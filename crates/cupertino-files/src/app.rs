@@ -24,6 +24,7 @@ use cupertino_files::context_menu::{
     common_apps, AppChoice, Command as MenuCommand, Key as MenuKey, Menu, MenuItem,
     Mods as MenuMods, Nav, Outcome,
 };
+use cupertino_files::menu_bar::{self, MenuAction, MenuState};
 use cupertino_files::menu_spec::{self, Background, Subject};
 use cupertino_files::metrics::{
     drag, marquee as marquee_metrics, menu as menu_metrics, timing, window as window_metrics,
@@ -48,6 +49,7 @@ use cupertino_icons::document::FileIcons;
 use cupertino_protocol_app::{AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop};
 use cupertino_text_field::{KeyInput, Keymap, Response, TextField};
 use cupertino_theme::{Appearance, Theme, WindowCornerSize};
+use cupertino_ui_menus::WindowMenus;
 use cupertino_ui_wayland::clipboard::Clipboard;
 use cupertino_ui_wayland::{popup, Ready, ShmPresenter};
 use cupertino_wayland_client::{
@@ -138,6 +140,14 @@ struct App {
     drag: Option<Drag>,
     /// The left button is down on empty space.
     marquee: Option<Marquee>,
+    /// The menus published to the desktop's menu bar; `None` when the server or the session bus takes none.
+    menus: Option<WindowMenus>,
+    /// What the published menus were made from.
+    menu_state: Option<MenuState>,
+    /// The folder of the trash's items, where Put Back applies.
+    trash_files: PathBuf,
+    /// Close Window was chosen.
+    closing: bool,
 }
 
 /// An item waiting for its activation token and what opens it.
@@ -169,6 +179,7 @@ struct Window {
     requested: (u32, u32),
     activated: bool,
     maximized: bool,
+    fullscreen: bool,
 }
 
 impl Window {
@@ -194,6 +205,7 @@ impl Window {
             requested: size,
             activated: false,
             maximized: false,
+            fullscreen: false,
         })
     }
 
@@ -205,6 +217,7 @@ impl Window {
         }
         self.activated = configure.states.activated;
         self.maximized = configure.states.maximized;
+        self.fullscreen = configure.states.fullscreen;
         let current = self.presenter.size().unwrap_or(self.requested);
         self.presenter
             .configured(configured_size(configure.size, current));
@@ -404,7 +417,12 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
         edit_when_listed: None,
         drag: None,
         marquee: None,
+        menus: None,
+        menu_state: None,
+        trash_files: Trash::new().home_trash().join("files"),
+        closing: false,
     };
+    app.publish_menus();
     app.update_available();
     let mut events = early;
     loop {
@@ -412,6 +430,10 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
             if !app.handle(event)? {
                 return Ok(());
             }
+        }
+        app.sync_menus()?;
+        if app.closing {
+            return Ok(());
         }
         app.sync_menu_mods()?;
         app.tick()?;
@@ -496,12 +518,12 @@ impl App {
                 }
                 // the display options reach the title bar and materials through the server
                 Some(AppEvent::DisplayOptions(options)) => self.display = options,
-                Some(
-                    AppEvent::ScrollCount { .. }
-                    | AppEvent::MenuBar { .. }
-                    | AppEvent::MenuReader { .. },
-                )
-                | None => {}
+                Some(event @ (AppEvent::MenuBar { .. } | AppEvent::MenuReader { .. })) => {
+                    if let Some(menus) = &mut self.menus {
+                        menus.handle(&event);
+                    }
+                }
+                Some(AppEvent::ScrollCount { .. }) | None => {}
             },
             // the server dismissed the menu (a click outside it); popups this process destroyed itself end no menu
             Event::PopupDone(popup) => {
@@ -945,6 +967,13 @@ impl App {
                     let outcome = self.browser.forward();
                     return self.navigated(outcome, "the next folder");
                 }
+                // the keys of the menu bar's items (crate::menu_bar)
+                (_, Some('n')) => return self.menu_action(MenuAction::NewWindow),
+                (_, Some('N')) => return self.menu_action(MenuAction::NewFolder),
+                (_, Some('o')) => return self.menu_action(MenuAction::Open),
+                (_, Some('d')) => return self.menu_action(MenuAction::Duplicate),
+                (_, Some('r')) => return self.menu_action(MenuAction::ShowOriginal),
+                (_, Some('w')) => return self.menu_action(MenuAction::CloseWindow),
                 // the design's View menu shortcut for the status bar
                 (_, Some('/')) => return self.toggle_bar(false),
                 (_, Some('1')) => return self.set_mode(ViewMode::Icons),
@@ -955,6 +984,12 @@ impl App {
                 }
                 _ => false,
             }
+        } else if mods.logo && mods.ctrl && !mods.alt && matches!(character, Some('n' | 'a')) {
+            return self.menu_action(if character == Some('n') {
+                MenuAction::NewFolderWithSelection
+            } else {
+                MenuAction::MakeAlias
+            });
         } else if mods.logo && mods.alt && !mods.ctrl && matches!(character, Some('p' | 'P')) {
             // the design's View menu shortcut for the path bar
             return self.toggle_bar(true);
@@ -1652,6 +1687,11 @@ impl App {
             .filter(|e| e.is_dir)
             .map(|e| e.path.clone())
             .collect();
+        self.open_windows(folders);
+    }
+
+    /// Open a window of its own for each of `folders`.
+    fn open_windows(&self, folders: Vec<PathBuf>) {
         for folder in folders {
             let mut command = match std::env::current_exe() {
                 Ok(exe) => Command::new(exe),
@@ -1667,6 +1707,118 @@ impl App {
             command.arg(folder);
             spawn(command);
         }
+    }
+
+    /// What the menu bar's items depend on now.
+    fn current_menu_state(&self) -> MenuState {
+        let in_trash = self.browser.dir() == self.trash_files;
+        let subject = self.subject(in_trash);
+        let history = self.browser.history();
+        MenuState {
+            count: subject.count,
+            all_folders: subject.count > 0 && subject.all_folders,
+            single_link: subject.single_link,
+            in_trash,
+            path_bar: self.bars.path,
+            status_bar: self.bars.status,
+            full_screen: self.window.fullscreen,
+            can_go_back: history.back_target().is_some(),
+            can_go_forward: history.forward_target().is_some(),
+            has_parent: self.browser.dir().parent().is_some(),
+        }
+    }
+
+    /// Publish the window's menus to the desktop's menu bar.
+    fn publish_menus(&mut self) {
+        let state = self.current_menu_state();
+        self.menus = WindowMenus::publish(
+            &self.conn,
+            &self.effects,
+            self.window.toplevel.surface(),
+            APP_ID,
+            Box::new(self.keymap.profile().clone()),
+            &menu_bar::menu_bar(&state),
+        );
+        if let Some(menus) = &self.menus {
+            for (action, on) in menu_bar::enabled(&state) {
+                menus.set_enabled(&action.name(), on);
+            }
+            self.menu_state = Some(state);
+        }
+    }
+
+    /// Bring the published menus up to date and carry out the items chosen in the menu bar.
+    fn sync_menus(&mut self) -> Result<()> {
+        if self.menus.is_none() {
+            return Ok(());
+        }
+        let state = self.current_menu_state();
+        let menus = self.menus.as_mut().expect("checked above");
+        let last = self.menu_state.unwrap_or_default();
+        if state != last {
+            let shape = |s: &MenuState| (s.in_trash, s.path_bar, s.status_bar, s.full_screen);
+            if shape(&state) != shape(&last) {
+                menus.update(&menu_bar::menu_bar(&state));
+            }
+            let before = menu_bar::enabled(&last);
+            for (i, (action, on)) in menu_bar::enabled(&state).into_iter().enumerate() {
+                if shape(&state) != shape(&last) || before[i].1 != on {
+                    menus.set_enabled(&action.name(), on);
+                }
+            }
+            self.menu_state = Some(state);
+        }
+        let chosen: Vec<MenuAction> = menus
+            .activations()
+            .filter_map(|activation| MenuAction::from_name(&activation.action))
+            .collect();
+        for action in chosen {
+            self.menu_action(action)?;
+        }
+        Ok(())
+    }
+
+    /// Carry out an item of the menu bar, or its key.
+    fn menu_action(&mut self, action: MenuAction) -> Result<()> {
+        match action {
+            MenuAction::CloseWindow => self.closing = true,
+            MenuAction::NewWindow => self.open_windows(vec![self.browser.dir().to_path_buf()]),
+            MenuAction::NewFolder => self.run(MenuCommand::NewFolder)?,
+            MenuAction::NewFolderWithSelection => self.run(MenuCommand::NewFolderWithSelection)?,
+            MenuAction::Open => self.open_selection()?,
+            MenuAction::OpenInNewWindow => self.run(MenuCommand::OpenInNewWindow)?,
+            MenuAction::MoveToTrash => self.trash_selection()?,
+            MenuAction::PutBack => self.run(MenuCommand::PutBack)?,
+            MenuAction::Rename => self.run(MenuCommand::Rename)?,
+            MenuAction::Duplicate => self.run(MenuCommand::Duplicate)?,
+            MenuAction::MakeAlias => self.run(MenuCommand::MakeAlias)?,
+            MenuAction::ShowOriginal => self.run(MenuCommand::ShowOriginal)?,
+            MenuAction::SelectAll => {
+                self.browser.select_all();
+                self.window.presenter.request_redraw();
+            }
+            MenuAction::View(mode) => self.set_mode(mode)?,
+            MenuAction::SortBy(key, ascending) => self.run(MenuCommand::SortBy(key, ascending))?,
+            MenuAction::TogglePathBar => self.toggle_bar(true)?,
+            MenuAction::ToggleStatusBar => self.toggle_bar(false)?,
+            MenuAction::FullScreen => {
+                let fullscreen = !self.window.fullscreen;
+                self.conn.set_fullscreen(self.window.toplevel, fullscreen)?;
+            }
+            MenuAction::Back => {
+                let outcome = self.browser.back();
+                self.navigated(outcome, "the previous folder")?;
+            }
+            MenuAction::Forward => {
+                let outcome = self.browser.forward();
+                self.navigated(outcome, "the next folder")?;
+            }
+            MenuAction::EnclosingFolder => {
+                let outcome = self.browser.parent();
+                self.navigated(outcome, "the enclosing folder")?;
+            }
+        }
+        Ok(())
     }
 
     /// Go to the folder of the selected link's target and select the target.

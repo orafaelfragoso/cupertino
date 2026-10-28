@@ -222,7 +222,7 @@ pub fn item_menu(subject: &Subject, apps: &[AppChoice]) -> Vec<MenuItem> {
 
 /// The choices of the Sort By menu, in the order of the arrange menu resource: title, key, ascending first.
 /// `None` for a key the window has no data for.
-fn sort_choices() -> [(&'static str, Option<(SortKey, bool)>); 8] {
+pub(crate) fn sort_choices() -> [(&'static str, Option<(SortKey, bool)>); 8] {
     [
         ("None", Some((SortKey::None, true))),
         ("Name", Some((SortKey::Name, true))),

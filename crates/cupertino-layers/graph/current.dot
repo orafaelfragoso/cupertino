@@ -1,5 +1,5 @@
 // cupertino-layers --graph current
-// 58 crates, 223 internal dependencies
+// 58 crates, 232 internal dependencies
 // per layer: foundation 13, models 9, platform 7, render 11, core 1, shell 9, services 4, apps 2, tools 2
 // forbidden edges: none
 // denied paths ui -> core, shell, services: none
@@ -131,11 +131,14 @@ digraph "current" {
   "cupertino-files" -> "cupertino-defaults";
   "cupertino-files" -> "cupertino-geometry";
   "cupertino-files" -> "cupertino-icons";
+  "cupertino-files" -> "cupertino-menu-model";
+  "cupertino-files" -> "cupertino-modifiers";
   "cupertino-files" -> "cupertino-protocol-app";
   "cupertino-files" -> "cupertino-text-field";
   "cupertino-files" -> "cupertino-theme";
   "cupertino-files" -> "cupertino-thumbnails";
   "cupertino-files" -> "cupertino-typeahead";
+  "cupertino-files" -> "cupertino-ui-menus";
   "cupertino-files" -> "cupertino-ui-wayland";
   "cupertino-files" -> "cupertino-wayland-client";
   "cupertino-glass" -> "cupertino-defaults";
@@ -145,7 +148,9 @@ digraph "current" {
   "cupertino-icons" -> "cupertino-assets";
   "cupertino-icons" -> "cupertino-defaults";
   "cupertino-input" -> "cupertino-animation";
+  "cupertino-input" -> "cupertino-menu-model" [label="dev"];
   "cupertino-input" -> "cupertino-modifiers";
+  "cupertino-input" -> "cupertino-modifiers" [label="dev"];
   "cupertino-keyboard" -> "cupertino-defaults";
   "cupertino-keyboard" -> "cupertino-modifiers";
   "cupertino-launcher" -> "cupertino-animation";
@@ -278,6 +283,7 @@ digraph "current" {
   "cupertino-settings" -> "cupertino-filepicker";
   "cupertino-settings" -> "cupertino-geometry";
   "cupertino-settings" -> "cupertino-icons";
+  "cupertino-settings" -> "cupertino-menu-model";
   "cupertino-settings" -> "cupertino-modifiers";
   "cupertino-settings" -> "cupertino-protocol-app";
   "cupertino-settings" -> "cupertino-test-bus" [label="dev"];
@@ -285,6 +291,7 @@ digraph "current" {
   "cupertino-settings" -> "cupertino-theme";
   "cupertino-settings" -> "cupertino-thumbnails";
   "cupertino-settings" -> "cupertino-typeahead";
+  "cupertino-settings" -> "cupertino-ui-menus";
   "cupertino-settings" -> "cupertino-ui-wayland";
   "cupertino-settings" -> "cupertino-wayland-client";
   "cupertino-shell-client" -> "cupertino-defaults";
@@ -302,6 +309,8 @@ digraph "current" {
   "cupertino-theme" -> "cupertino-animation";
   "cupertino-ui-menus" -> "cupertino-menu-model";
   "cupertino-ui-menus" -> "cupertino-modifiers";
+  "cupertino-ui-menus" -> "cupertino-protocol-app";
+  "cupertino-ui-menus" -> "cupertino-wayland-client";
   "cupertino-ui-wayland" -> "cupertino-geometry";
   "cupertino-ui-wayland" -> "cupertino-wayland-client";
   "cupertino-wayland-client" -> "cupertino-geometry";

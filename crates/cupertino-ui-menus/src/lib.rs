@@ -10,6 +10,7 @@
 //! every peer while there is no reader.
 
 mod objects;
+mod window;
 mod wire;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use cupertino_menu_model::{ActionName, MenuBar, Scope};
 use cupertino_modifiers::ModifierMap;
 use objects::{action_changes, Actions, Menus, OnActivate, Reader};
+pub use window::WindowMenus;
 use wire::WireMenus;
 use zbus::blocking::{connection, Connection};
 use zbus::names::{OwnedUniqueName, UniqueName};

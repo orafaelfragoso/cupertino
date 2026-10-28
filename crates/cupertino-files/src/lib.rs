@@ -20,6 +20,7 @@ pub mod geom;
 pub mod group;
 pub mod history;
 pub mod layout;
+pub mod menu_bar;
 pub mod menu_spec;
 pub mod metrics;
 pub mod mime;

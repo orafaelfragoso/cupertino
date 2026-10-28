@@ -155,6 +155,10 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
                 .system_menu(&cx.shared.chords, &cx.shared.recent)
                 .action(item)?
             {
+                ExtraAction::System(SystemAction::About) => Action::Launch(Launch::Program(vec![
+                    SETTINGS_PROGRAM.to_owned(),
+                    "--about".to_owned(),
+                ])),
                 ExtraAction::System(SystemAction::Settings) => {
                     Action::Launch(Launch::Program(vec![SETTINGS_PROGRAM.to_owned()]))
                 }
@@ -604,6 +608,13 @@ mod tests {
     fn settings_starts_the_control_panel_and_force_quit_opens_the_servers_dialog_without_an_agent()
     {
         let f = Fixture::new(WindowMenu::None);
+        assert_eq!(
+            f.resolve(activate(SlotKey::System, SystemRow::About.id().0)),
+            Some(Action::Launch(Launch::Program(vec![
+                "cupertino-settings".to_owned(),
+                "--about".to_owned()
+            ])))
+        );
         assert_eq!(
             f.resolve(activate(SlotKey::System, SystemRow::Settings.id().0)),
             Some(Action::Launch(Launch::Program(vec![

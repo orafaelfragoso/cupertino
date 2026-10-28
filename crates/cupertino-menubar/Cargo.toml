@@ -60,6 +60,7 @@ libc = "0.2"
 cupertino-ui-menus = { path = "../cupertino-ui-menus" }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 tempfile = "3"
+swash = "0.2.10"
 
 [[bin]]
 name = "cupertino-menubar"

@@ -4,10 +4,7 @@
 use cupertino_decorations::TitlebarStyle;
 use cupertino_effects::{DockEdge, Mesh, MinimizeEffect, Vertex};
 use cupertino_geometry::CornerStyle;
-use std::cell::RefCell;
-use std::collections::HashMap;
-
-use cupertino_wm::{OutputId, Presentation, Rect, WindowId};
+use cupertino_wm::{Presentation, Rect, WindowId};
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::surface::{
     render_elements_from_surface_tree, WaylandSurfaceRenderElement,
@@ -1125,35 +1122,10 @@ fn overview(
     true
 }
 
-thread_local! {
-    static LAST: RefCell<Vec<CupertinoElement>> = const { RefCell::new(Vec::new()) };
-    static CACHES: RefCell<HashMap<OutputId, ElementCache>> = RefCell::new(HashMap::new());
-}
-
-/// Forget the oracle's caches and recorded frame, when a new compositor starts on this thread.
-pub fn reset() {
-    CACHES.with(|c| c.borrow_mut().clear());
-    LAST.with(|last| last.borrow_mut().clear());
-}
-
-/// Keep the oracle's list of the frame just built, for [`take_recorded`].
-pub fn record(elements: Vec<CupertinoElement>) {
-    LAST.with(|last| *last.borrow_mut() = elements);
-}
-
-/// The oracle's list of the last frame built on this thread.
-pub fn take_recorded() -> Vec<CupertinoElement> {
-    LAST.with(|last| std::mem::take(&mut *last.borrow_mut()))
-}
-
-/// Build with element caches of its own, so the oracle and the migrated builder never share ids
-/// or commit counters.
+/// Build with the slots of the element cache that belong to this builder, so the oracle and the migrated builder
+/// never share ids or commit counters.
 pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<CupertinoElement> {
-    let id = p.output_id;
-    let mut own = CACHES
-        .with(|c| c.borrow_mut().remove(&id))
-        .unwrap_or_default();
-    std::mem::swap(p.cache, &mut own);
+    p.cache.swap_oracle_slots();
     let mut elements = build(renderer, &mut p);
     // front to back: the fade-in from black after the session became active and the dim and sleep overlay cover
     // everything, the cursor too
@@ -1164,9 +1136,57 @@ pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<C
         .map(|overlay| session_overlay(&mut p, overlay))
         .collect();
     elements.splice(0..0, overlays);
-    std::mem::swap(p.cache, &mut own);
-    CACHES.with(|c| c.borrow_mut().insert(id, own));
+    p.cache.swap_oracle_slots();
     elements
+}
+
+#[derive(Debug, PartialEq)]
+struct Shape {
+    variant: std::mem::Discriminant<CupertinoElement>,
+    kind: String,
+    geometry: smithay::utils::Rectangle<i32, Physical>,
+    src: (f64, f64, f64, f64),
+    alpha: f32,
+    commit: usize,
+}
+
+fn shape(element: &CupertinoElement, scale: f64) -> Shape {
+    let src = element.src();
+    Shape {
+        variant: std::mem::discriminant(element),
+        kind: format!("{:?}", element.kind()),
+        geometry: element.geometry(Scale::from(scale)),
+        src: (src.loc.x, src.loc.y, src.size.w, src.size.h),
+        alpha: element.alpha(),
+        commit: element
+            .current_commit()
+            .distance(Some(CommitCounter::default()))
+            .unwrap_or(0),
+    }
+}
+
+/// Panic unless the migrated builder produced what the previous one did: the same lowered variants in the same
+/// order, with the same kind, geometry, source rectangle, opacity and commit progression, and one consistent
+/// correspondence between the element identities of the two over every frame.
+pub fn assert_parity(
+    cache: &mut ElementCache,
+    legacy: &[CupertinoElement],
+    migrated: &[CupertinoElement],
+    scale: f64,
+) {
+    assert_eq!(legacy.len(), migrated.len(), "scene parity: element count");
+    for (at, (old, new)) in legacy.iter().zip(migrated).enumerate() {
+        assert_eq!(
+            shape(old, scale),
+            shape(new, scale),
+            "scene parity: element {at} of {}",
+            legacy.len()
+        );
+        assert!(
+            cache.pair_identities(old.id(), new.id()),
+            "scene parity: the identity of element {at} corresponds to another one in an earlier frame"
+        );
+    }
 }
 
 /// The black overlay over the whole output, as the power module built it.

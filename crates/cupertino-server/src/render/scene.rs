@@ -302,6 +302,7 @@ impl RenderResources {
 }
 
 /// What to draw for the pointer.
+#[derive(Clone)]
 pub enum CursorPlan {
     Hidden,
     /// A themed cursor drawn `size` points tall (its nominal size times the cursor scale).

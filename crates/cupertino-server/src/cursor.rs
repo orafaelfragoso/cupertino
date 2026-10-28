@@ -19,6 +19,7 @@ use xcursor::parser::{parse_xcursor, Image};
 use crate::state::Cupertino;
 
 /// One cursor frame ready for rendering.
+#[derive(Clone)]
 pub struct CursorFrame {
     /// The image at buffer scale 1.
     pub buffer: MemoryRenderBuffer,

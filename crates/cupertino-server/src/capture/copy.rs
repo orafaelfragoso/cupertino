@@ -35,7 +35,7 @@ use smithay::wayland::shm::{with_buffer_contents_mut, BufferAccessError};
 
 use super::{privileged, Placement, Source};
 use crate::authorization::{authorized, ShellRole};
-use crate::render::scene::{build_scene, capture_window, CursorPlan};
+use crate::render::scene::capture_window;
 use crate::state::Cupertino;
 
 /// The shm formats a frame is copied into. Both keep blue, green, red, alpha (or unused) in memory order.
@@ -416,12 +416,7 @@ impl Cupertino {
         paint_cursors: bool,
     ) -> Result<Image> {
         let elements = self
-            .with_scene(renderer, idx, |r, mut p| {
-                if !paint_cursors {
-                    p.cursor = CursorPlan::Hidden;
-                }
-                build_scene(r, p)
-            })
+            .scene_elements(renderer, idx, paint_cursors)
             .context("the render resources are not loaded")?;
         let out = &self.outputs[idx];
         let size = out

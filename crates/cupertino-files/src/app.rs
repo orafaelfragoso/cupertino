@@ -512,7 +512,7 @@ impl App {
                 }
             }
             Event::Close(_) => return Ok(false),
-            Event::Pointer { surface, event } => match self.menu_level(surface) {
+            Event::Pointer { surface, event, .. } => match self.menu_level(surface) {
                 Some(level) => self.menu_pointer(level, event)?,
                 None => self.pointer(event)?,
             },

@@ -23,7 +23,7 @@ mod text_input;
 pub use buffer::{BufferFormat, BufferLayout, PixelRect};
 pub use capability::{Capability, CapabilitySet, Extension};
 pub use clipboard::ClipboardOffer;
-pub use configure::{Decorations, WindowConfigure, WindowStates};
+pub use configure::{Decorations, WindowConfigure, WindowStates, WmCapabilities};
 pub use connection::{
     BufferLease, Connection, Event, ExtensionEvent, ExternalRole, FrameCallback, Popup,
     PopupConfigure, PopupPlacement, State, SurfaceId, TokenRequest, Toplevel, ToplevelConfig,
@@ -36,6 +36,7 @@ pub use scale::Scale;
 pub use text_input::{
     Preedit, SurroundingText, TextInputDone, TextInputEvent, TextInputState, MAX_SURROUNDING,
 };
+pub use wayland_client::protocol::wl_pointer::AxisSource as ScrollSource;
 pub use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape as CursorShape;
 pub use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::{
     ChangeCause, ContentHint, ContentPurpose,

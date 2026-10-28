@@ -525,19 +525,19 @@ impl App {
             }
             // the drag surface takes no input; the bar's surface keeps the pointer until the release
             Event::Pointer { surface, .. } if self.is_drag_surface(surface) => {}
-            Event::Pointer { surface, event } if self.is_overlay(surface) => {
+            Event::Pointer { surface, event, .. } if self.is_overlay(surface) => {
                 self.overlay_pointer(event)?
             }
-            Event::Pointer { surface, event } if self.is_grid(surface) => {
+            Event::Pointer { surface, event, .. } if self.is_grid(surface) => {
                 self.grid_pointer(event)?
             }
-            Event::Pointer { surface, event } if self.is_force_quit(surface) => {
+            Event::Pointer { surface, event, .. } if self.is_force_quit(surface) => {
                 self.force_quit_pointer(event)?
             }
-            Event::Pointer { surface, event } if self.is_overview(surface) => {
+            Event::Pointer { surface, event, .. } if self.is_overview(surface) => {
                 self.overview_pointer(event)?
             }
-            Event::Pointer { surface, event } if self.is_menu(surface) => {
+            Event::Pointer { surface, event, .. } if self.is_menu(surface) => {
                 self.menu_pointer(event)?
             }
             Event::Pointer { event, .. } => self.pointer(event)?,
@@ -557,6 +557,7 @@ impl App {
                         character,
                         ..
                     },
+                ..
             } if self.is_grid(surface) => {
                 if let Some(key) = grid_key(code, mods, character) {
                     let now = self.now();
@@ -578,6 +579,7 @@ impl App {
                         mods,
                         ..
                     },
+                ..
             } if self.is_overview(surface) => {
                 if let Some(key) = overview_key(code, mods) {
                     let now = self.now();
@@ -599,6 +601,7 @@ impl App {
                         mods,
                         ..
                     },
+                ..
             } if self.is_force_quit(surface) => {
                 if let Some(key) = force_quit_key(code) {
                     let outcome = self
@@ -614,6 +617,7 @@ impl App {
             Event::Keyboard {
                 surface,
                 event: KeyboardEvent::Leave,
+                ..
             } if self.is_grid(surface) => self.close_grid()?,
             // the server dismissed the menu's grab: the menu is over
             Event::PopupDone(popup) if self.is_menu(popup.surface()) => self.drop_menu()?,

@@ -266,7 +266,7 @@ impl App {
             Event::Frame(frame) if Some(frame.surface) == catcher => {
                 self.catcher_presenter().frame_done()
             }
-            Event::Pointer { surface, event } if surface == self.layer.surface() => {
+            Event::Pointer { surface, event, .. } if surface == self.layer.surface() => {
                 self.pointer(event)
             }
             // a left or right press outside the card dismisses it (global mouse monitor mask 0xa)
@@ -278,6 +278,7 @@ impl App {
                         button: Button::Left | Button::Right,
                         ..
                     },
+                ..
             } if Some(surface) == catcher => self.controller.dismiss(self.now()),
             // Escape is not in the design; it is added (approximate)
             Event::Keyboard {

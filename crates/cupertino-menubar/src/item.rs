@@ -256,11 +256,20 @@ impl MenuItem {
 /// Split a label with a mnemonic marker: `_File` → (`File`, `F`), `Save &As` → (`Save As`, `A`),
 /// `a__b` / `a&&b` keep a literal marker character.
 pub fn split_mnemonic(label: &str) -> (String, Option<char>) {
+    split_marked(label, &['_', '&'])
+}
+
+/// [`split_mnemonic`] for GMenuModel labels, whose only marker is `_`: `Q&A` stays `Q&A`.
+pub fn split_gtk_mnemonic(label: &str) -> (String, Option<char>) {
+    split_marked(label, &['_'])
+}
+
+fn split_marked(label: &str, markers: &[char]) -> (String, Option<char>) {
     let mut out = String::with_capacity(label.len());
     let mut mnemonic = None;
     let mut chars = label.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '_' || c == '&' {
+        if markers.contains(&c) {
             match chars.peek() {
                 Some(&n) if n == c => {
                     out.push(c);
@@ -296,6 +305,16 @@ mod tests {
         );
         assert_eq!(split_mnemonic("plain"), ("plain".to_string(), None));
         assert_eq!(split_mnemonic("trailing_"), ("trailing".to_string(), None));
+    }
+
+    #[test]
+    fn a_gtk_label_keeps_its_ampersands() {
+        assert_eq!(split_gtk_mnemonic("Q&A"), ("Q&A".to_string(), None));
+        assert_eq!(
+            split_gtk_mnemonic("_Save && Close"),
+            ("Save && Close".to_string(), Some('S'))
+        );
+        assert_eq!(split_gtk_mnemonic("a__b"), ("a_b".to_string(), None));
     }
 
     #[test]

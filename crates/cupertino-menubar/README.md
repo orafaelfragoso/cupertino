@@ -19,7 +19,7 @@ computes, and feeds the crate pointer, key and timer events with absolute timest
 | `dbus::dbusmenu` | `DBusMenuClient`: `GetLayout` parsing (`parse_layout`), `Event`, `AboutToShow`, and `LayoutUpdated` / `ItemsPropertiesUpdated` / `ItemActivationRequested` as a `MenuUpdate` stream, property update helpers. |
 | `dbus::sni` | `WatcherService` serving `org.kde.StatusNotifierWatcher` (the compositor is the host), `WatcherClient`, `fetch_item` (icons including ARGB pixmaps, status, tooltip, menu path), `load_menu` through DBusMenu, `activate_item` / `secondary_activate_item` / `context_menu_item` / `scroll_item`, `best_pixmap`. |
 | `dbus::registrar` | The `com.canonical.AppMenu.Registrar` stub the worker serves after the watcher; the process asks it to own the name with the first bar and to release it with the last. |
-| `dbus::gtk` | `GtkMenuClient`: an `org.gtk.Menus` + `org.gtk.Actions` reader (`Start`, sections flattened, namespaces, accelerators, enabled / toggle state from actions) and `Activate`. |
+| `dbus::gtk` | `GtkMenuClient`: an `org.gtk.Menus` + `org.gtk.Actions` reader (`Start`, sections flattened, `_` as the only mnemonic marker, namespaces, accelerators, enabled / toggle state from actions) and `Activate`. |
 
 Feature `dbus` (default) enables the zbus-based layer. Without it the crate depends only on `cupertino-animation`. The D-Bus
 layer is runtime agnostic (zbus with its `async-io` backend). Drive the futures with any executor or `zbus::block_on`.

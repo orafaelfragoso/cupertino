@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use zbus::zvariant::{OwnedValue, Signature, Value};
 use zbus::Connection;
 
-use crate::item::{split_mnemonic, ItemId, MenuItem, Shortcut, ShortcutModifier, Toggle};
+use crate::item::{split_gtk_mnemonic, ItemId, MenuItem, Shortcut, ShortcutModifier, Toggle};
 use crate::source::GtkMenuProps;
 
 pub type RawItems = Vec<HashMap<String, OwnedValue>>;
@@ -243,8 +243,8 @@ impl Builder<'_> {
             if let Some(sub) = link(it, ":submenu") {
                 let id = self.new_id();
                 let children = self.build(sub, &ns);
-                let mut item = MenuItem::submenu(id, &label, children);
-                item.has_submenu = true;
+                let mut item = MenuItem::submenu(id, "", children);
+                (item.label, item.mnemonic) = split_gtk_mnemonic(&label);
                 out.push(item);
                 continue;
             }
@@ -267,7 +267,7 @@ impl Builder<'_> {
             }
             let id = self.new_id();
             let mut item = MenuItem::new(id, "");
-            let (l, m) = split_mnemonic(&label);
+            let (l, m) = split_gtk_mnemonic(&label);
             item.label = l;
             item.mnemonic = m;
             item.enabled = match (&full, state) {
@@ -470,7 +470,7 @@ mod tests {
                 0,
                 0,
                 vec![
-                    item(vec![("label", v("_File")), (":submenu", pair(0, 1))]),
+                    item(vec![("label", v("_File & Edit")), (":submenu", pair(0, 1))]),
                     item(vec![("label", v("View")), (":submenu", pair(0, 2))]),
                 ],
             ),
@@ -513,7 +513,7 @@ mod tests {
                         ("accel", v("<Primary>n")),
                     ]),
                     item(vec![
-                        ("label", v("Close")),
+                        ("label", v("Close & Save")),
                         ("action", v("win.close")),
                         ("accel", v("<Primary><Shift>w")),
                     ]),
@@ -586,13 +586,13 @@ mod tests {
         let file = &b.items[0];
         assert_eq!(
             (file.label.as_str(), file.mnemonic, file.has_submenu),
-            ("File", Some('F'), true)
+            ("File & Edit", Some('F'), true)
         );
         let labels: Vec<&str> = file.children.iter().map(|c| c.label.as_str()).collect();
         assert_eq!(
             labels,
-            vec!["New Window", "Close", "", "Quit"],
-            "empty sections vanish, others are separated, the action-missing item is hidden"
+            vec!["New Window", "Close & Save", "", "Quit"],
+            "empty sections vanish, others are separated, the action-missing item is hidden, & is plain text"
         );
         assert!(file.children[2].separator);
         assert_eq!(

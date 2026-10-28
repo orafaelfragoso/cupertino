@@ -292,6 +292,8 @@ fn outside_click_dismisses_without_activating_the_underlying_pane() {
     let mut h = Harness::new();
     h.click(APPEARANCE_ROW);
     h.wait_for_menu_to_close();
+    // a press that was forwarded to the pane would switch it on the client's time, after the menu is gone
+    h.run_for(Duration::from_millis(500));
     assert_eq!(
         (popup_count(&h.state), title(&h.state)),
         (0, "Accessibility".into()),
@@ -400,6 +402,8 @@ fn escape_closes_the_open_menu_and_tab_does_not_reach_the_pane() {
     assert_eq!(popup_count(&h.state), 1, "Tab does not close the menu");
     h.tap(KEY_ESC);
     h.wait_for_menu_to_close();
+    // a key that reached the pane would act on the client's time, after the menu is gone
+    h.run_for(Duration::from_millis(500));
     assert_eq!(
         (popup_count(&h.state), title(&h.state)),
         (0, "Accessibility".into()),

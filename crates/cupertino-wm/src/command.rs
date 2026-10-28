@@ -206,6 +206,13 @@ pub enum Command {
         app: AppId,
     },
     ShowAll,
+    /// Raise every shown window of `app` above the other applications' windows, keeping their order and the key
+    /// window. With `cascade` the windows behind the key window then step [`crate::CASCADE_STEP`] further up and
+    /// left of it each, in stacking order, kept in the usable area; only windows in the normal layout move.
+    BringAllToFront {
+        app: AppId,
+        cascade: bool,
+    },
 
     /// The switch chord: opens the switcher, or steps it like a fresh Tab press when it is open.
     SwitcherOpen {

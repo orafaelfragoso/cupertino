@@ -31,7 +31,7 @@ When `CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE=id,id` is set, `capture.sh` builds a s
 | `magnification`, `autohide`, `recents` | Flags. |
 | `position` | `bottom`, `left` or `right`. |
 | `corner_top_left`, `corner_top_right`, `corner_bottom_left`, `corner_bottom_right`, `swipe_up`, `swipe_down`, `pinch`, `spread` | Hot-corner and gesture actions: `none`, `app-grid`, `exec:<command>`, or a server action name such as `overview`, `app-overview`, `show-desktop`, `launcher`, `lock`. |
-| `XDG_ACTIVATION_TOKEN`, `DESKTOP_STARTUP_ID` | Set by the dock, to the xdg-activation token, in the environment of every application it launches. |
+| `XDG_ACTIVATION_TOKEN`, `DESKTOP_STARTUP_ID` | Set by the dock, to the xdg-activation token, in the environment of every application it launches (the command and the detached start are `cupertino_apps::launch`, shared with the menu bar). |
 
 Preference defaults: tile size 64 (52 for displays at most 800 pt tall,
 `DockConfig::for_display_height`), large size 128, magnification off, launch animation on, auto-hide off, auto-hide delay

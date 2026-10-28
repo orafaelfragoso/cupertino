@@ -111,7 +111,7 @@ label colour. `PanelRenderer::new` fails when the directory lacks `application.g
 | `desktop` (re-export of `cupertino-apps::entry`) | Desktop Entry parsing, locale fallback, `NoDisplay`/`Hidden`/`OnlyShowIn`/`NotShowIn`/`TryExec`, XDG directory indexing with id shadowing |
 | `exec` (re-export of `cupertino-apps::exec`) | `Exec` quoting and field-code expansion, `CommandSpec` (with activation token and terminal wrapping) |
 | `matcher` | tiers exact › prefix › word-prefix › acronym › substring › fuzzy; field weights; highlight positions |
-| `frecency` | decayed launch counts + learned query→item associations, JSON persistence |
+| `frecency` | decayed launch counts + learned query→item associations, JSON persistence; the file format, its path and the ranking are `cupertino-apps::frecency` (re-exported `default_path`, `ItemRecord`, `FILE_VERSION`), which the menu bar reads the store with |
 | `calc` | arithmetic parser (`+ − × ÷ ^ % `, constants, `sqrt sin cos …), number formatting |
 | `files` | bounded breadth-first walker, ignore rules, in-memory name index and search |
 | `engine` | `Launcher`: providers → `Results { sections }`; `activate` → `Activation` |

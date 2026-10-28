@@ -430,7 +430,10 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
         terminal,
         menu: None,
         edit: None,
-        keymap: Keymap::load(),
+        keymap: Keymap::new(
+            cupertino_keyboard::binding::user_profile(),
+            cupertino_keyboard::binding::load_default().0,
+        ),
         caret_drawn: false,
         rename: RenameTrigger::default(),
         edit_when_listed: None,

@@ -36,6 +36,7 @@ use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_man
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::{
     self, WpFractionalScaleV1,
 };
+use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_manager_v3::ZwpTextInputManagerV3;
 use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use wayland_protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
 use wayland_protocols::xdg::activation::v1::client::xdg_activation_token_v1::{
@@ -63,10 +64,11 @@ use crate::configure::{wire_size, Serials};
 use crate::input::{Modifiers, PointerTracker, Repeat, Translator};
 use crate::output::{identification, physical_size, OutputBuilder, OutputId, OutputTransform};
 use crate::scale::ScaleSources;
+use crate::text_input::TextInput;
 use crate::{
     BufferFormat, BufferLayout, Capability, CapabilitySet, ClipboardOffer, Decorations, Disconnect,
-    Error, Extension, KeyboardEvent, OutputInfo, PixelRect, PointerEvent, Scale, WindowConfigure,
-    WindowStates,
+    Error, Extension, KeyboardEvent, OutputInfo, PixelRect, PointerEvent, Scale, TextInputEvent,
+    TextInputState, WindowConfigure, WindowStates,
 };
 
 /// A surface of this connection.
@@ -169,6 +171,11 @@ pub enum Event {
     Keyboard {
         surface: SurfaceId,
         event: KeyboardEvent,
+    },
+    /// The input method on a surface; see [`Connection::set_text_input`].
+    TextInput {
+        surface: SurfaceId,
+        event: TextInputEvent,
     },
     /// Another selection was set, or it was cleared.
     Selection(Option<ClipboardOffer>),
@@ -325,6 +332,7 @@ pub struct State {
     output_manager: Option<ZxdgOutputManagerV1>,
     data_device_manager: Option<WlDataDeviceManager>,
     pub(crate) clipboard: Clipboard,
+    pub(crate) text_input: TextInput,
     pointer: Option<WlPointer>,
     cursor_device: Option<WpCursorShapeDeviceV1>,
     pointer_enter_serial: Option<u32>,
@@ -411,6 +419,8 @@ impl Connection {
         let seat: Option<WlSeat> = bind(&globals, &qh, 1..=7);
         let data_device_manager = bind(&globals, &qh, 1..=3);
         let clipboard = Clipboard::new(data_device_manager.as_ref(), seat.as_ref(), &qh);
+        let text_input_manager: Option<ZwpTextInputManagerV3> = bind(&globals, &qh, 1..=1);
+        let text_input = TextInput::new(text_input_manager.as_ref(), seat.as_ref(), &qh);
         let mut state = State {
             capabilities,
             // version 6 adds `preferred_buffer_scale`
@@ -427,6 +437,7 @@ impl Connection {
             output_manager: bind(&globals, &qh, 1..=3),
             data_device_manager,
             clipboard,
+            text_input,
             pointer: None,
             cursor_device: None,
             pointer_enter_serial: None,
@@ -657,6 +668,7 @@ impl Connection {
         }
         s.wl.destroy();
         self.state.pointer_tracker.forget(surface);
+        self.state.text_input.forget(surface);
         if self.state.key_focus == Some(surface) {
             self.state.key_focus = None;
             self.state.repeat.clear();
@@ -786,14 +798,8 @@ impl Connection {
             .compositor
             .create_region(&self.queue.handle(), ());
         for r in rects {
-            let (left, top) = (r.min_x().floor() as i32, r.min_y().floor() as i32);
-            let (right, bottom) = (r.max_x().ceil() as i32, r.max_y().ceil() as i32);
-            region.add(
-                left,
-                top,
-                right.saturating_sub(left),
-                bottom.saturating_sub(top),
-            );
+            let (x, y, width, height) = round_out(r);
+            region.add(x, y, width, height);
         }
         wl.set_input_region(Some(&region));
         region.destroy();
@@ -868,6 +874,23 @@ impl Connection {
             ));
         };
         device.set_shape(serial, shape);
+        Ok(())
+    }
+
+    /// Tell the input method about the text field focused on `surface`, or with `None` that no field there takes text.
+    /// It is sent while the surface has the text-input focus and again after each [`TextInputEvent::Enter`]; an
+    /// unchanged state sends nothing. A password or PIN purpose sends no surrounding text and adds the sensitive-data
+    /// hint. Answers arrive as [`Event::TextInput`].
+    pub fn set_text_input(
+        &mut self,
+        surface: SurfaceId,
+        state: Option<&TextInputState>,
+    ) -> Result<(), Error> {
+        if state.is_some() {
+            self.state.capabilities.require(Capability::TextInput)?;
+        }
+        self.state.surface(surface)?;
+        self.state.text_input.set(surface, state);
         Ok(())
     }
 
@@ -1274,6 +1297,18 @@ fn clamp_i32(v: u32) -> i32 {
     i32::try_from(v).unwrap_or(i32::MAX)
 }
 
+/// `r` as whole points `(x, y, width, height)`, rounded outwards and saturated.
+pub(crate) fn round_out(r: &Rect) -> (i32, i32, i32, i32) {
+    let (left, top) = (r.min_x().floor() as i32, r.min_y().floor() as i32);
+    let (right, bottom) = (r.max_x().ceil() as i32, r.max_y().ceil() as i32);
+    (
+        left,
+        top,
+        right.saturating_sub(left),
+        bottom.saturating_sub(top),
+    )
+}
+
 impl State {
     /// Record a configure of an [`Connection::external_surface`]: its `serial`, acknowledged with the next present, and
     /// its logical `size`, where a 0 width or height leaves that dimension to the client. A serial that does not
@@ -1438,7 +1473,7 @@ impl State {
         }
     }
 
-    fn surface_of(&self, wl: &WlSurface) -> Option<SurfaceId> {
+    pub(crate) fn surface_of(&self, wl: &WlSurface) -> Option<SurfaceId> {
         wl.data::<SurfaceId>().copied()
     }
 }

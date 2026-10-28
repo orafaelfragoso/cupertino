@@ -11,3 +11,7 @@ layer = "models"
 [dependencies]
 cupertino-animation = { path = "../cupertino-animation" }
 cupertino-modifiers = { path = "../cupertino-modifiers" }
+
+[dev-dependencies]
+cupertino-menu-model = { path = "../cupertino-menu-model" }
+cupertino-modifiers = { path = "../cupertino-modifiers" }

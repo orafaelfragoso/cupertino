@@ -21,6 +21,7 @@ use cupertino_settings::instance;
 use cupertino_settings::keys::{self, Action, Focus, Mods, SearchKey};
 use cupertino_settings::live::{Live, Pictures, Reading};
 use cupertino_settings::menu;
+use cupertino_settings::menu_bar::{self, MenuAction, MenuState};
 use cupertino_settings::paint::{
     menu_rows, popup_hit, search_text_area, Painter, Palette, PaneView, WindowState,
 };
@@ -34,6 +35,7 @@ use cupertino_settings::window::{self, metrics, Hit, WindowLayout};
 use cupertino_settings::{PaneId, Point, Size};
 use cupertino_text_field::{KeyInput, Keymap, Response, TextField};
 use cupertino_theme::{Appearance, Theme, WindowCornerSize};
+use cupertino_ui_menus::WindowMenus;
 use cupertino_ui_wayland::clipboard::Clipboard;
 use cupertino_ui_wayland::popup::placement;
 use cupertino_ui_wayland::{Ready, ShmPresenter};
@@ -95,6 +97,7 @@ struct Window {
     requested: (u32, u32),
     activated: bool,
     maximized: bool,
+    fullscreen: bool,
 }
 
 impl Window {
@@ -120,6 +123,7 @@ impl Window {
             requested: size,
             activated: false,
             maximized: false,
+            fullscreen: false,
         })
     }
 
@@ -131,6 +135,7 @@ impl Window {
         }
         self.activated = configure.states.activated;
         self.maximized = configure.states.maximized;
+        self.fullscreen = configure.states.fullscreen;
         let current = self.presenter.size().unwrap_or(self.requested);
         self.presenter
             .configured(configured_size(configure.size, current));
@@ -248,6 +253,12 @@ struct App {
     _files: Option<ConfigWatcher>,
     /// Owns `org.cupertino.Settings1` while it lives.
     _instance: zbus::Connection,
+    /// The menus published to the desktop's menu bar; `None` when the server or the session bus takes none.
+    menus: Option<WindowMenus>,
+    /// What the published menus were made from.
+    menu_state: Option<MenuState>,
+    /// Quit was chosen.
+    closing: bool,
 }
 
 /// Something for the window loop from another thread.
@@ -451,9 +462,13 @@ pub fn run(pane: PaneId, activation_token: String) -> Result<()> {
         agent_registered: false,
         _files: files,
         _instance: instance,
+        menus: None,
+        menu_state: None,
+        closing: false,
     };
     app.sync_accessibility();
     app.enter_pane(None, pane)?;
+    app.publish_menus();
     let mut events = early;
     loop {
         for event in events {
@@ -461,6 +476,11 @@ pub fn run(pane: PaneId, activation_token: String) -> Result<()> {
                 app.leave_pane(app.content_pane);
                 return Ok(());
             }
+        }
+        app.sync_menus()?;
+        if app.closing {
+            app.leave_pane(app.content_pane);
+            return Ok(());
         }
         while let Ok(event) = app.background.try_recv() {
             app.background_event(event)?;
@@ -527,12 +547,12 @@ impl App {
                     self.palette = palette(&self.theme, self.session_dark, options)?;
                     self.redraw();
                 }
-                Some(
-                    AppEvent::ScrollCount { .. }
-                    | AppEvent::MenuBar { .. }
-                    | AppEvent::MenuReader { .. },
-                )
-                | None => {}
+                Some(event @ (AppEvent::MenuBar { .. } | AppEvent::MenuReader { .. })) => {
+                    if let Some(menus) = &mut self.menus {
+                        menus.handle(&event);
+                    }
+                }
+                Some(AppEvent::ScrollCount { .. }) | None => {}
             },
             // the server dismissed the popup (a click outside it): the field keeps its text
             Event::PopupDone(popup) => {
@@ -1213,6 +1233,113 @@ impl App {
             .expect("the current pane is a row");
         let to = i.saturating_add_signed(step).min(rows.len() - 1);
         self.go(rows[to])
+    }
+
+    /// What the menu bar's items depend on now.
+    fn current_menu_state(&self) -> MenuState {
+        MenuState {
+            search_focused: self.focus == Focus::Search,
+            has_selection: !self.search.field().selected_text().is_empty(),
+            full_screen: self.window.fullscreen,
+        }
+    }
+
+    /// Publish the window's menus to the desktop's menu bar.
+    fn publish_menus(&mut self) {
+        let state = self.current_menu_state();
+        self.menus = WindowMenus::publish(
+            &self.conn,
+            &self.effects,
+            self.window.toplevel.surface(),
+            APP_ID,
+            Box::new(self.keymap.profile().clone()),
+            &menu_bar::menu_bar(&state),
+        );
+        if let Some(menus) = &self.menus {
+            for (action, on) in menu_bar::enabled(&state) {
+                menus.set_enabled(&action.name(), on);
+            }
+            self.menu_state = Some(state);
+        }
+    }
+
+    /// Bring the published menus up to date and carry out the items chosen in the menu bar.
+    fn sync_menus(&mut self) -> Result<()> {
+        if self.menus.is_none() {
+            return Ok(());
+        }
+        let state = self.current_menu_state();
+        let last = self.menu_state.unwrap_or_default();
+        let menus = self.menus.as_mut().expect("checked above");
+        if state != last {
+            if state.full_screen != last.full_screen {
+                menus.update(&menu_bar::menu_bar(&state));
+            }
+            let before = menu_bar::enabled(&last);
+            for (i, (action, on)) in menu_bar::enabled(&state).into_iter().enumerate() {
+                if before[i].1 != on {
+                    menus.set_enabled(&action.name(), on);
+                }
+            }
+            self.menu_state = Some(state);
+        }
+        let chosen: Vec<MenuAction> = menus
+            .activations()
+            .filter_map(|activation| MenuAction::from_name(&activation.action))
+            .collect();
+        for action in chosen {
+            self.menu_action(action)?;
+        }
+        Ok(())
+    }
+
+    /// Carry out an item of the menu bar: the editing items act on the search field.
+    fn menu_action(&mut self, action: MenuAction) -> Result<()> {
+        match action {
+            MenuAction::Quit => self.closing = true,
+            MenuAction::Find => self.set_focus(Focus::Search)?,
+            MenuAction::FullScreen => {
+                let fullscreen = !self.window.fullscreen;
+                self.conn.set_fullscreen(self.window.toplevel, fullscreen)?;
+            }
+            MenuAction::Undo
+            | MenuAction::Redo
+            | MenuAction::Cut
+            | MenuAction::Copy
+            | MenuAction::Paste
+            | MenuAction::SelectAll => {
+                if self.focus != Focus::Search {
+                    return Ok(());
+                }
+                let selected = self.search.field().selected_text().to_owned();
+                match action {
+                    MenuAction::Undo => {
+                        self.search.edit(TextField::undo);
+                    }
+                    MenuAction::Redo => {
+                        self.search.edit(TextField::redo);
+                    }
+                    MenuAction::Cut | MenuAction::Copy if !selected.is_empty() => {
+                        if let Err(e) = self.clipboard.set_text(&mut self.conn, selected) {
+                            eprintln!("cupertino-settings: copy: {e}");
+                        }
+                        if action == MenuAction::Cut {
+                            self.search.edit(|f| f.paste(""));
+                        }
+                    }
+                    MenuAction::Paste => match self.clipboard.text(&mut self.conn) {
+                        Ok(Some(text)) => self.search.edit(|f| f.paste(&text)),
+                        Ok(None) => {}
+                        Err(e) => eprintln!("cupertino-settings: paste: {e}"),
+                    },
+                    MenuAction::SelectAll => self.search.edit(TextField::select_all),
+                    _ => {}
+                }
+                self.sync_results()?;
+                self.window.presenter.request_redraw();
+            }
+        }
+        Ok(())
     }
 
     fn search_key(&mut self, k: SearchKey, input: KeyInput) -> Result<()> {

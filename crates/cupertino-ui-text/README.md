@@ -20,11 +20,13 @@ buffer follow.
   stable `FontId`; `FontIndex::shape` shapes one run with `harfrust` (visual order, byte clusters, advances in points).
 - `TextSystem` is the shared entry point (`&self` methods, one `Arc` for measuring and painting): `paragraph` shapes an
   `AttributedText` per style run and hard line and caches the result, `measure` lays it out for a size. A family
-  no face matches falls back to the first registered face.
+  no face matches falls back to the first registered face. The cache keeps two generations of 512 paragraphs, a size
+  or spacing that is not finite (or a size of zero or less) is `TextError::InvalidValue`, and variation values are
+  kept in quarter units so an animated axis shares instances.
 - `Paragraph::layout(width)` re-wraps the shaped text without reshaping (UAX 14 breaks from `icu_segmenter`; a word
   wider than the width breaks between clusters; spaces at a soft wrap hang past the line). `ParagraphLayout` gives
   lines with glyph runs, `caret_rect`, `index_at` (always a grapheme boundary) and `selection_rects`. Layout is
-  logical-order left to right for now; bidi, script fallback and system fonts follow.
+  logical-order left to right for now (`max_lines` of zero keeps one line, a width that is not finite means no limit); bidi, script fallback and system fonts follow.
 - Timing, release, medians of 15 (`cargo test --release -p cupertino-ui-text -- --ignored --nocapture timing`; the
   shape figure is cold and includes loading the font and the break data): 200 characters shape 66 us, reflow 4 us;
   5000 characters shape 530 us, reflow 125-150 us; a cache hit costs under 1 us.

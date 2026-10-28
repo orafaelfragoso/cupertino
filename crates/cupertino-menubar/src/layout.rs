@@ -5,7 +5,7 @@
 
 use crate::fallback::HELP_SEARCH;
 use crate::geom::{Point, Rect};
-use crate::item::{ItemId, MenuItem, Shortcut, ShortcutGlyphs};
+use crate::item::{ItemId, MenuItem, ShortcutGlyphs, ShortcutStyle};
 
 /// Measures the advance width of a run of text in the bar / menu font.
 pub trait TextMeasure {
@@ -284,6 +284,8 @@ pub struct MenuMetrics {
     pub detail_gap: f64,
     /// Smallest width of a menu with a search field, so its width holds while results come and go.
     pub search_width: f64,
+    /// How the shortcuts are drawn: the Mac glyphs or the PC key names.
+    pub shortcut_style: ShortcutStyle,
 }
 
 impl Default for MenuMetrics {
@@ -302,6 +304,7 @@ impl Default for MenuMetrics {
             submenu_overlap: 2.0,
             detail_gap: 8.0,
             search_width: 320.0,
+            shortcut_style: ShortcutStyle::Glyphs,
         }
     }
 }
@@ -384,7 +387,7 @@ pub fn layout_popup(
         }
         label_w = label_w.max(measure.width(&c.label, false));
         if let Some(s) = &c.shortcut {
-            let glyphs = s.glyphs();
+            let glyphs = s.shown(m.shortcut_style);
             modifiers_w = modifiers_w.max(measure.width(&glyphs.modifiers, false));
             key_w = key_w.max(measure.width(&glyphs.key, false));
         }
@@ -454,7 +457,7 @@ pub fn layout_popup(
             ry += rh;
             let mut item = (*c).clone();
             item.children = Vec::new();
-            let shortcut = c.shortcut.as_ref().map(Shortcut::glyphs);
+            let shortcut = c.shortcut.as_ref().map(|s| s.shown(m.shortcut_style));
             let detail = c.detail.as_deref().and_then(|detail| {
                 let chord = shortcut.as_ref().map_or(0.0, |s| {
                     m.shortcut_gap + measure.width(&s.modifiers, false) + key_w
@@ -503,6 +506,7 @@ fn fit_tail(text: &str, room: f64, measure: &dyn TextMeasure) -> Option<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::item::Shortcut;
 
     const OUT: Rect = Rect::new(0.0, 0.0, 1920.0, 1080.0);
 
@@ -892,6 +896,41 @@ mod tests {
             plain.slots[0].key,
             SlotKey::AppMenu,
             "without entries no slot"
+        );
+    }
+
+    #[test]
+    fn the_names_style_lays_out_the_pc_names_of_the_keys() {
+        let menu = MenuItem::submenu(
+            0,
+            "",
+            vec![MenuItem::new(1, "Close Window")
+                .with_shortcut(Shortcut::from_tokens(&["Alt", "F4"]).unwrap())],
+        );
+        let mut m = MenuMetrics::default();
+        let measure = MonoMeasure::default();
+        let shown = |m: &MenuMetrics| {
+            layout_popup(
+                &menu,
+                Anchor::BelowSlot(Rect::new(0.0, 0.0, 40.0, 24.0)),
+                OUT,
+                0.0,
+                m,
+                &measure,
+            )
+            .rows[0]
+                .shortcut
+                .clone()
+                .unwrap()
+        };
+        assert_eq!(shown(&m).modifiers, "\u{2325}", "glyphs by default");
+        m.shortcut_style = ShortcutStyle::Names;
+        assert_eq!(
+            shown(&m),
+            ShortcutGlyphs {
+                modifiers: "Alt+".into(),
+                key: "F4".into()
+            }
         );
     }
 }

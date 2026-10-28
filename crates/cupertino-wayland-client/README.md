@@ -82,12 +82,16 @@ the close request exits; `--frames N` animates N frames and prints the size, sca
 
 ```
 cargo test -p cupertino-wayland-client
-cargo nextest run -p cupertino-wayland-client --run-ignored only   # needs weston
+cargo nextest run -p cupertino-wayland-client --test mutter       # skips only when mutter is absent
+cargo nextest run -p cupertino-wayland-client --run-ignored only   # optional Weston check
 ```
 
 `tests/protocol-flow.rs` runs a minimal protocol server in-process: required globals, configure and ack, resize, buffer
 reuse, scale, decorations, popups, input, clipboard and disconnect. Its `layer` module is an extension written against
 the public API (layer shell, a protocol the transport does not know): it is listed in the capabilities once bound and
 not when absent, a layer surface draws through the lease, acks through its own protocol, takes a popup, fills a 0
-dimension from the preferred size, and a burst of 100 of its configures arrives in at most three waits. `tests/weston.rs` runs `simple-window` on Weston's
+dimension from the preferred size, and a burst of 100 of its configures arrives in at most three waits. `tests/mutter.rs` runs
+`simple-window` with a private bus and headless Mutter, asserting 30 frames, 320×240 size, scale 1 and client-side
+decorations. An absent executable skips; an installed compositor or client failure fails. `tests/weston.rs` remains an
+optional check on Weston's
 headless backend; `cupertino-server`'s `tests/standard-clients.rs` runs it and `cupertino-testclient` on the real server.

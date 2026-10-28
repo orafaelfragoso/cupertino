@@ -196,6 +196,7 @@ impl Cupertino {
         if changed!(keybindings) {
             self.config.keybindings = target.keybindings.clone();
             self.key_router.bindings = target.keybindings.clone();
+            self.refresh_menu_bar_shortcuts();
         }
         if changed!(corner_radius) {
             self.config.window.corner_radius = target.window.corner_radius;
@@ -307,6 +308,9 @@ impl Cupertino {
         take!(accent_table => accent.table);
         take!(accent_keyboards => accent.keyboards);
         take!(accent_disabled_apps => accent.disabled_apps);
+        if changed!(modifier_profile) {
+            self.refresh_menu_bar_shortcuts();
+        }
         if changed!(
             caps_lock_delay_ms,
             caps_lock_switch,

@@ -4,7 +4,7 @@
 //! presentation when the surface is drawn, and feeds every bar the active application, the menu
 //! address its active window exports and the window state. The bar process owns everything else.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use crate::dbus::{LoginTrust, OwnerRefusal, Request as DbusRequest};
@@ -47,7 +47,7 @@ const MAX_APP_WINDOWS: usize = 1000;
 
 /// Longest window title or application id, in bytes, an event to a shell client carries: a client sets both to any
 /// length, and one message must stay under the 4096 bytes the Wayland wire allows.
-pub(crate) const MAX_TEXT_BYTES: usize = 1024;
+pub const MAX_TEXT_BYTES: usize = 1024;
 
 /// Longest time, in seconds from its arrival, an `edit` request waits for the keyboard to come back to its window.
 const EDIT_WAIT: f64 = 0.5;
@@ -124,6 +124,31 @@ impl MenuAddress {
         match self {
             MenuAddress::DbusMenu { service, .. } => service,
             MenuAddress::Gtk(props) => &props.bus_name,
+        }
+    }
+
+    /// Whether the address is a bus name of at most [`MAX_BUS_NAME_BYTES`], object paths of at most
+    /// [`MAX_OBJECT_PATH_BYTES`] and an application id of at most [`MAX_APPLICATION_ID_BYTES`], so the menu event that
+    /// carries it fits a message whatever the owner check and the absent strings add.
+    pub fn within_limits(&self) -> bool {
+        match self {
+            MenuAddress::DbusMenu { service, path } => is_bus_name(service) && is_object_path(path),
+            MenuAddress::Gtk(props) => {
+                let paths = [
+                    &props.application_object_path,
+                    &props.window_object_path,
+                    &props.menubar_object_path,
+                    &props.app_menu_object_path,
+                ];
+                is_bus_name(&props.bus_name)
+                    && props
+                        .application_id
+                        .as_ref()
+                        .is_none_or(|id| id.len() <= MAX_APPLICATION_ID_BYTES)
+                    && paths
+                        .iter()
+                        .all(|p| p.as_deref().is_none_or(is_object_path))
+            }
         }
     }
 
@@ -458,6 +483,8 @@ pub struct MenuBars {
     announced: HashMap<(ObjectId, MenuKind), Announced>,
     /// How many announcements were made.
     announcements: u64,
+    /// Surfaces whose announcement over the limits was logged: a client repeating it is logged once.
+    over_limits: HashSet<ObjectId>,
     /// The last `edit` request still to be sent; a newer one replaces it.
     edit: Option<PendingEdit>,
     app_menus: Vec<AppMenu>,
@@ -480,12 +507,23 @@ impl MenuBars {
             pending: Vec::new(),
             announced: HashMap::new(),
             announcements: 0,
+            over_limits: HashSet::new(),
             edit: None,
             app_menus: Vec::new(),
             reader: None,
             reader_retry: None,
             reader_backoff: READER_RETRY_FIRST,
         }
+    }
+
+    /// `surface` announced an address over the limits: whether this is the first time, the one to log.
+    pub fn over_limits(&mut self, surface: ObjectId) -> bool {
+        self.over_limits.insert(surface)
+    }
+
+    /// `surface` is gone: a later surface of the same id is logged afresh.
+    pub fn forget_over_limits(&mut self, surface: &ObjectId) {
+        self.over_limits.remove(surface);
     }
 
     pub fn has_app_menu(&self, surface: &WlSurface) -> bool {
@@ -1453,12 +1491,18 @@ impl Dispatch<CupertinoMenuBarV1, MenuBarData> for Cupertino {
     }
 }
 
+/// The longest bus name, unique or well-known, the D-Bus specification allows.
+pub const MAX_BUS_NAME_BYTES: usize = 255;
+
+/// The longest application id a window's menu announcement may carry.
+pub const MAX_APPLICATION_ID_BYTES: usize = 255;
+
 /// Whether `name` is a unique bus name such as `:1.42`.
-fn is_unique_bus_name(name: &str) -> bool {
+pub(crate) fn is_unique_bus_name(name: &str) -> bool {
     let Some(rest) = name.strip_prefix(':') else {
         return false;
     };
-    name.len() <= 255
+    name.len() <= MAX_BUS_NAME_BYTES
         && rest.split('.').count() >= 2
         && rest.split('.').all(|e| {
             !e.is_empty()
@@ -1469,7 +1513,12 @@ fn is_unique_bus_name(name: &str) -> bool {
 
 /// The longest object path a window's menu announcement may carry: the server forwards the four paths, the bus name and
 /// an application id in one `menu_gtk` event, and four paths of this length still fit the 4096-byte message limit.
-const MAX_OBJECT_PATH_BYTES: usize = 512;
+pub const MAX_OBJECT_PATH_BYTES: usize = 512;
+
+/// Whether `name` is a bus name, unique or well-known, no longer than [`MAX_BUS_NAME_BYTES`].
+fn is_bus_name(name: &str) -> bool {
+    name.len() <= MAX_BUS_NAME_BYTES && zbus::names::BusName::try_from(name).is_ok()
+}
 
 /// Whether `path` is a D-Bus object path no longer than [`MAX_OBJECT_PATH_BYTES`].
 fn is_object_path(path: &str) -> bool {
@@ -1751,5 +1800,53 @@ mod tests {
         retry.untimed();
         assert!(!retry.due(1), "no timer will fire for it");
         assert!(retry.recheck(), "the window becoming key checks it again");
+    }
+
+    #[test]
+    fn an_announcement_over_the_limits_is_logged_once_per_surface() {
+        let mut bars = MenuBars::new(24.0);
+        let surface = ObjectId::null();
+        assert!(bars.over_limits(surface.clone()), "the first is logged");
+        assert!(!bars.over_limits(surface.clone()), "a repeat is not");
+        bars.forget_over_limits(&surface);
+        assert!(
+            bars.over_limits(surface),
+            "a new surface of the id is logged again"
+        );
+    }
+
+    #[test]
+    fn an_announced_address_is_within_limits_up_to_each_cap() {
+        let path = format!("/{}", "a".repeat(MAX_OBJECT_PATH_BYTES - 1));
+        let name = format!("a.{}", "b".repeat(MAX_BUS_NAME_BYTES - 2));
+        let gtk = |name: &str, id: usize, path: &str| {
+            MenuAddress::Gtk(GtkMenuProps {
+                bus_name: name.into(),
+                application_id: Some("a".repeat(id)),
+                application_object_path: None,
+                window_object_path: Some(path.into()),
+                menubar_object_path: Some(path.into()),
+                app_menu_object_path: Some(path.into()),
+            })
+        };
+        let dbusmenu = |service: &str, path: &str| MenuAddress::DbusMenu {
+            service: service.into(),
+            path: path.into(),
+        };
+        assert!(gtk(&name, MAX_APPLICATION_ID_BYTES, &path).within_limits());
+        assert!(dbusmenu(&name, &path).within_limits());
+        assert!(dbusmenu(":1.42", "/MenuBar/1").within_limits());
+        for refused in [
+            gtk(&format!("{name}c"), 0, "/a"),
+            gtk(":1.42", MAX_APPLICATION_ID_BYTES + 1, "/a"),
+            gtk(":1.42", 0, &format!("{path}a")),
+            gtk(":1.42", 0, "/a-b"),
+            gtk("", 0, "/a"),
+            dbusmenu(&format!("{name}c"), "/a"),
+            dbusmenu(":1.42", &format!("{path}a")),
+            dbusmenu("org", "/a"),
+        ] {
+            assert!(!refused.within_limits(), "{refused:?}");
+        }
     }
 }

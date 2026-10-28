@@ -24,7 +24,7 @@ use cupertino_wm::{AppId, Command, LifecycleState, OutputId, Window, WindowId};
 use smithay::desktop::{layer_map_for_output, WindowSurfaceType};
 use smithay::input::keyboard::keysyms;
 use smithay::output::Output;
-use smithay::reexports::wayland_server::backend::ClientId;
+use smithay::reexports::wayland_server::backend::{ClientId, ObjectId};
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{
@@ -89,6 +89,25 @@ pub enum MenuAddress {
     DbusMenu { service: String, path: String },
     /// GMenuModel menus, announced through the toolkit shell protocol.
     Gtk(GtkMenuProps),
+}
+
+impl MenuAddress {
+    /// The bus name the menus are read from.
+    pub fn bus_name(&self) -> &str {
+        match self {
+            MenuAddress::DbusMenu { service, .. } => service,
+            MenuAddress::Gtk(props) => &props.bus_name,
+        }
+    }
+
+    /// The address read from the connection `unique` instead.
+    pub fn with_bus_name(mut self, unique: String) -> Self {
+        match &mut self {
+            MenuAddress::DbusMenu { service, .. } => *service = unique,
+            MenuAddress::Gtk(props) => props.bus_name = unique,
+        }
+        self
+    }
 }
 
 /// What a bar shows for the active window; one group of events carries all of it.
@@ -294,6 +313,8 @@ pub struct MenuBars {
     addresses: HashMap<u64, MenuAddress>,
     /// Addresses announced before the window mapped.
     pending: Vec<(WlSurface, MenuAddress)>,
+    /// Addresses announced and waiting for the check of their owner, by announcing surface.
+    announced: HashMap<ObjectId, (WlSurface, MenuAddress)>,
     /// The last `edit` request still to be sent; a newer one replaces it.
     edit: Option<PendingEdit>,
     app_menus: Vec<AppMenu>,
@@ -311,6 +332,7 @@ impl MenuBars {
             bars: Vec::new(),
             addresses: HashMap::new(),
             pending: Vec::new(),
+            announced: HashMap::new(),
             edit: None,
             app_menus: Vec::new(),
             menus_shown: false,
@@ -390,6 +412,18 @@ impl MenuBars {
             .partition(|(s, _)| s == root);
         self.pending = rest;
         mine.into_iter().map(|(_, a)| a).collect()
+    }
+
+    /// Keep `address` of `surface` until the owner of its bus name is checked (`crate::owner_check`); a newer
+    /// announcement replaces it.
+    pub fn announce(&mut self, surface: &WlSurface, address: MenuAddress) {
+        self.announced
+            .insert(surface.id(), (surface.clone(), address));
+    }
+
+    /// The address `surface` announced and is being checked, taken: withdrawn, or the check returned.
+    pub fn take_announced(&mut self, surface: &ObjectId) -> Option<(WlSurface, MenuAddress)> {
+        self.announced.remove(surface)
     }
 }
 

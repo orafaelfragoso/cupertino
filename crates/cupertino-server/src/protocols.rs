@@ -5,6 +5,7 @@
 use std::sync::Mutex;
 
 use cupertino_wm::Command;
+use smithay::reexports::wayland_server::backend::ObjectId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
@@ -15,6 +16,7 @@ use wayland_protocols_plasma::appmenu::server::org_kde_kwin_appmenu_manager::{
 };
 
 use crate::menu_bar::{GtkMenuProps, MenuAddress};
+use crate::owner_check::{OwnerCheck, OwnerKey, OwnerRefusal};
 use crate::state::Cupertino;
 
 pub mod gtk_shell {
@@ -121,15 +123,15 @@ impl Dispatch<OrgKdeKwinAppmenu, SurfaceData> for Cupertino {
                 service_name,
                 object_path,
             } => {
-                state.set_menu_address(
+                state.announce_menu_address(
                     &data.surface,
-                    Some(MenuAddress::DbusMenu {
+                    MenuAddress::DbusMenu {
                         service: service_name,
                         path: object_path,
-                    }),
+                    },
                 );
             }
-            org_kde_kwin_appmenu::Request::Release => state.set_menu_address(&data.surface, None),
+            org_kde_kwin_appmenu::Request::Release => state.withdraw_menu_address(&data.surface),
             _ => {}
         }
     }
@@ -208,16 +210,18 @@ impl Dispatch<GtkSurface1, SurfaceData> for Cupertino {
                     app_menu_object_path: app_menu_path,
                 };
                 *data.gtk.lock().expect("gtk props") = props.clone();
-                let address = (props.has_menu_bar() && !props.bus_name.is_empty())
-                    .then_some(MenuAddress::Gtk(props));
-                state.set_menu_address(&data.surface, address);
+                if props.has_menu_bar() && !props.bus_name.is_empty() {
+                    state.announce_menu_address(&data.surface, MenuAddress::Gtk(props));
+                } else {
+                    state.withdraw_menu_address(&data.surface);
+                }
             }
             gtk_surface1::Request::Present { .. } | gtk_surface1::Request::RequestFocus { .. } => {
                 if let Some(id) = state.window_id_for_surface(&data.surface) {
                     state.command(Command::FocusWindow { window: id });
                 }
             }
-            gtk_surface1::Request::Release => state.set_menu_address(&data.surface, None),
+            gtk_surface1::Request::Release => state.withdraw_menu_address(&data.surface),
             _ => {}
         }
     }
@@ -243,7 +247,58 @@ impl Cupertino {
         }
     }
 
-    /// A client announced (or withdrew) the menu export of `surface`.
+    /// A client announced where `surface` exports its menus. The surface has none until the owner of the bus name is
+    /// checked to be the client or its sandbox instance (`crate::owner_check`).
+    pub fn announce_menu_address(&mut self, surface: &WlSurface, address: MenuAddress) {
+        self.set_menu_address(surface, None);
+        let Some(client) = surface.client() else {
+            return;
+        };
+        let name = address.bus_name().to_owned();
+        self.menu_bars.announce(surface, address);
+        self.check_owner(OwnerCheck {
+            key: OwnerKey::MenuAddress(surface.id()),
+            name,
+            client,
+        });
+    }
+
+    /// The client withdrew the menu export of `surface`.
+    pub fn withdraw_menu_address(&mut self, surface: &WlSurface) {
+        self.menu_surface_destroyed(surface);
+        self.set_menu_address(surface, None);
+    }
+
+    /// `surface` is gone: the check of its announcement is cancelled.
+    pub fn menu_surface_destroyed(&mut self, surface: &WlSurface) {
+        self.menu_bars.take_announced(&surface.id());
+        self.cancel_owner_check(&OwnerKey::MenuAddress(surface.id()));
+    }
+
+    /// The check of the latest announcement of `surface` returned: on a match the address is read from the owner's
+    /// unique name; else the surface has no menus.
+    pub(crate) fn menu_owner_checked(
+        &mut self,
+        surface: ObjectId,
+        verdict: Result<String, OwnerRefusal>,
+    ) {
+        let Some((surface, address)) = self.menu_bars.take_announced(&surface) else {
+            return;
+        };
+        if !surface.is_alive() {
+            return;
+        }
+        match verdict {
+            Ok(owner) => self.set_menu_address(&surface, Some(address.with_bus_name(owner))),
+            Err(refusal) => tracing::warn!(
+                name = ?address.bus_name(),
+                ?refusal,
+                "the bus name a window announced for its menus is not its own: the menu bar is not told of it"
+            ),
+        }
+    }
+
+    /// Set (or withdraw) the menu address of `surface`; only a checked address is set.
     pub fn set_menu_address(&mut self, surface: &WlSurface, address: Option<MenuAddress>) {
         let root = self
             .root_window_surface(surface)

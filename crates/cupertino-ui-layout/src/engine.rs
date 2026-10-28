@@ -161,7 +161,12 @@ impl<T: LayoutTree> Engine<'_, T> {
             ContainerKind::Leaf => {
                 let measured = tree.measure_leaf(id, inner);
                 let (w, h) = (measured.size.width, measured.size.height);
-                if !w.is_finite() || !h.is_finite() || w < 0.0 || h < 0.0 {
+                if !w.is_finite()
+                    || !h.is_finite()
+                    || w < 0.0
+                    || h < 0.0
+                    || measured.baseline.is_some_and(|b| !b.is_finite())
+                {
                     return Err(LayoutError::NonFiniteValue);
                 }
                 Arranged {

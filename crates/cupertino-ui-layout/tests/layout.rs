@@ -402,14 +402,64 @@ fn a_cycle_and_an_oversized_tree_are_refused() {
     );
 }
 
-#[test]
-fn deeply_nested_stacks_lay_out_in_linear_work() {
+/// Alternating axes with every flex and alignment mode mixed in: `depth` levels, each holding a leaf and the next level.
+fn nested(depth: usize) -> (TestTree, usize) {
     let mut t = TestTree::default();
     let mut inner = t.leaf(10.0, 10.0);
-    for _ in 0..200 {
-        inner = t.stack(Axis::Horizontal, 0.0, vec![inner]);
-        set_stack(&mut t, inner, Align::Stretch, Justify::Start);
+    for level in 0..depth {
+        let sibling = t.leaf(5.0 + (level % 7) as f64, 4.0);
+        t.flex(
+            sibling,
+            match level % 3 {
+                0 => Flex::grow(1.0),
+                1 => Flex {
+                    grow: 0.0,
+                    shrink: 1.0,
+                    basis: None,
+                },
+                _ => Flex::NONE,
+            },
+        );
+        t.flex(
+            inner,
+            if level % 2 == 0 {
+                Flex::grow(2.0)
+            } else {
+                Flex {
+                    grow: 1.0,
+                    shrink: 1.0,
+                    basis: None,
+                }
+            },
+        );
+        let axis = if level % 2 == 0 {
+            Axis::Horizontal
+        } else {
+            Axis::Vertical
+        };
+        inner = t.stack(axis, 1.0, vec![sibling, inner]);
+        let align = [Align::Center, Align::Stretch, Align::Start, Align::End][level % 4];
+        set_stack(&mut t, inner, align, Justify::Center);
+        if level % 5 == 0 {
+            t.size(inner, SizeSpec::Fill, SizeSpec::Fill);
+        }
     }
-    let r = t.run_tight(inner, Size::new(50.0, 40.0), LayoutDirection::Ltr);
-    assert_eq!(r.nodes.len(), 201);
+    (t, inner)
+}
+
+#[test]
+fn layout_work_grows_linearly_with_depth_on_mixed_nested_stacks() {
+    let mut calls = Vec::new();
+    for depth in [25, 50, 100, 200] {
+        let (t, root) = nested(depth);
+        let r = t.run_tight(root, Size::new(900.0, 700.0), LayoutDirection::Ltr);
+        assert_eq!(r.nodes.len(), 2 * depth + 1);
+        calls.push((depth, t.leaf_measures.get()));
+    }
+    for (depth, measures) in &calls {
+        assert!(
+            *measures <= 4 * (2 * depth + 1),
+            "{depth} levels took {measures} leaf measurements"
+        );
+    }
 }

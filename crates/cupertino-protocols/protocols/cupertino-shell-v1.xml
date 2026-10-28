@@ -291,7 +291,8 @@
     <event name="active_app">
       <description summary="the active application changed">
         Application id (the desktop entry id when known) and title of the active window; both
-        are empty when no window is active.
+        are empty when no window is active. Each is cut to at most 1024 bytes at a UTF-8
+        character boundary.
       </description>
       <arg name="app_id" type="string"/>
       <arg name="title" type="string"/>
@@ -540,7 +541,8 @@
     <event name="window">
       <description summary="a window appeared or changed">
         Application id (the desktop entry id when known), title and state of a window. Sent
-        when the window is mapped and again whenever one of these changes.
+        when the window is mapped and again whenever one of these changes. The application id
+        and the title are each cut to at most 1024 bytes at a UTF-8 character boundary.
       </description>
       <arg name="id" type="uint"/>
       <arg name="app_id" type="string"/>

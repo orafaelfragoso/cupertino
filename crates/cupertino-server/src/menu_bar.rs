@@ -35,8 +35,9 @@ const INACTIVE_DIM: f64 = 0.4;
 /// Most windows the window list of a group names.
 const MAX_APP_WINDOWS: usize = 1000;
 
-/// Longest window title, in bytes, a window list entry carries.
-const MAX_TITLE_BYTES: usize = 1024;
+/// Longest window title or application id, in bytes, an event to a shell client carries: a client sets both to any
+/// length, and one message must stay under the 4096 bytes the Wayland wire allows.
+pub(crate) const MAX_TEXT_BYTES: usize = 1024;
 
 /// The actions a bar shows the chord of, each with the binding action that runs it.
 const BOUND_ACTIONS: [(BoundAction, Action); 13] = [
@@ -108,7 +109,10 @@ struct AppWindow {
 impl Feed {
     /// Send the group: `active_app`, one menu event, `window_state`, the window list, `done`.
     fn send(&self, bar: &CupertinoMenuBarV1) {
-        bar.active_app(self.app_id.clone(), self.title.clone());
+        bar.active_app(
+            cut_text(&self.app_id).to_owned(),
+            cut_text(&self.title).to_owned(),
+        );
         match &self.menu {
             None => bar.menu_none(),
             Some(MenuAddress::DbusMenu { service, path }) => {
@@ -159,9 +163,9 @@ fn can_zoom(window: &Window) -> bool {
         .is_none_or(|(a, b)| a != b)
 }
 
-/// `title` cut to at most [`MAX_TITLE_BYTES`] at a character boundary.
-fn cut_title(title: &str) -> &str {
-    &title[..title.floor_char_boundary(MAX_TITLE_BYTES)]
+/// `text` cut to at most [`MAX_TEXT_BYTES`] at a character boundary.
+pub(crate) fn cut_text(text: &str) -> &str {
+    &text[..text.floor_char_boundary(MAX_TEXT_BYTES)]
 }
 
 /// The physical keys that make the logical `chord` under `profile`, in the shortcut file's syntax; `None` when no
@@ -431,7 +435,7 @@ impl Cupertino {
                 flags.set(AppWindowFlags::Minimized, w.state().is_minimized());
                 AppWindow {
                     id: w.id.0 as u32,
-                    title: cut_title(&w.title).to_string(),
+                    title: cut_text(&w.title).to_string(),
                     flags,
                 }
             })
@@ -871,12 +875,12 @@ mod tests {
 
     #[test]
     fn a_long_title_is_cut_at_a_character_boundary() {
-        assert_eq!(cut_title("Notes"), "Notes");
-        let exact = "a".repeat(MAX_TITLE_BYTES);
-        assert_eq!(cut_title(&exact), exact);
+        assert_eq!(cut_text("Notes"), "Notes");
+        let exact = "a".repeat(MAX_TEXT_BYTES);
+        assert_eq!(cut_text(&exact), exact);
         // the two-byte character spans the limit: it goes as a whole
-        let long = format!("{}é{}", "a".repeat(MAX_TITLE_BYTES - 1), "b".repeat(10));
-        assert_eq!(cut_title(&long), "a".repeat(MAX_TITLE_BYTES - 1));
+        let long = format!("{}é{}", "a".repeat(MAX_TEXT_BYTES - 1), "b".repeat(10));
+        assert_eq!(cut_text(&long), "a".repeat(MAX_TEXT_BYTES - 1));
     }
 
     #[test]

@@ -39,6 +39,7 @@ use smithay::wayland::compositor::{with_states, Cacheable};
 
 use crate::app_effects_v1::surface_backdrops;
 use crate::authorization::{authorized, refuse, require, ShellRole};
+use crate::menu_bar::cut_text;
 use crate::state::Cupertino;
 
 /// Where a minimizing window lands: the dock's `set_minimize_target`, in surface-local logical
@@ -518,8 +519,8 @@ impl Cupertino {
                 (
                     w.id.0 as u32,
                     WindowInfo {
-                        app_id,
-                        title: w.title.clone(),
+                        app_id: cut_text(&app_id).to_owned(),
+                        title: cut_text(&w.title).to_owned(),
                         state,
                     },
                 )

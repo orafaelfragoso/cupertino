@@ -60,6 +60,7 @@ impl Application for Counter {
                 Element::new(leaf("plus")).key("plus"),
                 Element::new(Leaf {
                     secret: true,
+                    animated: true,
                     ..leaf("minus")
                 })
                 .key("minus"),
@@ -436,7 +437,11 @@ fn a_window_the_renderer_cannot_draw_is_reported_and_draws_again_after_a_drawabl
         "no retry until something changes"
     );
     key(&mut rt, window, 0xff09, Mods::NONE);
-    assert_eq!(errors.borrow().len(), 2, "a change tries again");
+    assert_eq!(
+        errors.borrow().len(),
+        1,
+        "a change tries again, and the same error is not reported again"
+    );
     assert!(!rt.exited());
 
     configure(&mut rt, window, 3);
@@ -448,7 +453,7 @@ fn a_window_the_renderer_cannot_draw_is_reported_and_draws_again_after_a_drawabl
         ]
     );
     assert_eq!(damage.borrow().last(), Some(&DamageRegion::Full));
-    assert_eq!(errors.borrow().len(), 2);
+    assert_eq!(errors.borrow().len(), 1);
 }
 
 #[test]
@@ -482,4 +487,49 @@ fn an_assistive_technology_listening_from_the_start_gets_each_window_once() {
     let updates = adapter.updates.borrow();
     assert_eq!(updates.len(), 1);
     assert_eq!(updates[0].nodes, rt.snapshot(window).unwrap().accessibility);
+}
+
+#[test]
+fn a_failing_window_reports_each_error_once_and_its_animation_waits_for_a_frame_that_presents() {
+    let damage = Rc::default();
+    let broken = Rc::new(Cell::new(false));
+    let errors = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&errors);
+    let mut options = options_with(&damage, &broken);
+    options.on_window_error = Some(Box::new(move |w, e| seen.borrow_mut().push((w, e.clone()))));
+    let mut rt = Rt::new(FakeSystem::default(), options);
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure(&mut rt, window, 1);
+    key(&mut rt, window, 0xff09, Mods::NONE);
+    key(&mut rt, window, 0xff09, Mods::NONE);
+    let frame = |rt: &mut Rt| {
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(1)));
+        rt.step(steps()).unwrap();
+    };
+    frame(&mut rt);
+    let presented = rt.window_system().presented.len();
+
+    broken.set(true);
+    key(&mut rt, window, 0x61, Mods::NONE);
+    frame(&mut rt);
+    assert_eq!(errors.borrow().len(), 1);
+    let requested = rt.window_system().frames_requested;
+    frame(&mut rt);
+    frame(&mut rt);
+    assert_eq!(errors.borrow().len(), 1, "the same error is reported once");
+    assert_eq!(
+        rt.window_system().frames_requested,
+        requested,
+        "the animation asks for no frames while the window fails"
+    );
+
+    broken.set(false);
+    key(&mut rt, window, 0x61, Mods::NONE);
+    assert_eq!(rt.window_system().presented.len(), presented + 1);
+    assert!(rt.window_system().frames_requested > requested);
+    broken.set(true);
+    frame(&mut rt);
+    assert_eq!(errors.borrow().len(), 2, "a failure after a success is new");
 }

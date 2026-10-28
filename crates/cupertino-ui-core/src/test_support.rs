@@ -106,6 +106,8 @@ pub(crate) struct Leaf {
     pub(crate) capture: bool,
     /// A protected text field: it marks its value protected and, when focused, asks for the input method with its text.
     pub(crate) secret: bool,
+    /// A key starts an animation that repaints and asks for the next frame on every frame.
+    pub(crate) animated: bool,
 }
 
 pub(crate) fn leaf(label: &'static str) -> Leaf {
@@ -116,6 +118,7 @@ pub(crate) fn leaf(label: &'static str) -> Leaf {
         stop: false,
         capture: false,
         secret: false,
+        animated: false,
     }
 }
 
@@ -165,7 +168,18 @@ impl<M: From<String> + 'static> Widget<M> for Leaf {
                 }
             }
             Event::Pointer(PointerEvent::Scroll { .. }, _) => "scroll",
-            Event::Key(..) => "key",
+            Event::Key(..) => {
+                if self.animated {
+                    cx.request_animation_frame();
+                    cx.request_paint();
+                }
+                "key"
+            }
+            Event::AnimationFrame(_) => {
+                cx.request_animation_frame();
+                cx.request_paint();
+                "frame"
+            }
             Event::Focus { gained: true, .. } => {
                 if self.secret {
                     cx.set_text_input(Some(TextInputState {

@@ -9,8 +9,9 @@ use crate::dbus::sni::{self, StatusItem};
 use crate::desktop::AppName;
 use crate::extras::{ExtraKind, Extras, SystemRow};
 use crate::fallback::{self, Chords, FallbackAction, WindowRow};
-use crate::item::{MenuItem, Shortcut, ShortcutModifier};
+use crate::item::{ItemId, MenuItem, Shortcut, ShortcutModifier};
 use crate::layout::{BarContent, StatusEntry};
+use crate::merge::{self, Export, Exporter};
 use crate::raster::{PRIVACY_DOT_PT, STATUS_ICON_PT};
 use crate::recent::RecentItems;
 use crate::source::{GtkMenuProps, KdeAppMenu, MenuSource, MenuSourceMap, WindowKey};
@@ -136,6 +137,8 @@ pub struct BarFeed {
     /// Identifies the bar's announced menu in [`Shared::sources`].
     key: WindowKey,
     app: Option<AppName>,
+    /// The active application's id; its last component names the application's own exported menu.
+    app_id: String,
     window: WindowState,
     /// The active application's windows, for the window list.
     windows: Vec<AppWindow>,
@@ -149,6 +152,7 @@ impl BarFeed {
             key,
             edits,
             app: None,
+            app_id: String::new(),
             window: WindowState {
                 can_zoom: true,
                 workspace: 0,
@@ -167,6 +171,7 @@ impl BarFeed {
     ) {
         if let Some(active) = &update.active_app {
             self.app = (!active.app_id.is_empty()).then(|| names(&active.app_id));
+            self.app_id.clone_from(&active.app_id);
         }
         if let Some(menu) = &update.menu {
             match menu {
@@ -209,43 +214,37 @@ impl BarFeed {
     }
 
     /// The bar content: the application menu and the application's menus (those of its exporter
-    /// once loaded, else the synthetic Window menu), the status items and the clock. Without an
+    /// once loaded, merged with the bar's own, else the synthetic ones), the status items and the clock. Without an
     /// active window the desktop's menu stands in for the application menu.
     pub fn content(&self, shared: &Shared) -> BarContent {
         let (app_name, app_menu, menus) = match &self.app {
             Some(app) => {
-                let source = self.source(shared);
-                let menus = if source.is_exported() {
-                    shared
-                        .layouts
-                        .get(&source)
-                        .map(top_level_menus)
-                        .unwrap_or_default()
-                } else {
-                    let current = Some(self.window.workspace).filter(|w| *w > 0);
-                    let windows: Vec<WindowRow> = self
-                        .windows
-                        .iter()
-                        .map(|w| WindowRow {
-                            title: &w.title,
-                            active: w.active,
-                            minimized: w.minimized,
-                        })
-                        .collect();
-                    fallback::menus(
-                        self.window.workspaces,
-                        current,
-                        self.window.can_zoom,
-                        &windows,
-                        &shared.chords,
-                        self.edits,
-                    )
+                let current = Some(self.window.workspace).filter(|w| *w > 0);
+                let windows: Vec<WindowRow> = self
+                    .windows
+                    .iter()
+                    .map(|w| WindowRow {
+                        title: &w.title,
+                        active: w.active,
+                        minimized: w.minimized,
+                    })
+                    .collect();
+                let system = fallback::menus(
+                    self.window.workspaces,
+                    current,
+                    self.window.can_zoom,
+                    &windows,
+                    &shared.chords,
+                    self.edits,
+                );
+                let app_menu = fallback::app_menu(&app.name, &shared.chords);
+                let (app_menu, menus) = match self.export(shared) {
+                    Some(export) => export.merge(app_menu, system, shared.chords.primary),
+                    // nothing until the exporter's tree arrived
+                    None if self.source(shared).is_exported() => (app_menu, Vec::new()),
+                    None => (app_menu, system),
                 };
-                (
-                    app.name.clone(),
-                    fallback::app_menu(&app.name, &shared.chords),
-                    menus,
-                )
+                (app.name.clone(), app_menu, menus)
             }
             None => (
                 "Desktop".to_string(),
@@ -286,6 +285,34 @@ impl BarFeed {
             clock: shared.clock.clone(),
             control_panel: true,
         }
+    }
+
+    /// The active window's exported tree once it arrived, with the application's names.
+    fn export<'a>(&'a self, shared: &'a Shared) -> Option<Export<'a>> {
+        let app = self.app.as_ref()?;
+        let source = self.source(shared);
+        let exporter = match source {
+            MenuSource::Kde(_) => Exporter::DbusMenu,
+            MenuSource::Gtk(_) => Exporter::Gtk,
+            MenuSource::Synthetic => return None,
+        };
+        let tree = shared
+            .layouts
+            .get(&source)
+            .filter(|t| !t.children.is_empty())?;
+        let id_name = self.app_id.rsplit(['.', '/']).next().unwrap_or_default();
+        Some(Export {
+            tree,
+            exporter,
+            names: [&app.name, id_name],
+            class: merge::client_class(&self.app_id),
+        })
+    }
+
+    /// The exporter's item the App menu's item of `action` invokes instead of the bar's own action: About, Settings…
+    /// and Quit when the exporter has an item of their role.
+    pub fn rebound(&self, shared: &Shared, action: FallbackAction) -> Option<ItemId> {
+        self.export(shared)?.roles().target(action)
     }
 
     /// The request that loads the active window's menus when it exports some that are not loaded
@@ -368,19 +395,6 @@ fn gtk_props(gtk: &GtkMenu) -> GtkMenuProps {
         menubar_object_path: gtk.menubar_object_path.clone(),
         app_menu_object_path: gtk.app_menu_object_path.clone(),
     }
-}
-
-/// The menus of an exporter's tree: its top-level submenus with a label.
-fn top_level_menus(root: &MenuItem) -> Vec<MenuItem> {
-    root.children
-        .iter()
-        .filter(|c| c.visible && !c.separator && !c.label.is_empty())
-        .cloned()
-        .map(|mut c| {
-            c.has_submenu = true;
-            c
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -536,7 +550,13 @@ mod tests {
                 .iter()
                 .map(|m| (m.label.as_str(), m.has_submenu))
                 .collect::<Vec<_>>(),
-            [("File", true), ("Edit", true)]
+            [
+                ("File", true),
+                ("Edit", true),
+                ("Window", true),
+                ("Help", true)
+            ],
+            "merged with the bar's Window and Help"
         );
     }
 
@@ -601,7 +621,7 @@ mod tests {
             "its own tree is not loaded yet"
         );
         assert_eq!(focus(WindowMenu::None), SYNTHETIC_MENUS);
-        assert_eq!(focus(dbusmenu()), ["File", "Edit"]);
+        assert_eq!(focus(dbusmenu()), ["File", "Edit", "Window", "Help"]);
     }
 
     #[test]

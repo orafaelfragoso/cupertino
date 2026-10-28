@@ -189,8 +189,9 @@ digraph "target" {
   "cupertino-menubar" -> "cupertino-defaults";
   "cupertino-menubar" -> "cupertino-geometry";
   "cupertino-menubar" -> "cupertino-icons";
-  "cupertino-menubar" -> "cupertino-menu-model" [label="dev"];
-  "cupertino-menubar" -> "cupertino-modifiers" [label="dev"];
+  "cupertino-menubar" -> "cupertino-keyboard";
+  "cupertino-menubar" -> "cupertino-menu-model";
+  "cupertino-menubar" -> "cupertino-modifiers";
   "cupertino-menubar" -> "cupertino-peer";
   "cupertino-menubar" -> "cupertino-protocol-app";
   "cupertino-menubar" -> "cupertino-shell-client";

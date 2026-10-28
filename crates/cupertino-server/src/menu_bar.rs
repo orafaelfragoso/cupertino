@@ -78,8 +78,9 @@ pub struct GtkMenuProps {
 }
 
 impl GtkMenuProps {
-    pub fn has_menu_bar(&self) -> bool {
-        self.menubar_object_path.is_some()
+    /// The window exports menus: a menu bar, an application menu or both.
+    pub fn has_menus(&self) -> bool {
+        self.menubar_object_path.is_some() || self.app_menu_object_path.is_some()
     }
 }
 
@@ -92,7 +93,22 @@ pub enum MenuAddress {
     Gtk(GtkMenuProps),
 }
 
+/// The kind of a menu address. A window keeps one checked address of each kind; the bar is told the GMenuModel one
+/// when there is one, since its items name their actions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MenuKind {
+    Gtk,
+    DbusMenu,
+}
+
 impl MenuAddress {
+    pub fn kind(&self) -> MenuKind {
+        match self {
+            MenuAddress::DbusMenu { .. } => MenuKind::DbusMenu,
+            MenuAddress::Gtk(_) => MenuKind::Gtk,
+        }
+    }
+
     /// The bus name the menus are read from.
     pub fn bus_name(&self) -> &str {
         match self {
@@ -294,12 +310,12 @@ struct AppMenu {
 pub struct MenuBars {
     pub set: MenuBarSet,
     bars: Vec<Bar>,
-    /// Addresses announced by windows, by window id.
-    addresses: HashMap<u64, MenuAddress>,
+    /// Addresses announced by windows, by window id and kind.
+    addresses: HashMap<(u64, MenuKind), MenuAddress>,
     /// Addresses announced before the window mapped.
     pending: Vec<(WlSurface, MenuAddress)>,
-    /// Addresses announced and waiting for the check of their owner, by announcing surface.
-    announced: HashMap<ObjectId, (WlSurface, MenuAddress)>,
+    /// Addresses announced and waiting for the check of their owner, by announcing surface and kind.
+    announced: HashMap<(ObjectId, MenuKind), (WlSurface, MenuAddress)>,
     /// The last `edit` request still to be sent; a newer one replaces it.
     edit: Option<PendingEdit>,
     app_menus: Vec<AppMenu>,
@@ -374,17 +390,40 @@ impl MenuBars {
         self.bars.retain(|b| b.output != output);
     }
 
-    /// Announce (or withdraw with `None`) the address of window `key`.
-    pub fn set_address(&mut self, key: u64, address: Option<MenuAddress>) {
+    /// Announce (or withdraw with `None`) the address of kind `kind` of window `key`.
+    pub fn set_address(&mut self, key: u64, kind: MenuKind, address: Option<MenuAddress>) {
         match address {
-            Some(a) => self.addresses.insert(key, a),
-            None => self.addresses.remove(&key),
+            Some(a) => self.addresses.insert((key, kind), a),
+            None => self.addresses.remove(&(key, kind)),
         };
     }
 
-    /// Keep an address announced before its window mapped (`None` withdraws).
-    pub fn set_pending(&mut self, surface: &WlSurface, address: Option<MenuAddress>) {
-        self.pending.retain(|(s, _)| s != surface);
+    /// The address the bar is told for window `key`: the GMenuModel one when it has a menu bar, else the DBusMenu one,
+    /// else a GMenuModel application menu alone (which must not hide a whole DBusMenu menu bar).
+    pub fn address(&self, key: u64) -> Option<&MenuAddress> {
+        let gtk = self.addresses.get(&(key, MenuKind::Gtk));
+        let has_menu_bar =
+            |a: &&MenuAddress| matches!(a, MenuAddress::Gtk(p) if p.menubar_object_path.is_some());
+        gtk.filter(has_menu_bar)
+            .or_else(|| self.addresses.get(&(key, MenuKind::DbusMenu)))
+            .or(gtk)
+    }
+
+    /// Window `key`, whose root surface is `root`, is gone: its addresses go with it.
+    pub fn forget_window(&mut self, key: u64, root: &WlSurface) {
+        self.addresses.retain(|(window, _), _| *window != key);
+        self.pending.retain(|(surface, _)| surface != root);
+    }
+
+    /// Keep an address of kind `kind` announced before its window mapped (`None` withdraws).
+    pub fn set_pending(
+        &mut self,
+        surface: &WlSurface,
+        kind: MenuKind,
+        address: Option<MenuAddress>,
+    ) {
+        self.pending
+            .retain(|(s, a)| s != surface || a.kind() != kind);
         if let Some(a) = address {
             self.pending.push((surface.clone(), a));
         }
@@ -400,15 +439,19 @@ impl MenuBars {
     }
 
     /// Keep `address` of `surface` until the owner of its bus name is checked (`crate::owner_check`); a newer
-    /// announcement replaces it.
+    /// announcement of the same kind replaces it.
     pub fn announce(&mut self, surface: &WlSurface, address: MenuAddress) {
         self.announced
-            .insert(surface.id(), (surface.clone(), address));
+            .insert((surface.id(), address.kind()), (surface.clone(), address));
     }
 
-    /// The address `surface` announced and is being checked, taken: withdrawn, or the check returned.
-    pub fn take_announced(&mut self, surface: &ObjectId) -> Option<(WlSurface, MenuAddress)> {
-        self.announced.remove(surface)
+    /// The address of kind `kind` `surface` announced and is being checked, taken: withdrawn, or the check returned.
+    pub fn take_announced(
+        &mut self,
+        surface: &ObjectId,
+        kind: MenuKind,
+    ) -> Option<(WlSurface, MenuAddress)> {
+        self.announced.remove(&(surface.clone(), kind))
     }
 }
 
@@ -571,7 +614,7 @@ impl Cupertino {
                 .map(|a| a.identity.clone())
                 .unwrap_or_default(),
             title: window.title.clone(),
-            menu: self.menu_bars.addresses.get(&window.id.0).cloned(),
+            menu: self.menu_bars.address(window.id.0).cloned(),
             can_zoom: can_zoom(window),
             workspace: workspaces
                 .iter()
@@ -1207,7 +1250,7 @@ impl Dispatch<CupertinoAppMenuV1, AppMenuData> for Cupertino {
         let menu = state.menu_bars.app_menus.remove(i);
         if let (true, Some(surface)) = (menu.announced, &data.surface) {
             if surface.is_alive() {
-                state.withdraw_menu_address(surface);
+                state.withdraw_menu_address(surface, MenuKind::Gtk);
             }
         }
     }

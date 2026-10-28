@@ -13,13 +13,14 @@ computes, and feeds the crate pointer, key and timer events with absolute timest
 | `clock` | The clock text (`clock_text`: weekday, day and short month, 12 / 24-hour time, seconds, day period, flashing separators) and its ticks (`next_tick`, `tick_interval`) from `ClockSettings`, which `cupertino_defaults::menubar` reads from and writes to `menubar.conf` (the `clock.* keys, bad lines reported with their numbers). |
 | `extras` | The bar's own status items (Wi-Fi, battery, Bluetooth, Focus): which show, their icons, menus (`ExtraMenu`) and row actions (`ExtraAction`), from an `Extras` snapshot of the services; the system menu (`system_menu`, rows at fixed ids `SystemRow`) and its Recent Items submenu (`recent_items`). |
 | `recent` | What Recent Items lists (`RecentItems`): `RecentSources::read` takes the launcher's applications in its order (`cupertino_apps::frecency`, ids without an installed visible desktop entry skipped) and the documents of `recently-used.xbel` newest first (`cupertino_apps::recent`, missing files skipped), at most 10 of each, leaving out what was used at or before the last Clear Menu (`RecentSources::clear`, the bar's own `$XDG_DATA_HOME/cupertino/menubar-recent-items-cleared`). It never writes the launcher's or the applications' files. |
-| `item` | `MenuItem`: label, mnemonic, separator, enabled, visible, `Toggle`, `Shortcut`, icon name / data, children. |
+| `item` | `MenuItem`: label, mnemonic, separator, enabled, visible, `Toggle`, `Shortcut`, icon name / data, children, the GMenuModel action and accelerator, and its `Origin` (the bar's or an exporter's), by which an activated item is routed. |
 | `fallback` | Synthetic menus of an app that exports none: the app menu (About, Settings…, Hide, Hide Others, Show All, Quit; Settings… and Show All on the desktop), File (Close Window), Edit (Undo, Redo, Cut, Copy, Paste, Select All; enabled on a bar whose server takes `edit`, version 11, and disabled below), View (Enter Full Screen), Window (Minimize, Zoom, Move to Workspace, Tile Window, Bring All to Front, the window list of at most 1000 rows with the active window checked and minimized ones marked, Close Window) and Help (the search row, disabled). Items of server actions show the chord the server binds (`Chords`), none while it sent none; the app's own convention chords use the primary modifier the server names. Ids are negative and stable; `action_for` maps activated ids back to `FallbackAction`. |
+| `merge` | `Export::merge`: an exporter's tree merged with the bar's App, Window and Help menus (roles, rebinding to the exporter's items, order, ids; see *Merged menus*); `Export::roles` for the routing, `label_role`, `accel_shortcut`. |
 | `source` | `MenuSourceMap`: window → `MenuSource::{Kde, Gtk, Synthetic}`. A window gets only the menus it exported, never another window of its application. |
 | `dbus::dbusmenu` | `DBusMenuClient`: `GetLayout` parsing (`parse_layout`), `Event`, `AboutToShow`, and `LayoutUpdated` / `ItemsPropertiesUpdated` / `ItemActivationRequested` as a `MenuUpdate` stream, property update helpers. |
 | `dbus::sni` | `WatcherService` serving `org.kde.StatusNotifierWatcher` (the compositor is the host), `WatcherClient`, `fetch_item` (icons including ARGB pixmaps, status, tooltip, menu path), `load_menu` through DBusMenu, `activate_item` / `secondary_activate_item` / `context_menu_item` / `scroll_item`, `best_pixmap`. |
 | `dbus::registrar` | The `com.canonical.AppMenu.Registrar` stub the worker serves after the watcher; the process asks it to own the name with the first bar and to release it with the last. |
-| `dbus::gtk` | `GtkMenuClient`: an `org.gtk.Menus` + `org.gtk.Actions` reader (`Start`, sections flattened, `_` as the only mnemonic marker, namespaces, accelerators, enabled / toggle state from actions) and `Activate`. |
+| `dbus::gtk` | `GtkMenuClient`: an `org.gtk.Menus` + `org.gtk.Actions` reader (`Start`, sections flattened, `_` as the only mnemonic marker, namespaces, accelerators kept as text, enabled / toggle state from actions; the application menu read next to the menu bar and leading the tree under `GTK_APP_MENU`) and `Activate`. |
 
 Feature `dbus` (default) enables the zbus-based layer. Without it the crate depends only on `cupertino-animation`. The D-Bus
 layer is runtime agnostic (zbus with its `async-io` backend). Drive the futures with any executor or `zbus::block_on`.
@@ -91,6 +92,45 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   Edit items send `edit` before their menu closes, and the server types the chord into the key window once the keyboard
   is back there; below version 11 they stay disabled. The `engage` event focuses the bar's first
   title. Arrows, Return and Escape navigate. Type-ahead needs a keymap and is not available.
+- **Merged menus (`merge`).** An exporter's tree is merged with the bar's own menus once it has arrived; nothing shows
+  before. The server reports one address per window, the GMenuModel one when the window announced both.
+  - Roles: about, preferences, quit, close and full screen. A GMenuModel item has the role of its action (`app.about`;
+    `app.preferences` or `app.settings`; `app.quit`; `win.close`; `win.fullscreen`). A DBusMenu item has the role of its
+    label, compared without mnemonic markers, a trailing "…" or "..." and case: about starts with "About"; quit is
+    "Quit", "Quit" and anything, or "Exit"; preferences is "Preferences", "Settings", "Options" or "Configure <name>";
+    close is "Close" or "Close Window"; full screen is "Full Screen" or "Enter Full Screen". English only; any other
+    label stays as exported. `<name>` is the desktop entry's `Name` or the last component of the application id.
+  - App menu: always the bar's. About, Settings… and Quit invoke the exporter's first item of their role (looked for in
+    the application's own menu, File, Edit, then the other menus); without one About shows the About panel, Settings…
+    is disabled and Quit closes every window. The exporter's about, preferences and quit items leave the application's
+    own menu, File and Edit, and the separators left leading, trailing or doubled go; a menu the removal emptied goes.
+    The rest of the application's own menu goes between About and Settings…, after a separator: the GMenuModel
+    application menu (`app_menu_object_path`), or the top-level DBusMenu menu titled (any case) with `<name>`.
+  - File, Edit and any other menu show as exported. View shows as exported, with a separator and Enter Full Screen
+    appended when it has no full screen item and is loaded. Window is the bar's Window menu with the exporter's items
+    that are no duplicates (by role close, or by label Minimize, Zoom, Maximize, Close, Close Window, Bring All to
+    Front, Move to Workspace, Move to Desktop) below a separator at its end. Help is the bar's, with the exporter's items
+    below the search row and a separator. Menus the exporter lacks are not added, except Window and Help. The order is
+    File, Edit, View, the others, Window, Help; an application that exports only a GMenuModel application menu gets
+    Window and Help.
+  - Ids: the bar's items keep their fixed ids, all at most -1000 (-1107…-1110 for the separators the merge adds);
+    the exporter's keep theirs, so a layout update leaves an open menu in place. Each item carries its origin
+    (`item::Origin`, set to the exporter by the DBusMenu and GMenuModel readers), and an activated item is routed by the
+    origin of the item shown in the menu that was open, never by its id: the bar's own items act through the server
+    (rebound About, Settings… and Quit activate the exporter's item), the exporter's go to the exporter. The DBusMenu
+    reader also leaves out an exporter's item whose id is in the bar's range (at most -1000), so ids never repeat in
+    one menu; the GMenuModel reader numbers its items from 1. The bar's
+    Window and Help menus send the exporter no `AboutToShow`, so items an exporter fills in lazily there do not show.
+  - Accelerators: a GMenuModel item's `accel` names the physical keys the application receives; it is read with
+    `cupertino_menu_model::Chord::from_accel` and the modifier map of the server's profile (the primary modifier of the
+    shortcut group). The bar shows the keys the person presses. For a third-party application (an id that does not
+    start with `cupertino-`, the server's rule) the server makes Ctrl chords of Super chords, so the bar shows the
+    chord `cupertino_keyboard::rewrite::pressed_for` gives: under `cupertino`, `<Primary>q` shows as Super+Q (the
+    command glyph), `<Primary>F5` as Ctrl+F5 (function keys, Escape, Tab, Space, Delete and the arrows are not
+    rewritten); under `classic-pc` and for `cupertino-*` applications the accelerator shows as it is (`<Primary>q` is
+    Ctrl+Q, `<Super>q` Super+Q). Accepted gaps: the bar does not know `rewrite_off`, so an application opted out of the
+    rewrite shows Super+Q where only Ctrl+Q works; and it does not know `rewrite_terminals`, so a terminal is shown as
+    an ordinary application.
 - **Session.** The labels follow the appearance the server announces over `cupertino_session_v1`, read at start and redrawn on
   every change. The material follows it in the server. On `locked` the bars close every open menu and title focus.
 - **System menu.** The first slot draws the system mark (`cupertino_icons::system_mark`, tinted with the label colour) and

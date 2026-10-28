@@ -3,10 +3,13 @@
 //! retained node tree, routes events to [`Widget`]s, lays out, paints and keeps the accessibility tree.
 
 mod accessibility;
+mod clock;
+mod command;
 mod cx;
 mod focus;
 mod pointer;
 mod route;
+mod task;
 #[cfg(test)]
 mod test_support;
 mod tree;
@@ -16,6 +19,8 @@ pub use accessibility::{
     AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, AccessibleStates,
     AccessibleValue, Action, ActionData, ActionRequest, Checked, Relation, Role, TextSemantics,
 };
+pub use clock::MonotonicClock;
+pub use command::CommandRegistry;
 pub use cx::{EventCx, MeasureCx, PaintCx, SemanticsCx};
 pub use widget::{Change, Element, Propagation, Widget};
 
@@ -77,6 +82,7 @@ pub struct WindowKey(pub Key);
 pub struct Window<M> {
     pub key: WindowKey,
     pub spec: WindowSpec,
+    pub shortcuts: CommandRegistry<M>,
     pub content: Element<M>,
 }
 
@@ -180,7 +186,7 @@ pub struct Environment {
 }
 
 /// The runtime's time source; tests inject one.
-pub trait Clock {
+pub trait Clock: Send + Sync {
     fn now(&self) -> Timestamp;
 }
 
@@ -188,12 +194,6 @@ pub trait Clock {
 pub struct Shortcut {
     pub mods: Mods,
     pub keysym: Keysym,
-}
-
-/// A window's keyboard shortcuts, tried after the focused node and its ancestors let a key pass.
-#[derive(Debug, Default)]
-pub struct CommandRegistry {
-    _private: (),
 }
 
 /// Work a runtime step left for later, so a test can tell a settled runtime from one that is waiting.

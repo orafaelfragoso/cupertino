@@ -40,7 +40,8 @@ all on one thread.
   wait for the frame callback. A node repaints only when it, its size, its focus or the window's active state changed;
   damage is where changed nodes were and are, and a frame with no damage sends no buffer. A window that cannot be
   laid out, rendered or presented goes to `on_window_error` and tries again, whole, on its next change or configure,
-  whatever the cause: the renderer reports a target and content too large to draw with the same error. Other windows
+  whatever the cause: the renderer reports a target and content too large to draw with the same error. The same error
+  again is not reported again, and the window's animations ask for no frames until a frame presents. Other windows
   go on, and only a lost connection ends `step`.
 - **Scrolling.** A scroll container's offset is model state, counted from the start edge; core moves the content
   by it when placing nodes, so painting and hit-testing agree. In right-to-left layout, where layout mirrors the

@@ -243,8 +243,8 @@ impl Builder<'_> {
             if let Some(sub) = link(it, ":submenu") {
                 let id = self.new_id();
                 let children = self.build(sub, &ns);
-                let mut item = MenuItem::submenu(id, &label, children);
-                item.has_submenu = true;
+                let mut item = MenuItem::submenu(id, "", children);
+                (item.label, item.mnemonic) = split_gtk_mnemonic(&label);
                 out.push(item);
                 continue;
             }
@@ -470,7 +470,7 @@ mod tests {
                 0,
                 0,
                 vec![
-                    item(vec![("label", v("_File")), (":submenu", pair(0, 1))]),
+                    item(vec![("label", v("_File & Edit")), (":submenu", pair(0, 1))]),
                     item(vec![("label", v("View")), (":submenu", pair(0, 2))]),
                 ],
             ),
@@ -586,7 +586,7 @@ mod tests {
         let file = &b.items[0];
         assert_eq!(
             (file.label.as_str(), file.mnemonic, file.has_submenu),
-            ("File", Some('F'), true)
+            ("File & Edit", Some('F'), true)
         );
         let labels: Vec<&str> = file.children.iter().map(|c| c.label.as_str()).collect();
         assert_eq!(

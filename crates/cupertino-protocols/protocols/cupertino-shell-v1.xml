@@ -10,7 +10,7 @@
      ends: interfaces may change without a version bump until then.
   </description>
 
-  <interface name="cupertino_shell_v1" version="10">
+  <interface name="cupertino_shell_v1" version="11">
     <description summary="shell services of the server">
       Global singleton, offered only to the processes the server started for a shell role, on a
       connection of their own. Each request needs the role it creates: a connection that holds
@@ -19,7 +19,8 @@
       the backdrops and the title bar style of application windows to the public
       cupertino_app_effects_v1 protocol, which any client may use, and removes their requests here. Version 6 adds the
       session_action request of the menu bar object, version 7 the lock_requested event of the session object, version 8 the session_agent event of the menu bar
-      object, version 9 the log_out_requested event of the session object. An object this global
+      object, version 9 the log_out_requested event of the session object, version 10 the window list, the shortcuts and the further
+      window commands of the menu bar object, version 11 its edit request. An object this global
       creates has the version the global was bound at, so the since of each message of those
       objects is the shell version that added it.
     </description>
@@ -276,7 +277,7 @@
     </event>
   </interface>
 
-  <interface name="cupertino_menu_bar_v1" version="10">
+  <interface name="cupertino_menu_bar_v1" version="11">
     <description summary="the menu bar of one output">
       Events describe the active application and the menus its active window exports. They
       come in groups ended by a done event; the client applies a group at once. The first group
@@ -466,6 +467,7 @@
     <enum name="error">
       <entry name="invalid_command" value="0" summary="the window_command value is not an entry of the command enum"/>
       <entry name="invalid_session_action" value="1" summary="the session_action value is not an entry of the session_action enum"/>
+      <entry name="invalid_edit_action" value="2" summary="the edit value is not an entry of the edit_action enum" since="11"/>
     </enum>
 
     <request name="move_to_workspace">
@@ -501,6 +503,52 @@
         list can change in the meantime. The request is also ignored while the session is locked.
       </description>
       <arg name="id" type="uint"/>
+    </request>
+
+    <enum name="edit_action" since="11">
+      <entry name="undo" value="0"/>
+      <entry name="redo" value="1"/>
+      <entry name="cut" value="2"/>
+      <entry name="copy" value="3"/>
+      <entry name="paste" value="4"/>
+      <entry name="select_all" value="5"/>
+    </enum>
+
+    <request name="edit" since="11">
+      <description summary="an item of the Edit menu was chosen">
+        The server sends the key chord of the action to the key window, as if it was typed there.
+
+        The request counts only while a popup of this menu bar holds the popup grab when it
+        arrives; at any other time it is ignored. The target is the key window at that moment, and
+        only when it is the xdg toplevel of an application: never an X11 window, a lock surface,
+        the greeter, a layer surface or a surface of a shell process. Nothing is sent, and the
+        request is ignored without an error, while the session is locked or a lock is pending,
+        while the overview or the application switcher is open, or while another grab holds the
+        pointer or the keyboard.
+
+        The server keeps one edit; a newer request replaces it. It sends the edit once, on the
+        first change of keyboard focus after the popup grab ends, and only when that change gives
+        the keyboard to the target window and comes within 500 ms of the request's arrival. Any
+        other first focus, or no focus change within 500 ms, drops the edit. Every condition above
+        is checked again right before the chord is sent.
+
+        The chord depends on the application. A terminal (an application id in the server's list
+        of terminals, the list its keyboard rewrite reads) gets only copy and paste, as
+        Shift+Ctrl+c and Shift+Ctrl+v, and nothing for the other actions. A first-party
+        application (an id that starts with "cupertino-"), or an application the keyboard rewrite
+        is off for, gets the primary modifier of the modifier profile (Super under cupertino, Ctrl
+        under classic-pc) with z for undo, Shift and z for redo, and x, c, v and a for cut, copy,
+        paste and select all. Any other application gets the same keys with Ctrl, whatever the
+        profile: so a terminal missing from the list gets Ctrl+c on copy, as the keyboard rewrite
+        gives it for Super+c.
+
+        The client is told the chord's modifiers; then the key that types the letter in the active
+        layout (else the key the shortcuts' Latin fallback maps to it) is pressed and released at
+        once, and the client is told the real modifiers again. The key never repeats and never
+        runs a shortcut of the server. An action value outside edit_action is the error
+        invalid_edit_action.
+      </description>
+      <arg name="action" type="uint" enum="edit_action"/>
     </request>
   </interface>
 

@@ -2,6 +2,8 @@
 //! text-input focus, and the composing, committed and deleted text the input method answers with, one batch per
 //! `done`.
 
+use std::fmt;
+
 use cupertino_geometry::Rect;
 use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::{delegate_noop, Connection, Dispatch, QueueHandle};
@@ -16,8 +18,18 @@ use crate::Event;
 /// The most bytes of surrounding text one request carries (the protocol's limit).
 pub const MAX_SURROUNDING: usize = 4000;
 
-/// The plain text around the cursor of a text field, without its preedit, at most [`MAX_SURROUNDING`] bytes.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed text in a `Debug` print: its length only, so logging an event never logs what was typed.
+struct Redacted(usize);
+
+impl fmt::Debug for Redacted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "<{} bytes>", self.0)
+    }
+}
+
+/// The plain text around the cursor of a text field, without its preedit, at most [`MAX_SURROUNDING`] bytes. Its
+/// `Debug` shows the length, not the text.
+#[derive(Clone, PartialEq, Eq)]
 pub struct SurroundingText {
     text: String,
     cursor: usize,
@@ -69,10 +81,21 @@ impl SurroundingText {
     }
 }
 
-/// What the input method is told about the focused text field.
+impl fmt::Debug for SurroundingText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SurroundingText")
+            .field("text", &Redacted(self.text.len()))
+            .field("cursor", &self.cursor)
+            .field("anchor", &self.anchor)
+            .finish()
+    }
+}
+
+/// What the input method is told about the focused text field. Protected content (a password or PIN purpose, or the
+/// hidden-text or sensitive-data hint) never sends its text and always carries the sensitive-data hint.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextInputState {
-    /// `None` when the field does not know its text. Never sent for password or PIN content.
+    /// `None` when the field does not know its text. Never sent for protected content (see [`TextInputState`]).
     pub surrounding: Option<SurroundingText>,
     /// Whether the last change came from the input method or from elsewhere (typing, the application).
     pub cause: ChangeCause,
@@ -96,9 +119,13 @@ impl Default for TextInputState {
 }
 
 impl TextInputState {
-    /// The state as sent: a password or PIN is never shown to the input method, and its typing is never stored.
+    /// The state as sent: protected text is never shown to the input method, and its typing is never stored.
     fn guarded(&self) -> TextInputState {
-        if matches!(self.purpose, ContentPurpose::Password | ContentPurpose::Pin) {
+        if matches!(self.purpose, ContentPurpose::Password | ContentPurpose::Pin)
+            || self
+                .hint
+                .intersects(ContentHint::HiddenText | ContentHint::SensitiveData)
+        {
             TextInputState {
                 surrounding: None,
                 hint: self.hint | ContentHint::SensitiveData,
@@ -110,8 +137,9 @@ impl TextInputState {
     }
 }
 
-/// Composing text the input method shows at the cursor, not yet part of the field.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Composing text the input method shows at the cursor, not yet part of the field. Its `Debug` shows the length, not
+/// the text.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Preedit {
     pub text: String,
     /// The byte range of [`Preedit::text`] to show as the cursor (a caret when empty, a highlight otherwise); `None`
@@ -120,8 +148,9 @@ pub struct Preedit {
 }
 
 /// One batch from the input method. Apply it in this order: remove the shown preedit, delete around the cursor, insert
-/// the commit with the cursor after it, send the new state, then show the new preedit.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// the commit with the cursor after it, send the new state, then show the new preedit. Its `Debug` shows lengths, not
+/// text.
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct TextInputDone {
     pub preedit: Option<Preedit>,
     pub commit: Option<String>,
@@ -129,6 +158,26 @@ pub struct TextInputDone {
     pub delete: (u32, u32),
     /// `false` when the input method answered an older state than the latest one sent: apply it all the same.
     pub current: bool,
+}
+
+impl fmt::Debug for Preedit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Preedit")
+            .field("text", &Redacted(self.text.len()))
+            .field("cursor", &self.cursor)
+            .finish()
+    }
+}
+
+impl fmt::Debug for TextInputDone {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TextInputDone")
+            .field("preedit", &self.preedit)
+            .field("commit", &self.commit.as_ref().map(|c| Redacted(c.len())))
+            .field("delete", &self.delete)
+            .field("current", &self.current)
+            .finish()
+    }
 }
 
 /// Input method activity on a surface.
@@ -369,6 +418,49 @@ mod tests {
             ..TextInputState::default()
         };
         assert_eq!(plain.guarded(), plain);
+    }
+
+    #[test]
+    fn hidden_or_sensitive_hints_protect_any_purpose() {
+        for hint in [ContentHint::HiddenText, ContentHint::SensitiveData] {
+            let state = TextInputState {
+                surrounding: SurroundingText::new("123", 3, 3),
+                hint,
+                ..TextInputState::default()
+            }
+            .guarded();
+            assert_eq!(state.surrounding, None);
+            assert!(state.hint.contains(hint | ContentHint::SensitiveData));
+        }
+    }
+
+    #[test]
+    fn debug_prints_never_show_typed_text() {
+        let done = TextInputDone {
+            preedit: Some(Preedit {
+                text: "secret".into(),
+                cursor: Some((0, 6)),
+            }),
+            commit: Some("hunter2".into()),
+            ..TextInputDone::default()
+        };
+        let state = TextInputState {
+            surrounding: SurroundingText::new("swordfish", 9, 9),
+            ..TextInputState::default()
+        };
+        let printed = format!(
+            "{:?} {:?} {state:?}",
+            TextInputEvent::Done(done),
+            state.guarded()
+        );
+        for secret in ["secret", "hunter2", "swordfish"] {
+            assert!(!printed.contains(secret), "{printed}");
+        }
+        assert!(
+            printed.contains("<6 bytes>")
+                && printed.contains("<7 bytes>")
+                && printed.contains("<9 bytes>")
+        );
     }
 
     #[test]

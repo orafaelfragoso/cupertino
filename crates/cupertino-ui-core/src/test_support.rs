@@ -5,7 +5,7 @@ use crate::{
     SemanticsCx, Widget,
 };
 use crate::{Clock, RuntimeOptions};
-use cupertino_geometry::{Insets, Size};
+use cupertino_geometry::{Insets, Point, Size};
 use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutDirection, LayoutSpec, Measured,
     Overflow, SizeSpec,
@@ -409,5 +409,51 @@ pub(crate) fn options(damage: &Rc<RefCell<Vec<DamageRegion>>>) -> RuntimeOptions
         }),
         accessibility: None,
         clock: Arc::new(FakeClock::default()),
+    }
+}
+
+/// A scroll container scrolled by `offset` along both axes.
+pub(crate) struct Scroller<M> {
+    pub(crate) children: Vec<Element<M>>,
+    pub(crate) offset: Point,
+}
+
+impl<M: From<String> + 'static> Widget<M> for Scroller<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Scroll {
+            horizontal: true,
+            vertical: true,
+        })
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::Layout
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+
+    fn scroll_offset(&self, _: &()) -> Point {
+        self.offset
     }
 }

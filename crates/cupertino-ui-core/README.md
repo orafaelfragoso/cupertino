@@ -13,9 +13,9 @@ all on one thread.
 |---|---|
 | `Application` | `Model`, `Message`, `init`, `update(&mut Model, Message) -> Vec<Command>`, `view(&Model) -> Vec<Window>` |
 | `Window` | `key`, `spec`, `shortcuts: CommandRegistry`, `on_close` (without it a close request ends the application), `content` |
-| `Element`, `Widget` | an element is a widget plus an optional `Key`; `Widget` has a typed `State`, `layout`, `take_children`, `update` (returns `Change`), `measure`, `event`, `paint`, `semantics` |
+| `Element`, `Widget` | an element is a widget plus an optional `Key`; `Widget` has a typed `State`, `layout`, `take_children`, `update` (returns `Change`), `measure`, `event`, `paint`, `semantics`, and for scroll containers `scroll_offset` |
 | `EventCx` | `emit`, `request_focus`, `capture_pointer` / `release_pointer`, `request_paint` / `request_layout`, `set_cursor`, `set_text_input`, `request_animation_frame`, plus the node's focus, capture and phase |
-| `PaintCx`, `SemanticsCx`, `MeasureCx` | painting into the node's `PaintOp`s in its own coordinates; role, name, value, states, actions, `focusable`, `focus_scope`, `protected` |
+| `PaintCx`, `SemanticsCx`, `MeasureCx` | painting into the node's `PaintOp`s in its own coordinates, and `set_group` to fade or shadow the whole subtree as one layer; role, name, value, states, actions, `focusable`, `focus_scope`, `protected` |
 | `Command` | `Perform(future)`, `Focus(key)`, `CloseWindow`, `Window(key, request)`, `SetClipboard`, `Exit` |
 | `Runtime` | `new(window system, RuntimeOptions)`, `step(max_turns)` (non-blocking, never moves time, returns `StepStatus`), `run`, `snapshot(window)`, `find`, `node_at` |
 | `RuntimeOptions` | theme, layout direction, node ceiling, a renderer factory (one renderer per window), an optional `AccessibilityAdapter`, the `Clock` |
@@ -39,11 +39,14 @@ all on one thread.
   compositor is ready: before the first configure nothing is drawn, the first frame acknowledges it, and later frames
   wait for the frame callback. A node repaints only when it, its size, its focus or the window's active state changed;
   damage is where changed nodes were and are, and a frame with no damage sends no buffer.
+- **Scrolling.** A scroll container's offset is model state, counted from the start edge; core moves the content
+  by it when placing nodes, so painting and hit-testing agree. In right-to-left layout, where layout mirrors the
+  content, a horizontal offset moves the content right.
 - **Accessibility.** A node without a role stays out of the tree and its children move up. A protected node's value
   becomes `AccessibleValue::Protected`, here, before any adapter, snapshot or test sees it. Adapters get diffs only
   while `is_active`.
 
 ## Not yet
 
-Popups (`create_popup`), clipboard reads and drag and drop, image resources in `PaintResources`, and `PaintNode::group`
-(row 162) are not wired yet. Layout runs over the whole window on every change.
+Popups (`create_popup`), clipboard reads and drag and drop, and image resources in `PaintResources` are not wired
+yet. Layout runs over the whole window on every change.

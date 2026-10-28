@@ -649,7 +649,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     },
                 )
                 .map_err(UiError::Layout)?;
-                w.geometry = placements(&self.tree, root, &result);
+                w.geometry = placements(&self.tree, root, &result, w.env.direction);
 
                 let semantics = build(&self.tree, root, &w.geometry, w.focus.node());
                 w.focusable = semantics.focusable;

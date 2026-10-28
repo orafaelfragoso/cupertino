@@ -10,7 +10,8 @@ use crate::{Environment, NodeId};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_platform::Timestamp;
 use cupertino_ui_render::{
-    DisplayList, Effect, PaintNode, PaintNodeId, PaintOp, PaintRevision, PathVerb, Shape, Transform,
+    DisplayList, Effect, Group, PaintNode, PaintNodeId, PaintOp, PaintRevision, PathVerb, Shape,
+    Transform,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -19,6 +20,7 @@ struct Painted {
     size: Size,
     revision: PaintRevision,
     ops: Vec<PaintOp>,
+    group: Option<Group>,
     /// What the ops may touch, in node coordinates.
     extent: Option<Rect>,
 }
@@ -155,6 +157,7 @@ impl Painter {
     ) -> Painting {
         let mut list = DisplayList::default();
         let mut seen = HashSet::with_capacity(self.nodes.len());
+        let mut clips = Vec::new();
         for id in tree.preorder(root) {
             let (Some(node), Some(placement)) = (tree.get(id), geometry.get(&id)) else {
                 continue;
@@ -172,6 +175,7 @@ impl Painter {
                 .is_some_and(|p| p.source == source && p.size == size);
             if !fresh {
                 let mut ops = Vec::new();
+                let mut group = None;
                 node.widget.paint(
                     &*node.state,
                     &mut PaintCx {
@@ -183,6 +187,7 @@ impl Painter {
                         window_active: input.window_active,
                         now: input.now,
                         ops: &mut ops,
+                        group: &mut group,
                     },
                 );
                 self.revision += 1;
@@ -194,6 +199,7 @@ impl Painter {
                         revision: PaintRevision(self.revision),
                         extent: extent(&ops),
                         ops,
+                        group,
                     },
                 );
             }
@@ -212,8 +218,10 @@ impl Painter {
                     .clip
                     .map_or(Some(placement.rect), |c| c.intersection(&placement.rect))
                     .unwrap_or(Rect::new(origin.x, origin.y, 0.0, 0.0)),
+                group: painted.group.clone(),
                 ops: painted.ops.clone(),
             });
+            clips.push(placement.clip);
             seen.insert(id);
         }
         self.nodes.retain(|id, _| seen.contains(id));
@@ -226,6 +234,13 @@ impl Painter {
             .map(|(i, n)| (n.id, i))
             .collect();
         for i in (0..list.nodes.len()).rev() {
+            if let Some(group) = &list.nodes[i].group {
+                let widened = with_effects(list.nodes[i].bounds, &group.effects);
+                list.nodes[i].bounds = match clips[i] {
+                    Some(clip) => widened.intersection(&clip).unwrap_or(list.nodes[i].bounds),
+                    None => widened,
+                };
+            }
             let (bounds, parent) = (list.nodes[i].bounds, list.nodes[i].parent);
             if let Some(&p) = parent.and_then(|p| index.get(&p)) {
                 list.nodes[p].bounds = list.nodes[p].bounds.union(&bounds);

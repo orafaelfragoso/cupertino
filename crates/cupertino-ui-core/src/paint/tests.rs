@@ -4,7 +4,7 @@ use crate::test_support::{env, spec};
 use crate::{Change, Element, Event, EventCx, MeasureCx, Propagation, SemanticsCx, Widget};
 use cupertino_geometry::Point;
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
-use cupertino_ui_render::{Paint, Shape};
+use cupertino_ui_render::{Effect, Paint, Shape};
 use cupertino_ui_theme::Color;
 use std::cell::Cell;
 use std::rc::Rc;
@@ -270,4 +270,80 @@ fn bounds_reach_past_the_layout_rect_to_what_the_node_draws_and_stop_at_its_clip
         Rect::new(98.0, 98.0, 16.0, 16.0)
     );
     assert_eq!(bounds(rect, None, None), rect);
+}
+
+/// Casts a shadow of its whole subtree.
+struct Shadowed;
+
+impl Widget<M> for Shadowed {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        cx.set_group(
+            0.5,
+            vec![Effect::DropShadow {
+                offset: Point::new(0.0, 4.0),
+                blur: 2.0,
+                color: Color::new(0.0, 0.0, 0.0, 0.5),
+            }],
+        );
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+#[test]
+fn a_group_reaches_the_renderer_and_its_effects_widen_the_subtree_bounds() {
+    let mut tree = Tree::<M>::new(2);
+    let root = tree.reconcile(None, Element::new(Shadowed)).unwrap();
+    let rect = Rect::new(10.0, 10.0, 20.0, 20.0);
+    let geometry = Geometry::from([(
+        root,
+        Placement {
+            rect,
+            clip: None,
+            own_clip: None,
+        },
+    )]);
+    let env = env();
+    let painting = Painter::default().paint(
+        &tree,
+        root,
+        &geometry,
+        &PaintInput {
+            env: &env,
+            focus: None,
+            focus_visible: false,
+            window_active: true,
+            now: Timestamp(0),
+        },
+    );
+    let node = &painting.list.nodes[0];
+    assert_eq!(node.group.as_ref().map(|g| g.opacity), Some(0.5));
+    assert_eq!(node.bounds, Rect::from_ltrb(4.0, 8.0, 36.0, 40.0));
+    assert_eq!(
+        painting.own[0], rect,
+        "damage still tracks what the node itself draws"
+    );
 }

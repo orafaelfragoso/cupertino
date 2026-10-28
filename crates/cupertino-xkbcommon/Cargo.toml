@@ -1,11 +1,11 @@
 [package]
 # The package name is `xkbcommon` on purpose: `[patch.crates-io]` replaces the C-binding crate of that name, so
-# Smithay and the client toolkit compile unmodified. This is the documented fork exception to the `cupertino-*` rule.
+# Smithay and the client transport compile unmodified. This is the documented fork exception to the `cupertino-*` rule.
 name = "xkbcommon"
 version = "0.8.1"
 edition.workspace = true
 license = "MIT"
-description = "Pure-Rust drop-in for the xkbcommon 0.8 crate (the API Smithay and the client toolkit use), on top of a vendored copy of the xkbcommon-rs port with the keysym names of libxkbcommon 1.13; no libxkbcommon"
+description = "Pure-Rust drop-in for the xkbcommon 0.8 crate (the API Smithay and the client transport use), on top of a vendored copy of the xkbcommon-rs port with the keysym names of libxkbcommon 1.13; no libxkbcommon"
 
 [package.metadata.cupertino]
 layer = "foundation"

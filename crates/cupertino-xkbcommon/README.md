@@ -1,9 +1,10 @@
 # cupertino-xkbcommon
 
 A pure-Rust drop-in for the `xkbcommon` 0.8 crate: the package name, module layout and signatures of the C-binding crate
-that Smithay and the client toolkit use, so the workspace's `[patch.crates-io]` entry replaces it without touching either
-of them. Underneath it is the vendored `xkbcommon-rs` port of libxkbcommon (`third-party/xkbcommon-rs`), so no C library
-is linked. Only the API that Smithay and `cupertino-client` call is provided; `src/xkb.rs` lists the deviations.
+that Smithay and the client transport use, so the workspace's `[patch.crates-io]` entry replaces it without touching
+either of them. Underneath it is the vendored `xkbcommon-rs` port of libxkbcommon (`third-party/xkbcommon-rs`), so no C
+library is linked. Only the API that Smithay and `cupertino-wayland-client` (its keymaps and key state) call is provided;
+`src/xkb.rs` lists the deviations.
 
 ## Licence
 

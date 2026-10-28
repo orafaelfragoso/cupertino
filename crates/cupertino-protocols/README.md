@@ -33,12 +33,12 @@ The crate has no code of its own. `build.rs` reruns when the XML changes, becaus
 
 ## Tests
 
-The crate has no tests of its own. `tests/protocol_flow.rs` in `cupertino-client` and `tests/app_effects_v1.rs`, `tests/shell_roles.rs`,
+The crate has no tests of its own. `tests/protocol-flow.rs` in `cupertino-shell-client` and `tests/app_effects_v1.rs`, `tests/shell_roles.rs`,
 `tests/menu_bar_v1.rs`, `tests/dock_v1.rs`, `tests/session_v1.rs`, `tests/window_manager_v1.rs` and `tests/scroll_v1.rs` in `cupertino-server`
 exercise the bindings:
 
 ```
 cargo build -p cupertino-protocols --features client,server
-cargo test -p cupertino-client
+cargo test -p cupertino-shell-client
 cargo test -p cupertino-server
 ```

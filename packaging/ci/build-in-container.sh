@@ -59,7 +59,7 @@ cd /src
 export CARGO_INCREMENTAL=0 CUPERTINO_THEME_DIR=/usr/share/cupertino/theme
 case $distro in
 arch)
-    pacman -Syu --noconfirm --needed -q rust python mesa libglvnd pam dbus xkeyboard-config shared-mime-info namcap >/dev/null
+    pacman -Syu --noconfirm --needed -q rust python mesa libglvnd pam dbus xkeyboard-config shared-mime-info gcc-libs systemd adwaita-icon-theme namcap >/dev/null
     useradd -m builder
     chown -R builder /src/arch-build
     su builder -c 'cd /src/arch-build && makepkg --noconfirm'

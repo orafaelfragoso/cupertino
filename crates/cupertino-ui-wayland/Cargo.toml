@@ -3,13 +3,17 @@ name = "cupertino-ui-wayland"
 version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
-description = "Draws a surface of the Cupertino transport with tiny-skia: frame pacing, damage and buffer conversion, popup placement and the text clipboard"
+description = "CupertinoKit's window system on the Cupertino transport, and drawing on a surface of it with tiny-skia: frame pacing, damage and buffer conversion, popup placement and the text clipboard"
 
 [package.metadata.cupertino]
 layer = "render"
 
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-modifiers = { path = "../cupertino-modifiers" }
+cupertino-ui-platform = { path = "../cupertino-ui-platform" }
+cupertino-ui-render = { path = "../cupertino-ui-render" }
+cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-wayland-client = { path = "../cupertino-wayland-client" }
 tiny-skia = "0.11"
 

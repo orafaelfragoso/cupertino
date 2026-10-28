@@ -1586,6 +1586,10 @@ name = "cupertino-ui-wayland"
 version = "0.1.0"
 dependencies = [
  "cupertino-geometry",
+ "cupertino-modifiers",
+ "cupertino-ui-platform",
+ "cupertino-ui-render",
+ "cupertino-ui-text",
  "cupertino-wayland-client",
  "memmap2",
  "rustix 1.1.5",

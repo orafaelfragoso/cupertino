@@ -162,7 +162,7 @@ impl Keymap {
             .and_then(|(settings, _)| settings.modifier_profile)
             .and_then(|p| Profile::by_name(p.name()))
             .unwrap_or_else(Profile::cupertino);
-        Keymap::new(profile, BindingTable::load_default().0)
+        Keymap::new(profile, cupertino_keyboard::binding::load_default().0)
     }
 
     /// The logical modifiers the user's profile makes of the physical ones held: for the chords of a window, which

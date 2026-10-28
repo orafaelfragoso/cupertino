@@ -1024,10 +1024,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-key-bindings"
+version = "0.1.0"
+dependencies = [
+ "cupertino-modifiers",
+]
+
+[[package]]
 name = "cupertino-keyboard"
 version = "0.1.0"
 dependencies = [
  "cupertino-defaults",
+ "cupertino-key-bindings",
  "cupertino-modifiers",
  "serde",
  "serde_json",

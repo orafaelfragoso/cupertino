@@ -16,6 +16,7 @@ use cupertino_server::authorization::ShellRole;
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
 use cupertino_server::Cupertino;
+use cupertino_test_bus::PrivateBus;
 use cupertino_theme::Appearance;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
@@ -499,37 +500,6 @@ fn a_lock_whose_client_crashes_stays_locked_and_a_takeover_tells_nothing_new() {
             Told::Unlocked
         ]
     );
-}
-
-/// A private session bus (`dbus-daemon --session`), killed on drop.
-struct PrivateBus {
-    address: String,
-    pid: String,
-}
-
-impl PrivateBus {
-    /// `None` when `dbus-daemon` is not installed.
-    fn start() -> Option<PrivateBus> {
-        let out = std::process::Command::new("dbus-daemon")
-            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output()
-            .ok()?;
-        assert!(out.status.success(), "dbus-daemon failed: {}", out.status);
-        let text = String::from_utf8(out.stdout).unwrap();
-        let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-        Some(PrivateBus {
-            address: lines.next().unwrap().to_string(),
-            pid: lines.next().unwrap().to_string(),
-        })
-    }
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        let _ = std::process::Command::new("kill").arg(&self.pid).status();
-    }
 }
 
 /// A process that took `org.cupertino.Login1`: counts the lock requests it receives.

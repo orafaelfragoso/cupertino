@@ -4,49 +4,13 @@
 
 use cupertino_osd::control::{serve, BUS_NAME, OBJECT_PATH};
 use cupertino_osd::{Command, Controller, Kind, MemoryBacklight, MemoryVolume};
-use std::process::{Command as Process, Stdio};
+use cupertino_test_bus::PrivateBus;
+use std::process::Command as Process;
 use std::sync::mpsc;
 use std::time::Duration;
-use zbus::{block_on, connection, Connection};
+use zbus::{block_on, Connection};
 
 const INTERFACE: &str = "org.cupertino.Osd1";
-
-struct PrivateBus {
-    address: String,
-    pid: String,
-}
-
-impl PrivateBus {
-    fn start() -> Option<PrivateBus> {
-        let out = Process::new("dbus-daemon")
-            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        let text = String::from_utf8(out.stdout)
-            .ok()
-            .filter(|_| out.status.success())?;
-        let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-        Some(PrivateBus {
-            address: lines.next()?.to_string(),
-            pid: lines.next()?.to_string(),
-        })
-    }
-
-    fn builder(&self) -> connection::Builder<'static> {
-        connection::Builder::address(self.address.as_str()).expect("address")
-    }
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        Process::new("kill")
-            .arg(&self.pid)
-            .status()
-            .expect("kill the private bus");
-    }
-}
 
 /// What the overlay shows after each command, as `(kind, level)`.
 type Shown = Option<(Kind, f64)>;

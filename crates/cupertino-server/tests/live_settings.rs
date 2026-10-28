@@ -4,7 +4,6 @@
 //! when no EGL device is available; the bus test also when `dbus-daemon` is missing.
 
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use cupertino_defaults::atomic::write_atomic;
@@ -14,6 +13,7 @@ use cupertino_server::config::{Config, SettingsFiles};
 use cupertino_server::live::SettingsPaths;
 use cupertino_server::quit::Refusal;
 use cupertino_server::Cupertino;
+use cupertino_test_bus::PrivateBus;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 
@@ -267,44 +267,6 @@ fn the_accessibility_setter_takes_the_file_keys_and_values() {
         Some("tint 0.5")
     );
     assert_eq!(props.appearance, "light");
-}
-
-/// A private session bus (`dbus-daemon --session`), killed on drop.
-struct PrivateBus {
-    address: String,
-    pid: String,
-}
-
-impl PrivateBus {
-    /// `None` when `dbus-daemon` is not installed.
-    fn start() -> Option<PrivateBus> {
-        let out = Command::new("dbus-daemon")
-            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        assert!(out.status.success(), "dbus-daemon failed: {}", out.status);
-        let text = String::from_utf8(out.stdout).unwrap();
-        let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-        Some(PrivateBus {
-            address: lines.next().unwrap().to_string(),
-            pid: lines.next().unwrap().to_string(),
-        })
-    }
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        assert!(
-            Command::new("kill")
-                .arg(&self.pid)
-                .status()
-                .unwrap()
-                .success(),
-            "killing the private bus"
-        );
-    }
 }
 
 #[test]

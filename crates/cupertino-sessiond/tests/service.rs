@@ -3,55 +3,14 @@
 //! decide what logind "says" about the test process.
 #![cfg(feature = "app")]
 
-use std::process::{Command, Stdio};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
 
 use cupertino_login_ipc::{PowerAction, PowerRefusal};
 use cupertino_sessiond::caller::{CallerSession, SEAT};
 use cupertino_sessiond::service::{self, Authorizer, Call, ReadyRefusal, Sink, SwitchRefusal};
+use cupertino_test_bus::PrivateBus;
 use zbus::blocking::Connection;
-
-/// A private `dbus-daemon`, killed on drop.
-struct PrivateBus {
-    address: String,
-    pid: String,
-}
-
-impl PrivateBus {
-    fn start() -> Option<PrivateBus> {
-        let out = Command::new("dbus-daemon")
-            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        let text = String::from_utf8(out.stdout)
-            .ok()
-            .filter(|_| out.status.success())?;
-        let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
-        Some(PrivateBus {
-            address: lines.next()?.to_owned(),
-            pid: lines.next()?.to_owned(),
-        })
-    }
-
-    fn connect(&self) -> Connection {
-        zbus::blocking::connection::Builder::address(self.address.as_str())
-            .unwrap()
-            .build()
-            .unwrap()
-    }
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        Command::new("kill")
-            .arg(&self.pid)
-            .status()
-            .expect("kill the private bus");
-    }
-}
 
 /// Answers with a fixed session for every process.
 struct Scripted(Option<CallerSession>);

@@ -336,52 +336,11 @@ impl Drop for Logind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cupertino_test_bus::PrivateBus;
 
-    use std::process::{Command, Stdio};
     use std::sync::mpsc;
     use std::time::Duration;
     use zbus::fdo::{ReleaseNameReply, RequestNameFlags, RequestNameReply};
-
-    /// A private `dbus-daemon`, killed on drop.
-    struct PrivateBus {
-        address: String,
-        pid: String,
-    }
-
-    impl PrivateBus {
-        fn start() -> Option<PrivateBus> {
-            let out = Command::new("dbus-daemon")
-                .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
-                .stdin(Stdio::null())
-                .stderr(Stdio::null())
-                .output()
-                .ok()?;
-            let text = String::from_utf8(out.stdout)
-                .ok()
-                .filter(|_| out.status.success())?;
-            let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
-            Some(PrivateBus {
-                address: lines.next()?.to_owned(),
-                pid: lines.next()?.to_owned(),
-            })
-        }
-
-        fn connect(&self) -> Connection {
-            zbus::blocking::connection::Builder::address(self.address.as_str())
-                .unwrap()
-                .build()
-                .unwrap()
-        }
-    }
-
-    impl Drop for PrivateBus {
-        fn drop(&mut self) {
-            Command::new("kill")
-                .arg(&self.pid)
-                .status()
-                .expect("kill the private bus");
-        }
-    }
 
     #[test]
     fn losing_the_name_is_reported_and_another_owner_is_not() {

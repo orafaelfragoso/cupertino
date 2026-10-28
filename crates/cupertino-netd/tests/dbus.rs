@@ -6,7 +6,6 @@
 
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
-use std::process::{Command as Process, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -19,6 +18,7 @@ use cupertino_netd::error::Result;
 use cupertino_netd::model::{DeviceKind, DeviceState, Failure, Network};
 use cupertino_netd::snapshot::{DeviceView, Snapshot};
 use cupertino_netlink::{MacAddr, Security, Ssid};
+use cupertino_test_bus::PrivateBus;
 use rustix::event::{poll, PollFd, PollFlags};
 use rustix::time::Timespec;
 use zbus::blocking::{Connection, Proxy};
@@ -29,47 +29,6 @@ const NETWORK_PATH: &str = "/org/cupertino/Network1";
 const MANAGER: &str = "org.freedesktop.NetworkManager";
 const MANAGER_PATH: &str = "/org/freedesktop/NetworkManager";
 const WAIT: Duration = Duration::from_secs(5);
-
-/// A private `dbus-daemon`, killed on drop.
-struct PrivateBus {
-    address: String,
-    pid: String,
-}
-
-impl PrivateBus {
-    fn start() -> Option<PrivateBus> {
-        let out = Process::new("dbus-daemon")
-            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        let text = String::from_utf8(out.stdout)
-            .ok()
-            .filter(|_| out.status.success())?;
-        let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
-        Some(PrivateBus {
-            address: lines.next()?.to_owned(),
-            pid: lines.next()?.to_owned(),
-        })
-    }
-
-    fn connect(&self) -> Connection {
-        zbus::blocking::connection::Builder::address(self.address.as_str())
-            .unwrap()
-            .build()
-            .unwrap()
-    }
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        Process::new("kill")
-            .arg(&self.pid)
-            .status()
-            .expect("kill the private bus");
-    }
-}
 
 macro_rules! private_bus {
     () => {

@@ -2,44 +2,13 @@
 //! launcher toggles, the overlay's media keys, the lock request and the power key's press and release reach their processes. Skipped when `dbus-daemon` is not installed.
 #![cfg(feature = "dbus")]
 
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cupertino_server::dbus::{DbusHandle, LoginTrust, Request, Toggle};
 use cupertino_server::input::OsdKey;
+use cupertino_test_bus::PrivateBus;
 use zbus::{block_on, connection};
-
-struct PrivateBus {
-    address: String,
-    pid: String,
-}
-
-impl PrivateBus {
-    fn start() -> Option<PrivateBus> {
-        let out = Command::new("dbus-daemon")
-            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        let text = String::from_utf8(out.stdout).ok()?;
-        let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-        Some(PrivateBus {
-            address: lines.next()?.to_string(),
-            pid: lines.next()?.to_string(),
-        })
-    }
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        let _ = Command::new("kill").arg(&self.pid).status();
-    }
-}
 
 /// The worker finds the bus through the process environment: the tests that start one take turns.
 static SESSION_BUS_ENV: Mutex<()> = Mutex::new(());

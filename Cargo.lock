@@ -750,6 +750,7 @@ dependencies = [
  "async-channel",
  "cupertino-bluetooth",
  "cupertino-seat",
+ "cupertino-test-bus",
  "rustix 1.1.5",
  "serde",
  "tempfile",
@@ -767,6 +768,7 @@ dependencies = [
  "cupertino-icons",
  "cupertino-protocol-app",
  "cupertino-shell-client",
+ "cupertino-test-bus",
  "cupertino-theme",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
@@ -954,6 +956,7 @@ dependencies = [
  "cupertino-icons",
  "cupertino-protocol-app",
  "cupertino-shell-client",
+ "cupertino-test-bus",
  "cupertino-text-field",
  "cupertino-theme",
  "cupertino-ui-wayland",
@@ -983,6 +986,7 @@ dependencies = [
  "cupertino-peer",
  "cupertino-seat",
  "cupertino-shell-client",
+ "cupertino-test-bus",
  "cupertino-theme",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
@@ -1051,6 +1055,7 @@ dependencies = [
  "async-channel",
  "cupertino-netlink",
  "cupertino-seat",
+ "cupertino-test-bus",
  "rustix 1.1.5",
  "tempfile",
  "zbus",
@@ -1100,6 +1105,7 @@ dependencies = [
  "cupertino-peer",
  "cupertino-protocol-app",
  "cupertino-shell-client",
+ "cupertino-test-bus",
  "cupertino-theme",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
@@ -1133,6 +1139,7 @@ dependencies = [
  "cupertino-devices",
  "cupertino-evdev",
  "cupertino-seat",
+ "cupertino-test-bus",
  "rustix 1.1.5",
  "tempfile",
  "zbus",
@@ -1191,6 +1198,7 @@ name = "cupertino-seat"
 version = "0.1.0"
 dependencies = [
  "cupertino-devices",
+ "cupertino-test-bus",
  "rustix 1.1.5",
  "smithay",
  "tracing",
@@ -1226,6 +1234,7 @@ dependencies = [
  "cupertino-protocols",
  "cupertino-seat",
  "cupertino-stage",
+ "cupertino-test-bus",
  "cupertino-theme",
  "cupertino-wm",
  "image",
@@ -1259,6 +1268,7 @@ dependencies = [
  "cupertino-defaults",
  "cupertino-login-ipc",
  "cupertino-seat",
+ "cupertino-test-bus",
  "libc",
  "pam-client2",
  "rustix 1.1.5",
@@ -1282,6 +1292,7 @@ dependencies = [
  "cupertino-icons",
  "cupertino-modifiers",
  "cupertino-protocol-app",
+ "cupertino-test-bus",
  "cupertino-text-field",
  "cupertino-theme",
  "cupertino-thumbnails",
@@ -1316,6 +1327,14 @@ version = "0.1.0"
 dependencies = [
  "cupertino-animation",
  "cupertino-wm",
+]
+
+[[package]]
+name = "cupertino-test-bus"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "zbus",
 ]
 
 [[package]]

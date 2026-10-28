@@ -5,6 +5,7 @@
 use cupertino_login::capabilities::{Answer, Capabilities, Inputs};
 use cupertino_login::control::{serve, Request, BUS_NAME, OBJECT_PATH};
 use cupertino_login::panel::Kind;
+use cupertino_test_bus::PrivateBus;
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -15,43 +16,6 @@ use zbus::zvariant::OwnedValue;
 use zbus::{block_on, connection, Connection, MatchRule};
 
 const INTERFACE: &str = "org.cupertino.Login1";
-
-struct PrivateBus {
-    address: String,
-    pid: String,
-}
-
-impl PrivateBus {
-    fn start() -> Option<PrivateBus> {
-        let out = Command::new("dbus-daemon")
-            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        let text = String::from_utf8(out.stdout)
-            .ok()
-            .filter(|_| out.status.success())?;
-        let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-        Some(PrivateBus {
-            address: lines.next()?.to_string(),
-            pid: lines.next()?.to_string(),
-        })
-    }
-
-    fn builder(&self) -> connection::Builder<'static> {
-        connection::Builder::address(self.address.as_str()).expect("address")
-    }
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        Command::new("kill")
-            .arg(&self.pid)
-            .status()
-            .expect("kill the private bus");
-    }
-}
 
 #[test]
 fn lock_reaches_the_callback_and_a_second_lock_screen_cannot_take_the_name() {

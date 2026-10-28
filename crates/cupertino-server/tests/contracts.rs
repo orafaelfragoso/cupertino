@@ -155,6 +155,18 @@ struct Server {
     event_loop: EventLoop<'static, Cupertino>,
 }
 
+fn egl_required() -> bool {
+    std::env::var("CUPERTINO_EGL_REQUIRED").as_deref() == Ok("1")
+}
+
+fn render_node_device_exists() -> bool {
+    std::fs::read_dir("/dev/dri").is_ok_and(|entries| {
+        entries
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().starts_with("renderD"))
+    })
+}
+
 impl Server {
     /// A headless server, or None (with a message) when there is no EGL device; CUPERTINO_EGL_REQUIRED=1 makes that
     /// a failure.
@@ -171,9 +183,8 @@ impl Server {
         )
         .unwrap();
         if let Err(e) = headless::init(&mut state, SIZE, 1.0) {
-            let required = std::env::var("CUPERTINO_EGL_REQUIRED").as_deref() == Ok("1");
             assert!(
-                !required,
+                !egl_required(),
                 "no EGL device and CUPERTINO_EGL_REQUIRED=1: {e:#}"
             );
             eprintln!(
@@ -256,6 +267,10 @@ fn every_connection_sees_the_registry_entries_of_its_scope() {
         // registry holds both versions, and the renderer decides which one this machine must advertise.
         let render_node = server.has_render_node();
         eprintln!("render node: {render_node}");
+        assert!(
+            render_node || !egl_required() || !render_node_device_exists(),
+            "CUPERTINO_EGL_REQUIRED=1 and /dev/dri has a renderD node, but the EGL display reports no render node"
+        );
         let mut peers = vec![Peer::Ordinary, Peer::Sandboxed, Peer::Internal];
         peers.extend(
             ROLES

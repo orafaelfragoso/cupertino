@@ -181,3 +181,159 @@ fn a_load_refused_past_the_retries_is_reported_as_failed() {
     };
     assert_eq!(failed, MenuSource::Gtk(props));
 }
+
+/// An exporter the bar's worker reads with its reader set, and the worker's events.
+#[cfg(feature = "app")]
+struct Followed {
+    _bus: PrivateBus,
+    exporter: Exporter,
+    _worker: cupertino_menubar::worker::Worker,
+    events: std::sync::mpsc::Receiver<cupertino_menubar::worker::Event>,
+}
+
+#[cfg(feature = "app")]
+impl Followed {
+    /// Notes with a New item (`app.new`), disabled before the bar loads it.
+    fn start() -> Option<Followed> {
+        use cupertino_menu_model::ActionName;
+        use cupertino_menubar::worker::{Request, Worker};
+
+        let bus = PrivateBus::start()?;
+        let exporting = zbus::blocking::connection::Builder::address(bus.address.as_str()).unwrap();
+        let mut exporter = Exporter::new(
+            exporting,
+            "org.example.Notes",
+            Box::new(Profile::cupertino()),
+            |_| {},
+        )
+        .unwrap();
+        let exported = exporter.export(WindowId(1), &notes("New Note")).unwrap();
+        exporter
+            .set_enabled(WindowId(1), &ActionName::parse("app.new").unwrap(), false)
+            .unwrap();
+        let bar = bus.connect();
+        exporter
+            .set_reader(Some(bar.unique_name().unwrap().as_str()))
+            .unwrap();
+        let (worker, events) = Worker::start(bar, || {}).unwrap();
+        worker
+            .send(Request::FetchGtk(GtkMenuProps {
+                bus_name: exported.unique_bus_name,
+                application_id: Some(exported.application_id),
+                application_object_path: Some(exported.application_object_path),
+                window_object_path: Some(exported.window_object_path),
+                menubar_object_path: Some(exported.menubar_path),
+                app_menu_object_path: Some(exported.app_menu_path),
+            }))
+            .unwrap();
+        Some(Followed {
+            _bus: bus,
+            exporter,
+            _worker: worker,
+            events,
+        })
+    }
+
+    /// The next tree the worker sends whose `label` item satisfies `want`, within 5 s.
+    fn tree_where(&self, label: &str, want: impl Fn(&MenuItem) -> bool) -> MenuItem {
+        use cupertino_menubar::worker::Event;
+        use std::time::{Duration, Instant};
+
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let wait = end.saturating_duration_since(Instant::now());
+            match self.events.recv_timeout(wait) {
+                Ok(Event::Layout { root, .. }) => {
+                    if find(&root.children, label).is_some_and(&want) {
+                        return root;
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => panic!("no tree with {label} as wanted within 5 s"),
+            }
+        }
+    }
+}
+
+#[cfg(feature = "app")]
+fn notes(new_label: &str) -> cupertino_menu_model::MenuBar {
+    standard::menu_bar(
+        "Notes",
+        &Features {
+            new: Some(new_label.to_string()),
+            ..Features::default()
+        },
+    )
+}
+
+/// An item the application enables after the bar loaded its menus is enabled in the bar, as an item that needs a
+/// selection is once something is selected.
+#[cfg(feature = "app")]
+#[test]
+fn an_item_enabled_after_the_load_is_enabled_in_the_bar() {
+    use cupertino_menu_model::ActionName;
+    let Some(followed) = Followed::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    followed.tree_where("New Note", |item| !item.enabled);
+    followed
+        .exporter
+        .set_enabled(WindowId(1), &ActionName::parse("app.new").unwrap(), true)
+        .unwrap();
+    followed.tree_where("New Note", |item| item.enabled);
+}
+
+/// A label the application changes after the bar loaded its menus is the bar's label.
+#[cfg(feature = "app")]
+#[test]
+fn a_label_changed_after_the_load_is_the_bars_label() {
+    let Some(mut followed) = Followed::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    followed.tree_where("New Note", |_| true);
+    followed
+        .exporter
+        .export(WindowId(1), &notes("New Notebook"))
+        .unwrap();
+    followed.tree_where("New Notebook", |_| true);
+}
+
+/// An application that changes its menus without pause reaches the bar as a few trees, the last one current.
+#[cfg(feature = "app")]
+#[test]
+fn many_changes_reach_the_bar_as_few_trees() {
+    use cupertino_menu_model::ActionName;
+    use cupertino_menubar::worker::Event;
+    use std::time::{Duration, Instant};
+
+    let Some(followed) = Followed::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    followed.tree_where("New Note", |item| !item.enabled);
+    let new = ActionName::parse("app.new").unwrap();
+    let start = Instant::now();
+    for i in 0..200 {
+        followed
+            .exporter
+            .set_enabled(WindowId(1), &new, i % 2 == 0)
+            .unwrap();
+    }
+    followed.tree_where("New Note", |item| !item.enabled);
+    let elapsed = start.elapsed();
+    // what else comes within the next interval belongs to the same burst
+    std::thread::sleep(Duration::from_millis(200));
+    let more = followed
+        .events
+        .try_iter()
+        .filter(|e| matches!(e, Event::Layout { .. }))
+        .count();
+    // one tree per 50 ms at most, with room for the first and last of the burst
+    let bound = (elapsed.as_millis() / 50) as usize + 3;
+    assert!(
+        more <= bound,
+        "{more} more trees after a burst of {elapsed:?}"
+    );
+}

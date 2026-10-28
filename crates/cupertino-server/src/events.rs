@@ -285,6 +285,12 @@ impl Cupertino {
             .unwrap_or_default()
     }
 
+    /// A touchpad gesture began: the Super key held now is a modifier of it, not a tap. (Touch screens and tablets are
+    /// not opened; when they are, a touch-down and a tip-down must call this too.)
+    pub fn gesture_begun(&mut self) {
+        self.key_filters.super_tap.disturb();
+    }
+
     pub fn process_input_event<B: InputBackend>(&mut self, event: InputEvent<B>) {
         if !matches!(
             event,
@@ -330,13 +336,20 @@ impl Cupertino {
             }
             InputEvent::PointerButton { event } => self.on_pointer_button::<B>(event),
             InputEvent::PointerAxis { event } => self.on_pointer_axis::<B>(event),
-            InputEvent::GestureSwipeBegin { event } => self.on_swipe_begin::<B>(event),
+            InputEvent::GestureSwipeBegin { event } => {
+                self.gesture_begun();
+                self.on_swipe_begin::<B>(event)
+            }
             InputEvent::GestureSwipeUpdate { event } => self.on_swipe_update::<B>(event),
             InputEvent::GestureSwipeEnd { event } => self.on_swipe_end::<B>(event),
-            InputEvent::GesturePinchBegin { event } => self.on_pinch_begin::<B>(event),
+            InputEvent::GesturePinchBegin { event } => {
+                self.gesture_begun();
+                self.on_pinch_begin::<B>(event)
+            }
             InputEvent::GesturePinchUpdate { event } => self.on_pinch_update::<B>(event),
             InputEvent::GesturePinchEnd { event } => self.on_pinch_end::<B>(event),
             InputEvent::GestureHoldBegin { event } => {
+                self.gesture_begun();
                 let pointer = self.pointer.clone();
                 let (time, fingers) = (event.time_msec(), event.fingers());
                 self.gestures.handle(GestureEvent::HoldBegin {
@@ -600,20 +613,17 @@ impl Cupertino {
             "super" => 125,
             other => return Err(format!("not a modifier: {other}")),
         };
-        let keyboard = self.seat.get_keyboard().unwrap();
         let time = (self.now() * 1000.0) as u32;
         let state = if pressed {
             KeyState::Pressed
         } else {
             KeyState::Released
         };
-        keyboard.input::<(), _>(
-            self,
+        // as a device would deliver it: through the filters, the shortcuts and the Super tap
+        self.key_after_delays(
             smithay::input::keyboard::Keycode::new(evdev + 8),
             state,
-            SERIAL_COUNTER.next_serial(),
             time,
-            |_, _, _| FilterResult::Forward,
         );
         Ok(())
     }

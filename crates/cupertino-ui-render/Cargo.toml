@@ -12,3 +12,4 @@ layer = "render"
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
+tiny-skia = "0.11"

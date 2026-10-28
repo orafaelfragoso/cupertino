@@ -20,14 +20,14 @@ use crate::{
     UiError, Window, WindowKey,
 };
 use cupertino_geometry::{Point, Size};
-use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutError, LayoutOptions};
+use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutOptions};
 use cupertino_ui_platform::{
     ClipboardData, ClipboardKind, ConfigureId, KeyEvent, Keysym, PlatformError, PlatformEvent,
     PresentOutcome, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec,
     WindowSystem,
 };
 use cupertino_ui_render::{
-    CpuFrame, DamageRegion, DisplayList, PaintResources, RenderError, RenderRequest, UiRenderer,
+    CpuFrame, DamageRegion, DisplayList, PaintResources, RenderRequest, UiRenderer,
 };
 use cupertino_ui_theme::ThemeTokens;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
@@ -646,9 +646,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     }
 
     /// Lays out, rebuilds semantics and focus, and paints and presents every window that is due. A window that fails
-    /// is reported: one the compositor sized or scaled out of reach, or that the window system refused, waits for its
-    /// next configure; one whose content failed tries again when the application next changes it. Only a lost
-    /// connection ends the application.
+    /// is reported and tries again whole on its next change or configure, whatever failed it: the renderer gives the same
+    /// error for a target and for content too large to draw. Only a lost connection ends the application.
     fn frame(&mut self) -> Result<(), UiError> {
         let relayout = self.tree.take_layout_dirty();
         let paint_dirty = self.tree.take_paint_dirty();
@@ -662,12 +661,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 Err(error) => {
                     let w = &mut self.windows[i];
                     w.invalidate();
+                    w.dirty = false;
                     w.damage.invalidate();
-                    if size_caused(&error) {
-                        w.frame_ready = false;
-                    } else {
-                        w.dirty = false;
-                    }
                     if let Some(report) = &mut self.options.on_window_error {
                         report(w.id, &error);
                     }
@@ -899,18 +894,6 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 .is_some_and(|n| n.key.as_ref() == Some(key))
         })
     }
-}
-
-/// Whether the window's size or scale, or the window system, failed the frame rather than the content.
-fn size_caused(error: &UiError) -> bool {
-    matches!(
-        error,
-        UiError::Platform(_)
-            | UiError::Layout(LayoutError::InvalidConstraint)
-            | UiError::Render(
-                RenderError::ResourceLimit | RenderError::InvalidSize | RenderError::InvalidScale
-            )
-    )
 }
 
 /// The buffer size of a logical length, rounded to the nearest pixel with halves up, as the window system sizes the

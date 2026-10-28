@@ -373,7 +373,8 @@ fn an_assistive_technology_that_starts_after_the_app_gets_the_whole_tree_and_the
 }
 
 #[test]
-fn a_window_whose_content_failed_draws_again_on_its_next_change_without_a_configure() {
+fn a_window_whose_content_was_too_large_to_draw_draws_again_on_its_next_change_without_a_configure()
+{
     let damage = Rc::default();
     let broken = Rc::new(Cell::new(false));
     let errors = Rc::new(RefCell::new(Vec::new()));
@@ -390,7 +391,13 @@ fn a_window_whose_content_failed_draws_again_on_its_next_change_without_a_config
 
     broken.set(true);
     key(&mut rt, window, 0xff09, Mods::NONE);
-    assert_eq!(errors.borrow().len(), 1);
+    assert_eq!(
+        *errors.borrow(),
+        [(
+            window,
+            UiError::Render(cupertino_ui_render::RenderError::ResourceLimit)
+        )]
+    );
     assert_eq!(
         rt.step(steps()).unwrap(),
         StepStatus::Idle,
@@ -425,12 +432,12 @@ fn a_window_the_renderer_cannot_draw_is_reported_and_draws_again_after_a_drawabl
     );
     assert_eq!(
         rt.step(steps()).unwrap(),
-        StepStatus::Waiting(Pending {
-            frames: 1,
-            ..Pending::default()
-        }),
-        "no retry until the compositor configures again"
+        StepStatus::Idle,
+        "no retry until something changes"
     );
+    key(&mut rt, window, 0xff09, Mods::NONE);
+    assert_eq!(errors.borrow().len(), 2, "a change tries again");
+    assert!(!rt.exited());
 
     configure(&mut rt, window, 3);
     assert_eq!(
@@ -441,7 +448,7 @@ fn a_window_the_renderer_cannot_draw_is_reported_and_draws_again_after_a_drawabl
         ]
     );
     assert_eq!(damage.borrow().last(), Some(&DamageRegion::Full));
-    assert_eq!(errors.borrow().len(), 1);
+    assert_eq!(errors.borrow().len(), 2);
 }
 
 #[test]

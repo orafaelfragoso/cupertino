@@ -434,7 +434,7 @@ impl Cupertino {
             match route {
                 _ if rewritten_release => FilterResult::Intercept(()),
                 KeyRoute::Forward => {
-                    if pressed {
+                    if pressed && !ctx.input_held {
                         rewrite = st.key_rewrite(code, sym, okey.text, modifiers);
                     }
                     if rewrite == Rewrite::Pass {
@@ -491,6 +491,7 @@ impl Cupertino {
         if pressed
             && !modifier_key
             && !ctx.locked
+            && !ctx.input_held
             && self.overlays.inputs.hud_open()
             && matches!(
                 sym,
@@ -505,7 +506,7 @@ impl Cupertino {
             return KeyRoute::Hud;
         }
         // 2. accent picker (hold a letter key)
-        if !modifier_key && !ctx.locked {
+        if !modifier_key && !ctx.locked && !ctx.input_held {
             match self.accent_filter(key, pressed) {
                 AccentRoute::Pass => {}
                 AccentRoute::Armed(c) => return KeyRoute::AccentArmed(c),
@@ -901,6 +902,10 @@ impl Cupertino {
     /// is consumed too; every other press and release goes to `pointer.button`, whose implicit grab keeps a client's
     /// release with the client that got the press.
     pub fn pointer_button(&mut self, button: u32, state: ButtonState, time: u32) {
+        self.as_input(|s| s.handle_pointer_button(button, state, time));
+    }
+
+    fn handle_pointer_button(&mut self, button: u32, state: ButtonState, time: u32) {
         self.key_filters.super_tap.disturb();
         let serial = SERIAL_COUNTER.next_serial();
         let pos = self.pointer.current_location();

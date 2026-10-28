@@ -866,6 +866,92 @@ fn render_hud(
     Some((pm, [0; 4]))
 }
 
+/// Padding of the notice that an application holds the shortcuts, in points: horizontal and vertical.
+const NOTICE_PADDING: (f64, f64) = (18.0, 11.0);
+/// Distance of that notice from the top of the output, in points.
+const NOTICE_TOP: f64 = 48.0;
+
+fn render_notice(
+    text: &str,
+    size: (f64, f64),
+    scale: f64,
+    dark: bool,
+    renderer: &mut crate::overlays::OverlayText,
+) -> Option<(Pixmap, [u32; 4])> {
+    let (w, h) = (
+        (size.0 * scale).round().max(1.0) as u32,
+        (size.1 * scale).round().max(1.0) as u32,
+    );
+    let mut pm = Pixmap::new(w, h)?;
+    let pal = palette(dark);
+    let fill = if dark {
+        [0.16, 0.16, 0.18, 0.92]
+    } else {
+        [0.97, 0.97, 0.98, 0.94]
+    };
+    fill_rounded(
+        &mut pm,
+        GRect::new(0.0, 0.0, size.0, size.1),
+        size.1 / 2.0,
+        scale,
+        fill,
+    );
+    let px = FONT_PT * scale as f32;
+    renderer.draw_centered(
+        &mut pm,
+        text,
+        (NOTICE_PADDING.0 * scale) as f32,
+        (size.1 / 2.0 * scale) as f32,
+        px,
+        400,
+        pal.text,
+    );
+    Some((pm, [0; 4]))
+}
+
+/// The notice that an application holds the shortcuts: a pill at the top of the output of its window, above everything
+/// but the session overlays. It is drawn on the compositor-overlay layer, which a lock-only frame omits.
+pub fn shortcut_notice(p: &mut SceneParams<'_>) -> Vec<Piece> {
+    let Some(notice) = p.overlays.shortcut_notice.clone() else {
+        return Vec::new();
+    };
+    if notice.output != p.output_id || p.now >= notice.until {
+        return Vec::new();
+    }
+    let (scale, dark) = (p.scale, p.config.is_dark());
+    let px = FONT_PT * scale as f32;
+    let overlays = &mut *p.overlays;
+    let text = &mut overlays.text;
+    text.set_scale(scale as f32);
+    let width = f64::from(text.width(&notice.text, px, 400)) / scale + 2.0 * NOTICE_PADDING.0;
+    let size = (
+        width.min(p.rect.w - 2.0 * NOTICE_TOP).max(1.0),
+        f64::from(FONT_PT) + 2.0 * NOTICE_PADDING.1,
+    );
+    let (x, y) = (((p.rect.w - size.0) / 2.0).round(), NOTICE_TOP);
+    let sig = debug_sig(&(
+        &notice.text,
+        (size.0.to_bits(), size.1.to_bits()),
+        scale.to_bits(),
+        dark,
+    ));
+    let cut = overlays.images.get(("shortcut-notice", 0), sig, || {
+        render_notice(&notice.text, size, scale, dark, text)
+    });
+    cut.map(|(buf, px, _)| {
+        vec![image_piece(
+            &buf,
+            SceneKind::ShortcutNotice,
+            px,
+            x,
+            y,
+            scale,
+            1.0,
+        )]
+    })
+    .unwrap_or_default()
+}
+
 /// The input-source HUD (centre of the primary output while it is open or fading).
 pub fn input_hud(p: &mut SceneParams<'_>) -> Vec<Piece> {
     if p.wm.outputs().first().map(|o| o.id) != Some(p.output_id) {

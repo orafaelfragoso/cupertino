@@ -512,7 +512,7 @@ impl Cupertino {
                 .super_tap
                 .key(evdev(code), pressed, self.now_ms(), others_held);
         self.keyboard_event_now(code, state, time);
-        if tapped {
+        if tapped && !self.shortcut_inhibit.holding() {
             let ctx = self.action_context();
             if let Some(plan) = self.key_router.tap_plan(&ctx) {
                 self.execute_plan(plan);

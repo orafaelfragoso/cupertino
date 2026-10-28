@@ -1570,6 +1570,10 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
     snap_preview(p, stack);
     stack.extend(SceneLayer::InputHud, crate::kbd_ui::input_hud(p));
     stack.extend(SceneLayer::AccentPopup, crate::kbd_ui::accent_popup(p));
+    stack.extend(
+        SceneLayer::CompositorOverlay,
+        crate::kbd_ui::shortcut_notice(p),
+    );
 
     if let Some((surface, offset)) = p.drag_icon.clone() {
         let scale = Scale::from(p.scale);

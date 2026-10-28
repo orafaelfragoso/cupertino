@@ -11,12 +11,16 @@
 //! design. The timings and the safe-triangle rule are
 //! approximate; see [`ControllerConfig`].
 
+use crate::fallback::{self, HELP_MENU};
 use crate::geom::{Point, Rect};
 use crate::item::{ItemId, MenuItem};
 use crate::layout::{
     layout_bar, layout_popup, Anchor, BarContent, BarLayout, BarMetrics, MenuMetrics, PopupLayout,
     SlotKey, TextMeasure,
 };
+use crate::search::{self, Match};
+use cupertino_text_field::{KeyInput, Keymap, Response, TextField};
+use std::time::Instant;
 
 /// Identifier of the synthetic root item of the app menu.
 pub const APP_MENU_ROOT: ItemId = ItemId(i32::MIN);
@@ -168,6 +172,9 @@ pub struct MenuController {
     type_ahead_at: f64,
     pending: Option<Pending>,
     keyboard_origin: bool,
+    /// The Help menu's search field and what its text finds.
+    search: TextField,
+    hits: Vec<Match>,
 }
 
 impl MenuController {
@@ -196,6 +203,8 @@ impl MenuController {
             type_ahead_at: 0.0,
             pending: None,
             keyboard_origin: false,
+            search: TextField::new(),
+            hits: Vec::new(),
         };
         c.relayout();
         c
@@ -232,6 +241,11 @@ impl MenuController {
         self.open_slot.as_ref().or(self.title_focus.as_ref())
     }
 
+    /// The Help menu's search field while the Help menu is open.
+    pub fn search_field(&self) -> Option<&TextField> {
+        self.searching().then_some(&self.search)
+    }
+
     /// Time of the next pending timer, if any.
     pub fn next_deadline(&self) -> Option<f64> {
         self.pending.map(|p| p.due)
@@ -249,6 +263,7 @@ impl MenuController {
     /// menus are kept when their items still exist.
     pub fn set_content(&mut self, content: BarContent) -> Outcome {
         self.content = content;
+        self.hits = search::search(&self.content, self.search.text());
         self.relayout();
         let mut out = Outcome::default();
         if let Some(k) = &self.open_slot {
@@ -300,7 +315,14 @@ impl MenuController {
                 visible: true,
                 ..Default::default()
             }),
-            SlotKey::Menu(id) => self.content.menus.iter().find(|m| m.id == *id).cloned(),
+            SlotKey::Menu(id) => {
+                let menu = self.content.menus.iter().find(|m| m.id == *id)?;
+                Some(if *id == HELP_MENU {
+                    search::help_menu(menu, self.search.text(), &self.hits)
+                } else {
+                    menu.clone()
+                })
+            }
             SlotKey::Status(id) => self
                 .content
                 .status
@@ -416,6 +438,7 @@ impl MenuController {
     // ---- opening and closing -------------------------------------------------------------
 
     fn open_title(&mut self, key: SlotKey, out: &mut Outcome) {
+        self.clear_search();
         let Some(root) = self.root_item(&key) else {
             return;
         };
@@ -454,6 +477,7 @@ impl MenuController {
         self.title_focus = None;
         self.mode = Mode::Idle;
         self.keyboard_origin = false;
+        self.clear_search();
         if had {
             out.effects.push(Effect::Closed);
             out.effects.push(Effect::Redraw);
@@ -692,11 +716,7 @@ impl MenuController {
             Hit::Popup { level, row } => {
                 let item = self.levels[level].layout.rows[row].item.clone();
                 if item.is_selectable() && !item.has_submenu {
-                    let slot = self.open_slot.clone().expect("open slot");
-                    out.effects.push(Effect::Activate {
-                        slot,
-                        item: item.id,
-                    });
+                    out.effects.extend(self.activation(item.id));
                     self.close_all(&mut out);
                 } else {
                     self.mode = Mode::Sticky;
@@ -953,11 +973,7 @@ impl MenuController {
                     if item.has_submenu {
                         self.open_submenu(level, true, &mut out);
                     } else {
-                        let slot = self.open_slot.clone().expect("open slot");
-                        out.effects.push(Effect::Activate {
-                            slot,
-                            item: item.id,
-                        });
+                        out.effects.extend(self.activation(item.id));
                         self.close_all(&mut out);
                     }
                 }
@@ -966,6 +982,9 @@ impl MenuController {
                 if level > 0 {
                     self.levels.truncate(level);
                     out.effects.push(Effect::Redraw);
+                } else if self.searching() && !self.search.is_empty() {
+                    self.search.set_text("");
+                    self.searched(&mut out);
                 } else if self.keyboard_origin {
                     let slot = self.open_slot.clone();
                     self.close_all(&mut out);
@@ -1017,6 +1036,81 @@ impl MenuController {
                 return;
             }
         }
+    }
+
+    // ---- Help search ---------------------------------------------------------------------
+
+    /// The Help menu is open, so its search field shows.
+    fn searching(&self) -> bool {
+        self.is_open() && self.open_slot == Some(SlotKey::Menu(HELP_MENU))
+    }
+
+    fn clear_search(&mut self) {
+        self.search = TextField::new();
+        self.hits.clear();
+    }
+
+    /// The effect of choosing the row `item` of the open menu. A search result stands for the item it found, by its
+    /// position among the results: choosing it is choosing that item in its own menu.
+    fn activation(&self, item: ItemId) -> Option<Effect> {
+        let slot = self.open_slot.clone()?;
+        match fallback::search_result_row(item).filter(|_| self.searching()) {
+            Some(row) => self.hits.get(row).map(|hit| Effect::Activate {
+                slot: hit.slot.clone(),
+                item: hit.item,
+            }),
+            None => Some(Effect::Activate { slot, item }),
+        }
+    }
+
+    /// The field's text changed: search again and select the first result.
+    fn searched(&mut self, out: &mut Outcome) {
+        self.hits = search::search(&self.content, self.search.text());
+        self.rebuild_levels();
+        if let Some(help) = self.levels.first_mut() {
+            help.selected = help.layout.index_of(fallback::search_result(0));
+        }
+        out.effects.push(Effect::Redraw);
+    }
+
+    /// A key press while the Help menu shows its search field, with the menu key it maps to (`None` for the typing
+    /// keys). The field takes the keys that edit text: the arrows, Home and End only while it holds text, Space
+    /// always; Up, Down, Return and Esc stay the menu's ([`MenuController::key`]). `None` when the field does not take
+    /// the key. The bar has no clipboard, so copy, cut and paste only change the text where they edit it.
+    pub fn search_key(
+        &mut self,
+        menu_key: Option<Key>,
+        keymap: &mut Keymap,
+        input: KeyInput,
+        at: Instant,
+    ) -> Option<Outcome> {
+        if !self.searching() || self.levels.len() > 1 {
+            return None;
+        }
+        let takes = match menu_key {
+            None | Some(Key::Space | Key::Char(_)) => true,
+            Some(Key::Left | Key::Right | Key::Home | Key::End) => !self.search.is_empty(),
+            Some(Key::Up | Key::Down | Key::Enter | Key::Escape) => false,
+        };
+        if !takes {
+            return None;
+        }
+        let response = self.search.key(keymap, input, at);
+        if response == Response::Ignored {
+            return None;
+        }
+        let mut out = Outcome {
+            consumed: true,
+            ..Default::default()
+        };
+        if self.mode != Mode::Tracking {
+            self.mode = Mode::Keyboard;
+        }
+        match response {
+            Response::Edited | Response::Cut(_) => self.searched(&mut out),
+            _ => out.effects.push(Effect::Redraw),
+        }
+        Some(out)
     }
 
     /// Close everything (focus lost, the app changed, the compositor needs the pointer).

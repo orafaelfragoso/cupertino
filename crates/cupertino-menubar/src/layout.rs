@@ -3,6 +3,7 @@
 //! Text measurement is abstracted behind [`TextMeasure`] so the compositor can plug in its text
 //! renderer. Every metric is approximate unless a doc comment says otherwise.
 
+use crate::fallback::HELP_SEARCH;
 use crate::geom::{Point, Rect};
 use crate::item::{ItemId, MenuItem, Shortcut, ShortcutGlyphs};
 
@@ -279,6 +280,10 @@ pub struct MenuMetrics {
     pub screen_margin: f64,
     /// Horizontal overlap of a submenu with its parent popup.
     pub submenu_overlap: f64,
+    /// Gap between the label and the secondary text after it.
+    pub detail_gap: f64,
+    /// Smallest width of a menu with a search field, so its width holds while results come and go.
+    pub search_width: f64,
 }
 
 impl Default for MenuMetrics {
@@ -295,6 +300,8 @@ impl Default for MenuMetrics {
             min_width: 120.0,
             screen_margin: 4.0,
             submenu_overlap: 2.0,
+            detail_gap: 8.0,
+            search_width: 320.0,
         }
     }
 }
@@ -306,6 +313,8 @@ pub struct PopupRow {
     pub rect: Rect,
     /// The shortcut's modifier glyphs and key, drawn in two columns.
     pub shortcut: Option<ShortcutGlyphs>,
+    /// The secondary text, cut at its end with an ellipsis to the room left between the label and the shortcut.
+    pub detail: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -388,7 +397,10 @@ pub fn layout_popup(
             0.0
         }
         + if any_arrow { m.arrow_width } else { 0.0 };
-    let w = (lead + label_w + trailing).max(m.min_width);
+    let has_field = children.iter().any(|c| c.id == HELP_SEARCH);
+    let w = (lead + label_w + trailing)
+        .max(m.min_width)
+        .max(if has_field { m.search_width } else { 0.0 });
     let content_h: f64 = 2.0 * m.padding_y
         + children
             .iter()
@@ -442,8 +454,24 @@ pub fn layout_popup(
             ry += rh;
             let mut item = (*c).clone();
             item.children = Vec::new();
+            let shortcut = c.shortcut.as_ref().map(Shortcut::glyphs);
+            let detail = c.detail.as_deref().and_then(|detail| {
+                let chord = shortcut.as_ref().map_or(0.0, |s| {
+                    m.shortcut_gap + measure.width(&s.modifiers, false) + key_w
+                });
+                let arrow = if c.has_submenu { m.arrow_width } else { 0.0 };
+                let room = w
+                    - lead
+                    - measure.width(&c.label, false)
+                    - m.detail_gap
+                    - chord
+                    - arrow
+                    - m.padding_x;
+                fit_tail(detail, room, measure)
+            });
             PopupRow {
-                shortcut: c.shortcut.as_ref().map(Shortcut::glyphs),
+                shortcut,
+                detail,
                 item,
                 rect: r,
             }
@@ -458,6 +486,18 @@ pub fn layout_popup(
         placed_left,
         shortcut_key_width: key_w,
     }
+}
+
+/// `text`, or as much of its start as fits in `room` with an ellipsis after it; `None` when not even the ellipsis fits.
+fn fit_tail(text: &str, room: f64, measure: &dyn TextMeasure) -> Option<String> {
+    if measure.width(text, false) <= room {
+        return Some(text.to_owned());
+    }
+    let chars: Vec<char> = text.chars().collect();
+    (0..chars.len())
+        .rev()
+        .map(|n| format!("{}…", chars[..n].iter().collect::<String>().trim_end()))
+        .find(|cut| measure.width(cut, false) <= room)
 }
 
 #[cfg(test)]
@@ -668,6 +708,68 @@ mod tests {
             &MonoMeasure::default(),
         );
         assert!(p.rect.right() <= 1920.0 - 4.0 + 1e-9);
+    }
+
+    #[test]
+    fn secondary_text_is_cut_at_its_end_before_the_shortcut_and_the_label_never_is() {
+        let (m, measure) = (MenuMetrics::default(), MonoMeasure::default());
+        let path = "Format ▸ Paragraph ▸ Alignment ▸ Justification ▸ Options";
+        let result = |id: i32, label: &str, detail: &str, key: &str| MenuItem {
+            detail: Some(detail.into()),
+            ..MenuItem::new(id, label)
+                .with_shortcut(Shortcut::from_tokens(&["Control", key]).unwrap())
+        };
+        let long_label = "A label far too long to share its row with any path at all";
+        let help = MenuItem::submenu(
+            HELP_SEARCH.0 - 1,
+            "Help",
+            vec![
+                MenuItem::new(HELP_SEARCH.0, "Search").disabled(),
+                result(1, "Save", "File", "S"),
+                result(2, "Justify", path, "J"),
+            ],
+        );
+        let slot = Anchor::BelowSlot(Rect::new(60.0, 0.0, 40.0, 24.0));
+        let p = layout_popup(&help, slot, OUT, 0.0, &m, &measure);
+        assert_eq!(
+            p.rect.w, m.search_width,
+            "a menu with the field keeps its width"
+        );
+        assert_eq!(p.rows[1].detail.as_deref(), Some("File"));
+
+        let row = &p.rows[2];
+        let cut = row.detail.as_deref().unwrap();
+        assert_eq!(row.item.label, "Justify");
+        assert!(
+            cut.ends_with('…') && path.starts_with(cut.trim_end_matches('…')),
+            "{cut}"
+        );
+        let glyphs = row.shortcut.as_ref().unwrap();
+        let chord_x = p.rect.right()
+            - m.padding_x
+            - p.shortcut_key_width
+            - measure.width(&glyphs.modifiers, false)
+            - m.shortcut_gap;
+        let detail_end = p.rect.x
+            + m.padding_x
+            + measure.width("Justify", false)
+            + m.detail_gap
+            + measure.width(cut, false);
+        assert!(detail_end <= chord_x + 1e-9, "{detail_end} > {chord_x}");
+        assert!(
+            detail_end + measure.advance > chord_x,
+            "it is cut no shorter than it must"
+        );
+
+        let mut wide = help.clone();
+        wide.children.push(result(3, long_label, path, "L"));
+        let p = layout_popup(&wide, slot, OUT, 0.0, &m, &measure);
+        assert!(
+            p.rect.w > m.search_width,
+            "the menu widens for a long label"
+        );
+        assert_eq!(p.rows[3].item.label, long_label);
+        assert_eq!(p.rows[3].detail, None, "no room is left for the path");
     }
 
     #[test]

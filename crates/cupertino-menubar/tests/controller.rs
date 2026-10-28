@@ -1,9 +1,12 @@
 use cupertino_menubar::controller::{
     point_in_triangle, Effect, Key, MenuController, Mode, APP_MENU_ROOT,
 };
+use cupertino_menubar::fallback::{HELP_MENU, HELP_SEARCH};
 use cupertino_menubar::geom::{Point, Rect};
 use cupertino_menubar::item::{ItemId, MenuItem, Shortcut, Toggle};
 use cupertino_menubar::layout::{BarContent, MonoMeasure, SlotKey, StatusEntry};
+use cupertino_text_field::{KeyInput, Keymap};
+use std::time::Instant;
 
 const OUT: Rect = Rect::new(0.0, 0.0, 1920.0, 1080.0);
 
@@ -690,4 +693,186 @@ fn second_output_popups_stay_on_their_output() {
     c.pointer_press(p, 0.0);
     let r = c.levels()[0].layout.rect;
     assert!(r.x >= right.x && r.right() <= right.right() && r.y >= 24.0 - 1e-9);
+}
+
+fn help() -> SlotKey {
+    SlotKey::Menu(HELP_MENU)
+}
+
+/// The bar of [`content`] with a Help menu, the Help menu open from a click.
+fn help_open() -> MenuController {
+    let mut content = content();
+    content.menus.push(MenuItem::submenu(
+        HELP_MENU.0,
+        "Help",
+        vec![
+            MenuItem::new(HELP_SEARCH.0, "Search").disabled(),
+            MenuItem::separator(-1110),
+            MenuItem::new(61, "Files Guide"),
+        ],
+    ));
+    let mut c = MenuController::new(OUT, Box::new(MonoMeasure::default()));
+    c.set_content(content);
+    let p = slot_center(&c, &help());
+    c.pointer_press(p, 0.0);
+    c.pointer_release(p, 0.05);
+    assert_eq!(c.open_slot(), Some(&help()));
+    c
+}
+
+/// A key press of the search field, `code` the evdev code; whether the field took it.
+fn field_key(c: &mut MenuController, key: Option<Key>, code: u32, character: Option<char>) -> bool {
+    let input = KeyInput::new(code, false, false, false, false, character);
+    c.search_key(key, &mut Keymap::standard(), input, Instant::now())
+        .is_some_and(|o| o.consumed)
+}
+
+fn type_text(c: &mut MenuController, text: &str) {
+    for ch in text.chars() {
+        assert!(field_key(c, None, 0, Some(ch)), "the field takes {ch:?}");
+    }
+}
+
+fn row_ids(c: &MenuController) -> Vec<i32> {
+    c.levels()[0]
+        .layout
+        .rows
+        .iter()
+        .map(|r| r.item.id.0)
+        .collect()
+}
+
+#[test]
+fn typing_in_the_help_menu_lists_results_and_up_down_and_return_choose_one() {
+    let mut c = help_open();
+    assert_eq!(row_ids(&c), [-1030, -1110, 61]);
+    type_text(&mut c, "zoom");
+    assert_eq!(c.search_field().map(|f| f.text()), Some("zoom"));
+    assert_eq!(row_ids(&c), [-1030, -1050, -1051, -1110, 61]);
+    let rows = &c.levels()[0].layout.rows;
+    assert_eq!(
+        (rows[1].item.label.as_str(), rows[1].detail.as_deref()),
+        ("Zoom In", Some("View"))
+    );
+    assert_eq!(
+        selected_id(&c, 0),
+        Some(-1050),
+        "the first result is selected"
+    );
+    assert!(
+        field_key(&mut c, Some(Key::Space), 57, Some(' ')),
+        "Space types"
+    );
+    assert_eq!(c.search_field().map(|f| f.text()), Some("zoom "));
+
+    assert!(
+        !field_key(&mut c, Some(Key::Down), 108, None),
+        "Down is the menu's"
+    );
+    c.key(Key::Down, 1.1);
+    assert_eq!(selected_id(&c, 0), Some(-1051));
+    c.key(Key::Up, 1.2);
+    assert_eq!(selected_id(&c, 0), Some(-1050));
+    c.key(Key::Down, 1.3);
+    let o = c.key(Key::Enter, 1.4);
+    assert!(has(
+        &o,
+        &Effect::Activate {
+            slot: SlotKey::Menu(ItemId(3)),
+            item: ItemId(31)
+        }
+    ));
+    assert!(!c.is_open() && c.search_field().is_none());
+}
+
+#[test]
+fn a_click_on_a_result_chooses_the_item_in_its_own_menu() {
+    let mut c = help_open();
+    type_text(&mut c, "files");
+    assert_eq!(row_ids(&c)[..4], [-1030, -1050, -1051, -1052]);
+    let p = row_center(&c, 0, -1051);
+    c.pointer_move(p, 1.0);
+    c.pointer_press(p, 1.1);
+    let o = c.pointer_release(p, 1.2);
+    assert!(has(
+        &o,
+        &Effect::Activate {
+            slot: SlotKey::AppMenu,
+            item: ItemId(102)
+        }
+    ));
+}
+
+#[test]
+fn escape_clears_the_text_first_then_closes_the_menu() {
+    let mut c = help_open();
+    type_text(&mut c, "qq");
+    assert_eq!(row_ids(&c), [-1030, -1031, -1110, 61]);
+    assert_eq!(c.levels()[0].layout.rows[1].item.label, "No Results");
+    assert_eq!(selected_id(&c, 0), None, "No Results cannot be selected");
+    c.key(Key::Down, 1.0);
+    assert_eq!(selected_id(&c, 0), Some(61));
+    let o = c.key(Key::Escape, 1.1);
+    assert!(c.is_open() && !has(&o, &Effect::Closed));
+    assert_eq!(c.search_field().map(|f| f.text()), Some(""));
+    assert_eq!(row_ids(&c), [-1030, -1110, 61]);
+    let o = c.key(Key::Escape, 1.2);
+    assert!(has(&o, &Effect::Closed) && !c.is_open());
+}
+
+#[test]
+fn the_arrows_move_the_caret_while_the_field_holds_text_and_switch_menus_without() {
+    let mut c = help_open();
+    assert!(
+        !field_key(&mut c, Some(Key::Left), 105, None),
+        "an empty field leaves Left to the menu"
+    );
+    type_text(&mut c, "cu");
+    assert!(field_key(&mut c, Some(Key::Left), 105, None));
+    assert_eq!(c.search_field().unwrap().caret(), 1);
+    type_text(&mut c, "o");
+    assert_eq!(c.search_field().unwrap().text(), "cou");
+    assert_eq!(c.open_slot(), Some(&help()));
+}
+
+#[test]
+fn result_ids_stay_by_position_while_typing_and_across_content_updates() {
+    let mut c = help_open();
+    type_text(&mut c, "c");
+    assert_eq!(row_ids(&c)[..3], [-1030, -1050, -1051]);
+    let labels: Vec<&str> = c.levels()[0].layout.rows[1..3]
+        .iter()
+        .map(|r| r.item.label.as_str())
+        .collect();
+    assert_eq!(labels, ["Cut", "Copy"]);
+    c.key(Key::Down, 1.0);
+    assert_eq!(selected_id(&c, 0), Some(-1051));
+    let content = c.content().clone();
+    c.set_content(content);
+    assert_eq!(
+        selected_id(&c, 0),
+        Some(-1051),
+        "an update keeps the selected result"
+    );
+    type_text(&mut c, "o");
+    assert_eq!(row_ids(&c)[..2], [-1030, -1050]);
+    assert_eq!(c.levels()[0].layout.rows[1].item.label, "Copy");
+    let o = c.key(Key::Enter, 1.1);
+    assert!(has(
+        &o,
+        &Effect::Activate {
+            slot: edit(),
+            item: ItemId(24)
+        }
+    ));
+}
+
+#[test]
+fn other_menus_have_no_search_field() {
+    let mut c = controller();
+    let p = slot_center(&c, &file());
+    c.pointer_press(p, 0.0);
+    c.pointer_release(p, 0.05);
+    assert!(c.search_field().is_none());
+    assert!(!field_key(&mut c, None, 0, Some('n')));
 }

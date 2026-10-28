@@ -3,10 +3,9 @@
 //! `cupertino-effects` (`TransformKind`, `ShowDesktop`, `MinimizeEffect`); the window model keeps
 //! owning minimize / open / zoom progress.
 
+use crate::render::snapshots::SnapshotOwner;
 use cupertino_effects::{MinimizeKind, ProgressAnimator, ShowDesktop, TransformKind, WindowKind};
 use cupertino_wm::{OutputId, Rect, WindowId};
-use smithay::backend::renderer::element::Id;
-use smithay::backend::renderer::gles::GlesTexture;
 
 /// A window that is gone from the model but still fading out on screen.
 pub struct ClosingWindow {
@@ -14,8 +13,8 @@ pub struct ClosingWindow {
     pub output: OutputId,
     /// Captured area in global logical points (frame plus shadow margin).
     pub rect: Rect,
-    pub texture: GlesTexture,
-    pub elem_id: Id,
+    /// The captured pixels, kept while the ghost shows.
+    pub snapshot: SnapshotOwner,
     kind: TransformKind,
     anim: ProgressAnimator,
 }
@@ -49,7 +48,7 @@ impl ClosingWindow {
 pub const SNAPSHOT_INTERVAL: f64 = 0.5;
 
 struct Snapshot {
-    texture: GlesTexture,
+    owner: SnapshotOwner,
     area: Rect,
     frame_origin: (f64, f64),
     taken: f64,
@@ -106,7 +105,7 @@ impl Effects {
         id: WindowId,
         output: OutputId,
         rect: Rect,
-        texture: GlesTexture,
+        snapshot: SnapshotOwner,
         kind: TransformKind,
         now: f64,
     ) {
@@ -117,8 +116,7 @@ impl Effects {
             id,
             output,
             rect,
-            texture,
-            elem_id: Id::new(),
+            snapshot,
             kind,
             anim,
         });
@@ -128,7 +126,7 @@ impl Effects {
     pub fn store_snapshot(
         &mut self,
         id: WindowId,
-        texture: GlesTexture,
+        owner: SnapshotOwner,
         area: Rect,
         frame_origin: (f64, f64),
         now: f64,
@@ -136,7 +134,7 @@ impl Effects {
         self.snapshots.insert(
             id,
             Snapshot {
-                texture,
+                owner,
                 area,
                 frame_origin,
                 taken: now,
@@ -156,13 +154,13 @@ impl Effects {
         &mut self,
         id: WindowId,
         frame_origin: (f64, f64),
-    ) -> Option<(GlesTexture, Rect, (f64, f64))> {
+    ) -> Option<(SnapshotOwner, Rect, (f64, f64))> {
         let s = self.snapshots.remove(&id)?;
         let (dx, dy) = (
             frame_origin.0 - s.frame_origin.0,
             frame_origin.1 - s.frame_origin.1,
         );
-        Some((s.texture, s.area.translate(dx, dy), frame_origin))
+        Some((s.owner, s.area.translate(dx, dy), frame_origin))
     }
 
     pub fn forget_snapshot(&mut self, id: WindowId) {

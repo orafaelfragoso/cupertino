@@ -23,6 +23,7 @@ pub mod programs;
 pub mod scene;
 pub mod screenshot;
 pub mod shader_rect;
+pub mod snapshots;
 pub mod ui;
 pub mod wallpaper;
 

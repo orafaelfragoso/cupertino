@@ -119,6 +119,8 @@ pub struct MaterialPass {
     pub radius: f64,
     pub style: CornerStyle,
     pub stage: MaterialStage,
+    /// Average colour of the wallpaper below, which tints the material.
+    pub tint: [f32; 3],
 }
 
 /// Preserve live-surface import and scanout eligibility when choosing the renderer element.
@@ -175,11 +177,6 @@ pub enum Source {
     TexturedMesh {
         snapshot: SnapshotId,
         mesh: Mesh,
-    },
-    /// Content the renderer still builds itself, by position in its frame-local list. Temporary:
-    /// removed in `wp03-scene-effects`, when materials and effect meshes become typed commands.
-    LocalPass {
-        index: usize,
     },
 }
 

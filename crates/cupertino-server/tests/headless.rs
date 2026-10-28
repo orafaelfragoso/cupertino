@@ -961,6 +961,7 @@ fn capture_orientation_and_mesh_drawing() {
         &mesh,
         1.0,
         1.0,
+        None,
     );
     let img = render_to_image(
         &mut renderer,

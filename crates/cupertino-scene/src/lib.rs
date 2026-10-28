@@ -27,6 +27,7 @@ pub struct FrameId(pub u64);
 pub enum SceneKind {
     Wallpaper,
     LockBackdrop,
+    WallpaperImage,
     ActivationFade,
     PowerOverlay,
     OverviewDim,
@@ -45,11 +46,17 @@ pub enum SceneKind {
     CursorImage,
     InputHud,
     AccentPopup,
+    MinimizeMesh,
+    ClosingGhost,
     InputHudTint,
+    InputHudMaterial,
+    AccentMaterial,
+    Backdrop,
+    BackdropCapture,
+    SheetDimming,
+    DisplayFilter,
     InputHudShadow,
     AccentShadow,
-    /// Content the renderer still builds itself; removed with the effect migration.
-    LocalPass,
     #[cfg(test)]
     Test,
 }
@@ -59,6 +66,7 @@ impl SceneKind {
         match self {
             Self::Wallpaper => "wallpaper",
             Self::LockBackdrop => "lock-backdrop",
+            Self::WallpaperImage => "wallpaper-image",
             Self::ActivationFade => "activation-fade",
             Self::PowerOverlay => "power-overlay",
             Self::OverviewDim => "overview-dim",
@@ -77,10 +85,17 @@ impl SceneKind {
             Self::CursorImage => "cursor-image",
             Self::InputHud => "input-hud",
             Self::AccentPopup => "accent-popup",
+            Self::MinimizeMesh => "minimize-mesh",
+            Self::ClosingGhost => "closing-ghost",
             Self::InputHudTint => "input-hud-tint",
+            Self::InputHudMaterial => "input-hud-material",
+            Self::AccentMaterial => "accent-material",
+            Self::Backdrop => "backdrop",
+            Self::BackdropCapture => "backdrop-capture",
+            Self::SheetDimming => "sheet-dimming",
+            Self::DisplayFilter => "display-filter",
             Self::InputHudShadow => "input-hud-shadow",
             Self::AccentShadow => "accent-shadow",
-            Self::LocalPass => "local-pass",
             #[cfg(test)]
             Self::Test => "test",
         }
@@ -308,6 +323,7 @@ mod tests {
             radius: 0.0,
             style: cupertino_geometry::CornerStyle::Circular,
             stage,
+            tint: [0.0; 3],
         });
         i
     }

@@ -185,6 +185,7 @@ impl Cupertino {
             let pinned = self.fixed_time.is_none().then(|| self.now());
             self.fixed_time = self.fixed_time.or(pinned);
             let cursor = self.cursor_plan(self.outputs[idx].scale);
+            self.overlays.wallpaper.hold_replies(true);
             let elements = self.with_scene_and_cursor(renderer, idx, cursor.clone(), build);
             let legacy = elements.as_ref().and_then(|_| {
                 self.with_scene_and_cursor(renderer, idx, cursor, |r, mut p| {
@@ -194,6 +195,7 @@ impl Cupertino {
                     legacy_scene::build_scene(r, p)
                 })
             });
+            self.overlays.wallpaper.hold_replies(false);
             if pinned.is_some() {
                 self.fixed_time = None;
             }
@@ -212,7 +214,7 @@ impl Cupertino {
         &mut self,
         id: cupertino_wm::WindowId,
     ) -> Option<(
-        smithay::backend::renderer::gles::GlesTexture,
+        crate::render::snapshots::SnapshotOwner,
         cupertino_wm::Rect,
         (f64, f64),
     )> {
@@ -267,7 +269,7 @@ impl Cupertino {
                     shadow_reach,
                     true,
                 )?;
-                Some((tex, area, (natural.x, natural.y)))
+                Some((p.res.snapshots.insert(tex), area, (natural.x, natural.y)))
             })
             .flatten()
         });
@@ -293,8 +295,8 @@ impl Cupertino {
         {
             return;
         }
-        if let Some((texture, area, origin)) = self.capture_snapshot(id) {
-            self.fx.store_snapshot(id, texture, area, origin, now);
+        if let Some((owner, area, origin)) = self.capture_snapshot(id) {
+            self.fx.store_snapshot(id, owner, area, origin, now);
         }
     }
 
@@ -327,8 +329,8 @@ impl Cupertino {
             None
         };
         let captured = captured.or_else(|| self.fx.stored_snapshot(id, frame_origin));
-        if let Some((texture, rect, _)) = captured {
-            self.fx.start_close(id, output, rect, texture, kind, now);
+        if let Some((snapshot, rect, _)) = captured {
+            self.fx.start_close(id, output, rect, snapshot, kind, now);
             self.request_redraw();
         }
     }

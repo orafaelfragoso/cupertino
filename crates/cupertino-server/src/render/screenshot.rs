@@ -23,11 +23,24 @@ pub fn render_to_image<E: RenderElement<GlesRenderer>>(
     scale: f64,
     clear: Color32F,
 ) -> Result<RgbaImage> {
+    render_to_image_transformed(renderer, elements, size, scale, Transform::Normal, clear)
+}
+
+/// [`render_to_image`] for an output of mode `size` that is rotated or flipped by `transform`: the elements are in
+/// the logical space of the output as it is shown, and the image is the framebuffer of the mode.
+pub fn render_to_image_transformed<E: RenderElement<GlesRenderer>>(
+    renderer: &mut GlesRenderer,
+    elements: &[E],
+    size: Size<i32, Physical>,
+    scale: f64,
+    transform: Transform,
+    clear: Color32F,
+) -> Result<RgbaImage> {
     let buf_size: Size<i32, Buffer> = (size.w, size.h).into();
     let mut texture: GlesTexture = renderer
         .create_buffer(Fourcc::Abgr8888, buf_size)
         .map_err(|e| anyhow!("create offscreen buffer: {e}"))?;
-    let mut tracker = OutputDamageTracker::new(size, scale, Transform::Normal);
+    let mut tracker = OutputDamageTracker::new(size, scale, transform);
     let mapping = {
         let mut target = renderer
             .bind(&mut texture)

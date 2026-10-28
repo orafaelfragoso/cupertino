@@ -450,8 +450,8 @@ impl Shell {
     pub fn bind(conn: &mut Connection) -> Option<Shell> {
         // version 2 adds the display options of the session object, version 3 the screen capture state of the menu bar,
         // version 5 moves the backdrops and the title bar style to the app effects, version 6 adds the menu bar's session actions,
-        // version 10 the menu bar's window list, shortcuts and default-menu commands
-        conn.bind_extension(9..=10, Quiet).map(Shell)
+        // version 10 the menu bar's window list, shortcuts and default-menu commands, version 11 its edit request
+        conn.bind_extension(9..=11, Quiet).map(Shell)
     }
 
     /// Observe the session: its appearance and display options arrive as

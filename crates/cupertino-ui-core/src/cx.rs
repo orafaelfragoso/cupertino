@@ -53,6 +53,21 @@ impl<M> Default for Effects<M> {
     }
 }
 
+impl<M> Effects<M> {
+    /// Takes on what a later route asked for; the later request wins where only one can.
+    pub(crate) fn absorb(&mut self, other: Self) {
+        self.messages.extend(other.messages);
+        self.focus = other.focus.or(self.focus);
+        self.capture = other.capture.or(self.capture.take());
+        self.changes.extend(other.changes);
+        self.cursor = other.cursor.or(self.cursor);
+        self.animate.extend(other.animate);
+        if other.text_input.is_some() {
+            self.text_input = other.text_input;
+        }
+    }
+}
+
 /// The parts of the runtime's state an event handler reads.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Status {

@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_support::{leaf, options, row, FakeSystem};
+use crate::test_support::{leaf, options, row, FakeAdapter, FakeSystem, Leaf, MAX_PIXELS};
 use crate::{Role, Shortcut};
 use cupertino_ui_platform::{
     Configure, DecorationMode, Mods, MouseButton, PointerEvent, WindowStates, WmCapabilities,
@@ -56,7 +56,11 @@ impl Application for Counter {
             on_close: None,
             content: Element::new(row(vec![
                 Element::new(leaf("plus")).key("plus"),
-                Element::new(leaf("minus")).key("minus"),
+                Element::new(Leaf {
+                    secret: true,
+                    ..leaf("minus")
+                })
+                .key("minus"),
             ])),
         }]
     }
@@ -71,19 +75,31 @@ fn steps() -> NonZeroU32 {
 }
 
 fn start() -> (Rt, WindowId, Rc<RefCell<Vec<DamageRegion>>>) {
+    start_with(|_| {})
+}
+
+fn start_with(
+    setup: impl FnOnce(&mut RuntimeOptions),
+) -> (Rt, WindowId, Rc<RefCell<Vec<DamageRegion>>>) {
     let damage = Rc::default();
-    let mut rt = Rt::new(FakeSystem::default(), options(&damage));
+    let mut options = options(&damage);
+    setup(&mut options);
+    let mut rt = Rt::new(FakeSystem::default(), options);
     rt.step(steps()).unwrap();
     let window = rt.windows()[0].1;
     (rt, window, damage)
 }
 
 fn configure(rt: &mut Rt, window: WindowId, id: u32) {
+    configure_at(rt, window, id, Size::new(200.0, 100.0));
+}
+
+fn configure_at(rt: &mut Rt, window: WindowId, id: u32, size: Size) {
     rt.window_system_mut().send(
         window,
         WindowEvent::Configure(Configure {
             id: ConfigureId(id),
-            size: Some(Size::new(200.0, 100.0)),
+            size: Some(size),
             states: WindowStates {
                 activated: true,
                 ..WindowStates::default()
@@ -303,4 +319,111 @@ fn a_buffer_is_sized_as_the_window_system_rounds_a_fractional_scale() {
         "3.75 and 2.5 round up, 1.25 down"
     );
     assert_eq!(physical(100.0, 1.5), 150);
+}
+
+#[test]
+fn an_assistive_technology_that_starts_after_the_app_gets_the_whole_tree_and_then_only_changes() {
+    let adapter = FakeAdapter::default();
+    let (mut rt, window, _) = start_with(|o| o.accessibility = Some(Box::new(adapter.clone())));
+    configure(&mut rt, window, 1);
+    assert!(adapter.updates.borrow().is_empty());
+
+    adapter.active.set(true);
+    rt.step(steps()).unwrap();
+
+    let snapshot = rt.snapshot(window).unwrap();
+    assert_eq!(
+        *adapter.updates.borrow(),
+        [AccessibilityUpdate {
+            window,
+            root: snapshot.nodes[0].id,
+            focus: None,
+            nodes: snapshot.accessibility.clone(),
+            removed: Vec::new(),
+        }]
+    );
+
+    key(&mut rt, window, 0xff09, Mods::NONE);
+    let plus = rt.find(window, &Key::from("plus")).unwrap();
+    let updates = adapter.updates.borrow();
+    assert_eq!(updates.len(), 2);
+    assert_eq!(updates[1].focus, Some(plus));
+    assert!(
+        updates[1].nodes.len() < snapshot.accessibility.len(),
+        "a diff, not the tree again"
+    );
+}
+
+#[test]
+fn a_window_the_renderer_cannot_draw_is_reported_and_draws_again_after_a_drawable_configure() {
+    let errors = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&errors);
+    let (mut rt, window, damage) = start_with(|o| {
+        o.on_window_error = Some(Box::new(move |w, e| seen.borrow_mut().push((w, e.clone()))));
+    });
+    configure(&mut rt, window, 1);
+    let side = (MAX_PIXELS as f64).sqrt() + 1.0;
+
+    configure_at(&mut rt, window, 2, Size::new(side, side));
+
+    assert!(!rt.exited());
+    assert_eq!(
+        *errors.borrow(),
+        [(
+            window,
+            UiError::Render(cupertino_ui_render::RenderError::ResourceLimit)
+        )]
+    );
+    assert_eq!(
+        rt.step(steps()).unwrap(),
+        StepStatus::Waiting(Pending {
+            frames: 1,
+            ..Pending::default()
+        }),
+        "no retry until the compositor configures again"
+    );
+
+    configure(&mut rt, window, 3);
+    assert_eq!(
+        rt.window_system().presented,
+        vec![
+            (window, Some(ConfigureId(1))),
+            (window, Some(ConfigureId(3)))
+        ]
+    );
+    assert_eq!(damage.borrow().last(), Some(&DamageRegion::Full));
+    assert_eq!(errors.borrow().len(), 1);
+}
+
+#[test]
+fn a_protected_field_never_shows_its_text_to_the_input_method() {
+    let (mut rt, window, _) = start();
+    configure(&mut rt, window, 1);
+
+    key(&mut rt, window, 0xff09, Mods::NONE);
+    key(&mut rt, window, 0xff09, Mods::NONE);
+
+    let minus = rt.find(window, &Key::from("minus")).unwrap();
+    assert_eq!(rt.snapshot(window).unwrap().text_input, Some(minus));
+    let sent = rt
+        .window_system()
+        .text_input
+        .last()
+        .cloned()
+        .flatten()
+        .unwrap();
+    assert_eq!(sent.surrounding, None);
+    assert_eq!(sent.purpose, cupertino_ui_text::ContentPurpose::Password);
+}
+
+#[test]
+fn an_assistive_technology_listening_from_the_start_gets_each_window_once() {
+    let adapter = FakeAdapter::default();
+    adapter.active.set(true);
+    let (mut rt, window, _) = start_with(|o| o.accessibility = Some(Box::new(adapter.clone())));
+    configure(&mut rt, window, 1);
+
+    let updates = adapter.updates.borrow();
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].nodes, rt.snapshot(window).unwrap().accessibility);
 }

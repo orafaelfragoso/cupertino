@@ -19,6 +19,22 @@ pub(crate) struct SemanticsPass {
     pub(crate) scopes: Vec<NodeId>,
 }
 
+/// Whether the node marks its value as protected, such as a password field.
+pub(crate) fn protected<M: 'static>(tree: &Tree<M>, id: NodeId) -> bool {
+    let Some(node) = tree.get(id) else {
+        return false;
+    };
+    let mut semantics = Semantics::default();
+    node.widget.semantics(
+        &*node.state,
+        &mut SemanticsCx {
+            node: id,
+            semantics: &mut semantics,
+        },
+    );
+    semantics.protected
+}
+
 pub(crate) fn build<M: 'static>(
     tree: &Tree<M>,
     root: NodeId,

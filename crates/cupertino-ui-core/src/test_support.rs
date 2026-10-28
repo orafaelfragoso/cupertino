@@ -1,10 +1,10 @@
 //! Widgets and an environment for the crate's own tests.
 
+use crate::{AccessibilityAdapter, AccessibilityUpdate, ActionRequest, Clock, RuntimeOptions};
 use crate::{
     Change, Element, Environment, Event, EventCx, MeasureCx, PaintCx, Propagation, Role,
     SemanticsCx, Widget,
 };
-use crate::{Clock, RuntimeOptions};
 use cupertino_geometry::{Insets, Point, Size};
 use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutDirection, LayoutSpec, Measured,
@@ -19,12 +19,12 @@ use cupertino_ui_platform::{
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, PixelFormat, RenderError, RenderFrameId, RenderRequest, UiRenderer,
 };
-use cupertino_ui_text::TextInputState;
+use cupertino_ui_text::{ChangeCause, ContentHints, ContentPurpose, Surrounding, TextInputState};
 use cupertino_ui_theme::{
     Appearance, ColorTokens, ControlMetrics, ControlSize, FocusRing, Motion, ThemePreferences,
     ThemeTokens, TypeRole, TypeScale,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -104,6 +104,8 @@ pub(crate) struct Leaf {
     pub(crate) stop: bool,
     /// Captures the pointer while a button is down.
     pub(crate) capture: bool,
+    /// A protected text field: it marks its value protected and, when focused, asks for the input method with its text.
+    pub(crate) secret: bool,
 }
 
 pub(crate) fn leaf(label: &'static str) -> Leaf {
@@ -113,6 +115,7 @@ pub(crate) fn leaf(label: &'static str) -> Leaf {
         focusable: true,
         stop: false,
         capture: false,
+        secret: false,
     }
 }
 
@@ -163,7 +166,22 @@ impl<M: From<String> + 'static> Widget<M> for Leaf {
             }
             Event::Pointer(PointerEvent::Scroll { .. }, _) => "scroll",
             Event::Key(..) => "key",
-            Event::Focus { gained: true, .. } => "focus",
+            Event::Focus { gained: true, .. } => {
+                if self.secret {
+                    cx.set_text_input(Some(TextInputState {
+                        surrounding: Some(Surrounding {
+                            text: "hunter2".into(),
+                            cursor: 7,
+                            anchor: 7,
+                        }),
+                        purpose: ContentPurpose::Password,
+                        hints: ContentHints::default(),
+                        cause: ChangeCause::Other,
+                        cursor_rect: None,
+                    }));
+                }
+                "focus"
+            }
             Event::Focus { .. } => "blur",
             Event::Cancel => "cancel",
             _ => "other",
@@ -185,6 +203,9 @@ impl<M: From<String> + 'static> Widget<M> for Leaf {
         }
         if self.focusable {
             cx.focusable();
+        }
+        if self.secret {
+            cx.protected();
         }
     }
 }
@@ -370,6 +391,9 @@ impl WindowSystem for FakeSystem {
     }
 }
 
+/// The fake renderer's allocation limit, in physical pixels.
+pub(crate) const MAX_PIXELS: u64 = 4096 * 4096;
+
 /// A renderer that keeps a blank frame and records the damage of every request.
 pub(crate) struct FakeRenderer {
     pub(crate) damage: Rc<RefCell<Vec<DamageRegion>>>,
@@ -380,6 +404,9 @@ impl UiRenderer for FakeRenderer {
     type Frame = CpuFrame;
 
     fn render(&mut self, request: &RenderRequest<'_>) -> Result<RenderFrameId, RenderError> {
+        if u64::from(request.width) * u64::from(request.height) > MAX_PIXELS {
+            return Err(RenderError::ResourceLimit);
+        }
         self.damage.borrow_mut().push(request.damage.clone());
         self.frame.id = RenderFrameId(self.frame.id.0 + 1);
         self.frame.width = request.width;
@@ -394,6 +421,27 @@ impl UiRenderer for FakeRenderer {
             Err(RenderError::UnknownFrame(id))
         }
     }
+}
+
+/// An adapter whose assistive technology a test switches on and off; it keeps every update.
+#[derive(Clone, Default)]
+pub(crate) struct FakeAdapter {
+    pub(crate) active: Rc<Cell<bool>>,
+    pub(crate) updates: Rc<RefCell<Vec<AccessibilityUpdate>>>,
+}
+
+impl AccessibilityAdapter for FakeAdapter {
+    fn is_active(&self) -> bool {
+        self.active.get()
+    }
+
+    fn window_focus(&mut self, _: WindowId, _: bool) {}
+
+    fn update(&mut self, update: &AccessibilityUpdate) {
+        self.updates.borrow_mut().push(update.clone());
+    }
+
+    fn drain_actions(&mut self, _: &mut Vec<ActionRequest>) {}
 }
 
 #[derive(Default)]
@@ -427,6 +475,7 @@ pub(crate) fn options(damage: &Rc<RefCell<Vec<DamageRegion>>>) -> RuntimeOptions
         }),
         accessibility: None,
         clock: Arc::new(FakeClock::default()),
+        on_window_error: None,
     }
 }
 

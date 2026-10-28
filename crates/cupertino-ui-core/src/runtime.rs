@@ -11,7 +11,7 @@ use crate::layout_view::{placements, TreeView};
 use crate::paint::{PaintInput, Painter};
 use crate::pointer::Pointer;
 use crate::route::{hit_test, Geometry, Route};
-use crate::semantics::{build, diff};
+use crate::semantics::{build, diff, protected};
 use crate::task::Executor;
 use crate::tree::Tree;
 use crate::{
@@ -22,8 +22,9 @@ use crate::{
 use cupertino_geometry::{Point, Size};
 use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutOptions};
 use cupertino_ui_platform::{
-    ClipboardData, ClipboardKind, ConfigureId, KeyEvent, Keysym, PlatformEvent, PresentOutcome,
-    Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
+    ClipboardData, ClipboardKind, ConfigureId, KeyEvent, Keysym, PlatformError, PlatformEvent,
+    PresentOutcome, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec,
+    WindowSystem,
 };
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, DisplayList, PaintResources, RenderRequest, UiRenderer,
@@ -38,6 +39,7 @@ const TAB: Keysym = Keysym(0xff09);
 const LEFT_TAB: Keysym = Keysym(0xfe20);
 
 pub type RendererFactory = Box<dyn FnMut() -> Box<dyn UiRenderer<Frame = CpuFrame>>>;
+pub type WindowErrorHandler = Box<dyn FnMut(WindowId, &UiError)>;
 
 /// How a runtime is set up besides its window system.
 pub struct RuntimeOptions {
@@ -49,6 +51,9 @@ pub struct RuntimeOptions {
     pub renderers: RendererFactory,
     pub accessibility: Option<Box<dyn AccessibilityAdapter>>,
     pub clock: Arc<dyn Clock>,
+    /// Hears about a window that could not be laid out, rendered or presented. The window keeps running and draws
+    /// whole again after its next configure; the application does not end.
+    pub on_window_error: Option<WindowErrorHandler>,
 }
 
 impl<M> WindowState<M> {
@@ -84,6 +89,8 @@ struct WindowState<M> {
     text_input: Option<NodeId>,
     geometry: Geometry,
     accessibility: BTreeMap<NodeId, AccessibilityNode>,
+    /// The adapter holds this window's whole tree, so a diff is enough.
+    accessible: bool,
     focusable: Vec<NodeId>,
     painter: Painter,
     damage: DamageTracker,
@@ -192,6 +199,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             || !self.messages.is_empty()
             || self.view_dirty
             || self.executor.has_ready()
+            || self.accessibility_behind()
             || self
                 .windows
                 .iter()
@@ -234,7 +242,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             Command::Perform(task) => self.executor.spawn(task),
             Command::Focus(key) => {
                 let now = self.options.clock.now();
-                for w in &mut self.windows {
+                for i in 0..self.windows.len() {
+                    let w = &mut self.windows[i];
                     let Some(root) = w.root else { continue };
                     let found = self.tree.preorder(root).into_iter().find(|&n| {
                         self.tree
@@ -243,7 +252,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     });
                     if let Some(node) = found {
                         let change = w.focus.set(&self.tree, Some(node), true);
-                        Self::focus_events(&mut self.tree, w, change, &mut self.messages, now);
+                        let rest =
+                            Self::focus_events(&mut self.tree, w, change, &mut self.messages, now);
+                        self.apply(i, rest);
                         break;
                     }
                 }
@@ -378,6 +389,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             text_input: None,
             geometry: Geometry::new(),
             accessibility: BTreeMap::new(),
+            accessible: false,
             focusable: Vec::new(),
             painter: Painter::default(),
             damage: DamageTracker::default(),
@@ -511,7 +523,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 key.keysym == TAB && !key.mods.contains(cupertino_ui_platform::Mods::SHIFT);
             let next = w.focus.step(&self.tree, &w.focusable, forward);
             let change = w.focus.set(&self.tree, next, true);
-            Self::focus_events(&mut self.tree, w, change, &mut self.messages, now);
+            let rest = Self::focus_events(&mut self.tree, w, change, &mut self.messages, now);
+            effects.absorb(rest);
         }
     }
 
@@ -568,13 +581,20 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             w.invalidate();
             self.system.request_frame(w.id);
         }
-        if let Some((node, state)) = effects.text_input {
+        if let Some((node, mut state)) = effects.text_input {
+            if let Some(state) = &mut state {
+                if protected(&self.tree, node) {
+                    state.surrounding = None;
+                }
+            }
             w.text_input = state.as_ref().map(|_| node);
             self.system.set_text_input(w.id, state.as_ref());
         }
         if let Some(node) = effects.focus {
             let change = w.focus.set(&self.tree, Some(node), false);
-            Self::focus_events(&mut self.tree, w, change, &mut self.messages, now);
+            let rest = Self::focus_events(&mut self.tree, w, change, &mut self.messages, now);
+            self.apply(i, rest);
+            return;
         }
         if w.text_input.is_some() && w.text_input != w.focus.node() {
             w.text_input = None;
@@ -582,15 +602,18 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         }
     }
 
-    /// Tells the nodes a focus move concerns, and repaints them.
+    /// Tells the nodes a focus move concerns, and repaints them. Returns what else their handlers asked for, such as
+    /// the input method; a focus request made while focus moves is dropped, so two nodes cannot pass it back and forth.
     fn focus_events(
         tree: &mut Tree<A::Message>,
         w: &mut WindowState<A::Message>,
         change: Option<FocusChange>,
         messages: &mut VecDeque<A::Message>,
         now: Timestamp,
-    ) {
-        let Some(change) = change else { return };
+    ) -> Effects<A::Message> {
+        let Some(change) = change else {
+            return Effects::default();
+        };
         w.invalidate();
         let mut effects = Effects::default();
         let mut route = route(tree, w, now, &mut effects);
@@ -612,126 +635,200 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 },
             );
         }
-        messages.extend(effects.messages);
-        for (node, c) in effects.changes {
+        messages.extend(effects.messages.drain(..));
+        for (node, c) in effects.changes.drain(..) {
             if tree.contains(node) {
                 tree.mark(node, c);
             }
         }
+        effects.focus = None;
+        effects
     }
 
-    /// Lays out, rebuilds semantics and focus, and paints and presents every window that is due.
+    /// Lays out, rebuilds semantics and focus, and paints and presents every window that is due. A window that fails
+    /// is reported and waits for its next configure; only a lost connection ends the application.
     fn frame(&mut self) -> Result<(), UiError> {
         let relayout = self.tree.take_layout_dirty();
         let paint_dirty = self.tree.take_paint_dirty();
         let now = self.options.clock.now();
         for i in 0..self.windows.len() {
-            let w = &mut self.windows[i];
-            let Some(root) = w.root else { continue };
-            if relayout || paint_dirty.iter().any(|n| w.geometry.contains_key(n)) {
-                w.invalidate();
-            }
-            if !w.dirty {
-                continue;
-            }
-            if !w.prepared {
-                let available = Constraints::tight(w.size).map_err(UiError::Layout)?;
-                let result = layout(
-                    &TreeView {
-                        tree: &self.tree,
-                        env: &w.env,
-                    },
-                    root,
-                    available,
-                    &LayoutOptions {
-                        direction: w.env.direction,
-                        node_limit: self.options.node_limit,
-                    },
-                )
-                .map_err(UiError::Layout)?;
-                w.geometry = placements(&self.tree, root, &result, w.env.direction);
-
-                let semantics = build(&self.tree, root, &w.geometry, w.focus.node());
-                w.focusable = semantics.focusable;
-                let change = w.focus.sync(&self.tree, &semantics.scopes, &w.focusable);
-                let refocused = change.is_some();
-                Self::focus_events(&mut self.tree, w, change, &mut self.messages, now);
-                let nodes = if refocused {
-                    build(&self.tree, root, &w.geometry, w.focus.node()).nodes
-                } else {
-                    semantics.nodes
-                };
-                if let Some(adapter) = &mut self.options.accessibility {
-                    if adapter.is_active() {
-                        let (changed, removed) = diff(&w.accessibility, &nodes);
-                        if !changed.is_empty() || !removed.is_empty() {
-                            adapter.update(&AccessibilityUpdate {
-                                window: w.id,
-                                root,
-                                focus: w.focus.node(),
-                                nodes: changed,
-                                removed,
-                            });
-                        }
-                    }
+            match self.frame_window(i, relayout, &paint_dirty, now) {
+                Ok(()) => {}
+                Err(error @ UiError::Platform(PlatformError::Disconnected(_))) => {
+                    return Err(error)
                 }
-                w.accessibility = nodes;
-                w.prepared = true;
-            }
-
-            if !(w.configured && w.frame_ready) {
-                continue;
-            }
-            let painting = w.painter.paint(
-                &self.tree,
-                root,
-                &w.geometry,
-                &PaintInput {
-                    env: &w.env,
-                    focus: w.focus.node(),
-                    focus_visible: w.focus.visible(),
-                    window_active: w.active,
-                    now,
-                },
-            );
-            let damage = w.damage.damage(&painting);
-            w.display_list = painting.list;
-            w.dirty = false;
-            if matches!(&damage, DamageRegion::Rects(r) if r.is_empty()) {
-                continue;
-            }
-            let scale = w.env.scale;
-            let id = w
-                .renderer
-                .render(&RenderRequest {
-                    list: &w.display_list,
-                    resources: &PaintResources::default(),
-                    scale,
-                    width: physical(w.size.width, scale),
-                    height: physical(w.size.height, scale),
-                    damage: &damage,
-                })
-                .map_err(UiError::Render)?;
-            let frame = w.renderer.frame(id).map_err(UiError::Render)?;
-            match self
-                .system
-                .present(w.id, frame, w.ack)
-                .map_err(UiError::Platform)?
-            {
-                PresentOutcome::Presented => {
-                    w.ack = None;
+                Err(error) => {
+                    let w = &mut self.windows[i];
                     w.frame_ready = false;
-                    self.system.request_frame(w.id);
-                }
-                PresentOutcome::NotReady => {
-                    w.frame_ready = false;
-                    w.dirty = true;
+                    w.invalidate();
                     w.damage.invalidate();
-                    self.system.request_frame(w.id);
+                    if let Some(report) = &mut self.options.on_window_error {
+                        report(w.id, &error);
+                    }
                 }
             }
         }
+        self.sync_accessibility();
         Ok(())
+    }
+
+    fn frame_window(
+        &mut self,
+        i: usize,
+        relayout: bool,
+        paint_dirty: &BTreeSet<NodeId>,
+        now: Timestamp,
+    ) -> Result<(), UiError> {
+        let w = &mut self.windows[i];
+        let Some(root) = w.root else {
+            return Ok(());
+        };
+        if relayout || paint_dirty.iter().any(|n| w.geometry.contains_key(n)) {
+            w.invalidate();
+        }
+        if !w.dirty {
+            return Ok(());
+        }
+        let mut focus_effects = Effects::default();
+        if !w.prepared {
+            let available = Constraints::tight(w.size).map_err(UiError::Layout)?;
+            let result = layout(
+                &TreeView {
+                    tree: &self.tree,
+                    env: &w.env,
+                },
+                root,
+                available,
+                &LayoutOptions {
+                    direction: w.env.direction,
+                    node_limit: self.options.node_limit,
+                },
+            )
+            .map_err(UiError::Layout)?;
+            w.geometry = placements(&self.tree, root, &result, w.env.direction);
+
+            let semantics = build(&self.tree, root, &w.geometry, w.focus.node());
+            w.focusable = semantics.focusable;
+            let change = w.focus.sync(&self.tree, &semantics.scopes, &w.focusable);
+            let refocused = change.is_some();
+            focus_effects = Self::focus_events(&mut self.tree, w, change, &mut self.messages, now);
+            let nodes = if refocused {
+                build(&self.tree, root, &w.geometry, w.focus.node()).nodes
+            } else {
+                semantics.nodes
+            };
+            if let Some(adapter) = &mut self.options.accessibility {
+                if adapter.is_active() && w.accessible {
+                    let (changed, removed) = diff(&w.accessibility, &nodes);
+                    if !changed.is_empty() || !removed.is_empty() {
+                        adapter.update(&AccessibilityUpdate {
+                            window: w.id,
+                            root,
+                            focus: w.focus.node(),
+                            nodes: changed,
+                            removed,
+                        });
+                    }
+                }
+            }
+            w.accessibility = nodes;
+            w.prepared = true;
+        }
+        self.apply(i, focus_effects);
+        let w = &mut self.windows[i];
+
+        if !(w.configured && w.frame_ready) {
+            return Ok(());
+        }
+        let painting = w.painter.paint(
+            &self.tree,
+            root,
+            &w.geometry,
+            &PaintInput {
+                env: &w.env,
+                focus: w.focus.node(),
+                focus_visible: w.focus.visible(),
+                window_active: w.active,
+                now,
+            },
+        );
+        let damage = w.damage.damage(&painting);
+        w.display_list = painting.list;
+        w.dirty = false;
+        if matches!(&damage, DamageRegion::Rects(r) if r.is_empty()) {
+            return Ok(());
+        }
+        let scale = w.env.scale;
+        let id = w
+            .renderer
+            .render(&RenderRequest {
+                list: &w.display_list,
+                resources: &PaintResources::default(),
+                scale,
+                width: physical(w.size.width, scale),
+                height: physical(w.size.height, scale),
+                damage: &damage,
+            })
+            .map_err(UiError::Render)?;
+        let frame = w.renderer.frame(id).map_err(UiError::Render)?;
+        match self
+            .system
+            .present(w.id, frame, w.ack)
+            .map_err(UiError::Platform)?
+        {
+            PresentOutcome::Presented => {
+                w.ack = None;
+                w.frame_ready = false;
+                self.system.request_frame(w.id);
+            }
+            PresentOutcome::NotReady => {
+                w.frame_ready = false;
+                w.dirty = true;
+                w.damage.invalidate();
+                self.system.request_frame(w.id);
+            }
+        }
+        Ok(())
+    }
+
+    /// Gives an adapter that has just become active, or a window it has not seen yet, the whole tree; later frames
+    /// send only what changed.
+    fn sync_accessibility(&mut self) {
+        let Some(adapter) = &mut self.options.accessibility else {
+            return;
+        };
+        let active = adapter.is_active();
+        for w in &mut self.windows {
+            if !active {
+                w.accessible = false;
+                continue;
+            }
+            let Some(root) = w.root else { continue };
+            if w.accessible || !w.prepared {
+                continue;
+            }
+            adapter.update(&AccessibilityUpdate {
+                window: w.id,
+                root,
+                focus: w.focus.node(),
+                nodes: w
+                    .accessibility
+                    .iter()
+                    .map(|(&id, node)| (id, node.clone()))
+                    .collect(),
+                removed: Vec::new(),
+            });
+            w.accessible = true;
+        }
+    }
+
+    fn accessibility_behind(&self) -> bool {
+        self.options.accessibility.as_ref().is_some_and(|adapter| {
+            let active = adapter.is_active();
+            self.windows
+                .iter()
+                .any(|w| w.root.is_some() && w.prepared && w.accessible != active)
+        })
     }
 
     /// A read-only view of one window after the last frame, for tests and the inspector.

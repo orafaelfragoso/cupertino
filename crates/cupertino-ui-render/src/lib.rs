@@ -1,17 +1,68 @@
-//! CupertinoKit rendering. Core paints each window into a [`DisplayList`] in logical points; a [`UiRenderer`] draws
-//! the damaged part of it into a [`PixelTarget`] at the window's scale. Effects such as materials are drawn from the
-//! window's own content and a local recipe, never from a capture of the screen.
+//! CupertinoKit rendering. Core paints each window into a [`DisplayList`] of [`PaintNode`]s in logical points, with
+//! materials and animations already resolved to plain paint values. A [`UiRenderer`] repaints the damaged part into
+//! a frame it owns and the window system presents that frame. Effects such as blur sample only the window's own
+//! layers, never a capture of the screen.
 
 use cupertino_geometry::{Point, Rect};
 use cupertino_theme::Color;
 use cupertino_ui_text::GlyphRun;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-/// The core node a run of display items was painted for.
+/// A paint node's identity across frames; core maps each of its node ids to one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PaintNodeId(pub u64);
 
+/// Bumped by core whenever a paint node's operations change.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PaintRevision(pub u64);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ImageId(pub u64);
+pub struct ResourceId(pub u64);
+
+/// A resource as one paint operation uses it; a different revision in [`PaintResources`] is an error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ResourceRef {
+    pub id: ResourceId,
+    pub revision: u64,
+}
+
+/// A 2D affine transform `[a, b, c, d, e, f]`: `x' = a x + c y + e`, `y' = b x + d y + f`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Transform(pub [f64; 6]);
+
+impl Transform {
+    pub const IDENTITY: Transform = Transform([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PathVerb {
+    MoveTo(Point),
+    LineTo(Point),
+    QuadTo(Point, Point),
+    CubicTo(Point, Point, Point),
+    Close,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum FillRule {
+    #[default]
+    NonZero,
+    EvenOdd,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Shape {
+    Rect(Rect),
+    RoundedRect {
+        rect: Rect,
+        radius: f64,
+    },
+    Path {
+        verbs: Vec<PathVerb>,
+        fill_rule: FillRule,
+    },
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GradientStop {
@@ -19,6 +70,7 @@ pub struct GradientStop {
     pub color: Color,
 }
 
+/// Source colour; gradients interpolate premultiplied, in encoded sRGB.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Paint {
     Solid(Color),
@@ -34,114 +86,171 @@ pub enum Paint {
     },
 }
 
-/// How an image fills its rectangle.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum ImageFit {
+pub enum Sampling {
+    Nearest,
     #[default]
-    Fit,
-    Fill,
-    Cover,
+    Linear,
 }
 
-/// The materials a window may draw behind its content; each has a deterministic local fallback.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Material {
-    WindowBackground,
-    Sidebar,
-    Menu,
-    Popover,
-    Header,
-    Sheet,
-    ToolTip,
+/// An effect on an isolated layer, computed from the layer's own content.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Effect {
+    Blur {
+        radius: f64,
+    },
+    DropShadow {
+        offset: Point,
+        blur: f64,
+        color: Color,
+    },
+    InnerShadow {
+        offset: Point,
+        blur: f64,
+        color: Color,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum DisplayItem {
-    /// Starts the items of one core node: what it painted may spill outside `hit`, which is where it takes input.
-    Node {
-        id: PaintNodeId,
-        bounds: Rect,
-        hit: Rect,
-    },
-    PushClip {
-        rect: Rect,
-        radius: f64,
-    },
-    PopClip,
-    PushLayer {
-        opacity: f32,
-    },
-    PopLayer,
-    Rect {
-        rect: Rect,
-        radius: f64,
+pub enum PaintOp {
+    Fill {
+        shape: Shape,
         paint: Paint,
     },
     Stroke {
-        rect: Rect,
-        radius: f64,
+        shape: Shape,
         width: f64,
         paint: Paint,
     },
-    Shadow {
-        rect: Rect,
-        radius: f64,
-        blur: f64,
-        offset: Point,
-        color: Color,
-    },
+    /// `origin` is the run's baseline start.
     Glyphs {
         origin: Point,
         run: GlyphRun,
         color: Color,
     },
     Image {
-        id: ImageId,
-        rect: Rect,
-        fit: ImageFit,
+        image: ResourceRef,
+        src: Rect,
+        dst: Rect,
+        sampling: Sampling,
     },
-    Material {
-        rect: Rect,
-        radius: f64,
-        material: Material,
+    PushClip(Shape),
+    PopClip,
+    /// Starts an isolated group: `opacity` applies once to the whole group, after `effects`.
+    PushLayer {
+        opacity: f32,
+        effects: Vec<Effect>,
     },
+    PopLayer,
 }
 
-/// One window's paint, in logical points.
+/// What one core node painted.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaintNode {
+    pub id: PaintNodeId,
+    pub revision: PaintRevision,
+    pub transform: Transform,
+    pub clip: Option<Shape>,
+    /// Everything the node's operations may touch, effects included.
+    pub bounds: Rect,
+    /// Where the node takes pointer input; never its shadow or focus ring.
+    pub hit: Rect,
+    pub ops: Vec<PaintOp>,
+}
+
+/// One window's paint, back to front, in logical points.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DisplayList {
-    pub items: Vec<DisplayItem>,
+    pub nodes: Vec<PaintNode>,
 }
 
-/// The parts of a window, in logical points, whose pixels must be redrawn.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Damage {
-    pub rects: Vec<Rect>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PixelFormat {
+    /// Premultiplied RGBA, one byte per component, in memory order.
+    Rgba8Premultiplied,
+    /// Straight-alpha RGBA, normalised when the image is added.
+    Rgba8,
 }
 
-/// Premultiplied ARGB8888 pixels, little-endian, as Wayland's `argb8888`.
-pub struct PixelTarget<'a> {
-    pub pixels: &'a mut [u8],
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImageResource {
+    pub revision: u64,
     pub width: u32,
     pub height: u32,
-    /// Bytes per row.
     pub stride: u32,
+    pub format: PixelFormat,
+    pub pixels: Arc<[u8]>,
+}
+
+/// The images the operations of a display list refer to.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PaintResources {
+    pub images: HashMap<ResourceId, ImageResource>,
+}
+
+/// What must be repainted, in logical points.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DamageRegion {
+    Full,
+    Rects(Vec<Rect>),
+}
+
+/// One repaint of a window.
+#[derive(Clone, Copy, Debug)]
+pub struct RenderRequest<'a> {
+    pub list: &'a DisplayList,
+    pub resources: &'a PaintResources,
     /// Physical pixels per logical point.
     pub scale: f64,
+    pub width: u32,
+    pub height: u32,
+    pub damage: &'a DamageRegion,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RenderFrameId(pub u64);
+
+/// A rectangle of whole physical pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PixelRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// A frame of the CPU renderer: its whole canonical image and the pixels this frame changed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CpuFrame {
+    pub id: RenderFrameId,
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+    /// Always [`PixelFormat::Rgba8Premultiplied`].
+    pub format: PixelFormat,
+    pub pixels: Vec<u8>,
+    pub damage: Vec<PixelRect>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RenderError {
-    TargetTooSmall,
-    MissingImage(ImageId),
+    MissingResource(ResourceId),
+    StaleResource(ResourceId),
+    /// Clip or layer scopes do not balance.
+    UnbalancedScope(PaintNodeId),
+    NonFiniteValue(PaintNodeId),
+    InvalidScale,
+    /// An image, layer or target exceeds the renderer's allocation limits.
+    ResourceLimit,
+    UnknownFrame(RenderFrameId),
 }
 
 pub trait UiRenderer {
-    /// Draws the parts of `list` inside `damage` into `target`, leaving every other pixel as it was.
-    fn render(
-        &mut self,
-        list: &DisplayList,
-        damage: &Damage,
-        target: &mut PixelTarget<'_>,
-    ) -> Result<(), RenderError>;
+    type Frame;
+
+    /// Repaints the damaged region into the renderer's own output. On error no partial frame is exposed and the
+    /// next request repaints in full.
+    fn render(&mut self, request: &RenderRequest<'_>) -> Result<RenderFrameId, RenderError>;
+    /// Borrows a frame for presentation; only the latest frame id is valid.
+    fn frame(&self, id: RenderFrameId) -> Result<&Self::Frame, RenderError>;
 }

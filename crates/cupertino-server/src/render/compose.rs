@@ -112,19 +112,28 @@ pub struct Composition {
     id: FrameId,
     scale: f64,
     items: LayerStack<SceneItem>,
-    surfaces: Vec<WlSurface>,
-    images: Vec<MemoryRenderBuffer>,
-    recipes: Vec<Rc<GpuRecipe>>,
-    snapshots: Vec<Option<FrameSnapshot>>,
+    resources: FrameResources,
 }
 
-/// A composed frame and the resources its items refer to: surface trees, images, recipes and snapshots by handle.
-pub struct Composed {
-    pub frame: SceneFrame,
+/// What the typed handles of a frame's items resolve to: surface trees, images, recipes and snapshots, each by the
+/// slot and generation the composition gave it. Owned by the renderer's adapter from the frame's composition until
+/// the frame's elements are gone.
+#[derive(Default)]
+pub struct FrameResources {
     pub surfaces: Vec<WlSurface>,
     pub images: Vec<MemoryRenderBuffer>,
     pub recipes: Vec<Rc<GpuRecipe>>,
     pub snapshots: Vec<Option<FrameSnapshot>>,
+    /// The elements the comparison with the previous builder already lowered for this frame: lowering moves commit
+    /// counters, so the frame is lowered once and the renderer draws this list.
+    #[cfg(scene_oracle)]
+    pub prelowered: Option<Vec<super::CupertinoElement>>,
+}
+
+/// A composed frame and the resources its items refer to.
+pub struct Composed {
+    pub frame: SceneFrame,
+    pub resources: FrameResources,
 }
 
 impl Composition {
@@ -134,10 +143,7 @@ impl Composition {
             id: FrameId(FRAMES.fetch_add(1, Ordering::Relaxed)),
             scale,
             items: LayerStack::new(),
-            surfaces: Vec::new(),
-            images: Vec::new(),
-            recipes: Vec::new(),
-            snapshots: Vec::new(),
+            resources: FrameResources::default(),
         }
     }
 
@@ -146,10 +152,10 @@ impl Composition {
             Piece::Item(item) => self.items.push(layer, *item),
             Piece::Mesh(mesh) => {
                 let snapshot = SnapshotId(ResourceKey {
-                    slot: self.snapshots.len() as u64,
+                    slot: self.resources.snapshots.len() as u64,
                     generation: self.id.0,
                 });
-                self.snapshots.push(Some(FrameSnapshot {
+                self.resources.snapshots.push(Some(FrameSnapshot {
                     texture: mesh.texture,
                     lease: mesh.lease,
                 }));
@@ -174,10 +180,10 @@ impl Composition {
             }
             Piece::Material(material) => {
                 let recipe = RecipeId(ResourceKey {
-                    slot: self.recipes.len() as u64,
+                    slot: self.resources.recipes.len() as u64,
                     generation: self.id.0,
                 });
-                self.recipes.push(material.recipe);
+                self.resources.recipes.push(material.recipe);
                 self.items.push(
                     layer,
                     SceneItem {
@@ -203,10 +209,10 @@ impl Composition {
             }
             Piece::Image(picture) => {
                 let id = ImageId(ResourceKey {
-                    slot: self.images.len() as u64,
+                    slot: self.resources.images.len() as u64,
                     generation: self.id.0,
                 });
-                self.images.push(picture.buffer);
+                self.resources.images.push(picture.buffer);
                 self.items.push(
                     layer,
                     SceneItem {
@@ -242,10 +248,10 @@ impl Composition {
             Piece::Tree(tree) => {
                 let index = tree.surface.id().protocol_id() as u64;
                 let id = SurfaceId(ResourceKey {
-                    slot: self.surfaces.len() as u64,
+                    slot: self.resources.surfaces.len() as u64,
                     generation: self.id.0,
                 });
-                self.surfaces.push(tree.surface);
+                self.resources.surfaces.push(tree.surface);
                 let device = |p: DevicePoint| {
                     OutputPoint(Point::new(
                         f64::from(p.x) / self.scale,
@@ -316,10 +322,7 @@ impl Composition {
         );
         Composed {
             frame,
-            surfaces: self.surfaces,
-            images: self.images,
-            recipes: self.recipes,
-            snapshots: self.snapshots,
+            resources: self.resources,
         }
     }
 }

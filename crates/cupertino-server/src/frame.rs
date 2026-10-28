@@ -14,10 +14,16 @@ use smithay::utils::{Logical, Point};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::presentation::Refresh;
 
-use crate::render::scene::{build_scene, CursorPlan, SceneParams, SessionOverlay};
+use crate::render::compose::Composed;
+use crate::render::gles::{Gles, GlesResources};
+use crate::render::scene::{
+    compose_scene, CursorPlan, RenderResources, SceneParams, SessionOverlay,
+};
+use crate::render::shader_rect::ElementCache;
 use crate::render::CupertinoElement;
 use crate::state::Cupertino;
 use cupertino_scene::SceneKind;
+use smithay::backend::renderer::damage::OutputDamageTracker;
 
 /// Frame callbacks are throttled to this interval for surfaces that are not on screen.
 pub const HIDDEN_FRAME_THROTTLE: Duration = Duration::from_secs(1);
@@ -170,14 +176,11 @@ impl Cupertino {
         idx: usize,
         paint_cursor: bool,
     ) -> Option<Vec<CupertinoElement>> {
-        let build = |r: &mut GlesRenderer, mut p: SceneParams<'_>| {
-            if !paint_cursor {
-                p.cursor = CursorPlan::Hidden;
-            }
-            build_scene(r, p)
-        };
         #[cfg(not(scene_oracle))]
-        let elements = self.with_scene(renderer, idx, build)?;
+        let elements = {
+            let cursor = self.cursor_plan(self.outputs[idx].scale);
+            self.lowered_elements(renderer, idx, cursor, paint_cursor)?
+        };
         #[cfg(scene_oracle)]
         let elements = {
             use crate::render::legacy_scene;
@@ -186,7 +189,7 @@ impl Cupertino {
             self.fixed_time = self.fixed_time.or(pinned);
             let cursor = self.cursor_plan(self.outputs[idx].scale);
             self.overlays.wallpaper.hold_replies(true);
-            let elements = self.with_scene_and_cursor(renderer, idx, cursor.clone(), build);
+            let elements = self.lowered_elements(renderer, idx, cursor.clone(), paint_cursor);
             let legacy = elements.as_ref().and_then(|_| {
                 self.with_scene_and_cursor(renderer, idx, cursor, |r, mut p| {
                     if !paint_cursor {
@@ -206,6 +209,118 @@ impl Cupertino {
             elements
         };
         Some(elements)
+    }
+
+    /// Compose output `idx` into its scene frame, the pointer left out with `paint_cursor` false; `None` while the
+    /// render resources are not loaded.
+    pub fn compose_output(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        idx: usize,
+        paint_cursor: bool,
+    ) -> Option<Composed> {
+        let cursor = self.cursor_plan(self.outputs[idx].scale);
+        self.compose_output_with(renderer, idx, cursor, paint_cursor)
+    }
+
+    fn compose_output_with(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        idx: usize,
+        cursor: CursorPlan,
+        paint_cursor: bool,
+    ) -> Option<Composed> {
+        self.with_scene_and_cursor(renderer, idx, cursor, |r, mut p| {
+            if !paint_cursor {
+                p.cursor = CursorPlan::Hidden;
+            }
+            compose_scene(r, &mut p)
+        })
+    }
+
+    fn lowered_elements(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        idx: usize,
+        cursor: CursorPlan,
+        paint_cursor: bool,
+    ) -> Option<Vec<CupertinoElement>> {
+        let composed = self.compose_output_with(renderer, idx, cursor, paint_cursor)?;
+        let (res, cache, _) = self.gles_parts(idx)?;
+        let mut resources = GlesResources::new(res, cache, composed.resources);
+        Gles::lower(renderer, &composed.frame, &mut resources)
+            .map_err(|e| tracing::warn!(error = %e, "lowering the scene failed"))
+            .ok()
+    }
+
+    /// The frame of output `idx` for presentation: the session lock's built-frame mark is set as for every frame
+    /// shown, and under the oracle the lowered elements are compared with the previous builder's first.
+    pub fn compose_for_present(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        idx: usize,
+    ) -> Option<Composed> {
+        self.note_scene_built(idx);
+        #[cfg(scene_oracle)]
+        {
+            let elements = self.scene_elements(renderer, idx, true)?;
+            let mut composed = self.compose_output(renderer, idx, true)?;
+            composed.resources.prelowered = Some(elements);
+            return Some(composed);
+        }
+        #[cfg(not(scene_oracle))]
+        self.compose_output(renderer, idx, true)
+    }
+
+    /// Draw output `idx` to a fresh image, the pointer left out with `paint_cursor` false. The built-frame mark of the
+    /// session lock is set with `note_built`, for frames that stand for what the screen shows.
+    pub fn draw_output_image(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        idx: usize,
+        paint_cursor: bool,
+        note_built: bool,
+    ) -> anyhow::Result<image::RgbaImage> {
+        use anyhow::Context;
+        use cupertino_render_api::Renderer;
+        if note_built {
+            self.note_scene_built(idx);
+        }
+        let mut composed = self
+            .compose_output(renderer, idx, paint_cursor)
+            .context("the render resources are not loaded")?;
+        #[cfg(scene_oracle)]
+        {
+            composed.resources.prelowered = self.scene_elements(renderer, idx, paint_cursor);
+        }
+        let (res, cache, _) = self.gles_parts(idx).context("the output is gone")?;
+        let mut resources = GlesResources::new(res, cache, composed.resources);
+        match Gles.render(
+            &composed.frame,
+            &mut resources,
+            crate::render::gles::GlesTarget::Image {
+                renderer,
+                clear: SCREENSHOT_CLEAR,
+            },
+        )? {
+            crate::render::gles::GlesCompletion::Image(image) => Ok(image),
+            _ => anyhow::bail!("the image target gave no image"),
+        }
+    }
+
+    /// What the GLES renderer draws output `idx` with: the shared resources, the element cache and the damage
+    /// tracker of the output.
+    pub fn gles_parts(
+        &mut self,
+        idx: usize,
+    ) -> Option<(
+        &RenderResources,
+        &mut ElementCache,
+        &mut OutputDamageTracker,
+    )> {
+        let res = self.render.as_ref()?;
+        let out = self.outputs.get_mut(idx)?;
+        Some((res, &mut out.cache, &mut out.tracker))
     }
 
     /// Render window `id` at its natural size with its shadow into a texture (`None` when it is not
@@ -360,20 +475,7 @@ impl Cupertino {
             return;
         }
         let paths = std::mem::take(&mut self.screenshot_requests);
-        let elements = self.build_output_elements(renderer, idx);
-        let out = &self.outputs[idx];
-        let size = out
-            .output
-            .current_mode()
-            .map(|m| m.size)
-            .unwrap_or_default();
-        match crate::render::screenshot::render_to_image(
-            renderer,
-            &elements,
-            size,
-            out.scale,
-            SCREENSHOT_CLEAR,
-        ) {
+        match self.draw_output_image(renderer, idx, true, true) {
             Ok(img) => {
                 for p in paths {
                     if self.exit_after_screenshot {

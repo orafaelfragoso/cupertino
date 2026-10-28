@@ -24,8 +24,10 @@ pub trait Completion {
 
 /// Draws scene frames. Implementations are thread-affine and statically dispatched: no `Send`, no `dyn`.
 pub trait Renderer {
-    /// What the frame's typed handles resolve against, and the caches that outlive a frame.
-    type Resources;
+    /// What the frame's typed handles resolve against, and the caches that outlive a frame; it may borrow them.
+    type Resources<'a>
+    where
+        Self: 'a;
     /// Where the frame is drawn: an offscreen image, a window's framebuffer, a display output.
     type Target<'a>
     where
@@ -37,7 +39,7 @@ pub trait Renderer {
     fn render(
         &mut self,
         scene: &SceneFrame,
-        resources: &mut Self::Resources,
+        resources: &mut Self::Resources<'_>,
         target: Self::Target<'_>,
     ) -> Result<Self::Completion, Self::Error>;
 }
@@ -48,7 +50,8 @@ mod tests {
 
     use cupertino_geometry::Rect;
     use cupertino_scene::{
-        FrameId, GlobalRect, LayerStack, Output, OutputId, OutputInvalidation, PhysicalSize, Transform,
+        FrameId, GlobalRect, LayerStack, Output, OutputId, OutputInvalidation, PhysicalSize,
+        Transform,
     };
 
     use super::*;
@@ -80,7 +83,7 @@ mod tests {
     }
 
     impl Renderer for Counting {
-        type Resources = ();
+        type Resources<'a> = ();
         type Target<'a> = bool;
         type Completion = Done;
         type Error = Refused;
@@ -118,6 +121,9 @@ mod tests {
         let mut renderer = Counting;
         let empty = renderer.render(&frame(), &mut (), false).unwrap();
         assert_eq!(empty.status(), RenderStatus::Empty);
-        assert_eq!(renderer.render(&frame(), &mut (), true).err(), Some(Refused));
+        assert_eq!(
+            renderer.render(&frame(), &mut (), true).err(),
+            Some(Refused)
+        );
     }
 }

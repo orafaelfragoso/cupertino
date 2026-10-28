@@ -29,9 +29,10 @@ use super::compose::{
     corner_style, image_piece, item, output_rect, Composed, Composition, Material, MeshPiece,
     Picture, Piece, Tree,
 };
-use super::lower::{id_hash, lower, Lowering};
+use super::gles::{Gles, GlesCompletion, GlesResources, GlesTarget};
+use super::lower::id_hash;
 use super::material::{GpuRecipe, MaterialStage, SharedMaterial};
-use super::mesh::{capture, MeshGl, SharedMesh};
+use super::mesh::{MeshGl, SharedMesh};
 use super::motion::{cross_fade_opacity, skips_frame_animation, WorkspaceTransition};
 use super::programs::Programs;
 use super::shader_rect::{to_physical_rect, ElementCache, Sig};
@@ -44,6 +45,7 @@ use crate::fx::{Effects, IntoGeom};
 use crate::shell::Shell;
 use crate::state::WindowEntry;
 use crate::window_manager::Look;
+use cupertino_render_api::Renderer;
 
 /// Material over a window while a sheet hangs from it (material 30).
 pub(super) const SHEET_DIMMING_MATERIAL: &str = "SheetUnderlay";
@@ -887,8 +889,6 @@ pub fn capture_window(
     let saved = (p.rect, p.output_px);
     p.rect = area;
     p.output_px = size_px;
-    let mut tmp = ElementCache::default();
-    std::mem::swap(p.cache, &mut tmp);
     let plan = WindowPlan {
         visual: natural,
         scale_x: 1.0,
@@ -903,12 +903,18 @@ pub fn capture_window(
     let mut stack = Composition::new(p.scale);
     stack.extend(SceneLayer::Windows, pieces);
     let composed = stack.finish(p);
-    let els = lower_composed(composed, renderer, p);
-    std::mem::swap(p.cache, &mut tmp);
     p.rect = saved.0;
     p.output_px = saved.1;
-    match capture(renderer, &els, size_px.into(), p.scale) {
-        Ok(t) => Some((t, area)),
+    // the window is drawn alone, with caches of its own
+    let mut cache = ElementCache::default();
+    let mut resources = GlesResources::new(p.res, &mut cache, composed.resources);
+    match Gles.render(
+        &composed.frame,
+        &mut resources,
+        GlesTarget::Snapshot { renderer },
+    ) {
+        Ok(GlesCompletion::Snapshot(t)) => Some((t, area)),
+        Ok(_) => None,
         Err(e) => {
             tracing::warn!(error = %e, "window snapshot failed");
             None
@@ -1446,17 +1452,6 @@ fn overview(p: &mut SceneParams<'_>, stack: &mut Composition) -> bool {
     true
 }
 
-/// Build the element list of one output, front to back.
-pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<CupertinoElement> {
-    let composed = compose_scene(renderer, &mut p);
-    let mut ordered = lower_composed(composed, renderer, &mut p);
-    finalize_materials(&mut ordered, p.scale, p.cache);
-    p.cache.end_frame();
-    p.decor.end_frame();
-    p.overlays.images.end_frame();
-    ordered
-}
-
 /// The neutral frame of one output, with the elements the renderer still builds itself.
 pub fn compose_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> Composed {
     let mut stack = Composition::new(p.scale);
@@ -1465,6 +1460,9 @@ pub fn compose_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> Co
         LockView::Unlocked => desktop_scene(renderer, p, &mut stack),
     }
     session_overlays(p, &mut stack);
+    // what the composition used this frame is all it keeps for the next one
+    p.decor.end_frame();
+    p.overlays.images.end_frame();
     stack.finish(p)
 }
 
@@ -1583,23 +1581,6 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
     }
     display_filter(p, stack);
     cursor(p, stack);
-}
-
-/// Lower a composed frame to renderer elements.
-fn lower_composed(
-    composed: Composed,
-    renderer: &mut GlesRenderer,
-    p: &mut SceneParams<'_>,
-) -> Vec<CupertinoElement> {
-    let mut ctx = Lowering {
-        renderer,
-        programs: &p.res.programs,
-        material: p.res.material.clone(),
-        mesh: p.res.mesh.clone(),
-        cache: p.cache,
-        scale: p.scale,
-    };
-    lower(composed, &mut ctx)
 }
 
 /// The scene while the session is locked: black, the lock surface and the pointer; nothing else may show.

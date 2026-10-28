@@ -24,7 +24,6 @@ type DevicePoint = smithay::utils::Point<i32, Physical>;
 use super::material::GpuRecipe;
 use super::scene::SceneParams;
 use super::snapshots::SnapshotLease;
-use super::CupertinoElement;
 
 /// Straight opaque black; the render target clears with its own colour.
 const UNSPECIFIED_CLEAR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
@@ -100,18 +99,11 @@ pub enum Piece {
     Image(Box<Picture>),
     Material(Box<Material>),
     Mesh(Box<MeshPiece>),
-    Local(Box<CupertinoElement>),
 }
 
 impl Piece {
     pub fn item(item: SceneItem) -> Self {
         Self::Item(Box::new(item))
-    }
-}
-
-impl<T: Into<CupertinoElement>> From<T> for Piece {
-    fn from(element: T) -> Self {
-        Self::Local(Box::new(element.into()))
     }
 }
 
@@ -124,18 +116,15 @@ pub struct Composition {
     images: Vec<MemoryRenderBuffer>,
     recipes: Vec<Rc<GpuRecipe>>,
     snapshots: Vec<Option<FrameSnapshot>>,
-    locals: Vec<Option<CupertinoElement>>,
 }
 
-/// A composed frame and the resources its items refer to: surface trees by [`SurfaceId`], and the
-/// frame-local elements of its [`Source::LocalPass`] items.
+/// A composed frame and the resources its items refer to: surface trees, images, recipes and snapshots by handle.
 pub struct Composed {
     pub frame: SceneFrame,
     pub surfaces: Vec<WlSurface>,
     pub images: Vec<MemoryRenderBuffer>,
     pub recipes: Vec<Rc<GpuRecipe>>,
     pub snapshots: Vec<Option<FrameSnapshot>>,
-    pub locals: Vec<Option<CupertinoElement>>,
 }
 
 impl Composition {
@@ -149,7 +138,6 @@ impl Composition {
             images: Vec::new(),
             recipes: Vec::new(),
             snapshots: Vec::new(),
-            locals: Vec::new(),
         }
     }
 
@@ -288,19 +276,6 @@ impl Composition {
                     },
                 );
             }
-            Piece::Local(element) => {
-                let index = self.locals.len();
-                self.locals.push(Some(*element));
-                self.items.push(
-                    layer,
-                    item(
-                        SceneKind::LocalPass,
-                        index as u64,
-                        Source::LocalPass { index },
-                        1.0,
-                    ),
-                );
-            }
         }
     }
 
@@ -345,7 +320,6 @@ impl Composition {
             images: self.images,
             recipes: self.recipes,
             snapshots: self.snapshots,
-            locals: self.locals,
         }
     }
 }

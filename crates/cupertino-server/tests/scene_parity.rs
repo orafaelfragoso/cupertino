@@ -334,3 +334,72 @@ fn the_power_dim_matches_while_it_ramps_and_when_asleep() {
         }
     }
 }
+
+fn one_display() -> [headless::HeadlessDisplay; 1] {
+    [headless::HeadlessDisplay {
+        name: "headless-1".into(),
+        size: (1000, 700),
+        physical_mm: (0, 0),
+    }]
+}
+
+#[test]
+fn minimize_and_restore_match_by_pixels_for_every_effect() {
+    use cupertino_effects::MinimizeKind;
+    use cupertino_wm::{Command, Rect};
+    for kind in [
+        MinimizeKind::Warp,
+        MinimizeKind::Funnel,
+        MinimizeKind::Scale,
+    ] {
+        let mut config = cupertino_server::config::Config::default();
+        config.effects.minimize = Some(kind);
+        let mut d = Desktop::configured(config, &one_display(), 1.5);
+        d.window();
+        d.at(2000);
+        let id = d.state.wm.key_window().expect("a window");
+        let dock = Rect::new(440.0, 640.0, 64.0, 64.0);
+        d.state.command(Command::Minimize {
+            window: id,
+            target: Some(dock),
+        });
+        let duration = kind.duration_s(false);
+        let t0 = d.state.now();
+        for fraction in [0.05, 0.3, 0.6, 0.9, 1.3] {
+            d.state.fixed_time = Some(t0 + duration * fraction);
+            d.state.tick();
+            d.pump();
+            compare(&mut d, &format!("{kind:?} minimize at {fraction}"));
+        }
+        d.state.command(Command::Restore { window: id });
+        let t1 = d.state.now();
+        for fraction in [0.1, 0.5, 0.9, 1.3] {
+            d.state.fixed_time = Some(t1 + duration * fraction);
+            d.state.tick();
+            d.pump();
+            compare(&mut d, &format!("{kind:?} restore at {fraction}"));
+        }
+    }
+}
+
+#[test]
+fn a_closing_ghost_matches_while_it_fades() {
+    for scale in [1.0, 1.5] {
+        let mut d = Desktop::new(scale);
+        d.state.fx.cfg.closing = true;
+        d.window();
+        d.at(2000);
+        d.clients.clear();
+        wait_until(&mut d, "the window to close", |d| {
+            d.state.wm.windows().count() == 0
+        });
+        assert_eq!(d.state.fx.closing.len(), 1, "a ghost of the closed window");
+        let t0 = d.state.now();
+        for dt in [0.0, 0.05, 0.12, 0.2, 0.3] {
+            d.state.fixed_time = Some(t0 + dt);
+            d.state.tick();
+            d.pump();
+            compare(&mut d, &format!("ghost at +{dt} s, {scale}x"));
+        }
+    }
+}

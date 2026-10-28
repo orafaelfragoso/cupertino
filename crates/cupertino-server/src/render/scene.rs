@@ -26,8 +26,8 @@ use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::shell::wlr_layer::Layer;
 
 use super::compose::{
-    corner_style, item, output_rect, Composed, Composition, Material, MeshPiece, Picture, Piece,
-    Tree,
+    corner_style, image_piece, item, output_rect, Composed, Composition, Material, MeshPiece,
+    Picture, Piece, Tree,
 };
 use super::lower::{id_hash, lower, Lowering};
 use super::material::{GpuRecipe, MaterialStage, SharedMaterial};
@@ -449,18 +449,24 @@ fn standalone(
 }
 
 /// The wallpaper of the output: the image of the user or of the asset pack, else the procedural one.
-fn wallpaper_element(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> Piece {
+fn wallpaper_element(p: &mut SceneParams<'_>) -> Piece {
     let dark = p.config.is_dark();
-    let image = p.overlays.wallpaper.element(
-        renderer,
-        p.output_id.0,
-        &p.config.wallpaper,
-        dark,
-        p.output_px,
-        p.scale,
-        p.now,
-    );
-    image.map_or_else(|| Piece::item(wallpaper(p)), Piece::from)
+    let image =
+        p.overlays
+            .wallpaper
+            .shown(p.output_id.0, &p.config.wallpaper, dark, p.output_px, p.now);
+    match image {
+        Some((buffer, px)) => image_piece(
+            &buffer,
+            SceneKind::WallpaperImage,
+            px,
+            0.0,
+            0.0,
+            p.scale,
+            1.0,
+        ),
+        None => Piece::item(wallpaper(p)),
+    }
 }
 
 fn wallpaper(p: &SceneParams<'_>) -> SceneItem {
@@ -1463,7 +1469,7 @@ pub fn compose_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> Co
 }
 
 fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &mut Composition) {
-    let wp = wallpaper_element(renderer, p);
+    let wp = wallpaper_element(p);
     stack.push(SceneLayer::Wallpaper, wp);
 
     let mut captures: Vec<Piece> = Vec::new();
@@ -1532,7 +1538,7 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
             }
             if pres.minimize_progress > 1e-6 {
                 if let Some(els) = minimize_elements(renderer, p, entry, &pres, slide, active) {
-                    front_to_back.extend(els.into_iter().map(Piece::from));
+                    front_to_back.extend(els);
                     continue;
                 }
             }

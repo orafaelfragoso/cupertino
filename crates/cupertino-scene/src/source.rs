@@ -178,11 +178,6 @@ pub enum Source {
         snapshot: SnapshotId,
         mesh: Mesh,
     },
-    /// Content the renderer still builds itself, by position in its frame-local list. Temporary:
-    /// removed in `wp03-scene-effects`, when materials and effect meshes become typed commands.
-    LocalPass {
-        index: usize,
-    },
 }
 
 #[cfg(test)]

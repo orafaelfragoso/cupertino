@@ -27,6 +27,7 @@ pub struct FrameId(pub u64);
 pub enum SceneKind {
     Wallpaper,
     LockBackdrop,
+    WallpaperImage,
     ActivationFade,
     PowerOverlay,
     OverviewDim,
@@ -56,8 +57,6 @@ pub enum SceneKind {
     DisplayFilter,
     InputHudShadow,
     AccentShadow,
-    /// Content the renderer still builds itself; removed with the effect migration.
-    LocalPass,
     #[cfg(test)]
     Test,
 }
@@ -67,6 +66,7 @@ impl SceneKind {
         match self {
             Self::Wallpaper => "wallpaper",
             Self::LockBackdrop => "lock-backdrop",
+            Self::WallpaperImage => "wallpaper-image",
             Self::ActivationFade => "activation-fade",
             Self::PowerOverlay => "power-overlay",
             Self::OverviewDim => "overview-dim",
@@ -96,7 +96,6 @@ impl SceneKind {
             Self::DisplayFilter => "display-filter",
             Self::InputHudShadow => "input-hud-shadow",
             Self::AccentShadow => "accent-shadow",
-            Self::LocalPass => "local-pass",
             #[cfg(test)]
             Self::Test => "test",
         }

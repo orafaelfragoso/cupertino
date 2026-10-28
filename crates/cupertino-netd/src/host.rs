@@ -134,9 +134,11 @@ mod tests {
     use super::*;
 
     /// A device file this user may not open, or `None` when this user is root and may open anything.
-    fn denied_device() -> Option<std::path::PathBuf> {
-        let path =
-            std::env::temp_dir().join(format!("cupertino-netd-rfkill-{}", std::process::id()));
+    fn denied_device(name: &str) -> Option<std::path::PathBuf> {
+        let path = std::env::temp_dir().join(format!(
+            "cupertino-netd-rfkill-{name}-{}",
+            std::process::id()
+        ));
         std::fs::write(&path, []).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
         if std::fs::File::open(&path).is_ok() {
@@ -150,7 +152,9 @@ mod tests {
     #[test]
     fn a_session_daemon_serves_without_an_rfkill_device_it_may_not_open_and_says_why_the_switch_fails(
     ) {
-        let Some(path) = denied_device() else { return };
+        let Some(path) = denied_device("session") else {
+            return;
+        };
         let host = SystemHost::open(&path, true);
         std::fs::remove_file(&path).unwrap();
         let mut host = host.unwrap();
@@ -166,7 +170,9 @@ mod tests {
 
     #[test]
     fn the_system_daemon_fails_on_an_rfkill_device_it_may_not_open() {
-        let Some(path) = denied_device() else { return };
+        let Some(path) = denied_device("system") else {
+            return;
+        };
         let host = SystemHost::open(&path, false);
         std::fs::remove_file(&path).unwrap();
         assert!(matches!(

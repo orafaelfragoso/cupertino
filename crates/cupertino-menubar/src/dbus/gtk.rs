@@ -4,7 +4,9 @@
 //! `org.gtk.Menus.Start(au) → a(uuaa{sv})` returns whole menus keyed by `(group, menu)`; an item
 //! links to other menus through the `:section` and `:submenu` keys (each a `(uu)` pair). Sections are
 //! flattened with separators between them. Item attributes used: `label`, `action`,
-//! `action-namespace`, `target`, `hidden-when`, `accel`. Action state and enabled flags come from
+//! `action-namespace`, `target`, `hidden-when`, `accel`; an item keeps its full action name and its accelerator
+//! text, which the bar shows through its modifier map. The application menu (`app_menu_object_path`) is read next
+//! to the menu bar and leads the tree under [`GTK_APP_MENU`]. Action state and enabled flags come from
 //! `org.gtk.Actions.DescribeAll`; activation calls `org.gtk.Actions.Activate` on the object that
 //! owns the action (`app.` actions on the application object, `win.` actions on the window object).
 
@@ -13,7 +15,8 @@ use std::collections::{HashMap, HashSet};
 use zbus::zvariant::{OwnedValue, Signature, Value};
 use zbus::Connection;
 
-use crate::item::{split_gtk_mnemonic, ItemId, MenuItem, Shortcut, ShortcutModifier, Toggle};
+use crate::item::{split_gtk_mnemonic, ItemId, MenuItem, Toggle};
+use crate::merge::GTK_APP_MENU;
 use crate::source::GtkMenuProps;
 
 pub type RawItems = Vec<HashMap<String, OwnedValue>>;
@@ -173,31 +176,6 @@ pub struct GtkBuild {
     pub actions: HashMap<ItemId, GtkActionRef>,
 }
 
-/// Parse a GTK accelerator such as `<Primary><Shift>q`.
-pub fn parse_accel(accel: &str) -> Option<Shortcut> {
-    let mut rest = accel.trim();
-    let mut modifiers = Vec::new();
-    while let Some(r) = rest.strip_prefix('<') {
-        let end = r.find('>')?;
-        let m = match r[..end].to_ascii_lowercase().as_str() {
-            "primary" | "control" | "ctrl" => ShortcutModifier::Ctrl,
-            "alt" | "mod1" => ShortcutModifier::Alt,
-            "shift" => ShortcutModifier::Shift,
-            "super" | "meta" | "mod4" => ShortcutModifier::Primary,
-            _ => return None,
-        };
-        if !modifiers.contains(&m) {
-            modifiers.push(m);
-        }
-        rest = &r[end + 1..];
-    }
-    modifiers.sort();
-    (!rest.is_empty()).then(|| Shortcut {
-        modifiers,
-        key: rest.to_string(),
-    })
-}
-
 struct Builder<'a> {
     menus: &'a GtkMenus,
     actions: &'a HashMap<String, GtkActionState>,
@@ -287,10 +265,9 @@ impl Builder<'_> {
                     _ => Toggle::None,
                 };
             }
-            if let Some(a) = super::prop_str(it, "accel") {
-                item.shortcut = parse_accel(&a);
-            }
+            item.accel = super::prop_str(it, "accel");
             if let Some(a) = full {
+                item.action = Some(a.clone());
                 self.refs
                     .insert(ItemId(id), GtkActionRef { action: a, target });
             }
@@ -325,17 +302,44 @@ pub fn build_menu(
     }
 }
 
+/// The tree of an exporter: the menus of its menu bar, led by the application menu under [`GTK_APP_MENU`] when that
+/// has items. Ids are numbered across both, the menu bar's first, so they do not depend on the application menu.
+pub fn build_menus(
+    menubar: &GtkMenus,
+    app_menu: &GtkMenus,
+    actions: &HashMap<String, GtkActionState>,
+) -> GtkBuild {
+    let mut b = Builder {
+        menus: menubar,
+        actions,
+        next_id: 0,
+        refs: HashMap::new(),
+        depth: 0,
+    };
+    let mut items = b.build((0, 0), "");
+    b.menus = app_menu;
+    let app = b.build((0, 0), "");
+    if !app.is_empty() {
+        items.insert(0, MenuItem::submenu(GTK_APP_MENU.0, "", app));
+    }
+    GtkBuild {
+        items,
+        actions: b.refs,
+    }
+}
+
 /// A connected exporter.
 pub struct GtkMenuClient {
     conn: Connection,
     props: GtkMenuProps,
     menus: GtkMenus,
+    app_menu: GtkMenus,
     action_states: HashMap<String, GtkActionState>,
     refs: HashMap<ItemId, GtkActionRef>,
 }
 
 impl GtkMenuClient {
-    /// Load the menu bar and the action states of the window and application objects.
+    /// Load the menu bar, the application menu and the action states of the window and application objects.
     pub async fn load(
         conn: &Connection,
         props: &GtkMenuProps,
@@ -344,6 +348,7 @@ impl GtkMenuClient {
             conn: conn.clone(),
             props: props.clone(),
             menus: GtkMenus::default(),
+            app_menu: GtkMenus::default(),
             action_states: HashMap::new(),
             refs: HashMap::new(),
         };
@@ -351,15 +356,10 @@ impl GtkMenuClient {
         Ok((c, items))
     }
 
-    async fn menus_proxy(&self) -> zbus::Result<GtkMenusProxy<'static>> {
-        let path = self
-            .props
-            .menubar_object_path
-            .clone()
-            .ok_or_else(|| zbus::Error::Failure("no menu bar path".into()))?;
+    async fn menus_proxy(&self, path: &str) -> zbus::Result<GtkMenusProxy<'static>> {
         GtkMenusProxy::builder(&self.conn)
             .destination(self.props.bus_name.clone())?
-            .path(path)?
+            .path(path.to_string())?
             .build()
             .await
     }
@@ -372,9 +372,12 @@ impl GtkMenuClient {
             .await
     }
 
-    /// Fetch everything again and rebuild the tree.
-    pub async fn reload(&mut self) -> zbus::Result<Vec<MenuItem>> {
-        let menus = self.menus_proxy().await?;
+    /// The menus of the `org.gtk.Menus` object at `path` reachable from `(0, 0)`; none without a path.
+    async fn load_menus(&self, path: Option<&str>) -> zbus::Result<GtkMenus> {
+        let Some(path) = path else {
+            return Ok(GtkMenus::default());
+        };
+        let menus = self.menus_proxy(path).await?;
         let mut cache = GtkMenus::from_reply(menus.start(&[0]).await?);
         let mut subscribed: HashSet<u32> = HashSet::from([0]);
         for _ in 0..8 {
@@ -389,7 +392,17 @@ impl GtkMenuClient {
             cache.merge_reply(menus.start(&missing).await?);
             subscribed.extend(missing);
         }
-        self.menus = cache;
+        Ok(cache)
+    }
+
+    /// Fetch everything again and rebuild the tree.
+    pub async fn reload(&mut self) -> zbus::Result<Vec<MenuItem>> {
+        self.menus = self
+            .load_menus(self.props.menubar_object_path.as_deref())
+            .await?;
+        self.app_menu = self
+            .load_menus(self.props.app_menu_object_path.as_deref())
+            .await?;
         self.action_states.clear();
         for (scope, path) in [
             ("app", self.props.application_object_path.clone()),
@@ -405,9 +418,13 @@ impl GtkMenuClient {
                 }
             }
         }
-        let built = build_menu(&self.menus, (0, 0), &self.action_states);
+        Ok(self.rebuild())
+    }
+
+    fn rebuild(&mut self) -> Vec<MenuItem> {
+        let built = build_menus(&self.menus, &self.app_menu, &self.action_states);
         self.refs = built.actions;
-        Ok(built.items)
+        built.items
     }
 
     /// Activate the action behind `item`. Returns `false` for items without an action.
@@ -439,12 +456,10 @@ impl GtkMenuClient {
         &self.menus
     }
 
-    /// Apply a `Changed` record and rebuild the tree.
+    /// Apply a `Changed` record of the menu bar and rebuild the tree.
     pub fn apply_menu_change(&mut self, change: RawChange) -> Vec<MenuItem> {
         self.menus.apply_change(change);
-        let built = build_menu(&self.menus, (0, 0), &self.action_states);
-        self.refs = built.actions;
-        built.items
+        self.rebuild()
     }
 }
 
@@ -596,13 +611,14 @@ mod tests {
         );
         assert!(file.children[2].separator);
         assert_eq!(
-            file.children[0].shortcut.as_ref().unwrap().display(),
-            "Ctrl+n"
+            (
+                file.children[0].accel.as_deref(),
+                file.children[1].accel.as_deref()
+            ),
+            (Some("<Primary>n"), Some("<Primary><Shift>w")),
+            "the accelerator text is kept for the bar's modifier map"
         );
-        assert_eq!(
-            file.children[1].shortcut.as_ref().unwrap().display(),
-            "Ctrl+Shift+w"
-        );
+        assert_eq!(file.children[1].action.as_deref(), Some("win.close"));
         assert!(
             file.children[0].enabled && !file.children[1].enabled,
             "enabled flags come from the actions"
@@ -739,18 +755,34 @@ mod tests {
     }
 
     #[test]
-    fn accelerators_parse() {
-        assert_eq!(parse_accel("<Primary>q").unwrap().display(), "Ctrl+q");
+    fn the_application_menu_leads_the_tree_without_moving_the_menu_bars_ids() {
+        let app_menu = GtkMenus::from_reply(vec![(
+            0,
+            0,
+            vec![
+                item(vec![("label", v("_About")), ("action", v("app.about"))]),
+                item(vec![("label", v("Quit")), ("action", v("app.quit"))]),
+            ],
+        )]);
+        let alone = build_menu(&sample(), (0, 0), &actions());
+        let b = build_menus(&sample(), &app_menu, &actions());
+        assert_eq!(b.items[0].id, GTK_APP_MENU);
+        assert_eq!(&b.items[1..], &alone.items[..]);
+        let about = &b.items[0].children[0];
         assert_eq!(
-            parse_accel("<Shift><Alt>F4").unwrap().display(),
-            "Alt+Shift+F4"
+            (about.label.as_str(), about.action.as_deref()),
+            ("About", Some("app.about"))
         );
+        assert_eq!(b.actions[&about.id].action, "app.about");
+        assert!(about.id.0 > alone.actions.keys().map(|i| i.0).max().unwrap());
+
+        let only = build_menus(&GtkMenus::default(), &app_menu, &actions());
         assert_eq!(
-            parse_accel("<Super>space").unwrap().display(),
-            "Super+space"
+            only.items.len(),
+            1,
+            "an application menu without a menu bar"
         );
-        assert!(parse_accel("<Hyper>x").is_none());
-        assert!(parse_accel("<Primary>").is_none());
-        assert!(parse_accel("<Primary").is_none());
+        let none = build_menus(&sample(), &GtkMenus::default(), &actions());
+        assert_eq!(none.items, alone.items);
     }
 }

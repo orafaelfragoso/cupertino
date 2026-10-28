@@ -115,6 +115,12 @@ impl FallbackAction {
     }
 }
 
+/// Whether `id` is one of the bar's own items (every one is at most -1000: the synthetic menus, their separators,
+/// the workspace targets, the window list and the system menu) rather than an item of an exporter.
+pub fn is_system(id: ItemId) -> bool {
+    id.0 <= ABOUT
+}
+
 /// The action a synthetic item stands for.
 pub fn action_for(id: ItemId) -> Option<FallbackAction> {
     let window_rows = WINDOW_LIST_BASE - MAX_WINDOW_ROWS as i32 + 1..=WINDOW_LIST_BASE;

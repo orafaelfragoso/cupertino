@@ -93,6 +93,10 @@ fn the_bar_reads_the_labels_a_kit_application_exports() {
         assert!(file.has_submenu);
         let new = find(&items, "New my_note").expect("the New item, its underscore kept");
         assert_eq!(new.mnemonic, None);
-        assert!(new.shortcut.is_some(), "New has its chord");
+        assert_eq!(
+            new.accel.as_deref(),
+            Some("<Super>n"),
+            "New has its chord in the keys of the profile"
+        );
     });
 }

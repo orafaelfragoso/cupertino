@@ -165,6 +165,10 @@ pub struct MenuItem {
     /// The item opens a submenu (even if `children` has not been loaded yet).
     pub has_submenu: bool,
     pub children: Vec<MenuItem>,
+    /// The GMenuModel action the item activates, with its scope (`app.quit`, `win.close`); `None` from other sources.
+    pub action: Option<String>,
+    /// The GMenuModel accelerator (`<Primary>q`), shown through the bar's modifier map; `None` from other sources.
+    pub accel: Option<String>,
 }
 
 impl MenuItem {

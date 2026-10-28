@@ -33,6 +33,8 @@ cupertino-apps = { path = "../cupertino-apps" }
 cupertino-assets = { path = "../cupertino-assets", optional = true }
 cupertino-decorations = { path = "../cupertino-decorations", optional = true }
 cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-menu-model = { path = "../cupertino-menu-model" }
+cupertino-modifiers = { path = "../cupertino-modifiers" }
 cupertino-geometry = { path = "../cupertino-geometry", optional = true }
 cupertino-peer = { path = "../cupertino-peer", optional = true }
 cupertino-icons = { path = "../cupertino-icons", optional = true }
@@ -49,8 +51,6 @@ futures-util = { version = "0.3", default-features = false, features = ["std"], 
 
 [dev-dependencies]
 async-io = "2"
-cupertino-menu-model = { path = "../cupertino-menu-model" }
-cupertino-modifiers = { path = "../cupertino-modifiers" }
 cupertino-ui-menus = { path = "../cupertino-ui-menus" }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 tempfile = "3"

@@ -1552,6 +1552,7 @@ dependencies = [
  "cupertino-geometry",
  "cupertino-theme",
  "cupertino-ui-text",
+ "tiny-skia",
 ]
 
 [[package]]

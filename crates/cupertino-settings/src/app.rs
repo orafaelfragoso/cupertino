@@ -252,7 +252,7 @@ struct App {
 
 /// Something for the window loop from another thread.
 enum Background {
-    ShowPane(PaneId),
+    ShowPane(PaneId, String),
     Agent(AgentEvent),
     /// A pairing ended.
     Paired(std::result::Result<(), String>),
@@ -300,7 +300,7 @@ fn palette(theme: &Theme, dark: bool, options: DisplayOptions) -> Result<Palette
 }
 
 /// Connect, open the window on `pane` and serve it until it is closed.
-pub fn run(pane: PaneId) -> Result<()> {
+pub fn run(pane: PaneId, activation_token: String) -> Result<()> {
     // one process per session: a second start hands its pane to the first and ends (§8); before the window, so it
     // needs no display
     let (sender, background) = std::sync::mpsc::channel();
@@ -316,18 +316,20 @@ pub fn run(pane: PaneId) -> Result<()> {
         }
     });
     let to_loop = notify.clone();
-    let instance = match instance::serve(zbus::connection::Builder::session()?, move |pane| {
-        to_loop(Background::ShowPane(pane))
-    }) {
-        Ok(connection) => connection,
-        Err(zbus::Error::NameTaken) => {
-            return Ok(instance::show(
-                zbus::connection::Builder::session()?,
-                pane.key(),
-            )?)
-        }
-        Err(e) => return Err(format!("cannot claim {}: {e}", instance::BUS_NAME).into()),
-    };
+    let instance =
+        match instance::serve(zbus::connection::Builder::session()?, move |pane, token| {
+            to_loop(Background::ShowPane(pane, token))
+        }) {
+            Ok(connection) => connection,
+            Err(zbus::Error::NameTaken) => {
+                return Ok(instance::show(
+                    zbus::connection::Builder::session()?,
+                    pane.key(),
+                    &activation_token,
+                )?)
+            }
+            Err(e) => return Err(format!("cannot claim {}: {e}", instance::BUS_NAME).into()),
+        };
     let assets = Assets::discover();
     let theme = Theme::load()?;
     let painter = Painter::new(&assets)?;
@@ -363,6 +365,9 @@ pub fn run(pane: PaneId) -> Result<()> {
         // the width is fixed by the content; the height's minimum is approximate (O6)
         (size.w as u32, metrics::MIN_HEIGHT as u32),
     )?;
+    if !activation_token.is_empty() {
+        conn.activate_with_token(window.toplevel, &activation_token)?;
+    }
     let sidebar = effects.backdrop(&conn, window.toplevel.surface())?;
     sidebar.set_material(SIDEBAR_MATERIAL);
     // the dock's default tile size depends on the height of the display it sits on
@@ -1653,7 +1658,13 @@ impl App {
     /// Something from a bus thread: a pane to show, a question of the pairing agent, the end of a pairing.
     fn background_event(&mut self, event: Background) -> Result<()> {
         match event {
-            Background::ShowPane(pane) => self.go(pane)?,
+            Background::ShowPane(pane, token) => {
+                self.go(pane)?;
+                if !token.is_empty() {
+                    self.conn
+                        .activate_with_token(self.window.toplevel, &token)?;
+                }
+            }
             Background::Agent(AgentEvent::Prompt {
                 id,
                 device,

@@ -382,6 +382,112 @@ pub struct Painter {
 }
 
 impl Painter {
+    /// Paint the approved About layout with the same text, semantic colours and button geometry as Settings.
+    pub fn paint_about(
+        &mut self,
+        pm: &mut Pixmap,
+        s: f32,
+        about: &crate::about::About,
+        pal: &Palette,
+    ) {
+        use crate::about::metrics::*;
+        pm.fill(
+            Color::from_rgba(
+                pal.window_background[0],
+                pal.window_background[1],
+                pal.window_background[2],
+                pal.window_background[3],
+            )
+            .expect("semantic colour"),
+        );
+        let mark = cupertino_icons::system_mark((MARK * f64::from(s)).round() as u32, pal.text);
+        pm.draw_pixmap(
+            ((f64::from(WIDTH) - MARK) / 2.0 * f64::from(s)).round() as i32,
+            (TOP * f64::from(s)).round() as i32,
+            mark.as_ref(),
+            &PixmapPaint::default(),
+            Transform::identity(),
+            None,
+        );
+        for (text, y, height, size, weight, color) in [
+            ("Cupertino", NAME_Y, NAME_HEIGHT, 22.0, 600, pal.text),
+            (
+                about.version.as_str(),
+                VERSION_Y,
+                VERSION_HEIGHT,
+                11.0,
+                400,
+                pal.secondary_text,
+            ),
+        ] {
+            let available = f64::from(WIDTH) - PADDING * 2.0;
+            let width =
+                f64::from(self.text.measure(text, size as f32 * s, weight, 0.0) / s).min(available);
+            self.label(
+                pm,
+                &Rect::new((f64::from(WIDTH) - width) / 2.0, y, width, height),
+                text,
+                Font { size, weight },
+                s,
+                color,
+            );
+        }
+        let centre = f64::from(WIDTH) / 2.0;
+        let column_width = centre - COLUMN_GAP / 2.0 - PADDING;
+        for (i, row) in about.rows.iter().enumerate() {
+            let y = ROWS_Y + i as f64 * (ROW_HEIGHT + ROW_GAP);
+            let label = if i > 0 && about.rows[i - 1].label == row.label {
+                ""
+            } else {
+                row.label
+            };
+            let width =
+                f64::from(self.text.measure(label, 13.0 * s, 400, 0.0) / s).min(column_width);
+            self.label(
+                pm,
+                &Rect::new(centre - COLUMN_GAP / 2.0 - width, y, width, ROW_HEIGHT),
+                label,
+                Font {
+                    size: 13.0,
+                    weight: 400,
+                },
+                s,
+                pal.secondary_text,
+            );
+            self.label(
+                pm,
+                &Rect::new(centre + COLUMN_GAP / 2.0, y, column_width, ROW_HEIGHT),
+                &row.value,
+                Font {
+                    size: 13.0,
+                    weight: 400,
+                },
+                s,
+                pal.text,
+            );
+        }
+        let button = about.button();
+        fill_rounded(pm, &button, cm::RADIUS, false, s, pal.accent);
+        let title = "More Info…";
+        let width = f64::from(self.text.measure(title, 13.0 * s, 400, 0.0) / s);
+        self.label(
+            pm,
+            &Rect::new(
+                button.x + (button.w - width) / 2.0,
+                button.y,
+                width + 1.0,
+                button.h,
+            ),
+            title,
+            Font {
+                size: 13.0,
+                weight: 400,
+            },
+            s,
+            WHITE,
+        );
+    }
+
     /// A painter with the `ui` font and the template symbols of the asset packs. Fails only when no usable font is
     /// left ([`TextRenderer::new`]); the symbols of [`required_symbols`] no pack provides are reported and drawn as placeholders.
     pub fn new(assets: &Assets) -> Result<Self, AssetError> {

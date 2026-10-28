@@ -3,6 +3,7 @@
 //! window layout ([`window`]) and its painter ([`paint`]). The `cupertino-settings` process (feature `app`) puts the
 //! window on the server.
 
+pub mod about;
 #[cfg(feature = "app")]
 pub mod agent;
 pub mod controls;

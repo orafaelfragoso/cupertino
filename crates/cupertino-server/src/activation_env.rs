@@ -6,10 +6,13 @@
 //!
 //! A user has one systemd manager for all sessions: when a graphical session is already active (another desktop of the
 //! same user), nothing is changed, since its services would lose their display. The exception is a leftover
-//! `cupertino-session.target` of an earlier session of ours that ended without stopping it: that one is stopped and the
-//! session goes on.
+//! `cupertino-session.target` of an earlier session of ours that ended without stopping it: when no compositor listens on
+//! the `WAYLAND_DISPLAY` the manager holds, that one is stopped and the session goes on; when one does, it is a second
+//! live session of the user and counts as another session.
 
 use std::collections::HashMap;
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
 
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, Value};
 use zbus::Connection;
@@ -153,6 +156,19 @@ async fn unit_active(conn: &Connection, name: &str) -> zbus::Result<bool> {
     ))
 }
 
+/// Whether the `WAYLAND_DISPLAY` in `environment` is a socket something still listens on: the display of a session that
+/// is running, as opposed to a leftover of one that ended. `own` is this session's display: a compositor that took over
+/// the socket name an ended session left answers on it too.
+fn display_is_live(environment: &[String], own: Option<&str>, runtime_dir: &Path) -> bool {
+    let Some(display) = environment
+        .iter()
+        .find_map(|line| line.strip_prefix("WAYLAND_DISPLAY="))
+    else {
+        return false;
+    };
+    Some(display) != own && UnixStream::connect(runtime_dir.join(display)).is_ok()
+}
+
 /// Puts `variables` in the user manager's environment and the bus's activation environment and starts the session target,
 /// unless the bus has no systemd user manager or another graphical session is active. Each of `defaults` is put there too
 /// unless the manager already has a value for it (the user's own choice, e.g. from `environment.d`).
@@ -160,6 +176,19 @@ pub async fn publish(
     conn: &Connection,
     variables: &[(&str, &str)],
     defaults: &[(&str, &str)],
+) -> zbus::Result<Outcome> {
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    publish_in(conn, variables, defaults, &runtime_dir).await
+}
+
+/// [`publish`] with the directory the displays' sockets are in.
+pub async fn publish_in(
+    conn: &Connection,
+    variables: &[(&str, &str)],
+    defaults: &[(&str, &str)],
+    runtime_dir: &Path,
 ) -> zbus::Result<Outcome> {
     let owned = call(
         conn,
@@ -175,8 +204,18 @@ pub async fn publish(
     }
     let leftover = unit_active(conn, SESSION_TARGET).await?;
     if leftover {
-        // a session of ours that ended without stopping its target (its session command was killed): the target is
-        // stopped so this session starts it again with its own variables
+        // the target of a session that is running keeps its services; one whose compositor is gone is a leftover of a
+        // session that ended without stopping it (its session command was killed), and is stopped so that this session
+        // starts it again with its own variables
+        let own = variables
+            .iter()
+            .find_map(|(k, v)| (*k == "WAYLAND_DISPLAY").then_some(*v));
+        if manager_environment(conn)
+            .await
+            .is_ok_and(|environment| display_is_live(&environment, own, runtime_dir))
+        {
+            return Ok(Outcome::AnotherSession);
+        }
         call(
             conn,
             SYSTEMD,

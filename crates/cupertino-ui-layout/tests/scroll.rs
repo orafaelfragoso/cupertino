@@ -130,3 +130,33 @@ fn an_empty_list_has_an_empty_window_and_bad_metrics_are_refused() {
         LayoutError::NonFiniteValue
     );
 }
+
+#[test]
+fn rows_are_spaced_apart_but_the_list_ends_with_its_last_row() {
+    for metrics in [ItemMetrics::Fixed(20.0), ItemMetrics::Estimated(20.0)] {
+        let mut list = VirtualList::with_spacing(5, metrics, 4.0).unwrap();
+        assert_eq!(list.top(0), 0.0);
+        assert_eq!(list.top(3), 72.0);
+        assert_eq!(list.total_height(), 5.0 * 20.0 + 4.0 * 4.0);
+        assert_eq!(list.index_at(23.0), 0, "inside the gap below row 0");
+        assert_eq!(list.index_at(24.0), 1);
+        let window = list.window(30.0, 20.0, 0.0);
+        assert_eq!((window.first, window.last), (1, 3));
+    }
+    let mut list = VirtualList::with_spacing(4, ItemMetrics::Estimated(10.0), 2.0).unwrap();
+    list.set_height(1, 30.0);
+    assert_eq!(list.top(2), 12.0 + 32.0);
+    assert_eq!(list.total_height(), 10.0 + 30.0 + 10.0 + 10.0 + 6.0);
+}
+
+#[test]
+fn spacing_must_be_finite_and_not_negative() {
+    assert_eq!(
+        VirtualList::with_spacing(1, ItemMetrics::Fixed(1.0), -1.0).unwrap_err(),
+        LayoutError::InvalidConstraint
+    );
+    assert_eq!(
+        VirtualList::with_spacing(1, ItemMetrics::Fixed(1.0), f64::NAN).unwrap_err(),
+        LayoutError::NonFiniteValue
+    );
+}

@@ -2,8 +2,9 @@
 
 use cupertino_geometry::{Insets, Size};
 use cupertino_ui_layout::{
-    layout, Align, Axis, Constraints, ContainerKind, Flex, Generation, Justify, LayoutDirection,
-    LayoutError, LayoutOptions, LayoutResult, LayoutSpec, LayoutTree, Measured, SizeSpec, Track,
+    layout, layout_cached, Align, Axis, Constraints, ContainerKind, Flex, Generation, Justify,
+    LayoutCache, LayoutDirection, LayoutError, LayoutOptions, LayoutResult, LayoutSpec, LayoutTree,
+    Measured, SizeSpec, Track,
 };
 
 pub struct Node {
@@ -13,6 +14,9 @@ pub struct Node {
     pub baseline: Option<f64>,
     /// Text-like leaf: its width is capped by the constraint and its height follows from this area.
     pub area: Option<f64>,
+    /// What the leaf answers when asked for its smallest size, a maximum of zero on an axis.
+    pub floor: Size,
+    pub generation: u64,
 }
 
 #[derive(Default)]
@@ -32,8 +36,8 @@ impl LayoutTree for TestTree {
         &self.nodes[id].spec
     }
 
-    fn generation(&self, _: usize) -> Generation {
-        Generation(0)
+    fn generation(&self, id: usize) -> Generation {
+        Generation(self.nodes[id].generation)
     }
 
     fn measure_leaf(&self, id: usize, c: Constraints) -> Measured {
@@ -46,6 +50,18 @@ impl LayoutTree for TestTree {
             }
             None => node.leaf,
         };
+        let size = Size::new(
+            if c.width.max() == 0.0 {
+                node.floor.width
+            } else {
+                size.width
+            },
+            if c.height.max() == 0.0 {
+                node.floor.height
+            } else {
+                size.height
+            },
+        );
         Measured {
             size,
             baseline: node.baseline,
@@ -61,6 +77,8 @@ impl TestTree {
             leaf,
             baseline: None,
             area: None,
+            floor: Size::ZERO,
+            generation: 0,
         });
         self.nodes.len() - 1
     }
@@ -110,6 +128,16 @@ impl TestTree {
         self.add(kind, children, Size::ZERO)
     }
 
+    /// Marks the node changed, as its owner would after editing its spec, children or content.
+    pub fn touch(&mut self, id: usize) {
+        self.nodes[id].generation += 1;
+    }
+
+    pub fn floor(&mut self, id: usize, width: f64, height: f64) -> usize {
+        self.nodes[id].floor = Size::new(width, height);
+        id
+    }
+
     pub fn spec(&mut self, id: usize) -> &mut LayoutSpec {
         &mut self.nodes[id].spec
     }
@@ -145,6 +173,26 @@ impl TestTree {
             node_limit: 10_000,
         };
         layout(self, root, Constraints::loose(available)?, &options)
+    }
+
+    pub fn run_cached(
+        &self,
+        root: usize,
+        available: Size,
+        cache: &mut LayoutCache<usize>,
+    ) -> LayoutResult<usize> {
+        let options = LayoutOptions {
+            direction: LayoutDirection::Ltr,
+            node_limit: 10_000,
+        };
+        layout_cached(
+            self,
+            root,
+            Constraints::loose(available).unwrap(),
+            &options,
+            cache,
+        )
+        .unwrap()
     }
 
     pub fn run_tight(

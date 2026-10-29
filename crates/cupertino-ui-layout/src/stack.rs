@@ -66,6 +66,15 @@ pub(crate) fn arrange<T: LayoutTree>(
     let gaps = spacing * kids.len().saturating_sub(1) as f64;
     let total = items.iter().map(|i| i.basis).sum::<f64>() + gaps;
     let main = main_c.clamp(total);
+    if total > main {
+        for item in items
+            .iter_mut()
+            .filter(|i| i.shrink > 0.0 && i.lower < i.upper)
+        {
+            let floor = engine.min_content(item.id, axis, cross_c.max())?;
+            item.lower = floor.min(item.basis);
+        }
+    }
     let sizes = distribute(&items, main - gaps)?;
 
     let mut solved = Vec::with_capacity(items.len());

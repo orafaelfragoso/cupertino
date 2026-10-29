@@ -3,7 +3,7 @@ mod common;
 use common::TestTree;
 use cupertino_geometry::Size;
 use cupertino_ui_layout::{
-    Align, Axis, ContainerKind, Flex, Justify, LayoutDirection, LayoutResult, SizeSpec,
+    Align, Axis, ContainerKind, Flex, Justify, LayoutCache, LayoutDirection, LayoutResult, SizeSpec,
 };
 use proptest::prelude::*;
 
@@ -211,6 +211,28 @@ proptest! {
                 prop_assert!((r.origin.x - (parent_width - l.max_x())).abs() < 1e-9);
                 prop_assert_eq!(r.origin.y, l.origin.y);
             }
+        }
+    }
+
+    #[test]
+    fn a_cached_layout_after_edits_equals_a_fresh_one(
+        shape in shape(),
+        edits in prop::collection::vec((any::<u8>(), 0.0..80.0f64, 0.0..80.0f64), 1..5),
+        width in 50.0..400.0f64,
+    ) {
+        let mut tree = TestTree::default();
+        let root = build(&mut tree, &shape, 0.0, 1);
+        let size = Size::new(width, 300.0);
+        let mut cache = LayoutCache::new();
+        tree.run_cached(root, size, &mut cache);
+        for (pick, w, h) in edits {
+            let leaves: Vec<usize> = (0..tree.nodes.len()).filter(|i| tree.nodes[*i].children.is_empty()).collect();
+            let leaf = leaves[pick as usize % leaves.len()];
+            tree.nodes[leaf].leaf = Size::new(w, h);
+            tree.touch(leaf);
+            let cached = tree.run_cached(root, size, &mut cache);
+            let fresh = tree.run(root, size);
+            prop_assert_eq!(cached.nodes, fresh.nodes);
         }
     }
 

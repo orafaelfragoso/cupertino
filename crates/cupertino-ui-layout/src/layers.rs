@@ -2,11 +2,11 @@
 
 use crate::engine::{align_offset, has_own_size, Arranged, Engine};
 use crate::{Align, AxisConstraint, Constraints, LayoutError, LayoutTree};
-use cupertino_geometry::{Rect, Size};
+use cupertino_geometry::{Point, Rect, Size};
 
 #[derive(Clone, Copy)]
 pub(crate) enum Mode {
-    /// Children keep their natural size at the origin.
+    /// Children keep their natural size at their `position`.
     Absolute,
     /// Children are layered; each follows its `align_self`, stretching by default.
     Overlay,
@@ -38,8 +38,16 @@ pub(crate) fn arrange<T: LayoutTree>(
     for &id in kids {
         natural.push(engine.solve(id, natural_c)?);
     }
-    let content = natural.iter().fold(Size::ZERO, |acc, s| {
-        Size::new(acc.width.max(s.size.width), acc.height.max(s.size.height))
+    let origin = |id: T::Id| match mode {
+        Mode::Absolute => engine.tree.spec(id).position,
+        _ => Point::ZERO,
+    };
+    let content = kids.iter().zip(&natural).fold(Size::ZERO, |acc, (&id, s)| {
+        let at = origin(id);
+        Size::new(
+            acc.width.max(at.x + s.size.width),
+            acc.height.max(at.y + s.size.height),
+        )
     });
     let size = Size::new(
         inner.width.clamp(content.width),
@@ -78,8 +86,9 @@ pub(crate) fn arrange<T: LayoutTree>(
         } else {
             natural
         };
-        let x = align_offset(align_x, size.width, solved.size.width);
-        let y = align_offset(align_y, size.height, solved.size.height);
+        let at = origin(id);
+        let x = at.x + align_offset(align_x, size.width, solved.size.width);
+        let y = at.y + align_offset(align_y, size.height, solved.size.height);
         if baseline.is_none() {
             baseline = solved.baseline.map(|b| b + y);
         }

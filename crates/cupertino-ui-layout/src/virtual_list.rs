@@ -8,6 +8,7 @@ use crate::{ItemMetrics, LayoutError, VirtualWindow};
 #[derive(Clone, Debug)]
 pub struct VirtualList {
     count: usize,
+    spacing: f64,
     rows: Rows,
     /// The row at the top of the viewport at the last window, and where its top was.
     anchor: Option<(usize, f64)>,
@@ -15,8 +16,10 @@ pub struct VirtualList {
 
 #[derive(Clone, Debug)]
 enum Rows {
+    /// Row height plus spacing.
     Fixed(f64),
     Estimated {
+        /// Estimated row height plus spacing; `heights` and `sums` hold row height plus spacing too.
         estimate: f64,
         heights: Vec<f64>,
         /// Fenwick tree over `heights`, 1-based.
@@ -27,6 +30,22 @@ enum Rows {
 impl VirtualList {
     /// `metrics` must hold a finite height above zero.
     pub fn new(count: usize, metrics: ItemMetrics) -> Result<Self, LayoutError> {
+        Self::with_spacing(count, metrics, 0.0)
+    }
+
+    /// Like [`new`](Self::new), with `spacing` between neighbouring rows (not after the last). It must be finite and
+    /// not negative.
+    pub fn with_spacing(
+        count: usize,
+        metrics: ItemMetrics,
+        spacing: f64,
+    ) -> Result<Self, LayoutError> {
+        if !spacing.is_finite() {
+            return Err(LayoutError::NonFiniteValue);
+        }
+        if spacing < 0.0 {
+            return Err(LayoutError::InvalidConstraint);
+        }
         let height = match metrics {
             ItemMetrics::Fixed(h) | ItemMetrics::Estimated(h) => h,
         };
@@ -37,15 +56,19 @@ impl VirtualList {
             return Err(LayoutError::InvalidConstraint);
         }
         let rows = match metrics {
-            ItemMetrics::Fixed(h) => Rows::Fixed(h),
-            ItemMetrics::Estimated(estimate) => Rows::Estimated {
-                estimate,
-                heights: vec![estimate; count],
-                sums: build_sums(&vec![estimate; count]),
-            },
+            ItemMetrics::Fixed(h) => Rows::Fixed(h + spacing),
+            ItemMetrics::Estimated(estimate) => {
+                let stride = estimate + spacing;
+                Rows::Estimated {
+                    estimate: stride,
+                    heights: vec![stride; count],
+                    sums: build_sums(&vec![stride; count]),
+                }
+            }
         };
         Ok(Self {
             count,
+            spacing,
             rows,
             anchor: None,
         })
@@ -82,8 +105,9 @@ impl VirtualList {
         let Some(slot) = heights.get_mut(index) else {
             return;
         };
-        let delta = height - *slot;
-        *slot = height;
+        let stride = height + self.spacing;
+        let delta = stride - *slot;
+        *slot = stride;
         let mut at = index + 1;
         while let Some(sum) = sums.get_mut(at) {
             *sum += delta;
@@ -91,7 +115,7 @@ impl VirtualList {
         }
     }
 
-    /// The y of the top of a row; `index == count` gives the total height.
+    /// The y of the top of a row; `index == count` gives where a further row would start.
     pub fn top(&self, index: usize) -> f64 {
         let index = index.min(self.count);
         match &self.rows {
@@ -109,7 +133,10 @@ impl VirtualList {
     }
 
     pub fn total_height(&self) -> f64 {
-        self.top(self.count)
+        match self.count {
+            0 => 0.0,
+            count => self.top(count) - self.spacing,
+        }
     }
 
     /// The row containing `offset`; the last row for offsets past the end, `0` for an empty list.

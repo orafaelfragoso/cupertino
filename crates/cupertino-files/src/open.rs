@@ -1,27 +1,10 @@
-//! Opening files with applications: the type of a file from its name (shared MIME database globs), its
-//! default application and Open With list from `mimeapps.list` (`cupertino-apps`), and the command that
-//! opens it.
-//!
-//! Types come from names only, without content sniffing: a regular file whose name matches no glob is
-//! `application/octet-stream`, as the shared-mime-info specification has it when nothing matches.
+//! Opening files with applications: the default application and Open With list of a file's type from
+//! `mimeapps.list`, and the command that opens it (`cupertino-apps`, which also types the file).
 
 use cupertino_apps::exec::{command_for_entry, CommandSpec};
-use cupertino_apps::mime::{MimeDatabase, DIRECTORY, OCTET_STREAM};
 use cupertino_apps::{DesktopEntry, MimeApps, OpenWithItem};
 use std::fmt;
 use std::path::Path;
-
-/// The type a file is opened as: `inode/directory` for a folder (`is_dir` follows symbolic links), else
-/// the type of its name, else `application/octet-stream`.
-pub fn file_type<'a>(db: &'a MimeDatabase, path: &Path, is_dir: bool) -> &'a str {
-    if is_dir {
-        return DIRECTORY;
-    }
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .and_then(|n| db.type_for_name(n))
-        .unwrap_or(OCTET_STREAM)
-}
 
 /// Why a file cannot be opened.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,7 +61,7 @@ pub fn open_command(
     is_dir: bool,
     terminal: Option<&[String]>,
 ) -> Result<CommandSpec, OpenError> {
-    let mime = file_type(apps.database(), path, is_dir);
+    let mime = apps.database().file_type(path, is_dir);
     let entry = apps
         .default_for(mime)
         .ok_or_else(|| OpenError::NoApplication {
@@ -89,18 +72,19 @@ pub fn open_command(
 
 /// The desktop entry id of the default application of `path`, if its type has one.
 pub fn default_app_id(apps: &MimeApps, path: &Path, is_dir: bool) -> Option<String> {
-    apps.default_for(file_type(apps.database(), path, is_dir))
+    apps.default_for(apps.database().file_type(path, is_dir))
         .map(|entry| entry.id.clone())
 }
 
 /// The Open With list of `path`: the default application first, then the others by name.
 pub fn open_with<'a>(apps: &'a MimeApps, path: &Path, is_dir: bool) -> Vec<OpenWithItem<'a>> {
-    apps.open_with(file_type(apps.database(), path, is_dir))
+    apps.open_with(apps.database().file_type(path, is_dir))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cupertino_apps::mime::{MimeDatabase, OCTET_STREAM};
     use cupertino_apps::{Locale, Visibility, XdgDirs};
 
     fn apps(root: &Path) -> MimeApps {

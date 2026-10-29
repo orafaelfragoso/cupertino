@@ -346,6 +346,8 @@ mod tests {
     #[test]
     fn only_a_lost_context_stops_rendering() {
         let rendering = |e: GlesError| RenderError::Rendering(e.into()).failure();
+        let lost = SwapBuffersError::ContextLost(Box::new(std::io::Error::other("reset")));
+        assert_eq!(RenderError::Rendering(lost).failure(), Failure::ContextLost);
         assert_eq!(
             rendering(GlesError::ShaderCompileError),
             Failure::ContextLost

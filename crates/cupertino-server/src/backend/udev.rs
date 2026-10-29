@@ -119,10 +119,11 @@ pub struct UdevBackend {
     renderer_lost: bool,
 }
 
-/// Whether an output gets a frame now. A paused session renders nothing: the device rejects the
-/// frame, and the loop would retry (and log) every iteration.
-fn frame_due(paused: bool, pending: bool, redraw: bool, wants_frames: bool) -> bool {
-    !paused && !pending && (redraw || wants_frames)
+/// Whether an output gets a frame now. A paused session or a lost renderer renders nothing: the device rejects the
+/// frame, and the loop would retry (and log) every iteration. Nor does an output whose frame waits for its vblank or
+/// for the retry time of a failed one.
+fn frame_due(stopped: bool, waiting: bool, redraw: bool, wants_frames: bool) -> bool {
+    !stopped && !waiting && (redraw || wants_frames)
 }
 
 impl UdevBackend {
@@ -697,6 +698,7 @@ fn render_outputs(state: &mut Cupertino) {
     };
     if let Backend::Udev(u) = &mut backend {
         let crtcs: Vec<crtc::Handle> = u.surfaces.keys().copied().collect();
+        let now = Duration::from(state.clock.now());
         for crtc in crtcs {
             let Some(s) = u.surfaces.get(&crtc) else {
                 continue;
@@ -706,8 +708,8 @@ fn render_outputs(state: &mut Cupertino) {
             };
             if !state.displays.powered(s.output)
                 || !frame_due(
-                    u.paused || u.asleep,
-                    s.pending,
+                    u.paused || u.asleep || u.renderer_lost,
+                    s.pending || !state.retry_due(idx, now),
                     state.outputs[idx].redraw,
                     state.wants_frames(),
                 )
@@ -730,7 +732,7 @@ fn already_shown(scene: bool, rendered: bool) -> bool {
 fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle, idx: usize) {
     // without a scene (no render resources or no mode yet) or a drawn frame, nothing is queued, but the tail still runs
     let mut scene = true;
-    let mut failed = false;
+    let mut failed = None;
     let rendered = match state.compose_for_present(&mut u.renderer, idx) {
         None => {
             scene = false;
@@ -754,15 +756,18 @@ fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle
                 },
             );
             match result {
-                Ok(completion) => completion.status() == RenderStatus::Rendered,
+                Ok(completion) => {
+                    state.frame_drawn(idx);
+                    completion.status() == RenderStatus::Rendered
+                }
+                Err(e) if e.failure() == Failure::ContextLost => {
+                    tracing::error!(error = %e, "the rendering context is lost: this device draws nothing more");
+                    u.renderer_lost = true;
+                    scene = false;
+                    false
+                }
                 Err(e) => {
-                    if e.failure() == Failure::ContextLost && !u.renderer_lost {
-                        tracing::error!(error = %e, "the rendering context is lost");
-                        u.renderer_lost = true;
-                    } else {
-                        tracing::warn!(error = %e, "rendering the frame failed");
-                    }
-                    failed = true;
+                    failed = Some(e);
                     scene = false;
                     false
                 }
@@ -790,10 +795,9 @@ fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle
         state.note_frame_shown(idx);
     }
     state.process_screenshots(&mut u.renderer, idx);
-    if failed {
-        state.frame_failed(idx, time);
-    } else {
-        state.send_frames(idx, time);
+    match failed {
+        Some(e) => state.frame_failed(idx, time, surface.refresh, &e),
+        None => state.send_frames(idx, time),
     }
 }
 

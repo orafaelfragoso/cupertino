@@ -254,13 +254,30 @@ fn a_handle_from_another_frame_is_refused() {
 }
 
 #[test]
-fn a_frame_that_failed_to_draw_stays_due() {
+fn a_failing_output_is_retried_at_the_display_rate_not_the_loop_rate() {
     let mut d = Desktop::new(1.0);
     d.window();
     d.at(3000);
-    let time = Duration::from(d.state.clock.now());
-    d.state.send_frames(0, time);
-    assert!(!d.state.outputs[0].redraw, "a sent frame is no longer due");
-    d.state.frame_failed(0, time);
+    let refresh = Duration::from_micros(16_667);
+    let start = Duration::from(d.state.clock.now());
+    let failure = Unresolved("no framebuffer".into());
+    // one second of loop passes, 4 ms apart, against an output whose every frame fails
+    let mut tries = 0;
+    for pass in 0..250 {
+        let now = start + Duration::from_millis(4) * pass;
+        if d.state.retry_due(0, now) {
+            d.state.frame_failed(0, now, refresh, &failure);
+            tries += 1;
+        }
+    }
+    assert!(
+        (1..=60).contains(&tries),
+        "{tries} tries and frame callbacks in one second"
+    );
     assert!(d.state.outputs[0].redraw, "a failed frame is drawn again");
+    d.state.frame_drawn(0);
+    assert!(
+        d.state.retry_due(0, start),
+        "a drawn frame ends the wait between retries"
+    );
 }

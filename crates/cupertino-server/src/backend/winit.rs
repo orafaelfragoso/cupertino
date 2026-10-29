@@ -20,6 +20,7 @@ use crate::render::scene::RenderResources;
 use crate::state::Cupertino;
 
 pub const CLEAR: Color32F = Color32F::new(0.05, 0.05, 0.07, 1.0);
+const REFRESH: Duration = Duration::from_micros(16_667);
 
 pub struct WinitBackend {
     pub graphics: WinitGraphicsBackend<GlesRenderer>,
@@ -135,14 +136,17 @@ pub fn render(state: &mut Cupertino) {
 
 fn render_inner(state: &mut Cupertino, w: &mut WinitBackend) {
     let idx = 0;
-    if state.outputs.is_empty() || !state.displays.powered(state.outputs[idx].id) {
+    if state.outputs.is_empty()
+        || !state.displays.powered(state.outputs[idx].id)
+        || !state.retry_due(idx, Duration::from(state.clock.now()))
+    {
         return;
     }
     let Some(composed) = state.compose_for_present(w.graphics.renderer(), idx) else {
         // without a scene (no render resources or no mode yet) nothing is drawn, but callbacks still go out
         let time = Duration::from(state.clock.now());
         state.process_screenshots(w.graphics.renderer(), idx);
-        state.post_repaint(idx, time, Some(Duration::from_micros(16_667)), false);
+        state.post_repaint(idx, time, Some(REFRESH), false);
         return;
     };
     w.full_redraw = w.full_redraw.saturating_sub(1);
@@ -168,6 +172,7 @@ fn render_inner(state: &mut Cupertino, w: &mut WinitBackend) {
     let time = Duration::from(state.clock.now());
     match result {
         Ok(completion) => {
+            state.frame_drawn(idx);
             // nothing differs from the buffer: nothing to submit or to report as presented
             let damage = completion.damage().map(<[_]>::to_vec);
             let presented = damage.is_some();
@@ -177,16 +182,15 @@ fn render_inner(state: &mut Cupertino, w: &mut WinitBackend) {
                 }
             }
             state.process_screenshots(w.graphics.renderer(), idx);
-            state.post_repaint(idx, time, Some(Duration::from_micros(16_667)), presented);
+            state.post_repaint(idx, time, Some(REFRESH), presented);
         }
         Err(e) if e.failure() == Failure::ContextLost => {
             tracing::error!(error = %e, "rendering context lost");
             state.running = false;
         }
         Err(e) => {
-            tracing::warn!(error = %e, "rendering failed");
             state.process_screenshots(w.graphics.renderer(), idx);
-            state.frame_failed(idx, time);
+            state.frame_failed(idx, time, REFRESH, &e);
         }
     }
 }

@@ -107,8 +107,8 @@ class RegistryTest(unittest.TestCase):
         test = "crates/cupertino-demo/tests/run.rs"
         self.assertEqual(run(INTERFACE_ENTRY + entry, {test: 'env!("CARGO_BIN_EXE_cupertino-demo");\n'}), [])
         problems = run(INTERFACE_ENTRY + entry, {test: "fn main() {}\n"})
-        self.assertEqual(problems, ["docs/architecture/contracts.yaml:12: test_owner crates/cupertino-demo/tests/run.rs "
-                                    "does not name cupertino-demo"])
+        self.assertEqual(problems, ["docs/architecture/contracts.yaml:12: test_owner "
+                                    "crates/cupertino-demo/tests/run.rs does not name cupertino-demo"])
 
     def test_an_interface_test_need_not_name_it(self):
         entry = INTERFACE_ENTRY.replace("test_owner: unknown", "test_owner: crates/cupertino-demo/tests/bus.rs")

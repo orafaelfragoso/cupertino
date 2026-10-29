@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use cupertino_render_api::Renderer;
+use cupertino_render_api::{Completion as _, RenderStatus, Renderer};
 use cupertino_wm::OutputId;
 use smithay::backend::allocator::gbm::GbmDevice;
 use smithay::backend::allocator::Fourcc;
@@ -262,8 +262,12 @@ pub fn render(state: &mut Cupertino) {
                             clear: CLEAR,
                         },
                     );
-                    if let Err(e) = result {
-                        tracing::warn!(error = %e, "headless render failed");
+                    let scheduler = &mut state.outputs[idx].scheduler;
+                    scheduler.rendered();
+                    match result {
+                        Ok(c) if c.status() == RenderStatus::Empty => scheduler.empty(),
+                        Ok(_) => scheduler.queued(),
+                        Err(e) => tracing::warn!(error = %e, "headless render failed"),
                     }
                 }
             }

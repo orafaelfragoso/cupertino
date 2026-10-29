@@ -29,7 +29,7 @@ GATE = [
     ("evidence ID", re.compile(ID)),
     ("evidence class", re.compile(CLASS)),
     ("cache address", re.compile(CACHE_ADDR)),
-    ("provenance wording", re.compile(r"\brecovered\b|\bresearch\b|\bdecompil|\bdisassembl|\bGhidra\b|\breference desktop\b|\b[Tt]he reference\b(?!(?:\s|//[/!]?)+(?:implementation|renderer|image|path|output|kernel))", re.I)),
+    ("provenance wording", re.compile(r"\brecovered\b|\bresearch\b|\bdecompil|\bdisassembl|\bGhidra\b|\breference desktop\b|\b[Tt]he reference\b(?!(?:\s|//[/!]?)+(?:implementation|renderer|image|path|output|kernel))|\bkeepalive\b|\bthrottleinterval\b|\bsuccessfulexit\b", re.I)),
     ("private document path", re.compile(r"\b(?:research|references|specifications|extraction)/\S|\b(?:REA|AGENTS|BACKLOG|ARCHITECTURE)\.md\b|\.\./\.\./\.\./|\bspecifications\b")),
     ("analysis wording", re.compile(r"\breference[ -](?:screenshot|system|build|desktop|product)s?\b", re.I)),
     ("cleanup remnant", re.compile(r"\(`\)|\(full source\)|\( \)")),

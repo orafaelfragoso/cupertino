@@ -1,7 +1,8 @@
 //! The Wayland globals the server advertises, against docs/architecture/contracts.yaml: an ordinary client and a
 //! connection made for each shell role see exactly the registry entries of their scope. A global added in code without
 //! an entry (or an entry for a global that is gone) fails here. Without an EGL device the tests
-//! skip with a message, unless CUPERTINO_EGL_REQUIRED=1 (CI), which makes a missing device a failure.
+//! skip with a message, unless CUPERTINO_EGL_REQUIRED=1 (CI), which makes a missing device a failure. With it set, a
+//! host whose /dev/dri has a renderD node while EGL runs on a device without one also fails, by design.
 
 use std::collections::BTreeMap;
 use std::path::Path;

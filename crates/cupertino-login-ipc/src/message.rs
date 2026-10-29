@@ -8,6 +8,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::hex;
 use crate::secret::Secret;
 
+/// The login screen's socket (mode 0600, owned by the greeter account), in the session manager's runtime directory.
+pub const SOCKET_PATH: &str = "/run/cupertino-login/greeter.sock";
+
 /// The protocol version both sides send in their first message. A change that adds or removes a message increments it: the
 /// login screen and the manager ship in one package, so there is no negotiation.
 pub const VERSION: u32 = 5;

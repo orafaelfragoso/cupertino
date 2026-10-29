@@ -94,7 +94,7 @@ Three checks keep it complete:
 
 ## Known limits
 
-- Wayland clients only: there is no X11 or XWayland support.
+- X11 programs need `xwayland-satellite` (0.8 or later) and `Xwayland` installed; without them the session serves Wayland clients only. Drag and drop between X11 and Wayland programs and per-output scales for X11 windows depend on the satellite (it uses one scale for all X11 windows), and none of it has been tested with real applications on hardware.
 - The settings setters on `org.cupertino.Session1` trust any client on the same user's session bus (see `SECURITY.md`).
 - The TTY backend has run in a virtual machine, not on real hardware.
 - Audio is not owned: applications use PipeWire, and the volume overlay reads the ALSA mixer.

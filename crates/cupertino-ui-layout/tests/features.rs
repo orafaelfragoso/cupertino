@@ -3,7 +3,8 @@ mod common;
 use common::TestTree;
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_layout::{
-    Align, Axis, ContainerKind, Flex, GridSpan, LayoutCache, LayoutDirection, SizeSpec, Track,
+    layout, Align, Axis, Constraints, ContainerKind, Flex, GridSpan, LayoutCache, LayoutDirection,
+    LayoutError, LayoutOptions, SizeSpec, Track,
 };
 
 const OPEN: Size = Size::new(f64::INFINITY, f64::INFINITY);
@@ -248,4 +249,39 @@ fn spans_and_positions_must_be_finite() {
     t.spec(a).position = Point::ZERO;
     t.size(a, SizeSpec::Fit, SizeSpec::Fit);
     assert!(t.try_run(root, OPEN, LayoutDirection::Ltr).is_ok());
+}
+
+fn tall_spans(count: usize) -> (TestTree, usize) {
+    let mut t = TestTree::default();
+    let kids: Vec<usize> = (0..count)
+        .map(|_| {
+            let leaf = t.leaf(1.0, 1.0);
+            span(&mut t, leaf, 1, count)
+        })
+        .collect();
+    let root = t.grid(vec![Track::Auto], vec![], Size::ZERO, kids);
+    (t, root)
+}
+
+#[test]
+fn grid_spans_beyond_the_node_limit_fail_before_the_occupancy_grid_is_built() {
+    let (t, root) = tall_spans(50_000);
+    let options = LayoutOptions {
+        direction: LayoutDirection::Ltr,
+        node_limit: 100_000,
+    };
+    let available = Constraints::loose(OPEN).unwrap();
+    assert_eq!(
+        layout(&t, root, available, &options).unwrap_err(),
+        LayoutError::NodeLimit
+    );
+}
+
+#[test]
+fn grid_spans_within_the_node_limit_still_stack_in_order() {
+    let (t, root) = tall_spans(40);
+    let r = t.run(root, OPEN);
+    assert_eq!(r.nodes.len(), 41);
+    let tops: Vec<f64> = (0..40).map(|i| r.nodes[&i].rect.origin.y).collect();
+    assert!(tops.windows(2).all(|w| w[0] < w[1]));
 }

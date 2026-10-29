@@ -4,7 +4,6 @@
 
 use crate::entry::DesktopEntry;
 use crate::exec::{command_for_entry, CommandSpec};
-use crate::mime::{DIRECTORY, OCTET_STREAM};
 use crate::mimeapps::MimeApps;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -41,14 +40,7 @@ impl Launch {
 /// `file` opened with the default application of its type (a folder as `inode/directory`, a name no glob matches
 /// as `application/octet-stream`); `None` when no installed application handles it.
 pub fn open_with_default(apps: &MimeApps, file: &Path) -> Option<Launch> {
-    let mime = if file.is_dir() {
-        DIRECTORY
-    } else {
-        file.file_name()
-            .and_then(|n| n.to_str())
-            .and_then(|n| apps.database().type_for_name(n))
-            .unwrap_or(OCTET_STREAM)
-    };
+    let mime = apps.database().file_type(file, file.is_dir());
     apps.default_for(mime).map(|app| Launch::Open {
         app: app.clone(),
         file: file.to_path_buf(),
@@ -56,16 +48,18 @@ pub fn open_with_default(apps: &MimeApps, file: &Path) -> Option<Launch> {
 }
 
 /// Run `command` detached from the caller's loop; its exit is reaped on a thread. False when it did not start.
-/// Problems are reported on standard error prefixed with `process`, the caller's name.
+/// Problems, an unsuccessful exit included, are reported on standard error prefixed with `process`, the caller's name.
 pub fn spawn(process: &str, mut command: Command) -> bool {
     let program = command.get_program().to_string_lossy().into_owned();
     match command.spawn() {
         Ok(mut child) => {
             let process = process.to_owned();
-            std::thread::spawn(move || {
-                if let Err(e) = child.wait() {
-                    eprintln!("{process}: {program}: {e}");
+            std::thread::spawn(move || match child.wait() {
+                Ok(status) if !status.success() => {
+                    eprintln!("{process}: {program} exited with {status}")
                 }
+                Ok(_) => {}
+                Err(e) => eprintln!("{process}: {program}: {e}"),
             });
             true
         }

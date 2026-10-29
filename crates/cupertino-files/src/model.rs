@@ -33,7 +33,7 @@ pub struct ModelOptions {
     pub watch: bool,
     /// Read the `user.xdg.tags` attribute of every entry (one extra syscall per file).
     pub read_tags: bool,
-    /// The shared MIME database that types every entry by its name, as the icons are chosen (`open::file_type`), so the
+    /// The shared MIME database that types every entry by its name, as the icons are chosen (`MimeDatabase::file_type`), so the
     /// Kind column, kind sorting and grouping agree with the icon. `None` leaves the type to the extension guess of
     /// [`crate::mime::entry_mime`] (tools and tests without the session's data directories).
     pub types: Option<Arc<MimeDatabase>>,
@@ -134,7 +134,7 @@ fn stat_entry(path: PathBuf, read_tags: bool, types: Option<&MimeDatabase>) -> i
 /// `e` with its MIME type from the shared database `types`, when there is one.
 fn typed(mut e: Entry, types: Option<&MimeDatabase>) -> Entry {
     if let Some(db) = types {
-        e.mime = Some(crate::open::file_type(db, &e.path, e.is_dir).to_string());
+        e.mime = Some(db.file_type(&e.path, e.is_dir).to_string());
     }
     e
 }

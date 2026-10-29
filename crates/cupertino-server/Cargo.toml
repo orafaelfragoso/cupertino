@@ -108,7 +108,7 @@ services (login manager, network, Bluetooth, power) are installed disabled."""
 section = "x11"
 priority = "optional"
 depends = "$auto, cupertino-data (>= 0.1.0), dbus, systemd, xkb-data, shared-mime-info, adwaita-icon-theme, libegl1, libegl-mesa0"
-recommends = "libgl1-mesa-dri, libwayland-client0, libwayland-egl1, libxkbcommon0"
+recommends = "libgl1-mesa-dri, libwayland-client0, libwayland-egl1, libxkbcommon0, xwayland"
 suggests = "foot, iwd"
 maintainer-scripts = "../../packaging/debian/scripts"
 preserve-symlinks = true
@@ -227,6 +227,8 @@ mesa-dri-drivers = "*"
 libwayland-client = "*"
 libwayland-egl = "*"
 libxkbcommon = "*"
+xwayland-satellite = "*"
+xorg-x11-server-Xwayland = "*"
 
 [package.metadata.generate-rpm.suggests]
 foot = "*"

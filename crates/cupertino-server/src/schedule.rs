@@ -1,6 +1,8 @@
 //! When each output draws its next frame. One [`FrameScheduler`] per output holds what decides that: whether something
-//! on the output changed, and the retry time of frames that failed to draw. It also counts the frame work the output
-//! did, so pacing is checked by counts instead of wall time.
+//! on the output changed, the grid of due times animation frames follow, and the retry time of frames that failed to
+//! draw. A change is drawn at once; an animation frame waits for the output's next grid point, so each output keeps
+//! its own refresh rate and an idle output beside an animating one does not compose on every loop pass. The scheduler
+//! also counts the frame work the output did, so pacing is checked by counts instead of wall time.
 
 use std::time::Duration;
 
@@ -30,6 +32,8 @@ pub struct FrameCounts {
 #[derive(Debug)]
 pub struct FrameScheduler {
     damaged: bool,
+    /// The next grid point: previous due time plus one refresh, moved to a vblank when one is reported.
+    next_due: Option<Duration>,
     failed: Option<FailedFrames>,
     counts: FrameCounts,
 }
@@ -39,6 +43,7 @@ impl Default for FrameScheduler {
     fn default() -> Self {
         Self {
             damaged: true,
+            next_due: None,
             failed: None,
             counts: FrameCounts::default(),
         }
@@ -59,6 +64,41 @@ impl FrameScheduler {
     pub fn called_back(&mut self) {
         self.damaged = false;
         self.counts.callbacks += 1;
+    }
+
+    /// Whether the output draws a frame at `now`: a change at once, an animation frame from its next grid point on, and
+    /// neither before the retry time of a failed frame.
+    pub fn due(&self, now: Duration, animating: bool) -> bool {
+        self.retry_due(now)
+            && (self.damaged || animating && self.next_due.is_none_or(|due| now >= due))
+    }
+
+    /// When the output is next due, if anything wants a frame: what the loop may sleep until.
+    pub fn deadline(&self, now: Duration, animating: bool) -> Option<Duration> {
+        let due = if self.damaged {
+            now
+        } else if animating {
+            self.next_due.map_or(now, |due| due.max(now))
+        } else {
+            return None;
+        };
+        Some(self.failed.map_or(due, |f| due.max(f.retry_at)))
+    }
+
+    /// A frame cycle began at `now`. On or after the grid point the grid moves one `refresh` on, or restarts from `now`
+    /// when that point has passed too (an output that sat idle, or a pass that came late), so nothing catches up in a
+    /// burst. A change drawn before the grid point leaves the grid as it is.
+    pub fn cycle(&mut self, now: Duration, refresh: Duration) {
+        if self.next_due.is_some_and(|due| now < due) {
+            return;
+        }
+        let next = self.next_due.unwrap_or(now) + refresh;
+        self.next_due = Some(if next <= now { now + refresh } else { next });
+    }
+
+    /// The display showed a frame at `time`: the grid follows its vblank.
+    pub fn vblank(&mut self, time: Duration, refresh: Duration) {
+        self.next_due = Some(time + refresh);
     }
 
     /// A frame failed to draw at `time`: the output stays damaged, and is not drawn again before one `refresh` later.
@@ -109,6 +149,111 @@ mod tests {
     use super::*;
 
     const REFRESH: Duration = Duration::from_micros(16_667);
+    const MS: Duration = Duration::from_millis(1);
+
+    /// The refresh period of a mode, as the backends derive it.
+    fn period(mhz: f64) -> Duration {
+        Duration::from_secs_f64(1000.0 / mhz)
+    }
+
+    /// An output animating with nothing else changing for one second, with loop passes `pass` apart: its frames.
+    fn animate_for_a_second(refresh: Duration, pass: Duration) -> u32 {
+        let mut s = FrameScheduler::default();
+        s.called_back();
+        let mut frames = 0;
+        let mut now = Duration::ZERO;
+        while now < Duration::from_secs(1) {
+            if s.due(now, true) {
+                s.cycle(now, refresh);
+                s.called_back();
+                frames += 1;
+            }
+            now += pass;
+        }
+        frames
+    }
+
+    #[test]
+    fn each_output_animates_at_its_own_refresh_whatever_the_loop_rate() {
+        for pass in [MS, 4 * MS] {
+            assert_eq!(animate_for_a_second(period(60_000.0), pass), 60, "{pass:?}");
+            assert_eq!(
+                animate_for_a_second(period(144_000.0), pass),
+                144,
+                "{pass:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_change_is_due_at_once_and_an_animation_frame_at_the_grid_point() {
+        let mut s = FrameScheduler::default();
+        s.cycle(Duration::ZERO, REFRESH);
+        s.called_back();
+        assert!(
+            !s.due(MS, true),
+            "the next animation frame waits for the grid"
+        );
+        assert!(s.due(REFRESH, true));
+        assert!(!s.due(REFRESH, false), "nothing wants a frame");
+        s.damage();
+        assert!(s.due(MS, false), "a change is drawn at once");
+        s.cycle(MS, REFRESH);
+        s.called_back();
+        assert!(
+            s.due(REFRESH, true),
+            "a change drawn before the grid point leaves the grid"
+        );
+    }
+
+    #[test]
+    fn a_late_pass_skips_forward_without_a_burst_and_a_vblank_moves_the_grid() {
+        let mut s = FrameScheduler::default();
+        s.cycle(Duration::ZERO, REFRESH);
+        s.called_back();
+        s.cycle(40 * MS, REFRESH);
+        assert!(
+            !s.due(41 * MS, true),
+            "no catching up on missed grid points"
+        );
+        assert!(s.due(40 * MS + REFRESH, true));
+        s.vblank(45 * MS, REFRESH);
+        assert!(!s.due(40 * MS + REFRESH, true));
+        assert!(s.due(45 * MS + REFRESH, true));
+    }
+
+    #[test]
+    fn the_first_animation_frame_after_idle_is_due_at_once() {
+        let mut s = FrameScheduler::default();
+        s.cycle(Duration::ZERO, REFRESH);
+        s.called_back();
+        let start = Duration::from_secs(5) + 3 * MS;
+        assert!(s.due(start, true));
+        s.cycle(start, REFRESH);
+        assert!(!s.due(start + REFRESH - MS, true));
+        assert!(s.due(start + REFRESH, true));
+    }
+
+    #[test]
+    fn the_deadline_is_now_for_a_change_the_grid_point_for_animation_and_none_when_idle() {
+        let mut s = FrameScheduler::default();
+        assert_eq!(
+            s.deadline(MS, false),
+            Some(MS),
+            "a new output draws at once"
+        );
+        s.cycle(Duration::ZERO, REFRESH);
+        s.called_back();
+        assert_eq!(s.deadline(MS, false), None);
+        assert_eq!(s.deadline(MS, true), Some(REFRESH));
+        assert_eq!(s.deadline(2 * REFRESH, true), Some(2 * REFRESH));
+        s.failed(MS, REFRESH);
+        assert_eq!(
+            s.deadline(2 * MS, false),
+            Some(MS + REFRESH),
+            "a failed frame waits for its retry"
+        );
+    }
 
     #[test]
     fn a_new_output_wants_its_first_frame_and_a_callback_round_settles_it() {

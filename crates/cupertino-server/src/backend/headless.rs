@@ -234,7 +234,7 @@ pub(crate) fn head_op(
     Ok(())
 }
 
-/// Render one frame of every powered output into its texture and send frame callbacks.
+/// Render a frame of every powered output that is due into its texture and send frame callbacks.
 #[allow(irrefutable_let_patterns)]
 pub fn render(state: &mut Cupertino) {
     let Some(mut backend) = state.backend.take() else {
@@ -245,7 +245,7 @@ pub fn render(state: &mut Cupertino) {
             let Some(idx) = state.outputs.iter().position(|o| o.id == target.output) else {
                 continue;
             };
-            if !state.displays.powered(target.output) {
+            if !state.displays.powered(target.output) || !state.frame_due(idx, state.frame_now()) {
                 continue;
             }
             // without a scene (no render resources or no mode yet) nothing is drawn, but callbacks still go out
@@ -265,7 +265,7 @@ pub fn render(state: &mut Cupertino) {
                     let scheduler = &mut state.outputs[idx].scheduler;
                     scheduler.rendered();
                     match result {
-                        Ok(c) if c.status() == RenderStatus::Empty => scheduler.empty(),
+                        Ok(c) if c.status() != RenderStatus::Rendered => scheduler.empty(),
                         Ok(_) => scheduler.queued(),
                         Err(e) => tracing::warn!(error = %e, "headless render failed"),
                     }

@@ -1020,7 +1020,7 @@ impl Cupertino {
             }
             (false, false) => {}
         }
-        self.request_redraw();
+        self.request_redraw_for(surface);
     }
 
     pub(crate) fn map_window(&mut self, idx: usize) {
@@ -1461,18 +1461,10 @@ impl Cupertino {
             self.shell.overview = None;
             self.request_redraw();
         }
-        if self.wm.wants_tick(now)
-            || self.shell.wants_tick(now)
-            || self.fx.wants_tick(now)
-            || self.window_managers.wants_tick(now)
-            || self.menu_bars_want_tick(now)
-            || self.overlays.wants_tick()
-        {
-            self.request_redraw();
-        }
     }
 
-    pub fn wants_frames(&self) -> bool {
+    /// Whether something animates: every output then draws a frame per its own refresh.
+    pub fn animating(&self) -> bool {
         let now = self.now();
         self.wm.wants_tick(now)
             || self.shell.wants_tick(now)
@@ -1481,7 +1473,10 @@ impl Cupertino {
             || self.menu_bars_want_tick(now)
             || self.overlays.wants_tick()
             || self.power.policy().animating(now)
-            || self.outputs.iter().any(|o| o.scheduler.damaged())
+    }
+
+    pub fn wants_frames(&self) -> bool {
+        self.animating() || self.outputs.iter().any(|o| o.scheduler.damaged())
     }
 
     pub fn apply_effects(&mut self, effects: Vec<Effect>) {

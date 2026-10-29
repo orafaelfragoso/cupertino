@@ -262,11 +262,14 @@ fn outputs_changing_scale_repaint_to_the_full_picture() {
 }
 
 #[test]
-fn each_render_pass_counts_one_compose_render_and_callback_round() {
+fn each_due_render_pass_counts_one_compose_render_and_callback_round() {
     let mut d = Desktop::new(1.0);
     d.window();
     d.at(3000);
     let before = d.state.outputs[0].scheduler.counts();
+    d.state.request_redraw();
+    headless::render(&mut d.state);
+    d.state.request_redraw();
     headless::render(&mut d.state);
     headless::render(&mut d.state);
     let after = d.state.outputs[0].scheduler.counts();

@@ -3,11 +3,10 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use cupertino_render_api::Renderer;
+use cupertino_render_api::{Failure, RenderFailure as _, Renderer};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::Color32F;
 use smithay::backend::winit::{self, WinitEvent, WinitEventLoop, WinitGraphicsBackend};
-use smithay::backend::SwapBuffersError;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::winit::dpi::LogicalSize;
 use smithay::reexports::winit::platform::pump_events::PumpStatus;
@@ -16,7 +15,7 @@ use smithay::utils::Transform;
 
 use super::Backend;
 use crate::displays::{HeadCaps, HeadId, HeadInfo, HeadMode, HeadOp};
-use crate::render::gles::{Gles, GlesResources, GlesTarget, RenderError};
+use crate::render::gles::{Gles, GlesResources, GlesTarget};
 use crate::render::scene::RenderResources;
 use crate::state::Cupertino;
 
@@ -166,12 +165,6 @@ fn render_inner(state: &mut Cupertino, w: &mut WinitBackend) {
             clear: CLEAR,
         },
     );
-    let result = result.map_err(|e| match e {
-        RenderError::Rendering(e) => SwapBuffersError::from(e),
-        other => {
-            SwapBuffersError::TemporaryFailure(Box::new(std::io::Error::other(other.to_string())))
-        }
-    });
     let time = Duration::from(state.clock.now());
     match result {
         Ok(completion) => {
@@ -186,11 +179,15 @@ fn render_inner(state: &mut Cupertino, w: &mut WinitBackend) {
             state.process_screenshots(w.graphics.renderer(), idx);
             state.post_repaint(idx, time, Some(Duration::from_micros(16_667)), presented);
         }
-        Err(SwapBuffersError::ContextLost(e)) => {
+        Err(e) if e.failure() == Failure::ContextLost => {
             tracing::error!(error = %e, "rendering context lost");
             state.running = false;
         }
-        Err(e) => tracing::warn!(error = %e, "rendering failed"),
+        Err(e) => {
+            tracing::warn!(error = %e, "rendering failed");
+            state.process_screenshots(w.graphics.renderer(), idx);
+            state.frame_failed(idx, time);
+        }
     }
 }
 

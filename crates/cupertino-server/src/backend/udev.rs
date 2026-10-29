@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use cupertino_devices::{Action, Monitor, Subsystem, SEAT0};
-use cupertino_render_api::{Completion as _, RenderStatus, Renderer};
+use cupertino_render_api::{Completion as _, Failure, RenderFailure as _, RenderStatus, Renderer};
 use cupertino_seat::LogindSession;
 use cupertino_wm::OutputId;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
@@ -115,6 +115,8 @@ pub struct UdevBackend {
     paused: bool,
     /// The display sleeps (`power.rs`): every CRTC is off and nothing is rendered until it wakes.
     asleep: bool,
+    /// A render reported the rendering context lost; it stays lost until the renderer is created again.
+    renderer_lost: bool,
 }
 
 /// Whether an output gets a frame now. A paused session renders nothing: the device rejects the
@@ -126,6 +128,10 @@ fn frame_due(paused: bool, pending: bool, redraw: bool, wants_frames: bool) -> b
 impl UdevBackend {
     pub fn renderer(&mut self) -> &mut GlesRenderer {
         &mut self.renderer
+    }
+
+    pub fn renderer_lost(&self) -> bool {
+        self.renderer_lost
     }
 
     /// Switch every CRTC off (DPMS off) or let the next frame switch it back on with a full redraw.
@@ -309,6 +315,7 @@ pub fn run(
         scale,
         paused: false,
         asleep: false,
+        renderer_lost: false,
     };
     state.backend = Some(Backend::Udev(Box::new(backend)));
 
@@ -721,8 +728,9 @@ fn already_shown(scene: bool, rendered: bool) -> bool {
 }
 
 fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle, idx: usize) {
-    // without a scene (no render resources or no mode yet) nothing is drawn or queued, but the tail still runs
+    // without a scene (no render resources or no mode yet) or a drawn frame, nothing is queued, but the tail still runs
     let mut scene = true;
+    let mut failed = false;
     let rendered = match state.compose_for_present(&mut u.renderer, idx) {
         None => {
             scene = false;
@@ -748,8 +756,15 @@ fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle
             match result {
                 Ok(completion) => completion.status() == RenderStatus::Rendered,
                 Err(e) => {
-                    tracing::warn!(error = %e, "rendering the frame failed");
-                    return;
+                    if e.failure() == Failure::ContextLost && !u.renderer_lost {
+                        tracing::error!(error = %e, "the rendering context is lost");
+                        u.renderer_lost = true;
+                    } else {
+                        tracing::warn!(error = %e, "rendering the frame failed");
+                    }
+                    failed = true;
+                    scene = false;
+                    false
                 }
             }
         }
@@ -775,7 +790,11 @@ fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle
         state.note_frame_shown(idx);
     }
     state.process_screenshots(&mut u.renderer, idx);
-    state.send_frames(idx, time);
+    if failed {
+        state.frame_failed(idx, time);
+    } else {
+        state.send_frames(idx, time);
+    }
 }
 
 fn frame_finish(

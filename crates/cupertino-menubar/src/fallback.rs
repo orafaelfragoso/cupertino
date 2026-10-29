@@ -299,19 +299,23 @@ pub fn desktop_menu(chords: &Chords) -> Vec<MenuItem> {
 }
 
 /// The Window menu. `workspaces` is the number of regular workspaces on the window's output and
-/// `current` the 1-based index the window is on (its entry is checked and disabled). `windows` are the application's
-/// windows, the first [`MAX_WINDOW_ROWS`] listed.
+/// `current` the 1-based index the window is on (its entry is checked and disabled). `can_minimize` and `can_zoom`
+/// enable Minimize and Zoom; their Alt alternates act on every window and stay enabled. `windows` are the
+/// application's windows, the first [`MAX_WINDOW_ROWS`] listed.
 pub fn window_menu(
     workspaces: u32,
     current: Option<u32>,
+    can_minimize: bool,
     can_zoom: bool,
     windows: &[WindowRow],
     chords: &Chords,
 ) -> MenuItem {
     let mut children = vec![
-        chords
-            .item(FallbackAction::Minimize, "Minimize")
-            .with_alternate(chords.item(FallbackAction::MinimizeAll, "Minimize All")),
+        MenuItem {
+            enabled: can_minimize,
+            ..chords.item(FallbackAction::Minimize, "Minimize")
+        }
+        .with_alternate(chords.item(FallbackAction::MinimizeAll, "Minimize All")),
         MenuItem {
             enabled: can_zoom,
             ..chords.item(FallbackAction::Zoom, "Zoom")
@@ -382,6 +386,7 @@ pub fn window_menu(
 pub fn menus(
     workspaces: u32,
     current: Option<u32>,
+    can_minimize: bool,
     can_zoom: bool,
     windows: &[WindowRow],
     chords: &Chords,
@@ -417,7 +422,7 @@ pub fn menus(
             "View",
             vec![chords.item(FallbackAction::ToggleFullscreen, "Enter Full Screen")],
         ),
-        window_menu(workspaces, current, can_zoom, windows, chords),
+        window_menu(workspaces, current, can_minimize, can_zoom, windows, chords),
         MenuItem::submenu(
             HELP_MENU.0,
             "Help",
@@ -505,7 +510,7 @@ mod tests {
 
     #[test]
     fn the_menus_of_an_app_without_its_own() {
-        let ms = menus(1, Some(1), true, &[], &Chords::default(), false);
+        let ms = menus(1, Some(1), true, true, &[], &Chords::default(), false);
         assert_eq!(labels(&ms), vec!["File", "Edit", "View", "Window", "Help"]);
         assert_eq!(
             ids(&ms),
@@ -526,7 +531,7 @@ mod tests {
             ms[1].children.iter().all(|i| !i.enabled),
             "Edit is disabled while the server cannot send its chords"
         );
-        let ms = menus(1, Some(1), true, &[], &Chords::default(), true);
+        let ms = menus(1, Some(1), true, true, &[], &Chords::default(), true);
         assert!(
             ms[1].children.iter().all(|i| i.enabled != i.separator),
             "every Edit item but the separator is enabled once it can"
@@ -537,7 +542,7 @@ mod tests {
 
     #[test]
     fn window_menu_offers_workspace_moves_and_tiling() {
-        let w = window_menu(3, Some(2), true, &[], &Chords::default());
+        let w = window_menu(3, Some(2), true, true, &[], &Chords::default());
         assert_eq!(w.label, "Window");
         assert_eq!(
             labels(&w.children),
@@ -569,7 +574,7 @@ mod tests {
         let tile = &w.children[3];
         assert_eq!(labels(&tile.children), vec!["Left", "Right", "Fill"]);
         assert_eq!(ids(&tile.children), vec![-1015, -1016, -1017]);
-        let single = window_menu(1, Some(1), false, &[], &Chords::default());
+        let single = window_menu(1, Some(1), true, false, &[], &Chords::default());
         assert!(single
             .children
             .iter()
@@ -577,6 +582,15 @@ mod tests {
         assert!(
             !single.children[1].enabled,
             "zoom disabled when the window cannot zoom"
+        );
+        let fixed = window_menu(1, Some(1), false, true, &[], &Chords::default());
+        assert_eq!(
+            fixed.children[..2]
+                .iter()
+                .map(|i| (i.label.as_str(), i.enabled))
+                .collect::<Vec<_>>(),
+            [("Minimize", false), ("Zoom", true)],
+            "minimize disabled when the window cannot minimize"
         );
     }
 
@@ -594,7 +608,7 @@ mod tests {
                 minimized: true,
             },
         ];
-        let w = window_menu(1, Some(1), true, &windows, &Chords::default());
+        let w = window_menu(1, Some(1), true, true, &windows, &Chords::default());
         let rows: Vec<(&str, i32, bool)> = w
             .children
             .iter()
@@ -616,7 +630,7 @@ mod tests {
             };
             MAX_WINDOW_ROWS + 5
         ];
-        let w = window_menu(1, Some(1), true, &many, &Chords::default());
+        let w = window_menu(1, Some(1), true, true, &many, &Chords::default());
         let rows: Vec<i32> = w
             .children
             .iter()
@@ -634,7 +648,7 @@ mod tests {
         assert_eq!(chord(&app[4]).as_deref(), Some("Super+h"));
         assert_eq!(chord(&app[5]).as_deref(), Some("Alt+Super+h"));
         assert_eq!(chord(&app[8]).as_deref(), Some("Super+q"));
-        let ms = menus(1, Some(1), true, &[], &chords, true);
+        let ms = menus(1, Some(1), true, true, &[], &chords, true);
         assert_eq!(chord(&ms[0].children[0]).as_deref(), Some("Super+w"));
         assert_eq!(chord(&ms[2].children[0]).as_deref(), Some("Ctrl+Super+f"));
         let window = &ms[3];
@@ -657,7 +671,7 @@ mod tests {
             .iter()
             .filter(|i| i.id.0 != SETTINGS)
             .all(|i| i.shortcut.is_none()));
-        let ms = menus(2, Some(1), true, &[], &chords, true);
+        let ms = menus(2, Some(1), true, true, &[], &chords, true);
         assert!(ms[0].children[0].shortcut.is_none());
         assert!(ms[2].children[0].shortcut.is_none());
         assert!(ms[3].children.iter().all(|i| i.shortcut.is_none()));
@@ -670,7 +684,7 @@ mod tests {
                 primary,
                 ..Chords::default()
             };
-            let ms = menus(1, Some(1), true, &[], &chords, true);
+            let ms = menus(1, Some(1), true, true, &[], &chords, true);
             let settings = desktop_menu(&chords).remove(0);
             (
                 chord(&settings).unwrap(),
@@ -764,7 +778,7 @@ mod tests {
 
     #[test]
     fn window_items_have_alternates_with_fixed_ids_of_their_own() {
-        let w = window_menu(3, Some(2), false, &[], &super_chords());
+        let w = window_menu(3, Some(2), false, false, &[], &super_chords());
         let alternates: Vec<(&str, &MenuItem)> = w
             .children
             .iter()
@@ -784,7 +798,7 @@ mod tests {
         );
         assert!(
             alternates.iter().all(|(_, a)| a.enabled && a.shortcut.is_none()),
-            "the server binds no chord to an alternate's action, and Zoom All acts on the windows that can zoom"
+            "the server binds no chord to an alternate's action, and Minimize All and Zoom All act on the windows that can"
         );
         fn collect(item: &MenuItem, ids: &mut Vec<i32>) {
             ids.push(item.id.0);
@@ -797,7 +811,7 @@ mod tests {
             active: true,
             minimized: false,
         }];
-        menus(3, Some(2), true, &rows, &super_chords(), true)
+        menus(3, Some(2), true, true, &rows, &super_chords(), true)
             .iter()
             .chain(&app_menu("Editor", &super_chords()))
             .for_each(|m| collect(m, &mut every));

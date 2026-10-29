@@ -9,7 +9,8 @@ The public protocols of the Cupertino server (`cupertino-app-protocols`) as exte
 
 | Item | Contents |
 |---|---|
-| `AppEffects` | `cupertino_app_effects_v1`: `bind`, `appearance` (an `Appearance` observer), `backdrop(surface)`, `unify_titlebar(surface)` (before the surface's first buffer), `menu(surface)` (an `AppMenu`; `None` from a version 1 server) |
+| `AppEffects` | `cupertino_app_effects_v1`: `bind`, `appearance` (an `Appearance` observer), `backdrop(surface)`, `unify_titlebar(surface)` (before the surface's first buffer), `menu(surface)` (an `AppMenu`; `None` from a version 1 server), `set_disabled_controls(surface, WindowControls)` (version 4; not sent to an older server, which `can_set_disabled_controls` tells) |
+| `WindowControls` | the minimize and zoom controls of a window, each a `bool`; the close button can't be disabled |
 | `AppMenu`, `MenuAddress` | `cupertino_app_menu_v1`: `set_address` announces where a window's menus are on the session bus; dropping it withdraws them |
 | `Backdrop` | a server-rendered material below a surface: `set_material`, `set_shape` (rounded to whole points), `set_alpha`; dropping it removes it with the next commit |
 | `ScrollCounts`, `PointerScroll` | `cupertino_scroll_v1`: `bind`, `watch(pointer)` |
@@ -20,11 +21,15 @@ The public protocols of the Cupertino server (`cupertino-app-protocols`) as exte
 An appearance other than 0 or 1, display options with reserved bits, a scroll count of an unknown axis, a menu bar
 state other than 0 or 1 and a menu reader that is not a unique bus name fail the connection with a protocol error.
 
+`set_disabled_controls` replaces the window's disabled set, applies with the surface's next commit and may change at any
+time. In this version the server checks the request and stores the set with the commit; the buttons, the shortcuts, the
+Window menu and the client's own `set_minimized` / `set_maximized` follow it once the server work that applies it lands.
+
 ## Tests
 
 ```
 cargo test -p cupertino-protocol-app
 ```
 
-Unit tests cover the backdrop shape. `tests/protocol-flow.rs` runs every object against an in-process server,
-`tests/menu.rs` the menu announcement.
+Unit tests cover the backdrop shape. `tests/protocol-flow.rs` runs every object against an in-process server
+(`set_disabled_controls` reaches a version 4 server and not a version 3 one), `tests/menu.rs` the menu announcement.

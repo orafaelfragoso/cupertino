@@ -619,6 +619,7 @@ mod tests {
         let mut f = Fixture::new(WindowMenu::None);
         let state = MenuBarUpdate {
             window_state: Some(WindowState {
+                can_minimize: true,
                 can_zoom: true,
                 workspace: 1,
                 workspaces: 3,

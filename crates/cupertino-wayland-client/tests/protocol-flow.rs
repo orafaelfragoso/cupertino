@@ -4,9 +4,9 @@
 use cupertino_geometry::{Point, Rect};
 use cupertino_wayland_client::{
     Anchor, BufferFormat, Button, Capability, Connection, ConstraintAdjustment, CursorShape,
-    Decorations, Error, Event, Extension, Gravity, KeyboardEvent, OutputGeometry, OutputTransform,
-    PixelRect, PointerEvent, PopupPlacement, Preedit, Presented, PresentedKind, Scale,
-    ScrollSource, SurfaceId, SurroundingText, TextInputDone, TextInputEvent, TextInputState,
+    CursorTheme, Decorations, Error, Event, Extension, Gravity, KeyboardEvent, OutputGeometry,
+    OutputTransform, PixelRect, PointerEvent, PopupPlacement, Preedit, Presented, PresentedKind,
+    Scale, ScrollSource, SurfaceId, SurroundingText, TextInputDone, TextInputEvent, TextInputState,
     Toplevel, ToplevelConfig, WindowConfigure, WmCapabilities,
 };
 use std::collections::VecDeque;
@@ -2377,24 +2377,48 @@ fn xcursor(images: &[(u32, u32, u32, (u32, u32))]) -> Vec<u8> {
 #[test]
 fn without_cursor_shapes_the_cursor_is_drawn_from_the_theme_at_the_pointers_scale() {
     let themes = std::env::temp_dir().join(format!("cupertino-cursors-{}", std::process::id()));
-    let cursors = themes.join("test").join("cursors");
-    std::fs::create_dir_all(&cursors).unwrap();
+    let cursors = |theme: &str| {
+        let dir = themes.join(theme).join("cursors");
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    };
     std::fs::write(
-        cursors.join("text"),
+        cursors("test").join("text"),
         xcursor(&[(24, 24, 24, (4, 8)), (48, 48, 48, (8, 16))]),
     )
     .unwrap();
-    std::fs::write(cursors.join("default"), xcursor(&[(24, 32, 32, (1, 2))])).unwrap();
-    // each test runs in a process of its own
-    std::env::set_var("XCURSOR_PATH", &themes);
-    std::env::set_var("XCURSOR_THEME", "test");
-    std::env::set_var("XCURSOR_SIZE", "24");
+    std::fs::write(
+        themes.join("test").join("index.theme"),
+        "[Icon Theme]\nInherits=base\n",
+    )
+    .unwrap();
+    std::fs::write(
+        cursors("base").join("default"),
+        xcursor(&[(24, 32, 32, (1, 2))]),
+    )
+    .unwrap();
+    // base names no parent, so it inherits from default, which leads back to test
+    std::fs::write(
+        cursors("default").join("pointer"),
+        xcursor(&[(24, 16, 16, (2, 3))]),
+    )
+    .unwrap();
+    std::fs::write(
+        themes.join("default").join("index.theme"),
+        "[Icon Theme]\nInherits=test\n",
+    )
+    .unwrap();
 
     let (mut conn, control, seen) = connect(Globals {
         seat: true,
         ..Globals::core()
     });
     assert!(!conn.capabilities().contains(Capability::CursorShape));
+    conn.set_cursor_theme(CursorTheme {
+        name: "test".into(),
+        size: 24,
+        search_path: vec![themes.clone()],
+    });
     let mut stash = Stash::new();
     let w = window(&mut conn, Decorations::Client);
     configured(&mut conn, &mut stash, w);
@@ -2430,7 +2454,11 @@ fn without_cursor_shapes_the_cursor_is_drawn_from_the_theme_at_the_pointers_scal
         cursor(&mut conn, CursorShape::Text),
         (((24, 24), 1), (4, 8))
     );
-    // the theme has no zoom-in: its default stands in
+    assert_eq!(
+        cursor(&mut conn, CursorShape::Pointer),
+        (((16, 16), 1), (2, 3))
+    );
+    // no theme of the cycle has zoom-in: the inherited default cursor stands in
     assert_eq!(
         cursor(&mut conn, CursorShape::ZoomIn),
         (((32, 32), 1), (1, 2))

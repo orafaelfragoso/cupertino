@@ -3,7 +3,7 @@ name = "cupertino-wayland-client"
 version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
-description = "Wayland client transport over standard protocols only: connection with capability discovery, application windows and popups, shm buffer leases, frame callbacks and presentation feedback, per-surface scale, pointer with a themed cursor fallback, keyboard, input methods and clipboard"
+description = "Wayland client transport over standard protocols only: connection with capability discovery, application windows and popups, shm buffer leases, frame callbacks and presentation feedback, per-surface scale, pointer with an XCursor theme fallback, keyboard, input methods and clipboard"
 
 [package.metadata.cupertino]
 layer = "render"
@@ -13,9 +13,9 @@ cupertino-geometry = { path = "../cupertino-geometry" }
 memmap2 = "0.9"
 rustix = { version = "1", features = ["event", "fs"] }
 wayland-client = "0.31"
-wayland-cursor = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
 xkbcommon = "0.8"
+xcursor = "0.3"
 
 # the integration test runs a minimal protocol server in-process; layer shell stands in for an extension's protocol
 [dev-dependencies]

@@ -25,7 +25,7 @@
 
 pub mod buttons;
 pub mod field;
-pub mod glyph;
+pub use cupertino_glyph as glyph;
 pub mod hit;
 pub mod layout;
 pub mod metrics;

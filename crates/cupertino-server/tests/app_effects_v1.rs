@@ -1092,20 +1092,64 @@ fn disable_controls(
     })
 }
 
-#[test]
-fn disabled_controls_are_stored_with_the_commit() {
-    let Some(mut h) = Harness::new() else { return };
-    let client = disable_controls(h.socket_path(), 4, true, WindowControl::Minimize.bits());
-    let (outcome, _conn) = finish(&mut h, client);
-    assert_eq!(outcome, Outcome::Connected);
-    let surface = h.state.windows[0].toplevel.wl_surface().clone();
-    assert_eq!(
-        disabled_controls(&surface),
-        DisabledControls {
-            minimize: true,
-            zoom: false
+/// A client with a toplevel that sends `set_disabled_controls(minimize)` without a commit, then commits once for each
+/// cue; it reports after the request and after each commit, each followed by a round trip.
+fn commit_on_cue(socket: PathBuf) -> (Sender<()>, Receiver<()>, JoinHandle<Connection>) {
+    let (cue, cues) = channel::<()>();
+    let (done, dones) = channel();
+    let client = std::thread::spawn(move || {
+        let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
+        let conn = Connection::from_socket(stream).unwrap();
+        let (globals, mut queue) = registry_queue_init::<Bare>(&conn).unwrap();
+        let qh = queue.handle();
+        let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
+        let wm_base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=6, ()).unwrap();
+        let effects: CupertinoAppEffectsV1 = globals.bind(&qh, 4..=4, ()).unwrap();
+        let surface = compositor.create_surface(&qh, ());
+        let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
+        let _toplevel = xdg.get_toplevel(&qh, ());
+        effects.set_disabled_controls(&surface, WindowControl::Minimize);
+        queue.roundtrip(&mut Bare).unwrap();
+        done.send(()).unwrap();
+        while cues.recv().is_ok() {
+            surface.commit();
+            queue.roundtrip(&mut Bare).unwrap();
+            done.send(()).unwrap();
         }
+        conn
+    });
+    (cue, dones, client)
+}
+
+#[test]
+fn disabled_controls_apply_with_the_next_commit_and_stay() {
+    let Some(mut h) = Harness::new() else { return };
+    let (cue, done, client) = commit_on_cue(h.socket_path());
+    let reported = |h: &mut Harness| {
+        while done.try_recv().is_err() {
+            h.step();
+        }
+        disabled_controls(h.state.windows[0].toplevel.wl_surface())
+    };
+    let minimize = DisabledControls {
+        minimize: true,
+        zoom: false,
+    };
+    assert_eq!(
+        reported(&mut h),
+        DisabledControls::default(),
+        "before the commit"
     );
+    cue.send(()).unwrap();
+    assert_eq!(reported(&mut h), minimize, "with the commit");
+    cue.send(()).unwrap();
+    assert_eq!(
+        reported(&mut h),
+        minimize,
+        "a commit without a request keeps it"
+    );
+    drop(cue);
+    finish(&mut h, client);
 }
 
 #[test]

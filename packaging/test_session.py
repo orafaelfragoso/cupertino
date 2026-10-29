@@ -10,7 +10,7 @@ from pathlib import Path
 SESSION = Path(__file__).resolve().parent / 'files/usr/bin/cupertino-session'
 
 FAKE_SERVER = """#!/bin/sh
-trap 'touch "$OUT/term"; exit 143' TERM
+trap 'touch "$OUT/term"; exit "${EXIT_ON_TERM:-143}"' TERM
 printf '%s\\n' "$@" >"$OUT/args"
 tr '\\0' ' ' </proc/$PPID/cmdline >"$OUT/parent"
 if [ -n "${HANG:-}" ]; then
@@ -126,6 +126,41 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(result.returncode, 3)
         self.assertEqual(self.args(), ['--udev'])
         self.assertEqual(result.stderr, '')
+
+    def test_leading_zeros_do_not_count_towards_the_digit_limit(self):
+        (self.root / 'config/cupertino/session-limit').write_text('00000060\n')
+        result = self.run_session()
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(self.args(), ['--udev', '--run-for', '60'])
+
+    def test_a_stop_by_the_session_is_logged_as_that_not_as_the_watchdog(self):
+        process = subprocess.Popen(['sh', str(SESSION)], env=self.env(HANG='1', EXIT_ON_TERM='137'))
+        self.assertTrue(self.wait_for('parent'))
+        process.send_signal(signal.SIGTERM)
+        self.assertEqual(process.wait(timeout=10), 137)
+        self.assertIn('stopped by the session', self.log())
+        self.assertNotIn('watchdog', self.log())
+
+    def test_the_session_target_is_stopped_when_the_compositor_ends(self):
+        tools = self.root / 'tools'
+        tools.mkdir()
+        (tools / 'systemctl').write_text(
+            '#!/bin/sh\necho "$@" >>"$OUT/systemctl"\n[ "$2" = is-active ] && exit 0\nexit 0\n'
+        )
+        (tools / 'systemctl').chmod(0o755)
+        result = self.run_session(PATH=f"{tools}:{os.environ['PATH']}")
+        self.assertEqual(result.returncode, 0)
+        calls = (self.out / 'systemctl').read_text()
+        self.assertIn('--user stop cupertino-session.target', calls)
+        self.assertIn('--user unset-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE', calls)
+
+    def test_an_inactive_session_target_is_left_alone(self):
+        tools = self.root / 'tools'
+        tools.mkdir()
+        (tools / 'systemctl').write_text('#!/bin/sh\necho "$@" >>"$OUT/systemctl"\n[ "$2" = is-active ] && exit 3\nexit 0\n')
+        (tools / 'systemctl').chmod(0o755)
+        self.run_session(PATH=f"{tools}:{os.environ['PATH']}")
+        self.assertEqual((self.out / 'systemctl').read_text().split('\n')[:-1], ['--user is-active --quiet cupertino-session.target'])
 
     def test_a_limit_of_more_than_seven_digits_is_ignored(self):
         (self.root / 'config/cupertino/session-limit').write_text('12345678\n')

@@ -10,9 +10,6 @@ use cupertino_server::input::OsdKey;
 use cupertino_test_bus::PrivateBus;
 use zbus::{block_on, connection};
 
-/// The worker finds the bus through the process environment: the tests that start one take turns.
-static SESSION_BUS_ENV: Mutex<()> = Mutex::new(());
-
 /// The shell processes' side of the interfaces: count the toggles.
 struct FakeCentre(Arc<Mutex<u32>>);
 
@@ -69,8 +66,6 @@ fn each_toggle_calls_its_own_process() {
         eprintln!("skipping: dbus-daemon is not available");
         return;
     };
-    let _env = SESSION_BUS_ENV.lock().unwrap_or_else(|e| e.into_inner());
-    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
     block_on(async {
         let (centre_toggles, launcher_toggles) = (Arc::new(Mutex::new(0)), Arc::new(Mutex::new(0)));
         let _centre = connection::Builder::address(bus.address.as_str())
@@ -97,7 +92,7 @@ fn each_toggle_calls_its_own_process() {
             .build()
             .await
             .expect("connect");
-        let handle = DbusHandle::start().expect("worker thread");
+        let handle = DbusHandle::start_on(Some(bus.address.clone()), || {}).expect("worker thread");
         handle.set_login(LoginTrust::Agent(std::process::id()));
         handle.send(Request::Toggle(Toggle::Launcher));
         for _ in 0..200 {
@@ -219,13 +214,13 @@ fn a_log_out_request_without_a_login_process_runs_the_fallback_and_with_one_does
         eprintln!("skipping: dbus-daemon is not available");
         return;
     };
-    let _env = SESSION_BUS_ENV.lock().unwrap_or_else(|e| e.into_inner());
-    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
     block_on(async {
         let fallbacks = Arc::new(Mutex::new(0u32));
         let counted = fallbacks.clone();
-        let handle =
-            DbusHandle::start_with(move || *counted.lock().unwrap() += 1).expect("worker thread");
+        let handle = DbusHandle::start_on(Some(bus.address.clone()), move || {
+            *counted.lock().unwrap() += 1
+        })
+        .expect("worker thread");
         // a supervised login process that has not taken its name yet is not a session without one
         handle.set_login(LoginTrust::Agent(std::process::id()));
         assert!(handle.send(Request::LogOut));
@@ -288,8 +283,6 @@ fn a_log_out_request_without_a_login_process_runs_the_fallback_and_with_one_does
 
 /// Send a log out request while `trust` is set and report whether the login process got it and whether the fallback ran.
 fn log_out_with(bus: &PrivateBus, trust: LoginTrust) -> (u32, u32) {
-    let _env = SESSION_BUS_ENV.lock().unwrap_or_else(|e| e.into_inner());
-    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
     block_on(async {
         let (asked, fallbacks) = (Arc::new(Mutex::new(0u32)), Arc::new(Mutex::new(0u32)));
         let _login = connection::Builder::address(bus.address.as_str())
@@ -302,8 +295,10 @@ fn log_out_with(bus: &PrivateBus, trust: LoginTrust) -> (u32, u32) {
             .await
             .expect("connect");
         let counted = fallbacks.clone();
-        let handle =
-            DbusHandle::start_with(move || *counted.lock().unwrap() += 1).expect("worker thread");
+        let handle = DbusHandle::start_on(Some(bus.address.clone()), move || {
+            *counted.lock().unwrap() += 1
+        })
+        .expect("worker thread");
         handle.set_login(trust);
         assert!(handle.send(Request::LogOut));
         for _ in 0..50 {
@@ -368,8 +363,6 @@ impl FakeNotifications {
 
 /// Send a log out request while `trust` is set, with the login service up or not, and report the banners shown.
 fn log_out_banners(bus: &PrivateBus, trust: LoginTrust, login_up: bool) -> Vec<(String, String)> {
-    let _env = SESSION_BUS_ENV.lock().unwrap_or_else(|e| e.into_inner());
-    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
     block_on(async {
         let shown = Arc::new(Mutex::new(Vec::new()));
         let _notifications = connection::Builder::address(bus.address.as_str())
@@ -402,7 +395,7 @@ fn log_out_banners(bus: &PrivateBus, trust: LoginTrust, login_up: bool) -> Vec<(
         } else {
             None
         };
-        let handle = DbusHandle::start_with(|| ()).expect("worker thread");
+        let handle = DbusHandle::start_on(Some(bus.address.clone()), || ()).expect("worker thread");
         handle.set_login(trust);
         assert!(handle.send(Request::LogOut));
         for _ in 0..100 {

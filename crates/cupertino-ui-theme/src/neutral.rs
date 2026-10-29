@@ -1,6 +1,6 @@
 //! Built-in palettes that need no theme data, pack or desktop service. Every colour is opaque, so nothing depends on
-//! what is drawn underneath. The neutral palettes keep the look of the Cupertino light and dark themes; the high-contrast
-//! palettes are used by both themes.
+//! what is drawn underneath. The neutral palettes keep the look of the Cupertino light and dark themes where it reaches
+//! the contrast they require; the high-contrast palettes are used by both themes.
 
 use crate::palette::{Palette, StateColors};
 use crate::ColorRole::*;
@@ -12,43 +12,44 @@ const fn gray(level: u8) -> [u8; 4] {
     [level, level, level, 255]
 }
 
-/// Neutral light: the Cupertino light colours, translucent ones flattened onto the surface they are drawn on.
+/// Neutral light: the Cupertino light colours, translucent ones flattened onto the surface they are drawn on, with text
+/// raised to 4.5:1 and control borders and the focus ring to 3:1 against what they are drawn on.
 pub(crate) const LIGHT: Palette<[u8; 4]> = Palette {
     normal: [
         (WindowBackground, gray(236)),
         (Text, BLACK),
-        (SecondaryText, gray(118)),
-        (PlaceholderText, gray(192)),
+        (SecondaryText, gray(105)),
+        (PlaceholderText, gray(118)),
         (ControlFill, WHITE),
-        (ControlBorder, gray(192)),
+        (ControlBorder, gray(130)),
         (ControlText, gray(36)),
         (DisabledControlFill, gray(242)),
         (DisabledControlBorder, gray(212)),
-        (DisabledControlText, gray(178)),
-        (DefaultButtonFill, [0, 122, 255, 255]),
+        (DisabledControlText, gray(104)),
+        (DefaultButtonFill, [0, 105, 230, 255]),
         (DefaultButtonText, WHITE),
-        (DestructiveFill, [255, 59, 48, 255]),
+        (DestructiveFill, [215, 45, 38, 255]),
         (DestructiveText, WHITE),
         (SwitchTrack, gray(213)),
         (SwitchThumb, WHITE),
         (TextBackground, WHITE),
-        (TextFieldBorder, gray(192)),
+        (TextFieldBorder, gray(130)),
         (SelectedTextBackground, [166, 209, 255, 255]),
         (SelectedText, BLACK),
-        (SelectedControlFill, [0, 122, 255, 255]),
+        (SelectedControlFill, [0, 105, 230, 255]),
         (SelectedControlText, WHITE),
         (SecondarySelectedControlFill, gray(220)),
         (SecondarySelectedControlText, gray(36)),
-        (KeyboardFocusIndicator, [59, 153, 252, 255]),
+        (KeyboardFocusIndicator, [0, 105, 230, 255]),
         (Separator, gray(230)),
-        (Header, gray(170)),
+        (Header, gray(105)),
         (ToolTip, gray(254)),
         (ToolTipText, gray(36)),
     ],
     states: StateColors {
-        emphasized_border: gray(159),
-        pressed_default_fill: [0, 104, 218, 255],
-        pressed_destructive_fill: [215, 45, 38, 255],
+        emphasized_border: gray(100),
+        pressed_default_fill: [0, 85, 190, 255],
+        pressed_destructive_fill: [175, 28, 22, 255],
         selected_switch_track: [0, 122, 255, 255],
         pressed_switch_track: gray(189),
         pressed_selected_switch_track: [0, 104, 218, 255],
@@ -58,30 +59,31 @@ pub(crate) const LIGHT: Palette<[u8; 4]> = Palette {
     },
 };
 
-/// Neutral dark: the Cupertino dark colours, translucent ones flattened onto the surface they are drawn on.
+/// Neutral dark: the Cupertino dark colours, translucent ones flattened onto the surface they are drawn on, with the
+/// same ratios as [`LIGHT`].
 pub(crate) const DARK: Palette<[u8; 4]> = Palette {
     normal: [
         (WindowBackground, gray(50)),
         (Text, WHITE),
         (SecondaryText, gray(163)),
-        (PlaceholderText, gray(86)),
+        (PlaceholderText, gray(140)),
         (ControlFill, gray(101)),
         (ControlBorder, gray(139)),
-        (ControlText, gray(224)),
+        (ControlText, WHITE),
         (DisabledControlFill, gray(62)),
         (DisabledControlBorder, gray(86)),
-        (DisabledControlText, gray(101)),
-        (DefaultButtonFill, [0, 122, 255, 255]),
+        (DisabledControlText, gray(170)),
+        (DefaultButtonFill, [0, 105, 230, 255]),
         (DefaultButtonText, WHITE),
-        (DestructiveFill, [255, 69, 58, 255]),
+        (DestructiveFill, [200, 40, 32, 255]),
         (DestructiveText, WHITE),
         (SwitchTrack, gray(70)),
         (SwitchThumb, WHITE),
         (TextBackground, gray(30)),
-        (TextFieldBorder, gray(86)),
+        (TextFieldBorder, gray(128)),
         (SelectedTextBackground, [20, 62, 109, 255]),
         (SelectedText, WHITE),
-        (SelectedControlFill, [0, 122, 255, 255]),
+        (SelectedControlFill, [0, 105, 230, 255]),
         (SelectedControlText, WHITE),
         (SecondarySelectedControlFill, gray(70)),
         (SecondarySelectedControlText, gray(224)),
@@ -93,8 +95,8 @@ pub(crate) const DARK: Palette<[u8; 4]> = Palette {
     ],
     states: StateColors {
         emphasized_border: gray(159),
-        pressed_default_fill: [0, 104, 218, 255],
-        pressed_destructive_fill: [220, 55, 46, 255],
+        pressed_default_fill: [0, 85, 190, 255],
+        pressed_destructive_fill: [165, 28, 22, 255],
         selected_switch_track: [0, 122, 255, 255],
         pressed_switch_track: gray(91),
         pressed_selected_switch_track: [0, 104, 218, 255],
@@ -232,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn high_contrast_text_and_boundaries_reach_their_ratios() {
+    fn built_in_text_and_boundaries_reach_their_ratios() {
         use ColorRole::*;
         const TEXT: f32 = 4.5;
         const BOUNDARY: f32 = 3.0;
@@ -254,13 +256,15 @@ mod tests {
             (ControlBorder, WindowBackground),
             (TextFieldBorder, WindowBackground),
             (TextFieldBorder, TextBackground),
-            (SwitchTrack, WindowBackground),
-            (SwitchThumb, SwitchTrack),
             (KeyboardFocusIndicator, WindowBackground),
             (KeyboardFocusIndicator, TextBackground),
+        ];
+        let high_contrast_boundary_pairs = [
+            (SwitchTrack, WindowBackground),
+            (SwitchThumb, SwitchTrack),
             (Separator, WindowBackground),
         ];
-        for appearance in [Appearance::LightHighContrast, Appearance::DarkHighContrast] {
+        for appearance in Appearance::ALL {
             let colors = ColorTokens::neutral(appearance);
             for state in StateVariant::ALL {
                 let disabled = state.interaction == InteractionVariant::Disabled;
@@ -280,12 +284,17 @@ mod tests {
                         check(pair, BOUNDARY);
                     }
                 }
+                for pair in high_contrast_boundary_pairs {
+                    if !disabled && appearance.is_high_contrast() {
+                        check(pair, BOUNDARY);
+                    }
+                }
             }
         }
     }
 
     #[test]
-    fn neutral_keeps_the_cupertino_colours_flattened_onto_their_surface() {
+    fn neutral_keeps_the_cupertino_colours_it_does_not_raise_for_contrast() {
         use ColorRole::*;
         let tokens = cupertino_theme::Theme::load().unwrap().tokens;
         let over = |c: Color, under: Color| {
@@ -310,7 +319,23 @@ mod tests {
                 DisabledControlBorder => normal(DisabledControlFill),
                 _ => normal(WindowBackground),
             };
+            let raised_for_contrast = [
+                SecondaryText,
+                PlaceholderText,
+                Header,
+                ControlText,
+                ControlBorder,
+                TextFieldBorder,
+                DisabledControlText,
+                DefaultButtonFill,
+                SelectedControlFill,
+                DestructiveFill,
+                KeyboardFocusIndicator,
+            ];
             for (role, c) in cupertino.normal {
+                if raised_for_contrast.contains(&role) {
+                    continue;
+                }
                 assert_eq!(
                     neutral.normal[role as usize].1,
                     over(c, surface(role)),
@@ -318,7 +343,6 @@ mod tests {
                 );
             }
             let (c, n) = (cupertino.states, neutral.states);
-            assert_eq!(n.emphasized_border, over(c.emphasized_border, control));
             assert_eq!(
                 n.pressed_switch_track,
                 over(c.pressed_switch_track, normal(WindowBackground))

@@ -7,7 +7,7 @@ use std::time::Duration;
 use cupertino_assets::Assets;
 use cupertino_defaults::keyboard::{KeyboardSettings, ModifierProfile};
 use cupertino_protocol_app::{AppEffects, AppEvent};
-use cupertino_settings::about::{About, Row};
+use cupertino_settings::about::{display_value, About, Display, Row};
 use cupertino_settings::instance;
 use cupertino_settings::paint::{Painter, Palette};
 use cupertino_theme::{Appearance, Theme};
@@ -55,23 +55,31 @@ pub fn run(activation_token: String) -> Result<()> {
     let mut dark = false;
     let mut contrast = false;
     for output in conn.outputs() {
-        if let Some((w, h)) = output.mode.filter(|(w, h)| *w > 0 && *h > 0) {
-            let description = output.description.or(output.name);
-            if let Some(description) = description.filter(|s| !s.trim().is_empty()) {
-                let value = format!("{description} {w} × {h} @ {}x", output.scale.factor());
-                let before_kernel = about
-                    .rows
-                    .iter()
-                    .position(|r| r.label == "Kernel")
-                    .unwrap_or(about.rows.len());
-                about.rows.insert(
-                    before_kernel,
-                    Row {
-                        label: "Displays",
-                        value,
-                    },
-                );
-            }
+        let Some(mode) = output.mode else { continue };
+        let display = Display {
+            make: output.make.as_deref(),
+            model: output.model.as_deref(),
+            description: output.description.as_deref(),
+            name: output.name.as_deref(),
+            mode,
+            physical_size_mm: output.physical_size_mm,
+            scale: output
+                .effective_scale()
+                .unwrap_or_else(|| output.scale.factor()),
+        };
+        if let Some(value) = display_value(&display) {
+            let before_kernel = about
+                .rows
+                .iter()
+                .position(|r| r.label == "Kernel")
+                .unwrap_or(about.rows.len());
+            about.rows.insert(
+                before_kernel,
+                Row {
+                    label: "Displays",
+                    value,
+                },
+            );
         }
     }
     let layout = painter.about_layout(&about);

@@ -17,7 +17,7 @@ all on one thread.
 | `EventCx` | `emit`, `request_focus`, `capture_pointer` / `release_pointer`, `request_paint` / `request_layout`, `set_cursor`, `set_text_input`, `request_animation_frame`, plus the node's focus, capture and phase |
 | `PaintCx`, `SemanticsCx`, `MeasureCx` | painting into the node's `PaintOp`s in its own coordinates, and `set_group` to fade or shadow the whole subtree as one layer; role, name, value, states, actions, `focusable`, `focus_scope`, `protected` |
 | `Command` | `Perform(future)`, `Focus(key)`, `CloseWindow`, `Window(key, request)`, `SetClipboard`, `Exit` |
-| `Runtime` | `new(window system, RuntimeOptions)`, `step(max_turns)` (non-blocking, never moves time, returns `StepStatus`), `run`, `snapshot(window)`, `find`, `node_at` |
+| `Runtime` | `new(window system, RuntimeOptions)`, `step(max_turns)` (non-blocking, never moves time, returns `StepStatus`), `run`, `protected_focus(window)`, `snapshot(window)`, `find`, `node_at` |
 | `RuntimeOptions` | theme, layout direction, node ceiling, a renderer factory (one renderer per window), an optional `AccessibilityAdapter`, the `Clock`, an optional `on_window_error` handler |
 | `MonotonicClock` | `CLOCK_MONOTONIC`, the clock the window system stamps events with |
 

@@ -94,7 +94,7 @@ fn protected_input(event: &PlatformEvent) -> Option<ProtectedInput> {
 impl Trace {
     /// Appends an event. With `protected_focus`, keys, input-method batches and clipboard data
     /// (a paste) are recorded as [`RecordedInput::Protected`] without their content.
-    pub fn record(
+    pub(crate) fn record(
         &mut self,
         at: Timestamp,
         event: PlatformEvent,

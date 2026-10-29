@@ -378,7 +378,7 @@ pub const TARGET: &[(&str, Layer)] = &[
     ("cupertino-filepicker", Foundation),
     ("cupertino-files", Apps),
     ("cupertino-geometry", Foundation),
-    ("cupertino-glyph", Render),
+    ("cupertino-glyph", Foundation),
     ("cupertino-glass", Render),
     ("cupertino-icons", Foundation),
     ("cupertino-input", Models),

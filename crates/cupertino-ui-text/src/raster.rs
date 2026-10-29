@@ -278,4 +278,28 @@ mod tests {
             &[128, 64, 0, 128, 0, 0, 0, 0]
         );
     }
+
+    #[test]
+    fn the_cost_of_a_glyph_grows_with_its_area_not_faster() {
+        let (mut raster, font, id) = raster();
+        let mut best = |size_px: f64| {
+            (0..9)
+                .map(|_| {
+                    let key = GlyphKey::for_draw(font, id('H'), size_px, 0.0, true, [0.0; 3]);
+                    let start = std::time::Instant::now();
+                    let glyph = raster.rasterize(&key).unwrap().unwrap();
+                    let elapsed = start.elapsed();
+                    assert!(glyph.height > 0);
+                    elapsed
+                })
+                .min()
+                .unwrap()
+        };
+        let (small, large) = (best(64.0), best(256.0));
+        let ratio = large.as_secs_f64() / small.as_secs_f64().max(1e-9);
+        assert!(
+            ratio < 100.0,
+            "256 px took {large:?} against {small:?} for 64 px, {ratio:.0}x for 16x the area"
+        );
+    }
 }

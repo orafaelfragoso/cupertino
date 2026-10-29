@@ -264,19 +264,9 @@ pub struct OutputEntry {
     pub scale: f64,
     pub tracker: OutputDamageTracker,
     pub cache: ElementCache,
-    pub redraw: bool,
     pub global: Option<smithay::reexports::wayland_server::backend::GlobalId>,
     pub lock: crate::session_lock::OutputLock,
-    /// The frames that failed to draw since the last one that did.
-    pub failed: Option<FailedFrames>,
-}
-
-/// A run of frames of one output that failed to draw.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FailedFrames {
-    pub count: u32,
-    /// Not drawn again before this time, so a failing output is retried at the display rate.
-    pub retry_at: std::time::Duration,
+    pub scheduler: crate::schedule::FrameScheduler,
 }
 
 /// What the pointer is over inside the window stack.
@@ -757,7 +747,7 @@ impl Cupertino {
 
     pub fn request_redraw(&mut self) {
         for o in &mut self.outputs {
-            o.redraw = true;
+            o.scheduler.damage();
         }
     }
 
@@ -795,10 +785,9 @@ impl Cupertino {
             scale,
             tracker,
             cache: ElementCache::default(),
-            redraw: true,
             global: Some(global),
             lock: Default::default(),
-            failed: None,
+            scheduler: Default::default(),
         });
         let now = self.now();
         self.menu_bars.set.add_output(id, rect, now);
@@ -861,7 +850,7 @@ impl Cupertino {
         entry.scale = scale;
         entry.rect = output_rect(mode, scale, transform, position);
         entry.tracker = OutputDamageTracker::from_output(&entry.output);
-        entry.redraw = true;
+        entry.scheduler.damage();
         let rect = entry.rect;
         layer_map_for_output(&entry.output).arrange();
         self.configure_lock_surface(idx);
@@ -1492,7 +1481,7 @@ impl Cupertino {
             || self.menu_bars_want_tick(now)
             || self.overlays.wants_tick()
             || self.power.policy().animating(now)
-            || self.outputs.iter().any(|o| o.redraw)
+            || self.outputs.iter().any(|o| o.scheduler.damaged())
     }
 
     pub fn apply_effects(&mut self, effects: Vec<Effect>) {

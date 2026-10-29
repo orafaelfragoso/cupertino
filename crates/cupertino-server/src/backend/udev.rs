@@ -724,7 +724,7 @@ fn render_outputs(state: &mut Cupertino) {
                 || !frame_due(
                     u.paused || u.asleep || u.renderer_lost,
                     s.pending || !state.retry_due(idx, now),
-                    state.outputs[idx].redraw,
+                    state.outputs[idx].scheduler.damaged(),
                     state.wants_frames(),
                 )
             {
@@ -769,10 +769,15 @@ fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle
                     clear: CLEAR,
                 },
             );
+            state.outputs[idx].scheduler.rendered();
             match result {
                 Ok(completion) => {
                     state.frame_drawn(idx);
-                    completion.status() == RenderStatus::Rendered
+                    let rendered = completion.status() == RenderStatus::Rendered;
+                    if !rendered {
+                        state.outputs[idx].scheduler.empty();
+                    }
+                    rendered
                 }
                 Err(e) => {
                     u.renderer_lost |= e.failure() == Failure::ContextLost;
@@ -790,7 +795,10 @@ fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle
     if rendered {
         let feedback = state.collect_feedback(idx);
         match surface.drm_output.queue_frame(Some(feedback)) {
-            Ok(()) => surface.pending = true,
+            Ok(()) => {
+                surface.pending = true;
+                state.outputs[idx].scheduler.queued();
+            }
             // logind drops DRM master before it sends the pause, so a flip in between is refused; the pause follows
             Err(FrameError::DrmError(DrmError::Access(e)))
                 if e.source.kind() == ErrorKind::PermissionDenied =>

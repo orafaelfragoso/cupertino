@@ -343,7 +343,12 @@ impl WaylandWindowSystem {
                 }
                 return;
             }
-            Event::OutputsChanged | Event::Extension(_) => return,
+            // the platform has no events for these yet: frame time stays the frame callback's
+            Event::OutputsChanged
+            | Event::Extension(_)
+            | Event::PopupRepositioned { .. }
+            | Event::Presented(_)
+            | Event::Discarded(_) => return,
         };
         let window = self.windows[i].id;
         out.push(PlatformEvent::Window { window, event });
@@ -481,7 +486,9 @@ impl WindowSystem for WaylandWindowSystem {
                     return Err(PlatformError::Unsupported);
                 };
                 self.window_mut(window)?.size = convert::whole(spec.size);
-                self.conn.reposition_popup(p, &convert::placement(&spec))
+                self.conn
+                    .reposition_popup(p, &convert::placement(&spec))
+                    .map(drop)
             }
         };
         result.map_err(platform_error)
@@ -497,7 +504,7 @@ impl WindowSystem for WaylandWindowSystem {
     }
 
     fn set_cursor(&mut self, _window: WindowId, shape: Option<CursorShape>) {
-        // before the pointer enters, or without cursor shapes, the compositor's cursor stays
+        // before the pointer enters the compositor's cursor stays
         let _ = match shape {
             Some(shape) => self.conn.set_cursor(convert::cursor(shape)),
             None => self.conn.hide_cursor(),

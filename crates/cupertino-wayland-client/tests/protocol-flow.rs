@@ -3,11 +3,11 @@
 
 use cupertino_geometry::{Point, Rect};
 use cupertino_wayland_client::{
-    Anchor, BufferFormat, Button, Capability, Connection, ConstraintAdjustment, Decorations, Error,
-    Event, Extension, Gravity, KeyboardEvent, OutputGeometry, OutputTransform, PixelRect,
-    PointerEvent, PopupPlacement, Preedit, Scale, ScrollSource, SurfaceId, SurroundingText,
-    TextInputDone, TextInputEvent, TextInputState, Toplevel, ToplevelConfig, WindowConfigure,
-    WmCapabilities,
+    Anchor, BufferFormat, Button, Capability, Connection, ConstraintAdjustment, CursorShape,
+    CursorTheme, Decorations, Error, Event, Extension, Gravity, KeyboardEvent, OutputGeometry,
+    OutputTransform, PixelRect, PointerEvent, PopupPlacement, Preedit, Presented, PresentedKind,
+    Scale, ScrollSource, SurfaceId, SurroundingText, TextInputDone, TextInputEvent, TextInputState,
+    Toplevel, ToplevelConfig, WindowConfigure, WmCapabilities,
 };
 use std::collections::VecDeque;
 use std::io::Write;
@@ -20,6 +20,10 @@ use wayland_protocols::wp::fractional_scale::v1::server::wp_fractional_scale_man
     self, WpFractionalScaleManagerV1,
 };
 use wayland_protocols::wp::fractional_scale::v1::server::wp_fractional_scale_v1::WpFractionalScaleV1;
+use wayland_protocols::wp::presentation_time::server::wp_presentation::{self, WpPresentation};
+use wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::{
+    self, WpPresentationFeedback,
+};
 use wayland_protocols::wp::text_input::zv3::server::zwp_text_input_manager_v3::{
     self, ZwpTextInputManagerV3,
 };
@@ -94,6 +98,8 @@ struct Globals {
     text_input: bool,
     /// Offer `wl_seat` version 8, whose wheels report half notches in 120ths, instead of 7.
     high_resolution_wheel: bool,
+    /// `wp_presentation` on `CLOCK_MONOTONIC`.
+    presentation: bool,
 }
 
 impl Globals {
@@ -137,6 +143,10 @@ enum Control {
     TextInputLeave,
     /// A preedit the input method never finishes with a `done`.
     PreeditOnly(&'static str),
+    /// Answer every presentation feedback asked for so far: presented, or discarded.
+    Presentation {
+        discard: bool,
+    },
     /// One input method batch, done with `serial` or else the number of commits so far.
     Compose {
         preedit: Option<(&'static str, i32, i32)>,
@@ -172,10 +182,7 @@ enum Seen {
     },
     Viewport(i32, i32),
     DecorationMode(Mode),
-    Positioner {
-        size: (i32, i32),
-        anchor_rect: [i32; 4],
-    },
+    Positioner(PositionerState),
     Receive(String),
     LayerAck(u32),
     LayerPopup,
@@ -184,7 +191,7 @@ enum Seen {
     InputRegion(Option<Vec<[i32; 4]>>),
     Reposition {
         token: u32,
-        size: (i32, i32),
+        positioner: PositionerState,
     },
     /// An activation token committed for this application id.
     TokenCommit(Option<String>),
@@ -197,6 +204,12 @@ enum Seen {
         serial: u32,
         x: i32,
         y: i32,
+    },
+    /// `wl_pointer.set_cursor`, with whether it named a surface.
+    Cursor {
+        serial: u32,
+        hotspot: (i32, i32),
+        surface: bool,
     },
 }
 
@@ -215,10 +228,14 @@ struct BufferData {
     format: wl_shm::Format,
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 struct PositionerState {
     size: (i32, i32),
     anchor_rect: [i32; 4],
+    offset: (i32, i32),
+    reactive: bool,
+    parent_size: Option<(i32, i32)>,
+    parent_configure: Option<u32>,
 }
 
 struct Mock {
@@ -245,6 +262,8 @@ struct Mock {
     layer: Option<(WlSurface, ZwlrLayerSurfaceV1, (u32, u32), bool)>,
     /// The text input with the number of commits on it.
     text_input: Option<(ZwpTextInputV3, u32)>,
+    /// Presentation feedback not answered yet.
+    feedbacks: Vec<WpPresentationFeedback>,
 }
 
 impl Mock {
@@ -298,7 +317,68 @@ macro_rules! ignore_requests {
     )*};
 }
 
-ignore_requests!(WlBuffer => BufferData, WlCallback => (), WlPointer => (), WlKeyboard => (), WlOutput => (), WpFractionalScaleV1 => (), WlDataSource => (), ZxdgOutputV1 => ());
+ignore_requests!(WlBuffer => BufferData, WlCallback => (), WlKeyboard => (), WlOutput => (), WpFractionalScaleV1 => (), WlDataSource => (), ZxdgOutputV1 => (), WpPresentationFeedback => ());
+
+/// `CLOCK_MONOTONIC`
+const MONOTONIC: u32 = 1;
+
+impl GlobalDispatch<WpPresentation, ()> for Mock {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<WpPresentation>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
+        init.init(r, ()).clock_id(MONOTONIC);
+    }
+}
+
+impl Dispatch<WpPresentation, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &WpPresentation,
+        request: wp_presentation::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        if let wp_presentation::Request::Feedback { callback, .. } = request {
+            state.feedbacks.push(init.init(callback, ()));
+        }
+    }
+}
+
+impl Dispatch<WlPointer, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &WlPointer,
+        request: wl_pointer::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        if let wl_pointer::Request::SetCursor {
+            serial,
+            surface,
+            hotspot_x,
+            hotspot_y,
+        } = request
+        {
+            state
+                .seen
+                .send(Seen::Cursor {
+                    serial,
+                    hotspot: (hotspot_x, hotspot_y),
+                    surface: surface.is_some(),
+                })
+                .unwrap();
+        }
+    }
+}
 
 impl Dispatch<WlCompositor, ()> for Mock {
     fn request(
@@ -520,6 +600,15 @@ impl Dispatch<XdgPositioner, Mutex<PositionerState>> for Mock {
                 width,
                 height,
             } => p.anchor_rect = [x, y, width, height],
+            xdg_positioner::Request::SetOffset { x, y } => p.offset = (x, y),
+            xdg_positioner::Request::SetReactive => p.reactive = true,
+            xdg_positioner::Request::SetParentSize {
+                parent_width,
+                parent_height,
+            } => p.parent_size = Some((parent_width, parent_height)),
+            xdg_positioner::Request::SetParentConfigure { serial } => {
+                p.parent_configure = Some(serial)
+            }
             _ => {}
         }
     }
@@ -546,13 +635,7 @@ impl Dispatch<XdgSurface, WlSurface> for Mock {
                     .unwrap()
                     .lock()
                     .unwrap();
-                state
-                    .seen
-                    .send(Seen::Positioner {
-                        size: p.size,
-                        anchor_rect: p.anchor_rect,
-                    })
-                    .unwrap();
+                state.seen.send(Seen::Positioner(p)).unwrap();
                 let popup = init.init(id, ());
                 state.popup = Some((xdg.clone(), popup, p, false));
             }
@@ -600,7 +683,7 @@ impl Dispatch<XdgPopup, ()> for Mock {
                 .seen
                 .send(Seen::Reposition {
                     token,
-                    size: p.size,
+                    positioner: p,
                 })
                 .unwrap();
             let serial = state.serial();
@@ -1051,6 +1134,9 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
         if globals.text_input {
             dh.create_global::<Mock, ZwpTextInputManagerV3, _>(1, ());
         }
+        if globals.presentation {
+            dh.create_global::<Mock, WpPresentation, _>(2, ());
+        }
         let mut mock = Mock {
             globals,
             seen: seen_tx,
@@ -1068,6 +1154,7 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
             frames: Vec::new(),
             layer: None,
             text_input: None,
+            feedbacks: Vec::new(),
         };
         let mut handle = display.handle();
         handle.insert_client(stream, Arc::new(Data)).unwrap();
@@ -1187,6 +1274,25 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
         Control::TextInputLeave => {
             let surface = mock.surface().clone();
             mock.text_input.as_ref().unwrap().0.leave(&surface);
+        }
+        Control::Presentation { discard } => {
+            for feedback in mock.feedbacks.drain(..) {
+                if discard {
+                    feedback.discarded();
+                } else {
+                    // 2^32 + 5 s and 250 ns, on a 60 Hz output's 2^32 + 7th retrace
+                    feedback.presented(
+                        1,
+                        5,
+                        250,
+                        16_666_666,
+                        1,
+                        7,
+                        wp_presentation_feedback::Kind::Vsync
+                            | wp_presentation_feedback::Kind::HwClock,
+                    );
+                }
+            }
         }
         Control::PreeditOnly(text) => {
             let input = &mock.text_input.as_ref().unwrap().0;
@@ -1664,6 +1770,9 @@ fn a_popup_is_drawn_where_and_as_large_as_the_compositor_placed_it() {
                 anchor: Anchor::BottomLeft,
                 gravity: Gravity::BottomRight,
                 constraint_adjustment: ConstraintAdjustment::FlipY,
+                offset: (0, 0),
+                reactive: false,
+                parent_size: None,
                 grab: false,
             },
         )
@@ -1671,10 +1780,11 @@ fn a_popup_is_drawn_where_and_as_large_as_the_compositor_placed_it() {
     conn.flush().unwrap();
     assert_eq!(
         next_seen(&seen),
-        Seen::Positioner {
+        Seen::Positioner(PositionerState {
             size: (120, 90),
-            anchor_rect: [10, 20, 31, 8]
-        }
+            anchor_rect: [10, 20, 31, 8],
+            ..PositionerState::default()
+        })
     );
     let placed = wait_for(&mut conn, &mut stash, |e| match e {
         Event::PopupConfigure {
@@ -1992,6 +2102,9 @@ fn an_extension_role_draws_through_the_lease_and_acknowledges_through_its_own_pr
         anchor: Anchor::BottomLeft,
         gravity: Gravity::BottomRight,
         constraint_adjustment: ConstraintAdjustment::empty(),
+        offset: (0, 0),
+        reactive: false,
+        parent_size: None,
         grab: false,
     };
     let popup = conn.popup(surface, &placement).unwrap();
@@ -2096,25 +2209,45 @@ fn an_input_region_is_sent_rounded_outwards_and_saturated_and_none_restores_the_
 }
 
 #[test]
-fn a_repositioned_popup_sends_its_new_placement_and_is_configured_again() {
+fn a_reactive_popup_answers_the_parents_pending_configure_and_a_reposition_reports_its_token() {
     let (mut conn, _control, seen) = connect(Globals::core());
     let mut stash = Stash::new();
     let w = window(&mut conn, Decorations::Client);
-    configured(&mut conn, &mut stash, w);
-    let placement = |anchor_rect, size| PopupPlacement {
+    // not presented: the window's configure is still pending
+    let pending = configured(&mut conn, &mut stash, w).serial;
+    let placement = |anchor_rect, size, reactive| PopupPlacement {
         anchor_rect,
         size,
         anchor: Anchor::BottomLeft,
         gravity: Gravity::BottomRight,
         constraint_adjustment: ConstraintAdjustment::FlipY,
+        offset: (-3, 4),
+        reactive,
+        parent_size: reactive.then_some((640, 480)),
         grab: false,
     };
     let popup = conn
         .popup(
             w.surface(),
-            &placement(Rect::new(10.0, 20.0, 30.0, 8.0), (120, 90)),
+            &placement(Rect::new(10.0, 20.0, 30.0, 8.0), (120, 90), false),
         )
         .unwrap();
+    conn.flush().unwrap();
+    let created = std::iter::repeat_with(|| next_seen(&seen))
+        .find_map(|s| match s {
+            Seen::Positioner(p) => Some(p),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        created,
+        PositionerState {
+            size: (120, 90),
+            anchor_rect: [10, 20, 30, 8],
+            offset: (-3, 4),
+            ..PositionerState::default()
+        }
+    );
     let popup_configure = |stash: &mut Stash, conn: &mut Connection| {
         wait_for(conn, stash, |e| match e {
             Event::PopupConfigure {
@@ -2126,11 +2259,12 @@ fn a_repositioned_popup_sends_its_new_placement_and_is_configured_again() {
     };
     assert_eq!(popup_configure(&mut stash, &mut conn), (10, 28, 120, 90));
     present(&mut conn, popup.surface(), (1, 1));
-    conn.reposition_popup(
-        popup,
-        &placement(Rect::new(50.0, 60.0, 10.0, 10.0), (200, 100)),
-    )
-    .unwrap();
+    let token = conn
+        .reposition_popup(
+            popup,
+            &placement(Rect::new(50.0, 60.0, 10.0, 10.0), (200, 100), true),
+        )
+        .unwrap();
     conn.flush().unwrap();
     let reposition = std::iter::repeat_with(|| next_seen(&seen))
         .find(|s| matches!(s, Seen::Reposition { .. }))
@@ -2138,11 +2272,206 @@ fn a_repositioned_popup_sends_its_new_placement_and_is_configured_again() {
     assert_eq!(
         reposition,
         Seen::Reposition {
-            token: 1,
-            size: (200, 100)
+            token,
+            positioner: PositionerState {
+                size: (200, 100),
+                anchor_rect: [50, 60, 10, 10],
+                offset: (-3, 4),
+                reactive: true,
+                parent_size: Some((640, 480)),
+                parent_configure: Some(pending),
+            }
         }
     );
+    let repositioned = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::PopupRepositioned { popup: p, token } if *p == popup => Some(*token),
+        _ => None,
+    });
+    assert_eq!(repositioned, token);
     assert_eq!(popup_configure(&mut stash, &mut conn), (50, 70, 200, 100));
+    present(&mut conn, w.surface(), (640, 480));
+    let again = conn
+        .reposition_popup(
+            popup,
+            &placement(Rect::new(50.0, 60.0, 10.0, 10.0), (200, 100), true),
+        )
+        .unwrap();
+    conn.flush().unwrap();
+    let acknowledged = std::iter::repeat_with(|| next_seen(&seen))
+        .find_map(|s| match s {
+            Seen::Reposition { token, positioner } => Some((token, positioner.parent_configure)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        acknowledged,
+        (again, None),
+        "the window answered its configure"
+    );
+    assert_ne!(again, token);
+}
+
+#[test]
+fn presented_frames_report_their_time_on_the_compositors_clock_and_discarded_ones_say_so() {
+    let (mut conn, control, _seen) = connect(Globals {
+        presentation: true,
+        ..Globals::core()
+    });
+    assert!(conn.capabilities().contains(Capability::Presentation));
+    assert_eq!(conn.presentation_clock(), Some(MONOTONIC));
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    present(&mut conn, w.surface(), (64, 48));
+    conn.roundtrip().unwrap();
+    control
+        .send(Control::Presentation { discard: false })
+        .unwrap();
+    let presented = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::Presented(p) => Some(*p),
+        _ => None,
+    });
+    assert_eq!(
+        presented,
+        Presented {
+            surface: w.surface(),
+            time_ns: ((1 << 32) + 5) * 1_000_000_000 + 250,
+            refresh_ns: 16_666_666,
+            sequence: (1 << 32) + 7,
+            kind: PresentedKind::Vsync | PresentedKind::HwClock,
+        }
+    );
+    present(&mut conn, w.surface(), (64, 48));
+    conn.roundtrip().unwrap();
+    control
+        .send(Control::Presentation { discard: true })
+        .unwrap();
+    let discarded = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::Discarded(surface) => Some(*surface),
+        _ => None,
+    });
+    assert_eq!(discarded, w.surface());
+}
+
+/// An XCursor file holding one opaque image per `(nominal size, width, height, hotspot)`.
+fn xcursor(images: &[(u32, u32, u32, (u32, u32))]) -> Vec<u8> {
+    const IMAGE: u32 = 0xfffd_0002;
+    let words = |out: &mut Vec<u8>, ws: &[u32]| ws.iter().for_each(|w| out.extend(w.to_le_bytes()));
+    let mut out = b"Xcur".to_vec();
+    words(&mut out, &[16, 0x1_0000, images.len() as u32]);
+    let mut position = 16 + 12 * images.len() as u32;
+    for (nominal, width, height, _) in images {
+        words(&mut out, &[IMAGE, *nominal, position]);
+        position += 36 + width * height * 4;
+    }
+    for (nominal, width, height, (x, y)) in images {
+        words(
+            &mut out,
+            &[36, IMAGE, *nominal, 1, *width, *height, *x, *y, 0],
+        );
+        words(&mut out, &vec![0xff00_0000; (width * height) as usize]);
+    }
+    out
+}
+
+#[test]
+fn without_cursor_shapes_the_cursor_is_drawn_from_the_theme_at_the_pointers_scale() {
+    let themes = std::env::temp_dir().join(format!("cupertino-cursors-{}", std::process::id()));
+    let cursors = |theme: &str| {
+        let dir = themes.join(theme).join("cursors");
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    };
+    std::fs::write(
+        cursors("test").join("text"),
+        xcursor(&[(24, 24, 24, (4, 8)), (48, 48, 48, (8, 16))]),
+    )
+    .unwrap();
+    std::fs::write(
+        themes.join("test").join("index.theme"),
+        "[Icon Theme]\nInherits=base\n",
+    )
+    .unwrap();
+    std::fs::write(
+        cursors("base").join("default"),
+        xcursor(&[(24, 32, 32, (1, 2))]),
+    )
+    .unwrap();
+    // base names no parent, so it inherits from default, which leads back to test
+    std::fs::write(
+        cursors("default").join("pointer"),
+        xcursor(&[(24, 16, 16, (2, 3))]),
+    )
+    .unwrap();
+    std::fs::write(
+        themes.join("default").join("index.theme"),
+        "[Icon Theme]\nInherits=test\n",
+    )
+    .unwrap();
+
+    let (mut conn, control, seen) = connect(Globals {
+        seat: true,
+        ..Globals::core()
+    });
+    assert!(!conn.capabilities().contains(Capability::CursorShape));
+    conn.set_cursor_theme(CursorTheme {
+        name: "test".into(),
+        size: 24,
+        search_path: vec![themes.clone()],
+    });
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    control.send(Control::Click { x: 5.0, y: 5.0 }).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(
+            e,
+            Event::Pointer {
+                event: PointerEvent::Enter(_),
+                ..
+            }
+        )
+        .then_some(())
+    });
+    let cursor = |conn: &mut Connection, shape| {
+        conn.set_cursor(shape).unwrap();
+        let commit = std::iter::repeat_with(|| next_seen(&seen))
+            .find_map(|s| match s {
+                Seen::Commit { size, scale, .. } => Some((size, scale)),
+                _ => None,
+            })
+            .unwrap();
+        match next_seen(&seen) {
+            Seen::Cursor {
+                hotspot,
+                surface: true,
+                ..
+            } => (commit, hotspot),
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(
+        cursor(&mut conn, CursorShape::Text),
+        (((24, 24), 1), (4, 8))
+    );
+    assert_eq!(
+        cursor(&mut conn, CursorShape::Pointer),
+        (((16, 16), 1), (2, 3))
+    );
+    // no theme of the cycle has zoom-in: the inherited default cursor stands in
+    assert_eq!(
+        cursor(&mut conn, CursorShape::ZoomIn),
+        (((32, 32), 1), (1, 2))
+    );
+    control.send(Control::PreferredBufferScale(2)).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(e, Event::ScaleChanged { .. }).then_some(())
+    });
+    assert_eq!(
+        cursor(&mut conn, CursorShape::Text),
+        (((48, 48), 2), (4, 8))
+    );
+    std::fs::remove_dir_all(&themes).unwrap();
 }
 
 #[test]

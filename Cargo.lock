@@ -1655,6 +1655,7 @@ dependencies = [
  "wayland-protocols",
  "wayland-protocols-wlr",
  "wayland-server",
+ "xcursor",
  "xkbcommon",
 ]
 

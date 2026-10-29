@@ -27,25 +27,89 @@ pub mod metrics {
     pub const BOTTOM: f64 = 20.0;
 }
 
-impl About {
-    pub fn button(&self) -> crate::Rect {
-        use metrics::*;
-        let rows_height = self.rows.len() as f64 * (ROW_HEIGHT + ROW_GAP)
-            - if self.rows.is_empty() { 0.0 } else { ROW_GAP };
-        crate::Rect::new(
-            (f64::from(WIDTH) - BUTTON_WIDTH) / 2.0,
-            ROWS_Y + rows_height + BUTTON_GAP,
-            BUTTON_WIDTH,
-            BUTTON_HEIGHT,
-        )
-    }
+#[derive(Clone, Debug, PartialEq)]
+pub struct RowLayout {
+    pub label: &'static str,
+    pub lines: Vec<String>,
+    pub y: f64,
+}
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Layout {
+    pub rows: Vec<RowLayout>,
+    pub button: crate::Rect,
+}
+
+impl Layout {
     pub fn size(&self) -> (u32, u32) {
         (
             metrics::WIDTH,
-            (self.button().bottom() + metrics::BOTTOM).ceil() as u32,
+            (self.button.bottom() + metrics::BOTTOM).ceil() as u32,
         )
     }
+}
+
+impl About {
+    /// Wrap values at the painter's measured width; painting, hit testing and the window share this layout.
+    pub fn layout(&self, mut measure: impl FnMut(&str) -> f64) -> Layout {
+        use metrics::*;
+        let width = f64::from(WIDTH) / 2.0 - COLUMN_GAP / 2.0 - PADDING;
+        let mut y = ROWS_Y;
+        let mut rows = Vec::new();
+        for (i, row) in self.rows.iter().enumerate() {
+            let lines = wrap_value(&row.value, width, &mut measure);
+            let label = if i > 0 && self.rows[i - 1].label == row.label {
+                ""
+            } else {
+                row.label
+            };
+            let height = lines.len() as f64 * ROW_HEIGHT;
+            rows.push(RowLayout { label, lines, y });
+            y += height + ROW_GAP;
+        }
+        if !rows.is_empty() {
+            y -= ROW_GAP;
+        }
+        let button = crate::Rect::new(
+            (f64::from(WIDTH) - BUTTON_WIDTH) / 2.0,
+            y + BUTTON_GAP,
+            BUTTON_WIDTH,
+            BUTTON_HEIGHT,
+        );
+        Layout { rows, button }
+    }
+}
+
+/// Prefer whole words, splitting an overlong word only at character boundaries. No value text is elided.
+fn wrap_value(text: &str, width: f64, measure: &mut impl FnMut(&str) -> f64) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let candidate = if line.is_empty() {
+            word.to_owned()
+        } else {
+            format!("{line} {word}")
+        };
+        if measure(&candidate) <= width {
+            line = candidate;
+            continue;
+        }
+        if !line.is_empty() {
+            lines.push(std::mem::take(&mut line));
+        }
+        for c in word.chars() {
+            let mut candidate = line.clone();
+            candidate.push(c);
+            if !line.is_empty() && measure(&candidate) > width {
+                lines.push(std::mem::take(&mut line));
+            }
+            line.push(c);
+        }
+    }
+    if !line.is_empty() || lines.is_empty() {
+        lines.push(line);
+    }
+    lines
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -355,11 +419,58 @@ mod tests {
             ]
         );
         assert_eq!(about.os.as_deref(), Some("Example Linux 1"));
-        assert_eq!(about.size().0, 280);
+        let layout = about.layout(|text| text.chars().count() as f64);
+        assert_eq!(layout.size().0, 280);
         assert_eq!(
-            about.size().1 as f64,
-            about.button().bottom() + metrics::BOTTOM
+            layout.size().1 as f64,
+            layout.button.bottom() + metrics::BOTTOM
         );
+    }
+
+    #[test]
+    fn long_values_remain_complete_and_push_later_rows_and_the_button_down() {
+        let values = [
+            "AMD Ryzen 7 5700X · 16 threads",
+            "GA106 [GeForce RTX 3060] (driver)",
+            "Built-in 2560 × 1600 @ 2x",
+        ];
+        let about = About {
+            version: "Version 1".into(),
+            os: None,
+            rows: values
+                .iter()
+                .map(|value| Row {
+                    label: "Hardware",
+                    value: (*value).into(),
+                })
+                .collect(),
+        };
+        let layout = about.layout(|text| text.chars().count() as f64 * 8.0);
+        let mut bottom = metrics::ROWS_Y - metrics::ROW_GAP;
+        for (row, value) in layout.rows.iter().zip(values) {
+            assert_eq!(row.lines.join(" "), value);
+            assert!(row.lines.len() > 1);
+            assert!(row
+                .lines
+                .iter()
+                .all(|s| s.chars().count() as f64 * 8.0 <= 110.0));
+            assert_eq!(row.y, bottom + metrics::ROW_GAP);
+            bottom = row.y + row.lines.len() as f64 * metrics::ROW_HEIGHT;
+        }
+        assert_eq!(layout.button.y, bottom + metrics::BUTTON_GAP);
+        assert_eq!(
+            layout.size().1 as f64,
+            layout.button.bottom() + metrics::BOTTOM
+        );
+        assert_eq!(layout.rows[1].label, "");
+    }
+
+    #[test]
+    fn unbroken_unicode_values_wrap_without_losing_characters() {
+        let value = "Display-長い表示名-123456789";
+        let lines = wrap_value(value, 5.0, &mut |text| text.chars().count() as f64);
+        assert_eq!(lines.concat(), value);
+        assert!(lines.iter().all(|s| s.chars().count() <= 5));
     }
 
     #[test]

@@ -57,7 +57,7 @@ use smithay::{
     delegate_xdg_decoration, delegate_xdg_dialog, delegate_xdg_shell,
 };
 
-use crate::acquire_waits::{self, Admission};
+use crate::acquire_waits::{self, Admission, Kind};
 use crate::clipboard::Snapshot;
 use crate::menu_bar::cut_text;
 use crate::policy;
@@ -115,14 +115,18 @@ impl CompositorHandler for Cupertino {
             });
             if let Some(point) = acquire {
                 match point.generate_blocker() {
-                    Ok((blocker, source)) => hold_commit(state, surface, blocker, source),
+                    Ok((blocker, source)) => {
+                        hold_commit(state, surface, Kind::AcquirePoint, blocker, source)
+                    }
                     Err(e) => {
                         tracing::warn!(client = ?surface.client().map(|c| c.id()), error = %e, "no wait for an acquire point: the commit goes through unblocked")
                     }
                 }
             } else if let Some(dmabuf) = dmabuf {
                 match dmabuf.generate_blocker(smithay::reexports::calloop::Interest::READ) {
-                    Ok((blocker, source)) => hold_commit(state, surface, blocker, source),
+                    Ok((blocker, source)) => {
+                        hold_commit(state, surface, Kind::ImplicitFence, blocker, source)
+                    }
                     Err(e) => {
                         tracing::warn!(client = ?surface.client().map(|c| c.id()), error = %e, "no wait for the dmabuf's fences: the commit goes through unblocked")
                     }
@@ -226,10 +230,16 @@ impl ShmHandler for Cupertino {
 }
 delegate_shm!(Cupertino);
 
-/// Keeps the commit of `surface` back until `blocker` clears, which `source` reports. A client may have
-/// [`acquire_waits::LIMIT`] such commits at once; past it the client is disconnected, since each is a file descriptor of
-/// the server. A commit that cannot be held back goes through at once, and is logged.
-fn hold_commit<B, S>(state: &mut Cupertino, surface: &WlSurface, blocker: B, source: S)
+/// The object id of the `wl_display`, which every connection has.
+const WL_DISPLAY_ID: u32 = 1;
+/// `wl_display.error` `implementation`: a problem in the compositor or in what the client asks of it.
+const WL_DISPLAY_ERROR_IMPLEMENTATION: u32 = 3;
+
+/// Keeps the commit of `surface` back until `blocker` clears, which `source` reports. How many such commits a client may
+/// have depends on what they wait for ([`acquire_waits`]): past the limit of explicit-sync waits the client is
+/// disconnected, and past the bound of implicit-fence waits the commit goes through without waiting. A commit that cannot
+/// be held back goes through at once, and is logged.
+fn hold_commit<B, S>(state: &mut Cupertino, surface: &WlSurface, kind: Kind, blocker: B, source: S)
 where
     B: Blocker + Send + 'static,
     S: smithay::reexports::calloop::EventSource<Event = (), Ret = Result<(), std::io::Error>>
@@ -242,20 +252,26 @@ where
         return;
     };
     let waits = data.acquire_waits.clone();
-    let id = match waits.admit() {
+    let id = match waits.admit(kind) {
         Admission::Granted(id) => id,
         Admission::Closed => return,
-        Admission::OverLimit => {
-            tracing::warn!(client = ?client.id(), limit = acquire_waits::LIMIT, "a client has too many commits waiting for their buffers: disconnected");
+        Admission::PassUnblocked { first } => {
+            if first {
+                tracing::warn!(client = ?client.id(), bound = acquire_waits::IMPLICIT_LIMIT, "a client has more commits waiting for dmabuf fences than the bound: its further commits go through without waiting");
+            }
+            return;
+        }
+        Admission::Disconnect => {
+            tracing::warn!(client = ?client.id(), limit = acquire_waits::ACQUIRE_LIMIT, "a client has too many commits waiting for acquire points: disconnected");
             state.display_handle.backend_handle().kill_client(
                 client.id(),
                 DisconnectReason::ProtocolError(ProtocolError {
-                    code: 0,
-                    object_id: surface.id().protocol_id(),
-                    object_interface: "wl_surface".into(),
+                    code: WL_DISPLAY_ERROR_IMPLEMENTATION,
+                    object_id: WL_DISPLAY_ID,
+                    object_interface: "wl_display".into(),
                     message: format!(
-                        "more than {} commits waiting for their buffers",
-                        acquire_waits::LIMIT
+                        "more than {} commits waiting for acquire points",
+                        acquire_waits::ACQUIRE_LIMIT
                     ),
                 }),
             );

@@ -21,6 +21,7 @@ pub mod display_power;
 pub mod displays;
 pub mod dock;
 pub mod events;
+pub mod file_limit;
 pub mod force_quit;
 pub mod frame;
 pub mod fx;

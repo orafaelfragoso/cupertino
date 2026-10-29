@@ -26,8 +26,8 @@ pub struct CpuConfig {
     pub max_pixels: u64,
     pub glyph_cache_bytes: usize,
     pub image_cache_bytes: usize,
-    /// Asks the rasterizer for hinted glyphs.
-    pub hint_glyphs: bool,
+    /// Darkens glyph stems by the fill colour; on by default, off only when the user turns font smoothing off.
+    pub font_smoothing: bool,
 }
 
 /// Paints display lists into a premultiplied RGBA image it keeps between frames, repainting only the damage.
@@ -691,20 +691,20 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         if size_px > MAX_GLYPH_PX {
             return Err(RenderError::ResourceLimit);
         }
-        let size_q = (size_px * 64.0).round() as u32;
         self.stats.glyphs += run.glyphs.len() as u32;
         for g in &run.glyphs {
             let (lx, ly) = (origin.x + f64::from(g.x), origin.y + f64::from(g.y));
             let px = (a * lx + c * ly + e) * self.scale;
             let py = (b * lx + d * ly + f) * self.scale;
             let ix = px.floor();
-            let key = GlyphKey {
-                font: run.font,
-                glyph: g.id,
-                size_q,
-                subpixel_x: (((px - ix) * 4.0) as u8).min(3),
-                hinted: self.config.hint_glyphs,
-            };
+            let key = GlyphKey::for_draw(
+                run.font,
+                g.id,
+                size_px,
+                px - ix,
+                self.config.font_smoothing,
+                [color.r, color.g, color.b],
+            );
             let Some(glyph) = self.glyphs.get(key, self.rasterizer)? else {
                 continue;
             };

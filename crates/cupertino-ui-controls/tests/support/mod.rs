@@ -180,7 +180,7 @@ impl<A: Application> Harness<A> {
                         max_pixels: 1 << 22,
                         glyph_cache_bytes: 1 << 20,
                         image_cache_bytes: 1 << 20,
-                        hint_glyphs: false,
+                        font_smoothing: true,
                     },
                     NoGlyphs,
                 ))

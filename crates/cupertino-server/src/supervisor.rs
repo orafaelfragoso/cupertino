@@ -143,7 +143,8 @@ fn start(
     command
         .args(args)
         .env("WAYLAND_DISPLAY", socket)
-        .env("XDG_CURRENT_DESKTOP", crate::state::CURRENT_DESKTOP);
+        .env("XDG_CURRENT_DESKTOP", crate::state::CURRENT_DESKTOP)
+        .env("XDG_SESSION_TYPE", "wayland");
     crate::xwayland::set_client_env(&mut command, x11);
     hand_over(&mut command, &stream);
     match command.spawn() {

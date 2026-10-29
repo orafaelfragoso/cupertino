@@ -445,7 +445,10 @@ pub fn run(pane: PaneId, activation_token: String) -> Result<()> {
         groups: sidebar::groups(),
         history: History::new(pane),
         search: SearchField::default(),
-        keymap: Keymap::load(),
+        keymap: Keymap::new(
+            cupertino_keyboard::binding::user_profile(),
+            cupertino_keyboard::binding::load_default().0,
+        ),
         search_offsets: Vec::new(),
         caret_drawn: false,
         results: None,

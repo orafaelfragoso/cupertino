@@ -235,7 +235,7 @@ sha256sum --check --status /tmp/server.before && echo 'cupertino-server payload 
 changed=$(altered)
 [ -z "$changed" ] || { echo "$changed"; exit 1; }
 echo 'package verification clean'
-files | while read -r f; do [ -e "$f" ] || [ -L "$f" ] || { echo "missing: $f"; exit 1; }; done
+files | while read -r f; do [ -z "$f" ] || [ -e "$f" ] || [ -L "$f" ] || { echo "missing: $f"; exit 1; }; done
 echo 'every packaged path present'
 for b in /usr/bin/cupertino-*; do
     [ "$b" = /usr/bin/cupertino-session ] && continue

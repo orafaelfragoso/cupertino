@@ -167,8 +167,33 @@ pub fn run(
     deadline: Option<Instant>,
     scale: Option<f64>,
 ) -> Result<()> {
-    let (session, mut notifier) =
-        LogindSession::new().map_err(|e| anyhow!("opening a logind session: {e}"))?;
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        kernel = std::fs::read_to_string("/proc/sys/kernel/osrelease")
+            .unwrap_or_default()
+            .trim(),
+        session = std::env::var("XDG_SESSION_ID").unwrap_or_default(),
+        vt = std::env::var("XDG_VTNR").unwrap_or_default(),
+        "starting the TTY backend"
+    );
+    let report = super::preflight::run(Path::new("/sys"))?;
+    for note in &report.notes {
+        tracing::info!("{note}");
+    }
+    for warning in &report.warnings {
+        tracing::warn!("{warning}");
+    }
+    if !report.is_ok() {
+        for problem in &report.problems {
+            tracing::error!("{problem}");
+        }
+        bail!("this machine is not set up for the TTY backend:\n{report}");
+    }
+    let (session, mut notifier) = LogindSession::new().map_err(|e| {
+        anyhow!(
+            "opening a logind session: {e} (start from a text console such as Ctrl+Alt+F3, or from a display manager's session entry; a running desktop session already controls the seat)"
+        )
+    })?;
     // Devices are only known on the default seat.
     let seat = session.seat();
     if seat != SEAT0 {
@@ -217,10 +242,13 @@ pub fn run(
     let fd = DrmDeviceFd::new(DeviceFd::from(fd));
     let (drm, drm_notifier) =
         DrmDevice::new(fd.clone(), true).map_err(|e| anyhow!("drm device: {e}"))?;
-    let gbm = GbmDevice::new(fd).map_err(|e| anyhow!("gbm device: {e}"))?;
+    let gbm = GbmDevice::new(fd).map_err(|e| anyhow!("gbm device: {e} (the driver's GBM backend is missing or refused the device; run `cupertino-server --check-hardware`)"))?;
 
-    let display =
-        unsafe { EGLDisplay::new(gbm.clone()) }.map_err(|e| anyhow!("EGL display: {e}"))?;
+    let display = unsafe { EGLDisplay::new(gbm.clone()) }.map_err(|e| {
+        anyhow!(
+            "EGL display: {e} (no EGL platform for GBM; check the driver's EGL and GBM libraries)"
+        )
+    })?;
     let egl_device =
         EGLDevice::device_for_display(&display).map_err(|e| anyhow!("EGL device: {e}"))?;
     if egl_device.is_software() {

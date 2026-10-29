@@ -13,6 +13,8 @@ pub mod headless;
 #[cfg(feature = "udev")]
 pub mod input;
 #[cfg(feature = "udev")]
+pub mod preflight;
+#[cfg(feature = "udev")]
 pub mod udev;
 #[cfg(feature = "winit")]
 pub mod winit;

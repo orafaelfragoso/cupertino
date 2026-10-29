@@ -31,6 +31,9 @@ pub struct Cli {
     /// Run without a window system (offscreen EGL device).
     #[arg(long)]
     pub headless: bool,
+    /// Print what the TTY backend needs from this machine (GPU driver and its settings) and exit; opens no device.
+    #[arg(long)]
+    pub check_hardware: bool,
     /// Development and nested runs: let any configuration file name the shell processes and the screenshot process, from
     /// any path. Without it only the system file, programs under /usr, and the person's file removing or reordering them
     /// apply.
@@ -362,7 +365,25 @@ pub fn start_shell_supervision(
 }
 
 /// Start the compositor with the given options and run until it exits.
+#[cfg(feature = "udev")]
+fn check_hardware() -> Result<()> {
+    let report = crate::backend::preflight::run(std::path::Path::new("/sys"))?;
+    print!("{report}");
+    if report.is_ok() {
+        println!("ok: nothing blocks the TTY backend");
+        Ok(())
+    } else {
+        Err(anyhow!("this machine is not set up for the TTY backend"))
+    }
+}
+
 pub fn run(cli: Cli) -> Result<()> {
+    if cli.check_hardware {
+        #[cfg(feature = "udev")]
+        return check_hardware();
+        #[cfg(not(feature = "udev"))]
+        return Err(anyhow!("built without the udev feature"));
+    }
     let assets = Assets::discover();
     let mode = cli.mode()?;
     let (cfg, files) = cli.config()?;

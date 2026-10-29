@@ -4,6 +4,8 @@ use crate::engine::{align_offset, has_own_size, Arranged, Engine};
 use crate::{Align, AxisConstraint, Constraints, GridSpan, LayoutError, LayoutTree, Track};
 use cupertino_geometry::{Rect, Size};
 
+const PROBE_FACTOR: usize = 64;
+
 /// Where a child landed: the first track it covers on each axis and how many it covers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Cell {
@@ -14,9 +16,17 @@ pub(crate) struct Cell {
 }
 
 /// Auto-flow placement: each child takes the first free spot, scanning row by row from the previous child's spot. A span
-/// wider than the grid is cut to its width; a span taller than `max_rows` is cut to it.
-pub(crate) fn place(spans: &[GridSpan], column_count: usize, max_rows: usize) -> Vec<Cell> {
+/// wider than the grid is cut to its width; a span taller than `max_rows` is cut to it. The occupancy grid may not hold
+/// more than `cell_limit` cells, and the cells probed while searching may not exceed [`PROBE_FACTOR`] times that.
+pub(crate) fn place(
+    spans: &[GridSpan],
+    column_count: usize,
+    max_rows: usize,
+    cell_limit: usize,
+) -> Result<Vec<Cell>, LayoutError> {
     let mut taken: Vec<Vec<bool>> = Vec::new();
+    let mut probed = 0usize;
+    let probe_limit = cell_limit.saturating_mul(PROBE_FACTOR);
     let (mut row, mut column) = (0, 0);
     let mut cells = Vec::with_capacity(spans.len());
     for span in spans {
@@ -28,7 +38,14 @@ pub(crate) fn place(spans: &[GridSpan], column_count: usize, max_rows: usize) ->
                 column = 0;
             }
             if taken.len() < row + rows {
+                if (row + rows).saturating_mul(column_count) > cell_limit {
+                    return Err(LayoutError::NodeLimit);
+                }
                 taken.resize(row + rows, vec![false; column_count]);
+            }
+            probed = probed.saturating_add(rows * columns);
+            if probed > probe_limit {
+                return Err(LayoutError::NodeLimit);
             }
             let free =
                 (row..row + rows).all(|r| taken[r][column..column + columns].iter().all(|t| !t));
@@ -48,7 +65,7 @@ pub(crate) fn place(spans: &[GridSpan], column_count: usize, max_rows: usize) ->
         });
         column += columns;
     }
-    cells
+    Ok(cells)
 }
 
 pub(crate) fn arrange<T: LayoutTree>(
@@ -61,7 +78,12 @@ pub(crate) fn arrange<T: LayoutTree>(
 ) -> Result<Arranged<T::Id>, LayoutError> {
     let column_count = columns.len().max(1);
     let spans: Vec<GridSpan> = kids.iter().map(|&id| engine.tree.spec(id).span).collect();
-    let cells = place(&spans, column_count, rows.len().max(kids.len()));
+    let cells = place(
+        &spans,
+        column_count,
+        rows.len().max(kids.len()),
+        engine.node_limit,
+    )?;
     let row_count = rows
         .len()
         .max(cells.iter().map(|c| c.row + c.rows).max().unwrap_or(0));

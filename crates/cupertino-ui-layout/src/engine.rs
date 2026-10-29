@@ -78,6 +78,7 @@ pub(crate) struct Solved<Id> {
 pub(crate) struct Engine<'a, T: LayoutTree> {
     pub tree: &'a T,
     direction: LayoutDirection,
+    pub node_limit: usize,
     cache: &'a mut LayoutCache<T::Id>,
     stats: LayoutStats,
 }
@@ -107,6 +108,7 @@ pub fn layout_cached<T: LayoutTree>(
     let mut engine = Engine {
         tree,
         direction: options.direction,
+        node_limit: options.node_limit,
         cache,
         stats: LayoutStats::default(),
     };
@@ -327,7 +329,12 @@ impl<T: LayoutTree> Engine<'_, T> {
             } => {
                 let column_count = columns.len().max(1);
                 let spans: Vec<_> = kids.iter().map(|&k| tree.spec(k).span).collect();
-                let cells = grid::place(&spans, column_count, rows.len().max(kids.len()));
+                let cells = grid::place(
+                    &spans,
+                    column_count,
+                    rows.len().max(kids.len()),
+                    self.node_limit,
+                )?;
                 let (tracks, gap) = match axis {
                     Axis::Horizontal => (columns, gaps.width),
                     Axis::Vertical => (rows, gaps.height),

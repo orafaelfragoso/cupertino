@@ -271,7 +271,8 @@ pub enum LayoutError {
     NoConvergence,
     InvalidConstraint,
     NonFiniteValue,
-    /// More nodes than [`LayoutOptions::node_limit`], or a tree deeper than 256 levels.
+    /// More nodes than [`LayoutOptions::node_limit`], a tree deeper than 256 levels, or a grid whose cells or placement
+    /// work exceed that limit.
     NodeLimit,
     /// A node reachable twice, which includes a cycle.
     CycleOrMissingNode,

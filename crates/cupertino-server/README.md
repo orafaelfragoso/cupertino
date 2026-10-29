@@ -35,6 +35,15 @@ Before the first run, in case the server hangs instead of stopping (an EGL or GB
 
 **NVIDIA.** `--check-hardware` reports the driver, and with the `nvidia` driver it requires `nvidia-drm.modeset=1` (kernel command line, or `options nvidia_drm modeset=1` in `/etc/modprobe.d`; `cat /sys/module/nvidia_drm/parameters/modeset` must print `Y`), and warns when `/usr/lib/gbm/nvidia-drm_gbm.so` (package `nvidia-utils`) is missing. The same check runs at the start of `--udev` and refuses to start with the fix. Explicit sync (`linux-drm-syncobj-v1`, used by Chrome and Electron on NVIDIA) is offered when the kernel supports it; it has not been run against the NVIDIA driver yet, so the first thing to check on the hardware is the log line `explicit sync (linux-drm-syncobj-v1) is offered` and that Chrome starts and draws.
 
+### From the display manager
+
+The package installs the session entry `cupertino.desktop` (it runs `/usr/bin/cupertino-session`) next to the other Wayland sessions, so GDM lists **Cupertino** in its session chooser. The packaged session is the same server as above; the script around it makes a bad first login recoverable:
+- When the compositor ends, for any reason, the script ends with the compositor's status and the display manager shows its login screen again; do not enable automatic login for this session while it is new, or a crash would log in again at once.
+- `~/.local/state/cupertino/session.log` gets one line per start and end (normal end, exit status, or ended by the watchdog); `server.log` there has the compositor's own log.
+- A first login can be bounded the way `run-cupertino.sh` bounds a run: write a whole number of seconds into `~/.config/cupertino/session-limit` (or set `CUPERTINO_SESSION_LIMIT`), for example `echo 600 > ~/.config/cupertino/session-limit`. The compositor stops after that long, and an outside `timeout -k 10` ends it 30 s later if it hangs. Remove the file for a normal session. A value that is not a whole number is ignored and logged.
+- The same pre-flight list as above applies (`kernel.sysrq=1`, save work first), and the machine checks of `--check-hardware`.
+- Not verified: how GDM treats the session on a real machine (VT, restart after a crash); the first login is the test, and `Ctrl+Alt+Backspace` ends the session as on a console.
+
 ## Command line
 
 Without a backend flag the server runs nested when `WAYLAND_DISPLAY` or `DISPLAY` is set, else on the TTY. Giving more than one of `--winit`, `--udev` and `--headless` is an error.

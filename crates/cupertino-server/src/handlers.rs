@@ -193,7 +193,7 @@ impl CompositorHandler for Cupertino {
         self.lock_surface_committed(surface);
         self.toplevel_committed(surface);
         self.layer_committed(surface);
-        self.request_redraw();
+        self.request_redraw_for(surface);
     }
 }
 impl smithay::wayland::security_context::SecurityContextHandler for Cupertino {

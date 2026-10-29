@@ -4,14 +4,15 @@
 use std::time::Duration;
 
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::desktop::layer_map_for_output;
 use smithay::desktop::utils::{
     send_frames_surface_tree, take_presentation_feedback_surface_tree, OutputPresentationFeedback,
 };
+use smithay::desktop::{find_popup_root_surface, layer_map_for_output, WindowSurfaceType};
 use smithay::input::pointer::{CursorImageStatus, CursorImageSurfaceData};
 use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point};
-use smithay::wayland::compositor::with_states;
+use smithay::wayland::compositor::{get_parent, with_states};
 use smithay::wayland::presentation::Refresh;
 
 use crate::render::compose::Composed;
@@ -197,6 +198,8 @@ impl Cupertino {
         idx: usize,
     ) -> Option<Composed> {
         self.note_scene_built(idx);
+        let (now, refresh) = (self.frame_now(), self.refresh_of(idx));
+        self.outputs[idx].scheduler.cycle(now, refresh);
         let composed = self.compose_output(renderer, idx, true);
         if composed.is_some() {
             self.outputs[idx].scheduler.composed();
@@ -496,10 +499,12 @@ impl Cupertino {
         feedback
     }
 
-    /// Send frame callbacks for output `idx`; windows that are not on screen are throttled.
+    /// Send frame callbacks for output `idx`; windows that are not on screen are throttled, and so are the cursor and a
+    /// drag icon on every output but the pointer's.
     pub fn send_frames(&mut self, idx: usize, time: Duration) {
         let output = self.outputs[idx].output.clone();
         let out = &output;
+        let pointer = self.pointer_output_idx() == Some(idx);
         if self.session_lock.is_active() {
             // only the lock surface is on screen; everything else waits for the unlock
             if let Some(lock) = self.lock_surface_of(idx) {
@@ -513,7 +518,7 @@ impl Cupertino {
             }
             if let CursorImageStatus::Surface(s) = &self.cursor_status {
                 send_frames_surface_tree(s, out, time, Some(HIDDEN_FRAME_THROTTLE), move |_, _| {
-                    Some(out.clone())
+                    pointer.then(|| out.clone())
                 });
             }
             self.outputs[idx].scheduler.called_back();
@@ -540,12 +545,12 @@ impl Cupertino {
         }
         if let CursorImageStatus::Surface(s) = &self.cursor_status {
             send_frames_surface_tree(s, out, time, Some(HIDDEN_FRAME_THROTTLE), move |_, _| {
-                Some(out.clone())
+                pointer.then(|| out.clone())
             });
         }
         if let Some((s, _)) = &self.drag_icon {
             send_frames_surface_tree(s, out, time, Some(HIDDEN_FRAME_THROTTLE), move |_, _| {
-                Some(out.clone())
+                pointer.then(|| out.clone())
             });
         }
         self.outputs[idx].scheduler.called_back();
@@ -580,6 +585,108 @@ impl Cupertino {
     /// Whether output `idx` may draw at `time`: not before the retry time of a frame that failed.
     pub fn retry_due(&self, idx: usize, time: Duration) -> bool {
         self.outputs[idx].scheduler.retry_due(time)
+    }
+
+    /// The clock frames are scheduled on: a test's fixed model time, otherwise the presentation clock, unscaled.
+    pub fn frame_now(&self) -> Duration {
+        self.fixed_time.map_or_else(
+            || Duration::from(self.clock.now()),
+            |t| Duration::from_secs_f64(t.max(0.0)),
+        )
+    }
+
+    /// One refresh period of output `idx`'s mode.
+    pub fn refresh_of(&self, idx: usize) -> Duration {
+        let mhz = self.outputs[idx]
+            .output
+            .current_mode()
+            .map_or(60_000, |m| m.refresh);
+        Duration::from_secs_f64(1000.0 / f64::from(mhz.max(1000)))
+    }
+
+    /// Whether output `idx` draws a frame at `now`.
+    pub fn frame_due(&self, idx: usize, now: Duration) -> bool {
+        self.outputs[idx].scheduler.due(now, self.animating())
+    }
+
+    /// When output `idx` is next due, if anything wants a frame of it.
+    pub fn frame_deadline(&self, idx: usize, now: Duration) -> Option<Duration> {
+        self.outputs[idx].scheduler.deadline(now, self.animating())
+    }
+
+    /// Mark for a frame the outputs that show `surface`, all of them when none is known.
+    pub fn request_redraw_for(&mut self, surface: &WlSurface) {
+        match self.outputs_showing(surface) {
+            Some(shown) => {
+                for idx in shown {
+                    self.outputs[idx].scheduler.damage();
+                }
+            }
+            None => self.request_redraw(),
+        }
+    }
+
+    /// The outputs `surface` is drawn on, by the surface it belongs to, as the scene places it: a window's (popups and
+    /// subsurfaces follow their root), a layer surface's, a lock surface's, and the pointer's for the cursor and a drag
+    /// icon. `None` for anything else, and for a window shown nowhere, whose callbacks are throttled on any output.
+    fn outputs_showing(&self, surface: &WlSurface) -> Option<Vec<usize>> {
+        let root = self.root_surface(surface);
+        let pointer_surface = matches!(&self.cursor_status, CursorImageStatus::Surface(s) if *s == root)
+            || self.drag_icon.as_ref().is_some_and(|(s, _)| *s == root);
+        if pointer_surface {
+            return self.pointer_output_idx().map(|idx| vec![idx]);
+        }
+        if let Some(id) = self
+            .windows
+            .iter()
+            .find(|e| e.has_surface(&root))
+            .map(|e| e.id)
+        {
+            let shown: Vec<usize> = (0..self.outputs.len())
+                .filter(|&idx| self.visible_window_ids(idx).contains(&id))
+                .collect();
+            return (!shown.is_empty()).then_some(shown);
+        }
+        if let Some(idx) = self.outputs.iter().position(|o| {
+            layer_map_for_output(&o.output)
+                .layer_for_surface(&root, WindowSurfaceType::TOPLEVEL)
+                .is_some()
+        }) {
+            return Some(vec![idx]);
+        }
+        (0..self.outputs.len())
+            .find(|&idx| self.lock_surface_of(idx).as_ref() == Some(&root))
+            .map(|idx| vec![idx])
+    }
+
+    /// The surface `surface` belongs to: the top of its subsurface tree, through a popup to the popup's root.
+    fn root_surface(&self, surface: &WlSurface) -> WlSurface {
+        let top = |s: &WlSurface| {
+            let mut root = s.clone();
+            while let Some(parent) = get_parent(&root) {
+                root = parent;
+            }
+            root
+        };
+        let root = top(surface);
+        match self
+            .popups
+            .find_popup(&root)
+            .and_then(|popup| find_popup_root_surface(&popup).ok())
+        {
+            Some(parent) => top(&parent),
+            None => root,
+        }
+    }
+
+    /// The output the cursor and a drag icon are paced by: the one under the pointer, or the first powered output when
+    /// that one is off, so an animated cursor keeps animating.
+    pub fn pointer_output_idx(&self) -> Option<usize> {
+        let powered = |idx: &usize| self.displays.powered(self.outputs[*idx].id);
+        self.output_at(self.pointer.current_location())
+            .and_then(|o| self.outputs.iter().position(|e| e.id == o.id))
+            .filter(powered)
+            .or_else(|| (0..self.outputs.len()).find(powered))
     }
 
     /// A frame of output `idx` was drawn, which ends a run of failed frames.

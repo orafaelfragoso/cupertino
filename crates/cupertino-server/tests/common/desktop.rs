@@ -108,3 +108,23 @@ impl Desktop {
         locker
     }
 }
+
+/// With `CUPERTINO_FRAME_COUNTS` set to a file, each desktop appends its outputs' frame work there when it goes: the
+/// sum over a suite compares pacing changes by counts.
+impl Drop for Desktop {
+    fn drop(&mut self) {
+        let Some(path) = std::env::var_os("CUPERTINO_FRAME_COUNTS") else {
+            return;
+        };
+        let (composes, renders) = self.state.outputs.iter().fold((0, 0), |(c, r), o| {
+            let n = o.scheduler.counts();
+            (c + n.composes, r + n.renders)
+        });
+        let line = format!("{composes} {renders}\n");
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+    }
+}

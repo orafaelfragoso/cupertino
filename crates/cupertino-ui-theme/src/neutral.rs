@@ -50,9 +50,9 @@ pub(crate) const LIGHT: Palette<[u8; 4]> = Palette {
         emphasized_border: gray(100),
         pressed_default_fill: [0, 85, 190, 255],
         pressed_destructive_fill: [175, 28, 22, 255],
-        selected_switch_track: [0, 122, 255, 255],
+        selected_switch_track: [0, 105, 230, 255],
         pressed_switch_track: gray(189),
-        pressed_selected_switch_track: [0, 104, 218, 255],
+        pressed_selected_switch_track: [0, 85, 190, 255],
         disabled_switch_track: gray(220),
         disabled_selected_switch_track: [166, 198, 232, 255],
         disabled_switch_thumb: gray(248),
@@ -97,9 +97,9 @@ pub(crate) const DARK: Palette<[u8; 4]> = Palette {
         emphasized_border: gray(159),
         pressed_default_fill: [0, 85, 190, 255],
         pressed_destructive_fill: [165, 28, 22, 255],
-        selected_switch_track: [0, 122, 255, 255],
+        selected_switch_track: [0, 105, 230, 255],
         pressed_switch_track: gray(91),
-        pressed_selected_switch_track: [0, 104, 218, 255],
+        pressed_selected_switch_track: [0, 85, 190, 255],
         disabled_switch_track: gray(70),
         disabled_selected_switch_track: [54, 82, 112, 255],
         disabled_switch_thumb: gray(180),
@@ -221,6 +221,18 @@ mod tests {
     fn contrast(a: Color, b: Color) -> f32 {
         let (x, y) = (luminance(a), luminance(b));
         (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    #[test]
+    fn a_neutral_on_switch_uses_the_accent_of_the_buttons_beside_it() {
+        for palette in [LIGHT, DARK] {
+            let accent = palette.normal[ColorRole::SelectedControlFill as usize].1;
+            assert_eq!(palette.states.selected_switch_track, accent);
+            assert_eq!(
+                palette.states.pressed_selected_switch_track,
+                palette.states.pressed_default_fill
+            );
+        }
     }
 
     #[test]

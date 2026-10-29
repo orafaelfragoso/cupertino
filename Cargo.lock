@@ -1596,9 +1596,11 @@ version = "0.1.0"
 dependencies = [
  "cupertino-geometry",
  "cupertino-ui-core",
+ "cupertino-ui-layout",
  "cupertino-ui-platform",
  "cupertino-ui-render",
  "cupertino-ui-text",
+ "cupertino-ui-theme",
 ]
 
 [[package]]

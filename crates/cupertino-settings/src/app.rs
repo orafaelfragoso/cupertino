@@ -41,8 +41,8 @@ use cupertino_ui_wayland::clipboard::Clipboard;
 use cupertino_ui_wayland::popup::placement;
 use cupertino_ui_wayland::{copy_rects, Damage, Ready, ShmPresenter};
 use cupertino_wayland_client::{
-    Button, Connection, Decorations, Event, KeyboardEvent, Modifiers as KeyModifiers, PointerEvent,
-    Popup, SurfaceId, Toplevel, ToplevelConfig, WindowConfigure,
+    Button, Capability, Connection, Decorations, Event, KeyboardEvent, Modifiers as KeyModifiers,
+    PointerEvent, Popup, SurfaceId, Toplevel, ToplevelConfig, WindowConfigure,
 };
 use tiny_skia::{Color, Pixmap};
 
@@ -311,8 +311,42 @@ enum ListingKey {
     Chooser(std::path::PathBuf, bool, cupertino_filepicker::Mode),
 }
 
+/// The outcome of an activation request, `None` when the compositor has no activation protocol: the window then shows
+/// without being raised.
+pub(crate) fn unless_unsupported<T>(
+    result: std::result::Result<T, cupertino_wayland_client::Error>,
+) -> std::result::Result<Option<T>, cupertino_wayland_client::Error> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(cupertino_wayland_client::Error::Unsupported(Capability::Activation)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// Hands a [`Background`] to the window loop and wakes it.
 type Notify = std::sync::Arc<dyn Fn(Background) + Send + Sync>;
+
+/// Background events waiting for the window loop.
+const BACKGROUND_QUEUE: usize = 64;
+
+/// The window loop owns the receiver until it ends; what arrives after that has no window. What arrives before the
+/// window exists waits for the loop's first turn. A full queue makes a worker thread wait; a pane request from the bus is
+/// dropped instead, so a caller on the bus can neither grow the queue nor hold the bus thread.
+fn background_channel(
+    wake: impl Fn() + Send + Sync + 'static,
+) -> (Notify, std::sync::mpsc::Receiver<Background>) {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(BACKGROUND_QUEUE);
+    let notify: Notify = std::sync::Arc::new(move |event| {
+        let queued = match event {
+            Background::ShowPane(..) => sender.try_send(event).is_ok(),
+            event => sender.send(event).is_ok(),
+        };
+        if queued {
+            wake();
+        }
+    });
+    (notify, receiver)
+}
 
 /// The live readings are read again this often as a safety net (the control panel's 1 s, approximate, §6.4).
 const REFRESH: f64 = 1.0;
@@ -334,16 +368,11 @@ fn palette(theme: &Theme, dark: bool, options: DisplayOptions) -> Result<Palette
 pub fn run(pane: PaneId, activation_token: String) -> Result<()> {
     // one process per session: a second start hands its pane to the first and ends (§8); before the window, so it
     // needs no display
-    let (sender, background) = std::sync::mpsc::channel();
     let waker = std::sync::Arc::new(std::sync::OnceLock::<cupertino_wayland_client::Waker>::new());
     let wake = waker.clone();
-    let notify: Notify = std::sync::Arc::new(move |event| {
-        // the window loop owns the receiver until it ends; what arrives after that has no window. What arrives before
-        // the window exists waits in the channel for the loop's first turn.
-        if sender.send(event).is_ok() {
-            if let Some(waker) = wake.get() {
-                waker.wake();
-            }
+    let (notify, background) = background_channel(move || {
+        if let Some(waker) = wake.get() {
+            waker.wake();
         }
     });
     let to_loop = notify.clone();
@@ -397,7 +426,7 @@ pub fn run(pane: PaneId, activation_token: String) -> Result<()> {
         (size.w as u32, metrics::MIN_HEIGHT as u32),
     )?;
     if !activation_token.is_empty() {
-        conn.activate_with_token(window.toplevel, &activation_token)?;
+        unless_unsupported(conn.activate_with_token(window.toplevel, &activation_token))?;
     }
     let sidebar = effects.backdrop(&conn, window.toplevel.surface())?;
     sidebar.set_material(SIDEBAR_MATERIAL);
@@ -1868,8 +1897,9 @@ impl App {
             Background::ShowPane(pane, token) => {
                 self.go(pane)?;
                 if !token.is_empty() {
-                    self.conn
-                        .activate_with_token(self.window.toplevel, &token)?;
+                    unless_unsupported(
+                        self.conn.activate_with_token(self.window.toplevel, &token),
+                    )?;
                 }
             }
             Background::Agent(AgentEvent::Prompt {
@@ -2208,5 +2238,56 @@ mod tests {
         assert_eq!(configured_size(Some((0, 0)), (920, 436)), (920, 436));
         assert_eq!(configured_size(Some((1200, 0)), (920, 436)), (1200, 436));
         assert_eq!(configured_size(Some((640, 480)), (920, 436)), (640, 480));
+    }
+
+    #[test]
+    fn only_a_missing_activation_protocol_skips_the_raise() {
+        use cupertino_wayland_client::Error;
+        assert!(matches!(unless_unsupported(Ok(7)), Ok(Some(7))));
+        assert!(matches!(
+            unless_unsupported::<()>(Err(Error::Unsupported(Capability::Activation))),
+            Ok(None)
+        ));
+        assert!(matches!(
+            unless_unsupported::<()>(Err(Error::Unsupported(Capability::Clipboard))),
+            Err(Error::Unsupported(Capability::Clipboard))
+        ));
+        assert!(matches!(
+            unless_unsupported::<()>(Err(Error::Protocol("bad token"))),
+            Err(Error::Protocol(_))
+        ));
+    }
+
+    #[test]
+    fn pane_requests_cannot_grow_the_background_queue_and_workers_wait_for_room() {
+        let wakes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = wakes.clone();
+        let (notify, background) = background_channel(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+        for _ in 0..BACKGROUND_QUEUE * 4 {
+            notify(Background::ShowPane(PaneId::Wifi, String::new()));
+        }
+        assert_eq!(
+            wakes.load(std::sync::atomic::Ordering::SeqCst),
+            BACKGROUND_QUEUE
+        );
+
+        let worker = notify.clone();
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            worker(Background::Paired(Ok(())));
+            done.send(()).unwrap();
+        });
+        assert!(finished
+            .recv_timeout(std::time::Duration::from_millis(200))
+            .is_err());
+        assert!(matches!(background.recv(), Ok(Background::ShowPane(..))));
+        finished
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the worker's event is queued once there is room");
+        let queued: Vec<_> = background.try_iter().collect();
+        assert_eq!(queued.len(), BACKGROUND_QUEUE);
+        assert!(matches!(queued.last(), Some(Background::Paired(Ok(())))));
     }
 }

@@ -6,7 +6,8 @@
 #   ./run-cupertino.sh --run-for 600   stop by itself after 10 minutes
 # Ctrl+Alt+Backspace quits; Ctrl+Alt+F1..F12 switch console. The server's log is ~/.local/state/cupertino/server.log (the
 # previous run's is server.log.1); what the processes print goes to ~/cupertino-tty.log. It stops after
-# $CUPERTINO_RUN_FOR seconds (default 900, 0 for no limit).
+# $CUPERTINO_RUN_FOR seconds (default 900), and an outside watchdog (`timeout`) ends the whole process tree 30 s later if the
+# server hangs instead of stopping. No limit (0) needs CUPERTINO_ALLOW_NO_TIMEOUT=1.
 set -eu
 
 root=$(cd "$(dirname "$0")" && pwd)
@@ -26,15 +27,50 @@ case $run_for in
     exit 1
     ;;
 esac
+# The limit that applies is the one in the arguments when there is one.
+limit=$run_for
 has_run_for=
+want_value=
 for arg in "$@"; do
+    if [ -n "$want_value" ]; then
+        limit=$arg
+        want_value=
+        continue
+    fi
     case $arg in
-    --run-for | --run-for=*) has_run_for=1 ;;
+    --run-for)
+        has_run_for=1
+        want_value=1
+        ;;
+    --run-for=*)
+        has_run_for=1
+        limit=${arg#--run-for=}
+        ;;
     esac
 done
+case $limit in
+'' | *[!0-9.]* | *.*.* | .)
+    echo "run-cupertino.sh: --run-for must be a number of seconds, got '$limit'" >&2
+    exit 1
+    ;;
+esac
 if [ -z "$has_run_for" ] && [ "$run_for" -gt 0 ]; then
     set -- --run-for "$run_for" "$@"
 fi
+# Without a limit a hung server leaves the console unusable (logind mutes the kernel keyboard), so it takes a decision.
+case $limit in
+*[1-9]*)
+    seconds=${limit%%.*}
+    watchdog="timeout -k 10 $((${seconds:-0} + 30))"
+    ;;
+*)
+    if [ "${CUPERTINO_ALLOW_NO_TIMEOUT:-}" != 1 ]; then
+        echo "run-cupertino.sh: no time limit on a real console can leave it unusable if the server hangs; set CUPERTINO_ALLOW_NO_TIMEOUT=1 to accept that" >&2
+        exit 1
+    fi
+    watchdog=
+    ;;
+esac
 
 cargo build --release --workspace --all-features --bins --manifest-path "$root/Cargo.toml"
 
@@ -63,8 +99,12 @@ trap 'rm -f "$CUPERTINO_SERVER_CONFIG"' EXIT
 # A fresh session bus: the notification centre needs org.freedesktop.Notifications to itself.
 echo "Starting Cupertino; log: $log"
 status=0
-dbus-run-session -- cupertino-server --udev --dev-shell \
+# shellcheck disable=SC2086 # $watchdog is a command and its options, or nothing
+$watchdog dbus-run-session -- cupertino-server --udev --dev-shell \
     --spawn cupertino-files --spawn cupertino-settings "$@" >"$log" 2>&1 || status=$?
+if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+    echo "Cupertino did not stop in time and was ended by the watchdog (status $status)" >&2
+fi
 if [ "$status" -ne 0 ]; then
     echo "Cupertino exited with status $status; last lines of $log:" >&2
     tail -n 20 "$log" >&2

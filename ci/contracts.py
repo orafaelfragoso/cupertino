@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Check docs/architecture/contracts.yaml against the source. Usage: python3 ci/contracts.py ROOT.
 
-Checks the registry itself (fields, enums, duplicates, every source and test_owner path exists), then compares it with
+Checks the registry itself (fields, enums, duplicates, every source and test_owner path exists, and the test_owner of a
+socket or a binary names it), then compares it with
 the code: every `#[zbus::interface(name = ...)]` outside tests and examples, every org.cupertino.* name in the sources
 and every binary target of the workspace has an entry. The Wayland globals are compared at run time, by
 crates/cupertino-server/tests/contracts.rs."""
@@ -30,6 +31,10 @@ LITERAL_NAME = re.compile(r'\(\s*name\s*=\s*"([^"]+)"\s*[,)]')
 # Entries without a test file. It only goes down: give an entry a test_owner and lower this number.
 UNKNOWN_TEST_OWNERS = 16
 UNKNOWN_SCOPES = 1
+# Kinds whose test_owner must name the entry: a socket path or binary name is a string its tests use. Wayland globals
+# need not, since crates/cupertino-server/tests/contracts.rs compares them with the registry at run time; D-Bus
+# interfaces are reached through typed proxies.
+NAMED_BY_TEST = {"socket-protocol", "binary"}
 NAME = re.compile(r'"(org\.cupertino\.[A-Za-z0-9.]+)"')
 
 
@@ -93,8 +98,12 @@ def check_entries(entries, root):
             problems.append(f"{where}: visible_to {e.get('visible_to')!r} is not unsandboxed")
         if e.get("scope") not in SCOPES:
             problems.append(f"{where}: scope {e.get('scope')!r} is not one of {sorted(SCOPES)}")
-        if e.get("test_owner", "unknown") != "unknown" and not (root / e["test_owner"]).is_file():
-            problems.append(f"{where}: test_owner {e['test_owner']} does not exist")
+        if e.get("test_owner", "unknown") != "unknown":
+            test = root / e["test_owner"]
+            if not test.is_file():
+                problems.append(f"{where}: test_owner {e['test_owner']} does not exist")
+            elif kind in NAMED_BY_TEST and e.get("name", "") not in test.read_text():
+                problems.append(f"{where}: test_owner {e['test_owner']} does not name {e.get('name')}")
         path, _, line = e.get("source", "").rpartition(":")
         file = root / path
         if not file.is_file() or not line.isdigit() or not 1 <= int(line) <= len(file.read_text().splitlines()):

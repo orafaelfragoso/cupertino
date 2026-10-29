@@ -1,7 +1,7 @@
 use cupertino_login_ipc::{
     decode, encode, encode_secret, is_login_name, Account, Decoder, Event, FrameError, Outcome,
     PowerAction, PowerRefusal, ProtocolRefusal, Request, Secret, State, MAX_REQUEST_FRAME,
-    MAX_SECRET_BYTES, VERSION,
+    MAX_SECRET_BYTES, SOCKET_PATH, VERSION,
 };
 use zeroize::Zeroizing;
 
@@ -357,4 +357,9 @@ fn a_power_request_has_one_wire_form_and_no_other_action_decodes() {
         &refused[4..],
         br#"{"type":"PowerRefused","reason":"OtherUsersLoggedIn"}"#
     );
+}
+
+#[test]
+fn the_socket_path_is_the_registered_one() {
+    assert_eq!(SOCKET_PATH, "/run/cupertino-login/greeter.sock");
 }

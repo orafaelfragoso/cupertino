@@ -32,8 +32,8 @@
   owner_area: services
   scope: system
   test_owner: crates/cupertino-login-ipc/tests/protocol.rs
-  source: crates/cupertino-login-ipc/src/message.rs:13
-  note: Carries authentication secrets between the greeter and the root session manager; socket access is restricted to the greeter user.
+  source: crates/cupertino-login-ipc/src/message.rs:12
+  note: Carries authentication secrets between the greeter and the root session manager. cupertino-sessiond enforces access in bind (mode 0600, owned by the greeter user) and Manager::accept (SO_PEERCRED uid must be the greeter's; one login-screen connection at a time). Frames are capped at MAX_REQUEST_FRAME (2 KiB) from the greeter and MAX_EVENT_FRAME (4 MiB) to it.
 - name: wl_compositor
   kind: wayland-global
   version: 5
@@ -851,7 +851,7 @@
   owner_crate: cupertino-server
   owner_area: compositor
   scope: shell-private
-  test_owner: crates/cupertino-server/tests/headless.rs
+  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-server/src/main.rs:5
 - name: cupertino-sessiond
   kind: binary

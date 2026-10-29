@@ -10,6 +10,8 @@ layer = "render"
 
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-key-bindings = { path = "../cupertino-key-bindings" }
+cupertino-modifiers = { path = "../cupertino-modifiers" }
 unicode-segmentation = "1.13"
 harfrust = "0.15"
 icu_segmenter = "2.4"

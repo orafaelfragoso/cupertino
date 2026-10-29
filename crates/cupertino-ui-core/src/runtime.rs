@@ -273,13 +273,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     let _ = self.system.request(w.id, request);
                 }
             }
-            Command::SetClipboard(text) => self.system.set_clipboard(
-                ClipboardKind::Clipboard,
-                ClipboardData {
-                    mime: "text/plain;charset=utf-8".into(),
-                    bytes: text.into_bytes(),
-                },
-            ),
+            Command::SetClipboard(text) => Self::set_clipboard(&mut self.system, text),
             Command::Exit => self.exit = true,
         }
     }
@@ -579,6 +573,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         if let Some(cursor) = effects.cursor {
             self.system.set_cursor(w.id, cursor);
         }
+        if let Some(text) = effects.clipboard {
+            Self::set_clipboard(&mut self.system, text);
+        }
         if !effects.animate.is_empty() {
             w.animate.extend(effects.animate);
             w.invalidate();
@@ -605,6 +602,16 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             w.text_input = None;
             self.system.set_text_input(w.id, None);
         }
+    }
+
+    fn set_clipboard(system: &mut W, text: String) {
+        system.set_clipboard(
+            ClipboardKind::Clipboard,
+            ClipboardData {
+                mime: "text/plain;charset=utf-8".into(),
+                bytes: text.into_bytes(),
+            },
+        );
     }
 
     /// Tells the nodes a focus move concerns, and repaints them. Returns what else their handlers asked for, such as
@@ -920,6 +927,7 @@ fn route<'a, M: 'static>(
 ) -> Route<'a, M> {
     Route {
         tree,
+        geometry: &w.geometry,
         env: &w.env,
         status: Status {
             focus: w.focus.node(),

@@ -1,7 +1,8 @@
 //! Keys to field commands: physical modifiers through the user's modifier profile, then the standard editing chords.
 
-use cupertino_defaults::keyboard::KeyboardSettings;
-use cupertino_keyboard::{BindingTable, Chord, Key, NamedKey, Resolution, Resolver, TextAction};
+use cupertino_key_bindings::{
+    BindingTable, Chord, Key, NamedKey, Resolution, Resolver, TextAction,
+};
 use cupertino_modifiers::{Mods, Physical, Profile, RawMods};
 
 /// Evdev codes of the named keys a field reads (`linux/input-event-codes.h`).
@@ -154,17 +155,6 @@ impl Keymap {
         Keymap::new(Profile::cupertino(), BindingTable::standard())
     }
 
-    /// The profile of `keyboard.conf` and the standard chords with the user's overrides; what cannot be read keeps the
-    /// standard value.
-    pub fn load() -> Self {
-        let profile = KeyboardSettings::path()
-            .and_then(|path| KeyboardSettings::load(&path, None).ok())
-            .and_then(|(settings, _)| settings.modifier_profile)
-            .and_then(|p| Profile::by_name(p.name()))
-            .unwrap_or_else(Profile::cupertino);
-        Keymap::new(profile, BindingTable::load_default().0)
-    }
-
     /// The logical modifiers the user's profile makes of the physical ones held: for the chords of a window, which
     /// name the command key by its role.
     pub fn logical(&self, shift: bool, ctrl: bool, alt: bool, logo: bool) -> Mods {
@@ -183,17 +173,39 @@ impl Keymap {
     }
 
     pub(crate) fn command(&mut self, key: KeyInput) -> Command {
-        let mods = self.profile.translate(key.mods);
-        let named = NAMED_KEYS
-            .iter()
-            .find(|(code, _)| *code == key.code)
-            .map(|(_, k)| *k);
         let chorded = key.mods.contains(RawMods::CTRL) || key.mods.contains(RawMods::SUPER);
+        self.resolve(
+            key.code,
+            self.profile.translate(key.mods),
+            chorded,
+            key.character,
+        )
+    }
+
+    /// A key whose modifiers the window system already gave their roles, as CupertinoKit's platform reports them.
+    pub(crate) fn logical_command(
+        &mut self,
+        code: u32,
+        mods: Mods,
+        character: Option<char>,
+    ) -> Command {
+        let chorded = mods.contains(Mods::CTRL) || mods.contains(Mods::PRIMARY);
+        self.resolve(code, mods, chorded, character)
+    }
+
+    fn resolve(
+        &mut self,
+        code: u32,
+        mods: Mods,
+        chorded: bool,
+        character: Option<char>,
+    ) -> Command {
+        let named = NAMED_KEYS.iter().find(|(c, _)| *c == code).map(|(_, k)| *k);
         let latin = LATIN_LETTERS
             .iter()
-            .find(|(code, _)| *code == key.code)
+            .find(|(c, _)| *c == code)
             .map(|(_, c)| *c);
-        let chord_key = match (named, key.character) {
+        let chord_key = match (named, character) {
             (Some(n), _) => Key::Named(n),
             // a chord names its letter by the key's Latin letter when the layout's is not Latin (Super+A on a
             // Cyrillic layout types 'ф')
@@ -218,14 +230,8 @@ impl Keymap {
         match self.resolver.feed(Chord::new(mods, chord_key)) {
             Resolution::Actions(actions) => Command::Actions(actions),
             Resolution::Pending => Command::Pending,
-            Resolution::NoMatch => match key.character {
-                Some(c)
-                    if !c.is_control()
-                        && !key.mods.contains(RawMods::CTRL)
-                        && !key.mods.contains(RawMods::SUPER) =>
-                {
-                    Command::Insert(c)
-                }
+            Resolution::NoMatch => match character {
+                Some(c) if !c.is_control() && !chorded => Command::Insert(c),
                 _ => Command::Ignored,
             },
         }

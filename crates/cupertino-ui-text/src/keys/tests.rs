@@ -1,10 +1,10 @@
 use std::time::{Duration, Instant};
 
-use cupertino_keyboard::{BindingTable, TextAction};
+use cupertino_key_bindings::{BindingTable, TextAction};
 use cupertino_modifiers::Profile;
 
 use crate::keymap::Command;
-use crate::{KeyInput, Keymap, Response, TextField, TextFieldKeys};
+use crate::{KeyInput, Keymap, Response, TextBuffer as TextField, TextFieldKeys};
 
 const A: u32 = 30;
 const C: u32 = 46;
@@ -157,6 +157,30 @@ fn the_primary_modifier_follows_the_users_profile() {
     f.press(E, "m", Some('e'));
     f.press(A, "m", Some('a'));
     assert_eq!(f.state(), ("abc", 0, 0..0));
+}
+
+#[test]
+fn logical_modifiers_skip_the_profile_and_a_command_chord_types_nothing() {
+    use cupertino_modifiers::Mods;
+    let mut f = Fixture::new("abc");
+    assert_eq!(
+        f.field
+            .logical_key(&mut f.keymap, A, Mods::PRIMARY, Some('a')),
+        Response::Moved
+    );
+    assert_eq!(f.field.selection(), 0..3, "Primary+A selects all");
+    f.field.logical_key(&mut f.keymap, E, Mods::CTRL, Some('e'));
+    assert_eq!(f.state(), ("abc", 3, 3..3), "Ctrl+E goes to the end");
+    assert_eq!(
+        f.field.logical_key(&mut f.keymap, 0, Mods::CTRL, Some('q')),
+        Response::Ignored
+    );
+    assert_eq!(
+        f.field
+            .logical_key(&mut f.keymap, 0, Mods::SHIFT, Some('D')),
+        Response::Edited
+    );
+    assert_eq!(f.field.text(), "abcD");
 }
 
 #[test]
@@ -466,7 +490,7 @@ fn the_key_views_are_on_physical_ctrl_tab_under_classic_pc() {
 
 #[test]
 fn a_binding_of_the_user_on_the_key_view_chord_stays_under_classic_pc() {
-    use cupertino_keyboard::{Chord, Key, NamedKey};
+    use cupertino_key_bindings::{Chord, Key, NamedKey};
     use cupertino_modifiers::Mods;
     let mut table = BindingTable::standard();
     table.bind(

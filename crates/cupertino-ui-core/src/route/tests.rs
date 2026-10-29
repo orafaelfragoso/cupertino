@@ -34,6 +34,7 @@ fn route(tree: &mut Tree<M>, path: &[NodeId]) -> (Propagation, Vec<String>) {
     let mut effects = Effects::default();
     let result = Route {
         tree,
+        geometry: &Geometry::new(),
         env: &env,
         status: status(),
         effects: &mut effects,
@@ -124,4 +125,16 @@ fn the_later_sibling_is_on_top_and_a_clip_hides_what_it_cuts_off() {
     assert_eq!(hit(5.0, 5.0), Some(vec![root, clipper]));
     assert_eq!(hit(90.0, 90.0), Some(vec![root]));
     assert_eq!(hit(150.0, 10.0), None);
+}
+
+#[test]
+fn a_node_is_hit_only_inside_its_rect_and_every_clip_above_it() {
+    let placement = Placement {
+        rect: Rect::new(0.0, 0.0, 100.0, 20.0),
+        clip: Some(Rect::new(0.0, 0.0, 50.0, 50.0)),
+        own_clip: None,
+    };
+    assert!(placement.hit(Point::new(10.0, 10.0)));
+    assert!(!placement.hit(Point::new(70.0, 10.0)), "clipped away");
+    assert!(!placement.hit(Point::new(10.0, 30.0)), "outside the rect");
 }

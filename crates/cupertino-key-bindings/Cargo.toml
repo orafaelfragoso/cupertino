@@ -1,0 +1,12 @@
+[package]
+name = "cupertino-key-bindings"
+version = "0.1.0"
+edition.workspace = true
+license = "MPL-2.0"
+description = "Key chords and the text-editing binding table: the standard bindings, user overrides and multi-key sequence resolution, with no file watching or desktop settings"
+
+[package.metadata.cupertino]
+layer = "foundation"
+
+[dependencies]
+cupertino-modifiers = { path = "../cupertino-modifiers" }

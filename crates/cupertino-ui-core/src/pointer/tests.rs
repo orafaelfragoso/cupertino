@@ -59,6 +59,7 @@ impl Fixture {
         let mut effects = Effects::default();
         let mut route = Route {
             tree: &mut self.tree,
+            geometry: &self.geometry,
             env: &env,
             status: Status {
                 focus: None,

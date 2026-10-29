@@ -35,6 +35,18 @@ class ForbiddenFileTest(unittest.TestCase):
         self.assertEqual(len(problems), 1, problems)
 
 
+class ListedKeyTest(unittest.TestCase):
+    def test_listed_key_names_fail_in_any_case(self):
+        # built from parts so that this file passes the gate itself
+        for key in ("Stay" + "Awake", "stay" + "awake"):
+            problems = run({"crates/x/src/lib.rs": f"//! restarted by {key}\n"})
+            self.assertEqual(len(problems), 1, (key, problems))
+            self.assertIn("provenance wording", problems[0])
+
+    def test_the_words_inside_a_longer_identifier_do_not_count(self):
+        self.assertEqual(run({"crates/x/src/lib.rs": "fn stay_awake_interval() {}\nlet exit_ok = true;\n"}), [])
+
+
 class HolderTest(unittest.TestCase):
     holder = "Status " + "Re" + "search & Development GmbH"  # built from parts so that this file passes the gate itself
     path = "packaging/licenses/THIRD-PARTY-LICENSES"

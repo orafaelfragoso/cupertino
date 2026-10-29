@@ -5,6 +5,7 @@
 
 pub mod accessibility;
 pub mod acquire_waits;
+pub mod activation_env;
 pub mod app_effects_v1;
 pub mod authorization;
 pub mod backend;

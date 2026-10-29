@@ -531,8 +531,8 @@ fn a_lock_request_reaches_the_lock_screen_while_a_squatter_owns_the_login_name()
         return;
     };
     let Some(mut h) = Harness::new() else { return };
-    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
-    let handle = cupertino_server::dbus::DbusHandle::start().expect("worker thread");
+    let handle = cupertino_server::dbus::DbusHandle::start_on(Some(bus.address.clone()), || {})
+        .expect("worker thread");
     // the supervised login process is some other process than the squatter, which is this test
     handle.set_login(cupertino_server::dbus::LoginTrust::Agent(
         std::process::id() + 1,

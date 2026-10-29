@@ -2073,8 +2073,8 @@ fn the_session_menu_entries_reach_the_session_agent_through_the_server() {
         return;
     };
     let Some(mut h) = Harness::new() else { return };
-    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
-    let handle = cupertino_server::dbus::DbusHandle::start().expect("worker thread");
+    let handle = cupertino_server::dbus::DbusHandle::start_on(Some(bus.address.clone()), || {})
+        .expect("worker thread");
     handle.set_login(cupertino_server::dbus::LoginTrust::Agent(std::process::id()));
     h.state.dbus = Some(handle);
     let calls = Arc::new(Mutex::new(Vec::new()));
@@ -2128,8 +2128,10 @@ fn menu_bus(h: &mut Harness) -> Option<(PrivateBus, zbus::blocking::Connection)>
         eprintln!("skipping: no dbus-daemon");
         return None;
     };
-    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
-    h.state.dbus = Some(cupertino_server::dbus::DbusHandle::start().expect("worker thread"));
+    h.state.dbus = Some(
+        cupertino_server::dbus::DbusHandle::start_on(Some(bus.address.clone()), || {})
+            .expect("worker thread"),
+    );
     h.state.watch_menu_reader();
     let own = zbus::blocking::connection::Builder::address(bus.address.as_str())
         .unwrap()
@@ -2905,11 +2907,10 @@ fn without_a_worker_an_announcement_gives_no_menus() {
     h.announce(&app, &bar, Cmd::SetAddress(":1.5".into(), "/MenuBar/1"));
     assert_eq!(latest_title_and_menu(&bar), none);
 
-    std::env::set_var(
-        "DBUS_SESSION_BUS_ADDRESS",
-        "unix:path=/nonexistent/cupertino-test-bus",
+    h.state.dbus = cupertino_server::dbus::DbusHandle::start_on(
+        Some("unix:path=/nonexistent/cupertino-test-bus".into()),
+        || {},
     );
-    h.state.dbus = cupertino_server::dbus::DbusHandle::start();
     h.announce(&app, &bar, Cmd::SetGtkAddress(":1.5".into()));
     assert_eq!(latest_title_and_menu(&bar), none);
     assert!(

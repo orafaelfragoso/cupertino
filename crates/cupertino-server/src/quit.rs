@@ -529,6 +529,11 @@ impl Session1 {
 /// Serve `org.cupertino.Session1` on the session bus from a thread of its own. Failures (no bus, the name owned by
 /// another compositor) are logged: the session agent then logs out without quitting the applications first.
 pub fn start_session_service(state: &mut Cupertino) {
+    start_session_service_on(state, None);
+}
+
+/// [`start_session_service`] on the bus at `address`, the session bus when `None`.
+pub fn start_session_service_on(state: &mut Cupertino, address: Option<String>) {
     let (calls, rx) = channel::channel::<Call>();
     if let Err(e) = state.loop_handle.insert_source(rx, |event, _, state| {
         if let Event::Msg(call) = event {
@@ -544,7 +549,7 @@ pub fn start_session_service(state: &mut Cupertino) {
     let spawned = std::thread::Builder::new().name("cupertino-session".into()).spawn(move || {
         let served = zbus::block_on(async {
             let iface = Session1 { calls: std::sync::Mutex::new(calls), settings: Arc::clone(&settings) };
-            let conn = zbus::connection::Builder::session()?.serve_at(OBJECT_PATH, iface)?.name(BUS_NAME)?.build().await?;
+            let conn = crate::dbus::bus(address.as_deref())?.serve_at(OBJECT_PATH, iface)?.name(BUS_NAME)?.build().await?;
             let emitter = SignalEmitter::new(&conn, OBJECT_PATH)?;
             let served = conn.object_server().interface::<_, Session1>(OBJECT_PATH).await?;
             while let Ok(out) = signals_rx.recv().await {

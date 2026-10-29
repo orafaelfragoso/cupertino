@@ -1,8 +1,9 @@
-//! How a control's state picks its colours, and the keyboard focus ring drawn around its chrome.
+//! How a control's state picks its colours, its label's type, and the keyboard focus ring drawn around its chrome.
 
-use cupertino_geometry::Rect;
-use cupertino_ui_core::{ControlState, PaintCx};
+use cupertino_geometry::{Point, Rect};
+use cupertino_ui_core::{ControlState, Environment, PaintCx};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
+use cupertino_ui_text::{AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextStyle};
 use cupertino_ui_theme::{
     Color, ColorRole, FocusRing, InteractionVariant, StateVariant, ThemeTokens,
 };
@@ -61,6 +62,76 @@ pub(crate) fn stroke(
             width,
             paint: Paint::Solid(color),
         });
+    }
+}
+
+/// The label laid out on one line in the theme's body type. An empty label, or one the fonts cannot shape, has none.
+pub(crate) fn label(env: &Environment, text: &str) -> Option<ParagraphLayout> {
+    if text.is_empty() {
+        return None;
+    }
+    paragraph(env, text)
+}
+
+/// `text` laid out on one line in the theme's body type, empty text included; `None` if the fonts cannot shape it.
+pub(crate) fn paragraph(env: &Environment, text: &str) -> Option<ParagraphLayout> {
+    let body = env.theme.type_scale.body;
+    let style = TextStyle {
+        weight: FontWeight(body.weight),
+        ..TextStyle::new(body.size)
+    };
+    let paragraph = env
+        .text
+        .paragraph(
+            &AttributedText::plain(text, style),
+            &ParagraphStyle::default(),
+        )
+        .ok()?;
+    Some(paragraph.layout(None))
+}
+
+/// The baseline's distance below the chrome's centre, as a share of the text size; the shell's fields use the same.
+const BASELINE_SHARE: f64 = 0.36;
+
+/// The top-left corner that centres a one-line `layout` horizontally in `chrome` and puts its baseline at the shared
+/// optical centre.
+pub(crate) fn centred(layout: &ParagraphLayout, chrome: Rect, env: &Environment) -> Point {
+    Point::new(
+        chrome.min_x() + (chrome.width() - layout.size().width) / 2.0,
+        top(layout, chrome, env),
+    )
+}
+
+/// The baseline of body text centred in `chrome`.
+pub(crate) fn baseline(chrome: Rect, env: &Environment) -> f64 {
+    let size = f64::from(env.theme.type_scale.body.size);
+    chrome.min_y() + chrome.height() / 2.0 + size * BASELINE_SHARE
+}
+
+/// The y of `layout`'s top that puts its first baseline at [`baseline`].
+pub(crate) fn top(layout: &ParagraphLayout, chrome: Rect, env: &Environment) -> f64 {
+    let first = layout.lines().first().map_or(0.0, |line| line.baseline);
+    baseline(chrome, env) - first
+}
+
+/// Paints `layout` with its top-left corner at `origin`.
+pub(crate) fn glyphs(
+    cx: &mut PaintCx<'_>,
+    layout: &ParagraphLayout,
+    origin: Point,
+    color: Option<Color>,
+) {
+    let Some(color) = color else {
+        return;
+    };
+    for line in layout.lines() {
+        for run in &line.runs {
+            cx.push(PaintOp::Glyphs {
+                origin: origin + run.origin,
+                run: run.run.clone(),
+                color,
+            });
+        }
     }
 }
 

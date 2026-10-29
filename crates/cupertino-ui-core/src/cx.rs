@@ -2,7 +2,7 @@ use crate::accessibility::{AccessibleStates, AccessibleValue, Action, Relation, 
 use crate::route::Placement;
 use crate::widget::Change;
 use crate::{Environment, NodeId, Phase};
-use cupertino_geometry::{Point, Size};
+use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_platform::{CursorShape, Timestamp};
 use cupertino_ui_render::{Effect, Group, PaintOp};
 use cupertino_ui_text::TextInputState;
@@ -116,6 +116,11 @@ impl<M> EventCx<'_, M> {
     /// every clip above it; false before the node's first layout.
     pub fn hit(&self, position: Point) -> bool {
         self.placement.is_some_and(|p| p.hit(position))
+    }
+
+    /// The node's rect in window coordinates; `None` before its first layout.
+    pub fn bounds(&self) -> Option<Rect> {
+        self.placement.map(|p| p.rect)
     }
 
     pub fn now(&self) -> Timestamp {

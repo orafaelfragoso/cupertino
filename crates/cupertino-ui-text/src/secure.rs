@@ -76,6 +76,17 @@ impl SecureBuffer {
         f(self.text())
     }
 
+    /// The caret and the selection as grapheme indices, which is where they fall in [`mask`](Self::mask).
+    pub fn masked_selection(&self) -> (usize, std::ops::Range<usize>) {
+        let text = self.text();
+        let index = |byte: usize| text[..byte].graphemes(true).count();
+        let selection = self.selection();
+        (
+            index(self.caret),
+            index(selection.start)..index(selection.end),
+        )
+    }
+
     /// One bullet per grapheme, for drawing; it reveals the length, as a password field does.
     pub fn mask(&self, bullet: char) -> String {
         std::iter::repeat_n(bullet, self.grapheme_count()).collect()
@@ -238,6 +249,17 @@ mod tests {
     #[test]
     fn it_zeroes_its_block_when_it_drops() {
         assert_zeroed_on_drop::<SecureBuffer>();
+    }
+
+    #[test]
+    fn the_masked_caret_and_selection_count_graphemes() {
+        let mut buffer = SecureBuffer::new();
+        buffer.insert("ae\u{301}b");
+        assert_eq!(buffer.masked_selection(), (3, 3..3));
+        buffer.move_char(false, false);
+        assert_eq!(buffer.masked_selection(), (2, 2..2));
+        buffer.select_all();
+        assert_eq!(buffer.masked_selection().1, 0..3);
     }
 
     #[test]

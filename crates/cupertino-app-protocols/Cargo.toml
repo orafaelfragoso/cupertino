@@ -6,7 +6,7 @@ license = "MPL-2.0"
 description = "Public Wayland protocols of the Cupertino server that any client may bind, with generated client and server bindings"
 
 [package.metadata.cupertino]
-layer = "render"
+layer = "protocol"
 
 [features]
 client = ["dep:wayland-client"]

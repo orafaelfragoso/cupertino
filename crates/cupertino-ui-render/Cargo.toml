@@ -6,7 +6,7 @@ license = "MPL-2.0"
 description = "CupertinoKit rendering: the display list a window paints into, damage, and the renderer that draws it into premultiplied pixels"
 
 [package.metadata.cupertino]
-layer = "render"
+layer = "ui"
 
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }

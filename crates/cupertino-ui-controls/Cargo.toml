@@ -6,7 +6,7 @@ license = "MPL-2.0"
 description = "CupertinoKit controls: text, icons, buttons, toggles, text and secure fields, stacks and the rest of the standard set, each with its state matrix, keyboard map and accessibility semantics"
 
 [package.metadata.cupertino]
-layer = "render"
+layer = "ui"
 
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }

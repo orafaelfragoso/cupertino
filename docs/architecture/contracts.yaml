@@ -27,7 +27,9 @@
 #   source      file that defines it
 #   source_match globals, D-Bus interfaces and sockets: text that must occur in the source file, such as the call that
 #               creates the global (a library state constructor or `create_global`) or the quoted interface name or path;
-#               binaries have none, their source is the file the binary target builds from
+#               binaries have none, their source is the file the binary target builds from. It only keeps the source
+#               pointing at the right file: entries may share one (wl_compositor and wl_subcompositor), and the
+#               globals themselves are proven at run time by crates/cupertino-server/tests/contracts.rs
 - name: /run/cupertino-login/greeter.sock
   kind: socket-protocol
   version: 5

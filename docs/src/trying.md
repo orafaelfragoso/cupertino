@@ -5,7 +5,7 @@ Cupertino is early (0.x). This page is for testers: what to expect, what does no
 ## Before you start
 
 - A current stable Rust toolchain, OpenGL ES drivers (Mesa), and a Wayland session to run nested in, or a free text console with logind and a DRM/KMS device.
-- Cupertino serves Wayland clients only. There is no X11 or XWayland support.
+- Cupertino serves Wayland clients. X11 programs run when `xwayland-satellite` (0.8 or later) and `Xwayland` are installed; the satellite starts with the first X11 program.
 - Run either nested (a window in your current session) or on a text console; steps for both are in [Building and running](building.md). The TTY session has run in a virtual machine, not yet on real hardware.
 - Nothing is installed and no service is enabled by these steps; they run from a checkout.
 

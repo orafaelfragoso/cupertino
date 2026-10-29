@@ -31,6 +31,7 @@ pub use connection::{
     PopupConfigure, PopupPlacement, State, SurfaceId, TokenRequest, Toplevel, ToplevelConfig,
     Waker,
 };
+pub use cursor::CursorTheme;
 pub use error::{Disconnect, Error};
 pub use input::{key, Button, KeyboardEvent, Modifiers, PointerEvent};
 pub use output::{OutputGeometry, OutputId, OutputInfo, OutputTransform};

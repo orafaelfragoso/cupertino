@@ -62,7 +62,7 @@ use crate::buffer::{pick_slot, Slot, SlotChoice, SlotTag, MAX_SLOTS};
 use crate::capability::REQUIRED;
 use crate::clipboard::Clipboard;
 use crate::configure::{wire_size, Serials};
-use crate::cursor::ThemedCursor;
+use crate::cursor::{CursorTheme, ThemedCursor};
 use crate::input::{InputClock, Modifiers, PointerTracker, Repeat, Translator};
 use crate::output::{identification, physical_size, OutputBuilder, OutputId, OutputTransform};
 use crate::scale::ScaleSources;
@@ -946,8 +946,14 @@ impl Connection {
         Ok(self.state.surface(surface)?.entered.clone())
     }
 
+    /// Draw the cursors of [`Connection::set_cursor`] from `theme` when the compositor has no cursor shapes, instead of
+    /// the user's ([`CursorTheme::from_env`], read when first needed).
+    pub fn set_cursor_theme(&mut self, theme: CursorTheme) {
+        self.state.themed_cursor.set_theme(theme);
+    }
+
     /// Show the cursor `shape` over the surface the pointer is on: the compositor's with [`Capability::CursorShape`],
-    /// else drawn from the XCursor theme at the scale of that surface.
+    /// else drawn from the cursor theme at the scale of that surface.
     pub fn set_cursor(&mut self, shape: wp_cursor_shape_device_v1::Shape) -> Result<(), Error> {
         let qh = self.queue.handle();
         let s = &mut self.state;
@@ -966,8 +972,7 @@ impl Connection {
             .and_then(|id| s.surfaces.iter().find(|surf| surf.id == id))
             .and_then(|surf| surf.scale.ceil().integer())
             .map_or(1, i32::unsigned_abs);
-        s.themed_cursor
-            .show(&self.conn, &qh, pointer, serial, shape, scale)?;
+        s.themed_cursor.show(&qh, pointer, serial, shape, scale)?;
         self.flush()
     }
 
@@ -1628,8 +1633,9 @@ delegate_noop!(State: ZxdgDecorationManagerV1);
 delegate_noop!(State: XdgActivationV1);
 delegate_noop!(State: WpCursorShapeManagerV1);
 delegate_noop!(State: WpCursorShapeDeviceV1);
-// the themed cursor's surface
+// the themed cursor's surface and buffers
 delegate_noop!(State: ignore WlSurface);
+delegate_noop!(State: ignore WlBuffer);
 delegate_noop!(State: ZxdgOutputManagerV1);
 
 impl Dispatch<ZxdgOutputV1, OutputId> for State {

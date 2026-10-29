@@ -1651,10 +1651,10 @@ dependencies = [
  "memmap2",
  "rustix 1.1.5",
  "wayland-client",
- "wayland-cursor",
  "wayland-protocols",
  "wayland-protocols-wlr",
  "wayland-server",
+ "xcursor",
  "xkbcommon",
 ]
 

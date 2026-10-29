@@ -1,7 +1,68 @@
 #!/bin/sh
+# The session command: the display manager's Cupertino entry and cupertino-sessiond's session-command run it. When the
+# compositor ends, by a crash too, this script ends with its status and the display manager shows its login screen
+# again. What happened is a line in ~/.local/state/cupertino/session.log; the compositor's own log is server.log there.
+#
+# A first run can be bounded: a whole number of seconds in ~/.config/cupertino/session-limit (or $CUPERTINO_SESSION_LIMIT)
+# stops the compositor after that long, and an outside `timeout` ends it 30 s later if it hangs instead. No file, no limit.
 set -eu
 export XDG_CURRENT_DESKTOP=Cupertino
-if [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
-    exec /usr/bin/cupertino-server --udev "$@"
+
+state=${XDG_STATE_HOME:-$HOME/.local/state}/cupertino
+config=${XDG_CONFIG_HOME:-$HOME/.config}/cupertino
+server=${CUPERTINO_SESSION_SERVER:-/usr/bin/cupertino-server}
+mkdir -p "$state"
+
+note() {
+    printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$state/session.log"
+}
+
+limit=${CUPERTINO_SESSION_LIMIT:-}
+if [ -z "$limit" ] && [ -r "$config/session-limit" ]; then
+    read -r limit <"$config/session-limit" || true
 fi
-exec dbus-run-session -- /usr/bin/cupertino-server --udev "$@"
+case $limit in
+'') ;;
+*[!0-9]*)
+    note "ignoring the session limit '$limit': it is not a whole number of seconds"
+    limit=
+    ;;
+esac
+while [ "${#limit}" -gt 1 ] && [ "${limit#0}" != "$limit" ]; do
+    limit=${limit#0}
+done
+
+watchdog=
+if [ -n "$limit" ] && [ "$limit" -gt 0 ]; then
+    set -- --run-for "$limit" "$@"
+    watchdog="timeout -k 10 $((limit + 30))"
+    note "starting with a limit of $limit s"
+else
+    note "starting"
+fi
+
+# Without a session bus of its own (the display manager provides one), the server gets a fresh one.
+if [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+    # shellcheck disable=SC2086 # $watchdog is a command and its options, or nothing
+    $watchdog "$server" --udev "$@" &
+else
+    # shellcheck disable=SC2086
+    dbus-run-session -- $watchdog "$server" --udev "$@" &
+fi
+child=$!
+trap 'kill -TERM "$child" 2>/dev/null || true' TERM INT HUP
+
+started=$(date +%s)
+status=0
+wait "$child" || status=$?
+while kill -0 "$child" 2>/dev/null; do
+    wait "$child" || status=$?
+done
+seconds=$(($(date +%s) - started))
+
+case $status in
+0) note "the compositor ended normally after $seconds s" ;;
+124 | 137) note "the compositor did not stop in time and was ended by the watchdog (status $status) after $seconds s" ;;
+*) note "the compositor ended with status $status after $seconds s; see server.log" ;;
+esac
+exit "$status"

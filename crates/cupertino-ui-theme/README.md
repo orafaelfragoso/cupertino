@@ -26,5 +26,5 @@ dark tooltip in the Cupertino light and dark palettes; all neutral and high-cont
 
 Accepted exceptions: the Cupertino light and dark palettes keep their look below 4.5:1 for text and 3:1 for boundaries
 in places (white on the accent and red fills, secondary, placeholder and light header text, control, field and switch
-outlines, separators, the light focus ring at 2.49:1). High contrast and neutral are the accessible palettes. Switch tracks and separators of the
-neutral palettes keep the Cupertino look below 3:1.
+outlines, separators, the light focus ring at 2.49:1). High contrast and neutral are the accessible palettes. Switch
+tracks and separators of the neutral palettes keep the Cupertino look below 3:1.

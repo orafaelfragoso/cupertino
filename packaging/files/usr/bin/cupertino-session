@@ -11,10 +11,11 @@ export XDG_CURRENT_DESKTOP=Cupertino
 state=${XDG_STATE_HOME:-$HOME/.local/state}/cupertino
 config=${XDG_CONFIG_HOME:-$HOME/.config}/cupertino
 server=${CUPERTINO_SESSION_SERVER:-/usr/bin/cupertino-server}
-mkdir -p "$state"
+mkdir -p "$state" 2>/dev/null || true
 
+# The log is best effort: a state directory that cannot be written must not keep the compositor from starting.
 note() {
-    printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$state/session.log"
+    printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" 2>/dev/null >>"$state/session.log" || true
 }
 
 limit=${CUPERTINO_SESSION_LIMIT:-}
@@ -28,6 +29,10 @@ case $limit in
     limit=
     ;;
 esac
+if [ "${#limit}" -gt 7 ]; then
+    note "ignoring the session limit: more than 7 digits"
+    limit=
+fi
 while [ "${#limit}" -gt 1 ] && [ "${limit#0}" != "$limit" ]; do
     limit=${limit#0}
 done
@@ -41,22 +46,43 @@ else
     note "starting"
 fi
 
+# A signal for the session goes to everything in the compositor's session of processes: dbus-run-session ends on TERM
+# without passing it on, and the compositor holds the seat and the display until it is gone.
+child=
+interrupted=
+forward() {
+    if [ -n "$child" ]; then
+        pkill -TERM -s "$child" 2>/dev/null || kill -TERM -- "-$child" 2>/dev/null || true
+    fi
+}
+trap 'interrupted=1; forward' TERM INT HUP
+
 # Without a session bus of its own (the display manager provides one), the server gets a fresh one.
 if [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
     # shellcheck disable=SC2086 # $watchdog is a command and its options, or nothing
-    $watchdog "$server" --udev "$@" &
+    setsid $watchdog "$server" --udev "$@" &
 else
     # shellcheck disable=SC2086
-    dbus-run-session -- $watchdog "$server" --udev "$@" &
+    setsid dbus-run-session -- $watchdog "$server" --udev "$@" &
 fi
 child=$!
-trap 'kill -TERM "$child" 2>/dev/null || true' TERM INT HUP
+# A signal that came before the process was known.
+if [ -n "$interrupted" ]; then
+    forward
+fi
 
 started=$(date +%s)
 status=0
 wait "$child" || status=$?
-while kill -0 "$child" 2>/dev/null; do
-    wait "$child" || status=$?
+# `wait` returns early when a trapped signal arrives; it is repeated for the real status, and once only for each signal
+# (a child that is already gone answers 127).
+while [ -n "$interrupted" ]; do
+    interrupted=
+    code=0
+    wait "$child" || code=$?
+    if [ "$code" -ne 127 ]; then
+        status=$code
+    fi
 done
 seconds=$(($(date +%s) - started))
 

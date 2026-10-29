@@ -4,7 +4,11 @@
 use cupertino_geometry::Size;
 use std::collections::HashMap;
 
-pub use cupertino_theme::{Appearance, Color, ControlSize};
+pub use cupertino_theme::{Appearance, Color, ControlSize, DesignTokens};
+
+mod adapter;
+mod neutral;
+mod palette;
 
 /// The semantic colours controls draw with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -40,6 +44,43 @@ pub enum ColorRole {
     ToolTipText,
 }
 
+impl ColorRole {
+    pub const ALL: [ColorRole; 29] = {
+        use ColorRole::*;
+        [
+            WindowBackground,
+            Text,
+            SecondaryText,
+            PlaceholderText,
+            ControlFill,
+            ControlBorder,
+            ControlText,
+            DisabledControlFill,
+            DisabledControlBorder,
+            DisabledControlText,
+            DefaultButtonFill,
+            DefaultButtonText,
+            DestructiveFill,
+            DestructiveText,
+            SwitchTrack,
+            SwitchThumb,
+            TextBackground,
+            TextFieldBorder,
+            SelectedTextBackground,
+            SelectedText,
+            SelectedControlFill,
+            SelectedControlText,
+            SecondarySelectedControlFill,
+            SecondarySelectedControlText,
+            KeyboardFocusIndicator,
+            Separator,
+            Header,
+            ToolTip,
+            ToolTipText,
+        ]
+    };
+}
+
 /// The pointer and enabled state a colour is resolved for. Disabled wins over everything; pressed wins over hover.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum InteractionVariant {
@@ -64,6 +105,22 @@ impl StateVariant {
         selected: false,
         window_active: true,
     };
+
+    pub const ALL: [StateVariant; 16] = {
+        use InteractionVariant::*;
+        let mut all = [StateVariant::NORMAL; 16];
+        let interactions = [Normal, Hover, Pressed, Disabled];
+        let mut i = 0;
+        while i < 16 {
+            all[i] = StateVariant {
+                interaction: interactions[i / 4],
+                selected: i % 4 >= 2,
+                window_active: i % 2 == 0,
+            };
+            i += 1;
+        }
+        all
+    };
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -76,6 +133,30 @@ impl ColorTokens {
         Self {
             map: entries.into_iter().collect(),
         }
+    }
+
+    /// The built-in theme, which needs no theme data. Every colour is opaque.
+    pub fn neutral(appearance: Appearance) -> Self {
+        match appearance {
+            Appearance::Light => neutral::LIGHT,
+            Appearance::Dark => neutral::DARK,
+            Appearance::LightHighContrast => neutral::HIGH_CONTRAST_LIGHT,
+            Appearance::DarkHighContrast => neutral::HIGH_CONTRAST_DARK,
+        }
+        .colors()
+        .resolve()
+    }
+
+    /// The Cupertino theme. Light and dark come from `tokens` and fail on a missing token; high contrast is the built-in
+    /// palette, which never depends on translucency.
+    pub fn cupertino(
+        tokens: &DesignTokens,
+        appearance: Appearance,
+    ) -> cupertino_theme::Result<Self> {
+        if appearance.is_high_contrast() {
+            return Ok(Self::neutral(appearance));
+        }
+        Ok(adapter::palette(tokens, appearance)?.resolve())
     }
 
     /// The colour of `role` in `state`, or its normal colour when the theme has no entry for that state.

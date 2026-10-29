@@ -80,9 +80,10 @@ fn check(sysfs_root: &Path, card: &Path, gbm_dirs: &[PathBuf]) -> Report {
         Some(driver) => report
             .notes
             .push(format!("primary GPU {name} uses the {driver} driver")),
-        None => report
-            .notes
-            .push(format!("primary GPU {name} has no driver bound")),
+        None => report.warnings.push(Finding {
+            what: format!("primary GPU {name} has no driver bound"),
+            fix: "load the GPU's kernel driver (check `lspci -k` and `dmesg`)".into(),
+        }),
     }
     if report.driver.as_deref() == Some("nvidia") {
         check_nvidia(sysfs_root, gbm_dirs, &mut report);
@@ -192,6 +193,16 @@ mod tests {
         let report = m.check(&[]);
         assert_eq!(report.driver.as_deref(), Some("amdgpu"));
         assert!(report.is_ok() && report.warnings.is_empty());
+    }
+
+    #[test]
+    fn a_gpu_without_a_bound_driver_is_a_warning() {
+        let m = Machine::with_driver("amdgpu");
+        fs::remove_file(m.card().join("device/driver")).unwrap();
+        let report = m.check(&[]);
+        assert!(report.is_ok());
+        assert_eq!(report.driver, None);
+        assert_eq!(report.warnings.len(), 1);
     }
 
     #[test]

@@ -82,6 +82,11 @@ impl TextSystem {
         Ok(self.paragraph(text, style)?.layout(max_width).size())
     }
 
+    /// The font file and coordinates behind a [`FontId`] that layout produced.
+    pub fn font_source(&self, font: crate::FontId) -> Result<crate::FontSource, TextError> {
+        self.state().fonts.source(font)
+    }
+
     pub fn metrics(&self, style: &TextStyle) -> Result<FontMetrics, TextError> {
         let mut state = self.state();
         let font = resolve(&mut state.fonts, &self.theme_family, style)?;

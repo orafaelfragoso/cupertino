@@ -13,16 +13,18 @@ mod input;
 mod keymap;
 mod keys;
 mod paragraph;
+mod raster;
 mod secure;
 mod shape;
 mod system;
 
 pub use buffer::{TextBuffer, CARET_BLINK_OFF, CARET_BLINK_ON, MULTI_CLICK_INTERVAL};
-pub use font::{FontIndex, FontMetrics};
+pub use font::{FontIndex, FontMetrics, FontSource};
 pub use input::SURROUNDING_MAX_BYTES;
 pub use keymap::{KeyInput, Keymap};
 pub use keys::{Response, TextFieldKeys};
 pub use paragraph::{Line, LineRun, Paragraph, ParagraphLayout, CARET_WIDTH};
+pub use raster::GlyphRaster;
 pub use secure::SecureBuffer;
 pub use shape::{ShapeRequest, ShapedGlyph, ShapedRun};
 pub use system::TextSystem;
@@ -280,7 +282,35 @@ pub struct GlyphKey {
     pub size_q: u32,
     /// Horizontal subpixel phase, in 1/4 pixel steps.
     pub subpixel_x: u8,
-    pub hinted: bool,
+    /// The stem darkening: 0 when font smoothing is off, otherwise 1 plus the fill's luminance in quarters (1 to 5).
+    /// Build keys with [`GlyphKey::for_draw`], so equal draws share one key.
+    pub dilation_q: u8,
+}
+
+impl GlyphKey {
+    /// The key of a glyph drawn at `size_px` physical pixels per em, `x_fraction` pixels right of a whole pixel, in
+    /// the sRGB fill `fill` (0 to 1, alpha ignored).
+    pub fn for_draw(
+        font: FontId,
+        glyph: GlyphId,
+        size_px: f64,
+        x_fraction: f64,
+        smoothing: bool,
+        fill: [f32; 3],
+    ) -> Self {
+        let dilation_q = if smoothing {
+            1 + (cupertino_glyph::quantized_luminance(fill) * 4.0).round() as u8
+        } else {
+            0
+        };
+        Self {
+            font,
+            glyph,
+            size_q: (size_px * 64.0).round() as u32,
+            subpixel_x: ((x_fraction * 4.0) as u8).min(3),
+            dilation_q,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

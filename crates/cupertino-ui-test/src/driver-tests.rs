@@ -179,7 +179,7 @@ fn options() -> RuntimeOptions {
                     max_pixels: 200 * 80,
                     glyph_cache_bytes: 0,
                     image_cache_bytes: 0,
-                    hint_glyphs: false,
+                    font_smoothing: true,
                 },
                 NoGlyphs,
             ))

@@ -118,7 +118,7 @@ mod tests {
             glyph: GlyphId(glyph),
             size_q: 64,
             subpixel_x: 0,
-            hinted: false,
+            dilation_q: 0,
         }
     }
 

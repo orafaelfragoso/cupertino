@@ -36,6 +36,7 @@ jobs:
       # check-metadata and test_release read the dependency graph with cargo metadata --offline.
       - run: cargo fetch --locked
       - run: python3 -I packaging/test_release.py
+      - run: python3 -I packaging/test_session.py
       - run: python3 -I ci/test_contracts.py
       - run: python3 -I ci/gate.py .
       # The Wayland globals are compared with the registry by crates/cupertino-server/tests/contracts.rs (nextest below).

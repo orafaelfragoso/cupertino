@@ -104,7 +104,7 @@ impl FrameScheduler {
     /// A frame failed to draw at `time`: the output stays damaged, and is not drawn again before one `refresh` later.
     /// Returns how many frames failed in a row.
     pub fn failed(&mut self, time: Duration, refresh: Duration) -> u32 {
-        let count = self.failed.map_or(0, |f| f.count) + 1;
+        let count = self.failed.map_or(0, |f| f.count).saturating_add(1);
         self.failed = Some(FailedFrames {
             count,
             retry_at: time + refresh,

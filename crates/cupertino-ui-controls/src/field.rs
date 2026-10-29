@@ -19,11 +19,13 @@ use cupertino_ui_text::{
 };
 use cupertino_ui_theme::{ColorRole, ThemeTokens};
 use std::cell::Cell;
+use std::ops::Range;
 
 const RETURN: Keysym = Keysym(0xff0d);
 const KP_ENTER: Keysym = Keysym(0xff8d);
 const ESCAPE: Keysym = Keysym(0xff1b);
 const TAB: Keysym = Keysym(0xff09);
+const BULLET: char = '\u{2022}';
 /// Points between the baseline and the composition's one-pixel underline.
 const COMPOSITION_DROP: f64 = 1.5;
 
@@ -105,6 +107,80 @@ fn fill_rect(cx: &mut PaintCx<'_>, rect: Rect, color: Option<cupertino_ui_theme:
             paint: Paint::Solid(color),
         });
     }
+}
+
+/// What a field paints of its buffer, in byte offsets of `text`.
+struct Shown<'a> {
+    text: &'a str,
+    caret: usize,
+    selection: Range<usize>,
+    composition: Option<Range<usize>>,
+}
+
+/// Paints a field's text, or its placeholder while empty, with the selection and caret while focused and the
+/// composition's underline, all clipped to the interior. Scrolls so the caret stays inside.
+fn paint_text(
+    cx: &mut PaintCx<'_>,
+    look: &ControlState,
+    enabled: bool,
+    shown: &Shown<'_>,
+    placeholder: &str,
+    scroll: &Cell<f64>,
+) {
+    let env = cx.env().clone();
+    let size = cx.size();
+    let area = interior(size, &env.theme);
+    let chrome = chrome(size, &env.theme);
+    let Some(layout) = look::paragraph(&env, shown.text) else {
+        return;
+    };
+    let caret = layout.caret_rect(position(shown.caret));
+    let offset = follow(
+        scroll.get(),
+        caret.min_x(),
+        layout.size().width,
+        area.width(),
+    );
+    scroll.set(offset);
+    let origin = Point::new(area.min_x() - offset, look::top(&layout, chrome, &env));
+    let color = |role| look::color(&env.theme, role, look);
+    cx.push(PaintOp::PushClip(Shape::Rect(area)));
+    let focused = look.focused && enabled;
+    if focused && !shown.selection.is_empty() {
+        for rect in layout.selection_rects(shown.selection.clone()) {
+            fill_rect(
+                cx,
+                rect.translate(origin.x, origin.y),
+                color(ColorRole::SelectedTextBackground),
+            );
+        }
+    }
+    if shown.text.is_empty() {
+        if let Some(placeholder) = look::label(&env, placeholder) {
+            let at = Point::new(area.min_x(), look::top(&placeholder, chrome, &env));
+            look::glyphs(cx, &placeholder, at, color(ColorRole::PlaceholderText));
+        }
+    } else {
+        look::glyphs(cx, &layout, origin, color(ColorRole::Text));
+    }
+    if let Some(range) = &shown.composition {
+        let start = layout.caret_rect(position(range.start)).min_x();
+        let end = layout.caret_rect(position(range.end)).min_x();
+        let y = look::baseline(chrome, &env) + COMPOSITION_DROP;
+        fill_rect(
+            cx,
+            Rect::new(origin.x + start, y, end - start, 1.0 / env.scale),
+            color(ColorRole::Text),
+        );
+    }
+    if focused && look.window_active && shown.selection.is_empty() {
+        fill_rect(
+            cx,
+            caret.translate(origin.x, origin.y),
+            color(ColorRole::Text),
+        );
+    }
+    cx.push(PaintOp::PopClip);
 }
 
 fn layout() -> LayoutSpec {
@@ -475,67 +551,20 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
     fn paint(&self, state: &FieldState, cx: &mut PaintCx<'_>) {
         let look = control_state(self.enabled, state.hovered, cx);
         paint_chrome(cx, &look);
-        let env = cx.env().clone();
-        let size = cx.size();
-        let area = interior(size, &env.theme);
-        let text = state.buffer.text();
-        let Some(layout) = look::paragraph(&env, text) else {
-            return;
+        let shown = Shown {
+            text: state.buffer.text(),
+            caret: state.buffer.caret(),
+            selection: state.buffer.selection(),
+            composition: state.buffer.composition(),
         };
-        let caret = layout.caret_rect(position(state.buffer.caret()));
-        let scroll = follow(
-            state.scroll.get(),
-            caret.min_x(),
-            layout.size().width,
-            area.width(),
+        paint_text(
+            cx,
+            &look,
+            self.enabled,
+            &shown,
+            &self.placeholder,
+            &state.scroll,
         );
-        state.scroll.set(scroll);
-        let origin = Point::new(
-            area.min_x() - scroll,
-            look::top(&layout, chrome(size, &env.theme), &env),
-        );
-        let color = |role| look::color(&env.theme, role, &look);
-        cx.push(PaintOp::PushClip(Shape::Rect(area)));
-        let focused = look.focused && self.enabled;
-        let selection = state.buffer.selection();
-        if focused && !selection.is_empty() {
-            for rect in layout.selection_rects(selection) {
-                fill_rect(
-                    cx,
-                    rect.translate(origin.x, origin.y),
-                    color(ColorRole::SelectedTextBackground),
-                );
-            }
-        }
-        if text.is_empty() {
-            if let Some(placeholder) = look::label(&env, &self.placeholder) {
-                let at = Point::new(
-                    area.min_x(),
-                    look::top(&placeholder, chrome(size, &env.theme), &env),
-                );
-                look::glyphs(cx, &placeholder, at, color(ColorRole::PlaceholderText));
-            }
-        } else {
-            look::glyphs(cx, &layout, origin, color(ColorRole::Text));
-        }
-        if let Some(range) = state.buffer.composition() {
-            let start = layout.caret_rect(position(range.start)).min_x();
-            let end = layout.caret_rect(position(range.end)).min_x();
-            let y = look::baseline(chrome(size, &env.theme), &env) + COMPOSITION_DROP;
-            fill_rect(
-                cx,
-                Rect::new(origin.x + start, y, end - start, 1.0 / env.scale),
-                color(ColorRole::Text),
-            );
-        }
-        if focused && look.window_active && state.buffer.selection().is_empty() {
-            fill_rect(
-                cx,
-                caret.translate(origin.x, origin.y),
-                color(ColorRole::Text),
-            );
-        }
-        cx.push(PaintOp::PopClip);
     }
 
     fn semantics(&self, state: &FieldState, cx: &mut SemanticsCx<'_>) {
@@ -568,6 +597,7 @@ pub struct SecureState {
     buffer: SecureBuffer,
     session: TextInputSession,
     hovered: bool,
+    scroll: Cell<f64>,
 }
 
 impl<M: 'static> SecureField<M> {
@@ -623,6 +653,7 @@ impl<M: 'static> Widget<M> for SecureField<M> {
             buffer: SecureBuffer::new(),
             session: session(ContentPurpose::Password, true),
             hovered: false,
+            scroll: Cell::new(0.0),
         }
     }
 
@@ -687,6 +718,24 @@ impl<M: 'static> Widget<M> for SecureField<M> {
             ..control_state(self.enabled, state.hovered, cx)
         };
         paint_chrome(cx, &look);
+        // the text system shapes only bullets: one per grapheme, with the caret and selection counted in graphemes
+        let (caret, selection) = state.buffer.masked_selection();
+        let width = BULLET.len_utf8();
+        let mask = state.buffer.mask(BULLET);
+        let shown = Shown {
+            text: &mask,
+            caret: caret * width,
+            selection: selection.start * width..selection.end * width,
+            composition: None,
+        };
+        paint_text(
+            cx,
+            &look,
+            self.enabled,
+            &shown,
+            &self.placeholder,
+            &state.scroll,
+        );
     }
 
     fn semantics(&self, _: &SecureState, cx: &mut SemanticsCx<'_>) {

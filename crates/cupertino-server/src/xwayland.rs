@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction, RegistrationToken};
 
-use crate::restart_policy::{decide, Backoff, Decision};
+use crate::restart_policy::Backoff;
 
 /// The program, found on `PATH`.
 pub const SATELLITE: &str = "xwayland-satellite";
@@ -30,6 +30,9 @@ pub const X_TMP: &str = "/tmp";
 /// Displays tried, from the first; an X server started by another session takes the low ones.
 const DISPLAYS: std::ops::Range<u32> = 0..64;
 const COOKIE_NAME: &[u8] = b"MIT-MAGIC-COOKIE-1";
+/// A satellite that ends successfully sooner than this after its start did not run: it goes through the restart throttle
+/// like a failure.
+const QUICK_EXIT: Duration = Duration::from_secs(1);
 /// An authority entry for every address, so the entry holds whatever host name a client looks up.
 const FAMILY_WILD: u16 = 0xffff;
 
@@ -96,15 +99,35 @@ impl XDisplay {
     }
 }
 
+/// Toolkits that would pick X11 when `DISPLAY` is set, and the preference that makes them try Wayland first and fall back
+/// to X11. Qt 5.11 and later take a list (Qt 6 already prefers Wayland in a Wayland session, outside GNOME); Electron
+/// before 38 reads the hint (38 removed it and picks Wayland from `XDG_SESSION_TYPE`). SDL is left alone: an SDL 2 bundled
+/// with a game may not take a list, and a driver name it does not know fails its video start.
+const WAYLAND_FIRST: [(&str, &str); 2] = [
+    ("QT_QPA_PLATFORM", "wayland;xcb"),
+    ("ELECTRON_OZONE_PLATFORM_HINT", "auto"),
+];
+
 /// Points a program the server starts at the X display, or, without one, keeps it from an X server of the session
-/// around the server: an X11 toolkit that finds `DISPLAY` prefers it.
+/// around the server: an X11 toolkit that finds `DISPLAY` prefers it. With the X display, toolkits are told to prefer
+/// Wayland ([`WAYLAND_FIRST`]) unless the program or the session already chose.
 pub fn set_client_env(command: &mut Command, display: Option<&XDisplay>) {
-    match display {
-        Some(display) => command
-            .env("DISPLAY", display.name())
-            .env("XAUTHORITY", display.authority()),
-        None => command.env_remove("DISPLAY"),
+    let Some(display) = display else {
+        command.env_remove("DISPLAY");
+        return;
     };
+    command
+        .env("DISPLAY", display.name())
+        .env("XAUTHORITY", display.authority());
+    for (name, value) in WAYLAND_FIRST {
+        let chosen = match command.get_envs().find(|(k, _)| *k == name) {
+            Some((_, value)) => value.is_some(),
+            None => std::env::var_os(name).is_some(),
+        };
+        if !chosen {
+            command.env(name, value);
+        }
+    }
 }
 
 impl Drop for XDisplay {
@@ -116,17 +139,16 @@ impl Drop for XDisplay {
 }
 
 /// The socket directory must exist and be one other users cannot swap: a real directory of root or of this user, sticky
-/// when it is shared. It is created (as X servers do) when missing.
+/// when it is shared. It is not created when missing (systemd-tmpfiles makes it, owned by root, at boot): the owner of a
+/// sticky directory may replace every socket in it, so one made by a user would let that user take over the X displays
+/// of others.
 fn check_socket_dir(dir: &Path) -> std::io::Result<()> {
-    let meta = match std::fs::symlink_metadata(dir) {
-        Ok(meta) => meta,
-        Err(e) if e.kind() == ErrorKind::NotFound => {
-            std::fs::create_dir(dir)?;
-            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o1777))?;
-            std::fs::symlink_metadata(dir)?
-        }
-        Err(e) => return Err(e),
-    };
+    let meta = std::fs::symlink_metadata(dir).map_err(|e| {
+        std::io::Error::new(
+            e.kind(),
+            format!("the X socket directory {}: {e}", dir.display()),
+        )
+    })?;
     let owner_ok = meta.uid() == 0 || meta.uid() == rustix::process::getuid().as_raw();
     let shared = meta.mode() & 0o022 != 0;
     if !meta.is_dir() || !owner_ok || (shared && meta.mode() & 0o1000 == 0) {
@@ -241,6 +263,8 @@ pub struct XWayland {
     socket: String,
     phase: Phase,
     backoff: Backoff,
+    /// [`QUICK_EXIT`]; tests set it long, so a loaded machine cannot turn a quick exit into a run.
+    quick_exit: Duration,
     sources: Vec<RegistrationToken>,
 }
 
@@ -278,6 +302,7 @@ impl XWayland {
             socket,
             phase: Phase::Listening,
             backoff: Backoff::default(),
+            quick_exit: QUICK_EXIT,
             sources,
         })
     }
@@ -326,14 +351,22 @@ impl XWayland {
                 Ok(None) => Phase::Running { child, started },
                 Ok(Some(status)) => {
                     tracing::info!(%status, "xwayland-satellite exited: the X display waits for the next X11 program");
-                    match decide(status, started, now, &mut self.backoff) {
-                        Decision::RestartAt(at) => Phase::Waiting(at),
-                        Decision::RestartNow | Decision::Stop => Phase::Listening,
+                    if status.success() && now.saturating_duration_since(started) >= self.quick_exit
+                    {
+                        Phase::Listening
+                    } else {
+                        // a failure, or a success at once (a build that cannot run, a usage error), which the waiting
+                        // client would otherwise restart on every poll
+                        let ran = now.saturating_duration_since(started);
+                        Phase::Waiting(started + self.backoff.next_interval(ran))
                     }
                 }
+                // the child cannot be waited for (it was reaped elsewhere): it counts as a failed exit, not as running
                 Err(e) => {
-                    tracing::warn!(error = %e, "waiting on xwayland-satellite failed");
-                    Phase::Running { child, started }
+                    tracing::warn!(error = %e, "waiting on xwayland-satellite failed: treating it as ended");
+                    let _ = child.kill();
+                    let ran = now.saturating_duration_since(started);
+                    Phase::Waiting(started + self.backoff.next_interval(ran))
                 }
             },
             Phase::Waiting(at) if at > now => Phase::Waiting(at),
@@ -419,6 +452,9 @@ mod tests {
         let runtime = root.path().join("run");
         std::fs::create_dir(&tmp).unwrap();
         std::fs::create_dir(&runtime).unwrap();
+        let socket_dir = tmp.join(".X11-unix");
+        std::fs::create_dir(&socket_dir).unwrap();
+        std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o1777)).unwrap();
         Dirs {
             tmp,
             runtime,
@@ -472,11 +508,51 @@ mod tests {
     fn a_socket_directory_others_can_change_is_refused() {
         let d = dirs();
         let socket_dir = d.tmp.join(".X11-unix");
-        std::fs::create_dir(&socket_dir).unwrap();
         std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o777)).unwrap();
         assert!(XDisplay::open(&d.tmp, &d.runtime).is_err());
         std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o1777)).unwrap();
         assert!(XDisplay::open(&d.tmp, &d.runtime).is_ok());
+    }
+
+    #[test]
+    fn a_missing_or_symlinked_socket_directory_is_refused_not_made() {
+        let d = dirs();
+        let socket_dir = d.tmp.join(".X11-unix");
+        std::fs::remove_dir(&socket_dir).unwrap();
+        assert!(XDisplay::open(&d.tmp, &d.runtime).is_err());
+        assert!(!socket_dir.exists(), "the directory was created");
+
+        let elsewhere = d.tmp.join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o1777)).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &socket_dir).unwrap();
+        assert!(XDisplay::open(&d.tmp, &d.runtime).is_err());
+    }
+
+    #[test]
+    fn programs_get_the_wayland_preference_unless_they_chose() {
+        let d = dirs();
+        let display = XDisplay::open(&d.tmp, &d.runtime).unwrap();
+        let run = |chosen: Option<&str>| {
+            let mut command = Command::new("sh");
+            command
+                .args([
+                    "-c",
+                    "echo \"$QT_QPA_PLATFORM $ELECTRON_OZONE_PLATFORM_HINT\"",
+                ])
+                .env_remove("QT_QPA_PLATFORM")
+                .env_remove("ELECTRON_OZONE_PLATFORM_HINT");
+            if let Some(qt) = chosen {
+                command.env("QT_QPA_PLATFORM", qt);
+            }
+            set_client_env(&mut command, Some(&display));
+            String::from_utf8(command.output().unwrap().stdout)
+                .unwrap()
+                .trim()
+                .to_owned()
+        };
+        assert_eq!(run(None), "wayland;xcb auto");
+        assert_eq!(run(Some("xcb")), "xcb auto");
     }
 
     fn env_of_child(display: Option<&XDisplay>) -> String {
@@ -628,10 +704,19 @@ mod tests {
     }
 
     #[test]
-    fn a_satellite_that_ends_normally_leaves_the_display_listening_at_once() {
-        let mut f = fixture("exit 0");
+    fn a_satellite_that_ran_and_ended_normally_leaves_the_display_listening_at_once() {
+        let mut f = fixture("sleep 1.2; exit 0");
         let _client = UnixStream::connect(&f.socket).unwrap();
         f.run_until(|f| f.starts().len() == 1 && f.state.as_ref().unwrap().pid().is_none());
         assert!(matches!(f.state.as_ref().unwrap().phase, Phase::Listening));
+    }
+
+    #[test]
+    fn a_satellite_that_ends_normally_at_once_waits_out_the_throttle() {
+        let mut f = fixture("exit 0");
+        f.state.as_mut().unwrap().quick_exit = Duration::from_secs(30);
+        let _client = UnixStream::connect(&f.socket).unwrap();
+        f.run_until(|f| f.starts().len() == 1 && f.state.as_ref().unwrap().pid().is_none());
+        assert!(matches!(f.state.as_ref().unwrap().phase, Phase::Waiting(_)));
     }
 }

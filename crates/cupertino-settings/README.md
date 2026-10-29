@@ -60,8 +60,10 @@ the frames to differ only inside the reported areas.
   rotation are not built.
 - The pane open and close hooks (scan, discovery, agent registration and unregistration) run in the window process and are
   not covered by a test; `tests/services.rs` drives the `Services` calls they make.
-- `ShowPane` switches the pane of the running window but does not raise it: raising needs an activation token from the
-  launcher, which no launcher sends yet (§8 Launchers).
+- `ShowPane` switches the pane of the running window; `ShowPaneWithToken` also raises it. On a compositor without the
+  activation protocol the window and More Info show unraised.
+- Bus, watcher and worker threads hand events to the window through a queue of 64. Workers wait for room; a pane request
+  or a pairing prompt arriving at a full queue is dropped, and a dropped prompt refuses the pairing.
 - Not built yet: keyboard steps of the sliders, the focus ring animation, the overlay scroller, tooltips, undo,
   the Mouse and Trackpad rows' device predicates (both rows always show until the device monitor is wired, §3).
 - The width cannot be fixed at the server: `ToplevelConfig` carries a minimum size only, so the window can be widened.

@@ -89,6 +89,7 @@ pub fn run(activation_token: String) -> Result<()> {
     }
     let mut pressed = false;
     let mut info_request = None;
+    let unraised_info = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     loop {
         for event in events {
             match event {
@@ -131,7 +132,8 @@ pub fn run(activation_token: String) -> Result<()> {
                         && matches!(code, key::ENTER | key::KEYPAD_ENTER | key::SPACE)
                         && info_request.is_none()
                     {
-                        info_request = more_info_request(&mut conn, window.surface())?;
+                        info_request =
+                            more_info_request(&mut conn, window.surface(), &unraised_info)?;
                     }
                 }
                 Event::Pointer {
@@ -151,7 +153,8 @@ pub fn run(activation_token: String) -> Result<()> {
                     pressed = down && inside;
                     presenter.request_redraw();
                     if activate && info_request.is_none() {
-                        info_request = more_info_request(&mut conn, window.surface())?;
+                        info_request =
+                            more_info_request(&mut conn, window.surface(), &unraised_info)?;
                     }
                 }
                 Event::Pointer {
@@ -163,7 +166,7 @@ pub fn run(activation_token: String) -> Result<()> {
                 }
                 Event::ActivationToken { request, token } if info_request == Some(request) => {
                     info_request = None;
-                    more_info(&token)?;
+                    more_info(&token, || {})?;
                 }
                 Event::Extension(event) => match event.downcast_ref::<AppEvent>() {
                     Some(AppEvent::Appearance { dark: value }) => {
@@ -222,24 +225,38 @@ fn primary_is_ctrl(path: Option<&Path>) -> bool {
     }
 }
 
-/// Ask for the token that raises More Info. Without activation, More Info opens at once, unraised.
-fn more_info_request(conn: &mut Connection, surface: SurfaceId) -> Result<Option<TokenRequest>> {
+/// Ask for the token that raises More Info. Without activation, More Info opens at once, unraised, and only when the one
+/// opened that way has ended (`open`), so a held key or repeated clicks start one process.
+fn more_info_request(
+    conn: &mut Connection,
+    surface: SurfaceId,
+    open: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<Option<TokenRequest>> {
+    use std::sync::atomic::Ordering::SeqCst;
     let request =
         unless_unsupported(conn.request_activation_token(surface, Some("cupertino-settings")))?;
-    if request.is_none() {
-        more_info("")?;
+    if request.is_none() && !open.swap(true, SeqCst) {
+        let ended = open.clone();
+        if let Err(e) = more_info("", move || ended.store(false, SeqCst)) {
+            open.store(false, SeqCst);
+            return Err(e);
+        }
     }
     Ok(request)
 }
 
-fn more_info(token: &str) -> Result<()> {
+/// Start More Info; `ended` runs when its process exits.
+fn more_info(token: &str, ended: impl FnOnce() + Send + 'static) -> Result<()> {
     let mut child = std::process::Command::new(std::env::current_exe()?)
         .env("XDG_ACTIVATION_TOKEN", token)
         .spawn()?;
-    std::thread::spawn(move || match child.wait() {
-        Ok(status) if status.success() => {}
-        Ok(status) => eprintln!("cupertino-settings: More Info exited with {status}"),
-        Err(e) => eprintln!("cupertino-settings: cannot wait for More Info: {e}"),
+    std::thread::spawn(move || {
+        match child.wait() {
+            Ok(status) if status.success() => {}
+            Ok(status) => eprintln!("cupertino-settings: More Info exited with {status}"),
+            Err(e) => eprintln!("cupertino-settings: cannot wait for More Info: {e}"),
+        }
+        ended();
     });
     Ok(())
 }

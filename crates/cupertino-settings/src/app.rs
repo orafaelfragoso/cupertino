@@ -330,15 +330,16 @@ type Notify = std::sync::Arc<dyn Fn(Background) + Send + Sync>;
 const BACKGROUND_QUEUE: usize = 64;
 
 /// The window loop owns the receiver until it ends; what arrives after that has no window. What arrives before the
-/// window exists waits for the loop's first turn. A full queue makes a worker thread wait; a pane request from the bus is
-/// dropped instead, so a caller on the bus can neither grow the queue nor hold the bus thread.
+/// window exists waits for the loop's first turn. A full queue makes a worker thread wait. What comes from a bus is
+/// dropped instead, so a caller can neither grow the queue nor block a bus executor: a dropped pane request shows nothing,
+/// a dropped agent prompt refuses the pairing.
 fn background_channel(
     wake: impl Fn() + Send + Sync + 'static,
 ) -> (Notify, std::sync::mpsc::Receiver<Background>) {
     let (sender, receiver) = std::sync::mpsc::sync_channel(BACKGROUND_QUEUE);
     let notify: Notify = std::sync::Arc::new(move |event| {
         let queued = match event {
-            Background::ShowPane(..) => sender.try_send(event).is_ok(),
+            Background::ShowPane(..) | Background::Agent(_) => sender.try_send(event).is_ok(),
             event => sender.send(event).is_ok(),
         };
         if queued {
@@ -2256,6 +2257,32 @@ mod tests {
             unless_unsupported::<()>(Err(Error::Protocol("bad token"))),
             Err(Error::Protocol(_))
         ));
+    }
+
+    #[test]
+    fn an_agent_prompt_at_a_full_queue_is_refused_without_waiting() {
+        let (notify, _background) = background_channel(|| {});
+        for _ in 0..BACKGROUND_QUEUE {
+            notify(Background::Paired(Ok(())));
+        }
+        let (answer, reply) = async_channel::bounded(1);
+        let agent = notify.clone();
+        let (done, returned) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            agent(Background::Agent(AgentEvent::Prompt {
+                id: 1,
+                device: "Keyboard".into(),
+                prompt: cupertino_settings::sheet::Prompt::Confirm {
+                    passkey: Some(123456),
+                },
+                answer: Some(answer),
+            }));
+            done.send(()).unwrap();
+        });
+        returned
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("a bus executor never waits for room");
+        assert!(reply.recv_blocking().is_err(), "a dropped prompt refuses");
     }
 
     #[test]

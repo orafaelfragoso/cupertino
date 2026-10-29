@@ -52,7 +52,9 @@ package() {
   optdepends=('wayland: nested session inside another Wayland desktop'
               'libxkbcommon: nested session'
               'foot: terminal for the nested try-out'
-              'iwd: wireless backend when cupertino-netd is enabled')
+              'iwd: wireless backend when cupertino-netd is enabled'
+              'xwayland-satellite>=0.8: X11 app support'
+              'xorg-xwayland: X11 app support')
   backup=('etc/cupertino/login.conf' 'etc/cupertino/greeter.json' 'etc/cupertino/compositor.json'
           'etc/pam.d/cupertino-login' 'etc/pam.d/cupertino-session'
           'etc/pam.d/cupertino-greeter' 'etc/pam.d/cupertino-autologin')

@@ -14,7 +14,9 @@ both.
   appearance only. A missing token is an error, never a colour from another appearance.
 - `ColorTokens::neutral(appearance)`: built in, for any compositor, with no theme data, pack or desktop service. Every
   colour is opaque. Light and dark are the Cupertino colours flattened onto the surface they are drawn on (a test keeps
-  them in step with the token data).
+  them in step with the token data), except where that falls short: text is raised to 4.5:1 and control and field
+  borders and the focus ring to 3:1 against their surface in every enabled state, with disabled text readable at
+  4.5:1 too. The accent and red fills are darker, so white text on them reaches 4.5:1.
 - High contrast is built in and used by both: opaque, text at least 4.5:1 and borders, tracks, thumbs, separators and
   the focus ring at least 3:1 against their surface in every enabled state (tested per resolved pair). Hover and press
   turn borders black (light) or white (dark). The dark switch thumb is dark, so it stands out on both tracks.
@@ -24,4 +26,5 @@ dark tooltip in the Cupertino light and dark palettes; all neutral and high-cont
 
 Accepted exceptions: the Cupertino light and dark palettes keep their look below 4.5:1 for text and 3:1 for boundaries
 in places (white on the accent and red fills, secondary and placeholder text, control, field and switch outlines, the
-light focus ring at 2.49:1). High contrast is the accessible palette. The neutral palettes do not meet those ratios yet.
+light focus ring at 2.49:1). High contrast and neutral are the accessible palettes. Switch tracks and separators of the
+neutral palettes keep the Cupertino look below 3:1.

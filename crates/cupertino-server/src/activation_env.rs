@@ -23,6 +23,7 @@ const GRAPHICAL_SESSION: &str = "graphical-session.target";
 pub const SESSION_TARGET: &str = "cupertino-session.target";
 /// Variables an earlier desktop may have left that this session does not have: Cupertino runs no X server, and a program
 /// that finds `DISPLAY` set prefers it to Wayland.
+// TODO(D2): once XWayland runs through xwayland-satellite, `DISPLAY` is this session's and is published, not unset.
 const UNSET: [&str; 1] = ["DISPLAY"];
 
 /// What was done with the shared bus.

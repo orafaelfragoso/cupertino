@@ -345,6 +345,20 @@ pub fn run(
                         tracing::error!(error = %e, "re-activating the DRM device failed");
                     }
                     for s in u.surfaces.values_mut() {
+                        // Smithay keeps a frame that waited for its vblank at the pause and holds every later frame of
+                        // the CRTC behind it; if that vblank never comes, the head freezes. Another session had the
+                        // device, so no flip of ours is under way: clearing the CRTC drops the frame, and the next one
+                        // is a full modeset (as after any resume)
+                        if s.pending {
+                            // the commit is blocking: a driver that lost the flip may hold it until its own timeout
+                            let started = Instant::now();
+                            let cleared = s.drm_output.with_compositor(|c| c.clear());
+                            let took = started.elapsed();
+                            match cleared {
+                                Ok(()) => tracing::info!(?took, "dropped the frame queued before the pause"),
+                                Err(e) => tracing::warn!(error = %e, ?took, "dropping the frame queued before the pause failed"),
+                            }
+                        }
                         s.pending = false;
                     }
                 }
@@ -817,7 +831,9 @@ fn frame_finish(
     };
     surface.pending = false;
     let output = surface.output;
-    match surface.drm_output.frame_submitted() {
+    let submitted = surface.drm_output.frame_submitted();
+    let shown = vblank_shows_frame(&submitted);
+    match submitted {
         Ok(Some(Some(mut feedback))) => feedback.presented(
             clock,
             Refresh::fixed(surface.refresh),
@@ -827,15 +843,35 @@ fn frame_finish(
         Ok(_) => {}
         Err(e) => tracing::warn!(error = %e, "frame submission failed"),
     }
-    if let Some(idx) = state.outputs.iter().position(|o| o.id == output) {
-        state.note_frame_shown(idx);
+    // a vblank of a frame dropped with its CRTC's state (sleep, resume) shows nothing new, so it confirms no frame, a
+    // lock frame least of all
+    if shown {
+        if let Some(idx) = state.outputs.iter().position(|o| o.id == output) {
+            state.note_frame_shown(idx);
+        }
     }
     state.request_redraw();
 }
 
+/// Whether a vblank showed a frame of ours: `frame_submitted` finds none waiting (`Ok(None)`) for an event of a frame
+/// that was dropped, and its error comes only from queueing the next frame after the one shown.
+fn vblank_shows_frame<U, E>(submitted: &Result<Option<U>, E>) -> bool {
+    !matches!(submitted, Ok(None))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{already_shown, frame_due};
+    use super::{already_shown, frame_due, vblank_shows_frame};
+
+    #[test]
+    fn a_vblank_without_a_frame_of_ours_shows_nothing() {
+        assert!(!vblank_shows_frame::<(), ()>(&Ok(None)));
+        assert!(vblank_shows_frame::<(), ()>(&Ok(Some(()))));
+        assert!(
+            vblank_shows_frame::<(), ()>(&Err(())),
+            "the error is the next frame's: the one waiting was shown"
+        );
+    }
 
     #[test]
     fn only_a_drawn_scene_that_changed_nothing_is_reported_as_shown() {

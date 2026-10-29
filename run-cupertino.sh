@@ -7,7 +7,7 @@
 # Ctrl+Alt+Backspace quits; Ctrl+Alt+F1..F12 switch console. The server's log is ~/.local/state/cupertino/server.log (the
 # previous run's is server.log.1); what the processes print goes to ~/cupertino-tty.log. It stops after
 # $CUPERTINO_RUN_FOR seconds (default 900), and an outside watchdog (`timeout`) ends the whole process tree 30 s later if the
-# server hangs instead of stopping. No limit (0) needs CUPERTINO_ALLOW_NO_TIMEOUT=1.
+# server (and what it started) hangs instead of stopping. No limit (0) needs CUPERTINO_ALLOW_NO_TIMEOUT=1.
 set -eu
 
 root=$(cd "$(dirname "$0")" && pwd)
@@ -61,6 +61,9 @@ fi
 case $limit in
 *[1-9]*)
     seconds=${limit%%.*}
+    while [ "${#seconds}" -gt 1 ] && [ "${seconds#0}" != "$seconds" ]; do
+        seconds=${seconds#0}
+    done
     watchdog="timeout -k 10 $((${seconds:-0} + 30))"
     ;;
 *)
@@ -100,7 +103,7 @@ trap 'rm -f "$CUPERTINO_SERVER_CONFIG"' EXIT
 echo "Starting Cupertino; log: $log"
 status=0
 # shellcheck disable=SC2086 # $watchdog is a command and its options, or nothing
-$watchdog dbus-run-session -- cupertino-server --udev --dev-shell \
+dbus-run-session -- $watchdog cupertino-server --udev --dev-shell \
     --spawn cupertino-files --spawn cupertino-settings "$@" >"$log" 2>&1 || status=$?
 if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
     echo "Cupertino did not stop in time and was ended by the watchdog (status $status)" >&2

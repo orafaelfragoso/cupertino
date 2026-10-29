@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Check docs/architecture/contracts.yaml against the source. Usage: python3 ci/contracts.py ROOT.
 
-Checks the registry itself (fields, enums, duplicates, every source and test_owner path exists, and the test_owner of a
-socket or a binary names it), then compares it with
-the code: every `#[zbus::interface(name = ...)]` outside tests and examples, every org.cupertino.* name in the sources
+Checks the registry itself (fields, enums, duplicates, every source and test_owner path exists, every source_match
+occurs in its source file, and the test_owner of a socket or a binary names it), then compares it with the code: every `#[zbus::interface(name = ...)]` outside tests and examples, every org.cupertino.* name in the sources
 and every binary target of the workspace has an entry. The Wayland globals are compared at run time, by
 crates/cupertino-server/tests/contracts.rs."""
 import json
@@ -18,10 +17,10 @@ AREAS = {"compositor", "rendering", "design", "apps", "services", "packaging"}
 SCOPES = {"public", "shell-private", "system", "unknown"}
 COMMON = {"name", "kind", "version", "owner_crate", "owner_area", "scope", "test_owner", "source"}
 EXTRA = {
-    "wayland-global": {"role", "advertised"},
-    "dbus-interface": {"bus", "bus_name"},
+    "wayland-global": {"role", "advertised", "source_match"},
+    "dbus-interface": {"bus", "bus_name", "source_match"},
     "binary": {"shipped"},
-    "socket-protocol": set(),
+    "socket-protocol": {"source_match"},
 }
 OPTIONAL = {"note", "version_without_render_node", "visible_to"}
 # Any attribute with an `interface` token that is not a `key = value` argument (`proxy(interface = "...")`) and not inside
@@ -33,7 +32,8 @@ UNKNOWN_TEST_OWNERS = 16
 UNKNOWN_SCOPES = 1
 # Kinds whose test_owner must name the entry: a socket path or binary name is a string its tests use. Wayland globals
 # need not, since crates/cupertino-server/tests/contracts.rs compares them with the registry at run time; D-Bus
-# interfaces are reached through typed proxies.
+# interfaces are reached through typed proxies. A substring heuristic: a comment, or a longer name that contains this
+# one (cupertino-dock in cupertino-dock-helper), also passes.
 NAMED_BY_TEST = {"socket-protocol", "binary"}
 NAME = re.compile(r'"(org\.cupertino\.[A-Za-z0-9.]+)"')
 
@@ -104,10 +104,11 @@ def check_entries(entries, root):
                 problems.append(f"{where}: test_owner {e['test_owner']} does not exist")
             elif kind in NAMED_BY_TEST and e.get("name", "") not in test.read_text():
                 problems.append(f"{where}: test_owner {e['test_owner']} does not name {e.get('name')}")
-        path, _, line = e.get("source", "").rpartition(":")
-        file = root / path
-        if not file.is_file() or not line.isdigit() or not 1 <= int(line) <= len(file.read_text().splitlines()):
-            problems.append(f"{where}: source {e.get('source')!r} is not path:line of an existing line")
+        file = root / e.get("source", "")
+        if not e.get("source") or not file.is_file():
+            problems.append(f"{where}: source {e.get('source')!r} is not an existing file")
+        elif e.get("source_match") and e["source_match"] not in file.read_text():
+            problems.append(f"{where}: source_match {e['source_match']!r} does not occur in {e['source']}")
     return problems
 
 
@@ -150,8 +151,8 @@ def check_dbus(entries, root):
             entry = registered.get(name)
             if not entry:
                 problems.append(f"{path}:{number}: D-Bus interface {name} has no entry in {REGISTRY}")
-            elif entry["source"] != f"{path}:{number}":
-                problems.append(f"{path}:{number}: {name} is registered at {entry['source']}")
+            elif entry["source"] != path:
+                problems.append(f"{path}:{number}: {name} is registered in {entry['source']}")
         for number, line in enumerate(text.splitlines(), 1):
             for name in NAME.findall(line):
                 name = re.sub(r"\.Error.*", "", name)
@@ -175,7 +176,7 @@ def check_binaries(entries, root, built=None, shipped=None):
             continue
         if entry["owner_crate"] != crate:
             problems.append(f"{REGISTRY}:{entry['line']}: {name} is built by {crate}, not {entry['owner_crate']}")
-        if not entry["source"].startswith(source + ":"):
+        if entry["source"] != source:
             problems.append(f"{REGISTRY}:{entry['line']}: {name} is built from {source}, not {entry['source']}")
         if entry.get("shipped") != ("yes" if name in shipped else "no"):
             problems.append(f"{REGISTRY}:{entry['line']}: {name} shipped is {entry.get('shipped')}, packaging says "

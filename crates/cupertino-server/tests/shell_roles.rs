@@ -38,6 +38,7 @@ const SHELL_GET_SESSION: u16 = 3;
 const SHELL_GET_WINDOW_MANAGER: u16 = 4;
 const EFFECTS_GET_BACKDROP: u16 = 1;
 const EFFECTS_SET_TITLEBAR_STYLE: u16 = 2;
+const EFFECTS_SET_DISABLED_CONTROLS: u16 = 5;
 const BACKDROP_SET_MATERIAL: u16 = 1;
 
 /// `wl_display.error` code of a global the client is not offered; the server reports it on `wl_display` itself. A
@@ -336,7 +337,7 @@ fn a_public_client_cannot_see_bind_or_use_a_role_global() {
 
     let (shell_name, shell_version) = offered(&holder, holder_registry, "cupertino_shell_v1")
         .expect("a shell process is offered cupertino_shell_v1");
-    assert_eq!(shell_version, 14);
+    assert_eq!(shell_version, 15);
     let public_interfaces: Vec<String> = public
         .globals(registry)
         .into_iter()
@@ -552,6 +553,22 @@ fn an_app_cannot_claim_effects_on_another_clients_surface() {
     assert!(
         intruder.closed,
         "a title bar style on a surface the client never created: the connection survived"
+    );
+
+    let mut intruder = h.public();
+    let registry = intruder.get_registry();
+    h.settle(&mut [&mut intruder]);
+    let (effects_name, _) = offered(&intruder, registry, "cupertino_app_effects_v1").unwrap();
+    let intruder_effects = intruder.bind(registry, effects_name, "cupertino_app_effects_v1", 4);
+    intruder.send(
+        intruder_effects,
+        EFFECTS_SET_DISABLED_CONTROLS,
+        &[Arg::Uint(surface), Arg::Uint(1)],
+    );
+    h.settle(&mut [&mut intruder]);
+    assert!(
+        intruder.closed,
+        "disabled controls on a surface the client never created: the connection survived"
     );
 
     owner.send(backdrop, BACKDROP_SET_MATERIAL, &[Arg::Str("Menu")]);

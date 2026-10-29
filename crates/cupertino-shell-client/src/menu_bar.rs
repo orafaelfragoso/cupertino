@@ -2,7 +2,7 @@
 
 use cupertino_protocols::client::cupertino_menu_bar_v1::{
     self, AgentTrust, AppWindowFlags, BoundAction as WireBoundAction, Command, CupertinoMenuBarV1,
-    EditAction as WireEditAction, ModifierKey, SessionAction as WireSessionAction,
+    EditAction as WireEditAction, ModifierKey, SessionAction as WireSessionAction, WindowControl,
 };
 use std::collections::BTreeMap;
 use wayland_client::{Proxy, WEnum};
@@ -50,6 +50,8 @@ pub enum WindowMenu {
 /// State of the active window for the window menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WindowState {
+    /// Whether the window's minimize is enabled; from version 15, else always `true`.
+    pub can_minimize: bool,
     pub can_zoom: bool,
     /// 1-based workspace of the window, `0` for none.
     pub workspace: u32,
@@ -372,6 +374,8 @@ pub(crate) struct GroupBuilder {
     update: MenuBarUpdate,
     /// The server lists the windows in every group with `window_state`.
     lists_windows: bool,
+    /// The enabled controls of the active window, for the group's `window_state` (version 15).
+    controls: Option<WindowControl>,
 }
 
 impl GroupBuilder {
@@ -380,6 +384,7 @@ impl GroupBuilder {
         Self {
             update: MenuBarUpdate::default(),
             lists_windows: version >= DEFAULT_MENUS_VERSION,
+            controls: None,
         }
     }
 
@@ -418,6 +423,7 @@ impl GroupBuilder {
                 workspaces,
             } => {
                 self.update.window_state = Some(WindowState {
+                    can_minimize: true,
                     can_zoom: can_zoom != 0,
                     workspace,
                     workspaces,
@@ -469,9 +475,21 @@ impl GroupBuilder {
                     WEnum::Value(_) | WEnum::Unknown(_) => {}
                 }
             }
+            Event::WindowControls { enabled } => {
+                self.controls = Some(match enabled {
+                    WEnum::Value(enabled) => enabled,
+                    WEnum::Unknown(bits) => WindowControl::from_bits_truncate(bits),
+                })
+            }
             Event::Done => {
                 if self.lists_windows && self.update.window_state.is_some() {
                     self.update.windows.get_or_insert_with(Vec::new);
+                }
+                if let (Some(state), Some(enabled)) =
+                    (self.update.window_state.as_mut(), self.controls.take())
+                {
+                    state.can_minimize = enabled.contains(WindowControl::Minimize);
+                    state.can_zoom &= enabled.contains(WindowControl::Zoom);
                 }
                 let update = std::mem::take(&mut self.update);
                 return (update != MenuBarUpdate::default()).then_some(update);
@@ -522,6 +540,7 @@ mod tests {
                     path: "/MenuBar".into()
                 }),
                 window_state: Some(WindowState {
+                    can_minimize: true,
                     can_zoom: true,
                     workspace: 2,
                     workspaces: 4
@@ -736,6 +755,57 @@ mod tests {
                     ..MenuBarUpdate::default()
                 }
             ]
+        );
+    }
+
+    #[test]
+    fn the_window_controls_set_what_the_window_state_enables() {
+        let controls = |enabled| Event::WindowControls {
+            enabled: WEnum::Value(enabled),
+        };
+        let enabled = |updates: &[MenuBarUpdate]| {
+            updates
+                .iter()
+                .map(|u| u.window_state.map(|s| (s.can_minimize, s.can_zoom)))
+                .collect::<Vec<_>>()
+        };
+        let updates = feed(vec![
+            controls(WindowControl::Zoom),
+            window_state(),
+            Event::Done,
+            window_state(),
+            controls(WindowControl::Minimize),
+            Event::Done,
+            Event::WindowState {
+                can_zoom: 0,
+                workspace: 1,
+                workspaces: 1,
+            },
+            controls(WindowControl::Minimize | WindowControl::Zoom),
+            Event::Done,
+            window_state(),
+            Event::Done,
+        ]);
+        assert_eq!(
+            enabled(&updates),
+            [
+                Some((false, true)),
+                Some((true, false)),
+                Some((true, false)),
+                Some((true, true))
+            ],
+            "in either order; zoom only while both allow it; both without the event"
+        );
+        let updates = feed(vec![
+            controls(WindowControl::empty()),
+            Event::Done,
+            window_state(),
+            Event::Done,
+        ]);
+        assert_eq!(
+            enabled(&updates),
+            [Some((true, true))],
+            "a group without window_state drops the controls"
         );
     }
 

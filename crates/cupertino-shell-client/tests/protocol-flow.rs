@@ -655,6 +655,9 @@ impl Dispatch<CupertinoShellV1, ()> for Mock {
                 bar.active_app("org.example.editor".into(), "notes.txt".into());
                 bar.menu_dbusmenu(":1.42".into(), "/MenuBar".into());
                 bar.window_state(1, 2, 4);
+                if bar.version() >= 15 {
+                    bar.window_controls(cupertino_menu_bar_v1::WindowControl::Zoom);
+                }
                 bar.done();
                 if bar.version() >= 14 {
                     bar.backdrop_luminance(620);
@@ -1290,6 +1293,7 @@ fn menu_bar_groups_arrive_typed_and_requests_reach_the_server() {
                 path: "/MenuBar".into()
             }),
             window_state: Some(WindowState {
+                can_minimize: true,
                 can_zoom: true,
                 workspace: 2,
                 workspaces: 4
@@ -1348,6 +1352,23 @@ fn a_version_14_server_tells_the_bar_the_backdrop_lightness() {
         _ => None,
     });
     assert_eq!(lightness, 620);
+}
+
+#[test]
+fn a_version_15_server_tells_the_bar_the_active_windows_enabled_controls() {
+    let (mut conn, _control, _committed, _seen, layer, mut stash) = connected_layer_surface_at(15);
+    let shell = Shell::bind(&mut conn).unwrap();
+    let _bar = shell.menu_bar(&conn, layer, conn.outputs()[0].id).unwrap();
+    flush(&mut conn, &mut stash);
+    let state = wait_for(&mut conn, &mut stash, |e| match shell_event(e) {
+        Some(ShellEvent::MenuBar { surface, update }) if *surface == layer => update.window_state,
+        _ => None,
+    });
+    assert_eq!(
+        (state.can_minimize, state.can_zoom),
+        (false, true),
+        "the server enabled zoom alone"
+    );
 }
 
 #[test]

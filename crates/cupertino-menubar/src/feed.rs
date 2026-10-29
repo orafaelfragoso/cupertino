@@ -196,6 +196,7 @@ impl BarFeed {
             app: None,
             app_id: String::new(),
             window: WindowState {
+                can_minimize: true,
                 can_zoom: true,
                 workspace: 0,
                 workspaces: 1,
@@ -285,6 +286,7 @@ impl BarFeed {
                 let system = fallback::menus(
                     self.window.workspaces,
                     current,
+                    self.window.can_minimize,
                     self.window.can_zoom,
                     &windows,
                     &shared.chords,
@@ -725,6 +727,7 @@ mod tests {
         let (mut feed, mut shared) = ready(Some(WindowMenu::None));
         let state = MenuBarUpdate {
             window_state: Some(WindowState {
+                can_minimize: false,
                 can_zoom: false,
                 workspace: 2,
                 workspaces: 3,
@@ -740,12 +743,19 @@ mod tests {
             .iter()
             .find(|m| m.id == fallback::WINDOW_MENU)
             .unwrap();
+        let minimize = window
+            .children
+            .iter()
+            .find(|i| i.label == "Minimize")
+            .unwrap();
         let zoom = window.children.iter().find(|i| i.label == "Zoom").unwrap();
         let workspaces = window
             .children
             .iter()
             .find(|i| i.label == "Move to Workspace")
             .unwrap();
+        assert!(!minimize.enabled);
+        assert!(minimize.alternate.as_ref().is_some_and(|all| all.enabled));
         assert!(!zoom.enabled);
         assert_eq!(
             workspaces

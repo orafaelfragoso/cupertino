@@ -579,7 +579,7 @@ mod tests {
         let chords = Chords::default();
         export.merge(
             fallback::app_menu("Editor", &chords),
-            fallback::menus(1, Some(1), true, &[], &chords, true),
+            fallback::menus(1, Some(1), true, true, &[], &chords, true),
             chords.primary,
         )
     }
@@ -812,7 +812,7 @@ mod tests {
         let tree = dbusmenu_tree();
         let (_, menus) = merged(&export(&tree, Exporter::DbusMenu));
         let window = menu(&menus, "Window");
-        let system = fallback::window_menu(1, Some(1), true, &[], &Chords::default());
+        let system = fallback::window_menu(1, Some(1), true, true, &[], &Chords::default());
         assert_eq!(window.id, fallback::WINDOW_MENU);
         assert_eq!(
             window.children[..system.children.len()],
@@ -943,7 +943,7 @@ mod tests {
         let chords = Chords::default();
         let (_, menus) = export(&tree, Exporter::Gtk).merge(
             fallback::app_menu("Editor", &chords),
-            fallback::menus(1, Some(1), true, &[], &chords, true),
+            fallback::menus(1, Some(1), true, true, &[], &chords, true),
             Primary,
         );
         let new = &menu(&menus, "File").children[0];

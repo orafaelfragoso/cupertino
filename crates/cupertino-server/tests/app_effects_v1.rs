@@ -964,7 +964,7 @@ fn run_steps(socket: PathBuf, steps: Vec<Step>) -> JoinHandle<Option<u32>> {
     })
 }
 
-fn finish(h: &mut Harness, client: JoinHandle<Option<u32>>) -> Option<u32> {
+fn finish<T>(h: &mut Harness, client: JoinHandle<T>) -> T {
     while !client.is_finished() {
         h.step();
     }
@@ -1024,4 +1024,155 @@ fn a_client_over_its_limit_does_not_take_the_places_of_another() {
     steps.extend((0..64).map(|_| Step::Backdrop(0)));
     let other = run_steps(h.socket_path(), steps);
     assert_eq!(finish(&mut h, other), None);
+}
+
+// ---- disabled window controls --------------------------------------------------------------
+
+use cupertino_protocols::client::app_effects::cupertino_app_effects_v1::WindowControl;
+use cupertino_server::app_effects_v1::{disabled_controls, DisabledControls};
+use wayland_protocols::xdg::shell::client::xdg_toplevel;
+
+ignore_bare_events!(
+    xdg_wm_base::XdgWmBase,
+    xdg_surface::XdgSurface,
+    xdg_toplevel::XdgToplevel
+);
+
+/// Protocol error codes of `cupertino_app_effects_v1.error`.
+const WINDOW: u32 = 1;
+const INVALID_CONTROLS: u32 = 4;
+/// How a client of the controls tests ended its round trip.
+#[derive(Debug, PartialEq)]
+enum Outcome {
+    Connected,
+    /// The code of the protocol error the server posted on the effects object.
+    EffectsError(u32),
+    /// The server ended the connection with an error the client does not keep, as `wl_display.invalid_method`.
+    Ended,
+}
+
+/// A client on `cupertino_app_effects_v1` of `version` that sends `set_disabled_controls(disabled)` for a new surface,
+/// an xdg toplevel when `toplevel`, commits the surface and waits one round trip: how the round trip ended, and the
+/// connection, kept open so its window stays.
+fn disable_controls(
+    socket: PathBuf,
+    version: u32,
+    toplevel: bool,
+    disabled: u32,
+) -> JoinHandle<(Outcome, Connection)> {
+    std::thread::spawn(move || {
+        let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
+        let conn = Connection::from_socket(stream).unwrap();
+        let (globals, mut queue) = registry_queue_init::<Bare>(&conn).unwrap();
+        let qh = queue.handle();
+        let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
+        let wm_base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=6, ()).unwrap();
+        let effects: CupertinoAppEffectsV1 = globals.bind(&qh, version..=version, ()).unwrap();
+        let surface = compositor.create_surface(&qh, ());
+        let _role = toplevel.then(|| {
+            let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
+            (xdg.get_toplevel(&qh, ()), xdg)
+        });
+        effects.set_disabled_controls(&surface, WindowControl::from_bits_retain(disabled));
+        surface.commit();
+        let outcome = match queue.roundtrip(&mut Bare) {
+            Ok(_) => Outcome::Connected,
+            Err(_) => match conn.protocol_error() {
+                Some(error) => {
+                    assert_eq!(
+                        error.object_interface,
+                        CupertinoAppEffectsV1::interface().name
+                    );
+                    Outcome::EffectsError(error.code)
+                }
+                None => Outcome::Ended,
+            },
+        };
+        (outcome, conn)
+    })
+}
+
+/// A client with a toplevel that sends `set_disabled_controls(minimize)` without a commit, then commits once for each
+/// cue; it reports after the request and after each commit, each followed by a round trip.
+fn commit_on_cue(socket: PathBuf) -> (Sender<()>, Receiver<()>, JoinHandle<Connection>) {
+    let (cue, cues) = channel::<()>();
+    let (done, dones) = channel();
+    let client = std::thread::spawn(move || {
+        let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
+        let conn = Connection::from_socket(stream).unwrap();
+        let (globals, mut queue) = registry_queue_init::<Bare>(&conn).unwrap();
+        let qh = queue.handle();
+        let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
+        let wm_base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=6, ()).unwrap();
+        let effects: CupertinoAppEffectsV1 = globals.bind(&qh, 4..=4, ()).unwrap();
+        let surface = compositor.create_surface(&qh, ());
+        let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
+        let _toplevel = xdg.get_toplevel(&qh, ());
+        effects.set_disabled_controls(&surface, WindowControl::Minimize);
+        queue.roundtrip(&mut Bare).unwrap();
+        done.send(()).unwrap();
+        while cues.recv().is_ok() {
+            surface.commit();
+            queue.roundtrip(&mut Bare).unwrap();
+            done.send(()).unwrap();
+        }
+        conn
+    });
+    (cue, dones, client)
+}
+
+#[test]
+fn disabled_controls_apply_with_the_next_commit_and_stay() {
+    let Some(mut h) = Harness::new() else { return };
+    let (cue, done, client) = commit_on_cue(h.socket_path());
+    let reported = |h: &mut Harness| {
+        while done.try_recv().is_err() {
+            h.step();
+        }
+        disabled_controls(h.state.windows[0].toplevel.wl_surface())
+    };
+    let minimize = DisabledControls {
+        minimize: true,
+        zoom: false,
+    };
+    assert_eq!(
+        reported(&mut h),
+        DisabledControls::default(),
+        "before the commit"
+    );
+    cue.send(()).unwrap();
+    assert_eq!(reported(&mut h), minimize, "with the commit");
+    cue.send(()).unwrap();
+    assert_eq!(
+        reported(&mut h),
+        minimize,
+        "a commit without a request keeps it"
+    );
+    drop(cue);
+    finish(&mut h, client);
+}
+
+#[test]
+fn disabling_controls_of_a_surface_that_is_not_a_toplevel_is_a_protocol_error() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = disable_controls(h.socket_path(), 4, false, WindowControl::Zoom.bits());
+    assert_eq!(finish(&mut h, client).0, Outcome::EffectsError(WINDOW));
+}
+
+#[test]
+fn a_control_the_version_does_not_define_is_a_protocol_error() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = disable_controls(h.socket_path(), 4, true, 4);
+    assert_eq!(
+        finish(&mut h, client).0,
+        Outcome::EffectsError(INVALID_CONTROLS)
+    );
+}
+
+#[test]
+fn a_version_3_client_cannot_disable_controls() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = disable_controls(h.socket_path(), 3, true, WindowControl::Minimize.bits());
+    // wl_display.invalid_method: the request is newer than the object, and the server ends the connection
+    assert_eq!(finish(&mut h, client).0, Outcome::Ended);
 }

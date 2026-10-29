@@ -48,19 +48,22 @@ A crate's layer is declared in its manifest (`[package.metadata.cupertino] layer
 
 | Layer | Crates | May depend on |
 |---|---|---|
-| `foundation` | cupertino-animation, -apps, -assets, -defaults, -filepicker, -geometry, -icons, -keyboard, -menu-model, -modifiers, -theme, -thumbnails, -typeahead, -xkbcommon | `foundation` |
-| `models` (pure logic, no I/O) | cupertino-displays, -effects, -input, -login-ipc, -overview, -stage, -wm | `foundation`, `models` |
+| `foundation` | cupertino-animation, -apps, -assets, -defaults, -filepicker, -geometry, -glyph, -icons, -key-bindings, -keyboard, -menu-model, -modifiers, -test-bus, -theme, -thumbnails, -typeahead, xkbcommon | `foundation` |
+| `models` (pure logic, no I/O) | cupertino-displays, -effects, -input, -overview, -render-api, -scene, -stage, -wm | `foundation`, `models` |
 | `platform` (kernel interfaces only) | cupertino-alsa, -bluetooth, -devices, -evdev, -netlink, -peer, -seat | `foundation`, `platform` |
-| `render` | cupertino-app-protocols, -client, -cursor, -decorations, -glass, -kit, -protocol-app, -protocols, -shell-client, -text-field, -ui-controls, -ui-core, -ui-layout, -ui-menus, -ui-platform, -ui-render, -ui-test, -ui-text, -ui-theme, -ui-wayland, -wayland-client | `foundation`, `platform`, `render` |
-| `core` | cupertino-server | `foundation`, `models`, `platform`, `render` |
-| `shell` | cupertino-controlcenter, -dock, -launcher, -login, -menubar, -notifications, -osd, -screenshot, -windowmanager | `foundation`, `models`, `platform`, `render` |
-| `services` | cupertino-btd, -netd, -powerd, -sessiond | as `shell` |
-| `apps` | cupertino-files, -settings | as `shell` |
-| `tools` | cupertino-layers, -testclient | as `shell` |
+| `protocol` | cupertino-app-protocols, -login-ipc, -protocols | `foundation`, `protocol` |
+| `transport` | cupertino-protocol-app, -shell-client, -wayland-client | `foundation`, `platform`, `protocol`, `transport` |
+| `render` | cupertino-cursor, -decorations, -glass | `foundation`, `platform`, `render` |
+| `ui` (the toolkit) | cupertino-kit, -text-field, -ui-controls, -ui-core, -ui-layout, -ui-menus, -ui-platform, -ui-render, -ui-test, -ui-text, -ui-theme, -ui-wayland | `foundation`, `protocol`, `transport`, `ui` |
+| `core` | cupertino-server | `foundation`, `models`, `platform`, `protocol`, `render` |
+| `shell` | cupertino-controlcenter, -dock, -launcher, -login, -menubar, -notifications, -osd, -screenshot, -windowmanager | `foundation`, `models`, `platform`, `protocol`, `transport`, `render`, `ui` |
+| `services` | cupertino-btd, -netd, -powerd, -sessiond | `foundation`, `models`, `platform`, `protocol`, `services` |
+| `apps` | cupertino-files, -settings | `foundation`, `models`, `protocol`, `transport`, `ui` |
+| `tools` | cupertino-layers, -testclient | all but `core`, `shell`, `services`, `apps` |
 
 `shell`, `services`, `apps` and `tools` crates never depend on `core` or on each other. Each shell component is one crate: its pure model plus a binary behind an `app` feature. Only `cupertino-server` and `cupertino-seat` (which implements Smithay's session trait) depend on Smithay. The `xkbcommon` package of the workspace is `cupertino-xkbcommon`, a pure-Rust drop-in for the C-binding crate, selected through `[patch.crates-io]`.
 
-The migration moves to twelve layers (adding `protocol`, `transport` and `ui`). `cupertino-layers` also checks every crate's target layer, with each edge that the target forbids today listed as an exception (permanent, or migration debt with its issue), and fails on any dependency chain from `ui` to `core`, `shell` or `services`; its README has the target table, and `crates/cupertino-layers/graph/` holds DOT snapshots of both views, checked by a test (`cargo run -p cupertino-layers -- --graph current|target`).
+An edge the table forbids that exists today is listed as an exception in `cupertino-layers` (permanent, or migration debt with its issue), and any dependency chain from `ui` to `core`, `shell` or `services` fails even when its edges are excused. `crates/cupertino-layers/graph/layers.dot` is a DOT snapshot of the layers, checked by a test (`cargo run -p cupertino-layers -- --graph`).
 
 ## Contracts registry
 

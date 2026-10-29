@@ -1,62 +1,48 @@
 # cupertino-layers
 
-Checks that dependencies between workspace crates follow the layer rules below, today's and the target's. A crate's
+Checks that dependencies between workspace crates follow the layer rules below. A crate's
 layer is declared in its manifest, `[package.metadata.cupertino] layer = "<layer>"`; in this tree crates live in
 `crates/<crate>`. Layer: `tools`.
 
 ## Usage
 
 ```sh
-cargo run -p cupertino-layers                          # from anywhere inside the repository
-cargo run -p cupertino-layers -- --graph current       # DOT graph of the declared layers
-cargo run -p cupertino-layers -- --graph target        # DOT graph of the target layers
+cargo run -p cupertino-layers               # from anywhere inside the repository
+cargo run -p cupertino-layers -- --graph    # DOT graph of the declared layers
 ```
 
 The binary runs `cargo metadata`, collects every dependency between workspace crates (normal, build and
-dev, one edge per kind), and prints one line per problem to stderr; target problems start with `target:`. Without `--graph` the last line
-is a summary:
+dev, one edge per kind), and prints one line per problem to stderr. Without `--graph` the last line is a summary:
 
 ```
-51 crates, 160 internal dependencies, 0 pending, 7 target exceptions, 0 problems
+71 crates, 291 internal dependencies, 3 exceptions, 0 problems
 ```
 
 It exits with failure on any problem, in both modes; lists it among the pre-finish checks.
 
 `--graph` prints a DOT graph with one cluster per layer. Comment lines above it give the crate count per layer, every
 forbidden edge with its kind and its exception (tracking, area, reason) or `violation`, stale exceptions and denied
-paths. Build and dev edges are labelled, exceptions drawn orange and dashed, violations red. `graph/current.dot` and
-`graph/target.dot` are committed snapshots, and `tests/graph-snapshots.rs` fails when they differ from the workspace;
-regenerate them after a dependency or classification change:
+paths. Build and dev edges are labelled, exceptions drawn orange and dashed, violations red. `graph/layers.dot` is a committed
+snapshot, and `tests/graph-snapshots.rs` fails when it differs from the workspace; regenerate it after a dependency or
+layer change:
 
 ```sh
-cargo run -q -p cupertino-layers -- --graph current > crates/cupertino-layers/graph/current.dot
-cargo run -q -p cupertino-layers -- --graph target > crates/cupertino-layers/graph/target.dot
+cargo run -q -p cupertino-layers -- --graph > crates/cupertino-layers/graph/layers.dot
 ```
 
 ## Design
 
 All rules are constants in `src/lib.rs`; nothing is read from a configuration file.
 
-`RULES` is what the manifests follow today:
-
-| Layer | May depend on |
-|---|---|
-| `foundation` | `foundation` |
-| `models` | `foundation`, `models` |
-| `platform` | `foundation`, `platform` |
-| `render` | `foundation`, `platform`, `render` |
-| `core`, `shell`, `services`, `apps`, `tools` | `foundation`, `models`, `platform`, `render` |
-
-`TARGET_RULES` is the twelve-layer target. `TARGET` classifies every workspace crate into one of its layers (names
-without the `cupertino-` prefix):
+`RULES` has twelve layers. The crates that declare each layer (names without the `cupertino-` prefix):
 
 | Layer | May depend on | Crates |
 |---|---|---|
-| `foundation` | `foundation` | animation, apps, assets, defaults, filepicker, geometry, icons, keyboard, theme, thumbnails, typeahead, xkbcommon |
-| `models` | `foundation`, `models` | displays, effects, input, overview, stage, wm |
+| `foundation` | `foundation` | animation, apps, assets, defaults, filepicker, geometry, glyph, icons, key-bindings, keyboard, menu-model, modifiers, test-bus, theme, thumbnails, typeahead, xkbcommon |
+| `models` | `foundation`, `models` | displays, effects, input, overview, render-api, scene, stage, wm |
 | `platform` | `foundation`, `platform` | alsa, bluetooth, devices, evdev, netlink, peer, seat |
-| `protocol` | `foundation`, `protocol` | login-ipc, protocols |
-| `transport` | `foundation`, `platform`, `protocol`, `transport` | client, wayland-client |
+| `protocol` | `foundation`, `protocol` | app-protocols, login-ipc, protocols |
+| `transport` | `foundation`, `platform`, `protocol`, `transport` | protocol-app, shell-client, wayland-client |
 | `render` | `foundation`, `platform`, `render` | cursor, decorations, glass |
 | `ui` | `foundation`, `protocol`, `transport`, `ui` | kit, text-field, ui-controls, ui-core, ui-layout, ui-menus, ui-platform, ui-render, ui-test, ui-text, ui-theme, ui-wayland |
 | `core` | `foundation`, `models`, `platform`, `protocol`, `render` | server |
@@ -82,20 +68,20 @@ included, from `cupertino-wayland-client` to `cupertino-protocols` or another co
 transport speaks standard protocols only. Every toolkit crate is also denied `cupertino-protocols` and
 `cupertino-shell-client`.
 
-`PENDING` (for `RULES`, empty) and `TARGET_EXCEPTIONS` (for `TARGET_RULES`) hold `Exception` values: `from`, `to`, the
+`EXCEPTIONS` holds `Exception` values: `from`, `to`, the
 dependency `kind` it excuses, an owner `area` (compositor, rendering, design, apps, services, packaging), a `reason`
 and a `tracking`:
 
 - `Permanent`: a reviewed edge that stays, such as a dev-only edge for tests or an approved render primitive. Today:
-  server → client (dev).
+  none.
 - `Issue(n)`: migration debt the issue removes. Today: #46 files and settings → decorations, #21 settings →
   alsa.
 
-An entry that no longer matches an edge of its kind is an error, so both lists only shrink. A crate missing from
-`TARGET`, or a `TARGET` entry that names no crate, is an error too.
+An entry that no longer matches an edge of its kind is an error, so the list only shrinks. A crate without a declared
+layer, or with a layer that has no row in `RULES`, stops the check.
 
 Library: `Layer` (`ALL`, `name`, `from_name`), `Kind`, `allows(rules, from, to)`, `Edge`, `edges(layers, deps)`,
-`classify(crates, target)`, `Exception`, `Area`, `Tracking`, `check(rules, edges, exceptions, denied)`,
+`Exception`, `Area`, `Tracking`, `check(rules, edges, exceptions, denied)`,
 `exception(exceptions, edge)`, `Problem`, `denied_paths(edges, denied)`, `denied_crate_paths(deps, denied)`, `licence_problems(licences, deps, has_text)`, `is_mpl`, `is_gpl`, `dot(…)`.
 
 ## Tests

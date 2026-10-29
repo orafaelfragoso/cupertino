@@ -6,7 +6,7 @@ license = "MPL-2.0"
 description = "CupertinoKit test harness: a headless window system, event-trace record and replay, and deterministic dumps of the layout, semantics and display list"
 
 [package.metadata.cupertino]
-layer = "render"
+layer = "ui"
 
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }

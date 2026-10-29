@@ -6,7 +6,7 @@ license = "MPL-2.0"
 description = "The public Cupertino protocols on the transport's queue: appearance and display options, server-rendered backdrops, the title bar style and scroll counts"
 
 [package.metadata.cupertino]
-layer = "render"
+layer = "transport"
 
 [dependencies]
 cupertino-app-protocols = { path = "../cupertino-app-protocols", features = ["client"] }

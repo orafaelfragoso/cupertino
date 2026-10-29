@@ -6,7 +6,7 @@ license = "MPL-2.0"
 description = "CupertinoKit theme tokens: semantic colours per control state, control metrics, type scale, focus ring and motion, from the neutral built-in theme or the Cupertino theme data"
 
 [package.metadata.cupertino]
-layer = "render"
+layer = "ui"
 
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }

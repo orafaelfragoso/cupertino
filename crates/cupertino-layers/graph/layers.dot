@@ -1,11 +1,11 @@
-// cupertino-layers --graph target
+// cupertino-layers --graph
 // 71 crates, 291 internal dependencies
 // per layer: foundation 17, models 8, platform 7, protocol 3, transport 3, render 3, ui 12, core 1, shell 9, services 4, apps 2, tools 2
 // forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the mixer itself until audio goes through a service
 // forbidden normal edge cupertino-settings (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // denied paths ui -> core, shell, services: none
-digraph "target" {
+digraph "layers" {
   node [shape=box];
   subgraph "cluster_foundation" {
     label="foundation (17)";

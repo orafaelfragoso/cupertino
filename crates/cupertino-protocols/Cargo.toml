@@ -6,7 +6,7 @@ license.workspace = true
 description = "Private Wayland protocols between the Cupertino server and its shell processes, with generated client and server bindings; re-exports the public ones"
 
 [package.metadata.cupertino]
-layer = "render"
+layer = "protocol"
 
 [features]
 client = ["dep:wayland-client", "cupertino-app-protocols/client"]

@@ -6,7 +6,7 @@ license = "MPL-2.0"
 description = "CupertinoKit's window system on the Cupertino transport, and drawing on a surface of it with tiny-skia: frame pacing, damage and buffer conversion, popup placement and the text clipboard"
 
 [package.metadata.cupertino]
-layer = "render"
+layer = "ui"
 
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }

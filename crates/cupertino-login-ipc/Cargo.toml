@@ -6,7 +6,7 @@ license.workspace = true
 description = "Protocol between the login screen and the session manager: typed requests and events, length-prefixed JSON framing with size caps, zeroed secrets and the connection state machine"
 
 [package.metadata.cupertino]
-layer = "models"
+layer = "protocol"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

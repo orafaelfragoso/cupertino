@@ -25,6 +25,7 @@ cupertino-apps = { path = "../cupertino-apps" }
 cupertino-icons = { path = "../cupertino-icons" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-keyboard = { path = "../cupertino-keyboard" }
 cupertino-thumbnails = { path = "../cupertino-thumbnails" }
 cupertino-typeahead = { path = "../cupertino-typeahead" }
 cupertino-geometry = { path = "../cupertino-geometry" }

@@ -12,8 +12,9 @@ buffer follow.
 - `TextInputSession::state` sends a protected field's own rectangle and no text; `Surrounding::around` cuts the
   bounded window around the caret on grapheme boundaries.
 - `TextBuffer` is the single-line editing model that used to be `cupertino-text-field`'s: grapheme caret and selection,
-  undo, kill buffer, composition range, click counting, caret blink and scroll. It takes no key codes; the apps' adapter
-  maps keys onto its methods.
+  undo, kill buffer, composition range, click counting, caret blink and scroll. `Keymap` resolves a key (evdev code, modifiers
+  physical through a profile or already logical, and the character) through `cupertino-key-bindings`' chords, and
+  `TextFieldKeys` carries the result out on the buffer; neither reads settings, which `cupertino-keyboard` does.
 - `Surrounding::around` costs the window, not the document; a text that is one huge run of regional indicators (flags)
   is the exception, because the boundary rule scans back over the run.
 - `FontIndex` holds the faces the app registers from font bytes and resolves a family, weight and variation set to a

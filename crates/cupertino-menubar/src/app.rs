@@ -249,7 +249,10 @@ pub fn run() -> Result<std::convert::Infallible> {
         next_key: 0,
         pending: HashMap::new(),
         recent,
-        keymap: Keymap::load(),
+        keymap: Keymap::new(
+            cupertino_keyboard::binding::user_profile(),
+            cupertino_keyboard::binding::load_default().0,
+        ),
     };
     app.reconcile_outputs()?;
     for event in early {

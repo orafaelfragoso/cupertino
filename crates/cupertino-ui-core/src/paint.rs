@@ -143,8 +143,11 @@ pub(crate) struct PaintInput<'a> {
     pub(crate) now: Timestamp,
 }
 
-pub(crate) fn paint_node_id(id: NodeId) -> PaintNodeId {
-    PaintNodeId(id.0.get())
+/// The paint node a UI node draws into, so tests and the inspector can find a node's operations.
+impl From<NodeId> for PaintNodeId {
+    fn from(id: NodeId) -> Self {
+        PaintNodeId(id.0.get())
+    }
 }
 
 impl Painter {
@@ -206,8 +209,8 @@ impl Painter {
             let painted = &self.nodes[&id];
             let origin = placement.rect.origin;
             list.nodes.push(PaintNode {
-                id: paint_node_id(id),
-                parent: node.parent.map(paint_node_id),
+                id: id.into(),
+                parent: node.parent.map(PaintNodeId::from),
                 revision: painted.revision,
                 transform: Transform([1.0, 0.0, 0.0, 1.0, origin.x, origin.y]),
                 clip: placement

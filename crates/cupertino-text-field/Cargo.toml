@@ -9,7 +9,4 @@ description = "Single-line text field model of the Cupertino apps: caret, select
 layer = "render"
 
 [dependencies]
-cupertino-defaults = { path = "../cupertino-defaults" }
-cupertino-keyboard = { path = "../cupertino-keyboard" }
-cupertino-modifiers = { path = "../cupertino-modifiers" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }

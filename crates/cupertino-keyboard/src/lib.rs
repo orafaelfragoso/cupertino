@@ -15,9 +15,8 @@
 
 pub mod accent;
 pub mod binding;
-mod binding_table;
 pub mod keycodes;
-pub mod keys;
+pub use cupertino_key_bindings::keys;
 pub mod modifiers;
 pub mod mouse_keys;
 pub mod repeat;

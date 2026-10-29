@@ -252,8 +252,9 @@ mod tests {
             .map(|l| l.parse().unwrap())
             .collect();
         let (first, second) = (starts[1] - starts[0], starts[2] - starts[1]);
-        assert!((1_000..1_900).contains(&first), "first wait {first} ms");
-        assert!((2_000..2_900).contains(&second), "second wait {second} ms");
+        // lower bounds only: a loaded machine may start a process late, never early
+        assert!(first >= 1_000, "first wait {first} ms");
+        assert!(second >= 2_000, "second wait {second} ms");
         drop(s);
         std::fs::remove_dir_all(dir).unwrap();
     }

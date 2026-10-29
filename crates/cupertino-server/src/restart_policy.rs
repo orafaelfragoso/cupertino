@@ -1,6 +1,5 @@
-//! Restart policy of a supervised shell process: the design session's restart rule (restart after a failed exit) with a throttle (rule 1).
-//! A process is restarted only after an exit with failure, and never sooner than the throttle
-//! after its last start. The throttle starts at 1 s and doubles with every failure up to [`BACKOFF_CAP`], so a process that
+//! Restart policy of a supervised shell process: it is restarted only after an exit with failure (a successful exit stops
+//! it for good), and never sooner than the throttle after its last start. The throttle starts at 1 s and doubles with every failure up to [`BACKOFF_CAP`], so a process that
 //! cannot run is tried less and less often; it starts over once a run lasted [`STABLE_AFTER`].
 
 use std::process::ExitStatus;

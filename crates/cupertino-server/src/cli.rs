@@ -330,12 +330,13 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
 /// restart is at most this late.
 const SUPERVISION_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Poll the shell processes of the configuration from the event loop (starting them on the first tick).
+/// Poll the shell processes of the configuration (starting them on the first tick) and the X display's satellite from
+/// the event loop.
 pub fn start_shell_supervision(
     state: &Cupertino,
     event_loop: &EventLoop<'static, Cupertino>,
 ) -> Result<()> {
-    if state.config.shell_processes.is_empty() {
+    if state.config.shell_processes.is_empty() && state.xwayland.is_none() {
         return Ok(());
     }
     let timer = Timer::immediate();
@@ -347,12 +348,18 @@ pub fn start_shell_supervision(
                 .clone()
                 .expect("the server listens on a socket when it supervises shell processes");
             let display = state.display_handle.clone();
-            state.supervisor.poll(Instant::now(), &socket, &mut |spec| {
-                crate::shell_connection::connect_bound_client(
-                    &display,
-                    crate::shell_connection::shell_process_state(&spec.roles),
-                )
-            });
+            if let Some(x) = &mut state.xwayland {
+                x.poll(&state.loop_handle, Instant::now());
+            }
+            let x11 = state.xwayland.as_ref().map(|x| x.display());
+            state
+                .supervisor
+                .poll(Instant::now(), &socket, x11, &mut |spec| {
+                    crate::shell_connection::connect_bound_client(
+                        &display,
+                        crate::shell_connection::shell_process_state(&spec.roles),
+                    )
+                });
             let trust = state.login_trust();
             if let Some(dbus) = &state.dbus {
                 dbus.set_login(trust);
@@ -362,6 +369,34 @@ pub fn start_shell_supervision(
         })
         .map_err(|e| anyhow::anyhow!("inserting the shell supervision timer: {e}"))?;
     Ok(())
+}
+
+/// Takes an X display for X11 programs when `xwayland-satellite` is installed; without it, or when no display can be
+/// taken, the session serves Wayland clients only.
+fn start_xwayland(state: &mut Cupertino) {
+    let Some(program) = crate::state::which(crate::xwayland::SATELLITE) else {
+        tracing::info!("xwayland-satellite is not installed: X11 programs cannot run");
+        return;
+    };
+    let (Some(socket), Some(runtime_dir)) = (
+        state.socket_name.clone(),
+        std::env::var_os("XDG_RUNTIME_DIR"),
+    ) else {
+        return;
+    };
+    let started = crate::xwayland::XDisplay::open(
+        std::path::Path::new(crate::xwayland::X_TMP),
+        std::path::Path::new(&runtime_dir),
+    )
+    .and_then(|display| {
+        crate::xwayland::XWayland::start(display, program, socket, &state.loop_handle, |s| {
+            s.xwayland.as_mut()
+        })
+    });
+    match started {
+        Ok(x) => state.xwayland = Some(x),
+        Err(e) => tracing::warn!(error = %e, "no X display: X11 programs cannot run"),
+    }
 }
 
 /// Start the compositor with the given options and run until it exits.
@@ -416,6 +451,9 @@ pub fn run(cli: Cli) -> Result<()> {
     }
     state.start_settings_watch(files, crate::live::SettingsPaths::from_env());
     schedule_script(&cli, &event_loop)?;
+    if mode != Mode::Headless {
+        start_xwayland(&mut state);
+    }
     start_shell_supervision(&state, &event_loop)?;
     state.overlays.hold_modifiers = cli.hold_modifiers;
     state.connect_input_method();
@@ -504,14 +542,22 @@ fn publish_session(state: &Cupertino) {
     let (Some(socket), Some(dbus)) = (&state.socket_name, &state.dbus) else {
         return;
     };
-    dbus.publish_session(vec![
+    let mut variables = vec![
         ("WAYLAND_DISPLAY".into(), socket.clone()),
         (
             "XDG_CURRENT_DESKTOP".into(),
             crate::state::CURRENT_DESKTOP.into(),
         ),
         ("XDG_SESSION_TYPE".into(), "wayland".into()),
-    ]);
+    ];
+    if let Some(x) = &state.xwayland {
+        variables.push(("DISPLAY".into(), x.display().name()));
+        variables.push((
+            "XAUTHORITY".into(),
+            x.display().authority().to_string_lossy().into_owned(),
+        ));
+    }
+    dbus.publish_session(variables);
 }
 
 fn export_socket(state: &Cupertino) {

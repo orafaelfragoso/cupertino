@@ -58,6 +58,7 @@ pub mod shortcut_inhibit;
 pub mod state;
 pub mod supervisor;
 pub mod window_manager;
+pub mod xwayland;
 
 pub use config::Config;
 pub use state::Cupertino;

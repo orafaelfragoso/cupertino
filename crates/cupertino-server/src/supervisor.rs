@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use crate::config::ShellProcess;
 use crate::restart_policy::{decide, Backoff, Decision};
 use crate::shell_connection::{bind_holder, hand_over, BoundConnection};
+use crate::xwayland::XDisplay;
 
 enum Phase {
     /// Not running; start at this time.
@@ -47,18 +48,20 @@ impl Supervisor {
         }
     }
 
-    /// Start due processes and restart exited ones as the policy says. Children get `WAYLAND_DISPLAY=socket` for the
-    /// programs they start, and their own connection from `connect` (made for the process's roles) as `WAYLAND_SOCKET`.
+    /// Start due processes and restart exited ones as the policy says. Children get `WAYLAND_DISPLAY=socket` and the X
+    /// display `x11` ([`crate::xwayland::set_client_env`]) for the programs they start, and their own connection from
+    /// `connect` (made for the process's roles) as `WAYLAND_SOCKET`.
     pub fn poll(
         &mut self,
         now: Instant,
         socket: &str,
+        x11: Option<&XDisplay>,
         connect: &mut dyn FnMut(&ShellProcess) -> std::io::Result<BoundConnection>,
     ) {
         for p in &mut self.procs {
             p.phase = match std::mem::replace(&mut p.phase, Phase::Stopped) {
                 Phase::Waiting(at) if at <= now => {
-                    start(&p.spec, socket, connect, now, &mut p.backoff)
+                    start(&p.spec, socket, x11, connect, now, &mut p.backoff)
                 }
                 Phase::Running { mut child, started } => match child
                     .try_wait()
@@ -69,7 +72,7 @@ impl Supervisor {
                         tracing::info!(name = p.spec.name, %status, "shell process exited");
                         match decide(status, started, now, &mut p.backoff) {
                             Decision::RestartNow => {
-                                start(&p.spec, socket, connect, now, &mut p.backoff)
+                                start(&p.spec, socket, x11, connect, now, &mut p.backoff)
                             }
                             Decision::RestartAt(at) => Phase::Waiting(at),
                             Decision::Stop => Phase::Stopped,
@@ -120,6 +123,7 @@ impl Supervisor {
 fn start(
     spec: &ShellProcess,
     socket: &str,
+    x11: Option<&XDisplay>,
     connect: &mut dyn FnMut(&ShellProcess) -> std::io::Result<BoundConnection>,
     now: Instant,
     backoff: &mut Backoff,
@@ -140,6 +144,7 @@ fn start(
         .args(args)
         .env("WAYLAND_DISPLAY", socket)
         .env("XDG_CURRENT_DESKTOP", crate::state::CURRENT_DESKTOP);
+    crate::xwayland::set_client_env(&mut command, x11);
     hand_over(&mut command, &stream);
     match command.spawn() {
         Ok(mut child) => {
@@ -203,7 +208,7 @@ mod tests {
         let mut connect = connect;
         let end = Instant::now() + Duration::from_secs(10);
         while Instant::now() < end {
-            s.poll(Instant::now(), "wayland-test", &mut connect);
+            s.poll(Instant::now(), "wayland-test", None, &mut connect);
             if done(s) {
                 return;
             }
@@ -274,7 +279,7 @@ mod tests {
         // well past the throttle: a restart would have happened by now
         let end = Instant::now() + RESTART_THROTTLE * 2;
         while Instant::now() < end {
-            s.poll(Instant::now(), "wayland-test", &mut connect);
+            s.poll(Instant::now(), "wayland-test", None, &mut connect);
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(std::fs::read_to_string(&log).unwrap(), "start\n");

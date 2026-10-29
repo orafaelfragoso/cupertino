@@ -139,9 +139,35 @@ fn an_idle_user_manager_gets_the_variables_and_the_session_target() {
         assert_eq!(calls.started, [(SESSION_TARGET.into(), "replace".into())]);
         assert_eq!(
             calls.unset,
-            ["DISPLAY"],
+            ["DISPLAY", "XAUTHORITY"],
             "a left-over X display must not reach the session's services"
         );
+    });
+}
+
+#[test]
+fn the_sessions_own_x_display_is_published_not_unset() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    block_on(async {
+        let (session, _systemd, calls) = session_with_manager(&bus, Some("inactive"), None).await;
+        let mut variables = VARIABLES.to_vec();
+        variables.extend([
+            ("DISPLAY", ":1"),
+            ("XAUTHORITY", "/run/user/1000/cupertino-xauth-1"),
+        ]);
+        assert_eq!(
+            publish(&session, &variables).await.unwrap(),
+            Outcome::Applied
+        );
+        let calls = calls.lock().unwrap();
+        assert!(calls.unset.is_empty(), "{:?}", calls.unset);
+        assert!(calls.environment.contains(&"DISPLAY=:1".to_string()));
+        assert!(calls
+            .environment
+            .contains(&"XAUTHORITY=/run/user/1000/cupertino-xauth-1".to_string()));
     });
 }
 

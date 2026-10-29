@@ -22,6 +22,20 @@ pub trait Completion {
     fn status(&self) -> RenderStatus;
 }
 
+/// What a failed render means for the frames after it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Failure {
+    /// This frame was not drawn; the next one may be.
+    Transient,
+    /// The device context is gone: every later frame fails until the renderer and its resources are created again.
+    ContextLost,
+}
+
+/// A render error that says whether rendering can go on.
+pub trait RenderFailure: std::error::Error + 'static {
+    fn failure(&self) -> Failure;
+}
+
 /// Draws scene frames. Implementations are thread-affine and statically dispatched: no `Send`, no `dyn`.
 pub trait Renderer {
     /// What the frame's typed handles resolve against, and the caches that outlive a frame; it may borrow them.
@@ -33,7 +47,7 @@ pub trait Renderer {
     where
         Self: 'a;
     type Completion: Completion;
-    type Error: std::error::Error + 'static;
+    type Error: RenderFailure;
 
     /// Draw `scene` to `target`. A failure is an error, never an empty success.
     fn render(
@@ -70,6 +84,12 @@ mod tests {
     }
 
     impl std::error::Error for Refused {}
+
+    impl RenderFailure for Refused {
+        fn failure(&self) -> Failure {
+            Failure::Transient
+        }
+    }
 
     struct Done(usize);
 

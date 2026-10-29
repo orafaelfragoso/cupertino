@@ -547,6 +547,13 @@ impl Cupertino {
         self.popups.cleanup();
     }
 
+    /// The tail of a frame of output `idx` that failed to draw. The screen still shows the frame before it, so nothing
+    /// is reported as shown, but no client waits on a frame that never comes, and the output stays due for another try.
+    pub fn frame_failed(&mut self, idx: usize, time: Duration) {
+        self.send_frames(idx, time);
+        self.outputs[idx].redraw = true;
+    }
+
     /// Frame callbacks plus an immediate presentation report (backends without a scan-out event).
     pub fn post_repaint(
         &mut self,

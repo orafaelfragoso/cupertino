@@ -4,8 +4,10 @@
 
 mod common;
 
+use std::time::Duration;
+
 use common::desktop::Desktop;
-use cupertino_render_api::{Completion, RenderStatus, Renderer};
+use cupertino_render_api::{Completion, Failure, RenderFailure, RenderStatus, Renderer};
 use cupertino_scene::{SceneFrame, SceneKind, Source};
 use cupertino_server::backend::Backend;
 use cupertino_server::render::compose::FrameResources;
@@ -42,6 +44,12 @@ impl std::fmt::Display for Unresolved {
 }
 
 impl std::error::Error for Unresolved {}
+
+impl RenderFailure for Unresolved {
+    fn failure(&self) -> Failure {
+        Failure::Transient
+    }
+}
 
 struct Fake;
 
@@ -243,4 +251,16 @@ fn a_handle_from_another_frame_is_refused() {
         result.is_err(),
         "handles of one frame do not resolve against another's resources"
     );
+}
+
+#[test]
+fn a_frame_that_failed_to_draw_stays_due() {
+    let mut d = Desktop::new(1.0);
+    d.window();
+    d.at(3000);
+    let time = Duration::from(d.state.clock.now());
+    d.state.send_frames(0, time);
+    assert!(!d.state.outputs[0].redraw, "a sent frame is no longer due");
+    d.state.frame_failed(0, time);
+    assert!(d.state.outputs[0].redraw, "a failed frame is drawn again");
 }

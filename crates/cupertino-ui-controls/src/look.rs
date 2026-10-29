@@ -70,6 +70,11 @@ pub(crate) fn label(env: &Environment, text: &str) -> Option<ParagraphLayout> {
     if text.is_empty() {
         return None;
     }
+    paragraph(env, text)
+}
+
+/// `text` laid out on one line in the theme's body type, empty text included; `None` if the fonts cannot shape it.
+pub(crate) fn paragraph(env: &Environment, text: &str) -> Option<ParagraphLayout> {
     let body = env.theme.type_scale.body;
     let style = TextStyle {
         weight: FontWeight(body.weight),
@@ -91,12 +96,22 @@ const BASELINE_SHARE: f64 = 0.36;
 /// The top-left corner that centres a one-line `layout` horizontally in `chrome` and puts its baseline at the shared
 /// optical centre.
 pub(crate) fn centred(layout: &ParagraphLayout, chrome: Rect, env: &Environment) -> Point {
-    let baseline = layout.lines().first().map_or(0.0, |line| line.baseline);
-    let size = f64::from(env.theme.type_scale.body.size);
     Point::new(
         chrome.min_x() + (chrome.width() - layout.size().width) / 2.0,
-        chrome.min_y() + chrome.height() / 2.0 + size * BASELINE_SHARE - baseline,
+        top(layout, chrome, env),
     )
+}
+
+/// The baseline of body text centred in `chrome`.
+pub(crate) fn baseline(chrome: Rect, env: &Environment) -> f64 {
+    let size = f64::from(env.theme.type_scale.body.size);
+    chrome.min_y() + chrome.height() / 2.0 + size * BASELINE_SHARE
+}
+
+/// The y of `layout`'s top that puts its first baseline at [`baseline`].
+pub(crate) fn top(layout: &ParagraphLayout, chrome: Rect, env: &Environment) -> f64 {
+    let first = layout.lines().first().map_or(0.0, |line| line.baseline);
+    baseline(chrome, env) - first
 }
 
 /// Paints `layout` with its top-left corner at `origin`.

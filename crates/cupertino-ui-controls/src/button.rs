@@ -119,7 +119,7 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
         if self.style != ButtonStyle::Borderless || state.pressed {
             look::fill(cx, chrome, radius, look::color(&theme, fill, &state));
         }
-        if self.style == ButtonStyle::Bordered && self.role == ButtonRole::Normal {
+        if self.style != ButtonStyle::Borderless {
             look::stroke(
                 cx,
                 chrome.inset(cupertino_geometry::Insets::uniform(0.5)),

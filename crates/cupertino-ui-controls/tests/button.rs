@@ -148,6 +148,33 @@ fn roles_pick_the_fill_and_a_borderless_button_fills_only_when_pressed() {
 }
 
 #[test]
+fn every_style_but_borderless_strokes_the_control_border_in_its_state() {
+    let border = |h: &Harness<App>, key| shapes(h, key).into_iter().find(|s| !s.0).map(|s| s.3);
+    let mut h = Harness::<App>::new();
+    let normal = Some(color(
+        ColorRole::ControlBorder,
+        InteractionVariant::Normal,
+        false,
+    ));
+    for key in ["ok", "save", "delete", "round"] {
+        assert_eq!(border(&h, key), normal, "{key}");
+    }
+    assert_eq!(border(&h, "plain"), None);
+
+    let center = h.center("save");
+    h.pointer(PointerEvent::Motion { position: center });
+    h.button(center, true);
+    assert_eq!(
+        border(&h, "save"),
+        Some(color(
+            ColorRole::ControlBorder,
+            InteractionVariant::Pressed,
+            false
+        ))
+    );
+}
+
+#[test]
 fn a_click_activates_once_and_a_release_elsewhere_or_a_cancel_does_nothing() {
     let mut h = Harness::<App>::new();
     h.click(h.center("ok"));

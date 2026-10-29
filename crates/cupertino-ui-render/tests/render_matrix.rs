@@ -122,7 +122,7 @@ fn matrix() {
                 max_pixels: 1 << 26,
                 glyph_cache_bytes: 1 << 24,
                 image_cache_bytes: 1 << 24,
-                hint_glyphs: false,
+                font_smoothing: true,
             };
             let mut r = CpuRenderer::new(config, Blocks);
             let first = rows(count, 0);

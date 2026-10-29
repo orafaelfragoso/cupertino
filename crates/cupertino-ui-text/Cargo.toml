@@ -6,7 +6,7 @@ license = "MPL-2.0"
 description = "CupertinoKit text: fonts and fallback, paragraph layout (bidi, line breaking, wrapping), grapheme caret and selection, the editing and secure buffers, and the input-method session"
 
 [package.metadata.cupertino]
-layer = "render"
+layer = "ui"
 
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }

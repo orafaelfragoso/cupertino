@@ -6,7 +6,7 @@ license = "MPL-2.0"
 description = "CupertinoKit, the Cupertino UI toolkit: the one crate applications depend on"
 
 [package.metadata.cupertino]
-layer = "render"
+layer = "ui"
 
 [dependencies]
 cupertino-ui-controls = { path = "../cupertino-ui-controls" }

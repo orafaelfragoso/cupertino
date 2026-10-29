@@ -1,14 +1,13 @@
-//! Reads `cargo metadata` for the workspace and reports every dependency that breaks the layer rules, today's and the
-//! target's.
+//! Reads `cargo metadata` for the workspace and reports every dependency that breaks the layer rules.
 //!
 //! ```text
-//! cupertino-layers                          (run from anywhere inside the workspace)
-//! cupertino-layers --graph current|target   DOT graph of one view on stdout
+//! cupertino-layers            (run from anywhere inside the workspace)
+//! cupertino-layers --graph    DOT graph of the layers on stdout
 //! ```
 
 use cupertino_layers::{
-    check, classify, denied_crate_paths, dot, edges, licence_problems, Dep, Kind, Layer, Problem,
-    DENIED_CRATES, DENIED_PATHS, PENDING, RULES, TARGET, TARGET_EXCEPTIONS, TARGET_RULES,
+    check, denied_crate_paths, dot, edges, licence_problems, Dep, Kind, Layer, Problem,
+    DENIED_CRATES, DENIED_PATHS, EXCEPTIONS, RULES,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,20 +20,17 @@ mod mpl_closure;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let graph = match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
-        [] => None,
-        ["--graph", view @ ("current" | "target")] => Some(view.to_owned()),
+        [] => false,
+        ["--graph"] => true,
         _ => {
-            eprintln!("usage: cupertino-layers [--graph current|target]");
+            eprintln!("usage: cupertino-layers [--graph]");
             return ExitCode::from(2);
         }
     };
 
     let (layers, deps, licences) = workspace();
-    let current_edges = edges(&layers, &deps);
-    let (target, mut target_problems) = classify(layers.keys(), TARGET);
-    let target_edges = edges(&target, &deps);
-    let mut problems = check(RULES, &current_edges, PENDING, DENIED_PATHS);
-    let external_licence_problems = mpl_closure::check();
+    let edges = edges(&layers, &deps);
+    let mut problems = check(RULES, &edges, EXCEPTIONS, DENIED_PATHS);
     problems.extend(
         denied_crate_paths(&deps, DENIED_CRATES)
             .into_iter()
@@ -43,55 +39,29 @@ fn main() -> ExitCode {
     problems.extend(licence_problems(&licences.licences, &deps, |name| {
         licences.has_text.get(name).copied().unwrap_or(false)
     }));
-    target_problems.extend(check(
-        TARGET_RULES,
-        &target_edges,
-        TARGET_EXCEPTIONS,
-        DENIED_PATHS,
-    ));
+    let external_licence_problems = mpl_closure::check();
     for p in &problems {
         eprintln!("{p}");
     }
     for p in &external_licence_problems {
         eprintln!("{p}");
     }
-    for p in &target_problems {
-        eprintln!("target: {p}");
-    }
 
-    match graph.as_deref() {
-        Some("current") => print!(
+    if graph {
+        print!(
             "{}",
-            dot(
-                "current",
-                RULES,
-                &layers,
-                &current_edges,
-                PENDING,
-                DENIED_PATHS
-            )
-        ),
-        Some(_) => print!(
-            "{}",
-            dot(
-                "target",
-                TARGET_RULES,
-                &target,
-                &target_edges,
-                TARGET_EXCEPTIONS,
-                DENIED_PATHS
-            )
-        ),
-        None => println!(
-            "{} crates, {} internal dependencies, {} pending, {} target exceptions, {} problems",
+            dot("layers", RULES, &layers, &edges, EXCEPTIONS, DENIED_PATHS)
+        );
+    } else {
+        println!(
+            "{} crates, {} internal dependencies, {} exceptions, {} problems",
             layers.len(),
-            current_edges.len(),
-            PENDING.len(),
-            TARGET_EXCEPTIONS.len(),
-            problems.len() + target_problems.len() + external_licence_problems.len()
-        ),
+            edges.len(),
+            EXCEPTIONS.len(),
+            problems.len() + external_licence_problems.len()
+        );
     }
-    if problems.is_empty() && target_problems.is_empty() && external_licence_problems.is_empty() {
+    if problems.is_empty() && external_licence_problems.is_empty() {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE

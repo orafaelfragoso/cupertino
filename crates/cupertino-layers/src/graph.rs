@@ -92,7 +92,7 @@ pub fn dot(
     }
     let count = |l: &Layer| by_layer.get(l).map_or(0, Vec::len);
     let mut s = String::new();
-    let _ = writeln!(s, "// cupertino-layers --graph {title}");
+    let _ = writeln!(s, "// cupertino-layers --graph");
     let _ = writeln!(
         s,
         "// {} crates, {} internal dependencies",
@@ -257,7 +257,7 @@ mod tests {
                 &exceptions,
                 &[(Apps, &[Render])]
             ),
-            r#"// cupertino-layers --graph t
+            r#"// cupertino-layers --graph
 // 4 crates, 3 internal dependencies
 // per layer: foundation 1, models 1, render 1, apps 1
 // forbidden normal edge files (apps) -> glass (render), migration #46 exception (apps): until the toolkit

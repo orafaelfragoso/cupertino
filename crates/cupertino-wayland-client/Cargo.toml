@@ -6,7 +6,7 @@ license = "MPL-2.0"
 description = "Wayland client transport over standard protocols only: connection with capability discovery, application windows and popups, shm buffer leases, frame callbacks, per-surface scale, pointer, keyboard, input methods and clipboard"
 
 [package.metadata.cupertino]
-layer = "render"
+layer = "transport"
 
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }

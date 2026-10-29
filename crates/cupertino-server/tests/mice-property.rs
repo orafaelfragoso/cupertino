@@ -85,9 +85,7 @@ fn the_mice_property_lists_the_mice_with_their_resolution_and_follows_the_config
             },
         ),
     );
-    // the only test of this binary that reads the variable
-    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
-    cupertino_server::quit::start_session_service(&mut state);
+    cupertino_server::quit::start_session_service_on(&mut state, Some(bus.address.clone()));
 
     let address = bus.address.clone();
     let client = std::thread::spawn(move || {

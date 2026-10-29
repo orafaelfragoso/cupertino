@@ -270,6 +270,15 @@ impl DbusHandle {
     /// Start the worker; `login_missing` runs on it when a log out request finds nobody to ask (no `org.cupertino.Login1`
     /// on the bus), so the caller can do what a session without a login process does.
     pub fn start_with(login_missing: impl Fn() + Send + Sync + 'static) -> Option<DbusHandle> {
+        Self::start_on(None, login_missing)
+    }
+
+    /// Start the worker on the bus at `address`, the session bus when `None`; `login_missing` as for
+    /// [`start_with`](Self::start_with).
+    pub fn start_on(
+        address: Option<String>,
+        login_missing: impl Fn() + Send + Sync + 'static,
+    ) -> Option<DbusHandle> {
         let (tx, rx) = async_channel::unbounded::<Job>();
         let login_missing: LoginMissing = std::sync::Arc::new(login_missing);
         let login = std::sync::Arc::new(std::sync::Mutex::new(LoginTrust::Nobody));
@@ -277,7 +286,15 @@ impl DbusHandle {
         let identifying = std::sync::Arc::new(AtomicUsize::new(0));
         let spawned = std::thread::Builder::new()
             .name("cupertino-dbus".into())
-            .spawn(move || zbus::block_on(worker(rx, login_missing, worker_login, identifying)));
+            .spawn(move || {
+                zbus::block_on(worker(
+                    address,
+                    rx,
+                    login_missing,
+                    worker_login,
+                    identifying,
+                ))
+            });
         match spawned {
             Ok(_) => Some(DbusHandle { tx, login }),
             Err(e) => {
@@ -350,13 +367,22 @@ fn watch_owner(conn: &zbus::Connection, name: &'static str, changed: OwnerChange
 
 type SharedLoginTrust = std::sync::Arc<std::sync::Mutex<LoginTrust>>;
 
+/// A connection to the bus at `address`, the session bus when `None`.
+pub(crate) fn bus(address: Option<&str>) -> zbus::Result<zbus::connection::Builder<'static>> {
+    match address {
+        Some(address) => zbus::connection::Builder::address(address),
+        None => zbus::connection::Builder::session(),
+    }
+}
+
 async fn worker(
+    address: Option<String>,
     rx: async_channel::Receiver<Job>,
     login_missing: LoginMissing,
     login: SharedLoginTrust,
     identifying: Identifying,
 ) {
-    let conn = match zbus::Connection::session().await {
+    let conn = match async { bus(address.as_deref())?.build().await }.await {
         Ok(c) => c,
         Err(e) => {
             tracing::info!(error = %e, "no session bus: the shell toggles and media keys are unavailable");

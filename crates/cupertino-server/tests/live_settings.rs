@@ -318,8 +318,6 @@ fn the_setters_are_served_on_the_session_bus() {
         return;
     };
     let Some(mut h) = Harness::new() else { return };
-    // the only test of this binary that reads the variable
-    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
     let (unavailable, first_read) = std::sync::mpsc::channel();
     let address = bus.address.clone();
     let client = std::thread::spawn(move || {
@@ -381,7 +379,7 @@ fn the_setters_are_served_on_the_session_bus() {
         (before, auto, bad, appearance, accessibility)
     });
     first_read.recv_timeout(Duration::from_secs(10)).unwrap();
-    cupertino_server::quit::start_session_service(&mut h.state);
+    cupertino_server::quit::start_session_service_on(&mut h.state, Some(bus.address.clone()));
     while !client.is_finished() {
         h.step();
     }
@@ -422,8 +420,7 @@ fn the_session_interface_refuses_a_host_process_that_is_not_the_agent() {
         return;
     };
     let Some(mut h) = Harness::new() else { return };
-    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
-    cupertino_server::quit::start_session_service(&mut h.state);
+    cupertino_server::quit::start_session_service_on(&mut h.state, Some(bus.address.clone()));
     let address = bus.address.clone();
     let client = std::thread::spawn(move || {
         let call = |member: &str, arguments: &[&str]| {

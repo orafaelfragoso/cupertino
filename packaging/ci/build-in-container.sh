@@ -140,6 +140,8 @@ EOF
 
 test_script=$(cat <<'EOF'
 set -euo pipefail
+check() { local label=$1; shift; "$@" || { echo "FAIL: $label"; exit 1; }; echo "$label"; }
+absent() { for p in "$@"; do [ ! -e "$p" ] || return 1; done; }
 case $1 in
 arch)
     pacman -Syu --noconfirm -q >/dev/null
@@ -171,18 +173,21 @@ for b in /usr/bin/cupertino-*; do
     if ldd "$b" | grep -q 'not found'; then ldd "$b"; exit 1; fi
 done
 echo 'all binaries resolve their libraries'
-/usr/bin/cupertino-server --help >/dev/null && echo 'cupertino-server --help: ok'
+/usr/bin/cupertino-server --help >/dev/null
+echo 'cupertino-server --help: ok'
 test -f /usr/share/cupertino/theme/tokens.json && test -f /usr/share/cupertino/assets/manifest.json
 echo '# local edit' >> /etc/cupertino/login.conf
 reinstall
-grep -q '^# local edit' /etc/cupertino/login.conf && echo 'login.conf kept across reinstall'
+check 'login.conf kept across reinstall' grep -q '^# local edit' /etc/cupertino/login.conf
 remove
-test ! -e /usr/bin/cupertino-server && test ! -e /usr/share/cupertino/assets/manifest.json && echo 'removed cleanly'
+check 'removed cleanly' absent /usr/bin/cupertino-server /usr/share/cupertino/assets/manifest.json
 EOF
 )
 
 upgrade_script=$(cat <<'EOF'
 set -euo pipefail
+check() { local label=$1; shift; "$@" || { echo "FAIL: $label"; exit 1; }; echo "$label"; }
+absent() { for p in "$@"; do [ ! -e "$p" ] || return 1; done; }
 case $1 in
 arch)
     pacman -Syu --noconfirm -q >/dev/null
@@ -226,12 +231,12 @@ install /dist/rev-2
 new=$(version)
 echo "upgraded: $old -> $new"
 newer "$new" "$old"
-[ "$(sha256sum /etc/cupertino/login.conf)" = "$conf" ] && echo 'login.conf kept across upgrade'
-[ "$(getent passwd cupertino-greeter)" = "$account" ] && echo 'cupertino-greeter account unchanged'
+check 'login.conf kept across upgrade' [ "$(sha256sum /etc/cupertino/login.conf)" = "$conf" ]
+check 'cupertino-greeter account unchanged' [ "$(getent passwd cupertino-greeter)" = "$account" ]
 units_after=$(units)
 echo "$units_after"
-[ "$units_after" = "$units_before" ] && echo 'unit state unchanged across upgrade'
-sha256sum --check --status /tmp/server.before && echo 'cupertino-server payload identical'
+check 'unit state unchanged across upgrade' [ "$units_after" = "$units_before" ]
+check 'cupertino-server payload identical' sha256sum --check --status /tmp/server.before
 changed=$(altered)
 [ -z "$changed" ] || { echo "$changed"; exit 1; }
 echo 'package verification clean'
@@ -241,10 +246,11 @@ for b in /usr/bin/cupertino-*; do
     [ "$b" = /usr/bin/cupertino-session ] && continue
     if ldd "$b" | grep -q 'not found'; then ldd "$b"; exit 1; fi
 done
-/usr/bin/cupertino-server --help >/dev/null && echo 'cupertino-server --help: ok'
+/usr/bin/cupertino-server --help >/dev/null
+echo 'cupertino-server --help: ok'
 remove
-test ! -e /usr/bin/cupertino-server && test ! -e /usr/share/cupertino/assets/manifest.json && echo 'removed cleanly'
-test ! -e /etc/systemd/system/multi-user.target.wants/cupertino-login.service && echo 'login enablement removed'
+check 'removed cleanly' absent /usr/bin/cupertino-server /usr/share/cupertino/assets/manifest.json
+check 'login enablement removed' absent /etc/systemd/system/multi-user.target.wants/cupertino-login.service
 EOF
 )
 

@@ -1608,10 +1608,12 @@ name = "cupertino-ui-text"
 version = "0.1.0"
 dependencies = [
  "cupertino-geometry",
+ "cupertino-glyph",
  "cupertino-key-bindings",
  "cupertino-modifiers",
  "harfrust",
  "icu_segmenter",
+ "swash",
  "unicode-segmentation",
  "zeroize",
 ]

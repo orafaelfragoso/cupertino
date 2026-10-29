@@ -15,8 +15,7 @@
 
 use swash::zeno::{Point, Verb};
 
-/// Whether glyphs are dilated: on while font smoothing is allowed, the default; off only when the
-/// smoothing preference holds a value other than 1, 2 or 3 (no such key exists here yet).
+/// Whether glyphs are dilated: on by default, off only when the user turns font smoothing off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Smoothing {
     Off,
@@ -63,8 +62,7 @@ impl Smoothing {
 }
 
 /// Subpixel positions per pixel of a glyph origin in x and y at pixel size `px`:
-/// x = min(5, ceil(1 / (0.03 · px))), y = min(5, ceil(1 / (0.12 · px))), the default quantisation with both
-/// preference limits at 5.
+/// x = min(5, ceil(1 / (0.03 · px))), y = min(5, ceil(1 / (0.12 · px))): at most 5 positions per axis.
 pub fn quantization(px: f32) -> (u8, u8) {
     let levels = |k: f32| (1.0 / (k * px)).ceil().clamp(1.0, 5.0) as u8;
     (levels(0.03), levels(0.12))

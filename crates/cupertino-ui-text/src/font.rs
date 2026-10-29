@@ -24,8 +24,18 @@ impl FontMetrics {
     }
 }
 
+/// A font instance as bytes: the file, the face's index in it and the variation coordinates the instance sets.
+#[derive(Clone, Debug)]
+pub struct FontSource {
+    pub data: Arc<Vec<u8>>,
+    pub index: u32,
+    pub variations: Vec<FontVariation>,
+}
+
 struct Face {
     family: Arc<str>,
+    data: Arc<Vec<u8>>,
+    index: u32,
     weight: FontWeight,
     style: FontStyle,
     font: Font,
@@ -34,6 +44,7 @@ struct Face {
 
 struct Instance {
     face: FaceId,
+    variations: Vec<FontVariation>,
     font: Font,
     metrics: FontMetrics,
 }
@@ -69,7 +80,7 @@ impl FontIndex {
         index: u32,
     ) -> Result<FaceId, TextError> {
         let font = Font::new(
-            harfrust::font::Blob::from(data as Arc<dyn AsRef<[u8]> + Send + Sync>),
+            harfrust::font::Blob::from(Arc::clone(&data) as Arc<dyn AsRef<[u8]> + Send + Sync>),
             index,
         )
         .ok_or_else(|| TextError::InvalidFont(family.into()))?;
@@ -80,6 +91,8 @@ impl FontIndex {
         let id = FaceId(self.faces.len() as u32);
         self.faces.push(Face {
             family: family.into(),
+            data,
+            index,
             weight,
             style,
             font,
@@ -161,6 +174,13 @@ impl FontIndex {
         let id = FontId(self.instances.len() as u32);
         self.instances.push(Instance {
             face,
+            variations: coords
+                .iter()
+                .map(|(tag, value)| FontVariation {
+                    tag: *tag,
+                    value: *value,
+                })
+                .collect(),
             font,
             metrics,
         });
@@ -170,6 +190,17 @@ impl FontIndex {
 
     pub fn face_of(&self, font: FontId) -> Result<FaceId, TextError> {
         self.instance_entry(font).map(|instance| instance.face)
+    }
+
+    /// The font file and variation coordinates behind `font`, for a rasterizer.
+    pub fn source(&self, font: FontId) -> Result<FontSource, TextError> {
+        let instance = self.instance_entry(font)?;
+        let face = &self.faces[instance.face.0 as usize];
+        Ok(FontSource {
+            data: Arc::clone(&face.data),
+            index: face.index,
+            variations: instance.variations.clone(),
+        })
     }
 
     pub fn metrics(&self, font: FontId) -> Result<FontMetrics, TextError> {

@@ -365,6 +365,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "needs its capture below")]
     fn composite_above_nothing_is_rejected() {
         let mut items = LayerStack::new();

@@ -263,6 +263,8 @@ pub struct XWayland {
     socket: String,
     phase: Phase,
     backoff: Backoff,
+    /// [`QUICK_EXIT`]; tests set it long, so a loaded machine cannot turn a quick exit into a run.
+    quick_exit: Duration,
     sources: Vec<RegistrationToken>,
 }
 
@@ -300,6 +302,7 @@ impl XWayland {
             socket,
             phase: Phase::Listening,
             backoff: Backoff::default(),
+            quick_exit: QUICK_EXIT,
             sources,
         })
     }
@@ -348,7 +351,8 @@ impl XWayland {
                 Ok(None) => Phase::Running { child, started },
                 Ok(Some(status)) => {
                     tracing::info!(%status, "xwayland-satellite exited: the X display waits for the next X11 program");
-                    if status.success() && now.saturating_duration_since(started) >= QUICK_EXIT {
+                    if status.success() && now.saturating_duration_since(started) >= self.quick_exit
+                    {
                         Phase::Listening
                     } else {
                         // a failure, or a success at once (a build that cannot run, a usage error), which the waiting
@@ -710,6 +714,7 @@ mod tests {
     #[test]
     fn a_satellite_that_ends_normally_at_once_waits_out_the_throttle() {
         let mut f = fixture("exit 0");
+        f.state.as_mut().unwrap().quick_exit = Duration::from_secs(30);
         let _client = UnixStream::connect(&f.socket).unwrap();
         f.run_until(|f| f.starts().len() == 1 && f.state.as_ref().unwrap().pid().is_none());
         assert!(matches!(f.state.as_ref().unwrap().phase, Phase::Waiting(_)));

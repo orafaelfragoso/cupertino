@@ -20,5 +20,8 @@ both.
   turn borders black (light) or white (dark). The dark switch thumb is dark, so it stands out on both tracks.
 
 Approximate: every state colour, the disabled fills and borders, the opaque thumb, the dark white role text and the
-dark tooltip in the Cupertino light and dark palettes; all neutral and high-contrast values. Contrast of the ordinary
-and neutral palettes is not yet accepted.
+dark tooltip in the Cupertino light and dark palettes; all neutral and high-contrast values.
+
+Accepted exceptions: the Cupertino light and dark palettes keep their look below 4.5:1 for text and 3:1 for boundaries
+in places (white on the accent and red fills, secondary and placeholder text, control, field and switch outlines, the
+light focus ring at 2.49:1). High contrast is the accessible palette. The neutral palettes do not meet those ratios yet.

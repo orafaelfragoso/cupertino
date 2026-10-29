@@ -17,7 +17,8 @@ Copyright: Cupertino contributors
 License: GPL-3+
 
 Files: crates/cupertino-animation/* crates/cupertino-app-protocols/* crates/cupertino-apps/* crates/cupertino-assets/*
- crates/cupertino-defaults/* crates/cupertino-geometry/* crates/cupertino-glyph/* crates/cupertino-icons/* crates/cupertino-keyboard/*
+ crates/cupertino-defaults/* crates/cupertino-geometry/* crates/cupertino-glyph/* crates/cupertino-icons/*
+ crates/cupertino-key-bindings/* crates/cupertino-keyboard/*
  crates/cupertino-menu-model/* crates/cupertino-modifiers/* crates/cupertino-protocol-app/* crates/cupertino-test-bus/*
  crates/cupertino-text-field/* crates/cupertino-theme/* crates/cupertino-kit/* crates/cupertino-ui-controls/*
  crates/cupertino-ui-core/* crates/cupertino-ui-layout/* crates/cupertino-ui-platform/* crates/cupertino-ui-render/*

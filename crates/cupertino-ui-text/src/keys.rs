@@ -2,10 +2,11 @@
 
 use std::time::Instant;
 
-use cupertino_keyboard::TextAction;
-use cupertino_ui_text::TextBuffer;
+use crate::TextBuffer;
+use cupertino_key_bindings::TextAction;
 
 use crate::keymap::{Command, KeyInput, Keymap};
+use cupertino_modifiers::Mods;
 
 /// What a key or pointer input did; the window redraws for every value but [`Response::Ignored`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,52 +25,73 @@ pub enum Response {
     Paste,
 }
 
-/// The editing model of a field. The toolkit's buffer is the field; this crate adds the keys ([`TextFieldKeys`]).
-pub type TextField = TextBuffer;
-
 /// A field that takes key presses.
 pub trait TextFieldKeys {
     /// A key press at `now`.
     fn key(&mut self, keymap: &mut Keymap, key: KeyInput, now: Instant) -> Response;
+    /// A key press with logical modifiers: the evdev `code`, the roles held and the character it types. The caret
+    /// blink is the caller's.
+    fn logical_key(
+        &mut self,
+        keymap: &mut Keymap,
+        code: u32,
+        mods: Mods,
+        character: Option<char>,
+    ) -> Response;
 }
 
 impl TextFieldKeys for TextBuffer {
     fn key(&mut self, keymap: &mut Keymap, key: KeyInput, now: Instant) -> Response {
-        let buffer = self;
-        let response = match keymap.command(key) {
-            Command::Ignored => return Response::Ignored,
-            Command::Pending => Response::Moved,
-            Command::SelectAll => {
-                buffer.select_all();
-                Response::Moved
+        let response = run(self, keymap.command(key));
+        if response != Response::Ignored {
+            self.touch(now);
+        }
+        response
+    }
+
+    fn logical_key(
+        &mut self,
+        keymap: &mut Keymap,
+        code: u32,
+        mods: Mods,
+        character: Option<char>,
+    ) -> Response {
+        run(self, keymap.logical_command(code, mods, character))
+    }
+}
+
+fn run(buffer: &mut TextBuffer, command: Command) -> Response {
+    match command {
+        Command::Ignored => Response::Ignored,
+        Command::Pending => Response::Moved,
+        Command::SelectAll => {
+            buffer.select_all();
+            Response::Moved
+        }
+        Command::Copy if buffer.selection().is_empty() => Response::Moved,
+        Command::Copy => Response::Copy(buffer.selected_text().to_string()),
+        Command::Cut if buffer.selection().is_empty() => Response::Moved,
+        Command::Cut => Response::Cut(buffer.cut()),
+        Command::Paste => Response::Paste,
+        Command::Undo => edited(buffer.undo()),
+        Command::Redo => edited(buffer.redo()),
+        Command::Insert(c) => {
+            buffer.insert(c.encode_utf8(&mut [0; 4]));
+            Response::Edited
+        }
+        Command::Actions(actions) => {
+            let before = buffer.text().to_string();
+            for action in actions {
+                if !apply(buffer, action) {
+                    return Response::Ignored;
+                }
             }
-            Command::Copy if buffer.selection().is_empty() => Response::Moved,
-            Command::Copy => Response::Copy(buffer.selected_text().to_string()),
-            Command::Cut if buffer.selection().is_empty() => Response::Moved,
-            Command::Cut => Response::Cut(buffer.cut()),
-            Command::Paste => Response::Paste,
-            Command::Undo => edited(buffer.undo()),
-            Command::Redo => edited(buffer.redo()),
-            Command::Insert(c) => {
-                buffer.insert(c.encode_utf8(&mut [0; 4]));
+            if buffer.text() == before {
+                Response::Moved
+            } else {
                 Response::Edited
             }
-            Command::Actions(actions) => {
-                let before = buffer.text().to_string();
-                for action in actions {
-                    if !apply(buffer, action) {
-                        return Response::Ignored;
-                    }
-                }
-                if buffer.text() == before {
-                    Response::Moved
-                } else {
-                    Response::Edited
-                }
-            }
-        };
-        buffer.touch(now);
-        response
+        }
     }
 }
 
@@ -165,3 +187,6 @@ fn edited(changed: bool) -> Response {
         Response::Moved
     }
 }
+
+#[cfg(test)]
+mod tests;

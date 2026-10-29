@@ -9,6 +9,13 @@ description = "CupertinoKit controls: text, icons, buttons, toggles, text and se
 layer = "render"
 
 [dependencies]
+cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-ui-core = { path = "../cupertino-ui-core" }
 cupertino-ui-layout = { path = "../cupertino-ui-layout" }
+cupertino-ui-platform = { path = "../cupertino-ui-platform" }
+cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
+cupertino-ui-theme = { path = "../cupertino-ui-theme" }
+
+[dev-dependencies]
+cupertino-ui-test = { path = "../cupertino-ui-test" }

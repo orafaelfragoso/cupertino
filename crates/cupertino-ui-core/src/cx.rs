@@ -1,7 +1,8 @@
 use crate::accessibility::{AccessibleStates, AccessibleValue, Action, Relation, Role};
+use crate::route::Placement;
 use crate::widget::Change;
 use crate::{Environment, NodeId, Phase};
-use cupertino_geometry::Size;
+use cupertino_geometry::{Point, Size};
 use cupertino_ui_platform::{CursorShape, Timestamp};
 use cupertino_ui_render::{Effect, Group, PaintOp};
 use cupertino_ui_text::TextInputState;
@@ -37,6 +38,7 @@ pub(crate) struct Effects<M> {
     pub(crate) cursor: Option<Option<CursorShape>>,
     pub(crate) animate: BTreeSet<NodeId>,
     pub(crate) text_input: Option<(NodeId, Option<TextInputState>)>,
+    pub(crate) clipboard: Option<String>,
 }
 
 impl<M> Default for Effects<M> {
@@ -49,6 +51,7 @@ impl<M> Default for Effects<M> {
             cursor: None,
             animate: BTreeSet::new(),
             text_input: None,
+            clipboard: None,
         }
     }
 }
@@ -64,6 +67,9 @@ impl<M> Effects<M> {
         self.animate.extend(other.animate);
         if other.text_input.is_some() {
             self.text_input = other.text_input;
+        }
+        if other.clipboard.is_some() {
+            self.clipboard = other.clipboard;
         }
     }
 }
@@ -82,6 +88,7 @@ pub struct EventCx<'a, M> {
     pub(crate) node: NodeId,
     pub(crate) target: NodeId,
     pub(crate) phase: Phase,
+    pub(crate) placement: Option<Placement>,
     pub(crate) env: &'a Environment,
     pub(crate) status: Status,
     pub(crate) effects: &'a mut Effects<M>,
@@ -103,6 +110,12 @@ impl<M> EventCx<'_, M> {
 
     pub fn env(&self) -> &Environment {
         self.env
+    }
+
+    /// Whether a pointer or touch position, in window coordinates as events carry them, lands on this node and inside
+    /// every clip above it; false before the node's first layout.
+    pub fn hit(&self, position: Point) -> bool {
+        self.placement.is_some_and(|p| p.hit(position))
     }
 
     pub fn now(&self) -> Timestamp {
@@ -162,6 +175,11 @@ impl<M> EventCx<'_, M> {
     /// node loses the focus.
     pub fn set_text_input(&mut self, state: Option<TextInputState>) {
         self.effects.text_input = Some((self.node, state));
+    }
+
+    /// Puts `text` on the clipboard, as a field's copy or cut does.
+    pub fn set_clipboard(&mut self, text: String) {
+        self.effects.clipboard = Some(text);
     }
 
     /// Delivers [`Event::AnimationFrame`](crate::Event::AnimationFrame) to this node on the next frame.

@@ -382,6 +382,7 @@ pub const TARGET: &[(&str, Layer)] = &[
     ("cupertino-glass", Render),
     ("cupertino-icons", Foundation),
     ("cupertino-input", Models),
+    ("cupertino-key-bindings", Foundation),
     ("cupertino-keyboard", Foundation),
     ("cupertino-kit", Ui),
     ("cupertino-launcher", Shell),

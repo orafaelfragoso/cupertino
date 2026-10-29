@@ -265,7 +265,10 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         last: None,
         backdrop: None,
         image: None,
-        keymap: Keymap::load(),
+        keymap: Keymap::new(
+            cupertino_keyboard::binding::user_profile(),
+            cupertino_keyboard::binding::load_default().0,
+        ),
         field_offsets: Vec::new(),
         caret_drawn: false,
         pending: HashMap::new(),

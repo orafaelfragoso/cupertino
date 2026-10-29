@@ -21,7 +21,8 @@ use crate::render::scene::{
 };
 use crate::render::shader_rect::ElementCache;
 use crate::render::CupertinoElement;
-use crate::state::Cupertino;
+use crate::state::{Cupertino, FailedFrames};
+use cupertino_render_api::{Failure, RenderFailure};
 use cupertino_scene::SceneKind;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 
@@ -545,6 +546,49 @@ impl Cupertino {
         }
         self.outputs[idx].redraw = false;
         self.popups.cleanup();
+    }
+
+    /// The tail of a frame of output `idx` that failed to draw. The screen still shows the frame before it, so nothing
+    /// is reported as shown, but no client waits on a frame that never comes, and the output stays due for another try
+    /// one `refresh` later: a failing output is retried, and its clients called back, at the display rate. A lost
+    /// rendering context ends the session instead, so the session manager can start a new one.
+    pub fn frame_failed(
+        &mut self,
+        idx: usize,
+        time: Duration,
+        refresh: Duration,
+        error: &dyn RenderFailure,
+    ) {
+        if error.failure() == Failure::ContextLost {
+            tracing::error!(error = %error, "the rendering context is lost: ending the session");
+            self.running = false;
+            return;
+        }
+        let count = self.outputs[idx].failed.map_or(0, |f| f.count) + 1;
+        if count == 1 {
+            tracing::warn!(error = %error, "rendering the frame failed");
+        } else {
+            tracing::debug!(error = %error, count, "rendering the frame failed again");
+        }
+        self.send_frames(idx, time);
+        let output = &mut self.outputs[idx];
+        output.failed = Some(FailedFrames {
+            count,
+            retry_at: time + refresh,
+        });
+        output.redraw = true;
+    }
+
+    /// Whether output `idx` may draw at `time`: not before the retry time of a frame that failed.
+    pub fn retry_due(&self, idx: usize, time: Duration) -> bool {
+        self.outputs[idx].failed.is_none_or(|f| time >= f.retry_at)
+    }
+
+    /// A frame of output `idx` was drawn, which ends a run of failed frames.
+    pub fn frame_drawn(&mut self, idx: usize) {
+        if let Some(f) = self.outputs[idx].failed.take() {
+            tracing::info!(failed = f.count, "rendering the frame works again");
+        }
     }
 
     /// Frame callbacks plus an immediate presentation report (backends without a scan-out event).

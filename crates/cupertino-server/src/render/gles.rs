@@ -6,12 +6,15 @@
 //! A target carries the device it draws on, so binding a window's framebuffer or a texture happens inside the render
 //! call and no borrowed framebuffer leaks into the trait.
 
-use cupertino_render_api::{Completion, RenderStatus, Renderer};
+use cupertino_render_api::{Completion, Failure, RenderFailure, RenderStatus, Renderer};
 use cupertino_scene::SceneFrame;
 use image::RgbaImage;
+#[cfg(feature = "udev")]
+use smithay::backend::drm::compositor::RenderFrameError;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::gles::{GlesError, GlesRenderer, GlesTexture};
 use smithay::backend::renderer::{Bind, Color32F};
+use smithay::backend::SwapBuffersError;
 use smithay::utils::{Physical, Rectangle};
 
 use super::compose::FrameResources;
@@ -162,8 +165,8 @@ impl Completion for GlesCompletion {
 
 #[derive(Debug)]
 pub enum RenderError {
-    /// The GL context failed; the nested backend maps this to a lost or temporarily failed context.
-    Rendering(GlesError),
+    /// Drawing or preparing the frame on the device failed, as Smithay classifies it: lost context or temporary.
+    Rendering(SwapBuffersError),
     /// Binding, reading back or another step of the target failed.
     Target(String),
     Resources(&'static str),
@@ -181,9 +184,18 @@ impl std::fmt::Display for RenderError {
 
 impl std::error::Error for RenderError {}
 
+impl RenderFailure for RenderError {
+    fn failure(&self) -> Failure {
+        match self {
+            Self::Rendering(SwapBuffersError::ContextLost(_)) => Failure::ContextLost,
+            _ => Failure::Transient,
+        }
+    }
+}
+
 fn tracked(e: smithay::backend::renderer::damage::Error<GlesError>) -> RenderError {
     match e {
-        smithay::backend::renderer::damage::Error::Rendering(e) => RenderError::Rendering(e),
+        smithay::backend::renderer::damage::Error::Rendering(e) => RenderError::Rendering(e.into()),
         other => RenderError::Target(format!("{other:?}")),
     }
 }
@@ -257,7 +269,10 @@ impl Renderer for Gles {
                         smithay::backend::drm::compositor::FrameFlags::DEFAULT,
                     )
                     .map(|r| GlesCompletion::Direct { empty: r.is_empty })
-                    .map_err(|e| RenderError::Target(e.to_string()))
+                    .map_err(|e| match e {
+                        RenderFrameError::PrepareFrame(e) => RenderError::Rendering(e.into()),
+                        RenderFrameError::RenderFrame(e) => tracked(e),
+                    })
             }
             GlesTarget::Image { renderer, clear } => {
                 let elements = Gles::lower(renderer, scene, resources)?;
@@ -325,6 +340,26 @@ mod tests {
         assert_eq!(
             RenderError::Resources("used twice").to_string(),
             "used twice"
+        );
+    }
+
+    #[test]
+    fn only_a_lost_context_stops_rendering() {
+        let rendering = |e: GlesError| RenderError::Rendering(e.into()).failure();
+        let lost = SwapBuffersError::ContextLost(Box::new(std::io::Error::other("reset")));
+        assert_eq!(RenderError::Rendering(lost).failure(), Failure::ContextLost);
+        assert_eq!(
+            rendering(GlesError::ShaderCompileError),
+            Failure::ContextLost
+        );
+        assert_eq!(rendering(GlesError::BlitError), Failure::Transient);
+        assert_eq!(
+            RenderError::Target("no framebuffer".into()).failure(),
+            Failure::Transient
+        );
+        assert_eq!(
+            RenderError::Resources("used twice").failure(),
+            Failure::Transient
         );
     }
 }

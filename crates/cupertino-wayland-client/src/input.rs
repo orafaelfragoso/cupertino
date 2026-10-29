@@ -132,6 +132,11 @@ struct Scroll {
 }
 
 impl PointerTracker {
+    /// The surface the pointer is on.
+    pub(crate) fn focus(&self) -> Option<SurfaceId> {
+        self.focus
+    }
+
     pub(crate) fn enter(
         &mut self,
         surface: SurfaceId,

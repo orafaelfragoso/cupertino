@@ -36,6 +36,7 @@ use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_man
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::{
     self, WpFractionalScaleV1,
 };
+use wayland_protocols::wp::presentation_time::client::wp_presentation::WpPresentation;
 use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_manager_v3::ZwpTextInputManagerV3;
 use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use wayland_protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
@@ -61,14 +62,15 @@ use crate::buffer::{pick_slot, Slot, SlotChoice, SlotTag, MAX_SLOTS};
 use crate::capability::REQUIRED;
 use crate::clipboard::Clipboard;
 use crate::configure::{wire_size, Serials};
+use crate::cursor::ThemedCursor;
 use crate::input::{InputClock, Modifiers, PointerTracker, Repeat, Translator};
 use crate::output::{identification, physical_size, OutputBuilder, OutputId, OutputTransform};
 use crate::scale::ScaleSources;
 use crate::text_input::TextInput;
 use crate::{
     BufferFormat, BufferLayout, Capability, CapabilitySet, ClipboardOffer, Decorations, Disconnect,
-    Error, Extension, KeyboardEvent, OutputInfo, PixelRect, PointerEvent, Scale, TextInputEvent,
-    TextInputState, WindowConfigure, WindowStates, WmCapabilities,
+    Error, Extension, KeyboardEvent, OutputInfo, PixelRect, PointerEvent, Presented, Scale,
+    TextInputEvent, TextInputState, WindowConfigure, WindowStates, WmCapabilities,
 };
 
 /// A surface of this connection.
@@ -119,6 +121,14 @@ pub struct PopupPlacement {
     pub gravity: Gravity,
     /// How the compositor may move the popup when it would not fit.
     pub constraint_adjustment: ConstraintAdjustment,
+    /// Moves the placed popup by this many logical points, before the compositor's constraint adjustment.
+    pub offset: (i32, i32),
+    /// Place the popup again when its parent moves or resizes, answered by an [`Event::PopupConfigure`]. Needs
+    /// `xdg_wm_base` version 3; an older compositor leaves the popup where it is.
+    pub reactive: bool,
+    /// The parent's size in logical points that the anchor rectangle is relative to, when it is changing: the size the
+    /// parent draws at in answer to its pending configure. Needs `xdg_wm_base` version 3, like `reactive`.
+    pub parent_size: Option<(u32, u32)>,
     /// Take an explicit grab with the latest input event, so a click outside dismisses the popup.
     pub grab: bool,
 }
@@ -158,7 +168,18 @@ pub enum Event {
     Close(Toplevel),
     /// The compositor dismissed the popup; the application destroys it.
     PopupDone(Popup),
+    /// The compositor took the placement of [`Connection::reposition_popup`] that returned `token`; its
+    /// [`Event::PopupConfigure`] follows.
+    PopupRepositioned {
+        popup: Popup,
+        token: u32,
+    },
     Frame(FrameCallback),
+    /// A presented frame reached the screen (with [`Capability::Presentation`]).
+    Presented(Presented),
+    /// A presented frame of the surface was never shown, such as one replaced before the screen's next refresh (with
+    /// [`Capability::Presentation`]).
+    Discarded(SurfaceId),
     /// The surface's buffer scale changed: draw again.
     ScaleChanged {
         surface: SurfaceId,
@@ -334,6 +355,9 @@ pub struct State {
     scaling: Option<(WpFractionalScaleManagerV1, WpViewporter)>,
     activation: Option<XdgActivationV1>,
     cursor_shape: Option<WpCursorShapeManagerV1>,
+    themed_cursor: ThemedCursor,
+    presentation: Option<WpPresentation>,
+    pub(crate) presentation_clock: Option<u32>,
     output_manager: Option<ZxdgOutputManagerV1>,
     data_device_manager: Option<WlDataDeviceManager>,
     pub(crate) clipboard: Clipboard,
@@ -428,11 +452,14 @@ impl Connection {
         let clipboard = Clipboard::new(data_device_manager.as_ref(), seat.as_ref(), &qh);
         let text_input_manager: Option<ZwpTextInputManagerV3> = bind(&globals, &qh, 1..=1);
         let text_input = TextInput::new(text_input_manager.as_ref(), seat.as_ref(), &qh);
+        // version 6 adds `preferred_buffer_scale`
+        let compositor: WlCompositor = required(bind(&globals, &qh, 4..=6), "wl_compositor")?;
+        let shm: WlShm = required(bind(&globals, &qh, 1..=1), "wl_shm")?;
         let mut state = State {
             capabilities,
-            // version 6 adds `preferred_buffer_scale`
-            compositor: required(bind(&globals, &qh, 4..=6), "wl_compositor")?,
-            shm: required(bind(&globals, &qh, 1..=1), "wl_shm")?,
+            themed_cursor: ThemedCursor::new(compositor.clone(), shm.clone()),
+            compositor,
+            shm,
             // version 4 adds `configure_bounds`, version 6 the suspended state
             wm_base: required(bind(&globals, &qh, 1..=6), "xdg_wm_base")?,
             seat,
@@ -440,6 +467,9 @@ impl Connection {
             scaling: bind(&globals, &qh, 1..=1).zip(bind(&globals, &qh, 1..=1)),
             activation: bind(&globals, &qh, 1..=1),
             cursor_shape: bind(&globals, &qh, 1..=1),
+            // version 2 allows a refresh rate picked for a variable one
+            presentation: bind(&globals, &qh, 1..=2),
+            presentation_clock: None,
             // version 3 sends the logical geometry before `wl_output.done` instead of a `done` of its own
             output_manager: bind(&globals, &qh, 1..=3),
             data_device_manager,
@@ -495,6 +525,12 @@ impl Connection {
 
     pub fn waker(&self) -> Waker {
         self.waker.clone()
+    }
+
+    /// The clock of [`Presented::time_ns`]: a `clockid_t` such as `CLOCK_MONOTONIC`, to read with `clock_gettime`.
+    /// `None` without [`Capability::Presentation`].
+    pub fn presentation_clock(&self) -> Option<u32> {
+        self.state.presentation_clock
     }
 
     pub fn outputs(&self) -> Vec<OutputInfo> {
@@ -557,7 +593,7 @@ impl Connection {
             Role::Toplevel { xdg, .. } | Role::Popup { xdg, .. } => Some(xdg.clone()),
             Role::External { .. } => None,
         };
-        let positioner = positioner(&s.wm_base, &qh, placement)?;
+        let positioner = positioner(&s.wm_base, &qh, placement, s.surface(parent)?.serials)?;
         let grab_serial = if placement.grab {
             Some(
                 s.last_serial
@@ -598,12 +634,13 @@ impl Connection {
     }
 
     /// Move or resize `popup` to `placement` (its grab and `placement.grab` are left as they are); the compositor answers
-    /// with a new [`Event::PopupConfigure`]. Needs `xdg_wm_base` version 3.
+    /// with [`Event::PopupRepositioned`] carrying the returned token, then a new [`Event::PopupConfigure`]. Needs
+    /// `xdg_wm_base` version 3.
     pub fn reposition_popup(
         &mut self,
         popup: Popup,
         placement: &PopupPlacement,
-    ) -> Result<(), Error> {
+    ) -> Result<u32, Error> {
         const REPOSITION_VERSION: u32 = 3;
         let qh = self.queue.handle();
         let s = &mut self.state;
@@ -613,15 +650,15 @@ impl Connection {
                 minimum_version: REPOSITION_VERSION,
             });
         }
-        let Role::Popup { popup, .. } = &s.surface(popup.0)?.role else {
+        let Role::Popup { popup, parent, .. } = &s.surface(popup.0)?.role else {
             unreachable!("a Popup handle names a popup");
         };
-        let popup = popup.clone();
-        let positioner = positioner(&s.wm_base, &qh, placement)?;
+        let (popup, parent) = (popup.clone(), *parent);
+        let positioner = positioner(&s.wm_base, &qh, placement, s.surface(parent)?.serials)?;
         s.next_reposition += 1;
         popup.reposition(&positioner, s.next_reposition);
         positioner.destroy();
-        Ok(())
+        Ok(s.next_reposition)
     }
 
     /// Destroy a surface, with its popups first.
@@ -909,18 +946,29 @@ impl Connection {
         Ok(self.state.surface(surface)?.entered.clone())
     }
 
-    /// Show the compositor's cursor `shape` over the surface the pointer is on.
+    /// Show the cursor `shape` over the surface the pointer is on: the compositor's with [`Capability::CursorShape`],
+    /// else drawn from the XCursor theme at the scale of that surface.
     pub fn set_cursor(&mut self, shape: wp_cursor_shape_device_v1::Shape) -> Result<(), Error> {
-        self.state.capabilities.require(Capability::CursorShape)?;
-        let (Some(device), Some(serial)) =
-            (&self.state.cursor_device, self.state.pointer_enter_serial)
-        else {
+        let qh = self.queue.handle();
+        let s = &mut self.state;
+        let (Some(pointer), Some(serial)) = (&s.pointer, s.pointer_enter_serial) else {
             return Err(Error::PermissionDenied(
                 "a cursor before the pointer entered",
             ));
         };
-        device.set_shape(serial, shape);
-        Ok(())
+        if let Some(device) = &s.cursor_device {
+            device.set_shape(serial, shape);
+            return Ok(());
+        }
+        let scale = s
+            .pointer_tracker
+            .focus()
+            .and_then(|id| s.surfaces.iter().find(|surf| surf.id == id))
+            .and_then(|surf| surf.scale.ceil().integer())
+            .map_or(1, i32::unsigned_abs);
+        s.themed_cursor
+            .show(&self.conn, &qh, pointer, serial, shape, scale)?;
+        self.flush()
     }
 
     /// Tell the input method about the text field focused on `surface`, or with `None` that no field there takes text.
@@ -1267,6 +1315,7 @@ impl BufferLease<'_> {
     /// latest one, which is acknowledged with it.
     pub fn present_damage(self, damage: Option<&[PixelRect]>) -> Result<(), Error> {
         let qh = self.connection.queue.handle();
+        let presentation = self.connection.state.presentation.clone();
         let surf = self.connection.state.surface_mut(self.surface)?;
         if let Some(serial) = surf.serials.present()? {
             match &surf.role {
@@ -1307,17 +1356,23 @@ impl BufferLease<'_> {
             }
         }
         surf.wl.frame(&qh, self.surface);
+        if let Some(presentation) = presentation {
+            presentation.feedback(&surf.wl, &qh, self.surface);
+        }
         surf.wl.commit();
         self.connection.flush()
     }
 }
 
-/// A positioner for `placement`; its anchor rectangle is rounded outwards to whole points.
+/// A positioner for `placement`; its anchor rectangle is rounded outwards to whole points. A reactive or resizing
+/// placement names the parent's configure not yet acknowledged, from `parent`, which it answers.
 fn positioner(
     wm_base: &XdgWmBase,
     qh: &QueueHandle<State>,
     placement: &PopupPlacement,
+    parent: Serials,
 ) -> Result<XdgPositioner, Error> {
+    const REACTIVE_VERSION: u32 = 3;
     let r = placement.anchor_rect;
     if !(r.width() > 0.0 && r.height() > 0.0 && placement.size.0 > 0 && placement.size.1 > 0) {
         return Err(Error::Protocol(
@@ -1336,6 +1391,22 @@ fn positioner(
     positioner.set_anchor(placement.anchor);
     positioner.set_gravity(placement.gravity);
     positioner.set_constraint_adjustment(placement.constraint_adjustment);
+    if placement.offset != (0, 0) {
+        positioner.set_offset(placement.offset.0, placement.offset.1);
+    }
+    if wm_base.version() >= REACTIVE_VERSION {
+        if placement.reactive {
+            positioner.set_reactive();
+        }
+        if let Some((w, h)) = placement.parent_size {
+            positioner.set_parent_size(clamp_i32(w), clamp_i32(h));
+        }
+        if placement.reactive || placement.parent_size.is_some() {
+            if let Some(serial) = parent.pending() {
+                positioner.set_parent_configure(serial);
+            }
+        }
+    }
     Ok(positioner)
 }
 
@@ -1434,6 +1505,10 @@ impl State {
             slots: Vec::new(),
             next_slot: 0,
         });
+    }
+
+    pub(crate) fn has_surface(&self, id: SurfaceId) -> bool {
+        self.surface(id).is_ok()
     }
 
     fn surface(&self, id: SurfaceId) -> Result<&Surface, Error> {
@@ -1553,6 +1628,8 @@ delegate_noop!(State: ZxdgDecorationManagerV1);
 delegate_noop!(State: XdgActivationV1);
 delegate_noop!(State: WpCursorShapeManagerV1);
 delegate_noop!(State: WpCursorShapeDeviceV1);
+// the themed cursor's surface
+delegate_noop!(State: ignore WlSurface);
 delegate_noop!(State: ZxdgOutputManagerV1);
 
 impl Dispatch<ZxdgOutputV1, OutputId> for State {
@@ -1957,6 +2034,12 @@ impl Dispatch<XdgPopup, SurfaceId> for State {
                 }
             }
             xdg_popup::Event::PopupDone => state.events.push(Event::PopupDone(Popup(*id))),
+            xdg_popup::Event::Repositioned { token } => {
+                state.events.push(Event::PopupRepositioned {
+                    popup: Popup(*id),
+                    token,
+                })
+            }
             _ => {}
         }
     }

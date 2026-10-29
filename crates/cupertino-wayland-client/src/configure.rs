@@ -150,6 +150,11 @@ impl Serials {
         self.latest
     }
 
+    /// The latest configure when it is not acknowledged yet.
+    pub(crate) fn pending(self) -> Option<u32> {
+        self.latest.filter(|l| self.acked != Some(*l))
+    }
+
     /// A buffer for the latest configure is about to be committed: that serial when it is not acknowledged yet.
     pub(crate) fn present(&mut self) -> Result<Option<u32>, Error> {
         let latest = self.latest.ok_or(Error::NotConfigured)?;

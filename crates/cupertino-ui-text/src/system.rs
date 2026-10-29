@@ -25,6 +25,9 @@ struct State {
 
 /// The fonts and the paragraph cache of one app. Methods take `&self`, so one `Arc<TextSystem>` serves measuring and
 /// painting.
+///
+/// The cache keeps the plain text of every recent paragraph, so text that must not linger, a password above all, is
+/// never shaped: a secure field shapes only its mask.
 pub struct TextSystem {
     theme_family: Arc<str>,
     state: Mutex<State>,

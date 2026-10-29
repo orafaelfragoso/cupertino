@@ -377,6 +377,16 @@ fn long_text_scrolls_to_keep_the_caret_inside_the_field() {
     let width = h.rect("name").width();
     let end = caret(&h).unwrap();
     assert!(end.max_x() <= width - 6.0 + CARET_WIDTH && end.min_x() > width / 2.0);
+    assert_eq!(
+        h.rt.window_system()
+            .text_input(h.window)
+            .unwrap()
+            .unwrap()
+            .cursor_rect
+            .map(|r| r.min_x()),
+        Some(h.rect("name").min_x() + end.min_x()),
+        "the input method sees the caret where the scrolled text puts it"
+    );
     h.press_key(102, 0xff50, true, false, Mods::NONE);
     assert_eq!(
         caret(&h).unwrap().min_x(),
@@ -423,4 +433,60 @@ fn a_password_paints_one_identical_bullet_per_grapheme() {
         .collect();
     assert_eq!(glyphs.len(), 7);
     assert!(glyphs.iter().all(|&id| id == glyphs[0]));
+}
+
+/// A form whose name field starts with `N` characters.
+struct Long<const N: usize>;
+
+impl<const N: usize> Application for Long<N> {
+    type Model = String;
+    type Message = Message;
+
+    fn init() -> (String, Vec<Command<Message>>) {
+        ("a".repeat(N), Vec::new())
+    }
+
+    fn update(text: &mut String, message: Message) -> Vec<Command<Message>> {
+        if let Message::Changed(change) = message {
+            *text = change.text;
+        }
+        Vec::new()
+    }
+
+    fn view(text: &String) -> Vec<Window<Message>> {
+        window(Element::new(TextField {
+            label: "Name".into(),
+            placeholder: String::new(),
+            value: text.clone(),
+            revision: 0,
+            purpose: ContentPurpose::Normal,
+            enabled: true,
+            on_change: Some(Box::new(Message::Changed)),
+            on_submit: None,
+        }))
+    }
+}
+
+/// The best of several keystrokes into a focused field, each shaped and painted.
+fn keystroke<const N: usize>() -> std::time::Duration {
+    let mut h = Harness::<Long<N>>::new();
+    h.tap(TAB);
+    (0..9)
+        .map(|_| {
+            let start = std::time::Instant::now();
+            h.type_text("x");
+            start.elapsed()
+        })
+        .min()
+        .unwrap()
+}
+
+#[test]
+fn a_keystroke_costs_no_more_than_linear_in_the_text() {
+    let (short, long) = (keystroke::<500>(), keystroke::<2000>());
+    let ratio = long.as_secs_f64() / short.as_secs_f64().max(1e-9);
+    assert!(
+        ratio < 10.0,
+        "a keystroke into 2000 characters took {long:?} against {short:?} for 500, {ratio:.1}x for 4x the text"
+    );
 }

@@ -301,13 +301,17 @@ impl FieldState {
         }
     }
 
-    /// The caret in window coordinates, for the input method's candidate window.
+    /// The caret in window coordinates, for the input method's candidate window, at the scroll the next paint takes.
     fn caret_rect<M>(&self, cx: &EventCx<'_, M>) -> Option<Rect> {
         let bounds = cx.bounds()?;
-        let (layout, origin) =
-            placed(cx.env(), self.buffer.text(), bounds.size, self.scroll.get())?;
+        let (layout, origin) = placed(cx.env(), self.buffer.text(), bounds.size, 0.0)?;
         let caret = layout.caret_rect(position(self.buffer.caret()));
-        Some(caret.translate(bounds.min_x() + origin.x, bounds.min_y() + origin.y))
+        let width = interior(bounds.size, &cx.env().theme).width();
+        let scroll = follow(self.scroll.get(), caret.min_x(), layout.size().width, width);
+        Some(caret.translate(
+            bounds.min_x() + origin.x - scroll,
+            bounds.min_y() + origin.y,
+        ))
     }
 
     /// Puts the caret at the text position under `point`, in window coordinates.

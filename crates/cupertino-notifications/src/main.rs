@@ -20,7 +20,9 @@ fn main() -> ExitCode {
     let Err(e) = app::run(&options);
     if e.downcast_ref::<app::NameOwned>().is_some() {
         // not a failure: the server restarts a process that fails, and the name is not going to be free
-        eprintln!("cupertino-notifications: {e}; leaving it to that daemon");
+        eprintln!(
+            "cupertino-notifications: {e}; leaving it to that daemon, so there are no notifications from this session until it is restarted"
+        );
         return ExitCode::SUCCESS;
     }
     // a failure exit makes the server restart the process

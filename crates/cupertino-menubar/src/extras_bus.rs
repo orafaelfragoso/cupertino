@@ -14,6 +14,7 @@ use crate::extras::{
 };
 use futures_util::StreamExt;
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::mpsc;
 use std::sync::Arc;
 use zbus::message::Type;
@@ -68,9 +69,18 @@ pub struct ExtrasBus {
 }
 
 impl ExtrasBus {
-    /// Start the task on the executor of `session`; `wake` is called after every new [`Extras`].
+    /// Start the task on the executor of `session`, with the system bus; `wake` is called after every new [`Extras`].
     pub fn start(
         session: Connection,
+        wake: impl Fn() + Send + Sync + 'static,
+    ) -> (ExtrasBus, mpsc::Receiver<Extras>) {
+        Self::with_system(session, Connection::system(), wake)
+    }
+
+    /// [`ExtrasBus::start`] with the system bus `system` connects to.
+    pub fn with_system(
+        session: Connection,
+        system: impl Future<Output = zbus::Result<Connection>> + Send + 'static,
         wake: impl Fn() + Send + Sync + 'static,
     ) -> (ExtrasBus, mpsc::Receiver<Extras>) {
         let (commands, rx) = async_channel::unbounded();
@@ -78,7 +88,7 @@ impl ExtrasBus {
         let executor = session.executor().clone();
         executor
             .spawn(
-                run(session, commands.clone(), rx, out, Arc::new(wake)),
+                run(session, system, commands.clone(), rx, out, Arc::new(wake)),
                 "cupertino-extras",
             )
             .detach();
@@ -131,12 +141,13 @@ impl Reasons {
 
 async fn run(
     session: Connection,
+    system: impl Future<Output = zbus::Result<Connection>>,
     commands: async_channel::Sender<Command>,
     rx: async_channel::Receiver<Command>,
     out: mpsc::Sender<Extras>,
     wake: Arc<dyn Fn() + Send + Sync>,
 ) {
-    let system = match Connection::system().await {
+    let system = match system.await {
         Ok(system) => Some(system),
         Err(e) => {
             eprintln!(

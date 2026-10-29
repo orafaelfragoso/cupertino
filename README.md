@@ -4,7 +4,7 @@ Cupertino is a Wayland compositor and desktop shell for Linux, written in Rust o
 
 **Status: early release (0.x).** It runs nested inside another Wayland session and on a TTY. The TTY backend has run in a virtual machine, not yet on real hardware; treat it as experimental. Interfaces and configuration files can still change between releases. The [changelog](CHANGELOG.md) lists what changed in the current candidate.
 
-Cupertino serves Wayland clients. X11 programs run through [`xwayland-satellite`](https://github.com/Supreeeme/xwayland-satellite) when it is installed, started at the first X11 program.
+Cupertino serves Wayland clients. X11 programs run through [`xwayland-satellite`](https://github.com/Supreeeme/xwayland-satellite) when it is installed, started at the first X11 program. The Arch and Fedora packages pull it in as an optional or recommended dependency; Debian does not package it, so the Debian package recommends only Xwayland, and X11 programs stay off until you install `xwayland-satellite` yourself.
 
 ## Try it in one minute
 

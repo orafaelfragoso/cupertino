@@ -1,13 +1,13 @@
 mod support;
 
-use cupertino_geometry::Rect;
+use cupertino_geometry::{Rect, Size};
 use cupertino_ui_controls::{Button, ButtonRole, ButtonStyle, Stack};
 use cupertino_ui_core::{Action, Application, Command, Element, Role, Window};
 use cupertino_ui_layout::{Align, Axis};
-use cupertino_ui_platform::{Mods, PointerEvent, TouchEvent};
+use cupertino_ui_platform::{Mods, PointerEvent, TouchEvent, WindowEvent};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_theme::{Color, ColorRole, InteractionVariant};
-use support::{color, point, window, Harness, ESCAPE, RETURN, SPACE, TAB};
+use support::{color, label_width, point, window, Harness, ESCAPE, RETURN, SPACE, TAB};
 
 /// One button per role and style; `BUSY` and `ENABLED` apply to the first.
 struct Buttons<const ENABLED: bool, const BUSY: bool>;
@@ -34,7 +34,7 @@ impl<const ENABLED: bool, const BUSY: bool> Application for Buttons<ENABLED, BUS
     fn view(_: &Model) -> Vec<Window<&'static str>> {
         let button = |key: &'static str, role, style, enabled, busy| {
             Element::new(Button {
-                label: key.into(),
+                label: key.trim_start_matches('_').into(),
                 role,
                 style,
                 enabled,
@@ -83,6 +83,7 @@ impl<const ENABLED: bool, const BUSY: bool> Application for Buttons<ENABLED, BUS
                     true,
                     false,
                 ),
+                button("_", ButtonRole::Normal, ButtonStyle::Bordered, true, false),
             ],
         }))
     }
@@ -110,19 +111,78 @@ fn fill<A: Application>(h: &Harness<A>, key: &'static str) -> Option<Color> {
     shapes(h, key).into_iter().find(|s| s.0).map(|s| s.3)
 }
 
+fn glyph_colors<A: Application>(h: &Harness<A>, key: &'static str) -> Vec<Color> {
+    h.ops(key)
+        .into_iter()
+        .filter_map(|op| match op {
+            PaintOp::Glyphs { color, .. } => Some(color),
+            _ => None,
+        })
+        .collect()
+}
+
 #[test]
 fn the_chrome_is_centred_in_a_target_padded_to_the_minimum() {
     let h = Harness::<App>::new();
-    assert_eq!(h.rect("ok"), Rect::new(0.0, 0.0, 24.0, 24.0));
-    let ok = shapes(&h, "ok");
-    assert_eq!((ok[0].1, ok[0].2), (Rect::new(0.0, 2.0, 24.0, 20.0), 5.0));
-    assert!(!ok[1].0, "a bordered button strokes its border");
+    assert_eq!(h.rect("_").size, Size::new(24.0, 24.0));
+    let blank = shapes(&h, "_");
+    assert_eq!((blank[0].1.size, blank[0].2), (Size::new(24.0, 20.0), 5.0));
+    assert!(!blank[1].0, "a bordered button strokes its border");
     assert_eq!(shapes(&h, "delete")[0].2, 10.0, "a pill is fully rounded");
     assert_eq!(
         (shapes(&h, "round")[0].1, shapes(&h, "round")[0].2),
         (Rect::new(2.0, 2.0, 20.0, 20.0), 10.0),
         "a round icon button is a circle"
     );
+}
+
+#[test]
+fn the_label_widens_the_button_between_its_insets_but_not_a_round_icon_button() {
+    let h = Harness::<App>::new();
+    let width = label_width("delete");
+    assert!(width > 24.0);
+    assert_eq!(h.rect("delete").size, Size::new(width + 20.0, 24.0));
+    assert_eq!(h.rect("round").size, Size::new(24.0, 24.0));
+}
+
+#[test]
+fn the_label_takes_its_role_text_colour_and_a_round_icon_button_paints_none() {
+    let h = Harness::<App>::new();
+    let normal = |role| color(role, InteractionVariant::Normal, false);
+    let texts = [
+        ("ok", ColorRole::ControlText),
+        ("save", ColorRole::DefaultButtonText),
+        ("delete", ColorRole::DestructiveText),
+        ("plain", ColorRole::ControlText),
+    ];
+    for (key, role) in texts {
+        let colors = glyph_colors(&h, key);
+        assert!(!colors.is_empty(), "{key} paints its label");
+        assert!(colors.iter().all(|&c| c == normal(role)), "{key}");
+    }
+    assert!(glyph_colors(&h, "round").is_empty());
+    assert!(glyph_colors(&h, "_").is_empty());
+
+    let h = Harness::<Buttons<false, false>>::new();
+    let disabled = color(ColorRole::ControlText, InteractionVariant::Disabled, false);
+    assert!(glyph_colors(&h, "ok").iter().all(|&c| c == disabled));
+}
+
+#[test]
+fn the_label_is_centred_with_its_baseline_below_the_chrome_centre() {
+    let h = Harness::<App>::new();
+    let size = h.rect("delete").size;
+    let origins: Vec<_> = h
+        .ops("delete")
+        .into_iter()
+        .filter_map(|op| match op {
+            PaintOp::Glyphs { origin, .. } => Some(origin),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(origins.len(), 1);
+    assert!((origins[0].x - 10.0).abs() < 1e-6);
+    assert!((origins[0].y - (size.height / 2.0 + 13.0 * 0.36)).abs() < 1e-4);
 }
 
 #[test]
@@ -230,6 +290,43 @@ fn space_activates_on_release_return_on_press_and_a_repeat_or_escape_never() {
 }
 
 #[test]
+fn deactivating_the_window_mid_press_ends_the_press_without_activating() {
+    let mut h = Harness::<App>::new();
+    let center = h.center("ok");
+    h.pointer(PointerEvent::Motion { position: center });
+    h.button(center, true);
+    assert_eq!(
+        fill(&h, "ok"),
+        Some(color(
+            ColorRole::ControlFill,
+            InteractionVariant::Pressed,
+            false
+        ))
+    );
+    h.send(WindowEvent::Focus(false));
+    assert_ne!(
+        fill(&h, "ok"),
+        Some(color(
+            ColorRole::ControlFill,
+            InteractionVariant::Pressed,
+            false
+        ))
+    );
+    h.send(WindowEvent::Focus(true));
+    h.button(center, false);
+    assert!(h.model().pressed.is_empty());
+}
+
+#[test]
+fn a_space_repeat_that_arrives_with_focus_neither_arms_nor_activates() {
+    let mut h = Harness::<App>::new();
+    h.tap(TAB);
+    h.key_event(SPACE, true, true, Mods::NONE);
+    h.key(SPACE, false);
+    assert!(h.model().pressed.is_empty());
+}
+
+#[test]
 fn a_keyboard_focus_rings_the_chrome() {
     let mut h = Harness::<App>::new();
     h.tap(TAB);
@@ -238,7 +335,7 @@ fn a_keyboard_focus_rings_the_chrome() {
         ring,
         (
             false,
-            Rect::new(-3.0, -1.0, 30.0, 26.0),
+            Rect::new(-3.0, -1.0, label_width("ok") + 20.0 + 6.0, 26.0),
             8.0,
             color(
                 ColorRole::KeyboardFocusIndicator,

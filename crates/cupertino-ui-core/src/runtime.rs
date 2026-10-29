@@ -29,6 +29,7 @@ use cupertino_ui_platform::{
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, DisplayList, PaintResources, RenderRequest, UiRenderer,
 };
+use cupertino_ui_text::TextSystem;
 use cupertino_ui_theme::ThemeTokens;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::num::NonZeroU32;
@@ -44,6 +45,7 @@ pub type WindowErrorHandler = Box<dyn FnMut(WindowId, &UiError)>;
 /// How a runtime is set up besides its window system.
 pub struct RuntimeOptions {
     pub theme: Arc<ThemeTokens>,
+    pub text: Arc<TextSystem>,
     pub direction: LayoutDirection,
     /// The most nodes the tree holds; more is a [`UiError::NodeLimit`].
     pub node_limit: usize,
@@ -369,6 +371,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             root: None,
             env: Environment {
                 theme: Arc::clone(&self.options.theme),
+                text: Arc::clone(&self.options.text),
                 direction: self.options.direction,
                 scale: 1.0,
             },

@@ -12,7 +12,7 @@ use cupertino_ui_platform::{
     ClipboardData, DecorationMode, KeyEvent, Keysym, Mods, WindowEvent, WindowSpec, WindowStates,
 };
 use cupertino_ui_render::{CpuConfig, CpuRenderer};
-use cupertino_ui_text::{GlyphKey, GlyphRasterizer, RasterGlyph, TextError};
+use cupertino_ui_text::{FontIndex, GlyphKey, GlyphRasterizer, RasterGlyph, TextError, TextSystem};
 use cupertino_ui_theme::*;
 
 struct Fields;
@@ -171,6 +171,7 @@ fn options() -> RuntimeOptions {
                 caret_phase_ms: 500,
             },
         }),
+        text: Arc::new(TextSystem::new(FontIndex::new(), "fixture")),
         direction: LayoutDirection::Ltr,
         node_limit: 32,
         renderers: Box::new(|| {

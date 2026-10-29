@@ -39,6 +39,7 @@ pub enum ColorRole {
     SecondarySelectedControlText,
     KeyboardFocusIndicator,
     Separator,
+    /// Text of a section or table header.
     Header,
     ToolTip,
     ToolTipText,

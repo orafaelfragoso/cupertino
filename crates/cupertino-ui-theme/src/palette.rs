@@ -107,7 +107,7 @@ impl Palette<Color> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::neutral;
+    use crate::{adapter, neutral};
 
     fn state(interaction: InteractionVariant, selected: bool, window_active: bool) -> StateVariant {
         StateVariant {
@@ -125,6 +125,10 @@ mod tests {
             neutral::HIGH_CONTRAST_LIGHT,
             neutral::HIGH_CONTRAST_DARK,
         ] {
+            let roles = palette.normal.map(|(role, _)| role);
+            assert_eq!(roles, ColorRole::ALL);
+        }
+        for palette in [adapter::LIGHT, adapter::DARK] {
             let roles = palette.normal.map(|(role, _)| role);
             assert_eq!(roles, ColorRole::ALL);
         }

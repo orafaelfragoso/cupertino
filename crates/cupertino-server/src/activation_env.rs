@@ -21,10 +21,17 @@ const UNIT: &str = "org.freedesktop.systemd1.Unit";
 const GRAPHICAL_SESSION: &str = "graphical-session.target";
 /// The unit the packages install in the user unit directory.
 pub const SESSION_TARGET: &str = "cupertino-session.target";
-/// Variables an earlier desktop may have left that this session does not have: Cupertino runs no X server, and a program
-/// that finds `DISPLAY` set prefers it to Wayland.
-// TODO(D2): once XWayland runs through xwayland-satellite, `DISPLAY` is this session's and is published, not unset.
-const UNSET: [&str; 1] = ["DISPLAY"];
+/// Variables an earlier desktop may have left, removed unless this session publishes its own: without an X display
+/// (no `xwayland-satellite`) a program that finds another session's `DISPLAY` would prefer it to Wayland.
+const UNSET: [&str; 2] = ["DISPLAY", "XAUTHORITY"];
+
+/// The [`UNSET`] names that `variables` does not set.
+fn unset<'a>(variables: &[(&str, &str)]) -> Vec<&'a str> {
+    UNSET
+        .into_iter()
+        .filter(|name| variables.iter().all(|(k, _)| k != name))
+        .collect()
+}
 
 /// What was done with the shared bus.
 #[derive(Debug, PartialEq, Eq)]
@@ -108,6 +115,7 @@ pub async fn publish(conn: &Connection, variables: &[(&str, &str)]) -> zbus::Res
     } else if unit_active(conn, GRAPHICAL_SESSION).await? {
         return Ok(Outcome::AnotherSession);
     }
+    let unset = unset(variables);
     let assignments: Vec<String> = variables.iter().map(|(k, v)| format!("{k}={v}")).collect();
     call(
         conn,
@@ -115,12 +123,12 @@ pub async fn publish(conn: &Connection, variables: &[(&str, &str)]) -> zbus::Res
         MANAGER_PATH,
         MANAGER,
         "UnsetAndSetEnvironment",
-        &(UNSET.as_slice(), assignments),
+        &(unset.as_slice(), assignments),
     )
     .await?;
     // `UpdateActivationEnvironment` cannot remove a variable: an empty value is the nearest thing
     let mut map: HashMap<&str, &str> = variables.iter().copied().collect();
-    map.extend(UNSET.iter().map(|name| (*name, "")));
+    map.extend(unset.iter().map(|name| (*name, "")));
     call(
         conn,
         "org.freedesktop.DBus",

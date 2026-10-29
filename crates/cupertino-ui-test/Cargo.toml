@@ -14,3 +14,7 @@ cupertino-ui-core = { path = "../cupertino-ui-core" }
 cupertino-ui-platform = { path = "../cupertino-ui-platform" }
 cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
+
+[dev-dependencies]
+cupertino-ui-layout = { path = "../cupertino-ui-layout" }
+cupertino-ui-theme = { path = "../cupertino-ui-theme" }

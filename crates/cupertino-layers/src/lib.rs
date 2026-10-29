@@ -1,8 +1,7 @@
 //! Layer rules of the workspace. A crate declares its layer in its manifest
-//! (`[package.metadata.cupertino] layer = "<layer>"`); [`RULES`] checks those layers. [`TARGET`] classifies every crate
-//! into the twelve target layers and [`TARGET_RULES`] checks that classification, excusing the edges in
-//! [`TARGET_EXCEPTIONS`]. Both views also fail on any chain of dependencies that [`DENIED_PATHS`] forbids, and the
-//! check fails on any chain of normal dependencies, external crates included, that [`DENIED_CRATES`] forbids.
+//! (`[package.metadata.cupertino] layer = "<layer>"`); [`RULES`] checks those layers, excusing the edges in
+//! [`EXCEPTIONS`]. The check also fails on any chain of dependencies that [`DENIED_PATHS`] forbids, and on any chain of
+//! normal dependencies, external crates included, that [`DENIED_CRATES`] forbids.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -109,22 +108,9 @@ impl fmt::Display for Kind {
 /// The layers each layer may depend on. A crate may only declare a layer that has a row.
 pub type Rules = &'static [(Layer, &'static [Layer])];
 
-/// The rules the manifests follow today: dependencies point down the stack, sideways only inside the library layers,
-/// and the shippable layers never depend on the core or on each other.
+/// Twelve layers: dependencies point down the stack, same-layer dependencies only inside the library layers,
+/// `services` and `tools`.
 pub const RULES: Rules = &[
-    (Foundation, &[Foundation]),
-    (Models, &[Foundation, Models]),
-    (Platform, &[Foundation, Platform]),
-    (Render, &[Foundation, Platform, Render]),
-    (Core, &[Foundation, Models, Platform, Render]),
-    (Shell, &[Foundation, Models, Platform, Render]),
-    (Services, &[Foundation, Models, Platform, Render]),
-    (Apps, &[Foundation, Models, Platform, Render]),
-    (Tools, &[Foundation, Models, Platform, Render]),
-];
-
-/// The target rules: twelve layers; same-layer dependencies only inside the library layers, `services` and `tools`.
-pub const TARGET_RULES: Rules = &[
     (Foundation, &[Foundation]),
     (Models, &[Foundation, Models]),
     (Platform, &[Foundation, Platform]),
@@ -354,90 +340,12 @@ impl Exception {
     }
 }
 
-/// Known violations of [`RULES`]. Each one must still exist: a stale entry is an error too, so the list only shrinks.
-pub const PENDING: &[Exception] = &[];
-
-/// The target layer of every workspace crate.
-pub const TARGET: &[(&str, Layer)] = &[
-    ("cupertino-alsa", Platform),
-    ("cupertino-animation", Foundation),
-    ("cupertino-app-protocols", Protocol),
-    ("cupertino-apps", Foundation),
-    ("cupertino-assets", Foundation),
-    ("cupertino-bluetooth", Platform),
-    ("cupertino-btd", Services),
-    ("cupertino-controlcenter", Shell),
-    ("cupertino-cursor", Render),
-    ("cupertino-decorations", Render),
-    ("cupertino-defaults", Foundation),
-    ("cupertino-devices", Platform),
-    ("cupertino-displays", Models),
-    ("cupertino-dock", Shell),
-    ("cupertino-effects", Models),
-    ("cupertino-evdev", Platform),
-    ("cupertino-filepicker", Foundation),
-    ("cupertino-files", Apps),
-    ("cupertino-geometry", Foundation),
-    ("cupertino-glyph", Foundation),
-    ("cupertino-glass", Render),
-    ("cupertino-icons", Foundation),
-    ("cupertino-input", Models),
-    ("cupertino-key-bindings", Foundation),
-    ("cupertino-keyboard", Foundation),
-    ("cupertino-kit", Ui),
-    ("cupertino-launcher", Shell),
-    ("cupertino-layers", Tools),
-    ("cupertino-login", Shell),
-    ("cupertino-login-ipc", Protocol),
-    ("cupertino-menu-model", Foundation),
-    ("cupertino-menubar", Shell),
-    ("cupertino-modifiers", Foundation),
-    ("cupertino-test-bus", Foundation),
-    ("cupertino-netd", Services),
-    ("cupertino-netlink", Platform),
-    ("cupertino-notifications", Shell),
-    ("cupertino-osd", Shell),
-    ("cupertino-overview", Models),
-    ("cupertino-peer", Platform),
-    ("cupertino-powerd", Services),
-    ("cupertino-protocol-app", Transport),
-    ("cupertino-protocols", Protocol),
-    ("cupertino-render-api", Models),
-    ("cupertino-scene", Models),
-    ("cupertino-screenshot", Shell),
-    ("cupertino-seat", Platform),
-    ("cupertino-server", Core),
-    ("cupertino-sessiond", Services),
-    ("cupertino-settings", Apps),
-    ("cupertino-shell-client", Transport),
-    ("cupertino-stage", Models),
-    ("cupertino-testclient", Tools),
-    ("cupertino-text-field", Ui),
-    ("cupertino-theme", Foundation),
-    ("cupertino-thumbnails", Foundation),
-    ("cupertino-typeahead", Foundation),
-    ("cupertino-ui-controls", Ui),
-    ("cupertino-ui-core", Ui),
-    ("cupertino-ui-layout", Ui),
-    ("cupertino-ui-menus", Ui),
-    ("cupertino-ui-platform", Ui),
-    ("cupertino-ui-render", Ui),
-    ("cupertino-ui-test", Ui),
-    ("cupertino-ui-text", Ui),
-    ("cupertino-ui-theme", Ui),
-    ("cupertino-ui-wayland", Ui),
-    ("cupertino-wayland-client", Transport),
-    ("cupertino-windowmanager", Shell),
-    ("cupertino-wm", Models),
-    ("xkbcommon", Foundation),
-];
-
 const APPS_DRAW: &str =
     "apps paint fields, shapes, text and system icons with desktop render crates until they draw \
                          through the toolkit (WP-10)";
 
-/// Edges that exist today and that [`TARGET_RULES`] forbid. Stale entries are errors.
-pub const TARGET_EXCEPTIONS: &[Exception] = &[
+/// Edges that exist today and that [`RULES`] forbid. Stale entries are errors, so the list only shrinks.
+pub const EXCEPTIONS: &[Exception] = &[
     Exception {
         from: "cupertino-files",
         to: "cupertino-decorations",
@@ -497,8 +405,6 @@ pub enum Problem {
     Forbidden(Edge),
     DeniedPath(Vec<String>),
     StaleException(Exception),
-    Unclassified(String),
-    NotACrate(&'static str),
     /// An MPL-2.0 crate with a normal dependency on a crate under a GPL licence: `(from, to, licence of to)`.
     GplDependency(String, String, String),
     /// An MPL-2.0 crate without the licence text in a `LICENSE` file next to its manifest.
@@ -521,10 +427,6 @@ impl fmt::Display for Problem {
                 "{} no longer has a {} dependency on {}: remove its exception",
                 x.from, x.kind, x.to
             ),
-            Problem::Unclassified(name) => write!(f, "{name} has no entry in TARGET"),
-            Problem::NotACrate(name) => {
-                write!(f, "{name} is in TARGET but is not a workspace crate")
-            }
             Problem::GplDependency(from, to, licence) => write!(
                 f,
                 "{from} is MPL-2.0 and must not depend on {to} ({licence}), normal dependency"
@@ -569,31 +471,6 @@ pub fn check(
 /// The exception that excuses `edge`.
 pub fn exception<'a>(exceptions: &'a [Exception], edge: &Edge) -> Option<&'a Exception> {
     exceptions.iter().find(|x| x.matches(edge))
-}
-
-/// The target layer of each of `crates`, with a problem for each crate `target` misses and each entry that names no
-/// crate.
-pub fn classify<'a>(
-    crates: impl IntoIterator<Item = &'a String>,
-    target: &[(&'static str, Layer)],
-) -> (BTreeMap<String, Layer>, Vec<Problem>) {
-    let crates: BTreeSet<&str> = crates.into_iter().map(String::as_str).collect();
-    let mut layers = BTreeMap::new();
-    let mut problems = Vec::new();
-    for &name in &crates {
-        match target.iter().find(|(n, _)| *n == name) {
-            Some(&(_, layer)) => {
-                layers.insert(name.to_owned(), layer);
-            }
-            None => problems.push(Problem::Unclassified(name.to_owned())),
-        }
-    }
-    for &(name, _) in target {
-        if !crates.contains(name) {
-            problems.push(Problem::NotACrate(name));
-        }
-    }
-    (layers, problems)
 }
 
 /// Whether the SPDX expression `licence` names `MPL-2.0` first: the crate's own code is under the MPL (a bundled font
@@ -693,16 +570,11 @@ mod tests {
     }
 
     #[test]
-    fn target_rules_let_a_shell_use_the_toolkit_and_keep_apps_off_the_renderer() {
+    fn a_shell_may_use_the_toolkit_and_apps_stay_off_the_renderer() {
         let toolkit = edge("dock", Shell, "kit", Ui);
         let renderer = edge("files", Apps, "glass", Render);
         assert_eq!(
-            check(
-                TARGET_RULES,
-                &[toolkit, renderer.clone()],
-                &[],
-                DENIED_PATHS
-            ),
+            check(RULES, &[toolkit, renderer.clone()], &[], DENIED_PATHS),
             vec![Problem::Forbidden(renderer.clone())]
         );
         assert_eq!(
@@ -712,11 +584,23 @@ mod tests {
     }
 
     #[test]
+    fn a_toolkit_crate_may_not_depend_on_the_server() {
+        let up = edge("kit", Ui, "server", Core);
+        assert_eq!(
+            check(RULES, std::slice::from_ref(&up), &[], DENIED_PATHS),
+            vec![
+                Problem::Forbidden(up),
+                Problem::DeniedPath(vec!["kit".into(), "server".into()])
+            ]
+        );
+    }
+
+    #[test]
     fn a_toolkit_chain_to_the_server_fails_even_when_its_edges_are_excused() {
         let up = edge("net", Transport, "server", Core);
         let edges = [edge("kit", Ui, "net", Transport), up.clone()];
         let problems = check(
-            TARGET_RULES,
+            RULES,
             &edges,
             &[exc("net", "server", Kind::Normal, Tracking::Issue(1))],
             DENIED_PATHS,
@@ -743,12 +627,9 @@ mod tests {
         };
         let normal = edge("server", Core, "client", Transport);
         let x = exc("server", "client", Kind::Dev, Tracking::Permanent);
+        assert_eq!(check(RULES, std::slice::from_ref(&dev), &[x], &[]), vec![]);
         assert_eq!(
-            check(TARGET_RULES, std::slice::from_ref(&dev), &[x], &[]),
-            vec![]
-        );
-        assert_eq!(
-            check(TARGET_RULES, std::slice::from_ref(&normal), &[x], &[]),
+            check(RULES, std::slice::from_ref(&normal), &[x], &[]),
             vec![
                 Problem::Forbidden(normal.clone()),
                 Problem::StaleException(x)
@@ -773,20 +654,6 @@ mod tests {
                 kind: Kind::Dev,
                 ..edge("dock", Shell, "wm", Models)
             }]
-        );
-    }
-
-    #[test]
-    fn classify_reports_missing_and_unknown_crates() {
-        let crates = ["dock".to_owned(), "wm".to_owned()];
-        let (layers, problems) = classify(&crates, &[("wm", Models), ("gone", Apps)]);
-        assert_eq!(layers, BTreeMap::from([("wm".to_owned(), Models)]));
-        assert_eq!(
-            problems,
-            vec![
-                Problem::Unclassified("dock".into()),
-                Problem::NotACrate("gone")
-            ]
         );
     }
 

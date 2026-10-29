@@ -6,7 +6,7 @@ license = "MPL-2.0"
 description = "CupertinoKit runtime: the application model, elements and the retained node tree, event routing, focus, commands and tasks, and the accessibility tree"
 
 [package.metadata.cupertino]
-layer = "render"
+layer = "ui"
 
 [dependencies]
 async-task = "4.7"

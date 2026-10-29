@@ -6,7 +6,7 @@ license.workspace = true
 description = "The privileged protocols of the Cupertino shell processes on the transport's queue: layer surfaces, the session lock, idle notification, the session observer and the menu-bar and dock roles"
 
 [package.metadata.cupertino]
-layer = "render"
+layer = "transport"
 
 [dependencies]
 cupertino-defaults = { path = "../cupertino-defaults" }

@@ -6,7 +6,7 @@ license = "MPL-2.0"
 description = "Glyph rasterisation for Cupertino text: outline dilation (stem darkening) and exact-area scan conversion to 8-bit coverage"
 
 [package.metadata.cupertino]
-layer = "render"
+layer = "foundation"
 
 [dependencies]
 swash = "0.2.10"

@@ -6,7 +6,7 @@ license = "MPL-2.0"
 description = "Publishes a CupertinoKit application's menus to the desktop menu bar as org.gtk.Menus and org.gtk.Actions on the session bus"
 
 [package.metadata.cupertino]
-layer = "render"
+layer = "ui"
 
 [dependencies]
 cupertino-menu-model = { path = "../cupertino-menu-model" }

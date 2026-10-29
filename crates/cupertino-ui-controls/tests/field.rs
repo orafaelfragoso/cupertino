@@ -403,3 +403,24 @@ fn a_composition_is_underlined_one_pixel_below_the_baseline() {
     h.send(batch(None, Some("か"), true));
     assert_eq!(underline(&h), None);
 }
+
+#[test]
+fn a_password_paints_one_identical_bullet_per_grapheme() {
+    let mut h = Harness::<App>::new();
+    h.tap(TAB);
+    h.tap(TAB);
+    assert!(h.focused("password"));
+    h.type_text("hunter2");
+    let glyphs: Vec<_> = h
+        .ops("password")
+        .into_iter()
+        .filter_map(|op| match op {
+            PaintOp::Glyphs { run, .. } => Some(run.glyphs),
+            _ => None,
+        })
+        .flatten()
+        .map(|g| g.id)
+        .collect();
+    assert_eq!(glyphs.len(), 7);
+    assert!(glyphs.iter().all(|&id| id == glyphs[0]));
+}

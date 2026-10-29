@@ -1622,6 +1622,7 @@ version = "0.1.0"
 dependencies = [
  "cupertino-geometry",
  "cupertino-theme",
+ "serde_json",
 ]
 
 [[package]]

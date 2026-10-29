@@ -11,3 +11,6 @@ layer = "render"
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-theme = { path = "../cupertino-theme" }
+
+[dev-dependencies]
+serde_json = "1"

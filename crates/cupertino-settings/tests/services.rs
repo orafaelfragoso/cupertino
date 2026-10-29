@@ -942,16 +942,8 @@ fn a_key_the_server_holds_that_this_build_does_not_know_is_named_not_applied() {
 
 #[test]
 fn a_bus_that_cannot_be_reached_shows_the_plain_state_and_never_the_error() {
-    // one test of this binary sets the buses' addresses; the others read them from their own connections
-    std::env::set_var(
-        "DBUS_SYSTEM_BUS_ADDRESS",
-        "unix:path=/nonexistent/cupertino-test-bus",
-    );
-    std::env::set_var(
-        "DBUS_SESSION_BUS_ADDRESS",
-        "unix:path=/nonexistent/cupertino-test-bus",
-    );
-    let mut services = Services::on(Bus::system(), Bus::session());
+    const NOWHERE: &str = "unix:path=/nonexistent/cupertino-test-bus";
+    let mut services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
     fn reason<T: std::fmt::Debug>(reading: Reading<T>) -> String {
         match reading {
             Reading::Unavailable(reason) => reason,

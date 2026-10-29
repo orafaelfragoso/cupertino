@@ -41,21 +41,38 @@ const BRIGHTNESS_FLOOR: u32 = 1;
 
 /// One bus, connected on first use.
 pub struct Bus {
-    connect: fn() -> zbus::Result<Connection>,
+    endpoint: Endpoint,
     connection: Option<Connection>,
+}
+
+/// Where a [`Bus`] connects.
+enum Endpoint {
+    System,
+    Session,
+    Address(String),
+    /// A test bus handed over connected, which can't be reached again.
+    Gone,
 }
 
 impl Bus {
     pub fn system() -> Self {
         Bus {
-            connect: Connection::system,
+            endpoint: Endpoint::System,
             connection: None,
         }
     }
 
     pub fn session() -> Self {
         Bus {
-            connect: Connection::session,
+            endpoint: Endpoint::Session,
+            connection: None,
+        }
+    }
+
+    /// The bus at a D-Bus `address`, connected on first use.
+    pub fn address(address: &str) -> Self {
+        Bus {
+            endpoint: Endpoint::Address(address.to_owned()),
             connection: None,
         }
     }
@@ -63,14 +80,21 @@ impl Bus {
     /// A bus at `address` (the tests' private buses).
     pub fn at(connection: Connection) -> Self {
         Bus {
-            connect: || Err(zbus::Error::Failure("the test bus is gone".into())),
+            endpoint: Endpoint::Gone,
             connection: Some(connection),
         }
     }
 
     pub fn connection(&mut self) -> zbus::Result<&Connection> {
         if self.connection.is_none() {
-            self.connection = Some((self.connect)()?);
+            self.connection = Some(match &self.endpoint {
+                Endpoint::System => Connection::system(),
+                Endpoint::Session => Connection::session(),
+                Endpoint::Address(address) => {
+                    zbus::blocking::connection::Builder::address(address.as_str())?.build()
+                }
+                Endpoint::Gone => Err(zbus::Error::Failure("the test bus is gone".into())),
+            }?);
         }
         Ok(self.connection.as_ref().expect("connected above"))
     }

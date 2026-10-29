@@ -68,12 +68,15 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
         }
     }
 
-    /// The label's width comes with text shaping; until then the chrome holds only its insets.
+    /// A round icon button's label is only its accessible name; the others fit the label between their insets.
     fn measure(&self, _: &Press, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
         let metrics = cx.env().theme.metrics;
         let width = match self.style {
             ButtonStyle::RoundIcon => metrics.button_height,
-            _ => 2.0 * metrics.button_inset,
+            _ => {
+                let label = look::label(cx.env(), &self.label).map_or(0.0, |l| l.size().width);
+                label + 2.0 * metrics.button_inset
+            }
         };
         Measured {
             size: Size::new(
@@ -115,7 +118,7 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
         };
         let chrome = chrome(cx.size(), self.style, &theme);
         let radius = self.radius(chrome, &theme);
-        let (fill, _) = self.roles();
+        let (fill, text) = self.roles();
         if self.style != ButtonStyle::Borderless || state.pressed {
             look::fill(cx, chrome, radius, look::color(&theme, fill, &state));
         }
@@ -127,6 +130,12 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
                 1.0,
                 look::color(&theme, ColorRole::ControlBorder, &state),
             );
+        }
+        if self.style != ButtonStyle::RoundIcon {
+            if let Some(label) = look::label(cx.env(), &self.label) {
+                let origin = look::centred(&label, chrome, cx.env());
+                look::glyphs(cx, &label, origin, look::color(&theme, text, &state));
+            }
         }
         paint_focus_ring(cx, chrome, radius);
     }

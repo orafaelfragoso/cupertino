@@ -15,7 +15,10 @@ use cupertino_ui_platform::{
 };
 use cupertino_ui_render::{CpuConfig, CpuRenderer, PaintNodeId, PaintOp};
 use cupertino_ui_test::{HeadlessWindowSystem, ManualClock};
-use cupertino_ui_text::{GlyphKey, GlyphRasterizer, RasterGlyph, TextError};
+use cupertino_ui_text::{
+    AttributedText, FontIndex, FontStyle, FontWeight, GlyphKey, GlyphRasterizer, ParagraphStyle,
+    RasterGlyph, TextError, TextStyle, TextSystem,
+};
 use cupertino_ui_theme::{
     Appearance, Color, ColorRole, ColorTokens, ControlMetrics, ControlSize, FocusRing,
     InteractionVariant, Motion, StateVariant, ThemePreferences, ThemeTokens, TypeRole, TypeScale,
@@ -28,7 +31,38 @@ pub const RETURN: u32 = 0xff0d;
 pub const ESCAPE: u32 = 0xff1b;
 pub const TAB: u32 = 0xff09;
 
-/// The controls under test draw no text.
+const INTER: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../cupertino-assets/fonts/InterVariable-subset.ttf"
+));
+
+/// Shapes labels with real metrics; the renderer below rasterizes none of their glyphs.
+pub fn text() -> Arc<TextSystem> {
+    let mut fonts = FontIndex::new();
+    fonts
+        .add_face(
+            "Inter",
+            FontWeight::REGULAR,
+            FontStyle::Normal,
+            Arc::new(INTER.to_vec()),
+            0,
+        )
+        .unwrap();
+    Arc::new(TextSystem::new(fonts, "Inter"))
+}
+
+/// The one-line width of `label` in the fixture's 13 pt body type.
+pub fn label_width(label: &str) -> f64 {
+    text()
+        .measure(
+            &AttributedText::plain(label, TextStyle::new(13.0)),
+            &ParagraphStyle::default(),
+            None,
+        )
+        .unwrap()
+        .width
+}
+
 struct NoGlyphs;
 
 impl GlyphRasterizer for NoGlyphs {
@@ -161,6 +195,7 @@ pub struct Harness<A: Application> {
     pub rt: Runtime<A, HeadlessWindowSystem>,
     pub window: WindowId,
     clock: Arc<ManualClock>,
+    text: Arc<TextSystem>,
 }
 
 impl<A: Application> Harness<A> {
@@ -170,8 +205,10 @@ impl<A: Application> Harness<A> {
 
     pub fn with_direction(direction: LayoutDirection) -> Self {
         let clock = Arc::new(ManualClock::new(Timestamp(0)));
+        let text = text();
         let options = RuntimeOptions {
             theme: Arc::new(theme()),
+            text: text.clone(),
             direction,
             node_limit: 1000,
             renderers: Box::new(|| {
@@ -195,7 +232,12 @@ impl<A: Application> Harness<A> {
         rt.window_system_mut()
             .configure(window, Some(Size::new(200.0, 100.0)), active())
             .unwrap();
-        let mut harness = Self { rt, window, clock };
+        let mut harness = Self {
+            rt,
+            window,
+            clock,
+            text,
+        };
         harness.settle();
         harness
     }
@@ -343,6 +385,7 @@ impl<A: Application> Harness<A> {
     pub fn env(&self) -> Environment {
         Environment {
             theme: Arc::new(theme()),
+            text: self.text.clone(),
             direction: LayoutDirection::Ltr,
             scale: 1.0,
         }

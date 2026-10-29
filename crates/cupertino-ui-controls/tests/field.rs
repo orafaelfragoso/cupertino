@@ -1,13 +1,16 @@
 mod support;
 
+use cupertino_geometry::Rect;
 use cupertino_ui_controls::{SecureField, Stack, TextChange, TextField};
 use cupertino_ui_core::{
     AccessibleValue, Application, Command, Element, Role, TextSemantics, Window,
 };
 use cupertino_ui_layout::{Align, Axis};
 use cupertino_ui_platform::{ClipboardKind, Mods, WindowEvent};
-use cupertino_ui_text::{ContentPurpose, ImeBatch, ImeEvent, Preedit};
-use support::{window, Harness, ESCAPE, RETURN, TAB};
+use cupertino_ui_render::{Paint, PaintOp, Shape};
+use cupertino_ui_text::{ContentPurpose, ImeBatch, ImeEvent, Preedit, CARET_WIDTH};
+use cupertino_ui_theme::{Color, ColorRole, InteractionVariant};
+use support::{color, point, window, Harness, ESCAPE, RETURN, TAB};
 
 const LEFT: (u32, u32) = (105, 0xff51);
 const BACKSPACE: (u32, u32) = (14, 0xff08);
@@ -109,6 +112,41 @@ fn batch(preedit: Option<&str>, commit: Option<&str>, current: bool) -> WindowEv
         delete: (0, 0),
         current,
     }))
+}
+
+/// The plain rectangles a field fills inside its chrome: caret, selection and composition underline.
+fn rects(h: &Harness<App>, key: &'static str) -> Vec<(Rect, Color)> {
+    h.ops(key)
+        .into_iter()
+        .filter_map(|op| match op {
+            PaintOp::Fill {
+                shape: Shape::Rect(rect),
+                paint: Paint::Solid(c),
+            } => Some((rect, c)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn caret(h: &Harness<App>) -> Option<Rect> {
+    rects(h, "name")
+        .into_iter()
+        .find(|(r, c)| r.width() == CARET_WIDTH && *c == normal(ColorRole::Text))
+        .map(|(r, _)| r)
+}
+
+fn glyph_colors(h: &Harness<App>, key: &'static str) -> Vec<Color> {
+    h.ops(key)
+        .into_iter()
+        .filter_map(|op| match op {
+            PaintOp::Glyphs { color, .. } => Some(color),
+            _ => None,
+        })
+        .collect()
+}
+
+fn normal(role: ColorRole) -> Color {
+    color(role, InteractionVariant::Normal, false)
 }
 
 fn focused_name() -> Harness<App> {
@@ -277,4 +315,178 @@ fn disabled_fields_take_no_focus_or_text() {
     assert_eq!(h.model().text, "");
     assert!(h.accessible("name").states.disabled);
     assert!(h.accessible("password").states.disabled);
+}
+
+#[test]
+fn the_placeholder_shows_in_its_own_colour_until_there_is_text() {
+    let mut h = focused_name();
+    let placeholder = glyph_colors(&h, "name");
+    assert!(!placeholder.is_empty());
+    assert!(placeholder
+        .iter()
+        .all(|&c| c == normal(ColorRole::PlaceholderText)));
+    h.type_text("A");
+    let text = glyph_colors(&h, "name");
+    assert!(!text.is_empty());
+    assert!(text.iter().all(|&c| c == normal(ColorRole::Text)));
+}
+
+#[test]
+fn the_caret_follows_typing_and_gives_way_to_the_selection() {
+    let mut h = focused_name();
+    let start = caret(&h).expect("a focused empty field shows its caret");
+    h.type_text("Ada");
+    let end = caret(&h).unwrap();
+    assert!(end.min_x() > start.min_x());
+    assert_eq!(
+        h.rt.window_system()
+            .text_input(h.window)
+            .unwrap()
+            .unwrap()
+            .cursor_rect
+            .map(|r| r.min_x()),
+        Some(h.rect("name").min_x() + end.min_x()),
+        "the input method learns where the caret is"
+    );
+
+    h.press_key(A, 'a' as u32, true, false, Mods::PRIMARY);
+    assert_eq!(caret(&h), None);
+    let selected: Vec<_> = rects(&h, "name")
+        .into_iter()
+        .filter(|(_, c)| *c == normal(ColorRole::SelectedTextBackground))
+        .collect();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].0.min_x(), start.min_x());
+    assert_eq!(selected[0].0.max_x(), end.min_x());
+}
+
+#[test]
+fn a_click_puts_the_caret_at_the_nearest_position() {
+    let mut h = focused_name();
+    h.type_text("hello");
+    let field = h.rect("name");
+    h.click(point(field.min_x() + 6.5, field.center().y));
+    h.type_text("X");
+    assert_eq!(h.model().text, "Xhello");
+}
+
+#[test]
+fn long_text_scrolls_to_keep_the_caret_inside_the_field() {
+    let mut h = focused_name();
+    h.type_text(&"w".repeat(60));
+    let width = h.rect("name").width();
+    let end = caret(&h).unwrap();
+    assert!(end.max_x() <= width - 6.0 + CARET_WIDTH && end.min_x() > width / 2.0);
+    assert_eq!(
+        h.rt.window_system()
+            .text_input(h.window)
+            .unwrap()
+            .unwrap()
+            .cursor_rect
+            .map(|r| r.min_x()),
+        Some(h.rect("name").min_x() + end.min_x()),
+        "the input method sees the caret where the scrolled text puts it"
+    );
+    h.press_key(102, 0xff50, true, false, Mods::NONE);
+    assert_eq!(
+        caret(&h).unwrap().min_x(),
+        6.0,
+        "Home scrolls back to the start"
+    );
+}
+
+#[test]
+fn a_composition_is_underlined_one_pixel_below_the_baseline() {
+    let mut h = focused_name();
+    h.send(batch(Some("ka"), None, true));
+    let underline = |h: &Harness<App>| {
+        rects(h, "name")
+            .into_iter()
+            .find(|(r, _)| r.height() == 1.0)
+    };
+    let (rect, c) = underline(&h).expect("the composition is underlined");
+    assert_eq!(c, normal(ColorRole::Text));
+    assert!(rect.width() > 0.0);
+    let baseline = h.rect("name").height() / 2.0 + 13.0 * 0.36;
+    assert!((rect.min_y() - (baseline + 1.5)).abs() < 1e-9);
+
+    h.send(batch(None, Some("か"), true));
+    assert_eq!(underline(&h), None);
+}
+
+#[test]
+fn a_password_paints_one_identical_bullet_per_grapheme() {
+    let mut h = Harness::<App>::new();
+    h.tap(TAB);
+    h.tap(TAB);
+    assert!(h.focused("password"));
+    h.type_text("hunter2");
+    let glyphs: Vec<_> = h
+        .ops("password")
+        .into_iter()
+        .filter_map(|op| match op {
+            PaintOp::Glyphs { run, .. } => Some(run.glyphs),
+            _ => None,
+        })
+        .flatten()
+        .map(|g| g.id)
+        .collect();
+    assert_eq!(glyphs.len(), 7);
+    assert!(glyphs.iter().all(|&id| id == glyphs[0]));
+}
+
+/// A form whose name field starts with `N` characters.
+struct Long<const N: usize>;
+
+impl<const N: usize> Application for Long<N> {
+    type Model = String;
+    type Message = Message;
+
+    fn init() -> (String, Vec<Command<Message>>) {
+        ("a".repeat(N), Vec::new())
+    }
+
+    fn update(text: &mut String, message: Message) -> Vec<Command<Message>> {
+        if let Message::Changed(change) = message {
+            *text = change.text;
+        }
+        Vec::new()
+    }
+
+    fn view(text: &String) -> Vec<Window<Message>> {
+        window(Element::new(TextField {
+            label: "Name".into(),
+            placeholder: String::new(),
+            value: text.clone(),
+            revision: 0,
+            purpose: ContentPurpose::Normal,
+            enabled: true,
+            on_change: Some(Box::new(Message::Changed)),
+            on_submit: None,
+        }))
+    }
+}
+
+/// The best of several keystrokes into a focused field, each shaped and painted.
+fn keystroke<const N: usize>() -> std::time::Duration {
+    let mut h = Harness::<Long<N>>::new();
+    h.tap(TAB);
+    (0..9)
+        .map(|_| {
+            let start = std::time::Instant::now();
+            h.type_text("x");
+            start.elapsed()
+        })
+        .min()
+        .unwrap()
+}
+
+#[test]
+fn a_keystroke_costs_no_more_than_linear_in_the_text() {
+    let (short, long) = (keystroke::<500>(), keystroke::<2000>());
+    let ratio = long.as_secs_f64() / short.as_secs_f64().max(1e-9);
+    assert!(
+        ratio < 10.0,
+        "a keystroke into 2000 characters took {long:?} against {short:?} for 500, {ratio:.1}x for 4x the text"
+    );
 }

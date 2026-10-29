@@ -195,14 +195,14 @@ impl Shortcut {
 const MODIFIER_GLYPHS: [char; 4] = ['\u{2303}', '\u{2325}', '\u{21e7}', '\u{2318}'];
 
 /// The keys the glyph style draws as a symbol or a short word, by their lower-case keysym names. Every symbol here must be
-/// in the embedded font (a test checks it): the Escape and keypad Enter symbols are not, so those keys are words.
+/// in the embedded font (a test checks it): Inter has no keypad Enter symbol, so that key is a word.
 const KEY_GLYPHS: &[(&[&str], &str)] = &[
     (&["return", "enter"], "\u{21a9}"),
     (&["kp_enter"], "Enter"),
     (&["backspace"], "\u{232b}"),
     (&["delete"], "\u{2326}"),
     (&["tab"], "\u{21e5}"),
-    (&["escape"], "Esc"),
+    (&["escape"], "\u{238b}"),
     (&["space"], "Space"),
     (&["page_up", "prior"], "\u{21de}"),
     (&["page_down", "next"], "\u{21df}"),
@@ -633,7 +633,7 @@ mod tests {
             ("comma", ","),
             ("slash", "/"),
             ("grave", "`"),
-            ("Escape", "Esc"),
+            ("Escape", "\u{238b}"),
             ("space", "Space"),
             ("Page_Up", "\u{21de}"),
             ("Prior", "\u{21de}"),

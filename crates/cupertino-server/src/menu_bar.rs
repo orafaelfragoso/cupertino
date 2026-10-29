@@ -18,7 +18,7 @@ use cupertino_protocols::server::app_effects::cupertino_app_menu_v1::{
 };
 use cupertino_protocols::server::cupertino_menu_bar_v1::{
     self, AgentTrust, AppWindowFlags, BoundAction, Command as BarCommand, CupertinoMenuBarV1,
-    EditAction, Error as BarError, ModifierKey, SessionAction,
+    EditAction, Error as BarError, ModifierKey, SessionAction, WindowControl,
 };
 use cupertino_protocols::server::cupertino_shell_v1::{CupertinoShellV1, Error as ShellError};
 use cupertino_wm::menu_bar::{BarSetConfig, MenuBarSet};
@@ -170,6 +170,7 @@ struct Feed {
     title: String,
     menu: Option<MenuAddress>,
     can_zoom: bool,
+    can_minimize: bool,
     /// 1-based workspace of the window, 0 for none.
     workspace: u32,
     workspaces: u32,
@@ -211,6 +212,13 @@ impl Feed {
             }
         }
         bar.window_state(u32::from(self.can_zoom), self.workspace, self.workspaces);
+        // version 15; an older bar keeps both enabled, and the model refuses what is disabled
+        if bar.version() >= 15 {
+            let mut enabled = WindowControl::empty();
+            enabled.set(WindowControl::Minimize, self.can_minimize);
+            enabled.set(WindowControl::Zoom, self.can_zoom);
+            bar.window_controls(enabled);
+        }
         for w in &self.windows {
             bar.app_window(w.id, w.title.clone(), w.flags);
         }
@@ -238,14 +246,6 @@ impl Shortcuts {
         bar.primary_modifier(self.primary);
         bar.done();
     }
-}
-
-/// Whether `window` can zoom: its client does not fix its size.
-fn can_zoom(window: &Window) -> bool {
-    window
-        .min_size
-        .zip(window.max_size)
-        .is_none_or(|(a, b)| a != b)
 }
 
 /// `text` cut to at most [`MAX_TEXT_BYTES`] at a character boundary.
@@ -949,6 +949,7 @@ impl Cupertino {
                 title: String::new(),
                 menu: None,
                 can_zoom: false,
+                can_minimize: false,
                 workspace: 0,
                 workspaces: 0,
                 windows: Vec::new(),
@@ -977,7 +978,8 @@ impl Cupertino {
                 .unwrap_or_default(),
             title: window.title.clone(),
             menu: self.menu_bars.address(window.id.0).cloned(),
-            can_zoom: can_zoom(window),
+            can_zoom: window.can_zoom(),
+            can_minimize: window.can_minimize(),
             workspace: workspaces
                 .iter()
                 .position(|w| w.id == window.workspace)
@@ -1320,7 +1322,7 @@ impl Cupertino {
             BarCommand::ZoomAll => {
                 for window in ctx.front_app_windows {
                     let zoom = self.wm.window(window).is_some_and(|w| {
-                        can_zoom(w)
+                        w.can_zoom()
                             && !matches!(
                                 w.state(),
                                 LifecycleState::Zooming | LifecycleState::Zoomed

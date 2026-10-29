@@ -428,6 +428,15 @@ pub struct DisabledControls {
     pub zoom: bool,
 }
 
+impl From<DisabledControls> for cupertino_wm::DisabledControls {
+    fn from(d: DisabledControls) -> Self {
+        Self {
+            minimize: d.minimize,
+            zoom: d.zoom,
+        }
+    }
+}
+
 impl Cacheable for DisabledControls {
     fn commit(&mut self, _: &DisplayHandle) -> Self {
         *self

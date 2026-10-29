@@ -2,8 +2,9 @@
 """Check docs/architecture/contracts.yaml against the source. Usage: python3 ci/contracts.py ROOT.
 
 Checks the registry itself (fields, enums, duplicates, every source and test_owner path exists, every source_match
-occurs in its source file, and the test_owner of a socket or a binary names it), then compares it with the code: every `#[zbus::interface(name = ...)]` outside tests and examples, every org.cupertino.* name in the sources
-and every binary target of the workspace has an entry. The Wayland globals are compared at run time, by
+occurs in its source file, and the test_owner of a socket or a binary names it), then compares it with the code: every
+`#[zbus::interface(name = ...)]` outside tests and examples, every org.cupertino.* name in the sources and every binary
+target of the workspace has an entry. The Wayland globals are compared at run time, by
 crates/cupertino-server/tests/contracts.rs."""
 import json
 from pathlib import Path

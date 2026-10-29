@@ -152,7 +152,7 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         calls = (self.out / 'systemctl').read_text()
         self.assertIn('--user stop cupertino-session.target', calls)
-        self.assertIn('--user unset-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE', calls)
+        self.assertIn('--user unset-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE DISPLAY', calls)
 
     def test_an_inactive_session_target_is_left_alone(self):
         tools = self.root / 'tools'

@@ -32,6 +32,7 @@ pub mod kbd;
 pub mod kbd_filters;
 pub mod kbd_ui;
 pub mod live;
+pub mod logging;
 pub mod menu_bar;
 pub mod overlays;
 pub mod owner_check;

@@ -1,0 +1,155 @@
+//! Keyboard focus. Tab order is the tree's reading order over focusable nodes. A focus scope (dialog, popover,
+//! menu) keeps Tab inside itself while it is the innermost open scope, and hands the focus back when it unmounts:
+//! to the node focused before it opened or, if that node is gone, its nearest surviving ancestor.
+
+use crate::tree::Tree;
+use crate::NodeId;
+
+struct Scope {
+    node: NodeId,
+    /// The path to the node focused before the scope opened, root first.
+    restore: Vec<NodeId>,
+}
+
+/// A focus move the runtime reports to the nodes involved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FocusChange {
+    pub(crate) from: Option<NodeId>,
+    pub(crate) to: Option<NodeId>,
+    pub(crate) visible: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct Focus {
+    node: Option<NodeId>,
+    visible: bool,
+    path: Vec<NodeId>,
+    scopes: Vec<Scope>,
+}
+
+impl Focus {
+    pub(crate) fn node(&self) -> Option<NodeId> {
+        self.node
+    }
+
+    pub(crate) fn visible(&self) -> bool {
+        self.visible
+    }
+
+    pub(crate) fn set<M: 'static>(
+        &mut self,
+        tree: &Tree<M>,
+        to: Option<NodeId>,
+        visible: bool,
+    ) -> Option<FocusChange> {
+        let to = to.filter(|&n| tree.contains(n));
+        if to == self.node && visible == self.visible {
+            return None;
+        }
+        let from = self.node.filter(|&n| tree.contains(n));
+        self.node = to;
+        self.visible = to.is_some() && visible;
+        self.path = to.map(|n| tree.path(n)).unwrap_or_default();
+        Some(FocusChange {
+            from,
+            to,
+            visible: self.visible,
+        })
+    }
+
+    /// Brings focus up to date after a frame: closed scopes give the focus back, a focus whose node unmounted moves
+    /// to its nearest surviving ancestor, and a newly open scope takes the focus to its first focusable node.
+    /// `scopes` and `focusable` are in reading order.
+    pub(crate) fn sync<M: 'static>(
+        &mut self,
+        tree: &Tree<M>,
+        scopes: &[NodeId],
+        focusable: &[NodeId],
+    ) -> Option<FocusChange> {
+        let from = self.node;
+        let visible = self.visible;
+        let mut target = self.node;
+        let mut moved = false;
+
+        while let Some(top) = self.scopes.last() {
+            if tree.contains(top.node) {
+                break;
+            }
+            let closed = self.scopes.pop().expect("checked above");
+            target = deepest_alive(tree, &closed.restore);
+            moved = true;
+        }
+        self.scopes.retain(|s| tree.contains(s.node));
+
+        if !moved && target.is_some_and(|n| !tree.contains(n)) {
+            target = deepest_alive(tree, &self.path);
+            moved = true;
+        }
+
+        for &scope in scopes {
+            if self.scopes.iter().any(|s| s.node == scope) {
+                continue;
+            }
+            let restore = target.map(|n| tree.path(n)).unwrap_or_default();
+            self.scopes.push(Scope {
+                node: scope,
+                restore,
+            });
+            if !target.is_some_and(|n| tree.path(n).contains(&scope)) {
+                target = focusable
+                    .iter()
+                    .copied()
+                    .find(|&n| n != scope && tree.path(n).contains(&scope))
+                    .or(Some(scope));
+                moved = true;
+            }
+        }
+
+        if !moved {
+            return None;
+        }
+        if target == from {
+            self.path = target.map(|n| tree.path(n)).unwrap_or_default();
+            return None;
+        }
+        self.node = None;
+        self.set(tree, target, visible)
+            .map(|change| FocusChange { from, ..change })
+    }
+
+    /// The next (or previous) Tab stop, inside the innermost open scope.
+    pub(crate) fn step<M: 'static>(
+        &self,
+        tree: &Tree<M>,
+        focusable: &[NodeId],
+        forward: bool,
+    ) -> Option<NodeId> {
+        let scope = self.scopes.last().map(|s| s.node);
+        let candidates: Vec<NodeId> = focusable
+            .iter()
+            .copied()
+            .filter(|&n| scope.is_none_or(|s| tree.path(n).contains(&s)))
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+        let len = candidates.len();
+        let next = match self
+            .node
+            .and_then(|n| candidates.iter().position(|&c| c == n))
+        {
+            Some(i) if forward => (i + 1) % len,
+            Some(i) => (i + len - 1) % len,
+            None if forward => 0,
+            None => len - 1,
+        };
+        Some(candidates[next])
+    }
+}
+
+fn deepest_alive<M: 'static>(tree: &Tree<M>, path: &[NodeId]) -> Option<NodeId> {
+    path.iter().rev().copied().find(|&n| tree.contains(n))
+}
+
+#[cfg(test)]
+mod tests;

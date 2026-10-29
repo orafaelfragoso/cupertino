@@ -34,7 +34,7 @@ use cupertino_settings::sheet::{Answer, Outcome, Sheet, SheetKey};
 use cupertino_settings::sidebar::{self, RowSize};
 use cupertino_settings::window::{self, metrics, Hit, WindowLayout};
 use cupertino_settings::{PaneId, Point, Size};
-use cupertino_text_field::{KeyInput, Keymap, Response, TextField};
+use cupertino_text_field::{KeyInput, Keymap, Response, TextField, TextFieldKeys};
 use cupertino_theme::{Appearance, Theme, WindowCornerSize};
 use cupertino_ui_menus::WindowMenus;
 use cupertino_ui_wayland::clipboard::Clipboard;
@@ -445,7 +445,10 @@ pub fn run(pane: PaneId, activation_token: String) -> Result<()> {
         groups: sidebar::groups(),
         history: History::new(pane),
         search: SearchField::default(),
-        keymap: Keymap::load(),
+        keymap: Keymap::new(
+            cupertino_keyboard::binding::user_profile(),
+            cupertino_keyboard::binding::load_default().0,
+        ),
         search_offsets: Vec::new(),
         caret_drawn: false,
         results: None,

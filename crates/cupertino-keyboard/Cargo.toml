@@ -6,10 +6,11 @@ license = "MPL-2.0"
 description = "Keyboard model for the Cupertino compositor: key repeat, modifier profiles, text-editing bindings, desktop shortcuts, accent picker, input-source switcher and an XKB keymap generator"
 
 [package.metadata.cupertino]
-layer = "models"
+layer = "foundation"
 
 [dependencies]
 cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-key-bindings = { path = "../cupertino-key-bindings" }
 cupertino-modifiers = { path = "../cupertino-modifiers" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

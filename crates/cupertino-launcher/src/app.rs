@@ -18,7 +18,7 @@ use cupertino_shell_client::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
     Session, SessionChange, SessionState, Shell, ShellEvent,
 };
-use cupertino_text_field::{KeyInput, Keymap, Response, TextField};
+use cupertino_text_field::{KeyInput, Keymap, Response, TextField, TextFieldKeys};
 use cupertino_theme::{Appearance, Theme};
 use cupertino_ui_wayland::clipboard::Clipboard;
 use cupertino_ui_wayland::{Ready, ShmPresenter};
@@ -265,7 +265,10 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         last: None,
         backdrop: None,
         image: None,
-        keymap: Keymap::load(),
+        keymap: Keymap::new(
+            cupertino_keyboard::binding::user_profile(),
+            cupertino_keyboard::binding::load_default().0,
+        ),
         field_offsets: Vec::new(),
         caret_drawn: false,
         pending: HashMap::new(),

@@ -1,19 +1,17 @@
-//! Glyph rasterisation after the design's CPU text path (§3, §4, §10.1, §11;
-//! register): the outline is dilated ("stem darkening") by edge translation,
-//! then scan-converted to 8-bit coverage.
+//! Glyph rasterisation with stem darkening: the outline is dilated by edge translation, then
+//! scan-converted to 8-bit coverage.
 //!
-//! * Dilation (provisional): every glyph draw sets the antialiasing style 0x400 with a pair that depends on the
-//!   fill colour, so the smoothing-level table does not draw text: d = min((0.0058 + 0.01 · Yq) · s, 0.3)
-//!   device pixels on both axes, s the font size in device pixels, Yq the fill colour's linear luminance quantised to
-//!   quarters. Text the design draws through its declarative toolkit's renderer floors s to a power of 1.25 first
-//!   ([`declarative_size`]).
-//! * Geometry: every edge is translated by (sign(edge dy) · d, −sign(edge dx) · d + d) in device
-//!   axes with y up, for counter-clockwise outer contours: left and right edges move out by d, bottom edges stay, top
-//!   edges rise 2 · d. Curves are flattened first and each flattened segment is translated by its own direction;
-//!   the translated segments are joined end to start (the join is not known, approximate).
+//! * Dilation: d = min((0.0058 + 0.01 · Yq) · s, 0.3) device pixels on both axes, s the font size in
+//!   device pixels and Yq the fill colour's linear luminance quantised to quarters, so light text on a dark
+//!   background is thickened more than dark text on a light one. Text drawn by the declarative toolkit floors s
+//!   to a power of 1.25 first ([`declarative_size`]).
+//! * Geometry: every edge is translated by (sign(edge dy) · d, −sign(edge dx) · d + d) in device axes with y
+//!   up, for counter-clockwise outer contours: left and right edges move out by d, bottom edges stay, top edges
+//!   rise 2 · d. Curves are flattened first and each flattened segment is translated by its own direction; the
+//!   translated segments are joined end to start, which approximates the join.
 //! * Coverage: the exact area of the polygon in each pixel (signed-area accumulation), so a translated edge that
-//!   covers a fraction f of a pixel adds f; the level table is an identity ramp. Overlapping contours of a
-//!   variable font add and clamp to 1.
+//!   covers a fraction f of a pixel adds f, with no further tone mapping. Overlapping contours of a variable font
+//!   add and clamp to 1.
 
 use swash::zeno::{Point, Verb};
 

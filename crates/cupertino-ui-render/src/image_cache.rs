@@ -1,3 +1,4 @@
+use crate::Tally;
 use crate::{ImageResource, PixelFormat, RenderError, ResourceId};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,6 +15,8 @@ pub(crate) struct ImageCache {
     bytes: usize,
     budget: usize,
     tick: u64,
+    /// Entries made since the last [`take_filled`](Self::take_filled).
+    filled: Tally,
 }
 
 impl ImageCache {
@@ -23,6 +26,7 @@ impl ImageCache {
             bytes: 0,
             budget,
             tick: 0,
+            filled: Tally::default(),
         }
     }
 
@@ -42,6 +46,7 @@ impl ImageCache {
             return Err(RenderError::ResourceLimit);
         }
         let pixmap = Arc::new(premultiplied(image).ok_or(RenderError::ResourceLimit)?);
+        self.filled.add(pixmap.data().len() as u64);
         self.bytes += pixmap.data().len();
         self.entries.insert(
             key,
@@ -53,7 +58,18 @@ impl ImageCache {
         Ok(pixmap)
     }
 
-    /// Between frames, like the glyph cache.
+    pub(crate) fn take_filled(&mut self) -> Tally {
+        std::mem::take(&mut self.filled)
+    }
+
+    pub(crate) fn retained(&self) -> Tally {
+        Tally {
+            count: self.entries.len() as u64,
+            bytes: self.bytes as u64,
+        }
+    }
+
+    /// Drops the least recently used images until the cache fits its budget. Between frames, like the glyph cache.
     pub(crate) fn trim(&mut self) {
         if self.bytes <= self.budget {
             return;

@@ -19,7 +19,7 @@ use crate::layout::{
     SlotKey, TextMeasure,
 };
 use crate::search::{self, Match};
-use cupertino_text_field::{KeyInput, Keymap, Response, TextField};
+use cupertino_text_field::{KeyInput, Keymap, Response, TextField, TextFieldKeys};
 use std::time::Instant;
 
 /// Identifier of the synthetic root item of the app menu.

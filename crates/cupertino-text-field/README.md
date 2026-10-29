@@ -1,15 +1,17 @@
 # cupertino-text-field
 
 The single-line text field model of the Cupertino apps (the Settings search field, the launcher's query, the file
-manager's rename editor). Pure logic: no drawing and no Wayland. The app feeds key and pointer presses with
+manager's rename editor). The editing model and its keys are `cupertino-ui-text`'s (`TextBuffer`, `Keymap`, `TextFieldKeys`); this crate
+re-exports them under the apps' names, with `TextField` an alias of the buffer. Pure logic: no drawing
+and no Wayland. It is deleted when the apps move to Kit controls (Phase 4, row 177); Kit crates must not depend on it. The app feeds key and pointer presses with
 `Instant`s, draws with `cupertino-decorations::field`, and carries out the clipboard requests.
 
 ## Public API
 
 | Item | Contents |
 |---|---|
-| `TextField` | The text, the caret and the selection anchor as byte offsets on grapheme boundaries; `key`, `press` / `drag_to` / `release`, `insert`, `paste`, `select_all`, `blur`, `undo` / `redo`, the composition range of an input method (`set_composition`, `commit_composition`, `cancel_composition`), `caret_visible` / `next_blink`, `boundaries` / `index_at` for hit-testing, `follow_caret` / `scroll` for text wider than the field |
-| `Keymap` | The user's modifier profile (`keyboard.conf`, `modifier_profile`) and the standard editing chords with the user's overrides (`cupertino-keyboard`, `keybindings.conf`); `Keymap::load` in an app, `Keymap::standard` in tests |
+| `TextField` | (the toolkit's `TextBuffer`) The text, the caret and the selection anchor as byte offsets on grapheme boundaries; `key` (`TextFieldKeys`), `press` / `drag_to` / `release`, `insert`, `paste`, `select_all`, `blur`, `undo` / `redo`, the composition range of an input method (`set_composition`, `commit_composition`, `cancel_composition`), `caret_visible` / `next_blink`, `boundaries` / `index_at` for hit-testing, `follow_caret` / `scroll` for text wider than the field |
+| `Keymap` | The user's modifier profile (`keyboard.conf`, `modifier_profile`) and the standard editing chords with the user's overrides (`cupertino-keyboard`, `keybindings.conf`); `Keymap::new(cupertino_keyboard::binding::user_profile(), cupertino_keyboard::binding::load_default().0)` in an app, `Keymap::standard` in tests |
 | `KeyInput` | A key press: evdev code, physical modifiers, the character it types |
 | `Response` | What a key did: `Ignored` (the window handles it: Return, Escape, Tab, a window shortcut), `Moved`, `Edited`, `Copy(text)`, `Cut(text)`, `Paste` |
 

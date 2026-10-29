@@ -47,7 +47,7 @@ use cupertino_files::{Entry, Kind, Point, Size, SortSpec};
 use cupertino_geometry::Rect as PopupRect;
 use cupertino_icons::document::FileIcons;
 use cupertino_protocol_app::{AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop};
-use cupertino_text_field::{KeyInput, Keymap, Response, TextField};
+use cupertino_text_field::{KeyInput, Keymap, Response, TextField, TextFieldKeys};
 use cupertino_theme::{Appearance, Theme, WindowCornerSize};
 use cupertino_ui_menus::WindowMenus;
 use cupertino_ui_wayland::clipboard::Clipboard;
@@ -430,7 +430,10 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
         terminal,
         menu: None,
         edit: None,
-        keymap: Keymap::load(),
+        keymap: Keymap::new(
+            cupertino_keyboard::binding::user_profile(),
+            cupertino_keyboard::binding::load_default().0,
+        ),
         caret_drawn: false,
         rename: RenameTrigger::default(),
         edit_when_listed: None,

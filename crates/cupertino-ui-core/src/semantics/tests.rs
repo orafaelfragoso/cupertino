@@ -1,0 +1,127 @@
+use super::*;
+use crate::accessibility::TextSemantics;
+use crate::route::Placement;
+use crate::test_support::{group, leaf, spec};
+use crate::{Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, Widget};
+use cupertino_geometry::Size;
+use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
+
+type M = String;
+
+/// A password field that hands core its plaintext, as a careless widget might.
+struct Secret;
+
+impl Widget<M> for Secret {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::PasswordInput);
+        cx.name("Password");
+        cx.value(AccessibleValue::Text {
+            value: "hunter2".into(),
+            editing: Some(TextSemantics {
+                caret: 7,
+                selection: 7..7,
+            }),
+        });
+        cx.focusable();
+        cx.protected();
+    }
+}
+
+fn pass(view: Element<M>) -> (Tree<M>, NodeId, SemanticsPass) {
+    let mut tree = Tree::new(20);
+    let root = tree.reconcile(None, view).unwrap();
+    let geometry: Geometry = tree
+        .preorder(root)
+        .into_iter()
+        .map(|id| {
+            (
+                id,
+                Placement {
+                    rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                    clip: None,
+                    own_clip: None,
+                },
+            )
+        })
+        .collect();
+    let pass = build(&tree, root, &geometry, None);
+    (tree, root, pass)
+}
+
+#[test]
+fn a_protected_value_reaches_the_tree_as_protected_with_no_text_or_caret() {
+    let (_, _, pass) = pass(Element::new(group(vec![Element::new(Secret)])));
+    let field = pass
+        .nodes
+        .values()
+        .find(|n| n.role == Role::PasswordInput)
+        .unwrap();
+    assert_eq!(field.value, Some(AccessibleValue::Protected));
+    assert_eq!(field.name.as_deref(), Some("Password"));
+    assert!(!format!("{:?}", pass.nodes).contains("hunter2"));
+}
+
+#[test]
+fn children_of_a_node_without_a_role_belong_to_its_nearest_ancestor_with_one() {
+    let (tree, root, pass) = pass(Element::new(group(vec![Element::new(group(vec![
+        Element::new(leaf("a")),
+        Element::new(leaf("b")),
+    ]))])));
+    let middle = tree.get(root).unwrap().children[0];
+    let leaves = tree.get(middle).unwrap().children.clone();
+
+    assert_eq!(pass.nodes[&root].role, Role::Window);
+    assert!(!pass.nodes.contains_key(&middle));
+    assert_eq!(pass.nodes[&root].children, leaves);
+    assert_eq!(pass.focusable, leaves);
+}
+
+#[test]
+fn a_diff_carries_changed_and_new_nodes_and_names_the_removed_ones() {
+    let (tree, root, before) = pass(Element::new(group(vec![
+        Element::new(leaf("a")).key(1u64),
+        Element::new(leaf("b")).key(2u64),
+    ])));
+    let [a, b] = tree.get(root).unwrap().children[..] else {
+        unreachable!()
+    };
+    let mut after = before.nodes.clone();
+    after.remove(&b);
+    after.get_mut(&a).unwrap().name = Some("renamed".into());
+    after.get_mut(&root).unwrap().children = vec![a];
+
+    let (changed, removed) = diff(&before.nodes, &after);
+    let mut expected = vec![root, a];
+    expected.sort();
+    assert_eq!(
+        changed.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        expected
+    );
+    assert_eq!(removed, vec![b]);
+    assert!(diff(&after, &after).0.is_empty());
+}

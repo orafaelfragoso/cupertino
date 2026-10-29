@@ -3,26 +3,45 @@
 //! retained node tree, routes events to [`Widget`]s, lays out, paints and keeps the accessibility tree.
 
 mod accessibility;
+mod clock;
+mod command;
+mod cx;
+mod damage;
+mod focus;
+mod layout_view;
+mod paint;
+mod pointer;
+mod route;
+mod runtime;
+mod semantics;
+mod task;
+#[cfg(test)]
+mod test_support;
+mod tree;
+mod widget;
 
 pub use accessibility::{
     AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, AccessibleStates,
     AccessibleValue, Action, ActionData, ActionRequest, Checked, Relation, Role, TextSemantics,
 };
+pub use clock::MonotonicClock;
+pub use command::CommandRegistry;
+pub use cx::{EventCx, MeasureCx, PaintCx, SemanticsCx};
+pub use runtime::{RendererFactory, Runtime, RuntimeOptions, WindowErrorHandler};
+pub use widget::{Change, Element, Propagation, Widget};
 
 use cupertino_geometry::Rect;
-use cupertino_ui_layout::{Constraints, LayoutDirection, LayoutError, LayoutSpec, Measured};
+use cupertino_ui_layout::{LayoutDirection, LayoutError};
 use cupertino_ui_platform::{
     KeyEvent, Keysym, Mods, PlatformError, PointerEvent, Timestamp, TouchEvent, WindowId,
-    WindowRequest, WindowSpec, WindowSystem,
+    WindowRequest, WindowSpec,
 };
 use cupertino_ui_render::{DisplayList, RenderError};
 use cupertino_ui_text::ImeEvent;
 use cupertino_ui_theme::ThemeTokens;
-use std::any::type_name;
 use std::borrow::Cow;
 use std::fmt;
 use std::future::Future;
-use std::marker::PhantomData;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -68,6 +87,9 @@ pub struct WindowKey(pub Key);
 pub struct Window<M> {
     pub key: WindowKey,
     pub spec: WindowSpec,
+    pub shortcuts: CommandRegistry<M>,
+    /// Sent when the user asks to close the window; without it the request ends the application.
+    pub on_close: Option<M>,
     pub content: Element<M>,
 }
 
@@ -97,59 +119,6 @@ impl fmt::Debug for NodeId {
     }
 }
 
-/// An immutable description of one widget and its children.
-pub struct Element<M> {
-    key: Option<Key>,
-    widget: Box<dyn AnyWidget<M>>,
-}
-
-impl<M: 'static> Element<M> {
-    pub fn new(widget: impl Widget<M>) -> Self {
-        Self {
-            key: None,
-            widget: Box::new(widget),
-        }
-    }
-
-    pub fn key(mut self, key: impl Into<Key>) -> Self {
-        self.key = Some(key.into());
-        self
-    }
-}
-
-impl<M> fmt::Debug for Element<M> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Element")
-            .field("key", &self.key)
-            .field("widget", &self.widget.type_name())
-            .finish()
-    }
-}
-
-trait AnyWidget<M> {
-    fn type_name(&self) -> &'static str;
-}
-
-impl<M, W: Widget<M>> AnyWidget<M> for W {
-    fn type_name(&self) -> &'static str {
-        type_name::<W>()
-    }
-}
-
-/// What an update changed in a node.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Change {
-    None,
-    Paint,
-    Layout,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Propagation {
-    Continue,
-    Stop,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Phase {
     Capture,
@@ -170,49 +139,10 @@ pub enum Event {
         visible: bool,
     },
     Action(ActionRequest),
+    /// The frame a node asked for with [`EventCx::request_animation_frame`] is being prepared.
+    AnimationFrame(Timestamp),
     /// A press, drag or composition in progress ends without effect: focus, pointer capture or the surface was lost.
     Cancel,
-}
-
-/// A widget: one kind of node in the tree. `State` is the node's own state, which lives as long as the node and
-/// never in the application's model (hover, press, caret blink, scroll velocity).
-pub trait Widget<M>: 'static {
-    type State: 'static;
-
-    fn layout(&self) -> LayoutSpec;
-    fn children(&self) -> &[Element<M>] {
-        &[]
-    }
-    fn state(&self) -> Self::State;
-    /// Takes over a node that `old` described.
-    fn update(&self, old: &Self, state: &mut Self::State) -> Change;
-    /// The size of a leaf; containers are measured by layout.
-    fn measure(
-        &self,
-        state: &Self::State,
-        constraints: Constraints,
-        cx: &mut MeasureCx<'_>,
-    ) -> Measured;
-    fn event(&self, state: &mut Self::State, event: &Event, cx: &mut EventCx<'_, M>)
-        -> Propagation;
-    fn paint(&self, state: &Self::State, cx: &mut PaintCx<'_>);
-    fn semantics(&self, state: &Self::State, cx: &mut SemanticsCx<'_>);
-}
-
-pub struct MeasureCx<'a> {
-    _private: PhantomData<&'a ()>,
-}
-
-pub struct EventCx<'a, M> {
-    _private: PhantomData<&'a fn() -> M>,
-}
-
-pub struct PaintCx<'a> {
-    _private: PhantomData<&'a ()>,
-}
-
-pub struct SemanticsCx<'a> {
-    _private: PhantomData<&'a ()>,
 }
 
 /// The state every interactive control resolves its look from.
@@ -263,7 +193,7 @@ pub struct Environment {
 }
 
 /// The runtime's time source; tests inject one.
-pub trait Clock {
+pub trait Clock: Send + Sync {
     fn now(&self) -> Timestamp;
 }
 
@@ -271,12 +201,6 @@ pub trait Clock {
 pub struct Shortcut {
     pub mods: Mods,
     pub keysym: Keysym,
-}
-
-/// A window's keyboard shortcuts, tried after the focused node and its ancestors let a key pass.
-#[derive(Debug, Default)]
-pub struct CommandRegistry {
-    _private: (),
 }
 
 /// Work a runtime step left for later, so a test can tell a settled runtime from one that is waiting.
@@ -323,11 +247,6 @@ pub struct FrameSnapshot {
     pub accessibility: Vec<(NodeId, AccessibilityNode)>,
     pub display_list: DisplayList,
     pub pending: Pending,
-}
-
-/// Runs an application on a window system.
-pub struct Runtime<A: Application, W: WindowSystem> {
-    _private: PhantomData<(A, W)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -11,13 +11,15 @@ use cupertino_ui_text::{
 };
 use std::sync::Arc;
 
+const BAD_FONT: FontId = FontId(99);
+
 struct Boxes {
     fail: bool,
 }
 
 impl GlyphRasterizer for Boxes {
     fn rasterize(&mut self, key: &GlyphKey) -> Result<Option<RasterGlyph>, TextError> {
-        if self.fail {
+        if self.fail || key.font == BAD_FONT {
             return Err(TextError::UnknownFont(key.font));
         }
         let side = (key.size_q / 64 / 2).max(1);
@@ -420,8 +422,12 @@ fn absurd_effect_extents_are_refused_not_overflowed() {
 }
 
 fn glyph_node(count: u32) -> PaintNode {
+    glyph_node_in(1, FontId(1), count)
+}
+
+fn glyph_node_in(id: u64, font: FontId, count: u32) -> PaintNode {
     let run = GlyphRun {
-        font: FontId(1),
+        font,
         size: 8.0,
         glyphs: (0..count)
             .map(|i| PositionedGlyph {
@@ -433,7 +439,7 @@ fn glyph_node(count: u32) -> PaintNode {
             .collect(),
     };
     node(
-        1,
+        id,
         rect(0.0, 0.0, 400.0, 130.0),
         vec![
             PaintOp::PushClip(Shape::RoundedRect {
@@ -450,12 +456,22 @@ fn glyph_node(count: u32) -> PaintNode {
     )
 }
 
-fn best_of_three(
+fn renderer_with(max_pixels: u64) -> CpuRenderer<Boxes> {
+    CpuRenderer::new(
+        CpuConfig {
+            max_pixels,
+            ..config()
+        },
+        Boxes { fail: false },
+    )
+}
+
+fn cost_of(
     width: u32,
     height: u32,
     list: &DisplayList,
     damage: &DamageRegion,
-) -> std::time::Duration {
+) -> cupertino_ui_render::RenderStats {
     let mut r = renderer_with(1 << 26);
     let request = RenderRequest {
         list,
@@ -470,24 +486,8 @@ fn best_of_three(
         ..request
     })
     .unwrap();
-    (0..3)
-        .map(|_| {
-            let start = std::time::Instant::now();
-            r.render(&request).unwrap();
-            start.elapsed()
-        })
-        .min()
-        .unwrap()
-}
-
-fn renderer_with(max_pixels: u64) -> CpuRenderer<Boxes> {
-    CpuRenderer::new(
-        CpuConfig {
-            max_pixels,
-            ..config()
-        },
-        Boxes { fail: false },
-    )
+    r.render(&request).unwrap();
+    *r.stats()
 }
 
 #[test]
@@ -496,18 +496,27 @@ fn cost_follows_damage_and_content_not_target_area() {
         nodes: vec![glyph_node(2000)],
     };
     let full = DamageRegion::Full;
-    let small = best_of_three(512, 288, &list, &full);
-    let large = best_of_three(3840, 2160, &list, &full);
-    assert!(
-        large < small * 8,
-        "full repaint {large:?} on 4K vs {small:?} on 512x288"
+    let small = cost_of(512, 288, &list, &full);
+    let large = cost_of(3840, 2160, &list, &full);
+    assert_eq!(small.dirty_pixels, 512 * 288);
+    assert_eq!(large.dirty_pixels, 3840 * 2160);
+    assert_eq!(large.clear.bytes, large.dirty_pixels * 4);
+    assert_eq!(
+        (large.nodes_painted, large.glyphs, large.masks),
+        (small.nodes_painted, small.glyphs, small.masks)
     );
+    assert_eq!(large.scratch_images, small.scratch_images);
+    assert_eq!(large.node_composite, small.node_composite);
+    assert_eq!(large.mask_apply, small.mask_apply);
+
     let corner = DamageRegion::Rects(vec![rect(0.0, 0.0, 16.0, 16.0)]);
-    let partial = best_of_three(3840, 2160, &list, &corner);
-    assert!(
-        partial * 5 < large,
-        "a 16x16 damage {partial:?} vs full {large:?}"
-    );
+    let partial = cost_of(3840, 2160, &list, &corner);
+    assert!(partial.dirty_pixels <= 17 * 17);
+    assert_eq!(partial.clear.bytes, partial.dirty_pixels * 4);
+    assert!(large.scratch_images.bytes * 100 < large.clear.bytes);
+    assert_eq!(partial.scratch_images.bytes, partial.dirty_pixels * 4);
+    assert_eq!(partial.node_composite.bytes, partial.dirty_pixels * 4);
+    assert_eq!(partial.masks.bytes, partial.dirty_pixels);
 }
 
 fn child(id: u64, parent: u64, bounds: Rect, ops: Vec<PaintOp>) -> PaintNode {
@@ -724,5 +733,68 @@ fn duplicate_ids_and_runaway_depth_are_refused() {
             &DamageRegion::Full
         ),
         Err(RenderError::TooDeep(PaintNodeId(257)))
+    );
+}
+
+fn stats_of(damage: &DamageRegion) -> cupertino_ui_render::RenderStats {
+    let none = PaintResources::default();
+    let mut r = renderer();
+    render(&mut r, &scene(0.0), &none, 1.0, &DamageRegion::Full).unwrap();
+    render(&mut r, &scene(0.0), &none, 1.0, damage).unwrap();
+    *r.stats()
+}
+
+#[test]
+fn counters_are_deterministic_and_follow_the_damage() {
+    let corner = DamageRegion::Rects(vec![rect(0.0, 0.0, 12.0, 12.0)]);
+    let (a, b) = (stats_of(&corner), stats_of(&corner));
+    assert_eq!(a, b, "two runs count the same");
+    let full = stats_of(&DamageRegion::Full);
+    assert!(a.dirty_pixels < full.dirty_pixels);
+    assert!(a.node_composite.bytes < full.node_composite.bytes);
+    assert_eq!(a.clear.bytes, a.dirty_pixels * 4);
+    assert_eq!(full.dirty_pixels, 96 * 64);
+    assert_eq!(full.frame_bytes, 96 * 64 * 4);
+    assert_eq!(full.groups_painted, 0);
+    assert_eq!(full.layers.count, 1, "the shadowed layer");
+    assert_eq!(full.glyphs, 4);
+    assert_eq!(
+        a.glyph_rasterize.count, 0,
+        "the glyphs were cached by the first frame"
+    );
+    assert!(full.retained_glyphs.count > 0);
+}
+
+#[test]
+fn stats_belong_to_their_own_frame_after_a_refusal_or_a_failed_paint() {
+    let none = PaintResources::default();
+    let mut r = renderer();
+    render(&mut r, &scene(0.0), &none, 1.0, &DamageRegion::Full).unwrap();
+    assert!(r.stats().dirty_pixels > 0);
+
+    let refused = DisplayList {
+        nodes: vec![child(2, 1, rect(0.0, 0.0, 8.0, 8.0), Vec::new())],
+    };
+    assert!(render(&mut r, &refused, &none, 1.0, &DamageRegion::Full).is_err());
+    assert_eq!(*r.stats(), cupertino_ui_render::RenderStats::default());
+
+    let failing = DisplayList {
+        nodes: vec![
+            glyph_node_in(1, FontId(1), 4),
+            glyph_node_in(2, BAD_FONT, 4),
+        ],
+    };
+    let failed = render(&mut r, &failing, &none, 1.0, &DamageRegion::Full);
+    assert!(matches!(failed, Err(RenderError::Glyph(_))));
+    assert_eq!(r.stats().glyph_rasterize.count, 4);
+
+    let next = DisplayList {
+        nodes: vec![glyph_node_in(1, FontId(1), 4)],
+    };
+    render(&mut r, &next, &none, 1.0, &DamageRegion::Full).unwrap();
+    assert_eq!(
+        r.stats().glyph_rasterize.count,
+        0,
+        "the failed frame's fills are not carried over"
     );
 }

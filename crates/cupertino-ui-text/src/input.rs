@@ -275,9 +275,12 @@ mod tests {
     fn a_window_cut_never_splits_a_regional_indicator_pair() {
         let text = "🇳🇱".repeat(300);
         let cursor = 8 * 150;
-        let around = Surrounding::around(&text, cursor, cursor, 100);
-        assert!(around.text.len().is_multiple_of(8), "{}", around.text.len());
-        assert!(text.contains(&around.text));
+        let around = Surrounding::around(&text, cursor, cursor, 104);
+        assert!(
+            (cursor - around.cursor).is_multiple_of(8),
+            "starts mid-pair"
+        );
+        assert!(around.text.len().is_multiple_of(8), "ends mid-pair");
     }
 
     #[test]

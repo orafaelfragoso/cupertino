@@ -16,9 +16,12 @@ use cupertino_server::backend::headless;
 use cupertino_server::shell_connection::{connect_client, hand_over};
 use cupertino_server::state::ClientState;
 use cupertino_server::Cupertino;
+use cupertino_wm::Command as WmCommand;
 use smithay::backend::input::KeyState;
+use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::input::keyboard::Keycode;
 use smithay::reexports::calloop::EventLoop;
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::Display;
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
@@ -234,6 +237,22 @@ fn simple_window_closes_on_escape() {
     server.wait_for_exit(&mut child);
 }
 
+type Extent = (i32, i32);
+
+/// The size the mapped window's client acknowledged in a full-screen configure and the size of the buffer it committed
+/// last, in logical points.
+fn fullscreen_sizes(state: &Cupertino) -> Option<(Extent, Option<Extent>)> {
+    let window = state.windows.iter().find(|w| w.mapped)?;
+    let acked = window.toplevel.current_state();
+    if !acked.states.contains(xdg_toplevel::State::Fullscreen) {
+        return None;
+    }
+    let buffer = with_renderer_surface_state(window.surface(), |s| s.buffer_size())
+        .flatten()
+        .map(|size| (size.w, size.h));
+    acked.size.map(|size| ((size.w, size.h), buffer))
+}
+
 #[test]
 fn testclient_writes_what_is_typed_and_exits_on_close() {
     let Some(mut server) = Server::start() else {
@@ -261,12 +280,31 @@ fn testclient_writes_what_is_typed_and_exits_on_close() {
             Some("Typed".to_owned())
         )
     );
+    let window = server.state.windows.iter().find(|w| w.mapped).unwrap();
+    assert!(
+        window.server_side,
+        "the server draws the frame of a window that asks for it"
+    );
+    let id = window.id;
     for code in [KEY_H, KEY_I, KEY_ENTER] {
         server.tap(code);
     }
     server.wait_until("the typed text in the output file", |_| {
         std::fs::read_to_string(output.path()).is_ok_and(|text| text == "hi\n")
     });
+    server.state.command(WmCommand::Fullscreen {
+        window: id,
+        output: None,
+    });
+    server.wait_until("a frame at the size of the full-screen configure", |s| {
+        fullscreen_sizes(s).is_some_and(|(configured, buffer)| buffer == Some(configured))
+    });
+    let (configured, _) = fullscreen_sizes(&server.state).unwrap();
+    assert_ne!(
+        configured,
+        (480, 320),
+        "the configure is not the client's own size"
+    );
     server
         .state
         .windows

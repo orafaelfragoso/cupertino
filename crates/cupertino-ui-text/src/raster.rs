@@ -1,7 +1,8 @@
+use crate::strike::strikes_fit;
 use crate::{
     FontId, FontSource, GlyphFormat, GlyphKey, GlyphRasterizer, RasterGlyph, TextError, TextSystem,
 };
-use cupertino_glyph::{declarative_size, mask_bounds, rasterize, Smoothing, MAX_MASK_SIDE};
+use cupertino_glyph::{declarative_size, mask_bounds, rasterize, Smoothing};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,15 +13,6 @@ use swash::{tag_from_bytes, CacheKey, FontRef, Setting};
 /// The largest size a glyph is drawn at, in [`GlyphKey::size_q`] steps (2048 pixels per em); larger keys draw at it.
 /// This bounds the scale only: a colour glyph's extent is checked on its own before it is drawn.
 const MAX_SIZE_Q: u32 = 2048 * 64;
-
-/// The largest side of a glyph in an embedded colour bitmap strike: its metrics store width and height as bytes.
-const STRIKE_GLYPH_SIDE: f32 = 255.0;
-
-/// Whether a glyph from a colour bitmap strike of `ppem` pixels per em, drawn at `size` pixels per em, stays within
-/// [`MAX_MASK_SIDE`] on both sides.
-fn strike_fits(ppem: u16, size: f32) -> bool {
-    ppem > 0 && STRIKE_GLYPH_SIDE * size / f32::from(ppem) <= MAX_MASK_SIDE as f32
-}
 
 struct Loaded {
     source: FontSource,
@@ -107,9 +99,9 @@ impl GlyphRasterizer for GlyphRaster {
         }
         if font.table(tag_from_bytes(b"sbix")).is_none()
             && font
-                .color_strikes()
-                .find_by_nearest_ppem(size as u16, glyph)
-                .is_some_and(|strike| strike_fits(strike.ppem(), size))
+                .table(tag_from_bytes(b"CBLC"))
+                .zip(font.table(tag_from_bytes(b"CBDT")))
+                .is_some_and(|(cblc, cbdt)| strikes_fit(cblc, cbdt, glyph, size))
         {
             sources.push(Source::ColorBitmap(StrikeWith::BestFit));
         }
@@ -342,16 +334,7 @@ mod tests {
             raster.rasterize(&key).unwrap().unwrap()
         };
         let capped = draw(MAX_SIZE_Q);
-        assert!(capped.height <= MAX_MASK_SIDE);
+        assert!(capped.height <= cupertino_glyph::MAX_MASK_SIDE);
         assert_eq!(draw(u32::MAX), capped);
-    }
-
-    #[test]
-    fn a_bitmap_strike_is_drawn_only_while_its_largest_glyph_fits_the_mask_cap() {
-        assert!(strike_fits(136, 2048.0));
-        assert!(strike_fits(128, 2048.0));
-        assert!(!strike_fits(127, 2048.0));
-        assert!(!strike_fits(1, 2048.0));
-        assert!(!strike_fits(0, 12.0));
     }
 }

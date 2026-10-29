@@ -16,6 +16,7 @@ mod paragraph;
 mod raster;
 mod secure;
 mod shape;
+mod strike;
 mod system;
 
 pub use buffer::{TextBuffer, CARET_BLINK_OFF, CARET_BLINK_ON, MULTI_CLICK_INTERVAL};

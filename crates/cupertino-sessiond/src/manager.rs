@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cupertino_defaults::login::LoginConfig;
-use cupertino_login_ipc::message::{MAX_EVENT_FRAME, MAX_REQUEST_FRAME};
+use cupertino_login_ipc::message::{MAX_EVENT_FRAME, MAX_REQUEST_FRAME, SOCKET_PATH};
 use cupertino_login_ipc::{
     encode, encode_secret, is_login_name, Account, Event, Outcome, PowerAction, PowerRefusal,
     ProtocolRefusal, Request, Secret, State, VERSION,
@@ -36,8 +36,6 @@ use crate::{picture, roster, users, vt};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-/// The login screen's socket (mode 0600, owned by the greeter account), in the unit's runtime directory.
-const SOCKET_PATH: &str = "/run/cupertino-login/greeter.sock";
 /// The environment variable that tells the login screen where the socket is.
 const SOCKET_VARIABLE: &str = "CUPERTINO_LOGIN_SOCK";
 /// PAM service of the login screen's own session: no authentication, a logind session of class `greeter`.

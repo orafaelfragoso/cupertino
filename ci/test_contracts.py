@@ -95,6 +95,18 @@ class RegistryTest(unittest.TestCase):
             "test_owner no/such.rs does not exist",
         ])
 
+    def test_a_binary_test_that_does_not_name_it_fails(self):
+        entry = BINARY_ENTRY.replace("test_owner: unknown", "test_owner: crates/cupertino-demo/tests/run.rs")
+        test = "crates/cupertino-demo/tests/run.rs"
+        self.assertEqual(run(INTERFACE_ENTRY + entry, {test: 'env!("CARGO_BIN_EXE_cupertino-demo");\n'}), [])
+        problems = run(INTERFACE_ENTRY + entry, {test: "fn main() {}\n"})
+        self.assertEqual(problems, ["docs/architecture/contracts.yaml:11: test_owner crates/cupertino-demo/tests/run.rs "
+                                    "does not name cupertino-demo"])
+
+    def test_an_interface_test_need_not_name_it(self):
+        entry = INTERFACE_ENTRY.replace("test_owner: unknown", "test_owner: crates/cupertino-demo/tests/bus.rs")
+        self.assertEqual(run(entry + BINARY_ENTRY, {"crates/cupertino-demo/tests/bus.rs": "fn main() {}\n"}), [])
+
     def test_an_interface_no_crate_serves_fails(self):
         problems = run(INTERFACE_ENTRY + BINARY_ENTRY, {"crates/cupertino-demo/src/lib.rs": "struct Demo;\n"})
         self.assertEqual(problems, ["docs/architecture/contracts.yaml:1: org.cupertino.Demo1 is not served by any "

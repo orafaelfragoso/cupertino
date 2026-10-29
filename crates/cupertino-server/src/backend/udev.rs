@@ -931,6 +931,11 @@ mod tests {
             !frame_due(false, true, true),
             "a frame is still waiting for its vblank"
         );
+        // render_outputs passes `pending || !retry_due`: a failed frame waits for its retry time like one for its vblank
+        assert!(
+            !frame_due(false, true, false, true),
+            "a failed frame waits for its retry time"
+        );
         assert!(
             !frame_due(true, false, true),
             "the device rejects frames while paused"

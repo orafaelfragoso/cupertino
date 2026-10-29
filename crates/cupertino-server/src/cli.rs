@@ -496,6 +496,9 @@ pub fn run(cli: Cli) -> Result<()> {
         Mode::Udev => return Err(anyhow!("built without the udev feature")),
     }
     tracing::info!("shutting down");
+    if state.rendering_lost {
+        return Err(anyhow!("the rendering context was lost"));
+    }
     Ok(())
 }
 

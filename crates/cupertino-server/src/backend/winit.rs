@@ -170,16 +170,19 @@ fn render_inner(state: &mut Cupertino, w: &mut WinitBackend) {
         },
     );
     let time = Duration::from(state.clock.now());
+    state.outputs[idx].scheduler.rendered();
     match result {
         Ok(completion) => {
             state.frame_drawn(idx);
             // nothing differs from the buffer: nothing to submit or to report as presented
             let damage = completion.damage().map(<[_]>::to_vec);
             let presented = damage.is_some();
-            if let Some(d) = damage {
-                if let Err(e) = w.graphics.submit(Some(&d)) {
-                    tracing::warn!(error = %e, "submitting the frame failed");
-                }
+            match damage {
+                Some(d) => match w.graphics.submit(Some(&d)) {
+                    Ok(()) => state.outputs[idx].scheduler.queued(),
+                    Err(e) => tracing::warn!(error = %e, "submitting the frame failed"),
+                },
+                None => state.outputs[idx].scheduler.empty(),
             }
             state.process_screenshots(w.graphics.renderer(), idx);
             state.post_repaint(idx, time, Some(REFRESH), presented);

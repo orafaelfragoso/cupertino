@@ -241,27 +241,21 @@ mod tests {
 
     #[test]
     fn a_process_that_keeps_failing_is_restarted_after_longer_and_longer_waits() {
-        let dir =
-            std::env::temp_dir().join(format!("cupertino-supervisor-bo-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let log = dir.join("starts");
-        // each start appends the time in milliseconds and fails
-        let script = format!("date +%s%3N >> {}; exit 1", log.display());
-        let mut s = Supervisor::new(&[spec(&script)], Instant::now());
-        poll_until(&mut s, |_| {
-            std::fs::read_to_string(&log).is_ok_and(|t| t.lines().count() >= 3)
+        let mut s = Supervisor::new(&[spec("exit 1")], Instant::now());
+        // the start times the supervisor itself recorded, which its throttle counts from: a child that runs late
+        // cannot shorten them
+        let mut starts: Vec<Instant> = Vec::new();
+        poll_until(&mut s, |s| {
+            if let Phase::Running { started, .. } = &s.procs[0].phase {
+                if starts.last() != Some(started) {
+                    starts.push(*started);
+                }
+            }
+            starts.len() >= 3
         });
-        let starts: Vec<u64> = std::fs::read_to_string(&log)
-            .unwrap()
-            .lines()
-            .map(|l| l.parse().unwrap())
-            .collect();
         let (first, second) = (starts[1] - starts[0], starts[2] - starts[1]);
-        // lower bounds only: a loaded machine may start a process late, never early
-        assert!(first >= 1_000, "first wait {first} ms");
-        assert!(second >= 2_000, "second wait {second} ms");
-        drop(s);
-        std::fs::remove_dir_all(dir).unwrap();
+        assert!(first >= RESTART_THROTTLE, "first wait {first:?}");
+        assert!(second >= 2 * RESTART_THROTTLE, "second wait {second:?}");
     }
 
     #[test]

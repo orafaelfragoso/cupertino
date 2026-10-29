@@ -21,7 +21,7 @@ use crate::render::scene::{
 };
 use crate::render::shader_rect::ElementCache;
 use crate::render::CupertinoElement;
-use crate::state::{Cupertino, FailedFrames};
+use crate::state::Cupertino;
 use cupertino_render_api::{Failure, RenderFailure};
 use cupertino_scene::SceneKind;
 use smithay::backend::renderer::damage::OutputDamageTracker;
@@ -197,7 +197,11 @@ impl Cupertino {
         idx: usize,
     ) -> Option<Composed> {
         self.note_scene_built(idx);
-        self.compose_output(renderer, idx, true)
+        let composed = self.compose_output(renderer, idx, true);
+        if composed.is_some() {
+            self.outputs[idx].scheduler.composed();
+        }
+        composed
     }
 
     /// Draw output `idx` to a fresh image, the pointer left out with `paint_cursor` false. The built-frame mark of the
@@ -512,7 +516,7 @@ impl Cupertino {
                     Some(out.clone())
                 });
             }
-            self.outputs[idx].redraw = false;
+            self.outputs[idx].scheduler.called_back();
             return;
         }
         let visible = self.visible_window_ids(idx);
@@ -544,7 +548,7 @@ impl Cupertino {
                 Some(out.clone())
             });
         }
-        self.outputs[idx].redraw = false;
+        self.outputs[idx].scheduler.called_back();
         self.popups.cleanup();
     }
 
@@ -564,30 +568,24 @@ impl Cupertino {
             self.running = false;
             return;
         }
-        let count = self.outputs[idx].failed.map_or(0, |f| f.count) + 1;
+        self.send_frames(idx, time);
+        let count = self.outputs[idx].scheduler.failed(time, refresh);
         if count == 1 {
             tracing::warn!(error = %error, "rendering the frame failed");
         } else {
             tracing::debug!(error = %error, count, "rendering the frame failed again");
         }
-        self.send_frames(idx, time);
-        let output = &mut self.outputs[idx];
-        output.failed = Some(FailedFrames {
-            count,
-            retry_at: time + refresh,
-        });
-        output.redraw = true;
     }
 
     /// Whether output `idx` may draw at `time`: not before the retry time of a frame that failed.
     pub fn retry_due(&self, idx: usize, time: Duration) -> bool {
-        self.outputs[idx].failed.is_none_or(|f| time >= f.retry_at)
+        self.outputs[idx].scheduler.retry_due(time)
     }
 
     /// A frame of output `idx` was drawn, which ends a run of failed frames.
     pub fn frame_drawn(&mut self, idx: usize) {
-        if let Some(f) = self.outputs[idx].failed.take() {
-            tracing::info!(failed = f.count, "rendering the frame works again");
+        if let Some(failed) = self.outputs[idx].scheduler.drawn() {
+            tracing::info!(failed, "rendering the frame works again");
         }
     }
 

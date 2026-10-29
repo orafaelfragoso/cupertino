@@ -47,6 +47,7 @@ pub mod protocols;
 pub mod quit;
 pub mod render;
 pub mod restart_policy;
+pub mod schedule;
 pub mod scroll_v1;
 pub mod session_lock;
 pub mod session_v1;

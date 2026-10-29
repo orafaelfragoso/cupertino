@@ -260,3 +260,22 @@ fn outputs_changing_scale_repaint_to_the_full_picture() {
         both_ways(&mut d, buffer, idx, "settled after the scale change");
     }
 }
+
+#[test]
+fn each_render_pass_counts_one_compose_render_and_callback_round() {
+    let mut d = Desktop::new(1.0);
+    d.window();
+    d.at(3000);
+    let before = d.state.outputs[0].scheduler.counts();
+    headless::render(&mut d.state);
+    headless::render(&mut d.state);
+    let after = d.state.outputs[0].scheduler.counts();
+    assert_eq!(after.composes - before.composes, 2);
+    assert_eq!(after.renders - before.renders, 2);
+    assert_eq!(after.callbacks - before.callbacks, 2);
+    assert_eq!(
+        (after.empty - before.empty) + (after.queued - before.queued),
+        2,
+        "every render is either empty or handed to the display: {after:?}"
+    );
+}

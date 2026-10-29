@@ -323,7 +323,10 @@ fn a_failing_output_is_retried_at_the_display_rate_not_the_loop_rate() {
         "{draws} draws and frame callbacks in one second"
     );
     assert!(d.state.running);
-    assert!(d.state.outputs[0].redraw, "a failed frame is drawn again");
+    assert!(
+        d.state.outputs[0].scheduler.damaged(),
+        "a failed frame is drawn again"
+    );
     d.state.frame_drawn(0);
     assert!(
         d.state.retry_due(0, Duration::ZERO),

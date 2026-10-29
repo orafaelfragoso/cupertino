@@ -4,10 +4,10 @@
 //! and the existing spawn code does not either, and a poll adds no thread or fd to the loop.
 
 use std::process::{Child, Command};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::config::ShellProcess;
-use crate::restart_policy::{decide, Decision, RESTART_THROTTLE};
+use crate::restart_policy::{decide, Backoff, Decision};
 use crate::shell_connection::{bind_holder, hand_over, BoundConnection};
 
 enum Phase {
@@ -24,6 +24,7 @@ enum Phase {
 struct Supervised {
     spec: ShellProcess,
     phase: Phase,
+    backoff: Backoff,
 }
 
 /// The supervised shell processes.
@@ -40,6 +41,7 @@ impl Supervisor {
                 .map(|spec| Supervised {
                     spec: spec.clone(),
                     phase: Phase::Waiting(now),
+                    backoff: Backoff::default(),
                 })
                 .collect(),
         }
@@ -55,7 +57,9 @@ impl Supervisor {
     ) {
         for p in &mut self.procs {
             p.phase = match std::mem::replace(&mut p.phase, Phase::Stopped) {
-                Phase::Waiting(at) if at <= now => start(&p.spec, socket, connect, now),
+                Phase::Waiting(at) if at <= now => {
+                    start(&p.spec, socket, connect, now, &mut p.backoff)
+                }
                 Phase::Running { mut child, started } => match child
                     .try_wait()
                     .expect("waiting on a child the supervisor started")
@@ -63,8 +67,10 @@ impl Supervisor {
                     None => Phase::Running { child, started },
                     Some(status) => {
                         tracing::info!(name = p.spec.name, %status, "shell process exited");
-                        match decide(status, started, now) {
-                            Decision::RestartNow => start(&p.spec, socket, connect, now),
+                        match decide(status, started, now, &mut p.backoff) {
+                            Decision::RestartNow => {
+                                start(&p.spec, socket, connect, now, &mut p.backoff)
+                            }
                             Decision::RestartAt(at) => Phase::Waiting(at),
                             Decision::Stop => Phase::Stopped,
                         }
@@ -110,12 +116,13 @@ impl Supervisor {
     }
 }
 
-/// Spawn the process; a failed spawn counts as an exit with failure, so it is retried after the throttle.
+/// Spawn the process; a failed spawn counts as an exit with failure, so it is retried after the throttle, which grows.
 fn start(
     spec: &ShellProcess,
     socket: &str,
     connect: &mut dyn FnMut(&ShellProcess) -> std::io::Result<BoundConnection>,
     now: Instant,
+    backoff: &mut Backoff,
 ) -> Phase {
     let (program, args) = spec
         .command
@@ -125,7 +132,7 @@ fn start(
         Ok(connection) => connection,
         Err(e) => {
             tracing::warn!(name = spec.name, error = %e, "creating the shell process's connection failed");
-            return Phase::Waiting(now + RESTART_THROTTLE);
+            return Phase::Waiting(now + backoff.next_interval(Duration::ZERO));
         }
     };
     let mut command = Command::new(program);
@@ -140,7 +147,7 @@ fn start(
                 tracing::warn!(name = spec.name, error = %e, "binding the shell process to its connection failed: ending it");
                 let _ = child.kill();
                 let _ = child.wait();
-                return Phase::Waiting(now + RESTART_THROTTLE);
+                return Phase::Waiting(now + backoff.next_interval(Duration::ZERO));
             }
             tracing::info!(name = spec.name, pid = child.id(), "shell process started");
             Phase::Running {
@@ -150,7 +157,7 @@ fn start(
         }
         Err(e) => {
             tracing::warn!(name = spec.name, program, error = %e, "starting shell process failed");
-            Phase::Waiting(now + RESTART_THROTTLE)
+            Phase::Waiting(now + backoff.next_interval(Duration::ZERO))
         }
     }
 }
@@ -175,6 +182,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::restart_policy::RESTART_THROTTLE;
     use crate::state::ClientState;
 
     fn spec(script: &str) -> ShellProcess {
@@ -222,6 +230,30 @@ mod tests {
             std::fs::read_to_string(&log).unwrap().lines().next(),
             Some("wayland-test")
         );
+        drop(s);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_process_that_keeps_failing_is_restarted_after_longer_and_longer_waits() {
+        let dir =
+            std::env::temp_dir().join(format!("cupertino-supervisor-bo-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("starts");
+        // each start appends the time in milliseconds and fails
+        let script = format!("date +%s%3N >> {}; exit 1", log.display());
+        let mut s = Supervisor::new(&[spec(&script)], Instant::now());
+        poll_until(&mut s, |_| {
+            std::fs::read_to_string(&log).is_ok_and(|t| t.lines().count() >= 3)
+        });
+        let starts: Vec<u64> = std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(|l| l.parse().unwrap())
+            .collect();
+        let (first, second) = (starts[1] - starts[0], starts[2] - starts[1]);
+        assert!((1_000..1_900).contains(&first), "first wait {first} ms");
+        assert!((2_000..2_900).contains(&second), "second wait {second} ms");
         drop(s);
         std::fs::remove_dir_all(dir).unwrap();
     }

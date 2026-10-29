@@ -1024,10 +1024,12 @@ impl App {
                         rect: desired[level],
                     });
                 }
-                PopupOp::Reposition { level, rect } => self.conn.reposition_popup(
-                    self.bars[i].popups[level].popup,
-                    &popup::placement(&geometry_rect(rect), true)?,
-                )?,
+                PopupOp::Reposition { level, rect } => {
+                    self.conn.reposition_popup(
+                        self.bars[i].popups[level].popup,
+                        &popup::placement(&geometry_rect(rect), true)?,
+                    )?;
+                }
             }
         }
         // the grab ended with the last menu, and a destroyed surface is told no leave: the keyboard comes back to the

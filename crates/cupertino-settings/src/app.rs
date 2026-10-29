@@ -595,7 +595,10 @@ impl App {
             Event::ScaleChanged { .. }
             | Event::OutputsChanged
             | Event::ActivationToken { .. }
-            | Event::TextInput { .. } => {}
+            | Event::TextInput { .. }
+            | Event::PopupRepositioned { .. }
+            | Event::Presented(_)
+            | Event::Discarded(_) => {}
         }
         Ok(true)
     }

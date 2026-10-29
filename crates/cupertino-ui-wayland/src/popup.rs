@@ -21,6 +21,9 @@ pub fn placement(rect: &Rect, grab: bool) -> Result<PopupPlacement, Error> {
         anchor: Anchor::TopLeft,
         gravity: Gravity::BottomRight,
         constraint_adjustment: ConstraintAdjustment::empty(),
+        offset: (0, 0),
+        reactive: false,
+        parent_size: None,
         grab,
     })
 }

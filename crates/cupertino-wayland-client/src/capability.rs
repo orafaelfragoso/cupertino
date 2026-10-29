@@ -43,10 +43,12 @@ pub enum Capability {
     OutputLayout,
     /// `zwp_text_input_manager_v3` with a seat: input methods ([`crate::Connection::set_text_input`]).
     TextInput,
+    /// `wp_presentation`: when each presented frame reached the screen ([`crate::Event::Presented`]).
+    Presentation,
 }
 
 impl Capability {
-    pub const ALL: [Capability; 8] = [
+    pub const ALL: [Capability; 9] = [
         Capability::Seat,
         Capability::Clipboard,
         Capability::FractionalScale,
@@ -55,6 +57,7 @@ impl Capability {
         Capability::CursorShape,
         Capability::OutputLayout,
         Capability::TextInput,
+        Capability::Presentation,
     ];
 
     /// The globals that must all be advertised for the capability.
@@ -68,10 +71,11 @@ impl Capability {
             Capability::CursorShape => &["wp_cursor_shape_manager_v1"],
             Capability::OutputLayout => &["zxdg_output_manager_v1"],
             Capability::TextInput => &["zwp_text_input_manager_v3", "wl_seat"],
+            Capability::Presentation => &["wp_presentation"],
         }
     }
 
-    fn bit(self) -> u8 {
+    fn bit(self) -> u16 {
         1 << self as u8
     }
 }
@@ -87,7 +91,7 @@ pub struct Extension {
 /// The optional protocols the compositor offers, read once at connect, and the extension protocols bound since.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CapabilitySet {
-    standard: u8,
+    standard: u16,
     extensions: Vec<Extension>,
 }
 

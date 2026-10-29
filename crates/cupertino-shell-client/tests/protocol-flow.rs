@@ -1094,6 +1094,9 @@ fn placement(rect: Rect, size: (u32, u32)) -> PopupPlacement {
         anchor: PopupAnchor::TopLeft,
         gravity: Gravity::BottomRight,
         constraint_adjustment: ConstraintAdjustment::empty(),
+        offset: (0, 0),
+        reactive: false,
+        parent_size: None,
         grab: true,
     }
 }

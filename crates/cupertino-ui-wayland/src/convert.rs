@@ -1,6 +1,6 @@
 //! Between the window-system interface (`cupertino-ui-platform`, `cupertino-ui-text`) and the transport's types.
 
-use cupertino_geometry::{Point, Rect, Size};
+use cupertino_geometry::{Point, Size};
 use cupertino_modifiers::{Profile, RawMods};
 use cupertino_ui_platform as platform;
 use cupertino_ui_text as text;
@@ -203,8 +203,7 @@ fn gravity(edge: platform::PopupEdge) -> wl::Gravity {
     }
 }
 
-/// The offset moves the anchor rectangle, which places the popup where `xdg_positioner.set_offset` would. `reactive` is
-/// not sent yet: the transport has no reactive positioner.
+/// The offset is rounded to whole points, which is all `xdg_positioner.set_offset` takes.
 pub(crate) fn placement(spec: &platform::PopupSpec) -> wl::PopupPlacement {
     let c = spec.constraint;
     let adjust = [
@@ -224,18 +223,16 @@ pub(crate) fn placement(spec: &platform::PopupSpec) -> wl::PopupPlacement {
     .into_iter()
     .filter(|(on, _)| *on)
     .fold(wl::ConstraintAdjustment::None, |all, (_, bits)| all | bits);
-    let r = spec.anchor_rect;
+    let point = |v: f64| v.round().clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32;
     wl::PopupPlacement {
-        anchor_rect: Rect::new(
-            r.x() + spec.offset.x,
-            r.y() + spec.offset.y,
-            r.width(),
-            r.height(),
-        ),
+        anchor_rect: spec.anchor_rect,
         size: whole(spec.size),
         anchor: anchor(spec.anchor),
         gravity: gravity(spec.gravity),
         constraint_adjustment: adjust,
+        offset: (point(spec.offset.x), point(spec.offset.y)),
+        reactive: spec.reactive,
+        parent_size: None,
         grab: spec.grab,
     }
 }
@@ -345,6 +342,7 @@ pub(crate) fn ime(event: wl::TextInputEvent) -> text::ImeEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cupertino_geometry::Rect;
 
     const MS: u64 = 1_000_000;
 
@@ -431,22 +429,24 @@ mod tests {
     }
 
     #[test]
-    fn a_popup_offset_moves_its_anchor_and_constraints_cover_both_axes() {
+    fn a_popup_offset_is_sent_in_whole_points_and_constraints_cover_both_axes() {
         let p = placement(&platform::PopupSpec {
             anchor_rect: Rect::new(10.0, 20.0, 30.0, 4.0),
             anchor: platform::PopupEdge::BottomLeft,
             gravity: platform::PopupEdge::BottomRight,
-            offset: Point::new(-2.0, 3.0),
+            offset: Point::new(-2.4, 3.5),
             size: Size::new(100.4, 50.0),
             constraint: platform::ConstraintAdjust {
                 slide: true,
                 flip: true,
                 resize: false,
             },
-            reactive: false,
+            reactive: true,
             grab: true,
         });
-        assert_eq!(p.anchor_rect, Rect::new(8.0, 23.0, 30.0, 4.0));
+        assert_eq!(p.anchor_rect, Rect::new(10.0, 20.0, 30.0, 4.0));
+        assert_eq!(p.offset, (-2, 4));
+        assert!(p.reactive);
         assert_eq!(p.size, (101, 50));
         assert_eq!(
             (p.anchor, p.gravity),

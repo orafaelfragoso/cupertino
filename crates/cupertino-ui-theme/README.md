@@ -1,5 +1,24 @@
 # cupertino-ui-theme
 
 CupertinoKit theme tokens: semantic colours per `ColorRole` and `StateVariant`, control metrics, type scale, focus
-ring and motion. MPL-2.0. Reuses `Color`, `Appearance` and `ControlSize` from `cupertino-theme`. The neutral built-in
-theme and the Cupertino adapter follow.
+ring and motion. MPL-2.0. Reuses `Color`, `Appearance`, `ControlSize` and `DesignTokens` from `cupertino-theme`.
+
+## Colours
+
+A theme is one colour per role plus a few state colours (emphasized border, pressed button fills, switch tracks and
+the disabled thumb). Resolution expands them into every role in all 16 states, so `ColorTokens::get` never falls back
+to a normal colour for a selected or disabled control. Selection applies first, then hover or press; disabled overrides
+both.
+
+- `ColorTokens::cupertino(tokens, appearance)`: light and dark name tokens of `data/theme/tokens.json` in that
+  appearance only. A missing token is an error, never a colour from another appearance.
+- `ColorTokens::neutral(appearance)`: built in, for any compositor, with no theme data, pack or desktop service. Every
+  colour is opaque. Light and dark are the Cupertino colours flattened onto the surface they are drawn on (a test keeps
+  them in step with the token data).
+- High contrast is built in and used by both: opaque, text at least 4.5:1 and borders, tracks, thumbs, separators and
+  the focus ring at least 3:1 against their surface in every enabled state (tested per resolved pair). Hover and press
+  turn borders black (light) or white (dark). The dark switch thumb is dark, so it stands out on both tracks.
+
+Approximate: every state colour, the disabled fills and borders, the opaque thumb, the dark white role text and the
+dark tooltip in the Cupertino light and dark palettes; all neutral and high-contrast values. Contrast of the ordinary
+and neutral palettes is not yet accepted.

@@ -112,6 +112,82 @@ fn wrap_value(text: &str, width: f64, measure: &mut impl FnMut(&str) -> f64) -> 
     lines
 }
 
+/// The longest make or model shown; a display reports both, so a longer one is cut with an ellipsis (approximate).
+const MAX_IDENTIFICATION_CHARS: usize = 32;
+/// Scales are shown on the 1/120 grid fractional scaling uses, with at most two decimals.
+const SCALE_STEPS: f64 = 120.0;
+const MM_PER_INCH: f64 = 25.4;
+
+/// What the Displays row shows of one display, as the compositor announces it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Display<'a> {
+    pub make: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub name: Option<&'a str>,
+    /// The current mode in device pixels.
+    pub mode: (u32, u32),
+    pub physical_size_mm: Option<(u32, u32)>,
+    /// Device pixels per logical point.
+    pub scale: f64,
+}
+
+/// "<make model> <diagonal>-inch W × H @ Sx": make and model, else the description, else the connector name; the
+/// diagonal only with a physical size. `None` without a mode or anything to name the display by.
+pub fn display_value(display: &Display<'_>) -> Option<String> {
+    let (w, h) = display.mode;
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let identification: Vec<String> = [display.make, display.model]
+        .into_iter()
+        .filter_map(present)
+        .map(|s| capped(s, MAX_IDENTIFICATION_CHARS))
+        .collect();
+    let title = if identification.is_empty() {
+        present(display.description)
+            .or(present(display.name))?
+            .to_owned()
+    } else {
+        identification.join(" ")
+    };
+    let size = display
+        .physical_size_mm
+        .filter(|&(w, h)| w > 0 && h > 0)
+        .map(|(w, h)| {
+            let inches = f64::from(w).hypot(f64::from(h)) / MM_PER_INCH;
+            format!(" {}-inch", decimals((inches * 10.0).round() / 10.0, 1))
+        })
+        .unwrap_or_default();
+    let scale = (display.scale * SCALE_STEPS).round() / SCALE_STEPS;
+    Some(format!("{title}{size} {w} × {h} @ {}x", decimals(scale, 2)))
+}
+
+/// `text` trimmed, `None` when nothing is left.
+fn present(text: Option<&str>) -> Option<&str> {
+    text.map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// `text` cut to `max` characters, the last one an ellipsis.
+fn capped(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let mut cut: String = text.chars().take(max - 1).collect();
+    cut.push('…');
+    cut
+}
+
+/// `value` with at most `places` decimals and no trailing zeros.
+fn decimals(value: f64, places: usize) -> String {
+    let text = format!("{value:.places$}");
+    if text.contains('.') {
+        text.trim_end_matches('0').trim_end_matches('.').to_owned()
+    } else {
+        text
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
     pub label: &'static str,
@@ -343,6 +419,83 @@ fn pci_name(text: &str, vendor: u16, product: u16) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_display_shows_make_model_diagonal_mode_and_snapped_scale() {
+        let display = Display {
+            make: Some("ACME"),
+            model: Some("Panel 27"),
+            description: Some("ACME Panel 27 (DP-1)"),
+            name: Some("DP-1"),
+            mode: (2560, 1600),
+            physical_size_mm: Some((286, 179)),
+            scale: 2560.0 / 1707.0,
+        };
+        assert_eq!(
+            display_value(&display).as_deref(),
+            Some("ACME Panel 27 13.3-inch 2560 × 1600 @ 1.5x")
+        );
+        let integer = Display {
+            physical_size_mm: Some((597, 336)),
+            mode: (3840, 2160),
+            scale: 2.0,
+            ..display.clone()
+        };
+        assert_eq!(
+            display_value(&integer).as_deref(),
+            Some("ACME Panel 27 27-inch 3840 × 2160 @ 2x")
+        );
+        let quarter = Display {
+            scale: 1.25,
+            physical_size_mm: None,
+            ..display.clone()
+        };
+        assert_eq!(
+            display_value(&quarter).as_deref(),
+            Some("ACME Panel 27 2560 × 1600 @ 1.25x")
+        );
+    }
+
+    #[test]
+    fn a_display_without_identification_falls_back_and_long_names_are_capped() {
+        let unnamed = Display {
+            description: Some("  "),
+            name: Some("HDMI-A-1"),
+            mode: (1920, 1080),
+            scale: 1.0,
+            ..Display::default()
+        };
+        assert_eq!(
+            display_value(&unnamed).as_deref(),
+            Some("HDMI-A-1 1920 × 1080 @ 1x")
+        );
+        assert_eq!(
+            display_value(&Display {
+                name: None,
+                description: None,
+                ..unnamed.clone()
+            }),
+            None
+        );
+        assert_eq!(
+            display_value(&Display {
+                mode: (0, 1080),
+                ..unnamed.clone()
+            }),
+            None
+        );
+        let long = "M".repeat(200);
+        let value = display_value(&Display {
+            model: Some(&long),
+            ..unnamed.clone()
+        })
+        .unwrap();
+        assert!(value.starts_with(&format!("{}…", "M".repeat(MAX_IDENTIFICATION_CHARS - 1))));
+        assert_eq!(
+            value.chars().count(),
+            MAX_IDENTIFICATION_CHARS + " 1920 × 1080 @ 1x".chars().count()
+        );
+    }
 
     #[test]
     fn absent_files_hide_all_rows() {

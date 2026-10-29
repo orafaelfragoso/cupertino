@@ -23,6 +23,7 @@ fn main() -> Result<()> {
     if let Some((path, e)) = failure {
         tracing::warn!("cannot write the log file {}: {e}", path.display());
     }
+    cupertino_server::file_limit::raise();
     let result = cupertino_server::cli::run(cli);
     if let (true, Err(e)) = (to_file, &result) {
         tracing::error!("the server stopped: {e:#}");

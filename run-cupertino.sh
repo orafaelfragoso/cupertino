@@ -19,18 +19,38 @@ fi
 : "${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set; log in on the console first}"
 log="$HOME/cupertino-tty.log"
 
+run_for=${CUPERTINO_RUN_FOR:-900}
+case $run_for in
+'' | *[!0-9]*)
+    echo "run-cupertino.sh: CUPERTINO_RUN_FOR must be a whole number of seconds (0 for no limit), got '$run_for'" >&2
+    exit 1
+    ;;
+esac
+has_run_for=
+for arg in "$@"; do
+    case $arg in
+    --run-for | --run-for=*) has_run_for=1 ;;
+    esac
+done
+if [ -z "$has_run_for" ] && [ "$run_for" -gt 0 ]; then
+    set -- --run-for "$run_for" "$@"
+fi
+
 cargo build --release --workspace --all-features --bins --manifest-path "$root/Cargo.toml"
 
-export PATH="$root/target/release:$PATH"
+# The binaries are the ones just built, wherever cargo puts them (CARGO_TARGET_DIR, or the checkout's own target).
+target_dir=${CARGO_TARGET_DIR:-$(cargo metadata --no-deps --format-version 1 --manifest-path "$root/Cargo.toml" | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')}
+bin_dir="$target_dir/release"
+if [ -z "$target_dir" ] || [ ! -x "$bin_dir/cupertino-server" ]; then
+    echo "run-cupertino.sh: no cupertino-server in '$bin_dir'" >&2
+    exit 1
+fi
+export PATH="$bin_dir:$PATH"
+echo "Using $bin_dir/cupertino-server, built $(date -r "$bin_dir/cupertino-server" '+%Y-%m-%d %H:%M:%S')"
 cupertino-server --check-hardware || {
     echo "run-cupertino.sh: fix the problems above, then run this again" >&2
     exit 1
 }
-run_for=${CUPERTINO_RUN_FOR:-900}
-case " $* " in
-*" --run-for "*) ;;
-*) [ "$run_for" -gt 0 ] && set -- --run-for "$run_for" "$@" ;;
-esac
 export XDG_CURRENT_DESKTOP=Cupertino
 export XDG_DATA_DIRS="$root/crates/cupertino-files/data:$root/crates/cupertino-settings/data:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 # The shell processes are the ones the packages install as /etc/cupertino/compositor.json; --dev-shell lets this checkout name

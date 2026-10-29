@@ -11,8 +11,9 @@ use cupertino_wayland_client::{
 };
 use std::collections::VecDeque;
 use std::io::Write;
-use std::os::fd::{AsFd, IntoRawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -1931,19 +1932,42 @@ fn a_compositor_that_goes_away_ends_the_wait_with_disconnected() {
     }
 }
 
+/// Set in the copy of the test binary that `a_program_started_after_the_shell_connection_has_no_wayland_socket` starts.
+const SHELL_PROCESS: &str = "CUPERTINO_TEST_SHELL_PROCESS";
+
 /// A process that connected over the `WAYLAND_SOCKET` it was given (a shell process the server started) does not pass
-/// that connection on: a program it starts afterwards has no such variable.
+/// that connection on: a program it starts afterwards has no such variable. The process is a copy of this test binary
+/// started with the variable, as the server starts a shell process, so no test changes its own environment.
 #[test]
 fn a_program_started_after_the_shell_connection_has_no_wayland_socket() {
+    const NAME: &str = "a_program_started_after_the_shell_connection_has_no_wayland_socket";
+    if std::env::var_os(SHELL_PROCESS).is_some() {
+        let _conn = Connection::connect().unwrap();
+        let output = std::process::Command::new("sh")
+            .args(["-c", "printf %s \"${WAYLAND_SOCKET-unset}\""])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "unset");
+        return;
+    }
     let (client, server) = UnixStream::pair().unwrap();
     let (_control, _seen) = spawn_compositor(server, Globals::core());
-    std::env::set_var("WAYLAND_SOCKET", client.into_raw_fd().to_string());
-    let _conn = Connection::connect().unwrap();
-    let output = std::process::Command::new("sh")
-        .args(["-c", "printf %s \"${WAYLAND_SOCKET-unset}\""])
-        .output()
-        .unwrap();
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "unset");
+    let fd = client.as_raw_fd();
+    let mut shell = std::process::Command::new(std::env::current_exe().unwrap());
+    shell
+        .args([NAME, "--exact", "--nocapture"])
+        .env(SHELL_PROCESS, "1")
+        .env("WAYLAND_SOCKET", fd.to_string());
+    // SAFETY: fcntl is async-signal-safe; the descriptor stays open in this process until the child has exited
+    unsafe {
+        shell.pre_exec(move || {
+            rustix::io::fcntl_setfd(BorrowedFd::borrow_raw(fd), rustix::io::FdFlags::empty())
+                .map_err(std::io::Error::from)
+        });
+    }
+    let status = shell.status().unwrap();
+    drop(client);
+    assert!(status.success(), "the shell process failed: {status}");
 }
 
 /// An extension as a crate above the transport writes one, through the public API only: layer surfaces, a protocol the

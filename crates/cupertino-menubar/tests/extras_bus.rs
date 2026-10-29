@@ -245,9 +245,12 @@ fn the_extras_follow_the_services_and_act_on_them() {
         }
     });
 
-    // the only test of this binary, so no other thread reads the environment
-    std::env::set_var("DBUS_SYSTEM_BUS_ADDRESS", &bus.address);
-    let (extras, events) = ExtrasBus::start(zbus::block_on(bus.connect_async()), || {});
+    let system = zbus::block_on(bus.connect_async());
+    let (extras, events) = ExtrasBus::with_system(
+        zbus::block_on(bus.connect_async()),
+        std::future::ready(Ok(system)),
+        || {},
+    );
     let first = next(&events);
     let wifi = first.wifi.as_ref().expect("a Wi-Fi device");
     assert!(wifi.enabled);

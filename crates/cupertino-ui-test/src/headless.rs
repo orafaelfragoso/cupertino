@@ -48,6 +48,7 @@ pub struct HeadlessWindowSystem {
     queue: VecDeque<PlatformEvent>,
     clipboards: HashMap<ClipboardKind, ClipboardData>,
     accepting_frames: bool,
+    pub(crate) dispatch_one: bool,
 }
 
 impl Default for HeadlessWindowSystem {
@@ -67,6 +68,7 @@ impl HeadlessWindowSystem {
             queue: VecDeque::new(),
             clipboards: HashMap::new(),
             accepting_frames: true,
+            dispatch_one: false,
         }
     }
 
@@ -233,6 +235,10 @@ impl HeadlessWindowSystem {
         self.clipboards.get(&kind)
     }
 
+    pub(crate) fn next_event(&self) -> Option<&PlatformEvent> {
+        self.queue.front()
+    }
+
     /// Events queued and not yet dispatched.
     pub fn queued(&self) -> usize {
         self.queue.len()
@@ -376,7 +382,12 @@ impl WindowSystem for HeadlessWindowSystem {
         _timeout: Option<Duration>,
         events: &mut Vec<PlatformEvent>,
     ) -> Result<(), PlatformError> {
-        events.extend(self.queue.drain(..));
+        let count = if self.dispatch_one {
+            self.queue.len().min(1)
+        } else {
+            self.queue.len()
+        };
+        events.extend(self.queue.drain(..count));
         Ok(())
     }
 

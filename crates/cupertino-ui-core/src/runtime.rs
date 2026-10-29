@@ -844,6 +844,16 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         })
     }
 
+    /// Whether the current focus protects input. This reads widget semantics, including nodes without a role.
+    pub fn protected_focus(&self, window: WindowId) -> Option<bool> {
+        let w = self.windows.iter().find(|w| w.id == window)?;
+        Some(
+            w.focus
+                .node()
+                .is_some_and(|node| protected(&self.tree, node)),
+        )
+    }
+
     /// A read-only view of one window after the last frame, for tests and the inspector.
     pub fn snapshot(&self, window: WindowId) -> Option<FrameSnapshot> {
         let w = self.windows.iter().find(|w| w.id == window)?;

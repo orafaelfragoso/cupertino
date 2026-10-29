@@ -13,8 +13,11 @@ use cupertino_settings::paint::{Painter, Palette};
 use cupertino_theme::{Appearance, Theme};
 use cupertino_ui_wayland::{Ready, ShmPresenter};
 use cupertino_wayland_client::{
-    key, Button, Connection, Decorations, Event, KeyboardEvent, PointerEvent, ToplevelConfig,
+    key, Button, Connection, Decorations, Event, KeyboardEvent, PointerEvent, SurfaceId,
+    TokenRequest, ToplevelConfig,
 };
+
+use crate::app::unless_unsupported;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -82,7 +85,7 @@ pub fn run(activation_token: String) -> Result<()> {
     })?;
     let mut presenter = ShmPresenter::new(window.surface());
     if !activation_token.is_empty() {
-        conn.activate_with_token(window, &activation_token)?;
+        unless_unsupported(conn.activate_with_token(window, &activation_token))?;
     }
     let mut pressed = false;
     let mut info_request = None;
@@ -128,10 +131,7 @@ pub fn run(activation_token: String) -> Result<()> {
                         && matches!(code, key::ENTER | key::KEYPAD_ENTER | key::SPACE)
                         && info_request.is_none()
                     {
-                        info_request = Some(conn.request_activation_token(
-                            window.surface(),
-                            Some("cupertino-settings"),
-                        )?);
+                        info_request = more_info_request(&mut conn, window.surface())?;
                     }
                 }
                 Event::Pointer {
@@ -151,10 +151,7 @@ pub fn run(activation_token: String) -> Result<()> {
                     pressed = down && inside;
                     presenter.request_redraw();
                     if activate && info_request.is_none() {
-                        info_request = Some(conn.request_activation_token(
-                            window.surface(),
-                            Some("cupertino-settings"),
-                        )?);
+                        info_request = more_info_request(&mut conn, window.surface())?;
                     }
                 }
                 Event::Pointer {
@@ -183,11 +180,11 @@ pub fn run(activation_token: String) -> Result<()> {
             }
         }
         while let Ok(token) = receiver.try_recv() {
-            if token.is_empty() {
-                conn.activate(window)?;
+            unless_unsupported(if token.is_empty() {
+                conn.activate(window)
             } else {
-                conn.activate_with_token(window, &token)?;
-            }
+                conn.activate_with_token(window, &token)
+            })?;
         }
         let appearance = match (dark, contrast) {
             (false, false) => Appearance::Light,
@@ -223,6 +220,16 @@ fn primary_is_ctrl(path: Option<&Path>) -> bool {
             false
         }
     }
+}
+
+/// Ask for the token that raises More Info. Without activation, More Info opens at once, unraised.
+fn more_info_request(conn: &mut Connection, surface: SurfaceId) -> Result<Option<TokenRequest>> {
+    let request =
+        unless_unsupported(conn.request_activation_token(surface, Some("cupertino-settings")))?;
+    if request.is_none() {
+        more_info("")?;
+    }
+    Ok(request)
 }
 
 fn more_info(token: &str) -> Result<()> {

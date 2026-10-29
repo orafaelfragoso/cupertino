@@ -40,6 +40,7 @@ use smithay::reexports::drm::Device as DrmDeviceTrait;
 use smithay::reexports::rustix::fs::OFlags;
 use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 use smithay::utils::{DeviceFd, Transform};
+use smithay::wayland::drm_syncobj::{supports_syncobj_eventfd, DrmSyncobjState};
 use smithay::wayland::presentation::Refresh;
 use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
 
@@ -242,6 +243,7 @@ pub fn run(
     let fd = DrmDeviceFd::new(DeviceFd::from(fd));
     let (drm, drm_notifier) =
         DrmDevice::new(fd.clone(), true).map_err(|e| anyhow!("drm device: {e}"))?;
+    let import_fd = fd.clone();
     let gbm = GbmDevice::new(fd).map_err(|e| anyhow!("gbm device: {e} (the driver's GBM backend is missing or refused the device; run `cupertino-server --check-hardware`)"))?;
 
     let display = unsafe { EGLDisplay::new(gbm.clone()) }.map_err(|e| {
@@ -275,6 +277,13 @@ pub fn run(
 
     state.render = Some(RenderResources::new(&mut renderer)?);
     super::init_buffers(state, &renderer);
+    if supports_syncobj_eventfd(&import_fd) {
+        let dh = state.display_handle.clone();
+        state.syncobj_state = Some(DrmSyncobjState::new::<Cupertino>(&dh, import_fd));
+        tracing::info!("explicit sync (linux-drm-syncobj-v1) is offered");
+    } else {
+        tracing::warn!("explicit sync is not offered: the kernel cannot wait on syncobj timelines");
+    }
 
     let allocator = GbmAllocator::new(
         gbm.clone(),

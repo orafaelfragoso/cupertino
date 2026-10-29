@@ -203,8 +203,12 @@ fn dilated_edges(
     edges
 }
 
+/// The largest mask side, pixels.
+pub const MAX_MASK_SIDE: u32 = 4096;
+
 /// Rasterise the outline `points` / `verbs` (pixels, y up, origin on the baseline; a scaled glyph outline) at the
-/// subpixel `offset` with the dilation `dilation`. `None` for an empty outline.
+/// subpixel `offset` with the dilation `dilation`. `None` for an empty outline, or one whose mask would be wider or
+/// taller than [`MAX_MASK_SIDE`] or lie outside `i32` pixel coordinates.
 pub fn rasterize(
     points: &[Point],
     verbs: &[Verb],
@@ -227,11 +231,20 @@ pub fn rasterize(
             (x0, y0, x1, y1) = (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y));
         }
     }
-    let (left, top) = (x0.floor() as i32, y1.ceil() as i32);
+    if ![x0, y0, x1, y1].iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let (left, right) = (x0.floor() as i64, x1.ceil() as i64);
+    let (bottom, top) = (y0.floor() as i64, y1.ceil() as i64);
     let (width, height) = (
-        (x1.ceil() as i32 - left).max(1) as usize,
-        (top - y0.floor() as i32).max(1) as usize,
+        right.saturating_sub(left).max(1),
+        top.saturating_sub(bottom).max(1),
     );
+    if width > i64::from(MAX_MASK_SIDE) || height > i64::from(MAX_MASK_SIDE) {
+        return None;
+    }
+    let (left, top) = (i32::try_from(left).ok()?, i32::try_from(top).ok()?);
+    let (width, height) = (width as usize, height as usize);
     // two spare columns: a segment adds to the pixel right of the last one it touches
     let stride = width + 2;
     let mut acc = vec![0.0f32; stride * height];
@@ -474,5 +487,20 @@ mod tests {
             153,
             "the hole's bottom edge rises by 2 dy = 0.6"
         );
+    }
+
+    #[test]
+    fn a_mask_past_the_side_cap_or_the_pixel_range_is_refused() {
+        let side = MAX_MASK_SIDE as f32;
+        let refused = |bounds| {
+            let mut path = (vec![], vec![]);
+            square(&mut path, bounds, true);
+            rasterize(&path.0, &path.1, (0.0, 0.0), (0.0, 0.0)).is_none()
+        };
+        assert!(!refused([0.0, 0.0, side, side]));
+        assert!(refused([0.0, 0.0, side + 1.0, 1.0]));
+        assert!(refused([0.0, 0.0, 1.0, side + 1.0]));
+        assert!(refused([-3e38, 0.0, 3e38, 1.0]));
+        assert!(refused([1e30, 1e30, 1e30 + 1.0, 1e30 + 1.0]));
     }
 }

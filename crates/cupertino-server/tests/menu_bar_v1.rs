@@ -1594,6 +1594,39 @@ fn the_active_window_its_menu_and_commands_go_through_the_bar() {
     );
 }
 
+/// The role is checked on every request, not only at `get_menu_bar`: once the process the connection was made for
+/// exits, a request on the bar it already has is refused with the permission error and not carried out.
+#[test]
+fn a_bar_whose_process_exited_is_refused_its_next_request() {
+    let Some(mut h) = Harness::new() else { return };
+    let (stream, holder) =
+        common::held_shell_connection(&h.state, &[ShellRole::Session, ShellRole::MenuBar]);
+    let bar = BarClient::spawn(stream, true);
+    let app = AppClient::spawn(h.socket_path(), "org.example.editor");
+    let first = h.mapped_window(1);
+    app.send(Cmd::OpenSecondWindow);
+    let second = h.mapped_window(2);
+    h.wait_until("the second window to be active", |s| {
+        s.wm.key_window() == Some(second)
+    });
+    bar.send(Cmd::WindowCommand(BarCommand::Minimize));
+    h.wait_until(
+        "the second window to minimize and the first to be active",
+        |s| {
+            s.wm.window(second)
+                .is_some_and(|w| w.state().is_minimized())
+                && s.wm.key_window() == Some(first)
+        },
+    );
+
+    holder.end();
+    bar.send(Cmd::WindowCommand(BarCommand::Minimize));
+    h.wait_until("the permission error", |_| bar.error().is_some());
+    // error 2 of cupertino_shell_v1.error is `permission`
+    assert_eq!(bar.error(), Some(("cupertino_menu_bar_v1".to_string(), 2)));
+    assert!(!h.state.wm.window(first).unwrap().state().is_minimized());
+}
+
 /// The title and the menu the bar was told in its latest group, once a window is active.
 fn latest_title_and_menu(bar: &BarClient) -> Option<(String, BarEvent)> {
     let group = bar.groups().pop()?;

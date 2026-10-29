@@ -67,7 +67,7 @@ An edge the table forbids that exists today is listed as an exception in `cupert
 
 ## Contracts registry
 
-[`docs/architecture/contracts.yaml`](../architecture/contracts.yaml) lists every Wayland global the server advertises, every D-Bus interface a Cupertino process serves and every binary a workspace crate builds. Each entry has its version, owner crate and area, threat scope (`public`, `shell-private` or `system`), test file and the `path:line` that defines it; the file's header defines the fields. `unknown` marks a value that is not measured yet.
+[`docs/architecture/contracts.yaml`](../architecture/contracts.yaml) lists every Wayland global the server advertises, every D-Bus interface a Cupertino process serves and every binary a workspace crate builds. Each entry has its version, owner crate and area, threat scope (`public`, `shell-private` or `system`), test file, and the file that defines it with a short text (`source_match`) that must occur in it; the file's header defines the fields. `unknown` marks a value that is not measured yet.
 
 Three checks keep it complete:
 

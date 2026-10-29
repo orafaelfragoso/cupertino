@@ -17,7 +17,8 @@ INTERFACE_ENTRY = """- name: org.cupertino.Demo1
   owner_area: apps
   scope: public
   test_owner: unknown
-  source: crates/cupertino-demo/src/lib.rs:1
+  source: crates/cupertino-demo/src/lib.rs
+  source_match: "org.cupertino.Demo1"
 """
 BINARY_ENTRY = """- name: cupertino-demo
   kind: binary
@@ -27,7 +28,7 @@ BINARY_ENTRY = """- name: cupertino-demo
   owner_area: apps
   scope: public
   test_owner: unknown
-  source: crates/cupertino-demo/src/main.rs:1
+  source: crates/cupertino-demo/src/main.rs
 """
 LIB = '#[zbus::interface(name = "org.cupertino.Demo1")]\nstruct Demo;\n'
 BUILT = {"cupertino-demo": ("cupertino-demo", "crates/cupertino-demo/src/main.rs")}
@@ -68,9 +69,15 @@ class RegistryTest(unittest.TestCase):
         files = {"crates/cupertino-demo/src/names.rs": 'const E: &str = "org.cupertino.Demo1.Error.Denied";\n'}
         self.assertEqual(run(INTERFACE_ENTRY + BINARY_ENTRY, files), [])
 
-    def test_an_interface_that_moved_fails(self):
-        problems = run(INTERFACE_ENTRY + BINARY_ENTRY, {"crates/cupertino-demo/src/lib.rs": "\n" + LIB})
-        self.assertTrue(any("is registered at crates/cupertino-demo/src/lib.rs:1" in p for p in problems), problems)
+    def test_an_interface_that_moved_within_its_file_passes(self):
+        self.assertEqual(run(INTERFACE_ENTRY + BINARY_ENTRY, {"crates/cupertino-demo/src/lib.rs": "\n" + LIB}), [])
+
+    def test_an_interface_that_moved_to_another_file_fails(self):
+        files = {"crates/cupertino-demo/src/lib.rs": 'const N: &str = "org.cupertino.Demo1";\n',
+                 "crates/cupertino-demo/src/bus.rs": LIB}
+        problems = run(INTERFACE_ENTRY + BINARY_ENTRY, files)
+        self.assertEqual(problems, ["crates/cupertino-demo/src/bus.rs:1: org.cupertino.Demo1 is registered in "
+                                    "crates/cupertino-demo/src/lib.rs"])
 
     def test_a_binary_without_an_entry_fails(self):
         problems = run(INTERFACE_ENTRY)
@@ -100,7 +107,7 @@ class RegistryTest(unittest.TestCase):
         test = "crates/cupertino-demo/tests/run.rs"
         self.assertEqual(run(INTERFACE_ENTRY + entry, {test: 'env!("CARGO_BIN_EXE_cupertino-demo");\n'}), [])
         problems = run(INTERFACE_ENTRY + entry, {test: "fn main() {}\n"})
-        self.assertEqual(problems, ["docs/architecture/contracts.yaml:11: test_owner crates/cupertino-demo/tests/run.rs "
+        self.assertEqual(problems, ["docs/architecture/contracts.yaml:12: test_owner crates/cupertino-demo/tests/run.rs "
                                     "does not name cupertino-demo"])
 
     def test_an_interface_test_need_not_name_it(self):
@@ -109,12 +116,22 @@ class RegistryTest(unittest.TestCase):
 
     def test_an_interface_no_crate_serves_fails(self):
         problems = run(INTERFACE_ENTRY + BINARY_ENTRY, {"crates/cupertino-demo/src/lib.rs": "struct Demo;\n"})
-        self.assertEqual(problems, ["docs/architecture/contracts.yaml:1: org.cupertino.Demo1 is not served by any "
+        self.assertEqual(problems, ["docs/architecture/contracts.yaml:1: source_match '\"org.cupertino.Demo1\"' does "
+                                    "not occur in crates/cupertino-demo/src/lib.rs",
+                                    "docs/architecture/contracts.yaml:1: org.cupertino.Demo1 is not served by any "
                                     "crate"])
 
-    def test_a_source_line_outside_the_file_fails(self):
-        problems = run(INTERFACE_ENTRY.replace("lib.rs:1", "lib.rs:99") + BINARY_ENTRY)
-        self.assertTrue(any("is not path:line of an existing line" in p for p in problems), problems)
+    def test_a_source_match_absent_from_its_file_fails(self):
+        problems = run(INTERFACE_ENTRY.replace('"org.cupertino.Demo1"\n', 'DemoState::new\n') + BINARY_ENTRY)
+        self.assertEqual(problems, ["docs/architecture/contracts.yaml:1: source_match 'DemoState::new' does not occur "
+                                    "in crates/cupertino-demo/src/lib.rs"])
+
+    def test_a_source_that_is_not_a_file_fails(self):
+        problems = run(INTERFACE_ENTRY.replace("src/lib.rs\n", "src/gone.rs\n") + BINARY_ENTRY)
+        self.assertEqual(problems, ["docs/architecture/contracts.yaml:1: source 'crates/cupertino-demo/src/gone.rs' is "
+                                    "not an existing file",
+                                    "crates/cupertino-demo/src/lib.rs:1: org.cupertino.Demo1 is registered in "
+                                    "crates/cupertino-demo/src/gone.rs"])
 
 
 def attribute_case(source):

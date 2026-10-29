@@ -267,6 +267,16 @@ pub struct OutputEntry {
     pub redraw: bool,
     pub global: Option<smithay::reexports::wayland_server::backend::GlobalId>,
     pub lock: crate::session_lock::OutputLock,
+    /// The frames that failed to draw since the last one that did.
+    pub failed: Option<FailedFrames>,
+}
+
+/// A run of frames of one output that failed to draw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FailedFrames {
+    pub count: u32,
+    /// Not drawn again before this time, so a failing output is retried at the display rate.
+    pub retry_at: std::time::Duration,
 }
 
 /// What the pointer is over inside the window stack.
@@ -788,6 +798,7 @@ impl Cupertino {
             redraw: true,
             global: Some(global),
             lock: Default::default(),
+            failed: None,
         });
         let now = self.now();
         self.menu_bars.set.add_output(id, rect, now);

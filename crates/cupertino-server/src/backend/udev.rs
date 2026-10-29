@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use cupertino_devices::{Action, Monitor, Subsystem, SEAT0};
-use cupertino_render_api::{Completion as _, RenderStatus, Renderer};
+use cupertino_render_api::{Completion as _, Failure, RenderFailure as _, RenderStatus, Renderer};
 use cupertino_seat::LogindSession;
 use cupertino_wm::OutputId;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
@@ -115,17 +115,24 @@ pub struct UdevBackend {
     paused: bool,
     /// The display sleeps (`power.rs`): every CRTC is off and nothing is rendered until it wakes.
     asleep: bool,
+    /// A render reported the rendering context lost, which ends the session; nothing is drawn with it again.
+    renderer_lost: bool,
 }
 
-/// Whether an output gets a frame now. A paused session renders nothing: the device rejects the
-/// frame, and the loop would retry (and log) every iteration.
-fn frame_due(paused: bool, pending: bool, redraw: bool, wants_frames: bool) -> bool {
-    !paused && !pending && (redraw || wants_frames)
+/// Whether an output gets a frame now. A paused session or a lost renderer renders nothing: the device rejects the
+/// frame, and the loop would retry (and log) every iteration. Nor does an output whose frame waits for its vblank or
+/// for the retry time of a failed one.
+fn frame_due(stopped: bool, waiting: bool, redraw: bool, wants_frames: bool) -> bool {
+    !stopped && !waiting && (redraw || wants_frames)
 }
 
 impl UdevBackend {
     pub fn renderer(&mut self) -> &mut GlesRenderer {
         &mut self.renderer
+    }
+
+    pub fn renderer_lost(&self) -> bool {
+        self.renderer_lost
     }
 
     /// Switch every CRTC off (DPMS off) or let the next frame switch it back on with a full redraw.
@@ -309,6 +316,7 @@ pub fn run(
         scale,
         paused: false,
         asleep: false,
+        renderer_lost: false,
     };
     state.backend = Some(Backend::Udev(Box::new(backend)));
 
@@ -690,6 +698,7 @@ fn render_outputs(state: &mut Cupertino) {
     };
     if let Backend::Udev(u) = &mut backend {
         let crtcs: Vec<crtc::Handle> = u.surfaces.keys().copied().collect();
+        let now = Duration::from(state.clock.now());
         for crtc in crtcs {
             let Some(s) = u.surfaces.get(&crtc) else {
                 continue;
@@ -699,8 +708,8 @@ fn render_outputs(state: &mut Cupertino) {
             };
             if !state.displays.powered(s.output)
                 || !frame_due(
-                    u.paused || u.asleep,
-                    s.pending,
+                    u.paused || u.asleep || u.renderer_lost,
+                    s.pending || !state.retry_due(idx, now),
                     state.outputs[idx].redraw,
                     state.wants_frames(),
                 )
@@ -721,8 +730,9 @@ fn already_shown(scene: bool, rendered: bool) -> bool {
 }
 
 fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle, idx: usize) {
-    // without a scene (no render resources or no mode yet) nothing is drawn or queued, but the tail still runs
+    // without a scene (no render resources or no mode yet) or a drawn frame, nothing is queued, but the tail still runs
     let mut scene = true;
+    let mut failed = None;
     let rendered = match state.compose_for_present(&mut u.renderer, idx) {
         None => {
             scene = false;
@@ -746,10 +756,15 @@ fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle
                 },
             );
             match result {
-                Ok(completion) => completion.status() == RenderStatus::Rendered,
+                Ok(completion) => {
+                    state.frame_drawn(idx);
+                    completion.status() == RenderStatus::Rendered
+                }
                 Err(e) => {
-                    tracing::warn!(error = %e, "rendering the frame failed");
-                    return;
+                    u.renderer_lost |= e.failure() == Failure::ContextLost;
+                    failed = Some(e);
+                    scene = false;
+                    false
                 }
             }
         }
@@ -775,7 +790,10 @@ fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle
         state.note_frame_shown(idx);
     }
     state.process_screenshots(&mut u.renderer, idx);
-    state.send_frames(idx, time);
+    match failed {
+        Some(e) => state.frame_failed(idx, time, surface.refresh, &e),
+        None => state.send_frames(idx, time),
+    }
 }
 
 fn frame_finish(

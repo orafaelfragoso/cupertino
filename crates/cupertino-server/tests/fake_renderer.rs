@@ -4,11 +4,13 @@
 
 mod common;
 
+use std::time::Duration;
+
 use common::desktop::Desktop;
-use cupertino_render_api::{Completion, RenderStatus, Renderer};
+use cupertino_render_api::{Completion, Failure, RenderFailure, RenderStatus, Renderer};
 use cupertino_scene::{SceneFrame, SceneKind, Source};
 use cupertino_server::backend::Backend;
-use cupertino_server::render::compose::FrameResources;
+use cupertino_server::render::compose::{Composed, FrameResources};
 use cupertino_wm::Command;
 
 /// What the fake saw of one frame.
@@ -42,6 +44,12 @@ impl std::fmt::Display for Unresolved {
 }
 
 impl std::error::Error for Unresolved {}
+
+impl RenderFailure for Unresolved {
+    fn failure(&self) -> Failure {
+        Failure::Transient
+    }
+}
 
 struct Fake;
 
@@ -119,8 +127,39 @@ impl Renderer for Fake {
     }
 }
 
-/// Compose output 0 and let the fake consume it.
-fn consume(d: &mut Desktop) -> Seen {
+/// A renderer whose every frame fails the same way.
+struct Failing(Failure);
+
+#[derive(Debug)]
+struct Broken(Failure);
+
+impl std::fmt::Display for Broken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the device failed: {:?}", self.0)
+    }
+}
+
+impl std::error::Error for Broken {}
+
+impl RenderFailure for Broken {
+    fn failure(&self) -> Failure {
+        self.0
+    }
+}
+
+impl Renderer for Failing {
+    type Resources<'a> = FrameResources;
+    type Target<'a> = ();
+    type Completion = Seen;
+    type Error = Broken;
+
+    fn render(&mut self, _: &SceneFrame, _: &mut FrameResources, (): ()) -> Result<Seen, Broken> {
+        Err(Broken(self.0))
+    }
+}
+
+/// Compose output 0.
+fn compose(d: &mut Desktop) -> Composed {
     let mut backend = d.state.backend.take().unwrap();
     #[allow(irrefutable_let_patterns)]
     let Backend::Headless(ref mut h) = backend
@@ -132,6 +171,34 @@ fn consume(d: &mut Desktop) -> Seen {
         .compose_output(&mut h.renderer, 0, true)
         .expect("render resources");
     d.state.backend = Some(backend);
+    composed
+}
+
+/// One second of loop passes, 4 ms apart as the udev loop runs them, drawing output 0 with a renderer that always
+/// fails: a pass draws while the session runs and the output is due, and a failed frame takes the backends' tail.
+/// Returns how many frames were drawn.
+fn fail_for_a_second(d: &mut Desktop, failure: Failure) -> u32 {
+    let start = Duration::from(d.state.clock.now());
+    let mut draws = 0;
+    for pass in 0..250 {
+        let now = start + Duration::from_millis(4) * pass;
+        if !d.state.running || !d.state.retry_due(0, now) {
+            continue;
+        }
+        let composed = compose(d);
+        let mut resources = composed.resources;
+        draws += 1;
+        if let Err(e) = Failing(failure).render(&composed.frame, &mut resources, ()) {
+            d.state
+                .frame_failed(0, now, Duration::from_micros(16_667), &e);
+        }
+    }
+    draws
+}
+
+/// Compose output 0 and let the fake consume it.
+fn consume(d: &mut Desktop) -> Seen {
+    let composed = compose(d);
     let mut resources = composed.resources;
     Fake.render(&composed.frame, &mut resources, ())
         .unwrap_or_else(|e| panic!("the fake could not resolve a handle: {e}"))
@@ -243,4 +310,32 @@ fn a_handle_from_another_frame_is_refused() {
         result.is_err(),
         "handles of one frame do not resolve against another's resources"
     );
+}
+
+#[test]
+fn a_failing_output_is_retried_at_the_display_rate_not_the_loop_rate() {
+    let mut d = Desktop::new(1.0);
+    d.window();
+    d.at(3000);
+    let draws = fail_for_a_second(&mut d, Failure::Transient);
+    assert!(
+        (1..=60).contains(&draws),
+        "{draws} draws and frame callbacks in one second"
+    );
+    assert!(d.state.running);
+    assert!(d.state.outputs[0].redraw, "a failed frame is drawn again");
+    d.state.frame_drawn(0);
+    assert!(
+        d.state.retry_due(0, Duration::ZERO),
+        "a drawn frame ends the wait between retries"
+    );
+}
+
+#[test]
+fn a_lost_rendering_context_ends_the_session_after_one_draw() {
+    let mut d = Desktop::new(1.0);
+    d.window();
+    d.at(3000);
+    assert_eq!(fail_for_a_second(&mut d, Failure::ContextLost), 1);
+    assert!(!d.state.running, "the session ends");
 }

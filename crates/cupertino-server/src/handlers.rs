@@ -123,13 +123,11 @@ impl CompositorHandler for Cupertino {
                     }
                 }
             } else if let Some(dmabuf) = dmabuf {
-                match dmabuf.generate_blocker(smithay::reexports::calloop::Interest::READ) {
-                    Ok((blocker, source)) => {
-                        hold_commit(state, surface, Kind::ImplicitFence, blocker, source)
-                    }
-                    Err(e) => {
-                        tracing::warn!(client = ?surface.client().map(|c| c.id()), error = %e, "no wait for the dmabuf's fences: the commit goes through unblocked")
-                    }
+                // the only error is that every fence has signalled: the commit then needs no wait
+                let blocker: Result<_, smithay::backend::allocator::dmabuf::AlreadyReady> =
+                    dmabuf.generate_blocker(smithay::reexports::calloop::Interest::READ);
+                if let Ok((blocker, source)) = blocker {
+                    hold_commit(state, surface, Kind::ImplicitFence, blocker, source)
                 }
             }
         });

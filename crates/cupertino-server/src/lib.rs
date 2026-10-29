@@ -4,6 +4,7 @@
 //! See the crate README for the architecture and the integration points.
 
 pub mod accessibility;
+pub mod acquire_waits;
 pub mod app_effects_v1;
 pub mod authorization;
 pub mod backend;

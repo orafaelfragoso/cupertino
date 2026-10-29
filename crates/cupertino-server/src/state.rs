@@ -99,6 +99,8 @@ pub struct ClientState {
     pub peer: Option<cupertino_peer::ProcessHandle>,
     /// How many of the client's owner identification threads are alive (`crate::dbus::CLIENT_IDENTIFY_LIMIT`).
     pub owner_identifying: crate::dbus::Identifying,
+    /// The commits of the client held back until their buffers are ready ([`crate::acquire_waits`]).
+    pub acquire_waits: std::sync::Arc<crate::acquire_waits::AcquireWaits>,
 }
 
 impl Default for ClientState {
@@ -114,6 +116,7 @@ impl Default for ClientState {
             sandboxed: false,
             peer: None,
             owner_identifying: std::sync::Arc::default(),
+            acquire_waits: std::sync::Arc::default(),
         }
     }
 }
@@ -146,7 +149,9 @@ pub fn client_process(
 
 impl ClientData for ClientState {
     fn initialized(&self, _client_id: ClientId) {}
-    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
+    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {
+        self.acquire_waits.close();
+    }
 }
 
 /// The window model's minimize and restore timing for the minimize effect of `effects`: the effect generators carry their
@@ -335,6 +340,10 @@ pub struct Cupertino {
     pub live: crate::live::LiveSettings,
     pub dmabuf_state: DmabufState,
     pub dmabuf_global: Option<DmabufGlobal>,
+    /// `linux-drm-syncobj-v1` (explicit sync); present once a DRM backend whose kernel supports it has started.
+    pub syncobj_state: Option<smithay::wayland::drm_syncobj::DrmSyncobjState>,
+    /// The waits of the clients that have had a commit held back, until they disconnect ([`crate::acquire_waits::sweep`]).
+    pub acquire_registry: Vec<std::sync::Arc<crate::acquire_waits::AcquireWaits>>,
     pub popups: PopupManager,
     /// Which clients answer their pings (`hung.rs`).
     pub hung: crate::hung::Pings,
@@ -634,6 +643,8 @@ impl Cupertino {
             live: crate::live::LiveSettings::default(),
             dmabuf_state: DmabufState::new(),
             dmabuf_global: None,
+            syncobj_state: None,
+            acquire_registry: Vec::new(),
             popups: PopupManager::default(),
             hung: crate::hung::Pings::default(),
             hung_announced: Default::default(),
@@ -1416,6 +1427,7 @@ impl Cupertino {
         self.idle.refresh_inhibition();
         self.tick_display_power();
         self.tick_quit();
+        crate::acquire_waits::sweep(&mut self.acquire_registry, &self.loop_handle);
         self.tick_hung(now);
         self.tick_force_quit(now);
         let fx = self.wm.tick(now);

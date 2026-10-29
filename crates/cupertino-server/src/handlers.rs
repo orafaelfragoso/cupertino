@@ -21,14 +21,17 @@ use smithay::reexports::wayland_server::protocol::wl_data_source::WlDataSource;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::backend::protocol::ProtocolError;
+use smithay::reexports::wayland_server::backend::DisconnectReason;
 use smithay::reexports::wayland_server::{Client, Resource};
 use smithay::utils::{Logical, Point, Rectangle, Serial};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
     add_blocker, add_pre_commit_hook, get_parent, is_sync_subsurface, with_states, BufferAssignment, CompositorClientState, CompositorHandler,
-    CompositorState, SurfaceAttributes,
+    Blocker, CompositorState, SurfaceAttributes,
 };
 use smithay::wayland::dmabuf::{get_dmabuf, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
+use smithay::wayland::drm_syncobj::{DrmSyncobjCachedState, DrmSyncobjHandler, DrmSyncobjState};
 use smithay::wayland::foreign_toplevel_list::{ForeignToplevelListHandler, ForeignToplevelListState};
 use smithay::wayland::fractional_scale::{with_fractional_scale, FractionalScaleHandler};
 use smithay::wayland::output::OutputHandler;
@@ -48,12 +51,13 @@ use smithay::wayland::shell::xdg::{
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::wayland::xdg_activation::{XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData};
 use smithay::{
-    delegate_compositor, delegate_cursor_shape, delegate_data_device, delegate_dmabuf, delegate_foreign_toplevel_list,
+    delegate_compositor, delegate_cursor_shape, delegate_data_device, delegate_dmabuf, delegate_drm_syncobj, delegate_foreign_toplevel_list,
     delegate_fractional_scale, delegate_layer_shell, delegate_output, delegate_pointer_gestures, delegate_presentation,
     delegate_primary_selection, delegate_relative_pointer, delegate_seat, delegate_shm, delegate_viewporter, delegate_xdg_activation,
     delegate_xdg_decoration, delegate_xdg_dialog, delegate_xdg_shell,
 };
 
+use crate::acquire_waits::{self, Admission};
 use crate::clipboard::Snapshot;
 use crate::menu_bar::cut_text;
 use crate::policy;
@@ -100,20 +104,27 @@ impl CompositorHandler for Cupertino {
             if unmapping {
                 state.snapshot_closing_surface(surface);
             }
-            if let Some(dmabuf) = dmabuf {
-                if let Ok((blocker, source)) =
-                    dmabuf.generate_blocker(smithay::reexports::calloop::Interest::READ)
-                {
-                    if let Some(client) = surface.client() {
-                        let res = state.loop_handle.insert_source(source, move |_, _, data| {
-                            let dh = data.display_handle.clone();
-                            data.client_compositor_state(&client)
-                                .blocker_cleared(data, &dh);
-                            Ok(())
-                        });
-                        if res.is_ok() {
-                            add_blocker(surface, blocker);
-                        }
+            // A client that uses explicit sync says when its buffer is ready; any other dmabuf is waited for through its
+            // implicit fences.
+            let acquire = with_states(surface, |data| {
+                data.cached_state
+                    .get::<DrmSyncobjCachedState>()
+                    .pending()
+                    .acquire_point
+                    .clone()
+            });
+            if let Some(point) = acquire {
+                match point.generate_blocker() {
+                    Ok((blocker, source)) => hold_commit(state, surface, blocker, source),
+                    Err(e) => {
+                        tracing::warn!(client = ?surface.client().map(|c| c.id()), error = %e, "no wait for an acquire point: the commit goes through unblocked")
+                    }
+                }
+            } else if let Some(dmabuf) = dmabuf {
+                match dmabuf.generate_blocker(smithay::reexports::calloop::Interest::READ) {
+                    Ok((blocker, source)) => hold_commit(state, surface, blocker, source),
+                    Err(e) => {
+                        tracing::warn!(client = ?surface.client().map(|c| c.id()), error = %e, "no wait for the dmabuf's fences: the commit goes through unblocked")
                     }
                 }
             }
@@ -214,6 +225,73 @@ impl ShmHandler for Cupertino {
     }
 }
 delegate_shm!(Cupertino);
+
+/// Keeps the commit of `surface` back until `blocker` clears, which `source` reports. A client may have
+/// [`acquire_waits::LIMIT`] such commits at once; past it the client is disconnected, since each is a file descriptor of
+/// the server. A commit that cannot be held back goes through at once, and is logged.
+fn hold_commit<B, S>(state: &mut Cupertino, surface: &WlSurface, blocker: B, source: S)
+where
+    B: Blocker + Send + 'static,
+    S: smithay::reexports::calloop::EventSource<Event = (), Ret = Result<(), std::io::Error>>
+        + 'static,
+{
+    let Some(client) = surface.client() else {
+        return;
+    };
+    let Some(data) = client.get_data::<ClientState>() else {
+        return;
+    };
+    let waits = data.acquire_waits.clone();
+    let id = match waits.admit() {
+        Admission::Granted(id) => id,
+        Admission::Closed => return,
+        Admission::OverLimit => {
+            tracing::warn!(client = ?client.id(), limit = acquire_waits::LIMIT, "a client has too many commits waiting for their buffers: disconnected");
+            state.display_handle.backend_handle().kill_client(
+                client.id(),
+                DisconnectReason::ProtocolError(ProtocolError {
+                    code: 0,
+                    object_id: surface.id().protocol_id(),
+                    object_interface: "wl_surface".into(),
+                    message: format!(
+                        "more than {} commits waiting for their buffers",
+                        acquire_waits::LIMIT
+                    ),
+                }),
+            );
+            return;
+        }
+    };
+    let on_fire = waits.clone();
+    let inserted = state.loop_handle.insert_source(source, move |_, _, data| {
+        on_fire.cleared(id);
+        let dh = data.display_handle.clone();
+        data.client_compositor_state(&client)
+            .blocker_cleared(data, &dh);
+        Ok(())
+    });
+    match inserted {
+        Ok(token) => {
+            waits.registered(id, token);
+            if waits.first_listing() {
+                state.acquire_registry.push(waits);
+            }
+            add_blocker(surface, blocker);
+        }
+        Err(e) => {
+            waits.cleared(id);
+            tracing::warn!(client = ?surface.client().map(|c| c.id()), error = %e, "a commit could not be held back for its buffer: it goes through unblocked");
+        }
+    }
+}
+
+impl DrmSyncobjHandler for Cupertino {
+    fn drm_syncobj_state(&mut self) -> Option<&mut DrmSyncobjState> {
+        self.syncobj_state.as_mut()
+    }
+}
+
+delegate_drm_syncobj!(Cupertino);
 
 impl DmabufHandler for Cupertino {
     fn dmabuf_state(&mut self) -> &mut DmabufState {

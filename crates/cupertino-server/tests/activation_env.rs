@@ -15,6 +15,7 @@ const VARIABLES: [(&str, &str); 3] = [
     ("XDG_SESSION_TYPE", "wayland"),
 ];
 const GRAPHICAL_UNIT: &str = "/org/freedesktop/systemd1/unit/graphical_2dsession_2etarget";
+const OUR_UNIT: &str = "/org/freedesktop/systemd1/unit/cupertino_2dsession_2etarget";
 
 /// What the real manager answers for a unit that is not loaded.
 #[derive(Debug, zbus::DBusError)]
@@ -27,13 +28,16 @@ enum SystemdError {
 
 #[derive(Default)]
 struct Calls {
+    unset: Vec<String>,
     environment: Vec<String>,
+    stopped: Vec<String>,
     started: Vec<(String, String)>,
 }
 
 struct FakeManager {
     calls: Arc<Mutex<Calls>>,
     graphical_session_loaded: bool,
+    ours_loaded: bool,
 }
 
 #[zbus::interface(name = "org.freedesktop.systemd1.Manager")]
@@ -42,11 +46,21 @@ impl FakeManager {
         if name == "graphical-session.target" && self.graphical_session_loaded {
             return Ok(OwnedObjectPath::try_from(GRAPHICAL_UNIT).unwrap());
         }
+        if name == "cupertino-session.target" && self.ours_loaded {
+            return Ok(OwnedObjectPath::try_from(OUR_UNIT).unwrap());
+        }
         Err(SystemdError::NoSuchUnit(format!("{name} is not loaded")))
     }
 
-    fn set_environment(&self, assignments: Vec<String>) {
-        self.calls.lock().unwrap().environment = assignments;
+    fn unset_and_set_environment(&self, names: Vec<String>, assignments: Vec<String>) {
+        let mut calls = self.calls.lock().unwrap();
+        calls.unset = names;
+        calls.environment = assignments;
+    }
+
+    fn stop_unit(&self, name: &str, _mode: &str) -> OwnedObjectPath {
+        self.calls.lock().unwrap().stopped.push(name.into());
+        OwnedObjectPath::try_from("/org/freedesktop/systemd1/job/2").unwrap()
     }
 
     fn start_unit(&self, name: &str, mode: &str) -> OwnedObjectPath {
@@ -72,11 +86,13 @@ impl FakeUnit {
 async fn session_with_manager(
     bus: &PrivateBus,
     graphical: Option<&'static str>,
+    ours: Option<&'static str>,
 ) -> (zbus::Connection, zbus::Connection, Arc<Mutex<Calls>>) {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let manager = FakeManager {
         calls: calls.clone(),
         graphical_session_loaded: graphical.is_some(),
+        ours_loaded: ours.is_some(),
     };
     let mut builder = connection::Builder::address(bus.address.as_str())
         .unwrap()
@@ -86,6 +102,9 @@ async fn session_with_manager(
         .unwrap();
     if let Some(state) = graphical {
         builder = builder.serve_at(GRAPHICAL_UNIT, FakeUnit(state)).unwrap();
+    }
+    if let Some(state) = ours {
+        builder = builder.serve_at(OUR_UNIT, FakeUnit(state)).unwrap();
     }
     let systemd = builder.build().await.unwrap();
     let session = connection::Builder::address(bus.address.as_str())
@@ -103,7 +122,7 @@ fn an_idle_user_manager_gets_the_variables_and_the_session_target() {
         return;
     };
     block_on(async {
-        let (session, _systemd, calls) = session_with_manager(&bus, Some("inactive")).await;
+        let (session, _systemd, calls) = session_with_manager(&bus, Some("inactive"), None).await;
         assert_eq!(
             publish(&session, &VARIABLES).await.unwrap(),
             Outcome::Applied
@@ -118,6 +137,31 @@ fn an_idle_user_manager_gets_the_variables_and_the_session_target() {
             ]
         );
         assert_eq!(calls.started, [(SESSION_TARGET.into(), "replace".into())]);
+        assert_eq!(
+            calls.unset,
+            ["DISPLAY"],
+            "a left-over X display must not reach the session's services"
+        );
+    });
+}
+
+#[test]
+fn a_leftover_session_target_of_ours_is_stopped_and_the_session_goes_on() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    block_on(async {
+        // the graphical session is active only because our own target, left by a session that was killed, binds it
+        let (session, _systemd, calls) =
+            session_with_manager(&bus, Some("active"), Some("active")).await;
+        assert_eq!(
+            publish(&session, &VARIABLES).await.unwrap(),
+            Outcome::Applied
+        );
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.stopped, [SESSION_TARGET]);
+        assert_eq!(calls.started, [(SESSION_TARGET.into(), "replace".into())]);
     });
 }
 
@@ -128,7 +172,7 @@ fn a_manager_without_the_graphical_session_loaded_counts_as_idle() {
         return;
     };
     block_on(async {
-        let (session, _systemd, calls) = session_with_manager(&bus, None).await;
+        let (session, _systemd, calls) = session_with_manager(&bus, None, None).await;
         assert_eq!(
             publish(&session, &VARIABLES).await.unwrap(),
             Outcome::Applied
@@ -144,7 +188,7 @@ fn another_active_graphical_session_is_left_alone() {
         return;
     };
     block_on(async {
-        let (session, _systemd, calls) = session_with_manager(&bus, Some("active")).await;
+        let (session, _systemd, calls) = session_with_manager(&bus, Some("active"), None).await;
         assert_eq!(
             publish(&session, &VARIABLES).await.unwrap(),
             Outcome::AnotherSession

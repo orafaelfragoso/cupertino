@@ -5,7 +5,9 @@
 //! session command stops it again when the compositor ends.
 //!
 //! A user has one systemd manager for all sessions: when a graphical session is already active (another desktop of the
-//! same user), nothing is changed, since its services would lose their display.
+//! same user), nothing is changed, since its services would lose their display. The exception is a leftover
+//! `cupertino-session.target` of an earlier session of ours that ended without stopping it: that one is stopped and the
+//! session goes on.
 
 use std::collections::HashMap;
 
@@ -19,6 +21,9 @@ const UNIT: &str = "org.freedesktop.systemd1.Unit";
 const GRAPHICAL_SESSION: &str = "graphical-session.target";
 /// The unit the packages install in the user unit directory.
 pub const SESSION_TARGET: &str = "cupertino-session.target";
+/// Variables an earlier desktop may have left that this session does not have: Cupertino runs no X server, and a program
+/// that finds `DISPLAY` set prefers it to Wayland.
+const UNSET: [&str; 1] = ["DISPLAY"];
 
 /// What was done with the shared bus.
 #[derive(Debug, PartialEq, Eq)]
@@ -46,17 +51,8 @@ where
         .await
 }
 
-async fn graphical_session_active(conn: &Connection) -> zbus::Result<bool> {
-    let unit = match call(
-        conn,
-        SYSTEMD,
-        MANAGER_PATH,
-        MANAGER,
-        "GetUnit",
-        &(GRAPHICAL_SESSION,),
-    )
-    .await
-    {
+async fn unit_active(conn: &Connection, name: &str) -> zbus::Result<bool> {
+    let unit = match call(conn, SYSTEMD, MANAGER_PATH, MANAGER, "GetUnit", &(name,)).await {
         Ok(reply) => reply.body().deserialize::<OwnedObjectPath>()?,
         // the unit is not loaded: nothing holds it
         Err(zbus::Error::MethodError(name, _, _)) if name.as_str().ends_with("NoSuchUnit") => {
@@ -96,7 +92,19 @@ pub async fn publish(conn: &Connection, variables: &[(&str, &str)]) -> zbus::Res
     if !owned.body().deserialize::<bool>()? {
         return Ok(Outcome::NoSystemd);
     }
-    if graphical_session_active(conn).await? {
+    if unit_active(conn, SESSION_TARGET).await? {
+        // a session of ours that ended without stopping its target (its session command was killed): the target is
+        // stopped so this session starts it again with its own variables
+        call(
+            conn,
+            SYSTEMD,
+            MANAGER_PATH,
+            MANAGER,
+            "StopUnit",
+            &(SESSION_TARGET, "replace"),
+        )
+        .await?;
+    } else if unit_active(conn, GRAPHICAL_SESSION).await? {
         return Ok(Outcome::AnotherSession);
     }
     let assignments: Vec<String> = variables.iter().map(|(k, v)| format!("{k}={v}")).collect();
@@ -105,11 +113,13 @@ pub async fn publish(conn: &Connection, variables: &[(&str, &str)]) -> zbus::Res
         SYSTEMD,
         MANAGER_PATH,
         MANAGER,
-        "SetEnvironment",
-        &(assignments,),
+        "UnsetAndSetEnvironment",
+        &(UNSET.as_slice(), assignments),
     )
     .await?;
-    let map: HashMap<&str, &str> = variables.iter().copied().collect();
+    // `UpdateActivationEnvironment` cannot remove a variable: an empty value is the nearest thing
+    let mut map: HashMap<&str, &str> = variables.iter().copied().collect();
+    map.extend(UNSET.iter().map(|name| (*name, "")));
     call(
         conn,
         "org.freedesktop.DBus",

@@ -176,6 +176,21 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn required_roots_cover_the_denied_kit_crates() {
+        for (name, _) in cupertino_layers::DENIED_CRATES {
+            if *name == "cupertino-kit"
+                || *name == "cupertino-wayland-client"
+                || name.starts_with("cupertino-ui-")
+            {
+                assert!(
+                    REQUIRED_ROOTS.contains(name),
+                    "{name} is missing from REQUIRED_ROOTS"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn evaluates_expressions_and_rejects_unknown_terms() {
         assert!(accepted("MIT OR GPL-3.0-only"));
         assert!(accepted("MIT/Apache-2.0"));

@@ -4,24 +4,28 @@
 
 use crate::look::{self, paint_focus_ring};
 use crate::{SecureField, TextChange, TextField};
-use cupertino_geometry::{Rect, Size};
+use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_core::{
-    AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Event, EventCx,
-    MeasureCx, PaintCx, Propagation, Role, SemanticsCx, TextSemantics, Widget,
+    AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Environment,
+    Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, TextSemantics, Widget,
 };
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
 use cupertino_ui_platform::{KeyEvent, Keysym, MouseButton, PointerEvent};
+use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_text::{
-    Affinity, ChangeCause, ContentHints, ContentPurpose, ImeBatch, ImeEvent, Keymap, Response,
-    SecureBuffer, Selection, Surrounding, TextBuffer, TextFieldKeys, TextInputSession,
-    TextPosition, SURROUNDING_MAX_BYTES,
+    Affinity, ChangeCause, ContentHints, ContentPurpose, ImeBatch, ImeEvent, Keymap,
+    ParagraphLayout, Response, SecureBuffer, Selection, Surrounding, TextBuffer, TextFieldKeys,
+    TextInputSession, TextPosition, SURROUNDING_MAX_BYTES,
 };
 use cupertino_ui_theme::{ColorRole, ThemeTokens};
+use std::cell::Cell;
 
 const RETURN: Keysym = Keysym(0xff0d);
 const KP_ENTER: Keysym = Keysym(0xff8d);
 const ESCAPE: Keysym = Keysym(0xff1b);
 const TAB: Keysym = Keysym(0xff09);
+/// Points between the baseline and the composition's one-pixel underline.
+const COMPOSITION_DROP: f64 = 1.5;
 
 fn session(purpose: ContentPurpose, protected: bool) -> TextInputSession {
     let caret = TextPosition {
@@ -52,6 +56,55 @@ fn position(byte: usize) -> TextPosition {
 fn chrome(size: Size, theme: &ThemeTokens) -> Rect {
     let height = theme.metrics.field_height;
     Rect::new(0.0, (size.height - height) / 2.0, size.width, height)
+}
+
+/// Where text, selection, composition and caret show; they are clipped to it.
+fn interior(size: Size, theme: &ThemeTokens) -> Rect {
+    let inset = theme.metrics.field_inset;
+    chrome(size, theme).inset(Insets {
+        top: 0.0,
+        left: inset,
+        bottom: 0.0,
+        right: inset,
+    })
+}
+
+/// How far the text scrolls left so the caret stays inside `width`: unchanged while it is visible, else just enough
+/// to show it, and never past the text's end.
+fn follow(scroll: f64, caret_x: f64, text_width: f64, width: f64) -> f64 {
+    let scroll = if caret_x < scroll {
+        caret_x
+    } else if caret_x > scroll + width {
+        caret_x - width
+    } else {
+        scroll
+    };
+    scroll.min((text_width - width).max(0.0)).max(0.0)
+}
+
+/// The text laid out where the field paints it: the layout and its top-left corner in node coordinates.
+fn placed(
+    env: &Environment,
+    text: &str,
+    size: Size,
+    scroll: f64,
+) -> Option<(ParagraphLayout, Point)> {
+    let layout = look::paragraph(env, text)?;
+    let chrome = chrome(size, &env.theme);
+    let origin = Point::new(
+        interior(size, &env.theme).min_x() - scroll,
+        look::top(&layout, chrome, env),
+    );
+    Some((layout, origin))
+}
+
+fn fill_rect(cx: &mut PaintCx<'_>, rect: Rect, color: Option<cupertino_ui_theme::Color>) {
+    if let Some(color) = color {
+        cx.push(PaintOp::Fill {
+            shape: Shape::Rect(rect),
+            paint: Paint::Solid(color),
+        });
+    }
 }
 
 fn layout() -> LayoutSpec {
@@ -149,6 +202,8 @@ pub struct FieldState {
     /// The revision of the last change the field reported.
     reported: u64,
     hovered: bool,
+    /// Set by paint, where the field's width is known, and read by hit testing.
+    scroll: Cell<f64>,
 }
 
 impl FieldState {
@@ -170,6 +225,30 @@ impl FieldState {
         }
     }
 
+    /// The caret in window coordinates, for the input method's candidate window.
+    fn caret_rect<M>(&self, cx: &EventCx<'_, M>) -> Option<Rect> {
+        let bounds = cx.bounds()?;
+        let (layout, origin) =
+            placed(cx.env(), self.buffer.text(), bounds.size, self.scroll.get())?;
+        let caret = layout.caret_rect(position(self.buffer.caret()));
+        Some(caret.translate(bounds.min_x() + origin.x, bounds.min_y() + origin.y))
+    }
+
+    /// Puts the caret at the text position under `point`, in window coordinates.
+    fn place_caret<M>(&mut self, point: Point, cx: &EventCx<'_, M>) {
+        let Some(bounds) = cx.bounds() else {
+            return;
+        };
+        let Some((layout, origin)) =
+            placed(cx.env(), self.buffer.text(), bounds.size, self.scroll.get())
+        else {
+            return;
+        };
+        let local = point - bounds.origin - origin;
+        let at = layout.index_at(local).byte;
+        self.buffer.select(at..at);
+    }
+
     /// Tells the input method where the field stands now.
     fn sync_input<M>(&mut self, cause: ChangeCause, cx: &mut EventCx<'_, M>) {
         self.session.select(Selection {
@@ -182,11 +261,13 @@ impl FieldState {
             self.anchor(),
             SURROUNDING_MAX_BYTES,
         );
+        let caret = self.caret_rect(cx);
+        let field = cx.bounds();
         cx.set_text_input(Some(self.session.state(
             Some(surrounding),
             cause,
-            None,
-            None,
+            caret,
+            field,
         )));
     }
 
@@ -288,6 +369,7 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
             session: session(self.purpose, false),
             reported: self.revision,
             hovered: false,
+            scroll: Cell::new(0.0),
         }
     }
 
@@ -321,6 +403,24 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
     }
 
     fn event(&self, state: &mut FieldState, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        if let Event::Pointer(
+            PointerEvent::Button {
+                position,
+                button: MouseButton::Left,
+                pressed: true,
+                ..
+            },
+            _,
+        ) = event
+        {
+            if self.enabled && cx.node() == cx.target() && state.buffer.composition().is_none() {
+                state.place_caret(*position, cx);
+                if cx.is_focused() {
+                    state.sync_input(ChangeCause::Other, cx);
+                }
+                cx.request_paint();
+            }
+        }
         if let Some(propagation) = pointer(event, self.enabled, &mut state.hovered, cx) {
             return propagation;
         }
@@ -375,6 +475,67 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
     fn paint(&self, state: &FieldState, cx: &mut PaintCx<'_>) {
         let look = control_state(self.enabled, state.hovered, cx);
         paint_chrome(cx, &look);
+        let env = cx.env().clone();
+        let size = cx.size();
+        let area = interior(size, &env.theme);
+        let text = state.buffer.text();
+        let Some(layout) = look::paragraph(&env, text) else {
+            return;
+        };
+        let caret = layout.caret_rect(position(state.buffer.caret()));
+        let scroll = follow(
+            state.scroll.get(),
+            caret.min_x(),
+            layout.size().width,
+            area.width(),
+        );
+        state.scroll.set(scroll);
+        let origin = Point::new(
+            area.min_x() - scroll,
+            look::top(&layout, chrome(size, &env.theme), &env),
+        );
+        let color = |role| look::color(&env.theme, role, &look);
+        cx.push(PaintOp::PushClip(Shape::Rect(area)));
+        let focused = look.focused && self.enabled;
+        let selection = state.buffer.selection();
+        if focused && !selection.is_empty() {
+            for rect in layout.selection_rects(selection) {
+                fill_rect(
+                    cx,
+                    rect.translate(origin.x, origin.y),
+                    color(ColorRole::SelectedTextBackground),
+                );
+            }
+        }
+        if text.is_empty() {
+            if let Some(placeholder) = look::label(&env, &self.placeholder) {
+                let at = Point::new(
+                    area.min_x(),
+                    look::top(&placeholder, chrome(size, &env.theme), &env),
+                );
+                look::glyphs(cx, &placeholder, at, color(ColorRole::PlaceholderText));
+            }
+        } else {
+            look::glyphs(cx, &layout, origin, color(ColorRole::Text));
+        }
+        if let Some(range) = state.buffer.composition() {
+            let start = layout.caret_rect(position(range.start)).min_x();
+            let end = layout.caret_rect(position(range.end)).min_x();
+            let y = look::baseline(chrome(size, &env.theme), &env) + COMPOSITION_DROP;
+            fill_rect(
+                cx,
+                Rect::new(origin.x + start, y, end - start, 1.0 / env.scale),
+                color(ColorRole::Text),
+            );
+        }
+        if focused && look.window_active && state.buffer.selection().is_empty() {
+            fill_rect(
+                cx,
+                caret.translate(origin.x, origin.y),
+                color(ColorRole::Text),
+            );
+        }
+        cx.push(PaintOp::PopClip);
     }
 
     fn semantics(&self, state: &FieldState, cx: &mut SemanticsCx<'_>) {

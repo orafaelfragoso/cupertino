@@ -1,13 +1,16 @@
 mod support;
 
+use cupertino_geometry::Rect;
 use cupertino_ui_controls::{SecureField, Stack, TextChange, TextField};
 use cupertino_ui_core::{
     AccessibleValue, Application, Command, Element, Role, TextSemantics, Window,
 };
 use cupertino_ui_layout::{Align, Axis};
 use cupertino_ui_platform::{ClipboardKind, Mods, WindowEvent};
-use cupertino_ui_text::{ContentPurpose, ImeBatch, ImeEvent, Preedit};
-use support::{window, Harness, ESCAPE, RETURN, TAB};
+use cupertino_ui_render::{Paint, PaintOp, Shape};
+use cupertino_ui_text::{ContentPurpose, ImeBatch, ImeEvent, Preedit, CARET_WIDTH};
+use cupertino_ui_theme::{Color, ColorRole, InteractionVariant};
+use support::{color, point, window, Harness, ESCAPE, RETURN, TAB};
 
 const LEFT: (u32, u32) = (105, 0xff51);
 const BACKSPACE: (u32, u32) = (14, 0xff08);
@@ -109,6 +112,41 @@ fn batch(preedit: Option<&str>, commit: Option<&str>, current: bool) -> WindowEv
         delete: (0, 0),
         current,
     }))
+}
+
+/// The plain rectangles a field fills inside its chrome: caret, selection and composition underline.
+fn rects(h: &Harness<App>, key: &'static str) -> Vec<(Rect, Color)> {
+    h.ops(key)
+        .into_iter()
+        .filter_map(|op| match op {
+            PaintOp::Fill {
+                shape: Shape::Rect(rect),
+                paint: Paint::Solid(c),
+            } => Some((rect, c)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn caret(h: &Harness<App>) -> Option<Rect> {
+    rects(h, "name")
+        .into_iter()
+        .find(|(r, c)| r.width() == CARET_WIDTH && *c == normal(ColorRole::Text))
+        .map(|(r, _)| r)
+}
+
+fn glyph_colors(h: &Harness<App>, key: &'static str) -> Vec<Color> {
+    h.ops(key)
+        .into_iter()
+        .filter_map(|op| match op {
+            PaintOp::Glyphs { color, .. } => Some(color),
+            _ => None,
+        })
+        .collect()
+}
+
+fn normal(role: ColorRole) -> Color {
+    color(role, InteractionVariant::Normal, false)
 }
 
 fn focused_name() -> Harness<App> {
@@ -277,4 +315,91 @@ fn disabled_fields_take_no_focus_or_text() {
     assert_eq!(h.model().text, "");
     assert!(h.accessible("name").states.disabled);
     assert!(h.accessible("password").states.disabled);
+}
+
+#[test]
+fn the_placeholder_shows_in_its_own_colour_until_there_is_text() {
+    let mut h = focused_name();
+    let placeholder = glyph_colors(&h, "name");
+    assert!(!placeholder.is_empty());
+    assert!(placeholder
+        .iter()
+        .all(|&c| c == normal(ColorRole::PlaceholderText)));
+    h.type_text("A");
+    let text = glyph_colors(&h, "name");
+    assert!(!text.is_empty());
+    assert!(text.iter().all(|&c| c == normal(ColorRole::Text)));
+}
+
+#[test]
+fn the_caret_follows_typing_and_gives_way_to_the_selection() {
+    let mut h = focused_name();
+    let start = caret(&h).expect("a focused empty field shows its caret");
+    h.type_text("Ada");
+    let end = caret(&h).unwrap();
+    assert!(end.min_x() > start.min_x());
+    assert_eq!(
+        h.rt.window_system()
+            .text_input(h.window)
+            .unwrap()
+            .unwrap()
+            .cursor_rect
+            .map(|r| r.min_x()),
+        Some(h.rect("name").min_x() + end.min_x()),
+        "the input method learns where the caret is"
+    );
+
+    h.press_key(A, 'a' as u32, true, false, Mods::PRIMARY);
+    assert_eq!(caret(&h), None);
+    let selected: Vec<_> = rects(&h, "name")
+        .into_iter()
+        .filter(|(_, c)| *c == normal(ColorRole::SelectedTextBackground))
+        .collect();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].0.min_x(), start.min_x());
+    assert_eq!(selected[0].0.max_x(), end.min_x());
+}
+
+#[test]
+fn a_click_puts_the_caret_at_the_nearest_position() {
+    let mut h = focused_name();
+    h.type_text("hello");
+    let field = h.rect("name");
+    h.click(point(field.min_x() + 6.5, field.center().y));
+    h.type_text("X");
+    assert_eq!(h.model().text, "Xhello");
+}
+
+#[test]
+fn long_text_scrolls_to_keep_the_caret_inside_the_field() {
+    let mut h = focused_name();
+    h.type_text(&"w".repeat(60));
+    let width = h.rect("name").width();
+    let end = caret(&h).unwrap();
+    assert!(end.max_x() <= width - 6.0 + CARET_WIDTH && end.min_x() > width / 2.0);
+    h.press_key(102, 0xff50, true, false, Mods::NONE);
+    assert_eq!(
+        caret(&h).unwrap().min_x(),
+        6.0,
+        "Home scrolls back to the start"
+    );
+}
+
+#[test]
+fn a_composition_is_underlined_one_pixel_below_the_baseline() {
+    let mut h = focused_name();
+    h.send(batch(Some("ka"), None, true));
+    let underline = |h: &Harness<App>| {
+        rects(h, "name")
+            .into_iter()
+            .find(|(r, _)| r.height() == 1.0)
+    };
+    let (rect, c) = underline(&h).expect("the composition is underlined");
+    assert_eq!(c, normal(ColorRole::Text));
+    assert!(rect.width() > 0.0);
+    let baseline = h.rect("name").height() / 2.0 + 13.0 * 0.36;
+    assert!((rect.min_y() - (baseline + 1.5)).abs() < 1e-9);
+
+    h.send(batch(None, Some("か"), true));
+    assert_eq!(underline(&h), None);
 }

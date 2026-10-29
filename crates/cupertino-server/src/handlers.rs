@@ -21,6 +21,8 @@ use smithay::reexports::wayland_server::protocol::wl_data_source::WlDataSource;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::backend::protocol::ProtocolError;
+use smithay::reexports::wayland_server::backend::DisconnectReason;
 use smithay::reexports::wayland_server::{Client, Resource};
 use smithay::utils::{Logical, Point, Rectangle, Serial};
 use smithay::wayland::buffer::BufferHandler;
@@ -55,6 +57,7 @@ use smithay::{
     delegate_xdg_decoration, delegate_xdg_dialog, delegate_xdg_shell,
 };
 
+use crate::acquire_waits::{self, Admission};
 use crate::clipboard::Snapshot;
 use crate::menu_bar::cut_text;
 use crate::policy;
@@ -111,14 +114,18 @@ impl CompositorHandler for Cupertino {
                     .clone()
             });
             if let Some(point) = acquire {
-                if let Ok((blocker, source)) = point.generate_blocker() {
-                    hold_commit(state, surface, blocker, source);
+                match point.generate_blocker() {
+                    Ok((blocker, source)) => hold_commit(state, surface, blocker, source),
+                    Err(e) => {
+                        tracing::warn!(client = ?surface.client().map(|c| c.id()), error = %e, "no wait for an acquire point: the commit goes through unblocked")
+                    }
                 }
             } else if let Some(dmabuf) = dmabuf {
-                if let Ok((blocker, source)) =
-                    dmabuf.generate_blocker(smithay::reexports::calloop::Interest::READ)
-                {
-                    hold_commit(state, surface, blocker, source);
+                match dmabuf.generate_blocker(smithay::reexports::calloop::Interest::READ) {
+                    Ok((blocker, source)) => hold_commit(state, surface, blocker, source),
+                    Err(e) => {
+                        tracing::warn!(client = ?surface.client().map(|c| c.id()), error = %e, "no wait for the dmabuf's fences: the commit goes through unblocked")
+                    }
                 }
             }
         });
@@ -219,7 +226,9 @@ impl ShmHandler for Cupertino {
 }
 delegate_shm!(Cupertino);
 
-/// Keeps the commit of `surface` back until `blocker` clears, which `source` reports.
+/// Keeps the commit of `surface` back until `blocker` clears, which `source` reports. A client may have
+/// [`acquire_waits::LIMIT`] such commits at once; past it the client is disconnected, since each is a file descriptor of
+/// the server. A commit that cannot be held back goes through at once, and is logged.
 fn hold_commit<B, S>(state: &mut Cupertino, surface: &WlSurface, blocker: B, source: S)
 where
     B: Blocker + Send + 'static,
@@ -229,14 +238,50 @@ where
     let Some(client) = surface.client() else {
         return;
     };
+    let Some(data) = client.get_data::<ClientState>() else {
+        return;
+    };
+    let waits = data.acquire_waits.clone();
+    let id = match waits.admit() {
+        Admission::Granted(id) => id,
+        Admission::Closed => return,
+        Admission::OverLimit => {
+            tracing::warn!(client = ?client.id(), limit = acquire_waits::LIMIT, "a client has too many commits waiting for their buffers: disconnected");
+            state.display_handle.backend_handle().kill_client(
+                client.id(),
+                DisconnectReason::ProtocolError(ProtocolError {
+                    code: 0,
+                    object_id: surface.id().protocol_id(),
+                    object_interface: "wl_surface".into(),
+                    message: format!(
+                        "more than {} commits waiting for their buffers",
+                        acquire_waits::LIMIT
+                    ),
+                }),
+            );
+            return;
+        }
+    };
+    let on_fire = waits.clone();
     let inserted = state.loop_handle.insert_source(source, move |_, _, data| {
+        on_fire.cleared(id);
         let dh = data.display_handle.clone();
         data.client_compositor_state(&client)
             .blocker_cleared(data, &dh);
         Ok(())
     });
-    if inserted.is_ok() {
-        add_blocker(surface, blocker);
+    match inserted {
+        Ok(token) => {
+            waits.registered(id, token);
+            if waits.first_listing() {
+                state.acquire_registry.push(waits);
+            }
+            add_blocker(surface, blocker);
+        }
+        Err(e) => {
+            waits.cleared(id);
+            tracing::warn!(client = ?surface.client().map(|c| c.id()), error = %e, "a commit could not be held back for its buffer: it goes through unblocked");
+        }
     }
 }
 

@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use cupertino_render_api::{Failure, RenderFailure as _, Renderer};
+use cupertino_render_api::Renderer;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::Color32F;
 use smithay::backend::winit::{self, WinitEvent, WinitEventLoop, WinitGraphicsBackend};
@@ -183,10 +183,6 @@ fn render_inner(state: &mut Cupertino, w: &mut WinitBackend) {
             }
             state.process_screenshots(w.graphics.renderer(), idx);
             state.post_repaint(idx, time, Some(REFRESH), presented);
-        }
-        Err(e) if e.failure() == Failure::ContextLost => {
-            tracing::error!(error = %e, "rendering context lost");
-            state.running = false;
         }
         Err(e) => {
             state.process_screenshots(w.graphics.renderer(), idx);

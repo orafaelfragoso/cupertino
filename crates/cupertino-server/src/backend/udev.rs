@@ -115,7 +115,7 @@ pub struct UdevBackend {
     paused: bool,
     /// The display sleeps (`power.rs`): every CRTC is off and nothing is rendered until it wakes.
     asleep: bool,
-    /// A render reported the rendering context lost; it stays lost until the renderer is created again.
+    /// A render reported the rendering context lost, which ends the session; nothing is drawn with it again.
     renderer_lost: bool,
 }
 
@@ -760,13 +760,8 @@ fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle
                     state.frame_drawn(idx);
                     completion.status() == RenderStatus::Rendered
                 }
-                Err(e) if e.failure() == Failure::ContextLost => {
-                    tracing::error!(error = %e, "the rendering context is lost: this device draws nothing more");
-                    u.renderer_lost = true;
-                    scene = false;
-                    false
-                }
                 Err(e) => {
+                    u.renderer_lost |= e.failure() == Failure::ContextLost;
                     failed = Some(e);
                     scene = false;
                     false

@@ -20,7 +20,7 @@ pub use frame::{decode, encode, encode_secret, DecodeError, Decoder, FrameError,
 pub use message::{
     is_login_name, Account, Event, Outcome, Picture, PowerAction, PowerMenu, PowerRefusal,
     ProtocolRefusal, Request, UserRow, MAX_EVENT_FRAME, MAX_LOGIN_NAME_BYTES, MAX_REQUEST_FRAME,
-    VERSION,
+    SOCKET_PATH, VERSION,
 };
 pub use secret::{Secret, MAX_SECRET_BYTES};
 pub use state::State;

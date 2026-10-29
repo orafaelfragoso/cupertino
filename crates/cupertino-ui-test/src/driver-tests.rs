@@ -1,13 +1,12 @@
 use super::*;
 use crate::{ProtectedInput, RecordedInput, SecureInputs};
-use cupertino_geometry::{Insets, Size};
+use cupertino_geometry::Size;
 use cupertino_ui_core::{
     AccessibleValue, Change, Command, CommandRegistry, Element, Event, EventCx, MeasureCx, PaintCx,
     Phase, Propagation, SemanticsCx, Widget, Window, WindowKey,
 };
 use cupertino_ui_layout::{
-    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutDirection, LayoutSpec, Measured,
-    Overflow, SizeSpec,
+    Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
 };
 use cupertino_ui_platform::{
     ClipboardData, DecorationMode, KeyEvent, Keysym, Mods, WindowEvent, WindowSpec, WindowStates,
@@ -74,28 +73,16 @@ impl Widget<char> for Field {
     type State = ();
     fn state(&self) {}
     fn layout(&self) -> LayoutSpec {
-        LayoutSpec {
-            kind: if !self.container {
-                ContainerKind::Leaf
-            } else {
-                ContainerKind::Stack {
-                    axis: Axis::Vertical,
-                    spacing: 0.0,
-                    align: Align::Start,
-                    justify: Justify::Start,
-                }
-            },
-            insets: Insets::default(),
-            width: SizeSpec::Fit,
-            height: SizeSpec::Fit,
-            flex: Flex {
-                grow: 0.0,
-                shrink: 0.0,
-                basis: None,
-            },
-            align_self: None,
-            overflow: Overflow::Visible,
-        }
+        LayoutSpec::new(if !self.container {
+            ContainerKind::Leaf
+        } else {
+            ContainerKind::Stack {
+                axis: Axis::Vertical,
+                spacing: 0.0,
+                align: Align::Start,
+                justify: Justify::Start,
+            }
+        })
     }
     fn take_children(&mut self) -> Vec<Element<char>> {
         std::mem::take(&mut self.children)

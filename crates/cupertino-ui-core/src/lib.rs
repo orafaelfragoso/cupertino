@@ -37,7 +37,7 @@ use cupertino_ui_platform::{
     WindowRequest, WindowSpec,
 };
 use cupertino_ui_render::{DisplayList, RenderError};
-use cupertino_ui_text::ImeEvent;
+use cupertino_ui_text::{ImeEvent, TextSystem};
 use cupertino_ui_theme::ThemeTokens;
 use std::borrow::Cow;
 use std::fmt;
@@ -184,12 +184,24 @@ pub enum Command<M> {
 }
 
 /// What a subtree is laid out and painted with.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Environment {
     pub theme: Arc<ThemeTokens>,
+    /// Shapes and measures every label and field; shared by all the app's windows.
+    pub text: Arc<TextSystem>,
     pub direction: LayoutDirection,
     /// Physical pixels per logical point; layout never reads it.
     pub scale: f64,
+}
+
+/// The text system compares by identity: two environments with the same fonts shape alike only if they share one.
+impl PartialEq for Environment {
+    fn eq(&self, other: &Self) -> bool {
+        self.theme == other.theme
+            && Arc::ptr_eq(&self.text, &other.text)
+            && self.direction == other.direction
+            && self.scale == other.scale
+    }
 }
 
 /// The runtime's time source; tests inject one.

@@ -5,6 +5,7 @@ use crate::{
 };
 use cupertino_geometry::Size;
 use std::collections::HashMap;
+use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -27,6 +28,14 @@ struct State {
 pub struct TextSystem {
     theme_family: Arc<str>,
     state: Mutex<State>,
+}
+
+impl fmt::Debug for TextSystem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TextSystem")
+            .field("theme_family", &self.theme_family)
+            .finish_non_exhaustive()
+    }
 }
 
 impl TextSystem {

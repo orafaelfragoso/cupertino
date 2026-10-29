@@ -18,7 +18,9 @@ use cupertino_ui_platform::{
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, PixelFormat, RenderError, RenderFrameId, RenderRequest, UiRenderer,
 };
-use cupertino_ui_text::{ChangeCause, ContentHints, ContentPurpose, Surrounding, TextInputState};
+use cupertino_ui_text::{
+    ChangeCause, ContentHints, ContentPurpose, FontIndex, Surrounding, TextInputState, TextSystem,
+};
 use cupertino_ui_theme::{
     Appearance, ColorTokens, ControlMetrics, ControlSize, FocusRing, Motion, ThemePreferences,
     ThemeTokens, TypeRole, TypeScale,
@@ -74,6 +76,7 @@ pub(crate) fn env() -> Environment {
                 caret_phase_ms: 500,
             },
         }),
+        text: Arc::new(TextSystem::new(FontIndex::new(), "Inter")),
         direction: LayoutDirection::Ltr,
         scale: 1.0,
     }
@@ -472,6 +475,7 @@ pub(crate) fn options_with(
     let broken = Rc::clone(broken);
     RuntimeOptions {
         theme: env().theme,
+        text: env().text,
         direction: LayoutDirection::Ltr,
         node_limit: 1000,
         renderers: Box::new(move || {

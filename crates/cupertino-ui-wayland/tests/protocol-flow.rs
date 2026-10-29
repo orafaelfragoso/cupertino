@@ -72,6 +72,10 @@ enum Control {
     PointerPress,
     /// Another client's text becomes the selection: offer it to the client's data device.
     OfferSelection(String),
+    /// Keep every buffer the next commits replace.
+    HoldBuffers,
+    /// Release the held buffers and release replaced ones again.
+    ReleaseBuffers,
 }
 
 /// A request the server saw that the commit record does not cover.
@@ -118,6 +122,8 @@ struct Mock {
     pointer: Option<WlPointer>,
     pending_frames: Vec<WlCallback>,
     shown: Option<WlBuffer>,
+    /// Replaced buffers kept unreleased, while holding.
+    held: Option<Vec<WlBuffer>>,
     toplevel: Option<ToplevelState>,
     data_device: Option<WlDataDevice>,
     /// The read end of a paste from the client's selection, and what arrived so far.
@@ -229,7 +235,10 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
                         .unwrap();
                     // like a compositor that keeps the current buffer until the next one replaces it
                     if let Some(previous) = state.shown.replace(buffer) {
-                        previous.release();
+                        match &mut state.held {
+                            Some(held) => held.push(previous),
+                            None => previous.release(),
+                        }
                     }
                     state.pending_frames.append(&mut s.frames);
                 }
@@ -486,6 +495,7 @@ fn spawn_server(stream: UnixStream) -> (Sender<Control>, Receiver<Committed>, Re
             pointer: None,
             pending_frames: Vec::new(),
             shown: None,
+            held: None,
             toplevel: None,
             data_device: None,
             pasting: None,
@@ -497,6 +507,13 @@ fn spawn_server(stream: UnixStream) -> (Sender<Control>, Receiver<Committed>, Re
         loop {
             match control_rx.try_recv() {
                 Ok(Control::FrameDone) => mock.pending_frames.drain(..).for_each(|cb| cb.done(0)),
+                Ok(Control::HoldBuffers) => mock.held = Some(Vec::new()),
+                Ok(Control::ReleaseBuffers) => mock
+                    .held
+                    .take()
+                    .into_iter()
+                    .flatten()
+                    .for_each(|b| b.release()),
                 Ok(Control::PointerPress) => {
                     let (pointer, t) = (
                         mock.pointer.as_ref().unwrap(),
@@ -953,4 +970,421 @@ fn buffers_taking_turns_hold_every_damaged_frame_exactly() {
         2,
         "two buffers take turns"
     );
+}
+
+mod window_system {
+    use super::*;
+    use cupertino_geometry::{Point, Size};
+    use cupertino_modifiers::Profile;
+    use cupertino_ui_platform::{
+        ClipboardKind, DecorationMode, MouseButton, PlatformEvent, PointerEvent, PresentOutcome,
+        WindowEvent, WindowId, WindowSpec, WindowSystem,
+    };
+    use cupertino_ui_render::{CpuFrame, PixelFormat, PixelRect, RenderFrameId};
+    use cupertino_ui_wayland::WaylandWindowSystem;
+
+    struct Kit {
+        ws: WaylandWindowSystem,
+        window: WindowId,
+        stash: VecDeque<PlatformEvent>,
+    }
+
+    impl Kit {
+        fn wait_for<T>(&mut self, mut pick: impl FnMut(&PlatformEvent) -> Option<T>) -> T {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                while let Some(event) = self.stash.pop_front() {
+                    if let Some(found) = pick(&event) {
+                        return found;
+                    }
+                }
+                let mut events = Vec::new();
+                self.ws
+                    .dispatch(Some(Duration::from_millis(50)), &mut events)
+                    .unwrap();
+                self.stash.extend(events);
+            }
+            panic!("timed out waiting for an event");
+        }
+
+        fn window_event<T>(&mut self, mut pick: impl FnMut(&WindowEvent) -> Option<T>) -> T {
+            let window = self.window;
+            self.wait_for(|e| match e {
+                PlatformEvent::Window { window: w, event } if *w == window => pick(event),
+                _ => None,
+            })
+        }
+
+        /// Dispatch once without waiting, so the requests go out and what arrived is read.
+        fn pump(&mut self) {
+            let mut events = Vec::new();
+            self.ws
+                .dispatch(Some(Duration::from_millis(20)), &mut events)
+                .unwrap();
+            self.stash.extend(events);
+        }
+
+        /// Whether the stashed events hold a frame for the window; empties the stash.
+        fn took_frame(&mut self) -> bool {
+            std::mem::take(&mut self.stash).iter().any(|e| {
+                matches!(
+                    e,
+                    PlatformEvent::Window {
+                        event: WindowEvent::Frame(_),
+                        ..
+                    }
+                )
+            })
+        }
+    }
+
+    /// A window mapped at the output's scale 2, so its frames are 200 × 100.
+    fn mapped() -> (Kit, Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
+        let (mut kit, control, committed, seen) = created();
+        let configure = kit.window_event(|e| match e {
+            WindowEvent::Configure(c) => Some(*c),
+            _ => None,
+        });
+        assert_eq!(
+            (configure.size, configure.server_decorations),
+            (None, false)
+        );
+        assert_eq!(
+            kit.window_event(|e| match e {
+                WindowEvent::Scale(s) => Some(*s),
+                _ => None,
+            }),
+            2.0
+        );
+        (kit, control, committed, seen)
+    }
+
+    /// A window created but not yet configured.
+    fn created() -> (Kit, Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let (control, committed, seen) = spawn_server(server_stream);
+        let mut ws = WaylandWindowSystem::new(
+            Connection::from_stream(client_stream).unwrap(),
+            Profile::cupertino(),
+        );
+        let window = ws
+            .create_window(&WindowSpec {
+                title: "Test".into(),
+                app_id: "org.example.Test".into(),
+                size: Size::new(100.0, 50.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Client,
+            })
+            .unwrap();
+        let kit = Kit {
+            ws,
+            window,
+            stash: VecDeque::new(),
+        };
+        (kit, control, committed, seen)
+    }
+
+    fn frame(id: u64, first: [u8; 4], damage: &[PixelRect]) -> CpuFrame {
+        frame_sized(id, (200, 100), first, damage)
+    }
+
+    fn frame_sized(
+        id: u64,
+        (width, height): (u32, u32),
+        first: [u8; 4],
+        damage: &[PixelRect],
+    ) -> CpuFrame {
+        let mut pixels = vec![0; (width * height * 4) as usize];
+        pixels[..4].copy_from_slice(&first);
+        CpuFrame {
+            id: RenderFrameId(id),
+            width,
+            height,
+            stride: width * 4,
+            format: PixelFormat::Rgba8Premultiplied,
+            pixels,
+            damage: damage.to_vec(),
+        }
+    }
+
+    fn rect(x: u32, y: u32, width: u32, height: u32) -> PixelRect {
+        PixelRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn frames_are_paced_by_the_compositor_and_damage_a_frame_could_not_show_is_carried() {
+        let (mut kit, control, committed, _seen) = mapped();
+        let w = kit.window;
+
+        // nothing paces a window that never presented: the frame is due at once
+        kit.ws.request_frame(w);
+        kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+        let first = kit
+            .ws
+            .present(w, &frame(1, [10, 20, 30, 40], &[]), None)
+            .unwrap();
+        assert_eq!(first, PresentOutcome::Presented);
+        kit.pump();
+        let shown = committed.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            (shown.buffer_size, shown.first_pixel, shown.damage),
+            (
+                (200, 100),
+                [30, 20, 10, 40],
+                vec![[0, 0, i32::MAX, i32::MAX]]
+            )
+        );
+
+        // the next frame waits for the frame callback
+        kit.ws.request_frame(w);
+        kit.pump();
+        assert!(!kit.stash.iter().any(|e| matches!(
+            e,
+            PlatformEvent::Window {
+                event: WindowEvent::Frame(_),
+                ..
+            }
+        )));
+        control.send(Control::FrameDone).unwrap();
+        kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+
+        // a second buffer while the server holds the first; showing it releases the first
+        kit.ws
+            .present(w, &frame(2, [1, 1, 1, 1], &[rect(0, 0, 1, 1)]), None)
+            .unwrap();
+        kit.pump();
+        committed.recv_timeout(Duration::from_secs(5)).unwrap();
+        kit.pump();
+
+        // a frame callback nobody asked for wakes nothing
+        control.send(Control::FrameDone).unwrap();
+        kit.pump();
+        kit.pump();
+        assert!(!kit.stash.iter().any(|e| matches!(
+            e,
+            PlatformEvent::Window {
+                event: WindowEvent::Frame(_),
+                ..
+            }
+        )));
+
+        // a frame drawn at a stale size is not shown, and its damage is carried
+        let stale = frame_sized(3, (100, 50), [0; 4], &[rect(40, 30, 5, 5)]);
+        assert_eq!(
+            kit.ws.present(w, &stale, None).unwrap(),
+            PresentOutcome::NotReady
+        );
+        assert!(committed.recv_timeout(Duration::from_millis(100)).is_err());
+        // the first buffer again: the compositor hears of the carried damage and this frame's; the buffer also gets
+        // what it missed (frame 2's pixel), which the compositor already showed
+        // the first buffer again: this frame's damage, the carried one, and what it missed (frame 2's pixel)
+        kit.ws
+            .present(w, &frame(4, [1, 1, 1, 1], &[rect(10, 10, 2, 2)]), None)
+            .unwrap();
+        kit.pump();
+        let reused = committed.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(reused.buffer, shown.buffer);
+        assert_eq!(reused.damage, vec![[40, 30, 5, 5], [10, 10, 2, 2]]);
+        assert_eq!(reused.first_pixel, [1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn a_frame_presented_before_the_first_configure_is_due_again_with_the_configure() {
+        let (mut kit, _control, committed, _seen) = created();
+        let w = kit.window;
+        assert_eq!(
+            kit.ws.present(w, &frame(1, [0; 4], &[]), None).unwrap(),
+            PresentOutcome::NotReady
+        );
+        kit.ws.request_frame(w);
+        let configured_first = kit.window_event(|e| match e {
+            WindowEvent::Configure(_) => Some(true),
+            WindowEvent::Frame(_) => Some(false),
+            _ => None,
+        });
+        assert!(configured_first);
+        let (mut framed, mut scaled) = (false, false);
+        while !(framed && scaled) {
+            let is_frame = kit.window_event(|e| match e {
+                WindowEvent::Frame(_) => Some(true),
+                WindowEvent::Scale(_) => Some(false),
+                _ => None,
+            });
+            framed |= is_frame;
+            scaled |= !is_frame;
+        }
+        assert_eq!(
+            kit.ws.present(w, &frame(2, [0; 4], &[]), None).unwrap(),
+            PresentOutcome::Presented
+        );
+        kit.pump();
+        committed.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn a_frame_with_no_free_buffer_is_due_again_once_the_compositor_releases_one() {
+        let (mut kit, control, committed, _seen) = mapped();
+        let w = kit.window;
+        control.send(Control::HoldBuffers).unwrap();
+        let mut presented = 0;
+        while kit
+            .ws
+            .present(w, &frame(presented, [0; 4], &[]), None)
+            .unwrap()
+            == PresentOutcome::Presented
+        {
+            presented += 1;
+            assert!(presented < 8, "the transport never ran out of buffers");
+        }
+        // the frame callbacks are done, so only the held buffers keep the next frame back
+        kit.pump();
+        for _ in 0..presented {
+            committed.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        control.send(Control::FrameDone).unwrap();
+        kit.pump();
+        kit.pump();
+        assert_eq!(
+            kit.ws.present(w, &frame(8, [0; 4], &[]), None).unwrap(),
+            PresentOutcome::NotReady
+        );
+        kit.stash.clear();
+
+        kit.ws.request_frame(w);
+        kit.pump();
+        kit.pump();
+        assert!(!kit.took_frame());
+
+        control.send(Control::ReleaseBuffers).unwrap();
+        kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+        assert_eq!(
+            kit.ws.present(w, &frame(9, [0; 4], &[]), None).unwrap(),
+            PresentOutcome::Presented
+        );
+    }
+
+    #[test]
+    fn a_click_arrives_in_logical_points_with_its_serial_and_a_time_on_the_systems_clock() {
+        let (mut kit, control, _committed, _seen) = mapped();
+        control.send(Control::PointerPress).unwrap();
+        let (button, time) = kit.window_event(|e| match e {
+            WindowEvent::Pointer(p @ PointerEvent::Button { .. }, time) => Some((*p, *time)),
+            _ => None,
+        });
+        assert_eq!(
+            button,
+            PointerEvent::Button {
+                position: Point::new(10.25, 20.75),
+                button: MouseButton::Left,
+                pressed: true,
+                serial: 6,
+            }
+        );
+        assert!(time.0 > 0);
+    }
+
+    #[test]
+    fn the_clipboard_reports_its_offer_reads_it_and_copies_with_the_latest_serial() {
+        let (mut kit, control, _committed, seen) = mapped();
+        control
+            .send(Control::OfferSelection("hello".into()))
+            .unwrap();
+        let mimes = kit.wait_for(|e| match e {
+            PlatformEvent::ClipboardOffered { kind, mimes } => Some((*kind, mimes.clone())),
+            _ => None,
+        });
+        assert_eq!(
+            mimes,
+            (
+                ClipboardKind::Clipboard,
+                Some(vec!["text/plain;charset=utf-8".into()])
+            )
+        );
+        let token = kit
+            .ws
+            .read_clipboard(ClipboardKind::Clipboard, "text/plain;charset=utf-8");
+        let data = kit.wait_for(|e| match e {
+            PlatformEvent::Clipboard { token: t, data } if *t == token => Some(data.clone()),
+            _ => None,
+        });
+        assert_eq!(data.map(|d| d.bytes), Some(b"hello".to_vec()));
+        // the primary selection is not offered here, whatever the clipboard holds
+        let primary = kit
+            .ws
+            .read_clipboard(ClipboardKind::Primary, "text/plain;charset=utf-8");
+        let nothing = kit.wait_for(|e| match e {
+            PlatformEvent::Clipboard { token: t, data } if *t == primary => Some(data.clone()),
+            _ => None,
+        });
+        assert_eq!(nothing, None);
+
+        control.send(Control::PointerPress).unwrap();
+        kit.window_event(|e| {
+            matches!(e, WindowEvent::Pointer(PointerEvent::Button { .. }, _)).then_some(())
+        });
+        kit.ws.set_clipboard(
+            ClipboardKind::Clipboard,
+            cupertino_ui_platform::ClipboardData {
+                mime: "text/plain".into(),
+                bytes: b"copied".to_vec(),
+            },
+        );
+        kit.pump();
+        assert_eq!(
+            seen.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Seen::Selection {
+                serial: 6,
+                types: vec!["text/plain".into()]
+            }
+        );
+    }
+
+    #[test]
+    fn a_waker_from_another_thread_ends_a_dispatch_with_wake() {
+        let (mut kit, _control, _committed, _seen) = mapped();
+        let waker = kit.ws.waker();
+        std::thread::spawn(move || waker.wake());
+        kit.wait_for(|e| matches!(e, PlatformEvent::Wake).then_some(()));
+    }
+
+    #[test]
+    fn requests_on_an_unknown_window_or_the_wrong_kind_are_refused() {
+        let (mut kit, _control, _committed, _seen) = mapped();
+        let gone = WindowId(99);
+        assert_eq!(
+            kit.ws
+                .request(gone, cupertino_ui_platform::WindowRequest::Minimize),
+            Err(cupertino_ui_platform::PlatformError::UnknownWindow(gone))
+        );
+        let w = kit.window;
+        assert_eq!(
+            kit.ws.request(
+                w,
+                cupertino_ui_platform::WindowRequest::Reposition(
+                    cupertino_ui_platform::PopupSpec {
+                        anchor_rect: Rect::new(0.0, 0.0, 1.0, 1.0),
+                        anchor: Default::default(),
+                        gravity: Default::default(),
+                        offset: Point::ZERO,
+                        size: Size::new(10.0, 10.0),
+                        constraint: Default::default(),
+                        reactive: false,
+                        grab: false,
+                    }
+                )
+            ),
+            Err(cupertino_ui_platform::PlatformError::Unsupported)
+        );
+        kit.ws.destroy(w);
+        assert_eq!(
+            kit.ws.present(w, &frame(1, [0; 4], &[]), None),
+            Err(cupertino_ui_platform::PlatformError::UnknownWindow(w))
+        );
+    }
 }

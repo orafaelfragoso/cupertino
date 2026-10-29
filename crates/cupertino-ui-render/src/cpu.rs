@@ -2,6 +2,7 @@ use crate::effects::{self, div255};
 use crate::geometry::{self, Bounds};
 use crate::glyph_cache::GlyphCache;
 use crate::image_cache::ImageCache;
+use crate::stats::RenderStats;
 use crate::validate;
 use crate::{
     CpuFrame, DamageRegion, Paint, PaintNode, PaintNodeId, PaintOp, PixelFormat, PixelRect,
@@ -40,6 +41,7 @@ pub struct CpuRenderer<R> {
     /// The image holds the last frame's complete contents.
     valid: bool,
     next_id: u64,
+    stats: RenderStats,
 }
 
 impl<R: GlyphRasterizer> CpuRenderer<R> {
@@ -61,7 +63,13 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
             scale: 1.0,
             valid: false,
             next_id: 1,
+            stats: RenderStats::default(),
         }
+    }
+
+    /// What the last [`render`](UiRenderer::render) call did, counted; empty when the request was refused before painting.
+    pub fn stats(&self) -> &RenderStats {
+        &self.stats
     }
 
     fn prepare(&mut self, request: &RenderRequest<'_>) -> Result<bool, RenderError> {
@@ -101,12 +109,48 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
         }
         Ok(full)
     }
+
+    fn paint(&mut self, request: &RenderRequest<'_>, dirty: &[Bounds]) -> Result<(), RenderError> {
+        let (width, height, scale) = (request.width, request.height, request.scale);
+        let whole = Bounds::of_size(width, height);
+        let mut base = PixmapMut::from_bytes(&mut self.frame.pixels, width, height)
+            .ok_or(RenderError::InvalidSize)?;
+        let tree = Tree::new(&request.list.nodes, scale);
+        let mut painter = Painter {
+            stats: &mut self.stats,
+            config: &self.config,
+            scale,
+            resources: request.resources,
+            glyphs: &mut self.glyphs,
+            images: &mut self.images,
+            rasterizer: &mut self.rasterizer,
+        };
+        for d in dirty {
+            clear(&mut base, d);
+            painter
+                .stats
+                .clear
+                .add(u64::from(d.width()) * u64::from(d.height()) * 4);
+            let mut target = Target {
+                pixmap: &mut base,
+                origin: (0, 0),
+                rect: whole,
+                limit: *d,
+                clips: Vec::new(),
+            };
+            for &root in &tree.roots {
+                painter.subtree(&mut target, &tree, root, &mut Vec::new())?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
     type Frame = CpuFrame;
 
     fn render(&mut self, request: &RenderRequest<'_>) -> Result<RenderFrameId, RenderError> {
+        self.stats = RenderStats::default();
         let full = self.prepare(request)?;
         let (width, height, scale) = (request.width, request.height, request.scale);
         let whole = Bounds::of_size(width, height);
@@ -119,34 +163,23 @@ impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
             ),
             _ => vec![whole],
         };
-        {
-            let mut base = PixmapMut::from_bytes(&mut self.frame.pixels, width, height)
-                .ok_or(RenderError::InvalidSize)?;
-            let tree = Tree::new(&request.list.nodes, scale);
-            let mut painter = Painter {
-                config: &self.config,
-                scale,
-                resources: request.resources,
-                glyphs: &mut self.glyphs,
-                images: &mut self.images,
-                rasterizer: &mut self.rasterizer,
-            };
-            for d in &dirty {
-                clear(&mut base, d);
-                let mut target = Target {
-                    pixmap: &mut base,
-                    origin: (0, 0),
-                    rect: whole,
-                    limit: *d,
-                    clips: Vec::new(),
-                };
-                for &root in &tree.roots {
-                    painter.subtree(&mut target, &tree, root, &mut Vec::new())?;
-                }
-            }
-        }
+        self.stats = RenderStats {
+            dirty_rects: dirty.len() as u32,
+            dirty_pixels: dirty
+                .iter()
+                .map(|d| u64::from(d.width()) * u64::from(d.height()))
+                .sum(),
+            frame_bytes: self.frame.pixels.len() as u64,
+            ..RenderStats::default()
+        };
+        let painted = self.paint(request, &dirty);
+        self.stats.glyph_rasterize = self.glyphs.take_filled();
+        self.stats.image_decode = self.images.take_filled();
+        painted?;
         self.glyphs.trim();
         self.images.trim();
+        self.stats.retained_glyphs = self.glyphs.retained();
+        self.stats.retained_images = self.images.retained();
         self.frame.damage = dirty
             .iter()
             .map(|d| PixelRect {
@@ -196,6 +229,13 @@ impl Target<'_, '_> {
     }
 }
 
+/// Which composite a layer image is laid over the target by, for counting.
+#[derive(Clone, Copy)]
+enum Site {
+    Node,
+    Group,
+}
+
 /// How far a node's own operations reach: their extent and what its layers' effects add around it.
 #[derive(Clone, Copy)]
 struct Reach {
@@ -237,6 +277,7 @@ impl<'n> Tree<'n> {
 }
 
 struct Painter<'a, R> {
+    stats: &'a mut RenderStats,
     config: &'a CpuConfig,
     scale: f64,
     resources: &'a crate::PaintResources,
@@ -305,6 +346,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         if area.is_empty() {
             return Ok(());
         }
+        self.stats.groups_painted += 1;
         let mut layer = self.scratch(&area)?;
         {
             let mut pm = layer.as_mut();
@@ -322,6 +364,9 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             effects::apply(&mut layer, effect, self.scale);
         }
         if let Some(mask) = self.chain_mask(chain, &area)? {
+            self.stats
+                .mask_apply
+                .add(u64::from(area.width()) * u64::from(area.height()) * 4);
             for (px, m) in layer
                 .data_mut()
                 .as_chunks_mut::<4>()
@@ -334,7 +379,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
                 }
             }
         }
-        self.lay_over(t, layer, &area, group.opacity)
+        self.lay_over(t, layer, &area, group.opacity, Site::Group)
     }
 
     /// Paints one node's own operations into a scratch image of just the pixels they can reach, under the
@@ -364,6 +409,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         if area.is_empty() {
             return Ok(());
         }
+        self.stats.nodes_painted += 1;
         let mut scratch = self.scratch(&area)?;
         {
             let mut pm = scratch.as_mut();
@@ -377,18 +423,24 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             let mut pos = 0;
             self.run(&mut inner, node, Reach { extent, halo }, &mut pos)?;
         }
-        self.lay_over(t, scratch, &area, 1.0)
+        self.lay_over(t, scratch, &area, 1.0, Site::Node)
     }
 
-    fn scratch(&self, area: &Bounds) -> Result<Pixmap, RenderError> {
-        if u64::from(area.width()) * u64::from(area.height()) > self.config.max_pixels {
+    fn scratch(&mut self, area: &Bounds) -> Result<Pixmap, RenderError> {
+        let pixels = u64::from(area.width()) * u64::from(area.height());
+        if pixels > self.config.max_pixels {
             return Err(RenderError::ResourceLimit);
         }
+        self.stats.scratch_images.add(pixels * 4);
         Pixmap::new(area.width(), area.height()).ok_or(RenderError::ResourceLimit)
     }
 
     /// The coverage of every clip on the chain, as a mask of just `area`; `None` when nothing is clipped.
-    fn chain_mask(&self, chain: &[&PaintNode], area: &Bounds) -> Result<Option<Mask>, RenderError> {
+    fn chain_mask(
+        &mut self,
+        chain: &[&PaintNode],
+        area: &Bounds,
+    ) -> Result<Option<Mask>, RenderError> {
         let mut mask: Option<Mask> = None;
         for owner in chain {
             let Some(clip) = &owner.clip else { continue };
@@ -397,6 +449,9 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             let rule = geometry::fill_rule(clip);
             match (mask.as_mut(), path) {
                 (None, path) => {
+                    self.stats
+                        .masks
+                        .add(u64::from(area.width()) * u64::from(area.height()));
                     let mut m =
                         Mask::new(area.width(), area.height()).ok_or(RenderError::ResourceLimit)?;
                     if let Some(path) = path {
@@ -413,11 +468,12 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
 
     /// Composites `image`, which covers `area`, onto the part of the target whose result is needed.
     fn lay_over(
-        &self,
+        &mut self,
         t: &mut Target<'_, '_>,
         image: Pixmap,
         area: &Bounds,
         opacity: f32,
+        site: Site,
     ) -> Result<(), RenderError> {
         let visible = area.intersect(&t.limit);
         if visible.is_empty() {
@@ -433,8 +489,16 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
                 visible.height(),
             )
             .ok_or(RenderError::ResourceLimit)?;
+            self.stats
+                .crop
+                .add(u64::from(visible.width()) * u64::from(visible.height()) * 4);
             image.clone_rect(crop).ok_or(RenderError::ResourceLimit)?
         };
+        let moved = u64::from(visible.width()) * u64::from(visible.height()) * 4;
+        match site {
+            Site::Node => self.stats.node_composite.add(moved),
+            Site::Group => self.stats.group_composite.add(moved),
+        }
         t.pixmap.draw_pixmap(
             visible.x0 - t.origin.0,
             visible.y0 - t.origin.1,
@@ -459,12 +523,18 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         while let Some(op) = node.ops.get(*pos) {
             *pos += 1;
             match op {
-                PaintOp::Fill { shape, paint } => self.fill(t, node, shape, paint),
+                PaintOp::Fill { shape, paint } => {
+                    self.stats.fills += 1;
+                    self.fill(t, node, shape, paint)
+                }
                 PaintOp::Stroke {
                     shape,
                     width,
                     paint,
-                } => self.stroke(t, node, shape, *width, paint),
+                } => {
+                    self.stats.strokes += 1;
+                    self.stroke(t, node, shape, *width, paint)
+                }
                 PaintOp::Glyphs { origin, run, color } => {
                     self.glyph_run(t, node, origin, run, *color)?
                 }
@@ -473,7 +543,10 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
                     src,
                     dst,
                     sampling,
-                } => self.image(t, node, image.id, src, dst, *sampling)?,
+                } => {
+                    self.stats.images += 1;
+                    self.image(t, node, image.id, src, dst, *sampling)?
+                }
                 PaintOp::PushClip(shape) => self.push_clip(t, node, shape)?,
                 PaintOp::PopClip => {
                     t.clips.pop();
@@ -492,12 +565,13 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
     }
 
     fn push_clip(
-        &self,
+        &mut self,
         t: &mut Target<'_, '_>,
         node: &PaintNode,
         shape: &Shape,
     ) -> Result<(), RenderError> {
         let (w, h) = (t.pixmap.width(), t.pixmap.height());
+        self.stats.masks.add(u64::from(w) * u64::from(h));
         let mut mask = match t.mask() {
             Some(m) => m.clone(),
             None => full_mask(w, h)?,
@@ -618,6 +692,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             return Err(RenderError::ResourceLimit);
         }
         let size_q = (size_px * 64.0).round() as u32;
+        self.stats.glyphs += run.glyphs.len() as u32;
         for g in &run.glyphs {
             let (lx, ly) = (origin.x + f64::from(g.x), origin.y + f64::from(g.y));
             let px = (a * lx + c * ly + e) * self.scale;
@@ -668,6 +743,8 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         if u64::from(area.width()) * u64::from(area.height()) > self.config.max_pixels {
             return Err(RenderError::ResourceLimit);
         }
+        let moved = u64::from(area.width()) * u64::from(area.height()) * 4;
+        self.stats.layers.add(moved);
         let mut layer =
             Pixmap::new(area.width(), area.height()).ok_or(RenderError::ResourceLimit)?;
         {
@@ -688,6 +765,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             opacity,
             ..PixmapPaint::default()
         };
+        self.stats.layer_composite.add(moved);
         t.pixmap.draw_pixmap(
             area.x0 - t.origin.0,
             area.y0 - t.origin.1,

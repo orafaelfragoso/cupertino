@@ -7,11 +7,25 @@ use cupertino_geometry::Rect;
 use std::ops::Range;
 use std::sync::Arc;
 
+mod buffer;
+mod font;
 mod input;
+mod keymap;
+mod keys;
+mod paragraph;
 mod secure;
+mod shape;
+mod system;
 
+pub use buffer::{TextBuffer, CARET_BLINK_OFF, CARET_BLINK_ON, MULTI_CLICK_INTERVAL};
+pub use font::{FontIndex, FontMetrics};
 pub use input::SURROUNDING_MAX_BYTES;
+pub use keymap::{KeyInput, Keymap};
+pub use keys::{Response, TextFieldKeys};
+pub use paragraph::{Line, LineRun, Paragraph, ParagraphLayout, CARET_WIDTH};
 pub use secure::SecureBuffer;
+pub use shape::{ShapeRequest, ShapedGlyph, ShapedRun};
+pub use system::TextSystem;
 
 /// One face of a font file: its file and collection index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -112,18 +126,6 @@ pub struct ParagraphStyle {
     pub wrap: Wrap,
 }
 
-/// Shaped text ready to lay out at any width.
-#[derive(Clone, Debug)]
-pub struct Paragraph {
-    _private: (),
-}
-
-/// A paragraph broken into lines at one width: line boxes, caret and selection geometry, hit testing.
-#[derive(Clone, Debug)]
-pub struct ParagraphLayout {
-    _private: (),
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PositionedGlyph {
     pub id: GlyphId,
@@ -163,12 +165,6 @@ pub struct TextPosition {
 pub struct Selection {
     pub anchor: TextPosition,
     pub focus: TextPosition,
-}
-
-/// The editable text of a field, with its selection and undo history.
-#[derive(Clone, Debug)]
-pub struct TextBuffer {
-    _private: (),
 }
 
 /// What a field holds, as the input method is told.
@@ -317,6 +313,11 @@ pub trait GlyphRasterizer {
 pub enum TextError {
     NoFont,
     UnknownFont(FontId),
+    /// Font data that is not a font, or has no face at the requested index; names the family.
+    InvalidFont(Box<str>),
+    ShapeFailed,
+    /// A size or spacing that is not a finite number, or a size that is not positive.
+    InvalidValue,
     NotACharBoundary(usize),
     /// Text with control characters where a password field takes none.
     InvalidText,

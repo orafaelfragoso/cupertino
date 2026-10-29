@@ -9,9 +9,14 @@ description = "CupertinoKit runtime: the application model, elements and the ret
 layer = "render"
 
 [dependencies]
+async-task = "4.7"
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-ui-layout = { path = "../cupertino-ui-layout" }
 cupertino-ui-platform = { path = "../cupertino-ui-platform" }
 cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-ui-theme = { path = "../cupertino-ui-theme" }
+rustix = { version = "1", features = ["time"] }
+
+[dev-dependencies]
+proptest = "1.12"

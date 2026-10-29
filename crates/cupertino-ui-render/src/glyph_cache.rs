@@ -1,4 +1,5 @@
 use crate::RenderError;
+use crate::Tally;
 use cupertino_ui_text::{GlyphKey, GlyphRasterizer, RasterGlyph};
 use std::collections::HashMap;
 
@@ -13,6 +14,8 @@ pub(crate) struct GlyphCache {
     bytes: usize,
     budget: usize,
     tick: u64,
+    /// Entries made since the last [`take_filled`](Self::take_filled).
+    filled: Tally,
 }
 
 impl GlyphCache {
@@ -22,6 +25,7 @@ impl GlyphCache {
             bytes: 0,
             budget,
             tick: 0,
+            filled: Tally::default(),
         }
     }
 
@@ -36,7 +40,9 @@ impl GlyphCache {
             return Ok(entry.glyph.clone());
         }
         let glyph = rasterizer.rasterize(&key).map_err(RenderError::Glyph)?;
-        self.bytes += glyph.as_ref().map_or(0, |g| g.pixels.len());
+        let made = glyph.as_ref().map_or(0, |g| g.pixels.len());
+        self.filled.add(made as u64);
+        self.bytes += made;
         self.entries.insert(
             key,
             Entry {
@@ -45,6 +51,17 @@ impl GlyphCache {
             },
         );
         Ok(glyph)
+    }
+
+    pub(crate) fn take_filled(&mut self) -> Tally {
+        std::mem::take(&mut self.filled)
+    }
+
+    pub(crate) fn retained(&self) -> Tally {
+        Tally {
+            count: self.entries.len() as u64,
+            bytes: self.bytes as u64,
+        }
     }
 
     /// Drops the least recently used glyphs until the cache fits its budget. Called between frames, so no glyph of the

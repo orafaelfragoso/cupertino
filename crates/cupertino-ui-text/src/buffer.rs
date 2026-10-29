@@ -1,12 +1,9 @@
-//! The field's text, caret, selection, undo, clicks, blink and scroll.
+//! The editable text of a single-line field: text, caret, selection, undo, clicks, blink and scroll.
 
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
-use cupertino_keyboard::TextAction;
 use unicode_segmentation::UnicodeSegmentation;
-
-use crate::keymap::{Command, KeyInput, Keymap};
 
 /// How long the caret shows and hides while it blinks; it shows for a whole period after every edit, move or click.
 /// Both are approximate: design values, not measured.
@@ -14,23 +11,6 @@ pub const CARET_BLINK_ON: Duration = Duration::from_millis(500);
 pub const CARET_BLINK_OFF: Duration = Duration::from_millis(500);
 /// Presses closer together than this at the same place count as a double or triple click.
 pub const MULTI_CLICK_INTERVAL: Duration = Duration::from_millis(500);
-
-/// What a key or pointer input did; the window redraws for every value but [`Response::Ignored`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Response {
-    /// Not a field key (Return, Escape, Tab, a window shortcut): the window handles it.
-    Ignored,
-    /// The caret or the selection moved; the text is the same.
-    Moved,
-    /// The text changed.
-    Edited,
-    /// Put this text on the clipboard; the text is the same.
-    Copy(String),
-    /// Put this text on the clipboard; it was cut, so the text changed.
-    Cut(String),
-    /// Read the clipboard and pass its text to [`TextField::paste`].
-    Paste,
-}
 
 /// Text and caret positions undo returns to.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,8 +44,13 @@ struct Press {
     count: u8,
 }
 
+/// The editable text of a single-line field, with its selection and undo history.
+///
+/// Its `Debug` output shows the text, the undo snapshots and the kill buffer, so protected input never enters a
+/// `TextBuffer`: a password field uses [`SecureBuffer`](crate::SecureBuffer) only. It strips line breaks; a
+/// multi-line editor needs a different model or a flag.
 #[derive(Clone, Debug, Default)]
-pub struct TextField {
+pub struct TextBuffer {
     text: String,
     caret: usize,
     anchor: usize,
@@ -84,17 +69,17 @@ pub struct TextField {
     max_len: Option<usize>,
 }
 
-impl TextField {
+impl TextBuffer {
     pub fn new() -> Self {
-        TextField::default()
+        TextBuffer::default()
     }
 
     /// A field whose text holds at most `max_len` bytes: typing, a paste or a composition past it is cut at a grapheme
     /// boundary.
     pub fn with_max_len(max_len: usize) -> Self {
-        TextField {
+        TextBuffer {
             max_len: Some(max_len),
-            ..TextField::default()
+            ..TextBuffer::default()
         }
     }
 
@@ -125,7 +110,7 @@ impl TextField {
         self.composition.clone()
     }
 
-    /// How far the text is scrolled left, in points ([`TextField::follow_caret`]).
+    /// How far the text is scrolled left, in points ([`TextBuffer::follow_caret`]).
     pub fn scroll(&self) -> f64 {
         self.scroll
     }
@@ -171,7 +156,7 @@ impl TextField {
             .collect()
     }
 
-    /// The caret position nearest to `x`, given the x of each of [`TextField::boundaries`] in the same order.
+    /// The caret position nearest to `x`, given the x of each of [`TextBuffer::boundaries`] in the same order.
     pub fn index_at(&self, offsets: &[f64], x: f64) -> usize {
         let boundaries = self.boundaries();
         offsets
@@ -187,7 +172,7 @@ impl TextField {
         self.scroll = self.scroll_for(caret_x, text_width, width);
     }
 
-    /// The scroll [`TextField::follow_caret`] would set, without setting it (for drawing before the field is updated).
+    /// The scroll [`TextBuffer::follow_caret`] would set, without setting it (for drawing before the field is updated).
     pub fn scroll_for(&self, caret_x: f64, text_width: f64, width: f64) -> f64 {
         let scroll = if caret_x < self.scroll {
             caret_x
@@ -282,49 +267,7 @@ impl TextField {
         self.step_history(false)
     }
 
-    /// A key press at `now`.
-    pub fn key(&mut self, keymap: &mut Keymap, key: KeyInput, now: Instant) -> Response {
-        let response = match keymap.command(key) {
-            Command::Ignored => return Response::Ignored,
-            Command::Pending => Response::Moved,
-            Command::SelectAll => {
-                self.select_all();
-                Response::Moved
-            }
-            Command::Copy if self.selection().is_empty() => Response::Moved,
-            Command::Copy => Response::Copy(self.selected_text().to_string()),
-            Command::Cut if self.selection().is_empty() => Response::Moved,
-            Command::Cut => {
-                let cut = self.selected_text().to_string();
-                self.replace_selection("", None);
-                Response::Cut(cut)
-            }
-            Command::Paste => Response::Paste,
-            Command::Undo => edited(self.undo()),
-            Command::Redo => edited(self.redo()),
-            Command::Insert(c) => {
-                self.insert(c.encode_utf8(&mut [0; 4]));
-                Response::Edited
-            }
-            Command::Actions(actions) => {
-                let before = self.text.clone();
-                for action in actions {
-                    if !self.apply(action) {
-                        return Response::Ignored;
-                    }
-                }
-                if self.text == before {
-                    Response::Moved
-                } else {
-                    Response::Edited
-                }
-            }
-        };
-        self.activity = Some(now);
-        response
-    }
-
-    /// The primary button went down at caret position `index` (from [`TextField::index_at`]); `extend` (Shift)
+    /// The primary button went down at caret position `index` (from [`TextBuffer::index_at`]); `extend` (Shift)
     /// extends the selection to it. A second and third press within [`MULTI_CLICK_INTERVAL`] at the same place
     /// select the word and the whole text.
     pub fn press(&mut self, index: usize, extend: bool, now: Instant) {
@@ -392,115 +335,85 @@ impl TextField {
         self.drag.is_some()
     }
 
-    /// Carry out a standard editing action; `false` for an action the window handles (Return, Tab, Escape).
-    fn apply(&mut self, action: TextAction) -> bool {
-        use TextAction as A;
-        let end = self.text.len();
-        match action {
-            A::InsertNewline
-            | A::InsertNewlineIgnoringFieldEditor
-            | A::InsertLineBreak
-            | A::InsertTab
-            | A::InsertTabIgnoringFieldEditor
-            | A::InsertBacktab
-            | A::CancelOperation
-            | A::Complete
-            | A::SelectNextKeyView
-            | A::SelectPreviousKeyView => return false,
-            A::MoveLeft | A::MoveBackward => self.move_char(false, false),
-            A::MoveRight | A::MoveForward => self.move_char(true, false),
-            A::MoveLeftAndModifySelection | A::MoveBackwardAndModifySelection => {
-                self.move_char(false, true)
-            }
-            A::MoveRightAndModifySelection | A::MoveForwardAndModifySelection => {
-                self.move_char(true, true)
-            }
-            A::MoveWordLeft | A::MoveWordBackward => {
-                let to = self.word_left(self.selection().start.min(self.caret));
-                self.move_to(to, false)
-            }
-            A::MoveWordRight | A::MoveWordForward => {
-                let to = self.word_right(self.selection().end.max(self.caret));
-                self.move_to(to, false)
-            }
-            A::MoveWordLeftAndModifySelection | A::MoveWordBackwardAndModifySelection => {
-                self.move_to(self.word_left(self.caret), true)
-            }
-            A::MoveWordRightAndModifySelection | A::MoveWordForwardAndModifySelection => {
-                self.move_to(self.word_right(self.caret), true)
-            }
-            A::MoveToLeftEndOfLine
-            | A::MoveToBeginningOfParagraph
-            | A::MoveToBeginningOfDocument
-            | A::MoveUp
-            | A::PageUp
-            | A::ScrollToBeginningOfDocument => self.move_to(0, false),
-            A::MoveToRightEndOfLine
-            | A::MoveToEndOfParagraph
-            | A::MoveToEndOfDocument
-            | A::MoveDown
-            | A::PageDown
-            | A::ScrollToEndOfDocument => self.move_to(end, false),
-            A::MoveToLeftEndOfLineAndModifySelection
-            | A::MoveToBeginningOfParagraphAndModifySelection
-            | A::MoveToBeginningOfDocumentAndModifySelection
-            | A::MoveParagraphBackwardAndModifySelection
-            | A::MoveUpAndModifySelection
-            | A::PageUpAndModifySelection => self.move_to(0, true),
-            A::MoveToRightEndOfLineAndModifySelection
-            | A::MoveToEndOfParagraphAndModifySelection
-            | A::MoveToEndOfDocumentAndModifySelection
-            | A::MoveParagraphForwardAndModifySelection
-            | A::MoveDownAndModifySelection
-            | A::PageDownAndModifySelection => self.move_to(end, true),
-            A::DeleteBackward | A::DeleteBackwardByDecomposingPreviousCharacter => {
-                self.delete_toward(|f| f.prev_boundary(f.caret))
-            }
-            A::DeleteForward => self.delete_toward(|f| f.next_boundary(f.caret)),
-            A::DeleteWordBackward => self.delete_toward(|f| f.word_left(f.caret)),
-            A::DeleteWordForward => self.delete_toward(|f| f.word_right(f.caret)),
-            A::DeleteToBeginningOfLine => self.delete_toward(|_| 0),
-            A::Delete => {
-                if !self.selection().is_empty() {
-                    self.replace_selection("", None);
-                }
-            }
-            A::DeleteToEndOfParagraph => {
-                let range = if self.selection().is_empty() {
-                    self.caret..end
-                } else {
-                    self.selection()
-                };
-                if !range.is_empty() {
-                    self.kill = self.text[range.clone()].to_string();
-                    self.anchor = range.start;
-                    self.caret = range.end;
-                    self.replace_selection("", None);
-                }
-            }
-            A::Yank => {
-                let kill = self.kill.clone();
-                self.replace_selection(&kill, None);
-            }
-            A::Transpose => self.transpose(),
-            A::InsertDoubleQuoteIgnoringSubstitution => self.insert("\""),
-            A::InsertSingleQuoteIgnoringSubstitution => self.insert("'"),
-            A::Noop
-            | A::CenterSelectionInVisibleArea
-            | A::CycleToNextInputKeyboardLayout
-            | A::CycleToNextInputScript
-            | A::InsertRightToLeftSlash
-            | A::MakeBaseWritingDirectionLeftToRight
-            | A::MakeBaseWritingDirectionNatural
-            | A::MakeBaseWritingDirectionRightToLeft
-            | A::MakeTextWritingDirectionLeftToRight
-            | A::MakeTextWritingDirectionNatural
-            | A::MakeTextWritingDirectionRightToLeft
-            | A::ScrollPageDown
-            | A::ScrollPageUp
-            | A::TogglePlatformInputSystem => {}
+    /// Remember that the caret moved at `now`: the blink counts from it.
+    pub fn touch(&mut self, now: Instant) {
+        self.activity = Some(now);
+    }
+
+    /// One word left or right. Without `extend` a selection collapses to the word boundary beyond its start or end.
+    pub fn move_word(&mut self, forward: bool, extend: bool) {
+        let to = match (forward, extend) {
+            (false, false) => self.word_left(self.selection().start.min(self.caret)),
+            (true, false) => self.word_right(self.selection().end.max(self.caret)),
+            (false, true) => self.word_left(self.caret),
+            (true, true) => self.word_right(self.caret),
+        };
+        self.move_to(to, extend);
+    }
+
+    pub fn move_to_start(&mut self, extend: bool) {
+        self.move_to(0, extend);
+    }
+
+    pub fn move_to_end(&mut self, extend: bool) {
+        self.move_to(self.text.len(), extend);
+    }
+
+    /// Delete the selection, or the grapheme before the caret.
+    pub fn delete_backward(&mut self) {
+        self.delete_toward(|f| f.prev_boundary(f.caret));
+    }
+
+    /// Delete the selection, or the grapheme after the caret.
+    pub fn delete_forward(&mut self) {
+        self.delete_toward(|f| f.next_boundary(f.caret));
+    }
+
+    pub fn delete_word_backward(&mut self) {
+        self.delete_toward(|f| f.word_left(f.caret));
+    }
+
+    pub fn delete_word_forward(&mut self) {
+        self.delete_toward(|f| f.word_right(f.caret));
+    }
+
+    pub fn delete_to_line_start(&mut self) {
+        self.delete_toward(|_| 0);
+    }
+
+    /// Delete the selection; with only a caret nothing happens.
+    pub fn delete_selection(&mut self) {
+        if !self.selection().is_empty() {
+            self.replace_selection("", None);
         }
-        true
+    }
+
+    /// Delete the selection and return it, for the clipboard.
+    pub fn cut(&mut self) -> String {
+        let cut = self.selected_text().to_string();
+        self.replace_selection("", None);
+        cut
+    }
+
+    /// Delete the selection, or from the caret to the end, and keep it in the kill buffer.
+    pub fn kill_to_end(&mut self) {
+        let range = if self.selection().is_empty() {
+            self.caret..self.text.len()
+        } else {
+            self.selection()
+        };
+        if !range.is_empty() {
+            self.kill = self.text[range.clone()].to_string();
+            self.anchor = range.start;
+            self.caret = range.end;
+            self.replace_selection("", None);
+        }
+    }
+
+    /// Insert the kill buffer in place of the selection.
+    pub fn yank(&mut self) {
+        let kill = self.kill.clone();
+        self.replace_selection(&kill, None);
     }
 
     fn move_to(&mut self, to: usize, extend: bool) {
@@ -513,7 +426,7 @@ impl TextField {
     }
 
     /// One grapheme left or right; without `extend` a selection collapses to its start or end instead.
-    fn move_char(&mut self, forward: bool, extend: bool) {
+    pub fn move_char(&mut self, forward: bool, extend: bool) {
         let selection = self.selection();
         let to = match (extend || selection.is_empty(), forward) {
             (true, false) => self.prev_boundary(self.caret),
@@ -535,7 +448,7 @@ impl TextField {
     }
 
     /// Swap the graphemes around the caret (at the end: the last two) and move past them.
-    fn transpose(&mut self) {
+    pub fn transpose(&mut self) {
         if !self.selection().is_empty() {
             return;
         }
@@ -677,14 +590,6 @@ impl TextField {
     }
 }
 
-fn edited(changed: bool) -> Response {
-    if changed {
-        Response::Edited
-    } else {
-        Response::Moved
-    }
-}
-
 /// `s` as typing could have produced it: line breaks and tabs become spaces; other control characters and the bidi
 /// embedding, override and isolate controls are dropped.
 fn single_line(s: &str) -> String {
@@ -697,4 +602,87 @@ fn single_line(s: &str) -> String {
             c => Some(c),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn buffer(text: &str) -> TextBuffer {
+        let mut b = TextBuffer::new();
+        b.set_text(text);
+        b
+    }
+
+    #[test]
+    fn words_move_by_word_and_a_plain_move_collapses_the_selection_beyond_its_side() {
+        let mut b = buffer("one two three");
+        b.move_to_start(false);
+        b.move_word(true, false);
+        assert_eq!(b.caret(), 3);
+        b.move_word(true, true);
+        assert_eq!(b.selection(), 3..7);
+        b.move_word(false, false);
+        assert_eq!(b.caret(), 0, "left of the selection's start");
+        b.move_to_end(false);
+        b.move_word(false, true);
+        assert_eq!(b.selection(), 8..13);
+    }
+
+    #[test]
+    fn deleting_removes_a_grapheme_a_word_or_the_line_start() {
+        let mut b = buffer("ab cd\u{301} ef");
+        b.delete_backward();
+        b.delete_word_backward();
+        assert_eq!(b.text(), "ab cd\u{301} ");
+        b.move_to_start(false);
+        b.delete_forward();
+        b.delete_word_forward();
+        assert_eq!(b.text(), " cd\u{301} ");
+        b.move_to_end(false);
+        b.delete_to_line_start();
+        assert_eq!(b.text(), "");
+    }
+
+    #[test]
+    fn delete_selection_does_nothing_for_a_caret_and_cut_returns_the_selection() {
+        let mut b = buffer("hello");
+        b.delete_selection();
+        assert_eq!(b.text(), "hello");
+        b.select(1..3);
+        assert_eq!(b.cut(), "el");
+        assert_eq!(b.text(), "hlo");
+        assert!(b.undo());
+        assert_eq!(b.text(), "hello");
+    }
+
+    #[test]
+    fn kill_to_end_fills_the_kill_buffer_and_yank_inserts_it() {
+        let mut b = buffer("abc def");
+        b.select(3..3);
+        b.kill_to_end();
+        assert_eq!(b.text(), "abc");
+        b.move_to_start(false);
+        b.yank();
+        assert_eq!(b.text(), " defabc");
+    }
+
+    #[test]
+    fn transpose_swaps_the_graphemes_around_the_caret() {
+        let mut b = buffer("ae\u{301}");
+        b.transpose();
+        assert_eq!(b.text(), "e\u{301}a");
+        assert_eq!(b.caret(), b.text().len());
+    }
+
+    #[test]
+    fn the_blink_counts_from_the_last_touch() {
+        let mut b = buffer("x");
+        let t0 = Instant::now();
+        b.touch(t0);
+        assert!(b.caret_visible(t0 + CARET_BLINK_ON / 2));
+        assert!(!b.caret_visible(t0 + CARET_BLINK_ON + CARET_BLINK_OFF / 2));
+        b.touch(t0 + CARET_BLINK_ON + CARET_BLINK_OFF / 2);
+        assert!(b.caret_visible(t0 + CARET_BLINK_ON + CARET_BLINK_OFF / 2));
+    }
 }

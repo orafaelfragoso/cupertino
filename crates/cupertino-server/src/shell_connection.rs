@@ -70,6 +70,7 @@ pub fn bind_holder(state: &ClientState, pid: u32) -> std::io::Result<()> {
 pub fn hand_over(command: &mut Command, stream: &UnixStream) {
     let fd = stream.as_raw_fd();
     command.env("WAYLAND_SOCKET", fd.to_string());
+    crate::file_limit::restore_in_child(command);
     // Safety: the closure runs in the child between fork and exec and calls only fcntl, which is async-signal-safe.
     unsafe {
         command.pre_exec(move || {

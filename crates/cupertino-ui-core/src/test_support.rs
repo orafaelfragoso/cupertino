@@ -5,10 +5,9 @@ use crate::{
     Change, Element, Environment, Event, EventCx, MeasureCx, PaintCx, Propagation, Role,
     SemanticsCx, Widget,
 };
-use cupertino_geometry::{Insets, Point, Size};
+use cupertino_geometry::{Point, Size};
 use cupertino_ui_layout::{
-    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutDirection, LayoutSpec, Measured,
-    Overflow, SizeSpec,
+    Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
 };
 use cupertino_ui_platform::PointerEvent;
 use cupertino_ui_platform::{
@@ -81,19 +80,7 @@ pub(crate) fn env() -> Environment {
 }
 
 pub(crate) fn spec(kind: ContainerKind) -> LayoutSpec {
-    LayoutSpec {
-        kind,
-        insets: Insets::default(),
-        width: SizeSpec::Fit,
-        height: SizeSpec::Fit,
-        flex: Flex {
-            grow: 0.0,
-            shrink: 0.0,
-            basis: None,
-        },
-        align_self: None,
-        overflow: Overflow::Visible,
-    }
+    LayoutSpec::new(kind)
 }
 
 /// A leaf that records the events it saw and reports its label as a change.

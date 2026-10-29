@@ -454,12 +454,17 @@ fn layout_work_grows_linearly_with_depth_on_mixed_nested_stacks() {
         let (t, root) = nested(depth);
         let r = t.run_tight(root, Size::new(900.0, 700.0), LayoutDirection::Ltr);
         assert_eq!(r.nodes.len(), 2 * depth + 1);
-        calls.push((depth, t.leaf_measures.get()));
+        calls.push((depth, t.leaf_measures.get(), r.stats.solves));
     }
-    for (depth, measures) in &calls {
+    for (depth, measures, solves) in &calls {
+        let nodes = 2 * depth + 1;
         assert!(
-            *measures <= 4 * (2 * depth + 1),
+            *measures <= 4 * nodes,
             "{depth} levels took {measures} leaf measurements"
+        );
+        assert!(
+            *solves <= 5 * nodes,
+            "{depth} levels took {solves} sizing cache misses"
         );
     }
 }

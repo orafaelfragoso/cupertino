@@ -1,8 +1,8 @@
 //! Minimal dependency-free benchmark for whole-tree layout: time per call, sizing cache misses and leaf measurements.
 use cupertino_geometry::{Insets, Size};
 use cupertino_ui_layout::{
-    layout, Align, Axis, Constraints, ContainerKind, Flex, Generation, Justify, LayoutDirection,
-    LayoutOptions, LayoutSpec, LayoutTree, Measured, SizeSpec,
+    layout, layout_cached, Align, Axis, Constraints, ContainerKind, Flex, Generation, Justify,
+    LayoutCache, LayoutDirection, LayoutOptions, LayoutSpec, LayoutTree, Measured, SizeSpec,
 };
 use std::hint::black_box;
 use std::time::Instant;
@@ -75,17 +75,26 @@ fn build(target: usize) -> Tree {
     Tree { nodes }
 }
 
-fn bench(name: &str, tree: &Tree, iterations: usize) {
+fn bench(name: &str, tree: &Tree, iterations: usize, warm: bool) {
     let root = tree.nodes.len() - 1;
     let options = LayoutOptions {
         direction: LayoutDirection::Ltr,
         node_limit: usize::MAX,
     };
     let available = Constraints::loose(Size::new(1280.0, f64::INFINITY)).unwrap();
+    let mut cache = LayoutCache::new();
+    if warm {
+        layout_cached(tree, root, available, &options, &mut cache).unwrap();
+    }
     let start = Instant::now();
     let mut stats = None;
     for _ in 0..iterations {
-        let result = layout(tree, root, available, &options).unwrap();
+        let result = if warm {
+            layout_cached(tree, root, available, &options, &mut cache)
+        } else {
+            layout(tree, root, available, &options)
+        }
+        .unwrap();
         stats = Some(black_box(result).stats);
     }
     let per_call = start.elapsed().as_secs_f64() / iterations as f64;
@@ -100,6 +109,14 @@ fn bench(name: &str, tree: &Tree, iterations: usize) {
 }
 
 fn main() {
-    bench("rows of 8 (1k)", &build(1_000), 200);
-    bench("rows of 8 (10k)", &build(10_000), 20);
+    for (name, nodes, iterations) in [("1k", 1_000, 200), ("10k", 10_000, 20)] {
+        let tree = build(nodes);
+        bench(&format!("rows of 8 ({name})"), &tree, iterations, false);
+        bench(
+            &format!("rows of 8 ({name}, warm)"),
+            &tree,
+            iterations,
+            true,
+        );
+    }
 }

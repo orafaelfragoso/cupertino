@@ -1798,6 +1798,7 @@ impl Cupertino {
             .and_then(|n| n.to_str())
             .and_then(|n| self.desktop.find(n))
             .map(|e| e.id.clone());
+        crate::file_limit::restore_in_child(&mut cmd);
         match cmd.spawn() {
             Ok(mut child) => {
                 if let Some(app_id) = app_id {

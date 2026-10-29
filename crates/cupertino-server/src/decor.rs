@@ -58,6 +58,10 @@ pub struct DecorInput<'a> {
     pub active: bool,
     pub title: &'a str,
     pub resizable: bool,
+    /// The minimize button is enabled: its application did not disable minimize.
+    pub can_minimize: bool,
+    /// The zoom button is enabled: the window is resizable and its application did not disable zoom.
+    pub can_zoom: bool,
 }
 
 pub struct Decor {
@@ -302,7 +306,7 @@ impl Decor {
             active: input.active,
             group_hovered: self.hover_group == Some(input.id),
             pressed: self.pressed.filter(|(w, _)| *w == input.id).map(|(_, k)| k),
-            enabled: [true, true, input.resizable],
+            enabled: [true, input.can_minimize, input.can_zoom],
             title: input.title.to_string(),
             resizable: input.resizable,
         }
@@ -513,7 +517,25 @@ mod tests {
             active: true,
             title: "Title",
             resizable: true,
+            can_minimize: true,
+            can_zoom: true,
         }
+    }
+
+    #[test]
+    fn the_minimize_and_zoom_buttons_follow_the_window_controls() {
+        let d = decor(Appearance::Light);
+        assert_eq!(d.state_for(&input(1, 400.0)).enabled, [true, true, true]);
+        let disabled = DecorInput {
+            can_minimize: false,
+            can_zoom: false,
+            ..input(1, 400.0)
+        };
+        assert_eq!(
+            d.state_for(&disabled).enabled,
+            [true, false, false],
+            "close always stays enabled"
+        );
     }
 
     #[test]

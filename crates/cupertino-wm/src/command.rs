@@ -5,7 +5,7 @@ use crate::geometry::{Edges, Point, Rect, Size};
 use crate::ids::{AppId, OutputId, WindowId, WorkspaceId};
 use crate::lifecycle::{LifecycleState, ToplevelStates};
 use crate::tiling::TileKind;
-use crate::window::Assignment;
+use crate::window::{Assignment, DisabledControls};
 use cupertino_effects::WindowKind;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -68,6 +68,8 @@ pub struct MapParams {
     pub activation: Activation,
     /// Selects the open / close transform (table).
     pub kind: WindowKind,
+    /// The controls its application disabled before the first commit.
+    pub disabled: DisabledControls,
 }
 
 impl MapParams {
@@ -84,6 +86,7 @@ impl MapParams {
             output: None,
             activation: Activation::Always,
             kind: WindowKind::Plain,
+            disabled: DisabledControls::default(),
         }
     }
 }
@@ -134,6 +137,12 @@ pub enum Command {
     SetTitle {
         window: WindowId,
         title: String,
+    },
+    /// The controls the window's application disabled; minimize and zoom are refused while disabled, whoever asks (an
+    /// unzoom and a restore are not).
+    SetDisabledControls {
+        window: WindowId,
+        disabled: DisabledControls,
     },
     SetSizeHints {
         window: WindowId,

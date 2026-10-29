@@ -1028,6 +1028,20 @@ impl Cupertino {
                     now,
                 );
                 self.apply_effects(fx);
+                let disabled = cupertino_wm::DisabledControls::from(
+                    crate::app_effects_v1::disabled_controls(surface),
+                );
+                if self.wm.window(id).is_some_and(|w| w.disabled != disabled) {
+                    let fx = self.wm.handle(
+                        Command::SetDisabledControls {
+                            window: id,
+                            disabled,
+                        },
+                        now,
+                    );
+                    self.apply_effects(fx);
+                    self.refresh_menu_bars();
+                }
             }
             (false, false) => {}
         }
@@ -1098,6 +1112,9 @@ impl Cupertino {
         params.title = title.unwrap_or_default();
         params.min_size = min;
         params.max_size = max;
+        params.disabled = cupertino_wm::DisabledControls::from(
+            crate::app_effects_v1::disabled_controls(&surface),
+        );
         params.parent = parent;
         params.modal = self.windows[idx].modal;
         // the model turns a modal child into a sheet and places dialogs

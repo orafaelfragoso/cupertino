@@ -743,12 +743,14 @@ fn builtin_decorations(
     if fw < 1.0 || fh < 1.0 || (ins.top <= 0.0 && entry.titlebar == TitlebarStyle::Standard) {
         return Vec::new();
     }
-    let (title, resizable) =
+    let (title, resizable, can_minimize, can_zoom) =
         p.wm.window(entry.id)
             .map(|w| {
                 (
                     w.title.clone(),
                     w.min_size.zip(w.max_size).is_none_or(|(a, b)| a != b),
+                    w.can_minimize(),
+                    w.can_zoom(),
                 )
             })
             .unwrap_or_default();
@@ -760,6 +762,8 @@ fn builtin_decorations(
         active,
         title: &title,
         resizable,
+        can_minimize,
+        can_zoom,
     });
     let scale = Scale::from(p.scale);
     let v_phys = to_physical_rect(local(plan.visual, &p.rect), scale);

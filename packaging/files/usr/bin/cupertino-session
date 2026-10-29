@@ -29,13 +29,13 @@ case $limit in
     limit=
     ;;
 esac
+while [ "${#limit}" -gt 1 ] && [ "${limit#0}" != "$limit" ]; do
+    limit=${limit#0}
+done
 if [ "${#limit}" -gt 7 ]; then
     note "ignoring the session limit: more than 7 digits"
     limit=
 fi
-while [ "${#limit}" -gt 1 ] && [ "${limit#0}" != "$limit" ]; do
-    limit=${limit#0}
-done
 
 watchdog=
 if [ -n "$limit" ] && [ "$limit" -gt 0 ]; then
@@ -50,14 +50,18 @@ fi
 # without passing it on, and the compositor holds the seat and the display until it is gone.
 child=
 interrupted=
+stopped=
 forward() {
     if [ -n "$child" ]; then
         pkill -TERM -s "$child" 2>/dev/null || kill -TERM -- "-$child" 2>/dev/null || true
     fi
 }
-trap 'interrupted=1; forward' TERM INT HUP
+trap 'interrupted=1; stopped=1; forward' TERM INT HUP
 
-# Without a session bus of its own (the display manager provides one), the server gets a fresh one.
+# Without a session bus of its own (the display manager provides one), the server gets a fresh one. `setsid` forks only
+# when its caller already leads a process group (with or without --wait), and then $! would not lead the session. This
+# script runs without job control, so its background job is no group leader and `setsid` runs the program in place: $!
+# leads the new session, which is what the signals above are sent to.
 if [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
     # shellcheck disable=SC2086 # $watchdog is a command and its options, or nothing
     setsid $watchdog "$server" --udev "$@" &
@@ -86,9 +90,20 @@ while [ -n "$interrupted" ]; do
 done
 seconds=$(($(date +%s) - started))
 
-case $status in
-0) note "the compositor ended normally after $seconds s" ;;
-124 | 137) note "the compositor did not stop in time and was ended by the watchdog (status $status) after $seconds s" ;;
-*) note "the compositor ended with status $status after $seconds s; see server.log" ;;
-esac
+# The session target and the variables the compositor put on a shared user bus (activation_env.rs) end with it.
+if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet cupertino-session.target 2>/dev/null; then
+    systemctl --user stop cupertino-session.target 2>/dev/null || true
+    systemctl --user unset-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE DISPLAY 2>/dev/null || true
+    note "stopped cupertino-session.target and removed the session's variables from the user manager"
+fi
+
+if [ -n "$stopped" ] && [ "$status" -ne 0 ]; then
+    note "the compositor was stopped by the session (status $status) after $seconds s"
+else
+    case $status in
+    0) note "the compositor ended normally after $seconds s" ;;
+    124 | 137) note "the compositor did not stop in time and was ended by the watchdog (status $status) after $seconds s" ;;
+    *) note "the compositor ended with status $status after $seconds s; see server.log" ;;
+    esac
+fi
 exit "$status"

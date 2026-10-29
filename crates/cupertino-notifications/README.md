@@ -24,7 +24,7 @@ cargo run -p cupertino-notifications --features app -- [--replace]
 
 | Option | Effect |
 |---|---|
-| `--replace` | Take `org.freedesktop.Notifications` from a running daemon that allows replacement. Without it a taken name is a startup error. |
+| `--replace` | Take `org.freedesktop.Notifications` from a running daemon that allows replacement. Without it a taken name ends the process normally (status 0, with a message), so the server does not restart it; any other startup failure exits with failure and is restarted. |
 
 Startup fails with a clear message when the server does not advertise `zwlr_layer_shell_v1`, `cupertino_shell_v1` (backdrop
 materials, `cupertino-protocols`), `xdg_activation_v1`, `wl_shm` or a seat. It connects to `$WAYLAND_DISPLAY`. Fractional scale is

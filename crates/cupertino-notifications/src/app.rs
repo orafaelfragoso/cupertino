@@ -237,6 +237,27 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
 }
 
 /// Start the `org.freedesktop.Notifications` server; model changes from the bus wake the loop.
+/// Another notification daemon owns `org.freedesktop.Notifications` and `--replace` was not given. This process has
+/// nothing wrong: it leaves the name to the daemon that has it, and does not fail, so the server does not restart it.
+#[derive(Debug)]
+pub struct NameOwned;
+
+impl std::fmt::Display for NameOwned {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("another notification daemon owns org.freedesktop.Notifications (start with --replace to take it over)")
+    }
+}
+
+impl Error for NameOwned {}
+
+/// What a failed start of the bus server is called.
+fn start_error(e: zbus::Error) -> Box<dyn Error> {
+    match e {
+        zbus::Error::NameTaken => Box::new(NameOwned),
+        e => Box::new(e),
+    }
+}
+
 fn start_server(options: &Options, config: CenterConfig, waker: &Waker) -> Result<Server> {
     let wake = waker.clone();
     let opts = ServerOptions {
@@ -245,10 +266,7 @@ fn start_server(options: &Options, config: CenterConfig, waker: &Waker) -> Resul
         replace_existing: options.replace_existing,
         ..ServerOptions::default()
     };
-    Server::start(opts).map_err(|e| match e {
-        zbus::Error::NameTaken => "another notification daemon owns org.freedesktop.Notifications (start with --replace to take it over)".into(),
-        e => Box::new(e) as Box<dyn Error>,
-    })
+    Server::start(opts).map_err(start_error)
 }
 
 /// Open a link of a notification body with the default handler.
@@ -737,5 +755,24 @@ impl App {
                 c.invoke_action(id, &key, Some(token), now);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_name_that_is_taken_is_no_failure_of_this_process() {
+        assert!(start_error(zbus::Error::NameTaken)
+            .downcast_ref::<NameOwned>()
+            .is_some());
+    }
+
+    #[test]
+    fn any_other_start_error_stays_one() {
+        assert!(start_error(zbus::Error::Unsupported)
+            .downcast_ref::<NameOwned>()
+            .is_none());
     }
 }

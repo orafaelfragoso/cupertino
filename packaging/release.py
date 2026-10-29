@@ -112,6 +112,7 @@ def runtime(fmt):
         ('usr/bin/cupertino-session', 0o755, False),
         ('usr/lib/cupertino/greeter', 0o755, False),
         ('usr/share/wayland-sessions/cupertino.desktop', 0o644, False),
+        ('usr/lib/systemd/user/cupertino-session.target', 0o644, False),
         ('usr/lib/sysusers.d/cupertino-greeter.conf', 0o644, False),
         ('usr/share/dbus-1/system.d/org.cupertino.conf', 0o644, False),
         ('etc/cupertino/login.conf', 0o644, True),

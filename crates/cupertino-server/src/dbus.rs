@@ -246,6 +246,7 @@ enum Job {
     Call(Request),
     Owner(OwnerQuery),
     WatchOwner(&'static str, OwnerChanged),
+    Publish(Vec<(String, String)>),
 }
 
 /// Runs on a watch thread each time the owner of a watched name may have changed.
@@ -309,6 +310,12 @@ impl DbusHandle {
         self.tx.try_send(Job::Owner(query)).is_ok()
     }
 
+    /// Put the session's variables on a shared user bus ([`crate::activation_env`]); false when the worker is gone (no
+    /// session bus).
+    pub fn publish_session(&self, variables: Vec<(String, String)>) -> bool {
+        self.tx.try_send(Job::Publish(variables)).is_ok()
+    }
+
     /// Call `changed` once the watch is up and then on every `NameOwnerChanged` of `name`, so no change is missed between
     /// a caller's first check and the watch; false when the worker is gone (no session bus).
     pub fn watch_owner(&self, name: &'static str, changed: OwnerChanged) -> bool {
@@ -364,6 +371,22 @@ async fn worker(
                 watch_owner(&conn, name, changed);
                 continue;
             }
+            Job::Publish(variables) => {
+                conn.executor()
+                    .clone()
+                    .spawn(
+                        async move {
+                            let pairs: Vec<(&str, &str)> = variables
+                                .iter()
+                                .map(|(k, v)| (k.as_str(), v.as_str()))
+                                .collect();
+                            report_publication(crate::activation_env::publish(&conn, &pairs).await)
+                        },
+                        "cupertino-activation-env",
+                    )
+                    .detach();
+                continue;
+            }
             Job::Owner(OwnerQuery {
                 name,
                 client,
@@ -399,6 +422,21 @@ async fn worker(
                 )
                 .detach();
         }
+    }
+}
+
+fn report_publication(result: zbus::Result<crate::activation_env::Outcome>) {
+    use crate::activation_env::Outcome;
+    match result {
+        Ok(Outcome::Applied) => tracing::info!(
+            target = crate::activation_env::SESSION_TARGET,
+            "the session's display and desktop name are in the user manager and the bus activation environment"
+        ),
+        Ok(Outcome::AnotherSession) => tracing::warn!(
+            "another graphical session of this user is active: its environment is left alone, so services started on the shared bus may use that session's display, and no portal reaches this one"
+        ),
+        Ok(Outcome::NoSystemd) => tracing::debug!("the session bus has no systemd user manager"),
+        Err(e) => tracing::warn!(error = %e, "cannot update the activation environment of the session bus"),
     }
 }
 

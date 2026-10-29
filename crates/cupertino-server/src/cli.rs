@@ -451,6 +451,7 @@ pub fn run(cli: Cli) -> Result<()> {
                     "neither XDG_CONFIG_HOME nor HOME is set: display arrangements are not stored"
                 ),
             }
+            publish_session(&state);
             crate::backend::udev::run(&mut state, &mut event_loop, deadline, cli.scale)?;
         }
         #[cfg(not(feature = "udev"))]
@@ -496,6 +497,22 @@ fn start_dbus(state: &mut Cupertino) {
 
 #[cfg(not(feature = "dbus"))]
 fn start_dbus(_state: &mut Cupertino) {}
+
+/// The TTY session's display and desktop name, for the services of a shared user bus ([`crate::activation_env`]).
+#[cfg(feature = "udev")]
+fn publish_session(state: &Cupertino) {
+    let (Some(socket), Some(dbus)) = (&state.socket_name, &state.dbus) else {
+        return;
+    };
+    dbus.publish_session(vec![
+        ("WAYLAND_DISPLAY".into(), socket.clone()),
+        (
+            "XDG_CURRENT_DESKTOP".into(),
+            crate::state::CURRENT_DESKTOP.into(),
+        ),
+        ("XDG_SESSION_TYPE".into(), "wayland".into()),
+    ]);
+}
 
 fn export_socket(state: &Cupertino) {
     if let Some(s) = &state.socket_name {

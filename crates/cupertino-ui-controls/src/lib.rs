@@ -6,6 +6,7 @@ mod field;
 mod look;
 mod press;
 mod stack;
+mod text;
 mod toggle;
 
 pub use field::{FieldState, SecureState};

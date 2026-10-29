@@ -429,6 +429,8 @@ pub struct Cupertino {
     pub shell_v1: ShellV1Global,
     pub app_effects_v1: AppEffectsV1Global,
     pub supervisor: Supervisor,
+    /// The X display for X11 programs and its satellite; `None` without `xwayland-satellite` and in headless runs.
+    pub xwayland: Option<crate::xwayland::XWayland>,
     /// Screen capture for the screenshot process: its globals, sessions and pending frames.
     pub capture: crate::capture::Capture,
 
@@ -699,6 +701,7 @@ impl Cupertino {
             shell_v1,
             app_effects_v1,
             supervisor,
+            xwayland: None,
             capture,
             wm,
             decor,
@@ -1788,8 +1791,8 @@ impl Cupertino {
             cmd.env("XCURSOR_THEME", &theme.name)
                 .env("XCURSOR_PATH", &theme.search_dir);
         }
-        // Wayland clients only: an X11 toolkit must not reach the X server of the session around us
-        cmd.env_remove("DISPLAY").env_remove("WAYLAND_SOCKET");
+        crate::xwayland::set_client_env(&mut cmd, self.xwayland.as_ref().map(|x| x.display()));
+        cmd.env_remove("WAYLAND_SOCKET");
         let program = cmd.get_program().to_string_lossy().into_owned();
         // the docks key tiles by desktop entry id; a program without an entry (a script, a shell)
         // is not an application launch

@@ -16,7 +16,7 @@
 //! item and moving more than 5 pt drags the selection: onto a folder of the window or a place of the sidebar it
 //! moves there (Alt copies, Super moves, copy across volumes); onto the trash place it goes to the trash.
 
-use cupertino_apps::{Locale, MimeApps, MimeDatabase, Visibility, XdgDirs};
+use cupertino_apps::{launch, Locale, MimeApps, MimeDatabase, Visibility, XdgDirs};
 use cupertino_assets::Assets;
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_files::browser::{Activation, Browser};
@@ -475,23 +475,6 @@ fn applications() -> Result<MimeApps> {
         &Locale::from_env(),
         &Visibility::from_env(),
     )?)
-}
-
-/// Run a command detached from the loop; its exit is reaped on a thread.
-fn spawn(mut command: Command) {
-    let program = command.get_program().to_string_lossy().into_owned();
-    match command.spawn() {
-        Ok(mut child) => {
-            std::thread::spawn(move || match child.wait() {
-                Ok(status) if !status.success() => {
-                    eprintln!("cupertino-files: {program} exited with {status}")
-                }
-                Ok(_) => {}
-                Err(e) => eprintln!("cupertino-files: {program}: {e}"),
-            });
-        }
-        Err(e) => eprintln!("cupertino-files: cannot run {program}: {e}"),
-    }
 }
 
 impl App {
@@ -1301,7 +1284,9 @@ impl App {
             }
         });
         match spec {
-            Ok(spec) => spawn(spec.with_activation_token(token).to_command()),
+            Ok(spec) => {
+                launch::spawn(APP_ID, spec.with_activation_token(token).to_command());
+            }
             Err(e) => eprintln!("cupertino-files: cannot open {}: {e}", path.display()),
         }
         Ok(())
@@ -1794,7 +1779,7 @@ impl App {
                 command.arg("--terminal").arg(program);
             }
             command.arg(folder);
-            spawn(command);
+            launch::spawn(APP_ID, command);
         }
     }
 

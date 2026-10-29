@@ -324,6 +324,19 @@ impl MimeDatabase {
         self.aliases.get(mime).map_or(mime, String::as_str)
     }
 
+    /// The type a file is opened as: `inode/directory` for a folder (`is_dir`, which follows symbolic links), else the
+    /// type of its name, else `application/octet-stream`, as the specification has it when nothing matches. Types come
+    /// from names only, without content sniffing.
+    pub fn file_type(&self, path: &Path, is_dir: bool) -> &str {
+        if is_dir {
+            return DIRECTORY;
+        }
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| self.type_for_name(n))
+            .unwrap_or(OCTET_STREAM)
+    }
+
     /// The type of a file name from its globs, canonical; `None` when no glob matches. Checking order of the
     /// specification: literal names first, then the suffix and wildcard patterns; among the matches of a
     /// class the highest weight wins, then the longest pattern. Names that tie on both are ambiguous, and
@@ -460,6 +473,21 @@ mod tests {
         10:text/x-readme:readme*\n\
         50:text/x-chdr:*.[hH]\n\
         50:application/x-legacy:*.leg\n";
+
+    #[test]
+    fn a_file_is_typed_as_a_folder_by_its_name_or_as_octet_stream() {
+        let (_d, db) = db(&[("globs2", GLOBS)]);
+        assert_eq!(db.file_type(Path::new("/src/Makefile"), true), DIRECTORY);
+        assert_eq!(
+            db.file_type(Path::new("/src/Makefile"), false),
+            "text/x-makefile"
+        );
+        assert_eq!(
+            db.file_type(Path::new("/src/unknown.zzz"), false),
+            OCTET_STREAM
+        );
+        assert_eq!(db.file_type(Path::new("/"), false), OCTET_STREAM);
+    }
 
     #[test]
     fn literal_names_win_then_the_longest_suffix() {

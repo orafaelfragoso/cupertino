@@ -632,7 +632,7 @@ impl Renderer {
         let icons = &mut self.icons;
         let side = r.w.min(r.h);
         let px = (side * s as f64).round().max(1.0) as u32;
-        let mime = crate::open::file_type(icons.database(), &e.path, e.is_dir).to_string();
+        let mime = icons.database().file_type(&e.path, e.is_dir).to_string();
         let (x, y) = (
             ((r.x + (r.w - side) / 2.0) as f32 * s).round(),
             ((r.y + (r.h - side) / 2.0) as f32 * s).round() - up,

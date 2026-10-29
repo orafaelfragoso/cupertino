@@ -335,6 +335,8 @@ pub struct Cupertino {
     pub live: crate::live::LiveSettings,
     pub dmabuf_state: DmabufState,
     pub dmabuf_global: Option<DmabufGlobal>,
+    /// `linux-drm-syncobj-v1` (explicit sync); present once a DRM backend whose kernel supports it has started.
+    pub syncobj_state: Option<smithay::wayland::drm_syncobj::DrmSyncobjState>,
     pub popups: PopupManager,
     /// Which clients answer their pings (`hung.rs`).
     pub hung: crate::hung::Pings,
@@ -634,6 +636,7 @@ impl Cupertino {
             live: crate::live::LiveSettings::default(),
             dmabuf_state: DmabufState::new(),
             dmabuf_global: None,
+            syncobj_state: None,
             popups: PopupManager::default(),
             hung: crate::hung::Pings::default(),
             hung_announced: Default::default(),

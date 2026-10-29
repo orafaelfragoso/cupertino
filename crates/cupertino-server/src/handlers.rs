@@ -26,9 +26,10 @@ use smithay::utils::{Logical, Point, Rectangle, Serial};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
     add_blocker, add_pre_commit_hook, get_parent, is_sync_subsurface, with_states, BufferAssignment, CompositorClientState, CompositorHandler,
-    CompositorState, SurfaceAttributes,
+    Blocker, CompositorState, SurfaceAttributes,
 };
 use smithay::wayland::dmabuf::{get_dmabuf, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
+use smithay::wayland::drm_syncobj::{DrmSyncobjCachedState, DrmSyncobjHandler, DrmSyncobjState};
 use smithay::wayland::foreign_toplevel_list::{ForeignToplevelListHandler, ForeignToplevelListState};
 use smithay::wayland::fractional_scale::{with_fractional_scale, FractionalScaleHandler};
 use smithay::wayland::output::OutputHandler;
@@ -48,7 +49,7 @@ use smithay::wayland::shell::xdg::{
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::wayland::xdg_activation::{XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData};
 use smithay::{
-    delegate_compositor, delegate_cursor_shape, delegate_data_device, delegate_dmabuf, delegate_foreign_toplevel_list,
+    delegate_compositor, delegate_cursor_shape, delegate_data_device, delegate_dmabuf, delegate_drm_syncobj, delegate_foreign_toplevel_list,
     delegate_fractional_scale, delegate_layer_shell, delegate_output, delegate_pointer_gestures, delegate_presentation,
     delegate_primary_selection, delegate_relative_pointer, delegate_seat, delegate_shm, delegate_viewporter, delegate_xdg_activation,
     delegate_xdg_decoration, delegate_xdg_dialog, delegate_xdg_shell,
@@ -100,21 +101,24 @@ impl CompositorHandler for Cupertino {
             if unmapping {
                 state.snapshot_closing_surface(surface);
             }
-            if let Some(dmabuf) = dmabuf {
+            // A client that uses explicit sync says when its buffer is ready; any other dmabuf is waited for through its
+            // implicit fences.
+            let acquire = with_states(surface, |data| {
+                data.cached_state
+                    .get::<DrmSyncobjCachedState>()
+                    .pending()
+                    .acquire_point
+                    .clone()
+            });
+            if let Some(point) = acquire {
+                if let Ok((blocker, source)) = point.generate_blocker() {
+                    hold_commit(state, surface, blocker, source);
+                }
+            } else if let Some(dmabuf) = dmabuf {
                 if let Ok((blocker, source)) =
                     dmabuf.generate_blocker(smithay::reexports::calloop::Interest::READ)
                 {
-                    if let Some(client) = surface.client() {
-                        let res = state.loop_handle.insert_source(source, move |_, _, data| {
-                            let dh = data.display_handle.clone();
-                            data.client_compositor_state(&client)
-                                .blocker_cleared(data, &dh);
-                            Ok(())
-                        });
-                        if res.is_ok() {
-                            add_blocker(surface, blocker);
-                        }
-                    }
+                    hold_commit(state, surface, blocker, source);
                 }
             }
         });
@@ -214,6 +218,35 @@ impl ShmHandler for Cupertino {
     }
 }
 delegate_shm!(Cupertino);
+
+/// Keeps the commit of `surface` back until `blocker` clears, which `source` reports.
+fn hold_commit<B, S>(state: &mut Cupertino, surface: &WlSurface, blocker: B, source: S)
+where
+    B: Blocker + Send + 'static,
+    S: smithay::reexports::calloop::EventSource<Event = (), Ret = Result<(), std::io::Error>>
+        + 'static,
+{
+    let Some(client) = surface.client() else {
+        return;
+    };
+    let inserted = state.loop_handle.insert_source(source, move |_, _, data| {
+        let dh = data.display_handle.clone();
+        data.client_compositor_state(&client)
+            .blocker_cleared(data, &dh);
+        Ok(())
+    });
+    if inserted.is_ok() {
+        add_blocker(surface, blocker);
+    }
+}
+
+impl DrmSyncobjHandler for Cupertino {
+    fn drm_syncobj_state(&mut self) -> Option<&mut DrmSyncobjState> {
+        self.syncobj_state.as_mut()
+    }
+}
+
+delegate_drm_syncobj!(Cupertino);
 
 impl DmabufHandler for Cupertino {
     fn dmabuf_state(&mut self) -> &mut DmabufState {

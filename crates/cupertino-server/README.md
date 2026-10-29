@@ -4,7 +4,7 @@ The Smithay 0.7 Wayland compositor of Cupertino, as a library (`cupertino_server
 
 Window policy comes from `cupertino-wm`. Server-side decorations, window effects and input handling come from `cupertino-decorations`, `cupertino-effects`, `cupertino-input` and `cupertino-keyboard`. Shadows, rounded corners and material passes run as GLES shaders. The overview is driven by `cupertino-overview`. The notifications, menu bar, launcher and dock run as separate Wayland clients that the server starts and restarts (*Shell processes*).
 
-Contents: [Run it](#run-it), [Command line](#command-line), [Architecture](#architecture) (window policy, rendering, material pass, protocols, clipboard, displays, session bus, shell processes, accessibility, keybindings and configuration files, keyboard, launcher, overlays, screenshots, notifications, idle, log out), [Integration points](#integration-points), [Tests](#tests), [Open issues and approximations](#open-issues-and-approximations).
+Contents: [Run it](#run-it), [Run on hardware](#run-on-hardware), [Command line](#command-line), [Architecture](#architecture) (window policy, rendering, material pass, protocols, clipboard, displays, session bus, shell processes, accessibility, keybindings and configuration files, keyboard, launcher, overlays, screenshots, notifications, idle, log out), [Integration points](#integration-points), [Tests](#tests), [Open issues and approximations](#open-issues-and-approximations).
 
 ## Run it
 
@@ -20,6 +20,16 @@ The server's text (title bars through `Decorations`, the input-source HUD and th
 
 The compositor prints `WAYLAND_DISPLAY=<socket>` once it listens. The socket is the first free `wayland-N` of `XDG_RUNTIME_DIR`; when all 32 are taken (other sessions, or other servers started by tests running at the same time) it is `wayland-cupertino-<pid>-<n>`, so a server always finds one. `tests/socket_names.rs` starts 40 at once. Start clients with that variable. `Super+Return` starts a terminal (`foot`, `alacritty`, `kitty`, `wezterm` or `xterm`, whichever exists first; configurable with `terminals`).
 
+## Run on hardware
+
+The TTY backend needs a seat of its own: logind refuses control of a session that has a controller, so it cannot start inside a running desktop. Start it from a free text console, or from a display manager's session entry (`cupertino.desktop`), and leave the desktop on its console.
+
+1. Log in on a free console (`Ctrl+Alt+F3`), then `./run-cupertino.sh` from the checkout. It builds, runs `cupertino-server --check-hardware` and stops with the reason when the machine is not ready, and starts the server with `--run-for 900` (change it with `CUPERTINO_RUN_FOR`, `0` for no limit).
+2. **Leave.** `Ctrl+Alt+Backspace` (`quit-compositor`) quits the server, and `Ctrl+Alt+F1`..`F12` switch console. Both are reserved actions: no application's shortcut inhibitor takes them. From another console, `pkill cupertino-server` ends it too.
+3. **Logs.** `~/.local/state/cupertino/server.log` (`$XDG_STATE_HOME`, or `CUPERTINO_LOG_FILE`; mode 0600) holds everything the server logs, including the GPU, driver and kernel it found and any panic; the previous run's log is `server.log.1`. Warnings and errors also reach standard error. `RUST_LOG` changes the filter.
+
+**NVIDIA.** `--check-hardware` reports the driver, and with the `nvidia` driver it requires `nvidia-drm.modeset=1` (kernel command line, or `options nvidia_drm modeset=1` in `/etc/modprobe.d`; `cat /sys/module/nvidia_drm/parameters/modeset` must print `Y`), and warns when `/usr/lib/gbm/nvidia-drm_gbm.so` (package `nvidia-utils`) is missing. The same check runs at the start of `--udev` and refuses to start with the fix. Not done: `linux-drm-syncobj-v1` (explicit sync, used by Chrome and Electron on NVIDIA) is not offered; whether the session works without it is the first thing to learn on the hardware.
+
 ## Command line
 
 Without a backend flag the server runs nested when `WAYLAND_DISPLAY` or `DISPLAY` is set, else on the TTY. Giving more than one of `--winit`, `--udev` and `--headless` is an error.
@@ -30,6 +40,7 @@ Without a backend flag the server runs nested when `WAYLAND_DISPLAY` or `DISPLAY
 | `--size WxH` | `1280x800` | nested window or headless output size |
 | `--scale F` | host scale (nested), 1 otherwise | output scale |
 | `--appearance light\|dark` | from the configuration | material and shadow appearance |
+| `--check-hardware` | | print what the TTY backend needs from this machine (primary GPU driver, the NVIDIA settings below) and exit with status 1 when something blocks it; opens no device, so it also runs inside a desktop session |
 | `--dev-shell` | off | let any configuration file name the shell processes and the screenshot process, from any path (development and nested runs; see *Shell roles*) |
 | `--spawn "cmd args" (repeat) | | start a client after startup on the compositor's socket |
 | `--spawn-delay S` | `0.5` | seconds before the first `--spawn` command |
@@ -622,7 +633,7 @@ Crates touched, with test counts: `cupertino-wm` 161 (`SetOutputRect`, the `menu
 
 * **Session desktop name.** `XDG_CURRENT_DESKTOP=Cupertino` reaches only the processes the server starts (clients and shell processes); applications started by D-Bus activation or as systemd user units get the environment of the bus or the user manager, so the session's `cupertino-mimeapps.list` and `OnlyShowIn=Cupertino` do not apply to them.
 
-* **TTY backend.** Run only in QEMU (virgl, one connected output), never on real hardware or with two DRM displays; logind refuses control of a session that has a controller, so it cannot run inside the desktop session. Single GPU, hot-plug by rescanning, no mirroring, adaptive sync or custom modes. Output management and output power are proved headless only. Depends on `cupertino-seat`, `cupertino-devices`, `cupertino-evdev`.
+* **TTY backend.** Run only in QEMU (virgl, one connected output), never on real hardware or with two DRM displays (the start-up checks and logs of *Run on hardware* are written for the first run on a machine; SIGTERM is not handled: it ends the process at once, without the orderly shutdown of the quit key, and the kernel releases the devices); logind refuses control of a session that has a controller, so it cannot run inside the desktop session. Single GPU, hot-plug by rescanning, no mirroring, adaptive sync or custom modes. Output management and output power are proved headless only. Depends on `cupertino-seat`, `cupertino-devices`, `cupertino-evdev`.
 * **Menu bar.** The reserved height is the configured `menu_bar_height`, and the bar surface is expected to have that height. The active output follows the pointer. Keyboard focus after a menu closes is the bar process's job (the server hands the keyboard to the bar on `engage` only). A click on a revealed bar overlaying a window also reaches the window's decoration under it.
 * **Dock** (`shell/cupertino-dock`). One minimize slot in the protocol, so the next-slot target is used for every window (no `minimize_to_app`). The dock's rectangle (where a minimized window flies in from in the overview) is its committed backdrop. The overview goes to the dock of its output only.
 * **Windows.**

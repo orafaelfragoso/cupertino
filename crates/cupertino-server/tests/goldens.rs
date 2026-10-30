@@ -69,8 +69,8 @@ struct Scene {
     clients: Vec<common::Client>,
     size: (i32, i32),
     milliseconds: u32,
-    /// The input events that entered the server, in order.
-    entered: Vec<Event>,
+    /// Whether the injected device was announced to the server.
+    device_added: bool,
 }
 
 impl Scene {
@@ -106,7 +106,7 @@ impl Scene {
             clients: Vec::new(),
             size,
             milliseconds: 0,
-            entered: Vec::new(),
+            device_added: false,
         }
     }
 
@@ -185,22 +185,17 @@ impl Scene {
         }
     }
 
-    /// Inject `event` where a device's events enter the server (`process_input_event`), at its time on the model clock,
-    /// and record it as it entered.
+    /// Inject `event` where a device's events enter the server (`process_input_event`), at its time on the model clock.
     fn input(&mut self, event: Event) {
         self.at(event.milliseconds);
-        if self.entered.is_empty() {
+        if !self.device_added {
             self.state
                 .process_input_event::<injected::Backend>(InputEvent::DeviceAdded {
                     device: injected::Device,
                 });
+            self.device_added = true;
         }
-        let entered = Event {
-            milliseconds: self.milliseconds,
-            input: event.input,
-        };
-        self.state.process_input_event(injected::event(&entered));
-        self.entered.push(entered);
+        self.state.process_input_event(injected::event(&event));
         self.pump();
     }
 
@@ -435,7 +430,11 @@ fn isolated(test: &str, shell: bool, work: impl FnOnce(&str)) {
     let output = child.output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     print!("{stdout}");
-    assert!(output.status.success(), "isolated golden worker failed");
+    assert!(
+        output.status.success(),
+        "isolated golden worker failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(
         stdout.lines().any(|l| l == format!("test {test} ... ok")),
         "the worker did not run {test}: its name is passed to isolated() and must match the test function"
@@ -573,8 +572,8 @@ fn desktop_goldens_and_input_replay() {
         }
         baseline(&root, "desktop-windows", &mut windows, update);
 
-        // XKB keycodes are evdev + 8. Ctrl+Up enters overview through the real key router. Re-recording injects this
-        // gesture and writes the trace from the events that entered the server; a comparison replays the trace.
+        // XKB keycodes are evdev + 8. Ctrl+Up enters overview through the device entry and the real key router. The trace
+        // is this injected gesture as written, not a capture of a device; re-recording writes it, a comparison replays it.
         let trace_path = root.join("overview-trace.json");
         let trace = if update {
             vec![
@@ -617,20 +616,12 @@ fn desktop_goldens_and_input_replay() {
         for event in &trace {
             windows.input(event.clone());
         }
-        assert_eq!(
-            windows.entered, trace,
-            "the replay entered other events than the trace"
-        );
         assert!(
             windows.state.shell.overview_open(),
             "trace must open overview"
         );
         if update {
-            std::fs::write(
-                trace_path,
-                serde_json::to_vec_pretty(&windows.entered).unwrap(),
-            )
-            .unwrap();
+            std::fs::write(trace_path, serde_json::to_vec_pretty(&trace).unwrap()).unwrap();
         }
         windows.at(3000);
         baseline(&root, "overview", &mut windows, update);

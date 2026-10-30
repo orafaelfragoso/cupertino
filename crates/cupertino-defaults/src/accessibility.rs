@@ -25,6 +25,12 @@ use std::path::Path;
 pub const ACCESSIBILITY_ENV: &str = "CUPERTINO_ACCESSIBILITY_CONF";
 /// File name under the configuration directory.
 pub const ACCESSIBILITY_FILE: &str = "accessibility.conf";
+/// The machine's defaults, written by an administrator: the login screen's settings, and those of every account without
+/// an `accessibility.conf` of its own. Same format, owned by root, readable by everyone (it names no one).
+pub const SYSTEM_ACCESSIBILITY: &str = "/etc/cupertino/accessibility.conf";
+/// The keys the machine's file may set: display options that cannot make the login screen unusable for someone else.
+/// A key joins only after a security review.
+pub const SYSTEM_KEYS: &[&str] = &["reduce_motion"];
 
 /// Lowest filter intensity the design's reader returns.
 pub const MIN_FILTER_INTENSITY: f64 = 0.25;
@@ -204,6 +210,18 @@ impl AccessibilitySettings {
 
     /// Apply `key = value` lines; returns `(line, message)` for every line that was not understood.
     pub fn apply_text(&mut self, text: &str) -> Vec<(usize, String)> {
+        self.apply_lines(text, |_| true)
+    }
+
+    /// The machine's defaults from the text of [`SYSTEM_ACCESSIBILITY`]: only the [`SYSTEM_KEYS`] apply, every other
+    /// key is reported and stays off.
+    pub fn from_system_text(text: &str) -> (Self, Vec<(usize, String)>) {
+        let mut settings = Self::default();
+        let errors = settings.apply_lines(text, |key| SYSTEM_KEYS.contains(&key));
+        (settings, errors)
+    }
+
+    fn apply_lines(&mut self, text: &str, allowed: impl Fn(&str) -> bool) -> Vec<(usize, String)> {
         let mut errors = Vec::new();
         for (i, raw) in text.lines().enumerate() {
             let line = raw.split('#').next().unwrap_or("").trim();
@@ -214,7 +232,12 @@ impl AccessibilitySettings {
                 errors.push((i + 1, format!("expected `key = value`, got {line:?}")));
                 continue;
             };
-            if let Err(e) = self.set(key.trim(), value.trim()) {
+            let key = key.trim();
+            if !allowed(key) {
+                errors.push((i + 1, format!("{key}: not a setting of the machine's file")));
+                continue;
+            }
+            if let Err(e) = self.set(key, value.trim()) {
                 errors.push((i + 1, e));
             }
         }
@@ -351,6 +374,20 @@ mod tests {
             AccessibilitySettings::load(&path).unwrap().0,
             AccessibilitySettings::default(),
             "a missing file is the defaults"
+        );
+    }
+
+    #[test]
+    fn the_machines_file_sets_only_its_keys() {
+        let (settings, errors) = AccessibilitySettings::from_system_text(
+            "reduce_motion = on\ninvert_colors = on\ncolor_filter = grayscale\nreduce_motion = maybe\n",
+        );
+        assert!(settings.display.reduce_motion);
+        assert!(!settings.invert_colors && settings.color_filter.is_none());
+        assert_eq!(
+            errors.iter().map(|(line, _)| *line).collect::<Vec<_>>(),
+            [2, 3, 4],
+            "{errors:?}"
         );
     }
 

@@ -141,6 +141,7 @@ pub struct Slider<M> {
 }
 
 /// How far a task has come, or that it is going on (`value: None`); not a Tab stop.
+/// Going on, it asks for a frame on every refresh while shown, so hide it when the task is idle.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Progress {
     /// The accessible name.

@@ -173,7 +173,9 @@ impl<M: Clone + 'static> Widget<M> for Item<M> {
                         FocusTarget::Next => (self.index + 1) % count,
                         _ => (self.index + count - 1) % count,
                     };
-                    self.choose(index, cx);
+                    if self.selected != Some(index) {
+                        self.choose(index, cx);
+                    }
                     cx.focus_item(target);
                     return Propagation::Stop;
                 }

@@ -145,6 +145,8 @@ pub(crate) struct Painting {
     pub(crate) list: DisplayList,
     /// What each node itself draws, in window coordinates, in the list's order; damage is tracked per node.
     pub(crate) own: Vec<Rect>,
+    /// The nodes that asked for the next frame while they painted.
+    pub(crate) animating: Vec<NodeId>,
 }
 
 pub(crate) struct PaintInput<'a> {
@@ -181,6 +183,7 @@ impl Painter {
             self.painted_in = Some(input.env.clone());
         }
         let mut list = DisplayList::default();
+        let mut animating = Vec::new();
         let mut seen = HashSet::with_capacity(self.nodes.len());
         let mut clips = Vec::new();
         for id in tree.preorder(root) {
@@ -220,6 +223,7 @@ impl Painter {
                     }));
                 }
                 let mut group = None;
+                let mut animate = false;
                 node.widget.paint(
                     &*node.state,
                     &mut PaintCx {
@@ -232,8 +236,12 @@ impl Painter {
                         now: input.now,
                         ops: &mut ops,
                         group: &mut group,
+                        animate: &mut animate,
                     },
                 );
+                if animate {
+                    animating.push(id);
+                }
                 self.revision += 1;
                 self.nodes.insert(
                     id,
@@ -290,7 +298,11 @@ impl Painter {
                 list.nodes[p].bounds = list.nodes[p].bounds.union(&bounds);
             }
         }
-        Painting { list, own }
+        Painting {
+            list,
+            own,
+            animating,
+        }
     }
 }
 

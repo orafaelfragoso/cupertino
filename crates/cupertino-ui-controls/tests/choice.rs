@@ -1,0 +1,196 @@
+mod support;
+
+use cupertino_geometry::Insets;
+use cupertino_ui_controls::{RadioGroup, SegmentedControl, Stack};
+use cupertino_ui_core::{AccessibleValue, Application, Checked, Command, Element, Role, Window};
+use cupertino_ui_layout::{Align, Axis, LayoutDirection};
+use support::{window, Harness, SPACE, TAB};
+
+const LEFT: u32 = 0xff51;
+const RIGHT: u32 = 0xff53;
+const DOWN: u32 = 0xff54;
+
+/// A radio group of three sizes and a segmented control of three views; each keeps its own choice.
+struct Choices;
+
+#[derive(Default)]
+struct Model {
+    size: Option<usize>,
+    view: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Message {
+    Size(usize),
+    View(usize),
+}
+
+impl Application for Choices {
+    type Model = Model;
+    type Message = Message;
+
+    fn init() -> (Model, Vec<Command<Message>>) {
+        (
+            Model {
+                size: None,
+                view: Some(0),
+            },
+            Vec::new(),
+        )
+    }
+
+    fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
+        match message {
+            Message::Size(i) => model.size = Some(i),
+            Message::View(i) => model.view = Some(i),
+        }
+        Vec::new()
+    }
+
+    fn view(model: &Model) -> Vec<Window<Message>> {
+        let strings = |s: &[&str]| s.iter().map(|s| s.to_string()).collect();
+        window(Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets::ZERO,
+            spacing: 4.0,
+            align: Align::Start,
+            children: vec![
+                Element::new(RadioGroup {
+                    label: "Size".into(),
+                    options: strings(&["Small", "Medium", "Large"]),
+                    selected: model.size,
+                    axis: Axis::Vertical,
+                    spacing: 0.0,
+                    enabled: true,
+                    on_select: Some(Box::new(Message::Size)),
+                })
+                .key("size"),
+                Element::new(SegmentedControl {
+                    label: "View".into(),
+                    segments: strings(&["Icons", "List", "Columns"]),
+                    selected: model.view,
+                    enabled: true,
+                    on_select: Some(Box::new(Message::View)),
+                })
+                .key("view"),
+            ],
+        }))
+    }
+}
+
+/// The accessibility node of the `index`-th item under `group`.
+fn item(
+    h: &Harness<Choices>,
+    group: &'static str,
+    index: usize,
+) -> cupertino_ui_core::AccessibilityNode {
+    let snapshot = h.snapshot();
+    let id = h.rt.find(h.window, &group.into()).unwrap();
+    let parent = snapshot
+        .accessibility
+        .iter()
+        .find(|(n, _)| *n == id)
+        .unwrap();
+    let child = parent.1.children[index];
+    snapshot
+        .accessibility
+        .into_iter()
+        .find(|(n, _)| *n == child)
+        .unwrap()
+        .1
+}
+
+#[test]
+fn a_group_is_one_tab_stop_and_the_arrows_choose_and_move_the_focus() {
+    let mut h = Harness::<Choices>::new();
+    h.tap(TAB);
+    assert!(
+        item(&h, "size", 0).states.focused,
+        "with nothing chosen, the first is the stop"
+    );
+    h.tap(DOWN);
+    assert_eq!(h.model().size, Some(1));
+    assert!(item(&h, "size", 1).states.focused);
+    h.tap(TAB);
+    assert!(
+        item(&h, "view", 0).states.focused,
+        "Tab leaves the group for the next one"
+    );
+    h.tap(RIGHT);
+    h.tap(RIGHT);
+    h.tap(RIGHT);
+    assert_eq!(h.model().view, Some(0), "the arrows wrap");
+    assert!(item(&h, "view", 0).states.focused);
+}
+
+#[test]
+fn in_right_to_left_the_left_arrow_chooses_the_next_segment() {
+    let mut h = Harness::<Choices>::with_direction(LayoutDirection::Rtl);
+    h.tap(TAB);
+    h.tap(TAB);
+    h.tap(LEFT);
+    assert_eq!(h.model().view, Some(1));
+}
+
+#[test]
+fn a_click_or_space_chooses_an_item() {
+    let mut h = Harness::<Choices>::new();
+    let large = item(&h, "size", 2).bounds;
+    h.click(large.center());
+    assert_eq!(h.model().size, Some(2));
+    h.tap(TAB);
+    h.tap(TAB);
+    h.tap(RIGHT);
+    h.tap(SPACE);
+    assert_eq!(h.model().view, Some(1));
+}
+
+#[test]
+fn segments_are_equally_wide_and_groups_are_radio_groups() {
+    let h = Harness::<Choices>::new();
+    let widths: Vec<f64> = (0..3).map(|i| item(&h, "view", i).bounds.width()).collect();
+    assert!(widths.iter().all(|w| *w == widths[0]), "{widths:?}");
+    let chrome = h
+        .ops("view")
+        .into_iter()
+        .find_map(|op| match op {
+            cupertino_ui_render::PaintOp::Fill {
+                shape: cupertino_ui_render::Shape::RoundedRect { rect, .. },
+                ..
+            } => Some(rect),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        chrome.width(),
+        3.0 * widths[0],
+        "the chrome holds the segments, not the row"
+    );
+    assert_eq!(h.accessible("size").role, Role::RadioGroup);
+    let chosen = item(&h, "view", 0);
+    assert_eq!(chosen.role, Role::RadioButton);
+    assert_eq!(chosen.value, Some(AccessibleValue::Toggle(Checked::True)));
+    assert_eq!(chosen.name.as_deref(), Some("Icons"));
+}
+
+#[test]
+fn no_divider_sits_beside_the_chosen_segment() {
+    let h = Harness::<Choices>::new();
+    let dividers = h
+        .ops("view")
+        .into_iter()
+        .filter(|op| {
+            matches!(
+                op,
+                cupertino_ui_render::PaintOp::Fill {
+                    shape: cupertino_ui_render::Shape::Rect(_),
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(
+        dividers, 1,
+        "the first segment is chosen: only the divider between the other two"
+    );
+}

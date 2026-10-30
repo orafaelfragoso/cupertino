@@ -91,6 +91,7 @@ mod tests {
         Painting {
             list: DisplayList { nodes },
             own,
+            animating: Vec::new(),
         }
     }
 

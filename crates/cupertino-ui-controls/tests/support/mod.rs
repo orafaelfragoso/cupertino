@@ -84,7 +84,7 @@ pub fn state(interaction: InteractionVariant, selected: bool) -> StateVariant {
     }
 }
 
-/// Every role gets its own grey per state: `base + 1` hover, `+ 2` pressed, `+ 3` disabled, `+ 8` selected.
+/// Every role gets its own grey per state, 13 apart: `base + 1` hover, `+ 2` pressed, `+ 3` disabled, `+ 8` selected.
 pub fn theme() -> ThemeTokens {
     use ColorRole::*;
     use InteractionVariant::*;
@@ -106,10 +106,12 @@ pub fn theme() -> ThemeTokens {
         KeyboardFocusIndicator,
         Separator,
         WindowBackground,
+        SecondarySelectedControlFill,
+        SecondaryText,
     ];
     let mut entries = Vec::new();
     for (i, role) in roles.into_iter().enumerate() {
-        let base = 4 + 15 * i as u8;
+        let base = 4 + 13 * i as u8;
         for (offset, interaction) in [(0, Normal), (1, Hover), (2, Pressed), (3, Disabled)] {
             for selected in [false, true] {
                 let level = base + offset + if selected { 8 } else { 0 };
@@ -198,6 +200,7 @@ pub struct Harness<A: Application> {
     pub window: WindowId,
     clock: Arc<ManualClock>,
     text: Arc<TextSystem>,
+    animated: bool,
 }
 
 impl<A: Application> Harness<A> {
@@ -206,15 +209,21 @@ impl<A: Application> Harness<A> {
     }
 
     pub fn with_direction(direction: LayoutDirection) -> Self {
-        Self::build(direction, theme())
+        Self::build(direction, theme(), false)
+    }
+
+    /// A harness for content that animates without end: each settle shows one more frame instead of waiting for the
+    /// window to stop asking.
+    pub fn animated() -> Self {
+        Self::build(LayoutDirection::Ltr, theme(), true)
     }
 
     /// A harness whose window draws with `theme` instead of the fixture theme.
     pub fn with_theme(theme: ThemeTokens) -> Self {
-        Self::build(LayoutDirection::Ltr, theme)
+        Self::build(LayoutDirection::Ltr, theme, false)
     }
 
-    fn build(direction: LayoutDirection, theme: ThemeTokens) -> Self {
+    fn build(direction: LayoutDirection, theme: ThemeTokens, animated: bool) -> Self {
         let clock = Arc::new(ManualClock::new(Timestamp(0)));
         let text = text();
         let options = RuntimeOptions {
@@ -248,6 +257,7 @@ impl<A: Application> Harness<A> {
             window,
             clock,
             text,
+            animated,
         };
         harness.settle();
         harness
@@ -255,7 +265,12 @@ impl<A: Application> Harness<A> {
 
     /// Steps until the window has drawn everything it asked to draw.
     pub fn settle(&mut self) {
-        for _ in 0..8 {
+        let rounds = if self.animated { 2 } else { 8 };
+        for round in 0..rounds {
+            if self.animated && round + 1 == rounds {
+                self.rt.step(turns()).unwrap();
+                return;
+            }
             self.rt.step(turns()).unwrap();
             let system = self.rt.window_system_mut();
             if !system.frame_requested(self.window).unwrap() {

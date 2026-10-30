@@ -241,23 +241,39 @@ fn font_runs(
     let mut runs: Vec<(Range<usize>, FontId)> = Vec::new();
     for (offset, cluster) in text[range.clone()].grapheme_indices(true) {
         let (start, end) = (range.start + offset, range.start + offset + cluster.len());
+        // the emoji presentation selector asks for a colour glyph: a colour font that has the cluster goes first
+        let emoji = cluster.contains('\u{FE0F}');
         let font = if cluster.chars().all(char::is_whitespace) {
             runs.last().map_or(primary, |(_, font)| *font)
-        } else if covers(fonts, primary, cluster)? {
+        } else if !emoji && covers(fonts, primary, cluster)? {
             primary
         } else {
             let candidates = match &fallbacks {
                 Some(candidates) => Arc::clone(candidates),
                 None => Arc::clone(fallbacks.insert(fonts.fallbacks(primary, weight)?)),
             };
-            let mut found = primary;
-            for &candidate in candidates.iter() {
-                if covers(fonts, candidate, cluster)? {
-                    found = candidate;
-                    break;
+            let order: Vec<FontId> = std::iter::once(primary)
+                .chain(candidates.iter().copied())
+                .skip(usize::from(!emoji))
+                .collect();
+            let mut found = None;
+            if emoji {
+                for &candidate in &order {
+                    if fonts.is_colour(candidate)? && covers(fonts, candidate, cluster)? {
+                        found = Some(candidate);
+                        break;
+                    }
                 }
             }
-            found
+            if found.is_none() {
+                for &candidate in &order {
+                    if covers(fonts, candidate, cluster)? {
+                        found = Some(candidate);
+                        break;
+                    }
+                }
+            }
+            found.unwrap_or(primary)
         };
         match runs.last_mut() {
             Some((run, last)) if *last == font => run.end = end,

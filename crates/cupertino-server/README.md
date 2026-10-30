@@ -656,7 +656,7 @@ Crates touched, with test counts: `cupertino-wm` 161 (`SetOutputRect`, the `menu
 
 * **Resume after a VT switch.** A frame still waiting for its vblank when the session paused is dropped at the resume by clearing its output (one short black flash), since a driver that lost that vblank would otherwise hold every later frame of the output back. The clear is a blocking commit: when the driver did lose the flip it can stall the server once, up to the driver's own flip timeout (3 s in nvidia-drm 615). The path needs real hardware and has no automated test.
 
-* **Lost rendering context.** When the GPU reports the rendering context lost, the server ends with an error (exit status 1), so the session command and the display manager treat it as a failure and show the login screen; the renderer is not rebuilt in place yet.
+* **Lost rendering context.** When the GPU reports the rendering context lost, the server ends with an error (exit status 1), so the session command and the display manager treat it as a failure and show the login screen; the renderer is not rebuilt in place yet. The error names the renderer's error and how many sessions on the hardware in a row ended this way (`$XDG_STATE_HOME/cupertino/lost-context-streak`, cleared by a session that ends otherwise), so a loss that recurs at every login shows in the journal.
 
 * **Session desktop name.** `XDG_CURRENT_DESKTOP=Cupertino` reaches only the processes the server starts (clients and shell processes); applications started by D-Bus activation or as systemd user units get the environment of the bus or the user manager, so the session's `cupertino-mimeapps.list` and `OnlyShowIn=Cupertino` do not apply to them.
 

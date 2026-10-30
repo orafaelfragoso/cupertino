@@ -5,7 +5,6 @@
 //! file `/etc/cupertino/compositor.json`) overrides the defaults; unknown keys are ignored.
 
 use std::ffi::OsString;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 use crate::authorization::ShellRole;
@@ -82,31 +81,7 @@ fn layer_trust(path: &Path, dev_shell: bool) -> LayerTrust {
     }
 }
 
-/// The text of a system file, read from the one descriptor that was checked: opened without following a link, owned by
-/// root and not writable by anyone else. `None` when there is no such file.
-pub(crate) fn read_system_file(path: &Path) -> std::io::Result<Option<String>> {
-    use std::io::Read;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut file = match std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(path)
-    {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e),
-    };
-    let meta = file.metadata()?;
-    if !meta.is_file() || meta.uid() != 0 || meta.mode() & 0o022 != 0 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "a system configuration must be a regular file owned by root that no one else can write",
-        ));
-    }
-    let mut text = String::new();
-    file.read_to_string(&mut text)?;
-    Ok(Some(text))
-}
+pub(crate) use cupertino_defaults::system::read_root_file as read_system_file;
 
 /// A shell process the server starts and keeps alive (see [`crate::supervisor`]).
 #[derive(Clone, Debug, PartialEq)]

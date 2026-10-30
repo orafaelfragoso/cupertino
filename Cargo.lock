@@ -967,6 +967,7 @@ dependencies = [
 name = "cupertino-defaults"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "notify",
  "serde_json",
  "tempfile",
@@ -1500,6 +1501,7 @@ version = "0.1.0"
 dependencies = [
  "cupertino-defaults",
  "cupertino-login-ipc",
+ "cupertino-peer",
  "cupertino-seat",
  "cupertino-test-bus",
  "libc",

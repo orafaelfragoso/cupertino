@@ -339,6 +339,13 @@ mod tests {
             .unwrap();
         let pid = other.id();
         let mut other = other;
+        // spawn can return while the child is still this program, before its exec: wait until the exec has happened
+        let own = std::env::current_exe().unwrap();
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|exe| exe == own) {
+            assert!(std::time::Instant::now() < end, "the child never ran sleep");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         assert!(!runs_this_program(pid));
         other.kill().unwrap();
         other.wait().unwrap();

@@ -274,6 +274,48 @@ impl IdlePolicy {
         self.ramp.is_some_and(|r| !r.done(now))
     }
 
+    /// When [`IdlePolicy::tick`] next has something to do under `facts`: dimming, display sleep, the lock after sleep
+    /// or system sleep. `None` while an inhibitor holds every countdown, or when nothing is left to count down.
+    pub fn next_deadline(&self, facts: Facts) -> Option<f64> {
+        if facts.inhibited {
+            return None;
+        }
+        let timers = self.settings.timers(facts.on_battery);
+        let mut next: Option<f64> = None;
+        let mut at = |t: f64| next = Some(next.map_or(t, |n: f64| n.min(t)));
+        let display_sleep = if facts.locked {
+            Some(self.settings.lock_screen_display_sleep.as_secs_f64())
+        } else {
+            timers.display_sleep.duration().map(|d| d.as_secs_f64())
+        };
+        if let Some(t) = display_sleep.map(|t| {
+            if self.lengthened {
+                t.max((2.0 * t).min(LENGTHENED_CAP_S))
+            } else {
+                t
+            }
+        }) {
+            if self.state == DisplayState::On && self.settings.dim_before_display_sleep {
+                at(self.last_input + (t - DIM_WINDOW_S).max(0.0));
+            }
+            if self.state != DisplayState::Asleep {
+                at(self.last_input + t);
+            }
+        }
+        if let (DisplayState::Asleep, Timer::After(delay), false, false) = (
+            self.state,
+            self.settings.require_password_after,
+            facts.locked,
+            self.lock_sent,
+        ) {
+            at(self.since + delay.as_secs_f64());
+        }
+        if let (Some(s), false) = (timers.system_sleep.duration(), self.sleep_sent) {
+            at(self.last_input + s.as_secs_f64());
+        }
+        next
+    }
+
     fn enter(&mut self, state: DisplayState, now: f64) -> Vec<Effect> {
         self.state = state;
         self.since = now;
@@ -312,6 +354,41 @@ mod tests {
             t = ((t + 0.1) * 10.0).round() / 10.0;
         }
         out
+    }
+
+    #[test]
+    fn waking_only_at_its_deadlines_gives_what_ticking_every_tenth_of_a_second_gives() {
+        let locking = PowerSettings {
+            require_password_after: Timer::After(Duration::from_secs(5)),
+            ..settings()
+        };
+        for (facts, settings) in [(AC, settings()), (BATTERY, settings()), (AC, locking)] {
+            let end = 4.0 * 3600.0;
+            let mut polled = IdlePolicy::new(settings, 0.0);
+            let expected: Vec<Effect> = run(&mut polled, 0.0, end, facts)
+                .into_iter()
+                .map(|(_, e)| e)
+                .collect();
+            let mut woken = IdlePolicy::new(settings, 0.0);
+            let mut got = woken.tick(0.0, facts);
+            while let Some(t) = woken.next_deadline(facts).filter(|&t| t <= end) {
+                got.extend(woken.tick(t, facts));
+                assert!(
+                    woken.next_deadline(facts).is_none_or(|next| next > t),
+                    "the tick at {t} left its own deadline due"
+                );
+            }
+            assert!(!expected.is_empty());
+            assert_eq!(got, expected, "{facts:?}");
+        }
+        assert_eq!(
+            IdlePolicy::new(settings(), 0.0).next_deadline(Facts {
+                inhibited: true,
+                ..AC
+            }),
+            None,
+            "an inhibitor holds every countdown"
+        );
     }
 
     #[test]

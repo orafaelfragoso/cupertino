@@ -93,14 +93,23 @@ impl Cupertino {
         self.apply_power_effects(effects);
     }
 
-    /// Advance the idle policy; called from [`Cupertino::tick`].
-    pub fn tick_display_power(&mut self) {
-        let now = self.now();
-        let facts = Facts {
+    fn display_power_facts(&self) -> Facts {
+        Facts {
             on_battery: self.power.on_battery.unwrap_or(false),
             inhibited: self.idle.inhibited() || self.power.idle_blocked,
             locked: self.session_lock.is_active(),
-        };
+        }
+    }
+
+    /// When the idle policy next has something to do.
+    pub fn display_power_deadline(&self) -> Option<f64> {
+        self.power.policy.next_deadline(self.display_power_facts())
+    }
+
+    /// Advance the idle policy; called from [`Cupertino::tick`].
+    pub fn tick_display_power(&mut self) {
+        let now = self.now();
+        let facts = self.display_power_facts();
         let effects = self.power.policy.tick(now, facts);
         self.apply_power_effects(effects);
         if self.power.policy.animating(now) || self.power.fade.animating(now) {

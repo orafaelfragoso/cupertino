@@ -657,7 +657,7 @@ fn shell_process_goldens() {
         let connection =
             zbus::block_on(zbus::connection::Builder::address(bus).unwrap().build()).unwrap();
         scene.wait_until("the launcher to own its control name", |_| {
-            launcher_is_up(&connection)
+            has_owner(&connection, "org.cupertino.Launcher1")
         });
         scene.state.execute_plan(ActionPlan {
             commands: Vec::new(),
@@ -669,6 +669,29 @@ fn shell_process_goldens() {
         scene.settle();
         baseline(&root, "launcher", &mut scene, update);
 
+        // the lock process finds its session through logind on the system bus: a stand-in on a bus of its own
+        let system = common::shell::private_bus();
+        let _logind = fake_logind::serve(&system.address);
+        let mut login = common::shell::process("cupertino-login", bus, &[]);
+        login.command.splice(
+            1..1,
+            [
+                format!("DBUS_SYSTEM_BUS_ADDRESS={}", system.address),
+                format!("XDG_SESSION_ID={}", fake_logind::SESSION_ID),
+            ],
+        );
+        let mut scene = Scene::with_processes(SIZE, vec![login]);
+        scene.wait_until("the lock process to own its control name", |_| {
+            has_owner(&connection, "org.cupertino.Login1")
+        });
+        scene.state.execute_plan(ActionPlan {
+            commands: Vec::new(),
+            ops: vec![ShellOp::PowerDialog],
+        });
+        scene.wait_until("the power panel", |s| s.mapped_layers("login-panel") == 1);
+        scene.settle();
+        baseline(&root, "power-panel", &mut scene, update);
+
         let mut scene = Scene::new(SIZE);
         scene.window();
         let locker = common::Client::locker(common::session_agent(&scene.state));
@@ -678,16 +701,119 @@ fn shell_process_goldens() {
     });
 }
 
-fn launcher_is_up(connection: &zbus::Connection) -> bool {
+/// Whether `name` has an owner on the bus of `connection`.
+fn has_owner(connection: &zbus::Connection, name: &str) -> bool {
     zbus::block_on(connection.call_method(
         Some("org.freedesktop.DBus"),
         "/org/freedesktop/DBus",
         Some("org.freedesktop.DBus"),
         "NameHasOwner",
-        &"org.cupertino.Launcher1",
+        &name,
     ))
     .unwrap()
     .body()
     .deserialize::<bool>()
     .unwrap()
+}
+
+/// A stand-in for logind for the lock process: session [`SESSION_ID`] is active on `seat0`, every power action is
+/// allowed, and each inhibitor is one end of a socket pair whose other end the stand-in keeps.
+mod fake_logind {
+    use std::os::fd::OwnedFd;
+    use std::sync::Mutex;
+    use zbus::zvariant::{self, OwnedObjectPath};
+
+    pub const SESSION_ID: &str = "1";
+    const SESSION_PATH: &str = "/org/freedesktop/login1/session/_31";
+
+    struct Manager {
+        held: Mutex<Vec<OwnedFd>>,
+    }
+
+    #[zbus::interface(name = "org.freedesktop.login1.Manager")]
+    impl Manager {
+        fn get_session(&self, id: &str) -> zbus::fdo::Result<OwnedObjectPath> {
+            if id != SESSION_ID {
+                return Err(zbus::fdo::Error::Failed(format!("no session {id}")));
+            }
+            Ok(OwnedObjectPath::try_from(SESSION_PATH).unwrap())
+        }
+
+        fn inhibit(
+            &self,
+            _what: &str,
+            _who: &str,
+            _why: &str,
+            _mode: &str,
+        ) -> zbus::fdo::Result<zvariant::OwnedFd> {
+            let (kept, given) = std::os::unix::net::UnixStream::pair()
+                .map_err(|e| zbus::fdo::Error::IOError(e.to_string()))?;
+            self.held.lock().unwrap().push(kept.into());
+            Ok(OwnedFd::from(given).into())
+        }
+
+        fn can_suspend(&self) -> String {
+            "yes".to_owned()
+        }
+
+        fn can_reboot(&self) -> String {
+            "yes".to_owned()
+        }
+
+        fn can_power_off(&self) -> String {
+            "yes".to_owned()
+        }
+    }
+
+    struct Session;
+
+    #[zbus::interface(name = "org.freedesktop.login1.Session")]
+    impl Session {
+        #[zbus(property)]
+        fn id(&self) -> String {
+            SESSION_ID.to_owned()
+        }
+
+        #[zbus(property, name = "Type")]
+        fn session_type(&self) -> String {
+            "wayland".to_owned()
+        }
+
+        #[zbus(property)]
+        fn active(&self) -> bool {
+            true
+        }
+
+        #[zbus(property, name = "VTNr")]
+        fn vt_nr(&self) -> u32 {
+            2
+        }
+
+        #[zbus(property)]
+        fn seat(&self) -> (String, OwnedObjectPath) {
+            (
+                "seat0".to_owned(),
+                OwnedObjectPath::try_from("/org/freedesktop/login1/seat/seat0").unwrap(),
+            )
+        }
+    }
+
+    /// Serve the stand-in on the bus at `address` for as long as the returned connection lives.
+    pub fn serve(address: &str) -> zbus::blocking::Connection {
+        zbus::blocking::connection::Builder::address(address)
+            .unwrap()
+            .name("org.freedesktop.login1")
+            .unwrap()
+            .serve_at(
+                "/org/freedesktop/login1",
+                Manager {
+                    held: Mutex::new(Vec::new()),
+                },
+            )
+            .unwrap()
+            .serve_at(SESSION_PATH, Session)
+            .unwrap()
+            .build()
+            .unwrap()
+    }
 }

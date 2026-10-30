@@ -27,6 +27,7 @@ use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use smithay::backend::input::InputEvent;
 use smithay::backend::renderer::gles::ffi;
+use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::desktop::layer_map_for_output;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
@@ -333,7 +334,7 @@ impl Scene {
     }
 }
 
-fn compare_pixels(expected: &RgbaImage, actual: &RgbaImage) {
+fn compare_pixels(name: &str, expected: &RgbaImage, actual: &RgbaImage) {
     assert_eq!(expected.dimensions(), actual.dimensions());
     let mismatches = expected
         .pixels()
@@ -344,7 +345,10 @@ fn compare_pixels(expected: &RgbaImage, actual: &RgbaImage) {
                 .any(|(a, b)| a.abs_diff(b) > CHANNEL_TOLERANCE)
         })
         .count();
-    assert_eq!(mismatches, 0, "pixels exceed the per-channel tolerance");
+    assert_eq!(
+        mismatches, 0,
+        "{name}: pixels exceed the per-channel tolerance"
+    );
 }
 
 /// Baselines this worker re-recorded.
@@ -377,7 +381,7 @@ fn baseline(root: &Path, name: &str, scene: &mut Scene, update: bool) {
         let expected: Structure =
             serde_json::from_slice(&std::fs::read(geometry).unwrap()).unwrap();
         assert_eq!(expected, structure, "{name} structural geometry changed");
-        compare_pixels(&image::open(png).unwrap().to_rgba8(), &image);
+        compare_pixels(name, &image::open(png).unwrap().to_rgba8(), &image);
     }
 }
 
@@ -483,11 +487,12 @@ fn pixel_comparison_fails_on_a_change_at_unchanged_geometry() {
     let mut within = expected.clone();
     within.get_pixel_mut(500, 350).0[0] =
         within.get_pixel(500, 350).0[0].saturating_add(CHANNEL_TOLERANCE);
-    compare_pixels(&expected, &within);
+    compare_pixels("desktop-windows", &expected, &within);
     let mut beyond = expected.clone();
     beyond.get_pixel_mut(500, 350).0[0] = beyond.get_pixel(500, 350).0[0] ^ 0x40;
-    let failure = std::panic::catch_unwind(|| compare_pixels(&expected, &beyond))
-        .expect_err("a changed pixel must fail the comparison");
+    let failure =
+        std::panic::catch_unwind(|| compare_pixels("desktop-windows", &expected, &beyond))
+            .expect_err("a changed pixel must fail the comparison");
     let message = failure.downcast_ref::<String>().unwrap();
     assert!(
         message.contains("pixels exceed the per-channel tolerance"),
@@ -734,7 +739,11 @@ fn shell_process_goldens() {
         });
         scene.state.lock_session();
         scene.wait_until("the lock screen", |s| {
-            s.state.session_lock.is_active() && s.state.lock_surface_of(0).is_some()
+            s.state.session_lock.is_active()
+                && s.state.lock_surface_of(0).is_some_and(|surface| {
+                    with_renderer_surface_state(&surface, |st| st.buffer().is_some())
+                        .unwrap_or(false)
+                })
         });
         scene.settle();
         baseline(&root, "lock-surface", &mut scene, update);

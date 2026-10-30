@@ -861,6 +861,10 @@ impl Wm {
         let Some(w) = self.windows.get(&id) else {
             return;
         };
+        // Fill gives the window the whole usable area, as zoom does: refused where zoom is; half tiles stay
+        if kind == TileKind::Fill && !w.can_zoom() {
+            return;
+        }
         let Some(usable) = self.output(w.output).map(|o| o.usable) else {
             return;
         };

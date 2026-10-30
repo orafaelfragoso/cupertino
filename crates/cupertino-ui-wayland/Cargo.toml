@@ -20,6 +20,7 @@ tiny-skia = "0.11"
 
 # the integration test runs a minimal protocol server in-process
 [dev-dependencies]
+cupertino-app-protocols = { path = "../cupertino-app-protocols", features = ["server"] }
 cupertino-defaults = { path = "../cupertino-defaults" }
 memmap2 = "0.9"
 rustix = { version = "1", features = ["event"] }

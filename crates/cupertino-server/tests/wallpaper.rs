@@ -367,10 +367,10 @@ fn a_quarter_turned_output_draws_the_image_upright() {
         frame += 1;
         assert!(Instant::now() < end, "no screenshot");
     }
-    // the screenshot draws the logical space unturned into an image of the mode's size, so its top-left 600 x 600 are
-    // the logical space's: the image's dark top must be at the top there, not a crop of its light middle
+    // the screenshot is the output as it is shown, upright: its logical space at the mode's size turned on its side.
+    // The image's dark top must be at the top, not a crop of its light middle
     let shot = image::open(&shot).unwrap().to_rgba8();
-    assert_eq!(shot.dimensions(), (900, 600));
+    assert_eq!(shot.dimensions(), (600, 900));
     // under the bar and below it, in the middle where no shell process draws
     let top = shot.get_pixel(300, 40);
     let below = shot.get_pixel(300, 450);

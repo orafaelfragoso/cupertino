@@ -98,6 +98,12 @@ pub const LIGHT_TEXT_UNTIL: u16 = 450;
 /// Where a tone chosen afresh splits the band between [`LIGHT_TEXT_UNTIL`] and [`DARK_TEXT_FROM`]. approximate.
 const FRESH_SPLIT: u16 = 500;
 
+/// Contrast the bar's text is brought to over a mid-tone wallpaper by the scrim under it (WCAG 4.5:1 for normal text,
+/// with a margin for 8-bit rounding and the strip mean). approximate.
+const SCRIM_CONTRAST: f64 = 4.6;
+/// The strongest scrim; the band's edges need at most 0.175. approximate.
+const SCRIM_MAX_ALPHA: f64 = 0.25;
+
 /// The text of a bar's strip: the appearance's, or dark or light for the wallpaper under the bar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BarTone {
@@ -156,6 +162,70 @@ impl BarTone {
     pub fn light_text(self, appearance: MenuPalette) -> bool {
         self.palette(appearance).text == MenuPalette::new(true).text
     }
+
+    /// The fill under the bar's text over a wallpaper of `lightness`: black under light text and white under dark
+    /// text, at the smallest alpha that brings the text to [`SCRIM_CONTRAST`]; none where the text reaches it alone,
+    /// and none for the appearance's tone (unmeasured, or a solid bar).
+    pub fn scrim(self, lightness: Option<u16>) -> Option<Rgba> {
+        let (text, scrim) = match self {
+            BarTone::Appearance => return None,
+            BarTone::DarkText => (MenuPalette::new(false).text, 1.0),
+            BarTone::LightText => (MenuPalette::new(true).text, 0.0),
+        };
+        let strip = srgb_grey(lightness?);
+        let contrast = |alpha: f64| {
+            let backdrop = alpha * scrim + (1.0 - alpha) * strip;
+            text_contrast(text, [backdrop; 3])
+        };
+        if contrast(0.0) >= SCRIM_CONTRAST {
+            return None;
+        }
+        let (mut low, mut high) = (0.0, SCRIM_MAX_ALPHA);
+        for _ in 0..20 {
+            let mid = (low + high) / 2.0;
+            if contrast(mid) >= SCRIM_CONTRAST {
+                high = mid;
+            } else {
+                low = mid;
+            }
+        }
+        let c = scrim as f32;
+        Some([c, c, c, high as f32])
+    }
+}
+
+/// The sRGB grey of `lightness` (CIE L*/100 in thousandths).
+fn srgb_grey(lightness: u16) -> f64 {
+    let l = f64::from(lightness.min(1000)) / 10.0;
+    let y = if l > 8.0 {
+        ((l + 16.0) / 116.0).powi(3)
+    } else {
+        l / 903.3
+    };
+    if y <= 0.003_130_8 {
+        12.92 * y
+    } else {
+        1.055 * y.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// The WCAG contrast of `text` drawn source-over in sRGB on the opaque `backdrop`.
+fn text_contrast(text: Rgba, backdrop: [f64; 3]) -> f64 {
+    let a = f64::from(text[3]);
+    let over = [0, 1, 2].map(|i| a * f64::from(text[i]) + (1.0 - a) * backdrop[i]);
+    let (t, b) = (relative_luminance(over), relative_luminance(backdrop));
+    (t.max(b) + 0.05) / (t.min(b) + 0.05)
+}
+
+fn relative_luminance(rgb: [f64; 3]) -> f64 {
+    let [r, g, b] = rgb.map(|c| {
+        if c <= 0.040_45 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    });
+    0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
 /// Measures and draws bar and menu text with the `ui` font of the asset directory. Text is measured at the
@@ -263,9 +333,9 @@ impl Style {
         [t[0], t[1], t[2], t[3] * alpha]
     }
 
-    /// Draw the bar into `pm` (the bar surface at `scale` device pixels per point): the highlight
-    /// of the open or keyboard-focused title, the labels, the status icons, the control panel
-    /// glyph and the clock, in the palette of the bar's `tone`.
+    /// Draw the bar into `pm` (the bar surface at `scale` device pixels per point): the `scrim` over the whole
+    /// strip, then the highlight of the open or keyboard-focused title, the labels, the status icons, the control
+    /// panel glyph and the clock, in the palette of the bar's `tone`.
     #[allow(clippy::too_many_arguments)]
     pub fn paint_bar(
         &self,
@@ -275,9 +345,11 @@ impl Style {
         content: &BarContent,
         highlight: Option<&SlotKey>,
         tone: BarTone,
+        scrim: Option<Rgba>,
         shared: &Shared,
         scale: f64,
     ) {
+        fill_scrim(pm, scrim);
         let palette = tone.palette(self.palette);
         for slot in &layout.slots {
             let r = GRect::new(slot.rect.x, slot.rect.y, slot.rect.w, slot.rect.h);
@@ -636,6 +708,15 @@ impl Style {
     }
 }
 
+/// The bar's scrim over the whole surface, under everything drawn after it.
+fn fill_scrim(pm: &mut Pixmap, scrim: Option<Rgba>) {
+    if let Some(c) = scrim {
+        pm.fill(
+            tiny_skia::Color::from_rgba(c[0], c[1], c[2], c[3]).expect("scrim components in 0..=1"),
+        );
+    }
+}
+
 fn paint(c: Rgba) -> Paint<'static> {
     let mut p = Paint {
         anti_alias: true,
@@ -883,5 +964,149 @@ mod tests {
         assert_eq!(tones(&[700, 480]).last(), Some(&BarTone::DarkText));
         assert_eq!(BarTone::fresh(Some(480), TRANSLUCENT), BarTone::LightText);
         assert_eq!(BarTone::fresh(Some(500), TRANSLUCENT), BarTone::DarkText);
+    }
+
+    /// WCAG contrast of `text` source-over in sRGB on `backdrop`, written out here apart from the code under test.
+    fn wcag(text: Rgba, backdrop: [f64; 3]) -> f64 {
+        let lum = |c: [f64; 3]| {
+            let l = |v: f64| {
+                if v <= 0.040_45 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * l(c[0]) + 0.7152 * l(c[1]) + 0.0722 * l(c[2])
+        };
+        let a = f64::from(text[3]);
+        let over = [0, 1, 2].map(|i| a * f64::from(text[i]) + (1.0 - a) * backdrop[i]);
+        let (t, b) = (lum(over), lum(backdrop));
+        (t.max(b) + 0.05) / (t.min(b) + 0.05)
+    }
+
+    /// The grey of CIE L* `lightness` thousandths, encoded to sRGB.
+    fn grey(lightness: u16) -> f64 {
+        let l = f64::from(lightness) / 10.0;
+        let y = if l > 8.0 {
+            ((l + 16.0) / 116.0).powi(3)
+        } else {
+            l / 903.3
+        };
+        if y <= 0.003_130_8 {
+            12.92 * y
+        } else {
+            1.055 * y.powf(1.0 / 2.4) - 0.055
+        }
+    }
+
+    /// The text of `tone` over its scrim over a strip of `strip` (sRGB).
+    fn contrast_over(tone: BarTone, lightness: u16, strip: [f64; 3]) -> f64 {
+        let text = tone.palette(MenuPalette::new(false)).text;
+        let backdrop = match tone.scrim(Some(lightness)) {
+            Some(s) => {
+                strip.map(|c| f64::from(s[3]) * f64::from(s[0]) + (1.0 - f64::from(s[3])) * c)
+            }
+            None => strip,
+        };
+        wcag(text, backdrop)
+    }
+
+    /// Every tone a bar can hold at `lightness`: fresh, and kept from either text.
+    fn reachable(lightness: u16) -> Vec<BarTone> {
+        [BarTone::Appearance, BarTone::DarkText, BarTone::LightText]
+            .map(|held| held.next(Some(lightness), TRANSLUCENT))
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn the_text_reaches_4_5_to_1_over_every_lightness_with_its_scrim() {
+        for lightness in 0..=1000 {
+            for tone in reachable(lightness) {
+                let c = contrast_over(tone, lightness, [grey(lightness); 3]);
+                assert!(c >= 4.5, "{tone:?} at {lightness}: {c:.3}");
+            }
+        }
+    }
+
+    #[test]
+    fn there_is_no_scrim_where_the_text_reads_alone_or_on_the_appearance() {
+        assert_eq!(BarTone::LightText.scrim(Some(300)), None);
+        assert_eq!(BarTone::LightText.scrim(Some(450)), None);
+        assert_eq!(BarTone::DarkText.scrim(Some(560)), None);
+        assert_eq!(BarTone::DarkText.scrim(Some(900)), None);
+        assert_eq!(BarTone::Appearance.scrim(Some(500)), None);
+        assert_eq!(BarTone::LightText.scrim(None), None);
+    }
+
+    #[test]
+    fn a_mid_grey_takes_a_light_scrim_under_dark_text_and_a_dark_one_under_light_text() {
+        let light = BarTone::LightText.scrim(Some(500)).unwrap();
+        assert_eq!(light[..3], [0.0; 3]);
+        assert!((light[3] - 0.089).abs() <= 0.005, "{light:?}");
+        let dark = BarTone::DarkText.scrim(Some(500)).unwrap();
+        assert_eq!(dark[..3], [1.0; 3]);
+        assert!((dark[3] - 0.069).abs() <= 0.005, "{dark:?}");
+        let edge = BarTone::LightText.scrim(Some(549)).unwrap();
+        assert!((edge[3] - 0.175).abs() <= 0.005, "{edge:?}");
+    }
+
+    #[test]
+    fn the_scrim_covers_the_whole_bar_surface() {
+        let mut pm = Pixmap::new(40, 8).unwrap();
+        fill_scrim(&mut pm, BarTone::LightText.scrim(Some(500)));
+        for px in [pm.pixel(0, 0), pm.pixel(39, 7), pm.pixel(20, 4)] {
+            let px = px.unwrap();
+            assert!((i32::from(px.alpha()) - 23).abs() <= 1, "{px:?}");
+            assert_eq!((px.red(), px.green(), px.blue()), (0, 0, 0));
+        }
+        let mut clear = Pixmap::new(4, 4).unwrap();
+        fill_scrim(&mut clear, BarTone::LightText.scrim(Some(300)));
+        assert_eq!(clear.pixel(1, 1).unwrap().alpha(), 0);
+    }
+
+    /// From wallpaper grey to text: the strip through each appearance's MenuBar colour ops, the lightness the server
+    /// measures of it, the tone and scrim the bar takes, and the text over scrim over that strip.
+    #[test]
+    fn through_the_bar_material_the_text_reaches_4_5_to_1_in_both_appearances() {
+        use cupertino_theme::{Appearance, MaterialOptions, Theme};
+        let theme = Theme::load().unwrap();
+        for appearance in [Appearance::Light, Appearance::Dark] {
+            let recipe = theme
+                .recipe(appearance, "MenuBar", &MaterialOptions::default())
+                .unwrap();
+            let ops = cupertino_glass::ops::color_ops(&recipe.backdrop.unwrap().ops);
+            for g in 0..=255u8 {
+                let c = f32::from(g) / 255.0;
+                let strip = cupertino_glass::cpu::apply_color_ops([c; 3], &ops)
+                    .map(|v| f64::from(v.clamp(0.0, 1.0)));
+                let lightness = cie_lightness(strip);
+                for tone in reachable(lightness) {
+                    let contrast = contrast_over(tone, lightness, strip);
+                    assert!(
+                        contrast >= 4.5,
+                        "{appearance:?} grey {g}: {tone:?} at {lightness}: {contrast:.3}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// CIE L* of an sRGB colour in thousandths, as the server reports it.
+    fn cie_lightness(rgb: [f64; 3]) -> u16 {
+        let l = |v: f64| {
+            if v <= 0.040_45 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let y = 0.2126 * l(rgb[0]) + 0.7152 * l(rgb[1]) + 0.0722 * l(rgb[2]);
+        let lstar = if y > 216.0 / 24389.0 {
+            116.0 * y.cbrt() - 16.0
+        } else {
+            y * 24389.0 / 27.0
+        };
+        (lstar * 10.0).round() as u16
     }
 }

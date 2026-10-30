@@ -109,8 +109,8 @@ struct WindowState<M> {
     /// Each key held down and the node that took its press; it gets [`Event::Cancel`] if the window deactivates first.
     held: Vec<(HeldKey, NodeId)>,
     animate: BTreeSet<NodeId>,
-    /// When each node asked to be woken, one time per node.
-    wakes: HashMap<NodeId, Timestamp>,
+    /// When each node asked to be woken, one time per node; ordered so that nodes due together wake in a fixed order.
+    wakes: BTreeMap<NodeId, Timestamp>,
     text_input: Option<NodeId>,
     geometry: Geometry,
     accessibility: BTreeMap<NodeId, AccessibilityNode>,
@@ -452,7 +452,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             touches: HashMap::new(),
             held: Vec::new(),
             animate: BTreeSet::new(),
-            wakes: HashMap::new(),
+            wakes: BTreeMap::new(),
             text_input: None,
             geometry: Geometry::new(),
             accessibility: BTreeMap::new(),

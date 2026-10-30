@@ -2117,9 +2117,11 @@ impl App {
             return Ok(());
         }
         if let Some(marquee) = self.marquee.as_mut() {
+            let (origin, from) = (marquee.origin, marquee.at);
             marquee.at = at;
-            self.marquee_apply();
-            self.window.redraw();
+            let before = self.selected_indices();
+            let selection = self.marquee_apply();
+            self.redraw_marquee(origin, from, at, selection.then_some(&before[..]));
             return Ok(());
         }
         let Some(drag) = &self.drag else {
@@ -2139,13 +2141,53 @@ impl App {
             if !drag.started {
                 self.rename.cancel();
             }
-            let moved = drag.target != target;
+            let outlined = |t: &Option<DropTarget>| t.as_ref().and_then(|t| t.item);
+            let moved = (outlined(&drag.target) != outlined(&target))
+                .then(|| [outlined(&drag.target), outlined(&target)]);
             (drag.started, drag.sources, drag.target) = (true, sources, target);
-            if moved {
-                self.window.redraw();
+            // only an item of the listing is outlined: a target moving between places changes no pixel
+            if let Some(items) = moved {
+                self.redraw_outlines(items.into_iter().flatten());
             }
         }
         Ok(())
+    }
+
+    /// The rubber band from `origin` moved from `from` to `to`: draw where it was and where it is, and the items whose
+    /// selection it changed from `before`.
+    fn redraw_marquee(&mut self, origin: Point, from: Point, to: Point, before: Option<&[usize]>) {
+        let Some(frame) = &self.frame else {
+            self.window.redraw();
+            return;
+        };
+        let areas: Vec<PopupRect> = [from, to]
+            .into_iter()
+            .filter_map(|at| cupertino_files::window::marquee_area(frame, origin, at))
+            .collect();
+        for area in areas {
+            self.window.redraw_rect(area);
+        }
+        if let Some(before) = before {
+            self.redraw_items(before);
+        }
+    }
+
+    /// The drop outline left or reached `items`: draw them.
+    fn redraw_outlines(&mut self, items: impl Iterator<Item = usize>) {
+        let Some(frame) = &self.frame else {
+            self.window.redraw();
+            return;
+        };
+        let areas: Vec<PopupRect> = items
+            .map(|i| cupertino_files::window::item_area(frame, i))
+            .collect::<Option<_>>()
+            .unwrap_or_default();
+        if areas.is_empty() {
+            self.window.redraw();
+        }
+        for area in areas {
+            self.window.redraw_rect(area);
+        }
     }
 
     /// Select what the band touches in the frame drawn last; `true` when the selection changed.

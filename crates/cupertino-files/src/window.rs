@@ -632,11 +632,8 @@ const EDITOR_RADIUS: f64 = 3.0;
 
 /// The rubber band over the content: a quaternary label fill inside a 1 pt tertiary label border, square corners,
 /// clipped to the content area (the view under the band is the default collection view band).
-fn paint_marquee(pm: &mut Pixmap, scale: f32, band: &Rect, content: &Rect, pal: &Palette) {
-    let Some(r) = band.intersection(content) else {
-        return;
-    };
-    fill_rect(pm, &r, scale, pal.quaternary_label);
+fn paint_marquee(pm: &mut Pixmap, scale: f32, r: &Rect, pal: &Palette) {
+    fill_rect(pm, r, scale, pal.quaternary_label);
     let w = marquee::BORDER_WIDTH;
     for edge in [
         Rect::new(r.x, r.y, r.w, w),
@@ -646,6 +643,27 @@ fn paint_marquee(pm: &mut Pixmap, scale: f32, band: &Rect, content: &Rect, pal: 
     ] {
         fill_rect(pm, &edge, scale, pal.tertiary_label);
     }
+}
+
+/// The rubber band from `origin` (content coordinates) to the pointer at `at` (window coordinates), as drawn in the
+/// window: cut to the content below the list header. `None` when nothing of it shows.
+fn marquee_rect(frame: &Frame, origin: Point, at: Point) -> Option<Rect> {
+    let w = &frame.window;
+    let band = Rect::from_corners(origin, frame.to_content(at))
+        .offset(w.content.x, w.content.y - frame.scroll);
+    let top = frame.content.fixed_top();
+    let visible = Rect::new(
+        w.content.x,
+        w.content.y + top,
+        w.content.w,
+        (w.content.h - top).max(0.0),
+    );
+    band.intersection(&visible)
+}
+
+/// Where the rubber band from `origin` to `at` is drawn in `frame`; `None` when nothing of it shows.
+pub fn marquee_area(frame: &Frame, origin: Point, at: Point) -> Option<GeoRect> {
+    marquee_rect(frame, origin, at).map(|r| GeoRect::new(r.x, r.y, r.w, r.h))
 }
 
 /// Points around an item that the name editor's field and its focus ring reach.
@@ -1047,27 +1065,11 @@ impl WindowPainter {
             ];
             fill_rounded(pm, &target, m::HIGHLIGHT_RADIUS, scale, outline);
         }
-        if let Some((origin, at)) = state.marquee {
-            let band = Rect::from_corners(origin, frame.to_content(at));
-            // the list header covers the top of the content
-            let top = if state.mode == ViewMode::List {
-                list_view::HEADER_HEIGHT
-            } else {
-                0.0
-            };
-            let visible = Rect::new(
-                w.content.x,
-                w.content.y + top,
-                w.content.w,
-                (w.content.h - top).max(0.0),
-            );
-            paint_marquee(
-                pm,
-                scale,
-                &band.offset(w.content.x, w.content.y - frame.scroll),
-                &visible,
-                pal,
-            );
+        if let Some(band) = state
+            .marquee
+            .and_then(|(origin, at)| marquee_rect(frame, origin, at))
+        {
+            paint_marquee(pm, scale, &band, pal);
         }
         self.editor_text = None;
         if let Some(edit) = state.edit {
@@ -3557,6 +3559,22 @@ mod tests {
         places: &[Place],
         scale: f32,
     ) -> Pixmap {
+        paint_dragging(painter, frame, browser, places, scale, None, None)
+    }
+
+    /// [`paint_listing`] with a drop target outlined and a rubber band, painted whole or, with `rows`, only those
+    /// device rows of it. Also gives the pixels the fills and copies wrote.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_drag_rows(
+        painter: &mut WindowPainter,
+        frame: &Frame,
+        browser: &Browser,
+        places: &[Place],
+        scale: f32,
+        drop_target: Option<usize>,
+        marquee: Option<(Point, Point)>,
+        rows: Option<&[(u32, u32)]>,
+    ) -> (Pixmap, u64) {
         let mut pm = Pixmap::new((920.0 * scale) as u32, (436.0 * scale) as u32).unwrap();
         let state = WindowState {
             browser,
@@ -3570,12 +3588,164 @@ mod tests {
             now: SystemTime::now(),
             edit: None,
             edit_caret: false,
-            drop_target: None,
-            marquee: None,
+            drop_target,
+            marquee,
             status: "",
         };
-        painter.paint(&mut pm, scale, frame, &state, &Palette::builtin(false));
-        pm
+        let pal = Palette::builtin(false);
+        crate::render::WRITTEN.with(|c| c.set(0));
+        match rows {
+            None => painter.paint(&mut pm, scale, frame, &state, &pal),
+            Some(rows) => painter.paint_rows(&mut pm, scale, frame, &state, &pal, rows),
+        }
+        (pm, crate::render::WRITTEN.with(|c| c.get()))
+    }
+
+    fn paint_dragging(
+        painter: &mut WindowPainter,
+        frame: &Frame,
+        browser: &Browser,
+        places: &[Place],
+        scale: f32,
+        drop_target: Option<usize>,
+        marquee: Option<(Point, Point)>,
+    ) -> Pixmap {
+        paint_drag_rows(
+            painter,
+            frame,
+            browser,
+            places,
+            scale,
+            drop_target,
+            marquee,
+            None,
+        )
+        .0
+    }
+
+    /// The listing painted with `drop_target` and `marquee` against painting only the rows of `areas`: the pixels
+    /// inside `areas` agree, and the damaged paint writes less than half the pixels.
+    #[allow(clippy::too_many_arguments)]
+    fn damaged_rows_agree(
+        painter: &mut WindowPainter,
+        frame: &Frame,
+        browser: &Browser,
+        places: &[Place],
+        scale: f32,
+        drop_target: Option<usize>,
+        marquee: Option<(Point, Point)>,
+        areas: &[GeoRect],
+    ) {
+        let rects = device_rects(areas, scale);
+        let rows: Vec<(u32, u32)> = rects.iter().map(|r| (r.1, r.3)).collect();
+        let (whole, all) = paint_drag_rows(
+            painter,
+            frame,
+            browser,
+            places,
+            scale,
+            drop_target,
+            marquee,
+            None,
+        );
+        let (damaged, some) = paint_drag_rows(
+            painter,
+            frame,
+            browser,
+            places,
+            scale,
+            drop_target,
+            marquee,
+            Some(&rows),
+        );
+        let width = whole.width() as usize;
+        for &(x0, y0, x1, y1) in &rects {
+            for y in y0 as usize..y1 as usize {
+                let row = (y * width + x0 as usize) * 4..(y * width + x1 as usize) * 4;
+                assert!(
+                    whole.data()[row.clone()] == damaged.data()[row],
+                    "row {y} at {scale}x"
+                );
+            }
+        }
+        assert!(
+            some < all / 2,
+            "pixels written at {scale}x: {some} against {all}"
+        );
+    }
+
+    #[test]
+    fn a_drop_target_change_changes_pixels_only_inside_the_items_it_outlines() {
+        for scale in [1.0_f32, 1.5] {
+            let (_d, browser, places, mut painter, frame) = listing(scale, 12, 0.0);
+            let mut paint = |target| {
+                paint_dragging(&mut painter, &frame, &browser, &places, scale, target, None)
+            };
+            let (none, two, four) = (paint(None), paint(Some(2)), paint(Some(4)));
+            assert_ne!(none.data(), two.data(), "the outline shows at {scale}x");
+            let area = |i| item_area(&frame, i).unwrap();
+            assert_eq!(
+                differing_outside(&none, &two, &[area(2)], scale),
+                vec![],
+                "an outline appearing at {scale}x"
+            );
+            assert_eq!(
+                differing_outside(&two, &four, &[area(2), area(4)], scale),
+                vec![],
+                "an outline moving at {scale}x"
+            );
+            damaged_rows_agree(
+                &mut painter,
+                &frame,
+                &browser,
+                &places,
+                scale,
+                Some(4),
+                None,
+                &[area(2), area(4)],
+            );
+        }
+    }
+
+    #[test]
+    fn a_rubber_band_move_changes_pixels_only_inside_where_it_was_and_is() {
+        for scale in [1.0_f32, 1.5] {
+            let (_d, browser, places, mut painter, frame) = listing(scale, 12, 0.0);
+            let origin = Point { x: 60.0, y: 80.0 };
+            let (from, to) = (Point { x: 420.0, y: 210.0 }, Point { x: 470.0, y: 260.0 });
+            let mut paint = |at| {
+                paint_dragging(
+                    &mut painter,
+                    &frame,
+                    &browser,
+                    &places,
+                    scale,
+                    None,
+                    Some((origin, at)),
+                )
+            };
+            let (before, after) = (paint(from), paint(to));
+            assert_ne!(before.data(), after.data(), "the band moves at {scale}x");
+            let areas: Vec<GeoRect> = [from, to]
+                .into_iter()
+                .map(|at| marquee_area(&frame, origin, at).unwrap())
+                .collect();
+            assert_eq!(
+                differing_outside(&before, &after, &areas, scale),
+                vec![],
+                "a band moving at {scale}x"
+            );
+            damaged_rows_agree(
+                &mut painter,
+                &frame,
+                &browser,
+                &places,
+                scale,
+                None,
+                Some((origin, to)),
+                &areas,
+            );
+        }
     }
 
     #[test]

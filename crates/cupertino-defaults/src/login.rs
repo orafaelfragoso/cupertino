@@ -2,7 +2,8 @@
 //! the commands the manager starts, which accounts and power items the screen offers. One `key = value` per line, `# starts
 //! a comment. System configuration, owned by root. A missing file, or a missing or bad `greeter-command` or
 //! `session-command`, is an error and the manager refuses to start on it. Any other bad line is reported and the manager
-//! starts: its key takes its safe value (the last column), so one typo cannot keep the machine without a login screen.
+//! starts: its key takes its safe value (the last column), so one typo cannot keep the machine without a login screen. A
+//! line without `=` is a bad line of the key it starts with. `cupertino-sessiond --check-config` lists every bad line.
 //!
 //! Names in a list are separated by commas, with spaces around them allowed; a name with a space or `:` inside is bad.
 //!
@@ -133,12 +134,21 @@ impl LoginConfig {
             if line.is_empty() {
                 continue;
             }
-            let Some((key, value)) = line.split_once('=') else {
-                problems.push((i + 1, format!("expected `key = value`, got {line:?}")));
-                continue;
+            // a line without `=` is bad for the key it starts with, so `hide-admin-users true` or `hide-admin-users: true`
+            // does not leave it open
+            let (key, applied) = match line.split_once('=') {
+                Some((key, value)) => {
+                    let key = key.trim();
+                    (key, config.apply(key, value.trim()))
+                }
+                None => (
+                    line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+                        .next()
+                        .unwrap_or(line),
+                    Err(format!("expected `key = value`, got {line:?}")),
+                ),
             };
-            let key = key.trim();
-            if let Err(message) = config.apply(key, value.trim()) {
+            if let Err(message) = applied {
                 if matches!(key, "greeter-command" | "session-command") {
                     fatal.push((i + 1, message));
                 } else {
@@ -415,6 +425,47 @@ mod tests {
         assert_eq!(config.restart_disabled, Some(true));
         assert_eq!(config.admin_groups, Some(Vec::new()), "no administrator");
         assert_eq!(config.retries_until_hint, 0);
+    }
+
+    #[test]
+    fn a_line_without_equals_is_a_bad_line_of_its_first_word() {
+        let text =
+            format!("{REQUIRED}hidden-users alice\nhide-admin-users: false\nauto-login:alice\n");
+        let Loaded { config, problems } = LoginConfig::parse(&text).unwrap();
+        assert_eq!(
+            problems,
+            [
+                (
+                    3,
+                    "expected `key = value`, got \"hidden-users alice\"".to_owned()
+                ),
+                (
+                    4,
+                    "expected `key = value`, got \"hide-admin-users: false\"".to_owned()
+                ),
+                (
+                    5,
+                    "expected `key = value`, got \"auto-login:alice\"".to_owned()
+                ),
+            ]
+        );
+        assert_eq!(config.allow_list, Some(Vec::new()));
+        assert_eq!(config.show_other_users, Some(true));
+        assert!(config.hide_admin_users);
+        assert_eq!(config.auto_login, None);
+
+        let problems = LoginConfig::parse(
+            "greeter-command:/usr/bin/cupertino-server\nsession-command = /usr/bin/true\n",
+        )
+        .unwrap_err();
+        assert_eq!(
+            problems,
+            [(
+                1,
+                "expected `key = value`, got \"greeter-command:/usr/bin/cupertino-server\""
+                    .to_owned()
+            )]
+        );
     }
 
     #[test]

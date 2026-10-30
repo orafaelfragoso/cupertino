@@ -639,6 +639,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 tracing::info!(
                     frames = written.frames,
                     drawn = written.drawn,
+                    due = written.due,
                     "recording written"
                 );
             }

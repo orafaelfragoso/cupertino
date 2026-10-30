@@ -327,6 +327,17 @@ pub enum PlatformEvent {
     },
     /// The waker was woken.
     Wake,
+    /// The session's appearance or display options, once when the window system learns them and on every change.
+    Appearance(SystemAppearance),
+}
+
+/// The session's appearance and the display options that change how windows draw.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SystemAppearance {
+    pub dark: bool,
+    pub increase_contrast: bool,
+    pub reduce_transparency: bool,
+    pub reduce_motion: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

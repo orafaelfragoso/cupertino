@@ -11,6 +11,7 @@ layer = "ui"
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-modifiers = { path = "../cupertino-modifiers" }
+cupertino-protocol-app = { path = "../cupertino-protocol-app" }
 cupertino-ui-platform = { path = "../cupertino-ui-platform" }
 cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
@@ -19,6 +20,7 @@ tiny-skia = "0.11"
 
 # the integration test runs a minimal protocol server in-process
 [dev-dependencies]
+cupertino-defaults = { path = "../cupertino-defaults" }
 memmap2 = "0.9"
 rustix = { version = "1", features = ["event"] }
 wayland-protocols = { version = "0.32", features = ["server"] }

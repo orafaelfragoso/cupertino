@@ -5,12 +5,14 @@ use cupertino_assets::{Assets, FontRole, FontSource, BUILTIN_FONT};
 use cupertino_modifiers::Profile;
 use cupertino_theme::Theme;
 use cupertino_ui_atspi::AtspiAdapter;
-use cupertino_ui_core::{Application, MonotonicClock, Runtime, RuntimeOptions, UiError};
+use cupertino_ui_core::{
+    Application, MonotonicClock, Runtime, RuntimeOptions, ThemeForAppearance, UiError,
+};
 use cupertino_ui_layout::LayoutDirection;
-use cupertino_ui_platform::{PlatformError, WindowSystem};
+use cupertino_ui_platform::{PlatformError, SystemAppearance, WindowSystem};
 use cupertino_ui_render::{CpuConfig, CpuRenderer};
 use cupertino_ui_text::{FontIndex, FontStyle, FontWeight, GlyphRaster, TextSystem};
-use cupertino_ui_theme::{Appearance, ThemePreferences, ThemeTokens};
+use cupertino_ui_theme::{Appearance, ColorTokens, ThemePreferences, ThemeTokens};
 use cupertino_ui_wayland::WaylandWindowSystem;
 use std::fmt;
 use std::fs::File;
@@ -42,28 +44,65 @@ impl fmt::Display for AppError {
 
 impl std::error::Error for AppError {}
 
-/// Opens `A`'s windows on the session's Wayland display, publishes them to assistive technology over AT-SPI, and runs
-/// until the application exits or its last window without a close handler is closed.
+/// Opens `A`'s windows on the session's Wayland display, publishes them to assistive technology over AT-SPI, follows
+/// the session's appearance and display options, and runs until the application exits or its last window without a
+/// close handler is closed.
 pub fn run<A: Application>() -> Result<(), AppError> {
-    let mut options = options()?;
+    let (mut options, theme) = options_and_theme()?;
+    let follow = theme_for(theme, Arc::clone(&options.theme));
     let system = WaylandWindowSystem::connect(Profile::cupertino()).map_err(AppError::Connect)?;
     options.accessibility = Some(Box::new(AtspiAdapter::new(system.waker())));
     Runtime::<A, _>::new(system, options)
+        .with_theme_for(follow)
         .run()
         .map_err(AppError::Runtime)
 }
 
-/// The runtime options of an application on this system. Appearance follows Light and motion is on until the
-/// system preferences reach applications.
+/// The runtime options of an application on this system. It starts in the light appearance with motion on; [`run`]
+/// then follows the session's appearance and display options.
 pub fn options() -> Result<RuntimeOptions, AppError> {
+    options_and_theme().map(|(options, _)| options)
+}
+
+/// The theme preferences of the session's appearance and display options.
+pub fn preferences(appearance: &SystemAppearance) -> ThemePreferences {
+    ThemePreferences {
+        appearance: match (appearance.dark, appearance.increase_contrast) {
+            (false, false) => Appearance::Light,
+            (true, false) => Appearance::Dark,
+            (false, true) => Appearance::LightHighContrast,
+            (true, true) => Appearance::DarkHighContrast,
+        },
+        reduce_transparency: appearance.reduce_transparency,
+        reduce_motion: appearance.reduce_motion,
+    }
+}
+
+/// Makes the Cupertino theme for each appearance from `theme`. Where the theme data lacks something the theme needs,
+/// the built-in neutral colours take the place of its colours, on `start`'s metrics and type.
+fn theme_for(theme: Theme, start: Arc<ThemeTokens>) -> ThemeForAppearance {
+    Box::new(move |appearance| {
+        let preferences = preferences(appearance);
+        let tokens = ThemeTokens::cupertino(&theme, preferences).unwrap_or_else(|e| {
+            eprintln!("cupertino-kit: the theme cannot follow the session ({e}); using the neutral colours");
+            let mut tokens = (*start).clone();
+            tokens.preferences = preferences;
+            tokens.colors = ColorTokens::neutral(preferences.appearance);
+            tokens.motion.reduce = preferences.reduce_motion;
+            tokens
+        });
+        Arc::new(tokens)
+    })
+}
+
+fn options_and_theme() -> Result<(RuntimeOptions, Theme), AppError> {
     let preferences = ThemePreferences {
         appearance: Appearance::Light,
         reduce_transparency: false,
         reduce_motion: false,
     };
-    let theme = Theme::load()
-        .and_then(|theme| ThemeTokens::cupertino(&theme, preferences))
-        .map_err(AppError::Theme)?;
+    let data = Theme::load().map_err(AppError::Theme)?;
+    let theme = ThemeTokens::cupertino(&data, preferences).map_err(AppError::Theme)?;
     let assets = Assets::discover();
     let (fonts, builtin) = fonts(&assets);
     let preferred = [
@@ -73,7 +112,7 @@ pub fn options() -> Result<RuntimeOptions, AppError> {
     let family = ui_family(&fonts, preferred.into_iter().flatten(), builtin.as_deref());
     let text = Arc::new(TextSystem::new(fonts, &family));
     let glyphs = Arc::clone(&text);
-    Ok(RuntimeOptions {
+    let options = RuntimeOptions {
         theme: Arc::new(theme),
         text,
         direction: LayoutDirection::Ltr,
@@ -94,7 +133,8 @@ pub fn options() -> Result<RuntimeOptions, AppError> {
         on_window_error: Some(Box::new(|window, error| {
             eprintln!("cupertino-kit: window {window:?}: {error:?}");
         })),
-    })
+    };
+    Ok((options, data))
 }
 
 /// The largest font file read; the biggest real collections are a few tens of megabytes.
@@ -177,6 +217,50 @@ fn fonts(assets: &Assets) -> (FontIndex, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_session_appearance_picks_the_theme_appearance_and_its_preferences() {
+        let session =
+            |dark, increase_contrast, reduce_transparency, reduce_motion| SystemAppearance {
+                dark,
+                increase_contrast,
+                reduce_transparency,
+                reduce_motion,
+            };
+        assert_eq!(
+            preferences(&session(false, false, false, false)).appearance,
+            Appearance::Light
+        );
+        assert_eq!(
+            preferences(&session(true, false, false, false)).appearance,
+            Appearance::Dark
+        );
+        assert_eq!(
+            preferences(&session(false, true, false, false)).appearance,
+            Appearance::LightHighContrast
+        );
+        let all = preferences(&session(true, true, true, true));
+        assert_eq!(all.appearance, Appearance::DarkHighContrast);
+        assert!(all.reduce_transparency && all.reduce_motion);
+    }
+
+    #[test]
+    fn following_the_session_makes_its_cupertino_theme() {
+        let theme = Theme::load().unwrap();
+        let start = Arc::new(
+            ThemeTokens::cupertino(&theme, preferences(&SystemAppearance::default())).unwrap(),
+        );
+        let mut follow = theme_for(theme, start);
+        let dark = SystemAppearance {
+            dark: true,
+            reduce_motion: true,
+            ..SystemAppearance::default()
+        };
+        let tokens = follow(&dark);
+        let expected = ThemeTokens::cupertino(&Theme::load().unwrap(), preferences(&dark)).unwrap();
+        assert_eq!(*tokens, expected);
+        assert!(tokens.motion.reduce);
+    }
 
     #[test]
     fn only_a_regular_font_file_of_bounded_size_is_read() {

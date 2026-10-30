@@ -1,7 +1,7 @@
 use crate::accessibility::{AccessibleStates, AccessibleValue, Action, Live, Relation, Role};
 use crate::route::Placement;
 use crate::widget::Change;
-use crate::{Environment, NodeId, Phase};
+use crate::{Environment, Key, NodeId, Phase};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_platform::{CursorShape, Timestamp};
 use cupertino_ui_render::{
@@ -32,7 +32,7 @@ pub(crate) enum CaptureRequest {
 }
 
 /// Where [`EventCx::focus_item`] moves the focus among a roving group's items, in reading order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum FocusTarget {
     /// The next item, the first after the last.
     Next,
@@ -42,6 +42,8 @@ pub enum FocusTarget {
     Last,
     /// The item at this position; past the last, nothing moves.
     Index(usize),
+    /// The item with this key once the view is rebuilt, for an item the old view did not build.
+    Key(Key),
 }
 
 /// What widgets asked for while one event was routed.
@@ -81,7 +83,7 @@ impl<M> Effects<M> {
     pub(crate) fn absorb(&mut self, other: Self) {
         self.messages.extend(other.messages);
         self.focus = other.focus.or(self.focus);
-        self.focus_item = other.focus_item.or(self.focus_item);
+        self.focus_item = other.focus_item.or(self.focus_item.take());
         self.capture = other.capture.or(self.capture.take());
         self.changes.extend(other.changes);
         self.cursor = other.cursor.or(self.cursor);
@@ -322,6 +324,7 @@ pub(crate) struct Semantics {
     pub(crate) live: Option<Live>,
     pub(crate) roving_group: bool,
     pub(crate) roving_item: bool,
+    pub(crate) focus_fallback: bool,
 }
 
 /// A node without a role is left out of the accessibility tree and its children take its place.
@@ -396,5 +399,10 @@ impl SemanticsCx<'_> {
     /// error). A node without a role is left out of the tree, and so is never announced.
     pub fn live(&mut self, live: Live) {
         self.semantics.live = Some(live);
+    }
+
+    /// Makes the node a Tab stop only when no node under it is one, such as a scroll view around long text.
+    pub fn focus_fallback(&mut self) {
+        self.semantics.focus_fallback = true;
     }
 }

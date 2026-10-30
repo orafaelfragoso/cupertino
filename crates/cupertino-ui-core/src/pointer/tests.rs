@@ -5,7 +5,7 @@ use crate::test_support::{env, group, leaf, Leaf};
 use crate::tree::Tree;
 use crate::Element;
 use cupertino_geometry::Rect;
-use cupertino_ui_platform::MouseButton;
+use cupertino_ui_platform::{Mods, MouseButton};
 
 type M = String;
 
@@ -92,6 +92,7 @@ fn button(x: f64, pressed: bool) -> PointerEvent {
         button: MouseButton::Left,
         pressed,
         serial: 1,
+        mods: Mods::NONE,
     }
 }
 

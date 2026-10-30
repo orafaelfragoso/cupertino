@@ -369,6 +369,19 @@ fn a_keyboard_focus_rings_the_chrome() {
 }
 
 #[test]
+fn an_inactive_window_shows_no_focus_ring_and_it_returns_with_the_window() {
+    let mut h = Harness::<App>::new();
+    h.tap(TAB);
+    let rings = |h: &Harness<App>| shapes(h, "ok").into_iter().filter(|s| !s.0).count();
+    let shown = rings(&h);
+    h.send(WindowEvent::Focus(false));
+    assert!(h.focused("ok"), "the window keeps its focus");
+    assert_eq!(rings(&h), shown - 1);
+    h.send(WindowEvent::Focus(true));
+    assert_eq!(rings(&h), shown);
+}
+
+#[test]
 fn it_is_a_button_named_by_its_label_that_can_be_clicked() {
     let h = Harness::<App>::new();
     let node = h.accessible("ok");

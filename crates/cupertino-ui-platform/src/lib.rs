@@ -246,6 +246,8 @@ pub enum PointerEvent {
         pressed: bool,
         /// Passed back with move, resize and window-menu requests.
         serial: u32,
+        /// The keyboard modifiers held at the press or release.
+        mods: Mods,
     },
     Scroll {
         position: Point,

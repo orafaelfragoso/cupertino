@@ -42,6 +42,8 @@ impl Application for Counter {
             content: AttributedText::plain(count.to_string(), TextStyle::new(13.0)),
             role: TextRole::Title,
             wrap: false,
+            secondary: false,
+            selected: false,
         })
         .key("count");
         vec![Window {

@@ -1,6 +1,6 @@
 //! `--record`: the first output of the headless backend as raw RGBA frames, 60 per second of wall time, for a video
-//! encoder that reads the file (a FIFO, say). The clients animate on the wall clock, so the frames follow it too: a frame
-//! that comes due while the encoder still takes the previous ones repeats the last image instead of being drawn, and the
+//! encoder that reads the file (a FIFO, say). The clients animate on the wall clock, so the frames follow it too: frames
+//! that come due while the encoder still takes the previous ones are written as repeats of the next image sent, and the
 //! number of frames always matches the time that passed.
 
 use std::cell::RefCell;

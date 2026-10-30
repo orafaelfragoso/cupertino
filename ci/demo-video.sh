@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Records the demo video: the full desktop of session.sh (headless, the sample home folder of ci/demo-video/home)
 # driven by the scripted input of ci/demo_video.py, every frame of the output at 60 per second, encoded by ffmpeg.
-# Nothing is composited or edited afterwards: each video frame is a frame the server drew, and a frame that came due
-# while the encoder was still busy repeats the previous one (the summary line says how many were drawn).
+# Nothing is composited or edited afterwards: each video frame is a frame the server drew, and frames that came due
+# while the encoder was still busy repeat the next one drawn (the summary line says how many were drawn).
 #
 # Usage: ci/demo-video.sh OUT.mp4          record and encode
 #        ci/demo-video.sh --frames DIR     the same run without recording: one PNG per shot, for a look check

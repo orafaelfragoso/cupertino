@@ -314,8 +314,8 @@ fn an_application_learns_the_lock_as_it_starts_and_the_unlock_once_it_is_over() 
     assert_eq!(late.lock_events(), ["session_lock 1"]);
 
     locker.unlock();
-    h.wait_until("the observer to be told the session is open again", |_| {
-        current.lock_events().len() == 3
+    h.wait_until("the observers to be told the session is open again", |_| {
+        current.lock_events().len() == 3 && late.lock_events().len() == 2
     });
     assert!(!h.state.session_lock.is_active());
     assert_eq!(

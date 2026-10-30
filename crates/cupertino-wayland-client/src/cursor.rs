@@ -143,6 +143,9 @@ fn inherits(index: &Path) -> Option<Vec<String>> {
 
 /// The most images of one animated cursor kept; themes ship a few dozen at most.
 const MAX_FRAMES: usize = 64;
+/// The shortest an animated cursor shows an image: a frame of a 60 Hz output. A shorter or zero delay in a theme file
+/// would redraw the cursor on every wake of the loop.
+const MIN_DELAY: Duration = Duration::from_millis(16);
 
 /// A cursor image in a buffer of its own, shown for `delay` when the cursor is animated.
 struct Frame {
@@ -249,7 +252,7 @@ impl ThemedCursor {
             .surface
             .get_or_insert_with(|| self.compositor.create_surface(qh, ()));
         draw(surface, pointer, serial, &frames[0], scale);
-        let animated = frames.len() > 1 && !frames[0].delay.is_zero();
+        let animated = frames.len() > 1;
         self.showing = Some(Showing {
             key,
             frame: 0,
@@ -293,7 +296,7 @@ impl ThemedCursor {
                     buffer: upload(&self.shm, qh, image)?,
                     size: (image.width, image.height),
                     hotspot: (image.xhot.min(image.width), image.yhot.min(image.height)),
-                    delay: Duration::from_millis(image.delay.into()),
+                    delay: delay(image.delay),
                 })
             })
             .collect()
@@ -377,6 +380,11 @@ fn frames(images: &[Image], wanted: u32) -> Vec<&Image> {
         .filter(|i| i.size == size && drawable(i))
         .take(MAX_FRAMES)
         .collect()
+}
+
+/// How long an image whose file says `millis` is shown, at least [`MIN_DELAY`].
+fn delay(millis: u32) -> Duration {
+    Duration::from_millis(millis.into()).max(MIN_DELAY)
 }
 
 fn drawable(image: &Image) -> bool {
@@ -477,6 +485,13 @@ mod tests {
             out.extend(std::iter::repeat_n(0xff, pixels));
         }
         out
+    }
+
+    #[test]
+    fn an_image_shows_for_its_delay_but_never_less_than_a_frame() {
+        assert_eq!(delay(0), MIN_DELAY);
+        assert_eq!(delay(1), MIN_DELAY);
+        assert_eq!(delay(30), Duration::from_millis(30));
     }
 
     #[test]

@@ -866,6 +866,9 @@ impl App {
             },
         );
         screen.set_reduce_motion(self.session_state.display.reduce_motion);
+        if cupertino_shell_client::test_clock::motion_settled() {
+            screen.settle_interface();
+        }
         self.lock = Some(Lock {
             screen,
             session_lock,

@@ -2,8 +2,10 @@
 
 A comparison passes when exactly the golden tests ran and passed. An update re-records the baselines and then fails
 each test that recorded (so it can never pass as a comparison); it passes when every golden test either passed or
-failed with its re-record message, at least one recorded, and nothing failed for another reason. No line is counted:
-a failing test's message may hold the worker's own output, which repeats the re-record line.
+failed with its re-record message alone, at least one recorded, and nothing failed for another reason. A test fails
+with that message alone only when its worker's sole failure was the re-record (tests/goldens.rs, `only_re_recorded`);
+anything else after it fails the test as `isolated golden worker failed`. No line is counted: a failing test's section
+also holds the worker's own output, which repeats the re-record line.
 
 Usage: python3 -I ci/goldens_log.py [--update] LOG
 """
@@ -14,13 +16,15 @@ from pathlib import Path
 # The tests of the goldens binary that ci/goldens.sh runs; change it with the tests.
 TESTS = (
     "pixel_comparison_fails_on_a_change_at_unchanged_geometry",
+    "only_a_lone_re_record_panic_is_an_update",
     "desktop_goldens_and_input_replay",
     "shell_process_goldens",
 )
 
 RESULT = re.compile(r"^test (\S+) \.\.\. (ok|FAILED)$")
 SECTION = re.compile(r"^---- (\S+) stdout ----$")
-RECORDED = re.compile(r"re-recorded [0-9]+ goldens")
+PANIC = re.compile(r"^thread '(\S+)'(?: \([0-9]+\))? panicked at \S+:$")
+RECORDED = re.compile(r"^re-recorded [0-9]+ goldens; rerun without CUPERTINO_UPDATE_GOLDENS$")
 
 
 def results(log: str) -> dict[str, set[str]]:
@@ -48,6 +52,17 @@ def sections(log: str) -> dict[str, str]:
     return {name: "\n".join(lines) for name, lines in found.items()}
 
 
+def re_recorded(name: str, section: str) -> bool:
+    """Whether the test failed with the re-record message alone: its own panic is the section's only unindented one
+    (the worker's stderr is indented) and that panic's message is the re-record line."""
+    lines = section.splitlines()
+    panics = [i for i, line in enumerate(lines) if PANIC.match(line)]
+    if len(panics) != 1 or PANIC.match(lines[panics[0]])[1] != name:
+        return False
+    following = lines[panics[0] + 1 : panics[0] + 2]
+    return bool(following) and RECORDED.match(following[0]) is not None
+
+
 def verdict(log: str, update: bool) -> str | None:
     """`None` when the log passes, else why not."""
     ran = results(log)
@@ -63,7 +78,7 @@ def verdict(log: str, update: bool) -> str | None:
     if not failed:
         return "an update re-recorded nothing"
     output = sections(log)
-    other = [name for name in failed if not RECORDED.search(output.get(name, ""))]
+    other = [name for name in failed if not re_recorded(name, output.get(name, ""))]
     if other:
         return f"tests failed without re-recording: {', '.join(other)}"
     return None

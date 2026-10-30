@@ -17,6 +17,9 @@ pub(crate) struct SemanticsPass {
     pub(crate) focusable: Vec<NodeId>,
     /// Focus scopes, in reading order.
     pub(crate) scopes: Vec<NodeId>,
+    pub(crate) roving_groups: Vec<NodeId>,
+    /// Items of roving groups, in reading order.
+    pub(crate) roving_items: Vec<NodeId>,
 }
 
 /// Whether the node marks its value as protected, such as a password field.
@@ -45,6 +48,8 @@ pub(crate) fn build<M: 'static>(
         nodes: BTreeMap::new(),
         focusable: Vec::new(),
         scopes: Vec::new(),
+        roving_groups: Vec::new(),
+        roving_items: Vec::new(),
     };
     // Each entry is a node and its nearest ancestor in the accessibility tree.
     let mut stack = vec![(root, None::<NodeId>)];
@@ -63,6 +68,12 @@ pub(crate) fn build<M: 'static>(
         }
         if semantics.focus_scope {
             pass.scopes.push(id);
+        }
+        if semantics.roving_group {
+            pass.roving_groups.push(id);
+        }
+        if semantics.roving_item {
+            pass.roving_items.push(id);
         }
         let role = match semantics.role {
             Some(role) => Some(role),

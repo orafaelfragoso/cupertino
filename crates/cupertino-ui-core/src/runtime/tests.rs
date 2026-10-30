@@ -1,8 +1,12 @@
 use super::*;
+use crate::test_support::Group;
 use crate::test_support::{
     leaf, options, options_with, row, FakeAdapter, FakeClock, FakeSystem, Leaf, MAX_PIXELS,
 };
-use crate::{Role, Shortcut};
+use crate::{
+    Change, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Shortcut, Widget,
+};
+use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
 use cupertino_ui_platform::{
     Configure, DecorationMode, Mods, MouseButton, PointerEvent, WindowStates, WmCapabilities,
 };
@@ -961,4 +965,191 @@ fn a_window_paints_the_theme_background_unless_its_content_draws_its_own() {
         fill,
         "the root repaints when the background changes back"
     );
+}
+
+/// One of four choices in a roving group; only the selected one is a Tab stop. Arrows, Home and End choose another and
+/// move the focus to it.
+struct Choice {
+    index: usize,
+    selected: bool,
+}
+
+const CHOICES: usize = 4;
+
+impl Widget<String> for Choice {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(20.0),
+            height: SizeSpec::Fixed(20.0),
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.selected != old.selected {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(20.0, 20.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, String>) -> Propagation {
+        let Event::Key(key, _) = event else {
+            return Propagation::Continue;
+        };
+        if !key.pressed || cx.node() != cx.target() {
+            return Propagation::Continue;
+        }
+        let (target, index) = match key.keysym.0 {
+            0xff53 => (FocusTarget::Next, (self.index + 1) % CHOICES),
+            0xff51 => (FocusTarget::Previous, (self.index + CHOICES - 1) % CHOICES),
+            0xff50 => (FocusTarget::First, 0),
+            0xff57 => (FocusTarget::Last, CHOICES - 1),
+            _ => return Propagation::Continue,
+        };
+        cx.emit(format!("choose:{index}"));
+        cx.focus_item(target);
+        Propagation::Stop
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::RadioButton);
+        cx.roving_item();
+        if self.selected {
+            cx.focusable();
+        }
+    }
+}
+
+/// A plain button, a roving group of four choices, and the model's selection; the model refuses choice 2.
+struct Choices;
+
+impl Application for Choices {
+    type Model = usize;
+    type Message = String;
+
+    fn init() -> (usize, Vec<Command<String>>) {
+        (0, Vec::new())
+    }
+
+    fn update(selected: &mut usize, message: String) -> Vec<Command<String>> {
+        if let Some(index) = message.strip_prefix("choose:") {
+            let index: usize = index.parse().unwrap();
+            if index != 2 {
+                *selected = index;
+            }
+        }
+        Vec::new()
+    }
+
+    fn view(selected: &usize) -> Vec<Window<String>> {
+        let choices = (0..CHOICES)
+            .map(|index| {
+                Element::new(Choice {
+                    index,
+                    selected: index == *selected,
+                })
+                .key(Key::from(format!("choice{index}")))
+            })
+            .collect();
+        vec![Window {
+            key: WindowKey("main".into()),
+            spec: WindowSpec {
+                title: "Choices".into(),
+                app_id: "test.choices".into(),
+                size: Size::new(200.0, 100.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Preferred,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            background: WindowBackground::Theme,
+            content: Element::new(row(vec![
+                Element::new(leaf("before")).key("before"),
+                Element::new(Group {
+                    roving: true,
+                    ..row(choices)
+                }),
+            ])),
+        }]
+    }
+}
+
+#[test]
+fn arrows_move_the_focus_with_the_selection_in_a_roving_group_and_a_refused_one_keeps_it() {
+    let damage = Rc::default();
+    let mut rt = Runtime::<Choices, _>::new(FakeSystem::default(), options(&damage));
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+    let key = |rt: &mut Runtime<Choices, FakeSystem>, keysym: u32| {
+        rt.window_system_mut().send(
+            window,
+            WindowEvent::Key(
+                KeyEvent {
+                    code: 0,
+                    keysym: Keysym(keysym),
+                    text: None,
+                    pressed: true,
+                    repeat: false,
+                    mods: Mods::NONE,
+                },
+                Timestamp(0),
+            ),
+        );
+        rt.step(steps()).unwrap();
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(1)));
+        rt.step(steps()).unwrap();
+    };
+    let focused = |rt: &Runtime<Choices, FakeSystem>| {
+        let focus = rt.snapshot(window).unwrap().focus;
+        (0..CHOICES).find(|i| focus == rt.find(window, &Key::from(format!("choice{i}"))))
+    };
+
+    key(&mut rt, 0xff09);
+    key(&mut rt, 0xff09);
+    assert_eq!(
+        focused(&rt),
+        Some(0),
+        "Tab stops once in the group, on its selected item"
+    );
+    key(&mut rt, 0xff53);
+    assert_eq!((focused(&rt), *rt.model()), (Some(1), 1));
+    assert!(
+        rt.windows[0].focus.visible(),
+        "the ring shows on the moved focus"
+    );
+
+    key(&mut rt, 0xff53);
+    assert_eq!(
+        (focused(&rt), *rt.model()),
+        (Some(1), 1),
+        "a refused choice keeps the focus"
+    );
+
+    key(&mut rt, 0xff57);
+    assert_eq!((focused(&rt), *rt.model()), (Some(3), 3));
+    key(&mut rt, 0xff53);
+    assert_eq!(
+        (focused(&rt), *rt.model()),
+        (Some(0), 0),
+        "Next wraps to the first"
+    );
+    key(&mut rt, 0xff51);
+    assert_eq!(focused(&rt), Some(3), "Previous wraps to the last");
 }

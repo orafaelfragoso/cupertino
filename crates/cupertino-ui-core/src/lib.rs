@@ -27,7 +27,7 @@ pub use accessibility::{
 };
 pub use clock::MonotonicClock;
 pub use command::CommandRegistry;
-pub use cx::{EventCx, MeasureCx, PaintCx, SemanticsCx};
+pub use cx::{EventCx, FocusTarget, MeasureCx, PaintCx, SemanticsCx};
 pub use runtime::{
     RendererFactory, Runtime, RuntimeOptions, ThemeForAppearance, WindowErrorHandler,
 };

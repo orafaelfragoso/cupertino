@@ -399,6 +399,39 @@ fn start_xwayland(state: &mut Cupertino) {
     }
 }
 
+/// Sessions in a row that ended with a lost rendering context, kept in `$XDG_STATE_HOME/cupertino`, so a loss that recurs
+/// at every login shows in the journal: counted up when this one did (`lost`), cleared when it did not. `None` when the
+/// count cannot be kept.
+fn lost_context_streak(lost: bool) -> Option<u32> {
+    // a relative XDG_STATE_HOME is ignored, as the base directory specification says
+    let dir = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?
+        .join("cupertino");
+    count_streak(&dir.join(LOST_CONTEXT_STREAK), lost)
+}
+
+const LOST_CONTEXT_STREAK: &str = "lost-context-streak";
+
+fn count_streak(path: &std::path::Path, lost: bool) -> Option<u32> {
+    if !lost {
+        let _ = std::fs::remove_file(path);
+        return None;
+    }
+    // a count is a few digits: the read is bounded, so a huge file or a device in its place costs nothing
+    let mut text = String::new();
+    let before = std::fs::File::open(path)
+        .and_then(|f| std::io::Read::read_to_string(&mut std::io::Read::take(f, 16), &mut text))
+        .ok()
+        .and_then(|_| text.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+    let count = before.saturating_add(1);
+    std::fs::create_dir_all(path.parent()?).ok()?;
+    std::fs::write(path, format!("{count}\n")).ok()?;
+    Some(count)
+}
+
 /// Start the compositor with the given options and run until it exits.
 #[cfg(feature = "udev")]
 fn check_hardware() -> Result<()> {
@@ -496,6 +529,16 @@ pub fn run(cli: Cli) -> Result<()> {
         Mode::Udev => return Err(anyhow!("built without the udev feature")),
     }
     tracing::info!("shutting down");
+    // only a session on the hardware counts: nested and offscreen runs (tests among them) leave the count alone
+    let streak = (mode == Mode::Udev)
+        .then(|| lost_context_streak(state.rendering_lost.is_some()))
+        .flatten();
+    if let Some(reason) = &state.rendering_lost {
+        return Err(anyhow!(
+            "the rendering context was lost ({reason}); sessions in a row that ended this way: {}",
+            streak.unwrap_or(1)
+        ));
+    }
     Ok(())
 }
 
@@ -570,6 +613,24 @@ fn export_socket(state: &Cupertino) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lost_contexts_are_counted_in_a_row_and_cleared_by_a_normal_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cupertino").join(LOST_CONTEXT_STREAK);
+        assert_eq!(count_streak(&path, true), Some(1));
+        assert_eq!(count_streak(&path, true), Some(2));
+        assert_eq!(count_streak(&path, false), None);
+        assert!(!path.exists());
+        assert_eq!(count_streak(&path, true), Some(1));
+
+        std::fs::write(&path, "x".repeat(1 << 20)).unwrap();
+        assert_eq!(
+            count_streak(&path, true),
+            Some(1),
+            "a malformed count starts over"
+        );
+    }
 
     #[test]
     fn size_parses() {

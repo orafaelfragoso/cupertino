@@ -50,6 +50,9 @@ const AVATAR_SHADOW_RADIUS: f64 = 15.0;
 const AVATAR_SHADOW_OPACITY: f32 = 0.25;
 /// Avatar ring (1 pt, white 0.1).
 const RING_WIDTH: f64 = 1.0;
+/// The outline of a password field after a wrong password: the dark appearance's red (approximate).
+const FAILURE_OUTLINE: Rgba = [1.0, 69.0 / 255.0, 58.0 / 255.0, 1.0];
+const FAILURE_OUTLINE_WIDTH: f64 = 2.0;
 const RING_ALPHA: f32 = 0.1;
 /// Fill behind the initials (approximate).
 const AVATAR_FILL: Rgba = [0.60, 0.62, 0.66, 1.0];
@@ -165,6 +168,8 @@ pub struct View<'a> {
     pub opacity: f64,
     /// Horizontal offset of the password field in points.
     pub shake: f64,
+    /// The last attempt was a wrong password: the field is outlined until the next edit.
+    pub failure_outline: bool,
 }
 
 /// What the field holds.
@@ -643,6 +648,14 @@ impl Renderer {
             PILL_HEIGHT,
         );
         canvas.pill(pill, PILL_FILL);
+        if view.failure_outline {
+            canvas.outline(
+                pill,
+                PILL_HEIGHT / 2.0,
+                FAILURE_OUTLINE_WIDTH,
+                FAILURE_OUTLINE,
+            );
+        }
         let center = pill.center();
         let baseline = center.y + self.cap_height_per_em * FIELD_SIZE / 2.0;
         match view.field {
@@ -1078,6 +1091,11 @@ impl Canvas<'_> {
 
     /// A line of [`RING_WIDTH`] along the edge of a rectangle with corners of `radius`.
     fn rounded_edge(&mut self, rect: Rect, radius: f64, rgba: Rgba) {
+        self.outline(rect, radius, RING_WIDTH, rgba);
+    }
+
+    /// A line `width` points wide along the edge of a rectangle with corners of `radius`.
+    fn outline(&mut self, rect: Rect, radius: f64, width: f64, rgba: Rgba) {
         let path = rounded_path(
             rect,
             Radii::uniform(radius),
@@ -1086,7 +1104,7 @@ impl Canvas<'_> {
         )
         .expect("the rectangle has a size");
         let stroke = Stroke {
-            width: self.px(RING_WIDTH),
+            width: self.px(width),
             ..Stroke::default()
         };
         self.pixmap

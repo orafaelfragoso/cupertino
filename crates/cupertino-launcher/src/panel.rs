@@ -227,6 +227,25 @@ impl Panel {
         self.focus
     }
 
+    /// Whether the query field's caret shows at `now`: the panel is open with the keyboard in the field and the blink
+    /// is on. `steady` (Reduce Motion): it does not blink.
+    pub fn caret_visible(&self, now: std::time::Instant, steady: bool) -> bool {
+        self.visible
+            && self.focus == Focus::Field
+            && if steady {
+                self.field.selection().is_empty()
+            } else {
+                self.field.caret_visible(now)
+            }
+    }
+
+    /// Until the caret's next blink while it can show; never while it is `steady`.
+    pub fn next_blink(&self, now: std::time::Instant, steady: bool) -> Option<std::time::Duration> {
+        (self.visible && self.focus == Focus::Field && !steady)
+            .then(|| self.field.next_blink(now))
+            .flatten()
+    }
+
     /// Scroll the query so that the caret at `caret_x` stays inside a field `width` points wide.
     pub fn follow_caret(&mut self, caret_x: f64, text_width: f64, width: f64) {
         self.field.follow_caret(caret_x, text_width, width);

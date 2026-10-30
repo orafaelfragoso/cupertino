@@ -425,9 +425,6 @@ fn an_output_whose_new_image_another_output_took_in_is_marked_for_a_frame() {
         ..CompositorSettings::default()
     };
     d.state.apply_compositor_change(&before, &after);
-    let mut frame = 1000;
-    d.at(frame * 16);
-    assert!(d.state.overlays.wallpaper.pending());
     let two = d.state.outputs[1].id;
     let mut backend = d.state.backend.take().unwrap();
     #[allow(irrefutable_let_patterns)]
@@ -435,6 +432,13 @@ fn an_output_whose_new_image_another_output_took_in_is_marked_for_a_frame() {
     else {
         panic!("headless backend required")
     };
+    // the second output's frame asks after taking in what was read, so its answer can only come in a later frame
+    let mut frame = 1000;
+    d.state.fixed_time = Some(f64::from(frame) * 0.016);
+    d.state.build_output_elements(&mut renderer.renderer, 0);
+    d.state.build_output_elements(&mut renderer.renderer, 1);
+    d.state.outputs[1].scheduler.called_back();
+    assert!(d.state.overlays.wallpaper.pending());
     let end = Instant::now() + Duration::from_secs(10);
     while d.state.overlays.wallpaper.pending() {
         assert!(Instant::now() < end, "no answer");

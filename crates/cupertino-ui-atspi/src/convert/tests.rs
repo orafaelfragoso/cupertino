@@ -73,6 +73,15 @@ fn a_button_carries_its_name_bounds_actions_relations_and_children() {
 }
 
 #[test]
+fn static_text_is_named_through_its_value_as_accesskit_reads_a_label() {
+    let mut text = base(Role::StaticText);
+    text.name = Some("Version 1.0".into());
+    let out = node(&text);
+    assert_eq!(out.role(), accesskit::Role::Label);
+    assert_eq!(out.value(), Some("Version 1.0"));
+}
+
+#[test]
 fn values_keep_their_kind() {
     let mut field = base(Role::TextInput);
     field.value = Some(text("Ada"));

@@ -27,8 +27,11 @@ pub(crate) fn protected(node: &AccessibilityNode) -> bool {
 pub(crate) fn node(node: &AccessibilityNode) -> accesskit::Node {
     let secret = protected(node);
     let mut out = accesskit::Node::new(role(node.role));
-    if let Some(name) = &node.name {
-        out.set_label(name.as_str());
+    match &node.name {
+        // AccessKit names a label from its value
+        Some(name) if node.role == Role::StaticText => out.set_value(name.as_str()),
+        Some(name) => out.set_label(name.as_str()),
+        None => {}
     }
     if let Some(description) = &node.description {
         out.set_description(description.as_str());

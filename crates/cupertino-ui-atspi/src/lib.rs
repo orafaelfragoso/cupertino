@@ -22,6 +22,10 @@ pub struct AtspiAdapter {
     windows: HashMap<WindowId, Window>,
 }
 
+/// The most action requests waiting for the application's loop; more are dropped until it drains them, and an
+/// assistive technology asks again.
+const MAX_QUEUED: usize = 64;
+
 /// What the executor thread and the application's loop share.
 struct Shared {
     /// Windows whose AccessKit adapter is active.
@@ -225,7 +229,11 @@ impl ActionHandler for Handlers {
         if !lock(&self.mirror).allows(&request) {
             return;
         }
-        lock(&self.shared.actions).push(request);
+        let mut queued = lock(&self.shared.actions);
+        if queued.len() < MAX_QUEUED {
+            queued.push(request);
+        }
+        drop(queued);
         self.shared.waker.wake_by_ref();
     }
 }

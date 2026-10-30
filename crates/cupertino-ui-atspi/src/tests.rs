@@ -85,6 +85,19 @@ fn an_advertised_action_reaches_the_loop_and_wakes_it() {
 }
 
 #[test]
+fn requests_beyond_what_the_loop_can_hold_are_dropped_until_it_drains() {
+    let (_, mut h, _) = handlers();
+    publish(&h, Role::Button, None, vec![Action::Click]);
+    for _ in 0..MAX_QUEUED + 6 {
+        ask(&mut h, accesskit::Action::Click, None);
+    }
+    assert_eq!(queued(&h).len(), MAX_QUEUED);
+    lock(&h.shared.actions).clear();
+    ask(&mut h, accesskit::Action::Click, None);
+    assert_eq!(queued(&h).len(), 1);
+}
+
+#[test]
 fn an_action_the_target_did_not_advertise_is_dropped() {
     let (count, mut h, _) = handlers();
     publish(&h, Role::Button, None, vec![Action::Focus]);

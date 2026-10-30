@@ -605,8 +605,10 @@ impl ContentLayout {
     }
 }
 
-/// Opacity of the accent over the folder a drag is over. approximate.
+/// Opacity of the accent over the folder or place a drag is over. approximate.
 const DROP_TARGET_ALPHA: f32 = 0.3;
+/// Width of the label-colour outline around a drop target under Increase Contrast. approximate.
+const DROP_OUTLINE_WIDTH: f64 = 2.0;
 /// Opacity of the text of a disabled menu row. approximate.
 const DISABLED_ALPHA: f32 = 0.4;
 /// Name editor: padding either side of the text, minimum text width, border width and corner radius. approximate.
@@ -664,6 +666,37 @@ fn marquee_rect(frame: &Frame, origin: Point, at: Point) -> Option<Rect> {
 /// Where the rubber band from `origin` to `at` is drawn in `frame`; `None` when nothing of it shows.
 pub fn marquee_area(frame: &Frame, origin: Point, at: Point) -> Option<GeoRect> {
     marquee_rect(frame, origin, at).map(|r| GeoRect::new(r.x, r.y, r.w, r.h))
+}
+
+/// The drop look over `r`: the accent at [`DROP_TARGET_ALPHA`] and, under Increase Contrast, a solid outline in the
+/// label colour inside it, so the target does not rest on a translucent fill alone.
+fn paint_drop_target(pm: &mut Pixmap, r: &Rect, scale: f32, pal: &Palette, contrast: bool) {
+    let [red, green, blue, _] = pal.accent;
+    fill_rounded(
+        pm,
+        r,
+        m::HIGHLIGHT_RADIUS,
+        scale,
+        [red, green, blue, DROP_TARGET_ALPHA],
+    );
+    if contrast {
+        let half = DROP_OUTLINE_WIDTH / 2.0;
+        let [red, green, blue, _] = pal.text;
+        stroke_rounded(
+            pm,
+            &r.inset(half, half),
+            m::HIGHLIGHT_RADIUS - half,
+            DROP_OUTLINE_WIDTH,
+            scale,
+            [red, green, blue, 1.0],
+        );
+    }
+}
+
+/// Where place `index` of the sidebar is drawn with the drop look. `None` when the place is not in the frame.
+pub fn place_area(frame: &Frame, index: usize) -> Option<GeoRect> {
+    let r = frame.window.places.get(index)?;
+    Some(GeoRect::new(r.x, r.y, r.w, r.h))
 }
 
 /// Points around an item that the name editor's field and its focus ring reach.
@@ -835,13 +868,24 @@ pub struct WindowState<'a> {
     pub edit: Option<&'a NameEdit>,
     /// The name editor's caret shows now (the window is active, nothing is selected, the blink is on).
     pub edit_caret: bool,
-    /// The folder item a drag is over: outlined as the place the items would go.
-    pub drop_target: Option<usize>,
+    /// The folder item or sidebar place a drag is over: marked as where the items would go.
+    pub drop_target: Option<DropOutline>,
+    /// The session's Increase Contrast: the drop look gets a solid outline.
+    pub increase_contrast: bool,
     /// The rubber band being dragged: where it started in content coordinates and where the pointer is now in window
     /// points.
     pub marquee: Option<(Point, Point)>,
     /// The status bar's text ([`status_text`]), drawn when the bar is shown.
     pub status: &'a str,
+}
+
+/// What a drag is over, marked with the drop look.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropOutline {
+    /// An item of the listing, by index.
+    Item(usize),
+    /// A place of the sidebar, by index.
+    Place(usize),
 }
 
 /// Lays out and draws browser windows; holds the text shaper and the view settings.
@@ -1056,14 +1100,10 @@ impl WindowPainter {
         if state.browser.no_results() {
             self.paint_no_results(pm, scale, &w.content, state.mode, pal);
         }
-        if let Some(target) = state.drop_target.and_then(|i| frame.item_frame(i)) {
-            let outline = [
-                pal.accent[0],
-                pal.accent[1],
-                pal.accent[2],
-                DROP_TARGET_ALPHA,
-            ];
-            fill_rounded(pm, &target, m::HIGHLIGHT_RADIUS, scale, outline);
+        if let Some(DropOutline::Item(i)) = state.drop_target {
+            if let Some(target) = frame.item_frame(i) {
+                paint_drop_target(pm, &target, scale, pal, state.increase_contrast);
+            }
         }
         if let Some(band) = state
             .marquee
@@ -1591,9 +1631,12 @@ impl WindowPainter {
             );
         }
         let here = state.browser.dir();
-        for (place, r) in state.places.iter().zip(&w.places) {
+        for (i, (place, r)) in state.places.iter().zip(&w.places).enumerate() {
             if place.path == here {
                 fill_rounded(pm, r, m::HIGHLIGHT_RADIUS, scale, pal.inactive_selection);
+            }
+            if state.drop_target == Some(DropOutline::Place(i)) {
+                paint_drop_target(pm, r, scale, pal, state.increase_contrast);
             }
             let icon = Rect::new(
                 r.x + sidebar::INDENT,
@@ -2170,6 +2213,7 @@ mod tests {
             edit: None,
             edit_caret: false,
             drop_target: None,
+            increase_contrast: false,
             marquee: None,
             status: "3 items",
         };
@@ -2391,6 +2435,7 @@ mod tests {
             edit: None,
             edit_caret: false,
             drop_target: None,
+            increase_contrast: false,
             marquee: Some((origin, at)),
             status: "3 items",
         };
@@ -2421,6 +2466,7 @@ mod tests {
             edit: None,
             edit_caret: false,
             drop_target: None,
+            increase_contrast: false,
             marquee: Some((origin, at)),
             status: "3 items",
         };
@@ -2813,6 +2859,7 @@ mod tests {
             edit: None,
             edit_caret: false,
             drop_target: None,
+            increase_contrast: false,
             marquee: None,
             status: "1 item",
         };
@@ -2882,6 +2929,7 @@ mod tests {
             edit: None,
             edit_caret: false,
             drop_target: None,
+            increase_contrast: false,
             marquee: None,
             status: "",
         };
@@ -2981,6 +3029,7 @@ mod tests {
                 edit: None,
                 edit_caret: false,
                 drop_target: None,
+                increase_contrast: false,
                 marquee: None,
                 status: "",
             };
@@ -3061,6 +3110,7 @@ mod tests {
                             edit: Some(&edit),
                             edit_caret: true,
                             drop_target: None,
+                            increase_contrast: false,
                             marquee: None,
                             status: "",
                         };
@@ -3252,6 +3302,7 @@ mod tests {
                 edit: None,
                 edit_caret: false,
                 drop_target: None,
+                increase_contrast: false,
                 marquee: None,
                 status: "",
             };
@@ -3377,6 +3428,7 @@ mod tests {
                     edit,
                     edit_caret,
                     drop_target: None,
+                    increase_contrast: false,
                     marquee: None,
                     status: "",
                 };
@@ -3467,6 +3519,7 @@ mod tests {
                     edit,
                     edit_caret: edit.is_some(),
                     drop_target: None,
+                    increase_contrast: false,
                     marquee: None,
                     status: "",
                 };
@@ -3571,7 +3624,7 @@ mod tests {
         browser: &Browser,
         places: &[Place],
         scale: f32,
-        drop_target: Option<usize>,
+        drop_target: Option<DropOutline>,
         marquee: Option<(Point, Point)>,
         rows: Option<&[(u32, u32)]>,
     ) -> (Pixmap, u64) {
@@ -3589,6 +3642,7 @@ mod tests {
             edit: None,
             edit_caret: false,
             drop_target,
+            increase_contrast: false,
             marquee,
             status: "",
         };
@@ -3607,7 +3661,7 @@ mod tests {
         browser: &Browser,
         places: &[Place],
         scale: f32,
-        drop_target: Option<usize>,
+        drop_target: Option<DropOutline>,
         marquee: Option<(Point, Point)>,
     ) -> Pixmap {
         paint_drag_rows(
@@ -3632,7 +3686,7 @@ mod tests {
         browser: &Browser,
         places: &[Place],
         scale: f32,
-        drop_target: Option<usize>,
+        drop_target: Option<DropOutline>,
         marquee: Option<(Point, Point)>,
         areas: &[GeoRect],
     ) {
@@ -3681,7 +3735,11 @@ mod tests {
             let mut paint = |target| {
                 paint_dragging(&mut painter, &frame, &browser, &places, scale, target, None)
             };
-            let (none, two, four) = (paint(None), paint(Some(2)), paint(Some(4)));
+            let (none, two, four) = (
+                paint(None),
+                paint(Some(DropOutline::Item(2))),
+                paint(Some(DropOutline::Item(4))),
+            );
             assert_ne!(none.data(), two.data(), "the outline shows at {scale}x");
             let area = |i| item_area(&frame, i).unwrap();
             assert_eq!(
@@ -3700,11 +3758,130 @@ mod tests {
                 &browser,
                 &places,
                 scale,
-                Some(4),
+                Some(DropOutline::Item(4)),
                 None,
                 &[area(2), area(4)],
             );
         }
+    }
+
+    #[test]
+    fn a_drop_target_change_between_places_changes_pixels_only_inside_those_places() {
+        for scale in [1.0_f32, 1.5] {
+            let (_d, browser, places, mut painter, frame) = listing(scale, 12, 0.0);
+            let mut paint = |target| {
+                paint_dragging(&mut painter, &frame, &browser, &places, scale, target, None)
+            };
+            let (none, first, third) = (
+                paint(None),
+                paint(Some(DropOutline::Place(0))),
+                paint(Some(DropOutline::Place(2))),
+            );
+            assert_ne!(
+                none.data(),
+                first.data(),
+                "the place shows the drop look at {scale}x"
+            );
+            let area = |i| place_area(&frame, i).unwrap();
+            assert_eq!(
+                differing_outside(&none, &first, &[area(0)], scale),
+                vec![],
+                "a place marked at {scale}x"
+            );
+            assert_eq!(
+                differing_outside(&first, &third, &[area(0), area(2)], scale),
+                vec![],
+                "the mark moving between places at {scale}x"
+            );
+            damaged_rows_agree(
+                &mut painter,
+                &frame,
+                &browser,
+                &places,
+                scale,
+                Some(DropOutline::Place(2)),
+                None,
+                &[area(0), area(2)],
+            );
+        }
+    }
+
+    #[test]
+    fn under_increase_contrast_the_drop_look_is_outlined_in_the_label_colour() {
+        let scale = 1.0_f32;
+        let (_d, browser, places, mut painter, frame) = listing(scale, 12, 0.0);
+        for dark in [false, true] {
+            let pal = Palette::builtin(dark);
+            let [red, green, blue, _] = pal.text;
+            let outline = [red, green, blue, 1.0];
+            assert!(
+                contrast(outline, pal.background) >= 3.0,
+                "the outline against the background, dark {dark}"
+            );
+            for (target, r) in [
+                (DropOutline::Item(3), frame.item_frame(3).unwrap()),
+                (DropOutline::Place(1), frame.window.places[1]),
+            ] {
+                let mut paint = |increase_contrast| {
+                    let mut pm = Pixmap::new(920, 436).unwrap();
+                    let state = WindowState {
+                        browser: &browser,
+                        places: &places,
+                        mode: ViewMode::List,
+                        active: true,
+                        search: &TextField::new(),
+                        search_focused: false,
+                        search_caret: false,
+                        title: "Here",
+                        now: SystemTime::now(),
+                        edit: None,
+                        edit_caret: false,
+                        drop_target: Some(target),
+                        increase_contrast,
+                        marquee: None,
+                        status: "",
+                    };
+                    painter.paint(&mut pm, scale, &frame, &state, &pal);
+                    pm
+                };
+                // the middle of the outline's left edge
+                let at = (
+                    (r.x + DROP_OUTLINE_WIDTH / 2.0) as u32,
+                    (r.y + r.h / 2.0) as u32,
+                );
+                let pixel = |pm: &Pixmap| {
+                    let p = pm.pixel(at.0, at.1).unwrap().demultiply();
+                    [p.red(), p.green(), p.blue()]
+                };
+                let want = outline.map(|c| (c * 255.0).round() as u8);
+                assert_eq!(
+                    pixel(&paint(true)),
+                    [want[0], want[1], want[2]],
+                    "{target:?} outlined, dark {dark}"
+                );
+                assert_ne!(
+                    pixel(&paint(false)),
+                    [want[0], want[1], want[2]],
+                    "{target:?} not outlined without Increase Contrast, dark {dark}"
+                );
+            }
+        }
+    }
+
+    /// The WCAG contrast ratio of two opaque colours.
+    fn contrast(a: Rgba, b: Rgba) -> f32 {
+        let lum = |c: Rgba| {
+            let ch = |v: f32| {
+                if v <= 0.03928 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * ch(c[0]) + 0.7152 * ch(c[1]) + 0.0722 * ch(c[2])
+        };
+        let (x, y) = (lum(a), lum(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
     }
 
     #[test]

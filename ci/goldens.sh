@@ -36,20 +36,12 @@ docker run --rm \
   cargo test -p cupertino-server --test goldens -- --include-ignored --skip headless_frame_and_memory_report \
   | tee "$log" || status=$?
 
-# An update records the baselines and then fails each test that recorded, so it can never pass as a comparison.
+# An update records the baselines and then fails each test that recorded, so it can never pass as a comparison; the
+# log check tells those failures from any other and knows which tests must run (ci/goldens_log.py).
 if [ "$update" -eq 1 ]; then
-  recorded="$(grep -c '^re-recorded [0-9]* goldens' "$log" || true)"
-  [ "$recorded" -eq 2 ] || { echo "goldens: $recorded tests re-recorded, expected 2" >&2; exit 1; }
+  python3 -I "$root/ci/goldens_log.py" --update "$log"
   echo "goldens: re-recorded; review the diff, then run ci/goldens.sh to compare" >&2
   exit 0
 fi
+python3 -I "$root/ci/goldens_log.py" "$log"
 [ "${status:-0}" -eq 0 ] || exit "$status"
-
-# The goldens binary holds exactly this many tests that run here; change it with the tests.
-expected=3
-# A renamed or removed test must not turn into a job that runs nothing and passes.
-for name in pixel_comparison_fails_on_a_change_at_unchanged_geometry desktop_goldens_and_input_replay shell_process_goldens; do
-  grep -qx "test $name ... ok" "$log" || { echo "goldens: expected test $name did not run and pass" >&2; exit 1; }
-done
-ran="$(grep -E '^test .* \.\.\. ok$' "$log" | sort -u | wc -l)"
-[ "$ran" -eq "$expected" ] || { echo "goldens: $ran tests passed, expected $expected" >&2; exit 1; }

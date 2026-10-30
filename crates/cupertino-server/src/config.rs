@@ -80,12 +80,25 @@ impl BuiltIn {
         }
     }
 
-    /// Where the install put the program: the build's install prefix before `/usr`; `None` when it is not installed.
+    /// Where the install put the program: the build's install prefix before `/usr`; `None` when it is not installed. A
+    /// file another user could have put there or could change ([`may_run_built_in`]) is refused and logged.
     pub fn installed(self) -> Option<PathBuf> {
-        installed_roots()
-            .rev()
-            .map(|root| root.join("bin").join(self.program_name()))
-            .find(|program| program.is_file())
+        use std::os::unix::fs::MetadataExt;
+        let user = rustix::process::getuid().as_raw();
+        installed_roots().rev().find_map(|root| {
+            let program = root.join("bin").join(self.program_name());
+            let file = std::fs::metadata(&program).ok().filter(|f| f.is_file())?;
+            let root_owner = std::fs::metadata(root).ok()?.uid();
+            if may_run_built_in(file.uid(), file.mode(), root_owner, user) {
+                return Some(program);
+            }
+            tracing::warn!(
+                name = self.name(),
+                program = %program.display(),
+                "the program is not root's alone (owned by another user or writable by others): it is not started"
+            );
+            None
+        })
     }
 
     /// The supervised process that runs `program`, holding [`BuiltIn::role`] alone.
@@ -105,6 +118,12 @@ impl BuiltIn {
                 .and_then(|program| Path::new(program).file_name())
                 .is_some_and(|file| file == self.program_name())
     }
+}
+
+/// Whether a built-in program file of `owner` and `mode`, under an install root of `root_owner`, may run with its role
+/// for `user`: nobody else may write it, and it is root's, or the root is the user's own (a development prefix).
+pub fn may_run_built_in(owner: u32, mode: u32, root_owner: u32, user: u32) -> bool {
+    mode & 0o022 == 0 && (owner == 0 || (root_owner == user && owner == user))
 }
 
 /// Whether the server runs the login screen: its configuration is the login screen's file, or logind made its session
@@ -1198,6 +1217,36 @@ mod tests {
                 b.role()
             );
         }
+    }
+
+    #[test]
+    fn a_built_in_program_runs_only_from_a_file_nobody_else_can_change() {
+        let (root, me, other) = (0, 1000, 1001);
+        assert!(may_run_built_in(root, 0o100755, root, me));
+        assert!(
+            !may_run_built_in(root, 0o100775, root, me),
+            "group-writable"
+        );
+        assert!(
+            !may_run_built_in(root, 0o100757, root, me),
+            "writable by others"
+        );
+        assert!(
+            !may_run_built_in(me, 0o100755, root, me),
+            "the user's file in root's tree"
+        );
+        assert!(
+            may_run_built_in(me, 0o100755, me, me),
+            "the user's own prefix"
+        );
+        assert!(
+            !may_run_built_in(other, 0o100755, me, me),
+            "another user's file in the user's prefix"
+        );
+        assert!(
+            !may_run_built_in(other, 0o100755, other, me),
+            "another user's prefix"
+        );
     }
 
     #[test]

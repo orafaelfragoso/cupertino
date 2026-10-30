@@ -285,3 +285,65 @@ fn an_application_cannot_take_the_keyboard_exclusively_while_locked() {
         "an application took the keyboard at the lock screen"
     );
 }
+
+/// An application is told the session is locking before the lock client is told it holds the lock, and unlocked only
+/// once the lock is over; one that starts during the lock is told at once, and one bound below version 5 never is.
+#[test]
+fn an_application_learns_the_lock_as_it_starts_and_the_unlock_once_it_is_over() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_toplevel, _) = mapped_toplevel(&mut h);
+    let current = Client::appearance_observer(h.socket_path(), 5);
+    let older = Client::appearance_observer(h.socket_path(), 4);
+    h.wait_until("the observer to be told the session is open", |_| {
+        current.lock_events() == ["session_lock 0"]
+    });
+
+    let locker = Client::observing_locker(common::session_agent(&h.state));
+    h.wait_until("the session to be locked", |_| locker.locked());
+    assert_eq!(
+        locker.lock_events(),
+        ["session_lock 0", "session_lock 1", "locked"]
+    );
+    h.wait_until("the observer to be told the session is locked", |_| {
+        current.lock_events().len() == 2
+    });
+    let late = Client::appearance_observer(h.socket_path(), 5);
+    h.wait_until("the late observer to be told", |_| {
+        !late.lock_events().is_empty()
+    });
+    assert_eq!(late.lock_events(), ["session_lock 1"]);
+
+    locker.unlock();
+    h.wait_until("the observer to be told the session is open again", |_| {
+        current.lock_events().len() == 3
+    });
+    assert!(!h.state.session_lock.is_active());
+    assert_eq!(
+        current.lock_events(),
+        ["session_lock 0", "session_lock 1", "session_lock 0"]
+    );
+    assert_eq!(late.lock_events(), ["session_lock 1", "session_lock 0"]);
+    assert!(
+        older.lock_events().is_empty(),
+        "a version 4 observer was told"
+    );
+}
+
+#[test]
+fn an_application_stays_told_locked_when_the_lock_client_crashes() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_toplevel, center) = mapped_toplevel(&mut h);
+    let observer = Client::appearance_observer(h.socket_path(), 5);
+    h.wait_until("the observer to be told the session is open", |_| {
+        !observer.lock_events().is_empty()
+    });
+    let locker = Client::locker(common::session_agent(&h.state));
+    h.wait_until("the session to be locked", |_| locker.locked());
+    locker.kill();
+    h.wait_until("the lock surface to go away", |s| {
+        s.surface_under(center.into()).is_none()
+    });
+    let successor = Client::locker(common::session_agent(&h.state));
+    h.wait_until("a new client to take the lock", |_| successor.locked());
+    assert_eq!(observer.lock_events(), ["session_lock 0", "session_lock 1"]);
+}

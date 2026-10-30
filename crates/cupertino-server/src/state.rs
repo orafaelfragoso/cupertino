@@ -1734,12 +1734,14 @@ impl Cupertino {
     /// keyboard; when it stops asking or goes away the key window gets it back.
     ///
     /// While the session is locked only a shell process can take it: an application's layer surface must not collect
-    /// what is typed at the lock screen, nor wait to take the keyboard at the unlock. While the authentication prompt is
+    /// what is typed at the lock screen, nor wait to take the keyboard at the unlock. The authentication prompt keeps its
+    /// claim under the lock, which holds the keyboard, and gets it back at the unlock. While the authentication prompt is
     /// shown only the prompt can take it, and an open menu of another surface is closed as it does.
     pub fn layer_keyboard_exclusivity(&mut self, surface: &WlSurface, exclusive: bool) {
         let prompt = crate::authorization::is_prompt(surface);
         let exclusive = exclusive
             && (!self.session_lock.is_active()
+                || prompt
                 || surface
                     .client()
                     .is_some_and(|c| crate::authorization::capabilities(&c).holds_shell_role()))

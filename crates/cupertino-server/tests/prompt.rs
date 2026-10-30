@@ -116,7 +116,7 @@ fn the_prompt_is_drawn_and_hit_above_an_overlay_surface_mapped_after_it() {
 }
 
 #[test]
-fn the_keyboard_stays_with_the_prompt_until_the_lock_takes_it() {
+fn the_keyboard_stays_with_the_prompt_until_the_lock_takes_it_and_returns_at_the_unlock() {
     let mut d = Desktop::new(1.0);
     d.window();
     let (_prompt, _other) =
@@ -130,10 +130,15 @@ fn the_keyboard_stays_with_the_prompt_until_the_lock_takes_it() {
     );
     assert_eq!(d.state.exclusive_layer, Some(prompt.clone()));
 
-    let _locker = d.lock();
+    let locker = d.lock();
     wait_until(&mut d, "the lock surface to take the keyboard", |s| {
         keyboard_focus(s).is_some_and(|focus| s.is_lock_surface(&focus))
     });
+    // what a commit of the prompt under the lock does
+    d.state.layer_keyboard_exclusivity(&prompt, true);
+    locker.unlock();
+    wait_until(&mut d, "the unlock", |s| !s.session_lock.is_active());
+    assert_eq!(keyboard_focus(&d.state), Some(prompt));
 }
 
 #[test]

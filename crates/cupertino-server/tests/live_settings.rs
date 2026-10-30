@@ -1,6 +1,7 @@
 //! Live settings against a headless compositor: changes to `compositor.json`, `keyboard.conf` and `power.conf` apply while
 //! the server runs, a wrong key keeps its last good value, a setting changed another way survives an edit of other keys,
-//! and the session interface's setters store and apply the appearance and the accessibility settings. Tests skip (pass)
+//! the session interface's setters store and apply the appearance and the accessibility settings, and the machine's
+//! accessibility defaults apply to an account without a file of its own, live, and never from a file root does not own. Tests skip (pass)
 //! when no EGL device is available; the bus test also when `dbus-daemon` is missing.
 
 mod common;
@@ -8,6 +9,7 @@ mod common;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use cupertino_defaults::accessibility::{AccessibilitySettings, DisplayOption};
 use cupertino_defaults::atomic::write_atomic;
 use cupertino_defaults::power::Timer;
 use cupertino_server::backend::headless;
@@ -50,6 +52,7 @@ impl Harness {
             system: Some(dir.path().join("system.json")),
             keyboard: Some(dir.path().join("keyboard.conf")),
             power: Some(dir.path().join("power.conf")),
+            system_accessibility: Some(dir.path().join("system-accessibility.conf")),
         };
         state.start_settings_watch(SettingsFiles::default(), paths);
         Some(Harness {
@@ -309,6 +312,71 @@ fn the_system_file_applies_live_under_the_users_file_and_a_removed_user_key_fall
     );
     h.write("compositor.json", r#"{"corner_radius":8}"#);
     assert_eq!((radius(&h), h.state.config.pointer.mouse_speed), (8.0, 1.5));
+}
+
+/// The machine's defaults with Reduce Motion `on` or off.
+fn machine(on: bool) -> AccessibilitySettings {
+    AccessibilitySettings::from_system_text(&format!(
+        "reduce_motion = {}",
+        if on { "on" } else { "off" }
+    ))
+    .0
+}
+
+#[test]
+fn the_machines_accessibility_is_an_accounts_without_its_own_file_and_follows_it() {
+    let Some(mut h) = Harness::new() else { return };
+    let own = h.path("accessibility.conf");
+    h.state.use_accessibility_store(own.clone()).unwrap();
+    h.state.set_system_accessibility(machine(true));
+    assert!(h.state.display_options().reduce_motion);
+    h.state.set_system_accessibility(machine(false));
+    assert!(
+        !h.state.display_options().reduce_motion,
+        "a change applies at once"
+    );
+    assert!(!own.exists(), "nothing is written for the account");
+}
+
+#[test]
+fn an_account_with_its_own_file_keeps_its_settings() {
+    let Some(mut h) = Harness::new() else { return };
+    let own = h.path("accessibility.conf");
+    std::fs::write(&own, "reduce_motion = off\n").unwrap();
+    h.state.set_system_accessibility(machine(true));
+    h.state.use_accessibility_store(own).unwrap();
+    assert!(!h.state.display_options().reduce_motion);
+    h.state.set_system_accessibility(machine(true));
+    assert!(!h.state.display_options().reduce_motion);
+}
+
+#[test]
+fn a_change_the_person_makes_keeps_what_they_saw_and_leaves_the_machines_defaults() {
+    let Some(mut h) = Harness::new() else { return };
+    let own = h.path("accessibility.conf");
+    h.state.set_system_accessibility(machine(true));
+    h.state.use_accessibility_store(own.clone()).unwrap();
+    assert!(h.state.display_options().reduce_motion);
+    h.state
+        .set_display_option(DisplayOption::ReduceTransparency, true);
+    let written = std::fs::read_to_string(&own).unwrap();
+    assert!(written.contains("reduce_motion = on"), "{written}");
+    h.state.set_system_accessibility(machine(false));
+    assert!(
+        h.state.display_options().reduce_motion,
+        "the account's own settings stay"
+    );
+}
+
+#[test]
+fn a_machine_file_that_someone_other_than_root_could_have_written_is_ignored() {
+    let Some(mut h) = Harness::new() else { return };
+    h.state
+        .use_accessibility_store(h.path("accessibility.conf"))
+        .unwrap();
+    // the test's own file, not root's: what an account could forge
+    h.write("system-accessibility.conf", "reduce_motion = on\n");
+    assert!(!h.state.display_options().reduce_motion);
 }
 
 #[test]

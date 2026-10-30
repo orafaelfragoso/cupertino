@@ -12,6 +12,7 @@
 //! | `compositor.json` | appearance, tracking speeds, acceleration, scroll direction, cursor size, colours and shake, minimize effect, closing animation, hot corner size and dwell, corner radius, key bindings, terminals | `decorations` (new windows only), `menu_bar_height`, `show_menu_bar`, `shell`, `screenshot` (privileged processes: read at start) |
 //! | `keyboard.conf` | every key: repeat, caps lock, filters, rewrite, accent picker, input sources and layouts (the keymap is rebuilt) | — |
 //! | `power.conf` | every key (the countdown in progress continues with the new timers) | — |
+//! | `/etc/cupertino/accessibility.conf` | its keys, for an account without an `accessibility.conf` of its own and the login screen (`crate::accessibility`) | — |
 
 use std::path::PathBuf;
 
@@ -32,6 +33,8 @@ pub struct SettingsPaths {
     pub system: Option<PathBuf>,
     pub keyboard: Option<PathBuf>,
     pub power: Option<PathBuf>,
+    /// The machine's accessibility defaults, when `/etc/cupertino` exists.
+    pub system_accessibility: Option<PathBuf>,
 }
 
 impl SettingsPaths {
@@ -43,6 +46,13 @@ impl SettingsPaths {
             system: crate::config::system_config_path(std::env::var_os(crate::config::CONFIG_ENV)),
             keyboard: KeyboardConf::path(),
             power: PowerSettings::path(),
+            system_accessibility: {
+                let path =
+                    std::path::Path::new(cupertino_defaults::accessibility::SYSTEM_ACCESSIBILITY);
+                path.parent()
+                    .is_some_and(std::path::Path::is_dir)
+                    .then(|| path.to_path_buf())
+            },
         }
     }
 }
@@ -63,10 +73,16 @@ impl Cupertino {
     pub fn start_settings_watch(&mut self, files: SettingsFiles, paths: SettingsPaths) {
         self.live.files = files;
         self.live.paths = paths.clone();
-        let watched: Vec<PathBuf> = [paths.compositor, paths.system, paths.keyboard, paths.power]
-            .into_iter()
-            .flatten()
-            .collect();
+        let watched: Vec<PathBuf> = [
+            paths.compositor,
+            paths.system,
+            paths.keyboard,
+            paths.power,
+            paths.system_accessibility,
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         if watched.is_empty() {
             tracing::warn!("no settings directory (neither XDG_CONFIG_HOME nor HOME is set): settings apply at the next start only");
             return;
@@ -109,6 +125,12 @@ impl Cupertino {
                 self.reload_keyboard(&path);
             } else if self.live.paths.power.as_ref() == Some(&path) {
                 self.reload_power(&path);
+            } else if self.live.paths.system_accessibility.as_ref() == Some(&path) {
+                // a file that is gone, or refused (logged), leaves the machine's defaults off
+                let system =
+                    crate::accessibility::read_system_accessibility(&path).unwrap_or_default();
+                self.set_system_accessibility(system);
+                self.live.reloads += 1;
             }
         }
     }

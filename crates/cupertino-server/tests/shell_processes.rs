@@ -1643,20 +1643,48 @@ fn the_session_manager_binary_refuses_what_it_cannot_serve() {
     );
 }
 
+/// What the `--winit` server's own Wayland traffic (`WAYLAND_DEBUG=client`) shows when its output never connected: a
+/// window asked for and never configured is a host compositor that stalled, not a failure of the server.
+fn host_stall(lines: &[String]) -> Option<&'static str> {
+    let asked = lines
+        .iter()
+        .any(|l| l.contains(" -> ") && l.contains(".get_toplevel("));
+    let configured = lines
+        .iter()
+        .any(|l| !l.contains(" -> ") && l.contains("xdg_surface") && l.contains(".configure("));
+    (asked && !configured).then_some(
+        "the host compositor never configured the window: the server asked for an xdg_toplevel and got no \
+         xdg_surface.configure, so the host session stalled, not the server",
+    )
+}
+
+/// The lines of the server's log to show on a failure: its own messages and the window's protocol traffic, without
+/// the rest of `WAYLAND_DEBUG`.
+fn shown(lines: &[String]) -> String {
+    lines
+        .iter()
+        .filter(|l| !l.starts_with('[') || l.contains("xdg_"))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The server binary with `mode` (`--headless` or `--winit`): it listens on its own socket and connects its output.
 /// `None` when the output cannot be made for want of an EGL device, unless `CUPERTINO_EGL_REQUIRED=1` (CI), which makes
-/// that a failure.
+/// that a failure. A nested server logs its Wayland traffic with the host, so a host that never configures the window
+/// is named as such.
 fn start_server_binary(mode: &str) -> Option<Daemon> {
     let config = TempDir::new(&format!("server-binary{mode}"));
-    let mut server = Daemon(
-        Command::new(env!("CARGO_BIN_EXE_cupertino-server"))
-            .args([mode, "--size", "800x600"])
-            .env("XDG_CONFIG_HOME", &config.0)
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("the server starts"),
-    );
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cupertino-server"));
+    command
+        .args([mode, "--size", "800x600"])
+        .env("XDG_CONFIG_HOME", &config.0)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    if mode == "--winit" {
+        command.env("WAYLAND_DEBUG", "client");
+    }
+    let mut server = Daemon(command.spawn().expect("the server starts"));
     let stderr = std::io::BufReader::new(server.0.stderr.take().unwrap());
     let (tx, rx) = channel();
     std::thread::spawn(move || {
@@ -1683,7 +1711,7 @@ fn start_server_binary(mode: &str) -> Option<Daemon> {
                 assert!(
                     no_egl && !required,
                     "the server {mode} ended before it connected its output:\n{}",
-                    lines.join("\n")
+                    shown(&lines)
                 );
                 eprintln!("SKIPPED: no EGL device for {mode}; set CUPERTINO_EGL_REQUIRED=1 to fail instead");
                 return None;
@@ -1694,8 +1722,12 @@ fn start_server_binary(mode: &str) -> Option<Daemon> {
         }
         assert!(
             Instant::now() < end,
-            "the server {mode} never connected its output:\n{}",
-            lines.join("\n")
+            "{}:\n{}",
+            host_stall(&lines).map_or_else(
+                || format!("the server {mode} never connected its output"),
+                str::to_owned
+            ),
+            shown(&lines)
         );
     }
     assert!(
@@ -1720,4 +1752,34 @@ fn the_server_starts_as_a_nested_session() {
         return;
     }
     let _server = start_server_binary("--winit");
+}
+
+/// A window asked for and never configured is told apart from one the host configured, in both libwayland's and the
+/// Rust backend's `WAYLAND_DEBUG` format.
+#[test]
+fn a_window_the_host_never_configured_is_named_as_a_host_stall() {
+    let lines = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let asked = [
+        "[21:00:18.613230]  -> xdg_wm_base#12.get_xdg_surface(new id xdg_surface#26, wl_surface#25)",
+        "[21:00:18.613236]  -> xdg_surface#26.get_toplevel(new id xdg_toplevel#27)",
+        "[21:00:18.613288]  -> xdg_toplevel#27.set_title(\"Cupertino\")",
+    ];
+    assert!(host_stall(&lines(&asked))
+        .is_some_and(|m| m.starts_with("the host compositor never configured the window")));
+
+    let mut configured = asked.to_vec();
+    configured.push("[21:00:18.620101] xdg_toplevel#27.configure(800, 600, [])");
+    configured.push("[21:00:18.620110] xdg_surface#26.configure(4)");
+    configured.push("[21:00:18.620200]  -> xdg_surface#26.ack_configure(4)");
+    assert_eq!(host_stall(&lines(&configured)), None);
+
+    let libwayland = [
+        "[1234567.890]  -> xdg_surface@26.get_toplevel(new id xdg_toplevel@27)",
+        "[1234570.120] xdg_surface@26.configure(4)",
+    ];
+    assert_eq!(host_stall(&lines(&libwayland)), None);
+    assert!(host_stall(&lines(&libwayland[..1])).is_some());
+
+    // no window asked for: the server failed before it reached the host
+    assert_eq!(host_stall(&lines(&["listening on wayland-1"])), None);
 }

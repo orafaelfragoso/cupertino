@@ -149,6 +149,48 @@ fn overview_layout_avoids_the_bar_and_has_no_overlap() {
     }
 }
 
+fn three_windows_under_the_menu_bar(expand_on_hover: bool) -> Overview {
+    let mut cfg = OverviewConfig::default();
+    cfg.bar.expand_on_hover = expand_on_hover;
+    let windows = vec![
+        win(1, A, Rect::new(0.0, 24.0, 1000.0, 696.0)),
+        win(2, A, Rect::new(280.0, 120.0, 800.0, 500.0)),
+        win(3, B, Rect::new(460.0, 300.0, 360.0, 240.0)),
+    ];
+    let mut o = Overview::new(
+        cfg,
+        Rect::new(0.0, 24.0, 1280.0, 696.0),
+        OverviewMode::Overview,
+        windows,
+    );
+    o.bar.set_expanded(!expand_on_hover, -10.0);
+    o.set_workspaces(&[WorkspaceId(1), WorkspaceId(2)], Some(WorkspaceId(1)));
+    o
+}
+
+#[test]
+fn windows_clear_a_pinned_expanded_bar_by_the_packing_inset() {
+    let o = three_windows_under_the_menu_bar(false);
+    let bar = o.bar.layout(0.0).rect;
+    assert_eq!(bar.bottom(), 168.0);
+    let rects = o.layout_rects();
+    assert_eq!(rects.len(), 3);
+    for (i, r) in rects.iter().enumerate() {
+        assert!(r.y >= 188.0 - 1e-9, "window {i} top {} under the bar", r.y);
+        assert!(!r.intersects(&bar));
+        for q in &rects[i + 1..] {
+            assert!(!r.intersects(q));
+        }
+    }
+}
+
+#[test]
+fn a_bar_that_expands_on_hover_reserves_its_collapsed_height() {
+    let o = three_windows_under_the_menu_bar(true);
+    assert_eq!(o.bar.layout(0.0).rect.bottom(), 24.0 + 90.0);
+    assert_eq!(o.layout_area().y, 24.0 + 90.0);
+}
+
 #[test]
 fn overview_hides_minimized_windows() {
     let mut w = grid4();

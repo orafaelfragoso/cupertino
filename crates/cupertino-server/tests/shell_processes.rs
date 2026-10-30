@@ -1633,6 +1633,51 @@ fn the_network_bluetooth_and_power_daemons_own_their_bus_names() {
     }
 }
 
+/// `cupertino-sessiond --check-config` passes a settings file it understands whole, and fails naming each line it does not
+/// understand, so a packaging check or an administrator sees what the manager only logs.
+#[test]
+fn the_session_managers_check_fails_on_each_line_it_does_not_understand() {
+    let sessiond = shell_bin_dir().join("cupertino-sessiond");
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("login.conf");
+    let check = |text: &str| {
+        std::fs::write(&file, text).unwrap();
+        let output = Command::new(&sessiond)
+            .arg("--check-config")
+            .env("CUPERTINO_LOGIN_CONF", &file)
+            .output()
+            .expect("the binary starts");
+        (
+            output.status.success(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
+    let required = "greeter-command = /usr/bin/cupertino-server\nsession-command = /usr/bin/cupertino-session\n";
+    assert_eq!(check(required), (true, String::new()));
+
+    let (ok, errors) = check(&format!(
+        "{required}hide-admin-users false\nhiden-users = alice\n"
+    ));
+    assert!(!ok);
+    let lines: Vec<&str> = errors.lines().collect();
+    assert_eq!(lines.len(), 2, "{errors}");
+    assert!(
+        lines[0].contains("line 3: expected `key = value`"),
+        "{errors}"
+    );
+    assert!(
+        lines[1].contains("line 4: unknown setting \"hiden-users\""),
+        "{errors}"
+    );
+
+    let (ok, errors) = check("session-command = /usr/bin/cupertino-session\n");
+    assert!(!ok);
+    assert!(
+        errors.contains("greeter-command is required; the manager refuses the file"),
+        "{errors}"
+    );
+}
+
 /// The session manager refuses a mode it does not know. Its start without an argument is a system service (it binds
 /// the greeter socket, takes a terminal and waits for logind): there it is only run where it cannot reach those, as a
 /// user other than root on a host without `/etc/cupertino/login.conf`, and must fail naming that file.
@@ -1645,7 +1690,8 @@ fn the_session_manager_binary_refuses_what_it_cannot_serve() {
         .expect("the binary starts");
     assert!(!output.status.success());
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("usage: cupertino-sessiond [worker]"),
+        String::from_utf8_lossy(&output.stderr)
+            .contains("usage: cupertino-sessiond [worker | --check-config]"),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );

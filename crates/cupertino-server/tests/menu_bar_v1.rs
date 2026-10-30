@@ -1306,6 +1306,52 @@ fn window_controls(bar: &BarClient) -> Option<u32> {
 }
 
 #[test]
+fn a_window_its_client_full_screened_with_zoom_disabled_leaves_by_the_menu_and_by_the_shortcut() {
+    use cupertino_server::input::{translate_action, Action};
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_at(&mut h, 15);
+    let app = KitAppClient::spawn_at(h.socket_path(), "org.example.game", 4);
+    let id = h.mapped_window(1);
+    app.send(Cmd::DisableControls(WindowControl::Zoom));
+    h.wait_until("zoom to be disabled", |s| {
+        !s.wm.window(id).unwrap().can_zoom()
+    });
+    let full = |h: &Harness| h.state.wm.window(id).unwrap().state().is_fullscreen();
+    let client_full_screen = |h: &mut Harness| {
+        h.state.command(Command::Fullscreen {
+            window: id,
+            output: None,
+            requested_by: cupertino_wm::Requester::Client,
+        });
+        h.advance(2.0);
+        assert!(full(h), "the client's own request applies");
+    };
+
+    client_full_screen(&mut h);
+    bar.send(Cmd::WindowCommand(BarCommand::ToggleFullscreen));
+    h.wait_until("the menu to leave full screen", |s| {
+        !s.wm.window(id).unwrap().state().is_fullscreen()
+    });
+
+    client_full_screen(&mut h);
+    let ctx = h.state.action_context();
+    h.state
+        .execute_plan(translate_action(Action::ToggleFullscreen, &ctx));
+    h.advance(2.0);
+    assert!(!full(&h), "the shortcut leaves full screen too");
+
+    let ctx = h.state.action_context();
+    h.state
+        .execute_plan(translate_action(Action::ToggleFullscreen, &ctx));
+    h.advance(2.0);
+    assert!(
+        !full(&h),
+        "but does not enter it for a window that cannot zoom"
+    );
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
 fn a_version_15_bar_follows_the_controls_the_active_window_disables_and_the_model_refuses_them() {
     let Some(mut h) = Harness::new() else { return };
     let bar = bar_at(&mut h, 15);

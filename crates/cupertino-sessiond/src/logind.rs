@@ -243,6 +243,8 @@ impl Logind {
             class: session.get_property("Class").map_err(fail)?,
             seat,
             active: session.get_property("Active").map_err(fail)?,
+            remote: session.get_property("Remote").map_err(fail)?,
+            state: session.get_property("State").map_err(fail)?,
         }))
     }
 

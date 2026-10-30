@@ -200,6 +200,15 @@ impl AccessibilitySettings {
         entries
     }
 
+    /// The machine's file: the [`SYSTEM_KEYS`] with their values, which [`Self::from_system_text`] reads back.
+    pub fn system_text(&self) -> String {
+        self.entries()
+            .into_iter()
+            .filter(|(key, _)| SYSTEM_KEYS.contains(key))
+            .map(|(k, v)| format!("{k} = {v}\n"))
+            .collect()
+    }
+
     /// Every key with its value, in the order of the table above; [`Self::apply_text`] reads it back unchanged.
     pub fn to_text(&self) -> String {
         self.entries()

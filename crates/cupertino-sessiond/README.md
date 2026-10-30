@@ -122,6 +122,27 @@ inside a user's session is refused: it has no use for the manager), and for `Req
 | `RequestPower(s) | the active user session | `restart`, `shut-down` or `sleep`; errors `AccessDenied`, `InvalidArgs`, `OtherUsersLoggedIn`, `Inhibited`, `Failed` (all `org.cupertino.LoginManager1.Error.*) |
 | `SwitchToLoginWindow | the active user session | the login screen takes the console; the agent has locked its screen first. Ignored while a switch is under way. Errors: `Failed` (no login screen, logind refused) |
 | `SessionReady | a user session, active or not | the session's agent is up: the manager registers the caller's unique name as the session's agent and ends the ready gate. A session the manager did not start (a getty's) gets `UnknownSession`; a repeated call (the agent restarted) registers the new caller |
+| `SetSystemAccessibility(a{ss})` | an administrator at the console, through the installed settings application | writes the machine's accessibility defaults, `/etc/cupertino/accessibility.conf` (`system_accessibility.rs`); see below |
+| `CanSetSystemAccessibility → b` | — | whether the caller would pass the same checks now: a hint for the settings application, a method because the answer depends on the caller; the setter checks again |
+
+**The machine's accessibility defaults.** The first write from a user to a file of root's, so its checks are stricter than the
+other methods':
+- The caller is the process behind the `ProcessFD` the bus daemon gives (`cupertino_peer::Caller::from_process_fd`); a daemon
+  that gives none is refused. It must be unsandboxed and run `<install root>/bin/cupertino-settings` (`/usr`, and the build's
+  `CUPERTINO_INSTALL_PREFIX`). Its session (logind `GetSessionByPID` by that process) must be the active user session of
+  `seat0`, opened there (`Remote` false) and in `State` `active` (`Need::Console`), else `NotAtConsole`; its user must be in
+  `wheel` by `getgrouplist`, asked at every call (`users::is_administrator`), else `NotAdministrator`. The process must still be
+  the one the descriptor holds after these lookups.
+- The call is refused whole before anything else when it has more entries than the allowed keys or a key or value over 64
+  bytes, then when a key is not one of `SYSTEM_KEYS` or a value is not one the file takes (`InvalidArgs`). Only then does it
+  count against the limit: one write a second per user and five a second in all (`TooManyWrites`).
+- The keys it names replace the file's; the others keep the file's values. `/etc/cupertino` is made (755) when missing (also
+  at the manager's start, so every compositor, the login screen's first, can watch the file in it) and a link or other file
+  there is refused; the file is written as a new file beside it (exclusive, not through a link, 644),
+  flushed, renamed over `accessibility.conf`, and the directory is flushed. The detailed reason of a refusal is in the
+  journal; the error names are what the settings application shows (its own sentences).
+- A person who deletes their own `accessibility.conf` while signed in keeps their settings until their next login: the
+  compositor reads whether they have one at start.
 
 **Signal `Unlock()`**, sent by the manager to one agent only: the unique name that called `SessionReady` for the session (a `dbus-daemon` delivers a message with a destination to that destination alone). The agent subscribes with the manager's name as the sender, and only root may own that name, so no other process can send it. A session without a registered agent is only activated (`session N has no agent to unlock it`).
 

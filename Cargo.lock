@@ -1366,6 +1366,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-polkit-agent"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "cupertino-test-bus",
+ "tempfile",
+ "zbus",
+ "zeroize",
+]
+
+[[package]]
 name = "cupertino-powerd"
 version = "0.1.0"
 dependencies = [

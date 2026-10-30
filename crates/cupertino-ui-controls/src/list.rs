@@ -245,7 +245,8 @@ impl<M: 'static> From<TableView<M>> for Element<M> {
                 .enumerate()
                 .map(|(index, column)| {
                     let order = table.sort.filter(|&(c, _)| c == index).map(|(_, o)| o);
-                    header_cell(index, column, order, on_sort.clone())
+                    let last = index + 1 == columns.len();
+                    header_cell(index, last, column, order, on_sort.clone())
                 })
                 .collect(),
         });
@@ -690,6 +691,8 @@ fn row_of_cells() -> LayoutSpec {
 /// A column's sorting header: what a click on its title asks for.
 struct Sort<M> {
     index: usize,
+    /// The last column draws no divider after it.
+    last: bool,
     order: Option<SortOrder>,
     on_sort: Option<Rc<Handler<(usize, SortOrder), M>>>,
 }
@@ -704,6 +707,7 @@ struct Cell<M> {
 
 fn header_cell<M: 'static>(
     index: usize,
+    last: bool,
     column: &Column,
     order: Option<SortOrder>,
     on_sort: Option<Rc<Handler<(usize, SortOrder), M>>>,
@@ -736,6 +740,7 @@ fn header_cell<M: 'static>(
         width: column.width,
         header: Some(Sort {
             index,
+            last,
             order,
             on_sort,
         }),
@@ -813,9 +818,9 @@ impl<M: 'static> Widget<M> for Cell<M> {
         }
     }
 
-    /// A header cell draws the divider at its trailing edge.
+    /// A header cell other than the last draws the divider at its trailing edge.
     fn paint(&self, _: &Press, cx: &mut PaintCx<'_>) {
-        if self.header.is_none() {
+        if self.header.as_ref().is_none_or(|h| h.last) {
             return;
         }
         let env = cx.env();

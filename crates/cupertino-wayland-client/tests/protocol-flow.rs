@@ -133,6 +133,8 @@ enum Control {
     },
     /// The pointer leaves the toplevel.
     Leave,
+    /// The seat loses its pointer and keeps its keyboard.
+    DropPointer,
     TypeKey(u32),
     Offer(Vec<&'static str>),
     /// Configure the layer surface this many times in a row, each a pixel wider.
@@ -276,6 +278,7 @@ struct Mock {
     feedbacks: Vec<WpPresentationFeedback>,
     /// Clipboard reads held open.
     held: Vec<std::fs::File>,
+    seat: Option<WlSeat>,
 }
 
 impl Mock {
@@ -898,7 +901,7 @@ impl GlobalDispatch<WlOutput, ()> for Mock {
 
 impl GlobalDispatch<WlSeat, ()> for Mock {
     fn bind(
-        _: &mut Self,
+        state: &mut Self,
         _: &DisplayHandle,
         _: &ServerClient,
         r: New<WlSeat>,
@@ -907,6 +910,7 @@ impl GlobalDispatch<WlSeat, ()> for Mock {
     ) {
         let seat = init.init(r, ());
         seat.capabilities(wl_seat::Capability::Pointer | wl_seat::Capability::Keyboard);
+        state.seat = Some(seat);
     }
 }
 
@@ -1172,6 +1176,7 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
             text_input: None,
             feedbacks: Vec::new(),
             held: Vec::new(),
+            seat: None,
         };
         let mut handle = display.handle();
         handle.insert_client(stream, Arc::new(Data)).unwrap();
@@ -1241,6 +1246,11 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
             pointer.leave(serial, &surface);
             pointer.frame();
         }
+        Control::DropPointer => mock
+            .seat
+            .as_ref()
+            .unwrap()
+            .capabilities(wl_seat::Capability::Keyboard),
         Control::TypeKey(code) => {
             let (serial, surface) = (mock.serial(), mock.surface().clone());
             let keyboard = mock.keyboard.as_ref().unwrap();
@@ -2653,6 +2663,92 @@ fn an_animated_theme_cursor_plays_its_images_until_the_pointer_leaves() {
         !seen.try_iter().any(|s| matches!(s, Seen::Cursor { .. })),
         "the cursor animated after the pointer left"
     );
+    std::fs::remove_dir_all(&themes).unwrap();
+}
+
+/// The ways a client's animated cursor leaves the screen besides the pointer leaving.
+#[derive(Clone, Copy, Debug)]
+enum Replaced {
+    Hidden,
+    StillShape,
+    NewTheme,
+    PointerGone,
+}
+
+#[test]
+fn an_animated_theme_cursor_stops_when_hidden_replaced_or_its_pointer_goes() {
+    let themes = std::env::temp_dir().join(format!("cupertino-stops-{}", std::process::id()));
+    let cursors = themes.join("test").join("cursors");
+    std::fs::create_dir_all(&cursors).unwrap();
+    let steps = [(24, 8, 8, (1, 1)), (24, 8, 8, (2, 2)), (24, 8, 8, (3, 3))];
+    std::fs::write(cursors.join("wait"), animated_xcursor(&steps, 20)).unwrap();
+    std::fs::write(cursors.join("text"), xcursor(&[(24, 8, 8, (7, 7))])).unwrap();
+    let theme = CursorTheme {
+        name: "test".into(),
+        size: 24,
+        search_path: vec![themes.clone()],
+    };
+    let animated = |hotspot: (i32, i32)| [(1, 1), (2, 2), (3, 3)].contains(&hotspot);
+    for case in [
+        Replaced::Hidden,
+        Replaced::StillShape,
+        Replaced::NewTheme,
+        Replaced::PointerGone,
+    ] {
+        let (mut conn, control, seen) = connect(Globals {
+            seat: true,
+            ..Globals::core()
+        });
+        conn.set_cursor_theme(theme.clone());
+        let mut stash = Stash::new();
+        let w = window(&mut conn, Decorations::Client);
+        configured(&mut conn, &mut stash, w);
+        control.send(Control::Click { x: 5.0, y: 5.0 }).unwrap();
+        wait_for(&mut conn, &mut stash, |e| {
+            matches!(
+                e,
+                Event::Pointer {
+                    event: PointerEvent::Enter(_),
+                    ..
+                }
+            )
+            .then_some(())
+        });
+        conn.set_cursor(CursorShape::Wait).unwrap();
+        let mut steps = 0;
+        while steps < 2 {
+            stash.extend(conn.wait(Some(Duration::from_millis(10))).unwrap());
+            steps += seen
+                .try_iter()
+                .filter(|s| matches!(s, Seen::Cursor { hotspot, .. } if animated(*hotspot)))
+                .count();
+        }
+        match case {
+            Replaced::Hidden => conn.hide_cursor().unwrap(),
+            Replaced::StillShape => conn.set_cursor(CursorShape::Text).unwrap(),
+            Replaced::NewTheme => conn.set_cursor_theme(theme.clone()),
+            Replaced::PointerGone => {
+                control.send(Control::DropPointer).unwrap();
+                conn.roundtrip().unwrap();
+            }
+        }
+        conn.flush().unwrap();
+        // what the stop itself sent arrives first; then nothing is drawn on the cursor's surface again
+        std::thread::sleep(Duration::from_millis(30));
+        seen.try_iter().for_each(drop);
+        let quiet = Instant::now() + Duration::from_millis(150);
+        while Instant::now() < quiet {
+            conn.wait(Some(Duration::from_millis(10))).unwrap();
+        }
+        let late: Vec<_> = seen
+            .try_iter()
+            .filter(|s| matches!(s, Seen::Cursor { .. } | Seen::Commit { size: (8, 8), .. }))
+            .collect();
+        assert!(
+            late.is_empty(),
+            "{case:?}: the cursor was drawn again: {late:?}"
+        );
+    }
     std::fs::remove_dir_all(&themes).unwrap();
 }
 

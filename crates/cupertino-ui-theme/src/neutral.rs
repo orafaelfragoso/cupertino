@@ -1,6 +1,6 @@
 //! Built-in palettes that need no theme data, pack or desktop service. Every colour but the dialog scrim is opaque, so
-//! nothing depends on what is drawn underneath. The neutral palettes keep the look of the Cupertino light and dark themes where it reaches
-//! the contrast they require; the high-contrast palettes are used by both themes.
+//! nothing depends on what is drawn underneath. The neutral palettes keep the look of the Cupertino light and dark
+//! themes where it reaches the contrast they require; the high-contrast palettes are used by both themes.
 
 use crate::palette::{Palette, StateColors};
 use crate::ColorRole::*;
@@ -283,6 +283,7 @@ mod tests {
             (KeyboardFocusIndicator, WindowBackground),
             (KeyboardFocusIndicator, TextBackground),
             (ScrollerThumb, WindowBackground),
+            (ScrollerThumb, TextBackground),
         ];
         let high_contrast_boundary_pairs = [
             (SwitchTrack, WindowBackground),

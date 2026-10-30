@@ -46,7 +46,8 @@ pub enum ColorRole {
     ToolTipText,
     /// The overlay scroller's thumb.
     ScrollerThumb,
-    /// The layer that dims a window behind a dialog or sheet. Translucent in every palette: it must not hide what it dims.
+    /// The layer that dims a window behind a dialog or sheet. Translucent in every palette: it must not hide what it
+    /// dims.
     DialogScrim,
 }
 
@@ -155,8 +156,8 @@ impl ColorTokens {
         .resolve()
     }
 
-    /// The Cupertino theme. Light and dark come from `tokens` and fail on a missing token; high contrast is the built-in
-    /// palette, which never depends on translucency.
+    /// The Cupertino theme. Light and dark come from `tokens` and fail on a missing token; high contrast is the
+    /// built-in palette, which never depends on translucency.
     pub fn cupertino(
         tokens: &DesignTokens,
         appearance: Appearance,

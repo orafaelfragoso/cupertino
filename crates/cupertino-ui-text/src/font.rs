@@ -63,6 +63,7 @@ pub struct FontIndex {
     faces: Vec<Face>,
     instances: Vec<Instance>,
     instance_ids: HashMap<InstanceKey, FontId>,
+    fallbacks: HashMap<(FontId, FontWeight), Arc<[FontId]>>,
 }
 
 impl FontIndex {
@@ -90,6 +91,7 @@ impl FontIndex {
             .get_by_tag(Tag::new(&WEIGHT_AXIS))
             .map(|axis| (axis.min_value(), axis.max_value()));
         let id = FaceId(self.faces.len() as u32);
+        self.fallbacks.clear();
         self.faces.push(Face {
             family: family.into(),
             data,
@@ -231,6 +233,26 @@ impl FontIndex {
         });
         self.instance_ids.insert(key, id);
         Ok(id)
+    }
+
+    /// The fonts that stand in for `font` where it has no glyph: every other face in load order, at `weight`. Kept per
+    /// font and weight.
+    pub(crate) fn fallbacks(
+        &mut self,
+        font: FontId,
+        weight: FontWeight,
+    ) -> Result<Arc<[FontId]>, TextError> {
+        if let Some(fonts) = self.fallbacks.get(&(font, weight)) {
+            return Ok(Arc::clone(fonts));
+        }
+        let own = self.face_of(font)?;
+        let fonts: Arc<[FontId]> = (0..self.faces.len() as u32)
+            .map(FaceId)
+            .filter(|face| *face != own)
+            .map(|face| self.instance(face, weight, &[]))
+            .collect::<Result<_, _>>()?;
+        self.fallbacks.insert((font, weight), Arc::clone(&fonts));
+        Ok(fonts)
     }
 
     pub fn face_of(&self, font: FontId) -> Result<FaceId, TextError> {

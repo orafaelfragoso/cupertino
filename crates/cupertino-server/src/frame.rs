@@ -149,7 +149,12 @@ impl Cupertino {
             lock,
             session_overlays,
         };
-        Some(f(renderer, params))
+        let result = f(renderer, params);
+        // a new image was put up: its lightness under the bar was measured once, with the decode
+        for (output, lightness) in self.overlays.wallpaper.take_bar_lightness() {
+            self.set_backdrop_lightness(cupertino_wm::OutputId(output), Some(lightness));
+        }
+        Some(result)
     }
 
     /// Element list (front to back) of output `idx` at the current model time.

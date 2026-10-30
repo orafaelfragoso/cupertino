@@ -55,6 +55,8 @@ pub(crate) const LIGHT: Palette<Source> = Palette {
         (ToolTipText, Token("tool-tip-text")),
         (ScrollerThumb, Rgba([0, 0, 0, 128])),
         (DialogScrim, Rgba([0, 0, 0, 51])),
+        (Link, Token("link")),
+        (PageDot, Rgba([0, 0, 0, 51])),
     ],
     states: StateColors {
         emphasized_border: Rgba([0, 0, 0, 96]),
@@ -106,6 +108,8 @@ pub(crate) const DARK: Palette<Source> = Palette {
         (ToolTipText, Token("tool-tip-text")),
         (ScrollerThumb, Rgba([255, 255, 255, 128])),
         (DialogScrim, Rgba([0, 0, 0, 102])),
+        (Link, Token("link")),
+        (PageDot, Rgba([255, 255, 255, 51])),
     ],
     states: StateColors {
         emphasized_border: Rgba([255, 255, 255, 96]),
@@ -150,6 +154,20 @@ mod tests {
             assert_eq!(get(ControlFill), token("control"));
             assert_eq!(get(ControlBorder), token("container-border"));
             assert_eq!(get(DefaultButtonFill), token("control-accent-blue"));
+        }
+    }
+
+    #[test]
+    fn links_take_the_link_token_and_page_dots_a_faint_text_colour() {
+        let tokens = tokens();
+        for (appearance, dot) in [
+            (Appearance::Light, [0, 0, 0, 51]),
+            (Appearance::Dark, [255, 255, 255, 51]),
+        ] {
+            let colors = ColorTokens::cupertino(&tokens, appearance).unwrap();
+            let get = |role| colors.get(role, StateVariant::NORMAL).unwrap();
+            assert_eq!(get(Link), tokens.table(appearance).get("link").unwrap());
+            assert_eq!(get(PageDot).to_rgba8(), dot);
         }
     }
 

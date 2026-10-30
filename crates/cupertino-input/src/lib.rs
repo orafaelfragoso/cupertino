@@ -32,13 +32,13 @@ pub mod hotcorner;
 pub mod keysym;
 pub mod mouse_accel;
 pub mod pointer;
-pub mod scroll;
+pub use cupertino_animation::scroll;
 pub mod scroll_accel;
 pub mod scroll_count;
 pub mod shortcuts;
 pub mod table;
 pub mod touchpad;
-pub mod velocity;
+pub use cupertino_animation::velocity;
 
 pub use cursor::{
     clamp_cursor_scale, ShakeDetector, CURSOR_SCALE_LIMIT, CURSOR_SCALE_MAX, CURSOR_SCALE_MIN,

@@ -415,13 +415,10 @@ impl Cupertino {
         idx: usize,
         paint_cursors: bool,
     ) -> Result<Image> {
+        // the output as it is shown, upright, so the frame's transform is normal
         let image = self.draw_output_image(renderer, idx, paint_cursors, false)?;
-        let size = self.outputs[idx]
-            .output
-            .current_mode()
-            .context("the output has no mode")?
-            .size;
-        Image::new(size.w, size.h, image.into_raw())
+        let (w, h) = image.dimensions();
+        Image::new(w as i32, h as i32, image.into_raw())
     }
 
     /// The window at its natural size with its decorations and without its shadow, as the window snapshots draw it.

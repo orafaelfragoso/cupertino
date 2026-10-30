@@ -61,6 +61,7 @@ class VendorIdentifierTest(unittest.TestCase):
             f"{cap}Script",
             f"{self.name}Cursor",
             f"{self.name}2",
+            f"com.{self.name}.foo",
         ):
             problems = run({"crates/x/src/lib.rs": f"// {text}\n"})
             self.assertEqual(len(problems), 1, (text, problems))

@@ -23,7 +23,8 @@ Files: crates/cupertino-animation/* crates/cupertino-app-protocols/* crates/cupe
  crates/cupertino-text-field/* crates/cupertino-theme/* crates/cupertino-kit/* crates/cupertino-ui-controls/*
  crates/cupertino-ui-core/* crates/cupertino-ui-layout/* crates/cupertino-ui-platform/* crates/cupertino-ui-render/*
  crates/cupertino-ui-test/* crates/cupertino-ui-text/* crates/cupertino-ui-theme/*
- crates/cupertino-typeahead/* crates/cupertino-ui-menus/* crates/cupertino-ui-wayland/* crates/cupertino-wayland-client/*
+ crates/cupertino-typeahead/* crates/cupertino-ui-atspi/* crates/cupertino-ui-menus/* crates/cupertino-ui-wayland/*
+ crates/cupertino-wayland-client/*
 Copyright: Cupertino contributors
 License: MPL-2.0
 

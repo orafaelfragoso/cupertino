@@ -84,7 +84,7 @@ fn layer_trust(path: &Path, dev_shell: bool) -> LayerTrust {
 
 /// The text of a system file, read from the one descriptor that was checked: opened without following a link, owned by
 /// root and not writable by anyone else. `None` when there is no such file.
-fn read_system_file(path: &Path) -> std::io::Result<Option<String>> {
+pub(crate) fn read_system_file(path: &Path) -> std::io::Result<Option<String>> {
     use std::io::Read;
     use std::os::unix::fs::OpenOptionsExt;
     let mut file = match std::fs::OpenOptions::new()

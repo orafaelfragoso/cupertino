@@ -62,6 +62,7 @@ fn the_mice_property_lists_the_mice_with_their_resolution_and_follows_the_config
             system: None,
             keyboard: None,
             power: None,
+            system_accessibility: None,
         },
     );
     // two mice, one with a stored resolution, and a touchpad that is not listed

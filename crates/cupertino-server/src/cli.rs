@@ -559,9 +559,20 @@ pub fn run(cli: Cli) -> Result<()> {
     let deadline = cli
         .run_for
         .map(|s| Instant::now() + Duration::from_secs_f64(s));
-    // the user's session keeps its accessibility settings; offscreen runs keep them in memory
-    if mode != Mode::Headless {
+    // the user's session keeps its accessibility settings over the machine's (the login screen's account has none, so it
+    // has the machine's); offscreen runs keep them in memory
+    let mut paths = crate::live::SettingsPaths::from_env();
+    if mode == Mode::Headless {
+        paths.system_accessibility = None;
+    } else {
         use cupertino_defaults::accessibility::{ACCESSIBILITY_ENV, ACCESSIBILITY_FILE};
+        if let Some(system) = paths
+            .system_accessibility
+            .as_deref()
+            .and_then(crate::accessibility::read_system_accessibility)
+        {
+            state.set_system_accessibility(system);
+        }
         match cupertino_defaults::config_file(ACCESSIBILITY_ENV, ACCESSIBILITY_FILE) {
             Some(path) => state.use_accessibility_store(path)?,
             None => tracing::warn!(
@@ -569,7 +580,7 @@ pub fn run(cli: Cli) -> Result<()> {
             ),
         }
     }
-    state.start_settings_watch(files, crate::live::SettingsPaths::from_env());
+    state.start_settings_watch(files, paths);
     schedule_script(&cli, &event_loop)?;
     if mode != Mode::Headless {
         start_xwayland(&mut state);

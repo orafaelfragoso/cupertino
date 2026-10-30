@@ -110,3 +110,43 @@ fn controls_disabled_before_the_window_maps_hold_from_the_start() {
     h.settle();
     assert!(!h.state(w).is_minimized());
 }
+
+#[test]
+fn a_window_that_cannot_zoom_is_refused_fill_but_keeps_the_half_tiles() {
+    let mut h = H::new();
+    let w = h.map("a");
+    h.settle();
+    disable(&mut h, w, false, true);
+    h.cmd(Command::Tile {
+        window: w,
+        kind: TileKind::Fill,
+    });
+    h.settle();
+    assert!(!matches!(h.state(w), LifecycleState::Tiled(_)));
+
+    h.cmd(Command::Tile {
+        window: w,
+        kind: TileKind::Left,
+    });
+    h.settle();
+    assert_eq!(h.state(w), LifecycleState::Tiled(TileKind::Left));
+}
+
+#[test]
+fn a_fixed_size_window_is_refused_fill() {
+    let mut h = H::new();
+    let w = h.map("a");
+    h.cmd(Command::SetSizeHints {
+        window: w,
+        min: Some(Size::new(400.0, 300.0)),
+        max: Some(Size::new(400.0, 300.0)),
+        content: None,
+    });
+    h.settle();
+    h.cmd(Command::Tile {
+        window: w,
+        kind: TileKind::Fill,
+    });
+    h.settle();
+    assert!(!matches!(h.state(w), LifecycleState::Tiled(_)));
+}

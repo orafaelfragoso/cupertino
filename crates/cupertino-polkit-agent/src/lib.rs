@@ -5,7 +5,9 @@
 //! - [`agent`]: the agent on the system bus, which only polkitd may ask.
 //! - [`text`]: the strings polkitd and PAM send, made safe to show.
 //! - [`helper`]: the conversation with polkit's helper.
+//! - [`model`]: the prompt and the requests waiting for it, as a pure model.
 
 pub mod agent;
 pub mod helper;
+pub mod model;
 pub mod text;

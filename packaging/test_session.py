@@ -164,7 +164,7 @@ class SessionTest(unittest.TestCase):
         runtime = self.root / 'runtime'
         runtime.mkdir()
         record = runtime / 'cupertino-session-defaults'
-        record.write_text('QT_QPA_PLATFORM\nELECTRON_OZONE_PLATFORM_HINT\nnot;a name\n')
+        record.write_text('QT_QPA_PLATFORM\nELECTRON_OZONE_PLATFORM_HINT\nnot;a name\n1ABC\n')
         result = self.run_session(PATH=f"{tools}:{os.environ['PATH']}", XDG_RUNTIME_DIR=str(runtime))
         self.assertEqual(result.returncode, 0)
         calls = (self.out / 'systemctl').read_text()

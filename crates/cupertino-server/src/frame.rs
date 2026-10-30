@@ -627,8 +627,8 @@ impl Cupertino {
     }
 
     /// The outputs `surface` is drawn on, by the surface it belongs to, as the scene places it: a window's (popups and
-    /// subsurfaces follow their root), a layer surface's, a lock surface's, and the pointer's for the cursor and a drag
-    /// icon. `None` for anything else, and for a window shown nowhere, whose callbacks are throttled on any output.
+    /// subsurfaces follow their root), a layer surface's, a lock surface's, and the pointer's for the cursor, a drag
+    /// icon and a window shown nowhere. `None` for anything else.
     fn outputs_showing(&self, surface: &WlSurface) -> Option<Vec<usize>> {
         let root = self.root_surface(surface);
         let pointer_surface = matches!(&self.cursor_status, CursorImageStatus::Surface(s) if *s == root)
@@ -645,7 +645,11 @@ impl Cupertino {
             let shown: Vec<usize> = (0..self.outputs.len())
                 .filter(|&idx| self.visible_window_ids(idx).contains(&id))
                 .collect();
-            return (!shown.is_empty()).then_some(shown);
+            if shown.is_empty() {
+                // its callbacks are throttled on whichever output sends them; one output is enough to send them
+                return self.pointer_output_idx().map(|idx| vec![idx]);
+            }
+            return Some(shown);
         }
         if let Some(idx) = self.outputs.iter().position(|o| {
             layer_map_for_output(&o.output)

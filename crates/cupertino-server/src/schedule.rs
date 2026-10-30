@@ -3,8 +3,59 @@
 //! draw. A change is drawn at once; an animation frame waits for the output's next grid point, so each output keeps
 //! its own refresh rate and an idle output beside an animating one does not compose on every loop pass. The scheduler
 //! also counts the frame work the output did, so pacing is checked by counts instead of wall time.
+//!
+//! On a display with page flips (udev) every shown vblank marks its output, so an animating head draws right after
+//! each vblank and the flip is what paces it; there the grid paces heads that queue no flips, such as an idle head
+//! beside an animating one. Headless and nested outputs have no flips, and the grid paces all their animation.
+//!
+//! A flip queued to the display gets a [`PresentationId`]. Only the vblank of the flip in flight confirms a frame; an
+//! event of an earlier generation, after a reset that dropped its flip, changes nothing. A flip whose vblank does not
+//! come times out: the output's clients are then called back once per refresh, so none waits on a dead head, until the
+//! event arrives or the backend gives the flip up.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+
+/// Generations of every output's presentations: a reset takes the next one, so no id is ever used twice.
+static GENERATIONS: AtomicU64 = AtomicU64::new(0);
+
+/// One flip queued to the display.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PresentationId {
+    pub generation: u64,
+    pub sequence: u64,
+}
+
+/// The flip in flight, once its vblank came.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Presented {
+    /// The frame showed the locked scene.
+    pub locked: bool,
+    /// Refresh periods it was overdue by.
+    pub late_periods: u32,
+}
+
+/// What a flip that outlived its vblank asks of the backend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Overdue {
+    /// The flip just timed out: call the clients back, and say so once.
+    TimedOut,
+    /// Another refresh passed without the vblank: call the clients back.
+    CallBack,
+    /// No vblank for long enough that the head is dead: drop the flip.
+    GiveUp,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct InFlight {
+    id: PresentationId,
+    queued_at: Duration,
+    locked: bool,
+    /// The next paced callback once the flip timed out.
+    callback_at: Option<Duration>,
+    late_periods: u32,
+    given_up: bool,
+}
 
 /// A run of frames of one output that failed to draw.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,6 +86,9 @@ pub struct FrameScheduler {
     /// The next grid point: previous due time plus one refresh, moved to a vblank when one is reported.
     next_due: Option<Duration>,
     failed: Option<FailedFrames>,
+    in_flight: Option<InFlight>,
+    generation: u64,
+    next_sequence: u64,
     counts: FrameCounts,
 }
 
@@ -45,6 +99,9 @@ impl Default for FrameScheduler {
             damaged: true,
             next_due: None,
             failed: None,
+            in_flight: None,
+            generation: GENERATIONS.fetch_add(1, Ordering::Relaxed),
+            next_sequence: 0,
             counts: FrameCounts::default(),
         }
     }
@@ -137,6 +194,87 @@ impl FrameScheduler {
 
     pub fn queued(&mut self) {
         self.counts.queued += 1;
+    }
+
+    /// The id the next queued flip gets.
+    pub fn next_presentation(&self) -> PresentationId {
+        PresentationId {
+            generation: self.generation,
+            sequence: self.next_sequence,
+        }
+    }
+
+    /// A flip was queued at `now`, of a frame that showed the locked scene when `locked`.
+    pub fn flip_queued(&mut self, now: Duration, locked: bool) -> PresentationId {
+        let id = self.next_presentation();
+        self.next_sequence += 1;
+        self.in_flight = Some(InFlight {
+            id,
+            queued_at: now,
+            locked,
+            callback_at: None,
+            late_periods: 0,
+            given_up: false,
+        });
+        self.queued();
+        id
+    }
+
+    /// The vblank of flip `id` came: the flip in flight is shown. Any other id is stale and confirms nothing.
+    pub fn presented(&mut self, id: PresentationId) -> Option<Presented> {
+        let flight = self.in_flight.filter(|f| f.id == id)?;
+        self.in_flight = None;
+        Some(Presented {
+            locked: flight.locked,
+            late_periods: flight.late_periods,
+        })
+    }
+
+    /// The vblank of the flip in flight came, but its id was lost with an error about the flip queued after it.
+    pub fn presented_in_flight(&mut self) -> Option<Presented> {
+        let id = self.in_flight?.id;
+        self.presented(id)
+    }
+
+    pub fn in_flight(&self) -> bool {
+        self.in_flight.is_some()
+    }
+
+    /// The backend ended the flip in flight without its vblank (cleared CRTC, sleep, resume, mode change): it will
+    /// never be shown, and a late event for it is stale. The output draws its next frame in full.
+    pub fn reset(&mut self) {
+        self.in_flight = None;
+        self.generation = GENERATIONS.fetch_add(1, Ordering::Relaxed);
+        self.damaged = true;
+    }
+
+    /// The flip in flight at `now`, if its vblank is overdue: it times out after three refresh periods (at least 50 ms),
+    /// calls the clients back once per refresh after that, and is given up once, after ten periods (at least one
+    /// second) without the vblank.
+    pub fn overdue(&mut self, now: Duration, refresh: Duration) -> Option<Overdue> {
+        let flight = self.in_flight.as_mut()?;
+        let waited = now.saturating_sub(flight.queued_at);
+        if waited < (3 * refresh).max(Duration::from_millis(50)) {
+            return None;
+        }
+        if !flight.given_up && waited >= (10 * refresh).max(Duration::from_secs(1)) {
+            flight.given_up = true;
+            return Some(Overdue::GiveUp);
+        }
+        match flight.callback_at {
+            None => {
+                flight.callback_at = Some(now + refresh);
+                flight.late_periods = 1;
+                Some(Overdue::TimedOut)
+            }
+            Some(at) if now >= at => {
+                let next = at + refresh;
+                flight.callback_at = Some(if next <= now { now + refresh } else { next });
+                flight.late_periods += 1;
+                Some(Overdue::CallBack)
+            }
+            Some(_) => None,
+        }
     }
 
     pub fn counts(&self) -> FrameCounts {
@@ -282,5 +420,101 @@ mod tests {
             "a drawn frame ends the wait between retries"
         );
         assert_eq!(s.drawn(), None);
+    }
+
+    #[test]
+    fn only_the_vblank_of_the_flip_in_flight_confirms_a_frame() {
+        let mut s = FrameScheduler::default();
+        let first = s.flip_queued(Duration::ZERO, true);
+        let second = PresentationId {
+            sequence: first.sequence + 1,
+            ..first
+        };
+        assert_eq!(s.presented(second), None, "an id not in flight is stale");
+        assert!(s.in_flight());
+        assert_eq!(
+            s.presented(first),
+            Some(Presented {
+                locked: true,
+                late_periods: 0
+            })
+        );
+        assert_eq!(s.presented(first), None, "a vblank confirms its flip once");
+        let next = s.flip_queued(MS, false);
+        assert!(next.sequence > first.sequence);
+        assert_eq!(s.counts().queued, 2);
+    }
+
+    #[test]
+    fn a_reset_drops_the_flip_and_makes_its_late_vblank_stale() {
+        let mut s = FrameScheduler::default();
+        s.called_back();
+        let before = s.flip_queued(Duration::ZERO, true);
+        s.reset();
+        assert!(!s.in_flight());
+        assert!(s.damaged(), "the next frame is drawn in full");
+        let after = s.flip_queued(MS, true);
+        assert_ne!(after.generation, before.generation);
+        assert_eq!(s.presented(before), None);
+        assert!(s.presented(after).is_some());
+        let other = FrameScheduler::default();
+        assert_ne!(
+            other.generation, after.generation,
+            "no two outputs share a generation"
+        );
+    }
+
+    #[test]
+    fn an_overdue_flip_times_out_calls_back_once_per_refresh_and_is_given_up_once() {
+        let refresh = period(60_000.0);
+        let mut s = FrameScheduler::default();
+        let id = s.flip_queued(Duration::ZERO, false);
+        let mut events = Vec::new();
+        let mut now = Duration::ZERO;
+        while now < Duration::from_millis(1500) {
+            if let Some(e) = s.overdue(now, refresh) {
+                events.push((now, e));
+            }
+            now += MS;
+        }
+        let timeout = (3 * refresh).max(50 * MS);
+        assert_eq!(events[0].1, Overdue::TimedOut);
+        assert!(
+            events[0].0 >= timeout && events[0].0 < timeout + MS,
+            "three refresh periods: {:?}",
+            events[0].0
+        );
+        let callbacks: Vec<Duration> = events
+            .iter()
+            .filter(|(_, e)| *e != Overdue::GiveUp)
+            .map(|&(t, _)| t)
+            .collect();
+        let gaps: Vec<Duration> = callbacks.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(
+            gaps.iter().all(|&g| g + MS > refresh && g < refresh + MS),
+            "one callback per refresh: {gaps:?}"
+        );
+        let given_up: Vec<Duration> = events
+            .iter()
+            .filter(|(_, e)| *e == Overdue::GiveUp)
+            .map(|&(t, _)| t)
+            .collect();
+        assert_eq!(given_up, [Duration::from_secs(1)], "once, after one second");
+        let late = s
+            .presented(id)
+            .expect("the flip is still in flight")
+            .late_periods;
+        assert!(late > 50, "{late} periods without a vblank");
+
+        let fast = period(144_000.0);
+        let mut s = FrameScheduler::default();
+        s.flip_queued(Duration::ZERO, false);
+        assert_eq!(s.overdue(49 * MS, fast), None, "the floor is 50 ms");
+        assert_eq!(s.overdue(50 * MS, fast), Some(Overdue::TimedOut));
+        assert_ne!(
+            s.overdue(500 * MS, fast),
+            Some(Overdue::GiveUp),
+            "not before one second at 144 Hz"
+        );
     }
 }

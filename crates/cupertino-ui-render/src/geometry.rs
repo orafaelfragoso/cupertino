@@ -76,6 +76,15 @@ impl Bounds {
             y1: self.y1.saturating_add(by),
         }
     }
+
+    pub(crate) fn offset(&self, dx: i32, dy: i32) -> Bounds {
+        Bounds {
+            x0: self.x0.saturating_add(dx),
+            y0: self.y0.saturating_add(dy),
+            x1: self.x1.saturating_add(dx),
+            y1: self.y1.saturating_add(dy),
+        }
+    }
 }
 
 /// Merges overlapping or touching rectangles until none remain, then orders the rest by row and column.

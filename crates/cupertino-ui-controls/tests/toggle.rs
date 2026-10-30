@@ -1,6 +1,6 @@
 mod support;
 
-use cupertino_geometry::Rect;
+use cupertino_geometry::{Insets, Rect};
 use cupertino_ui_controls::{Stack, Toggle};
 use cupertino_ui_core::{
     AccessibleValue, Action, Application, Checked, Command, Element, Role, Window,
@@ -48,6 +48,7 @@ impl<const DISABLED: bool> Application for Switch<DISABLED> {
     fn view(model: &Model) -> Vec<Window<Message>> {
         window(Element::new(Stack {
             axis: Axis::Vertical,
+            padding: Insets::ZERO,
             spacing: 0.0,
             align: Align::Start,
             children: vec![Element::new(Toggle {

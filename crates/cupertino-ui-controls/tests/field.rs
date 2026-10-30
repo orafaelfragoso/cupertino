@@ -1,6 +1,6 @@
 mod support;
 
-use cupertino_geometry::Rect;
+use cupertino_geometry::{Insets, Rect};
 use cupertino_ui_controls::{SecureField, Stack, TextChange, TextField};
 use cupertino_ui_core::{
     AccessibleValue, Application, Command, Element, Role, TextSemantics, Window,
@@ -64,6 +64,7 @@ impl<const ENABLED: bool> Application for Form<ENABLED> {
     fn view(model: &Model) -> Vec<Window<Message>> {
         window(Element::new(Stack {
             axis: Axis::Vertical,
+            padding: Insets::ZERO,
             spacing: 4.0,
             align: Align::Start,
             children: vec![

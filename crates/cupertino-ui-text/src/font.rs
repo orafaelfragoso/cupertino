@@ -108,9 +108,10 @@ impl FontIndex {
         let file = FontDataRef::new(&data)
             .ok_or_else(|| TextError::InvalidFont("not a TrueType or OpenType file".into()))?;
         let mut named = Vec::new();
-        for index in 0..file.len() {
+        // a collection's header states its face count; each face needs a 4-byte offset, so no more fit in the file
+        for index in 0..file.len().min(data.len() / 4) {
             let Some(font) = file.get(index) else {
-                continue;
+                break;
             };
             let name = |id| {
                 font.localized_strings()
@@ -139,6 +140,10 @@ impl FontIndex {
                 self.add_face(&family, weight, style, Arc::clone(&data), index)
             })
             .collect()
+    }
+
+    pub fn family(&self, face: FaceId) -> Option<&str> {
+        self.faces.get(face.0 as usize).map(|f| &*f.family)
     }
 
     pub fn face_count(&self) -> usize {

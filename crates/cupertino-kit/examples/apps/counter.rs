@@ -1,6 +1,6 @@
 //! A number and two buttons that change it.
 
-use cupertino_kit::controls::TextRole;
+use cupertino_kit::controls::{TextRole, WINDOW_CONTENT_INSET};
 use cupertino_kit::core::CommandRegistry;
 use cupertino_kit::geometry::Size;
 use cupertino_kit::platform::DecorationMode;
@@ -49,7 +49,7 @@ impl Application for Counter {
             spec: WindowSpec {
                 title: "Counter".into(),
                 app_id: "org.cupertino.examples.Counter".into(),
-                size: Size::new(200.0, 60.0),
+                size: Size::new(200.0, 64.0),
                 min_size: None,
                 max_size: None,
                 decorations: DecorationMode::Preferred,
@@ -58,6 +58,7 @@ impl Application for Counter {
             on_close: None,
             content: Element::new(Stack {
                 axis: Axis::Horizontal,
+                padding: WINDOW_CONTENT_INSET,
                 spacing: 8.0,
                 align: Align::Center,
                 children: vec![

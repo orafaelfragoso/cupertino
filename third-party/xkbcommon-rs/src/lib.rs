@@ -497,20 +497,3 @@ pub mod keysym {
     ///
     pub use super::rust_xkbcommon::XKB_KEYSYM_MAX;
 }
-
-#[cfg(test)]
-macro_rules! log_init {
-    () => {
-        use simplelog::*;
-
-        // Only initialize logger if not already initialized
-        let _ = TermLogger::init(
-            LevelFilter::Debug,
-            Config::default(),
-            TerminalMode::Mixed,
-            ColorChoice::Auto,
-        );
-    };
-}
-#[cfg(test)]
-pub(crate) use log_init;

@@ -1197,9 +1197,10 @@ mod tests {
 
     use super::*;
 
+    // Cupertino patch: the rules file is in the upstream repository's test data, which the crates.io package leaves out
     #[test]
+    #[ignore = "needs test/data from the upstream repository"]
     fn test_lex_rmlvo() {
-        crate::log_init!();
         let path: &'static str = "./test/data/rules/evdev";
         let string = std::fs::read_to_string(path).unwrap();
         for token in RulesToken::lexer(&string) {

@@ -58,7 +58,7 @@ fn node(
     }
 }
 
-/// A window with an OK button and a password field that, like a careless core, still carries its value.
+/// A window with a text label, an OK button and a password field that, like a careless core, still carries its value.
 fn tree() -> AccessibilityUpdate {
     AccessibilityUpdate {
         window: WINDOW,
@@ -67,7 +67,23 @@ fn tree() -> AccessibilityUpdate {
         nodes: vec![
             (
                 id(1),
-                node(Role::Window, "About", None, Vec::new(), vec![id(2), id(3)]),
+                node(
+                    Role::Window,
+                    "About",
+                    None,
+                    Vec::new(),
+                    vec![id(4), id(2), id(3)],
+                ),
+            ),
+            (
+                id(4),
+                node(
+                    Role::StaticText,
+                    "Version 1.0",
+                    None,
+                    Vec::new(),
+                    Vec::new(),
+                ),
             ),
             (
                 id(2),
@@ -281,6 +297,10 @@ fn an_assistive_technology_reads_the_window_and_its_click_reaches_the_applicatio
         .collect();
     let named = |name: &str| nodes.iter().find(|((n, _), _)| n == name).unwrap();
     assert_eq!(named("OK").0 .1, PUSH_BUTTON);
+    assert!(
+        nodes.iter().any(|((n, _), _)| n == "Version 1.0"),
+        "a text label reaches assistive technology without its name: {nodes:?}"
+    );
     assert_eq!(named("Password").0 .1, PASSWORD_TEXT);
     let password = Proxy::new(
         &conn,

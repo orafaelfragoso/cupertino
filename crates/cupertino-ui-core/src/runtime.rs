@@ -16,7 +16,7 @@ use crate::task::Executor;
 use crate::tree::Tree;
 use crate::{
     AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, Application, Clock, Command,
-    Environment, Event, FocusTarget, FrameSnapshot, Key, NodeId, NodeSnapshot, Pending,
+    Environment, Event, FocusTarget, FrameSnapshot, Icons, Key, NodeId, NodeSnapshot, Pending,
     Propagation, StepStatus, UiError, Window, WindowBackground, WindowKey,
 };
 use cupertino_geometry::{Point, Size};
@@ -48,6 +48,8 @@ pub type ThemeForAppearance = Box<dyn FnMut(&SystemAppearance) -> Arc<ThemeToken
 pub struct RuntimeOptions {
     pub theme: Arc<ThemeTokens>,
     pub text: Arc<TextSystem>,
+    /// The system's symbols ([`PlaceholderIcons`](crate::PlaceholderIcons) without asset packs).
+    pub icons: Arc<dyn Icons>,
     pub direction: LayoutDirection,
     /// The most nodes the tree holds; more is a [`UiError::NodeLimit`].
     pub node_limit: usize,
@@ -126,6 +128,8 @@ struct WindowState<M> {
     painter: Painter,
     damage: DamageTracker,
     display_list: DisplayList,
+    /// The images the display list draws.
+    resources: PaintResources,
     renderer: Box<dyn UiRenderer<Frame = CpuFrame>>,
     /// The error of the last frame, until one renders and presents; animations wait for that.
     failed: Option<UiError>,
@@ -447,6 +451,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             env: Environment {
                 theme: Arc::clone(&self.options.theme),
                 text: Arc::clone(&self.options.text),
+                icons: Arc::clone(&self.options.icons),
                 direction: self.options.direction,
                 scale: 1.0,
             },
@@ -473,6 +478,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             painter: Painter::default(),
             damage: DamageTracker::default(),
             display_list: DisplayList::default(),
+            resources: PaintResources::default(),
             renderer: (self.options.renderers)(),
             failed: None,
         }
@@ -936,6 +942,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let damage = w.damage.damage(&painting);
         w.animate.extend(painting.animating);
         w.display_list = painting.list;
+        w.resources = painting.resources;
         w.dirty = false;
         if matches!(&damage, DamageRegion::Rects(r) if r.is_empty()) {
             return Ok(());
@@ -945,7 +952,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             .renderer
             .render(&RenderRequest {
                 list: &w.display_list,
-                resources: &PaintResources::default(),
+                resources: &w.resources,
                 scale,
                 width: physical(w.size.width, scale),
                 height: physical(w.size.height, scale),

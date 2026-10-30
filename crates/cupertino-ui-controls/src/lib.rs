@@ -5,6 +5,7 @@ mod button;
 mod checkbox;
 mod choice;
 mod field;
+mod icon;
 mod look;
 mod press;
 mod progress;
@@ -21,6 +22,7 @@ use cupertino_geometry::Insets;
 use cupertino_ui_core::{Checked, Element};
 use cupertino_ui_layout::{Align, Axis};
 use cupertino_ui_text::{AttributedText, ContentPurpose, SecureBuffer};
+use cupertino_ui_theme::ColorRole;
 
 /// The space a form-style window (a form, a dialog) leaves between its edges and its content, for a [`Stack`]'s
 /// padding. Windows add none themselves: sidebars, lists and canvases run to the edges.
@@ -72,6 +74,8 @@ pub struct Icon {
     pub direction: IconDirection,
     /// `None` marks the icon decorative, so accessibility skips it.
     pub label: Option<String>,
+    /// The colour role it is drawn in; `None` is the label colour ([`ColorRole::Text`]).
+    pub tint: Option<ColorRole>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

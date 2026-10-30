@@ -173,6 +173,7 @@ fn options() -> RuntimeOptions {
             },
         }),
         text: Arc::new(TextSystem::new(FontIndex::new(), "fixture")),
+        icons: Arc::new(cupertino_ui_core::PlaceholderIcons::default()),
         direction: LayoutDirection::Ltr,
         node_limit: 32,
         renderers: Box::new(|| {

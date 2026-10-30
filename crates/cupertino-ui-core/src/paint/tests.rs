@@ -1,7 +1,7 @@
 use super::*;
 use crate::route::Placement;
 use crate::test_support::{env, spec};
-use crate::{Change, Element, Event, EventCx, MeasureCx, Propagation, SemanticsCx, Widget};
+use crate::{Change, Element, Event, EventCx, Icons, MeasureCx, Propagation, SemanticsCx, Widget};
 use cupertino_geometry::Point;
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 use cupertino_ui_render::{Effect, Paint, Shape};
@@ -358,4 +358,116 @@ fn a_group_reaches_the_renderer_and_its_effects_widen_the_subtree_bounds() {
         painting.own[0], rect,
         "damage still tracks what the node itself draws"
     );
+}
+
+/// Draws one image over its whole size and counts how often it painted.
+struct Pictured {
+    image: crate::IconImage,
+    paints: Rc<Cell<u32>>,
+}
+
+impl Widget<M> for Pictured {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        self.paints.set(self.paints.get() + 1);
+        let dst = Rect::from_origin_size(Point::new(0.0, 0.0), cx.size());
+        cx.image(
+            self.image.id,
+            &self.image.image,
+            dst,
+            cupertino_ui_render::Sampling::Linear,
+        );
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+#[test]
+fn an_image_a_node_draws_travels_with_the_list_and_stays_when_the_node_is_reused() {
+    let image = crate::PlaceholderIcons::default().symbol(
+        "symbol.house",
+        16,
+        Color::new(0.0, 0.0, 0.0, 1.0),
+        false,
+    );
+    let paints = Rc::default();
+    let mut tree = Tree::<M>::new(2);
+    let root = tree
+        .reconcile(
+            None,
+            Element::new(Pictured {
+                image: image.clone(),
+                paints: Rc::clone(&paints),
+            }),
+        )
+        .unwrap();
+    let geometry = Geometry::from([(
+        root,
+        Placement {
+            rect: Rect::new(4.0, 4.0, 16.0, 16.0),
+            clip: None,
+            own_clip: None,
+        },
+    )]);
+    let env = env();
+    let mut painter = Painter::default();
+    let mut paint = || {
+        painter.paint(
+            &tree,
+            root,
+            &geometry,
+            &PaintInput {
+                env: &env,
+                focus: None,
+                focus_visible: false,
+                window_active: true,
+                background: WindowBackground::Theme,
+                now: Timestamp(0),
+            },
+        )
+    };
+    for frame in 0..2 {
+        let painting = paint();
+        assert_eq!(
+            painting.list.nodes[0].ops,
+            vec![PaintOp::Image {
+                image: cupertino_ui_render::ResourceRef {
+                    id: image.id,
+                    revision: 1
+                },
+                src: Rect::new(0.0, 0.0, 16.0, 16.0),
+                dst: Rect::new(0.0, 0.0, 16.0, 16.0),
+                sampling: cupertino_ui_render::Sampling::Linear,
+            }],
+            "frame {frame}"
+        );
+        assert_eq!(
+            painting.resources.images.get(&image.id),
+            Some(&image.image),
+            "frame {frame}: the pixels travel with the list"
+        );
+    }
+    assert_eq!(paints.get(), 1, "the second frame reused the node");
 }

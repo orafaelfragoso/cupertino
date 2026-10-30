@@ -158,3 +158,37 @@ fn the_cursor_is_paced_by_the_head_under_the_pointer_or_the_first_powered_one() 
         "an animated cursor keeps animating on a powered head"
     );
 }
+
+#[test]
+fn a_window_shown_nowhere_marks_only_the_head_under_the_pointer() {
+    let mut d = two_heads();
+    d.window();
+    d.at(2000);
+    let entry = &d.state.windows[0];
+    let (id, surface) = (entry.id, entry.toplevel.wl_surface().clone());
+    let output = d.state.wm.window(id).expect("the window").output;
+    let shown = d
+        .state
+        .outputs
+        .iter()
+        .position(|o| o.id == output)
+        .expect("the window's output");
+    let other = 1 - shown;
+    d.state.command(cupertino_wm::Command::Minimize {
+        window: id,
+        target: None,
+    });
+    d.at(5000);
+    let rect = d.state.outputs[other].rect;
+    d.state
+        .pointer_moved_to((rect.x + 10.0, rect.y + 10.0).into(), 0, None);
+
+    settle(&mut d);
+    CompositorHandler::commit(&mut d.state, &surface);
+    let marked = damaged(&d);
+    assert!(marked[other], "the head under the pointer is marked");
+    assert!(
+        !marked[shown],
+        "the window's own head, where it is hidden, is not"
+    );
+}

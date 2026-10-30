@@ -437,6 +437,7 @@ impl UiRenderer for FakeRenderer {
 pub(crate) struct FakeAdapter {
     pub(crate) active: Rc<Cell<bool>>,
     pub(crate) updates: Rc<RefCell<Vec<AccessibilityUpdate>>>,
+    pub(crate) closed: Rc<RefCell<Vec<WindowId>>>,
 }
 
 impl AccessibilityAdapter for FakeAdapter {
@@ -451,6 +452,10 @@ impl AccessibilityAdapter for FakeAdapter {
     }
 
     fn drain_actions(&mut self, _: &mut Vec<ActionRequest>) {}
+
+    fn window_closed(&mut self, window: WindowId) {
+        self.closed.borrow_mut().push(window);
+    }
 }
 
 #[derive(Default)]

@@ -1134,13 +1134,21 @@ dependencies = [
 name = "cupertino-kit"
 version = "0.1.0"
 dependencies = [
+ "cupertino-assets",
+ "cupertino-geometry",
+ "cupertino-modifiers",
+ "cupertino-theme",
+ "cupertino-ui-atspi",
  "cupertino-ui-controls",
  "cupertino-ui-core",
  "cupertino-ui-layout",
  "cupertino-ui-platform",
  "cupertino-ui-render",
+ "cupertino-ui-test",
  "cupertino-ui-text",
  "cupertino-ui-theme",
+ "cupertino-ui-wayland",
+ "tempfile",
 ]
 
 [[package]]

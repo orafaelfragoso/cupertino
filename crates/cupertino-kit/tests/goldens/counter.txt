@@ -1,0 +1,29 @@
+window 1
+pending messages=0 tasks=0 frames=0 animating=false
+focus Some(NodeId(1v1))
+pointer_capture None
+text_input None
+layout
+  NodeId(0v1) cupertino_ui_controls::Stack<examples::counter::Add> key=None parent=None children=[NodeId(1v1), NodeId(2v1), NodeId(3v1)] rect=[0,0 200x64] clip=[none]
+  NodeId(1v1) cupertino_ui_controls::Button<examples::counter::Add> key=Some(Str("less")) parent=Some(NodeId(0v1)) children=[] rect=[20,20 25.9794921875x24] clip=[none]
+  NodeId(2v1) cupertino_ui_controls::Text key=Some(Str("count")) parent=Some(NodeId(0v1)) children=[] rect=[53.9794921875,22.92529296875 6.3427734375x18.1494140625] clip=[none]
+  NodeId(3v1) cupertino_ui_controls::Button<examples::counter::Add> key=Some(Str("more")) parent=Some(NodeId(0v1)) children=[] rect=[68.322265625,20 28.60107421875x24] clip=[none]
+semantics
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x64] actions=[] relations=[] children=[NodeId(1v1), NodeId(2v1), NodeId(3v1)]
+  NodeId(1v1) role=Button name=Some("-") description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[20,20 25.9794921875x24] actions=[Click] relations=[] children=[]
+  NodeId(2v1) role=StaticText name=Some("1") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[53.9794921875,22.92529296875 6.3427734375x18.1494140625] actions=[] relations=[] children=[]
+  NodeId(3v1) role=Button name=Some("+") description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[68.322265625,20 28.60107421875x24] actions=[Click] relations=[] children=[]
+display
+  paint 4294967296 parent=None revision=1 bounds=[0,0 200x64] hit=[0,0 200x64] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    Fill { shape: Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 200.0, height: 64.0 } }), paint: Solid(Color { r: 0.9254902, g: 0.9254902, b: 0.9254902, a: 1.0 }) }
+  paint 4294967297 parent=Some(4294967296) revision=14 bounds=[16,17.18 40x32.5] hit=[20,20 25.9794921875x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 20.0]
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 2.0 }, size: Size { width: 25.9794921875, height: 20.0 } }, radius: 5.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
+    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.5, y: 2.5 }, size: Size { width: 24.9794921875, height: 19.0 } }, radius: 4.5 }, width: 1.0, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.24705882 }) }
+    Glyphs origin=10,16.68 font=FontId(0) size=13 count=1 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 0.84705883 }
+    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: -3.0, y: -1.0 }, size: Size { width: 31.9794921875, height: 26.0 } }, radius: 8.0 }, width: 2.0, paint: Solid(Color { r: 0.23137255, g: 0.6, b: 0.9882353, a: 1.0 }) }
+  paint 4294967298 parent=Some(4294967296) revision=15 bounds=[38.9794921875,14.95654296875 45x37.5] hit=[53.9794921875,22.92529296875 6.3427734375x18.1494140625] clip=None transform=[1.0, 0.0, 0.0, 1.0, 53.9794921875, 22.92529296875]
+    Glyphs origin=0,14.53125 font=FontId(1) size=15 count=1 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
+  paint 4294967299 parent=Some(4294967296) revision=11 bounds=[65.322265625,17.18 39x32.5] hit=[68.322265625,20 28.60107421875x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 68.322265625, 20.0]
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 2.0 }, size: Size { width: 28.60107421875, height: 20.0 } }, radius: 5.0 }, paint: Solid(Color { r: 0.0, g: 0.47843137, b: 1.0, a: 1.0 }) }
+    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.5, y: 2.5 }, size: Size { width: 27.60107421875, height: 19.0 } }, radius: 4.5 }, width: 1.0, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.3764706 }) }
+    Glyphs origin=10,16.68 font=FontId(0) size=13 count=1 color=Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }

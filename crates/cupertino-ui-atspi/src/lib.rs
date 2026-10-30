@@ -178,6 +178,10 @@ impl AccessibilityAdapter for AtspiAdapter {
         });
     }
 
+    fn window_closed(&mut self, window: WindowId) {
+        self.windows.remove(&window);
+    }
+
     fn drain_actions(&mut self, out: &mut Vec<ActionRequest>) {
         out.append(&mut lock(&self.shared.actions));
     }

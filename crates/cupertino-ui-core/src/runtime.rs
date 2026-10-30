@@ -58,6 +58,23 @@ pub struct RuntimeOptions {
     pub on_window_error: Option<WindowErrorHandler>,
 }
 
+/// A held key, by its physical code, which its release repeats even when a modifier changed the symbol in between; by
+/// its symbol when the window system gives no code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HeldKey {
+    Code(u32),
+    Symbol(Keysym),
+}
+
+impl HeldKey {
+    fn of(key: &KeyEvent) -> HeldKey {
+        match key.code {
+            0 => HeldKey::Symbol(key.keysym),
+            code => HeldKey::Code(code),
+        }
+    }
+}
+
 impl<M> WindowState<M> {
     /// Something in the window changed: lay it out and paint it again.
     fn invalidate(&mut self) {
@@ -88,7 +105,7 @@ struct WindowState<M> {
     pointer: Pointer,
     touches: HashMap<i32, Vec<NodeId>>,
     /// Each key held down and the node that took its press; it gets [`Event::Cancel`] if the window deactivates first.
-    held: Vec<(Keysym, NodeId)>,
+    held: Vec<(HeldKey, NodeId)>,
     animate: BTreeSet<NodeId>,
     text_input: Option<NodeId>,
     geometry: Geometry,
@@ -473,8 +490,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             WindowEvent::Focus(focused) => {
                 w.active = focused;
                 if !focused {
-                    let mut held: Vec<NodeId> = w.held.drain(..).map(|(_, node)| node).collect();
-                    held.dedup();
+                    let held: BTreeSet<NodeId> = w.held.drain(..).map(|(_, node)| node).collect();
                     let mut pointer = std::mem::take(&mut w.pointer);
                     let mut route = route(&mut self.tree, w, now, &mut effects);
                     pointer.revoke(&mut route);
@@ -524,9 +540,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         };
         let handled =
             route(&mut self.tree, w, now, effects).dispatch(&path, &Event::Key(key, time));
-        w.held.retain(|&(keysym, _)| keysym != key.keysym);
+        let held = HeldKey::of(&key);
+        w.held.retain(|&(k, _)| k != held);
         if handled == Propagation::Stop && key.pressed {
-            w.held.extend(path.last().map(|&node| (key.keysym, node)));
+            w.held.extend(path.last().map(|&node| (held, node)));
         }
         if handled == Propagation::Stop || !key.pressed {
             return;

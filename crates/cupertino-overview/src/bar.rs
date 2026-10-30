@@ -41,9 +41,15 @@ impl Default for BarConfig {
 }
 
 impl BarConfig {
-    /// Vertical space the collapsed bar takes at the top of the area.
+    /// Vertical space the bar takes at the top of the area: collapsed when it expands only on hover, expanded when
+    /// it is pinned.
     pub fn reserved_height(&self) -> f64 {
-        self.top_margin + self.collapsed_thumb_height + 2.0 * self.padding
+        let thumb = if self.expand_on_hover {
+            self.collapsed_thumb_height
+        } else {
+            self.expanded_thumb_height
+        };
+        self.top_margin + thumb + 2.0 * self.padding
     }
 }
 

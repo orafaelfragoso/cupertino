@@ -383,7 +383,8 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
     }
 
     /// Paints one node's own operations into a scratch image of just the pixels they can reach, under the
-    /// ancestors' clips, and lays that over the target.
+    /// ancestors' clips, and lays that over the target. A node that nothing clips or cuts, whose operations only draw,
+    /// is painted straight into the target instead: source-over is associative, so the result is the same.
     fn own(
         &mut self,
         t: &mut Target<'_, '_>,
@@ -410,6 +411,29 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             return Ok(());
         }
         self.stats.nodes_painted += 1;
+        let reach = extent.outset(halo).intersect(&t.rect);
+        let direct = chain.iter().all(|owner| owner.clip.is_none())
+            && reach.intersect(&t.limit) == reach
+            && node.ops.iter().all(|op| {
+                matches!(
+                    op,
+                    PaintOp::Fill { .. }
+                        | PaintOp::Stroke { .. }
+                        | PaintOp::Glyphs { .. }
+                        | PaintOp::Image { .. }
+                )
+            });
+        if direct {
+            let mut inner = Target {
+                pixmap: &mut *t.pixmap,
+                origin: t.origin,
+                rect: t.rect,
+                limit: reach,
+                clips: Vec::new(),
+            };
+            let mut pos = 0;
+            return self.run(&mut inner, node, Reach { extent, halo }, &mut pos);
+        }
         let mut scratch = self.scratch(&area)?;
         {
             let mut pm = scratch.as_mut();

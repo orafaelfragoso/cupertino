@@ -798,3 +798,64 @@ fn stats_belong_to_their_own_frame_after_a_refusal_or_a_failed_paint() {
         "the failed frame's fills are not carried over"
     );
 }
+
+/// What one frame of `list` did: the stats of a render after a full first frame.
+fn frame_stats(list: &DisplayList, damage: &DamageRegion) -> cupertino_ui_render::RenderStats {
+    let mut r = renderer();
+    let none = PaintResources::default();
+    render(&mut r, list, &none, 1.0, &DamageRegion::Full).unwrap();
+    render(&mut r, list, &none, 1.0, damage).unwrap();
+    *r.stats()
+}
+
+fn blue_square() -> PaintNode {
+    node(
+        1,
+        rect(10.0, 10.0, 30.0, 30.0),
+        vec![fill(
+            Shape::Rect(rect(10.0, 10.0, 30.0, 30.0)),
+            solid(0.0, 0.0, 1.0, 0.5),
+        )],
+    )
+}
+
+#[test]
+fn a_node_nothing_clips_or_cuts_is_painted_straight_into_the_frame() {
+    let stats = frame_stats(
+        &DisplayList {
+            nodes: vec![blue_square()],
+        },
+        &DamageRegion::Full,
+    );
+    assert_eq!(stats.nodes_painted, 1);
+    assert_eq!(stats.scratch_images.count, 0);
+    assert_eq!(stats.node_composite.count, 0);
+}
+
+#[test]
+fn a_clipped_cut_or_grouped_node_keeps_its_scratch_image() {
+    let clipped = DisplayList {
+        nodes: vec![
+            PaintNode {
+                clip: Some(Shape::Rect(rect(0.0, 0.0, 20.0, 20.0))),
+                ..node(9, rect(0.0, 0.0, 96.0, 64.0), vec![])
+            },
+            PaintNode {
+                parent: Some(PaintNodeId(9)),
+                ..blue_square()
+            },
+        ],
+    };
+    let stats = frame_stats(&clipped, &DamageRegion::Full);
+    assert_eq!(stats.node_composite.count, 1, "under a clipping ancestor");
+    let cut = DamageRegion::Rects(vec![rect(0.0, 0.0, 20.0, 20.0)]);
+    let stats = frame_stats(
+        &DisplayList {
+            nodes: vec![blue_square()],
+        },
+        &cut,
+    );
+    assert_eq!(stats.node_composite.count, 1, "cut by the damage");
+    let stats = frame_stats(&faded_sheet(0.0), &DamageRegion::Full);
+    assert_eq!(stats.group_composite.count, 1, "inside a group's layer");
+}

@@ -6,7 +6,8 @@ use std::num::NonZeroU32;
 
 use cupertino_geometry::Rect;
 use cupertino_ui_core::{
-    AccessibilityNode, AccessibilityUpdate, AccessibleStates, AccessibleValue, Action, NodeId, Role,
+    AccessibilityNode, AccessibilityUpdate, AccessibleStates, AccessibleValue, Action, Live,
+    NodeId, Role,
 };
 use cupertino_ui_platform::WindowId;
 
@@ -101,10 +102,10 @@ pub fn lock_tree(window: WindowId, view: &LockView<'_>) -> AccessibilityUpdate {
     add(LockNode::Password, password(view.screen, layout.pill));
     let below = line(layout.notice_baseline, layout.time_size / 4.0);
     if view.screen.failure_outline() {
-        add(LockNode::Denied, text(DENIED, below));
+        add(LockNode::Denied, announced(DENIED, below));
     }
     if let Some(notice) = view.screen.notice() {
-        add(LockNode::Notice, text(notice, below));
+        add(LockNode::Notice, announced(notice, below));
     }
     if view.caps_lock {
         add(LockNode::CapsLock, text("Caps Lock is on", below));
@@ -232,6 +233,14 @@ fn password(screen: &LockScreen, frame: Rect) -> AccessibilityNode {
     }
 }
 
+/// Text that assistive technology reads out as soon as it shows: the answer to an attempt.
+fn announced(content: &str, bounds: Rect) -> AccessibilityNode {
+    AccessibilityNode {
+        live: Some(Live::Assertive),
+        ..text(content, bounds)
+    }
+}
+
 fn text(content: &str, bounds: Rect) -> AccessibilityNode {
     node(Role::StaticText, Some(content), bounds)
 }
@@ -247,6 +256,7 @@ fn node(role: Role, name: Option<&str>, bounds: Rect) -> AccessibilityNode {
         actions: Vec::new(),
         relations: Vec::new(),
         children: Vec::new(),
+        live: None,
     }
 }
 

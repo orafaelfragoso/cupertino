@@ -95,3 +95,32 @@ fn a_character_no_font_has_stays_in_the_runs_font() {
     assert!(missing, "the missing glyph shows");
     assert_eq!(font_at(&fonts, text, "Hi"), font_at(&fonts, text, "日"));
 }
+
+/// A heart and a grin in colour layers (tests/fixtures/make-colour-font.py).
+const COLOUR: &[u8] = include_bytes!("fixtures/colour-test.ttf");
+
+#[test]
+fn the_emoji_selector_takes_a_colour_face_over_a_text_face_that_has_the_character() {
+    // the matched face has a plain heart; a colour face that has one too is loaded after it
+    let fonts = system(&[("Inter", BOXES), ("Colour", COLOUR)]);
+    let text = "❤ ❤\u{FE0F} ❤\u{FE0E}";
+    let (glyphs, missing) = fonts_of(&fonts, text);
+    assert!(!missing);
+    let plain = font_at(&glyphs, text, "❤");
+    let emoji = font_at(&glyphs, text, "❤\u{FE0F}");
+    assert_ne!(plain, emoji, "the selector asks for the colour heart");
+    assert_eq!(
+        font_at(&glyphs, text, "❤\u{FE0E}"),
+        plain,
+        "the text selector keeps the run's face"
+    );
+}
+
+#[test]
+fn the_emoji_selector_keeps_a_face_that_has_the_character_when_no_colour_face_does() {
+    let fonts = system(&[("Inter", INTER), ("Boxes", BOXES)]);
+    let text = "Hi ❤\u{FE0F}";
+    let (glyphs, missing) = fonts_of(&fonts, text);
+    assert!(!missing);
+    assert_ne!(font_at(&glyphs, text, "Hi"), font_at(&glyphs, text, "❤"));
+}

@@ -18,6 +18,8 @@ use cupertino_test_bus::PrivateBus;
 /// Stands in for the session agent of `cupertino-login`: the properties of the system menu and the calls it records.
 struct FakeLogin {
     calls: mpsc::Sender<String>,
+    /// The next read of `Capabilities` fails.
+    fail_capabilities: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[zbus::interface(name = "org.cupertino.Login1")]
@@ -33,14 +35,20 @@ impl FakeLogin {
     }
 
     #[zbus(property)]
-    fn capabilities(&self) -> HashMap<String, bool> {
+    fn capabilities(&self) -> zbus::fdo::Result<HashMap<String, bool>> {
+        if self
+            .fail_capabilities
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(zbus::fdo::Error::Failed("not ready".into()));
+        }
         // shut-down, log-out and switch-user are not reported
-        [
+        Ok([
             ("sleep".to_string(), false),
             ("restart".to_string(), true),
             ("lock".to_string(), true),
         ]
-        .into()
+        .into())
     }
 
     fn sleep(&self) {
@@ -204,6 +212,7 @@ fn the_extras_follow_the_services_and_act_on_them() {
     };
     let (calls_tx, calls) = mpsc::channel();
     let (login_tx, login_calls) = mpsc::channel();
+    let fail_capabilities = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let services = zbus::block_on(bus.connect_async());
     block_on(async {
         let server = services.object_server();
@@ -237,7 +246,13 @@ fn the_extras_follow_the_services_and_act_on_them() {
             .await
             .unwrap();
         server
-            .at("/org/cupertino/Login1", FakeLogin { calls: login_tx })
+            .at(
+                "/org/cupertino/Login1",
+                FakeLogin {
+                    calls: login_tx,
+                    fail_capabilities: fail_capabilities.clone(),
+                },
+            )
             .await
             .unwrap();
         for name in [
@@ -331,6 +346,21 @@ fn the_extras_follow_the_services_and_act_on_them() {
         !session.caps.shut_down && !session.caps.log_out && !session.caps.switch_user,
         "a capability the agent does not report is not offered"
     );
+    // a read of the capabilities that fails is no answer: with nothing read before, every entry stays offered, so Lock and
+    // Log Out remain reachable
+    extras.session_agent(SessionAgent::Process(me ^ 1)).unwrap();
+    assert_eq!(next(&events).session, None);
+    fail_capabilities.store(true, std::sync::atomic::Ordering::SeqCst);
+    extras.session_agent(SessionAgent::Process(me)).unwrap();
+    let unread = next(&events);
+    let caps = unread.session.as_ref().expect("the session agent").caps;
+    assert!(caps.lock && caps.log_out, "{caps:?}");
+    // the next read that works gives the agent's answer again
+    extras.session_agent(SessionAgent::Process(me)).unwrap();
+    let reread = next(&events);
+    let caps = reread.session.as_ref().expect("the session agent").caps;
+    assert!(caps.lock && !caps.shut_down, "{caps:?}");
+
     // the session menu's entries go to the server over the shell protocol: the bus side never calls the agent
     for action in [SessionAction::Restart, SessionAction::RefreshCapabilities] {
         extras.act(ExtraAction::Session(action)).unwrap();

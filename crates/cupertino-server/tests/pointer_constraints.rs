@@ -216,6 +216,31 @@ fn a_lock_keeps_the_pointer_in_place_and_sends_only_relative_motion_until_the_re
 }
 
 #[test]
+fn the_authentication_prompt_ends_the_lock_and_the_inhibitor_while_it_is_shown() {
+    let Some(mut h) = Harness::new() else { return };
+    let game = Client::constraining(h.socket_path(), "org.example.game", Constraint::Lock, true);
+    let window = h.mapped(1, "org.example.game");
+    // the prompt is in the top left corner of the output, away from the pointer and the window
+    h.move_to(h.in_window(window, 200.0, 150.0));
+    h.wait_until("the lock and the inhibitor", |_| {
+        game.constraint_events() == [true] && game.inhibitor_events() == [true]
+    });
+
+    let prompt = Client::prompt(common::prompt_agent(&h.state));
+    h.wait_until("the prompt to be shown", |s| s.prompt_shown());
+    h.wait_until("the lock and the inhibitor to end", |_| {
+        game.constraint_events() == [true, false] && game.inhibitor_events() == [true, false]
+    });
+
+    prompt.unlock();
+    h.wait_until("the prompt to go", |s| !s.prompt_shown());
+    h.wait_until("the lock and the inhibitor to be taken again", |_| {
+        game.constraint_events() == [true, false, true]
+            && game.inhibitor_events() == [true, false, true]
+    });
+}
+
+#[test]
 fn a_confine_keeps_the_pointer_inside_its_region_and_lets_it_slide_along_the_edge() {
     let Some(mut h) = Harness::new() else { return };
     let region = Constraint::Confine {

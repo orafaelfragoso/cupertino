@@ -2,10 +2,10 @@
 //! a remote desktop client or a game takes the keys the system would act on.
 //!
 //! The compositor decides, not the client. An inhibitor is active only while its surface has the keyboard focus, its
-//! client is an application (not a shell process), the session is not locked and the person has not released it. While
-//! one is active the key router forwards every key but the reserved actions (`Action::is_reserved`), the rewrite for
-//! third-party clients, the accent picker and the Super tap are off, and a notice names the application and the chord
-//! that gives the shortcuts back (`release-shortcuts`).
+//! client is an application (not a shell process), the session is not locked, the authentication prompt is not shown
+//! and the person has not released it. While one is active the key router forwards every key but the reserved actions
+//! (`Action::is_reserved`), the rewrite for third-party clients, the accent picker and the Super tap are off, and a
+//! notice names the application and the chord that gives the shortcuts back (`release-shortcuts`).
 //!
 //! A client that does not answer its pings holds nothing until it answers again.
 //!
@@ -18,13 +18,17 @@
 
 use std::collections::HashSet;
 
+use smithay::backend::renderer::utils::with_renderer_surface_state;
+use smithay::desktop::layer_map_for_output;
 use smithay::reexports::wayland_server::backend::{ClientId, ObjectId};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
 use smithay::wayland::keyboard_shortcuts_inhibit::{
     KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor,
 };
+use smithay::wayland::shell::wlr_layer::Layer;
 
+use crate::authorization::is_prompt;
 use crate::input::{Action, Chord};
 use crate::overlays::ShortcutNotice;
 use crate::state::{ClientState, Cupertino};
@@ -145,9 +149,11 @@ pub fn chord_label(chord: &Chord) -> String {
 
 impl Cupertino {
     /// Whether `surface` may hold the shortcuts: the toplevel of an application client that answers its pings, with the
-    /// session unlocked. A layer surface, a popup or a lock surface never holds them, whoever owns it.
+    /// session unlocked and the authentication prompt not shown. A layer surface, a popup or a lock surface never holds
+    /// them, whoever owns it.
     pub(crate) fn may_hold_shortcuts(&self, surface: &WlSurface) -> bool {
         if self.session_lock.is_active()
+            || self.prompt_shown()
             || self
                 .window_id_for_surface(surface)
                 .is_none_or(|id| self.window_is_unresponsive(id))
@@ -161,6 +167,28 @@ impl Cupertino {
                     .map(|s| !s.internal && s.capabilities.is_empty())
             })
             .unwrap_or(false)
+    }
+
+    /// Whether the authentication prompt is shown: a layer surface with a buffer on the overlay layer of an output, of a
+    /// client with the Prompt role.
+    pub fn prompt_shown(&self) -> bool {
+        self.outputs.iter().any(|o| {
+            layer_map_for_output(&o.output)
+                .layers_on(Layer::Overlay)
+                .any(|l| {
+                    is_prompt(l.wl_surface())
+                        && with_renderer_surface_state(l.wl_surface(), |s| s.buffer().is_some())
+                            .unwrap_or(false)
+                })
+        })
+    }
+
+    /// Make every inhibitor and pointer constraint active or not with the current keyboard focus: a layer surface of
+    /// the authentication prompt mapped or went, so they end at once while it is shown and are taken again after.
+    pub(crate) fn refresh_holds(&mut self) {
+        let focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
+        self.refresh_shortcut_inhibitors(focus.as_ref());
+        self.refresh_pointer_constraints(focus.as_ref());
     }
 
     /// Make every inhibitor active or not by the rules above, with `focus` the surface that has the keyboard.

@@ -148,6 +148,7 @@ impl Cupertino {
             drag_icon,
             lock,
             session_overlays,
+            for_capture: false,
         };
         let result = f(renderer, params);
         // a new image was put up, perhaps for another output: that output draws it, and the lightness under its bar,
@@ -196,10 +197,22 @@ impl Cupertino {
         idx: usize,
         paint_cursor: bool,
     ) -> Option<Composed> {
+        self.compose(renderer, idx, paint_cursor, false)
+    }
+
+    /// [`Cupertino::compose_output`], for a frame that leaves the compositor with `for_capture`.
+    fn compose(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        idx: usize,
+        paint_cursor: bool,
+        for_capture: bool,
+    ) -> Option<Composed> {
         self.with_scene(renderer, idx, |r, mut p| {
             if !paint_cursor {
                 p.cursor = CursorPlan::Hidden;
             }
+            p.for_capture = for_capture;
             compose_scene(r, &mut p)
         })
     }
@@ -221,8 +234,9 @@ impl Cupertino {
         composed
     }
 
-    /// Draw output `idx` to a fresh image, the pointer left out with `paint_cursor` false. The built-frame mark of the
-    /// session lock is set with `note_built`, for frames that stand for what the screen shows.
+    /// Draw output `idx` to a fresh image, the pointer left out with `paint_cursor` false. The image leaves the
+    /// compositor (a capture, a screenshot file, a recording), so the authentication prompt is left out. The built-frame
+    /// mark of the session lock is set with `note_built`, for frames that stand for what the screen shows.
     pub fn draw_output_image(
         &mut self,
         renderer: &mut GlesRenderer,
@@ -236,7 +250,7 @@ impl Cupertino {
             self.note_scene_built(idx);
         }
         let composed = self
-            .compose_output(renderer, idx, paint_cursor)
+            .compose(renderer, idx, paint_cursor, true)
             .context("the render resources are not loaded")?;
         let (res, cache, _) = self.gles_parts(idx).context("the output is gone")?;
         let mut resources = GlesResources::new(res, cache, composed.resources);

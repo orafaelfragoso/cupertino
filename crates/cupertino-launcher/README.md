@@ -171,7 +171,7 @@ let img = renderer.render(&panel, &layout, &RenderOptions { scale, caret_visible
   fallback `Menu`), radius `style.corner_radius`, curve `style.corner_style`.
   `Backdrop { image, panel_origin }` runs the recipe through `cupertino-glass`'s CPU path instead
   (feature `material`, default on).
-* The query is a shared text field (`cupertino-text-field`): caret with blink, word and line moves, Shift selection,
+* The query is a shared text field (`cupertino-text-field`): caret with blink (steady under Reduce Motion), word and line moves, Shift selection,
   click, double and triple click, drag, copy, cut and paste with the system clipboard, undo. Keys the panel does not
   take come back as `PanelEvent::Edit` and go to `Panel::edit`.
 * The panel's keyboard bindings are listed in `panel.rs` (Up/Down without wrap,

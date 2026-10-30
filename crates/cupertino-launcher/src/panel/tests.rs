@@ -476,3 +476,26 @@ fn primary_up_down_jump_between_sections() {
         "no section before the first"
     );
 }
+
+#[test]
+fn under_reduce_motion_the_caret_is_steady() {
+    let (mut p, mut l) = open();
+    type_str(&mut p, &mut l, "a");
+    let start = Instant::now();
+    let mut blinked_off = false;
+    for ms in (0..3000).step_by(50) {
+        let at = start + std::time::Duration::from_millis(ms);
+        assert!(p.caret_visible(at, true), "steady at {ms} ms");
+        assert_eq!(p.next_blink(at, true), None);
+        blinked_off |= !p.caret_visible(at, false);
+    }
+    assert!(blinked_off, "without Reduce Motion it still blinks");
+    assert!(p.next_blink(start, false).is_some());
+
+    let (mut closed, _) = open();
+    closed.hide(0.0);
+    assert!(
+        !closed.caret_visible(start, true),
+        "no caret when the panel is closed"
+    );
+}

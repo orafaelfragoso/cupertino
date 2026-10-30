@@ -81,10 +81,15 @@ impl About {
 }
 
 /// Prefer whole words, splitting an overlong word only at character boundaries. No value text is elided.
+/// Whitespace a line may break at: any but the no-break spaces, which hold their neighbours together.
+fn breakable(c: char) -> bool {
+    c.is_whitespace() && !matches!(c, NO_BREAK_SPACE | NARROW_NO_BREAK_SPACE)
+}
+
 fn wrap_value(text: &str, width: f64, measure: &mut impl FnMut(&str) -> f64) -> Vec<String> {
     let mut lines = Vec::new();
     let mut line = String::new();
-    for word in text.split_whitespace() {
+    for word in text.split(breakable).filter(|word| !word.is_empty()) {
         let candidate = if line.is_empty() {
             word.to_owned()
         } else {
@@ -117,6 +122,12 @@ const MAX_IDENTIFICATION_CHARS: usize = 32;
 /// Scales are shown on the 1/120 grid fractional scaling uses, with at most two decimals.
 const SCALE_STEPS: f64 = 120.0;
 const MM_PER_INCH: f64 = 25.4;
+/// The diagonals shown, in inches: a display often reports its aspect ratio (16 × 9 mm) or nothing usable as its size,
+/// so one outside this range is left out (approximate).
+const PLAUSIBLE_DIAGONAL: std::ops::RangeInclusive<f64> = 10.0..=100.0;
+const NO_BREAK_SPACE: char = '\u{a0}';
+/// Joins a mode's width, "×" and height, so a wrapped value never splits the mode.
+const NARROW_NO_BREAK_SPACE: char = '\u{202f}';
 
 /// What the Displays row shows of one display, as the compositor announces it.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -133,7 +144,8 @@ pub struct Display<'a> {
 }
 
 /// "<make model> <diagonal>-inch W × H @ Sx": make and model, else the description, else the connector name; the
-/// diagonal only with a physical size. `None` without a mode or anything to name the display by.
+/// diagonal only with a plausible physical size; "W × H" joined by narrow no-break spaces. `None` without a mode or
+/// anything to name the display by.
 pub fn display_value(display: &Display<'_>) -> Option<String> {
     let (w, h) = display.mode;
     if w == 0 || h == 0 {
@@ -153,14 +165,17 @@ pub fn display_value(display: &Display<'_>) -> Option<String> {
     };
     let size = display
         .physical_size_mm
-        .filter(|&(w, h)| w > 0 && h > 0)
-        .map(|(w, h)| {
-            let inches = f64::from(w).hypot(f64::from(h)) / MM_PER_INCH;
-            format!(" {}-inch", decimals((inches * 10.0).round() / 10.0, 1))
-        })
+        .map(|(w, h)| f64::from(w).hypot(f64::from(h)) / MM_PER_INCH)
+        .map(|inches| (inches * 10.0).round() / 10.0)
+        .filter(|inches| PLAUSIBLE_DIAGONAL.contains(inches))
+        .map(|inches| format!(" {}-inch", decimals(inches, 1)))
         .unwrap_or_default();
     let scale = (display.scale * SCALE_STEPS).round() / SCALE_STEPS;
-    Some(format!("{title}{size} {w} × {h} @ {}x", decimals(scale, 2)))
+    let nb = NARROW_NO_BREAK_SPACE;
+    Some(format!(
+        "{title}{size} {w}{nb}×{nb}{h} @ {}x",
+        decimals(scale, 2)
+    ))
 }
 
 /// `text` trimmed, `None` when nothing is left.
@@ -433,7 +448,7 @@ mod tests {
         };
         assert_eq!(
             display_value(&display).as_deref(),
-            Some("ACME Panel 27 13.3-inch 2560 × 1600 @ 1.5x")
+            Some("ACME Panel 27 13.3-inch 2560\u{202f}×\u{202f}1600 @ 1.5x")
         );
         let integer = Display {
             physical_size_mm: Some((597, 336)),
@@ -443,7 +458,7 @@ mod tests {
         };
         assert_eq!(
             display_value(&integer).as_deref(),
-            Some("ACME Panel 27 27-inch 3840 × 2160 @ 2x")
+            Some("ACME Panel 27 27-inch 3840\u{202f}×\u{202f}2160 @ 2x")
         );
         let quarter = Display {
             scale: 1.25,
@@ -452,7 +467,52 @@ mod tests {
         };
         assert_eq!(
             display_value(&quarter).as_deref(),
-            Some("ACME Panel 27 2560 × 1600 @ 1.25x")
+            Some("ACME Panel 27 2560\u{202f}×\u{202f}1600 @ 1.25x")
+        );
+    }
+
+    #[test]
+    fn a_size_that_is_only_an_aspect_ratio_shows_no_diagonal() {
+        let display = Display {
+            name: Some("HDMI-A-1"),
+            mode: (1920, 1080),
+            scale: 1.0,
+            ..Display::default()
+        };
+        for size in [(16, 9), (160, 90), (1, 1), (5000, 3000)] {
+            let value = display_value(&Display {
+                physical_size_mm: Some(size),
+                ..display.clone()
+            })
+            .unwrap();
+            assert!(!value.contains("-inch"), "{size:?}: {value}");
+        }
+        let laptop = display_value(&Display {
+            physical_size_mm: Some((221, 125)),
+            ..display.clone()
+        })
+        .unwrap();
+        assert!(laptop.contains(" 10-inch "), "{laptop}");
+    }
+
+    #[test]
+    fn a_wrapped_display_value_never_splits_its_mode() {
+        let value = display_value(&Display {
+            name: Some("HDMI-A-1"),
+            mode: (2560, 1600),
+            scale: 1.5,
+            ..Display::default()
+        })
+        .unwrap();
+        let mut measure = |s: &str| s.chars().count() as f64;
+        let lines = wrap_value(&value, 12.0, &mut measure);
+        assert!(
+            lines.contains(&"2560\u{202f}×\u{202f}1600".to_owned()),
+            "{lines:?}"
+        );
+        assert_eq!(
+            wrap_value("a\u{a0}b c", 3.0, &mut measure),
+            ["a\u{a0}b", "c"]
         );
     }
 
@@ -467,7 +527,7 @@ mod tests {
         };
         assert_eq!(
             display_value(&unnamed).as_deref(),
-            Some("HDMI-A-1 1920 × 1080 @ 1x")
+            Some("HDMI-A-1 1920\u{202f}×\u{202f}1080 @ 1x")
         );
         assert_eq!(
             display_value(&Display {
@@ -493,7 +553,7 @@ mod tests {
         assert!(value.starts_with(&format!("{}…", "M".repeat(MAX_IDENTIFICATION_CHARS - 1))));
         assert_eq!(
             value.chars().count(),
-            MAX_IDENTIFICATION_CHARS + " 1920 × 1080 @ 1x".chars().count()
+            MAX_IDENTIFICATION_CHARS + " 1920\u{202f}×\u{202f}1080 @ 1x".chars().count()
         );
     }
 

@@ -1762,6 +1762,7 @@ dependencies = [
 name = "cupertino-ui-wayland"
 version = "0.1.0"
 dependencies = [
+ "cupertino-app-protocols",
  "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-modifiers",

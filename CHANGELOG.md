@@ -11,7 +11,7 @@ Changes on `main` since `v0.1.0-rc4`.
 - Apps such as games and virtual machines can lock or confine the pointer, also when they draw in a subsurface. A notice shows while an app holds the pointer, and `Super+Escape` releases it for the whole app.
 - An app can ask to receive the system shortcuts. A release chord that no configuration can remove gives them back, and a notice stays visible while the app holds them.
 - Two modifier profiles, Cupertino and classic PC. System shortcuts match the physical key, with a table for each profile.
-- Under the classic PC profile, tapping `Super` alone opens the launcher (a gesture or a mouse-keys key cancels the tap), `Super+Down` restores a tiled or zoomed window before it minimizes, `Ctrl+Tab` moves between key views in text views, and the menu bar shows PC key names.
+- Under the classic PC profile, tapping `Super` alone opens the launcher (a gesture or a mouse-keys key cancels the tap), `Super+Down` restores a tiled or zoomed window before it minimizes, `Ctrl+Tab` moves between key views in text views, the menu bar shows PC key names, and `Ctrl` is the command key in Settings and in text fields.
 
 ### Text
 
@@ -64,7 +64,7 @@ Changes on `main` since `v0.1.0-rc4`.
 - A machine-wide accessibility file, `/etc/cupertino/accessibility.conf`, is read by every session and by the login screen. An administrator at the console can set it through the session manager.
 - Animated theme cursors play, and stop when the pointer leaves, hides or changes shape, theme or seat.
 - A rotated monitor shows its wallpaper upright, and its screenshots and screen captures come out upright.
-- Screenshots are written in one step and never replace an existing file.
+- Screenshots are written in one step and never replace an existing file, and a failed write, for example on a full disk, leaves no partial file.
 - The network daemon starts without rfkill access and reports the real error. The Bluetooth daemon keeps running on a machine without Bluetooth.
 - When every `wayland-N` socket name is taken, the server uses a name of its own.
 

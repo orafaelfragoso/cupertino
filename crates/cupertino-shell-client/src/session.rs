@@ -27,6 +27,7 @@ impl SessionChange {
         match *event {
             AppEvent::Appearance { dark } => Some(SessionChange::Appearance { dark }),
             AppEvent::DisplayOptions(options) => Some(SessionChange::DisplayOptions(options)),
+            AppEvent::SessionLock { locked } => Some(SessionChange::Lock { locked }),
             AppEvent::ScrollCount { .. }
             | AppEvent::MenuBar { .. }
             | AppEvent::MenuReader { .. } => None,
@@ -42,8 +43,8 @@ impl SessionChange {
 }
 
 impl SessionState {
-    /// Take `event` when it is one of the session's state. The appearance and display options of an application's
-    /// [`cupertino_protocol_app::Appearance`] count as well.
+    /// Take `event` when it is one of the session's state. What an application's [`cupertino_protocol_app::Appearance`]
+    /// tells counts as well.
     pub fn apply(&mut self, event: &ExtensionEvent) -> Option<SessionChange> {
         let change = event
             .downcast_ref::<AppEvent>()

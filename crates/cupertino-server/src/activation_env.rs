@@ -92,15 +92,22 @@ async fn manager_environment(conn: &Connection) -> zbus::Result<Vec<String>> {
     Vec::<String>::try_from(value).map_err(Into::into)
 }
 
-/// The `defaults` whose names `environment` does not set.
-fn missing<'a>(defaults: &[(&'a str, &'a str)], environment: &[String]) -> Vec<(&'a str, &'a str)> {
+/// The `defaults` whose names `environment` does not set. With `leftover` (a session of ours ended without its cleanup),
+/// an entry that holds exactly our default is that session's, not the user's: it counts as unset, so it is set and
+/// recorded again and removed at the end of this session.
+fn missing<'a>(
+    defaults: &[(&'a str, &'a str)],
+    environment: &[String],
+    leftover: bool,
+) -> Vec<(&'a str, &'a str)> {
     defaults
         .iter()
         .copied()
-        .filter(|(name, _)| {
-            environment
-                .iter()
-                .all(|entry| entry.split_once('=').map(|(k, _)| k) != Some(*name))
+        .filter(|(name, value)| {
+            environment.iter().all(|entry| match entry.split_once('=') {
+                Some((k, v)) => k != *name || (leftover && v == *value),
+                None => true,
+            })
         })
         .collect()
 }
@@ -166,7 +173,8 @@ pub async fn publish(
     if !owned.body().deserialize::<bool>()? {
         return Ok(Outcome::NoSystemd);
     }
-    if unit_active(conn, SESSION_TARGET).await? {
+    let leftover = unit_active(conn, SESSION_TARGET).await?;
+    if leftover {
         // a session of ours that ended without stopping its target (its session command was killed): the target is
         // stopped so this session starts it again with its own variables
         call(
@@ -181,7 +189,15 @@ pub async fn publish(
     } else if unit_active(conn, GRAPHICAL_SESSION).await? {
         return Ok(Outcome::AnotherSession);
     }
-    let defaults = missing(defaults, &manager_environment(conn).await?);
+    // without the manager's environment no default is set: one could replace a value of the user's own, and the
+    // session's own variables still go out
+    let defaults = match manager_environment(conn).await {
+        Ok(environment) => missing(defaults, &environment, leftover),
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot read the user manager's environment: the session's defaults are not published");
+            Vec::new()
+        }
+    };
     let variables: Vec<(&str, &str)> = variables
         .iter()
         .copied()
@@ -239,10 +255,26 @@ mod tests {
         ];
         let environment = vec!["PATH=/usr/bin".to_owned(), "QT_QPA_PLATFORM=xcb".to_owned()];
         assert_eq!(
-            missing(&defaults, &environment),
+            missing(&defaults, &environment, false),
             [("ELECTRON_OZONE_PLATFORM_HINT", "auto")]
         );
-        assert_eq!(missing(&defaults, &[]), defaults);
+        assert_eq!(missing(&defaults, &[], false), defaults);
+    }
+
+    #[test]
+    fn our_default_left_by_a_session_without_its_cleanup_is_taken_back() {
+        let defaults = [("QT_QPA_PLATFORM", "wayland;xcb")];
+        let ours = vec!["QT_QPA_PLATFORM=wayland;xcb".to_owned()];
+        let users = vec!["QT_QPA_PLATFORM=xcb".to_owned()];
+        assert_eq!(missing(&defaults, &ours, true), defaults);
+        assert!(
+            missing(&defaults, &users, true).is_empty(),
+            "a different value is the user's"
+        );
+        assert!(
+            missing(&defaults, &ours, false).is_empty(),
+            "without a leftover session it may be the user's too"
+        );
     }
 
     #[test]

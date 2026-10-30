@@ -36,8 +36,8 @@ struct Calls {
 
 struct FakeManager {
     calls: Arc<Mutex<Calls>>,
-    /// The manager's `Environment` before the session publishes.
-    environment: Vec<String>,
+    /// The manager's `Environment` before the session publishes; `None` answers the property with an error.
+    environment: Option<Vec<String>>,
     graphical_session_loaded: bool,
     ours_loaded: bool,
 }
@@ -66,8 +66,10 @@ impl FakeManager {
     }
 
     #[zbus(property)]
-    fn environment(&self) -> Vec<String> {
-        self.environment.clone()
+    fn environment(&self) -> zbus::fdo::Result<Vec<String>> {
+        self.environment
+            .clone()
+            .ok_or_else(|| zbus::fdo::Error::Failed("no environment".into()))
     }
 
     fn start_unit(&self, name: &str, mode: &str) -> OwnedObjectPath {
@@ -95,10 +97,20 @@ async fn session_with_manager(
     graphical: Option<&'static str>,
     ours: Option<&'static str>,
 ) -> (zbus::Connection, zbus::Connection, Arc<Mutex<Calls>>) {
+    let environment = Some(vec!["QT_QPA_PLATFORM=xcb".into()]);
+    session_with_manager_environment(bus, graphical, ours, environment).await
+}
+
+async fn session_with_manager_environment(
+    bus: &PrivateBus,
+    graphical: Option<&'static str>,
+    ours: Option<&'static str>,
+    environment: Option<Vec<String>>,
+) -> (zbus::Connection, zbus::Connection, Arc<Mutex<Calls>>) {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let manager = FakeManager {
         calls: calls.clone(),
-        environment: vec!["QT_QPA_PLATFORM=xcb".into()],
+        environment,
         graphical_session_loaded: graphical.is_some(),
         ours_loaded: ours.is_some(),
     };
@@ -278,5 +290,58 @@ fn a_default_is_published_only_where_the_user_manager_has_no_value_of_its_own() 
             .environment
             .iter()
             .any(|e| e.starts_with("QT_QPA_PLATFORM=")));
+    });
+}
+
+#[test]
+fn an_unreadable_manager_environment_publishes_the_session_without_defaults() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    block_on(async {
+        let (session, _systemd, calls) =
+            session_with_manager_environment(&bus, Some("inactive"), None, None).await;
+        assert_eq!(
+            publish(
+                &session,
+                &VARIABLES,
+                &[("ELECTRON_OZONE_PLATFORM_HINT", "auto")]
+            )
+            .await
+            .unwrap(),
+            Outcome::Applied { defaults: vec![] }
+        );
+        let calls = calls.lock().unwrap();
+        assert!(calls
+            .environment
+            .contains(&"WAYLAND_DISPLAY=wayland-cupertino".to_string()));
+        assert!(!calls
+            .environment
+            .iter()
+            .any(|e| e.starts_with("ELECTRON_OZONE_PLATFORM_HINT=")));
+        assert_eq!(calls.started, [(SESSION_TARGET.into(), "replace".into())]);
+    });
+}
+
+#[test]
+fn our_default_left_in_the_manager_by_a_killed_session_is_taken_back_and_recorded() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    block_on(async {
+        let environment = Some(vec!["QT_QPA_PLATFORM=wayland;xcb".into()]);
+        let (session, _systemd, _calls) =
+            session_with_manager_environment(&bus, Some("active"), Some("active"), environment)
+                .await;
+        assert_eq!(
+            publish(&session, &VARIABLES, &[("QT_QPA_PLATFORM", "wayland;xcb")])
+                .await
+                .unwrap(),
+            Outcome::Applied {
+                defaults: vec!["QT_QPA_PLATFORM".into()]
+            }
+        );
     });
 }

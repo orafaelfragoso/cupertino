@@ -97,7 +97,7 @@ if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet cu
     defaults=
     if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -f "$XDG_RUNTIME_DIR/cupertino-session-defaults" ]; then
         while IFS= read -r name; do
-            case "$name" in '' | *[!A-Z0-9_]*) ;; *) defaults="$defaults $name" ;; esac
+            case "$name" in '' | [!A-Z_]* | *[!A-Z0-9_]*) ;; *) defaults="$defaults $name" ;; esac
         done <"$XDG_RUNTIME_DIR/cupertino-session-defaults"
         rm -f "$XDG_RUNTIME_DIR/cupertino-session-defaults"
     fi

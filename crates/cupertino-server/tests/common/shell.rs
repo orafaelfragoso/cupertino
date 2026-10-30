@@ -10,7 +10,7 @@ use cupertino_server::config::ShellProcess;
 /// Set by the parent test process for its isolated worker, whose cleared environment cannot run cargo.
 pub const BIN_DIR_ENV: &str = "CUPERTINO_GOLDEN_BIN_DIR";
 
-const BINARIES: [&str; 2] = ["cupertino-dock", "cupertino-launcher"];
+const BINARIES: [&str; 3] = ["cupertino-dock", "cupertino-launcher", "cupertino-login"];
 
 /// Build the `app` feature of the shell crates once (a no-op when current) and return the directory of the binaries.
 pub fn bin_dir() -> &'static Path {
@@ -29,8 +29,19 @@ pub fn bin_dir() -> &'static Path {
             .to_path_buf();
         let mut cargo =
             Command::new(std::env::var_os("CARGO").expect("CARGO is set by `cargo test`"));
-        cargo.args(["build", "-p", "cupertino-dock", "-p", "cupertino-launcher"]);
-        cargo.args(["--features", "cupertino-dock/app,cupertino-launcher/app"]);
+        cargo.args([
+            "build",
+            "-p",
+            "cupertino-dock",
+            "-p",
+            "cupertino-launcher",
+            "-p",
+            "cupertino-login",
+        ]);
+        cargo.args([
+            "--features",
+            "cupertino-dock/app,cupertino-launcher/app,cupertino-login/app",
+        ]);
         cargo.args([
             "--target-dir",
             profile_dir.parent().unwrap().to_str().unwrap(),
@@ -91,6 +102,7 @@ pub fn process(binary: &str, bus_address: &str, args: &[&str]) -> ShellProcess {
         command,
         roles: match binary {
             "cupertino-dock" => vec![ShellRole::Session, ShellRole::Dock],
+            "cupertino-login" => vec![ShellRole::Session, ShellRole::SessionLock],
             _ => vec![ShellRole::Session],
         },
     }

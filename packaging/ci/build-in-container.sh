@@ -94,6 +94,7 @@ debian)
     apt-get update -qq
     apt-get install -y -qq --no-install-recommends pkg-config libgbm-dev libpam0g-dev dpkg-dev >/dev/null
     cargo install --locked --quiet --version $CARGO_DEB cargo-deb
+    export CUPERTINO_ADMIN_GROUPS=sudo
     ;;
 fedora)
     dnf install -y -q gcc pkgconf-pkg-config mesa-libgbm-devel pam-devel rustup rpm-build cpio python3 binutils >/dev/null

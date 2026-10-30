@@ -1148,6 +1148,7 @@ dependencies = [
  "cupertino-ui-text",
  "cupertino-ui-theme",
  "cupertino-ui-wayland",
+ "tempfile",
 ]
 
 [[package]]

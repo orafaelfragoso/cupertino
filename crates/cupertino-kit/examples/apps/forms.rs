@@ -1,11 +1,16 @@
 //! A sign-in form: a name, a password and a choice.
 
-use cupertino_kit::controls::TextRole;
+use cupertino_kit::controls::{TextRole, WINDOW_CONTENT_INSET};
 use cupertino_kit::core::CommandRegistry;
-use cupertino_kit::geometry::Size;
+use cupertino_kit::geometry::{Insets, Size};
 use cupertino_kit::platform::DecorationMode;
 use cupertino_kit::prelude::*;
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
+
+/// Between a form's rows and between controls in a row, an approximate design value.
+const ROW_GAP: f64 = 8.0;
+/// Between a section label and its first row, an approximate design value.
+const SECTION_GAP: f64 = 12.0;
 
 pub struct Forms;
 
@@ -56,7 +61,8 @@ impl Application for Forms {
     fn view(account: &Account) -> Vec<Window<Message>> {
         let remember = Element::new(Stack {
             axis: Axis::Horizontal,
-            spacing: 8.0,
+            padding: Insets::ZERO,
+            spacing: ROW_GAP,
             align: Align::Center,
             children: vec![
                 text("Remember me", TextRole::Body),
@@ -69,12 +75,41 @@ impl Application for Forms {
                 .key("remember"),
             ],
         });
+        let rows = Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets::ZERO,
+            spacing: ROW_GAP,
+            align: Align::Stretch,
+            children: vec![
+                Element::new(TextField {
+                    label: "Name".into(),
+                    placeholder: "Your name".into(),
+                    value: account.name.clone(),
+                    revision: account.revision,
+                    purpose: ContentPurpose::Name,
+                    enabled: true,
+                    on_change: Some(Box::new(Message::Name)),
+                    on_submit: None,
+                })
+                .key("name"),
+                Element::new(SecureField {
+                    label: "Password".into(),
+                    placeholder: "Required".into(),
+                    enabled: true,
+                    on_submit: Some(Box::new(|secret| {
+                        Message::SignIn(secret.with_secret(|s| s.chars().count()))
+                    })),
+                })
+                .key("password"),
+                remember,
+            ],
+        });
         vec![Window {
             key: WindowKey("forms".into()),
             spec: WindowSpec {
-                title: "Sign In".into(),
+                title: "Forms".into(),
                 app_id: "org.cupertino.examples.Forms".into(),
-                size: Size::new(240.0, 140.0),
+                size: Size::new(280.0, 180.0),
                 min_size: None,
                 max_size: None,
                 decorations: DecorationMode::Preferred,
@@ -83,32 +118,10 @@ impl Application for Forms {
             on_close: None,
             content: Element::new(Stack {
                 axis: Axis::Vertical,
-                spacing: 6.0,
-                align: Align::Start,
-                children: vec![
-                    text("Sign In", TextRole::Section),
-                    Element::new(TextField {
-                        label: "Name".into(),
-                        placeholder: "Your name".into(),
-                        value: account.name.clone(),
-                        revision: account.revision,
-                        purpose: ContentPurpose::Name,
-                        enabled: true,
-                        on_change: Some(Box::new(Message::Name)),
-                        on_submit: None,
-                    })
-                    .key("name"),
-                    Element::new(SecureField {
-                        label: "Password".into(),
-                        placeholder: "Required".into(),
-                        enabled: true,
-                        on_submit: Some(Box::new(|secret| {
-                            Message::SignIn(secret.with_secret(|s| s.chars().count()))
-                        })),
-                    })
-                    .key("password"),
-                    remember,
-                ],
+                padding: WINDOW_CONTENT_INSET,
+                spacing: SECTION_GAP,
+                align: Align::Stretch,
+                children: vec![text("Sign In", TextRole::Section), rows],
             }),
         }]
     }

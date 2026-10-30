@@ -12,9 +12,19 @@ mod toggle;
 pub use field::{FieldState, SecureState};
 pub use press::Press;
 
+use cupertino_geometry::Insets;
 use cupertino_ui_core::Element;
 use cupertino_ui_layout::{Align, Axis};
 use cupertino_ui_text::{AttributedText, ContentPurpose, SecureBuffer};
+
+/// The space a form-style window (a form, a dialog) leaves between its edges and its content, for a [`Stack`]'s
+/// padding. Windows add none themselves: sidebars, lists and canvases run to the edges.
+pub const WINDOW_CONTENT_INSET: Insets = Insets {
+    top: 20.0,
+    left: 20.0,
+    bottom: 20.0,
+    right: 20.0,
+};
 
 /// Turns a control's new value into the application's message.
 pub type Handler<T, M> = Box<dyn Fn(T) -> M>;
@@ -124,6 +134,8 @@ pub struct SecureField<M> {
 
 pub struct Stack<M> {
     pub axis: Axis,
+    /// Space between the stack's edges and its children.
+    pub padding: Insets,
     pub spacing: f64,
     pub align: Align,
     pub children: Vec<Element<M>>,

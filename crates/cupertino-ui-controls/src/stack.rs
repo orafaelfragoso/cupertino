@@ -21,12 +21,15 @@ impl<M: 'static> Widget<M> for Stack<M> {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
-        LayoutSpec::new(ContainerKind::Stack {
-            axis: self.axis,
-            spacing: self.spacing,
-            align: self.align,
-            justify: Justify::Start,
-        })
+        LayoutSpec {
+            insets: self.padding,
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: self.axis,
+                spacing: self.spacing,
+                align: self.align,
+                justify: Justify::Start,
+            })
+        }
     }
 
     fn take_children(&mut self) -> Vec<Element<M>> {
@@ -36,7 +39,11 @@ impl<M: 'static> Widget<M> for Stack<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.axis != old.axis || self.spacing != old.spacing || self.align != old.align {
+        if self.axis != old.axis
+            || self.padding != old.padding
+            || self.spacing != old.spacing
+            || self.align != old.align
+        {
             Change::Layout
         } else {
             Change::None

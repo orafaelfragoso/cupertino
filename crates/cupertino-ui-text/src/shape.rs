@@ -128,6 +128,14 @@ mod tests {
         assert!(index.add_font(Arc::new(b"not a font".to_vec())).is_err());
     }
 
+    #[test]
+    fn a_collection_header_claiming_billions_of_faces_is_read_only_as_far_as_the_file_goes() {
+        let mut data = b"ttcf\0\x01\0\0\xff\xff\xff\xf0".to_vec();
+        data.extend([0; 8]);
+        let faces = FontIndex::new().add_font(Arc::new(data));
+        assert!(faces.map_or(true, |f| f.is_empty()));
+    }
+
     fn request(font: FontId) -> ShapeRequest<'static> {
         ShapeRequest {
             font,

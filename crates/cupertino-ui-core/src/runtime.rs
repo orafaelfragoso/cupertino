@@ -498,6 +498,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
                 return Ok(());
             }
+            PlatformEvent::SessionLock(locked) => {
+                if let Some(adapter) = &mut self.options.accessibility {
+                    adapter.session_locked(locked);
+                }
+                return Ok(());
+            }
         };
         let Some(i) = self.windows.iter().position(|w| w.id == window) else {
             return Ok(());

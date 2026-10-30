@@ -1,7 +1,8 @@
 //! Server side of the session observers: `cupertino_shell_v1.get_session` (`cupertino_session_v1`, shell processes
 //! with the Session role) tells the session's appearance, accessibility display options (version 2) and lock state,
 //! on bind and on every change; `cupertino_app_effects_v1.get_appearance` (`cupertino_appearance_v1`, any client) tells
-//! the appearance and display options only, so the lock state stays with the shell. The appearance changes only through
+//! the appearance, display options and (version 5) whether the session is locked, so an application keeps quiet for
+//! assistive technology behind the lock. The appearance changes only through
 //! [`Cupertino::set_appearance`], the display options through `accessibility.rs`, which calls
 //! [`SessionObservers::display_options`]; the lock state follows `session_lock.rs`, which calls
 //! [`SessionObservers::lock`] where the lock begins and ends.
@@ -90,6 +91,9 @@ impl SessionObservers {
         for observer in self.observers.iter().filter(|o| permitted(o)) {
             send_lock(observer, locked);
         }
+        for observer in &self.appearance_observers {
+            send_appearance_lock(observer, locked);
+        }
     }
 }
 
@@ -130,6 +134,13 @@ fn send_appearance_options(observer: &CupertinoAppearanceV1, options: DisplayOpt
     observer.display_options(bits);
 }
 
+/// `session_lock`; observers created below version 5 know no such event.
+fn send_appearance_lock(observer: &CupertinoAppearanceV1, locked: bool) {
+    if observer.version() >= 5 {
+        observer.session_lock(u32::from(locked));
+    }
+}
+
 fn send_lock(observer: &CupertinoSessionV1, locked: bool) {
     if locked {
         observer.locked();
@@ -167,6 +178,7 @@ impl Cupertino {
         let observer = init.init(id, ());
         observer.appearance(u32::from(self.config.is_dark()));
         send_appearance_options(&observer, self.display_options());
+        send_appearance_lock(&observer, self.session_lock.is_active());
         self.sessions.appearance_observers.push(observer);
     }
 

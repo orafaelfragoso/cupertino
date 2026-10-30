@@ -1,4 +1,5 @@
-//! The `cupertino-sessiond` process: the manager, or with the argument `worker` one worker. See the README.
+//! The `cupertino-sessiond` process: the manager, with the argument `worker` one worker, or with `--check-config` the check
+//! of the settings file. See the README.
 
 use std::process::ExitCode;
 
@@ -14,8 +15,9 @@ fn main() -> ExitCode {
     match (arguments.next().as_deref(), arguments.next()) {
         (None, None) => manager::run(),
         (Some("worker"), None) => worker::run(),
+        (Some("--check-config"), None) => manager::check_config(),
         _ => {
-            eprintln!("usage: cupertino-sessiond [worker]");
+            eprintln!("usage: cupertino-sessiond [worker | --check-config]");
             ExitCode::FAILURE
         }
     }

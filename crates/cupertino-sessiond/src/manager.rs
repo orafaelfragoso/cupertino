@@ -16,7 +16,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cupertino_defaults::login::{default_admin_groups, LoginConfig, DEFAULT_ADMIN_GROUPS};
+use cupertino_defaults::login::{default_admin_groups, LoginConfig, Problem, DEFAULT_ADMIN_GROUPS};
 use cupertino_login_ipc::message::{MAX_EVENT_FRAME, MAX_REQUEST_FRAME, SOCKET_PATH};
 use cupertino_login_ipc::{
     encode, encode_secret, is_login_name, Account, Event, Outcome, PowerAction, PowerRefusal,
@@ -73,6 +73,34 @@ pub fn run() -> ExitCode {
             eprintln!("cupertino-sessiond: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// `cupertino-sessiond --check-config`: print each line of the settings file that was not understood, and fail when there
+/// is one, so packaging and administrators see a typo the manager only logs. A refused file lists its refusals alone.
+pub fn check_config() -> ExitCode {
+    let path = LoginConfig::path();
+    let (problems, outcome) = match LoginConfig::load() {
+        Ok(loaded) => (loaded.problems, "the setting takes its safe value"),
+        Err(problems) => (problems, "the manager refuses the file"),
+    };
+    for problem in &problems {
+        eprintln!("{}: {}; {outcome}", path.display(), describe(problem));
+    }
+    if problems.is_empty() {
+        println!("{}: ok", path.display());
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// A problem of the settings file as its line number and message; one of the whole file (line 0) as its message.
+fn describe((line, message): &Problem) -> String {
+    if *line == 0 {
+        message.clone()
+    } else {
+        format!("line {line}: {message}")
     }
 }
 
@@ -322,22 +350,22 @@ impl Manager {
     fn start() -> Result<Manager> {
         harden()?;
         let loaded = LoginConfig::load().map_err(|problems| {
-            let lines: Vec<String> = problems
-                .iter()
-                .map(|(line, message)| {
-                    if *line == 0 {
-                        message.clone()
-                    } else {
-                        format!("line {line}: {message}")
-                    }
-                })
-                .collect();
+            let lines: Vec<String> = problems.iter().map(describe).collect();
             format!("{}: {}", LoginConfig::path().display(), lines.join("; "))
         })?;
-        for (line, message) in &loaded.problems {
+        let path = LoginConfig::path();
+        for problem in &loaded.problems {
             eprintln!(
-                "cupertino-sessiond: {} line {line}: {message}; the setting takes its safe value",
-                LoginConfig::path().display()
+                "cupertino-sessiond: {}: {}; the setting takes its safe value",
+                path.display(),
+                describe(problem)
+            );
+        }
+        if !loaded.problems.is_empty() {
+            eprintln!(
+                "cupertino-sessiond: {}: {} line(s) not understood, the login screen starts with their safe values; `cupertino-sessiond --check-config` lists them",
+                path.display(),
+                loaded.problems.len()
             );
         }
         let config = loaded.config;

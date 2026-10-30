@@ -30,6 +30,7 @@ impl Application for Counter {
         match message.as_str() {
             "plus:Target:press" | "plus" => model.count += 1,
             "quit" => return vec![Command::Exit],
+            "close" => return vec![Command::CloseWindow(WindowKey("main".into()))],
             "wait" => return vec![Command::Perform(Box::pin(async { "done 7".to_string() }))],
             m if m.starts_with("done ") => model.done.push(m[5..].parse().unwrap()),
             _ => {}
@@ -322,6 +323,16 @@ fn a_buffer_is_sized_as_the_window_system_rounds_a_fractional_scale() {
         "3.75 and 2.5 round up, 1.25 down"
     );
     assert_eq!(physical(100.0, 1.5), 150);
+}
+
+#[test]
+fn a_closed_window_is_dropped_by_the_accessibility_adapter() {
+    let adapter = FakeAdapter::default();
+    let (mut rt, window, _) = start_with(|o| o.accessibility = Some(Box::new(adapter.clone())));
+    configure(&mut rt, window, 1);
+    rt.messages.push_back("close".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(*adapter.closed.borrow(), [window]);
 }
 
 #[test]

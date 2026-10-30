@@ -286,6 +286,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         if let Some(root) = w.root {
             self.tree.unmount(root);
         }
+        if let Some(adapter) = &mut self.options.accessibility {
+            adapter.window_closed(w.id);
+        }
         self.system.destroy(w.id);
     }
 

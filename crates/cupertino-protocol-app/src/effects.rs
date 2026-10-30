@@ -46,6 +46,9 @@ pub enum AppEvent {
     Appearance { dark: bool },
     /// The session's display options; also sent once when the observer is created.
     DisplayOptions(DisplayOptions),
+    /// Whether the session is locked; also sent once when the observer is created, from version 5. While it is, the
+    /// application announces nothing to assistive technology.
+    SessionLock { locked: bool },
     /// The scroll count of one axis of the pointer frame being received; the frame's scroll follows.
     ScrollCount { vertical: bool, count: u32 },
     /// Whether the desktop's menu bar shows the menus `surface` announced; also sent once when its [`AppMenu`] is
@@ -66,11 +69,12 @@ pub struct AppEffects(CupertinoAppEffectsV1);
 impl AppEffects {
     /// Bind the global; `None` when the server does not offer it.
     pub fn bind(conn: &mut Connection) -> Option<AppEffects> {
-        conn.bind_extension(1..=4, Quiet).map(AppEffects)
+        conn.bind_extension(1..=5, Quiet).map(AppEffects)
     }
 
     /// Observe the session's appearance and display options: [`AppEvent::Appearance`] and
-    /// [`AppEvent::DisplayOptions`] arrive now and on every change while the observer lives.
+    /// [`AppEvent::DisplayOptions`] arrive now and on every change while the observer lives, and from version 5
+    /// [`AppEvent::SessionLock`] after them.
     pub fn appearance(&self, conn: &Connection) -> Appearance {
         Appearance(self.0.get_appearance(&conn.queue_handle(), Quiet))
     }
@@ -127,6 +131,11 @@ impl AppEffects {
         Ok(())
     }
 
+    /// Whether observers tell [`AppEvent::SessionLock`] (version 5).
+    pub fn tells_session_lock(&self) -> bool {
+        self.0.version() >= SESSION_LOCK_VERSION
+    }
+
     /// Whether the server takes [`Self::set_disabled_controls`] (version 4).
     pub fn can_set_disabled_controls(&self) -> bool {
         self.0.version() >= DISABLED_CONTROLS_VERSION
@@ -135,6 +144,8 @@ impl AppEffects {
 
 /// The version that adds `set_disabled_controls`.
 const DISABLED_CONTROLS_VERSION: u32 = 4;
+/// The version whose appearance observer tells `session_lock`.
+const SESSION_LOCK_VERSION: u32 = 5;
 
 /// Window controls, each `true` when it is in the set.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -260,6 +271,14 @@ impl Dispatch<CupertinoAppearanceV1, Quiet> for State {
                     Ok(bits) => report_display_options(state, bits.bits()),
                     Err(_) => state.fail(Error::Protocol("display options with reserved bits")),
                 }
+            }
+            cupertino_appearance_v1::Event::SessionLock { locked } => {
+                if locked > 1 {
+                    return state.fail(Error::Protocol("session lock other than 0 or 1"));
+                }
+                state.emit(AppEvent::SessionLock {
+                    locked: locked == 1,
+                });
             }
             _ => {}
         }

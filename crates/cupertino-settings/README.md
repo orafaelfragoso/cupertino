@@ -8,7 +8,7 @@ server with the unified title bar style and a `Sidebar` material under the sideb
 ```
 cargo test -p cupertino-settings --features app        # needs CUPERTINO_ASSET_DIR; bus tests need dbus-daemon
 cargo run -p cupertino-settings --features app -- [--pane PANE-ID]
-cargo run -p cupertino-settings --example settings_samples   # ST-23 PNGs into output/
+ci/capture.sh settings/wifi                                # PNGs of a pane into $CARGO_TARGET_DIR/captures (crates/cupertino-capture)
 cargo clippy -p cupertino-settings --all-targets --all-features
 ```
 
@@ -86,4 +86,4 @@ the frames to differ only inside the reported areas.
 | unit tests of `mapping`, `panes`, `controls`, `form` | The Login Screen section (present only when allowed, "Saving…" ignoring presses until the reply, the state row and "Default settings" without a file, the one-line footer), ST-14, ST-14a, ST-17 (the restart footer), ST-18 for the hot corners and the sleep timers (a value outside the list shows as an extra item and is kept), ST-26 (form frame at 499 and 800), the level slider's write throttle, the sheets |
 | `tests/services.rs` | Against fake daemons on a private bus: the Login Screen section offered only when sessiond says yes (not on no, a failure or no sessiond), Use Mine sending only the allow-listed keys with the person's values and each refusal getting its sentence (any other failure the plain unavailable text); ST-10 (the Wi-Fi switch writes `WirelessEnabled`, the shown value is the daemon's, a saved network joins with an empty passphrase once, a refused write keeps the daemon's value and gives the error), ST-11 (paired and nearby groups, agent registration, a pairing answered and refused through the agent, Remove only after confirmation, `AgentExists` without a dialog), ST-13 (Focus rows are `FocusLifetimes` in order and call the centre), ST-19 (no daemon: the switch row disabled with the reason) |
 | `tests/instance.rs` | ST-24: `ShowPane` reaches the owner, an unknown id is `InvalidArgs`, a second owner is refused, and a second start of the binary hands its pane over and exits 0 without a display, but its activation token only to its own program; About has its own owner, takes a launch from its own program only, and a launch refuses to hand its token to an About of another program |
-| `examples/settings_samples.rs` | ST-23: Wi-Fi, Desktop & Dock, Sound and Keyboard in light and dark at 715 × 625, and the search results window |
+| `examples/settings_capture.rs` | ST-23 and look checks (`ci/capture.sh settings/...`): every pane, the wallpaper chooser and the search results window in light and dark at 715 × 625 and any scale, with example live readings; the Login Screen states and one or two mice |

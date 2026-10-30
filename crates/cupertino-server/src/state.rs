@@ -372,8 +372,14 @@ pub struct Cupertino {
     pub pending_activations:
         HashMap<smithay::reexports::wayland_server::backend::ObjectId, crate::handlers::TokenGrant>,
     /// The processes whose first toplevel has mapped: the first-window rule of the focus policy applies once to a process,
-    /// however often it reconnects.
+    /// however often it reconnects while a client of it that mapped a toplevel stays connected. A process is forgotten
+    /// once the last of those has gone ([`Cupertino::forget_gone_processes`]).
     pub mapped_processes: std::collections::HashSet<crate::process::ProcessIdentity>,
+    /// The clients that mapped a toplevel, with their processes.
+    mapped_clients: HashMap<
+        smithay::reexports::wayland_server::backend::ClientId,
+        crate::process::ProcessIdentity,
+    >,
     /// The process behind a client (`crate::process::peer_process`); replaced in tests, whose clients share one process.
     pub process_of: crate::process::ProcessOf,
     /// A server move or resize waiting for the pointer to leave the drag-start box.
@@ -661,6 +667,7 @@ impl Cupertino {
             last_input: None,
             pending_activations: HashMap::new(),
             mapped_processes: std::collections::HashSet::new(),
+            mapped_clients: HashMap::new(),
             process_of: Box::new(crate::process::peer_process),
             pending_drag: None,
             cursor_status: CursorImageStatus::default_named(),
@@ -1104,6 +1111,24 @@ impl Cupertino {
         self.apply_effects(fx);
     }
 
+    /// Forgets the first-window grant of processes whose last client that mapped a toplevel has disconnected.
+    pub fn forget_gone_processes(&mut self) {
+        if self.mapped_clients.is_empty() {
+            return;
+        }
+        let mut live = std::collections::HashSet::new();
+        self.display_handle.backend_handle().with_all_clients(|id| {
+            live.insert(id);
+        });
+        let before = self.mapped_clients.len();
+        self.mapped_clients.retain(|id, _| live.contains(id));
+        if self.mapped_clients.len() != before {
+            let mapped = &self.mapped_clients;
+            self.mapped_processes
+                .retain(|p| mapped.values().any(|q| q == p));
+        }
+    }
+
     /// The facts the focus policy needs about a window that maps (`cupertino_wm::MapFocus`): whether it is its client's
     /// first toplevel, whether the person has given input elsewhere since the client connected, and the activation token
     /// it presented. Uses up the pending token.
@@ -1115,8 +1140,12 @@ impl Cupertino {
                     let id = client.id();
                     let first_of_connection = !data.mapped_toplevel.swap(true, Ordering::SeqCst);
                     // a process that cannot be named gets no first-window grant
-                    let first_of_process = (self.process_of)(&self.display_handle, &client)
-                        .is_some_and(|process| self.mapped_processes.insert(process));
+                    let process = (self.process_of)(&self.display_handle, &client);
+                    if let Some(process) = process {
+                        self.mapped_clients.insert(id.clone(), process);
+                    }
+                    let first_of_process =
+                        process.is_some_and(|process| self.mapped_processes.insert(process));
                     // nobody is at the screen while the session is locked: what comes up then waits behind
                     let first =
                         first_of_connection && first_of_process && !self.session_lock.is_active();
@@ -1425,6 +1454,7 @@ impl Cupertino {
 
     /// Advance the model to now and apply the resulting effects.
     pub fn tick(&mut self) {
+        self.forget_gone_processes();
         let now = self.now();
         self.tick_session_lock();
         self.idle.refresh_inhibition();

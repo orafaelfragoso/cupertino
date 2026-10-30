@@ -183,6 +183,27 @@ fn a_program_that_connects_and_maps_while_the_person_types_opens_behind_the_key_
 }
 
 #[test]
+fn a_process_is_forgotten_when_its_last_client_disconnects() {
+    let Some(mut h) = Harness::new() else { return };
+    let (a, _) = with_front_window(&mut h);
+    let b = Client::toplevel_after(
+        h.socket_path(),
+        "org.example.second",
+        Arc::new(AtomicBool::new(true)),
+        Arc::default(),
+    );
+    h.wait_until("both windows to map", |s| s.mapped_processes.len() == 2);
+    drop(a);
+    h.wait_until("the first client's process to be forgotten", |s| {
+        s.mapped_processes.len() == 1
+    });
+    drop(b);
+    h.wait_until("every process to be forgotten", |s| {
+        s.mapped_processes.is_empty()
+    });
+}
+
+#[test]
 fn a_process_that_reconnects_gets_the_first_window_grant_once() {
     let Some(mut h) = Harness::new() else { return };
     h.state.process_of = Box::new(cupertino_server::process::peer_process);

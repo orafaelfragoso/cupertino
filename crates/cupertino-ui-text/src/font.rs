@@ -3,6 +3,7 @@ use harfrust::font::{Font, Variation};
 use harfrust::Tag;
 use std::collections::HashMap;
 use std::sync::Arc;
+use swash::{FontDataRef, StringId, Style};
 
 const WEIGHT_AXIS: [u8; 4] = *b"wght";
 
@@ -99,6 +100,45 @@ impl FontIndex {
             weight_range,
         });
         Ok(id)
+    }
+
+    /// Registers every face of a font file or collection under the family, weight and style its own tables name. A face
+    /// without a family name is skipped. Returns the faces added.
+    pub fn add_font(&mut self, data: Arc<Vec<u8>>) -> Result<Vec<FaceId>, TextError> {
+        let file = FontDataRef::new(&data)
+            .ok_or_else(|| TextError::InvalidFont("not a TrueType or OpenType file".into()))?;
+        let mut named = Vec::new();
+        for index in 0..file.len() {
+            let Some(font) = file.get(index) else {
+                continue;
+            };
+            let name = |id| {
+                font.localized_strings()
+                    .find(|s| s.id() == id)
+                    .map(|s| s.to_string())
+            };
+            let Some(family) = name(StringId::TypographicFamily).or_else(|| name(StringId::Family))
+            else {
+                continue;
+            };
+            let attributes = font.attributes();
+            let style = match attributes.style() {
+                Style::Normal => FontStyle::Normal,
+                _ => FontStyle::Italic,
+            };
+            named.push((
+                family,
+                FontWeight(attributes.weight().0),
+                style,
+                index as u32,
+            ));
+        }
+        named
+            .into_iter()
+            .map(|(family, weight, style, index)| {
+                self.add_face(&family, weight, style, Arc::clone(&data), index)
+            })
+            .collect()
     }
 
     pub fn face_count(&self) -> usize {

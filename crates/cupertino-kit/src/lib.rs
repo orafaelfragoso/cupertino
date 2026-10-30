@@ -1,6 +1,9 @@
 //! CupertinoKit, the Cupertino UI toolkit. Applications depend on this crate alone; the modules re-export the
 //! toolkit's crates and [`prelude`] has what a typical application names.
 
+pub mod app;
+
+pub use cupertino_geometry as geometry;
 pub use cupertino_ui_controls as controls;
 pub use cupertino_ui_core as core;
 pub use cupertino_ui_layout as layout;

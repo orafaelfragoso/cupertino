@@ -116,6 +116,18 @@ mod tests {
         (index, face)
     }
 
+    #[test]
+    fn a_font_file_registers_its_faces_under_its_own_names() {
+        let mut index = FontIndex::new();
+        let faces = index.add_font(Arc::new(INTER.to_vec())).unwrap();
+        assert_eq!(faces.len(), 1);
+        assert_eq!(
+            index.match_face("Inter Variable", FontWeight::REGULAR, FontStyle::Normal),
+            Some(faces[0])
+        );
+        assert!(index.add_font(Arc::new(b"not a font".to_vec())).is_err());
+    }
+
     fn request(font: FontId) -> ShapeRequest<'static> {
         ShapeRequest {
             font,

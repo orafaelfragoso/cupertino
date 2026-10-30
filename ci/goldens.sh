@@ -37,9 +37,14 @@ docker run --rm \
   | tee "$log" || status=$?
 
 # An update records the baselines and then fails each test that recorded, so it can never pass as a comparison; the
-# log check tells those failures from any other and knows which tests must run (ci/goldens_log.py).
+# log check tells those failures from any other and knows which tests must run (ci/goldens_log.py). The run must also
+# end with cargo test's own failure status: a container killed after the log was complete exits otherwise.
 if [ "$update" -eq 1 ]; then
   python3 -I "$root/ci/goldens_log.py" --update "$log"
+  if [ "${status:-0}" -ne 101 ]; then
+    echo "goldens: the update run exited ${status:-0}, not with cargo test's failure status 101" >&2
+    exit 1
+  fi
   echo "goldens: re-recorded; review the diff, then run ci/goldens.sh to compare" >&2
   exit 0
 fi

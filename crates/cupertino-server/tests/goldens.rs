@@ -354,16 +354,36 @@ fn compare_pixels(name: &str, expected: &RgbaImage, actual: &RgbaImage) {
 /// Baselines this worker re-recorded.
 static RECORDED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+const RERUN: &str = "; rerun without CUPERTINO_UPDATE_GOLDENS";
+
 /// An update run fails after recording, so a `CUPERTINO_UPDATE_GOLDENS` that leaks into a test run can never pass it.
 fn fail_after_update(update: bool) {
     if update {
         let message = format!(
-            "re-recorded {} goldens; rerun without CUPERTINO_UPDATE_GOLDENS",
+            "re-recorded {} goldens{RERUN}",
             RECORDED.load(std::sync::atomic::Ordering::Relaxed)
         );
         println!("{message}");
         panic!("{message}");
     }
+}
+
+/// The re-record message when it is the worker's only failure: libtest's failure status and a single panic, that of
+/// `fail_after_update`. The parent then fails with that message alone, so ci/goldens_log.py tells an update from an
+/// update followed by another failure.
+fn only_re_recorded(status: std::process::ExitStatus, stderr: &str) -> Option<&str> {
+    if status.code() != Some(101) {
+        return None;
+    }
+    let lines: Vec<&str> = stderr.lines().collect();
+    let panics: Vec<usize> = (0..lines.len())
+        .filter(|&i| lines[i].contains("' panicked at "))
+        .collect();
+    let [at] = panics[..] else { return None };
+    lines
+        .get(at + 1)
+        .copied()
+        .filter(|message| message.starts_with("re-recorded ") && message.ends_with(RERUN))
 }
 
 fn baseline(root: &Path, name: &str, scene: &mut Scene, update: bool) {
@@ -464,10 +484,14 @@ fn isolated(test: &str, shell: bool, work: impl FnOnce(&str)) {
     let output = child.output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     print!("{stdout}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if let Some(message) = only_re_recorded(output.status, &stderr) {
+        panic!("{message}");
+    }
     assert!(
         output.status.success(),
         "isolated golden worker failed:\n{}",
-        String::from_utf8_lossy(&output.stderr)
+        stderr
             .lines()
             .map(|line| format!("    {line}\n"))
             .collect::<String>()

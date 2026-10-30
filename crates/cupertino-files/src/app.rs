@@ -768,8 +768,9 @@ impl App {
                 let factor = scale.factor() as f32;
                 match cleared {
                     None => painter.paint(pm, factor, &frame, &state, palette),
-                    // the frame is drawn whole and only the damaged rectangles of it replace what the pixmap holds, which
-                    // makes the pixels the same as those of a whole redraw
+                    // the frame is drawn into a scratch pixmap, its content view only in the rows the damage crosses,
+                    // and only the damaged rectangles of it replace what the pixmap holds, which makes the pixels the
+                    // same as those of a whole redraw
                     Some(rects) => {
                         let whole = match scratch.take() {
                             Some(p) if (p.width(), p.height()) == (pm.width(), pm.height()) => p,
@@ -779,7 +780,9 @@ impl App {
                         };
                         let mut whole = whole;
                         whole.fill(Color::TRANSPARENT);
-                        painter.paint(&mut whole, factor, &frame, &state, palette);
+                        let rows: Vec<(u32, u32)> =
+                            rects.iter().map(|r| (r.y, r.y + r.height)).collect();
+                        painter.paint_rows(&mut whole, factor, &frame, &state, palette, &rows);
                         copy_rects(pm, &whole, rects);
                         *scratch = Some(whole);
                     }

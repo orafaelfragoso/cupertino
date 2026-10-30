@@ -115,6 +115,33 @@ fn main() {
             painter.paint(&mut pm, scale, &frame, &state, &pal);
         }) - clear;
         let convert = best(|| rgba_to_argb8888(pm.data(), &mut shm));
+        // a damaged frame: only the rows of the search field's caret blink, and of a hovered list row
+        let s = f64::from(scale);
+        let caret: Vec<(u32, u32)> = cupertino_files::window::caret_areas(&frame, None)
+            .unwrap()
+            .iter()
+            .map(|r| {
+                (
+                    (r.y() * s).floor() as u32,
+                    ((r.y() + r.height()) * s).ceil() as u32,
+                )
+            })
+            .collect();
+        let row_top = ((frame.window.content.y + 100.0) * s) as u32;
+        let hover = [(row_top, row_top + (24.0 * s) as u32)];
+        let mut damaged = |rows: &[(u32, u32)]| {
+            best(|| {
+                pm.fill(Color::TRANSPARENT);
+                painter.paint_rows(&mut pm, scale, &frame, &state, &pal, rows);
+            })
+            .saturating_sub(clear)
+        };
+        let (caret_paint, hover_paint) = (damaged(&caret), damaged(&hover));
+        println!(
+            "  damaged paint: search caret {:.2} ms, one list row {:.2} ms",
+            ms(caret_paint),
+            ms(hover_paint)
+        );
         // the parts: the content view's own pixmap, its blit, a full-window opaque fill
         let content = frame.window.content;
         let size = Size {

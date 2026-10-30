@@ -101,7 +101,12 @@ pub struct ClientState {
     pub owner_identifying: crate::dbus::Identifying,
     /// The commits of the client held back until their buffers are ready ([`crate::acquire_waits`]).
     pub acquire_waits: std::sync::Arc<crate::acquire_waits::AcquireWaits>,
+    /// Where the client's id goes when it disconnects, set once it mapped a toplevel ([`Cupertino::forget_gone_processes`]).
+    pub gone: std::sync::OnceLock<GoneClients>,
 }
+
+/// The clients that mapped a toplevel and have disconnected since the last tick.
+pub type GoneClients = std::sync::Arc<std::sync::Mutex<Vec<ClientId>>>;
 
 impl Default for ClientState {
     fn default() -> Self {
@@ -117,6 +122,7 @@ impl Default for ClientState {
             peer: None,
             owner_identifying: std::sync::Arc::default(),
             acquire_waits: std::sync::Arc::default(),
+            gone: std::sync::OnceLock::new(),
         }
     }
 }
@@ -149,8 +155,13 @@ pub fn client_process(
 
 impl ClientData for ClientState {
     fn initialized(&self, _client_id: ClientId) {}
-    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {
+    fn disconnected(&self, client_id: ClientId, _reason: DisconnectReason) {
         self.acquire_waits.close();
+        if let Some(gone) = self.gone.get() {
+            gone.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(client_id);
+        }
     }
 }
 
@@ -383,6 +394,8 @@ pub struct Cupertino {
         smithay::reexports::wayland_server::backend::ClientId,
         crate::process::ProcessIdentity,
     >,
+    /// Clients of `mapped_clients` that disconnected, put there by their [`ClientState::gone`].
+    gone_clients: GoneClients,
     /// The process behind a client (`crate::process::peer_process`); replaced in tests, whose clients share one process.
     pub process_of: crate::process::ProcessOf,
     /// A server move or resize waiting for the pointer to leave the drag-start box.
@@ -672,6 +685,7 @@ impl Cupertino {
             pending_activations: HashMap::new(),
             mapped_processes: std::collections::HashSet::new(),
             mapped_clients: HashMap::new(),
+            gone_clients: std::sync::Arc::default(),
             process_of: Box::new(crate::process::peer_process),
             pending_drag: None,
             cursor_status: CursorImageStatus::default_named(),
@@ -1134,20 +1148,21 @@ impl Cupertino {
 
     /// Forgets the first-window grant of processes whose last client that mapped a toplevel has disconnected.
     pub fn forget_gone_processes(&mut self) {
-        if self.mapped_clients.is_empty() {
+        let gone = std::mem::take(
+            &mut *self
+                .gone_clients
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        if gone.is_empty() {
             return;
         }
-        let mut live = std::collections::HashSet::new();
-        self.display_handle.backend_handle().with_all_clients(|id| {
-            live.insert(id);
-        });
-        let before = self.mapped_clients.len();
-        self.mapped_clients.retain(|id, _| live.contains(id));
-        if self.mapped_clients.len() != before {
-            let mapped = &self.mapped_clients;
-            self.mapped_processes
-                .retain(|p| mapped.values().any(|q| q == p));
+        for id in &gone {
+            self.mapped_clients.remove(id);
         }
+        let mapped = &self.mapped_clients;
+        self.mapped_processes
+            .retain(|p| mapped.values().any(|q| q == p));
     }
 
     /// The facts the focus policy needs about a window that maps (`cupertino_wm::MapFocus`): whether it is its client's
@@ -1164,6 +1179,7 @@ impl Cupertino {
                     let process = (self.process_of)(&self.display_handle, &client);
                     if let Some(process) = process {
                         self.mapped_clients.insert(id.clone(), process);
+                        data.gone.get_or_init(|| self.gone_clients.clone());
                     }
                     let first_of_process =
                         process.is_some_and(|process| self.mapped_processes.insert(process));
@@ -1512,6 +1528,31 @@ impl Cupertino {
             self.shell.overview = None;
             self.request_redraw();
         }
+    }
+
+    /// The earliest model time at which [`Cupertino::tick`] has time-driven work that no event and no frame brings
+    /// about: a ping or the pong timeout, a promised SIGKILL, the idle countdowns, the end of the wait for lock
+    /// surfaces, a hot corner's dwell, the menu bar edge's reveal or hide, a stale menu edit, and the keyboard filters'
+    /// repeat, slow keys and mouse keys. Animation is not here: it draws frames ([`Cupertino::animating`]).
+    pub fn next_tick_deadline(&self) -> Option<f64> {
+        let filters = &self.key_filters;
+        let ms = |t: u64| t as f64 / 1000.0;
+        [
+            self.hung.next_deadline(),
+            self.force_quits.next_deadline(),
+            self.display_power_deadline(),
+            self.lock_wait_deadline(),
+            self.hot_corners.next_deadline(),
+            self.bar_edge.next_deadline(),
+            self.menu_bars.set.next_deadline(),
+            self.menu_bars.edit_deadline(),
+            filters.slow.as_ref().and_then(|s| s.deadline()).map(ms),
+            filters.mouse.deadline().map(ms),
+            filters.repeat.next_deadline().map(ms),
+        ]
+        .into_iter()
+        .flatten()
+        .reduce(f64::min)
     }
 
     /// Whether something animates: every output then draws a frame per its own refresh.

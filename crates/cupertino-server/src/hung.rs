@@ -53,6 +53,15 @@ impl Liveness {
         self.unresponsive
     }
 
+    /// When the clock next matters to this client: its next ping, or the moment an outstanding one makes it
+    /// unresponsive. `None` for a client never pinged (the next tick pings it) or already unresponsive.
+    pub fn next_deadline(&self) -> Option<f64> {
+        match (self.outstanding, self.last_ping) {
+            (Some(sent), _) => (!self.unresponsive).then_some(sent + PONG_TIMEOUT),
+            (None, last) => last.map(|t| t + PING_INTERVAL),
+        }
+    }
+
     /// A ping went out and has not been answered yet.
     pub fn awaiting_pong(&self) -> bool {
         self.outstanding.is_some()
@@ -128,6 +137,14 @@ impl Pings {
     /// as time the client took to answer.
     pub fn awaiting_pong(&self) -> bool {
         self.watched.iter().any(|w| w.liveness.awaiting_pong())
+    }
+
+    /// The earliest moment the clock next matters to a watched client.
+    pub fn next_deadline(&self) -> Option<f64> {
+        self.watched
+            .iter()
+            .filter_map(|w| w.liveness.next_deadline())
+            .reduce(f64::min)
     }
 
     /// Whether any client is unresponsive.
@@ -206,6 +223,23 @@ impl crate::state::Cupertino {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_clock_next_matters_at_the_next_ping_or_the_pong_timeout() {
+        let mut l = Liveness::default();
+        assert_eq!(l.next_deadline(), None, "the next tick pings a new client");
+        l.pinged(10.0);
+        assert_eq!(l.next_deadline(), Some(10.0 + PONG_TIMEOUT));
+        l.ponged();
+        assert_eq!(l.next_deadline(), Some(10.0 + PING_INTERVAL));
+        l.pinged(11.0);
+        assert!(l.check(11.0 + PONG_TIMEOUT));
+        assert_eq!(
+            l.next_deadline(),
+            None,
+            "an unresponsive client waits for its pong"
+        );
+    }
 
     #[test]
     fn a_client_that_answers_is_pinged_every_second_and_never_unresponsive() {

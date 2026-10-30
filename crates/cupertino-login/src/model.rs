@@ -138,6 +138,10 @@ pub struct LockScreen {
     last_input: f64,
     /// Seconds without input until the interface hides: [`HIDE_AFTER`] or [`HIDE_AFTER_EXPLICIT_LOCK`].
     hide_after: f64,
+    /// A wrong password was entered; shown until the person edits the field.
+    failure_outline: bool,
+    /// The session asks for reduced motion: the field does not shake.
+    reduce_motion: bool,
 }
 
 impl LockScreen {
@@ -154,7 +158,20 @@ impl LockScreen {
             },
             last_input: now,
             hide_after,
+            failure_outline: false,
+            reduce_motion: false,
         }
+    }
+
+    /// Follow the session's Reduce Motion: no shake while it is on.
+    pub fn set_reduce_motion(&mut self, on: bool) {
+        self.reduce_motion = on;
+    }
+
+    /// Whether the password field shows that the last attempt was a wrong password: from the answer until the person
+    /// edits the field. With or without the shake, so a failure is never shown by motion alone.
+    pub fn failure_outline(&self) -> bool {
+        self.failure_outline
     }
 
     pub fn phase(&self) -> Phase {
@@ -187,10 +204,10 @@ impl LockScreen {
         }
     }
 
-    /// Horizontal offset of the password field in points at `now`.
+    /// Horizontal offset of the password field in points at `now`; always 0 under Reduce Motion.
     pub fn shake(&self, now: f64) -> f64 {
         match self.phase {
-            Phase::Failed { since } => shake_offset(now - since),
+            Phase::Failed { since } if !self.reduce_motion => shake_offset(now - since),
             _ => 0.0,
         }
     }
@@ -228,14 +245,17 @@ impl LockScreen {
                     self.password.push(c);
                 }
                 self.notice = None;
+                self.failure_outline = false;
             }
             Key::Backspace => {
                 self.password.pop();
                 self.notice = None;
+                self.failure_outline = false;
             }
             Key::Escape => {
                 self.password = empty_password();
                 self.notice = None;
+                self.failure_outline = false;
             }
             Key::Return
                 if self.password.is_empty()
@@ -243,6 +263,7 @@ impl LockScreen {
             Key::Return => {
                 self.phase = Phase::Authenticating { since: now };
                 self.notice = None;
+                self.failure_outline = false;
                 return Some(std::mem::replace(&mut self.password, empty_password()));
             }
         }
@@ -268,7 +289,10 @@ impl LockScreen {
                 self.phase = Phase::Unlocking;
                 self.interface.retarget(now, 0.0);
             }
-            AuthOutcome::Denied => self.phase = Phase::Failed { since: now },
+            AuthOutcome::Denied => {
+                self.phase = Phase::Failed { since: now };
+                self.failure_outline = true;
+            }
             AuthOutcome::Error(reason) => {
                 self.phase = Phase::Locked;
                 self.notice = Some(reason);
@@ -283,6 +307,7 @@ impl LockScreen {
     /// ): unlock from any phase. The caller only calls this for a message of the manager.
     pub fn unlock_by_switch(&mut self, now: f64) {
         self.password = empty_password();
+        self.failure_outline = false;
         self.phase = Phase::Unlocking;
         self.interface.retarget(now, 0.0);
         self.last_input = now;
@@ -441,6 +466,74 @@ mod tests {
                 .as_deref()
                 .map(String::as_str),
             Some("right")
+        );
+    }
+
+    #[test]
+    fn a_wrong_password_is_outlined_until_the_person_edits_the_field_and_nothing_else_is() {
+        for reduce_motion in [false, true] {
+            let mut screen = LockScreen::new(0.0, HIDE_AFTER);
+            screen.set_reduce_motion(reduce_motion);
+            type_str(&mut screen, 1.0, "wrong");
+            assert!(!screen.failure_outline());
+            screen.press(1.0, Key::Return);
+            screen.tick(2.5);
+            assert!(screen.spinner(2.5).is_some());
+            assert!(!screen.failure_outline(), "not while the attempt runs");
+            screen.finish_auth(3.0, AuthOutcome::Denied).unwrap();
+            assert!(screen.failure_outline());
+            // the shake ends; the field, emptied by the submission, is still the person's to change
+            screen.tick(3.0 + SHAKE_DURATION + 1.0);
+            assert_eq!(screen.phase(), Phase::Locked);
+            assert!(screen.failure_outline(), "it stays after the shake");
+            type_str(&mut screen, 5.0, "r");
+            assert!(!screen.failure_outline(), "the next keystroke ends it");
+
+            for edit in [Key::Backspace, Key::Escape] {
+                screen.press(6.0, Key::Return);
+                screen.finish_auth(6.5, AuthOutcome::Denied).unwrap();
+                assert!(screen.failure_outline());
+                screen.press(7.0, edit);
+                assert!(!screen.failure_outline(), "{edit:?} ends it");
+                type_str(&mut screen, 7.0, "r");
+            }
+
+            screen.press(8.0, Key::Return);
+            screen
+                .finish_auth(8.5, AuthOutcome::Error("account locked".into()))
+                .unwrap();
+            assert!(
+                !screen.failure_outline(),
+                "an undecided attempt shows its notice instead"
+            );
+            type_str(&mut screen, 9.0, "right");
+            screen.press(9.0, Key::Return);
+            screen.finish_auth(9.5, AuthOutcome::Success).unwrap();
+            assert!(!screen.failure_outline());
+        }
+    }
+
+    #[test]
+    fn under_reduce_motion_a_wrong_password_does_not_shake() {
+        let mut moving = LockScreen::new(0.0, HIDE_AFTER);
+        let mut still = LockScreen::new(0.0, HIDE_AFTER);
+        still.set_reduce_motion(true);
+        for screen in [&mut moving, &mut still] {
+            type_str(screen, 1.0, "wrong");
+            screen.press(1.0, Key::Return);
+            screen.finish_auth(2.0, AuthOutcome::Denied).unwrap();
+        }
+        let mut t = 2.0;
+        while t <= 2.0 + SHAKE_DURATION {
+            approx(still.shake(t), 0.0);
+            approx(moving.shake(t), shake_offset(t - 2.0));
+            approx(still.opacity(t), moving.opacity(t));
+            t += SHAKE_DURATION / 40.0;
+        }
+        assert_eq!(
+            still.phase(),
+            moving.phase(),
+            "the failure keeps its timing"
         );
     }
 

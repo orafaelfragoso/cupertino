@@ -21,6 +21,8 @@
 # there show in the launcher).
 # CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE: application ids (comma separated) the dock shows as not responding; the script builds
 # a dock for it into target/capture-fixtures.
+# CUPERTINO_ACCESSIBILITY_CONF: an accessibility.conf the server reads its display options from (increase_contrast = on,
+# say); without it the run has the defaults.
 # Needs: dbus-run-session, python3.
 set -eu
 
@@ -91,6 +93,7 @@ env -i \
     CUPERTINO_ASSET_SEARCH_PATH="$PACK" \
     CUPERTINO_SERVER_CONFIG="$SCRATCH/server.json" \
     ${CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE:+CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE="$CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE"} \
+    ${CUPERTINO_ACCESSIBILITY_CONF:+CUPERTINO_ACCESSIBILITY_CONF="$CUPERTINO_ACCESSIBILITY_CONF"} \
     DBUS_SYSTEM_BUS_ADDRESS="unix:path=$SCRATCH/no-system-bus" \
     dbus-run-session -- "$BIN_DIR/cupertino-server" --headless --dbus --size "${SIZE:-1280x800}" \
     --dev-shell "$@"

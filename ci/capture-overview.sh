@@ -46,6 +46,7 @@ if [ -z "${BIN_DIR:-}" ]; then
     python3 -I -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
   BIN_DIR=$target/release
 fi
+[[ $BIN_DIR != *[[:space:]]* ]] || fail "BIN_DIR $BIN_DIR: the server splits --spawn on whitespace, so the path cannot hold any"
 [ -x "$BIN_DIR/cupertino-testclient" ] || fail "no cupertino-testclient in $BIN_DIR"
 mkdir -p "$out"
 out=$(realpath "$out")

@@ -15,6 +15,7 @@ use cupertino_ui_render::{
 };
 use cupertino_ui_theme::{ColorRole, StateVariant};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 struct Painted {
     source: u64,
@@ -128,6 +129,16 @@ fn shape_bounds(shape: &Shape) -> Option<Rect> {
 pub(crate) struct Painter {
     nodes: HashMap<NodeId, Painted>,
     revision: u64,
+    /// The environment the kept paint was made in; any other repaints every node.
+    painted_in: Option<Environment>,
+}
+
+/// Whether paint made in `a` is paint made in `b`: the same theme, text system and scale, the same direction.
+fn same_environment(a: &Environment, b: &Environment) -> bool {
+    Arc::ptr_eq(&a.theme, &b.theme)
+        && Arc::ptr_eq(&a.text, &b.text)
+        && a.scale == b.scale
+        && a.direction == b.direction
 }
 
 pub(crate) struct Painting {
@@ -159,6 +170,15 @@ impl Painter {
         geometry: &Geometry,
         input: &PaintInput<'_>,
     ) -> Painting {
+        // a node paints in its environment's colours, type and pixels, none of which its own revision covers
+        if !self
+            .painted_in
+            .as_ref()
+            .is_some_and(|env| same_environment(env, input.env))
+        {
+            self.nodes.clear();
+            self.painted_in = Some(input.env.clone());
+        }
         let mut list = DisplayList::default();
         let mut seen = HashSet::with_capacity(self.nodes.len());
         let mut clips = Vec::new();

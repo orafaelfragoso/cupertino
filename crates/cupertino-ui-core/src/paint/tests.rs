@@ -62,6 +62,8 @@ struct Fixture {
     root: NodeId,
     painter: Painter,
     paints: Rc<Cell<u32>>,
+    /// One environment for every frame, as a window keeps.
+    env: Environment,
 }
 
 impl Fixture {
@@ -74,6 +76,7 @@ impl Fixture {
             root,
             painter: Painter::default(),
             paints,
+            env: env(),
         }
     }
 
@@ -85,7 +88,6 @@ impl Fixture {
     }
 
     fn frame(&mut self, rect: Rect, clip: Option<Rect>, focus: bool) -> PaintNode {
-        let env = env();
         let geometry = Geometry::from([(
             self.root,
             Placement {
@@ -99,7 +101,7 @@ impl Fixture {
             self.root,
             &geometry,
             &PaintInput {
-                env: &env,
+                env: &self.env,
                 focus: focus.then_some(self.root),
                 focus_visible: true,
                 window_active: true,
@@ -136,6 +138,13 @@ fn a_node_paints_again_only_when_it_changed_its_size_changed_or_its_focus_did() 
         .unwrap();
     f.frame(Rect::new(50.0, 20.0, 31.0, 40.0), None, true);
     assert_eq!(f.paints.get(), 4, "a paint change repaints");
+
+    f.env.scale = 2.0;
+    f.frame(Rect::new(50.0, 20.0, 31.0, 40.0), None, true);
+    assert_eq!(f.paints.get(), 5, "another environment repaints");
+    f.env.theme = Arc::new((*f.env.theme).clone());
+    f.frame(Rect::new(50.0, 20.0, 31.0, 40.0), None, true);
+    assert_eq!(f.paints.get(), 6, "so does another theme");
 }
 
 #[test]

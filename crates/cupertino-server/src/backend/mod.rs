@@ -14,6 +14,7 @@ pub mod headless;
 pub mod input;
 #[cfg(feature = "udev")]
 pub mod preflight;
+pub mod record;
 #[cfg(feature = "udev")]
 pub mod udev;
 #[cfg(feature = "winit")]

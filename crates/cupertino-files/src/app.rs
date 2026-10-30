@@ -40,7 +40,7 @@ use cupertino_files::selection::Modifiers;
 use cupertino_files::tags::{self, TagColor};
 use cupertino_files::trash::Trash;
 use cupertino_files::window::{
-    metrics, status_text, Bars, Frame, Hit, Move, SearchWidth, ToolbarItem, ViewMode,
+    metrics, status_text, Bars, DropOutline, Frame, Hit, Move, SearchWidth, ToolbarItem, ViewMode,
     WindowPainter, WindowState, SEARCH_MAX_LEN,
 };
 use cupertino_files::{Entry, Kind, Point, Size, SortSpec};
@@ -304,8 +304,8 @@ struct Marquee {
 #[derive(Clone, PartialEq)]
 struct DropTarget {
     path: PathBuf,
-    /// The listing item to outline; `None` for a place of the sidebar.
-    item: Option<usize>,
+    /// The listing item or sidebar place marked with the drop look.
+    outline: DropOutline,
     /// The trash place: dropping trashes.
     trash: bool,
 }
@@ -522,7 +522,13 @@ impl App {
                     self.window.redraw();
                 }
                 // the display options reach the title bar and materials through the server
-                Some(AppEvent::DisplayOptions(options)) => self.display = options,
+                Some(AppEvent::DisplayOptions(options)) => {
+                    // the drop look follows Increase Contrast
+                    if options.increase_contrast != self.display.increase_contrast {
+                        self.window.redraw();
+                    }
+                    self.display = options;
+                }
                 Some(event @ (AppEvent::MenuBar { .. } | AppEvent::MenuReader { .. })) => {
                     if let Some(menus) = &mut self.menus {
                         menus.handle(&event);
@@ -702,13 +708,14 @@ impl App {
             edit,
             drag,
             marquee,
+            display,
             frame: prev_frame,
             ..
         } = self;
         let drop_target = drag
             .as_ref()
             .and_then(|d| d.target.as_ref())
-            .and_then(|t| t.item);
+            .map(|t| t.outline);
         let title = title(browser.dir(), places);
         let status = status_text(browser.item_count(), *available);
         let state = WindowState {
@@ -724,6 +731,7 @@ impl App {
             edit: edit.as_ref().map(|(e, _)| e),
             edit_caret,
             drop_target,
+            increase_contrast: display.increase_contrast,
             marquee: marquee.as_ref().map(|m| (m.origin, m.at)),
             status: &status,
         };
@@ -2143,13 +2151,12 @@ impl App {
             if !drag.started {
                 self.rename.cancel();
             }
-            let outlined = |t: &Option<DropTarget>| t.as_ref().and_then(|t| t.item);
+            let outlined = |t: &Option<DropTarget>| t.as_ref().map(|t| t.outline);
             let moved = (outlined(&drag.target) != outlined(&target))
                 .then(|| [outlined(&drag.target), outlined(&target)]);
             (drag.started, drag.sources, drag.target) = (true, sources, target);
-            // only an item of the listing is outlined: a target moving between places changes no pixel
-            if let Some(items) = moved {
-                self.redraw_outlines(items.into_iter().flatten());
+            if let Some(outlines) = moved {
+                self.redraw_outlines(outlines.into_iter().flatten());
             }
         }
         Ok(())
@@ -2174,14 +2181,17 @@ impl App {
         }
     }
 
-    /// The drop outline left or reached `items`: draw them.
-    fn redraw_outlines(&mut self, items: impl Iterator<Item = usize>) {
+    /// The drop look left or reached `outlines`: draw them.
+    fn redraw_outlines(&mut self, outlines: impl Iterator<Item = DropOutline>) {
         let Some(frame) = &self.frame else {
             self.window.redraw();
             return;
         };
-        let areas: Vec<PopupRect> = items
-            .map(|i| cupertino_files::window::item_area(frame, i))
+        let areas: Vec<PopupRect> = outlines
+            .map(|o| match o {
+                DropOutline::Item(i) => cupertino_files::window::item_area(frame, i),
+                DropOutline::Place(i) => cupertino_files::window::place_area(frame, i),
+            })
             .collect::<Option<_>>()
             .unwrap_or_default();
         if areas.is_empty() {
@@ -2247,16 +2257,23 @@ impl App {
     fn drop_target(&self, at: Point, sources: &[PathBuf]) -> Option<DropTarget> {
         let frame = self.frame.as_ref()?;
         let trash_files = Trash::new().home_trash().join("files");
-        let (path, item) = match frame.hit(at) {
+        let (path, outline) = match frame.hit(at) {
             Hit::Item(i) | Hit::Disclosure(i) => {
                 let entry = self.browser.entries().get(i)?;
-                (entry.is_dir.then(|| entry.path.clone())?, Some(i))
+                (
+                    entry.is_dir.then(|| entry.path.clone())?,
+                    DropOutline::Item(i),
+                )
             }
-            Hit::Place(i) => (self.places.get(i)?.path.clone(), None),
+            Hit::Place(i) => (self.places.get(i)?.path.clone(), DropOutline::Place(i)),
             _ => return None,
         };
         let trash = path == trash_files;
-        (!sources.contains(&path)).then_some(DropTarget { path, item, trash })
+        (!sources.contains(&path)).then_some(DropTarget {
+            path,
+            outline,
+            trash,
+        })
     }
 
     /// The left button went up: end a drag by dropping on its target, else finish the click.

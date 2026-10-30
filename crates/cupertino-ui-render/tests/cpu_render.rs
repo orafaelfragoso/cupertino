@@ -798,3 +798,212 @@ fn stats_belong_to_their_own_frame_after_a_refusal_or_a_failed_paint() {
         "the failed frame's fills are not carried over"
     );
 }
+
+/// What one frame of `list` did: the stats of a render after a full first frame.
+fn frame_stats(list: &DisplayList, damage: &DamageRegion) -> cupertino_ui_render::RenderStats {
+    let mut r = renderer();
+    let none = PaintResources::default();
+    render(&mut r, list, &none, 1.0, &DamageRegion::Full).unwrap();
+    render(&mut r, list, &none, 1.0, damage).unwrap();
+    *r.stats()
+}
+
+fn blue_square() -> PaintNode {
+    node(
+        1,
+        rect(10.0, 10.0, 30.0, 30.0),
+        vec![fill(
+            Shape::Rect(rect(10.0, 10.0, 30.0, 30.0)),
+            solid(0.0, 0.0, 1.0, 0.5),
+        )],
+    )
+}
+
+#[test]
+fn a_node_nothing_clips_or_cuts_is_painted_straight_into_the_frame() {
+    let stats = frame_stats(
+        &DisplayList {
+            nodes: vec![blue_square()],
+        },
+        &DamageRegion::Full,
+    );
+    assert_eq!(stats.nodes_painted, 1);
+    assert_eq!(stats.scratch_images.count, 0);
+    assert_eq!(stats.node_composite.count, 0);
+}
+
+#[test]
+fn a_clipped_cut_or_grouped_node_keeps_its_scratch_image() {
+    let clipped = DisplayList {
+        nodes: vec![
+            PaintNode {
+                clip: Some(Shape::Rect(rect(0.0, 0.0, 20.0, 20.0))),
+                ..node(9, rect(0.0, 0.0, 96.0, 64.0), vec![])
+            },
+            PaintNode {
+                parent: Some(PaintNodeId(9)),
+                ..blue_square()
+            },
+        ],
+    };
+    let stats = frame_stats(&clipped, &DamageRegion::Full);
+    assert_eq!(stats.node_composite.count, 1, "under a clipping ancestor");
+    let cut = DamageRegion::Rects(vec![rect(0.0, 0.0, 20.0, 20.0)]);
+    let stats = frame_stats(
+        &DisplayList {
+            nodes: vec![blue_square()],
+        },
+        &cut,
+    );
+    assert_eq!(stats.node_composite.count, 1, "cut by the damage");
+    let stats = frame_stats(&faded_sheet(0.0), &DamageRegion::Full);
+    assert_eq!(stats.group_composite.count, 1, "inside a group's layer");
+}
+
+#[test]
+fn a_full_repaint_costs_in_proportion_to_its_area() {
+    let (width, height) = (480.0, 320.0);
+    let sheet = rect(20.0, 20.0, 440.0, 280.0);
+    let background = rect(0.0, 0.0, width, height);
+    let list = DisplayList {
+        nodes: vec![
+            node(
+                1,
+                background,
+                vec![
+                    fill(Shape::Rect(background), solid(1.0, 1.0, 1.0, 1.0)),
+                    PaintOp::Glyphs {
+                        origin: Point { x: 40.0, y: 310.0 },
+                        run: GlyphRun {
+                            font: FontId(1),
+                            size: 8.0,
+                            glyphs: (0..4)
+                                .map(|i| PositionedGlyph {
+                                    id: GlyphId(i),
+                                    x: i as f32 * 6.0,
+                                    y: 0.0,
+                                    cluster: 0,
+                                })
+                                .collect(),
+                        },
+                        color: Color::new(0.0, 0.0, 0.0, 1.0),
+                    },
+                ],
+            ),
+            PaintNode {
+                clip: Some(Shape::RoundedRect {
+                    rect: sheet,
+                    radius: 16.0,
+                }),
+                ..node(2, sheet, vec![])
+            },
+            child(
+                3,
+                2,
+                sheet,
+                vec![fill(Shape::Rect(sheet), solid(0.2, 0.4, 0.9, 0.8))],
+            ),
+        ],
+    };
+    let none = PaintResources::default();
+    let at = |scale: f64| {
+        let mut r = renderer();
+        r.render(&RenderRequest {
+            list: &list,
+            resources: &none,
+            scale,
+            width: (width * scale) as u32,
+            height: (height * scale) as u32,
+            damage: &DamageRegion::Full,
+        })
+        .unwrap();
+        let stats = *r.stats();
+        assert_eq!(
+            (stats.scratch_images.count, stats.node_composite.count),
+            (1, 1),
+            "only the clipped node takes a scratch image; the background is painted directly"
+        );
+        let sheet = (440.0 * scale + 4.0) * (280.0 * scale + 4.0) * 4.0;
+        assert!(
+            stats.scratch_images.bytes as f64 <= sheet,
+            "the scratch image covers the clipped node, not the frame"
+        );
+        stats
+    };
+    let (small, large) = (at(1.0), at(2.0));
+    assert_eq!(
+        (small.nodes_painted, small.fills, small.glyphs),
+        (large.nodes_painted, large.fills, large.glyphs)
+    );
+    assert_eq!(large.clear.bytes, 4 * small.clear.bytes);
+    assert_eq!(small.clear.bytes, 480 * 320 * 4);
+}
+
+/// Glyph rasters ten em wide and half covered: wider than the box a node's extent allows a glyph.
+struct Wide;
+
+impl GlyphRasterizer for Wide {
+    fn rasterize(&mut self, key: &GlyphKey) -> Result<Option<RasterGlyph>, TextError> {
+        let em = key.size_q / 64;
+        Ok(Some(RasterGlyph {
+            format: GlyphFormat::Coverage,
+            width: em * 10,
+            height: em,
+            stride: em * 10,
+            bearing_x: 0,
+            bearing_y: em as i32,
+            pixels: Arc::from(vec![128u8; (em * em * 10) as usize]),
+        }))
+    }
+}
+
+#[test]
+fn a_glyph_wider_than_its_box_is_cut_to_the_damage() {
+    let run = GlyphRun {
+        font: FontId(1),
+        size: 8.0,
+        glyphs: vec![PositionedGlyph {
+            id: GlyphId(1),
+            x: 0.0,
+            y: 0.0,
+            cluster: 0,
+        }],
+    };
+    let list = DisplayList {
+        nodes: vec![node(
+            1,
+            rect(10.0, 10.0, 20.0, 10.0),
+            vec![PaintOp::Glyphs {
+                origin: Point { x: 12.0, y: 18.0 },
+                run,
+                color: Color::new(0.0, 0.0, 0.0, 1.0),
+            }],
+        )],
+    };
+    let none = PaintResources::default();
+    let mut r = CpuRenderer::new(config(), Wide);
+    let mut frame = |damage: &DamageRegion| {
+        let id = r
+            .render(&RenderRequest {
+                list: &list,
+                resources: &none,
+                scale: 1.0,
+                width: 96,
+                height: 64,
+                damage,
+            })
+            .unwrap();
+        r.frame(id).unwrap().pixels.clone()
+    };
+    let fresh = frame(&DamageRegion::Full);
+    assert_ne!(
+        fresh[(15 * 96 + 20) * 4 + 3],
+        0,
+        "the glyph is drawn in its box"
+    );
+    let repainted = frame(&DamageRegion::Rects(vec![rect(0.0, 0.0, 40.0, 40.0)]));
+    assert!(
+        repainted == fresh,
+        "pixels outside the damage are not painted again"
+    );
+}

@@ -9,6 +9,7 @@ RUN sed -i \
       -e "s|http://deb.debian.org/debian\$|http://snapshot.debian.org/archive/debian/${SNAPSHOT}|" \
       /etc/apt/sources.list.d/debian.sources \
  && grep -q snapshot.debian.org /etc/apt/sources.list.d/debian.sources \
+ && ! grep -rq --include='*.list' --include='*.sources' deb.debian.org /etc/apt \
  && apt-get -o Acquire::Check-Valid-Until=false update \
  && apt-get install -y --no-install-recommends \
       build-essential pkg-config libgbm-dev libpam0g-dev dbus libgl1-mesa-dri libegl1 libegl-mesa0 xkb-data \

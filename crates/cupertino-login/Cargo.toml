@@ -15,6 +15,7 @@ dbus = ["dep:zbus", "dep:cupertino-seat"]
 app = [
     "dbus",
     "dep:cupertino-shell-client",
+    "dep:cupertino-ui-atspi",
     "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
     "dep:pam-client2",
@@ -27,6 +28,7 @@ cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-login-ipc = { path = "../cupertino-login-ipc" }
 cupertino-peer = { path = "../cupertino-peer" }
 cupertino-theme = { path = "../cupertino-theme" }
+cupertino-ui-atspi = { path = "../cupertino-ui-atspi", optional = true }
 cupertino-ui-core = { path = "../cupertino-ui-core" }
 cupertino-ui-platform = { path = "../cupertino-ui-platform" }
 cupertino-seat = { path = "../cupertino-seat", optional = true }

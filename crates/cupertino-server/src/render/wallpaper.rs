@@ -111,23 +111,43 @@ pub fn scale_cover(source: &RgbaImage, dst: (u32, u32)) -> Result<(Pixmap, [f32;
     ))
 }
 
+/// The relative luminance of an sRGB channel value from 0 to 1.
+fn linear(c: f64) -> f64 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// CIE L* of relative luminance `y`, in tenths (0 black to 1000 white).
+fn lightness(y: f64) -> u16 {
+    let l = if y > 216.0 / 24_389.0 {
+        116.0 * y.cbrt() - 16.0
+    } else {
+        y * 24_389.0 / 27.0
+    };
+    (l * 10.0).round().clamp(0.0, 1000.0) as u16
+}
+
+/// The lightness of an sRGB colour (channels from 0 to 1), as [`strip_lightness`] gives it.
+pub fn colour_lightness(rgb: [f32; 3]) -> u16 {
+    let [r, g, b] = rgb.map(|c| linear(f64::from(c)));
+    lightness(0.2126 * r + 0.7152 * g + 0.0722 * b)
+}
+
 /// The lightness of the top `rows` rows of `pixmap`, where the menu bar sits: CIE L* of their mean relative luminance,
 /// in tenths (0 black to 1000 white). The mean is taken before L*, as the bar's material blurs what it covers. About
-/// 16 000 pixels are read, whatever the size.
+/// 16 000 pixels are read, whatever the size. The pixels are premultiplied, so a transparent part counts as black; what
+/// shows through it is the output's clear colour (0.05, 0.05, 0.07 on every backend), so it reads at most about 35 tenths
+/// darker than it looks, and only where the image is transparent.
 pub fn strip_lightness(pixmap: &Pixmap, rows: u32) -> u16 {
     let rows = rows.clamp(1, pixmap.height().max(1)) as usize;
     let width = pixmap.width() as usize;
     let (pixels, _) = pixmap.data().as_chunks::<4>();
     let strip = &pixels[..(rows * width).min(pixels.len())];
     let step = (strip.len() / 16_384).max(1);
-    let linear = |c: u8| {
-        let c = f64::from(c) / 255.0;
-        if c <= 0.04045 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        }
-    };
+    let linear = |c: u8| linear(f64::from(c) / 255.0);
     let (sum, n) = strip
         .iter()
         .step_by(step)
@@ -135,13 +155,7 @@ pub fn strip_lightness(pixmap: &Pixmap, rows: u32) -> u16 {
             let y = 0.2126 * linear(px[0]) + 0.7152 * linear(px[1]) + 0.0722 * linear(px[2]);
             (sum + y, n + 1)
         });
-    let y = sum / f64::from(n.max(1));
-    let l = if y > 216.0 / 24_389.0 {
-        116.0 * y.cbrt() - 16.0
-    } else {
-        y * 24_389.0 / 27.0
-    };
-    (l * 10.0).round().clamp(0.0, 1000.0) as u16
+    lightness(sum / f64::from(n.max(1)))
 }
 
 /// What identifies the contents of a file at a time.
@@ -419,6 +433,8 @@ pub struct Wallpapers {
     pub tint: Option<[f32; 3]>,
     /// The lightness under the menu bar of each output whose new image has just been put up, until taken.
     measured: Vec<(u64, u16)>,
+    /// The lightness last handed out for each output, so the procedural wallpaper's is handed out once per change.
+    sent: HashMap<u64, u16>,
 }
 
 impl Wallpapers {
@@ -438,6 +454,7 @@ impl Wallpapers {
             next_ticket: 0,
             tint: None,
             measured: Vec::new(),
+            sent: HashMap::new(),
         }
     }
 
@@ -502,7 +519,9 @@ impl Wallpapers {
                         tint,
                     });
                     state.loaded = Some((path, stamp));
+                    // every image put up is handed out, so its output draws it at once even at the same lightness
                     self.measured.push((reply.output, bar_lightness));
+                    self.sent.insert(reply.output, bar_lightness);
                 }
                 Outcome::Failed => {
                     state.loaded = None;
@@ -628,10 +647,17 @@ impl Wallpapers {
         if candidates.is_empty() {
             self.forget(output);
             self.tint = None;
+            self.procedural(output, dark);
             return None;
         }
         self.update(output, candidates, dst, strip_rows, now);
         let state = self.outputs.get(&output)?;
+        // no candidate could be used and none is being read: the procedural wallpaper stays
+        if !state.in_flight && state.shown.is_none() {
+            self.tint = None;
+            self.procedural(output, dark);
+            return None;
+        }
         match state.shown.as_ref().filter(|s| s.px == px) {
             Some(shown) => {
                 self.tint = Some(shown.tint);
@@ -641,6 +667,15 @@ impl Wallpapers {
                 self.tint = None;
                 None
             }
+        }
+    }
+
+    /// The procedural wallpaper shows on `output`: the lightness under its bar is that of the wallpaper's average colour
+    /// ([`crate::render::scene::wallpaper_tint`]), handed out when it differs from the last one.
+    fn procedural(&mut self, output: u64, dark: bool) {
+        let lightness = colour_lightness(crate::render::scene::wallpaper_tint(dark));
+        if self.sent.insert(output, lightness) != Some(lightness) {
+            self.measured.push((output, lightness));
         }
     }
 
@@ -727,6 +762,36 @@ mod tests {
         // sRGB 119 is L* 50.0
         let grey = strip_lightness(&split_pixmap((64, 48), 48, 119, 119), 24);
         assert!(grey.abs_diff(500) <= 3, "{grey}");
+    }
+
+    #[test]
+    fn a_colour_measures_as_a_strip_of_it_does() {
+        for grey in [0u8, 40, 119, 200, 255] {
+            let v = f32::from(grey) / 255.0;
+            assert_eq!(
+                colour_lightness([v; 3]),
+                strip_lightness(&split_pixmap((16, 16), 16, grey, grey), 8),
+                "{grey}"
+            );
+        }
+        let light = colour_lightness(crate::render::scene::wallpaper_tint(false));
+        let dark = colour_lightness(crate::render::scene::wallpaper_tint(true));
+        assert!(light > 700 && dark < 300, "{light} {dark}");
+    }
+
+    #[test]
+    fn the_procedural_wallpapers_lightness_is_handed_out_once_per_change() {
+        let mut wallpapers = Wallpapers::with_decoder([None, None], Arc::new(decode_file));
+        let none = WallpaperSettings::default();
+        let light = colour_lightness(crate::render::scene::wallpaper_tint(false));
+        for _ in 0..3 {
+            assert!(wallpapers.shown(1, &none, false, (8, 8), 1, 0.0).is_none());
+        }
+        assert_eq!(wallpapers.take_bar_lightness(), [(1, light)]);
+        wallpapers.shown(1, &none, true, (8, 8), 1, 0.0);
+        wallpapers.shown(1, &none, true, (8, 8), 1, 0.0);
+        let dark = colour_lightness(crate::render::scene::wallpaper_tint(true));
+        assert_eq!(wallpapers.take_bar_lightness(), [(1, dark)]);
     }
 
     #[test]

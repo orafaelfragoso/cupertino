@@ -38,6 +38,7 @@ jobs:
       - run: python3 -I packaging/test_release.py
       - run: python3 -I packaging/test_session.py
       - run: python3 -I ci/test_contracts.py
+      - run: python3 -I ci/test_goldens_log.py
       - run: python3 -I ci/gate.py .
       # The Wayland globals are compared with the registry by crates/cupertino-server/tests/contracts.rs (nextest below).
       - run: python3 -I ci/contracts.py .

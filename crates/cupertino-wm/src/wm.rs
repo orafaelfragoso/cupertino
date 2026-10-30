@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use crate::command::{Activation, AnimationKind, Command, Effect, MapParams};
+use crate::command::{Activation, AnimationKind, Command, Effect, MapParams, Requester};
 use crate::config::WmConfig;
 use crate::focus::FocusState;
 use crate::geometry::Rect;
@@ -238,9 +238,11 @@ impl Wm {
                 }
             }
             Command::ToggleZoom { window } => self.toggle_zoom(window, now, o),
-            Command::Fullscreen { window, output } => {
-                self.fullscreen_window(window, output, now, o)
-            }
+            Command::Fullscreen {
+                window,
+                output,
+                requested_by,
+            } => self.fullscreen_window(window, output, requested_by, now, o),
             Command::ExitFullscreen { window } => self.exit_fullscreen_window(window, now, o),
             Command::MinimizeOrRestore { window } => self.minimize_or_restore(window, now, o),
             Command::Tile { window, kind } => self.tile_window(window, kind, now, o),
@@ -814,12 +816,17 @@ impl Wm {
         &mut self,
         id: WindowId,
         output: Option<OutputId>,
+        requested_by: Requester,
         now: f64,
         out: &mut Vec<Effect>,
     ) {
         let Some(w) = self.windows.get(&id) else {
             return;
         };
+        // the person cannot full-screen a window that cannot zoom; its client still can, at its own request
+        if requested_by == Requester::User && !w.can_zoom() {
+            return;
+        }
         let output = output
             .filter(|o| self.output(*o).is_some())
             .unwrap_or(w.output);

@@ -293,6 +293,7 @@ fn testclient_writes_what_is_typed_and_exits_on_close() {
         std::fs::read_to_string(output.path()).is_ok_and(|text| text == "hi\n")
     });
     server.state.command(WmCommand::Fullscreen {
+        requested_by: cupertino_wm::Requester::Client,
         window: id,
         output: None,
     });

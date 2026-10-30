@@ -157,6 +157,7 @@ fn fullscreen_gets_workspace_after_current_and_is_removed_on_exit() {
     let w = h.map("a");
     let other = h.map("b");
     let fx = h.cmd(Command::Fullscreen {
+        requested_by: Requester::Client,
         window: w,
         output: None,
     });
@@ -214,6 +215,7 @@ fn fullscreen_window_closing_removes_its_workspace_and_returns() {
     let a = h.map("a");
     let w = h.map("b");
     h.cmd(Command::Fullscreen {
+        requested_by: Requester::Client,
         window: w,
         output: None,
     });
@@ -238,6 +240,7 @@ fn exit_fullscreen_while_on_another_workspace_removes_it_immediately() {
     let mut h = H::new();
     let w = h.map("a");
     h.cmd(Command::Fullscreen {
+        requested_by: Requester::Client,
         window: w,
         output: None,
     });
@@ -259,6 +262,7 @@ fn fullscreen_reentry_during_exit_reuses_the_workspace() {
     let mut h = H::new();
     let w = h.map("a");
     h.cmd(Command::Fullscreen {
+        requested_by: Requester::Client,
         window: w,
         output: None,
     });
@@ -266,6 +270,7 @@ fn fullscreen_reentry_during_exit_reuses_the_workspace() {
     h.cmd(Command::ExitFullscreen { window: w });
     h.advance(0.1);
     h.cmd(Command::Fullscreen {
+        requested_by: Requester::Client,
         window: w,
         output: None,
     });
@@ -281,6 +286,7 @@ fn two_fullscreen_apps_keep_order() {
     let a = h.map("a");
     let b = h.map("b");
     h.cmd(Command::Fullscreen {
+        requested_by: Requester::Client,
         window: a,
         output: None,
     });
@@ -292,6 +298,7 @@ fn two_fullscreen_apps_keep_order() {
     });
     h.settle();
     h.cmd(Command::Fullscreen {
+        requested_by: Requester::Client,
         window: b,
         output: None,
     });

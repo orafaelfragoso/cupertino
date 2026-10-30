@@ -380,6 +380,12 @@ pub struct ExtraGlyph {
 }
 
 impl Extras {
+    /// Whether going from these extras to `next` loses the session agent: an open system menu then closes, its session
+    /// items doing nothing.
+    pub fn loses_session(&self, next: &Extras) -> bool {
+        self.session.is_some() && next.session.is_none()
+    }
+
     /// The items to show, nearest to the control panel first.
     pub fn shown(&self) -> Vec<ExtraKind> {
         ExtraKind::ORDER
@@ -759,6 +765,23 @@ fn focus_menu(menu: &mut ExtraMenu, focus: &FocusState) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn only_an_agent_that_goes_away_closes_the_system_menu() {
+        let with = Extras {
+            session: Some(SessionState::default()),
+            ..Extras::default()
+        };
+        let without = Extras::default();
+        assert!(with.loses_session(&without));
+        assert!(
+            !without.loses_session(&with),
+            "an agent that comes changes nothing open"
+        );
+        assert!(!with.loses_session(&with));
+        assert!(!without.loses_session(&without));
+    }
+
     use super::*;
     use crate::item::Shortcut;
 

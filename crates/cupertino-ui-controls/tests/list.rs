@@ -406,6 +406,18 @@ fn a_table_lines_its_cells_up_under_the_header_and_a_title_click_sorts_the_other
         28.0,
         "the rows start under the header"
     );
+    let dividers = h
+        .snapshot()
+        .display_list
+        .nodes
+        .iter()
+        .flat_map(|n| &n.ops)
+        .filter(|op| matches!(op, PaintOp::Fill { shape: Shape::Rect(r), .. } if r.width() == 1.0))
+        .count();
+    assert_eq!(
+        dividers, 1,
+        "one divider between the two columns, none after the last"
+    );
     let title = Point::new(headers[0].min_x() + 10.0, 14.0);
     h.click(title);
     assert_eq!(h.model().sorted, [(0, SortOrder::Descending)]);

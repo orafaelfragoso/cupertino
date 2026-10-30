@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # isolated mode (-I) does not add the script's directory
 from goldens_log import TESTS, verdict  # noqa: E402
 
-PIXEL, DESKTOP, SHELL = TESTS
+*UNIT, DESKTOP, SHELL = TESTS
 
 
 def failure(name: str, message: str, later: str | None = None) -> str:
@@ -62,41 +62,41 @@ RECORDED_5 = "re-recorded 5 goldens; rerun without CUPERTINO_UPDATE_GOLDENS"
 
 class CompareTest(unittest.TestCase):
     def test_every_golden_test_passing_passes(self):
-        self.assertIsNone(verdict(log([PIXEL, DESKTOP, SHELL], {}), update=False))
+        self.assertIsNone(verdict(log([*UNIT, DESKTOP, SHELL], {}), update=False))
 
     def test_a_failure_fails(self):
         mismatch = "desktop-windows: pixels exceed 2/255 at 120 pixels"
         self.assertEqual(
-            verdict(log([PIXEL, SHELL], {DESKTOP: mismatch}), update=False),
+            verdict(log([*UNIT, SHELL], {DESKTOP: mismatch}), update=False),
             f"tests failed: {DESKTOP}",
         )
 
     def test_a_missing_test_fails(self):
         self.assertEqual(
-            verdict(log([PIXEL, DESKTOP], {}), update=False),
+            verdict(log([*UNIT, DESKTOP], {}), update=False),
             f"expected tests did not run: {SHELL}",
         )
 
     def test_a_test_outside_the_list_fails(self):
         self.assertEqual(
-            verdict(log([PIXEL, DESKTOP, SHELL, "new_scene_goldens"], {}), update=False),
+            verdict(log([*UNIT, DESKTOP, SHELL, "new_scene_goldens"], {}), update=False),
             "tests not in the golden list ran: new_scene_goldens",
         )
 
 
 class UpdateTest(unittest.TestCase):
     def test_tests_that_re_recorded_pass_whatever_their_number(self):
-        self.assertIsNone(verdict(log([PIXEL], {DESKTOP: RECORDED_3, SHELL: RECORDED_5}), update=True))
-        self.assertIsNone(verdict(log([PIXEL, DESKTOP], {SHELL: RECORDED_5}), update=True))
+        self.assertIsNone(verdict(log([*UNIT], {DESKTOP: RECORDED_3, SHELL: RECORDED_5}), update=True))
+        self.assertIsNone(verdict(log([*UNIT, DESKTOP], {SHELL: RECORDED_5}), update=True))
 
     def test_the_repeated_re_record_line_of_a_worker_is_not_a_problem(self):
         # the section holds the line twice: the worker's stdout and the parent's panic
-        self.assertIsNone(verdict(log([PIXEL, SHELL], {DESKTOP: RECORDED_3}), update=True))
+        self.assertIsNone(verdict(log([*UNIT, SHELL], {DESKTOP: RECORDED_3}), update=True))
 
     def test_a_failure_that_did_not_re_record_fails(self):
         self.assertEqual(
             verdict(
-                log([PIXEL], {DESKTOP: RECORDED_3, SHELL: "timed out waiting for the lock screen"}),
+                log([*UNIT], {DESKTOP: RECORDED_3, SHELL: "timed out waiting for the lock screen"}),
                 update=True,
             ),
             f"tests failed without re-recording: {SHELL}",
@@ -105,7 +105,7 @@ class UpdateTest(unittest.TestCase):
     def test_a_test_that_failed_after_re_recording_fails(self):
         self.assertEqual(
             verdict(
-                log([PIXEL], {DESKTOP: RECORDED_3, SHELL: RECORDED_5}, later={SHELL: "the lock screen did not exit"}),
+                log([*UNIT], {DESKTOP: RECORDED_3, SHELL: RECORDED_5}, later={SHELL: "the lock screen did not exit"}),
                 update=True,
             ),
             f"tests failed without re-recording: {SHELL}",
@@ -113,13 +113,13 @@ class UpdateTest(unittest.TestCase):
 
     def test_an_update_that_recorded_nothing_fails(self):
         self.assertEqual(
-            verdict(log([PIXEL, DESKTOP, SHELL], {}), update=True),
+            verdict(log([*UNIT, DESKTOP, SHELL], {}), update=True),
             "an update re-recorded nothing",
         )
 
     def test_a_missing_test_fails(self):
         self.assertEqual(
-            verdict(log([PIXEL], {DESKTOP: RECORDED_3}), update=True),
+            verdict(log([*UNIT], {DESKTOP: RECORDED_3}), update=True),
             f"expected tests did not run: {SHELL}",
         )
 
@@ -128,7 +128,7 @@ class RealLogTest(unittest.TestCase):
     """The shape of the `ci/goldens.sh --update` log that a hard-coded count misread (row 80 part 3)."""
 
     def test_two_re_recording_tests_with_their_lines_repeated_pass(self):
-        text = log([PIXEL], {DESKTOP: RECORDED_3, SHELL: RECORDED_5})
+        text = log([*UNIT], {DESKTOP: RECORDED_3, SHELL: RECORDED_5})
         self.assertEqual(text.count("re-recorded"), 4)
         self.assertIsNone(verdict(text, update=True))
 
@@ -141,7 +141,7 @@ class UpdateStatusTest(unittest.TestCase):
             bin_dir = Path(scratch) / "bin"
             bin_dir.mkdir()
             update_log = Path(scratch) / "update.log"
-            update_log.write_text(log([PIXEL], {DESKTOP: RECORDED_3, SHELL: RECORDED_5}))
+            update_log.write_text(log([*UNIT], {DESKTOP: RECORDED_3, SHELL: RECORDED_5}))
             docker = bin_dir / "docker"
             docker.write_text(f'#!/bin/sh\n[ "$1" = run ] || exit 0\ncat "{update_log}"\nexit {status}\n')
             docker.chmod(0o755)

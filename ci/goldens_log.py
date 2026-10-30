@@ -16,6 +16,7 @@ from pathlib import Path
 # The tests of the goldens binary that ci/goldens.sh runs; change it with the tests.
 TESTS = (
     "pixel_comparison_fails_on_a_change_at_unchanged_geometry",
+    "only_a_lone_re_record_panic_is_an_update",
     "desktop_goldens_and_input_replay",
     "shell_process_goldens",
 )

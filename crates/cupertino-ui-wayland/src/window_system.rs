@@ -337,9 +337,10 @@ impl WaylandWindowSystem {
                 };
                 let serial = self.conn.input_serial().unwrap_or(0);
                 let time = self.input_time(time);
+                let mods = convert::mods(self.conn.modifiers(), &self.profile);
                 (
                     i,
-                    WindowEvent::Pointer(convert::pointer(event, serial), time),
+                    WindowEvent::Pointer(convert::pointer(event, serial, mods), time),
                 )
             }
             Event::Keyboard {

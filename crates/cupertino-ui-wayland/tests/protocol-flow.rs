@@ -1359,6 +1359,7 @@ mod window_system {
                 button: MouseButton::Left,
                 pressed: true,
                 serial: 6,
+                mods: cupertino_ui_platform::Mods::NONE,
             }
         );
         assert!(time.0 > 0);

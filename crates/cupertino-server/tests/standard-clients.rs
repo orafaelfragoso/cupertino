@@ -42,6 +42,8 @@ const FRAMES: u32 = 30;
 enum Binary {
     SimpleWindow,
     TestClient,
+    /// A CupertinoKit example, by its example name.
+    Kit(&'static str),
 }
 
 struct Server {
@@ -153,6 +155,10 @@ fn built(binary: Binary) -> PathBuf {
         Binary::TestClient => (
             &["-p", "cupertino-testclient"],
             profile_dir.join("cupertino-testclient"),
+        ),
+        Binary::Kit(example) => (
+            &["-p", "cupertino-kit", "--example", example],
+            profile_dir.join("examples").join(example),
         ),
     };
     let mut cargo = Command::new(std::env::var_os("CARGO").expect("CARGO is set by `cargo test`"));
@@ -314,4 +320,44 @@ fn testclient_writes_what_is_typed_and_exits_on_close() {
         .unwrap()
         .close();
     server.wait_for_exit(&mut child);
+}
+
+/// The CupertinoKit examples map with their app id and title, commit a buffer of their window's size, and end with a
+/// success when the server closes their only window.
+#[test]
+fn kit_examples_map_at_their_size_and_exit_on_close() {
+    let examples = [
+        (
+            "counter",
+            "org.cupertino.examples.Counter",
+            "Counter",
+            (200, 64),
+        ),
+        ("forms", "org.cupertino.examples.Forms", "Forms", (280, 180)),
+    ];
+    for (example, app_id, title, size) in examples {
+        let Some(mut server) = Server::start() else {
+            return;
+        };
+        let mut child = server.launch(Binary::Kit(example), &[]);
+        server.wait_until("the window to map with a buffer", |s| {
+            s.windows.iter().find(|w| w.mapped).is_some_and(|w| {
+                with_renderer_surface_state(w.surface(), |s| s.buffer_size())
+                    .flatten()
+                    .is_some()
+            })
+        });
+        assert_eq!(
+            identity(&server.state),
+            (Some(app_id.to_owned()), Some(title.to_owned())),
+            "{example}"
+        );
+        let window = server.state.windows.iter().find(|w| w.mapped).unwrap();
+        let buffer = with_renderer_surface_state(window.surface(), |s| s.buffer_size())
+            .flatten()
+            .map(|size| (size.w, size.h));
+        assert_eq!(buffer, Some(size), "{example}");
+        window.close();
+        server.wait_for_exit(&mut child);
+    }
 }

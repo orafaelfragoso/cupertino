@@ -47,6 +47,8 @@ pub(crate) const LIGHT: Palette<[u8; 4]> = Palette {
         (ToolTipText, gray(36)),
         (ScrollerThumb, gray(118)),
         (DialogScrim, [0, 0, 0, 51]),
+        (Link, [0, 95, 210, 255]),
+        (PageDot, gray(105)),
     ],
     states: StateColors {
         emphasized_border: gray(100),
@@ -96,6 +98,8 @@ pub(crate) const DARK: Palette<[u8; 4]> = Palette {
         (ToolTipText, gray(224)),
         (ScrollerThumb, gray(153)),
         (DialogScrim, [0, 0, 0, 102]),
+        (Link, [65, 156, 255, 255]),
+        (PageDot, gray(163)),
     ],
     states: StateColors {
         emphasized_border: gray(159),
@@ -145,6 +149,8 @@ pub(crate) const HIGH_CONTRAST_LIGHT: Palette<[u8; 4]> = Palette {
         (ToolTipText, BLACK),
         (ScrollerThumb, gray(60)),
         (DialogScrim, [0, 0, 0, 102]),
+        (Link, [0, 64, 221, 255]),
+        (PageDot, gray(60)),
     ],
     states: StateColors {
         emphasized_border: BLACK,
@@ -194,6 +200,8 @@ pub(crate) const HIGH_CONTRAST_DARK: Palette<[u8; 4]> = Palette {
         (ToolTipText, WHITE),
         (ScrollerThumb, gray(200)),
         (DialogScrim, [0, 0, 0, 153]),
+        (Link, [102, 178, 255, 255]),
+        (PageDot, gray(210)),
     ],
     states: StateColors {
         emphasized_border: WHITE,
@@ -276,6 +284,8 @@ mod tests {
             (Header, WindowBackground),
             (ToolTipText, ToolTip),
         ];
+        // a link has no disabled look
+        let link_pairs = [(Link, WindowBackground), (Link, TextBackground)];
         let boundary_pairs = [
             (ControlBorder, WindowBackground),
             (TextFieldBorder, WindowBackground),
@@ -284,6 +294,7 @@ mod tests {
             (KeyboardFocusIndicator, TextBackground),
             (ScrollerThumb, WindowBackground),
             (ScrollerThumb, TextBackground),
+            (PageDot, WindowBackground),
         ];
         let high_contrast_boundary_pairs = [
             (SwitchTrack, WindowBackground),
@@ -304,6 +315,11 @@ mod tests {
                 };
                 for pair in text_pairs {
                     check(pair, TEXT);
+                }
+                for pair in link_pairs {
+                    if !disabled {
+                        check(pair, TEXT);
+                    }
                 }
                 for pair in boundary_pairs {
                     if !disabled {
@@ -357,6 +373,8 @@ mod tests {
                 SelectedControlFill,
                 DestructiveFill,
                 KeyboardFocusIndicator,
+                Link,
+                PageDot,
             ];
             for (role, c) in cupertino.normal {
                 if raised_for_contrast.contains(&role) || role == DialogScrim {

@@ -212,6 +212,53 @@ mod tests {
     }
 
     #[test]
+    fn surfaces_ask_for_their_material_unless_transparency_is_reduced_or_contrast_is_high() {
+        use crate::{Surface, SurfaceLook};
+        let theme = Theme::load().unwrap();
+        let look = |appearance, reduce_transparency, surface| {
+            ThemeTokens::cupertino(
+                &theme,
+                ThemePreferences {
+                    reduce_transparency,
+                    ..preferences(appearance)
+                },
+            )
+            .unwrap()
+            .surface(surface)
+        };
+        let window = |appearance| {
+            ColorTokens::cupertino(&theme.tokens, appearance)
+                .unwrap()
+                .get(crate::ColorRole::WindowBackground, StateVariant::NORMAL)
+        };
+        assert_eq!(
+            look(Appearance::Light, false, Surface::Sidebar),
+            SurfaceLook {
+                material: Some("Sidebar"),
+                fill: window(Appearance::Light)
+            }
+        );
+        assert_eq!(
+            look(Appearance::Dark, false, Surface::Menu).material,
+            Some("Menu")
+        );
+        assert_eq!(
+            look(Appearance::Dark, false, Surface::Popover).material,
+            Some("Menu")
+        );
+        assert_eq!(
+            look(Appearance::Light, true, Surface::Sidebar).material,
+            None
+        );
+        let high_contrast = look(Appearance::DarkHighContrast, false, Surface::Popover);
+        assert_eq!(high_contrast.material, None);
+        assert_eq!(high_contrast.fill, window(Appearance::DarkHighContrast));
+        for appearance in Appearance::ALL {
+            assert_eq!(look(appearance, true, Surface::Menu).fill.unwrap().a, 1.0);
+        }
+    }
+
+    #[test]
     fn preferences_choose_the_colours_and_reduce_motion() {
         let theme = Theme::load().unwrap();
         let prefs = ThemePreferences {

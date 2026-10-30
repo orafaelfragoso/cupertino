@@ -1,11 +1,13 @@
 //! The lock screen as assistive technology sees it, on a private bus with a fake accessibility registry: the password
-//! field is there and says nothing of what is typed, while a password is typed the process sends no keyboard event to
-//! the registry and no message that holds the password, and every answer to an attempt is announced once. The lock
-//! screen runs in a copy of this test binary, started with the bus addresses AccessKit reads from its environment.
+//! field is there and says nothing of what is typed, typing a password sends assistive technology nothing at all, and
+//! every answer to an attempt is announced once. The lock screen runs in a copy of this test binary, started with the
+//! bus addresses AccessKit reads from its environment. It announces a marker before and after its part, and AccessKit
+//! sends its events in order, so what lies between the two markers is exactly what the part sent.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::num::NonZeroU32;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
@@ -13,18 +15,23 @@ use std::task::{Wake, Waker};
 use std::thread::Thread;
 use std::time::{Duration, Instant};
 
+use cupertino_geometry::Rect;
 use cupertino_login::access::{lock_tree, LockView, DENIED};
 use cupertino_login::layout::Layout;
 use cupertino_login::model::{AuthOutcome, Key, LockScreen};
 use cupertino_test_bus::PrivateBus;
 use cupertino_ui_atspi::AtspiAdapter;
-use cupertino_ui_core::AccessibilityAdapter;
+use cupertino_ui_core::{
+    AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, AccessibleStates, Live, NodeId,
+    Role,
+};
 use cupertino_ui_platform::WindowId;
 use zbus::blocking::{Connection, MessageIterator, Proxy};
+use zbus::message::Type;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 use zbus::Message;
 
-/// Set in the copy of the test binary that plays the lock screen: the file it writes once it has played its part.
+/// Set in the copy of the test binary that plays the lock screen.
 const LOCK_SCREEN: &str = "CUPERTINO_TEST_LOCK_SCREEN";
 const ROOT: &str = "/org/a11y/atspi/accessible/root";
 const SECRET: &str = "hunter2";
@@ -32,6 +39,9 @@ const SECRET: &str = "hunter2";
 const PASSWORD_TEXT: u32 = 40;
 /// AT-SPI's politeness number of an assertive announcement (`AtspiLive`).
 const ASSERTIVE: i32 = 2;
+/// What the lock screen announces just before and just after its part.
+const READY: &str = "Test part starts";
+const PLAYED: &str = "Test part ends";
 
 struct Unpark(Thread);
 
@@ -41,21 +51,46 @@ impl Wake for Unpark {
     }
 }
 
-/// The lock screen: it sends its tree once accessibility is active, then once its input says go plays `part` with a
-/// way to send its tree, as the app does after each frame, writes `done` and waits for its input to close.
-fn lock_screen(done: PathBuf, part: impl FnOnce(&mut LockScreen, &mut dyn FnMut(&LockScreen))) {
-    let mut adapter = AtspiAdapter::new(Waker::from(Arc::new(Unpark(std::thread::current()))));
+/// `update` with a live node for each of `markers` added under its root; ids from 100 stay clear of the lock screen's.
+fn with_markers(mut update: AccessibilityUpdate, markers: &[&str]) -> AccessibilityUpdate {
+    for (i, marker) in markers.iter().enumerate() {
+        let id = NodeId::new(100 + i as u32, NonZeroU32::MIN);
+        update.nodes.push((
+            id,
+            AccessibilityNode {
+                role: Role::StaticText,
+                name: Some((*marker).to_owned()),
+                description: None,
+                value: None,
+                states: AccessibleStates::default(),
+                bounds: Rect::new(0.0, 0.0, 1.0, 1.0),
+                actions: Vec::new(),
+                relations: Vec::new(),
+                children: Vec::new(),
+                live: Some(Live::Assertive),
+            },
+        ));
+        let root = update.root;
+        let (_, root) = update.nodes.iter_mut().find(|(id, _)| *id == root).unwrap();
+        root.children.push(id);
+    }
+    update
+}
+
+/// The lock screen: it sends its tree once accessibility is active, and once its input says go announces [`READY`],
+/// plays `part` with a way to send its tree, as the app does after each frame, announces [`PLAYED`] and waits for its
+/// input to close.
+fn lock_screen(part: impl FnOnce(&mut LockScreen, &mut dyn FnMut(&LockScreen))) {
+    let adapter = RefCell::new(AtspiAdapter::new(Waker::from(Arc::new(Unpark(
+        std::thread::current(),
+    )))));
     let window = WindowId(1);
-    adapter.window_focus(window, true);
+    adapter.borrow_mut().window_focus(window, true);
     let layout = Layout::new(1280.0, 800.0, 0.25);
     let mut screen = LockScreen::new(0.0, 30.0);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !adapter.is_active() {
-        assert!(Instant::now() < deadline, "accessibility never turned on");
-        std::thread::park_timeout(Duration::from_millis(20));
-    }
-    let mut send = |screen: &LockScreen| {
-        adapter.update(&lock_tree(
+    let markers = RefCell::new(Vec::new());
+    let send = |screen: &LockScreen| {
+        let tree = lock_tree(
             window,
             &LockView {
                 screen,
@@ -68,13 +103,24 @@ fn lock_screen(done: PathBuf, part: impl FnOnce(&mut LockScreen, &mut dyn FnMut(
                 help: None,
                 power: false,
             },
-        ));
+        );
+        adapter
+            .borrow_mut()
+            .update(&with_markers(tree, &markers.borrow()));
     };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !adapter.borrow().is_active() {
+        assert!(Instant::now() < deadline, "accessibility never turned on");
+        std::thread::park_timeout(Duration::from_millis(20));
+    }
     send(&screen);
     let mut line = String::new();
     std::io::stdin().read_line(&mut line).unwrap();
-    part(&mut screen, &mut send);
-    std::fs::write(done, b"done").unwrap();
+    markers.borrow_mut().push(READY);
+    send(&screen);
+    part(&mut screen, &mut |screen| send(screen));
+    markers.borrow_mut().push(PLAYED);
+    send(&screen);
     std::io::stdin().read_to_end(&mut Vec::new()).unwrap();
 }
 
@@ -116,6 +162,41 @@ fn accessible<'a>(conn: &'a Connection, peer: &str, path: &str) -> Proxy<'a> {
     .unwrap()
 }
 
+/// The text and politeness of an announcement.
+fn announcement(message: &Message) -> Option<(String, i32)> {
+    type Event = (String, i32, i32, OwnedValue, HashMap<String, OwnedValue>);
+    let header = message.header();
+    if header.interface()? != "org.a11y.atspi.Event.Object" || header.member()? != "Announcement" {
+        return None;
+    }
+    let (_, politeness, _, said, _): Event = message.body().deserialize().unwrap();
+    Some((String::try_from(said).unwrap(), politeness))
+}
+
+/// What the lock screen sent while it played its part: the messages between its two markers, and the object paths of
+/// the markers.
+struct Part {
+    sent: Vec<Message>,
+    markers: [String; 2],
+}
+
+impl Part {
+    /// The signals of the part that are not about a marker.
+    fn signals(&self) -> Vec<&Message> {
+        self.sent
+            .iter()
+            .filter(|m| m.message_type() == Type::Signal)
+            .filter(|m| {
+                let path = m.header().path().map(|p| p.to_string()).unwrap_or_default();
+                let body = m.data();
+                !self.markers.iter().any(|marker| {
+                    path == *marker || body.windows(marker.len()).any(|w| w == marker.as_bytes())
+                })
+            })
+            .collect()
+    }
+}
+
 /// A lock screen started by test `name` in a copy of this binary, embedded in a fake registry, with every message it
 /// sends from then on recorded.
 struct Locked {
@@ -124,16 +205,12 @@ struct Locked {
     peer: String,
     sent: Arc<Mutex<Vec<Message>>>,
     conn: Connection,
-    done: PathBuf,
-    _marker: tempfile::TempDir,
     _services: (Connection, Connection),
     _bus: PrivateBus,
 }
 
 impl Locked {
     fn start(name: &str) -> Option<Locked> {
-        let marker = tempfile::tempdir().unwrap();
-        let done = marker.path().join("done");
         let bus = PrivateBus::start()?;
         let (embedded, embeds) = channel();
         let status = bus
@@ -154,7 +231,7 @@ impl Locked {
             .unwrap();
         let mut app = Command::new(std::env::current_exe().unwrap())
             .args([name, "--exact", "--nocapture"])
-            .env(LOCK_SCREEN, &done)
+            .env(LOCK_SCREEN, "1")
             .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
             .env("AT_SPI_BUS_ADDRESS", &bus.address)
             .stdin(Stdio::piped())
@@ -187,48 +264,39 @@ impl Locked {
             peer,
             sent,
             conn: bus.connect(),
-            done,
-            _marker: marker,
             _services: (status, registry),
             _bus: bus,
         })
     }
 
-    /// Tells the lock screen to play its part and waits until it has.
-    fn play(&mut self) {
+    /// Tells the lock screen to play its part and waits until it has announced both markers.
+    fn play(&mut self) -> Part {
         writeln!(self.stdin).unwrap();
         self.stdin.flush().unwrap();
+        let marker = |sent: &[Message], text: &str| {
+            sent.iter()
+                .position(|m| announcement(m).is_some_and(|(said, _)| said == text))
+        };
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !self.done.exists() {
+        loop {
+            let sent = self.sent.lock().unwrap().clone();
+            if let (Some(ready), Some(played)) = (marker(&sent, READY), marker(&sent, PLAYED)) {
+                let path = |i: usize| sent[i].header().path().unwrap().to_string();
+                return Part {
+                    markers: [path(ready), path(played)],
+                    sent: sent[ready + 1..played].to_vec(),
+                };
+            }
             assert!(
                 Instant::now() < deadline,
                 "the lock screen never played its part"
             );
-            std::thread::sleep(Duration::from_millis(20));
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 
-    /// Everything the lock screen sent until now. The bus keeps its messages in order: once the monitor has its answer
-    /// to a call made now, it has everything sent before.
+    /// Everything the lock screen sent until now.
     fn sent(&self) -> Vec<Message> {
-        let answered = || {
-            self.sent
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|m| m.header().reply_serial().is_some())
-                .count()
-        };
-        let before = answered();
-        let _: zbus::Result<u32> = accessible(&self.conn, &self.peer, ROOT).call("GetRole", &());
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while answered() == before {
-            assert!(
-                Instant::now() < deadline,
-                "the monitor never saw the answer"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
         self.sent.lock().unwrap().clone()
     }
 
@@ -239,10 +307,10 @@ impl Locked {
 }
 
 #[test]
-fn typing_a_password_sends_assistive_technology_neither_keys_nor_the_password() {
-    const NAME: &str = "typing_a_password_sends_assistive_technology_neither_keys_nor_the_password";
-    if let Some(done) = std::env::var_os(LOCK_SCREEN) {
-        return lock_screen(done.into(), |screen, send| {
+fn typing_a_password_sends_assistive_technology_nothing() {
+    const NAME: &str = "typing_a_password_sends_assistive_technology_nothing";
+    if std::env::var_os(LOCK_SCREEN).is_some() {
+        return lock_screen(|screen, send| {
             for c in SECRET.chars() {
                 screen.press(1.0, Key::Char(c));
                 send(screen);
@@ -283,7 +351,7 @@ fn typing_a_password_sends_assistive_technology_neither_keys_nor_the_password() 
         .unwrap();
     assert_eq!(name, "Password");
 
-    locked.play();
+    let part = locked.play();
     let text = Proxy::new(
         &locked.conn,
         locked.peer.clone(),
@@ -299,11 +367,21 @@ fn typing_a_password_sends_assistive_technology_neither_keys_nor_the_password() 
     let sent = locked.sent();
     locked.finish();
 
-    let holds = |text: &[u8]| {
-        sent.iter().any(|m| {
-            let body = m.data();
-            body.windows(text.len()).any(|w| w == text)
+    let typed: Vec<_> = part
+        .signals()
+        .iter()
+        .map(|m| {
+            let header = m.header();
+            (
+                header.interface().map(|i| i.to_string()),
+                header.member().map(|m| m.to_string()),
+            )
         })
+        .collect();
+    assert!(typed.is_empty(), "typing sent signals: {typed:?}");
+    let holds = |text: &[u8]| {
+        sent.iter()
+            .any(|m| m.data().windows(text.len()).any(|w| w == text))
     };
     assert!(
         holds(b"Password"),
@@ -336,8 +414,8 @@ fn typing_a_password_sends_assistive_technology_neither_keys_nor_the_password() 
 fn every_answer_to_an_attempt_is_announced_once_and_assertively() {
     const NAME: &str = "every_answer_to_an_attempt_is_announced_once_and_assertively";
     const LOCKED_OUT: &str = "The account is locked.";
-    if let Some(done) = std::env::var_os(LOCK_SCREEN) {
-        return lock_screen(done.into(), |screen, send| {
+    if std::env::var_os(LOCK_SCREEN).is_some() {
+        return lock_screen(|screen, send| {
             let outcomes = [
                 AuthOutcome::Denied,
                 AuthOutcome::Denied,
@@ -358,25 +436,10 @@ fn every_answer_to_an_attempt_is_announced_once_and_assertively() {
     let Some(mut locked) = Locked::start(NAME) else {
         return;
     };
-    locked.play();
-    let sent = locked.sent();
+    let part = locked.play();
     locked.finish();
 
-    type Event = (String, i32, i32, OwnedValue, HashMap<String, OwnedValue>);
-    let announced: Vec<(String, i32)> = sent
-        .iter()
-        .filter(|m| {
-            let header = m.header();
-            header
-                .interface()
-                .is_some_and(|i| i == "org.a11y.atspi.Event.Object")
-                && header.member().is_some_and(|m| m == "Announcement")
-        })
-        .map(|m| {
-            let (_, politeness, _, said, _): Event = m.body().deserialize().unwrap();
-            (String::try_from(said).unwrap(), politeness)
-        })
-        .collect();
+    let announced: Vec<_> = part.sent.iter().filter_map(announcement).collect();
     assert_eq!(
         announced,
         [

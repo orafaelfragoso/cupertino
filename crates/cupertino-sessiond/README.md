@@ -56,7 +56,7 @@ account has no private directory), no group.
 ## Administrators
 
 An administrator is a member of any of the administrators' groups. They are `admin-groups` of `login.conf` (group names
-separated by commas; empty names nobody) when that file is root-owned and writable by root alone, the same rule as auto
+separated by commas, spaces around them allowed; empty names nobody) when that file is root-owned and writable by root alone, the same rule as auto
 login; otherwise the build's: `CUPERTINO_ADMIN_GROUPS` at compile time (the packaging sets the distribution's, `sudo` for
 Debian and Ubuntu), else `wheel`. An untrusted file's `admin-groups` is logged and the build's groups apply. The bus checks ask
 the account's groups at every call (`getgrouplist`, so a primary group and a directory service's groups count); the login
@@ -69,7 +69,10 @@ One `key = value` per line, `#` starts a comment. Keys (`cupertino-defaults::log
 (`cupertino-greeter`), `greeter-command` and `session-command` (required, absolute program path, split at spaces),
 `hidden-users`, `deny-list`, `allow-list`, `hide-admin-users`, `show-other-users`, `restart-disabled`, `shut-down-disabled`,
 `sleep-disabled`, `power-off-disabled`, `retries-until-hint`, `auto-login` (an account name; off when absent: see "Auto login"),
-`admin-groups` (see "Administrators"). The filter and power keys are the login window preferences of the
+`admin-groups` (see "Administrators"). A bad line is logged and its key takes its safe value (the table in
+`cupertino-defaults::login`: a bad filter lists nobody and offers "Other…", a bad power switch disables the item, a bad
+`admin-groups` names no administrator, a bad `auto-login` is off); only a missing or bad greeter or session command, or a
+missing file, keeps the manager from starting. The filter and power keys are the login window preferences of the
 reference; they were options of `cupertino-login --greeter`.
 
 ## What the manager does
@@ -135,6 +138,13 @@ inside a user's session is refused: it has no use for the manager), and for `Req
 | `SessionReady | a user session, active or not | the session's agent is up: the manager registers the caller's unique name as the session's agent and ends the ready gate. A session the manager did not start (a getty's) gets `UnknownSession`; a repeated call (the agent restarted) registers the new caller |
 | `SetSystemAccessibility(a{ss})` | an administrator at the console, through the installed settings application | writes the machine's accessibility defaults, `/etc/cupertino/accessibility.conf` (`system_accessibility.rs`); see below |
 | `CanSetSystemAccessibility → b` | — | whether the caller would pass the same checks now: a hint for the settings application, a method because the answer depends on the caller; the setter checks again |
+
+The program check is defence in depth, not the boundary: a program of the same user can still start the real
+`cupertino-settings` with `LD_PRELOAD` or trace its own child (as Yama's `ptrace_scope` allows), and a root-owned
+interpreter hard-linked into a user-writable prefix would pass where `fs.protected_hardlinks` is off. The boundary is an
+administrator at the console in the active session, and what it guards is bounded to `SYSTEM_KEYS`. A Settings window that
+was open while a package upgrade replaced the program runs a deleted file (`/proc/<pid>/exe` ends in ` (deleted)`), so its
+writes are refused until it is opened again.
 
 **The machine's accessibility defaults.** The first write from a user to a file of root's, so its checks are stricter than the
 other methods':

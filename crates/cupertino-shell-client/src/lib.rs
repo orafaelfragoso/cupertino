@@ -12,6 +12,7 @@ mod error;
 mod menu_bar;
 mod roles;
 mod session;
+pub mod test_clock;
 
 pub use dock::{
     AppCommand, Corner, Dock, DockChange, DockUpdate, DockWindow, Gesture, OverviewMode,

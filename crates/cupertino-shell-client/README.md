@@ -17,6 +17,7 @@ GPL-3.0-or-later. Depends on `cupertino-wayland-client`, `cupertino-protocol-app
 | `Dock`, `DockUpdate`, `DockChange`, `DockWindow`, `OverviewMode`, `OverviewWindow`, `OverviewWorkspace`, `Corner`, `Gesture`, `AppCommand` | the dock role, with `done`-grouped updates; the switcher's output arrives as the transport's `OutputId` |
 | `ShellEvent` | what the objects receive, inside the transport's `Event::Extension` and in order with its events: configures of layer and lock surfaces (acknowledged by the transport), `Closed`, `Lock`, `Idle`, `SessionLock`, `LockRequested`, `LogOutRequested`, `MenuBar`, `Dock`. The session's appearance and display options arrive as `cupertino_protocol_app::AppEvent` |
 | `Error` | `Transport`, `UnknownOutput`, `InvalidShape`, `Unsized` |
+| `test_clock` | `display_unix_seconds`, `display_now`: the clock a shell process draws with (the login screens' time, the dock's trash check, the launcher's caret). In a debug build `CUPERTINO_TEST_CLOCK=<decimal Unix seconds>` fixes the wall clock and freezes the monotonic one at the first reading, so the goldens settle; a release build (no `debug_assertions`) has neither the override nor the variable's name, which the release install test checks. Never for authentication, back-off, locks or IPC deadlines |
 
 ## Tests
 

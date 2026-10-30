@@ -1542,3 +1542,78 @@ fn a_roving_move_to_a_key_focuses_the_item_the_new_view_builds() {
     assert!(end.is_some());
     assert_eq!(rt.snapshot(window).unwrap().focus, end);
 }
+
+/// An outer pane around an inner pane that holds nothing focusable.
+struct NestedPanes;
+
+impl Application for NestedPanes {
+    type Model = ();
+    type Message = String;
+
+    fn init() -> ((), Vec<Command<String>>) {
+        ((), Vec::new())
+    }
+
+    fn update(_: &mut (), _: String) -> Vec<Command<String>> {
+        Vec::new()
+    }
+
+    fn view(_: &()) -> Vec<Window<String>> {
+        let inner = Element::new(Pane {
+            name: "inner",
+            height: SizeSpec::Fixed(40.0),
+            offset: 0.0,
+            content: Some(block(100.0, false)),
+        })
+        .key("inner");
+        vec![Window {
+            key: WindowKey("main".into()),
+            spec: WindowSpec {
+                title: "Nested".into(),
+                app_id: "test.nested".into(),
+                size: Size::new(200.0, 100.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Preferred,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            background: WindowBackground::Theme,
+            content: Element::new(Pane {
+                name: "outer",
+                height: SizeSpec::Fill,
+                offset: 0.0,
+                content: Some(column(vec![inner, block(200.0, false)])),
+            })
+            .key("outer"),
+        }]
+    }
+}
+
+#[test]
+fn an_inner_pane_that_became_a_tab_stop_keeps_the_outer_pane_from_being_one() {
+    let damage = Rc::default();
+    let mut rt = Runtime::<NestedPanes, FakeSystem>::new(FakeSystem::default(), options(&damage));
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+    let inner = rt.find(window, &"inner".into());
+    for _ in 0..2 {
+        rt.window_system_mut().send(
+            window,
+            WindowEvent::Key(
+                KeyEvent {
+                    code: 0,
+                    keysym: Keysym(0xff09),
+                    text: None,
+                    pressed: true,
+                    repeat: false,
+                    mods: Mods::NONE,
+                },
+                Timestamp(0),
+            ),
+        );
+        rt.step(steps()).unwrap();
+        assert_eq!(rt.snapshot(window).unwrap().focus, inner);
+    }
+}

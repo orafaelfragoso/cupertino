@@ -21,7 +21,7 @@ use crate::{
     Propagation, StepStatus, UiError, Window, WindowBackground, WindowKey,
 };
 use cupertino_geometry::{Point, Size};
-use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutOptions};
+use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutOptions, LayoutStats};
 use cupertino_ui_platform::{
     ClipboardData, ClipboardKind, ConfigureId, KeyEvent, Keysym, PlatformError, PlatformEvent,
     PresentOutcome, SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest,
@@ -134,6 +134,7 @@ struct WindowState<M> {
     scroll_heard: HashMap<NodeId, (Size, Size)>,
     /// Frames held back in a row, so the model could take a scroll geometry first.
     held_paints: u8,
+    layout: LayoutStats,
     painter: Painter,
     damage: DamageTracker,
     display_list: DisplayList,
@@ -487,6 +488,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             reveal: None,
             scroll_heard: HashMap::new(),
             held_paints: 0,
+            layout: LayoutStats::default(),
             painter: Painter::default(),
             damage: DamageTracker::default(),
             display_list: DisplayList::default(),
@@ -896,6 +898,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 },
             )
             .map_err(UiError::Layout)?;
+            w.layout = result.stats;
             w.geometry = placements(&self.tree, root, &result, w.env.direction);
 
             let semantics = build(&self.tree, root, &w.geometry, w.focus.node());
@@ -1122,6 +1125,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 .collect(),
             display_list: w.display_list.clone(),
             pending: self.pending(),
+            layout: w.layout,
         })
     }
 

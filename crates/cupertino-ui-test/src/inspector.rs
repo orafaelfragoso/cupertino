@@ -209,6 +209,7 @@ mod tests {
                 animating: true,
                 next_wake: Some(Timestamp(500)),
             },
+            layout: Default::default(),
         }
     }
 

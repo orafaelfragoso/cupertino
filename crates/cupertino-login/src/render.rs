@@ -83,7 +83,7 @@ const SELECTION_RADIUS: f64 = 20.0;
 const SELECTION_FILL: Rgba = [1.0, 1.0, 1.0, 0.2];
 /// The password help line (approximate: the design opens its own help view, whose text is not in the register; this
 /// system has no hint to show, so the line points to whoever can reset the password).
-const PASSWORD_HELP: &str = "Forgot your password? Ask an administrator to reset it.";
+pub const PASSWORD_HELP: &str = "Forgot your password? Ask an administrator to reset it.";
 /// Dots standing for typed characters (approximate).
 const DOT_DIAMETER: f64 = 6.0;
 const DOT_PITCH: f64 = 11.0;

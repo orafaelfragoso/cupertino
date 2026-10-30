@@ -7,6 +7,7 @@
 use crate::options::SessionOptions;
 use crate::screen::{self, FrameKey, Notifier, OutputSurface, Result, Scene};
 use cupertino_assets::Assets;
+use cupertino_login::access::{lock_tree, panel_click, panel_tree, LockView};
 use cupertino_login::auth::{self, Authenticator};
 use cupertino_login::autostart;
 use cupertino_login::capabilities::{Answer, Capabilities, Inputs};
@@ -23,7 +24,7 @@ use cupertino_login::model::{
 use cupertino_login::panel::{Action, Decision, Frames, Kind, Panel};
 use cupertino_login::power_button::{Effect, PowerButton};
 use cupertino_login::probe;
-use cupertino_login::render::{PanelView, Renderer};
+use cupertino_login::render::{PanelView, Renderer, PASSWORD_HELP};
 use cupertino_login::user::User;
 use cupertino_login::{session, upower};
 use cupertino_shell_client::{
@@ -32,12 +33,17 @@ use cupertino_shell_client::{
     SessionState, Shell, ShellEvent,
 };
 use cupertino_theme::Theme;
+use cupertino_ui_atspi::AtspiAdapter;
+use cupertino_ui_core::AccessibilityAdapter;
+use cupertino_ui_platform::WindowId;
 use cupertino_ui_wayland::{Ready, ShmPresenter};
 use cupertino_wayland_client::{
     Button, Connection, Event, KeyboardEvent, Modifiers, PointerEvent, SurfaceId,
 };
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
+use std::task::{Wake, Waker};
 use std::time::{Duration, Instant};
 
 /// What the bus and authentication threads tell the loop.
@@ -109,6 +115,8 @@ struct InterruptState {
 }
 
 /// Namespace of the panel's layer surface for the server.
+/// The window assistive technology knows the confirmation panel as; outputs' registry names never reach it.
+const PANEL_WINDOW: WindowId = WindowId(u32::MAX);
 const PANEL_NAMESPACE: &str = "login-panel";
 
 struct App {
@@ -155,6 +163,10 @@ struct App {
     low_battery: LowBattery,
     /// The session bus, for the notifications and the server's `org.cupertino.Session1`.
     session_bus: zbus::blocking::Connection,
+    /// Assistive technology's view of the lock screen.
+    access: AtspiAdapter,
+    /// An assistive technology was listening at the last housekeeping.
+    access_active: bool,
 }
 
 /// Why [`run`] returned without a failure.
@@ -178,6 +190,7 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     let idle_notifier = IdleNotifier::bind(&mut conn);
     let (sender, messages) = mpsc::channel();
     let notifier = Notifier::new(sender, conn.waker());
+    let access = AtspiAdapter::new(Waker::from(Arc::new(WakeLoop(conn.waker()))));
 
     let request_notifier = notifier.clone();
     // `RefreshCapabilities` goes to the probe thread, not through the loop: the menu's question must not wait for it
@@ -314,6 +327,8 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
         retries_until_hint: options.retries_until_hint,
         low_battery: LowBattery::new(),
         session_bus,
+        access,
+        access_active: false,
     };
     for event in early {
         app.handle(event)?;
@@ -326,6 +341,27 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
             app.handle(event)?;
         }
         app.housekeeping()?;
+    }
+}
+
+/// The windows assistive technology knows the lock surfaces as: each by its output.
+fn lock_windows(surfaces: &[OutputSurface]) -> Vec<WindowId> {
+    surfaces
+        .iter()
+        .map(|s| WindowId(s.output.registry_name()))
+        .collect()
+}
+
+/// Wakes the login loop from assistive technology's thread.
+struct WakeLoop(cupertino_wayland_client::Waker);
+
+impl Wake for WakeLoop {
+    fn wake(self: Arc<Self>) {
+        self.0.wake();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.wake();
     }
 }
 
@@ -511,6 +547,7 @@ impl App {
             ShellEvent::Configure { surface, size } => self.configured(surface, size)?,
             ShellEvent::Closed(surface) if self.panel_surface() == Some(surface) => {
                 self.panel = None;
+                self.access.window_closed(PANEL_WINDOW);
                 eprintln!("cupertino-login: panel cancelled");
             }
             ShellEvent::Closed(surface) if self.interrupt_surface() == Some(surface) => {
@@ -703,6 +740,7 @@ impl App {
     /// Carry out the queued requests, follow the lock and the screen's timers, and redraw what changed.
     fn housekeeping(&mut self) -> Result<()> {
         let now = self.now();
+        self.follow_access()?;
         while let Ok(message) = self.messages.try_recv() {
             match message {
                 Message::Lock { explicit } => self.request_lock(now, explicit)?,
@@ -911,9 +949,15 @@ impl App {
             return Ok(());
         };
         let session_lock = &lock.session_lock;
+        let before = lock_windows(&lock.surfaces);
         screen::arrange_surfaces(&mut self.conn, &mut lock.surfaces, |conn, output| {
             Ok((session_lock.lock_surface(conn, output)?, None))
-        })
+        })?;
+        let after = lock_windows(&lock.surfaces);
+        for gone in before.into_iter().filter(|w| !after.contains(w)) {
+            self.access.window_closed(gone);
+        }
+        Ok(())
     }
 
     fn draw(&mut self, surface: SurfaceId) -> Result<()> {
@@ -935,6 +979,11 @@ impl App {
                     renderer.render_panel(&view, pixmap, scale.factor() as f32)
                 })?;
             panel.drawn = Some(view.seconds_left);
+            if self.access.is_active() {
+                let tree = panel_tree(PANEL_WINDOW, view.kind, &view.frames, view.seconds_left);
+                self.access.window_focus(PANEL_WINDOW, true);
+                self.access.update(&tree);
+            }
             return Ok(());
         }
         if let Some(shown) = self
@@ -966,6 +1015,7 @@ impl App {
                 .help_shown(&self.user.login, self.retries_until_hint),
             power: None,
         };
+        let scene_help = scene.help;
         let key = FrameKey::new(&scene, now)?;
         screen::draw(
             &mut self.conn,
@@ -975,8 +1025,73 @@ impl App {
             Some(&self.user),
             None,
         )?;
-        lock.drawn = Some(key);
+        self.publish_lock(i, &key, scene_help);
+        if let Some(lock) = self.lock.as_mut() {
+            lock.drawn = Some(key);
+        }
         Ok(())
+    }
+
+    /// Draw the lock screen and the panel again when assistive technology starts listening, so it gets them whole, and
+    /// do what it asks: a click on a panel's button decides as a click there does; focus on the lock screen's already
+    /// focused field needs nothing done.
+    fn follow_access(&mut self) -> Result<()> {
+        let active = self.access.is_active();
+        if active && !self.access_active {
+            if let Some(lock) = self.lock.as_mut() {
+                lock.drawn = None;
+            }
+            if let Some(panel) = self.panel.as_mut() {
+                panel.drawn = None;
+            }
+        }
+        self.access_active = active;
+        let mut requests = Vec::new();
+        self.access.drain_actions(&mut requests);
+        for request in requests {
+            let decision = self
+                .panel
+                .as_ref()
+                .filter(|_| request.action == cupertino_ui_core::Action::Click)
+                .and_then(|panel| panel_click(&panel.frames, request.target));
+            if let Some(decision) = decision {
+                self.decide(decision)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Tell assistive technology what lock surface `i` shows now, while one listens.
+    fn publish_lock(&mut self, i: usize, key: &FrameKey, help: bool) {
+        let Some(lock) = &self.lock else {
+            return;
+        };
+        if !self.access.is_active() {
+            return;
+        }
+        let surface = &lock.surfaces[i];
+        let Some((width, height)) = surface.presenter.size() else {
+            return;
+        };
+        let (width, height) = (f64::from(width), f64::from(height));
+        let layout = self.renderer.layout(width, height);
+        let window = lock_windows(std::slice::from_ref(surface))[0];
+        let tree = lock_tree(
+            window,
+            &LockView {
+                screen: &lock.screen,
+                layout: &layout,
+                size: (width, height),
+                user_name: &self.user.display,
+                time: &key.time,
+                date: None,
+                caps_lock: key.caps_lock,
+                help: help.then_some(PASSWORD_HELP),
+                power: false,
+            },
+        );
+        self.access.window_focus(window, i == 0);
+        self.access.update(&tree);
     }
 
     /// End the lock after an accepted attempt and hold sleep back again.
@@ -988,6 +1103,9 @@ impl App {
         // the lock surfaces are destroyed before the lock
         for s in &lock.surfaces {
             self.conn.destroy(s.surface())?;
+        }
+        for window in lock_windows(&lock.surfaces) {
+            self.access.window_closed(window);
         }
         lock.session_lock.unlock();
         self.conn.roundtrip()?;
@@ -1047,6 +1165,7 @@ impl App {
             .take()
             .expect("a decision is only made on an open panel");
         self.conn.destroy(layer.surface())?;
+        self.access.window_closed(PANEL_WINDOW);
         match decision {
             Decision::Cancel => eprintln!("cupertino-login: panel cancelled"),
             Decision::Do(action) => {

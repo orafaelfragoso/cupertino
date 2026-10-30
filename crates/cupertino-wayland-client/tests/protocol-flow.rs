@@ -134,6 +134,8 @@ enum Control {
     },
     /// The pointer leaves the toplevel.
     Leave,
+    /// The left button, pressed by `Click`, goes up.
+    ButtonUp,
     /// The seat loses its pointer and keeps its keyboard.
     DropPointer,
     TypeKey(u32),
@@ -1355,6 +1357,12 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
             pointer.button(serial + 1, 4242, BTN_LEFT, wl_pointer::ButtonState::Pressed);
             pointer.frame();
         }
+        Control::ButtonUp => {
+            let serial = mock.serial();
+            let pointer = mock.pointer.as_ref().unwrap();
+            pointer.button(serial, 4300, BTN_LEFT, wl_pointer::ButtonState::Released);
+            pointer.frame();
+        }
         Control::Leave => {
             let (serial, surface) = (mock.serial(), mock.surface().clone());
             let pointer = mock.pointer.as_ref().unwrap();
@@ -2324,7 +2332,8 @@ fn a_drop_is_read_only_once_accepted_in_its_type_and_dropped_then_finished() {
     assert_eq!(
         next_drag(&mut conn, &mut stash),
         DragEvent::Motion {
-            point: Point::new(6.0, 7.5)
+            point: Point::new(6.0, 7.5),
+            time: 5000
         }
     );
     assert!(matches!(
@@ -2459,6 +2468,19 @@ fn a_drag_from_this_client_answers_the_button_and_serves_its_data() {
         .then_some(())
     });
     let button = conn.input_serial().unwrap();
+    // a key while the button is held, as for a modifier choosing copy or move: the drag still answers the press
+    control.send(Control::TypeKey(KEY_A)).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(
+            e,
+            Event::Keyboard {
+                event: KeyboardEvent::Key { .. },
+                ..
+            }
+        )
+        .then_some(())
+    });
+    assert_ne!(conn.input_serial(), Some(button));
     let source = conn
         .start_drag(
             w.surface(),
@@ -2501,6 +2523,24 @@ fn a_drag_from_this_client_answers_the_button_and_serves_its_data() {
     let cancelled = conn
         .start_drag(w.surface(), contents(), DragActions::Copy)
         .unwrap();
+    control.send(Control::ButtonUp).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(
+            e,
+            Event::Pointer {
+                event: PointerEvent::Button { pressed: false, .. },
+                ..
+            }
+        )
+        .then_some(())
+    });
+    assert!(
+        matches!(
+            conn.start_drag(w.surface(), contents(), DragActions::Copy),
+            Err(Error::PermissionDenied(_))
+        ),
+        "no button held"
+    );
     assert_ne!(cancelled, source);
     seen_matching(&seen, |s| matches!(s, Seen::StartDrag { .. }));
     control.send(Control::SourceCancelled).unwrap();

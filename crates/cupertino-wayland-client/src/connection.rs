@@ -384,6 +384,9 @@ pub struct State {
     pointer: Option<WlPointer>,
     cursor_device: Option<WpCursorShapeDeviceV1>,
     pointer_enter_serial: Option<u32>,
+    /// The buttons held down, and the serial of the latest press among them: the implicit grab a drag starts from.
+    held_buttons: Vec<u32>,
+    press_serial: Option<u32>,
     keyboard: Option<WlKeyboard>,
     outputs: Vec<Output>,
     surfaces: Vec<Surface>,
@@ -497,6 +500,8 @@ impl Connection {
             pointer: None,
             cursor_device: None,
             pointer_enter_serial: None,
+            held_buttons: Vec::new(),
+            press_serial: None,
             keyboard: None,
             outputs: Vec::new(),
             surfaces: Vec::new(),
@@ -1047,8 +1052,10 @@ impl Connection {
         self.state.clipboard.receive_async(&self.conn, offer, mime)
     }
 
-    /// Start dragging `contents`, offered in each of their MIME types, from `origin` with the pointer button held, the
-    /// target allowed the `actions`; [`Event::DragSource`] tells how it goes. A drag started before replaces the last.
+    /// Start dragging `contents`, offered in each of their MIME types, from `origin` while a pointer button is held,
+    /// the target allowed the `actions`; [`Event::DragSource`] tells how it goes. The drag answers that button's
+    /// press, whatever keys were pressed since; with no button held it is refused. A drag started before replaces the
+    /// last.
     pub fn start_drag(
         &mut self,
         origin: SurfaceId,
@@ -1058,8 +1065,8 @@ impl Connection {
         self.state.capabilities.require(Capability::Clipboard)?;
         let serial = self
             .state
-            .last_serial
-            .ok_or(Error::PermissionDenied("a drag without a button press"))?;
+            .press_serial
+            .ok_or(Error::PermissionDenied("a drag without a button held"))?;
         let qh = self.queue.handle();
         let origin = self.state.surface(origin)?.wl.clone();
         let manager = self
@@ -2228,6 +2235,8 @@ impl Dispatch<WlSeat, ()> for State {
             state.pointer = Some(pointer);
         } else if let Some(pointer) = state.pointer.take_if(|_| !has_pointer) {
             state.themed_cursor.stop();
+            state.held_buttons.clear();
+            state.press_serial = None;
             if let Some(device) = state.cursor_device.take() {
                 device.destroy();
             }
@@ -2296,6 +2305,8 @@ impl Dispatch<WlPointer, ()> for State {
             }
             wl_pointer::Event::Leave { .. } => {
                 state.themed_cursor.stop();
+                state.held_buttons.clear();
+                state.press_serial = None;
                 state.pointer_tracker.leave()
             }
             wl_pointer::Event::Motion {
@@ -2316,9 +2327,17 @@ impl Dispatch<WlPointer, ()> for State {
             } => {
                 state.note_time(time);
                 state.last_serial = Some(serial);
-                state
-                    .pointer_tracker
-                    .button(button, button_state == ButtonState::Pressed)
+                let pressed = button_state == ButtonState::Pressed;
+                if pressed {
+                    state.held_buttons.push(button);
+                    state.press_serial = Some(serial);
+                } else {
+                    state.held_buttons.retain(|b| *b != button);
+                    if state.held_buttons.is_empty() {
+                        state.press_serial = None;
+                    }
+                }
+                state.pointer_tracker.button(button, pressed)
             }
             wl_pointer::Event::Axis {
                 time,

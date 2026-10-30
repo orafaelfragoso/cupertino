@@ -717,6 +717,52 @@ fn the_output_is_captured_at_its_mode_size_with_full_damage_and_the_cursor_only_
 }
 
 #[test]
+fn a_quarter_turned_output_is_captured_upright_as_it_is_shown() {
+    let Some(mut h) = Harness::new() else { return };
+    let id = h.state.outputs[0].id;
+    h.state.configure_output(
+        id,
+        smithay::output::Mode {
+            size: OUTPUT.into(),
+            refresh: 60_000,
+        },
+        1.0,
+        smithay::utils::Transform::_90,
+        (0, 0),
+    );
+    let (_app, frame) = mapped_app(&mut h);
+    let mut c = TestClient::privileged(&mut h);
+    let source = c.output_source();
+    let capture = c.session(&mut h, &source, false);
+    assert_eq!(
+        capture.size,
+        (OUTPUT.1, OUTPUT.0),
+        "the buffer is the output as shown, its mode on its side"
+    );
+    let _frame = c.request_frame(&capture);
+    h.pump_until(&mut c, "the frame of the turned output", |s| {
+        s.frame.ready || s.frame.failed.is_some()
+    });
+    assert!(c.state.frame.ready, "failed: {:?}", c.state.frame.failed);
+    assert_eq!(
+        c.state.frame.transform,
+        Some(wl_output::Transform::Normal),
+        "the buffer is upright"
+    );
+    let x = (frame.x + frame.w / 2.0) as i32;
+    assert_eq!(
+        capture.pixel(x, (frame.y + frame.h * 0.25) as i32),
+        RED,
+        "the window's upper half, where it is shown"
+    );
+    assert_eq!(
+        capture.pixel(x, (frame.y + frame.h * 0.75) as i32),
+        BLUE,
+        "the window's lower half"
+    );
+}
+
+#[test]
 fn a_second_frame_waits_for_a_change_and_reports_only_the_changed_area() {
     let Some(mut h) = Harness::new() else { return };
     let (mut app, frame) = mapped_app(&mut h);

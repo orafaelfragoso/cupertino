@@ -112,10 +112,13 @@ impl Cupertino {
             Source::Output(weak) => {
                 let output = weak.as_ref()?.upgrade()?;
                 let idx = self.outputs.iter().position(|o| o.output == output)?;
-                let mode = output.current_mode()?;
+                // the output as it is shown: a quarter-turned output has its mode on its side
+                let size = output
+                    .current_transform()
+                    .transform_size(output.current_mode()?.size);
                 Some(Placement {
                     output: idx,
-                    size: (mode.size.w, mode.size.h),
+                    size: (size.w, size.h),
                     window: None,
                 })
             }

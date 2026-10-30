@@ -27,8 +27,14 @@ use wayland_client::{
 use crate::connection::State;
 use crate::{Error, Event, SurfaceId};
 
-/// How long a read waits for the offering client.
+/// How long a blocking read waits for the offering client, and how long a read of [`Clipboard::receive_async`] waits for
+/// its next bytes.
 const READ_TIMEOUT: Duration = Duration::from_secs(1);
+/// The longest a read of [`Clipboard::receive_async`] takes, however steadily its bytes come.
+const READ_CAP: Duration = Duration::from_secs(10);
+/// The most MIME types kept of one offer, and the longest; the rest are dropped.
+const MAX_OFFER_TYPES: usize = 64;
+const MAX_MIME_LEN: usize = 255;
 /// The most reads of [`Clipboard::receive_async`] running at once.
 const MAX_READS: usize = 8;
 /// The most a read takes; a longer selection is cut there.
@@ -69,7 +75,15 @@ struct PendingRead {
     source: Source,
     reader: PipeReader,
     bytes: Vec<u8>,
-    deadline: Instant,
+    /// When the read gives up without new bytes; each byte read moves it on, up to `cap`.
+    idle: Instant,
+    cap: Instant,
+}
+
+impl PendingRead {
+    fn deadline(&self) -> Instant {
+        self.idle.min(self.cap)
+    }
 }
 
 /// The types an offer announced, and for a drag the actions its source allows.
@@ -216,8 +230,8 @@ impl Clipboard {
     }
 
     /// Start reading the selection in `mime`, like [`Clipboard::receive`] without waiting: the data arrives as
-    /// [`Event::Received`] from [`Clipboard::pump`], `None` when the offer was replaced, the reader did not finish within
-    /// [`READ_TIMEOUT`] or the pipe failed. At most [`MAX_READS`] run at once.
+    /// [`Event::Received`] from [`Clipboard::pump`], `None` when the offer was replaced, the reader sent nothing for
+    /// [`READ_TIMEOUT`] or did not finish within [`READ_CAP`], or the pipe failed. At most [`MAX_READS`] run at once.
     pub(crate) fn receive_async(
         &mut self,
         conn: &Connection,
@@ -262,12 +276,14 @@ impl Clipboard {
         offer.receive(mime.to_string(), writer.as_fd());
         drop(writer);
         conn.flush()?;
+        let now = Instant::now();
         self.reads.push(PendingRead {
             id,
             source,
             reader,
             bytes: Vec::new(),
-            deadline: Instant::now() + READ_TIMEOUT,
+            idle: now + READ_TIMEOUT,
+            cap: now + READ_CAP,
         });
         Ok(())
     }
@@ -409,8 +425,13 @@ impl Clipboard {
                 Source::Drop(id) => Some(id) == drop,
             };
             let data = if alive {
-                match drain(read) {
-                    Drained::Open if now < read.deadline => return true,
+                let before = read.bytes.len();
+                let drained = drain(read);
+                if read.bytes.len() > before {
+                    read.idle = now + READ_TIMEOUT;
+                }
+                match drained {
+                    Drained::Open if now < read.deadline() => return true,
                     Drained::Open | Drained::Failed => None,
                     Drained::Done => Some(std::mem::take(&mut read.bytes)),
                 }
@@ -429,7 +450,7 @@ impl Clipboard {
 
     /// When the first running read gives up.
     pub(crate) fn read_deadline(&self) -> Option<Instant> {
-        self.reads.iter().map(|r| r.deadline).min()
+        self.reads.iter().map(PendingRead::deadline).min()
     }
 
     /// The selection in `mime`: this client's own directly, another client's read through a pipe. The caller waits up to
@@ -708,7 +729,11 @@ impl Dispatch<WlDataOffer, OfferTypes> for State {
     ) {
         match event {
             wl_data_offer::Event::Offer { mime_type } => {
-                types.types.lock().expect("offer types").push(mime_type);
+                let mut offered = types.types.lock().expect("offer types");
+                // another client chooses how many types it offers and how long they are
+                if offered.len() < MAX_OFFER_TYPES && mime_type.len() <= MAX_MIME_LEN {
+                    offered.push(mime_type);
+                }
             }
             wl_data_offer::Event::SourceActions {
                 source_actions: wayland_client::WEnum::Value(actions),

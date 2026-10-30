@@ -1045,8 +1045,8 @@ impl Connection {
     }
 
     /// Start reading the selection `offer` in `mime` while [`Connection::wait`] goes on; the data arrives as
-    /// [`Event::Received`] with the returned id, at most 16 MiB, or `None` when the offer was replaced or its client took
-    /// longer than a second. At most eight reads run at once.
+    /// [`Event::Received`] with the returned id, at most 16 MiB, or `None` when the offer was replaced, its client sent
+    /// nothing for a second, or the read took longer than ten seconds. At most eight reads run at once.
     pub fn receive_async(&mut self, offer: &ClipboardOffer, mime: &str) -> Result<ReadId, Error> {
         self.state.capabilities.require(Capability::Clipboard)?;
         self.state.clipboard.receive_async(&self.conn, offer, mime)

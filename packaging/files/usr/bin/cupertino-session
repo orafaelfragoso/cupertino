@@ -93,7 +93,16 @@ seconds=$(($(date +%s) - started))
 # The session target and the variables the compositor put on a shared user bus (activation_env.rs) end with it.
 if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet cupertino-session.target 2>/dev/null; then
     systemctl --user stop cupertino-session.target 2>/dev/null || true
-    systemctl --user unset-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE DISPLAY XAUTHORITY 2>/dev/null || true
+    # the defaults the compositor set because the manager had no value of the user's own (activation_env.rs DEFAULTS_RECORD)
+    defaults=
+    if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -f "$XDG_RUNTIME_DIR/cupertino-session-defaults" ]; then
+        while IFS= read -r name; do
+            case "$name" in '' | *[!A-Z0-9_]*) ;; *) defaults="$defaults $name" ;; esac
+        done <"$XDG_RUNTIME_DIR/cupertino-session-defaults"
+        rm -f "$XDG_RUNTIME_DIR/cupertino-session-defaults"
+    fi
+    # shellcheck disable=SC2086 # the names are checked above
+    systemctl --user unset-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE DISPLAY XAUTHORITY$defaults 2>/dev/null || true
     note "stopped cupertino-session.target and removed the session's variables from the user manager"
 fi
 

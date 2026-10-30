@@ -154,6 +154,27 @@ class SessionTest(unittest.TestCase):
         self.assertIn('--user stop cupertino-session.target', calls)
         self.assertIn('--user unset-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE DISPLAY XAUTHORITY', calls)
 
+    def test_the_defaults_the_compositor_set_are_removed_and_nothing_else(self):
+        tools = self.root / 'tools'
+        tools.mkdir()
+        (tools / 'systemctl').write_text(
+            '#!/bin/sh\necho "$@" >>"$OUT/systemctl"\n[ "$2" = is-active ] && exit 0\nexit 0\n'
+        )
+        (tools / 'systemctl').chmod(0o755)
+        runtime = self.root / 'runtime'
+        runtime.mkdir()
+        record = runtime / 'cupertino-session-defaults'
+        record.write_text('QT_QPA_PLATFORM\nELECTRON_OZONE_PLATFORM_HINT\nnot;a name\n')
+        result = self.run_session(PATH=f"{tools}:{os.environ['PATH']}", XDG_RUNTIME_DIR=str(runtime))
+        self.assertEqual(result.returncode, 0)
+        calls = (self.out / 'systemctl').read_text()
+        self.assertIn(
+            '--user unset-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE DISPLAY XAUTHORITY'
+            ' QT_QPA_PLATFORM ELECTRON_OZONE_PLATFORM_HINT\n',
+            calls,
+        )
+        self.assertFalse(record.exists())
+
     def test_an_inactive_session_target_is_left_alone(self):
         tools = self.root / 'tools'
         tools.mkdir()

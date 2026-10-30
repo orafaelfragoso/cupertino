@@ -198,6 +198,7 @@ impl BarFeed {
             window: WindowState {
                 can_minimize: true,
                 can_zoom: true,
+                full_screen: false,
                 workspace: 0,
                 workspaces: 1,
             },
@@ -288,6 +289,7 @@ impl BarFeed {
                     current,
                     self.window.can_minimize,
                     self.window.can_zoom,
+                    self.window.full_screen,
                     &windows,
                     &shared.chords,
                     self.edits,
@@ -729,6 +731,7 @@ mod tests {
             window_state: Some(WindowState {
                 can_minimize: false,
                 can_zoom: false,
+                full_screen: false,
                 workspace: 2,
                 workspaces: 3,
             }),

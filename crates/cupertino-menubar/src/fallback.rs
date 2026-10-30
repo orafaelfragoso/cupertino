@@ -383,11 +383,13 @@ pub fn window_menu(
 
 /// The menus shown for an app without exported menus, after the app menu. `edits`: the server sends the Edit items'
 /// chords to the key window (version 11); without it they are disabled.
+#[allow(clippy::too_many_arguments)]
 pub fn menus(
     workspaces: u32,
     current: Option<u32>,
     can_minimize: bool,
     can_zoom: bool,
+    full_screen: bool,
     windows: &[WindowRow],
     chords: &Chords,
     edits: bool,
@@ -420,9 +422,20 @@ pub fn menus(
         MenuItem::submenu(
             VIEW_MENU.0,
             "View",
-            // stays enabled where zoom is not: it is also how a window its client put in full screen is left, and the
-            // bar does not know whether the window is in full screen; the server refuses entering there
-            vec![chords.item(FallbackAction::ToggleFullscreen, "Enter Full Screen")],
+            // leaving full screen is always offered; entering only where the server would take it (it refuses the
+            // person's full screen where zoom is refused); a server before shell version 16 never says full screen, so
+            // there the item names entering and stays enabled
+            vec![MenuItem {
+                enabled: can_zoom || full_screen,
+                ..chords.item(
+                    FallbackAction::ToggleFullscreen,
+                    if full_screen {
+                        "Exit Full Screen"
+                    } else {
+                        "Enter Full Screen"
+                    },
+                )
+            }],
         ),
         window_menu(workspaces, current, can_minimize, can_zoom, windows, chords),
         MenuItem::submenu(
@@ -512,7 +525,16 @@ mod tests {
 
     #[test]
     fn the_menus_of_an_app_without_its_own() {
-        let ms = menus(1, Some(1), true, true, &[], &Chords::default(), false);
+        let ms = menus(
+            1,
+            Some(1),
+            true,
+            true,
+            false,
+            &[],
+            &Chords::default(),
+            false,
+        );
         assert_eq!(labels(&ms), vec!["File", "Edit", "View", "Window", "Help"]);
         assert_eq!(
             ids(&ms),
@@ -533,7 +555,7 @@ mod tests {
             ms[1].children.iter().all(|i| !i.enabled),
             "Edit is disabled while the server cannot send its chords"
         );
-        let ms = menus(1, Some(1), true, true, &[], &Chords::default(), true);
+        let ms = menus(1, Some(1), true, true, false, &[], &Chords::default(), true);
         assert!(
             ms[1].children.iter().all(|i| i.enabled != i.separator),
             "every Edit item but the separator is enabled once it can"
@@ -544,9 +566,25 @@ mod tests {
     }
 
     #[test]
-    fn full_screen_stays_enabled_where_zoom_is_not_so_a_window_can_always_leave_it() {
-        let ms = menus(1, Some(1), true, false, &[], &Chords::default(), true);
-        assert!(ms[2].children[0].enabled);
+    fn full_screen_is_entered_only_where_zoom_is_and_always_left() {
+        let item = |can_zoom, full_screen| {
+            let ms = menus(
+                1,
+                Some(1),
+                true,
+                can_zoom,
+                full_screen,
+                &[],
+                &Chords::default(),
+                true,
+            );
+            let item = ms[2].children[0].clone();
+            (item.label, item.enabled)
+        };
+        assert_eq!(item(true, false), ("Enter Full Screen".to_string(), true));
+        assert_eq!(item(false, false), ("Enter Full Screen".to_string(), false));
+        assert_eq!(item(false, true), ("Exit Full Screen".to_string(), true));
+        assert_eq!(item(true, true), ("Exit Full Screen".to_string(), true));
     }
 
     #[test]
@@ -657,7 +695,7 @@ mod tests {
         assert_eq!(chord(&app[4]).as_deref(), Some("Super+h"));
         assert_eq!(chord(&app[5]).as_deref(), Some("Alt+Super+h"));
         assert_eq!(chord(&app[8]).as_deref(), Some("Super+q"));
-        let ms = menus(1, Some(1), true, true, &[], &chords, true);
+        let ms = menus(1, Some(1), true, true, false, &[], &chords, true);
         assert_eq!(chord(&ms[0].children[0]).as_deref(), Some("Super+w"));
         assert_eq!(chord(&ms[2].children[0]).as_deref(), Some("Ctrl+Super+f"));
         let window = &ms[3];
@@ -680,7 +718,7 @@ mod tests {
             .iter()
             .filter(|i| i.id.0 != SETTINGS)
             .all(|i| i.shortcut.is_none()));
-        let ms = menus(2, Some(1), true, true, &[], &chords, true);
+        let ms = menus(2, Some(1), true, true, false, &[], &chords, true);
         assert!(ms[0].children[0].shortcut.is_none());
         assert!(ms[2].children[0].shortcut.is_none());
         assert!(ms[3].children.iter().all(|i| i.shortcut.is_none()));
@@ -693,7 +731,7 @@ mod tests {
                 primary,
                 ..Chords::default()
             };
-            let ms = menus(1, Some(1), true, true, &[], &chords, true);
+            let ms = menus(1, Some(1), true, true, false, &[], &chords, true);
             let settings = desktop_menu(&chords).remove(0);
             (
                 chord(&settings).unwrap(),
@@ -820,7 +858,7 @@ mod tests {
             active: true,
             minimized: false,
         }];
-        menus(3, Some(2), true, true, &rows, &super_chords(), true)
+        menus(3, Some(2), true, true, false, &rows, &super_chords(), true)
             .iter()
             .chain(&app_menu("Editor", &super_chords()))
             .for_each(|m| collect(m, &mut every));

@@ -258,6 +258,8 @@ enum BarEvent {
     },
     /// Version 15: the enabled controls of the active window.
     WindowControls(u32),
+    /// Version 16: whether the active window is in full screen.
+    WindowFullScreen(u32),
     Engage,
     EngageHelp,
     ScreenCapture(u32),
@@ -459,6 +461,7 @@ impl Dispatch<CupertinoMenuBarV1, ()> for ClientState {
                 workspaces,
             },
             E::WindowControls { enabled } => BarEvent::WindowControls(raw(enabled)),
+            E::WindowFullScreen { full_screen } => BarEvent::WindowFullScreen(full_screen),
             E::Engage => BarEvent::Engage,
             E::EngageHelp => BarEvent::EngageHelp,
             E::ScreenCapture { active } => BarEvent::ScreenCapture(active),
@@ -1296,6 +1299,38 @@ impl KitAppClient {
 }
 
 // ---- tests ---------------------------------------------------------------------------------
+
+/// The `window_full_screen` of the latest group that has one.
+fn window_full_screen(bar: &BarClient) -> Option<u32> {
+    bar.groups().iter().rev().flatten().find_map(|e| match e {
+        BarEvent::WindowFullScreen(full) => Some(*full),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_version_16_bar_is_told_when_the_active_window_enters_and_leaves_full_screen() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_at(&mut h, 16);
+    let _app = AppClient::spawn(h.socket_path(), "org.example.player");
+    let id = h.mapped_window(1);
+    h.wait_until("the window's group", |_| {
+        window_full_screen(&bar) == Some(0)
+    });
+    h.state.command(Command::Fullscreen {
+        window: id,
+        output: None,
+        requested_by: cupertino_wm::Requester::Client,
+    });
+    h.wait_until("full screen to be sent", |_| {
+        window_full_screen(&bar) == Some(1)
+    });
+    h.state.command(Command::ExitFullscreen { window: id });
+    h.wait_until("leaving it to be sent", |_| {
+        window_full_screen(&bar) == Some(0)
+    });
+    assert_eq!(bar.error(), None);
+}
 
 /// The `window_controls` of the latest group that has one.
 fn window_controls(bar: &BarClient) -> Option<u32> {

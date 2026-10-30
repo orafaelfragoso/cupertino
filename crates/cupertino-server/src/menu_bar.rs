@@ -171,6 +171,8 @@ struct Feed {
     menu: Option<MenuAddress>,
     can_zoom: bool,
     can_minimize: bool,
+    /// The window is in full screen (version 16).
+    full_screen: bool,
     /// 1-based workspace of the window, 0 for none.
     workspace: u32,
     workspaces: u32,
@@ -218,6 +220,9 @@ impl Feed {
             enabled.set(WindowControl::Minimize, self.can_minimize);
             enabled.set(WindowControl::Zoom, self.can_zoom);
             bar.window_controls(enabled);
+        }
+        if bar.version() >= 16 {
+            bar.window_full_screen(u32::from(self.full_screen));
         }
         for w in &self.windows {
             bar.app_window(w.id, w.title.clone(), w.flags);
@@ -955,6 +960,7 @@ impl Cupertino {
                 menu: None,
                 can_zoom: false,
                 can_minimize: false,
+                full_screen: false,
                 workspace: 0,
                 workspaces: 0,
                 windows: Vec::new(),
@@ -985,6 +991,7 @@ impl Cupertino {
             menu: self.menu_bars.address(window.id.0).cloned(),
             can_zoom: window.can_zoom(),
             can_minimize: window.can_minimize(),
+            full_screen: window.state().is_fullscreen(),
             workspace: workspaces
                 .iter()
                 .position(|w| w.id == window.workspace)

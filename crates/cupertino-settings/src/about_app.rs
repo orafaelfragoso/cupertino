@@ -33,7 +33,7 @@ pub fn run(activation_token: String) -> Result<()> {
             }
         }
     };
-    let Some(_instance) = instance::serve_or_show_about(
+    let Some(_instance) = instance::serve_or_hand_over(
         || instance::serve_about(zbus::connection::Builder::session()?, on_show.clone()),
         || instance::show_about(zbus::connection::Builder::session()?, &activation_token),
     )?

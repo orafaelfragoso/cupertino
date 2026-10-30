@@ -226,6 +226,8 @@ pub(crate) struct Group<M> {
     pub(crate) children: Vec<Element<M>>,
     pub(crate) scope: bool,
     pub(crate) row: bool,
+    /// A roving group: its items share one Tab stop.
+    pub(crate) roving: bool,
 }
 
 pub(crate) fn group<M>(children: Vec<Element<M>>) -> Group<M> {
@@ -233,6 +235,7 @@ pub(crate) fn group<M>(children: Vec<Element<M>>) -> Group<M> {
         children,
         scope: false,
         row: false,
+        roving: false,
     }
 }
 
@@ -287,6 +290,9 @@ impl<M: From<String> + 'static> Widget<M> for Group<M> {
     fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        if self.roving {
+            cx.roving_group();
+        }
         if self.scope {
             cx.role(Role::Dialog);
             cx.focus_scope();

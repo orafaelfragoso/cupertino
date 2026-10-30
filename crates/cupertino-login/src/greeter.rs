@@ -314,7 +314,8 @@ impl App {
 
     /// How long the loop may sleep: until the password screen next changes by itself or the clock's minute turns.
     fn timeout(&self) -> Result<Option<Duration>> {
-        let minute = Duration::from_secs(60 - screen::unix_seconds()?.rem_euclid(60) as u64);
+        let minute =
+            Duration::from_secs(60 - screen::display_unix_seconds()?.rem_euclid(60) as u64);
         let by_screen = match &self.stage {
             Stage::Password { screen, .. } => screen.next_wakeup(self.now()),
             Stage::Picking | Stage::Naming(_) => None,

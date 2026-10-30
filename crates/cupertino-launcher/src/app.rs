@@ -594,7 +594,11 @@ impl App {
         let now = self.now();
         let keymap = &mut self.keymap;
         let response = self.panel.edit(&self.launcher, now, |f| {
-            f.key(keymap, input, Instant::now())
+            f.key(
+                keymap,
+                input,
+                cupertino_shell_client::test_clock::display_now(),
+            )
         });
         match response {
             Response::Ignored => return Ok(()),
@@ -618,13 +622,20 @@ impl App {
     fn caret_visible(&self) -> bool {
         self.panel.is_visible()
             && self.panel.focus() == Focus::Field
-            && self.panel.field().caret_visible(Instant::now())
+            && self
+                .panel
+                .field()
+                .caret_visible(cupertino_shell_client::test_clock::display_now())
     }
 
     /// Until the caret's next blink while it can show.
     fn blink_due(&self) -> Option<std::time::Duration> {
         (self.panel.is_visible() && self.panel.focus() == Focus::Field)
-            .then(|| self.panel.field().next_blink(Instant::now()))
+            .then(|| {
+                self.panel
+                    .field()
+                    .next_blink(cupertino_shell_client::test_clock::display_now())
+            })
             .flatten()
     }
 
@@ -944,7 +955,11 @@ impl App {
                 let now = self.now();
                 self.panel.focus_field();
                 self.panel.edit(&self.launcher, now, |f| {
-                    f.press(index, extend, Instant::now())
+                    f.press(
+                        index,
+                        extend,
+                        cupertino_shell_client::test_clock::display_now(),
+                    )
                 });
                 self.presenter.request_redraw();
             }

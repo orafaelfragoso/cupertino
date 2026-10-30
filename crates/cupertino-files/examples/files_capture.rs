@@ -1,10 +1,10 @@
 //! The Files surfaces for look checks: `files/window`, a browser window (920 × 436 at 1×) on a sample home folder,
 //! and `files/sidebar`, the sidebar column of that window.
 //!
-//! `ci/capture.sh files/sidebar --drop-target Desktop --scale 2` (the flags are `cupertino-capture`'s)
+//! `ci/capture.sh files/sidebar --drop-place Desktop --scale 2` (the flags are `cupertino-capture`'s)
 //!
-//! State flags: `--view icon|list` (default icon), `--drop-target NAME` (the sidebar place of that name, else the
-//! item: the drop look of a drag over it) and `--selected NAME` (the item, selected). The home folder `avery` is made
+//! State flags: `--view icon|list` (default icon), `--drop-place NAME` (the sidebar place) or `--drop-item NAME` (the
+//! item), with the drop look of a drag over it, and `--selected NAME` (the item, selected). The home folder `avery` is made
 //! under a temporary directory with the user folders and sample files; the places are those of a session with that
 //! home on a computer named `cupertino`. File types come from the system's MIME database. The sidebar material is
 //! the server's: here a flat fill of the window background stands in for it.
@@ -15,6 +15,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
+use cupertino_assets::Assets;
 use cupertino_capture::{App, Request, State};
 use cupertino_files::browser::Browser;
 use cupertino_files::geom::Size;
@@ -59,6 +60,14 @@ const FILES: [(&str, u64, u64); 10] = [
     ("Website.md", 9_800, 3),
 ];
 
+/// The capture's clock, 2026-01-01 15:00 UTC: the sample files' ages count back from it and the list's relative
+/// dates read from it, in UTC, so a surface is the same pixels on every run.
+const NOW: Duration = Duration::from_secs(1_767_279_600);
+
+fn now() -> SystemTime {
+    SystemTime::UNIX_EPOCH + NOW
+}
+
 /// How long the listing of the sample folder may take.
 const LISTING: Duration = Duration::from_secs(5);
 
@@ -72,11 +81,10 @@ fn home(root: &Path) -> Result<PathBuf, String> {
     for (_, name) in USER_DIRS {
         std::fs::create_dir_all(home.join(name)).map_err(io)?;
     }
-    let now = SystemTime::now();
     for (name, size, days) in FILES {
         let file = std::fs::File::create(home.join(name)).map_err(io)?;
         file.set_len(size).map_err(io)?;
-        file.set_modified(now - Duration::from_secs(days * 86_400 + 3_600))
+        file.set_modified(now() - Duration::from_secs(days * 86_400 + 3_600))
             .map_err(io)?;
     }
     Ok(home)
@@ -92,8 +100,7 @@ struct Capture {
 }
 
 impl Capture {
-    fn new() -> Result<Self, String> {
-        let assets = cupertino_capture::assets()?;
+    fn new(assets: Assets) -> Result<Self, String> {
         let theme = Theme::load().map_err(|e| e.to_string())?;
         let root = tempfile::tempdir().map_err(io)?;
         let home = home(root.path())?;
@@ -148,7 +155,7 @@ fn state(flag: &str, value: &str) -> State {
 
 impl App for Capture {
     const NAME: &'static str = "files";
-    const STATE_FLAGS: &'static [&'static str] = &["view", "drop-target", "selected"];
+    const STATE_FLAGS: &'static [&'static str] = &["view", "drop-place", "drop-item", "selected"];
 
     fn surfaces(&self) -> Vec<String> {
         vec!["window".into(), "sidebar".into()]
@@ -160,9 +167,9 @@ impl App for Capture {
                 State::new(),
                 state("view", "list"),
                 state("selected", "notes.txt"),
-                state("drop-target", "Documents"),
+                state("drop-item", "Documents"),
             ],
-            _ => vec![State::new(), state("drop-target", "Desktop")],
+            _ => vec![State::new(), state("drop-place", "Desktop")],
         }
     }
 
@@ -182,12 +189,15 @@ impl App for Capture {
                 ("view", "icon") => mode = ViewMode::Icons,
                 ("view", "list") => mode = ViewMode::List,
                 ("view", _) => return Err(format!("--view {value}: icon or list")),
-                ("drop-target", name) => {
-                    drop_target = Some(match self.places.iter().position(|p| p.name == name) {
-                        Some(i) => DropOutline::Place(i),
-                        None => DropOutline::Item(item(name)?),
-                    })
+                ("drop-place", name) => {
+                    let place = self.places.iter().position(|p| p.name == name);
+                    let place = place.ok_or_else(|| format!("{name}: no sidebar place"))?;
+                    drop_target = Some(DropOutline::Place(place));
                 }
+                ("drop-item", _) if drop_target.is_some() => {
+                    return Err("--drop-place and --drop-item: one drop target at a time".into());
+                }
+                ("drop-item", name) => drop_target = Some(DropOutline::Item(item(name)?)),
                 (_, name) => selected = Some(item(name)?),
             }
         }
@@ -226,7 +236,7 @@ impl App for Capture {
             search_focused: false,
             search_caret: false,
             title: HOME,
-            now: SystemTime::now(),
+            now: now(),
             edit: None,
             edit_caret: false,
             drop_target,
@@ -270,5 +280,47 @@ impl App for Capture {
 }
 
 fn main() -> ExitCode {
-    cupertino_capture::run(Capture::new)
+    std::env::set_var("TZ", "UTC");
+    cupertino_capture::run(|| Capture::new(cupertino_capture::assets()?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cupertino_capture::Look;
+    use cupertino_files::render::relative_date;
+
+    #[test]
+    fn the_list_window_is_the_same_pixels_on_every_run() {
+        std::env::set_var("TZ", "UTC");
+        let state = vec![("view".to_string(), "list".to_string())];
+        let request = Request {
+            surface: "window",
+            state: &state,
+            look: Look {
+                dark: false,
+                increase_contrast: false,
+                reduce_transparency: false,
+            },
+            scale: 1.0,
+            size: None,
+        };
+        let mut first = Capture::new(Assets::builtin()).unwrap();
+        let notes = first
+            .browser
+            .entries()
+            .iter()
+            .find(|e| e.name == "notes.txt");
+        let modified = notes.and_then(|e| e.modified).unwrap();
+        assert_eq!(relative_date(modified, now()), "Today at 14:00");
+        let drawn = first.capture(&request).unwrap();
+        let again = Capture::new(Assets::builtin())
+            .unwrap()
+            .capture(&request)
+            .unwrap();
+        assert!(
+            drawn.data() == again.data(),
+            "the second run drew other pixels"
+        );
+    }
 }

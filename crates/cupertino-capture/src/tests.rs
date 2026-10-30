@@ -36,7 +36,7 @@ fn a_surface_alone_is_both_appearances_at_one_x_into_target_captures() {
 fn every_flag_is_read_and_state_flags_keep_the_apps_order() {
     let o = options(
         "--view list settings/files --scale 2 --appearance dark --increase-contrast --reduce-transparency \
-         --size 440x360 --out shots --sheet --login saving",
+         --size 440x360 --out shots --login saving",
     )
     .unwrap();
     assert_eq!(o.surface.as_deref(), Some("files"));
@@ -54,7 +54,7 @@ fn every_flag_is_read_and_state_flags_keep_the_apps_order() {
             vec![true],
             Some((440.0, 360.0)),
             PathBuf::from("shots"),
-            true
+            false
         )
     );
     assert!(o.increase_contrast && o.reduce_transparency);
@@ -77,8 +77,8 @@ fn bad_command_lines_say_what_is_wrong() {
         ("settings/", "settings/: the surface is settings/SURFACE"),
         ("settings/a settings/b", "settings/b: one surface at a time"),
         (
-            "settings/a --drop-target Home",
-            "settings has no flag --drop-target",
+            "settings/a --drop-place Home",
+            "settings has no flag --drop-place",
         ),
         ("settings/a --scale 0", "--scale 0: not a positive number"),
         ("settings/a --scale", "--scale needs a value"),
@@ -96,6 +96,14 @@ fn bad_command_lines_say_what_is_wrong() {
         ),
         ("settings/a settings", "settings: one surface at a time"),
         ("settings/a --list", "settings has no flag --list"),
+        (
+            "settings/a --sheet --login saving",
+            "--sheet shows the states settings lists; drop --login",
+        ),
+        (
+            "settings/a --view list --sheet",
+            "--sheet shows the states settings lists; drop --view",
+        ),
     ];
     for (line, error) in cases {
         assert_eq!(options(line), Err(error.to_string()), "{line:?}");
@@ -122,7 +130,7 @@ fn file_names_carry_the_state_appearance_settings_and_scale() {
         file_name("settings", "accessibility", &State::new(), LIGHT, 1.0),
         "settings-accessibility-light@1x.png"
     );
-    let drop = vec![("drop-target".to_string(), "My Files (old)".to_string())];
+    let drop = vec![("drop-place".to_string(), "My Files (old)".to_string())];
     let look = Look {
         increase_contrast: true,
         reduce_transparency: true,
@@ -130,7 +138,7 @@ fn file_names_carry_the_state_appearance_settings_and_scale() {
     };
     assert_eq!(
         file_name("files", "sidebar", &drop, look, 1.5),
-        "files-sidebar-drop-target-my-files-old-light-hc-rt@1.5x.png"
+        "files-sidebar-drop-place-my-files-old-light-hc-rt@1.5x.png"
     );
     assert_eq!(
         sheet_name("files", "sidebar", look, 2.0),
@@ -264,7 +272,8 @@ fn a_capture_writes_one_png_per_appearance_of_the_asked_state() {
 fn a_sheet_draws_every_state_in_every_asked_appearance_and_lays_them_out() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = Fake { drawn: Vec::new() };
-    let mut o = options("settings/accessibility --sheet --login refused").unwrap();
+    let mut o = options("settings/accessibility --sheet").unwrap();
+    assert!(o.sheet);
     o.out = dir.path().to_path_buf();
     capture(&mut app, &o).unwrap();
     assert_eq!(

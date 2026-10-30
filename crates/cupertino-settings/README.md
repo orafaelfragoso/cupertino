@@ -8,7 +8,7 @@ server with the unified title bar style and a `Sidebar` material under the sideb
 ```
 cargo test -p cupertino-settings --features app        # needs CUPERTINO_ASSET_DIR; bus tests need dbus-daemon
 cargo run -p cupertino-settings --features app -- [--pane PANE-ID]
-ci/capture.sh settings/wifi                                # PNGs of a pane into target/captures (crates/cupertino-capture)
+ci/capture.sh settings/wifi                                # PNGs of a pane into $CARGO_TARGET_DIR/captures (crates/cupertino-capture)
 cargo clippy -p cupertino-settings --all-targets --all-features
 ```
 

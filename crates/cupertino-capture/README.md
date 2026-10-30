@@ -16,8 +16,8 @@ ci/capture.sh APP          # lists the surfaces of APP
 | `--appearance` | `light`, `dark` or `both` (default) |
 | `--increase-contrast`, `--reduce-transparency` | the session's display options |
 | `--size WxH` | the window size in points instead of the surface's default |
-| `--out DIR` | where the PNGs go (default `target/captures`, created) |
-| `--sheet` | every state the app lists for the surface, and one contact sheet: states as columns, appearances as rows |
+| `--out DIR` | where the PNGs go (created); `ci/capture.sh` defaults to `captures` in `$CARGO_TARGET_DIR`, else in the workspace's `target` |
+| `--sheet` | every state the app lists for the surface, and one contact sheet: states as columns, appearances as rows; refused with a state flag |
 | `--STATE-FLAG VALUE` | a state of the surface; each app names its own (`--login saving`, `--view list`) |
 
 One PNG per state and appearance: `<app>-<surface>[-<flag>-<value>]...-<light|dark>[-hc][-rt]@<scale>x.png`, the value in
@@ -28,9 +28,11 @@ alone does not show the surfaces as they look.
 
 | Surface | States |
 |---|---|
-| `settings/<pane-key>` (every pane), `settings/wallpaper-chooser`, `settings/search-results` | `--login none\|saving\|refused` (Accessibility), `--mice one\|two` (Mouse) |
-| `files/window`, `files/sidebar` (the sidebar column of the window) | `--view icon\|list`, `--drop-target NAME` (a sidebar place, else an item), `--selected NAME` |
-| `kit/controls`, `kit/icons` | none |
+| `settings/<pane-key>` (every pane), `settings/wallpaper-chooser`, `settings/search-results` | `--login none\|saving\|refused` (Accessibility), `--mice one\|two` (Mouse), `--scroll PT` (the pane scrolled, clamped to the form as the app does) |
+| `files/window`, `files/sidebar` (the sidebar column of the window) | `--view icon\|list`, `--drop-place NAME` (a sidebar place) or `--drop-item NAME` (an item of the folder), `--selected NAME` |
+| `kit/controls` (the row 167a controls sheet), `kit/icons` (with the chevrons along the reading direction and a missing symbol's placeholder) | `--direction ltr\|rtl` |
+| `overview/all` (the server headless with test windows, `ci/capture-overview.sh`; no `--sheet`) | `--windows N` (1 to 6, default 2) |
 
 The sidebar material is the server's, so a flat fill of the window background stands in for it. The live readings,
-the home folder and the pictures are example data, not the machine's.
+the home folder and the pictures are example data, not the machine's. Files draws at a fixed clock (2026-01-01 15:00
+UTC), so a command gives the same pixels on every run.

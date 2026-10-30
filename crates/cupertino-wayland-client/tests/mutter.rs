@@ -263,46 +263,115 @@ fn simple_window_presents_frames_with_client_decorations_on_mutter() {
     );
 }
 
-/// What a client's own Wayland traffic (`WAYLAND_DEBUG=client`, requests marked ` -> `) shows of its window: whether it
-/// named itself `app_id` and `title`, was configured, created a buffer of `size`, and had a frame callback it asked for
-/// after a commit answered.
+/// One message of a `WAYLAND_DEBUG=client` trace as libwayland (`[t] {queue}  -> wl_surface#7.frame(new id
+/// wl_callback#9)`, events without an arrow) or wayland-rs (`[t][rs] -> wl_surface@7.frame(wl_callback@9)`,
+/// `[t][rs] <- wl_callback@9.done, (1)`, strings as `Some("…")`) writes it. Discarded requests are not messages.
+#[derive(Debug, PartialEq)]
+struct Message<'a> {
+    request: bool,
+    object: &'a str,
+    name: &'a str,
+    args: Vec<&'a str>,
+}
+
+fn message(line: &str) -> Option<Message<'_>> {
+    let mut rest = line.strip_prefix('[')?.split_once(']')?.1;
+    rest = rest.strip_prefix("[rs]").unwrap_or(rest).trim_start();
+    if let Some(queued) = rest.strip_prefix('{') {
+        rest = queued.split_once('}')?.1.trim_start();
+    }
+    if rest.starts_with("[discarded]") || rest.starts_with("discarded") {
+        return None;
+    }
+    let (request, rest) = match (rest.strip_prefix("-> "), rest.strip_prefix("<- ")) {
+        (Some(sent), _) => (true, sent),
+        (None, Some(received)) => (false, received),
+        (None, None) => (false, rest),
+    };
+    let (call, args) = rest.split_once('(')?;
+    let (object, name) = call.trim_end_matches(", ").rsplit_once('.')?;
+    let args = args
+        .strip_suffix(')')?
+        .split(", ")
+        .filter(|arg| !arg.is_empty())
+        .map(|arg| {
+            let arg = arg.strip_prefix("new id ").unwrap_or(arg);
+            arg.strip_prefix("Some(")
+                .and_then(|arg| arg.strip_suffix(')'))
+                .unwrap_or(arg)
+        })
+        .collect();
+    Some(Message {
+        request,
+        object,
+        name,
+        args,
+    })
+}
+
+/// What a client's own Wayland traffic (`WAYLAND_DEBUG=client`) shows of its window: whether it named itself `app_id`
+/// and `title`, was configured, created a buffer of `size`, and had a frame callback it asked for after a commit
+/// answered.
 fn presented(trace: &str, app_id: &str, title: &str, size: (u32, u32)) -> Result<(), String> {
-    let lines: Vec<&str> = trace.lines().collect();
-    let request = |l: &&str, what: &str| l.contains(" -> ") && l.contains(what);
-    let event =
-        |l: &&str, what: &str| l.starts_with('[') && !l.contains(" -> ") && l.contains(what);
-    let named = |what: String| lines.iter().any(|l| request(l, &what));
-    if !named(format!(".set_app_id(\"{app_id}\")")) {
+    let messages: Vec<Message> = trace.lines().filter_map(message).collect();
+    let requested = |name: &str, args: &[&str]| {
+        messages
+            .iter()
+            .any(|m| m.request && m.name == name && m.args == args)
+    };
+    if !requested("set_app_id", &[&format!("\"{app_id}\"")]) {
         return Err(format!("no set_app_id(\"{app_id}\")"));
     }
-    if !named(format!(".set_title(\"{title}\")")) {
+    if !requested("set_title", &[&format!("\"{title}\"")]) {
         return Err(format!("no set_title(\"{title}\")"));
     }
-    if !lines
-        .iter()
-        .any(|l| event(l, "xdg_surface") && l.contains(".configure("))
-    {
+    if !messages.iter().any(|m| {
+        !m.request
+            && m.name == "configure"
+            && m.object.split(['@', '#']).next() == Some("xdg_surface")
+    }) {
         return Err("no xdg_surface.configure".to_owned());
     }
-    let buffer = format!(", {}, {}, ", size.0, size.1);
-    if !lines
-        .iter()
-        .any(|l| request(l, ".create_buffer(") && l.contains(&buffer))
-    {
+    let (width, height) = (size.0.to_string(), size.1.to_string());
+    if !messages.iter().any(|m| {
+        m.request
+            && m.name == "create_buffer"
+            && m.args.get(2) == Some(&width.as_str())
+            && m.args.get(3) == Some(&height.as_str())
+    }) {
         return Err(format!("no buffer of {}x{}", size.0, size.1));
     }
-    let answered = lines.iter().enumerate().any(|(i, l)| {
-        request(l, ".frame(new id ")
-            && l.split("new id ").nth(1).is_some_and(|callback| {
-                let done = format!("{}.done(", callback.trim_end_matches(')'));
-                lines[i..].iter().any(|l| request(l, ".commit()"))
-                    && lines[i..].iter().any(|l| event(l, &done))
+    let answered = messages.iter().enumerate().any(|(i, m)| {
+        m.request
+            && m.name == "frame"
+            && m.args.first().is_some_and(|callback| {
+                messages[i..]
+                    .iter()
+                    .any(|m| m.request && m.name == "commit")
+                    && messages[i..]
+                        .iter()
+                        .any(|m| !m.request && m.name == "done" && m.object == *callback)
             })
     });
     if !answered {
         return Err("no frame callback answered after a commit".to_owned());
     }
     Ok(())
+}
+
+/// The lines of a client trace to show on a failure: the client's own messages and its window traffic, not the rest of
+/// `WAYLAND_DEBUG`.
+fn window_lines(trace: &str) -> String {
+    trace
+        .lines()
+        .filter(|l| {
+            !l.starts_with('[')
+                || ["xdg_", "wl_surface", "wl_shm", "wl_callback", "error"]
+                    .iter()
+                    .any(|part| l.contains(part))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The CupertinoKit examples name themselves, are configured and present frames of their window's size on Mutter, and
@@ -345,11 +414,15 @@ fn kit_examples_present_frames_on_mutter() {
                 break;
             }
             if let Some(status) = client.0.try_wait().unwrap() {
-                panic!("{example} exited ({status}) before it presented: {result:?}");
+                panic!(
+                    "{example} exited ({status}) before it presented: {result:?}\n{}",
+                    window_lines(&text)
+                );
             }
             assert!(
                 Instant::now() < deadline,
-                "{example} did not present on mutter: {result:?}"
+                "{example} did not present on mutter: {result:?}\n{}",
+                window_lines(&text)
             );
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -365,13 +438,13 @@ fn kit_examples_present_frames_on_mutter() {
 #[test]
 fn a_trace_is_presented_only_with_identity_configure_buffer_and_an_answered_frame() {
     let full = [
-        "[1.0]  -> xdg_toplevel#9.set_app_id(\"org.example.App\")",
-        "[1.1]  -> xdg_toplevel#9.set_title(\"App\")",
-        "[1.2] xdg_surface#8.configure(3)",
-        "[1.3]  -> wl_shm_pool#11.create_buffer(new id wl_buffer#12, 0, 200, 64, 800, 0)",
-        "[1.4]  -> wl_surface#7.frame(new id wl_callback#13)",
-        "[1.5]  -> wl_surface#7.commit()",
-        "[1.6] wl_callback#13.done(1234)",
+        "[1.0] {Default Queue}  -> xdg_toplevel#9.set_app_id(\"org.example.App\")",
+        "[1.1] {Default Queue}  -> xdg_toplevel#9.set_title(\"App\")",
+        "[1.2] {Default Queue} xdg_surface#8.configure(3)",
+        "[1.3] {Default Queue}  -> wl_shm_pool#11.create_buffer(new id wl_buffer#12, 0, 200, 64, 800, 0)",
+        "[1.4] {Default Queue}  -> wl_surface#7.frame(new id wl_callback#13)",
+        "[1.5] {Default Queue}  -> wl_surface#7.commit()",
+        "[1.6] {Default Queue} wl_callback#13.done(1234)",
     ];
     let check = |lines: &[&str]| presented(&lines.join("\n"), "org.example.App", "App", (200, 64));
     assert_eq!(check(&full), Ok(()));
@@ -390,7 +463,7 @@ fn a_trace_is_presented_only_with_identity_configure_buffer_and_an_answered_fram
         Err("no frame callback answered after a commit".to_owned())
     );
     let mut other = full.to_vec();
-    other[6] = "[1.6] wl_callback#14.done(1234)";
+    other[6] = "[1.6] {Default Queue} wl_callback#14.done(1234)";
     assert_eq!(
         check(&other),
         Err("no frame callback answered after a commit".to_owned())
@@ -405,4 +478,24 @@ fn a_trace_is_presented_only_with_identity_configure_buffer_and_an_answered_fram
         "[100.6] wl_callback@13.done(1234)",
     ];
     assert_eq!(check(&libwayland), Ok(()));
+    let wayland_rs = [
+        "[1869906.785][rs] -> xdg_toplevel@22.set_app_id(Some(\"org.example.App\"))",
+        "[1869906.816][rs] -> xdg_toplevel@22.set_title(Some(\"App\"))",
+        "[1869909.907][rs] <- xdg_surface@21.configure, (1)",
+        "[1869911.405][rs] -> wl_shm_pool@25.create_buffer(wl_buffer@26, 0, 200, 64, 800, 0)",
+        "[1869911.616][rs] -> wl_surface@20.frame(wl_callback@27)",
+        "[1869911.644][rs] -> wl_surface@20.commit()",
+        "[1869926.975][rs] <- wl_callback@27.done, (49385751)",
+    ];
+    assert_eq!(check(&wayland_rs), Ok(()));
+    let mut wide = wayland_rs.to_vec();
+    wide[3] = "[1869911.405][rs] -> wl_shm_pool@25.create_buffer(wl_buffer@26, 0, 64, 200, 256, 0)";
+    assert_eq!(check(&wide), Err("no buffer of 200x64".to_owned()));
+    let mut discarded = wayland_rs.to_vec();
+    discarded[0] =
+        "[1869906.785][rs][discarded] -> xdg_toplevel@22.set_app_id(Some(\"org.example.App\"))";
+    assert_eq!(
+        check(&discarded),
+        Err("no set_app_id(\"org.example.App\")".to_owned())
+    );
 }

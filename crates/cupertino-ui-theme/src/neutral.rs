@@ -1,5 +1,5 @@
-//! Built-in palettes that need no theme data, pack or desktop service. Every colour is opaque, so nothing depends on
-//! what is drawn underneath. The neutral palettes keep the look of the Cupertino light and dark themes where it reaches
+//! Built-in palettes that need no theme data, pack or desktop service. Every colour but the dialog scrim is opaque, so
+//! nothing depends on what is drawn underneath. The neutral palettes keep the look of the Cupertino light and dark themes where it reaches
 //! the contrast they require; the high-contrast palettes are used by both themes.
 
 use crate::palette::{Palette, StateColors};
@@ -45,6 +45,8 @@ pub(crate) const LIGHT: Palette<[u8; 4]> = Palette {
         (Header, gray(105)),
         (ToolTip, gray(254)),
         (ToolTipText, gray(36)),
+        (ScrollerThumb, gray(118)),
+        (DialogScrim, [0, 0, 0, 51]),
     ],
     states: StateColors {
         emphasized_border: gray(100),
@@ -92,6 +94,8 @@ pub(crate) const DARK: Palette<[u8; 4]> = Palette {
         (Header, WHITE),
         (ToolTip, gray(40)),
         (ToolTipText, gray(224)),
+        (ScrollerThumb, gray(153)),
+        (DialogScrim, [0, 0, 0, 102]),
     ],
     states: StateColors {
         emphasized_border: gray(159),
@@ -139,6 +143,8 @@ pub(crate) const HIGH_CONTRAST_LIGHT: Palette<[u8; 4]> = Palette {
         (Header, gray(60)),
         (ToolTip, WHITE),
         (ToolTipText, BLACK),
+        (ScrollerThumb, gray(60)),
+        (DialogScrim, [0, 0, 0, 102]),
     ],
     states: StateColors {
         emphasized_border: BLACK,
@@ -186,6 +192,8 @@ pub(crate) const HIGH_CONTRAST_DARK: Palette<[u8; 4]> = Palette {
         (Header, WHITE),
         (ToolTip, gray(24)),
         (ToolTipText, WHITE),
+        (ScrollerThumb, gray(200)),
+        (DialogScrim, [0, 0, 0, 153]),
     ],
     states: StateColors {
         emphasized_border: WHITE,
@@ -240,7 +248,11 @@ mod tests {
         for appearance in Appearance::ALL {
             let colors = ColorTokens::neutral(appearance);
             for ((role, state), c) in &colors.map {
-                assert_eq!(c.a, 1.0, "{appearance:?} {role:?} {state:?}");
+                if *role == ColorRole::DialogScrim {
+                    assert!(c.a < 1.0, "the scrim must not hide what it dims");
+                } else {
+                    assert_eq!(c.a, 1.0, "{appearance:?} {role:?} {state:?}");
+                }
             }
         }
     }
@@ -270,6 +282,7 @@ mod tests {
             (TextFieldBorder, TextBackground),
             (KeyboardFocusIndicator, WindowBackground),
             (KeyboardFocusIndicator, TextBackground),
+            (ScrollerThumb, WindowBackground),
         ];
         let high_contrast_boundary_pairs = [
             (SwitchTrack, WindowBackground),
@@ -345,7 +358,7 @@ mod tests {
                 KeyboardFocusIndicator,
             ];
             for (role, c) in cupertino.normal {
-                if raised_for_contrast.contains(&role) {
+                if raised_for_contrast.contains(&role) || role == DialogScrim {
                     continue;
                 }
                 assert_eq!(

@@ -116,6 +116,7 @@ impl Application for Forms {
             },
             shortcuts: CommandRegistry::new(),
             on_close: None,
+            background: WindowBackground::Theme,
             content: Element::new(Stack {
                 axis: Axis::Vertical,
                 padding: WINDOW_CONTENT_INSET,

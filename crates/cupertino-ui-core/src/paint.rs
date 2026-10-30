@@ -6,7 +6,7 @@
 use crate::cx::PaintCx;
 use crate::route::Geometry;
 use crate::tree::Tree;
-use crate::{Environment, NodeId};
+use crate::{Environment, NodeId, WindowBackground};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_platform::Timestamp;
 use cupertino_ui_render::{
@@ -141,6 +141,7 @@ pub(crate) struct PaintInput<'a> {
     pub(crate) focus: Option<NodeId>,
     pub(crate) focus_visible: bool,
     pub(crate) window_active: bool,
+    pub(crate) background: WindowBackground,
     pub(crate) now: Timestamp,
 }
 
@@ -168,8 +169,11 @@ impl Painter {
             };
             let size = placement.rect.size;
             let focused = input.focus == Some(id);
-            // Focus and the window's active state change how a node paints, though nothing in the node changed.
-            let source = node.paint_revision << 3
+            let painted_background = id == root && input.background == WindowBackground::Theme;
+            // Focus, the window's active state and its background change how a node paints, though nothing in the
+            // node changed.
+            let source = node.paint_revision << 4
+                | u64::from(painted_background) << 3
                 | u64::from(input.window_active) << 2
                 | u64::from(focused) << 1
                 | u64::from(focused && input.focus_visible);
@@ -180,7 +184,7 @@ impl Painter {
             if !fresh {
                 let mut ops = Vec::new();
                 // the window's own background, under everything its content paints
-                if id == root {
+                if painted_background {
                     let state = StateVariant {
                         window_active: input.window_active,
                         ..StateVariant::NORMAL

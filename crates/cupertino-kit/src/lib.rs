@@ -17,7 +17,9 @@ pub mod prelude {
         Button, ButtonRole, ButtonStyle, Icon, SecureField, Separator, Spacer, Stack, Text,
         TextChange, TextField, Toggle,
     };
-    pub use cupertino_ui_core::{Application, Command, Element, Key, Window, WindowKey};
+    pub use cupertino_ui_core::{
+        Application, Command, Element, Key, Window, WindowBackground, WindowKey,
+    };
     pub use cupertino_ui_layout::{Align, Axis};
     pub use cupertino_ui_platform::WindowSpec;
 }

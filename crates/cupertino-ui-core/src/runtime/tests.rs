@@ -6,6 +6,8 @@ use crate::{Role, Shortcut};
 use cupertino_ui_platform::{
     Configure, DecorationMode, Mods, MouseButton, PointerEvent, WindowStates, WmCapabilities,
 };
+use cupertino_ui_render::{Paint, PaintOp, Shape};
+use cupertino_ui_theme::{Color, ColorRole, ColorTokens, StateVariant};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
@@ -17,6 +19,8 @@ struct Counter;
 struct Model {
     count: u32,
     done: Vec<u32>,
+    /// The window paints no background, as a panel that draws its own.
+    panel: bool,
 }
 
 impl Application for Counter {
@@ -31,6 +35,7 @@ impl Application for Counter {
         match message.as_str() {
             "plus:Target:press" | "plus" => model.count += 1,
             "quit" => return vec![Command::Exit],
+            "panel" => model.panel = !model.panel,
             "close" => return vec![Command::CloseWindow(WindowKey("main".into()))],
             "wait" => return vec![Command::Perform(Box::pin(async { "done 7".to_string() }))],
             m if m.starts_with("done ") => model.done.push(m[5..].parse().unwrap()),
@@ -58,6 +63,11 @@ impl Application for Counter {
                 "plus".to_string(),
             ),
             on_close: None,
+            background: if model.panel {
+                WindowBackground::None
+            } else {
+                WindowBackground::Theme
+            },
             content: Element::new(row(vec![
                 Element::new(leaf("plus")).key("plus"),
                 Element::new(Leaf {
@@ -580,6 +590,7 @@ impl Application for Holder {
             },
             shortcuts: CommandRegistry::new(),
             on_close: None,
+            background: WindowBackground::Theme,
             content: Element::new(Leaf {
                 stop: true,
                 ..leaf("hold")
@@ -765,6 +776,7 @@ impl Application for Sleeper {
             },
             shortcuts: CommandRegistry::new(),
             on_close: None,
+            background: WindowBackground::Theme,
             content: Element::new(content),
         }]
     }
@@ -859,5 +871,46 @@ fn the_loop_waits_only_until_the_earliest_wake() {
         Some(Some(Duration::from_nanos(300))),
         "the wake due at 500 bounds the wait at 200: {:?}",
         waits.borrow()
+    );
+}
+
+#[test]
+fn a_window_paints_the_theme_background_unless_its_content_draws_its_own() {
+    let background = Color::new(0.9, 0.9, 0.9, 1.0);
+    let (mut rt, window, _) = start_with(|o| {
+        let mut theme = (*o.theme).clone();
+        theme.colors = ColorTokens::new([(
+            (ColorRole::WindowBackground, StateVariant::NORMAL),
+            background,
+        )]);
+        o.theme = Arc::new(theme);
+    });
+    configure(&mut rt, window, 1);
+    let first_op = |rt: &Rt| {
+        rt.snapshot(window).unwrap().display_list.nodes[0]
+            .ops
+            .first()
+            .cloned()
+    };
+    let fill = Some(PaintOp::Fill {
+        shape: Shape::Rect(cupertino_geometry::Rect::new(0.0, 0.0, 200.0, 100.0)),
+        paint: Paint::Solid(background),
+    });
+    assert_eq!(first_op(&rt), fill);
+
+    rt.messages.push_back("panel".into());
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(1)));
+    rt.step(steps()).unwrap();
+    assert_eq!(first_op(&rt), None, "a panel paints its own surface");
+
+    rt.messages.push_back("panel".into());
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(1)));
+    rt.step(steps()).unwrap();
+    assert_eq!(
+        first_op(&rt),
+        fill,
+        "the root repaints when the background changes back"
     );
 }

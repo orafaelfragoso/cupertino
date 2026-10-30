@@ -103,6 +103,7 @@ impl Fixture {
                 focus: focus.then_some(self.root),
                 focus_visible: true,
                 window_active: true,
+                background: WindowBackground::Theme,
                 now: Timestamp(0),
             },
         );
@@ -193,6 +194,7 @@ fn a_node_carries_the_clip_it_puts_on_its_children_and_bounds_that_cover_its_sub
             focus: None,
             focus_visible: false,
             window_active: true,
+            background: WindowBackground::Theme,
             now: Timestamp(0),
         },
     );
@@ -336,6 +338,7 @@ fn a_group_reaches_the_renderer_and_its_effects_widen_the_subtree_bounds() {
             focus: None,
             focus_visible: false,
             window_active: true,
+            background: WindowBackground::Theme,
             now: Timestamp(0),
         },
     );

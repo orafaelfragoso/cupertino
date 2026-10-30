@@ -230,12 +230,6 @@ impl FrameScheduler {
         })
     }
 
-    /// The vblank of the flip in flight came, but its id was lost with an error about the flip queued after it.
-    pub fn presented_in_flight(&mut self) -> Option<Presented> {
-        let id = self.in_flight?.id;
-        self.presented(id)
-    }
-
     pub fn in_flight(&self) -> bool {
         self.in_flight.is_some()
     }
@@ -516,5 +510,19 @@ mod tests {
             Some(Overdue::GiveUp),
             "not before one second at 144 Hz"
         );
+    }
+
+    #[test]
+    fn a_failed_submission_confirms_nothing_and_starts_the_head_over() {
+        let mut s = FrameScheduler::default();
+        s.called_back();
+        let parked = s.flip_queued(Duration::ZERO, true);
+        s.reset();
+        assert_eq!(
+            s.presented(parked),
+            None,
+            "the frame that failed to submit was never shown"
+        );
+        assert!(s.damaged(), "the next frame is drawn in full");
     }
 }

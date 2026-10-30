@@ -812,7 +812,7 @@ fn flip_overdue(
         Overdue::CallBack => {}
         Overdue::GiveUp => {
             tracing::warn!(output = %name, "the display has not shown the queued frame for a second; dropping it");
-            if drop_pending_frame(surface, "a full redraw") {
+            if drop_pending_frame(surface, "the head was given up") {
                 surface.pending = false;
                 state.outputs[idx].scheduler.reset();
                 return;
@@ -820,7 +820,7 @@ fn flip_overdue(
             tracing::error!(output = %name, "the head is stuck until it sleeps, resumes, changes mode or is unplugged");
         }
     }
-    let time = Duration::from(state.clock.now());
+    let time = state.frame_now();
     state.send_frames(idx, time);
 }
 
@@ -933,29 +933,28 @@ fn frame_finish(
     };
     surface.pending = false;
     let (output, refresh) = (surface.output, surface.refresh);
-    // `Ok(None)`: no frame of ours waited (it was dropped with its CRTC's state); an error comes only from queueing the
-    // frame after the one shown, whose id it takes along
-    let shown = match surface.drm_output.frame_submitted() {
-        Ok(Some((id, feedback))) => Some((Some(id), Some(feedback))),
-        Ok(None) => None,
+    // `Ok(None)`: no frame of ours waited (it was dropped with its CRTC's state). An error comes after Smithay took the
+    // shown frame, whose id goes with it, and failed to submit the frame parked behind it (queued while a dropped frame
+    // was still pending): that is the flip in flight, and it never reaches the screen
+    let (shown, failed) = match surface.drm_output.frame_submitted() {
+        Ok(shown) => (shown, false),
         Err(e) => {
             tracing::warn!(error = %e, "frame submission failed");
-            Some((None, None))
+            (None, true)
         }
     };
     let Some(idx) = state.outputs.iter().position(|o| o.id == output) else {
         return;
     };
     let scheduler = &mut state.outputs[idx].scheduler;
+    if failed {
+        scheduler.reset();
+    }
     // only the flip in flight is shown: a late event of a flip dropped by a reset confirms no frame, a lock frame least
     // of all, and the refresh grid does not follow it; its feedback is discarded
-    let presented = match &shown {
-        Some((Some(id), _)) => scheduler.presented(*id),
-        Some((None, _)) => scheduler.presented_in_flight(),
-        None => None,
-    };
+    let presented = shown.as_ref().and_then(|(id, _)| scheduler.presented(*id));
     if let Some(presented) = presented {
-        if let Some((_, Some(mut feedback))) = shown {
+        if let Some((_, mut feedback)) = shown {
             feedback.presented(
                 clock,
                 Refresh::fixed(refresh),

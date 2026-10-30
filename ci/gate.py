@@ -13,7 +13,7 @@ from collections import Counter
 FORBIDDEN_SUFFIXES = {".ttf", ".otf", ".ttc"}
 
 ALLOWED_BINARIES = {
-    "crates/cupertino-assets/fonts/InterVariable-subset.ttf": "a38802ab5d40c789b19864858e7329f79787a12cff0f8904933295729189dd6f",
+    "crates/cupertino-assets/fonts/InterVariable-subset.ttf": "8082ab1587b6b1a0ee14e44287b204f3aae7f2021583ca76beb1f717a093dcea",
 }
 
 

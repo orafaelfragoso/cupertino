@@ -94,8 +94,24 @@ pub trait Authorizer: Send + Sync {
 pub struct MachineFiles {
     /// `/etc/cupertino`.
     pub dir: PathBuf,
-    /// Whether a program (as `/proc/<pid>/exe` names it) is the installed settings application.
-    pub settings_program: Arc<dyn Fn(&Path) -> bool + Send + Sync>,
+    /// Whether a program is the installed settings application, by its path as `/proc/<pid>/exe` names it and the
+    /// metadata of the file the process runs (through that link, so a file put in its place later does not count).
+    pub settings_program: SettingsProgram,
+}
+
+/// See [`MachineFiles::settings_program`].
+pub type SettingsProgram = Arc<dyn Fn(&Path, &std::fs::Metadata) -> bool + Send + Sync>;
+
+/// Whether a program file is one only root can change: owned by root and writable by no group or other user, so a
+/// program of the user's put under a writable install prefix is not taken for the installed one.
+pub fn only_root_changes(file: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    is_root_only(file.uid(), file.mode())
+}
+
+/// [`only_root_changes`] by the owner and the `st_mode` (type and permission bits) of a file.
+pub fn is_root_only(owner: u32, mode: u32) -> bool {
+    mode & libc::S_IFMT == libc::S_IFREG && owner == 0 && mode & 0o022 == 0
 }
 
 /// What a method call answers with when it fails; the names are `org.cupertino.LoginManager1.Error.<variant>`.
@@ -211,11 +227,17 @@ impl LoginManager {
                 "the bus gave no process descriptor for the caller, or its process cannot be checked".to_owned(),
             ));
         };
+        let file = std::fs::metadata(
+            Path::new("/proc")
+                .join(caller.process.pid.to_string())
+                .join("exe"),
+        );
         if caller.sandbox.is_some()
             || !caller
                 .exe
                 .as_deref()
-                .is_some_and(|exe| (self.machine.settings_program)(exe))
+                .zip(file.as_ref().ok())
+                .is_some_and(|(exe, file)| (self.machine.settings_program)(exe, file))
         {
             return Err(Error::AccessDenied(
                 "only the settings application changes the machine's settings".to_owned(),

@@ -76,7 +76,9 @@ fn fixture_on(
     let test_program = std::env::current_exe().unwrap();
     let files = service::MachineFiles {
         dir: machine.path().join("cupertino"),
-        settings_program: Arc::new(move |exe: &std::path::Path| settings && exe == test_program),
+        settings_program: Arc::new(move |exe: &std::path::Path, _: &std::fs::Metadata| {
+            settings && exe == test_program
+        }),
     };
     let (sender, calls) = channel();
     let sender = Mutex::new(sender);
@@ -560,4 +562,19 @@ fn the_packaged_bus_policy_lets_users_call_the_managers_methods_and_nothing_else
         error_name(call(&fixture.client, "Shutdown", &())),
         "org.freedesktop.DBus.Error.AccessDenied"
     );
+}
+
+#[test]
+fn only_a_program_file_root_alone_can_change_passes_for_the_installed_one() {
+    assert!(service::is_root_only(0, 0o100_755));
+    assert!(
+        !service::is_root_only(1000, 0o100_755),
+        "a file of the user's"
+    );
+    assert!(
+        !service::is_root_only(0, 0o100_775),
+        "writable by its group"
+    );
+    assert!(!service::is_root_only(0, 0o100_757), "writable by anyone");
+    assert!(!service::is_root_only(0, 0o040_755), "not a file");
 }

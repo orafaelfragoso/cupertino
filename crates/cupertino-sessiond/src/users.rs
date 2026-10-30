@@ -9,9 +9,6 @@ use std::io;
 const PASSWD: &str = "/etc/passwd";
 const GROUP: &str = "/etc/group";
 const LOGIN_DEFS: &str = "/etc/login.defs";
-/// The group whose members are the administrators (approximate: the design's admin group has no counterpart; `wheel`
-/// is the one the distribution's `sudo` rules name).
-const ADMIN_GROUP: &str = "wheel";
 /// The user id range of ordinary accounts when `login.defs` does not set `UID_MIN` or `UID_MAX`
 /// (`login.defs(5)).
 const DEFAULT_UID_MIN: u32 = 1000;
@@ -81,10 +78,10 @@ pub fn login_accounts() -> Result<Vec<Account>, UsersError> {
     parse_passwd(&read(PASSWD)?, range)
 }
 
-/// The login names of the administrators: the members `/etc/group` lists for the group [`ADMIN_GROUP`]. An account whose
-/// primary group that is, and is not listed, is not found.
-pub fn admin_logins() -> Result<Vec<String>, UsersError> {
-    parse_group_members(&read(GROUP)?, ADMIN_GROUP)
+/// The login names of the administrators: the members `/etc/group` lists for any of the administrators' `groups`
+/// (`admin-groups` of `login.conf`), each once. An account whose primary group that is, and is not listed, is not found.
+pub fn admin_logins(groups: &[String]) -> Result<Vec<String>, UsersError> {
+    parse_members_of_any(&read(GROUP)?, groups)
 }
 
 /// `ENV_PATH` of `login.defs`: the search path of a session.
@@ -122,17 +119,21 @@ pub fn by_uid(uid: u32) -> Result<Option<Account>, UsersError> {
     })
 }
 
-/// Whether the account `uid` is an administrator: a member of [`ADMIN_GROUP`] by the system's own lookup (`getgrouplist`,
-/// so its primary group and a directory service's groups count), asked again at every call. `false` for an id with no
-/// account, or when the group does not exist.
-pub fn is_administrator(uid: u32) -> Result<bool, UsersError> {
+/// Whether the account `uid` is an administrator: a member of any of the administrators' `groups` by the system's own
+/// lookup (`getgrouplist`, so its primary group and a directory service's groups count), asked again at every call. `false`
+/// for an id with no account, or when none of the groups exists.
+pub fn is_administrator(uid: u32, groups: &[String]) -> Result<bool, UsersError> {
     let Some(account) = by_uid(uid)? else {
         return Ok(false);
     };
-    let Some(admin) = group_id(ADMIN_GROUP)? else {
+    let mut admin = Vec::new();
+    for group in groups {
+        admin.extend(group_id(group)?);
+    }
+    if admin.is_empty() {
         return Ok(false);
-    };
-    Ok(group_list(&account)?.contains(&admin))
+    }
+    Ok(group_list(&account)?.iter().any(|gid| admin.contains(gid)))
 }
 
 /// The id of the group `name`, from the group database.
@@ -284,6 +285,19 @@ fn parse_passwd(passwd: &str, range: UidRange) -> Result<Vec<Account>, UsersErro
 
 /// The members of the group `group` in `/etc/group` text (`name:password:gid:member,member`); empty when the file has no
 /// such group.
+/// The members a group file lists for any of `groups`, each once, in the order of `groups`.
+fn parse_members_of_any(text: &str, groups: &[String]) -> Result<Vec<String>, UsersError> {
+    let mut logins: Vec<String> = Vec::new();
+    for group in groups {
+        for login in parse_group_members(text, group)? {
+            if !logins.contains(&login) {
+                logins.push(login);
+            }
+        }
+    }
+    Ok(logins)
+}
+
 fn parse_group_members(text: &str, group: &str) -> Result<Vec<String>, UsersError> {
     let mut members = Vec::new();
     for (number, line) in text
@@ -356,24 +370,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_administrator_is_a_member_of_the_group_by_the_systems_own_lookup() {
+    fn an_administrator_is_a_member_of_any_of_the_groups_by_the_systems_own_lookup() {
         // Safety: `getuid` has no preconditions.
         let me = unsafe { libc::getuid() };
-        let mine = group_list(&by_uid(me).unwrap().unwrap()).unwrap();
-        let wheel = group_id(ADMIN_GROUP).unwrap();
-        assert_eq!(
-            is_administrator(me).unwrap(),
-            wheel.is_some_and(|gid| mine.contains(&gid))
+        let output = std::process::Command::new("id")
+            .arg("-gn")
+            .output()
+            .unwrap();
+        let primary = String::from_utf8(output.stdout).unwrap().trim().to_owned();
+        let missing = "cupertino-no-such-group".to_owned();
+        assert!(
+            is_administrator(me, &[missing.clone(), primary.clone()]).unwrap(),
+            "a primary group counts"
         );
         assert!(
-            !is_administrator(u32::MAX - 7).unwrap(),
+            !is_administrator(me, std::slice::from_ref(&missing)).unwrap(),
+            "no such group, no administrator"
+        );
+        assert!(
+            !is_administrator(me, &[]).unwrap(),
+            "no groups, no administrators"
+        );
+        assert!(
+            !is_administrator(u32::MAX - 7, &[primary]).unwrap(),
             "no account, no administrator"
         );
-        // an account that is not in the group is no administrator
-        if let (Some(nobody), Some(wheel)) = (by_name("nobody").unwrap(), wheel) {
-            assert!(!group_list(&nobody).unwrap().contains(&wheel));
-            assert!(!is_administrator(nobody.uid).unwrap());
-        }
+    }
+
+    #[test]
+    fn the_administrators_are_the_listed_members_of_any_of_the_groups_each_once() {
+        let group = "wheel:x:998:alice,bob\nsudo:x:27:bob,carol\nusers:x:100:dave\n";
+        let groups = ["sudo".to_owned(), "wheel".to_owned(), "admin".to_owned()];
+        assert_eq!(
+            parse_members_of_any(group, &groups).unwrap(),
+            ["bob", "carol", "alice"]
+        );
+        assert!(parse_members_of_any(group, &[]).unwrap().is_empty());
     }
 
     #[test]

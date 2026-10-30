@@ -16,7 +16,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cupertino_defaults::login::LoginConfig;
+use cupertino_defaults::login::{default_admin_groups, LoginConfig, DEFAULT_ADMIN_GROUPS};
 use cupertino_login_ipc::message::{MAX_EVENT_FRAME, MAX_REQUEST_FRAME, SOCKET_PATH};
 use cupertino_login_ipc::{
     encode, encode_secret, is_login_name, Account, Event, Outcome, PowerAction, PowerRefusal,
@@ -242,15 +242,18 @@ enum Requester<'a> {
 }
 
 /// [`Authorizer`] on logind, for the bus service's threads.
-struct LogindAuthorizer(Logind);
+struct LogindAuthorizer {
+    logind: Logind,
+    admin_groups: Vec<String>,
+}
 
 impl Authorizer for LogindAuthorizer {
     fn session_of(&self, pid: u32) -> std::result::Result<Option<CallerSession>, String> {
-        self.0.session_of_pid(pid).map_err(|e| e.to_string())
+        self.logind.session_of_pid(pid).map_err(|e| e.to_string())
     }
 
     fn is_administrator(&self, uid: u32) -> std::result::Result<bool, String> {
-        users::is_administrator(uid).map_err(|e| e.to_string())
+        users::is_administrator(uid, &self.admin_groups).map_err(|e| e.to_string())
     }
 }
 
@@ -294,6 +297,8 @@ struct Manager {
     /// The account to log in without a password once the login screen's session is up; `None` when the setting is off, refused
     /// or already used.
     auto_login: Option<String>,
+    /// The groups whose members are administrators: `admin-groups` of a trusted `login.conf`, else the build's.
+    admin_groups: Vec<String>,
     /// The worker that runs the auto login, until it starts the session or ends.
     auto_login_worker: Option<u64>,
     /// The attempt that is open.
@@ -338,17 +343,29 @@ impl Manager {
         if greeter.uid == 0 {
             return Err("greeter-user must not be root".into());
         }
-        // auto login skips the password: only a settings file that root alone can change may turn it on
-        let auto_login =
-            config.auto_login.clone().filter(|_| {
-                match auto_login::settings_are_trusted(&LoginConfig::path()) {
-                    Ok(()) => true,
-                    Err(reason) => {
-                        eprintln!("cupertino-sessiond: auto login refused: {reason}");
-                        false
-                    }
+        // auto login skips the password and the administrators' groups grant the machine's settings: only a settings file
+        // that root alone can change may set them
+        let trusted = auto_login::settings_are_trusted(&LoginConfig::path());
+        let auto_login = config.auto_login.clone().filter(|_| match &trusted {
+            Ok(()) => true,
+            Err(reason) => {
+                eprintln!("cupertino-sessiond: auto login refused: {reason}");
+                false
+            }
+        });
+        let admin_groups = config
+            .admin_groups
+            .clone()
+            .filter(|_| match &trusted {
+                Ok(()) => true,
+                Err(reason) => {
+                    eprintln!(
+                        "cupertino-sessiond: admin-groups refused, the build's {DEFAULT_ADMIN_GROUPS} apply: {reason}"
+                    );
+                    false
                 }
-            });
+            })
+            .unwrap_or_else(default_admin_groups);
         // the machine's files are watched by every compositor, the login screen's first: their directory must be there
         if let Err(e) =
             system_accessibility::ensure_dir(Path::new(system_accessibility::MACHINE_DIR))
@@ -360,7 +377,7 @@ impl Manager {
         }
         let listener = bind(Path::new(SOCKET_PATH), greeter.uid, greeter.gid)?;
         let (logind, incoming, mailbox) = watch_logind()?;
-        let bus = serve_bus(&mailbox)?;
+        let bus = serve_bus(&mailbox, admin_groups.clone())?;
         let mut manager = Manager {
             session_path: users::session_path()?,
             _held_terminals: vec![vt::hold(config.vt)
@@ -383,6 +400,7 @@ impl Manager {
             greeter_adopted: false,
             adopted: Vec::new(),
             auto_login,
+            admin_groups,
             auto_login_worker: None,
             attempt: None,
             switch: None,
@@ -587,7 +605,7 @@ impl Manager {
     fn build_roster(&mut self) -> Result<roster::Roster> {
         let accounts = users::login_accounts()?;
         let admins = if self.config.hide_admin_users {
-            users::admin_logins()?
+            users::admin_logins(&self.admin_groups)?
         } else {
             Vec::new()
         };
@@ -730,7 +748,7 @@ impl Manager {
             });
             return;
         }
-        let administrator = match users::admin_logins() {
+        let administrator = match users::admin_logins(&self.admin_groups) {
             Ok(administrators) => {
                 is_login_name(name) && administrators.iter().any(|login| login == name)
             }
@@ -1651,7 +1669,7 @@ impl Manager {
             Requester::Agent(caller) => Asker::Agent { uid: caller.uid },
         };
         may_end_other_sessions(asker, &uids, |uid| {
-            let administrators = users::admin_logins().map_err(|e| failed(&e))?;
+            let administrators = users::admin_logins(&self.admin_groups).map_err(|e| failed(&e))?;
             let account = users::by_uid(uid).map_err(|e| failed(&e))?;
             Ok(account.is_some_and(|account| administrators.contains(&account.login)))
         })
@@ -1749,14 +1767,18 @@ fn watch_logind() -> Result<(Logind, Receiver<Incoming>, Mailbox)> {
 
 /// Serve `org.cupertino.LoginManager1` on the system bus. Its methods run on the connection's thread, with a connection of
 /// their own to logind.
-fn serve_bus(mailbox: &Mailbox) -> Result<zbus::blocking::Connection> {
-    let authorizer = Arc::new(LogindAuthorizer(Logind::connect()?));
+fn serve_bus(mailbox: &Mailbox, admin_groups: Vec<String>) -> Result<zbus::blocking::Connection> {
+    let authorizer = Arc::new(LogindAuthorizer {
+        logind: Logind::connect()?,
+        admin_groups,
+    });
     let commands = mailbox.clone();
     let sink: service::Sink = Arc::new(move |call| commands.post(Incoming::Call(call)));
     let machine = service::MachineFiles {
         dir: PathBuf::from(system_accessibility::MACHINE_DIR),
-        settings_program: Arc::new(|exe: &Path| {
+        settings_program: Arc::new(|exe: &Path, file: &std::fs::Metadata| {
             installed_roots().any(|root| exe == root.join("bin/cupertino-settings"))
+                && service::only_root_changes(file)
         }),
     };
     Ok(service::serve(

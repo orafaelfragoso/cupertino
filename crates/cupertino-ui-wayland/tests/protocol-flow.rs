@@ -1,6 +1,12 @@
 //! Runs the presenter and the text clipboard on the transport against a minimal in-process server (shm, an output at
 //! scale 2, a seat with a pointer, one window, the clipboard) and checks what the server receives.
 
+use cupertino_app_protocols::server::app_effects::cupertino_app_effects_v1::{
+    self, CupertinoAppEffectsV1,
+};
+use cupertino_app_protocols::server::app_effects::cupertino_appearance_v1::{
+    CupertinoAppearanceV1, DisplayOption,
+};
 use cupertino_geometry::Rect;
 use cupertino_ui_wayland::clipboard::Clipboard;
 use cupertino_ui_wayland::{rgba_to_argb8888, Ready, ShmPresenter};
@@ -146,7 +152,34 @@ macro_rules! plain_global {
         }
     )*};
 }
-plain_global!(WlCompositor, WlShm, WlDataDeviceManager);
+plain_global!(
+    WlCompositor,
+    WlShm,
+    WlDataDeviceManager,
+    CupertinoAppEffectsV1
+);
+
+/// The session is locked: an observer that can tell (version 5) is told so at once.
+impl Dispatch<CupertinoAppEffectsV1, ()> for Mock {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &CupertinoAppEffectsV1,
+        request: cupertino_app_effects_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        if let cupertino_app_effects_v1::Request::GetAppearance { id } = request {
+            let observer = init.init(id, ());
+            observer.appearance(0);
+            observer.display_options(DisplayOption::empty());
+            if observer.version() >= 5 {
+                observer.session_lock(1);
+            }
+        }
+    }
+}
 
 /// Objects whose requests the server ignores.
 macro_rules! ignore_requests {
@@ -161,7 +194,8 @@ ignore_requests!(
     WlBuffer: BufferData,
     WlOutput: (),
     WlPointer: (),
-    XdgToplevel: ()
+    XdgToplevel: (),
+    CupertinoAppearanceV1: ()
 );
 
 impl Dispatch<WlCompositor, ()> for Mock {
@@ -475,6 +509,14 @@ impl Dispatch<WlDataOffer, String> for Mock {
 
 /// Run the server on a thread until the test drops the control channel.
 fn spawn_server(stream: UnixStream) -> (Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
+    spawn_server_with(stream, None)
+}
+
+/// [`spawn_server`], offering `cupertino_app_effects_v1` at `effects` when it is some.
+fn spawn_server_with(
+    stream: UnixStream,
+    effects: Option<u32>,
+) -> (Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
     let (control_tx, control_rx) = channel::<Control>();
     let (committed_tx, committed_rx) = channel();
     let (seen_tx, seen_rx) = channel();
@@ -487,6 +529,9 @@ fn spawn_server(stream: UnixStream) -> (Sender<Control>, Receiver<Committed>, Re
         dh.create_global::<Mock, WlSeat, _>(7, ());
         dh.create_global::<Mock, XdgWmBase, _>(6, ());
         dh.create_global::<Mock, WlDataDeviceManager, _>(3, ());
+        if let Some(version) = effects {
+            dh.create_global::<Mock, CupertinoAppEffectsV1, _>(version, ());
+        }
         let mut mock = Mock {
             committed: committed_tx,
             seen: seen_tx,
@@ -1061,8 +1106,15 @@ mod window_system {
 
     /// A window created but not yet configured.
     fn created() -> (Kit, Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
+        created_with(None)
+    }
+
+    /// [`created`] on a server that offers the app effects at `effects`.
+    fn created_with(
+        effects: Option<u32>,
+    ) -> (Kit, Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
-        let (control, committed, seen) = spawn_server(server_stream);
+        let (control, committed, seen) = spawn_server_with(server_stream, effects);
         let mut ws = WaylandWindowSystem::new(
             Connection::from_stream(client_stream).unwrap(),
             Profile::cupertino(),
@@ -1117,20 +1169,27 @@ mod window_system {
         }
     }
 
-    /// The compositor has no app effects, so it can't tell the session is locked: the first dispatch says it isn't,
-    /// once, so an adapter that starts muted speaks.
+    /// A compositor without app effects, or with them below version 5, can't tell the session is locked: the first
+    /// dispatch says it isn't, once, so an adapter that starts muted speaks. From version 5 the compositor's own state
+    /// comes instead (the mock's session is locked).
     #[test]
     fn a_compositor_that_cannot_tell_the_lock_state_is_reported_unlocked_once() {
-        let (mut kit, _control, _committed, _seen) = created();
-        let locks = |kit: &mut Kit| {
-            kit.pump();
-            std::mem::take(&mut kit.stash)
-                .into_iter()
-                .filter(|e| matches!(e, PlatformEvent::SessionLock(_)))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(locks(&mut kit), [PlatformEvent::SessionLock(false)]);
-        assert_eq!(locks(&mut kit), []);
+        for (effects, told) in [(None, false), (Some(4), false), (Some(5), true)] {
+            let (mut kit, _control, _committed, _seen) = created_with(effects);
+            let locks = |kit: &mut Kit| {
+                kit.pump();
+                std::mem::take(&mut kit.stash)
+                    .into_iter()
+                    .filter(|e| matches!(e, PlatformEvent::SessionLock(_)))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                locks(&mut kit),
+                [PlatformEvent::SessionLock(told)],
+                "app effects {effects:?}"
+            );
+            assert_eq!(locks(&mut kit), [], "app effects {effects:?}");
+        }
     }
 
     #[test]

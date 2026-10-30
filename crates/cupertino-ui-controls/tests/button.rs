@@ -1,6 +1,6 @@
 mod support;
 
-use cupertino_geometry::{Rect, Size};
+use cupertino_geometry::{Insets, Rect, Size};
 use cupertino_ui_controls::{Button, ButtonRole, ButtonStyle, Stack};
 use cupertino_ui_core::{Action, Application, Command, Element, Role, Window};
 use cupertino_ui_layout::{Align, Axis};
@@ -45,6 +45,7 @@ impl<const ENABLED: bool, const BUSY: bool> Application for Buttons<ENABLED, BUS
         };
         window(Element::new(Stack {
             axis: Axis::Vertical,
+            padding: Insets::ZERO,
             spacing: 0.0,
             align: Align::Start,
             children: vec![

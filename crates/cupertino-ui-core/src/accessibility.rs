@@ -172,4 +172,6 @@ pub trait AccessibilityAdapter {
     fn window_focus(&mut self, window: WindowId, focused: bool);
     fn update(&mut self, update: &AccessibilityUpdate);
     fn drain_actions(&mut self, out: &mut Vec<ActionRequest>);
+    /// The window is gone; the adapter drops what it holds for it.
+    fn window_closed(&mut self, _window: WindowId) {}
 }

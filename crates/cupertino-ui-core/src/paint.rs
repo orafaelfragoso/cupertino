@@ -10,9 +10,10 @@ use crate::{Environment, NodeId};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_platform::Timestamp;
 use cupertino_ui_render::{
-    DisplayList, Effect, Group, PaintNode, PaintNodeId, PaintOp, PaintRevision, PathVerb, Shape,
-    Transform,
+    DisplayList, Effect, Group, Paint, PaintNode, PaintNodeId, PaintOp, PaintRevision, PathVerb,
+    Shape, Transform,
 };
+use cupertino_ui_theme::{ColorRole, StateVariant};
 use std::collections::{HashMap, HashSet};
 
 struct Painted {
@@ -178,6 +179,22 @@ impl Painter {
                 .is_some_and(|p| p.source == source && p.size == size);
             if !fresh {
                 let mut ops = Vec::new();
+                // the window's own background, under everything its content paints
+                if id == root {
+                    let state = StateVariant {
+                        window_active: input.window_active,
+                        ..StateVariant::NORMAL
+                    };
+                    let background = input
+                        .env
+                        .theme
+                        .colors
+                        .get(ColorRole::WindowBackground, state);
+                    ops.extend(background.map(|color| PaintOp::Fill {
+                        shape: Shape::Rect(Rect::new(0.0, 0.0, size.width, size.height)),
+                        paint: Paint::Solid(color),
+                    }));
+                }
                 let mut group = None;
                 node.widget.paint(
                     &*node.state,

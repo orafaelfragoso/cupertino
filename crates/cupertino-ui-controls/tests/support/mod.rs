@@ -6,7 +6,7 @@
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_core::{
     AccessibilityNode, Application, CommandRegistry, Element, Environment, FrameSnapshot, Key,
-    Runtime, RuntimeOptions, Window, WindowKey,
+    Runtime, RuntimeOptions, Window, WindowBackground, WindowKey,
 };
 use cupertino_ui_layout::LayoutDirection;
 use cupertino_ui_platform::{
@@ -188,6 +188,7 @@ pub fn window<M: Clone>(content: Element<M>) -> Vec<Window<M>> {
         },
         shortcuts: CommandRegistry::new(),
         on_close: None,
+        background: WindowBackground::Theme,
         content,
     }]
 }

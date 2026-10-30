@@ -92,7 +92,18 @@ pub struct Window<M> {
     pub shortcuts: CommandRegistry<M>,
     /// Sent when the user asks to close the window; without it the request ends the application.
     pub on_close: Option<M>,
+    pub background: WindowBackground,
     pub content: Element<M>,
+}
+
+/// What a window paints under its content.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum WindowBackground {
+    /// The theme's window background, full size and opaque: an ordinary window.
+    #[default]
+    Theme,
+    /// Nothing: the content paints its own surface, shaped or translucent, as a menu or popover panel does.
+    None,
 }
 
 /// A node of the retained tree: a 32-bit slot index and the slot's 32-bit generation, so a stale id never matches

@@ -3,7 +3,7 @@ use crate::{ProtectedInput, RecordedInput, SecureInputs};
 use cupertino_geometry::Size;
 use cupertino_ui_core::{
     AccessibleValue, Change, Command, CommandRegistry, Element, Event, EventCx, MeasureCx, PaintCx,
-    Phase, Propagation, SemanticsCx, Widget, Window, WindowKey,
+    Phase, Propagation, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
 };
 use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
@@ -41,6 +41,7 @@ impl Application for Fields {
             },
             shortcuts: CommandRegistry::new(),
             on_close: None,
+            background: WindowBackground::Theme,
             content: Element::new(Field {
                 protected: false,
                 container: true,

@@ -394,6 +394,14 @@ impl Cupertino {
     }
 
     /// What output `idx` has to draw for the lock.
+    /// When a pending lock stops waiting for lock surfaces and sends `locked` with black outputs.
+    pub fn lock_wait_deadline(&self) -> Option<f64> {
+        match &self.session_lock.state {
+            LockState::Pending { since, .. } => Some(since + LOCK_SURFACE_WAIT),
+            _ => None,
+        }
+    }
+
     pub fn lock_view(&self, idx: usize) -> LockView {
         if self.session_lock.is_active() {
             LockView::Locked {

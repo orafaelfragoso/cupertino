@@ -44,6 +44,7 @@ const APP_ID: &str = "org.example.captured";
 /// Memory order of an Argb8888 pixel is blue, green, red, alpha.
 const RED: [u8; 4] = [0, 0, 255, 255];
 const BLUE: [u8; 4] = [255, 0, 0, 255];
+const BLACK: [u8; 4] = [0, 0, 0, 255];
 /// The globals only privileged clients see.
 const CAPTURE_GLOBALS: [&str; 4] = [
     "ext_output_image_capture_source_manager_v1",
@@ -444,6 +445,14 @@ impl Capture {
             .read_exact_at(&mut p, ((y * self.size.0 + x) * 4) as u64)
             .unwrap();
         p
+    }
+
+    /// Every pixel of the buffer, row by row.
+    fn pixels(&self) -> Vec<[u8; 4]> {
+        use std::os::unix::fs::FileExt;
+        let mut bytes = vec![0u8; (self.size.0 * self.size.1 * 4) as usize];
+        self.file.read_exact_at(&mut bytes, 0).unwrap();
+        bytes.as_chunks::<4>().0.to_vec()
     }
 }
 
@@ -890,27 +899,9 @@ fn a_toplevel_is_captured_at_its_frame_size_and_listed_in_the_window_feed() {
     drop((feed, list));
 }
 
-/// SEC-05: locking the session ends every capture session: it is told `stopped`, a frame asked for while locked fails,
-/// and the session does not resume at the unlock (a new one does).
-#[test]
-fn locking_the_session_stops_the_capture_sessions_for_good() {
-    let Some(mut h) = Harness::new() else { return };
-    let (mut app, frame) = mapped_app(&mut h);
-    h.state
-        .pointer_moved_to((frame.x + 20.0, frame.y + 200.0).into(), 0, None);
-    h.idle(&mut app, 5);
-    let mut c = TestClient::privileged(&mut h);
-    let source = c.output_source();
-    let capture = c.session(&mut h, &source, true);
-    let first = c.request_frame(&capture);
-    h.pump_until(&mut c, "the first frame before the lock", |s| s.frame.ready);
-    first.destroy();
-    c.state.frame = Default::default();
-
+/// Lock the session through a lock screen client and wait until it is locked.
+fn locked(h: &mut Harness) -> common::Client {
     let locker = common::Client::locker(common::session_agent(&h.state));
-    h.pump_until(&mut c, "the session to be stopped by the lock", |s| {
-        s.session.stopped
-    });
     for _ in 0..200 {
         if locker.locked() {
             break;
@@ -919,111 +910,184 @@ fn locking_the_session_stops_the_capture_sessions_for_good() {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(locker.locked(), "the session lock was not granted");
-    assert!(
-        !h.state.capture_running(),
-        "a stopped session still shows as running"
-    );
+    locker
+}
 
-    let second = c.request_frame(&capture);
-    h.state
-        .pointer_moved_to((frame.x + 300.0, frame.y + 60.0).into(), 1, None);
+/// Ask for a frame of `capture` and wait until it is ready, failed or the session stopped.
+fn next_frame(
+    h: &mut Harness,
+    c: &mut TestClient<Capturer>,
+    capture: &Capture,
+    what: &str,
+) -> ext_image_copy_capture_frame_v1::ExtImageCopyCaptureFrameV1 {
+    let frame = c.request_frame(capture);
     h.state.request_redraw();
-    h.pump_until(&mut c, "the frame asked for while locked", |s| {
-        s.frame.ready || s.frame.failed.is_some()
+    h.pump_until(c, what, |s| {
+        s.frame.ready || s.frame.failed.is_some() || s.session.stopped
     });
-    assert!(
-        !c.state.frame.ready,
-        "a frame was delivered while the session was locked"
+    frame
+}
+
+/// SEC-05: under the lock an output session goes on and every frame is black: neither the lock screen nor what it
+/// covers reaches the buffer. After the unlock the same session shows the desktop again.
+#[test]
+fn under_the_lock_an_output_session_goes_on_and_is_copied_black() {
+    let Some(mut h) = Harness::new() else { return };
+    let (mut app, frame) = mapped_app(&mut h);
+    h.idle(&mut app, 5);
+    let red = (
+        (frame.x + frame.w / 2.0) as i32,
+        (frame.y + frame.h * 0.25) as i32,
     );
-    assert_eq!(
-        c.state.frame.failed,
-        Some(ext_image_copy_capture_frame_v1::FailureReason::Stopped)
+    let mut c = TestClient::privileged(&mut h);
+    let source = c.output_source();
+    let capture = c.session(&mut h, &source, true);
+    next_frame(&mut h, &mut c, &capture, "the frame before the lock").destroy();
+    assert_eq!(capture.pixel(red.0, red.1), RED);
+
+    let locker = locked(&mut h);
+    let second = next_frame(&mut h, &mut c, &capture, "the frame while locked");
+    assert!(!c.state.session.stopped, "the lock stopped the session");
+    assert!(c.state.frame.ready, "failed: {:?}", c.state.frame.failed);
+    assert!(h.state.capture_running());
+    assert!(
+        capture.pixels().iter().all(|p| *p == BLACK),
+        "a frame of a locked output that is not all black"
     );
 
     second.destroy();
     locker.unlock();
     h.idle(&mut c, 40);
-    let third = c.request_frame(&capture);
-    h.pump_until(&mut c, "the frame after the unlock", |s| {
-        s.frame.ready || s.frame.failed.is_some()
-    });
-    assert!(
-        !c.state.frame.ready,
-        "a session stopped by the lock delivered after the unlock"
-    );
-
-    third.destroy();
-    let renewed = c.session(&mut h, &source, true);
-    let _fourth = c.request_frame(&renewed);
-    h.pump_until(&mut c, "a new session after the unlock", |s| {
-        s.frame.ready || s.frame.failed.is_some()
-    });
+    next_frame(&mut h, &mut c, &capture, "the frame after the unlock");
     assert!(c.state.frame.ready, "failed: {:?}", c.state.frame.failed);
+    assert_eq!(
+        capture.pixel(red.0, red.1),
+        RED,
+        "the desktop after the unlock"
+    );
 }
 
 /// SEC-05: a console switch away and back while the session is locked does not open the screen to capture, and a
-/// session made while locked is stopped at once.
+/// session made while locked is served black frames.
 #[test]
-fn a_session_resumed_while_locked_still_delivers_no_capture_buffer() {
+fn a_session_resumed_or_made_while_locked_is_copied_black() {
     let Some(mut h) = Harness::new() else { return };
-    let (mut app, frame) = mapped_app(&mut h);
-    h.state
-        .pointer_moved_to((frame.x + 20.0, frame.y + 200.0).into(), 0, None);
+    let (mut app, _) = mapped_app(&mut h);
     h.idle(&mut app, 5);
     let mut c = TestClient::privileged(&mut h);
     let source = c.output_source();
     let capture = c.session(&mut h, &source, true);
-
-    let locker = common::Client::locker(common::session_agent(&h.state));
-    h.pump_until(&mut c, "the session to be stopped by the lock", |s| {
-        s.session.stopped
-    });
-    for _ in 0..200 {
-        if locker.locked() {
-            break;
-        }
-        h.step();
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    assert!(locker.locked(), "the session lock was not granted");
+    let locker = locked(&mut h);
 
     h.state.session_activated();
-    let _frame = c.request_frame(&capture);
-    h.state.request_redraw();
-    h.pump_until(&mut c, "the frame asked for after the resume", |s| {
-        s.frame.ready || s.frame.failed.is_some()
-    });
+    next_frame(
+        &mut h,
+        &mut c,
+        &capture,
+        "the frame asked for after the resume",
+    );
+    assert!(c.state.frame.ready, "failed: {:?}", c.state.frame.failed);
     assert!(
-        !c.state.frame.ready,
-        "a frame was delivered after the session resumed while locked"
+        capture.pixels().iter().all(|p| *p == BLACK),
+        "a frame after the resume that is not all black"
     );
     assert!(
         h.state.session_lock.is_active(),
         "the resume ended the lock"
     );
 
-    c.state.session = SessionSeen::default();
-    let qh = c.qh();
-    let manager: ext_image_copy_capture_manager_v1::ExtImageCopyCaptureManagerV1 =
-        c.globals.bind(&qh, 1..=1, ()).unwrap();
-    let _late = manager.create_session(
-        &source,
-        ext_image_copy_capture_manager_v1::Options::empty(),
-        &qh,
-        (),
+    let late = c.session(&mut h, &source, false);
+    assert_eq!(
+        late.size, OUTPUT,
+        "a session made while locked gets its constraints"
     );
-    h.pump_until(&mut c, "a session made while locked to be stopped", |s| {
-        s.session.stopped || s.session.done
-    });
-    assert!(
-        c.state.session.stopped,
-        "a session made while locked was served"
+    next_frame(
+        &mut h,
+        &mut c,
+        &late,
+        "the frame of a session made while locked",
     );
-    assert!(
-        c.state.session.size.is_none(),
-        "a session made while locked got constraints"
-    );
+    assert!(c.state.frame.ready, "failed: {:?}", c.state.frame.failed);
+    assert!(late.pixels().iter().all(|p| *p == BLACK));
     locker.unlock();
+}
+
+/// SEC-05: under the lock a window session goes on and its frame waits: it is copied after the unlock.
+#[test]
+fn under_the_lock_a_window_frame_waits_for_the_unlock() {
+    let Some(mut h) = Harness::new() else { return };
+    let (mut app, _) = mapped_app(&mut h);
+    let mut c = TestClient::privileged(&mut h);
+    let qh = c.qh();
+    let list: ext_foreign_toplevel_list_v1::ExtForeignToplevelListV1 =
+        c.globals.bind(&qh, 1..=1, ()).unwrap();
+    h.pump_until(&mut c, "the foreign toplevel", |s| {
+        s.toplevels.iter().any(|t| t.1 == APP_ID)
+    });
+    app.pump();
+    let handle = c
+        .state
+        .toplevels
+        .iter()
+        .find(|t| t.1 == APP_ID)
+        .unwrap()
+        .0
+        .clone();
+    let manager: ext_foreign_toplevel_image_capture_source_manager_v1::ExtForeignToplevelImageCaptureSourceManagerV1 = c.globals.bind(&qh, 1..=1, ()).unwrap();
+    let source = manager.create_source(&handle, &qh, ());
+    let capture = c.session(&mut h, &source, false);
+    let locker = locked(&mut h);
+
+    let _frame = c.request_frame(&capture);
+    h.state.request_redraw();
+    h.idle(&mut c, 40);
+    assert!(
+        !c.state.frame.ready && c.state.frame.failed.is_none() && !c.state.session.stopped,
+        "a window frame under the lock was answered: ready {}, failed {:?}, stopped {}",
+        c.state.frame.ready,
+        c.state.frame.failed,
+        c.state.session.stopped
+    );
+
+    locker.unlock();
+    h.pump_until(&mut c, "the window frame after the unlock", |s| {
+        s.frame.ready || s.frame.failed.is_some()
+    });
+    assert!(c.state.frame.ready, "failed: {:?}", c.state.frame.failed);
+    let (w, hh) = capture.size;
+    assert_eq!(capture.pixel(w / 2, hh / 4), RED);
+    drop(list);
+}
+
+/// The authentication prompt is never captured: where its overlay surface is shown, a capture has the pixels it had
+/// before the prompt came.
+#[test]
+fn the_authentication_prompt_is_not_in_an_output_capture() {
+    let Some(mut h) = Harness::new() else { return };
+    let mut c = TestClient::privileged(&mut h);
+    let source = c.output_source();
+    let before = c.session(&mut h, &source, false);
+    next_frame(&mut h, &mut c, &before, "the frame before the prompt");
+    assert!(c.state.frame.ready, "failed: {:?}", c.state.frame.failed);
+
+    let _prompt = common::Client::prompt(common::prompt_agent(&h.state));
+    h.clients_until(&mut [&mut c], "the prompt to be shown", |s| {
+        s.prompt_shown()
+    });
+    let after = c.session(&mut h, &source, false);
+    next_frame(&mut h, &mut c, &after, "the frame with the prompt");
+    assert!(c.state.frame.ready, "failed: {:?}", c.state.frame.failed);
+    // the prompt's 120 x 80 points in the top left corner
+    let area: Vec<(i32, i32)> = (0..80)
+        .flat_map(|y| (0..120).map(move |x| (x, y)))
+        .collect();
+    assert!(
+        area.iter().all(|&(x, y)| after.pixel(x, y) != BLUE),
+        "the prompt's pixels are in the capture"
+    );
+    assert!(area
+        .iter()
+        .all(|&(x, y)| after.pixel(x, y) == before.pixel(x, y)));
 }
 
 /// A `sleep` process holding a connection with the Capture role.

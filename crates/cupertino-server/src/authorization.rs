@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use cupertino_defaults::compositor::ShellRoleName;
 use cupertino_protocols::server::cupertino_shell_v1::Error as ShellError;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Resource};
 
 use crate::force_quit::ProcessHandle;
@@ -31,6 +32,9 @@ pub enum ShellRole {
     SessionLock,
     /// See the capture globals and the window feed of the screenshot process.
     Capture,
+    /// Draw the authentication prompt: its overlay surfaces are hidden from capture, and while one is mapped no
+    /// application holds the pointer or the shortcuts.
+    Prompt,
 }
 
 impl ShellRole {
@@ -200,6 +204,13 @@ pub fn authorized(client: &Client, role: ShellRole) -> bool {
     capabilities(client).contains(role)
 }
 
+/// Whether `surface` is drawn by the authentication prompt: its client holds [`ShellRole::Prompt`].
+pub fn is_prompt(surface: &WlSurface) -> bool {
+    surface
+        .client()
+        .is_some_and(|client| authorized(&client, ShellRole::Prompt))
+}
+
 /// Request-time check of a role object: the connection must still hold `role`. When it does not, the object's client
 /// gets the shell protocol's permission error and the request is not to be carried out.
 pub fn require<R: Resource>(client: &Client, role: ShellRole, object: &R) -> bool {
@@ -243,6 +254,13 @@ mod tests {
     fn capture_alone_does_not_make_the_shell_global_visible() {
         assert!(!ClientCapabilitySet::of([ShellRole::Capture]).holds_shell_role());
         assert!(ClientCapabilitySet::of([ShellRole::MenuBar]).holds_shell_role());
+    }
+
+    #[test]
+    fn the_prompt_role_does_not_make_the_shell_global_visible() {
+        let prompt = ClientCapabilitySet::of([ShellRole::Prompt]);
+        assert!(!prompt.holds_shell_role());
+        assert!(prompt.contains(ShellRole::Prompt) && !prompt.contains(ShellRole::Capture));
     }
 
     #[test]

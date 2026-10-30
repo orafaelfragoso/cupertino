@@ -850,6 +850,41 @@ impl Client {
         })
     }
 
+    /// The authentication prompt over `stream` (a connection with the Prompt role, [`prompt_agent`]): an overlay layer
+    /// surface of 120 x 80 in the top left corner of the output, drawn [`TOPLEVEL_BLUE`]. [`Client::unlock`] unmaps it.
+    pub fn prompt(stream: UnixStream) -> Client {
+        Self::run_over(stream, |queue, client, globals| {
+            let qh = queue.handle();
+            let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
+            let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
+                globals.bind(&qh, 1..=4, ()).unwrap();
+            let surface = compositor.create_surface(&qh, ());
+            let layer = layer_shell.get_layer_surface(
+                &surface,
+                None,
+                zwlr_layer_shell_v1::Layer::Overlay,
+                "prompt".to_string(),
+                &qh,
+                surface.clone(),
+            );
+            layer.set_size(120, 80);
+            layer.set_anchor(
+                zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left,
+            );
+            surface.commit();
+            queue.roundtrip(client).unwrap();
+            let unmapped = surface.clone();
+            Setup {
+                objects: Box::new((layer_shell, layer, surface)),
+                lock: None,
+                release: Some(Box::new(move || {
+                    unmapped.attach(None, 0, 0);
+                    unmapped.commit();
+                })),
+            }
+        })
+    }
+
     pub fn locked(&self) -> bool {
         self.lock_status.lock().unwrap().locked
     }
@@ -863,7 +898,7 @@ impl Client {
         self.lock_status.lock().unwrap().finished
     }
 
-    /// Send `unlock_and_destroy`; a constraining client destroys its pointer constraint.
+    /// Send `unlock_and_destroy`; a constraining client destroys its pointer constraint, a prompt unmaps its surface.
     pub fn unlock(&self) {
         self.unlock.store(true, Ordering::SeqCst);
     }
@@ -887,6 +922,15 @@ pub fn session_agent(state: &Cupertino) -> UnixStream {
     cupertino_server::shell_connection::shell_process_connection(
         &state.display_handle,
         &[cupertino_server::authorization::ShellRole::SessionLock],
+    )
+    .unwrap()
+}
+
+/// A connection the server made for the authentication prompt.
+pub fn prompt_agent(state: &Cupertino) -> UnixStream {
+    cupertino_server::shell_connection::shell_process_connection(
+        &state.display_handle,
+        &[cupertino_server::authorization::ShellRole::Prompt],
     )
     .unwrap()
 }

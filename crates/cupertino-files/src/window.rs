@@ -954,6 +954,52 @@ impl WindowPainter {
         state: &WindowState<'_>,
         pal: &Palette,
     ) {
+        self.paint_in(pm, scale, frame, state, pal, None);
+    }
+
+    /// [`paint`](Self::paint) for a frame of which only the device-pixel `rows` (top, bottom) are needed: the content
+    /// view, most of a frame's cost, is drawn only in the bands of it they cross. Inside those rows the pixels are those
+    /// of a whole paint; outside them the content view is missing.
+    pub fn paint_rows(
+        &mut self,
+        pm: &mut Pixmap,
+        scale: f32,
+        frame: &Frame,
+        state: &WindowState<'_>,
+        pal: &Palette,
+        rows: &[(u32, u32)],
+    ) {
+        let content = &frame.window.content;
+        let top = (content.y as f32 * scale).round() as u32;
+        let height = (content.h as f32 * scale) as u32;
+        let mut bands: Vec<(u32, u32)> = rows
+            .iter()
+            .map(|&(y0, y1)| (y0.max(top) - top, y1.min(top + height).saturating_sub(top)))
+            .filter(|(y0, y1)| y0 < y1)
+            .collect();
+        bands.sort_unstable();
+        let mut merged: Vec<Band> = Vec::new();
+        for (y0, y1) in bands {
+            match merged.last_mut() {
+                Some(b) if y0 <= b.top + b.height => b.height = b.height.max(y1 - b.top),
+                _ => merged.push(Band {
+                    top: y0,
+                    height: y1 - y0,
+                }),
+            }
+        }
+        self.paint_in(pm, scale, frame, state, pal, Some(&merged));
+    }
+
+    fn paint_in(
+        &mut self,
+        pm: &mut Pixmap,
+        scale: f32,
+        frame: &Frame,
+        state: &WindowState<'_>,
+        pal: &Palette,
+        bands: Option<&[Band]>,
+    ) {
         self.renderer.text.set_scale(scale);
         let w = &frame.window;
         // the sidebar is left clear: the server draws its material below the surface
@@ -981,7 +1027,14 @@ impl WindowPainter {
         if w.content.w < 1.0 || w.content.h < 1.0 {
             return;
         }
-        self.paint_content(pm, scale, frame, state, pal, None);
+        match bands {
+            None => self.paint_content(pm, scale, frame, state, pal, None),
+            Some(bands) => {
+                for &band in bands {
+                    self.paint_content(pm, scale, frame, state, pal, Some(band));
+                }
+            }
+        }
         if state.browser.no_results() {
             self.paint_no_results(pm, scale, &w.content, state.mode, pal);
         }
@@ -3385,6 +3438,77 @@ mod tests {
                 None,
                 "an item that is not there"
             );
+        }
+    }
+
+    #[test]
+    fn painting_the_damaged_rows_gives_their_pixels_for_less_work() {
+        for scale in [1.0, 1.5] {
+            let (_d, browser, places, mut painter, frame) = search_window(scale);
+            let mut search = TextField::with_max_len(SEARCH_MAX_LEN);
+            search.insert("notes");
+            let edit = NameEdit::new(0, "editor.txt", false);
+            for (edit, areas) in [
+                (None, caret_areas(&frame, None).unwrap()),
+                (Some(&edit), caret_areas(&frame, Some(0)).unwrap()),
+            ] {
+                let state = WindowState {
+                    browser: &browser,
+                    places: &places,
+                    mode: ViewMode::List,
+                    active: true,
+                    search: &search,
+                    search_focused: edit.is_none(),
+                    search_caret: edit.is_none(),
+                    title: "Here",
+                    now: SystemTime::now(),
+                    edit,
+                    edit_caret: edit.is_some(),
+                    drop_target: None,
+                    marquee: None,
+                    status: "",
+                };
+                let rects = device_rects(&areas, scale);
+                let rows: Vec<(u32, u32)> = rects.iter().map(|r| (r.1, r.3)).collect();
+                let mut paint = |rows: Option<&[(u32, u32)]>| {
+                    let mut pm =
+                        Pixmap::new((920.0 * scale) as u32, (436.0 * scale) as u32).unwrap();
+                    painter.renderer.rows_drawn = 0;
+                    crate::render::WRITTEN.with(|c| c.set(0));
+                    let pal = Palette::builtin(false);
+                    match rows {
+                        None => painter.paint(&mut pm, scale, &frame, &state, &pal),
+                        Some(rows) => {
+                            painter.paint_rows(&mut pm, scale, &frame, &state, &pal, rows)
+                        }
+                    }
+                    let work = (
+                        crate::render::WRITTEN.with(|c| c.get()),
+                        painter.renderer.rows_drawn,
+                    );
+                    (pm, work)
+                };
+                let (whole, whole_work) = paint(None);
+                let (damaged, damaged_work) = paint(Some(&rows));
+                let width = whole.width() as usize;
+                for &(x0, y0, x1, y1) in &rects {
+                    for y in y0 as usize..y1 as usize {
+                        let row = (y * width + x0 as usize) * 4..(y * width + x1 as usize) * 4;
+                        assert!(
+                            whole.data()[row.clone()] == damaged.data()[row],
+                            "row {y} of the damage at {scale}x, editing: {}",
+                            edit.is_some()
+                        );
+                    }
+                }
+                assert!(
+                    damaged_work.0 < whole_work.0 / 2,
+                    "pixels written at {scale}x: {damaged_work:?} against {whole_work:?}"
+                );
+                if edit.is_none() {
+                    assert_eq!(damaged_work.1, 0, "a toolbar caret draws no list row");
+                }
+            }
         }
     }
 

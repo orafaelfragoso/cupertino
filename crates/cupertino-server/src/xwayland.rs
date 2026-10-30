@@ -103,7 +103,7 @@ impl XDisplay {
 /// to X11. Qt 5.11 and later take a list (Qt 6 already prefers Wayland in a Wayland session, outside GNOME); Electron
 /// before 38 reads the hint (38 removed it and picks Wayland from `XDG_SESSION_TYPE`). SDL is left alone: an SDL 2 bundled
 /// with a game may not take a list, and a driver name it does not know fails its video start.
-const WAYLAND_FIRST: [(&str, &str); 2] = [
+pub const WAYLAND_FIRST: [(&str, &str); 2] = [
     ("QT_QPA_PLATFORM", "wayland;xcb"),
     ("ELECTRON_OZONE_PLATFORM_HINT", "auto"),
 ];
@@ -353,6 +353,8 @@ impl XWayland {
                     tracing::info!(%status, "xwayland-satellite exited: the X display waits for the next X11 program");
                     if status.success() && now.saturating_duration_since(started) >= self.quick_exit
                     {
+                        // it ran: a run of failures before it is over
+                        self.backoff = Backoff::default();
                         Phase::Listening
                     } else {
                         // a failure, or a success at once (a build that cannot run, a usage error), which the waiting
@@ -709,6 +711,27 @@ mod tests {
         let _client = UnixStream::connect(&f.socket).unwrap();
         f.run_until(|f| f.starts().len() == 1 && f.state.as_ref().unwrap().pid().is_none());
         assert!(matches!(f.state.as_ref().unwrap().phase, Phase::Listening));
+    }
+
+    #[test]
+    fn a_normal_run_after_a_crash_starts_the_throttle_over() {
+        let marker = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+        std::fs::remove_file(&marker).unwrap();
+        let mut f = fixture(&format!(
+            "if [ -e {0} ]; then sleep 1.2; exit 0; else touch {0}; kill -SEGV $$; fi",
+            marker.display()
+        ));
+        let _client = UnixStream::connect(&f.socket).unwrap();
+        f.run_until(|f| f.starts().len() == 1 && f.state.as_ref().unwrap().pid().is_none());
+        assert_ne!(
+            f.state.as_ref().unwrap().backoff,
+            Backoff::default(),
+            "the crash raised it"
+        );
+        // the waiting client starts it again after the throttle; this run lasts and ends normally
+        f.run_until(|f| f.starts().len() == 2 && f.state.as_ref().unwrap().pid().is_none());
+        assert!(matches!(f.state.as_ref().unwrap().phase, Phase::Listening));
+        assert_eq!(f.state.as_ref().unwrap().backoff, Backoff::default());
     }
 
     #[test]

@@ -72,7 +72,10 @@ One `key = value` per line, `#` starts a comment. Keys (`cupertino-defaults::log
 `admin-groups` (see "Administrators"). A bad line is logged and its key takes its safe value (the table in
 `cupertino-defaults::login`: a bad filter lists nobody and offers "Other…", a bad power switch disables the item, a bad
 `admin-groups` names no administrator, a bad `auto-login` is off); only a missing or bad greeter or session command, or a
-missing file, keeps the manager from starting. The filter and power keys are the login window preferences of the
+missing file, keeps the manager from starting. A line without `=` is a bad line of the key it starts with
+(`hide-admin-users false` hides the administrators). A misspelled key is only logged, with one summary line after the
+bad lines: after editing the file run `cupertino-sessiond --check-config`, which prints each bad line and exits non-zero
+when there is one (any user can run it; it reads the file and starts nothing), or check the journal. The filter and power keys are the login window preferences of the
 reference; they were options of `cupertino-login --greeter`.
 
 ## What the manager does

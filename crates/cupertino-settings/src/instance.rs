@@ -55,16 +55,29 @@ pub fn serve_about(
     })
 }
 
+/// Hand `activation_token` to the running About. Only an owner that runs this very program gets it: another program
+/// holding the name would otherwise receive the launcher's focus grant. The call goes to the owner that was checked.
 pub fn show_about(
     builder: connection::Builder<'static>,
     activation_token: &str,
 ) -> zbus::Result<()> {
     zbus::block_on(async {
-        builder
-            .build()
-            .await?
+        let connection = builder.build().await?;
+        let daemon = fdo::DBusProxy::new(&connection).await?;
+        let owner = daemon
+            .get_name_owner(ABOUT_BUS_NAME.try_into().expect("a valid bus name"))
+            .await?;
+        let pid = daemon
+            .get_connection_unix_process_id(owner.as_ref().into())
+            .await?;
+        if !runs_this_program(pid) {
+            return Err(zbus::Error::Failure(format!(
+                "{ABOUT_BUS_NAME} is owned by another program"
+            )));
+        }
+        connection
             .call_method(
-                Some(ABOUT_BUS_NAME),
+                Some(owner.as_str()),
                 ABOUT_PATH,
                 Some(ABOUT_BUS_NAME),
                 "Show",
@@ -73,6 +86,53 @@ pub fn show_about(
             .await
             .map(drop)
     })
+}
+
+/// Whether process `pid` runs the same executable as this process.
+fn runs_this_program(pid: u32) -> bool {
+    match (
+        std::fs::read_link(format!("/proc/{pid}/exe")),
+        std::env::current_exe(),
+    ) {
+        (Ok(owner), Ok(own)) => owner == own,
+        _ => false,
+    }
+}
+
+/// Whether a hand-over failed because About's owner left the bus after the name was found taken.
+fn owner_left(e: &zbus::Error) -> bool {
+    match e {
+        zbus::Error::MethodError(name, _, _) => matches!(
+            name.as_str(),
+            "org.freedesktop.DBus.Error.ServiceUnknown"
+                | "org.freedesktop.DBus.Error.NameHasNoOwner"
+        ),
+        zbus::Error::FDO(e) => matches!(
+            **e,
+            fdo::Error::ServiceUnknown(_) | fdo::Error::NameHasNoOwner(_)
+        ),
+        _ => false,
+    }
+}
+
+/// Serve About, or hand the launch to the About that runs (`Ok(None)`). An owner that leaves between the two, as an
+/// About quitting while it is launched again, lets this launch claim the name once more.
+pub fn serve_or_show_about<C>(
+    mut serve: impl FnMut() -> zbus::Result<C>,
+    mut show: impl FnMut() -> zbus::Result<()>,
+) -> zbus::Result<Option<C>> {
+    let mut retried = false;
+    loop {
+        match serve() {
+            Ok(connection) => return Ok(Some(connection)),
+            Err(zbus::Error::NameTaken) => match show() {
+                Ok(()) => return Ok(None),
+                Err(e) if owner_left(&e) && !retried => retried = true,
+                Err(e) => return Err(e),
+            },
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 struct Instance {
@@ -163,4 +223,85 @@ pub fn show(
                 .map(drop)
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn left() -> zbus::Error {
+        zbus::Error::FDO(Box::new(fdo::Error::NameHasNoOwner("gone".into())))
+    }
+
+    #[test]
+    fn a_taken_name_hands_the_launch_over() {
+        let mut serves = 0;
+        let outcome = serve_or_show_about(
+            || -> zbus::Result<()> {
+                serves += 1;
+                Err(zbus::Error::NameTaken)
+            },
+            || Ok(()),
+        );
+        assert!(matches!(outcome, Ok(None)));
+        assert_eq!(serves, 1);
+    }
+
+    #[test]
+    fn an_owner_that_left_lets_the_launch_claim_the_name_once_more() {
+        let mut serves = 0;
+        let outcome = serve_or_show_about(
+            || {
+                serves += 1;
+                if serves == 1 {
+                    Err(zbus::Error::NameTaken)
+                } else {
+                    Ok("owner")
+                }
+            },
+            || Err(left()),
+        );
+        assert!(matches!(outcome, Ok(Some("owner"))));
+        assert_eq!(serves, 2);
+    }
+
+    #[test]
+    fn the_name_is_claimed_again_only_once_and_other_failures_are_not_retried() {
+        let mut serves = 0;
+        let outcome = serve_or_show_about(
+            || -> zbus::Result<()> {
+                serves += 1;
+                Err(zbus::Error::NameTaken)
+            },
+            || Err(left()),
+        );
+        assert!(outcome.is_err());
+        assert_eq!(serves, 2);
+
+        let mut serves = 0;
+        let outcome = serve_or_show_about(
+            || -> zbus::Result<()> {
+                serves += 1;
+                Err(zbus::Error::NameTaken)
+            },
+            || Err(zbus::Error::Failure("refused".into())),
+        );
+        assert!(matches!(outcome, Err(zbus::Error::Failure(_))));
+        assert_eq!(serves, 1);
+    }
+
+    #[test]
+    fn only_this_program_counts_as_the_owner() {
+        assert!(runs_this_program(std::process::id()));
+        let other = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .unwrap();
+        let pid = other.id();
+        let mut other = other;
+        assert!(!runs_this_program(pid));
+        other.kill().unwrap();
+        other.wait().unwrap();
+        assert!(!runs_this_program(u32::MAX));
+    }
 }

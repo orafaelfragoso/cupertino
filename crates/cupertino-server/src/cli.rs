@@ -593,6 +593,8 @@ pub fn run(cli: Cli) -> Result<()> {
         }
     }
     state.start_settings_watch(files, paths);
+    // the scripted steps and the recording count their seconds from the same instant
+    let script_start = Instant::now();
     schedule_script(&cli, &event_loop)?;
     if mode != Mode::Headless {
         start_xwayland(&mut state);
@@ -625,7 +627,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 .as_deref()
                 .map(|path| {
                     let after = Duration::from_secs_f64(cli.record_after.max(0.0));
-                    crate::backend::record::start(&event_loop, path, after)
+                    crate::backend::record::start(&event_loop, path, script_start + after)
                 })
                 .transpose()?;
             crate::backend::headless::run(&mut state, &mut event_loop, deadline)?;

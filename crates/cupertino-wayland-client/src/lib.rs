@@ -24,7 +24,7 @@ mod text_input;
 
 pub use buffer::{BufferFormat, BufferLayout, PixelRect};
 pub use capability::{Capability, CapabilitySet, Extension};
-pub use clipboard::{ClipboardOffer, ReadId};
+pub use clipboard::{ClipboardOffer, DragEvent, DragOffer, DragSource, DragSourceEvent, ReadId};
 pub use configure::{Decorations, WindowConfigure, WindowStates, WmCapabilities};
 pub use connection::{
     BufferLease, Connection, Event, ExtensionEvent, ExternalRole, FrameCallback, Popup,
@@ -40,6 +40,7 @@ pub use scale::Scale;
 pub use text_input::{
     Preedit, SurroundingText, TextInputDone, TextInputEvent, TextInputState, MAX_SURROUNDING,
 };
+pub use wayland_client::protocol::wl_data_device_manager::DndAction as DragActions;
 pub use wayland_client::protocol::wl_pointer::AxisSource as ScrollSource;
 pub use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape as CursorShape;
 pub use wayland_protocols::wp::presentation_time::client::wp_presentation_feedback::Kind as PresentedKind;

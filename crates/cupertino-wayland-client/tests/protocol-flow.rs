@@ -4,10 +4,11 @@
 use cupertino_geometry::{Point, Rect};
 use cupertino_wayland_client::{
     Anchor, BufferFormat, Button, Capability, ClipboardOffer, Connection, ConstraintAdjustment,
-    CursorShape, CursorTheme, Decorations, Error, Event, Extension, Gravity, KeyboardEvent,
-    OutputGeometry, OutputTransform, PixelRect, PointerEvent, PopupPlacement, Preedit, Presented,
-    PresentedKind, ReadId, Scale, ScrollSource, SurfaceId, SurroundingText, TextInputDone,
-    TextInputEvent, TextInputState, Toplevel, ToplevelConfig, WindowConfigure, WmCapabilities,
+    CursorShape, CursorTheme, Decorations, DragActions, DragEvent, DragOffer, DragSourceEvent,
+    Error, Event, Extension, Gravity, KeyboardEvent, OutputGeometry, OutputTransform, PixelRect,
+    PointerEvent, PopupPlacement, Preedit, Presented, PresentedKind, ReadId, Scale, ScrollSource,
+    SurfaceId, SurroundingText, TextInputDone, TextInputEvent, TextInputState, Toplevel,
+    ToplevelConfig, WindowConfigure, WmCapabilities,
 };
 use std::collections::VecDeque;
 use std::io::Write;
@@ -58,10 +59,10 @@ use wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use wayland_server::protocol::wl_buffer::WlBuffer;
 use wayland_server::protocol::wl_callback::WlCallback;
 use wayland_server::protocol::wl_compositor::{self, WlCompositor};
-use wayland_server::protocol::wl_data_device::WlDataDevice;
-use wayland_server::protocol::wl_data_device_manager::{self, WlDataDeviceManager};
+use wayland_server::protocol::wl_data_device::{self, WlDataDevice};
+use wayland_server::protocol::wl_data_device_manager::{self, DndAction, WlDataDeviceManager};
 use wayland_server::protocol::wl_data_offer::{self, WlDataOffer};
-use wayland_server::protocol::wl_data_source::WlDataSource;
+use wayland_server::protocol::wl_data_source::{self, WlDataSource};
 use wayland_server::protocol::wl_keyboard::{self, WlKeyboard};
 use wayland_server::protocol::wl_output::{self, WlOutput};
 use wayland_server::protocol::wl_pointer::{self, WlPointer};
@@ -133,6 +134,8 @@ enum Control {
     },
     /// The pointer leaves the toplevel.
     Leave,
+    /// The left button, pressed by `Click`, goes up.
+    ButtonUp,
     /// The seat loses its pointer and keeps its keyboard.
     DropPointer,
     TypeKey(u32),
@@ -150,6 +153,21 @@ enum Control {
     TextInputLeave,
     /// A preedit the input method never finishes with a `done`.
     PreeditOnly(&'static str),
+    /// Another client's drag enters the toplevel at (4, 5), offering `types` with `actions` allowed.
+    DragEnter {
+        types: Vec<&'static str>,
+        actions: wl_data_device_manager::DndAction,
+    },
+    DragMotion,
+    DragAction(wl_data_device_manager::DndAction),
+    DragDrop,
+    DragLeave,
+    /// To the client's own drag source: the target's type, a request for the data in `mime`, and the end.
+    SourceTarget(Option<&'static str>),
+    SourceSend(&'static str),
+    SourceDropped,
+    SourceFinished,
+    SourceCancelled,
     /// Write `bytes` to every held clipboard read and close it.
     Release(&'static [u8]),
     /// Write this many bytes to every held clipboard read from a thread of its own, keeping it open for two seconds
@@ -217,6 +235,27 @@ enum Seen {
         x: i32,
         y: i32,
     },
+    /// `wl_data_device.start_drag` of a source offering `types` with `actions`.
+    StartDrag {
+        serial: u32,
+        types: Vec<String>,
+        actions: u32,
+    },
+    /// The serial of a drag's enter.
+    DragEntered(u32),
+    /// What the client wrote for a type its drag source was asked for.
+    SourceData(Vec<u8>),
+    /// `wl_data_offer` requests of the drag offer.
+    Accept {
+        serial: u32,
+        mime: Option<String>,
+    },
+    DragActions {
+        actions: u32,
+        preferred: u32,
+    },
+    Finish,
+    OfferDestroyed,
     /// `wl_pointer.set_cursor`, with whether it named a surface.
     Cursor {
         serial: u32,
@@ -279,6 +318,8 @@ struct Mock {
     /// Clipboard reads held open.
     held: Vec<std::fs::File>,
     seat: Option<WlSeat>,
+    drag_offer: Option<WlDataOffer>,
+    drag_source: Option<WlDataSource>,
 }
 
 impl Mock {
@@ -332,7 +373,35 @@ macro_rules! ignore_requests {
     )*};
 }
 
-ignore_requests!(WlBuffer => BufferData, WlCallback => (), WlKeyboard => (), WlOutput => (), WpFractionalScaleV1 => (), WlDataSource => (), ZxdgOutputV1 => (), WpPresentationFeedback => ());
+ignore_requests!(WlBuffer => BufferData, WlCallback => (), WlKeyboard => (), WlOutput => (), WpFractionalScaleV1 => (), ZxdgOutputV1 => (), WpPresentationFeedback => ());
+
+/// What a client's data source offers.
+#[derive(Default)]
+struct SourceState {
+    types: Vec<String>,
+    actions: u32,
+}
+
+impl Dispatch<WlDataSource, Mutex<SourceState>> for Mock {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &WlDataSource,
+        request: wl_data_source::Request,
+        data: &Mutex<SourceState>,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        let mut source = data.lock().unwrap();
+        match request {
+            wl_data_source::Request::Offer { mime_type } => source.types.push(mime_type),
+            wl_data_source::Request::SetActions { dnd_actions } => {
+                source.actions = u32::from(dnd_actions)
+            }
+            _ => {}
+        }
+    }
+}
 
 /// `CLOCK_MONOTONIC`
 const MONOTONIC: u32 = 1;
@@ -977,14 +1046,43 @@ impl Dispatch<WlDataDeviceManager, ()> for Mock {
                 state.data_device = Some(init.init(id, ()))
             }
             wl_data_device_manager::Request::CreateDataSource { id } => {
-                init.init(id, ());
+                init.init(id, Mutex::new(SourceState::default()));
             }
             _ => {}
         }
     }
 }
 
-ignore_requests!(WlDataDevice => ());
+impl Dispatch<WlDataDevice, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &WlDataDevice,
+        request: wl_data_device::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        if let wl_data_device::Request::StartDrag {
+            source: Some(source),
+            serial,
+            ..
+        } = request
+        {
+            let offered = source.data::<Mutex<SourceState>>().unwrap().lock().unwrap();
+            state
+                .seen
+                .send(Seen::StartDrag {
+                    serial,
+                    types: offered.types.clone(),
+                    actions: offered.actions,
+                })
+                .unwrap();
+            drop(offered);
+            state.drag_source = Some(source);
+        }
+    }
+}
 
 impl Dispatch<WlDataOffer, ()> for Mock {
     fn request(
@@ -996,16 +1094,33 @@ impl Dispatch<WlDataOffer, ()> for Mock {
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
-        if let wl_data_offer::Request::Receive { mime_type, fd } = request {
-            let mut file = std::fs::File::from(fd);
-            if state.globals.hold_reads {
-                state.held.push(file);
-            } else {
-                file.write_all(format!("as {mime_type}").as_bytes())
-                    .unwrap();
+        let seen = match request {
+            wl_data_offer::Request::Accept { serial, mime_type } => Seen::Accept {
+                serial,
+                mime: mime_type,
+            },
+            wl_data_offer::Request::SetActions {
+                dnd_actions,
+                preferred_action,
+            } => Seen::DragActions {
+                actions: u32::from(dnd_actions),
+                preferred: u32::from(preferred_action),
+            },
+            wl_data_offer::Request::Finish => Seen::Finish,
+            wl_data_offer::Request::Destroy => Seen::OfferDestroyed,
+            wl_data_offer::Request::Receive { mime_type, fd } => {
+                let mut file = std::fs::File::from(fd);
+                if state.globals.hold_reads {
+                    state.held.push(file);
+                } else {
+                    file.write_all(format!("as {mime_type}").as_bytes())
+                        .unwrap();
+                }
+                Seen::Receive(mime_type)
             }
-            state.seen.send(Seen::Receive(mime_type)).unwrap();
-        }
+            _ => return,
+        };
+        state.seen.send(seen).unwrap();
     }
 }
 
@@ -1177,6 +1292,8 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
             feedbacks: Vec::new(),
             held: Vec::new(),
             seat: None,
+            drag_offer: None,
+            drag_source: None,
         };
         let mut handle = display.handle();
         handle.insert_client(stream, Arc::new(Data)).unwrap();
@@ -1238,6 +1355,12 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
             pointer.enter(serial, &surface, x, y);
             pointer.motion(4000, x, y);
             pointer.button(serial + 1, 4242, BTN_LEFT, wl_pointer::ButtonState::Pressed);
+            pointer.frame();
+        }
+        Control::ButtonUp => {
+            let serial = mock.serial();
+            let pointer = mock.pointer.as_ref().unwrap();
+            pointer.button(serial, 4300, BTN_LEFT, wl_pointer::ButtonState::Released);
             pointer.frame();
         }
         Control::Leave => {
@@ -1308,6 +1431,49 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
             let surface = mock.surface().clone();
             mock.text_input.as_ref().unwrap().0.leave(&surface);
         }
+        Control::DragEnter { types, actions } => {
+            let (serial, surface) = (mock.serial(), mock.surface().clone());
+            let device = mock.data_device.as_ref().unwrap();
+            let offer = device
+                .client()
+                .unwrap()
+                .create_resource::<WlDataOffer, (), Mock>(handle, device.version(), ())
+                .unwrap();
+            device.data_offer(&offer);
+            for t in types {
+                offer.offer(t.into());
+            }
+            offer.source_actions(actions);
+            device.enter(serial, &surface, 4.0, 5.0, Some(&offer));
+            mock.drag_offer = Some(offer);
+            mock.seen.send(Seen::DragEntered(serial)).unwrap();
+        }
+        Control::DragMotion => mock.data_device.as_ref().unwrap().motion(5000, 6.0, 7.5),
+        Control::DragAction(action) => mock.drag_offer.as_ref().unwrap().action(action),
+        Control::DragDrop => mock.data_device.as_ref().unwrap().drop(),
+        Control::DragLeave => mock.data_device.as_ref().unwrap().leave(),
+        Control::SourceTarget(mime) => mock
+            .drag_source
+            .as_ref()
+            .unwrap()
+            .target(mime.map(String::from)),
+        Control::SourceSend(mime) => {
+            let (mut reader, writer) = std::io::pipe().unwrap();
+            mock.drag_source
+                .as_ref()
+                .unwrap()
+                .send(mime.into(), writer.as_fd());
+            drop(writer);
+            let seen = mock.seen.clone();
+            std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(&mut reader, &mut bytes).unwrap();
+                let _ = seen.send(Seen::SourceData(bytes));
+            });
+        }
+        Control::SourceDropped => mock.drag_source.as_ref().unwrap().dnd_drop_performed(),
+        Control::SourceFinished => mock.drag_source.as_ref().unwrap().dnd_finished(),
+        Control::SourceCancelled => mock.drag_source.as_ref().unwrap().cancelled(),
         Control::Release(bytes) => {
             for mut file in mock.held.drain(..) {
                 let _ = file.write_all(bytes);
@@ -2105,6 +2271,284 @@ fn a_replaced_selection_cancels_its_reads_and_eight_run_at_once() {
         conn.receive_async(&fresh, "image/png"),
         Err(Error::UnsupportedFormat(_))
     ));
+}
+
+/// A configured window on a compositor with a seat and the clipboard, and a drag of plain text or HTML, copy or move,
+/// entered over it: the offer and the enter's serial.
+fn dragged_over() -> (
+    Connection,
+    Sender<Control>,
+    Receiver<Seen>,
+    Stash,
+    Toplevel,
+    DragOffer,
+) {
+    let (mut conn, control, seen) = connect(Globals {
+        seat: true,
+        clipboard: true,
+        ..Globals::core()
+    });
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    control
+        .send(Control::DragEnter {
+            types: vec!["text/plain", "text/html"],
+            actions: DndAction::Copy | DndAction::Move,
+        })
+        .unwrap();
+    let offer = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::Drag {
+            surface,
+            event: DragEvent::Enter { offer, point },
+        } if *surface == w.surface() && *point == Point::new(4.0, 5.0) => Some(offer.clone()),
+        _ => None,
+    });
+    (conn, control, seen, stash, w, offer)
+}
+
+fn next_drag(conn: &mut Connection, stash: &mut Stash) -> DragEvent {
+    wait_for(conn, stash, |e| match e {
+        Event::Drag { event, .. } => Some(event.clone()),
+        _ => None,
+    })
+}
+
+fn seen_matching(seen: &Receiver<Seen>, pick: impl Fn(&Seen) -> bool) -> Seen {
+    std::iter::repeat_with(|| next_seen(seen))
+        .find(|s| pick(s))
+        .unwrap()
+}
+
+#[test]
+fn a_drop_is_read_only_once_accepted_in_its_type_and_dropped_then_finished() {
+    let (mut conn, control, seen, mut stash, _w, offer) = dragged_over();
+    assert_eq!(offer.mime_types(), ["text/plain", "text/html"]);
+    assert_eq!(
+        offer.source_actions(),
+        DragActions::Copy | DragActions::Move
+    );
+    control.send(Control::DragMotion).unwrap();
+    assert_eq!(
+        next_drag(&mut conn, &mut stash),
+        DragEvent::Motion {
+            point: Point::new(6.0, 7.5),
+            time: 5000
+        }
+    );
+    assert!(matches!(
+        conn.accept_drag(&offer, Some("image/png")),
+        Err(Error::UnsupportedFormat(_))
+    ));
+    conn.accept_drag(&offer, Some("text/plain")).unwrap();
+    conn.set_drag_actions(&offer, DragActions::Copy, DragActions::Copy)
+        .unwrap();
+    conn.flush().unwrap();
+    let Seen::DragEntered(enter_serial) =
+        seen_matching(&seen, |s| matches!(s, Seen::DragEntered(_)))
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        seen_matching(&seen, |s| matches!(s, Seen::Accept { .. })),
+        Seen::Accept {
+            serial: enter_serial,
+            mime: Some("text/plain".into())
+        }
+    );
+    assert_eq!(
+        seen_matching(&seen, |s| matches!(s, Seen::DragActions { .. })),
+        Seen::DragActions {
+            actions: u32::from(DndAction::Copy),
+            preferred: u32::from(DndAction::Copy),
+        }
+    );
+    control.send(Control::DragAction(DndAction::Copy)).unwrap();
+    assert_eq!(
+        next_drag(&mut conn, &mut stash),
+        DragEvent::Action(DragActions::Copy)
+    );
+    assert!(
+        matches!(
+            conn.receive_drop(&offer, "text/plain"),
+            Err(Error::PermissionDenied(_))
+        ),
+        "not dropped yet"
+    );
+    control.send(Control::DragDrop).unwrap();
+    assert_eq!(next_drag(&mut conn, &mut stash), DragEvent::Drop);
+    assert!(
+        matches!(
+            conn.receive_drop(&offer, "text/html"),
+            Err(Error::PermissionDenied(_))
+        ),
+        "not the accepted type"
+    );
+    let read = conn.receive_drop(&offer, "text/plain").unwrap();
+    let data = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::Received { id, data } if *id == read => Some(data.clone()),
+        _ => None,
+    });
+    assert_eq!(data, Some(b"as text/plain".to_vec()));
+    conn.finish_drag(&offer).unwrap();
+    assert_eq!(
+        seen_matching(&seen, |s| matches!(s, Seen::Finish)),
+        Seen::Finish
+    );
+    assert_eq!(
+        seen_matching(&seen, |s| matches!(s, Seen::OfferDestroyed)),
+        Seen::OfferDestroyed
+    );
+    assert!(matches!(
+        conn.accept_drag(&offer, None),
+        Err(Error::Cancelled)
+    ));
+}
+
+#[test]
+fn a_drag_that_leaves_lets_its_offer_go_and_finishes_only_after_a_drop() {
+    let (mut conn, control, seen, mut stash, _w, offer) = dragged_over();
+    assert!(matches!(conn.finish_drag(&offer), Err(Error::Protocol(_))));
+    control.send(Control::DragLeave).unwrap();
+    assert_eq!(next_drag(&mut conn, &mut stash), DragEvent::Leave);
+    conn.flush().unwrap();
+    assert_eq!(
+        seen_matching(&seen, |s| matches!(s, Seen::OfferDestroyed)),
+        Seen::OfferDestroyed
+    );
+    assert!(matches!(
+        conn.accept_drag(&offer, Some("text/plain")),
+        Err(Error::Cancelled)
+    ));
+}
+
+#[test]
+fn a_window_destroyed_under_a_drag_lets_the_offer_go_and_hears_no_more() {
+    let (mut conn, control, seen, mut stash, w, offer) = dragged_over();
+    conn.destroy(w.surface()).unwrap();
+    conn.flush().unwrap();
+    assert_eq!(
+        seen_matching(&seen, |s| matches!(s, Seen::OfferDestroyed)),
+        Seen::OfferDestroyed
+    );
+    control.send(Control::DragMotion).unwrap();
+    conn.roundtrip().unwrap();
+    stash.extend(conn.wait(Some(Duration::from_millis(50))).unwrap());
+    assert!(!stash.iter().any(|e| matches!(e, Event::Drag { .. })));
+    assert!(matches!(
+        conn.accept_drag(&offer, None),
+        Err(Error::Cancelled)
+    ));
+}
+
+#[test]
+fn a_drag_from_this_client_answers_the_button_and_serves_its_data() {
+    let (mut conn, control, seen) = connect(Globals {
+        seat: true,
+        clipboard: true,
+        ..Globals::core()
+    });
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    let contents = || vec![("text/plain".to_string(), b"dragged".to_vec())];
+    assert!(matches!(
+        conn.start_drag(w.surface(), contents(), DragActions::Copy),
+        Err(Error::PermissionDenied(_))
+    ));
+    control.send(Control::Click { x: 3.0, y: 4.0 }).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(
+            e,
+            Event::Pointer {
+                event: PointerEvent::Button { .. },
+                ..
+            }
+        )
+        .then_some(())
+    });
+    let button = conn.input_serial().unwrap();
+    // a key while the button is held, as for a modifier choosing copy or move: the drag still answers the press
+    control.send(Control::TypeKey(KEY_A)).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(
+            e,
+            Event::Keyboard {
+                event: KeyboardEvent::Key { .. },
+                ..
+            }
+        )
+        .then_some(())
+    });
+    assert_ne!(conn.input_serial(), Some(button));
+    let source = conn
+        .start_drag(
+            w.surface(),
+            contents(),
+            DragActions::Copy | DragActions::Move,
+        )
+        .unwrap();
+    assert_eq!(
+        seen_matching(&seen, |s| matches!(s, Seen::StartDrag { .. })),
+        Seen::StartDrag {
+            serial: button,
+            types: vec!["text/plain".into()],
+            actions: u32::from(DndAction::Copy | DndAction::Move),
+        }
+    );
+    let next = |conn: &mut Connection, stash: &mut Stash| {
+        wait_for(conn, stash, |e| match e {
+            Event::DragSource { source: s, event } if *s == source => Some(event.clone()),
+            _ => None,
+        })
+    };
+    control
+        .send(Control::SourceTarget(Some("text/plain")))
+        .unwrap();
+    assert_eq!(
+        next(&mut conn, &mut stash),
+        DragSourceEvent::Target(Some("text/plain".into()))
+    );
+    control.send(Control::SourceSend("text/plain")).unwrap();
+    conn.roundtrip().unwrap();
+    assert_eq!(
+        seen_matching(&seen, |s| matches!(s, Seen::SourceData(_))),
+        Seen::SourceData(b"dragged".to_vec())
+    );
+    control.send(Control::SourceDropped).unwrap();
+    assert_eq!(next(&mut conn, &mut stash), DragSourceEvent::Dropped);
+    control.send(Control::SourceFinished).unwrap();
+    assert_eq!(next(&mut conn, &mut stash), DragSourceEvent::Finished);
+
+    let cancelled = conn
+        .start_drag(w.surface(), contents(), DragActions::Copy)
+        .unwrap();
+    control.send(Control::ButtonUp).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(
+            e,
+            Event::Pointer {
+                event: PointerEvent::Button { pressed: false, .. },
+                ..
+            }
+        )
+        .then_some(())
+    });
+    assert!(
+        matches!(
+            conn.start_drag(w.surface(), contents(), DragActions::Copy),
+            Err(Error::PermissionDenied(_))
+        ),
+        "no button held"
+    );
+    assert_ne!(cancelled, source);
+    seen_matching(&seen, |s| matches!(s, Seen::StartDrag { .. }));
+    control.send(Control::SourceCancelled).unwrap();
+    let event = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::DragSource { source: s, event } if *s == cancelled => Some(event.clone()),
+        _ => None,
+    });
+    assert_eq!(event, DragSourceEvent::Cancelled);
 }
 
 #[test]

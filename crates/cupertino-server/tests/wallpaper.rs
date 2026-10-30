@@ -382,13 +382,27 @@ fn a_quarter_turned_output_draws_the_image_upright() {
 
 #[test]
 fn the_procedural_wallpaper_is_measured_by_its_average_colour_once_per_change() {
+    use cupertino_glass::{cpu::apply_color_ops, ops::color_ops};
     use cupertino_server::render::scene::wallpaper_tint;
     use cupertino_server::render::wallpaper::colour_lightness;
+    // the average colour as the menu bar's material shows it
+    let under_bar = |appearance: Appearance| {
+        let recipe = cupertino_theme::Theme::load()
+            .unwrap()
+            .recipe(appearance, "MenuBar", &Default::default())
+            .unwrap();
+        let ops = color_ops(&recipe.backdrop.unwrap().ops);
+        colour_lightness(apply_color_ops(
+            wallpaper_tint(appearance == Appearance::Dark),
+            &ops,
+        ))
+    };
     let Some(mut h) = Harness::new(|_, _| {}) else {
         return;
     };
     let out = h.state.outputs[0].id;
-    let light = colour_lightness(wallpaper_tint(false));
+    let light = under_bar(Appearance::Light);
+    assert_ne!(light, colour_lightness(wallpaper_tint(false)));
     h.wait_until("the measure", |s| s.backdrop_lightness(out) == Some(light));
     // told once: no output is marked for frames again by it
     for _ in 0..20 {
@@ -396,7 +410,7 @@ fn the_procedural_wallpaper_is_measured_by_its_average_colour_once_per_change() 
         assert!(!h.state.outputs[0].scheduler.damaged() || h.state.animating());
     }
     h.state.set_appearance(Appearance::Dark);
-    let dark = colour_lightness(wallpaper_tint(true));
+    let dark = under_bar(Appearance::Dark);
     h.wait_until("the dark measure", |s| {
         s.backdrop_lightness(out) == Some(dark)
     });

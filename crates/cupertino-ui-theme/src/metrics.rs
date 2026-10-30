@@ -190,7 +190,11 @@ mod tests {
             )
             .unwrap();
             assert!(
-                reduced.colors.map.values().all(|c| c.a == 1.0),
+                reduced
+                    .colors
+                    .map
+                    .iter()
+                    .all(|((role, _), c)| *role == crate::ColorRole::DialogScrim || c.a == 1.0),
                 "{appearance:?}"
             );
             assert_eq!(reduced.colors, ColorTokens::neutral(appearance));

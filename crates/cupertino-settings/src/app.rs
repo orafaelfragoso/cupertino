@@ -7,7 +7,7 @@ use std::error::Error;
 use std::time::{Duration, Instant};
 
 use cupertino_assets::Assets;
-use cupertino_defaults::accessibility::DisplayOptions;
+use cupertino_defaults::accessibility::{DisplayOptions, SYSTEM_ACCESSIBILITY};
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_filepicker::Mode;
 use cupertino_geometry::Rect as PopupRect;
@@ -19,7 +19,7 @@ use cupertino_settings::history::History;
 use cupertino_settings::inflight::Reads;
 use cupertino_settings::instance;
 use cupertino_settings::keys::{self, Action, Focus, Mods, SearchKey};
-use cupertino_settings::live::{Live, Pictures, Reading};
+use cupertino_settings::live::{Live, LoginScreen, Pictures, Reading};
 use cupertino_settings::menu;
 use cupertino_settings::menu_bar::{self, MenuAction, MenuState};
 use cupertino_settings::paint::{
@@ -29,7 +29,7 @@ use cupertino_settings::paint::{
 use cupertino_settings::panes::{self, Call, ControlId, Effect, Section, Session};
 use cupertino_settings::search::{popup, SearchField};
 use cupertino_settings::services::{self, Services, SESSION_NAME, SESSION_PATH};
-use cupertino_settings::settings::{Paths, Settings};
+use cupertino_settings::settings::{system_accessibility, Paths, Settings};
 use cupertino_settings::sheet::{Answer, Outcome, Sheet, SheetKey};
 use cupertino_settings::sidebar::{self, RowSize};
 use cupertino_settings::window::{self, metrics, Hit, WindowLayout};
@@ -269,6 +269,10 @@ struct App {
     agent_answer: Option<(u64, async_channel::Sender<Answer>)>,
     /// Whether this window's pairing agent is registered.
     agent_registered: bool,
+    /// The openings of the Accessibility pane so far: an answer to `CanSetSystemAccessibility` counts for its own only.
+    login_opening: u64,
+    /// A Use Mine write is waiting for sessiond's reply; it outlives the opening it was pressed in.
+    login_saving: bool,
     /// Watches the settings files while it lives; `None` when the watch could not be set up.
     _files: Option<ConfigWatcher>,
     /// Owns `org.cupertino.Settings1` while it lives.
@@ -301,6 +305,13 @@ enum Background {
         image: std::path::PathBuf,
         thumbnail: std::path::PathBuf,
     },
+    /// Whether the Login Screen section shows, asked at the Accessibility pane's opening `opening`.
+    LoginScreen {
+        opening: u64,
+        allowed: bool,
+    },
+    /// sessiond answered Use Mine.
+    LoginScreenSaved(std::result::Result<(), String>),
 }
 
 /// What a listing thread reads: the packs' pictures, the pictures of an added folder, or a folder of the chooser.
@@ -514,6 +525,8 @@ pub fn run(pane: PaneId, activation_token: String) -> Result<()> {
         listings: Reads::default(),
         agent_answer: None,
         agent_registered: false,
+        login_opening: 0,
+        login_saving: false,
         _files: files,
         _instance: instance,
         menus: None,
@@ -785,6 +798,9 @@ impl App {
         self.scanned = f64::NEG_INFINITY;
         if to == PaneId::Wallpaper {
             self.load_pictures();
+        }
+        if to == PaneId::Accessibility {
+            self.ask_login_screen();
         }
         self.refresh(self.now())?;
         if to == PaneId::Bluetooth && self.live.bluetooth.ready().is_some_and(|b| b.available) {
@@ -1692,6 +1708,7 @@ impl App {
                     .map_err(|e| e.to_string()),
                 Effect::SetAppearance { dark } => self.set_appearance(dark),
                 Effect::SetAccessibility { key, value } => self.set_accessibility(key, &value),
+                Effect::SetSystemAccessibility => self.save_login_screen(),
             };
             if let Err(e) = outcome {
                 eprintln!("cupertino-settings: {e}");
@@ -1723,6 +1740,39 @@ impl App {
         let now = self.now();
         self.refresh(now).map_err(|e| e.to_string())?;
         result
+    }
+
+    /// Ask sessiond whether the Login Screen section shows at this opening of the Accessibility pane: it stays hidden
+    /// until the answer, and the refusal shown under it at the last opening goes.
+    fn ask_login_screen(&mut self) {
+        self.live.login_screen = None;
+        self.errors.retain(|(id, _)| *id != ControlId::LoginScreen);
+        self.login_opening += 1;
+        let opening = self.login_opening;
+        let notify = self.notify.clone();
+        // a failure is logged and leaves the section hidden
+        let _ = self.services.can_set_system_accessibility(move |allowed| {
+            notify(Background::LoginScreen { opening, allowed })
+        });
+    }
+
+    /// Use Mine: send the person's allow-listed options to sessiond; the row shows "Saving…" until the reply.
+    fn save_login_screen(&mut self) -> std::result::Result<(), String> {
+        let session = Session {
+            dark: self.dark,
+            display: self.display,
+        };
+        let options = panes::login_screen_options(session, &self.settings);
+        let notify = self.notify.clone();
+        self.services
+            .set_system_accessibility(options, move |result| {
+                notify(Background::LoginScreenSaved(result))
+            })?;
+        self.login_saving = true;
+        if let Some(login) = &mut self.live.login_screen {
+            login.saving = true;
+        }
+        Ok(())
     }
 
     /// What a sheet's key or press decided.
@@ -1970,6 +2020,27 @@ impl App {
                 if self.painter.set_thumbnail(&image, &thumbnail) {
                     self.window.redraw();
                 }
+            }
+            Background::LoginScreen { opening, allowed } => {
+                if opening == self.login_opening {
+                    self.live.login_screen = allowed.then(|| LoginScreen {
+                        current: system_accessibility(std::path::Path::new(SYSTEM_ACCESSIBILITY)),
+                        saving: self.login_saving,
+                    });
+                    self.window.redraw();
+                }
+            }
+            Background::LoginScreenSaved(result) => {
+                self.login_saving = false;
+                if let Some(login) = &mut self.live.login_screen {
+                    login.saving = false;
+                    login.current =
+                        system_accessibility(std::path::Path::new(SYSTEM_ACCESSIBILITY));
+                }
+                if let Err(e) = result {
+                    self.errors.push((ControlId::LoginScreen, e));
+                }
+                self.window.redraw();
             }
             Background::Files(WatchEvent::Changed(_)) => {
                 if let Err(e) = self.settings.reload(&self.paths) {

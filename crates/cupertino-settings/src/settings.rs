@@ -3,7 +3,7 @@
 //! values a key has when its file does not set it.
 
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use cupertino_defaults::accessibility::{
     AccessibilitySettings, ACCESSIBILITY_ENV, ACCESSIBILITY_FILE,
@@ -14,6 +14,7 @@ use cupertino_defaults::dock::{sanitize_large_size, sanitize_tile_size, DockSett
 use cupertino_defaults::keyboard::KeyboardSettings;
 use cupertino_defaults::menubar::{ClockSettings, MenuBarSettings};
 use cupertino_defaults::power::PowerSettings;
+use cupertino_defaults::system::read_root_file;
 
 use crate::mapping;
 
@@ -384,4 +385,11 @@ impl Settings {
     pub fn repeat_interval_ms(&self) -> u32 {
         self.keyboard.repeat_interval_ms.unwrap_or(83)
     }
+}
+
+/// The machine's accessibility defaults in `path` (`SYSTEM_ACCESSIBILITY`) as the login screen reads them: `None`
+/// without a file or with one the readers refuse (not root's, writable by others, a link, unreadable).
+pub fn system_accessibility(path: &Path) -> Option<AccessibilitySettings> {
+    let text = read_root_file(path).ok()??;
+    Some(AccessibilitySettings::from_system_text(&text).0)
 }

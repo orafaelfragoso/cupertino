@@ -7,6 +7,12 @@ use swash::{FontDataRef, StringId, Style};
 
 const WEIGHT_AXIS: [u8; 4] = *b"wght";
 
+#[cfg(test)]
+thread_local! {
+    /// The charmap lookups of [`FontIndex::has_glyph`] on this thread: what a fallback costs.
+    pub(crate) static GLYPH_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Vertical metrics of a font as fractions of the em; multiply by the size in points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FontMetrics {
@@ -63,6 +69,7 @@ pub struct FontIndex {
     faces: Vec<Face>,
     instances: Vec<Instance>,
     instance_ids: HashMap<InstanceKey, FontId>,
+    fallbacks: HashMap<(FontId, FontWeight), Arc<[FontId]>>,
 }
 
 impl FontIndex {
@@ -90,6 +97,7 @@ impl FontIndex {
             .get_by_tag(Tag::new(&WEIGHT_AXIS))
             .map(|axis| (axis.min_value(), axis.max_value()));
         let id = FaceId(self.faces.len() as u32);
+        self.fallbacks.clear();
         self.faces.push(Face {
             family: family.into(),
             data,
@@ -233,6 +241,26 @@ impl FontIndex {
         Ok(id)
     }
 
+    /// The fonts that stand in for `font` where it has no glyph: every other face in load order, at `weight`. Kept per
+    /// font and weight.
+    pub(crate) fn fallbacks(
+        &mut self,
+        font: FontId,
+        weight: FontWeight,
+    ) -> Result<Arc<[FontId]>, TextError> {
+        if let Some(fonts) = self.fallbacks.get(&(font, weight)) {
+            return Ok(Arc::clone(fonts));
+        }
+        let own = self.face_of(font)?;
+        let fonts: Arc<[FontId]> = (0..self.faces.len() as u32)
+            .map(FaceId)
+            .filter(|face| *face != own)
+            .map(|face| self.instance(face, weight, &[]))
+            .collect::<Result<_, _>>()?;
+        self.fallbacks.insert((font, weight), Arc::clone(&fonts));
+        Ok(fonts)
+    }
+
     pub fn face_of(&self, font: FontId) -> Result<FaceId, TextError> {
         self.instance_entry(font).map(|instance| instance.face)
     }
@@ -254,6 +282,8 @@ impl FontIndex {
 
     /// Whether the font has a glyph for `ch`.
     pub fn has_glyph(&self, font: FontId, ch: char) -> Result<bool, TextError> {
+        #[cfg(test)]
+        GLYPH_LOOKUPS.with(|count| count.set(count.get() + 1));
         self.font(font)
             .map(|font| font.charmap().map_unicode(ch).is_some())
     }

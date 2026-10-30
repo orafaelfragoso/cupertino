@@ -2,19 +2,24 @@
 //! the key or call that backs it ([`Backend`]); a control without one is not drawn (ST-09). The row order inside a pane
 //! is Original (by frequency of use) until O4 recovers the design's.
 
-use cupertino_defaults::accessibility::{ColorFilter, DisplayOptions};
+use cupertino_defaults::accessibility::{
+    AccessibilitySettings, ColorFilter, DisplayOption, DisplayOptions, SYSTEM_KEYS,
+};
 use cupertino_defaults::compositor::MinimizeEffectName;
 use cupertino_defaults::dock::{ActionTarget, Position, Trigger};
 use cupertino_defaults::keyboard::{FnKey, ModifierProfile};
 use cupertino_defaults::menubar::{HourCycle, ShowDate};
 use cupertino_defaults::power::Timer;
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use cupertino_assets::WallpaperFile;
 
 use crate::controls::{Control, Tile, Value, MUTE_BELOW};
-use crate::live::{duration_text, BatteryState, Bluetooth, Live, Mouse, Reading, Wifi};
+use crate::live::{
+    duration_text, BatteryState, Bluetooth, Live, LoginScreen, Mouse, Reading, Wifi,
+};
 use crate::mapping;
 use crate::pane::PaneId;
 use crate::settings::{File, Settings};
@@ -66,6 +71,8 @@ pub enum ControlId {
     DisplayContrast,
     ColorFilter,
     ColorFilterIntensity,
+    /// Use Mine: the person's allow-listed display options become the machine's defaults.
+    LoginScreen,
     CursorSize,
     ShakeToLocate,
     StickyKeys,
@@ -134,6 +141,8 @@ pub enum Effect {
     SetAppearance { dark: bool },
     /// Ask the server to set a key of `accessibility.conf` to a value as the file writes it.
     SetAccessibility { key: &'static str, value: String },
+    /// Ask sessiond to make [`login_screen_options`] the machine's accessibility defaults.
+    SetSystemAccessibility,
     /// A call on a live service.
     Service(Call),
     /// Ask for a folder (`folder`) or a picture in the chooser.
@@ -897,25 +906,25 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
             let mut display = vec![
                 row(
                     ControlId::ReduceMotion,
-                    "Reduce motion",
+                    display_label(DisplayOption::ReduceMotion),
                     switch(d.reduce_motion),
                     set("reduce_motion"),
                 ),
                 row(
                     ControlId::ReduceTransparency,
-                    "Reduce transparency",
+                    display_label(DisplayOption::ReduceTransparency),
                     switch(d.reduce_transparency),
                     set("reduce_transparency"),
                 ),
                 row(
                     ControlId::IncreaseContrast,
-                    "Increase contrast",
+                    display_label(DisplayOption::IncreaseContrast),
                     switch(d.increase_contrast),
                     set("increase_contrast"),
                 ),
                 row(
                     ControlId::DifferentiateWithoutColor,
-                    "Differentiate without colour",
+                    display_label(DisplayOption::DifferentiateWithoutColor),
                     switch(d.differentiate_without_color),
                     set("differentiate_without_color"),
                 ),
@@ -963,7 +972,7 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                 .clamp(0.0, 1.0);
             let keys = |k| Backend::Key(File::Keyboard, k);
             let k = &settings.keyboard;
-            vec![
+            let mut out = vec![
                 Section {
                     header: header("Display"),
                     rows: display,
@@ -1028,7 +1037,11 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                     ],
                     footer: file_footer(File::Keyboard),
                 },
-            ]
+            ];
+            if let Some(login) = &live.login_screen {
+                out.insert(1, login_screen_section(login));
+            }
+            out
         }
         PaneId::LockScreen => {
             let p = &settings.power;
@@ -1278,6 +1291,92 @@ fn choice_popup<T: PartialEq + Copy>(
         }
     };
     Control::Popup { choices, selected }
+}
+
+/// The label of a display option's row; the Login Screen footer names the option by it too.
+fn display_label(option: DisplayOption) -> &'static str {
+    match option {
+        DisplayOption::ReduceMotion => "Reduce motion",
+        DisplayOption::ReduceTransparency => "Reduce transparency",
+        DisplayOption::IncreaseContrast => "Increase contrast",
+        DisplayOption::DifferentiateWithoutColor => "Differentiate without colour",
+    }
+}
+
+/// The display options the machine's defaults may set ([`SYSTEM_KEYS`]), in the Display section's order.
+fn system_options() -> Vec<DisplayOption> {
+    DisplayOption::ALL
+        .into_iter()
+        .filter(|o| SYSTEM_KEYS.contains(&o.key()))
+        .collect()
+}
+
+/// What the section's footer says: the limit of the machine's defaults (the row's label says whom they reach).
+const LOGIN_SCREEN_FOOTER: &str =
+    "People who have changed an accessibility setting keep their own settings.";
+
+/// What the machine's file holds now, for the login screen: each allowed option with its state, or `Default settings`
+/// when there is no file or it was refused.
+pub fn login_screen_state(current: Option<&AccessibilitySettings>) -> String {
+    match current {
+        Some(a) => system_options()
+            .iter()
+            .map(|o| {
+                let state = if a.display.get(*o) { "on" } else { "off" };
+                format!("{} {state}", display_label(*o))
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+        None => "Default settings".to_string(),
+    }
+}
+
+/// What Use Mine sends: the [`SYSTEM_KEYS`] with the person's values, the display options as the session
+/// applies them (the Display rows'), never another key.
+pub fn login_screen_options(session: Session, settings: &Settings) -> HashMap<String, String> {
+    AccessibilitySettings {
+        display: session.display,
+        ..settings.accessibility
+    }
+    .entries()
+    .into_iter()
+    .filter(|(key, _)| SYSTEM_KEYS.contains(key))
+    .map(|(key, value)| (key.to_string(), value))
+    .collect()
+}
+
+/// The machine's defaults for the login screen and new users, offered to whoever sessiond lets set them: Use My
+/// Settings, "Saving…" while the write waits for its reply.
+fn login_screen_section(login: &LoginScreen) -> Section {
+    let control = if login.saving {
+        Control::Text {
+            value: "Saving…".into(),
+        }
+    } else {
+        Control::Button {
+            title: "Use Mine".into(),
+        }
+    };
+    Section {
+        header: header("Login Screen"),
+        rows: vec![
+            row(
+                ControlId::LoginScreen,
+                "Login screen and new users",
+                control,
+                Backend::Service("SetSystemAccessibility"),
+            ),
+            row(
+                ControlId::Reading,
+                "Login screen now",
+                Control::Text {
+                    value: login_screen_state(login.current.as_ref()),
+                },
+                Backend::Service("SystemAccessibility"),
+            ),
+        ],
+        footer: Some(LOGIN_SCREEN_FOOTER.to_string()),
+    }
 }
 
 /// Do Not Disturb and its durations (`NotificationCenter1`; the pane's layout is Original, §3).
@@ -1850,6 +1949,10 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
                 INTENSITY_MIN + (1.0 - INTENSITY_MIN) * fraction_of(value)
             ),
         }],
+        ControlId::LoginScreen => match &live.login_screen {
+            Some(login) if !login.saving => vec![Effect::SetSystemAccessibility],
+            _ => Vec::new(),
+        },
         ControlId::CursorSize => {
             settings.compositor.cursor_size = Some(
                 ((CURSOR_MIN + (CURSOR_MAX - CURSOR_MIN) * fraction_of(value)) * 100.0).round()
@@ -2086,6 +2189,7 @@ mod tests {
                 devices: vec![device("p", true), device("n", false)],
                 ..Bluetooth::default()
             }),
+            login_screen: Some(crate::live::LoginScreen::default()),
         };
         for pane in crate::pane::PANES.iter().map(|p| p.id) {
             for r in sections(pane, &unset(), LIGHT, &live)
@@ -2454,6 +2558,145 @@ mod tests {
             panic!("a slider")
         };
         assert_eq!(value, 1.0, "grayscale's default intensity 1.0");
+    }
+
+    fn login_live(login: Option<LoginScreen>) -> Live {
+        Live {
+            login_screen: login,
+            ..Live::default()
+        }
+    }
+
+    fn login_row(live: &Live) -> Row {
+        sections(PaneId::Accessibility, &unset(), LIGHT, live)
+            .into_iter()
+            .flat_map(|s| s.rows)
+            .find(|r| r.id == ControlId::LoginScreen)
+            .expect("the Login Screen row")
+    }
+
+    #[test]
+    fn the_login_screen_section_follows_display_only_when_sessiond_allows_it() {
+        let headers = |live: &Live| {
+            sections(PaneId::Accessibility, &unset(), LIGHT, live)
+                .into_iter()
+                .map(|s| s.header.unwrap_or_default())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            headers(&login_live(None)),
+            ["Display", "Pointer", "Keyboard"],
+            "not allowed, not answered, or no sessiond"
+        );
+        let live = login_live(Some(LoginScreen::default()));
+        assert_eq!(
+            headers(&live),
+            ["Display", "Login Screen", "Pointer", "Keyboard"]
+        );
+        let row = login_row(&live);
+        assert_eq!(row.label, "Login screen and new users");
+        assert_eq!(
+            row.control,
+            Control::Button {
+                title: "Use Mine".into()
+            }
+        );
+    }
+
+    #[test]
+    fn use_my_settings_sends_only_the_allow_listed_keys_with_the_values_shown() {
+        let mut s = unset();
+        s.accessibility.invert_colors = true;
+        s.accessibility.display.reduce_motion = false;
+        let session = Session {
+            display: DisplayOptions {
+                reduce_motion: true,
+                increase_contrast: true,
+                ..DisplayOptions::default()
+            },
+            ..LIGHT
+        };
+        assert_eq!(
+            login_screen_options(session, &s),
+            HashMap::from([("reduce_motion".to_string(), "on".to_string())]),
+            "the session's value, and no invert or any other key"
+        );
+        assert_eq!(
+            login_screen_options(LIGHT, &s),
+            HashMap::from([("reduce_motion".to_string(), "off".to_string())])
+        );
+        let shown = login_live(Some(LoginScreen::default()));
+        assert_eq!(
+            change(ControlId::LoginScreen, Value::Index(0), &mut s, &shown),
+            [Effect::SetSystemAccessibility]
+        );
+        assert!(
+            change(
+                ControlId::LoginScreen,
+                Value::Index(0),
+                &mut s,
+                &login_live(None)
+            )
+            .is_empty(),
+            "no section, no write"
+        );
+    }
+
+    #[test]
+    fn while_saving_the_row_says_saving_ignores_presses_and_the_reply_brings_the_button_back() {
+        let mut s = unset();
+        let saving = login_live(Some(LoginScreen {
+            current: None,
+            saving: true,
+        }));
+        assert_eq!(
+            login_row(&saving).control,
+            Control::Text {
+                value: "Saving…".into()
+            }
+        );
+        assert!(change(ControlId::LoginScreen, Value::Index(0), &mut s, &saving).is_empty());
+        let (written, _) = AccessibilitySettings::from_system_text("reduce_motion = on\n");
+        let saved = login_live(Some(LoginScreen {
+            current: Some(written),
+            saving: false,
+        }));
+        assert_eq!(
+            login_row(&saved).control,
+            Control::Button {
+                title: "Use Mine".into()
+            }
+        );
+        let state = sections(PaneId::Accessibility, &s, LIGHT, &saved)[1]
+            .rows
+            .iter()
+            .find(|r| r.label == "Login screen now")
+            .map(|r| r.control.clone());
+        assert_eq!(
+            state,
+            Some(Control::Text {
+                value: "Reduce motion on".into()
+            }),
+            "the state row shows the file as written"
+        );
+    }
+
+    #[test]
+    fn the_login_screen_state_is_read_from_the_machines_file_and_is_default_without_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = crate::settings::system_accessibility(&dir.path().join("accessibility.conf"));
+        assert_eq!(current, None);
+        assert_eq!(login_screen_state(current.as_ref()), "Default settings");
+        let (off, _) = AccessibilitySettings::from_system_text("reduce_motion = off\n");
+        assert_eq!(login_screen_state(Some(&off)), "Reduce motion off");
+        let (on, _) = AccessibilitySettings::from_system_text("reduce_motion = on\n");
+        assert_eq!(login_screen_state(Some(&on)), "Reduce motion on");
+        let section = login_screen_section(&LoginScreen::default());
+        assert_eq!(section.footer.as_deref(), Some(LOGIN_SCREEN_FOOTER));
+        assert!(
+            LOGIN_SCREEN_FOOTER.len() <= 80,
+            "one line at the narrowest window"
+        );
     }
 
     #[test]

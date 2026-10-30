@@ -593,14 +593,22 @@ fn publish_session(state: &Cupertino) {
         ),
         ("XDG_SESSION_TYPE".into(), "wayland".into()),
     ];
+    let mut defaults = Vec::new();
     if let Some(x) = &state.xwayland {
         variables.push(("DISPLAY".into(), x.display().name()));
         variables.push((
             "XAUTHORITY".into(),
             x.display().authority().to_string_lossy().into_owned(),
         ));
+        // a value the session gave the server is the user's choice, as for the programs it starts
+        defaults.extend(
+            crate::xwayland::WAYLAND_FIRST
+                .iter()
+                .filter(|(name, _)| std::env::var_os(name).is_none())
+                .map(|(name, value)| ((*name).into(), (*value).into())),
+        );
     }
-    dbus.publish_session(variables);
+    dbus.publish_session(variables, defaults);
 }
 
 fn export_socket(state: &Cupertino) {

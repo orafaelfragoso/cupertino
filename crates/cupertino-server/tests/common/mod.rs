@@ -631,6 +631,43 @@ pub fn session_agent(state: &Cupertino) -> UnixStream {
     .unwrap()
 }
 
+/// The process a shell connection was made for, standing in for a shell process the server supervises. It is killed
+/// and reaped when dropped, so a failing test leaves none behind.
+pub struct Holder(std::process::Child);
+
+impl Holder {
+    /// Kill and reap the process, as the supervisor does when it sees the exit: the connection's roles end with it.
+    pub fn end(self) {}
+}
+
+impl Drop for Holder {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// A connection the server made for a process of its own, holding `roles` until that process exits ([`Holder::end`]).
+pub fn held_shell_connection(
+    state: &Cupertino,
+    roles: &[cupertino_server::authorization::ShellRole],
+) -> (UnixStream, Holder) {
+    use cupertino_server::shell_connection::{
+        bind_holder, connect_bound_client, shell_process_state,
+    };
+    let holder = Holder(
+        std::process::Command::new("sleep")
+            .arg("60")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let (stream, client) =
+        connect_bound_client(&state.display_handle, shell_process_state(roles)).unwrap();
+    bind_holder(&client, holder.0.id()).unwrap();
+    (stream, holder)
+}
+
 pub fn each_connection_a_process(state: &mut Cupertino) {
     state.process_of = Box::new(|_, client| {
         let mut hasher = DefaultHasher::new();

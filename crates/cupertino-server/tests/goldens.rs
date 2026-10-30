@@ -329,12 +329,28 @@ fn compare_pixels(expected: &RgbaImage, actual: &RgbaImage) {
     assert_eq!(mismatches, 0, "pixels exceed the per-channel tolerance");
 }
 
+/// Baselines this worker re-recorded.
+static RECORDED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// An update run fails after recording, so a `CUPERTINO_UPDATE_GOLDENS` that leaks into a test run can never pass it.
+fn fail_after_update(update: bool) {
+    if update {
+        let message = format!(
+            "re-recorded {} goldens; rerun without CUPERTINO_UPDATE_GOLDENS",
+            RECORDED.load(std::sync::atomic::Ordering::Relaxed)
+        );
+        println!("{message}");
+        panic!("{message}");
+    }
+}
+
 fn baseline(root: &Path, name: &str, scene: &mut Scene, update: bool) {
     let structure = scene.structure();
     let image = scene.image();
     let geometry = root.join(format!("{name}.json"));
     let png = root.join(format!("{name}.png"));
     if update {
+        RECORDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         std::fs::create_dir_all(root).unwrap();
         std::fs::write(geometry, serde_json::to_vec_pretty(&structure).unwrap()).unwrap();
         image.save(png).unwrap();
@@ -616,6 +632,7 @@ fn desktop_goldens_and_input_replay() {
         }
         windows.at(3000);
         baseline(&root, "overview", &mut windows, update);
+        fail_after_update(update);
     });
 }
 
@@ -698,6 +715,7 @@ fn shell_process_goldens() {
         scene.wait_until("the session lock", |_| locker.locked());
         scene.settle();
         baseline(&root, "lock-surface", &mut scene, update);
+        fail_after_update(update);
     });
 }
 

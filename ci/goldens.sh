@@ -33,7 +33,16 @@ docker run --rm \
   --env "CUPERTINO_UPDATE_GOLDENS=$update" \
   cupertino-goldens \
   cargo test -p cupertino-server --test goldens -- --include-ignored --skip headless_frame_and_memory_report \
-  | tee "$log"
+  | tee "$log" || status=$?
+
+# An update records the baselines and then fails each test that recorded, so it can never pass as a comparison.
+if [ "$update" -eq 1 ]; then
+  recorded="$(grep -c '^re-recorded [0-9]* goldens' "$log" || true)"
+  [ "$recorded" -eq 2 ] || { echo "goldens: $recorded tests re-recorded, expected 2" >&2; exit 1; }
+  echo "goldens: re-recorded; review the diff, then run ci/goldens.sh to compare" >&2
+  exit 0
+fi
+[ "${status:-0}" -eq 0 ] || exit "$status"
 
 # The goldens binary holds exactly this many tests that run here; change it with the tests.
 expected=3

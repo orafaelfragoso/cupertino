@@ -1696,6 +1696,7 @@ dependencies = [
  "cupertino-geometry",
  "cupertino-theme",
  "cupertino-ui-text",
+ "image",
  "tiny-skia",
 ]
 

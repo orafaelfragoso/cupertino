@@ -23,8 +23,8 @@ use cupertino_geometry::{Point, Size};
 use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutOptions};
 use cupertino_ui_platform::{
     ClipboardData, ClipboardKind, ConfigureId, KeyEvent, Keysym, PlatformError, PlatformEvent,
-    PresentOutcome, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec,
-    WindowSystem,
+    PresentOutcome, SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest,
+    WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, DisplayList, PaintResources, RenderRequest, UiRenderer,
@@ -41,6 +41,8 @@ const LEFT_TAB: Keysym = Keysym(0xfe20);
 
 pub type RendererFactory = Box<dyn FnMut() -> Box<dyn UiRenderer<Frame = CpuFrame>>>;
 pub type WindowErrorHandler = Box<dyn FnMut(WindowId, &UiError)>;
+/// Makes the theme for the session's appearance and display options.
+pub type ThemeForAppearance = Box<dyn FnMut(&SystemAppearance) -> Arc<ThemeTokens>>;
 
 /// How a runtime is set up besides its window system.
 pub struct RuntimeOptions {
@@ -133,6 +135,7 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     events: Vec<PlatformEvent>,
     view_dirty: bool,
     exit: bool,
+    theme_for: Option<ThemeForAppearance>,
 }
 
 impl<A: Application, W: WindowSystem> Runtime<A, W> {
@@ -150,11 +153,29 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             events: Vec::new(),
             view_dirty: true,
             exit: false,
+            theme_for: None,
         };
         for command in commands {
             runtime.command(command);
         }
         runtime
+    }
+
+    /// Follow the session's appearance: `theme_for` makes the theme each time the window system reports it.
+    pub fn with_theme_for(mut self, theme_for: ThemeForAppearance) -> Self {
+        self.theme_for = Some(theme_for);
+        self
+    }
+
+    /// Draw every window with `theme` from now on. Text is measured and laid out again; focus and input-method
+    /// compositions stay.
+    pub fn set_theme(&mut self, theme: Arc<ThemeTokens>) {
+        for w in &mut self.windows {
+            w.env.theme = Arc::clone(&theme);
+            w.invalidate();
+            w.damage.invalidate();
+        }
+        self.options.theme = theme;
     }
 
     pub fn model(&self) -> &A::Model {
@@ -428,6 +449,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             | PlatformEvent::ClipboardOffered { .. }
             | PlatformEvent::ActivationToken { .. }
             | PlatformEvent::Wake => return Ok(()),
+            PlatformEvent::Appearance(appearance) => {
+                if let Some(theme_for) = &mut self.theme_for {
+                    let theme = theme_for(&appearance);
+                    self.set_theme(theme);
+                }
+                return Ok(());
+            }
         };
         let Some(i) = self.windows.iter().position(|w| w.id == window) else {
             return Ok(());

@@ -65,7 +65,12 @@ pub struct Cli {
     #[arg(long, value_name = "PATH", requires = "headless")]
     pub record: Option<PathBuf>,
     /// Seconds after start at which `--record` takes its first frame.
-    #[arg(long, value_name = "SECONDS", default_value_t = 0.0, requires = "record")]
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        default_value_t = 0.0,
+        requires = "record"
+    )]
     pub record_after: f64,
     /// Start a client (command line) after startup; repeatable.
     #[arg(long = "spawn", value_name = "COMMAND")]
@@ -626,7 +631,11 @@ pub fn run(cli: Cli) -> Result<()> {
             crate::backend::headless::run(&mut state, &mut event_loop, deadline)?;
             if let Some(recorder) = recorder {
                 let written = recorder.finish()?;
-                tracing::info!(frames = written.frames, drawn = written.drawn, "recording written");
+                tracing::info!(
+                    frames = written.frames,
+                    drawn = written.drawn,
+                    "recording written"
+                );
             }
         }
         #[cfg(feature = "udev")]

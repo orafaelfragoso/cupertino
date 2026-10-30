@@ -16,6 +16,7 @@
 # The shell processes are the ones the packages install as /etc/cupertino/compositor.json, found on PATH (BIN_DIR first; the
 # server runs with --dev-shell, which lets a checkout name programs outside /usr),
 # without cupertino-login: it works on the system bus and the caller's logind session, which a capture must not touch.
+# HOME_NAME: the fixture home folder's name, which Files shows as its title (default home).
 # SYSTEM_DATA_DIRS: the data directories after the checkout's (default /usr/local/share:/usr/share; the applications installed
 # there show in the launcher).
 # CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE: application ids (comma separated) the dock shows as not responding; the script builds
@@ -42,7 +43,7 @@ if [ -n "${CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE:-}" ]; then
     ln -sf "$ROOT/target/capture-fixtures/release/cupertino-dock" "$SCRATCH/bin/cupertino-dock"
     BIN_DIR=$SCRATCH/bin
 fi
-FHOME=$SCRATCH/home
+FHOME=$SCRATCH/${HOME_NAME:-home}
 RUNTIME=$SCRATCH/runtime
 mkdir -p "$FHOME"/{Desktop,Documents/Projects,Downloads,Music,Pictures,Videos} \
     "$FHOME"/.config "$FHOME"/.local/share "$FHOME"/.local/state "$FHOME"/.cache "$RUNTIME"

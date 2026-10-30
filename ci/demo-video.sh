@@ -34,7 +34,7 @@ mkdir -p "$scratch/share"
 for dir in mime icons; do [ -d "/usr/share/$dir" ] && ln -s "/usr/share/$dir" "$scratch/share/$dir"; done
 
 session() {
-  FIXTURE_DIR="$scratch/home" SYSTEM_DATA_DIRS="$scratch/share" SIZE="$size" "$root/crates/cupertino-server/scripts/session.sh" --scale "${SCALE:-2}" "$@"
+  FIXTURE_DIR="$scratch/home" HOME_NAME=avery SYSTEM_DATA_DIRS="$scratch/share" SIZE="$size" "$root/crates/cupertino-server/scripts/session.sh" --scale "${SCALE:-2}" "$@"
 }
 
 if [ -n "${frames:-}" ]; then

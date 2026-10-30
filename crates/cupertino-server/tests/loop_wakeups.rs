@@ -39,3 +39,61 @@ fn an_idle_desktop_has_nothing_due_within_a_second() {
         d.state.next_tick_deadline()
     );
 }
+
+/// What `Cupertino::tick` calls, each audited for how the loop wakes for it (Shared/cupertino/prism/row236-tick-audit.md):
+/// an event, a frame (`animating`), or a deadline in `next_tick_deadline`. A call added to the tick fails this test until
+/// it is audited the same way and listed here; otherwise its time-driven work would run up to a second late.
+const AUDITED: [&str; 21] = [
+    "crate::acquire_waits::sweep(",
+    "self.apply_effects(",
+    "self.forget_gone_processes(",
+    "self.fx.snapshot_age(",
+    "self.fx.tick(",
+    "self.idle.refresh_inhibition(",
+    "self.now(",
+    "self.refresh_shortcut_inhibitors(",
+    "self.refresh_snapshot(",
+    "self.request_redraw(",
+    "self.seat.get_keyboard(",
+    "self.tick_display_power(",
+    "self.tick_force_quit(",
+    "self.tick_hung(",
+    "self.tick_input_timers(",
+    "self.tick_menu_bars(",
+    "self.tick_overlays(",
+    "self.tick_quit(",
+    "self.tick_session_lock(",
+    "self.tick_window_managers(",
+    "self.wm.tick(",
+];
+
+#[test]
+fn every_call_of_the_tick_is_audited_for_how_the_loop_wakes_for_it() {
+    let source = include_str!("../src/state.rs");
+    let start = source
+        .find("    pub fn tick(&mut self) {")
+        .expect("Cupertino::tick");
+    let body = &source[start..];
+    let body = &body[..body.find("\n    }\n").expect("the end of tick")];
+    let mut calls: Vec<&str> = Vec::new();
+    for (at, _) in body.match_indices('(') {
+        let name_start = body[..at]
+            .rfind(|c: char| !(c.is_ascii_alphanumeric() || "_.:".contains(c)))
+            .map_or(0, |i| i + 1);
+        let call = &body[name_start..=at];
+        if call.starts_with("self.") || call.starts_with("crate::") {
+            calls.push(call);
+        }
+    }
+    calls.sort_unstable();
+    calls.dedup();
+    let unaudited: Vec<&str> = calls
+        .iter()
+        .copied()
+        .filter(|c| !AUDITED.contains(c))
+        .collect();
+    assert!(
+        unaudited.is_empty(),
+        "audit these tick calls for a deadline: {unaudited:?}"
+    );
+}

@@ -1,0 +1,16 @@
+[package]
+name = "cupertino-capture"
+version = "0.1.0"
+edition.workspace = true
+license = "MPL-2.0"
+description = "The look-check capture command's shared part: the flags of every app's capture example, the PNG names it writes and the contact sheet"
+
+[package.metadata.cupertino]
+layer = "foundation"
+
+[dependencies]
+cupertino-assets = { path = "../cupertino-assets" }
+tiny-skia = "0.11"
+
+[dev-dependencies]
+tempfile = "3"

@@ -26,4 +26,6 @@ cupertino-ui-wayland = { path = "../cupertino-ui-wayland" }
 
 [dev-dependencies]
 tempfile = "3"
+cupertino-capture = { path = "../cupertino-capture" }
 cupertino-ui-test = { path = "../cupertino-ui-test" }
+tiny-skia = "0.11"

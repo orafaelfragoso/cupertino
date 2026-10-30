@@ -1,6 +1,6 @@
 // cupertino-layers --graph
-// 72 crates, 311 internal dependencies
-// per layer: foundation 17, models 8, platform 7, protocol 3, transport 3, render 3, ui 13, core 1, shell 9, services 4, apps 2, tools 2
+// 73 crates, 315 internal dependencies
+// per layer: foundation 18, models 8, platform 7, protocol 3, transport 3, render 3, ui 13, core 1, shell 9, services 4, apps 2, tools 2
 // forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the mixer itself until audio goes through a service
 // forbidden normal edge cupertino-settings (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
@@ -8,10 +8,11 @@
 digraph "layers" {
   node [shape=box];
   subgraph "cluster_foundation" {
-    label="foundation (17)";
+    label="foundation (18)";
     "cupertino-animation";
     "cupertino-apps";
     "cupertino-assets";
+    "cupertino-capture";
     "cupertino-defaults";
     "cupertino-filepicker";
     "cupertino-geometry";
@@ -118,6 +119,7 @@ digraph "layers" {
   "cupertino-btd" -> "cupertino-bluetooth";
   "cupertino-btd" -> "cupertino-seat";
   "cupertino-btd" -> "cupertino-test-bus" [label="dev"];
+  "cupertino-capture" -> "cupertino-assets";
   "cupertino-controlcenter" -> "cupertino-alsa";
   "cupertino-controlcenter" -> "cupertino-assets";
   "cupertino-controlcenter" -> "cupertino-decorations";
@@ -153,6 +155,7 @@ digraph "layers" {
   "cupertino-filepicker" -> "cupertino-typeahead";
   "cupertino-files" -> "cupertino-apps";
   "cupertino-files" -> "cupertino-assets";
+  "cupertino-files" -> "cupertino-capture" [label="dev"];
   "cupertino-files" -> "cupertino-decorations" [color=orange, style=dashed];
   "cupertino-files" -> "cupertino-defaults";
   "cupertino-files" -> "cupertino-geometry";
@@ -183,6 +186,7 @@ digraph "layers" {
   "cupertino-keyboard" -> "cupertino-key-bindings";
   "cupertino-keyboard" -> "cupertino-modifiers";
   "cupertino-kit" -> "cupertino-assets";
+  "cupertino-kit" -> "cupertino-capture" [label="dev"];
   "cupertino-kit" -> "cupertino-geometry";
   "cupertino-kit" -> "cupertino-icons";
   "cupertino-kit" -> "cupertino-modifiers";
@@ -336,6 +340,7 @@ digraph "layers" {
   "cupertino-sessiond" -> "cupertino-test-bus" [label="dev"];
   "cupertino-settings" -> "cupertino-alsa" [color=orange, style=dashed];
   "cupertino-settings" -> "cupertino-assets";
+  "cupertino-settings" -> "cupertino-capture" [label="dev"];
   "cupertino-settings" -> "cupertino-decorations" [color=orange, style=dashed];
   "cupertino-settings" -> "cupertino-defaults";
   "cupertino-settings" -> "cupertino-filepicker";

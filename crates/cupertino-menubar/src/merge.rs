@@ -356,7 +356,7 @@ pub fn label_role(label: &str, names: &[&str]) -> Option<Role> {
         "quit" | "exit" => Role::Quit,
         "preferences" | "settings" | "options" => Role::Preferences,
         "close" | "close window" => Role::Close,
-        "full screen" | "enter full screen" => Role::FullScreen,
+        "full screen" | "enter full screen" | "exit full screen" => Role::FullScreen,
         _ if words("about").is_some() => Role::About,
         _ if words("quit").is_some_and(|rest| !rest.trim().is_empty()) => Role::Quit,
         _ if words("configure").is_some_and(names_app) => Role::Preferences,
@@ -579,7 +579,7 @@ mod tests {
         let chords = Chords::default();
         export.merge(
             fallback::app_menu("Editor", &chords),
-            fallback::menus(1, Some(1), true, true, &[], &chords, true),
+            fallback::menus(1, Some(1), true, true, false, &[], &chords, true),
             chords.primary,
         )
     }
@@ -606,6 +606,7 @@ mod tests {
             ("Close Window", Some(Role::Close)),
             ("Full Screen", Some(Role::FullScreen)),
             ("Enter Full Screen", Some(Role::FullScreen)),
+            ("Exit Full Screen", Some(Role::FullScreen)),
             ("Configure Toolbars…", None),
             ("Configure", None),
             ("Quitting Time", None),
@@ -943,7 +944,7 @@ mod tests {
         let chords = Chords::default();
         let (_, menus) = export(&tree, Exporter::Gtk).merge(
             fallback::app_menu("Editor", &chords),
-            fallback::menus(1, Some(1), true, true, &[], &chords, true),
+            fallback::menus(1, Some(1), true, true, false, &[], &chords, true),
             Primary,
         );
         let new = &menu(&menus, "File").children[0];

@@ -452,8 +452,8 @@ impl Shell {
         // version 5 moves the backdrops and the title bar style to the app effects, version 6 adds the menu bar's session actions,
         // version 10 the menu bar's window list, shortcuts and default-menu commands, version 11 its edit request,
         // version 12 its Help search shortcut, version 13 its force_quit_app request, version 14 its backdrop lightness,
-        // version 15 the enabled controls of the active window
-        conn.bind_extension(9..=15, Quiet).map(Shell)
+        // version 15 the enabled controls of the active window, version 16 whether it is in full screen
+        conn.bind_extension(9..=16, Quiet).map(Shell)
     }
 
     /// Observe the session: its appearance and display options arrive as

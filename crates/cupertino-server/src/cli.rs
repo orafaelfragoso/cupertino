@@ -60,6 +60,18 @@ pub struct Cli {
     /// Exit after this many seconds.
     #[arg(long, value_name = "SECONDS")]
     pub run_for: Option<f64>,
+    /// Headless: write the output as raw RGBA frames, 60 per second of wall time, to this file (a FIFO a video encoder
+    /// reads, say) until the server exits.
+    #[arg(long, value_name = "PATH", requires = "headless")]
+    pub record: Option<PathBuf>,
+    /// Seconds after start at which `--record` takes its first frame.
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        default_value_t = 0.0,
+        requires = "record"
+    )]
+    pub record_after: f64,
     /// Start a client (command line) after startup; repeatable.
     #[arg(long = "spawn", value_name = "COMMAND")]
     pub spawn: Vec<String>,
@@ -581,6 +593,8 @@ pub fn run(cli: Cli) -> Result<()> {
         }
     }
     state.start_settings_watch(files, paths);
+    // the scripted steps and the recording count their seconds from the same instant
+    let script_start = Instant::now();
     schedule_script(&cli, &event_loop)?;
     if mode != Mode::Headless {
         start_xwayland(&mut state);
@@ -608,7 +622,23 @@ pub fn run(cli: Cli) -> Result<()> {
                 cli.scale.unwrap_or(1.0),
             )?;
             export_socket(&state);
+            let recorder = cli
+                .record
+                .as_deref()
+                .map(|path| {
+                    let after = Duration::from_secs_f64(cli.record_after.max(0.0));
+                    crate::backend::record::start(&event_loop, path, script_start + after)
+                })
+                .transpose()?;
             crate::backend::headless::run(&mut state, &mut event_loop, deadline)?;
+            if let Some(recorder) = recorder {
+                let written = recorder.finish()?;
+                tracing::info!(
+                    frames = written.frames,
+                    drawn = written.drawn,
+                    "recording written"
+                );
+            }
         }
         #[cfg(feature = "udev")]
         Mode::Udev => {

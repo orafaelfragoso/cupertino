@@ -1437,7 +1437,7 @@ impl Cupertino {
             // every surface of a layer, topmost first: one whose box holds the point but whose input region does not
             // (an overlay strip with an empty region) must not hide the surfaces below it
             for l in layers {
-                for surface in map.layers_on(*l).rev() {
+                for surface in crate::authorization::layers_stacked(&map, *l).rev() {
                     let geo = map.layer_geometry(surface)?;
                     // a menu bar is offset while it hides or reveals
                     let shift = Point::<f64, Logical>::from((
@@ -1702,10 +1702,18 @@ impl Cupertino {
         }
     }
 
+    /// Give the keyboard to `surface`. While the session is locked only a lock surface gets it, and while the
+    /// authentication prompt is shown only the prompt.
     pub fn set_keyboard_focus(&mut self, surface: Option<WlSurface>) {
-        if self.session_lock.is_active()
-            && !surface.as_ref().is_some_and(|s| self.is_lock_surface(s))
-        {
+        let allowed = if self.session_lock.is_active() {
+            surface.as_ref().is_some_and(|s| self.is_lock_surface(s))
+        } else {
+            !self.prompt_shown()
+                || surface
+                    .as_ref()
+                    .is_some_and(crate::authorization::is_prompt)
+        };
+        if !allowed {
             return;
         }
         let keyboard = self.seat.get_keyboard().unwrap();
@@ -1726,16 +1734,22 @@ impl Cupertino {
     /// keyboard; when it stops asking or goes away the key window gets it back.
     ///
     /// While the session is locked only a shell process can take it: an application's layer surface must not collect
-    /// what is typed at the lock screen, nor wait to take the keyboard at the unlock.
+    /// what is typed at the lock screen, nor wait to take the keyboard at the unlock. While the authentication prompt is
+    /// shown only the prompt can take it, and an open menu of another surface is closed as it does.
     pub fn layer_keyboard_exclusivity(&mut self, surface: &WlSurface, exclusive: bool) {
+        let prompt = crate::authorization::is_prompt(surface);
         let exclusive = exclusive
             && (!self.session_lock.is_active()
                 || surface
                     .client()
-                    .is_some_and(|c| crate::authorization::capabilities(&c).holds_shell_role()));
+                    .is_some_and(|c| crate::authorization::capabilities(&c).holds_shell_role()))
+            && (prompt || !self.prompt_shown());
         let holds = self.exclusive_layer.as_ref() == Some(surface);
         if exclusive && !holds {
             self.exclusive_layer = Some(surface.clone());
+            if prompt {
+                self.end_popup_grab_for_focus(Some(surface));
+            }
             self.set_keyboard_focus(Some(surface.clone()));
         } else if !exclusive && holds {
             self.exclusive_layer = None;

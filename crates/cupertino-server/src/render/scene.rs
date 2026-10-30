@@ -1076,7 +1076,7 @@ fn layer_elements(p: &mut SceneParams<'_>, layer: Layer, captures: &mut Vec<Piec
     let scale = Scale::from(p.scale);
     let mut out: Vec<Piece> = Vec::new();
     // later surfaces are drawn on top of earlier ones
-    for surface in map.layers_on(layer).rev() {
+    for surface in crate::authorization::layers_stacked(&map, layer).rev() {
         if p.for_capture && crate::authorization::is_prompt(surface.wl_surface()) {
             continue;
         }

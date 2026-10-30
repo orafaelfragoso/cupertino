@@ -17,7 +17,7 @@ use cupertino_input::ScreenshotRequest;
 use cupertino_server::authorization::ShellRole;
 use cupertino_server::backend::headless;
 use cupertino_server::cli::start_shell_supervision;
-use cupertino_server::config::{Config, ShellProcess};
+use cupertino_server::config::{BuiltIn, Config, ShellProcess};
 use cupertino_server::input::{ActionPlan, ShellOp};
 use cupertino_server::Cupertino;
 use cupertino_test_bus::PrivateBus;
@@ -55,6 +55,15 @@ impl Server {
     /// A server with the shell processes `procs` supervised. `offscreen` adds the headless output.
     /// `None` when the offscreen output is wanted and no EGL device is available.
     fn start(procs: Vec<ShellProcess>, offscreen: bool) -> Option<Server> {
+        Self::start_with_built_ins(procs, offscreen, Vec::new())
+    }
+
+    /// [`Server::start`] that also supervises the built-in processes with the given programs.
+    fn start_with_built_ins(
+        procs: Vec<ShellProcess>,
+        offscreen: bool,
+        built_ins: Vec<(BuiltIn, Option<PathBuf>)>,
+    ) -> Option<Server> {
         let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().unwrap();
         let display: Display<Cupertino> = Display::new().unwrap();
         let cfg = Config {
@@ -76,6 +85,7 @@ impl Server {
                 return None;
             }
         }
+        state.supervisor.add_built_ins(built_ins, Instant::now());
         start_shell_supervision(&state, &event_loop).expect("the supervision timer is inserted");
         Some(Server { state, event_loop })
     }
@@ -244,6 +254,81 @@ fn a_process_that_exits_successfully_is_not_restarted() {
     // the failing process cycling once proves a full throttle period passed since the first start of both
     server.wait_for_lines(&failing, 2);
     assert_eq!(read_lines(&done), vec!["run"]);
+}
+
+/// The capabilities of the connection the server made for the process `pid`.
+fn capabilities_of_process(
+    state: &Cupertino,
+    pid: u32,
+) -> Option<cupertino_server::authorization::ClientCapabilitySet> {
+    let mut ids = Vec::new();
+    state
+        .display_handle
+        .backend_handle()
+        .with_all_clients(|id| ids.push(id));
+    ids.into_iter()
+        .filter_map(|id| {
+            state
+                .display_handle
+                .backend_handle()
+                .get_client_data(id)
+                .ok()
+        })
+        .find_map(|data| {
+            let client = data.downcast_ref::<cupertino_server::state::ClientState>()?;
+            (client.process()?.pid == pid).then(|| client.granted())
+        })
+}
+
+/// The portal and the polkit agent run supervised, each on a connection that holds its one role and nothing else,
+/// beside a configured process that holds the roles of its entry.
+#[test]
+fn the_built_in_processes_run_with_exactly_their_roles() {
+    use cupertino_server::authorization::ClientCapabilitySet;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new("built-ins");
+    let program = |name: &str| {
+        let path = dir.file(name);
+        let log = dir.file(&format!("{name}.log"));
+        let script = format!("#!/bin/sh\necho $$ >> {}\nexec sleep 60\n", log.display());
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    };
+    let built_ins = vec![
+        (BuiltIn::Portal, Some(program("cupertino-portal"))),
+        (
+            BuiltIn::PolkitAgent,
+            Some(program("cupertino-polkit-agent")),
+        ),
+    ];
+    let log = dir.file("dock");
+    let dock = stand_in("dock", r#"echo $$ >> "$1"; exec sleep 60"#, &log);
+    let mut server = Server::start_with_built_ins(vec![dock], false, built_ins).unwrap();
+    for (built_in, log, role) in [
+        (BuiltIn::Portal, "cupertino-portal.log", ShellRole::Capture),
+        (
+            BuiltIn::PolkitAgent,
+            "cupertino-polkit-agent.log",
+            ShellRole::Prompt,
+        ),
+    ] {
+        let pid: u32 = server.wait_for_lines(&dir.file(log), 1)[0].parse().unwrap();
+        assert_eq!(server.state.supervisor.pid_of(built_in.name()), Some(pid));
+        assert_eq!(
+            capabilities_of_process(&server.state, pid),
+            Some(ClientCapabilitySet::of([role])),
+            "{built_in:?}"
+        );
+    }
+    let pid: u32 = server.wait_for_lines(&log, 1)[0].parse().unwrap();
+    assert_eq!(
+        capabilities_of_process(&server.state, pid),
+        Some(ClientCapabilitySet::of([
+            ShellRole::Session,
+            ShellRole::Dock
+        ]))
+    );
 }
 
 // ---- real shell processes ----------------------------------------------------------------------

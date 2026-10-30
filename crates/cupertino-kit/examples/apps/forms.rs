@@ -35,6 +35,8 @@ fn text(content: &str, role: TextRole) -> Element<Message> {
         content: AttributedText::plain(content, TextStyle::new(13.0)),
         role,
         wrap: false,
+        secondary: false,
+        selected: false,
     })
 }
 

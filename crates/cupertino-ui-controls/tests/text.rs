@@ -31,6 +31,8 @@ impl Application for Texts {
                 content: AttributedText::plain(content, TextStyle::new(13.0)),
                 role,
                 wrap,
+                secondary: false,
+                selected: false,
             })
             .key(key)
         };
@@ -136,6 +138,8 @@ impl Application for Padded {
                 content: AttributedText::plain("Wi-Fi", TextStyle::new(13.0)),
                 role: TextRole::Body,
                 wrap: false,
+                secondary: false,
+                selected: false,
             })
             .key("body")],
         }))

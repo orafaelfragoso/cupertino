@@ -111,7 +111,13 @@ pub(crate) fn hit_test<M: 'static>(
         {
             return true;
         }
-        if placement.rect.contains(point) {
+        let own = Point::new(
+            point.x - placement.rect.origin.x,
+            point.y - placement.rect.origin.y,
+        );
+        if placement.rect.contains(point)
+            && tree.get(id).is_none_or(|n| n.widget.hit(&*n.state, own))
+        {
             return true;
         }
         path.pop();

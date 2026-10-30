@@ -81,23 +81,18 @@ impl BuiltIn {
     }
 
     /// Where the install put the program: the build's install prefix before `/usr`; `None` when it is not installed. A
-    /// file another user could have put there or could change ([`may_run_built_in`]) is refused and logged.
+    /// file [`check_built_in`] refuses is logged and the next root is tried.
     pub fn installed(self) -> Option<PathBuf> {
-        use std::os::unix::fs::MetadataExt;
-        let user = rustix::process::getuid().as_raw();
         installed_roots().rev().find_map(|root| {
             let program = root.join("bin").join(self.program_name());
-            let file = std::fs::metadata(&program).ok().filter(|f| f.is_file())?;
-            let root_owner = std::fs::metadata(root).ok()?.uid();
-            if may_run_built_in(file.uid(), file.mode(), root_owner, user) {
-                return Some(program);
+            std::fs::symlink_metadata(&program).ok()?;
+            match check_built_in(&program) {
+                Ok(()) => Some(program),
+                Err(reason) => {
+                    tracing::warn!(name = self.name(), %reason, "the program is not started");
+                    None
+                }
             }
-            tracing::warn!(
-                name = self.name(),
-                program = %program.display(),
-                "the program is not root's alone (owned by another user or writable by others): it is not started"
-            );
-            None
         })
     }
 
@@ -120,10 +115,51 @@ impl BuiltIn {
     }
 }
 
-/// Whether a built-in program file of `owner` and `mode`, under an install root of `root_owner`, may run with its role
-/// for `user`: nobody else may write it, and it is root's, or the root is the user's own (a development prefix).
-pub fn may_run_built_in(owner: u32, mode: u32, root_owner: u32, user: u32) -> bool {
-    mode & 0o022 == 0 && (owner == 0 || (root_owner == user && owner == user))
+/// Whether the built-in program at `<root>/bin/<name>` may run with its role, checked at every start: the file and its
+/// `bin` directory are no links, and [`may_run_built_in`] holds for them. The reason comes back otherwise.
+pub fn check_built_in(program: &Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    let stat = |path: &Path| {
+        std::fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))
+    };
+    let bin = program
+        .parent()
+        .ok_or_else(|| format!("{} has no directory", program.display()))?;
+    let root = bin
+        .parent()
+        .ok_or_else(|| format!("{} has no install root", bin.display()))?;
+    let (file, bin_meta, root_meta) = (stat(program)?, stat(bin)?, stat(root)?);
+    if !file.is_file() {
+        return Err(format!("{} is not a regular file", program.display()));
+    }
+    if !bin_meta.is_dir() {
+        return Err(format!("{} is not a directory", bin.display()));
+    }
+    let user = rustix::process::getuid().as_raw();
+    if may_run_built_in(
+        (file.uid(), file.mode()),
+        (bin_meta.uid(), bin_meta.mode()),
+        root_meta.uid(),
+        user,
+    ) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} is not root's alone: it or its directory has another owner, or its group or others can write it",
+            program.display()
+        ))
+    }
+}
+
+/// Whether a built-in program file and its `bin` directory, each `(owner, mode)`, under an install root of `root_owner`,
+/// may run with its role for `user`: nobody else may write either, the directory has the root's owner, and the file is
+/// root's, or the root is the user's own (a development prefix).
+pub fn may_run_built_in(file: (u32, u32), bin: (u32, u32), root_owner: u32, user: u32) -> bool {
+    let unshared = |mode: u32| mode & 0o022 == 0;
+    unshared(file.1)
+        && unshared(bin.1)
+        && bin.0 == root_owner
+        && (file.0 == 0 || (root_owner == user && file.0 == user))
 }
 
 /// Whether the server runs the login screen: its configuration is the login screen's file, or logind made its session
@@ -1222,31 +1258,120 @@ mod tests {
     #[test]
     fn a_built_in_program_runs_only_from_a_file_nobody_else_can_change() {
         let (root, me, other) = (0, 1000, 1001);
-        assert!(may_run_built_in(root, 0o100755, root, me));
+        let file = |owner: u32, mode: u32| (owner, 0o100000 | mode);
+        let bin = |owner: u32, mode: u32| (owner, 0o040000 | mode);
+        let cases = [
+            (file(root, 0o755), bin(root, 0o755), root, true, "root's"),
+            (
+                file(root, 0o775),
+                bin(root, 0o755),
+                root,
+                false,
+                "a group-writable file",
+            ),
+            (
+                file(root, 0o757),
+                bin(root, 0o755),
+                root,
+                false,
+                "a file others can write",
+            ),
+            (
+                file(root, 0o755),
+                bin(root, 0o775),
+                root,
+                false,
+                "a group-writable bin",
+            ),
+            (
+                file(root, 0o755),
+                bin(root, 0o757),
+                root,
+                false,
+                "a bin others can write",
+            ),
+            (
+                file(root, 0o755),
+                bin(me, 0o755),
+                root,
+                false,
+                "the user's bin in root's tree",
+            ),
+            (
+                file(me, 0o755),
+                bin(root, 0o755),
+                root,
+                false,
+                "the user's file in root's tree",
+            ),
+            (
+                file(me, 0o755),
+                bin(me, 0o755),
+                me,
+                true,
+                "the user's own prefix",
+            ),
+            (
+                file(me, 0o755),
+                bin(other, 0o755),
+                me,
+                false,
+                "another user's bin in the user's prefix",
+            ),
+            (
+                file(other, 0o755),
+                bin(me, 0o755),
+                me,
+                false,
+                "another user's file in the user's prefix",
+            ),
+            (
+                file(other, 0o755),
+                bin(other, 0o755),
+                other,
+                false,
+                "another user's prefix",
+            ),
+        ];
+        for (file, bin, root_owner, allowed, case) in cases {
+            assert_eq!(
+                may_run_built_in(file, bin, root_owner, me),
+                allowed,
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_built_in_program_that_is_a_link_or_in_a_shared_bin_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let program = bin.join("cupertino-portal");
+        std::fs::write(&program, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(check_built_in(&program), Ok(()), "the user's own prefix");
+
+        let link = bin.join("cupertino-polkit-agent");
+        std::os::unix::fs::symlink(&program, &link).unwrap();
+        assert!(check_built_in(&link)
+            .unwrap_err()
+            .contains("not a regular file"));
+
+        let linked_root = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(&bin, linked_root.path().join("bin")).unwrap();
         assert!(
-            !may_run_built_in(root, 0o100775, root, me),
-            "group-writable"
+            check_built_in(&linked_root.path().join("bin/cupertino-portal"))
+                .unwrap_err()
+                .contains("not a directory")
         );
-        assert!(
-            !may_run_built_in(root, 0o100757, root, me),
-            "writable by others"
-        );
-        assert!(
-            !may_run_built_in(me, 0o100755, root, me),
-            "the user's file in root's tree"
-        );
-        assert!(
-            may_run_built_in(me, 0o100755, me, me),
-            "the user's own prefix"
-        );
-        assert!(
-            !may_run_built_in(other, 0o100755, me, me),
-            "another user's file in the user's prefix"
-        );
-        assert!(
-            !may_run_built_in(other, 0o100755, other, me),
-            "another user's prefix"
-        );
+
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(check_built_in(&program)
+            .unwrap_err()
+            .contains("not root's alone"));
     }
 
     #[test]

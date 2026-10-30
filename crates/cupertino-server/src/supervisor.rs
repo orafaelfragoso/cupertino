@@ -1,14 +1,14 @@
-//! Supervision of the shell processes named in the configuration and of the built-in ones ([`BuiltIn`]): started with the server,
+//! Supervision of the shell processes named in the configuration and of the built-in ones ([`BuiltIn`], their program checked before every start): started with the server,
 //! restarted by [`crate::restart_policy`], and killed when the server goes away. A pass of
 //! [`Supervisor::poll`] runs when a child's pidfd becomes readable (it exited) or at the earliest
 //! restart ([`Supervisor::next_deadline`]), see [`Wakeups`]; `try_wait` reaps it there. The server
 //! installs no SIGCHLD handler, and nothing wakes the loop while every child runs.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
-use crate::config::{BuiltIn, ShellProcess};
+use crate::config::{check_built_in, BuiltIn, ShellProcess};
 use crate::restart_policy::{decide, Backoff, Decision};
 use crate::shell_connection::{bind_holder, hand_over, BoundConnection};
 use crate::xwayland::XDisplay;
@@ -28,6 +28,8 @@ struct Supervised {
     spec: ShellProcess,
     phase: Phase,
     backoff: Backoff,
+    /// A built-in process: its program is checked again before every start ([`check_built_in`]).
+    built_in: bool,
 }
 
 /// The supervised shell processes.
@@ -45,24 +47,27 @@ impl Supervisor {
                     spec: spec.clone(),
                     phase: Phase::Waiting(now),
                     backoff: Backoff::default(),
+                    built_in: false,
                 })
                 .collect(),
         }
     }
 
     /// Supervise the built-in processes from `programs`, each at the first [`Supervisor::poll`] at or after `now`. One
-    /// whose program is not installed (no path, or nothing at it) is logged once and never started.
+    /// whose program is not installed (no path, or nothing at it) is logged once and never started. The program is
+    /// checked before every start ([`check_built_in`]): a refused start waits out the throttle, like a failed one.
     pub fn add_built_ins(
         &mut self,
         programs: impl IntoIterator<Item = (BuiltIn, Option<PathBuf>)>,
         now: Instant,
     ) {
         for (built_in, program) in programs {
-            match program.filter(|p| p.is_file()) {
+            match program.filter(|p| p.symlink_metadata().is_ok()) {
                 Some(program) => self.procs.push(Supervised {
                     spec: built_in.process(&program),
                     phase: Phase::Waiting(now),
                     backoff: Backoff::default(),
+                    built_in: true,
                 }),
                 None => {
                     tracing::info!(
@@ -96,9 +101,15 @@ impl Supervisor {
     ) {
         for p in &mut self.procs {
             p.phase = match std::mem::replace(&mut p.phase, Phase::Stopped) {
-                Phase::Waiting(at) if at <= now => {
-                    start(&p.spec, socket, x11, connect, now, &mut p.backoff)
-                }
+                Phase::Waiting(at) if at <= now => start(
+                    &p.spec,
+                    p.built_in,
+                    socket,
+                    x11,
+                    connect,
+                    now,
+                    &mut p.backoff,
+                ),
                 Phase::Running { mut child, started } => match child
                     .try_wait()
                     .expect("waiting on a child the supervisor started")
@@ -107,9 +118,15 @@ impl Supervisor {
                     Some(status) => {
                         tracing::info!(name = p.spec.name, %status, "shell process exited");
                         match decide(status, started, now, &mut p.backoff) {
-                            Decision::RestartNow => {
-                                start(&p.spec, socket, x11, connect, now, &mut p.backoff)
-                            }
+                            Decision::RestartNow => start(
+                                &p.spec,
+                                p.built_in,
+                                socket,
+                                x11,
+                                connect,
+                                now,
+                                &mut p.backoff,
+                            ),
                             Decision::RestartAt(at) => Phase::Waiting(at),
                             Decision::Stop => Phase::Stopped,
                         }
@@ -167,8 +184,10 @@ impl Supervisor {
 }
 
 /// Spawn the process; a failed spawn counts as an exit with failure, so it is retried after the throttle, which grows.
+/// The program of a `built_in` process that [`check_built_in`] refuses is not started, and is checked again then.
 fn start(
     spec: &ShellProcess,
+    built_in: bool,
     socket: &str,
     x11: Option<&XDisplay>,
     connect: &mut dyn FnMut(&ShellProcess) -> std::io::Result<BoundConnection>,
@@ -179,6 +198,12 @@ fn start(
         .command
         .split_first()
         .expect("shell process commands are validated non-empty at load");
+    if built_in {
+        if let Err(reason) = check_built_in(Path::new(program)) {
+            tracing::warn!(name = spec.name, %reason, "the built-in program is not started");
+            return Phase::Waiting(now + backoff.next_interval(Duration::ZERO));
+        }
+    }
     let (stream, state) = match connect(spec) {
         Ok(connection) => connection,
         Err(e) => {
@@ -329,6 +354,37 @@ mod tests {
             None,
             "a running process waits for its exit"
         );
+    }
+
+    #[test]
+    fn a_built_in_program_others_can_change_after_it_ran_is_not_started_again() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let log = root.path().join("starts");
+        let program = bin.join("cupertino-portal");
+        std::fs::write(
+            &program,
+            format!("#!/bin/sh\necho >> {}\nexit 1\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let starts = || std::fs::read_to_string(&log).map_or(0, |t| t.lines().count());
+
+        let mut s = Supervisor::new(&[], Instant::now());
+        s.add_built_ins([(BuiltIn::Portal, Some(program.clone()))], Instant::now());
+        poll_until(&mut s, |s| starts() == 1 && s.next_deadline().is_some());
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o775)).unwrap();
+        let end = Instant::now() + 3 * RESTART_THROTTLE;
+        let mut connect = connect;
+        while Instant::now() < end {
+            s.poll(Instant::now(), "wayland-test", None, &mut connect);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(starts(), 1, "a group-writable program was started again");
+        assert!(s.next_deadline().is_some(), "it is checked again later");
     }
 
     #[test]

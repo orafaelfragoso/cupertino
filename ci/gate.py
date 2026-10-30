@@ -33,7 +33,10 @@ GATE = [
     ("private document path", re.compile(r"\b(?:research|references|specifications|extraction)/\S|\b(?:REA|AGENTS|BACKLOG|ARCHITECTURE)\.md\b|\.\./\.\./\.\./|\bspecifications\b")),
     ("analysis wording", re.compile(r"\breference[ -](?:screenshot|system|build|desktop|product)s?\b", re.I)),
     ("cleanup remnant", re.compile(r"\(`\)|\(full source\)|\( \)")),
-    ("vendor or product name", re.compile(r"\b(?:Apple|macOS|Mac OS|OS X|iPhone|iPad|iOS|Sequoia|Cocoa|AppKit|QuartzCore|Core Animation|CoreUI|SkyLight|SwiftUI|UIKit|Finder|Spotlight|Launchpad|Mission Control|Stage Manager|Exposé|Siri|Safari|Xcode|SF Pro|SF Mono|New York|Lucida Grande|Aqua)\b")),
+    # in any case, inside identifiers and CamelCase names (`apple_cursor`, `AppleColorEmoji`, `appleCursor`), not inside
+    # longer lowercase words (pineapple, applet, apples)
+    ("vendor or product name", re.compile(r"(?<![A-Za-z0-9])[Aa][Pp][Pp][Ll][Ee](?![a-z])")),
+    ("vendor or product name", re.compile(r"\b(?:macOS|Mac OS|OS X|iPhone|iPad|iOS|Sequoia|Cocoa|AppKit|QuartzCore|Core Animation|CoreUI|SkyLight|SwiftUI|UIKit|Finder|Spotlight|Launchpad|Mission Control|Stage Manager|Exposé|Siri|Safari|Xcode|SF Pro|SF Mono|New York|Lucida Grande|Aqua)\b")),
 ]
 
 GATE_EXEMPT = {

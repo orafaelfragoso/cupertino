@@ -36,6 +36,8 @@ struct Calls {
 
 struct FakeManager {
     calls: Arc<Mutex<Calls>>,
+    /// The manager's `Environment` before the session publishes; `None` answers the property with an error.
+    environment: Option<Vec<String>>,
     graphical_session_loaded: bool,
     ours_loaded: bool,
 }
@@ -63,6 +65,13 @@ impl FakeManager {
         OwnedObjectPath::try_from("/org/freedesktop/systemd1/job/2").unwrap()
     }
 
+    #[zbus(property)]
+    fn environment(&self) -> zbus::fdo::Result<Vec<String>> {
+        self.environment
+            .clone()
+            .ok_or_else(|| zbus::fdo::Error::Failed("no environment".into()))
+    }
+
     fn start_unit(&self, name: &str, mode: &str) -> OwnedObjectPath {
         self.calls
             .lock()
@@ -88,9 +97,20 @@ async fn session_with_manager(
     graphical: Option<&'static str>,
     ours: Option<&'static str>,
 ) -> (zbus::Connection, zbus::Connection, Arc<Mutex<Calls>>) {
+    let environment = Some(vec!["QT_QPA_PLATFORM=xcb".into()]);
+    session_with_manager_environment(bus, graphical, ours, environment).await
+}
+
+async fn session_with_manager_environment(
+    bus: &PrivateBus,
+    graphical: Option<&'static str>,
+    ours: Option<&'static str>,
+    environment: Option<Vec<String>>,
+) -> (zbus::Connection, zbus::Connection, Arc<Mutex<Calls>>) {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let manager = FakeManager {
         calls: calls.clone(),
+        environment,
         graphical_session_loaded: graphical.is_some(),
         ours_loaded: ours.is_some(),
     };
@@ -124,8 +144,8 @@ fn an_idle_user_manager_gets_the_variables_and_the_session_target() {
     block_on(async {
         let (session, _systemd, calls) = session_with_manager(&bus, Some("inactive"), None).await;
         assert_eq!(
-            publish(&session, &VARIABLES).await.unwrap(),
-            Outcome::Applied
+            publish(&session, &VARIABLES, &[]).await.unwrap(),
+            Outcome::Applied { defaults: vec![] }
         );
         let calls = calls.lock().unwrap();
         assert_eq!(
@@ -159,8 +179,8 @@ fn the_sessions_own_x_display_is_published_not_unset() {
             ("XAUTHORITY", "/run/user/1000/cupertino-xauth-1"),
         ]);
         assert_eq!(
-            publish(&session, &variables).await.unwrap(),
-            Outcome::Applied
+            publish(&session, &variables, &[]).await.unwrap(),
+            Outcome::Applied { defaults: vec![] }
         );
         let calls = calls.lock().unwrap();
         assert!(calls.unset.is_empty(), "{:?}", calls.unset);
@@ -182,8 +202,8 @@ fn a_leftover_session_target_of_ours_is_stopped_and_the_session_goes_on() {
         let (session, _systemd, calls) =
             session_with_manager(&bus, Some("active"), Some("active")).await;
         assert_eq!(
-            publish(&session, &VARIABLES).await.unwrap(),
-            Outcome::Applied
+            publish(&session, &VARIABLES, &[]).await.unwrap(),
+            Outcome::Applied { defaults: vec![] }
         );
         let calls = calls.lock().unwrap();
         assert_eq!(calls.stopped, [SESSION_TARGET]);
@@ -200,8 +220,8 @@ fn a_manager_without_the_graphical_session_loaded_counts_as_idle() {
     block_on(async {
         let (session, _systemd, calls) = session_with_manager(&bus, None, None).await;
         assert_eq!(
-            publish(&session, &VARIABLES).await.unwrap(),
-            Outcome::Applied
+            publish(&session, &VARIABLES, &[]).await.unwrap(),
+            Outcome::Applied { defaults: vec![] }
         );
         assert_eq!(calls.lock().unwrap().started.len(), 1);
     });
@@ -216,7 +236,7 @@ fn another_active_graphical_session_is_left_alone() {
     block_on(async {
         let (session, _systemd, calls) = session_with_manager(&bus, Some("active"), None).await;
         assert_eq!(
-            publish(&session, &VARIABLES).await.unwrap(),
+            publish(&session, &VARIABLES, &[]).await.unwrap(),
             Outcome::AnotherSession
         );
         let calls = calls.lock().unwrap();
@@ -237,8 +257,91 @@ fn a_bus_without_a_user_manager_is_left_alone() {
             .await
             .unwrap();
         assert_eq!(
-            publish(&session, &VARIABLES).await.unwrap(),
+            publish(&session, &VARIABLES, &[]).await.unwrap(),
             Outcome::NoSystemd
+        );
+    });
+}
+
+#[test]
+fn a_default_is_published_only_where_the_user_manager_has_no_value_of_its_own() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    block_on(async {
+        let (session, _systemd, calls) = session_with_manager(&bus, Some("inactive"), None).await;
+        let defaults = [
+            ("QT_QPA_PLATFORM", "wayland;xcb"),
+            ("ELECTRON_OZONE_PLATFORM_HINT", "auto"),
+        ];
+        assert_eq!(
+            publish(&session, &VARIABLES, &defaults).await.unwrap(),
+            Outcome::Applied {
+                defaults: vec!["ELECTRON_OZONE_PLATFORM_HINT".into()]
+            },
+            "the manager's QT_QPA_PLATFORM=xcb is the user's choice"
+        );
+        let calls = calls.lock().unwrap();
+        assert!(calls
+            .environment
+            .contains(&"ELECTRON_OZONE_PLATFORM_HINT=auto".to_string()));
+        assert!(!calls
+            .environment
+            .iter()
+            .any(|e| e.starts_with("QT_QPA_PLATFORM=")));
+    });
+}
+
+#[test]
+fn an_unreadable_manager_environment_publishes_the_session_without_defaults() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    block_on(async {
+        let (session, _systemd, calls) =
+            session_with_manager_environment(&bus, Some("inactive"), None, None).await;
+        assert_eq!(
+            publish(
+                &session,
+                &VARIABLES,
+                &[("ELECTRON_OZONE_PLATFORM_HINT", "auto")]
+            )
+            .await
+            .unwrap(),
+            Outcome::Applied { defaults: vec![] }
+        );
+        let calls = calls.lock().unwrap();
+        assert!(calls
+            .environment
+            .contains(&"WAYLAND_DISPLAY=wayland-cupertino".to_string()));
+        assert!(!calls
+            .environment
+            .iter()
+            .any(|e| e.starts_with("ELECTRON_OZONE_PLATFORM_HINT=")));
+        assert_eq!(calls.started, [(SESSION_TARGET.into(), "replace".into())]);
+    });
+}
+
+#[test]
+fn our_default_left_in_the_manager_by_a_killed_session_is_taken_back_and_recorded() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    block_on(async {
+        let environment = Some(vec!["QT_QPA_PLATFORM=wayland;xcb".into()]);
+        let (session, _systemd, _calls) =
+            session_with_manager_environment(&bus, Some("active"), Some("active"), environment)
+                .await;
+        assert_eq!(
+            publish(&session, &VARIABLES, &[("QT_QPA_PLATFORM", "wayland;xcb")])
+                .await
+                .unwrap(),
+            Outcome::Applied {
+                defaults: vec!["QT_QPA_PLATFORM".into()]
+            }
         );
     });
 }

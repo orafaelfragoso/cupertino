@@ -100,7 +100,7 @@ fn show_pane_reaches_the_owner_and_rejects_an_unknown_id() {
 }
 
 #[test]
-fn a_second_start_hands_its_pane_to_the_first_and_exits_0() {
+fn a_second_start_hands_its_pane_to_the_first_and_its_token_only_to_its_own_program() {
     let Some(bus) = common::bus() else { return };
     let (tx, rx) = mpsc::channel();
     let tx = std::sync::Mutex::new(tx);
@@ -108,17 +108,28 @@ fn a_second_start_hands_its_pane_to_the_first_and_exits_0() {
         tx.lock().unwrap().send((pane, token)).unwrap()
     })
     .expect("claims the name");
-    // no display: the second start must not need one
-    let status = std::process::Command::new(env!("CARGO_BIN_EXE_cupertino-settings"))
-        .args(["--pane", "sound"])
-        .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
-        .env("XDG_ACTIVATION_TOKEN", "fresh-second-launch-token")
-        .env_remove("WAYLAND_DISPLAY")
-        .status()
-        .expect("the binary runs");
+    let second = |token: Option<&str>| {
+        // no display: the second start must not need one
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_cupertino-settings"));
+        command
+            .args(["--pane", "sound"])
+            .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
+            .env_remove("WAYLAND_DISPLAY")
+            .env_remove("XDG_ACTIVATION_TOKEN");
+        if let Some(token) = token {
+            command.env("XDG_ACTIVATION_TOKEN", token);
+        }
+        command.status().expect("the binary runs")
+    };
+    // the owner here is the test binary, another program: a pane switch carries no grant and reaches it
+    let status = second(None);
     assert!(status.success(), "{status}");
     assert_eq!(
         rx.recv_timeout(Duration::from_secs(5)),
-        Ok((PaneId::Sound, "fresh-second-launch-token".into()))
+        Ok((PaneId::Sound, String::new()))
     );
+    // a launch's activation token never goes to another program
+    let status = second(Some("fresh-second-launch-token"));
+    assert!(!status.success(), "{status}");
+    assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
 }

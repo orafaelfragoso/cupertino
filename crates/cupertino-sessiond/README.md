@@ -75,7 +75,7 @@ One `key = value` per line, `#` starts a comment. Keys (`cupertino-defaults::log
 missing file, keeps the manager from starting. A line without `=` is a bad line of the key it starts with
 (`hide-admin-users false` hides the administrators). A misspelled key is only logged, with one summary line after the
 bad lines: after editing the file run `cupertino-sessiond --check-config`, which prints each bad line and exits non-zero
-when there is one (any user can run it; it reads the file and starts nothing), or check the journal. The filter and power keys are the login window preferences of the
+when there is one, and also names `auto-login` or `admin-groups` the manager would ignore because the file is not root's alone (it reads the file and starts nothing; a file only root can read needs root), or check the journal. The filter and power keys are the login window preferences of the
 reference; they were options of `cupertino-login --greeter`.
 
 ## What the manager does

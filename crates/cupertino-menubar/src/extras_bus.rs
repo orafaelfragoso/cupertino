@@ -362,19 +362,10 @@ async fn read_session(
         .filter(|name: &String| !name.is_empty())
         .or_else(|| std::env::var("USER").ok())
         .unwrap_or_default();
-    let capabilities: HashMap<String, bool> =
-        login.get_property("Capabilities").await.unwrap_or_default();
-    let can = |key: &str| capabilities.get(key).copied().unwrap_or(true);
+    let capabilities: Option<HashMap<String, bool>> = login.get_property("Capabilities").await.ok();
     Ok(Some(SessionState {
         user_name,
-        caps: SessionCaps {
-            sleep: can("sleep"),
-            restart: can("restart"),
-            shut_down: can("shut-down"),
-            log_out: can("log-out"),
-            switch_user: can("switch-user"),
-            lock: can("lock"),
-        },
+        caps: session_caps(capabilities.as_ref()),
     }))
 }
 
@@ -539,5 +530,37 @@ async fn act(
                 .call("Disconnect", &(id,))
                 .await
         }
+    }
+}
+
+/// The system menu's session entries from the agent's `Capabilities`. A capability the agent does not report is not
+/// offered (drawn disabled). A map that could not be read at all (the agent still starting, a timeout) offers every
+/// entry, as before the read: the agent and logind still refuse what is not allowed, and Lock and Log Out stay
+/// reachable until the next read.
+fn session_caps(capabilities: Option<&HashMap<String, bool>>) -> SessionCaps {
+    let Some(capabilities) = capabilities else {
+        return SessionCaps::default();
+    };
+    let can = |key: &str| capabilities.get(key).copied().unwrap_or(false);
+    SessionCaps {
+        sleep: can("sleep"),
+        restart: can("restart"),
+        shut_down: can("shut-down"),
+        log_out: can("log-out"),
+        switch_user: can("switch-user"),
+        lock: can("lock"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unreported_capability_is_off_but_an_unreadable_map_offers_everything() {
+        let reported: HashMap<String, bool> = [("lock".to_string(), true)].into();
+        let caps = session_caps(Some(&reported));
+        assert!(caps.lock && !caps.log_out && !caps.shut_down);
+        assert_eq!(session_caps(None), SessionCaps::default());
     }
 }

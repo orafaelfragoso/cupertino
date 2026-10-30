@@ -46,7 +46,7 @@ pub use kind::{child_frame, modal_panel_frame, sheet_frame, window_kind, MODAL_C
 pub use lifecycle::{Lifecycle, LifecycleState, Presentation, Resting, ToplevelStates};
 pub use magnet::{unsnap_distance, Guide, Magnet, MagnetStep};
 pub use tiling::{hot_zone, hot_zone_hit, tile_rect, HotZoneHit, TileKind};
-pub use window::{App, Assignment, Window, WindowLevel};
+pub use window::{App, Assignment, DisabledControls, Window, WindowLevel};
 pub use wm::{Output, Wm};
 pub use workspace::{Workspace, WorkspaceKind};
 pub use zoom::{best_fit, SizeHints};

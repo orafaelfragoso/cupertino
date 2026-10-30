@@ -22,8 +22,8 @@ An appearance other than 0 or 1, display options with reserved bits, a scroll co
 state other than 0 or 1 and a menu reader that is not a unique bus name fail the connection with a protocol error.
 
 `set_disabled_controls` replaces the window's disabled set, applies with the surface's next commit and may change at any
-time. In this version the server checks the request and stores the set with the commit; the buttons, the shortcuts, the
-Window menu and the client's own `set_minimized` / `set_maximized` follow it once the server work that applies it lands.
+time. The server applies it with that commit: the buttons are dimmed, and the shortcuts, the Window menu and the client's
+own `set_minimized` / `set_maximized` do nothing for a disabled control (unzooming a zoomed window still works).
 
 ## Tests
 

@@ -199,6 +199,11 @@ impl Wm {
                     w.title = title;
                 }
             }
+            Command::SetDisabledControls { window, disabled } => {
+                if let Some(w) = self.windows.get_mut(&window) {
+                    w.disabled = disabled;
+                }
+            }
             Command::SetSizeHints {
                 window,
                 min,
@@ -590,6 +595,7 @@ impl Wm {
                 sticky_from_app: from_app,
                 level,
                 lifecycle,
+                disabled: p.disabled,
             },
         );
         self.insert_in_stack(p.window);
@@ -732,6 +738,9 @@ impl Wm {
         let Some(w) = self.windows.get(&id) else {
             return;
         };
+        if !w.can_minimize() {
+            return;
+        }
         let target = target.unwrap_or_else(|| self.default_minimize_target(w.output));
         let w = self.windows.get_mut(&id).unwrap();
         if !w.lifecycle.minimize(target, now) {
@@ -779,6 +788,10 @@ impl Wm {
             if self.windows.get_mut(&id).unwrap().lifecycle.unzoom(now) {
                 self.emit_layout(id, AnimationKind::Unzoom, out);
             }
+            return;
+        }
+        // unzooming above stays allowed, so disabling zoom cannot trap a zoomed window
+        if !w.can_zoom() {
             return;
         }
         let Some(usable) = self.output(w.output).map(|o| o.usable) else {

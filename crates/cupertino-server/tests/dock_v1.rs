@@ -951,6 +951,32 @@ fn activate_app_raises_the_application() {
     });
 }
 
+/// The role is checked on every request, not only at `get_dock`: once the process the connection was made for exits, a
+/// request on the dock it already has is refused with the permission error and not carried out.
+#[test]
+fn a_dock_whose_process_exited_is_refused_its_next_request() {
+    let Some(mut h) = Harness::new() else { return };
+    let (stream, holder) =
+        common::held_shell_connection(&h.state, &[ShellRole::Session, ShellRole::Dock]);
+    let dock = DockClient::spawn(stream, true);
+    let _a = spawn_app(h.socket_path(), "org.example.a");
+    let first = h.mapped_window(1);
+    let _b = spawn_app(h.socket_path(), "org.example.b");
+    let second = h.mapped_window(2);
+    dock.send(Cmd::ActivateApp("org.example.a"));
+    h.wait_until("the first application to take focus", |s| {
+        s.wm.key_window() == Some(first)
+    });
+
+    holder.end();
+    dock.send(Cmd::ActivateApp("org.example.b"));
+    h.wait_until("the permission error", |_| dock.error().is_some());
+    // error 2 of cupertino_shell_v1.error is `permission`
+    assert_eq!(dock.error(), Some(("cupertino_dock_v1".to_string(), 2)));
+    assert_eq!(h.state.wm.key_window(), Some(first));
+    assert_ne!(first, second);
+}
+
 #[test]
 fn restore_window_unminimizes_out_of_the_given_tile() {
     let Some(mut h) = Harness::new() else { return };

@@ -633,6 +633,29 @@ fn a_strip_placement_animates_into_its_rectangle_takes_no_input_and_reports_pres
     );
 }
 
+/// The role is checked on every request, not only at `get_window_manager`: once the process the connection was made
+/// for exits, a request on the window manager it already has is refused with the permission error and not carried out.
+#[test]
+fn a_window_manager_whose_process_exited_is_refused_its_next_request() {
+    let Some(mut h) = Harness::new() else { return };
+    let (a, b, _ca, _cb) = h.two_windows();
+    let (stream, holder) = common::held_shell_connection(&h.state, &[ShellRole::WindowManager]);
+    let wm = WmClient::spawn(stream);
+    h.wait_until("the first group", |_| wm.events().contains(&WmEvent::Done));
+    wm.send(Cmd::Activate(a.0 as u32));
+    h.wait_until("the activation", |s| s.wm.key_window() == Some(a));
+
+    holder.end();
+    wm.send(Cmd::Activate(b.0 as u32));
+    h.wait_until("the permission error", |_| wm.error().is_some());
+    // error 2 of cupertino_shell_v1.error is `permission`
+    assert_eq!(
+        wm.error(),
+        Some(("cupertino_window_manager_v1".to_string(), 2))
+    );
+    assert_eq!(h.state.wm.key_window(), Some(a));
+}
+
 #[test]
 fn a_dead_window_manager_puts_every_window_back_at_once() {
     let Some(mut h) = Harness::new() else { return };

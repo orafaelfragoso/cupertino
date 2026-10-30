@@ -120,10 +120,30 @@ pub struct UdevBackend {
 }
 
 /// Whether an output gets a frame now. A paused session or a lost renderer renders nothing: the device rejects the
-/// frame, and the loop would retry (and log) every iteration. Nor does an output whose frame waits for its vblank or
-/// for the retry time of a failed one.
-fn frame_due(stopped: bool, waiting: bool, redraw: bool, wants_frames: bool) -> bool {
-    !stopped && !waiting && (redraw || wants_frames)
+/// frame, and the loop would retry (and log) every iteration. Nor does an output whose frame waits for its vblank, or
+/// one its scheduler does not find due (a change at once, animation on its refresh grid, a failed frame's retry).
+fn frame_due(stopped: bool, waiting: bool, due: bool) -> bool {
+    !stopped && !waiting && due
+}
+
+/// How long the loop may sleep: until the earliest output is due, at most 4 ms. Outputs that cannot draw (paused,
+/// asleep, off, waiting for their vblank) wait for an event, not a deadline.
+fn loop_timeout(state: &Cupertino) -> Duration {
+    const MAX: Duration = Duration::from_millis(4);
+    let Some(Backend::Udev(u)) = state.backend.as_ref() else {
+        return MAX;
+    };
+    if u.paused || u.asleep || u.renderer_lost {
+        return MAX;
+    }
+    let now = state.frame_now();
+    u.surfaces
+        .values()
+        .filter(|s| !s.pending && state.displays.powered(s.output))
+        .filter_map(|s| state.outputs.iter().position(|o| o.id == s.output))
+        .filter_map(|idx| state.frame_deadline(idx, now))
+        .min()
+        .map_or(MAX, |due| due.saturating_sub(now).min(MAX))
 }
 
 impl UdevBackend {
@@ -423,7 +443,7 @@ pub fn run(
 
     while state.running {
         event_loop
-            .dispatch(Some(Duration::from_millis(4)), state)
+            .dispatch(Some(loop_timeout(state)), state)
             .map_err(|e| anyhow!("event loop: {e}"))?;
         state.tick();
         render_outputs(state);
@@ -712,7 +732,7 @@ fn render_outputs(state: &mut Cupertino) {
     };
     if let Backend::Udev(u) = &mut backend {
         let crtcs: Vec<crtc::Handle> = u.surfaces.keys().copied().collect();
-        let now = Duration::from(state.clock.now());
+        let now = state.frame_now();
         for crtc in crtcs {
             let Some(s) = u.surfaces.get(&crtc) else {
                 continue;
@@ -723,9 +743,8 @@ fn render_outputs(state: &mut Cupertino) {
             if !state.displays.powered(s.output)
                 || !frame_due(
                     u.paused || u.asleep || u.renderer_lost,
-                    s.pending || !state.retry_due(idx, now),
-                    state.outputs[idx].scheduler.damaged(),
-                    state.wants_frames(),
+                    s.pending,
+                    state.frame_due(idx, now),
                 )
             {
                 continue;
@@ -851,14 +870,18 @@ fn frame_finish(
         Ok(_) => {}
         Err(e) => tracing::warn!(error = %e, "frame submission failed"),
     }
+    let refresh = surface.refresh;
+    let Some(idx) = state.outputs.iter().position(|o| o.id == output) else {
+        return;
+    };
     // a vblank of a frame dropped with its CRTC's state (sleep, resume) shows nothing new, so it confirms no frame, a
-    // lock frame least of all
+    // lock frame least of all, and the refresh grid does not follow it
     if shown {
-        if let Some(idx) = state.outputs.iter().position(|o| o.id == output) {
-            state.note_frame_shown(idx);
-        }
+        state.note_frame_shown(idx);
+        let now = state.frame_now();
+        state.outputs[idx].scheduler.vblank(now, refresh);
     }
-    state.request_redraw();
+    state.outputs[idx].scheduler.damage();
 }
 
 /// Whether a vblank showed a frame of ours: `frame_submitted` finds none waiting (`Ok(None)`) for an event of a frame
@@ -899,15 +922,17 @@ mod tests {
 
     #[test]
     fn a_paused_session_renders_nothing_however_much_is_wanted() {
-        assert!(frame_due(false, false, true, false));
-        assert!(frame_due(false, false, false, true));
-        assert!(!frame_due(false, false, false, false), "nothing changed");
+        assert!(frame_due(false, false, true));
         assert!(
-            !frame_due(false, true, true, true),
+            !frame_due(false, false, false),
+            "the scheduler finds nothing due"
+        );
+        assert!(
+            !frame_due(false, true, true),
             "a frame is still waiting for its vblank"
         );
         assert!(
-            !frame_due(true, false, true, true),
+            !frame_due(true, false, true),
             "the device rejects frames while paused"
         );
     }

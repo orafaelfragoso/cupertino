@@ -143,6 +143,8 @@ pub enum Event {
     Action(ActionRequest),
     /// The frame a node asked for with [`EventCx::request_animation_frame`] is being prepared.
     AnimationFrame(Timestamp),
+    /// The time a node asked for with [`EventCx::wake_at`] has come; it carries the clock's time now.
+    Wake(Timestamp),
     /// A press, drag or composition in progress ends without effect: focus, pointer capture or the surface was lost.
     Cancel,
 }
@@ -224,6 +226,8 @@ pub struct Pending {
     pub tasks: usize,
     pub frames: usize,
     pub animating: bool,
+    /// The earliest time a node asked to be woken at.
+    pub next_wake: Option<Timestamp>,
 }
 
 /// What a bounded runtime step ended with. Steps never advance time on their own.

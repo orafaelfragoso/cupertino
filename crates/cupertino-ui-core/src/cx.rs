@@ -37,6 +37,7 @@ pub(crate) struct Effects<M> {
     pub(crate) changes: Vec<(NodeId, Change)>,
     pub(crate) cursor: Option<Option<CursorShape>>,
     pub(crate) animate: BTreeSet<NodeId>,
+    pub(crate) wakes: Vec<(NodeId, Timestamp)>,
     pub(crate) text_input: Option<(NodeId, Option<TextInputState>)>,
     pub(crate) clipboard: Option<String>,
 }
@@ -50,6 +51,7 @@ impl<M> Default for Effects<M> {
             changes: Vec::new(),
             cursor: None,
             animate: BTreeSet::new(),
+            wakes: Vec::new(),
             text_input: None,
             clipboard: None,
         }
@@ -65,6 +67,7 @@ impl<M> Effects<M> {
         self.changes.extend(other.changes);
         self.cursor = other.cursor.or(self.cursor);
         self.animate.extend(other.animate);
+        self.wakes.extend(other.wakes);
         if other.text_input.is_some() {
             self.text_input = other.text_input;
         }
@@ -190,6 +193,12 @@ impl<M> EventCx<'_, M> {
     /// Delivers [`Event::AnimationFrame`](crate::Event::AnimationFrame) to this node on the next frame.
     pub fn request_animation_frame(&mut self) {
         self.effects.animate.insert(self.node);
+    }
+
+    /// Delivers [`Event::Wake`](crate::Event::Wake) to this node once the clock reaches `at`, in place of any wake it
+    /// asked for before.
+    pub fn wake_at(&mut self, at: Timestamp) {
+        self.effects.wakes.push((self.node, at));
     }
 }
 

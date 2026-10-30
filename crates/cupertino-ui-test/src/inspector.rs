@@ -48,8 +48,12 @@ impl Inspector {
         let _ = writeln!(out, "window {}", frame.window.0);
         let _ = writeln!(
             out,
-            "pending messages={} tasks={} frames={} animating={}",
-            p.messages, p.tasks, p.frames, p.animating
+            "pending messages={} tasks={} frames={} animating={} next_wake={:?}",
+            p.messages,
+            p.tasks,
+            p.frames,
+            p.animating,
+            p.next_wake.map(|t| t.0)
         );
         let _ = writeln!(out, "focus {:?}", frame.focus);
         let _ = writeln!(out, "pointer_capture {:?}", frame.pointer_capture);
@@ -136,7 +140,7 @@ mod tests {
     use super::*;
     use cupertino_geometry::{Point, Size};
     use cupertino_ui_core::{AccessibleStates, Action, NodeId, NodeSnapshot, Pending, Role};
-    use cupertino_ui_platform::WindowId;
+    use cupertino_ui_platform::{Timestamp, WindowId};
     use cupertino_ui_render::{DisplayList, PaintNode, PaintNodeId, PaintRevision, Transform};
     use std::num::NonZeroU32;
 
@@ -201,6 +205,7 @@ mod tests {
                 tasks: 2,
                 frames: 3,
                 animating: true,
+                next_wake: Some(Timestamp(500)),
             },
         }
     }
@@ -210,7 +215,7 @@ mod tests {
         let dump = Inspector::default().dump(&snapshot(AccessibleValue::Protected));
         let expected = "\
 window 1
-pending messages=1 tasks=2 frames=3 animating=true
+pending messages=1 tasks=2 frames=3 animating=true next_wake=Some(500)
 focus Some(NodeId(0v1))
 pointer_capture None
 text_input Some(NodeId(0v1))

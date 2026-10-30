@@ -98,6 +98,8 @@ pub(crate) struct Leaf {
     pub(crate) secret: bool,
     /// A key starts an animation that repaints and asks for the next frame on every frame.
     pub(crate) animated: bool,
+    /// A key asks to be woken this many nanoseconds later.
+    pub(crate) wake_after: Option<u64>,
 }
 
 pub(crate) fn leaf(label: &'static str) -> Leaf {
@@ -109,6 +111,7 @@ pub(crate) fn leaf(label: &'static str) -> Leaf {
         capture: false,
         secret: false,
         animated: false,
+        wake_after: None,
     }
 }
 
@@ -163,8 +166,12 @@ impl<M: From<String> + 'static> Widget<M> for Leaf {
                     cx.request_animation_frame();
                     cx.request_paint();
                 }
+                if let Some(after) = self.wake_after {
+                    cx.wake_at(Timestamp(cx.now().0 + after));
+                }
                 "key"
             }
+            Event::Wake(_) => "wake",
             Event::AnimationFrame(_) => {
                 cx.request_animation_frame();
                 cx.request_paint();
@@ -291,6 +298,11 @@ impl<M: From<String> + 'static> Widget<M> for Group<M> {
 #[derive(Default)]
 pub(crate) struct FakeSystem {
     pub(crate) queue: VecDeque<PlatformEvent>,
+    /// The timeout of every wait, in order.
+    pub(crate) waits: Rc<RefCell<Vec<Option<Duration>>>>,
+    /// A wait that may block (not a step's zero-timeout poll) with nothing queued asks the first window to close, so
+    /// `run` returns.
+    pub(crate) close_on_wait: bool,
     pub(crate) created: Vec<(WindowId, WindowSpec)>,
     pub(crate) destroyed: Vec<WindowId>,
     pub(crate) requests: Vec<(WindowId, WindowRequest)>,
@@ -383,9 +395,18 @@ impl WindowSystem for FakeSystem {
 
     fn dispatch(
         &mut self,
-        _: Option<Duration>,
+        timeout: Option<Duration>,
         events: &mut Vec<PlatformEvent>,
     ) -> Result<(), PlatformError> {
+        self.waits.borrow_mut().push(timeout);
+        if self.close_on_wait && timeout != Some(Duration::ZERO) && self.queue.is_empty() {
+            if let Some(&(window, _)) = self.created.first() {
+                self.queue.push_back(PlatformEvent::Window {
+                    window,
+                    event: WindowEvent::CloseRequested,
+                });
+            }
+        }
         events.extend(self.queue.drain(..));
         Ok(())
     }

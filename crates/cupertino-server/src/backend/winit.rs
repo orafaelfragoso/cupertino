@@ -138,7 +138,7 @@ fn render_inner(state: &mut Cupertino, w: &mut WinitBackend) {
     let idx = 0;
     if state.outputs.is_empty()
         || !state.displays.powered(state.outputs[idx].id)
-        || !state.retry_due(idx, Duration::from(state.clock.now()))
+        || !state.frame_due(idx, state.frame_now())
     {
         return;
     }

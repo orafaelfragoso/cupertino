@@ -10,7 +10,7 @@ use cupertino_ui_core::{
     Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, TextSemantics, Widget,
 };
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
-use cupertino_ui_platform::{KeyEvent, Keysym, MouseButton, PointerEvent};
+use cupertino_ui_platform::{KeyEvent, Keysym, MouseButton, PointerEvent, Timestamp};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_text::{
     Affinity, ChangeCause, ContentHints, ContentPurpose, ImeBatch, ImeEvent, Keymap,
@@ -115,6 +115,8 @@ struct Shown<'a> {
     caret: usize,
     selection: Range<usize>,
     composition: Option<Range<usize>>,
+    /// The caret is in the on phase of its blink.
+    caret_on: bool,
 }
 
 /// Paints a field's text, or its placeholder while empty, with the selection and caret while focused and the
@@ -173,7 +175,7 @@ fn paint_text(
             color(ColorRole::Text),
         );
     }
-    if focused && look.window_active && shown.selection.is_empty() {
+    if focused && look.window_active && shown.selection.is_empty() && shown.caret_on {
         fill_rect(
             cx,
             caret.translate(origin.x, origin.y),
@@ -181,6 +183,77 @@ fn paint_text(
         );
     }
     cx.push(PaintOp::PopClip);
+}
+
+/// After this long without an edit, move, click or focus, the caret stops blinking and stays on, so an idle window
+/// settles.
+const BLINK_LIMIT_NS: u64 = 10_000_000_000;
+
+/// The caret's blink: on for the first phase after each edit, move, click or focus gain, then alternating, steady with
+/// Reduce Motion and after [`BLINK_LIMIT_NS`].
+#[derive(Clone, Copy, Debug, Default)]
+struct Blink {
+    since: Timestamp,
+}
+
+impl Blink {
+    fn phase(env: &Environment) -> Option<u64> {
+        let motion = env.theme.motion;
+        let phase = u64::from(motion.caret_phase_ms) * 1_000_000;
+        (!motion.reduce && phase > 0).then_some(phase)
+    }
+
+    fn on(&self, env: &Environment, now: Timestamp) -> bool {
+        let elapsed = now.0.saturating_sub(self.since.0);
+        match Self::phase(env) {
+            Some(phase) if elapsed < BLINK_LIMIT_NS => (elapsed / phase).is_multiple_of(2),
+            _ => true,
+        }
+    }
+
+    /// The next time the caret shows or hides, or `None` once it is steady.
+    fn next_edge(&self, env: &Environment, now: Timestamp) -> Option<Timestamp> {
+        let phase = Self::phase(env)?;
+        let elapsed = now.0.saturating_sub(self.since.0);
+        (elapsed < BLINK_LIMIT_NS).then(|| {
+            let next = (elapsed / phase + 1) * phase;
+            Timestamp(self.since.0 + next.min(BLINK_LIMIT_NS))
+        })
+    }
+
+    /// Asks to be woken at the next edge while the caret shows in a focused field of an active window.
+    fn arm<M>(&self, selecting: bool, cx: &mut EventCx<'_, M>) {
+        if selecting || !cx.is_focused() || !cx.window_active() {
+            return;
+        }
+        if let Some(at) = self.next_edge(cx.env(), cx.now()) {
+            cx.wake_at(at);
+        }
+    }
+
+    /// Whether `event` restarts the blink with the caret showing.
+    fn restarts(event: &Event) -> bool {
+        matches!(
+            event,
+            Event::Key(..)
+                | Event::Ime(ImeEvent::Done(_))
+                | Event::Focus { gained: true, .. }
+                | Event::WindowActive(true)
+                | Event::Pointer(PointerEvent::Button { pressed: true, .. }, _)
+        )
+    }
+
+    /// Restarts on the events that move the caret, and keeps blinking on a wake, after the field handled `event`.
+    fn follow<M>(&mut self, event: &Event, selecting: bool, cx: &mut EventCx<'_, M>) {
+        if Self::restarts(event) {
+            self.since = cx.now();
+            self.arm(selecting, cx);
+            cx.request_paint();
+        } else if let Event::Wake(_) = event {
+            self.arm(selecting, cx);
+            cx.request_paint();
+        }
+    }
 }
 
 fn layout() -> LayoutSpec {
@@ -280,6 +353,7 @@ pub struct FieldState {
     hovered: bool,
     /// Set by paint, where the field's width is known, and read by hit testing.
     scroll: Cell<f64>,
+    blink: Blink,
 }
 
 impl FieldState {
@@ -382,107 +456,12 @@ impl FieldState {
 }
 
 impl<M: Clone + 'static> TextField<M> {
-    fn report(&self, state: &mut FieldState, cx: &mut EventCx<'_, M>) {
-        state.reported += 1;
-        if let Some(on_change) = &self.on_change {
-            cx.emit(on_change(TextChange {
-                text: state.committed(),
-                revision: state.reported,
-            }));
-        }
-    }
-
-    fn key(&self, state: &mut FieldState, key: &KeyEvent, cx: &mut EventCx<'_, M>) -> Propagation {
-        if !key.pressed {
-            return Propagation::Continue;
-        }
-        let composing = state.buffer.composition().is_some();
-        match key.keysym {
-            RETURN | KP_ENTER if !composing => {
-                if let Some(message) = &self.on_submit {
-                    cx.emit(message.clone());
-                }
-                return Propagation::Stop;
-            }
-            ESCAPE if composing => {
-                state.buffer.cancel_composition();
-                state.sync_input(ChangeCause::Other, cx);
-                cx.request_paint();
-                return Propagation::Stop;
-            }
-            ESCAPE => return Propagation::Continue,
-            _ => {}
-        }
-        let response = state
-            .buffer
-            .logical_key(&mut state.keymap, key.code, key.mods, key.text);
-        match response {
-            Response::Ignored => return Propagation::Continue,
-            Response::Moved => {}
-            Response::Edited => self.report(state, cx),
-            Response::Copy(text) => cx.set_clipboard(text),
-            Response::Cut(text) => {
-                cx.set_clipboard(text);
-                self.report(state, cx);
-            }
-            Response::Paste => {}
-        }
-        state.sync_input(ChangeCause::Other, cx);
-        cx.request_paint();
-        Propagation::Stop
-    }
-}
-
-impl<M: Clone + 'static> Widget<M> for TextField<M> {
-    type State = FieldState;
-
-    fn layout(&self) -> LayoutSpec {
-        layout()
-    }
-
-    fn state(&self) -> FieldState {
-        let mut buffer = TextBuffer::new();
-        buffer.set_text(&self.value);
-        FieldState {
-            buffer,
-            keymap: Keymap::standard(),
-            session: session(self.purpose, false),
-            reported: self.revision,
-            hovered: false,
-            scroll: Cell::new(0.0),
-        }
-    }
-
-    /// Takes the model's text when the application changed it itself: a revision at or past the last one the field
-    /// reported, with a different text. An older revision is the model catching up and is ignored.
-    fn update(&self, old: &Self, state: &mut FieldState) -> Change {
-        state.session.purpose = self.purpose;
-        if self.revision >= state.reported && self.value != state.committed() {
-            state.buffer.set_text(&self.value);
-            state.reported = self.revision;
-            return Change::Paint;
-        }
-        if self.enabled != old.enabled
-            || self.label != old.label
-            || self.placeholder != old.placeholder
-            || self.purpose != old.purpose
-        {
-            Change::Paint
-        } else {
-            Change::None
-        }
-    }
-
-    fn measure(
+    fn handle(
         &self,
-        _: &FieldState,
-        constraints: Constraints,
-        cx: &mut MeasureCx<'_>,
-    ) -> Measured {
-        measure(constraints, cx)
-    }
-
-    fn event(&self, state: &mut FieldState, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        state: &mut FieldState,
+        event: &Event,
+        cx: &mut EventCx<'_, M>,
+    ) -> Propagation {
         if let Event::Pointer(
             PointerEvent::Button {
                 position,
@@ -552,6 +531,114 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
         }
     }
 
+    fn report(&self, state: &mut FieldState, cx: &mut EventCx<'_, M>) {
+        state.reported += 1;
+        if let Some(on_change) = &self.on_change {
+            cx.emit(on_change(TextChange {
+                text: state.committed(),
+                revision: state.reported,
+            }));
+        }
+    }
+
+    fn key(&self, state: &mut FieldState, key: &KeyEvent, cx: &mut EventCx<'_, M>) -> Propagation {
+        if !key.pressed {
+            return Propagation::Continue;
+        }
+        let composing = state.buffer.composition().is_some();
+        match key.keysym {
+            RETURN | KP_ENTER if !composing => {
+                if let Some(message) = &self.on_submit {
+                    cx.emit(message.clone());
+                }
+                return Propagation::Stop;
+            }
+            ESCAPE if composing => {
+                state.buffer.cancel_composition();
+                state.sync_input(ChangeCause::Other, cx);
+                cx.request_paint();
+                return Propagation::Stop;
+            }
+            ESCAPE => return Propagation::Continue,
+            _ => {}
+        }
+        let response = state
+            .buffer
+            .logical_key(&mut state.keymap, key.code, key.mods, key.text);
+        match response {
+            Response::Ignored => return Propagation::Continue,
+            Response::Moved => {}
+            Response::Edited => self.report(state, cx),
+            Response::Copy(text) => cx.set_clipboard(text),
+            Response::Cut(text) => {
+                cx.set_clipboard(text);
+                self.report(state, cx);
+            }
+            Response::Paste => {}
+        }
+        state.sync_input(ChangeCause::Other, cx);
+        cx.request_paint();
+        Propagation::Stop
+    }
+}
+
+impl<M: Clone + 'static> Widget<M> for TextField<M> {
+    type State = FieldState;
+
+    fn layout(&self) -> LayoutSpec {
+        layout()
+    }
+
+    fn state(&self) -> FieldState {
+        let mut buffer = TextBuffer::new();
+        buffer.set_text(&self.value);
+        FieldState {
+            buffer,
+            keymap: Keymap::standard(),
+            session: session(self.purpose, false),
+            reported: self.revision,
+            hovered: false,
+            scroll: Cell::new(0.0),
+            blink: Blink::default(),
+        }
+    }
+
+    /// Takes the model's text when the application changed it itself: a revision at or past the last one the field
+    /// reported, with a different text. An older revision is the model catching up and is ignored.
+    fn update(&self, old: &Self, state: &mut FieldState) -> Change {
+        state.session.purpose = self.purpose;
+        if self.revision >= state.reported && self.value != state.committed() {
+            state.buffer.set_text(&self.value);
+            state.reported = self.revision;
+            return Change::Paint;
+        }
+        if self.enabled != old.enabled
+            || self.label != old.label
+            || self.placeholder != old.placeholder
+            || self.purpose != old.purpose
+        {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(
+        &self,
+        _: &FieldState,
+        constraints: Constraints,
+        cx: &mut MeasureCx<'_>,
+    ) -> Measured {
+        measure(constraints, cx)
+    }
+
+    fn event(&self, state: &mut FieldState, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        let propagation = self.handle(state, event, cx);
+        let selecting = !state.buffer.selection().is_empty();
+        state.blink.follow(event, selecting, cx);
+        propagation
+    }
+
     fn paint(&self, state: &FieldState, cx: &mut PaintCx<'_>) {
         let look = control_state(self.enabled, state.hovered, cx);
         paint_chrome(cx, &look);
@@ -560,6 +647,7 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
             caret: state.buffer.caret(),
             selection: state.buffer.selection(),
             composition: state.buffer.composition(),
+            caret_on: state.blink.on(cx.env(), cx.now()),
         };
         paint_text(
             cx,
@@ -602,9 +690,45 @@ pub struct SecureState {
     session: TextInputSession,
     hovered: bool,
     scroll: Cell<f64>,
+    blink: Blink,
 }
 
 impl<M: 'static> SecureField<M> {
+    fn handle(
+        &self,
+        state: &mut SecureState,
+        event: &Event,
+        cx: &mut EventCx<'_, M>,
+    ) -> Propagation {
+        if let Some(propagation) = pointer(event, self.enabled, &mut state.hovered, cx) {
+            return propagation;
+        }
+        match event {
+            Event::Focus { gained: true, .. } if self.enabled => {
+                cx.set_text_input(Some(state.session.state(
+                    None,
+                    ChangeCause::Other,
+                    None,
+                    None,
+                )));
+                cx.request_paint();
+                Propagation::Continue
+            }
+            Event::Key(key, _) if self.enabled && cx.node() == cx.target() => {
+                self.key(state, key, cx)
+            }
+            // a password takes committed text only; a composition is never held anywhere
+            Event::Ime(ImeEvent::Done(batch)) if self.enabled && state.session.accepts(batch) => {
+                if let Some(commit) = &batch.commit {
+                    state.buffer.insert(commit);
+                    cx.request_paint();
+                }
+                Propagation::Stop
+            }
+            _ => Propagation::Continue,
+        }
+    }
+
     fn key(&self, state: &mut SecureState, key: &KeyEvent, cx: &mut EventCx<'_, M>) -> Propagation {
         use cupertino_ui_platform::Mods;
         if !key.pressed {
@@ -658,6 +782,7 @@ impl<M: 'static> Widget<M> for SecureField<M> {
             session: session(ContentPurpose::Password, true),
             hovered: false,
             scroll: Cell::new(0.0),
+            blink: Blink::default(),
         }
     }
 
@@ -687,33 +812,10 @@ impl<M: 'static> Widget<M> for SecureField<M> {
         event: &Event,
         cx: &mut EventCx<'_, M>,
     ) -> Propagation {
-        if let Some(propagation) = pointer(event, self.enabled, &mut state.hovered, cx) {
-            return propagation;
-        }
-        match event {
-            Event::Focus { gained: true, .. } if self.enabled => {
-                cx.set_text_input(Some(state.session.state(
-                    None,
-                    ChangeCause::Other,
-                    None,
-                    None,
-                )));
-                cx.request_paint();
-                Propagation::Continue
-            }
-            Event::Key(key, _) if self.enabled && cx.node() == cx.target() => {
-                self.key(state, key, cx)
-            }
-            // a password takes committed text only; a composition is never held anywhere
-            Event::Ime(ImeEvent::Done(batch)) if self.enabled && state.session.accepts(batch) => {
-                if let Some(commit) = &batch.commit {
-                    state.buffer.insert(commit);
-                    cx.request_paint();
-                }
-                Propagation::Stop
-            }
-            _ => Propagation::Continue,
-        }
+        let propagation = self.handle(state, event, cx);
+        let selecting = !state.buffer.selection().is_empty();
+        state.blink.follow(event, selecting, cx);
+        propagation
     }
 
     fn paint(&self, state: &SecureState, cx: &mut PaintCx<'_>) {
@@ -731,6 +833,7 @@ impl<M: 'static> Widget<M> for SecureField<M> {
             caret: caret * width,
             selection: selection.start * width..selection.end * width,
             composition: None,
+            caret_on: state.blink.on(cx.env(), cx.now()),
         };
         paint_text(
             cx,

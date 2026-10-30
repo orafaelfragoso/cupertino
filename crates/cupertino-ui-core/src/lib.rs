@@ -145,6 +145,8 @@ pub enum Event {
     AnimationFrame(Timestamp),
     /// The time a node asked for with [`EventCx::wake_at`] has come; it carries the clock's time now.
     Wake(Timestamp),
+    /// The window of the focused node became active (`true`) or inactive; only that node hears it.
+    WindowActive(bool),
     /// A press, drag or composition in progress ends without effect: focus, pointer capture or the surface was lost.
     Cancel,
 }

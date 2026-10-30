@@ -12,6 +12,7 @@ cargo test -p cupertino-files --features app                    # 140+ unit test
 cargo run -p cupertino-files --features app -- [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]  # the window (default $HOME), in a running session
 cargo clippy -p cupertino-files --all-targets
 cargo run -p cupertino-files --release --example files_samples # PNGs in output/ (needs CUPERTINO_ASSET_DIR)
+ci/capture.sh files/window --view list   # a window or its sidebar on a sample home folder (crates/cupertino-capture)
 cargo bench -p cupertino-files --bench directory                # 50k entries
 ```
 

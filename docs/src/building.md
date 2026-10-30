@@ -61,6 +61,19 @@ AFTER=6 crates/cupertino-server/scripts/capture.sh switcher.png --spawn cupertin
 
 The script uses the release binaries in `target/release`, or `target/debug` when the release build is missing (`BIN_DIR` overrides both), with a temporary sample home folder and cleared environment, so a capture never reads your files and looks the same on every machine. `AFTER` sets the seconds before the shot (default 5), `SIZE` the output size (default `1280x800`), and `dbus-run-session` is required. One asset pack is used: `CUPERTINO_ASSET_DIR`, else the user pack under `$XDG_DATA_HOME` (or `~/.local/share`), else the built-in assets; the system pack is not searched. The script prints the path it wrote.
 
+## Surface captures
+
+`ci/capture.sh` draws one surface of Settings, Files or the toolkit with the app's own painter on sample data, without a display, a session bus or the server, for look checks and merge screenshots. `overview/all` runs the server headless (`session.sh`) with test windows and builds the release binaries first unless `BIN_DIR` names them:
+
+```bash
+ci/capture.sh settings/accessibility --login saving --scale 2
+ci/capture.sh files/sidebar --drop-place Desktop --increase-contrast --sheet
+ci/capture.sh kit                # lists the surfaces of an app
+ci/capture.sh overview/all --windows 3 --scale 2
+```
+
+It writes one PNG per state and appearance into `captures` under `$CARGO_TARGET_DIR`, else under the workspace's `target` (`--out` changes it) and prints each path. The flags, the file names and the surfaces are in `crates/cupertino-capture/README.md`. It needs an asset pack and exits 2 without one.
+
 ## The shell processes
 
 The dock, menu bar, launcher, notifications and the other shell parts are separate processes. Each builds its binary behind an `app` feature:

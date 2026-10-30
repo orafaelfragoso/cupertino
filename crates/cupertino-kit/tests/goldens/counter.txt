@@ -1,5 +1,5 @@
 window 1
-pending messages=0 tasks=0 frames=0 animating=false
+pending messages=0 tasks=0 frames=0 animating=false next_wake=None
 focus Some(NodeId(1v1))
 pointer_capture None
 text_input None

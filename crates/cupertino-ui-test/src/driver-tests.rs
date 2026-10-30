@@ -360,6 +360,7 @@ fn the_turn_budget_keeps_input_queued_and_time_changes_only_explicitly() {
             tasks: 0,
             frames: 1,
             animating: false,
+            next_wake: None,
         }))
     );
     assert_eq!(driver.window_system_mut().queued(), 1);

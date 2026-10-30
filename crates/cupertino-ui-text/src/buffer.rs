@@ -1,6 +1,7 @@
 //! The editable text of a single-line field: text, caret, selection, undo, clicks, blink and scroll.
 
 use std::ops::Range;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use unicode_segmentation::UnicodeSegmentation;
@@ -37,9 +38,16 @@ enum Granularity {
     All,
 }
 
+/// `now` as time since one origin for the process, so presses timed by an `Instant` and by an application's clock
+/// (with [`TextBuffer::press_at`]) share one scale.
+fn since_origin(now: Instant) -> Duration {
+    static ORIGIN: OnceLock<Instant> = OnceLock::new();
+    now.saturating_duration_since(*ORIGIN.get_or_init(|| now))
+}
+
 #[derive(Clone, Copy, Debug)]
 struct Press {
-    at: Instant,
+    at: Duration,
     index: usize,
     count: u8,
 }
@@ -63,7 +71,7 @@ pub struct TextBuffer {
     /// The range the drag started from and how it extends, while the button is held.
     drag: Option<(Range<usize>, Granularity)>,
     /// When the caret last moved; the blink counts from it.
-    activity: Option<Instant>,
+    activity: Option<Duration>,
     scroll: f64,
     /// The most bytes the text holds; `None` for no limit.
     max_len: Option<usize>,
@@ -193,7 +201,7 @@ impl TextBuffer {
             return true;
         };
         let period = CARET_BLINK_ON + CARET_BLINK_OFF;
-        let phase = now.saturating_duration_since(since).as_nanos() % period.as_nanos();
+        let phase = since_origin(now).saturating_sub(since).as_nanos() % period.as_nanos();
         phase < CARET_BLINK_ON.as_nanos()
     }
 
@@ -202,9 +210,10 @@ impl TextBuffer {
         if !self.selection().is_empty() {
             return None;
         }
+        let now = since_origin(now);
         let since = self.activity.unwrap_or(now);
         let period = (CARET_BLINK_ON + CARET_BLINK_OFF).as_nanos();
-        let phase = now.saturating_duration_since(since).as_nanos() % period;
+        let phase = now.saturating_sub(since).as_nanos() % period;
         let on = CARET_BLINK_ON.as_nanos();
         let left = if phase < on {
             on - phase
@@ -271,12 +280,17 @@ impl TextBuffer {
     /// extends the selection to it. A second and third press within [`MULTI_CLICK_INTERVAL`] at the same place
     /// select the word and the whole text.
     pub fn press(&mut self, index: usize, extend: bool, now: Instant) {
+        self.press_at(index, extend, since_origin(now));
+    }
+
+    /// [`TextBuffer::press`] at `now`, a time on the caller's own clock; every press of one buffer must use one clock.
+    pub fn press_at(&mut self, index: usize, extend: bool, now: Duration) {
         let index = self.boundary_at_or_before(index.min(self.text.len()));
         let count = match self.last_press {
             Some(p)
                 if !extend
                     && p.index == index
-                    && now.saturating_duration_since(p.at) <= MULTI_CLICK_INTERVAL =>
+                    && now.saturating_sub(p.at) <= MULTI_CLICK_INTERVAL =>
             {
                 p.count % 3 + 1
             }
@@ -337,7 +351,7 @@ impl TextBuffer {
 
     /// Remember that the caret moved at `now`: the blink counts from it.
     pub fn touch(&mut self, now: Instant) {
-        self.activity = Some(now);
+        self.activity = Some(since_origin(now));
     }
 
     /// One word left or right. Without `extend` a selection collapses to the word boundary beyond its start or end.

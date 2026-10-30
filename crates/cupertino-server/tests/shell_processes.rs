@@ -1643,27 +1643,69 @@ fn the_session_manager_binary_refuses_what_it_cannot_serve() {
     );
 }
 
-/// What the `--winit` server's own Wayland traffic (`WAYLAND_DEBUG=client`) shows when its output never connected: a
-/// window asked for and never configured is a host compositor that stalled, not a failure of the server.
-fn host_stall(lines: &[String]) -> Option<&'static str> {
+/// The server asked for a toplevel and never committed its surface: the host was never asked to configure it.
+const NEVER_COMMITTED: &str =
+    "the server asked for an xdg_toplevel but never committed its surface, so the host was never asked to configure it";
+/// The server committed, the host answered a later sync, and no configure came: the host read the commit and stalled.
+const HOST_STALLED: &str = "the host compositor never configured the window: the server committed its surface and \
+     the host answered a later wl_display.sync, but sent no xdg_surface.configure, so the host session stalled";
+/// The server committed and no configure or answer to a later sync came.
+const NOTHING_READ: &str =
+    "no xdg_surface.configure was received after the initial commit, and no answer to a \
+     later wl_display.sync: most likely the host session stalled";
+
+/// What the `--winit` server's own Wayland traffic (`WAYLAND_DEBUG=client`, requests marked ` -> `) says about a window
+/// that was never configured; `None` when no toplevel was asked for or the host configured it. A host configures a
+/// surface only after its first commit, and the answer to a `wl_display.sync` sent after the commit shows the host
+/// read the commit (and the server read the answer).
+fn unconfigured_window(lines: &[String]) -> Option<&'static str> {
+    let request = |l: &String| l.contains(" -> ");
+    let event = |l: &String| l.starts_with('[') && !request(l);
     let asked = lines
         .iter()
-        .any(|l| l.contains(" -> ") && l.contains(".get_toplevel("));
-    let configured = lines
+        .position(|l| request(l) && l.contains(".get_toplevel("))?;
+    let surface = lines[..asked]
         .iter()
-        .any(|l| !l.contains(" -> ") && l.contains("xdg_surface") && l.contains(".configure("));
-    (asked && !configured).then_some(
-        "the host compositor never configured the window: the server asked for an xdg_toplevel and got no \
-         xdg_surface.configure, so the host session stalled, not the server",
-    )
+        .rev()
+        .find(|l| request(l) && l.contains(".get_xdg_surface("))
+        .and_then(|l| l.split("wl_surface").nth(1))
+        .map(|id| format!("wl_surface{}.commit()", id.trim_end_matches(')')))?;
+    if lines
+        .iter()
+        .any(|l| event(l) && l.contains("xdg_surface") && l.contains(".configure("))
+    {
+        return None;
+    }
+    let Some(committed) = lines[asked..]
+        .iter()
+        .position(|l| request(l) && l.contains(&surface))
+    else {
+        return Some(NEVER_COMMITTED);
+    };
+    let after = &lines[asked + committed..];
+    let answered = after.iter().enumerate().any(|(i, l)| {
+        request(l)
+            && l.contains("wl_display")
+            && l.contains(".sync(")
+            && l.split("new id ").nth(1).is_some_and(|callback| {
+                let done = format!("{}.done(", callback.trim_end_matches(')'));
+                after[i..].iter().any(|l| event(l) && l.contains(&done))
+            })
+    });
+    Some(if answered { HOST_STALLED } else { NOTHING_READ })
 }
 
-/// The lines of the server's log to show on a failure: its own messages and the window's protocol traffic, without
-/// the rest of `WAYLAND_DEBUG`.
+/// The lines of the server's log to show on a failure: its own messages and the window's protocol traffic (the
+/// `xdg_`, `wl_surface`, `wl_display.sync` and `wl_callback` lines), without the rest of `WAYLAND_DEBUG`.
 fn shown(lines: &[String]) -> String {
     lines
         .iter()
-        .filter(|l| !l.starts_with('[') || l.contains("xdg_"))
+        .filter(|l| {
+            !l.starts_with('[')
+                || ["xdg_", "wl_surface", "wl_callback", ".sync("]
+                    .iter()
+                    .any(|part| l.contains(part))
+        })
         .cloned()
         .collect::<Vec<_>>()
         .join("\n")
@@ -1723,7 +1765,7 @@ fn start_server_binary(mode: &str) -> Option<Daemon> {
         assert!(
             Instant::now() < end,
             "{}:\n{}",
-            host_stall(&lines).map_or_else(
+            unconfigured_window(&lines).map_or_else(
                 || format!("the server {mode} never connected its output"),
                 str::to_owned
             ),
@@ -1754,32 +1796,80 @@ fn the_server_starts_as_a_nested_session() {
     let _server = start_server_binary("--winit");
 }
 
-/// A window asked for and never configured is told apart from one the host configured, in both libwayland's and the
-/// Rust backend's `WAYLAND_DEBUG` format.
+/// A window the host never configured is told apart from a server that never committed its surface, one that stopped
+/// reading after its commit, and a window the host configured, in the Rust backend's and libwayland's `WAYLAND_DEBUG`
+/// formats.
 #[test]
-fn a_window_the_host_never_configured_is_named_as_a_host_stall() {
+fn a_window_the_host_never_configured_is_told_apart_from_a_server_failure() {
     let lines = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     let asked = [
         "[21:00:18.613230]  -> xdg_wm_base#12.get_xdg_surface(new id xdg_surface#26, wl_surface#25)",
         "[21:00:18.613236]  -> xdg_surface#26.get_toplevel(new id xdg_toplevel#27)",
         "[21:00:18.613288]  -> xdg_toplevel#27.set_title(\"Cupertino\")",
     ];
-    assert!(host_stall(&lines(&asked))
-        .is_some_and(|m| m.starts_with("the host compositor never configured the window")));
+    assert_eq!(unconfigured_window(&lines(&asked)), Some(NEVER_COMMITTED));
 
-    let mut configured = asked.to_vec();
+    let mut committed = asked.to_vec();
+    committed.push("[21:00:18.613302]  -> wl_surface#25.commit()");
+    assert_eq!(unconfigured_window(&lines(&committed)), Some(NOTHING_READ));
+
+    // another surface's commit is not the window's
+    let mut other = asked.to_vec();
+    other.push("[21:00:18.613302]  -> wl_surface#2.commit()");
+    other.push("[21:00:18.613311]  -> wl_display#1.sync(new id wl_callback#31)");
+    other.push("[21:00:18.614827] wl_callback#31.done(15462)");
+    assert_eq!(unconfigured_window(&lines(&other)), Some(NEVER_COMMITTED));
+
+    // events read after the commit, but no sync answered: not proof the host read the commit
+    let mut events = committed.clone();
+    events.push("[21:00:18.614814] wl_keyboard#17.keymap(1, fd 32, 35724)");
+    events.push("[21:00:18.614823] wl_keyboard#17.repeat_info(33, 500)");
+    assert_eq!(unconfigured_window(&lines(&events)), Some(NOTHING_READ));
+
+    // a sync sent before the commit does not count, and an answer to another callback is not this sync's
+    let mut early = asked.to_vec();
+    early.insert(
+        0,
+        "[21:00:18.611176]  -> wl_display#1.sync(new id wl_callback#17)",
+    );
+    early.insert(1, "[21:00:18.611300] wl_callback#17.done(15400)");
+    early.push("[21:00:18.613302]  -> wl_surface#25.commit()");
+    early.push("[21:00:18.613311]  -> wl_display#1.sync(new id wl_callback#31)");
+    early.push("[21:00:18.614000] wl_callback#3.done(15460)");
+    assert_eq!(unconfigured_window(&lines(&early)), Some(NOTHING_READ));
+
+    // the shape of the stalled host's trace: commit, sync, the sync answered, no configure
+    let mut reading = events.clone();
+    reading.insert(
+        4,
+        "[21:00:18.613311]  -> wl_display#1.sync(new id wl_callback#31)",
+    );
+    reading.push("[21:00:18.614827] wl_callback#31.done(15462)");
+    assert_eq!(unconfigured_window(&lines(&reading)), Some(HOST_STALLED));
+
+    let mut configured = reading.clone();
     configured.push("[21:00:18.620101] xdg_toplevel#27.configure(800, 600, [])");
     configured.push("[21:00:18.620110] xdg_surface#26.configure(4)");
     configured.push("[21:00:18.620200]  -> xdg_surface#26.ack_configure(4)");
-    assert_eq!(host_stall(&lines(&configured)), None);
+    assert_eq!(unconfigured_window(&lines(&configured)), None);
 
     let libwayland = [
+        "[1234567.880]  -> xdg_wm_base@12.get_xdg_surface(new id xdg_surface@26, wl_surface@25)",
         "[1234567.890]  -> xdg_surface@26.get_toplevel(new id xdg_toplevel@27)",
+        "[1234567.900]  -> wl_surface@25.commit()",
+        "[1234567.910]  -> wl_display@1.sync(new id wl_callback@31)",
+        "[1234568.010] wl_callback@31.done(15462)",
         "[1234570.120] xdg_surface@26.configure(4)",
     ];
-    assert_eq!(host_stall(&lines(&libwayland)), None);
-    assert!(host_stall(&lines(&libwayland[..1])).is_some());
+    assert_eq!(
+        unconfigured_window(&lines(&libwayland[..5])),
+        Some(HOST_STALLED)
+    );
+    assert_eq!(unconfigured_window(&lines(&libwayland)), None);
 
     // no window asked for: the server failed before it reached the host
-    assert_eq!(host_stall(&lines(&["listening on wayland-1"])), None);
+    assert_eq!(
+        unconfigured_window(&lines(&["listening on wayland-1"])),
+        None
+    );
 }

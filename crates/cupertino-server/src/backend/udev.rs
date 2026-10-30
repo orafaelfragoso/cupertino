@@ -49,24 +49,24 @@ use super::Backend;
 use crate::displays::{edid, HeadCaps, HeadId, HeadInfo, HeadMode, HeadOp};
 use crate::render::gles::{Gles, GlesResources, GlesTarget};
 use crate::render::scene::RenderResources;
+use crate::schedule::{Overdue, PresentationId};
 use crate::state::Cupertino;
 
 const CLEAR: Color32F = Color32F::new(0.05, 0.05, 0.07, 1.0);
 const COLOR_FORMATS: [Fourcc; 2] = [Fourcc::Abgr8888, Fourcc::Argb8888];
 
 /// The DRM output of one display, as the renderer draws to it.
-pub(crate) type DrmSurfaceOutput = DrmOutput<
-    GbmAllocator<DrmDeviceFd>,
-    GbmFramebufferExporter<DrmDeviceFd>,
-    Option<OutputPresentationFeedback>,
-    DrmDeviceFd,
->;
+pub(crate) type DrmSurfaceOutput =
+    DrmOutput<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, Frame, DrmDeviceFd>;
 type Manager = DrmOutputManager<
     GbmAllocator<DrmDeviceFd>,
     GbmFramebufferExporter<DrmDeviceFd>,
-    Option<OutputPresentationFeedback>,
+    Frame,
     DrmDeviceFd,
 >;
+
+/// What a queued flip carries to its vblank: the scheduler's id for it and its presentation feedback.
+type Frame = (PresentationId, OutputPresentationFeedback);
 
 struct Surface {
     output: OutputId,
@@ -370,17 +370,13 @@ pub fn run(
                         // device, so no flip of ours is under way: clearing the CRTC drops the frame, and the next one
                         // is a full modeset (as after any resume)
                         if s.pending {
-                            // the commit is blocking: a driver that lost the flip may hold it until its own timeout
-                            let started = Instant::now();
-                            let cleared = s.drm_output.with_compositor(|c| c.clear());
-                            let took = started.elapsed();
-                            match cleared {
-                                Ok(()) => tracing::info!(?took, "dropped the frame queued before the pause"),
-                                Err(e) => tracing::warn!(error = %e, ?took, "dropping the frame queued before the pause failed"),
-                            }
+                            drop_pending_frame(s, "the pause");
                         }
                         s.pending = false;
                     }
+                }
+                for o in &mut state.outputs {
+                    o.scheduler.reset();
                 }
                 state.session_activated();
             }
@@ -698,6 +694,11 @@ pub(crate) fn head_op(
                 .surfaces
                 .get_mut(&crtc)
                 .context("the head is not enabled")?;
+            // a frame waiting for its vblank would stay Smithay's pending frame across the mode change and hold every later
+            // frame behind it, as after a pause; clearing the CRTC drops it, and the new mode starts with a full modeset
+            if surface.pending {
+                drop_pending_frame(surface, "the mode change");
+            }
             let elements =
                 DrmOutputRenderElements::<GlesRenderer, crate::render::CupertinoElement>::default();
             surface
@@ -706,6 +707,7 @@ pub(crate) fn head_op(
                 .map_err(|e| anyhow!("switching the mode: {e}"))?;
             surface.refresh = Duration::from_secs_f64(1000.0 / mode.refresh_mhz.max(1000) as f64);
             surface.pending = false;
+            reset_frames(state, surface.output);
             Ok(())
         }
         HeadOp::Power(on) => {
@@ -720,9 +722,36 @@ pub(crate) fn head_op(
                     .with_compositor(|c| c.clear())
                     .map_err(|e| anyhow!("blanking the output: {e}"))?;
                 surface.pending = false;
+                reset_frames(state, surface.output);
             }
             Ok(())
         }
+    }
+}
+
+/// Drop the frame waiting for its vblank on `surface` by clearing its CRTC, before `what`. The commit is blocking: a
+/// driver that lost the flip may hold it until its own timeout (up to 3 s on nvidia-drm), so the time it took is
+/// logged. Returns whether the frame is gone.
+fn drop_pending_frame(surface: &mut Surface, what: &str) -> bool {
+    let started = Instant::now();
+    let cleared = surface.drm_output.with_compositor(|c| c.clear());
+    let took = started.elapsed();
+    match cleared {
+        Ok(()) => {
+            tracing::info!(?took, "dropped the frame queued before {what}");
+            true
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, ?took, "dropping the frame queued before {what} failed");
+            false
+        }
+    }
+}
+
+/// The flip in flight on `output` ended without its vblank: a late event for it is stale, and the next frame is full.
+fn reset_frames(state: &mut Cupertino, output: OutputId) {
+    if let Some(o) = state.outputs.iter_mut().find(|o| o.id == output) {
+        o.scheduler.reset();
     }
 }
 
@@ -740,6 +769,13 @@ fn render_outputs(state: &mut Cupertino) {
             let Some(idx) = state.outputs.iter().position(|o| o.id == s.output) else {
                 continue;
             };
+            if s.pending && !(u.paused || u.asleep) {
+                let overdue = state.outputs[idx].scheduler.overdue(now, s.refresh);
+                if let Some(overdue) = overdue {
+                    flip_overdue(state, u, crtc, idx, overdue);
+                }
+                continue;
+            }
             if !state.displays.powered(s.output)
                 || !frame_due(
                     u.paused || u.asleep || u.renderer_lost,
@@ -753,6 +789,39 @@ fn render_outputs(state: &mut Cupertino) {
         }
     }
     state.backend = Some(backend);
+}
+
+/// A flip whose vblank is overdue: its clients are called back once per refresh, so none waits on a dead head, and after
+/// a second without the vblank the flip is dropped and the head starts over with a full frame. A head whose flip cannot
+/// be dropped stays stuck with paced callbacks until a sleep, a resume, a mode change or an unplug.
+fn flip_overdue(
+    state: &mut Cupertino,
+    u: &mut UdevBackend,
+    crtc: crtc::Handle,
+    idx: usize,
+    overdue: Overdue,
+) {
+    let Some(surface) = u.surfaces.get_mut(&crtc) else {
+        return;
+    };
+    let name = state.outputs[idx].output.name();
+    match overdue {
+        Overdue::TimedOut => {
+            tracing::warn!(output = %name, "the display has not shown the queued frame; calling its clients back once per refresh")
+        }
+        Overdue::CallBack => {}
+        Overdue::GiveUp => {
+            tracing::warn!(output = %name, "the display has not shown the queued frame for a second; dropping it");
+            if drop_pending_frame(surface, "a full redraw") {
+                surface.pending = false;
+                state.outputs[idx].scheduler.reset();
+                return;
+            }
+            tracing::error!(output = %name, "the head is stuck until it sleeps, resumes, changes mode or is unplugged");
+        }
+    }
+    let time = Duration::from(state.clock.now());
+    state.send_frames(idx, time);
 }
 
 /// Whether the frame already on the screen is what this frame would show, so it may be reported as shown: only when a
@@ -813,10 +882,13 @@ fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle
     let time = Duration::from(state.clock.now());
     if rendered {
         let feedback = state.collect_feedback(idx);
-        match surface.drm_output.queue_frame(Some(feedback)) {
+        let id = state.outputs[idx].scheduler.next_presentation();
+        match surface.drm_output.queue_frame((id, feedback)) {
             Ok(()) => {
                 surface.pending = true;
-                state.outputs[idx].scheduler.queued();
+                let locked = state.scene_built_locked(idx);
+                let now = state.frame_now();
+                state.outputs[idx].scheduler.flip_queued(now, locked);
             }
             // logind drops DRM master before it sends the pause, so a flip in between is refused; the pause follows
             Err(FrameError::DrmError(DrmError::Access(e)))
@@ -843,66 +915,73 @@ fn frame_finish(
     time: Option<DrmEventTime>,
     seq: Option<u32>,
 ) {
-    let (clock, flags) = match time {
-        Some(DrmEventTime::Monotonic(t)) if !t.is_zero() => (
-            t.into(),
-            wp_presentation_feedback::Kind::Vsync
-                | wp_presentation_feedback::Kind::HwClock
-                | wp_presentation_feedback::Kind::HwCompletion,
-        ),
-        _ => (state.clock.now(), wp_presentation_feedback::Kind::Vsync),
+    let hardware = match time {
+        Some(DrmEventTime::Monotonic(t)) if !t.is_zero() => Some(t),
+        _ => None,
     };
+    let flags = if hardware.is_some() {
+        wp_presentation_feedback::Kind::Vsync
+            | wp_presentation_feedback::Kind::HwClock
+            | wp_presentation_feedback::Kind::HwCompletion
+    } else {
+        wp_presentation_feedback::Kind::Vsync
+    };
+    let clock = hardware.map_or_else(|| state.clock.now(), Into::into);
     let Some(u) = udev(state) else { return };
     let Some(surface) = u.surfaces.get_mut(&crtc) else {
         return;
     };
     surface.pending = false;
-    let output = surface.output;
-    let submitted = surface.drm_output.frame_submitted();
-    let shown = vblank_shows_frame(&submitted);
-    match submitted {
-        Ok(Some(Some(mut feedback))) => feedback.presented(
-            clock,
-            Refresh::fixed(surface.refresh),
-            seq.unwrap_or(0) as u64,
-            flags,
-        ),
-        Ok(_) => {}
-        Err(e) => tracing::warn!(error = %e, "frame submission failed"),
-    }
-    let refresh = surface.refresh;
+    let (output, refresh) = (surface.output, surface.refresh);
+    // `Ok(None)`: no frame of ours waited (it was dropped with its CRTC's state); an error comes only from queueing the
+    // frame after the one shown, whose id it takes along
+    let shown = match surface.drm_output.frame_submitted() {
+        Ok(Some((id, feedback))) => Some((Some(id), Some(feedback))),
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(error = %e, "frame submission failed");
+            Some((None, None))
+        }
+    };
     let Some(idx) = state.outputs.iter().position(|o| o.id == output) else {
         return;
     };
-    // a vblank of a frame dropped with its CRTC's state (sleep, resume) shows nothing new, so it confirms no frame, a
-    // lock frame least of all, and the refresh grid does not follow it
-    if shown {
-        state.note_frame_shown(idx);
-        let now = state.frame_now();
-        state.outputs[idx].scheduler.vblank(now, refresh);
+    let scheduler = &mut state.outputs[idx].scheduler;
+    // only the flip in flight is shown: a late event of a flip dropped by a reset confirms no frame, a lock frame least
+    // of all, and the refresh grid does not follow it; its feedback is discarded
+    let presented = match &shown {
+        Some((Some(id), _)) => scheduler.presented(*id),
+        Some((None, _)) => scheduler.presented_in_flight(),
+        None => None,
+    };
+    if let Some(presented) = presented {
+        if let Some((_, Some(mut feedback))) = shown {
+            feedback.presented(
+                clock,
+                Refresh::fixed(refresh),
+                seq.unwrap_or(0) as u64,
+                flags,
+            );
+        }
+        if presented.late_periods > 0 {
+            tracing::info!(
+                late_periods = presented.late_periods,
+                "the display showed the queued frame late"
+            );
+        }
+        let vblank = match hardware {
+            Some(t) if state.fixed_time.is_none() => t,
+            _ => state.frame_now(),
+        };
+        state.outputs[idx].scheduler.vblank(vblank, refresh);
+        state.note_frame_presented(idx, presented.locked);
     }
     state.outputs[idx].scheduler.damage();
 }
 
-/// Whether a vblank showed a frame of ours: `frame_submitted` finds none waiting (`Ok(None)`) for an event of a frame
-/// that was dropped, and its error comes only from queueing the next frame after the one shown.
-fn vblank_shows_frame<U, E>(submitted: &Result<Option<U>, E>) -> bool {
-    !matches!(submitted, Ok(None))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{already_shown, frame_due, vblank_shows_frame};
-
-    #[test]
-    fn a_vblank_without_a_frame_of_ours_shows_nothing() {
-        assert!(!vblank_shows_frame::<(), ()>(&Ok(None)));
-        assert!(vblank_shows_frame::<(), ()>(&Ok(Some(()))));
-        assert!(
-            vblank_shows_frame::<(), ()>(&Err(())),
-            "the error is the next frame's: the one waiting was shown"
-        );
-    }
+    use super::{already_shown, frame_due};
 
     #[test]
     fn only_a_drawn_scene_that_changed_nothing_is_reported_as_shown() {

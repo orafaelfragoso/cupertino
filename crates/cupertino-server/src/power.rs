@@ -147,6 +147,12 @@ impl Cupertino {
         #[cfg(feature = "udev")]
         if let Some(crate::backend::Backend::Udev(u)) = self.backend.as_mut() {
             u.set_asleep(asleep);
+            if asleep {
+                // the cleared CRTCs dropped any flip in flight
+                for o in &mut self.outputs {
+                    o.scheduler.reset();
+                }
+            }
         }
         #[cfg(not(feature = "udev"))]
         let _ = asleep;

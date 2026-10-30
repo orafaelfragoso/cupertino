@@ -25,6 +25,8 @@ use smithay::utils::Transform;
 use tiny_skia::Pixmap;
 
 use cupertino_assets::Assets;
+use cupertino_glass::cpu::apply_color_ops;
+use cupertino_glass::ops::Op;
 
 use super::image::image_element;
 use super::CupertinoElement;
@@ -130,32 +132,44 @@ fn lightness(y: f64) -> u16 {
     (l * 10.0).round().clamp(0.0, 1000.0) as u16
 }
 
-/// The lightness of an sRGB colour (channels from 0 to 1), as [`strip_lightness`] gives it.
+/// The lightness of an sRGB colour (channels from 0 to 1), as [`strip_lightness`] gives it with no colour operations.
 pub fn colour_lightness(rgb: [f32; 3]) -> u16 {
-    let [r, g, b] = rgb.map(|c| linear(f64::from(c)));
-    lightness(0.2126 * r + 0.7152 * g + 0.0722 * b)
+    lightness(luminance(rgb))
 }
 
-/// The lightness of the top `rows` rows of `pixmap`, where the menu bar sits: CIE L* of their mean relative luminance,
-/// in tenths (0 black to 1000 white). The mean is taken before L*, as the bar's material blurs what it covers. About
-/// 16 000 pixels are read, whatever the size. The pixels are premultiplied, so a transparent part counts as black; what
-/// shows through it is the output's clear colour (0.05, 0.05, 0.07 on every backend), so it reads at most about 35 tenths
-/// darker than it looks, and only where the image is transparent.
-pub fn strip_lightness(pixmap: &Pixmap, rows: u32) -> u16 {
+/// About 16 000 pixels of the top `rows` rows of `pixmap`, where the menu bar sits, whatever the size. The pixels are
+/// premultiplied, so a transparent part counts as black; what shows through it is the output's clear colour (0.05, 0.05,
+/// 0.07 on every backend), so it reads at most about 35 tenths darker than it looks, and only where the image is
+/// transparent.
+pub fn strip_samples(pixmap: &Pixmap, rows: u32) -> Vec<[u8; 4]> {
     let rows = rows.clamp(1, pixmap.height().max(1)) as usize;
     let width = pixmap.width() as usize;
     let (pixels, _) = pixmap.data().as_chunks::<4>();
     let strip = &pixels[..(rows * width).min(pixels.len())];
     let step = (strip.len() / 16_384).max(1);
-    let linear = |c: u8| linear(f64::from(c) / 255.0);
-    let (sum, n) = strip
+    strip.iter().step_by(step).copied().collect()
+}
+
+/// The lightness under the menu bar of the [`strip_samples`] `samples`, seen through the bar material's colour
+/// operations `ops`: CIE L* of their mean relative luminance, in tenths (0 black to 1000 white). The operations apply to
+/// each pixel and the mean is taken before L*, as the material blurs what it covers.
+pub fn strip_lightness(samples: &[[u8; 4]], ops: &[Op]) -> u16 {
+    let sum: f64 = samples
         .iter()
-        .step_by(step)
-        .fold((0.0, 0u32), |(sum, n), px| {
-            let y = 0.2126 * linear(px[0]) + 0.7152 * linear(px[1]) + 0.0722 * linear(px[2]);
-            (sum + y, n + 1)
-        });
-    lightness(sum / f64::from(n.max(1)))
+        .map(|px| {
+            luminance(apply_color_ops(
+                [0, 1, 2].map(|i| f32::from(px[i]) / 255.0),
+                ops,
+            ))
+        })
+        .sum();
+    lightness(sum / samples.len().max(1) as f64)
+}
+
+/// The relative luminance of an sRGB colour (channels from 0 to 1).
+fn luminance(rgb: [f32; 3]) -> f64 {
+    let [r, g, b] = rgb.map(|c| linear(f64::from(c.clamp(0.0, 1.0))));
+    0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
 /// What identifies the contents of a file at a time.
@@ -211,8 +225,8 @@ enum Outcome {
     Loaded {
         pixmap: Pixmap,
         tint: [f32; 3],
-        /// [`strip_lightness`] of the rows under the menu bar.
-        bar_lightness: u16,
+        /// [`strip_samples`] of the rows under the menu bar.
+        strip: Vec<[u8; 4]>,
         path: PathBuf,
         stamp: Stamp,
     },
@@ -316,7 +330,7 @@ impl WorkerState {
             match scale_cover(&source, request.dst) {
                 Ok((pixmap, tint)) => {
                     return Outcome::Loaded {
-                        bar_lightness: strip_lightness(&pixmap, request.strip_rows),
+                        strip: strip_samples(&pixmap, request.strip_rows),
                         pixmap,
                         tint,
                         path: path.clone(),
@@ -419,6 +433,8 @@ struct Shown {
     buffer: MemoryRenderBuffer,
     px: (i32, i32),
     tint: [f32; 3],
+    /// [`strip_samples`] under the menu bar, measured again when the bar's colour operations change.
+    strip: Vec<[u8; 4]>,
 }
 
 /// The image wallpapers of all outputs.
@@ -435,6 +451,8 @@ pub struct Wallpapers {
     measured: Vec<(u64, u16)>,
     /// The lightness last handed out for each output, so the procedural wallpaper's is handed out once per change.
     sent: HashMap<u64, u16>,
+    /// The colour operations of the menu bar's material, which the lightness under it is measured through.
+    bar_ops: Vec<Op>,
 }
 
 impl Wallpapers {
@@ -455,6 +473,23 @@ impl Wallpapers {
             tint: None,
             measured: Vec::new(),
             sent: HashMap::new(),
+            bar_ops: Vec::new(),
+        }
+    }
+
+    /// The menu bar's material now has the colour operations `ops` (another appearance or material option): every
+    /// image shown is measured through them again, and a lightness that changed is handed out.
+    pub fn set_bar_ops(&mut self, ops: &[Op]) {
+        if self.bar_ops == ops {
+            return;
+        }
+        self.bar_ops = ops.to_vec();
+        for (output, state) in &self.outputs {
+            let Some(shown) = &state.shown else { continue };
+            let lightness = strip_lightness(&shown.strip, ops);
+            if self.sent.insert(*output, lightness) != Some(lightness) {
+                self.measured.push((*output, lightness));
+            }
         }
     }
 
@@ -500,10 +535,11 @@ impl Wallpapers {
                 Outcome::Loaded {
                     pixmap,
                     tint,
-                    bar_lightness,
+                    strip,
                     path,
                     stamp,
                 } => {
+                    let bar_lightness = strip_lightness(&strip, &self.bar_ops);
                     let size = (pixmap.width() as i32, pixmap.height() as i32);
                     let buffer = MemoryRenderBuffer::from_slice(
                         pixmap.data(),
@@ -517,6 +553,7 @@ impl Wallpapers {
                         buffer,
                         px: size,
                         tint,
+                        strip,
                     });
                     state.loaded = Some((path, stamp));
                     // every image put up is handed out, so its output draws it at once even at the same lightness
@@ -628,8 +665,8 @@ impl Wallpapers {
 
     /// The pixels the wallpaper of an output of `px` device pixels shows, or `None` for the procedural wallpaper.
     /// Until the image is in, the output keeps what it showed. The lightness of its top `strip_rows` rows, under the
-    /// menu bar, is measured once per image and handed out by [`Wallpapers::take_bar_lightness`] once the image is put
-    /// up.
+    /// menu bar, is measured through the colour operations given to [`Wallpapers::set_bar_ops`] once per image and
+    /// once per change of those, and handed out by [`Wallpapers::take_bar_lightness`].
     pub fn shown(
         &mut self,
         output: u64,
@@ -671,9 +708,11 @@ impl Wallpapers {
     }
 
     /// The procedural wallpaper shows on `output`: the lightness under its bar is that of the wallpaper's average colour
-    /// ([`crate::render::scene::wallpaper_tint`]), handed out when it differs from the last one.
+    /// ([`crate::render::scene::wallpaper_tint`]) through the bar's colour operations, handed out when it differs from
+    /// the last one.
     fn procedural(&mut self, output: u64, dark: bool) {
-        let lightness = colour_lightness(crate::render::scene::wallpaper_tint(dark));
+        let tint = crate::render::scene::wallpaper_tint(dark);
+        let lightness = colour_lightness(apply_color_ops(tint, &self.bar_ops));
         if self.sent.insert(output, lightness) != Some(lightness) {
             self.measured.push((output, lightness));
         }
@@ -752,15 +791,64 @@ mod tests {
         pixmap
     }
 
+    /// The lightness of the top `rows` rows of `pixmap` with no material on them.
+    fn raw_lightness(pixmap: &Pixmap, rows: u32) -> u16 {
+        strip_lightness(&strip_samples(pixmap, rows), &[])
+    }
+
+    /// The colour operations of the menu bar's material in `appearance`.
+    fn bar_ops(appearance: cupertino_theme::Appearance) -> Vec<Op> {
+        let recipe = cupertino_theme::Theme::load()
+            .unwrap()
+            .recipe(
+                appearance,
+                "MenuBar",
+                &cupertino_theme::MaterialOptions::default(),
+            )
+            .unwrap();
+        cupertino_glass::ops::color_ops(&recipe.backdrop.unwrap().ops)
+    }
+
+    #[test]
+    fn a_strip_is_measured_through_the_bar_material() {
+        let grey = strip_samples(&split_pixmap((64, 48), 48, 119, 119), 24);
+        let ops = bar_ops(cupertino_theme::Appearance::Light);
+        let through = colour_lightness(apply_color_ops([119.0 / 255.0; 3], &ops));
+        assert_eq!(strip_lightness(&grey, &ops), through);
+        assert_eq!(strip_lightness(&grey, &[]), 500);
+        assert_ne!(through, 500, "the material changes mid-grey");
+    }
+
+    #[test]
+    fn a_change_of_the_bar_material_hands_out_the_lightness_again_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_png(dir.path(), "w.png", (32, 32), |_, _| [119, 119, 119, 255]);
+        let mut rig = rig();
+        let ops = bar_ops(cupertino_theme::Appearance::Light);
+        let through = strip_lightness(&[[119, 119, 119, 255]], &ops);
+        rig.wallpapers.set_bar_ops(&ops);
+        rig.settle(&path, (32, 32), 0.0);
+        assert_eq!(rig.wallpapers.take_bar_lightness(), [(1, through)]);
+        rig.wallpapers.set_bar_ops(&ops);
+        assert_eq!(rig.wallpapers.take_bar_lightness(), []);
+        // Reduce Transparency: the bar is solid and has no colour operations
+        rig.wallpapers.set_bar_ops(&[]);
+        assert_eq!(rig.wallpapers.take_bar_lightness(), [(1, 500)]);
+        rig.wallpapers.set_bar_ops(&[]);
+        assert_eq!(rig.wallpapers.take_bar_lightness(), []);
+        rig.wallpapers.set_bar_ops(&ops);
+        assert_eq!(rig.wallpapers.take_bar_lightness(), [(1, through)]);
+    }
+
     #[test]
     fn the_lightness_under_the_bar_runs_from_black_to_white_in_cie_l_star() {
-        assert_eq!(strip_lightness(&split_pixmap((64, 48), 48, 0, 0), 24), 0);
+        assert_eq!(raw_lightness(&split_pixmap((64, 48), 48, 0, 0), 24), 0);
         assert_eq!(
-            strip_lightness(&split_pixmap((64, 48), 48, 255, 255), 24),
+            raw_lightness(&split_pixmap((64, 48), 48, 255, 255), 24),
             1000
         );
         // sRGB 119 is L* 50.0
-        let grey = strip_lightness(&split_pixmap((64, 48), 48, 119, 119), 24);
+        let grey = raw_lightness(&split_pixmap((64, 48), 48, 119, 119), 24);
         assert!(grey.abs_diff(500) <= 3, "{grey}");
     }
 
@@ -770,7 +858,7 @@ mod tests {
             let v = f32::from(grey) / 255.0;
             assert_eq!(
                 colour_lightness([v; 3]),
-                strip_lightness(&split_pixmap((16, 16), 16, grey, grey), 8),
+                raw_lightness(&split_pixmap((16, 16), 16, grey, grey), 8),
                 "{grey}"
             );
         }
@@ -797,13 +885,13 @@ mod tests {
     #[test]
     fn only_the_rows_under_the_bar_are_measured() {
         let pixmap = split_pixmap((300, 200), 24, 10, 245);
-        assert!(strip_lightness(&pixmap, 24) < 60, "the bar's rows are dark");
+        assert!(raw_lightness(&pixmap, 24) < 60, "the bar's rows are dark");
         assert!(
-            strip_lightness(&pixmap, 200) > 800,
+            raw_lightness(&pixmap, 200) > 800,
             "the whole image is mostly light"
         );
         // a strip taller than the image measures the image
-        assert_eq!(strip_lightness(&pixmap, 900), strip_lightness(&pixmap, 200));
+        assert_eq!(raw_lightness(&pixmap, 900), raw_lightness(&pixmap, 200));
     }
 
     #[test]

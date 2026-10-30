@@ -3,9 +3,10 @@
 
 use cupertino_geometry::{CornerStyle, Point};
 use cupertino_glass::gpu::{average_color, procedural_wallpaper, psnr, HeadlessGpu};
+use cupertino_glass::ops::color_ops;
 use cupertino_glass::renderer::{FrameDesc, MaterialRegion, MaterialRenderer, TargetInit};
 use cupertino_glass::{cpu, VibrantDraw, VibrantMode, VibrantStyle};
-use cupertino_theme::{Appearance, Blend, Fill, MaterialOptions, Recipe, Theme};
+use cupertino_theme::{Appearance, Backdrop, Blend, Fill, MaterialOptions, Recipe, Theme};
 
 fn gpu() -> Option<HeadlessGpu> {
     let g = HeadlessGpu::new();
@@ -386,5 +387,63 @@ fn vibrant_blend_matches_cpu_reference() {
             "{mode:?} reversed={reversed}: worst channel error {worst}"
         );
         assert_ne!(out, dest, "glyphs changed the image");
+    }
+}
+
+/// Fully saturated colour at `t` of the way around the hue circle.
+fn hue(t: f32) -> [u8; 3] {
+    let h = t * 6.0;
+    let f = h.fract();
+    let ch = |v: f32| (v * 255.0).round() as u8;
+    match h as u32 {
+        0 => [255, ch(f), 0],
+        1 => [ch(1.0 - f), 255, 0],
+        2 => [0, 255, ch(f)],
+        3 => [0, ch(1.0 - f), 255],
+        4 => [ch(f), 0, 255],
+        _ => [255, 0, ch(1.0 - f)],
+    }
+}
+
+#[test]
+fn the_cpu_colour_chain_matches_the_gpu_colour_pass_within_one_level() {
+    let Some(g) = gpu() else { return };
+    let theme = Theme::load().unwrap();
+    let photo = procedural_wallpaper(256, 64);
+    // a grey ramp, a saturated hue ramp, then a crop of the photo-like wallpaper
+    let wall = image::RgbaImage::from_fn(256, 66, |x, y| match y {
+        0 => image::Rgba([x as u8, x as u8, x as u8, 255]),
+        1 => {
+            let [r, g, b] = hue(x as f32 / 256.0);
+            image::Rgba([r, g, b, 255])
+        }
+        _ => *photo.get_pixel(x, y - 2),
+    });
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        let bar = recipe(&theme, appearance, "MenuBar");
+        let ops = bar.backdrop.unwrap().ops;
+        assert!(!ops.is_empty(), "{appearance:?} MenuBar has colour ops");
+        // the colour pass alone: no capture scale, no blur, no fills
+        let unblurred = Recipe {
+            backdrop: Some(Backdrop {
+                scale: 1.0,
+                sigma_pt: 0.0,
+                ops: ops.clone(),
+            }),
+            ..Default::default()
+        };
+        let regions = [MaterialRegion::new([0.0, 0.0, 256.0, 66.0], &unblurred)];
+        let out = g.render_once(&wall, &regions, 1.0, average_color(&wall));
+        let packed = color_ops(&ops);
+        let mut worst = 0;
+        for (src, got) in wall.pixels().zip(out.pixels()) {
+            let c = [0, 1, 2].map(|i| f32::from(src[i]) / 255.0);
+            let want = cpu::apply_color_ops(c, &packed);
+            for i in 0..3 {
+                let want = (want[i].clamp(0.0, 1.0) * 255.0).round() as i32;
+                worst = worst.max((i32::from(got[i]) - want).abs());
+            }
+        }
+        assert!(worst <= 1, "{appearance:?}: worst channel error {worst}");
     }
 }

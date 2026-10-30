@@ -11,8 +11,10 @@ use std::time::{Duration, Instant};
 
 use cupertino_defaults::compositor::ShellRoleName;
 use cupertino_protocols::server::cupertino_shell_v1::Error as ShellError;
+use smithay::desktop::{LayerMap, LayerSurface};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Resource};
+use smithay::wayland::shell::wlr_layer::Layer;
 
 use crate::force_quit::ProcessHandle;
 use crate::state::{ClientState, Cupertino};
@@ -209,6 +211,18 @@ pub fn is_prompt(surface: &WlSurface) -> bool {
     surface
         .client()
         .is_some_and(|client| authorized(&client, ShellRole::Prompt))
+}
+
+/// The surfaces of `layer` from bottom to top, with the authentication prompt's overlay surfaces above every other one, so
+/// the prompt is drawn and hit first whatever was mapped after it.
+pub fn layers_stacked(
+    map: &LayerMap,
+    layer: Layer,
+) -> impl DoubleEndedIterator<Item = &LayerSurface> {
+    let raised = move |l: &&LayerSurface| layer == Layer::Overlay && is_prompt(l.wl_surface());
+    map.layers_on(layer)
+        .filter(move |l| !raised(l))
+        .chain(map.layers_on(layer).filter(raised))
 }
 
 /// Request-time check of a role object: the connection must still hold `role`. When it does not, the object's client

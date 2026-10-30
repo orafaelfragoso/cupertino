@@ -402,9 +402,14 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, wl_surface::WlSurface> 
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        if let zwlr_layer_surface_v1::Event::Configure { serial, .. } = event {
+        if let zwlr_layer_surface_v1::Event::Configure {
+            serial,
+            width,
+            height,
+        } = event
+        {
             layer.ack_configure(serial);
-            let size = (120, 80);
+            let size = (width as i32, height as i32);
             surface.attach(
                 Some(&solid_buffer(&state.shm, size, TOPLEVEL_BLUE, qh)),
                 0,
@@ -894,7 +899,23 @@ impl Client {
     /// The authentication prompt over `stream` (a connection with the Prompt role, [`prompt_agent`]): an overlay layer
     /// surface of 120 x 80 in the top left corner of the output, drawn [`TOPLEVEL_BLUE`]. [`Client::unlock`] unmaps it.
     pub fn prompt(stream: UnixStream) -> Client {
-        Self::run_over(stream, |queue, client, globals| {
+        Self::overlay(
+            stream,
+            "prompt",
+            (120, 80),
+            zwlr_layer_surface_v1::KeyboardInteractivity::None,
+        )
+    }
+
+    /// An overlay layer surface of `size` in the top left corner of the output over `stream`, named `namespace`, which
+    /// takes the keyboard as `keyboard` says.
+    pub fn overlay(
+        stream: UnixStream,
+        namespace: &'static str,
+        size: (u32, u32),
+        keyboard: zwlr_layer_surface_v1::KeyboardInteractivity,
+    ) -> Client {
+        Self::run_over(stream, move |queue, client, globals| {
             let qh = queue.handle();
             let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
             let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
@@ -904,14 +925,15 @@ impl Client {
                 &surface,
                 None,
                 zwlr_layer_shell_v1::Layer::Overlay,
-                "prompt".to_string(),
+                namespace.to_string(),
                 &qh,
                 surface.clone(),
             );
-            layer.set_size(120, 80);
+            layer.set_size(size.0, size.1);
             layer.set_anchor(
                 zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left,
             );
+            layer.set_keyboard_interactivity(keyboard);
             surface.commit();
             queue.roundtrip(client).unwrap();
             let unmapped = surface.clone();

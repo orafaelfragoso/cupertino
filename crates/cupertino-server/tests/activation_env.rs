@@ -1,11 +1,22 @@
 //! The session's variables on a shared user bus, against a private bus with a stand-in for the systemd user manager:
 //! they are published and the session target started, unless another graphical session is active or the bus has no manager.
+//! A server that supervises the portal publishes them once the portal owns its bus name, or after a timeout.
 #![cfg(feature = "dbus")]
 
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use cupertino_server::activation_env::{publish, Outcome, SESSION_TARGET};
+use cupertino_server::backend::headless;
+use cupertino_server::cli::{
+    publish_session_when_ready, start_shell_supervision, PORTAL_READY_TIMEOUT,
+};
+use cupertino_server::config::{BuiltIn, Config, PORTAL_BUS_NAME};
+use cupertino_server::dbus::DbusHandle;
+use cupertino_server::Cupertino;
 use cupertino_test_bus::PrivateBus;
+use smithay::reexports::calloop::EventLoop;
+use smithay::reexports::wayland_server::Display;
 use zbus::zvariant::OwnedObjectPath;
 use zbus::{block_on, connection};
 
@@ -28,6 +39,8 @@ enum SystemdError {
 
 #[derive(Default)]
 struct Calls {
+    /// The units asked for, in order: the first call of a publication.
+    units: Vec<String>,
     unset: Vec<String>,
     environment: Vec<String>,
     stopped: Vec<String>,
@@ -45,6 +58,7 @@ struct FakeManager {
 #[zbus::interface(name = "org.freedesktop.systemd1.Manager")]
 impl FakeManager {
     fn get_unit(&self, name: &str) -> Result<OwnedObjectPath, SystemdError> {
+        self.calls.lock().unwrap().units.push(name.into());
         if name == "graphical-session.target" && self.graphical_session_loaded {
             return Ok(OwnedObjectPath::try_from(GRAPHICAL_UNIT).unwrap());
         }
@@ -344,4 +358,103 @@ fn our_default_left_in_the_manager_by_a_killed_session_is_taken_back_and_recorde
             }
         );
     });
+}
+
+/// A server whose session bus worker is on `bus`, supervising a stand-in portal that never takes its bus name, the
+/// publication of its session asked for (`publish_session_when_ready`). The stand-in is a script in `dir`.
+fn server_publishing_with_a_portal(
+    bus: &PrivateBus,
+    dir: &std::path::Path,
+) -> (Cupertino, EventLoop<'static, Cupertino>) {
+    use std::os::unix::fs::PermissionsExt;
+    let portal = dir.join("cupertino-portal");
+    std::fs::write(&portal, "#!/bin/sh\nexec sleep 60\n").unwrap();
+    std::fs::set_permissions(&portal, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().unwrap();
+    let mut state = Cupertino::new(
+        Display::new().unwrap(),
+        event_loop.handle(),
+        event_loop.get_signal(),
+        Config::default(),
+        true,
+        &cupertino_assets::Assets::builtin(),
+    )
+    .unwrap();
+    state.dbus = DbusHandle::start_on(Some(bus.address.clone()), || {});
+    state
+        .supervisor
+        .add_built_ins([(BuiltIn::Portal, Some(portal))], Instant::now());
+    start_shell_supervision(&state, &event_loop).unwrap();
+    publish_session_when_ready(&state);
+    (state, event_loop)
+}
+
+/// Dispatch the server until `calls` shows a publication, or `limit` passes; how long it took.
+fn published_within(
+    state: &mut Cupertino,
+    event_loop: &mut EventLoop<'static, Cupertino>,
+    calls: &Mutex<Calls>,
+    limit: Duration,
+) -> Option<Duration> {
+    let start = Instant::now();
+    while start.elapsed() < limit {
+        headless::step(state, event_loop, Duration::from_millis(20)).unwrap();
+        if !calls.lock().unwrap().units.is_empty() {
+            return Some(start.elapsed());
+        }
+    }
+    None
+}
+
+/// Another graphical session is active in these tests, so a publication only asks the manager about units and changes
+/// nothing, here or in the runtime directory.
+#[test]
+fn the_session_is_published_once_the_portal_owns_its_bus_name() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let (session, _systemd, calls) = block_on(session_with_manager(&bus, Some("active"), None));
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, mut event_loop) = server_publishing_with_a_portal(&bus, dir.path());
+    assert_eq!(
+        published_within(&mut state, &mut event_loop, &calls, Duration::from_secs(1)),
+        None,
+        "published before the portal owns its name"
+    );
+    block_on(session.request_name(PORTAL_BUS_NAME)).unwrap();
+    let waited = published_within(&mut state, &mut event_loop, &calls, PORTAL_READY_TIMEOUT)
+        .expect("published once the portal owns its name");
+    assert!(
+        waited < PORTAL_READY_TIMEOUT - Duration::from_secs(1),
+        "{waited:?}"
+    );
+    assert!(
+        state.supervisor.pid_of(BuiltIn::Portal.name()).is_some(),
+        "the portal runs while the server waits"
+    );
+}
+
+#[test]
+fn the_session_is_published_after_the_timeout_when_the_portal_never_owns_its_bus_name() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let (_session, _systemd, calls) = block_on(session_with_manager(&bus, Some("active"), None));
+    let dir = tempfile::tempdir().unwrap();
+    let start = Instant::now();
+    let (mut state, mut event_loop) = server_publishing_with_a_portal(&bus, dir.path());
+    published_within(
+        &mut state,
+        &mut event_loop,
+        &calls,
+        3 * PORTAL_READY_TIMEOUT,
+    )
+    .expect("published after the timeout");
+    let waited = start.elapsed();
+    assert!(
+        waited >= PORTAL_READY_TIMEOUT && waited < 2 * PORTAL_READY_TIMEOUT,
+        "{waited:?}"
+    );
 }

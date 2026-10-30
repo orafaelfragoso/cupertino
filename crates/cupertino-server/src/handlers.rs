@@ -15,7 +15,7 @@ use smithay::input::pointer::{CursorImageStatus, CursorImageSurfaceData, Focus};
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::output::Output;
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
-use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+use smithay::reexports::wayland_protocols::xdg::shell::server::{xdg_toplevel, xdg_wm_base};
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_data_source::WlDataSource;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
@@ -701,6 +701,18 @@ impl XdgShellHandler for Cupertino {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
+        // the prompt is layer surfaces only: a window of it would reach the window list, the capture of a window or of
+        // the screen, and the stacking of applications
+        if crate::authorization::is_prompt(surface.wl_surface()) {
+            tracing::warn!(
+                "the authentication prompt asked for a toplevel: its connection is ended"
+            );
+            surface.xdg_toplevel().post_error(
+                xdg_wm_base::Error::Role,
+                "the authentication prompt draws on layer surfaces only",
+            );
+            return;
+        }
         // without the built-in decorations an extension draws a frame around every window
         let legacy = !self.config.window.decorations;
         let id = cupertino_wm::WindowId(self.next_window);
@@ -758,6 +770,10 @@ impl XdgShellHandler for Cupertino {
         let Some(root) = find_popup_root_surface(&kind).ok() else {
             return;
         };
+        // the keyboard stays with the authentication prompt while it is shown
+        if self.prompt_shown() && !crate::authorization::is_prompt(&root) {
+            return;
+        }
         if let Ok(mut grab) = self.popups.grab_popup(root.clone(), kind, &seat, serial) {
             if let Some(keyboard) = seat.get_keyboard() {
                 if keyboard.is_grabbed()

@@ -10,7 +10,7 @@ use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 
-use crate::config::Config;
+use crate::config::{BuiltIn, Config, PORTAL_BUS_NAME};
 use crate::input::{translate_action, Action};
 use crate::state::Cupertino;
 
@@ -338,13 +338,13 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
     Ok(())
 }
 
-/// Poll the shell processes of the configuration (starting them on the first tick) and the X display's satellite from
-/// the event loop.
+/// Poll the shell processes of the configuration and the built-in ones (starting them on the first tick) and the X
+/// display's satellite from the event loop.
 pub fn start_shell_supervision(
     state: &Cupertino,
     event_loop: &EventLoop<'static, Cupertino>,
 ) -> Result<()> {
-    if state.config.shell_processes.is_empty() && state.xwayland.is_none() {
+    if state.supervisor.is_empty() && state.xwayland.is_none() {
         return Ok(());
     }
     event_loop
@@ -602,6 +602,16 @@ pub fn run(cli: Cli) -> Result<()> {
     if mode != Mode::Headless {
         start_xwayland(&mut state);
     }
+    // the built-in processes belong to a user's session on the hardware: not to the login screen, nor to nested and
+    // offscreen runs
+    let login_screen = crate::config::login_screen(
+        std::env::var_os(crate::config::CONFIG_ENV).as_deref(),
+        std::env::var_os("XDG_SESSION_CLASS").as_deref(),
+    );
+    if mode == Mode::Udev && !login_screen {
+        let programs = BuiltIn::ALL.map(|b| (b, b.installed()));
+        state.supervisor.add_built_ins(programs, Instant::now());
+    }
     start_shell_supervision(&state, &event_loop)?;
     state.overlays.hold_modifiers = cli.hold_modifiers;
     state.connect_input_method();
@@ -654,7 +664,7 @@ pub fn run(cli: Cli) -> Result<()> {
                     "neither XDG_CONFIG_HOME nor HOME is set: display arrangements are not stored"
                 ),
             }
-            publish_session(&state);
+            publish_session_when_ready(&state);
             crate::backend::udev::run(&mut state, &mut event_loop, deadline, cli.scale)?;
         }
         #[cfg(not(feature = "udev"))]
@@ -711,9 +721,75 @@ fn start_dbus(state: &mut Cupertino) {
 #[cfg(not(feature = "dbus"))]
 fn start_dbus(_state: &mut Cupertino) {}
 
+/// How long the session's publication waits for the portal to own [`PORTAL_BUS_NAME`].
+pub const PORTAL_READY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// [`publish_session`] once the supervised portal owns its bus name, so the portal frontend that the publication starts
+/// finds its backend; after [`PORTAL_READY_TIMEOUT`] without the name it is published all the same, and at once when
+/// the portal is not supervised. The event loop goes on meanwhile: the portal needs it to connect.
+pub fn publish_session_when_ready(state: &Cupertino) {
+    use smithay::reexports::calloop::channel::{channel, Event};
+    let Some(dbus) = state
+        .dbus
+        .as_ref()
+        .filter(|_| state.supervisor.supervises(BuiltIn::Portal.name()))
+    else {
+        publish_session(state);
+        return;
+    };
+    let published = std::rc::Rc::new(std::cell::Cell::new(false));
+    let publish = move |state: &mut Cupertino, owned: bool| {
+        if published.replace(true) {
+            return;
+        }
+        if !owned {
+            tracing::warn!(
+                name = PORTAL_BUS_NAME,
+                timeout = ?PORTAL_READY_TIMEOUT,
+                "the portal did not take its bus name in time: the session is published without it"
+            );
+        }
+        publish_session(state);
+    };
+    let (tx, rx) = channel::<()>();
+    let on_owned = publish.clone();
+    let owner_source = state.loop_handle.insert_source(rx, move |event, _, state| {
+        if let Event::Msg(()) = event {
+            on_owned(state, true);
+        }
+    });
+    let timer = owner_source.as_ref().ok().map(|&token| {
+        state.loop_handle.insert_source(
+            Timer::from_duration(PORTAL_READY_TIMEOUT),
+            move |_, _, state| {
+                publish(state, false);
+                state.loop_handle.remove(token);
+                TimeoutAction::Drop
+            },
+        )
+    });
+    let waiting = matches!(timer, Some(Ok(_)))
+        && dbus.await_owner(
+            PORTAL_BUS_NAME,
+            Box::new(move || {
+                // the loop is gone only while the server shuts down
+                let _ = tx.send(());
+            }),
+        );
+    if !waiting {
+        tracing::warn!("cannot wait for the portal's bus name: the session is published at once");
+        if let Ok(token) = owner_source {
+            state.loop_handle.remove(token);
+        }
+        if let Some(Ok(token)) = timer {
+            state.loop_handle.remove(token);
+        }
+        publish_session(state);
+    }
+}
+
 /// The TTY session's display and desktop name, for the services of a shared user bus ([`crate::activation_env`]).
-#[cfg(feature = "udev")]
-fn publish_session(state: &Cupertino) {
+pub fn publish_session(state: &Cupertino) {
     let (Some(socket), Some(dbus)) = (&state.socket_name, &state.dbus) else {
         return;
     };

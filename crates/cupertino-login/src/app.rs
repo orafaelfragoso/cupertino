@@ -344,6 +344,14 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     }
 }
 
+/// The windows assistive technology knows the lock surfaces as: each by its output.
+fn lock_windows(surfaces: &[OutputSurface]) -> Vec<WindowId> {
+    surfaces
+        .iter()
+        .map(|s| WindowId(s.output.registry_name()))
+        .collect()
+}
+
 /// Wakes the login loop from assistive technology's thread.
 struct WakeLoop(cupertino_wayland_client::Waker);
 
@@ -539,6 +547,7 @@ impl App {
             ShellEvent::Configure { surface, size } => self.configured(surface, size)?,
             ShellEvent::Closed(surface) if self.panel_surface() == Some(surface) => {
                 self.panel = None;
+                self.access.window_closed(PANEL_WINDOW);
                 eprintln!("cupertino-login: panel cancelled");
             }
             ShellEvent::Closed(surface) if self.interrupt_surface() == Some(surface) => {
@@ -940,9 +949,15 @@ impl App {
             return Ok(());
         };
         let session_lock = &lock.session_lock;
+        let before = lock_windows(&lock.surfaces);
         screen::arrange_surfaces(&mut self.conn, &mut lock.surfaces, |conn, output| {
             Ok((session_lock.lock_surface(conn, output)?, None))
-        })
+        })?;
+        let after = lock_windows(&lock.surfaces);
+        for gone in before.into_iter().filter(|w| !after.contains(w)) {
+            self.access.window_closed(gone);
+        }
+        Ok(())
     }
 
     fn draw(&mut self, surface: SurfaceId) -> Result<()> {
@@ -1060,7 +1075,7 @@ impl App {
         };
         let (width, height) = (f64::from(width), f64::from(height));
         let layout = self.renderer.layout(width, height);
-        let window = WindowId(surface.output.registry_name());
+        let window = lock_windows(std::slice::from_ref(surface))[0];
         let tree = lock_tree(
             window,
             &LockView {
@@ -1088,6 +1103,9 @@ impl App {
         // the lock surfaces are destroyed before the lock
         for s in &lock.surfaces {
             self.conn.destroy(s.surface())?;
+        }
+        for window in lock_windows(&lock.surfaces) {
+            self.access.window_closed(window);
         }
         lock.session_lock.unlock();
         self.conn.roundtrip()?;
@@ -1147,6 +1165,7 @@ impl App {
             .take()
             .expect("a decision is only made on an open panel");
         self.conn.destroy(layer.surface())?;
+        self.access.window_closed(PANEL_WINDOW);
         match decision {
             Decision::Cancel => eprintln!("cupertino-login: panel cancelled"),
             Decision::Do(action) => {

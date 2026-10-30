@@ -3,8 +3,8 @@
 //! another.
 
 use std::fs::File;
-use std::io::{ErrorKind, Read, Write};
-use std::os::fd::{AsFd, OwnedFd};
+use std::io::{ErrorKind, PipeReader, Read, Write};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -24,8 +24,10 @@ use wayland_client::{
 use crate::connection::State;
 use crate::{Error, Event};
 
-/// How long a read waits for the offering client; the caller's thread waits with it.
+/// How long a read waits for the offering client.
 const READ_TIMEOUT: Duration = Duration::from_secs(1);
+/// The most reads of [`Clipboard::receive_async`] running at once.
+const MAX_READS: usize = 8;
 /// The most a read takes; a longer selection is cut there.
 const READ_LIMIT: usize = 16 << 20;
 /// How long serving our selection to a reading client may take before the descriptor is dropped.
@@ -46,6 +48,20 @@ impl ClipboardOffer {
     }
 }
 
+/// Names one read of [`crate::Connection::receive_async`]; its data arrives as [`Event::Received`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ReadId(u64);
+
+/// A read of another client's selection, in progress in the connection's loop.
+#[derive(Debug)]
+struct PendingRead {
+    id: ReadId,
+    offer: u64,
+    reader: PipeReader,
+    bytes: Vec<u8>,
+    deadline: Instant,
+}
+
 /// The types an offer announced.
 #[derive(Debug, Default)]
 pub(crate) struct OfferTypes(Mutex<Vec<String>>);
@@ -60,6 +76,10 @@ pub(crate) struct Clipboard {
     next_offer: u64,
     own: Option<(WlDataSource, Contents)>,
     serving: Arc<AtomicUsize>,
+    reads: Vec<PendingRead>,
+    /// Reads answered without a pipe, reported with the next pump.
+    answered: Vec<(ReadId, Option<Vec<u8>>)>,
+    next_read: u64,
 }
 
 impl Clipboard {
@@ -99,6 +119,83 @@ impl Clipboard {
         }
     }
 
+    /// Start reading the selection in `mime`, like [`Clipboard::receive`] without waiting: the data arrives as
+    /// [`Event::Received`] from [`Clipboard::pump`], `None` when the offer was replaced, the reader did not finish within
+    /// [`READ_TIMEOUT`] or the pipe failed. At most [`MAX_READS`] run at once.
+    pub(crate) fn receive_async(
+        &mut self,
+        conn: &Connection,
+        offer: &ClipboardOffer,
+        mime: &str,
+    ) -> Result<ReadId, Error> {
+        if self.reads.len() >= MAX_READS {
+            return Err(Error::PermissionDenied("more clipboard reads at once"));
+        }
+        self.next_read += 1;
+        let id = ReadId(self.next_read);
+        if let Some((_, contents)) = &self.own {
+            let bytes = contents
+                .iter()
+                .find(|(m, _)| m == mime)
+                .map(|(_, bytes)| bytes.to_vec())
+                .ok_or_else(|| Error::UnsupportedFormat(mime.to_string()))?;
+            self.answered.push((id, Some(bytes)));
+            return Ok(id);
+        }
+        let Some((_, current)) = self.selection.as_ref().filter(|(id, _)| *id == offer.id) else {
+            return Err(Error::Cancelled);
+        };
+        if !offer.mime_types.iter().any(|m| m == mime) {
+            return Err(Error::UnsupportedFormat(mime.to_string()));
+        }
+        let (reader, writer) = std::io::pipe().map_err(Error::Io)?;
+        fcntl_setfl(&reader, OFlags::NONBLOCK).map_err(|e| Error::Io(e.into()))?;
+        current.receive(mime.to_string(), writer.as_fd());
+        drop(writer);
+        conn.flush()?;
+        self.reads.push(PendingRead {
+            id,
+            offer: offer.id,
+            reader,
+            bytes: Vec::new(),
+            deadline: Instant::now() + READ_TIMEOUT,
+        });
+        Ok(id)
+    }
+
+    /// Read what the pipes of running reads hold now, and report each read that ended at `now` to `events`.
+    pub(crate) fn pump(&mut self, now: Instant, events: &mut Vec<Event>) {
+        events.extend(
+            self.answered
+                .drain(..)
+                .map(|(id, data)| Event::Received { id, data }),
+        );
+        let current = self.selection.as_ref().map(|(id, _)| *id);
+        self.reads.retain_mut(|read| {
+            let data = if Some(read.offer) == current {
+                match drain(read) {
+                    Drained::Open if now < read.deadline => return true,
+                    Drained::Open | Drained::Failed => None,
+                    Drained::Done => Some(std::mem::take(&mut read.bytes)),
+                }
+            } else {
+                None
+            };
+            events.push(Event::Received { id: read.id, data });
+            false
+        });
+    }
+
+    /// The pipes of running reads, to wait on with the display.
+    pub(crate) fn read_fds(&self) -> impl Iterator<Item = BorrowedFd<'_>> {
+        self.reads.iter().map(|r| r.reader.as_fd())
+    }
+
+    /// When the first running read gives up.
+    pub(crate) fn read_deadline(&self) -> Option<Instant> {
+        self.reads.iter().map(|r| r.deadline).min()
+    }
+
     /// The selection in `mime`: this client's own directly, another client's read through a pipe. The caller waits up to
     /// [`READ_TIMEOUT`]; a replaced offer or a reader that does not finish in time is [`Error::Cancelled`].
     pub(crate) fn receive(
@@ -128,6 +225,32 @@ impl Clipboard {
             .map_err(Error::Io)?
             .ok_or(Error::Cancelled)
     }
+}
+
+enum Drained {
+    /// The writer may send more.
+    Open,
+    /// The writer closed the pipe, or the read reached [`READ_LIMIT`] and the rest is cut.
+    Done,
+    Failed,
+}
+
+/// Read what `read`'s pipe holds now without waiting.
+fn drain(read: &mut PendingRead) -> Drained {
+    let mut chunk = [0u8; 4096];
+    while read.bytes.len() < READ_LIMIT {
+        match read.reader.read(&mut chunk) {
+            Ok(0) => return Drained::Done,
+            Ok(n) => {
+                let room = READ_LIMIT - read.bytes.len();
+                read.bytes.extend_from_slice(&chunk[..n.min(room)]);
+            }
+            Err(e) if e.kind() == ErrorKind::WouldBlock => return Drained::Open,
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(_) => return Drained::Failed,
+        }
+    }
+    Drained::Done
 }
 
 /// What `reader` gives until it closes, at most `limit` bytes; `None` when `deadline` passes first.

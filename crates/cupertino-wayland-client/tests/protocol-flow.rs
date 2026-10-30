@@ -3,11 +3,11 @@
 
 use cupertino_geometry::{Point, Rect};
 use cupertino_wayland_client::{
-    Anchor, BufferFormat, Button, Capability, Connection, ConstraintAdjustment, CursorShape,
-    CursorTheme, Decorations, Error, Event, Extension, Gravity, KeyboardEvent, OutputGeometry,
-    OutputTransform, PixelRect, PointerEvent, PopupPlacement, Preedit, Presented, PresentedKind,
-    Scale, ScrollSource, SurfaceId, SurroundingText, TextInputDone, TextInputEvent, TextInputState,
-    Toplevel, ToplevelConfig, WindowConfigure, WmCapabilities,
+    Anchor, BufferFormat, Button, Capability, ClipboardOffer, Connection, ConstraintAdjustment,
+    CursorShape, CursorTheme, Decorations, Error, Event, Extension, Gravity, KeyboardEvent,
+    OutputGeometry, OutputTransform, PixelRect, PointerEvent, PopupPlacement, Preedit, Presented,
+    PresentedKind, ReadId, Scale, ScrollSource, SurfaceId, SurroundingText, TextInputDone,
+    TextInputEvent, TextInputState, Toplevel, ToplevelConfig, WindowConfigure, WmCapabilities,
 };
 use std::collections::VecDeque;
 use std::io::Write;
@@ -101,6 +101,8 @@ struct Globals {
     high_resolution_wheel: bool,
     /// `wp_presentation` on `CLOCK_MONOTONIC`.
     presentation: bool,
+    /// Keep each clipboard read's pipe open, writing nothing, until the test releases it.
+    hold_reads: bool,
 }
 
 impl Globals {
@@ -146,6 +148,11 @@ enum Control {
     TextInputLeave,
     /// A preedit the input method never finishes with a `done`.
     PreeditOnly(&'static str),
+    /// Write `bytes` to every held clipboard read and close it.
+    Release(&'static [u8]),
+    /// Write this many bytes to every held clipboard read from a thread of its own, keeping it open for two seconds
+    /// after.
+    Flood(usize),
     /// Answer every presentation feedback asked for so far: presented, or discarded.
     Presentation {
         discard: bool,
@@ -267,6 +274,8 @@ struct Mock {
     text_input: Option<(ZwpTextInputV3, u32)>,
     /// Presentation feedback not answered yet.
     feedbacks: Vec<WpPresentationFeedback>,
+    /// Clipboard reads held open.
+    held: Vec<std::fs::File>,
 }
 
 impl Mock {
@@ -985,8 +994,12 @@ impl Dispatch<WlDataOffer, ()> for Mock {
     ) {
         if let wl_data_offer::Request::Receive { mime_type, fd } = request {
             let mut file = std::fs::File::from(fd);
-            file.write_all(format!("as {mime_type}").as_bytes())
-                .unwrap();
+            if state.globals.hold_reads {
+                state.held.push(file);
+            } else {
+                file.write_all(format!("as {mime_type}").as_bytes())
+                    .unwrap();
+            }
             state.seen.send(Seen::Receive(mime_type)).unwrap();
         }
     }
@@ -1158,6 +1171,7 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
             layer: None,
             text_input: None,
             feedbacks: Vec::new(),
+            held: Vec::new(),
         };
         let mut handle = display.handle();
         handle.insert_client(stream, Arc::new(Data)).unwrap();
@@ -1283,6 +1297,20 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
         Control::TextInputLeave => {
             let surface = mock.surface().clone();
             mock.text_input.as_ref().unwrap().0.leave(&surface);
+        }
+        Control::Release(bytes) => {
+            for mut file in mock.held.drain(..) {
+                let _ = file.write_all(bytes);
+            }
+        }
+        Control::Flood(len) => {
+            for mut file in mock.held.drain(..) {
+                // the reader stops at its limit and closes the pipe, which ends the write
+                std::thread::spawn(move || {
+                    let _ = file.write_all(&vec![b'x'; len]);
+                    std::thread::sleep(Duration::from_secs(2));
+                });
+            }
         }
         Control::Presentation { discard } => {
             for feedback in mock.feedbacks.drain(..) {
@@ -1923,6 +1951,141 @@ fn the_selection_is_read_in_an_offered_type_only_and_a_replaced_offer_is_cancell
     assert!(matches!(
         conn.set_selection(vec![("text/plain".into(), b"x".to_vec())]),
         Err(Error::PermissionDenied(_))
+    ));
+}
+
+/// A compositor that holds clipboard reads, with a selection offered in plain text.
+fn holding_clipboard() -> (
+    Connection,
+    Sender<Control>,
+    Receiver<Seen>,
+    Stash,
+    ClipboardOffer,
+) {
+    let (mut conn, control, seen) = connect(Globals {
+        seat: true,
+        clipboard: true,
+        hold_reads: true,
+        ..Globals::core()
+    });
+    let mut stash = Stash::new();
+    control.send(Control::Offer(vec!["text/plain"])).unwrap();
+    let offer = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::Selection(Some(offer)) => Some(offer.clone()),
+        _ => None,
+    });
+    (conn, control, seen, stash, offer)
+}
+
+/// What `read` gives and how long it took, with each wait allowed three seconds: only the read's own pipe or deadline
+/// ends one sooner.
+fn received_in(conn: &mut Connection, read: ReadId) -> (Option<Vec<u8>>, Duration) {
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(10) {
+        for event in conn.wait(Some(Duration::from_secs(3))).unwrap() {
+            if let Event::Received { id, data } = event {
+                if id == read {
+                    return (data, started.elapsed());
+                }
+            }
+        }
+    }
+    panic!("the read never ended");
+}
+
+fn received(conn: &mut Connection, stash: &mut Stash, read: ReadId) -> Option<Vec<u8>> {
+    wait_for(conn, stash, |e| match e {
+        Event::Received { id, data } if *id == read => Some(data.clone()),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_paste_is_read_while_the_loop_keeps_serving_input() {
+    let (mut conn, control, seen, mut stash, offer) = holding_clipboard();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    let read = conn.receive_async(&offer, "text/plain").unwrap();
+    assert_eq!(
+        std::iter::repeat_with(|| next_seen(&seen)).find(|s| matches!(s, Seen::Receive(_))),
+        Some(Seen::Receive("text/plain".into()))
+    );
+    // the source writes nothing yet, and a key still arrives
+    control.send(Control::TypeKey(KEY_A)).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(
+            e,
+            Event::Keyboard {
+                event: KeyboardEvent::Key { .. },
+                ..
+            }
+        )
+        .then_some(())
+    });
+    assert!(!stash.iter().any(|e| matches!(e, Event::Received { .. })));
+    control.send(Control::Release(b"pasted")).unwrap();
+    let (data, took) = received_in(&mut conn, read);
+    assert_eq!(data, Some(b"pasted".to_vec()));
+    assert!(
+        took < Duration::from_millis(500),
+        "the pipe did not end the wait: {took:?}"
+    );
+}
+
+#[test]
+fn a_paste_longer_than_the_limit_is_cut_and_one_that_never_ends_gives_up() {
+    const LIMIT: usize = 16 << 20;
+    let (mut conn, control, seen, _stash, offer) = holding_clipboard();
+    let long = conn.receive_async(&offer, "text/plain").unwrap();
+    assert!(std::iter::repeat_with(|| next_seen(&seen)).any(|s| matches!(s, Seen::Receive(_))));
+    control.send(Control::Flood(LIMIT + 4096)).unwrap();
+    // the source keeps its pipe open: the read ends at the limit, not at the source's close
+    let (data, _) = received_in(&mut conn, long);
+    assert_eq!(data.map(|d| d.len()), Some(LIMIT));
+    let stuck = conn.receive_async(&offer, "text/plain").unwrap();
+    let (data, took) = received_in(&mut conn, stuck);
+    assert_eq!(data, None);
+    assert!(
+        (Duration::from_millis(900)..Duration::from_secs(2)).contains(&took),
+        "a read gives up after a second, waking the wait: {took:?}"
+    );
+}
+
+#[test]
+fn a_replaced_selection_cancels_its_reads_and_eight_run_at_once() {
+    let (mut conn, control, _seen, mut stash, offer) = holding_clipboard();
+    let reads: Vec<_> = (0..8)
+        .map(|_| conn.receive_async(&offer, "text/plain").unwrap())
+        .collect();
+    assert!(matches!(
+        conn.receive_async(&offer, "text/plain"),
+        Err(Error::PermissionDenied(_))
+    ));
+    assert!(matches!(
+        conn.receive_async(&offer, "image/png"),
+        Err(Error::PermissionDenied(_) | Error::UnsupportedFormat(_))
+    ));
+    let replaced = Instant::now();
+    control.send(Control::Offer(vec!["text/plain"])).unwrap();
+    let fresh = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::Selection(Some(o)) if *o != offer => Some(o.clone()),
+        _ => None,
+    });
+    for read in reads {
+        assert_eq!(received(&mut conn, &mut stash, read), None);
+    }
+    assert!(
+        replaced.elapsed() < Duration::from_millis(500),
+        "cancelled by the new selection, not by the reads' deadline: {:?}",
+        replaced.elapsed()
+    );
+    assert!(matches!(
+        conn.receive_async(&offer, "text/plain"),
+        Err(Error::Cancelled)
+    ));
+    assert!(matches!(
+        conn.receive_async(&fresh, "image/png"),
+        Err(Error::UnsupportedFormat(_))
     ));
 }
 

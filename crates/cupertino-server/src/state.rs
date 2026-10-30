@@ -303,9 +303,9 @@ pub struct Cupertino {
     pub config: Config,
     pub socket_name: Option<String>,
     pub running: bool,
-    /// The rendering context was lost and the server ends for it: [`crate::cli::run`] then returns an error, so the
-    /// session command and the display manager see a failure, not a log out.
-    pub rendering_lost: bool,
+    /// The rendering context was lost (the renderer's error) and the server ends for it: [`crate::cli::run`] then returns
+    /// an error, so the session command and the display manager see a failure, not a log out.
+    pub rendering_lost: Option<String>,
 
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
@@ -619,7 +619,7 @@ impl Cupertino {
             config,
             socket_name,
             running: true,
-            rendering_lost: false,
+            rendering_lost: None,
             compositor_state,
             xdg_shell_state,
             xdg_decoration_state,

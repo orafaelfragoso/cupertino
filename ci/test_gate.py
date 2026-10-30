@@ -51,7 +51,17 @@ class VendorIdentifierTest(unittest.TestCase):
     name = "pom" + "el"  # built from parts so that this file passes the gate itself
 
     def test_the_vendor_name_fails_in_any_case_and_inside_an_identifier(self):
-        for text in (f"{self.name}_cursor", f"{self.name.upper()}_THEME", self.name.capitalize(), f"{self.name}-cursors"):
+        cap = self.name.capitalize()
+        for text in (
+            f"{self.name}_cursor",
+            f"{self.name.upper()}_THEME",
+            cap,
+            f"{self.name}-cursors",
+            f"{cap}ColorEmoji",
+            f"{cap}Script",
+            f"{self.name}Cursor",
+            f"{self.name}2",
+        ):
             problems = run({"crates/x/src/lib.rs": f"// {text}\n"})
             self.assertEqual(len(problems), 1, (text, problems))
             self.assertIn("vendor or product name", problems[0])

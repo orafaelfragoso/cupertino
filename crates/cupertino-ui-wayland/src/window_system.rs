@@ -17,7 +17,7 @@ use cupertino_ui_render::CpuFrame;
 use cupertino_ui_text::TextInputState;
 use cupertino_wayland_client::{
     BufferFormat, Capability, ClipboardOffer, Connection, Error, Event, KeyboardEvent, PixelRect,
-    Popup, SurfaceId, TokenRequest, Toplevel, ToplevelConfig,
+    Popup, ReadId, SurfaceId, TokenRequest, Toplevel, ToplevelConfig,
 };
 
 use crate::convert::{self, InputTimeline};
@@ -87,6 +87,8 @@ pub struct WaylandWindowSystem {
     input_times: InputTimeline,
     selection: Option<ClipboardOffer>,
     next_clipboard: u64,
+    /// Clipboard reads in progress, with the MIME type each asked for.
+    reads: Vec<(ReadId, ClipboardToken, String)>,
     tokens: Vec<(TokenRequest, ActivationRequest)>,
     next_activation: u64,
     /// Events produced outside a dispatch (a clipboard read, a frame that needs no wait), returned by the next one.
@@ -120,6 +122,7 @@ impl WaylandWindowSystem {
             input_times: InputTimeline::default(),
             selection: None,
             next_clipboard: 0,
+            reads: Vec::new(),
             tokens: Vec::new(),
             next_activation: 0,
             queued: Vec::new(),
@@ -336,6 +339,14 @@ impl WaylandWindowSystem {
                 });
                 return;
             }
+            Event::Received { id, data } => {
+                if let Some(at) = self.reads.iter().position(|(r, _, _)| *r == id) {
+                    let (_, token, mime) = self.reads.swap_remove(at);
+                    let data = data.map(|bytes| ClipboardData { mime, bytes });
+                    out.push(PlatformEvent::Clipboard { token, data });
+                }
+                return;
+            }
             Event::ActivationToken { request, token } => {
                 if let Some(at) = self.tokens.iter().position(|(r, _)| *r == request) {
                     let (_, request) = self.tokens.swap_remove(at);
@@ -517,25 +528,24 @@ impl WindowSystem for WaylandWindowSystem {
         }
     }
 
-    /// The read finishes before this returns (at most a second, the transport's limit); its data arrives with the
-    /// next dispatch.
+    /// The read runs in the transport's loop while dispatch goes on; its data arrives with the dispatch it ends in (at
+    /// most a second later, the transport's limit). One that can't start answers `None` with the next dispatch.
     fn read_clipboard(&mut self, kind: ClipboardKind, mime: &str) -> ClipboardToken {
         self.next_clipboard += 1;
         let token = ClipboardToken(self.next_clipboard);
-        let data = match (&self.selection, kind) {
+        let started = match (&self.selection, kind) {
             (Some(offer), ClipboardKind::Clipboard) => {
                 let offer = offer.clone();
-                self.conn
-                    .receive(&offer, mime)
-                    .ok()
-                    .map(|bytes| ClipboardData {
-                        mime: mime.to_owned(),
-                        bytes,
-                    })
+                self.conn.receive_async(&offer, mime).ok()
             }
             _ => None,
         };
-        self.queued.push(PlatformEvent::Clipboard { token, data });
+        match started {
+            Some(id) => self.reads.push((id, token, mime.to_owned())),
+            None => self
+                .queued
+                .push(PlatformEvent::Clipboard { token, data: None }),
+        }
         token
     }
 

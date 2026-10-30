@@ -69,7 +69,7 @@ use crate::scale::ScaleSources;
 use crate::text_input::TextInput;
 use crate::{
     BufferFormat, BufferLayout, Capability, CapabilitySet, ClipboardOffer, Decorations, Disconnect,
-    Error, Extension, KeyboardEvent, OutputInfo, PixelRect, PointerEvent, Presented, Scale,
+    Error, Extension, KeyboardEvent, OutputInfo, PixelRect, PointerEvent, Presented, ReadId, Scale,
     TextInputEvent, TextInputState, WindowConfigure, WindowStates, WmCapabilities,
 };
 
@@ -204,6 +204,11 @@ pub enum Event {
     },
     /// Another selection was set, or it was cleared.
     Selection(Option<ClipboardOffer>),
+    /// What a read of [`Connection::receive_async`] gave; `None` when it was cancelled or failed.
+    Received {
+        id: ReadId,
+        data: Option<Vec<u8>>,
+    },
     /// An output appeared, went away or changed: read [`Connection::outputs`] again.
     OutputsChanged,
     /// The token asked for with [`Connection::request_activation_token`].
@@ -1012,10 +1017,19 @@ impl Connection {
         Ok(())
     }
 
-    /// Read the selection `offer` in `mime`, one of its [`ClipboardOffer::mime_types`]. Blocks for up to one second.
+    /// Read the selection `offer` in `mime`, one of its [`ClipboardOffer::mime_types`]. Blocks for up to one second;
+    /// [`Connection::receive_async`] doesn't.
     pub fn receive(&mut self, offer: &ClipboardOffer, mime: &str) -> Result<Vec<u8>, Error> {
         self.state.capabilities.require(Capability::Clipboard)?;
         self.state.clipboard.receive(&self.conn, offer, mime)
+    }
+
+    /// Start reading the selection `offer` in `mime` while [`Connection::wait`] goes on; the data arrives as
+    /// [`Event::Received`] with the returned id, at most 16 MiB, or `None` when the offer was replaced or its client took
+    /// longer than a second. At most eight reads run at once.
+    pub fn receive_async(&mut self, offer: &ClipboardOffer, mime: &str) -> Result<ReadId, Error> {
+        self.state.capabilities.require(Capability::Clipboard)?;
+        self.state.clipboard.receive_async(&self.conn, offer, mime)
     }
 
     /// The queue extensions create their objects on.
@@ -1166,14 +1180,16 @@ impl Connection {
         self.queue.dispatch_pending(&mut self.state)?;
         self.state.repeat_keys(Instant::now());
         self.animate_cursor()?;
+        self.state.pump_reads();
         self.state.update_scales();
         if self.state.events.is_empty() && self.state.fault.is_none() {
-            // a key repeat or the next image of an animated cursor due earlier than the caller's timeout ends the
-            // wait first
+            // a key repeat, the next image of an animated cursor or a clipboard read giving up earlier than the
+            // caller's timeout ends the wait first
             let now = Instant::now();
             let timers = [
                 self.state.repeat.deadline(),
                 self.state.themed_cursor.deadline(),
+                self.state.clipboard.read_deadline(),
             ];
             let until_timer = timers
                 .into_iter()
@@ -1183,6 +1199,7 @@ impl Connection {
             self.queue.dispatch_pending(&mut self.state)?;
             self.state.repeat_keys(Instant::now());
             self.animate_cursor()?;
+            self.state.pump_reads();
             self.state.update_scales();
         }
         match self.state.fault.take() {
@@ -1225,10 +1242,15 @@ impl Connection {
         });
         let (connection_ready, wake_ready) = {
             let connection_fd = guard.connection_fd();
-            let mut fds = [
+            // a clipboard read's pipe ends the wait too, to be read with the next pump
+            let reads: Vec<_> = self.state.clipboard.read_fds().collect();
+            let mut fds: Vec<_> = [
                 PollFd::new(&connection_fd, PollFlags::IN),
                 PollFd::new(&self.wake, PollFlags::IN),
-            ];
+            ]
+            .into_iter()
+            .chain(reads.iter().map(|fd| PollFd::new(fd, PollFlags::IN)))
+            .collect();
             match poll(&mut fds, timespec.as_ref()) {
                 Ok(_) => {}
                 // a signal interrupted the wait: report an empty wake-up
@@ -1600,6 +1622,10 @@ impl State {
                 });
             }
         }
+    }
+
+    fn pump_reads(&mut self) {
+        self.clipboard.pump(Instant::now(), &mut self.events);
     }
 
     fn repeat_keys(&mut self, now: Instant) {

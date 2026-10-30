@@ -46,14 +46,16 @@ if [ -z "${BIN_DIR:-}" ]; then
     python3 -I -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
   BIN_DIR=$target/release
 fi
+[[ $BIN_DIR != *[[:space:]]* ]] || fail "BIN_DIR $BIN_DIR: the server splits --spawn on whitespace, so the path cannot hold any"
 [ -x "$BIN_DIR/cupertino-testclient" ] || fail "no cupertino-testclient in $BIN_DIR"
 mkdir -p "$out"
 out=$(realpath "$out")
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/cupertino-overview.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT
-mkdir -p "$scratch/home/.config/cupertino"
-[ -z "$contrast" ] || echo "increase_contrast = on" >>"$scratch/home/.config/cupertino/accessibility.conf"
-[ -z "$transparency" ] || echo "reduce_transparency = on" >>"$scratch/home/.config/cupertino/accessibility.conf"
+conf="$scratch/accessibility.conf"
+: >"$conf"
+[ -z "$contrast" ] || echo "increase_contrast = on" >>"$conf"
+[ -z "$transparency" ] || echo "reduce_transparency = on" >>"$conf"
 
 names=(One Two Three Four Five Six)
 spawn=()
@@ -62,7 +64,7 @@ for name in "${names[@]:0:$windows}"; do
 done
 for appearance in $appearances; do
   png="$out/overview-all-windows-$windows-$appearance$contrast$transparency@${scale}x.png"
-  BIN_DIR=$BIN_DIR SIZE=$pixels FIXTURE_DIR="$scratch/home" CONFIG_JSON="{\"appearance\": \"$appearance\"}" \
+  BIN_DIR=$BIN_DIR SIZE=$pixels CUPERTINO_ACCESSIBILITY_CONF="$conf" CONFIG_JSON="{\"appearance\": \"$appearance\"}" \
     "$root/crates/cupertino-server/scripts/session.sh" --scale "$scale" "${spawn[@]}" \
     --action 3:overview --shot "5:$png" --run-for 5.5 >"$scratch/server.log" 2>&1 \
     || { tail -20 "$scratch/server.log" >&2; exit 1; }

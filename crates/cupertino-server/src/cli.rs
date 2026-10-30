@@ -572,12 +572,15 @@ pub fn run(cli: Cli) -> Result<()> {
         .run_for
         .map(|s| Instant::now() + Duration::from_secs_f64(s));
     // the user's session keeps its accessibility settings over the machine's (the login screen's account has none, so it
-    // has the machine's); offscreen runs keep them in memory
+    // has the machine's); offscreen runs keep them in memory unless the environment names their file
+    use cupertino_defaults::accessibility::{ACCESSIBILITY_ENV, ACCESSIBILITY_FILE};
     let mut paths = crate::live::SettingsPaths::from_env();
     if mode == Mode::Headless {
         paths.system_accessibility = None;
+        if let Some(path) = std::env::var_os(ACCESSIBILITY_ENV).filter(|p| !p.is_empty()) {
+            state.use_accessibility_store(path.into())?;
+        }
     } else {
-        use cupertino_defaults::accessibility::{ACCESSIBILITY_ENV, ACCESSIBILITY_FILE};
         if let Some(system) = paths
             .system_accessibility
             .as_deref()

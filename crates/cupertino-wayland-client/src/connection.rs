@@ -925,6 +925,7 @@ impl Connection {
             ));
         };
         pointer.set_cursor(serial, None, 0, 0);
+        self.state.themed_cursor.stop();
         Ok(())
     }
 
@@ -964,6 +965,7 @@ impl Connection {
         };
         if let Some(device) = &s.cursor_device {
             device.set_shape(serial, shape);
+            s.themed_cursor.stop();
             return Ok(());
         }
         let scale = s
@@ -1163,23 +1165,37 @@ impl Connection {
     pub fn wait(&mut self, timeout: Option<Duration>) -> Result<Vec<Event>, Error> {
         self.queue.dispatch_pending(&mut self.state)?;
         self.state.repeat_keys(Instant::now());
+        self.animate_cursor()?;
         self.state.update_scales();
         if self.state.events.is_empty() && self.state.fault.is_none() {
-            // a key repeat due earlier than the caller's timeout ends the wait first
-            let until_repeat = self
-                .state
-                .repeat
-                .deadline()
-                .map(|at| at.saturating_duration_since(Instant::now()));
-            self.block(timeout.into_iter().chain(until_repeat).min())?;
+            // a key repeat or the next image of an animated cursor due earlier than the caller's timeout ends the
+            // wait first
+            let now = Instant::now();
+            let timers = [
+                self.state.repeat.deadline(),
+                self.state.themed_cursor.deadline(),
+            ];
+            let until_timer = timers
+                .into_iter()
+                .flatten()
+                .map(|at| at.saturating_duration_since(now));
+            self.block(timeout.into_iter().chain(until_timer).min())?;
             self.queue.dispatch_pending(&mut self.state)?;
             self.state.repeat_keys(Instant::now());
+            self.animate_cursor()?;
             self.state.update_scales();
         }
         match self.state.fault.take() {
             Some(e) => Err(e),
             None => Ok(std::mem::take(&mut self.state.events)),
         }
+    }
+
+    fn animate_cursor(&mut self) -> Result<(), Error> {
+        if self.state.themed_cursor.advance(Instant::now()) {
+            self.flush()?;
+        }
+        Ok(())
     }
 
     /// Send queued requests now; [`Connection::wait`] also does.
@@ -2110,6 +2126,7 @@ impl Dispatch<WlSeat, ()> for State {
                 .map(|m| m.get_pointer(&pointer, qh, ()));
             state.pointer = Some(pointer);
         } else if let Some(pointer) = state.pointer.take_if(|_| !has_pointer) {
+            state.themed_cursor.stop();
             if let Some(device) = state.cursor_device.take() {
                 device.destroy();
             }
@@ -2176,7 +2193,10 @@ impl Dispatch<WlPointer, ()> for State {
                         .enter(s, Point::new(surface_x, surface_y))
                 })
             }
-            wl_pointer::Event::Leave { .. } => state.pointer_tracker.leave(),
+            wl_pointer::Event::Leave { .. } => {
+                state.themed_cursor.stop();
+                state.pointer_tracker.leave()
+            }
             wl_pointer::Event::Motion {
                 time,
                 surface_x,

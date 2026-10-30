@@ -7,9 +7,13 @@
 //! third-party clients, the accent picker and the Super tap are off, and a notice names the application and the chord
 //! that gives the shortcuts back (`release-shortcuts`).
 //!
-//! A released surface stays released until it gains the keyboard focus again by the person's own input (a click, the
-//! switcher, a shortcut, a shell process's request), never by a request of the client (`xdg_activation`, the gtk shell,
-//! a window that maps), so an application cannot take the shortcuts back by moving the focus itself.
+//! A client that does not answer its pings holds nothing until it answers again.
+//!
+//! The release chord also gives back the pointer (`crate::pointer_constraints`). A released surface stays released
+//! until it gains the keyboard focus again by the person's own input (a click, the switcher, a shortcut, a shell
+//! process's request) or the person presses a button on it while it has the focus, never by a request of the client
+//! (`xdg_activation`, the gtk shell, a window that maps), so an application cannot take the shortcuts or the pointer
+//! back by moving the focus itself.
 
 use std::collections::HashMap;
 
@@ -74,6 +78,37 @@ impl ShortcutInhibit {
     pub fn holding(&self) -> bool {
         self.inhibitors.iter().any(|i| i.is_active())
     }
+
+    /// Whether the person released `surface`, and input has not focused it since.
+    pub fn is_released(&self, surface: &WlSurface) -> bool {
+        self.released.contains_key(&surface.id())
+    }
+}
+
+/// The sentence of the notice that names the release chord, and the whole text, for what `app` holds.
+fn notice_text(chord: Option<&str>, app: &str, shortcuts: bool, pointer: bool) -> (String, String) {
+    // "shortcuts and pointer" makes the sentence too wide for the narrowest output
+    let (what, held) = match (shortcuts, pointer) {
+        (true, true) => ("input", "holding your shortcuts and pointer"),
+        (false, true) => ("pointer", "holding it"),
+        _ => ("shortcuts", "receiving them"),
+    };
+    // the way out comes first: it must not be pushed out of sight by a long name
+    match chord {
+        Some(chord) => {
+            let clause = format!("Press {chord} to get your {what} back.");
+            let text = format!("{clause} {app} is {held}.");
+            (clause, text)
+        }
+        None => {
+            let clause = match (shortcuts, pointer) {
+                (true, true) => format!("{app} is {held}."),
+                (false, true) => format!("{app} is holding your pointer."),
+                _ => format!("{app} is receiving your shortcuts."),
+            };
+            (clause.clone(), clause)
+        }
+    }
 }
 
 /// The chord as the person presses it, from the bindings.
@@ -98,10 +133,14 @@ pub fn chord_label(chord: &Chord) -> String {
 }
 
 impl Cupertino {
-    /// Whether `surface` may hold the shortcuts: the toplevel of an application client, with the session unlocked. A
-    /// layer surface, a popup or a lock surface never holds them, whoever owns it.
-    fn may_hold_shortcuts(&self, surface: &WlSurface) -> bool {
-        if self.session_lock.is_active() || self.window_id_for_surface(surface).is_none() {
+    /// Whether `surface` may hold the shortcuts: the toplevel of an application client that answers its pings, with the
+    /// session unlocked. A layer surface, a popup or a lock surface never holds them, whoever owns it.
+    pub(crate) fn may_hold_shortcuts(&self, surface: &WlSurface) -> bool {
+        if self.session_lock.is_active()
+            || self
+                .window_id_for_surface(surface)
+                .is_none_or(|id| self.window_is_unresponsive(id))
+        {
             return false;
         }
         surface
@@ -124,49 +163,11 @@ impl Cupertino {
                 && !self.shortcut_inhibit.released.contains_key(&surface.id());
             if want && !inhibitor.is_active() {
                 inhibitor.activate();
-                let chord = self
-                    .key_router
-                    .bindings
-                    .entries()
-                    .iter()
-                    .find(|(_, a)| *a == Action::ReleaseShortcuts)
-                    .map(|(c, _)| chord_label(c));
-                let app = notice_name(&self.application_name(surface));
-                if let Some(output) = self
-                    .window_id_for_surface(surface)
-                    .and_then(|id| self.wm.window(id))
-                    .map(|w| w.output)
-                {
-                    // the way out comes first: it must not be pushed out of sight by a long name
-                    let clause = match &chord {
-                        Some(chord) => format!("Press {chord} to get your shortcuts back."),
-                        None => format!("{app} is receiving your shortcuts."),
-                    };
-                    let text = match &chord {
-                        Some(_) => format!("{clause} {app} is receiving them."),
-                        None => clause.clone(),
-                    };
-                    self.overlays.shortcut_notice = Some(ShortcutNotice {
-                        short: chord.unwrap_or_else(|| clause.clone()),
-                        clause,
-                        text,
-                        output,
-                        owner: Some(surface.id()),
-                        until: now + NOTICE_SECONDS,
-                    });
-                }
+                self.show_hold_notice(surface);
                 self.request_redraw();
             } else if !want && inhibitor.is_active() {
                 inhibitor.inactivate();
-                // only the notice of this inhibitor: another one may have been activated in this same pass
-                if self
-                    .overlays
-                    .shortcut_notice
-                    .as_ref()
-                    .is_some_and(|n| n.owner.as_ref() == Some(&surface.id()))
-                {
-                    self.overlays.shortcut_notice = None;
-                }
+                self.end_hold_notice(surface);
                 self.request_redraw();
             }
         }
@@ -181,6 +182,66 @@ impl Cupertino {
         {
             self.overlays.shortcut_notice = None;
             self.request_redraw();
+        }
+    }
+
+    /// What the window of the toplevel `root` holds now: the shortcuts, the pointer.
+    fn held_by(&self, root: &WlSurface) -> (bool, bool) {
+        let shortcuts = self
+            .shortcut_inhibit
+            .inhibitors
+            .iter()
+            .any(|i| i.is_active() && i.wl_surface() == root);
+        let pointer = self.pointer_held()
+            && self
+                .pointer
+                .current_focus()
+                .and_then(|surface| self.root_window_surface(&surface))
+                .as_ref()
+                == Some(root);
+        (shortcuts, pointer)
+    }
+
+    /// Show the notice for the window of the toplevel `root`, which has just taken the shortcuts or the pointer.
+    pub(crate) fn show_hold_notice(&mut self, root: &WlSurface) {
+        let (shortcuts, pointer) = self.held_by(root);
+        let Some(output) = self
+            .window_id_for_surface(root)
+            .and_then(|id| self.wm.window(id))
+            .map(|w| w.output)
+        else {
+            return;
+        };
+        let chord = self
+            .key_router
+            .bindings
+            .entries()
+            .iter()
+            .find(|(_, a)| *a == Action::ReleaseShortcuts)
+            .map(|(c, _)| chord_label(c));
+        let app = notice_name(&self.application_name(root));
+        let (clause, text) = notice_text(chord.as_deref(), &app, shortcuts, pointer);
+        self.overlays.shortcut_notice = Some(ShortcutNotice {
+            short: chord.unwrap_or_else(|| clause.clone()),
+            clause,
+            text,
+            output,
+            owner: Some(root.id()),
+            until: self.now() + NOTICE_SECONDS,
+        });
+    }
+
+    /// The window of the toplevel `root` gave up the shortcuts or the pointer: its notice goes once it holds neither.
+    /// Only the notice of this window: another one may have been activated in this same pass.
+    pub(crate) fn end_hold_notice(&mut self, root: &WlSurface) {
+        if self.held_by(root) == (false, false)
+            && self
+                .overlays
+                .shortcut_notice
+                .as_ref()
+                .is_some_and(|n| n.owner.as_ref() == Some(&root.id()))
+        {
+            self.overlays.shortcut_notice = None;
         }
     }
 
@@ -203,19 +264,45 @@ impl Cupertino {
             }
         }
         self.refresh_shortcut_inhibitors(focused);
+        self.refresh_pointer_constraints(focused);
     }
 
-    /// `release-shortcuts`: give the shortcuts of the focused surface back to the system. Returns whether an
-    /// inhibitor was active.
+    /// A press of the person's on the window that already has the keyboard focus arms it again: it moves no focus
+    /// that would.
+    pub fn arm_by_press(&mut self) {
+        let focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
+        let pressed = self
+            .pointer
+            .current_focus()
+            .and_then(|surface| self.root_window_surface(&surface));
+        let Some(surface) = focus.filter(|f| pressed.as_ref() == Some(f)) else {
+            return;
+        };
+        if self
+            .shortcut_inhibit
+            .released
+            .remove(&surface.id())
+            .is_some()
+        {
+            self.refresh_shortcut_inhibitors(Some(&surface));
+            self.refresh_pointer_constraints(Some(&surface));
+        }
+    }
+
+    /// `release-shortcuts`: give the shortcuts and the pointer of the focused surface back to the system. Returns
+    /// whether an inhibitor or a pointer constraint was active.
     pub fn release_shortcuts(&mut self) -> bool {
         let focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
-        let Some(surface) = focus.filter(|_| self.shortcut_inhibit.holding()) else {
+        let Some(surface) =
+            focus.filter(|_| self.shortcut_inhibit.holding() || self.pointer_held())
+        else {
             return false;
         };
         self.shortcut_inhibit
             .released
             .insert(surface.id(), surface.clone());
         self.refresh_shortcut_inhibitors(Some(&surface));
+        self.refresh_pointer_constraints(Some(&surface));
         true
     }
 
@@ -246,9 +333,7 @@ impl KeyboardShortcutsInhibitHandler for Cupertino {
 
     fn inhibitor_destroyed(&mut self, inhibitor: KeyboardShortcutsInhibitor) {
         self.shortcut_inhibit.inhibitors.retain(|i| *i != inhibitor);
-        if !self.shortcut_inhibit.holding() {
-            self.overlays.shortcut_notice = None;
-        }
+        self.end_hold_notice(inhibitor.wl_surface());
         self.request_redraw();
     }
 }

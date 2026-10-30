@@ -47,12 +47,16 @@ pub enum CursorChoice {
 impl Cupertino {
     /// What the pointer shows: the cursor of a server decoration zone (a resize edge) first, then the busy cursor over a
     /// window whose client does not answer its pings (it cannot change its cursor, and the one it set is stale), else
-    /// what the client under the pointer asked for.
+    /// what the client under the pointer asked for, except that a window the person released from holding the pointer
+    /// cannot hide it.
     pub fn cursor_choice(&self) -> CursorChoice {
         match (self.decor.cursor, self.cursor_status.clone()) {
             (Some(icon), _) => CursorChoice::Icon(icon),
             (None, _) if self.pointer_over_unresponsive() => {
                 CursorChoice::Icon(smithay::input::pointer::CursorIcon::Wait)
+            }
+            (None, CursorImageStatus::Hidden) if self.cursor_forced_visible() => {
+                CursorChoice::Icon(smithay::input::pointer::CursorIcon::Default)
             }
             (None, CursorImageStatus::Named(icon)) => CursorChoice::Icon(icon),
             (None, CursorImageStatus::Hidden) => CursorChoice::Hidden,

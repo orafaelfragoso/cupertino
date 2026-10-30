@@ -16,8 +16,8 @@ use cupertino_server::Cupertino;
 use smithay::reexports::calloop::EventLoop;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_keyboard, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm,
-    wl_shm_pool, wl_surface,
+    wl_buffer, wl_compositor, wl_keyboard, wl_output, wl_pointer, wl_region, wl_registry, wl_seat,
+    wl_shm, wl_shm_pool, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::ext::session_lock::v1::client::{
@@ -25,6 +25,12 @@ use wayland_protocols::ext::session_lock::v1::client::{
 };
 use wayland_protocols::wp::keyboard_shortcuts_inhibit::zv1::client::{
     zwp_keyboard_shortcuts_inhibit_manager_v1, zwp_keyboard_shortcuts_inhibitor_v1,
+};
+use wayland_protocols::wp::pointer_constraints::zv1::client::{
+    zwp_confined_pointer_v1, zwp_locked_pointer_v1, zwp_pointer_constraints_v1,
+};
+use wayland_protocols::wp::relative_pointer::zv1::client::{
+    zwp_relative_pointer_manager_v1, zwp_relative_pointer_v1,
 };
 use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1;
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
@@ -103,9 +109,17 @@ struct LockStatus {
     inhibitor: Vec<bool>,
     /// The keys (evdev codes) the client's keyboard received, with whether they were pressed.
     keys: Vec<(u32, bool)>,
+    /// The `locked` / `confined` (true) and `unlocked` / `unconfined` (false) events of the pointer constraint.
+    constraint: Vec<bool>,
+    /// The surface-local positions of the pointer's motion events.
+    motions: Vec<(f64, f64)>,
+    /// The unaccelerated deltas of the relative pointer's motion events.
+    relative: Vec<(f64, f64)>,
 }
 
 struct ClientState {
+    /// The seat's pointer, once the seat announced one.
+    pointer: Option<wl_pointer::WlPointer>,
     shm: wl_shm::WlShm,
     lock_status: Arc<Mutex<LockStatus>>,
     toplevel_size: (i32, i32),
@@ -143,6 +157,9 @@ ignore_events!(
     xdg_activation_v1::XdgActivationV1,
     ext_session_lock_manager_v1::ExtSessionLockManagerV1,
     zwp_keyboard_shortcuts_inhibit_manager_v1::ZwpKeyboardShortcutsInhibitManagerV1,
+    zwp_pointer_constraints_v1::ZwpPointerConstraintsV1,
+    zwp_relative_pointer_manager_v1::ZwpRelativePointerManagerV1,
+    wl_region::WlRegion,
     zwlr_layer_shell_v1::ZwlrLayerShellV1
 );
 
@@ -236,7 +253,7 @@ impl Dispatch<ext_session_lock_surface_v1::ExtSessionLockSurfaceV1, wl_surface::
 
 impl Dispatch<wl_seat::WlSeat, ()> for ClientState {
     fn event(
-        _: &mut Self,
+        state: &mut Self,
         seat: &wl_seat::WlSeat,
         event: wl_seat::Event,
         _: &(),
@@ -248,7 +265,7 @@ impl Dispatch<wl_seat::WlSeat, ()> for ClientState {
         } = event
         {
             if caps.contains(wl_seat::Capability::Pointer) {
-                seat.get_pointer(qh, ());
+                state.pointer = Some(seat.get_pointer(qh, ()));
             }
             if caps.contains(wl_seat::Capability::Keyboard) {
                 seat.get_keyboard(qh, ());
@@ -266,12 +283,83 @@ impl Dispatch<wl_pointer::WlPointer, ()> for ClientState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_pointer::Event::Button {
-            state: wayland_client::WEnum::Value(wl_pointer::ButtonState::Pressed),
+        match event {
+            wl_pointer::Event::Button {
+                state: wayland_client::WEnum::Value(wl_pointer::ButtonState::Pressed),
+                ..
+            } => state.lock_status.lock().unwrap().presses += 1,
+            wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => state
+                .lock_status
+                .lock()
+                .unwrap()
+                .motions
+                .push((surface_x, surface_y)),
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<zwp_relative_pointer_v1::ZwpRelativePointerV1, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        _: &zwp_relative_pointer_v1::ZwpRelativePointerV1,
+        event: zwp_relative_pointer_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let zwp_relative_pointer_v1::Event::RelativeMotion {
+            dx_unaccel,
+            dy_unaccel,
             ..
         } = event
         {
-            state.lock_status.lock().unwrap().presses += 1;
+            state
+                .lock_status
+                .lock()
+                .unwrap()
+                .relative
+                .push((dx_unaccel, dy_unaccel));
+        }
+    }
+}
+
+impl Dispatch<zwp_locked_pointer_v1::ZwpLockedPointerV1, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        _: &zwp_locked_pointer_v1::ZwpLockedPointerV1,
+        event: zwp_locked_pointer_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let mut status = state.lock_status.lock().unwrap();
+        match event {
+            zwp_locked_pointer_v1::Event::Locked => status.constraint.push(true),
+            zwp_locked_pointer_v1::Event::Unlocked => status.constraint.push(false),
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<zwp_confined_pointer_v1::ZwpConfinedPointerV1, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        _: &zwp_confined_pointer_v1::ZwpConfinedPointerV1,
+        event: zwp_confined_pointer_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let mut status = state.lock_status.lock().unwrap();
+        match event {
+            zwp_confined_pointer_v1::Event::Confined => status.constraint.push(true),
+            zwp_confined_pointer_v1::Event::Unconfined => status.constraint.push(false),
+            _ => {}
         }
     }
 }
@@ -345,6 +433,13 @@ impl Dispatch<zwp_keyboard_shortcuts_inhibitor_v1::ZwpKeyboardShortcutsInhibitor
     }
 }
 
+/// The pointer constraint a client asks for: a lock, or a confine to a surface-local rectangle.
+#[derive(Clone, Copy)]
+pub enum Constraint {
+    Lock,
+    Confine { x: i32, y: i32, w: i32, h: i32 },
+}
+
 /// Keeps a client's protocol objects alive for the life of its thread; the lock object is kept apart because
 /// the thread uses it to unlock.
 struct Setup {
@@ -407,6 +502,7 @@ impl Client {
             let (globals, mut queue) = registry_queue_init::<ClientState>(&conn).unwrap();
             let qh = queue.handle();
             let mut client = ClientState {
+                pointer: None,
                 shm: globals.bind(&qh, 1..=1, ()).unwrap(),
                 lock_status: status2,
                 toplevel_size: (400, 300),
@@ -524,6 +620,91 @@ impl Client {
                 lock: None,
             }
         })
+    }
+
+    /// A client with one mapped toplevel that asks for a persistent pointer `constraint` on it, and also to inhibit the
+    /// shortcuts when `inhibit`. It records the constraint's events, the pointer's motion and its relative motion.
+    pub fn constraining(
+        socket: PathBuf,
+        app_id: &'static str,
+        constraint: Constraint,
+        inhibit: bool,
+    ) -> Client {
+        Self::run(socket, move |queue, client, globals| {
+            let qh = queue.handle();
+            let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
+            let wm_base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).unwrap();
+            let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=7, ()).unwrap();
+            let constraints: zwp_pointer_constraints_v1::ZwpPointerConstraintsV1 =
+                globals.bind(&qh, 1..=1, ()).unwrap();
+            let relative_manager: zwp_relative_pointer_manager_v1::ZwpRelativePointerManagerV1 =
+                globals.bind(&qh, 1..=1, ()).unwrap();
+            queue.roundtrip(client).unwrap();
+            let pointer = client.pointer.clone().expect("the seat has a pointer");
+            let relative = relative_manager.get_relative_pointer(&pointer, &qh, ());
+            let surface = compositor.create_surface(&qh, ());
+            let xdg = wm_base.get_xdg_surface(&surface, &qh, surface.clone());
+            let toplevel = xdg.get_toplevel(&qh, ());
+            toplevel.set_app_id(app_id.to_string());
+            let inhibitor = inhibit.then(|| {
+                let manager: zwp_keyboard_shortcuts_inhibit_manager_v1::ZwpKeyboardShortcutsInhibitManagerV1 =
+                    globals.bind(&qh, 1..=1, ()).unwrap();
+                (manager.inhibit_shortcuts(&surface, &seat, &qh, ()), manager)
+            });
+            let lifetime = zwp_pointer_constraints_v1::Lifetime::Persistent;
+            let held: Box<dyn std::any::Any> = match constraint {
+                Constraint::Lock => {
+                    Box::new(constraints.lock_pointer(&surface, &pointer, None, lifetime, &qh, ()))
+                }
+                Constraint::Confine { x, y, w, h } => {
+                    let region = compositor.create_region(&qh, ());
+                    region.add(x, y, w, h);
+                    Box::new((
+                        constraints.confine_pointer(
+                            &surface,
+                            &pointer,
+                            Some(&region),
+                            lifetime,
+                            &qh,
+                            (),
+                        ),
+                        region,
+                    ))
+                }
+            };
+            surface.commit();
+            queue.roundtrip(client).unwrap();
+            Setup {
+                objects: Box::new((
+                    wm_base,
+                    xdg,
+                    toplevel,
+                    surface,
+                    seat,
+                    constraints,
+                    relative_manager,
+                    relative,
+                    inhibitor,
+                    held,
+                )),
+                lock: None,
+            }
+        })
+    }
+
+    /// The `locked` / `confined` (true) and `unlocked` / `unconfined` (false) events of the pointer constraint so far.
+    pub fn constraint_events(&self) -> Vec<bool> {
+        self.lock_status.lock().unwrap().constraint.clone()
+    }
+
+    /// The surface-local positions of the pointer's motion events so far.
+    pub fn motions(&self) -> Vec<(f64, f64)> {
+        self.lock_status.lock().unwrap().motions.clone()
+    }
+
+    /// The unaccelerated deltas of the relative motion events so far.
+    pub fn relative_motions(&self) -> Vec<(f64, f64)> {
+        self.lock_status.lock().unwrap().relative.clone()
     }
 
     /// The `active` (true) and `inactive` (false) events of the shortcuts inhibitor so far.

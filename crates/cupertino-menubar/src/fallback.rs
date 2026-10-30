@@ -424,7 +424,7 @@ pub fn menus(
             "View",
             // leaving full screen is always offered; entering only where the server would take it (it refuses the
             // person's full screen where zoom is refused); a server before shell version 16 never says full screen, so
-            // there the item names entering and stays enabled
+            // there the item names entering and is enabled only where zoom is; the full-screen shortcut still leaves
             vec![MenuItem {
                 enabled: can_zoom || full_screen,
                 ..chords.item(

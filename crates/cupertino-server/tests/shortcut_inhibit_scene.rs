@@ -46,6 +46,7 @@ fn the_notice_is_in_front_of_a_fullscreen_window() {
     d.at(3000);
     let window = d.state.wm.key_window().expect("a window");
     d.state.command(Command::Fullscreen {
+        requested_by: cupertino_wm::Requester::Client,
         window,
         output: None,
     });

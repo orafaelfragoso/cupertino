@@ -2026,6 +2026,7 @@ fn a_bar_gone_with_a_menu_open_does_not_keep_the_next_bar_revealed() {
             .visible
     };
     h.state.command(Command::Fullscreen {
+        requested_by: cupertino_wm::Requester::Client,
         window: id,
         output: None,
     });
@@ -2063,6 +2064,7 @@ fn full_screen_hides_the_bar_and_an_open_menu_or_the_top_edge_reveals_it() {
     );
 
     h.state.command(Command::Fullscreen {
+        requested_by: cupertino_wm::Requester::Client,
         window: id,
         output: None,
     });

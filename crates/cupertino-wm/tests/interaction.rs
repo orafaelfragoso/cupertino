@@ -659,6 +659,7 @@ fn fullscreen_and_minimized_windows_cannot_be_moved() {
     let mut h = H::new();
     let w = h.map("a");
     h.cmd(Command::Fullscreen {
+        requested_by: Requester::Client,
         window: w,
         output: None,
     });
@@ -791,6 +792,7 @@ fn double_click_edge_snap_keeps_size_limits_and_skips_full_screen() {
     );
     h.settle();
     h.cmd(Command::Fullscreen {
+        requested_by: Requester::Client,
         window: w,
         output: None,
     });

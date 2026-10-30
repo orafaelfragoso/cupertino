@@ -856,6 +856,7 @@ impl XdgShellHandler for Cupertino {
             .and_then(|o| self.output_by_wl(&o).map(|e| e.id));
         if let Some(id) = self.window_id_for_surface(surface.wl_surface()) {
             self.command(Command::Fullscreen {
+                requested_by: cupertino_wm::Requester::Client,
                 window: id,
                 output: target,
             });

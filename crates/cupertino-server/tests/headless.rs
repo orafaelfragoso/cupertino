@@ -782,6 +782,7 @@ fn under_reduce_motion_full_screen_draws_the_new_frame_at_once() {
     h.state.tick();
     let id = h.state.wm.key_window().unwrap();
     h.state.command(Command::Fullscreen {
+        requested_by: cupertino_wm::Requester::Client,
         window: id,
         output: None,
     });
@@ -1290,6 +1291,7 @@ fn output_resize_refits_a_fullscreen_window() {
     );
     let (id, _) = h.mapped_window(1);
     h.state.command(Command::Fullscreen {
+        requested_by: cupertino_wm::Requester::Client,
         window: id,
         output: None,
     });

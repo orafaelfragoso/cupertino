@@ -1,13 +1,12 @@
-//! `--record` on the headless output: the file is whole frames, as many as the server says it wrote, each of them
-//! drawn or a repeat of a drawn one.
+//! `--record` on the headless output: the file is whole frames, each drawn or a repeat of a drawn one, and as many as
+//! the time the recording ran comes to (60 a second), also when the encoder reads slower than the server draws.
 
+use std::io::{ErrorKind, Read};
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 use cupertino_server::backend::headless;
-
-/// The output's size in pixels: small, so a second of frames is a small file.
-const SIZE: (u64, u64) = (64, 48);
 
 /// The value of `field=` on the line of the log that has `message`.
 fn field(log: &str, message: &str, field: &str) -> u64 {
@@ -22,11 +21,18 @@ fn field(log: &str, message: &str, field: &str) -> u64 {
     value.parse().unwrap()
 }
 
-/// The server's log of a headless second recorded into `video`, `None` without an EGL device (unless
+/// What the server's log says a recording wrote: video frames, drawn frames and the frames its time came to.
+struct Written {
+    frames: u64,
+    drawn: u64,
+    due: u64,
+}
+
+/// A headless second of a `size` output recorded into `video`; `None` without an EGL device (unless
 /// `CUPERTINO_EGL_REQUIRED=1`).
-fn record(dir: &Path, video: &Path) -> Option<String> {
+fn record(dir: &Path, video: &Path, size: (u64, u64)) -> Option<Written> {
     let output = Command::new(env!("CARGO_BIN_EXE_cupertino-server"))
-        .args(["--headless", "--size", &format!("{}x{}", SIZE.0, SIZE.1)])
+        .args(["--headless", "--size", &format!("{}x{}", size.0, size.1)])
         .arg("--record")
         .arg(video)
         .args(["--run-for", "1"])
@@ -45,24 +51,66 @@ fn record(dir: &Path, video: &Path) -> Option<String> {
         return None;
     }
     assert!(output.status.success(), "{}:\n{log}", output.status);
-    Some(log)
+    let written = |name| field(&log, "recording written", name);
+    Some(Written {
+        frames: written("frames"),
+        drawn: written("drawn"),
+        due: written("due"),
+    })
 }
 
 #[test]
-fn a_recording_is_whole_frames_as_many_as_the_server_wrote() {
+fn a_recording_is_whole_frames_as_many_as_its_time_comes_to() {
+    let size = (64, 48);
     let dir = tempfile::tempdir().unwrap();
     let video = dir.path().join("video.rgba");
-    let Some(log) = record(dir.path(), &video) else {
+    let Some(Written { frames, drawn, due }) = record(dir.path(), &video, size) else {
         return;
     };
-    let frames = field(&log, "recording written", "frames");
-    let drawn = field(&log, "recording written", "drawn");
     let length = std::fs::metadata(&video).unwrap().len();
-    assert_eq!(length, frames * SIZE.0 * SIZE.1 * 4);
+    assert_eq!(length, frames * size.0 * size.1 * 4);
+    assert_eq!(frames, due);
     assert!(
         frames >= drawn && drawn >= 1,
         "frames={frames} drawn={drawn}"
     );
+    assert!(frames >= 30, "{frames} frames for a second at 60 a second");
+}
+
+#[test]
+fn a_slow_encoder_gets_repeats_for_the_frames_not_drawn() {
+    // a frame of this size fills the writer's buffer, so the server waits on the reader
+    let size: (u64, u64) = (1280, 800);
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("frames");
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        &fifo,
+        rustix::fs::Mode::from_raw_mode(0o600),
+    )
+    .unwrap();
+    let path = fifo.clone();
+    // an encoder that takes 50 ms a frame, 20 a second
+    let encoder = std::thread::spawn(move || {
+        let mut file = std::fs::File::open(path).unwrap();
+        let mut frame = vec![0; (size.0 * size.1 * 4) as usize];
+        let mut read = 0;
+        loop {
+            match file.read_exact(&mut frame) {
+                Ok(()) => read += 1,
+                Err(e) if e.kind() == ErrorKind::UnexpectedEof => return read,
+                Err(e) => panic!("reading the frames: {e}"),
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    });
+    let Some(Written { frames, drawn, due }) = record(dir.path(), &fifo, size) else {
+        return;
+    };
+    assert_eq!(encoder.join().unwrap(), frames);
+    assert_eq!(frames, due);
+    assert!(drawn < frames, "frames={frames} drawn={drawn}");
+    assert!(frames >= 30, "{frames} frames for a second at 60 a second");
 }
 
 #[test]

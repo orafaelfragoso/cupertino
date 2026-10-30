@@ -1,7 +1,8 @@
 //! `--record`: the first output of the headless backend as raw RGBA frames, 60 per second of wall time, for a video
 //! encoder that reads the file (a FIFO, say). The clients animate on the wall clock, so the frames follow it too: frames
 //! that come due while the encoder still takes the previous ones are not drawn but written as repeats of the next image
-//! sent, and the number of frames always matches the time that passed.
+//! sent, those still due when the recording finishes as repeats of the last one, and the number of frames always matches
+//! the time that passed.
 
 use std::cell::RefCell;
 use std::fs::{File, OpenOptions};
@@ -30,19 +31,41 @@ const QUEUE: usize = 2;
 /// How long opening a FIFO waits for its reader (an encoder that failed to start never opens it).
 const READER_WAIT: Duration = Duration::from_secs(10);
 
-/// One drawn frame and how many video frames it stands for.
-type Frame = (Vec<u8>, u64);
+/// A drawn frame (`None`: the last one again) and how many video frames it stands for.
+type Frame = (Option<Vec<u8>>, u64);
 
-/// What a recording wrote: video frames, and how many of them were drawn rather than repeated.
+/// The timer's side of a recording, which [`Recorder::finish`] ends.
+struct Sending {
+    /// `None` once the recording finished.
+    send: Option<SyncSender<Frame>>,
+    /// The video frames that came due since `started`.
+    due: u64,
+    /// The video frames that came due since the last image sent.
+    unsent: u64,
+}
+
+impl Sending {
+    /// Count the video frames due `elapsed` after the start.
+    fn advance(&mut self, elapsed: Duration) {
+        let now = (elapsed.as_secs_f64() * FPS as f64) as u64 + 1;
+        self.unsent += now.saturating_sub(self.due);
+        self.due = self.due.max(now);
+    }
+}
+
+/// What a recording wrote: video frames, how many of them were drawn rather than repeated, and how many the time it
+/// ran comes to.
 #[derive(Debug, Clone, Copy)]
 pub struct Written {
     pub frames: u64,
     pub drawn: u64,
+    pub due: u64,
 }
 
-/// The running recording; [`Recorder::finish`] writes the frames still queued.
+/// The running recording; [`Recorder::finish`] writes the frames still queued and those still due.
 pub struct Recorder {
-    frames: Rc<RefCell<Option<SyncSender<Frame>>>>,
+    sending: Rc<RefCell<Sending>>,
+    started: Instant,
     writer: JoinHandle<Result<Written>>,
 }
 
@@ -95,42 +118,49 @@ pub fn start(
             let mut written = Written {
                 frames: 0,
                 drawn: 0,
+                due: 0,
             };
+            let mut last = None;
             for (image, repeats) in receive {
+                if image.is_some() {
+                    last = image;
+                    written.drawn += 1;
+                    written_out.fetch_sub(1, Ordering::AcqRel);
+                }
+                let Some(image) = &last else { continue };
                 for _ in 0..repeats {
-                    out.write_all(&image).context("writing a frame")?;
+                    out.write_all(image).context("writing a frame")?;
                 }
                 written.frames += repeats;
-                written.drawn += 1;
-                written_out.fetch_sub(1, Ordering::AcqRel);
             }
             out.flush().context("writing a frame")?;
             Ok(written)
         })
         .context("starting the recording thread")?;
-    let frames = Rc::new(RefCell::new(Some(send)));
-    let sender = frames.clone();
-    let mut due = 0;
-    let mut unsent = 0;
+    let sending = Rc::new(RefCell::new(Sending {
+        send: Some(send),
+        due: 0,
+        unsent: 0,
+    }));
+    let timer = sending.clone();
     let mut size = None;
     event_loop
         .handle()
         .insert_source(Timer::from_deadline(started), move |_, _, state| {
-            let Some(send) = sender.borrow().clone() else {
+            let mut sending = timer.borrow_mut();
+            let Some(send) = sending.send.clone() else {
                 return TimeoutAction::Drop;
             };
-            let now = (started.elapsed().as_secs_f64() * FPS as f64) as u64 + 1;
-            unsent += now - due;
-            due = now;
-            let next = started + Duration::from_secs_f64(due as f64 / FPS as f64);
+            sending.advance(started.elapsed());
+            let next = started + Duration::from_secs_f64(sending.due as f64 / FPS as f64);
             if queued.load(Ordering::Acquire) >= QUEUE {
                 return TimeoutAction::ToInstant(next);
             }
             match draw(state) {
                 Ok(image) if *size.get_or_insert(image.dimensions()) == image.dimensions() => {
                     queued.fetch_add(1, Ordering::AcqRel);
-                    match send.try_send((image.into_raw(), unsent)) {
-                        Ok(()) => unsent = 0,
+                    match send.try_send((Some(image.into_raw()), sending.unsent)) {
+                        Ok(()) => sending.unsent = 0,
                         Err(TrySendError::Full(_)) => {
                             queued.fetch_sub(1, Ordering::AcqRel);
                         }
@@ -151,7 +181,11 @@ pub fn start(
             TimeoutAction::ToInstant(next)
         })
         .map_err(|e| anyhow!("inserting the recording timer: {e}"))?;
-    Ok(Recorder { frames, writer })
+    Ok(Recorder {
+        sending,
+        started,
+        writer,
+    })
 }
 
 fn draw(state: &mut Cupertino) -> Result<image::RgbaImage> {
@@ -166,11 +200,20 @@ fn draw(state: &mut Cupertino) -> Result<image::RgbaImage> {
 }
 
 impl Recorder {
-    /// Stop taking frames and wait until the queued ones are written.
+    /// Stop taking frames, send the ones due since the last image as repeats of it and wait until all are written.
     pub fn finish(self) -> Result<Written> {
-        self.frames.borrow_mut().take();
-        self.writer
+        let mut sending = self.sending.borrow_mut();
+        if let Some(send) = sending.send.take() {
+            sending.advance(self.started.elapsed());
+            // a writer that ended has its error in the join below
+            let _ = send.send((None, sending.unsent));
+        }
+        let due = sending.due;
+        drop(sending);
+        let written = self
+            .writer
             .join()
-            .map_err(|_| anyhow!("the recording thread panicked"))?
+            .map_err(|_| anyhow!("the recording thread panicked"))??;
+        Ok(Written { due, ..written })
     }
 }

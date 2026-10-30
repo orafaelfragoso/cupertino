@@ -168,8 +168,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     }
 
     /// Draw every window with `theme` from now on. Text is measured and laid out again; focus and input-method
-    /// compositions stay.
+    /// compositions stay. A theme equal to the current one changes nothing.
     pub fn set_theme(&mut self, theme: Arc<ThemeTokens>) {
+        if *theme == *self.options.theme {
+            return;
+        }
         for w in &mut self.windows {
             w.env.theme = Arc::clone(&theme);
             w.invalidate();

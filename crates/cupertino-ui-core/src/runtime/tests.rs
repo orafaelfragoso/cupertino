@@ -1,12 +1,15 @@
 use super::*;
-use crate::test_support::Group;
+use crate::test_support::{group, Group};
 use crate::test_support::{
     leaf, options, options_with, row, FakeAdapter, FakeClock, FakeSystem, Leaf, MAX_PIXELS,
 };
 use crate::{
     Change, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Shortcut, Widget,
 };
-use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
+use cupertino_geometry::Rect;
+use cupertino_ui_layout::{
+    Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured, Overflow, SizeSpec,
+};
 use cupertino_ui_platform::{
     Configure, DecorationMode, Mods, MouseButton, PointerEvent, WindowStates, WmCapabilities,
 };
@@ -141,7 +144,7 @@ fn configure_at<A: Application>(
     rt.step(steps()).unwrap();
 }
 
-fn click(rt: &mut Rt, window: WindowId, x: f64) {
+fn click<A: Application>(rt: &mut Runtime<A, FakeSystem>, window: WindowId, x: f64) {
     for pressed in [true, false] {
         rt.window_system_mut().send(
             window,
@@ -1165,4 +1168,376 @@ fn arrows_move_the_focus_with_the_selection_in_a_roving_group_and_a_refused_one_
     );
     key(&mut rt, 0xff51);
     assert_eq!(focused(&rt), Some(3), "Previous wraps to the last");
+}
+
+/// A vertical scroll container whose offset is the model's; it reports its geometry and reveals as messages.
+struct Pane {
+    name: &'static str,
+    height: SizeSpec,
+    offset: f64,
+    content: Option<Element<String>>,
+}
+
+impl Widget<String> for Pane {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            height: self.height,
+            overflow: Overflow::Clip,
+            ..LayoutSpec::new(ContainerKind::Scroll {
+                horizontal: false,
+                vertical: true,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<String>> {
+        self.content.take().into_iter().collect()
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::Layout
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, String>) -> Propagation {
+        match event {
+            Event::ScrollGeometry { viewport, content } => cx.emit(format!(
+                "geometry:{}:{}:{}",
+                self.name, viewport.height, content.height
+            )),
+            Event::Reveal(offset) => cx.emit(format!("reveal:{}:{}", self.name, offset.y)),
+            _ => return Propagation::Continue,
+        }
+        Propagation::Stop
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.focus_fallback();
+    }
+
+    fn scroll_offset(&self, _: &()) -> Point {
+        Point::new(0.0, self.offset)
+    }
+}
+
+/// A block of a fixed height that a click focuses. An item of a roving group asks End to focus the item keyed `end`.
+struct Block {
+    height: f64,
+    focusable: bool,
+    end: Option<u64>,
+}
+
+fn block(height: f64, focusable: bool) -> Element<String> {
+    Element::new(Block {
+        height,
+        focusable,
+        end: None,
+    })
+}
+
+impl Widget<String> for Block {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(50.0),
+            height: SizeSpec::Fixed(self.height),
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(50.0, self.height),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, String>) -> Propagation {
+        match event {
+            Event::Pointer(PointerEvent::Button { pressed: true, .. }, _) if self.focusable => {
+                cx.request_focus();
+            }
+            Event::Key(key, _) if key.pressed && key.keysym.0 == 0xff57 => {
+                let Some(end) = self.end else {
+                    return Propagation::Continue;
+                };
+                cx.emit(format!("cursor:{end}"));
+                cx.focus_item(FocusTarget::Key(Key::Int(end)));
+            }
+            _ => return Propagation::Continue,
+        }
+        Propagation::Stop
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        if self.focusable {
+            cx.role(Role::Button);
+            cx.focusable();
+        }
+        if self.end.is_some() {
+            cx.roving_item();
+        }
+    }
+}
+
+fn column(children: Vec<Element<String>>) -> Element<String> {
+    struct Column(Vec<Element<String>>);
+    impl Widget<String> for Column {
+        type State = ();
+        fn layout(&self) -> LayoutSpec {
+            LayoutSpec::new(ContainerKind::Stack {
+                axis: Axis::Vertical,
+                spacing: 0.0,
+                align: Align::Start,
+                justify: Justify::Start,
+            })
+        }
+        fn take_children(&mut self) -> Vec<Element<String>> {
+            std::mem::take(&mut self.0)
+        }
+        fn state(&self) {}
+        fn update(&self, _: &Self, _: &mut ()) -> Change {
+            Change::Layout
+        }
+        fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+            Measured {
+                size: Size::new(0.0, 0.0),
+                baseline: None,
+            }
+        }
+        fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, String>) -> Propagation {
+            Propagation::Continue
+        }
+        fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+        fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+    }
+    Element::new(Column(children))
+}
+
+/// An outer pane as tall as the window, scrolled 20 down: a focusable top block (30), a gap (200), an inner pane 40 tall around a
+/// hidden field (100 + 20), one row of 20 per 20 of the outer viewport the model heard, and a roving list that builds
+/// only its cursor item.
+struct Scrolling;
+
+struct Panes {
+    outer: f64,
+    inner: f64,
+    viewport: f64,
+    cursor: u64,
+    heard: Vec<String>,
+}
+
+impl Application for Scrolling {
+    type Model = Panes;
+    type Message = String;
+
+    fn init() -> (Panes, Vec<Command<String>>) {
+        (
+            Panes {
+                outer: 20.0,
+                inner: 0.0,
+                viewport: 0.0,
+                cursor: 0,
+                heard: Vec::new(),
+            },
+            Vec::new(),
+        )
+    }
+
+    fn update(model: &mut Panes, message: String) -> Vec<Command<String>> {
+        let parts: Vec<&str> = message.split(':').collect();
+        match parts[..] {
+            ["geometry", name, viewport, content] => {
+                if name == "outer" {
+                    model.viewport = viewport.parse().unwrap();
+                }
+                model.heard.push(format!("{name}:{viewport}:{content}"));
+            }
+            ["reveal", "outer", y] => model.outer = y.parse().unwrap(),
+            ["reveal", "inner", y] => model.inner = y.parse().unwrap(),
+            ["cursor", i] => model.cursor = i.parse().unwrap(),
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    fn view(model: &Panes) -> Vec<Window<String>> {
+        let rows = (0..(model.viewport / 20.0) as usize).map(|_| block(20.0, false));
+        let list = Element::new(Group {
+            roving: true,
+            ..group(vec![Element::new(Block {
+                height: 20.0,
+                focusable: true,
+                end: Some(9),
+            })
+            .key(Key::Int(model.cursor))])
+        });
+        let content = column(
+            [
+                block(30.0, true).key("top"),
+                block(200.0, false),
+                Element::new(Pane {
+                    name: "inner",
+                    height: SizeSpec::Fixed(40.0),
+                    offset: model.inner,
+                    content: Some(column(vec![
+                        block(100.0, false),
+                        block(20.0, true).key("field"),
+                    ])),
+                }),
+            ]
+            .into_iter()
+            .chain(rows)
+            .chain([list])
+            .collect(),
+        );
+        vec![Window {
+            key: WindowKey("main".into()),
+            spec: WindowSpec {
+                title: "Scrolling".into(),
+                app_id: "test.scrolling".into(),
+                size: Size::new(200.0, 100.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Preferred,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            background: WindowBackground::Theme,
+            content: Element::new(Pane {
+                name: "outer",
+                height: SizeSpec::Fill,
+                offset: model.outer,
+                content: Some(content),
+            }),
+        }]
+    }
+}
+
+fn scrolling_at(height: f64) -> (Runtime<Scrolling, FakeSystem>, WindowId) {
+    let damage = Rc::default();
+    let mut rt = Runtime::<Scrolling, FakeSystem>::new(FakeSystem::default(), options(&damage));
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(200.0, height));
+    (rt, window)
+}
+
+fn scrolling() -> (Runtime<Scrolling, FakeSystem>, WindowId) {
+    scrolling_at(100.0)
+}
+
+fn press(rt: &mut Runtime<Scrolling, FakeSystem>, window: WindowId, keysym: u32) {
+    rt.window_system_mut().send(
+        window,
+        WindowEvent::Key(
+            KeyEvent {
+                code: 0,
+                keysym: Keysym(keysym),
+                text: None,
+                pressed: true,
+                repeat: false,
+                mods: Mods::NONE,
+            },
+            Timestamp(0),
+        ),
+    );
+    rt.step(steps()).unwrap();
+}
+
+fn rect_of(rt: &Runtime<Scrolling, FakeSystem>, window: WindowId, key: &'static str) -> Rect {
+    let node = rt.find(window, &key.into()).unwrap();
+    let snapshot = rt.snapshot(window).unwrap();
+    snapshot.nodes.iter().find(|n| n.id == node).unwrap().rect
+}
+
+#[test]
+fn the_model_hears_a_scroll_geometry_before_the_first_frame_paints() {
+    let (rt, window) = scrolling_at(150.0);
+    assert_eq!(
+        rt.model().heard,
+        [
+            "outer:100:290",
+            "inner:40:120",
+            "outer:100:390",
+            "outer:150:390",
+            "outer:150:430"
+        ],
+        "the configured size, then the rows for it, reach the model"
+    );
+    assert_eq!(
+        rt.window_system()
+            .presented
+            .iter()
+            .filter(|(w, _)| *w == window)
+            .count(),
+        1,
+        "only the frame with the rows for the viewport paints"
+    );
+    assert_eq!(
+        rt.snapshot(window).unwrap().pending.frames,
+        0,
+        "and nothing waits to paint after it"
+    );
+}
+
+#[test]
+fn keyboard_focus_reveals_a_node_through_nested_panes_and_a_click_does_not() {
+    let (mut rt, window) = scrolling();
+    click(&mut rt, window, 10.0);
+    assert_eq!(
+        rt.snapshot(window).unwrap().focus,
+        rt.find(window, &"top".into())
+    );
+    assert_eq!(
+        rt.model().outer,
+        20.0,
+        "a click scrolls nothing under the pointer"
+    );
+
+    press(&mut rt, window, 0xff09);
+    assert_eq!(
+        rt.snapshot(window).unwrap().focus,
+        rt.find(window, &"field".into())
+    );
+    // the inner pane moves the field to its bottom edge; the outer pane shows the inner viewport's part of it
+    assert_eq!((rt.model().inner, rt.model().outer), (80.0, 170.0));
+    assert_eq!(rect_of(&rt, window, "field").origin.y, 80.0);
+}
+
+#[test]
+fn a_roving_move_to_a_key_focuses_the_item_the_new_view_builds() {
+    let (mut rt, window) = scrolling();
+    for _ in 0..3 {
+        press(&mut rt, window, 0xff09);
+    }
+    let first = rt.find(window, &Key::Int(0)).unwrap();
+    assert_eq!(rt.snapshot(window).unwrap().focus, Some(first));
+    press(&mut rt, window, 0xff57);
+    assert_eq!(rt.model().cursor, 9);
+    let end = rt.find(window, &Key::Int(9));
+    assert!(end.is_some());
+    assert_eq!(rt.snapshot(window).unwrap().focus, end);
 }

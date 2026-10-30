@@ -70,6 +70,13 @@ pub struct App {
     pub activated_at: Option<f64>,
 }
 
+/// The controls an application disabled on its own window (`cupertino_app_effects_v1.set_disabled_controls`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DisabledControls {
+    pub minimize: bool,
+    pub zoom: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct Window {
     pub id: WindowId,
@@ -87,9 +94,20 @@ pub struct Window {
     pub(crate) sticky_from_app: bool,
     pub level: WindowLevel,
     pub lifecycle: Lifecycle,
+    pub disabled: DisabledControls,
 }
 
 impl Window {
+    /// Whether the window may be minimized: its application did not disable it.
+    pub fn can_minimize(&self) -> bool {
+        !self.disabled.minimize
+    }
+
+    /// Whether the window may zoom: its client does not fix its size (minimum equal to maximum) and did not disable it.
+    pub fn can_zoom(&self) -> bool {
+        !self.disabled.zoom && self.min_size.zip(self.max_size).is_none_or(|(a, b)| a != b)
+    }
+
     /// Logical frame the client is configured to (the model's notion of "geometry").
     pub fn geometry(&self) -> Rect {
         self.lifecycle.target_frame()

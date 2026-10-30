@@ -22,7 +22,7 @@ shadow, minimize progress).
 | `zoom` | best-fit sizing from min/max size, content hint and usable area |
 | `tiling` | tile kinds, hot zones, tile rectangles with optional margins |
 | `wm` | `Wm`: owns apps, windows, outputs, focus, workspaces and the pointer interaction state |
-| `window` | `App`, `Window`, `WindowLevel`, `Assignment` |
+| `window` | `App`, `Window`, `WindowLevel`, `Assignment`, `DisabledControls` (the controls an application disabled on its window: `Window::can_minimize` and `can_zoom`, which also needs a size that is not fixed; `minimize_window` and the zoom leg of `toggle_zoom` refuse them for every caller, while an unzoom, a restore and Hide still work) |
 | `menu_bar` | menu bar presentation per output: dimming, auto-hide with a reveal dwell, the area the bar reserves (the menu bar process draws the content) |
 | `command`, `config` | `Command` in, `Effect` out; every tunable value, with its evidence label |
 

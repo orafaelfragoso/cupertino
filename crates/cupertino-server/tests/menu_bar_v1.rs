@@ -13,7 +13,9 @@ use std::time::{Duration, Instant};
 
 use cupertino_defaults::compositor::CompositorSettings;
 use cupertino_defaults::keyboard::{KeyboardSettings, ModifierProfile};
-use cupertino_protocols::client::app_effects::cupertino_app_effects_v1::CupertinoAppEffectsV1;
+use cupertino_protocols::client::app_effects::cupertino_app_effects_v1::{
+    CupertinoAppEffectsV1, WindowControl,
+};
 use cupertino_protocols::client::app_effects::cupertino_app_menu_v1::{self, CupertinoAppMenuV1};
 use cupertino_protocols::client::cupertino_dock_v1::{self, CupertinoDockV1};
 use cupertino_protocols::client::cupertino_menu_bar_v1::{
@@ -254,6 +256,8 @@ enum BarEvent {
         workspace: u32,
         workspaces: u32,
     },
+    /// Version 15: the enabled controls of the active window.
+    WindowControls(u32),
     Engage,
     EngageHelp,
     ScreenCapture(u32),
@@ -454,6 +458,7 @@ impl Dispatch<CupertinoMenuBarV1, ()> for ClientState {
                 workspace,
                 workspaces,
             },
+            E::WindowControls { enabled } => BarEvent::WindowControls(raw(enabled)),
             E::Engage => BarEvent::Engage,
             E::EngageHelp => BarEvent::EngageHelp,
             E::ScreenCapture { active } => BarEvent::ScreenCapture(active),
@@ -629,6 +634,8 @@ enum Cmd {
     /// Announce the exported menus of an application window: bus name, then the application, window, menu bar and
     /// application menu object paths.
     AnnounceMenu([&'static str; 5]),
+    /// `cupertino_app_effects_v1.set_disabled_controls` (version 4) on the application window, and a commit.
+    DisableControls(WindowControl),
     /// Ask for exclusive keyboard interactivity (true) or none (false), and commit.
     SetKeyboard(bool),
     /// Choose a row of the window list.
@@ -867,7 +874,8 @@ impl BarClient {
                 | Cmd::SetSecondAddress(..)
                 | Cmd::SetTitle(_)
                 | Cmd::CloseSecondWindow
-                | Cmd::AnnounceMenu(..) => {
+                | Cmd::AnnounceMenu(..)
+                | Cmd::DisableControls(..) => {
                     panic!("a menu bar has no application windows")
                 }
                 Cmd::SetKeyboard(exclusive) => {
@@ -1239,6 +1247,7 @@ impl KitAppClient {
             toplevel.set_title(format!("{app_id} window"));
             let menu = effects.get_menu(&surface, qh, ());
             surface.commit();
+            let window = surface.clone();
             let state = ClientState {
                 status: status.clone(),
                 shm,
@@ -1247,6 +1256,10 @@ impl KitAppClient {
                 toplevel_size: (300, 200),
             };
             let apply = Box::new(move |cmd: Cmd| match cmd {
+                Cmd::DisableControls(controls) => {
+                    effects.set_disabled_controls(&window, controls);
+                    window.commit();
+                }
                 Cmd::AnnounceMenu([bus, app, window, menubar, app_menu]) => menu.set_address(
                     bus.into(),
                     app.into(),
@@ -1283,6 +1296,47 @@ impl KitAppClient {
 }
 
 // ---- tests ---------------------------------------------------------------------------------
+
+/// The `window_controls` of the latest group that has one.
+fn window_controls(bar: &BarClient) -> Option<u32> {
+    bar.groups().iter().rev().flatten().find_map(|e| match e {
+        BarEvent::WindowControls(enabled) => Some(*enabled),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_version_15_bar_follows_the_controls_the_active_window_disables_and_the_model_refuses_them() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_at(&mut h, 15);
+    let app = KitAppClient::spawn_at(h.socket_path(), "org.example.about", 4);
+    let id = h.mapped_window(1);
+    let both = (WindowControl::Minimize | WindowControl::Zoom).bits();
+    h.wait_until("the controls of the window", |_| {
+        window_controls(&bar) == Some(both)
+    });
+
+    app.send(Cmd::DisableControls(WindowControl::Minimize));
+    h.wait_until("minimize to be disabled", |_| {
+        window_controls(&bar) == Some(WindowControl::Zoom.bits())
+    });
+    assert!(!h.state.wm.window(id).unwrap().can_minimize());
+    bar.send(Cmd::WindowCommand(BarCommand::Minimize));
+    for _ in 0..20 {
+        h.step();
+    }
+    assert!(
+        !h.state.wm.window(id).unwrap().state().is_minimized(),
+        "the Window menu's Minimize is refused"
+    );
+
+    app.send(Cmd::DisableControls(WindowControl::empty()));
+    h.wait_until("minimize to be enabled again", |_| {
+        window_controls(&bar) == Some(both)
+    });
+    assert_eq!(app.error(), None);
+    assert_eq!(bar.error(), None);
+}
 
 /// The group sent while no window is active.
 fn empty_group() -> Vec<BarEvent> {

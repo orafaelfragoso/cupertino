@@ -9,6 +9,7 @@ mod icon;
 mod look;
 mod press;
 mod progress;
+mod scroll;
 mod slider;
 mod stack;
 mod text;
@@ -16,11 +17,12 @@ mod toggle;
 
 pub use field::{FieldState, SecureState};
 pub use press::Press;
+pub use scroll::{BarState, ViewportState};
 pub use slider::SliderState;
 
 use cupertino_geometry::Insets;
 use cupertino_ui_core::{Checked, Element};
-use cupertino_ui_layout::{Align, Axis};
+use cupertino_ui_layout::{Align, Axis, ScrollState};
 use cupertino_ui_text::{AttributedText, ContentPurpose, SecureBuffer};
 use cupertino_ui_theme::ColorRole;
 
@@ -55,6 +57,10 @@ pub struct Text {
     pub content: AttributedText,
     pub role: TextRole,
     pub wrap: bool,
+    /// Drawn in the secondary text colour, as a list row's second line.
+    pub secondary: bool,
+    /// On a selected row: drawn in the selected control text colour, whatever `secondary` says.
+    pub selected: bool,
 }
 
 /// Whether an icon's artwork mirrors in right-to-left layouts.
@@ -214,6 +220,28 @@ pub struct Stack<M> {
     pub spacing: f64,
     pub align: Align,
     pub children: Vec<Element<M>>,
+}
+
+/// How a scroll view shows where it is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Scroller {
+    /// Thin thumbs over the content that show while it moves and fade a second after.
+    #[default]
+    Overlay,
+    /// Tracks beside the content, always shown, that a click pages and a drag moves.
+    Always,
+}
+
+/// Content larger than its frame, clipped and moved by `state.offset`, which the model keeps: the view reports its
+/// size and every move through `on_scroll`. It is a Tab stop only when nothing in it is; keys from a focused child
+/// that the child does not use scroll it. Build its element with `Element::from`.
+pub struct ScrollView<M> {
+    pub content: Element<M>,
+    pub state: ScrollState,
+    pub horizontal: bool,
+    pub vertical: bool,
+    pub scroller: Scroller,
+    pub on_scroll: Handler<ScrollState, M>,
 }
 
 /// Flexible empty space in a stack.

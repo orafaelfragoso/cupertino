@@ -123,6 +123,15 @@ pub fn theme() -> ThemeTokens {
             }
         }
     }
+    // translucent, as the real thumbs are, so a test can read the fade from its alpha
+    for interaction in [Normal, Hover, Pressed, Disabled] {
+        for selected in [false, true] {
+            entries.push((
+                (ScrollerThumb, state(interaction, selected)),
+                gray(128).with_alpha(0.5),
+            ));
+        }
+    }
     ThemeTokens {
         preferences: ThemePreferences {
             appearance: Appearance::Light,

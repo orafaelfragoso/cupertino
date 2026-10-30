@@ -22,8 +22,14 @@ use crate::Error;
 
 /// The size in pixels at scale 1 when `XCURSOR_SIZE` doesn't say.
 const DEFAULT_SIZE: u32 = 24;
-/// The largest side the XCursor format allows.
-const MAX_SIDE: u32 = 0x7fff;
+/// The largest side of a cursor image drawn; themes ship 256 at most.
+const MAX_SIDE: u32 = 1024;
+/// The type of an image entry of an XCursor file.
+const XCURSOR_IMAGE: u32 = 0xfffd_0002;
+/// The lengths of an XCursor file's header, of an entry of its table of contents and of an image chunk's header.
+const HEADER: usize = 16;
+const TOC_ENTRY: usize = 12;
+const IMAGE_HEADER: usize = 36;
 
 /// Where the cursors a client draws itself come from: a theme, found by name in the directories of `search_path` with
 /// the themes it inherits from (`index.theme`), at a nominal `size` in pixels at scale 1.
@@ -223,13 +229,9 @@ impl ThemedCursor {
             .ok_or(Error::Protocol("the cursor theme has no default cursor"))?;
         let images = std::fs::read(&file)
             .ok()
-            .and_then(|bytes| parse_xcursor(&bytes))
+            .and_then(|bytes| images(&bytes))
             .ok_or(Error::Protocol("a cursor file that is not an XCursor file"))?;
-        let wanted = theme.size.saturating_mul(scale);
-        let image = images
-            .iter()
-            .filter(|i| (1..=MAX_SIDE).contains(&i.width) && (1..=MAX_SIDE).contains(&i.height))
-            .min_by_key(|i| i.size.abs_diff(wanted))
+        let image = nearest(&images, theme.size.saturating_mul(scale))
             .ok_or(Error::Protocol("a cursor file without an image"))?;
         Ok(Loaded {
             buffer: upload(&self.shm, qh, image)?,
@@ -239,9 +241,56 @@ impl ThemedCursor {
     }
 }
 
+/// Whether the table of contents and every image an XCursor file declares lie within the file. The parser sizes an
+/// image's allocation from its declared sides before it reads the pixels, so a short file could ask for gigabytes.
+fn holds_its_images(bytes: &[u8]) -> bool {
+    let word = |at: usize| -> Option<usize> {
+        let b = bytes.get(at..at.checked_add(4)?)?;
+        usize::try_from(u32::from_le_bytes(b.try_into().ok()?)).ok()
+    };
+    let (Some(header), Some(count)) = (word(4), word(12)) else {
+        return false;
+    };
+    if !bytes.starts_with(b"Xcur") || header < HEADER {
+        return false;
+    }
+    let fits =
+        |start: usize, len: usize| start.checked_add(len).is_some_and(|end| end <= bytes.len());
+    (0..count).all(|i| {
+        let entry = header + i * TOC_ENTRY;
+        let (Some(kind), Some(at)) = (word(entry), word(entry + 8)) else {
+            return false;
+        };
+        if kind != XCURSOR_IMAGE as usize {
+            return true;
+        }
+        let pixels = word(at + 16)
+            .zip(word(at + 20))
+            .and_then(|(w, h)| w.checked_mul(h)?.checked_mul(4));
+        pixels.is_some_and(|len| fits(at + IMAGE_HEADER, len))
+    })
+}
+
+/// The images of an XCursor file; `None` for a file that is not one or does not hold what it declares.
+fn images(bytes: &[u8]) -> Option<Vec<Image>> {
+    holds_its_images(bytes)
+        .then(|| parse_xcursor(bytes))
+        .flatten()
+}
+
+/// The image of `images` no wider or taller than [`MAX_SIDE`] whose nominal size is nearest to `wanted`.
+fn nearest(images: &[Image], wanted: u32) -> Option<&Image> {
+    images
+        .iter()
+        .filter(|i| (1..=MAX_SIDE).contains(&i.width) && (1..=MAX_SIDE).contains(&i.height))
+        .min_by_key(|i| i.size.abs_diff(wanted))
+}
+
 /// A buffer holding `image`. XCursor pixels are little-endian ARGB, the byte order of `wl_shm`'s `argb8888`.
 fn upload(shm: &WlShm, qh: &QueueHandle<State>, image: &Image) -> Result<WlBuffer, Error> {
     let len = (image.width * image.height * 4) as usize;
+    let pool_len =
+        i32::try_from(len).map_err(|_| Error::Protocol("a cursor image too large to share"))?;
     let pixels = image
         .pixels_rgba
         .get(..len)
@@ -250,7 +299,7 @@ fn upload(shm: &WlShm, qh: &QueueHandle<State>, image: &Image) -> Result<WlBuffe
         memfd_create("cupertino-cursor", MemfdFlags::CLOEXEC).map_err(|e| Error::Io(e.into()))?,
     );
     file.write_all(pixels).map_err(Error::Io)?;
-    let pool = shm.create_pool(file.as_fd(), len as i32, qh, ());
+    let pool = shm.create_pool(file.as_fd(), pool_len, qh, ());
     let buffer = pool.create_buffer(
         0,
         image.width as i32,
@@ -304,5 +353,67 @@ fn names(shape: Shape) -> &'static [&'static str] {
         Shape::DndAsk => &["dnd-ask", "copy"],
         Shape::AllResize => &["all-resize", "fleur"],
         _ => &[],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An XCursor file whose images, `(nominal size, width, height)`, declare their sides but carry `pixels` bytes
+    /// each.
+    fn file(images: &[(u32, u32, u32)], pixels: usize) -> Vec<u8> {
+        let mut out = b"Xcur".to_vec();
+        let words =
+            |out: &mut Vec<u8>, ws: &[u32]| ws.iter().for_each(|w| out.extend(w.to_le_bytes()));
+        words(&mut out, &[16, 0x1_0000, images.len() as u32]);
+        let chunk = IMAGE_HEADER + pixels;
+        for (i, (size, _, _)) in images.iter().enumerate() {
+            let at = HEADER + TOC_ENTRY * images.len() + chunk * i;
+            words(&mut out, &[XCURSOR_IMAGE, *size, at as u32]);
+        }
+        for (size, width, height) in images {
+            words(
+                &mut out,
+                &[36, XCURSOR_IMAGE, *size, 1, *width, *height, 0, 0, 0],
+            );
+            out.extend(std::iter::repeat_n(0xff, pixels));
+        }
+        out
+    }
+
+    #[test]
+    fn a_file_holding_what_it_declares_is_read() {
+        let bytes = file(&[(24, 24, 24), (24, 24, 24)], 24 * 24 * 4);
+        assert!(holds_its_images(&bytes));
+        assert_eq!(parse_xcursor(&bytes).map(|i| i.len()), Some(2));
+    }
+
+    #[test]
+    fn an_image_larger_than_the_file_is_refused_before_parsing() {
+        // 30000 × 30000 declared, 16 pixels present: the parser alone would ask for 3.6 GB before finding the file short
+        assert!(images(&file(&[(24, 30_000, 30_000)], 64)).is_none());
+        assert!(!holds_its_images(&file(&[(24, 4096, 4096)], 64)));
+        assert!(!holds_its_images(&file(&[(24, 4, 5)], 4 * 4 * 4)));
+    }
+
+    #[test]
+    fn a_table_of_contents_longer_than_the_file_is_refused() {
+        let mut bytes = file(&[(24, 4, 4)], 64);
+        bytes[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(images(&bytes).is_none());
+        assert!(!holds_its_images(b"Xcur"));
+        assert!(!holds_its_images(b"Xcuz\x10\0\0\0\0\0\x01\0\0\0\0\0"));
+    }
+
+    #[test]
+    fn an_image_wider_or_taller_than_the_largest_cursor_is_never_drawn() {
+        let side = MAX_SIDE + 1;
+        let bytes = file(&[(48, side, 4), (24, 24, 24)], (side * 4 * 4) as usize);
+        let images = parse_xcursor(&bytes).expect("a well-formed file");
+        let chosen = nearest(&images, 48).expect("the small image");
+        assert_eq!((chosen.width, chosen.height), (24, 24));
+        let images = parse_xcursor(&file(&[(48, 4, side)], (side * 4 * 4) as usize)).unwrap();
+        assert!(nearest(&images, 48).is_none());
     }
 }

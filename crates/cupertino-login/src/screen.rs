@@ -56,10 +56,10 @@ pub fn display_unix_seconds() -> Result<i64> {
 /// What a frame shows that changes without the state machine's say: when this differs from the last frame, redraw.
 #[derive(PartialEq)]
 pub struct FrameKey {
-    time: String,
+    pub(crate) time: String,
     field: FieldKey,
     notice: Option<String>,
-    caps_lock: bool,
+    pub(crate) caps_lock: bool,
     spinner: Option<u32>,
     help: bool,
     /// The row selected in the open power menu.

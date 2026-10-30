@@ -7,6 +7,7 @@
 use crate::options::SessionOptions;
 use crate::screen::{self, FrameKey, Notifier, OutputSurface, Result, Scene};
 use cupertino_assets::Assets;
+use cupertino_login::access::{lock_tree, LockView};
 use cupertino_login::auth::{self, Authenticator};
 use cupertino_login::autostart;
 use cupertino_login::capabilities::{Answer, Capabilities, Inputs};
@@ -23,7 +24,7 @@ use cupertino_login::model::{
 use cupertino_login::panel::{Action, Decision, Frames, Kind, Panel};
 use cupertino_login::power_button::{Effect, PowerButton};
 use cupertino_login::probe;
-use cupertino_login::render::{PanelView, Renderer};
+use cupertino_login::render::{PanelView, Renderer, PASSWORD_HELP};
 use cupertino_login::user::User;
 use cupertino_login::{session, upower};
 use cupertino_shell_client::{
@@ -32,12 +33,17 @@ use cupertino_shell_client::{
     SessionState, Shell, ShellEvent,
 };
 use cupertino_theme::Theme;
+use cupertino_ui_atspi::AtspiAdapter;
+use cupertino_ui_core::AccessibilityAdapter;
+use cupertino_ui_platform::WindowId;
 use cupertino_ui_wayland::{Ready, ShmPresenter};
 use cupertino_wayland_client::{
     Button, Connection, Event, KeyboardEvent, Modifiers, PointerEvent, SurfaceId,
 };
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
+use std::task::{Wake, Waker};
 use std::time::{Duration, Instant};
 
 /// What the bus and authentication threads tell the loop.
@@ -155,6 +161,10 @@ struct App {
     low_battery: LowBattery,
     /// The session bus, for the notifications and the server's `org.cupertino.Session1`.
     session_bus: zbus::blocking::Connection,
+    /// Assistive technology's view of the lock screen.
+    access: AtspiAdapter,
+    /// An assistive technology was listening at the last housekeeping.
+    access_active: bool,
 }
 
 /// Why [`run`] returned without a failure.
@@ -178,6 +188,7 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     let idle_notifier = IdleNotifier::bind(&mut conn);
     let (sender, messages) = mpsc::channel();
     let notifier = Notifier::new(sender, conn.waker());
+    let access = AtspiAdapter::new(Waker::from(Arc::new(WakeLoop(conn.waker()))));
 
     let request_notifier = notifier.clone();
     // `RefreshCapabilities` goes to the probe thread, not through the loop: the menu's question must not wait for it
@@ -314,6 +325,8 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
         retries_until_hint: options.retries_until_hint,
         low_battery: LowBattery::new(),
         session_bus,
+        access,
+        access_active: false,
     };
     for event in early {
         app.handle(event)?;
@@ -326,6 +339,19 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
             app.handle(event)?;
         }
         app.housekeeping()?;
+    }
+}
+
+/// Wakes the login loop from assistive technology's thread.
+struct WakeLoop(cupertino_wayland_client::Waker);
+
+impl Wake for WakeLoop {
+    fn wake(self: Arc<Self>) {
+        self.0.wake();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.wake();
     }
 }
 
@@ -703,6 +729,7 @@ impl App {
     /// Carry out the queued requests, follow the lock and the screen's timers, and redraw what changed.
     fn housekeeping(&mut self) -> Result<()> {
         let now = self.now();
+        self.follow_access();
         while let Ok(message) = self.messages.try_recv() {
             match message {
                 Message::Lock { explicit } => self.request_lock(now, explicit)?,
@@ -966,6 +993,7 @@ impl App {
                 .help_shown(&self.user.login, self.retries_until_hint),
             power: None,
         };
+        let scene_help = scene.help;
         let key = FrameKey::new(&scene, now)?;
         screen::draw(
             &mut self.conn,
@@ -975,8 +1003,57 @@ impl App {
             Some(&self.user),
             None,
         )?;
-        lock.drawn = Some(key);
+        self.publish_lock(i, &key, scene_help);
+        if let Some(lock) = self.lock.as_mut() {
+            lock.drawn = Some(key);
+        }
         Ok(())
+    }
+
+    /// Draw the lock screen again when assistive technology starts listening, so it gets the whole screen, and drop what
+    /// it asks: the only action offered, focus on the already focused field, needs nothing done.
+    fn follow_access(&mut self) {
+        let active = self.access.is_active();
+        if active && !self.access_active {
+            if let Some(lock) = self.lock.as_mut() {
+                lock.drawn = None;
+            }
+        }
+        self.access_active = active;
+        self.access.drain_actions(&mut Vec::new());
+    }
+
+    /// Tell assistive technology what lock surface `i` shows now, while one listens.
+    fn publish_lock(&mut self, i: usize, key: &FrameKey, help: bool) {
+        let Some(lock) = &self.lock else {
+            return;
+        };
+        if !self.access.is_active() {
+            return;
+        }
+        let surface = &lock.surfaces[i];
+        let Some((width, height)) = surface.presenter.size() else {
+            return;
+        };
+        let (width, height) = (f64::from(width), f64::from(height));
+        let layout = self.renderer.layout(width, height);
+        let window = WindowId(surface.output.registry_name());
+        let tree = lock_tree(
+            window,
+            &LockView {
+                screen: &lock.screen,
+                layout: &layout,
+                size: (width, height),
+                user_name: &self.user.display,
+                time: &key.time,
+                date: None,
+                caps_lock: key.caps_lock,
+                help: help.then_some(PASSWORD_HELP),
+                power: false,
+            },
+        );
+        self.access.window_focus(window, i == 0);
+        self.access.update(&tree);
     }
 
     /// End the lock after an accepted attempt and hold sleep back again.

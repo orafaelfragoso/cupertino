@@ -1200,6 +1200,7 @@ dependencies = [
  "cupertino-shell-client",
  "cupertino-test-bus",
  "cupertino-theme",
+ "cupertino-ui-atspi",
  "cupertino-ui-core",
  "cupertino-ui-platform",
  "cupertino-ui-wayland",

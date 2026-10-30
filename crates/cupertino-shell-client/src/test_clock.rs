@@ -1,6 +1,6 @@
 //! The clock the shell processes show, which a debug build lets a test fix: with `CUPERTINO_TEST_CLOCK` set to a decimal
-//! number of Unix seconds, [`display_unix_seconds`] returns it and [`display_now`] stays at the process's first reading,
-//! so a scene settles (the goldens). Only for what is drawn: never for authentication, back-off, locks or IPC deadlines.
+//! number of Unix seconds, [`display_unix_seconds`] returns it, [`display_now`] stays at the process's first reading and
+//! [`motion_settled`] is true, so a scene settles (the goldens). Only for what is drawn: never for authentication, back-off, locks or IPC deadlines.
 //! The override exists only with `debug_assertions`, which every release profile turns off: a packaged binary neither
 //! reads the variable nor contains its name (the release build checks that with `strings`).
 
@@ -22,6 +22,19 @@ pub fn display_now() -> Instant {
         return frozen;
     }
     Instant::now()
+}
+
+/// Whether an opening animation starts at its end (the clock is fixed for a test). Only for where an animation starts,
+/// never for its formula or timing, and never for timers, hides or countdowns.
+pub fn motion_settled() -> bool {
+    #[cfg(debug_assertions)]
+    {
+        fixed::seconds().is_some()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        false
+    }
 }
 
 #[cfg(debug_assertions)]

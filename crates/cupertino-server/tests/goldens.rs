@@ -27,12 +27,15 @@ use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use smithay::backend::input::InputEvent;
 use smithay::backend::renderer::gles::ffi;
+use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::desktop::layer_map_for_output;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
+use smithay::wayland::compositor::{
+    with_surface_tree_downward, SurfaceAttributes, TraversalAction,
+};
 
 const SIZE: (i32, i32) = (1000, 700);
-const SETTLED: Duration = Duration::from_millis(750);
 // Permit rounding by the GLES implementation, without permitting any displaced pixels.
 // Only Mesa's EGL vendor is visible, and it is forced to its software rasteriser, so no host GPU takes part.
 const MESA_EGL_VENDOR: &str = "/usr/share/glvnd/egl_vendor.d/50_mesa.json";
@@ -127,23 +130,51 @@ impl Scene {
         }
     }
 
-    /// Shell processes animate on their own clocks, so a process scene is compared once its pixels have not changed for
-    /// [`SETTLED`] of real time; the server's model clock stays pinned.
+    /// Pump until the scene is idle: two captures ten steps apart are equal and no shell surface waits for a frame. The
+    /// shell processes' display clocks stand still ([`common::shell::TEST_CLOCK`]) and the server's model clock is
+    /// pinned, so nothing changes by itself after that; real time bounds the wait only as a deadline.
     fn settle(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(60);
         let mut last = (self.structure(), self.image());
-        let mut since = Instant::now();
-        while since.elapsed() < SETTLED {
+        loop {
             assert!(Instant::now() < deadline, "scene never settled");
             for _ in 0..10 {
                 self.pump();
             }
             let current = (self.structure(), self.image());
-            if current != last {
-                last = current;
-                since = Instant::now();
+            if current == last && !self.awaiting_frame() {
+                return;
             }
+            last = current;
         }
+    }
+
+    /// Whether a layer or lock surface, or a subsurface of one, asked for a frame callback it has not got.
+    fn awaiting_frame(&self) -> bool {
+        let mut surfaces = Vec::new();
+        for (idx, output) in self.state.outputs.iter().enumerate() {
+            let map = layer_map_for_output(&output.output);
+            surfaces.extend(map.layers().map(|l| l.wl_surface().clone()));
+            surfaces.extend(self.state.lock_surface_of(idx));
+        }
+        surfaces.iter().any(|surface| {
+            let mut waiting = false;
+            with_surface_tree_downward(
+                surface,
+                (),
+                |_, _, _| TraversalAction::DoChildren(()),
+                |_, states, _| {
+                    waiting |= !states
+                        .cached_state
+                        .get::<SurfaceAttributes>()
+                        .current()
+                        .frame_callbacks
+                        .is_empty();
+                },
+                |_, _, _| true,
+            );
+            waiting
+        })
     }
 
     fn mapped_layers(&self, namespace: &str) -> usize {
@@ -303,7 +334,7 @@ impl Scene {
     }
 }
 
-fn compare_pixels(expected: &RgbaImage, actual: &RgbaImage) {
+fn compare_pixels(name: &str, expected: &RgbaImage, actual: &RgbaImage) {
     assert_eq!(expected.dimensions(), actual.dimensions());
     let mismatches = expected
         .pixels()
@@ -314,7 +345,10 @@ fn compare_pixels(expected: &RgbaImage, actual: &RgbaImage) {
                 .any(|(a, b)| a.abs_diff(b) > CHANNEL_TOLERANCE)
         })
         .count();
-    assert_eq!(mismatches, 0, "pixels exceed the per-channel tolerance");
+    assert_eq!(
+        mismatches, 0,
+        "{name}: pixels exceed the per-channel tolerance"
+    );
 }
 
 /// Baselines this worker re-recorded.
@@ -347,7 +381,7 @@ fn baseline(root: &Path, name: &str, scene: &mut Scene, update: bool) {
         let expected: Structure =
             serde_json::from_slice(&std::fs::read(geometry).unwrap()).unwrap();
         assert_eq!(expected, structure, "{name} structural geometry changed");
-        compare_pixels(&image::open(png).unwrap().to_rgba8(), &image);
+        compare_pixels(name, &image::open(png).unwrap().to_rgba8(), &image);
     }
 }
 
@@ -453,11 +487,12 @@ fn pixel_comparison_fails_on_a_change_at_unchanged_geometry() {
     let mut within = expected.clone();
     within.get_pixel_mut(500, 350).0[0] =
         within.get_pixel(500, 350).0[0].saturating_add(CHANNEL_TOLERANCE);
-    compare_pixels(&expected, &within);
+    compare_pixels("desktop-windows", &expected, &within);
     let mut beyond = expected.clone();
     beyond.get_pixel_mut(500, 350).0[0] = beyond.get_pixel(500, 350).0[0] ^ 0x40;
-    let failure = std::panic::catch_unwind(|| compare_pixels(&expected, &beyond))
-        .expect_err("a changed pixel must fail the comparison");
+    let failure =
+        std::panic::catch_unwind(|| compare_pixels("desktop-windows", &expected, &beyond))
+            .expect_err("a changed pixel must fail the comparison");
     let message = failure.downcast_ref::<String>().unwrap();
     assert!(
         message.contains("pixels exceed the per-channel tolerance"),
@@ -685,15 +720,7 @@ fn shell_process_goldens() {
         // the lock process finds its session through logind on the system bus: a stand-in on a bus of its own
         let system = common::shell::private_bus();
         let _logind = fake_logind::serve(&system.address);
-        let mut login = common::shell::process("cupertino-login", bus, &[]);
-        login.command.splice(
-            1..1,
-            [
-                format!("DBUS_SYSTEM_BUS_ADDRESS={}", system.address),
-                format!("XDG_SESSION_ID={}", fake_logind::SESSION_ID),
-            ],
-        );
-        let mut scene = Scene::with_processes(SIZE, vec![login]);
+        let mut scene = Scene::with_processes(SIZE, vec![login_process(bus, &system.address)]);
         scene.wait_until("the lock process to own its control name", |_| {
             has_owner(&connection, "org.cupertino.Login1")
         });
@@ -705,14 +732,36 @@ fn shell_process_goldens() {
         scene.settle();
         baseline(&root, "power-panel", &mut scene, update);
 
-        let mut scene = Scene::new(SIZE);
+        let mut scene = Scene::with_processes(SIZE, vec![login_process(bus, &system.address)]);
         scene.window();
-        let locker = common::Client::locker(common::session_agent(&scene.state));
-        scene.wait_until("the session lock", |_| locker.locked());
+        scene.wait_until("the lock process to own its control name", |_| {
+            has_owner(&connection, "org.cupertino.Login1")
+        });
+        scene.state.lock_session();
+        scene.wait_until("the lock screen", |s| {
+            s.state.session_lock.is_active()
+                && s.state.lock_surface_of(0).is_some_and(|surface| {
+                    with_renderer_surface_state(&surface, |st| st.buffer().is_some())
+                        .unwrap_or(false)
+                })
+        });
         scene.settle();
         baseline(&root, "lock-surface", &mut scene, update);
         fail_after_update(update);
     });
+}
+
+/// The lock process on the session bus `bus`, finding its session through the stand-in logind on `system`.
+fn login_process(bus: &str, system: &str) -> ShellProcess {
+    let mut login = common::shell::process("cupertino-login", bus, &[]);
+    login.command.splice(
+        1..1,
+        [
+            format!("DBUS_SYSTEM_BUS_ADDRESS={system}"),
+            format!("XDG_SESSION_ID={}", fake_logind::SESSION_ID),
+        ],
+    );
+    login
 }
 
 /// Whether `name` has an owner on the bus of `connection`.

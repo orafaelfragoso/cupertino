@@ -1020,6 +1020,8 @@ impl WlrLayerShellHandler for Cupertino {
             if let Some(id) = self.output_by_wl(&output).map(|o| o.id) {
                 self.refresh_usable_area(id);
             }
+            // the client of a prompt that is going may be gone already, so its role cannot be asked
+            self.refresh_holds();
         }
     }
 }
@@ -1087,6 +1089,9 @@ impl Cupertino {
         self.layer_keyboard_exclusivity(surface, exclusive);
         if let Some(id) = self.output_by_wl(&output).map(|o| o.id) {
             self.refresh_usable_area(id);
+        }
+        if crate::authorization::is_prompt(surface) {
+            self.refresh_holds();
         }
     }
 

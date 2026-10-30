@@ -7,7 +7,8 @@
 //! Every global is offered only to privileged clients: the shell processes the server started on a connection of its
 //! own ([`launch`]). A client of the public socket does not see them, so an application cannot read the screen.
 //!
-//! The screen is not captured while the session is locked: requested frames wait until it is unlocked.
+//! The screen is not captured while the session is locked: an output is copied as black and a window frame waits until
+//! the session is unlocked. The surfaces of the authentication prompt are never captured.
 //!
 //! Frames are copied after an output's frame was rendered ([`Cupertino::process_captures`]): the source is rendered once
 //! more offscreen (an output through the normal element tree, a toplevel at its natural size like the window
@@ -94,15 +95,14 @@ impl Capture {
 impl Cupertino {
     /// Copy the frames waiting on the sources drawn on output `idx` and refresh the window feeds. Called after the
     /// output's frame was rendered, by every backend (through [`Cupertino::process_screenshots`]). A session whose
-    /// connection lost the Capture role is stopped first. Locking the session stops every copy session
-    /// ([`Cupertino::stop_captures`]) and nothing is copied while it is locked, so a capture session delivers no buffer
-    /// of a locked screen and none resumes at the unlock.
+    /// connection lost the Capture role is stopped first. While the session is locked (from the lock request on) an
+    /// output is copied as black, a window frame waits for the unlock and the window feeds are not refreshed, so no
+    /// buffer shows the lock screen or what it covers.
     pub fn process_captures(&mut self, renderer: &mut GlesRenderer, idx: usize) {
-        self.stop_captures(false);
-        if self.session_lock.is_active() {
-            return;
+        self.stop_captures();
+        if !self.session_lock.is_active() {
+            self.refresh_window_feeds();
         }
-        self.refresh_window_feeds();
         self.copy_frames(renderer, idx);
     }
 

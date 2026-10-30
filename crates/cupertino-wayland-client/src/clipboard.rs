@@ -111,13 +111,9 @@ impl DragOffer {
 #[derive(Clone, Debug, PartialEq)]
 pub enum DragEvent {
     /// The drag entered the surface at `point`, in its logical points.
-    Enter {
-        offer: DragOffer,
-        point: Point,
-    },
-    Motion {
-        point: Point,
-    },
+    Enter { offer: DragOffer, point: Point },
+    /// `time` is the compositor's input timestamp in milliseconds, as for the pointer's events.
+    Motion { point: Point, time: u32 },
     /// The action the compositor chose from the source's and the ones [`crate::Connection::set_drag_actions`] named.
     Action(DndAction),
     /// The drag left the surface, or ended without a drop on it.
@@ -654,12 +650,13 @@ impl Dispatch<WlDataDevice, ()> for State {
                     },
                 });
             }
-            wl_data_device::Event::Motion { x, y, .. } => {
+            wl_data_device::Event::Motion { time, x, y } => {
                 if let Some(drag) = state.clipboard.drag.as_ref().filter(|d| !d.dropped) {
                     state.events.push(Event::Drag {
                         surface: drag.surface,
                         event: DragEvent::Motion {
                             point: Point::new(x, y),
+                            time,
                         },
                     });
                 }

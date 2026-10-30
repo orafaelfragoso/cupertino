@@ -2,18 +2,23 @@
 //! tokens, takes values from the application's model and reports changes as messages.
 
 mod button;
+mod checkbox;
+mod choice;
 mod field;
 mod look;
 mod press;
+mod progress;
+mod slider;
 mod stack;
 mod text;
 mod toggle;
 
 pub use field::{FieldState, SecureState};
 pub use press::Press;
+pub use slider::SliderState;
 
 use cupertino_geometry::Insets;
-use cupertino_ui_core::Element;
+use cupertino_ui_core::{Checked, Element};
 use cupertino_ui_layout::{Align, Axis};
 use cupertino_ui_text::{AttributedText, ContentPurpose, SecureBuffer};
 
@@ -95,6 +100,71 @@ pub struct Button<M> {
     /// Shows progress and ignores activation until cleared.
     pub busy: bool,
     pub on_press: Option<M>,
+}
+
+/// A check box with its label, which is part of its target and names it.
+pub struct CheckBox<M> {
+    pub label: String,
+    pub checked: Checked,
+    pub enabled: bool,
+    /// Asked with the new state: on from off or mixed, off from on.
+    pub on_toggle: Option<Handler<bool, M>>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum SliderStyle {
+    /// A thin track with a round knob.
+    #[default]
+    Regular,
+    /// A wide track filled up to the knob, as a volume or brightness level.
+    Level,
+}
+
+/// A value in `min..=max`, set by dragging or the arrow keys; it takes the whole width it is offered.
+pub struct Slider<M> {
+    /// The accessible name.
+    pub label: String,
+    pub value: f64,
+    pub min: f64,
+    pub max: f64,
+    /// The values snap to `min + n × step`; without it the arrow keys move a hundredth of the range.
+    pub step: Option<f64>,
+    pub style: SliderStyle,
+    /// Tick marks along a regular track, evenly spaced from end to end; fewer than two draws none.
+    pub ticks: u32,
+    pub enabled: bool,
+    pub on_change: Option<Handler<f64, M>>,
+}
+
+/// How far a task has come, or that it is going on (`value: None`); not a Tab stop.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Progress {
+    /// The accessible name.
+    pub label: String,
+    /// From 0 to 1; `None` sweeps without an end.
+    pub value: Option<f64>,
+}
+
+/// One choice of several, each a radio button with its label; one Tab stop, the arrows choose.
+pub struct RadioGroup<M> {
+    /// The group's accessible name.
+    pub label: String,
+    pub options: Vec<String>,
+    pub selected: Option<usize>,
+    pub axis: Axis,
+    pub spacing: f64,
+    pub enabled: bool,
+    pub on_select: Option<Handler<usize, M>>,
+}
+
+/// One choice of several as equal segments of one control; one Tab stop, the arrows choose.
+pub struct SegmentedControl<M> {
+    /// The control's accessible name.
+    pub label: String,
+    pub segments: Vec<String>,
+    pub selected: Option<usize>,
+    pub enabled: bool,
+    pub on_select: Option<Handler<usize, M>>,
 }
 
 pub struct Toggle<M> {

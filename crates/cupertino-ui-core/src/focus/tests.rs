@@ -14,6 +14,7 @@ fn view(dialog: bool) -> Element<M> {
                 children: ["d1", "d2"].map(|k| Element::new(leaf(k)).key(k)).into(),
                 scope: true,
                 row: false,
+                roving: false,
             })
             .key("dialog"),
         );
@@ -130,6 +131,7 @@ fn a_focus_whose_node_unmounts_moves_to_its_nearest_surviving_ancestor() {
             children: vec![Element::new(leaf("d1")).key("d1")],
             scope: true,
             row: false,
+            roving: false,
         })
         .key("dialog"),
     ]));

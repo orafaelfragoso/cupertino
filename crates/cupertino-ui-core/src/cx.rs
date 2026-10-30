@@ -29,10 +29,25 @@ pub(crate) enum CaptureRequest {
     Release,
 }
 
+/// Where [`EventCx::focus_item`] moves the focus among a roving group's items, in reading order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FocusTarget {
+    /// The next item, the first after the last.
+    Next,
+    /// The previous item, the last before the first.
+    Previous,
+    First,
+    Last,
+    /// The item at this position; past the last, nothing moves.
+    Index(usize),
+}
+
 /// What widgets asked for while one event was routed.
 pub(crate) struct Effects<M> {
     pub(crate) messages: Vec<M>,
     pub(crate) focus: Option<NodeId>,
+    /// An item of a roving group asked to move the focus within its group.
+    pub(crate) focus_item: Option<(NodeId, FocusTarget)>,
     pub(crate) capture: Option<CaptureRequest>,
     pub(crate) changes: Vec<(NodeId, Change)>,
     pub(crate) cursor: Option<Option<CursorShape>>,
@@ -47,6 +62,7 @@ impl<M> Default for Effects<M> {
         Self {
             messages: Vec::new(),
             focus: None,
+            focus_item: None,
             capture: None,
             changes: Vec::new(),
             cursor: None,
@@ -63,6 +79,7 @@ impl<M> Effects<M> {
     pub(crate) fn absorb(&mut self, other: Self) {
         self.messages.extend(other.messages);
         self.focus = other.focus.or(self.focus);
+        self.focus_item = other.focus_item.or(self.focus_item);
         self.capture = other.capture.or(self.capture.take());
         self.changes.extend(other.changes);
         self.cursor = other.cursor.or(self.cursor);
@@ -151,6 +168,13 @@ impl<M> EventCx<'_, M> {
         self.effects.messages.push(message);
     }
 
+    /// Moves the keyboard focus to `target` among the items of this node's roving group (see
+    /// [`SemanticsCx::roving_group`]). It moves once the view after this event is built, and only if that item is then a
+    /// Tab stop; otherwise the focus stays where it is.
+    pub fn focus_item(&mut self, target: FocusTarget) {
+        self.effects.focus_item = Some((self.node, target));
+    }
+
     pub fn request_focus(&mut self) {
         self.effects.focus = Some(self.node);
     }
@@ -212,6 +236,7 @@ pub struct PaintCx<'a> {
     pub(crate) now: Timestamp,
     pub(crate) ops: &'a mut Vec<PaintOp>,
     pub(crate) group: &'a mut Option<Group>,
+    pub(crate) animate: &'a mut bool,
 }
 
 impl PaintCx<'_> {
@@ -248,6 +273,12 @@ impl PaintCx<'_> {
         self.ops.push(op);
     }
 
+    /// Delivers [`Event::AnimationFrame`](crate::Event::AnimationFrame) to this node on the next frame, for what
+    /// moves by itself from its first paint, as an indeterminate progress bar does.
+    pub fn request_animation_frame(&mut self) {
+        *self.animate = true;
+    }
+
     /// Paints this node and its whole subtree as one layer, with `opacity` applied once and `effects` (a fade, or a
     /// shadow or blur of the subtree) on the result.
     pub fn set_group(&mut self, opacity: f32, effects: Vec<Effect>) {
@@ -269,6 +300,8 @@ pub(crate) struct Semantics {
     pub(crate) focus_scope: bool,
     pub(crate) protected: bool,
     pub(crate) live: Option<Live>,
+    pub(crate) roving_group: bool,
+    pub(crate) roving_item: bool,
 }
 
 /// A node without a role is left out of the accessibility tree and its children take its place.
@@ -319,6 +352,18 @@ impl SemanticsCx<'_> {
     /// popovers, menus).
     pub fn focus_scope(&mut self) {
         self.semantics.focus_scope = true;
+    }
+
+    /// Makes the node a group whose items share one Tab stop and move the focus among themselves with
+    /// [`EventCx::focus_item`]: a radio group, a segmented control, a tab list.
+    pub fn roving_group(&mut self) {
+        self.semantics.roving_group = true;
+    }
+
+    /// Makes the node an item of its nearest roving group. Only the item that is the group's Tab stop calls
+    /// [`focusable`](Self::focusable).
+    pub fn roving_item(&mut self) {
+        self.semantics.roving_item = true;
     }
 
     /// Marks the node's value a secret: whatever value it sets reaches accessibility as

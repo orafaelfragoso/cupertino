@@ -16,8 +16,8 @@ use crate::task::Executor;
 use crate::tree::Tree;
 use crate::{
     AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, Application, Clock, Command,
-    Environment, Event, FrameSnapshot, Key, NodeId, NodeSnapshot, Pending, Propagation, StepStatus,
-    UiError, Window, WindowBackground, WindowKey,
+    Environment, Event, FocusTarget, FrameSnapshot, Key, NodeId, NodeSnapshot, Pending,
+    Propagation, StepStatus, UiError, Window, WindowBackground, WindowKey,
 };
 use cupertino_geometry::{Point, Size};
 use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutOptions};
@@ -118,6 +118,11 @@ struct WindowState<M> {
     /// The adapter holds this window's whole tree, so a diff is enough.
     accessible: bool,
     focusable: Vec<NodeId>,
+    /// Roving groups and their items, in reading order, from the last semantics pass.
+    roving_groups: Vec<NodeId>,
+    roving_items: Vec<NodeId>,
+    /// The item a roving group asked to focus, moved to at the next frame if it is a Tab stop by then.
+    focus_request: Option<NodeId>,
     painter: Painter,
     damage: DamageTracker,
     display_list: DisplayList,
@@ -462,6 +467,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             accessibility: BTreeMap::new(),
             accessible: false,
             focusable: Vec::new(),
+            roving_groups: Vec::new(),
+            roving_items: Vec::new(),
+            focus_request: None,
             painter: Painter::default(),
             damage: DamageTracker::default(),
             display_list: DisplayList::default(),
@@ -722,6 +730,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             w.text_input = state.as_ref().map(|_| node);
             self.system.set_text_input(w.id, state.as_ref());
         }
+        if let Some((node, target)) = effects.focus_item {
+            w.focus_request = roving_target(&self.tree, w, node, target);
+            w.invalidate();
+        }
         if let Some(node) = effects.focus {
             let change = w.focus.set(&self.tree, Some(node), false);
             let rest = Self::focus_events(&mut self.tree, w, change, &mut self.messages, now);
@@ -860,9 +872,25 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
 
             let semantics = build(&self.tree, root, &w.geometry, w.focus.node());
             w.focusable = semantics.focusable;
+            w.roving_groups = semantics.roving_groups;
+            w.roving_items = semantics.roving_items;
+            let requested = match w.focus_request.take() {
+                Some(item) if w.focusable.contains(&item) => {
+                    w.focus.set(&self.tree, Some(item), true)
+                }
+                _ => None,
+            };
             let change = w.focus.sync(&self.tree, &semantics.scopes, &w.focusable);
-            let refocused = change.is_some();
-            focus_effects = Self::focus_events(&mut self.tree, w, change, &mut self.messages, now);
+            let refocused = requested.is_some() || change.is_some();
+            focus_effects =
+                Self::focus_events(&mut self.tree, w, requested, &mut self.messages, now);
+            focus_effects.absorb(Self::focus_events(
+                &mut self.tree,
+                w,
+                change,
+                &mut self.messages,
+                now,
+            ));
             let nodes = if refocused {
                 build(&self.tree, root, &w.geometry, w.focus.node()).nodes
             } else {
@@ -906,6 +934,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             },
         );
         let damage = w.damage.damage(&painting);
+        w.animate.extend(painting.animating);
         w.display_list = painting.list;
         w.dirty = false;
         if matches!(&damage, DamageRegion::Rects(r) if r.is_empty()) {
@@ -1062,6 +1091,48 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
 /// buffer it accepts for a configure at a fractional scale.
 fn physical(logical: f64, scale: f64) -> u32 {
     (logical * scale).round().clamp(0.0, f64::from(u32::MAX)) as u32
+}
+
+/// The item `target` names among the items of `node`'s roving group (the group itself, or the nearest one above it),
+/// counted from the focused item, else from `node`.
+fn roving_target<M: 'static>(
+    tree: &Tree<M>,
+    w: &WindowState<M>,
+    node: NodeId,
+    target: FocusTarget,
+) -> Option<NodeId> {
+    let group_of = |n: NodeId| {
+        tree.path(n)
+            .into_iter()
+            .rev()
+            .skip(1)
+            .find(|a| w.roving_groups.contains(a))
+    };
+    let group = if w.roving_groups.contains(&node) {
+        node
+    } else {
+        group_of(node)?
+    };
+    let items: Vec<NodeId> = w
+        .roving_items
+        .iter()
+        .copied()
+        .filter(|&item| group_of(item) == Some(group))
+        .collect();
+    let n = items.len();
+    if n == 0 {
+        return None;
+    }
+    let at = |id: NodeId| items.iter().position(|&item| item == id);
+    let current = w.focus.node().and_then(at).or_else(|| at(node));
+    let index = match target {
+        FocusTarget::Next => current.map_or(0, |c| (c + 1) % n),
+        FocusTarget::Previous => current.map_or(n - 1, |c| (c + n - 1) % n),
+        FocusTarget::First => 0,
+        FocusTarget::Last => n - 1,
+        FocusTarget::Index(k) => (k < n).then_some(k)?,
+    };
+    Some(items[index])
 }
 
 fn route<'a, M: 'static>(

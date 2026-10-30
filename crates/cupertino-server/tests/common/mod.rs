@@ -17,7 +17,7 @@ use smithay::reexports::calloop::EventLoop;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_keyboard, wl_output, wl_pointer, wl_region, wl_registry, wl_seat,
-    wl_shm, wl_shm_pool, wl_surface,
+    wl_shm, wl_shm_pool, wl_subcompositor, wl_subsurface, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::ext::session_lock::v1::client::{
@@ -160,6 +160,8 @@ ignore_events!(
     zwp_pointer_constraints_v1::ZwpPointerConstraintsV1,
     zwp_relative_pointer_manager_v1::ZwpRelativePointerManagerV1,
     wl_region::WlRegion,
+    wl_subcompositor::WlSubcompositor,
+    wl_subsurface::WlSubsurface,
     zwlr_layer_shell_v1::ZwlrLayerShellV1
 );
 
@@ -441,10 +443,11 @@ pub enum Constraint {
 }
 
 /// Keeps a client's protocol objects alive for the life of its thread; the lock object is kept apart because
-/// the thread uses it to unlock.
+/// the thread uses it to unlock, and so is what `Client::unlock` does besides.
 struct Setup {
     objects: Box<dyn std::any::Any>,
     lock: Option<ext_session_lock_v1::ExtSessionLockV1>,
+    release: Option<Box<dyn FnOnce()>>,
 }
 
 /// A client thread; dropping the handle makes the thread end and so disconnects the client.
@@ -512,11 +515,15 @@ impl Client {
             let Setup {
                 objects: _objects,
                 mut lock,
+                mut release,
             } = setup(&mut queue, &mut client, &globals);
             while !stop2.load(Ordering::SeqCst) {
                 if unlock2.swap(false, Ordering::SeqCst) {
                     if let Some(lock) = lock.take() {
                         lock.unlock_and_destroy();
+                    }
+                    if let Some(release) = release.take() {
+                        release();
                     }
                 }
                 if queue.roundtrip(&mut client).is_err() {
@@ -560,6 +567,7 @@ impl Client {
             Setup {
                 objects: Box::new((wm_base, xdg, toplevel, surface)),
                 lock: None,
+                release: None,
             }
         })
     }
@@ -584,6 +592,36 @@ impl Client {
             Setup {
                 objects: Box::new((wm_base, xdg, toplevel, surface, seat, manager, inhibitor)),
                 lock: None,
+                release: None,
+            }
+        })
+    }
+
+    /// A client with two mapped toplevels of `app_id`, each asking to inhibit the compositor's keyboard shortcuts.
+    pub fn inhibiting_twice(socket: PathBuf, app_id: &'static str) -> Client {
+        Self::run(socket, move |queue, client, globals| {
+            let qh = queue.handle();
+            let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
+            let wm_base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).unwrap();
+            let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=7, ()).unwrap();
+            let manager: zwp_keyboard_shortcuts_inhibit_manager_v1::ZwpKeyboardShortcutsInhibitManagerV1 =
+                globals.bind(&qh, 1..=1, ()).unwrap();
+            let windows: Vec<_> = (0..2)
+                .map(|_| {
+                    let surface = compositor.create_surface(&qh, ());
+                    let xdg = wm_base.get_xdg_surface(&surface, &qh, surface.clone());
+                    let toplevel = xdg.get_toplevel(&qh, ());
+                    toplevel.set_app_id(app_id.to_string());
+                    let inhibitor = manager.inhibit_shortcuts(&surface, &seat, &qh, ());
+                    surface.commit();
+                    (surface, xdg, toplevel, inhibitor)
+                })
+                .collect();
+            queue.roundtrip(client).unwrap();
+            Setup {
+                objects: Box::new((wm_base, seat, manager, windows)),
+                lock: None,
+                release: None,
             }
         })
     }
@@ -618,6 +656,7 @@ impl Client {
             Setup {
                 objects: Box::new((layer_shell, layer, surface, seat, manager, inhibitor)),
                 lock: None,
+                release: None,
             }
         })
     }
@@ -629,6 +668,22 @@ impl Client {
         app_id: &'static str,
         constraint: Constraint,
         inhibit: bool,
+    ) -> Client {
+        Self::constraining_with(socket, app_id, constraint, inhibit, false)
+    }
+
+    /// As [`Client::constraining`] with a pointer lock, its toplevel wholly covered by a subsurface, as a game or a
+    /// video drawn in one is: the pointer is over the subsurface, never over the surface with the lock.
+    pub fn constraining_under_subsurface(socket: PathBuf, app_id: &'static str) -> Client {
+        Self::constraining_with(socket, app_id, Constraint::Lock, false, true)
+    }
+
+    fn constraining_with(
+        socket: PathBuf,
+        app_id: &'static str,
+        constraint: Constraint,
+        inhibit: bool,
+        covered: bool,
     ) -> Client {
         Self::run(socket, move |queue, client, globals| {
             let qh = queue.handle();
@@ -651,25 +706,45 @@ impl Client {
                     globals.bind(&qh, 1..=1, ()).unwrap();
                 (manager.inhibit_shortcuts(&surface, &seat, &qh, ()), manager)
             });
+            let cover = covered.then(|| {
+                let subcompositor: wl_subcompositor::WlSubcompositor =
+                    globals.bind(&qh, 1..=1, ()).unwrap();
+                let child = compositor.create_surface(&qh, ());
+                let subsurface = subcompositor.get_subsurface(&child, &surface, &qh, ());
+                let size = client.toplevel_size;
+                child.attach(
+                    Some(&solid_buffer(&client.shm, size, TOPLEVEL_BLUE, &qh)),
+                    0,
+                    0,
+                );
+                child.damage_buffer(0, 0, size.0, size.1);
+                child.commit();
+                (subcompositor, subsurface, child)
+            });
             let lifetime = zwp_pointer_constraints_v1::Lifetime::Persistent;
-            let held: Box<dyn std::any::Any> = match constraint {
+            let (held, release): (Box<dyn std::any::Any>, Box<dyn FnOnce()>) = match constraint {
                 Constraint::Lock => {
-                    Box::new(constraints.lock_pointer(&surface, &pointer, None, lifetime, &qh, ()))
+                    let locked =
+                        constraints.lock_pointer(&surface, &pointer, None, lifetime, &qh, ());
+                    let destroy = locked.clone();
+                    (Box::new(locked), Box::new(move || destroy.destroy()))
                 }
                 Constraint::Confine { x, y, w, h } => {
                     let region = compositor.create_region(&qh, ());
                     region.add(x, y, w, h);
-                    Box::new((
-                        constraints.confine_pointer(
-                            &surface,
-                            &pointer,
-                            Some(&region),
-                            lifetime,
-                            &qh,
-                            (),
-                        ),
-                        region,
-                    ))
+                    let confined = constraints.confine_pointer(
+                        &surface,
+                        &pointer,
+                        Some(&region),
+                        lifetime,
+                        &qh,
+                        (),
+                    );
+                    let destroy = confined.clone();
+                    (
+                        Box::new((confined, region)),
+                        Box::new(move || destroy.destroy()),
+                    )
                 }
             };
             surface.commit();
@@ -686,8 +761,10 @@ impl Client {
                     relative,
                     inhibitor,
                     held,
+                    cover,
                 )),
                 lock: None,
+                release: Some(release),
             }
         })
     }
@@ -747,6 +824,7 @@ impl Client {
             Setup {
                 objects: Box::new((wm_base, xdg, toplevel, surface, activation)),
                 lock: None,
+                release: None,
             }
         })
     }
@@ -767,6 +845,7 @@ impl Client {
             Setup {
                 objects: Box::new((manager, output, seat, surface, lock_surface)),
                 lock: Some(lock),
+                release: None,
             }
         })
     }
@@ -784,7 +863,7 @@ impl Client {
         self.lock_status.lock().unwrap().finished
     }
 
-    /// Send `unlock_and_destroy`.
+    /// Send `unlock_and_destroy`; a constraining client destroys its pointer constraint.
     pub fn unlock(&self) {
         self.unlock.store(true, Ordering::SeqCst);
     }

@@ -398,8 +398,6 @@ struct OutputState {
     seen_at: f64,
     /// The file and state the shown image was made from.
     loaded: Option<(PathBuf, Stamp)>,
-    /// An answer not yet turned into a buffer, with the lightness under the menu bar.
-    ready: Option<(Pixmap, [f32; 3], u16)>,
     shown: Option<Shown>,
 }
 
@@ -443,12 +441,9 @@ impl Wallpapers {
         }
     }
 
-    /// An image is being read, or is read and not put up yet (another output's frame may have taken the answer in):
-    /// frames are wanted to pick it up.
+    /// An image is being read: frames are wanted to pick it up.
     pub fn pending(&self) -> bool {
-        self.outputs
-            .values()
-            .any(|o| o.in_flight || o.ready.is_some())
+        self.outputs.values().any(|o| o.in_flight)
     }
 
     /// The images to try for an appearance, best first: the user's, then the pack's.
@@ -471,7 +466,8 @@ impl Wallpapers {
         }
     }
 
-    /// Take in the answers the worker has.
+    /// Take in the answers the worker has, and put a new image up at once, whichever output's frame takes it in: an
+    /// output that does not draw now (off, or locked) has it ready, and nothing waits on it.
     fn collect(&mut self) {
         let Some(loader) = &self.loader else { return };
         while let Ok(reply) = loader.replies.try_recv() {
@@ -491,12 +487,25 @@ impl Wallpapers {
                     path,
                     stamp,
                 } => {
-                    state.ready = Some((pixmap, tint, bar_lightness));
+                    let size = (pixmap.width() as i32, pixmap.height() as i32);
+                    let buffer = MemoryRenderBuffer::from_slice(
+                        pixmap.data(),
+                        Fourcc::Abgr8888,
+                        size,
+                        1,
+                        Transform::Normal,
+                        None,
+                    );
+                    state.shown = Some(Shown {
+                        buffer,
+                        px: size,
+                        tint,
+                    });
                     state.loaded = Some((path, stamp));
+                    self.measured.push((reply.output, bar_lightness));
                 }
                 Outcome::Failed => {
                     state.loaded = None;
-                    state.ready = None;
                     state.shown = None;
                 }
             }
@@ -572,7 +581,6 @@ impl Wallpapers {
         state.seen_at = now;
         if state.key != key || state.ticket == 0 {
             state.key = key;
-            state.ready = None;
             state.loaded = None;
             self.request(output, candidates, dst, strip_rows, now, None);
         } else if !state.in_flight && now - state.checked_at >= REVALIDATE_SECONDS {
@@ -601,7 +609,8 @@ impl Wallpapers {
 
     /// The pixels the wallpaper of an output of `px` device pixels shows, or `None` for the procedural wallpaper.
     /// Until the image is in, the output keeps what it showed. The lightness of its top `strip_rows` rows, under the
-    /// menu bar, is measured once per image and handed out by [`Wallpapers::take_bar_lightness`].
+    /// menu bar, is measured once per image and handed out by [`Wallpapers::take_bar_lightness`] once the image is put
+    /// up.
     pub fn shown(
         &mut self,
         output: u64,
@@ -622,24 +631,7 @@ impl Wallpapers {
             return None;
         }
         self.update(output, candidates, dst, strip_rows, now);
-        let state = self.outputs.get_mut(&output)?;
-        if let Some((pixmap, tint, bar_lightness)) = state.ready.take() {
-            self.measured.push((output, bar_lightness));
-            let size = (pixmap.width() as i32, pixmap.height() as i32);
-            let buffer = MemoryRenderBuffer::from_slice(
-                pixmap.data(),
-                Fourcc::Abgr8888,
-                size,
-                1,
-                Transform::Normal,
-                None,
-            );
-            state.shown = Some(Shown {
-                buffer,
-                px: size,
-                tint,
-            });
-        }
+        let state = self.outputs.get(&output)?;
         match state.shown.as_ref().filter(|s| s.px == px) {
             Some(shown) => {
                 self.tint = Some(shown.tint);
@@ -650,12 +642,6 @@ impl Wallpapers {
                 None
             }
         }
-    }
-
-    /// The worker owes an answer: unlike [`Wallpapers::pending`], an answer taken in but not put up does not count.
-    #[cfg(test)]
-    fn answering(&self) -> bool {
-        self.outputs.values().any(|o| o.in_flight)
     }
 
     /// The lightness under the menu bar of each output whose new image was put up since the last call.
@@ -891,7 +877,7 @@ mod tests {
             loop {
                 self.wallpapers
                     .update(1, vec![path.to_path_buf()], dst, 1, now);
-                if !self.wallpapers.answering() {
+                if !self.wallpapers.pending() {
                     return;
                 }
                 assert!(std::time::Instant::now() < end, "the worker did not answer");
@@ -901,9 +887,9 @@ mod tests {
 
         fn shown_size(&self) -> Option<(u32, u32)> {
             self.wallpapers.outputs[&1]
-                .ready
+                .shown
                 .as_ref()
-                .map(|(p, _, _)| (p.width(), p.height()))
+                .map(|s| (s.px.0 as u32, s.px.1 as u32))
         }
     }
 
@@ -927,7 +913,7 @@ mod tests {
         );
         assert_eq!(rig.wallpapers.decodes(), 1);
         // another size of the same file only scales it
-        rig.wallpapers.outputs.get_mut(&1).unwrap().ready = None;
+        rig.wallpapers.outputs.get_mut(&1).unwrap().shown = None;
         rig.settle(&path, (320, 200), 0.0);
         assert_eq!(rig.shown_size(), Some((320, 200)));
         assert_eq!(rig.wallpapers.decodes(), 1);
@@ -950,7 +936,7 @@ mod tests {
             started.elapsed()
         );
         assert!(rig.wallpapers.pending());
-        assert!(rig.wallpapers.outputs[&1].ready.is_none());
+        assert!(rig.wallpapers.outputs[&1].shown.is_none());
         drop(hold);
         rig.settle(&path, (32, 32), 2.0);
         assert!(rig.shown_size().is_some());
@@ -963,7 +949,7 @@ mod tests {
         let mut rig = rig();
         rig.settle(&path, (8, 8), 0.0);
         assert_eq!(rig.wallpapers.decodes(), 1);
-        rig.wallpapers.outputs.get_mut(&1).unwrap().ready = None;
+        rig.wallpapers.outputs.get_mut(&1).unwrap().shown = None;
         // not due yet, then due with the file unchanged: nothing is decoded or delivered again
         rig.settle(&path, (8, 8), 1.0);
         rig.settle(&path, (8, 8), 6.0);
@@ -973,8 +959,8 @@ mod tests {
         write_png(dir.path(), "w.png", (32, 32), |_, _| [0, 200, 0, 255]);
         rig.settle(&path, (8, 8), 12.0);
         assert_eq!(rig.wallpapers.decodes(), 2);
-        let (pixmap, _, _) = rig.wallpapers.outputs[&1].ready.as_ref().unwrap();
-        assert_eq!(pixmap.pixel(0, 0).unwrap().green(), 200);
+        let tint = rig.wallpapers.outputs[&1].shown.as_ref().unwrap().tint;
+        assert!((tint[1] - 200.0 / 255.0).abs() < 0.01, "{tint:?}");
     }
 
     #[test]
@@ -989,7 +975,7 @@ mod tests {
         for now in [0.0, 6.0, 12.0] {
             loop {
                 rig.wallpapers.update(1, candidates.clone(), (4, 4), 1, now);
-                if !rig.wallpapers.answering() {
+                if !rig.wallpapers.pending() {
                     break;
                 }
                 assert!(std::time::Instant::now() < end);
@@ -1037,7 +1023,7 @@ mod tests {
         rig.settle(&path, (8, 4), 0.0);
         rig.wallpapers.update(2, vec![path.clone()], (8, 4), 1, 0.0);
         until(&mut rig, 0.0, &|w| {
-            !w.answering() && w.cached_source_bytes() == 16 * 8 * 4
+            !w.pending() && w.cached_source_bytes() == 16 * 8 * 4
         });
         rig.wallpapers.forget(2);
         rig.settle(&path, (4, 2), 1.0);

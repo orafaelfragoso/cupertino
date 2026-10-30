@@ -150,9 +150,14 @@ impl Cupertino {
             session_overlays,
         };
         let result = f(renderer, params);
-        // a new image was put up: its lightness under the bar was measured once, with the decode
+        // a new image was put up, perhaps for another output: that output draws it, and the lightness under its bar,
+        // measured once with the decode, goes to the bar
         for (output, lightness) in self.overlays.wallpaper.take_bar_lightness() {
-            self.set_backdrop_lightness(cupertino_wm::OutputId(output), Some(lightness));
+            let id = cupertino_wm::OutputId(output);
+            if let Some(out) = self.outputs.iter_mut().find(|o| o.id == id) {
+                out.scheduler.damage();
+            }
+            self.set_backdrop_lightness(id, Some(lightness));
         }
         Some(result)
     }

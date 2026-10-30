@@ -59,6 +59,36 @@ pub fn render_to_image_transformed<E: RenderElement<GlesRenderer>>(
         .ok_or_else(|| anyhow!("unexpected pixel buffer size"))
 }
 
+/// What an output of mode `size` turned by `transform` shows, upright: the framebuffer drawn as for the screen,
+/// then turned back. Some elements draw with the output's transform, so the frame is not drawn upright directly.
+pub fn render_shown_image<E: RenderElement<GlesRenderer>>(
+    renderer: &mut GlesRenderer,
+    elements: &[E],
+    size: Size<i32, Physical>,
+    scale: f64,
+    transform: Transform,
+    clear: Color32F,
+) -> Result<RgbaImage> {
+    let framebuffer =
+        render_to_image_transformed(renderer, elements, size, scale, transform, clear)?;
+    Ok(upright(framebuffer, transform))
+}
+
+/// The framebuffer of an output turned by `transform`, turned back the way the output shows it.
+fn upright(framebuffer: RgbaImage, transform: Transform) -> RgbaImage {
+    use image::imageops::{flip_horizontal, rotate180, rotate270, rotate90};
+    match transform {
+        Transform::Normal => framebuffer,
+        Transform::_90 => rotate90(&framebuffer),
+        Transform::_180 => rotate180(&framebuffer),
+        Transform::_270 => rotate270(&framebuffer),
+        Transform::Flipped => flip_horizontal(&framebuffer),
+        Transform::Flipped90 => flip_horizontal(&rotate90(&framebuffer)),
+        Transform::Flipped180 => flip_horizontal(&rotate180(&framebuffer)),
+        Transform::Flipped270 => flip_horizontal(&rotate270(&framebuffer)),
+    }
+}
+
 pub fn save_png(image: &RgbaImage, path: &Path) -> Result<()> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;

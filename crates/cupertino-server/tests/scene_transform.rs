@@ -30,8 +30,8 @@ fn mode_for(logical: (i32, i32), transform: Transform) -> (i32, i32) {
     }
 }
 
-/// The frame of the desktop with two windows on an output of framebuffer `mode`, turned by `transform`.
-fn frame(mode: (i32, i32), transform: Transform, scale: f64) -> RgbaImage {
+/// The desktop with two windows on an output of framebuffer `mode`, turned by `transform`.
+fn desktop(mode: (i32, i32), transform: Transform, scale: f64) -> Desktop {
     let display = headless::HeadlessDisplay {
         name: "headless-1".into(),
         size: mode,
@@ -53,6 +53,12 @@ fn frame(mode: (i32, i32), transform: Transform, scale: f64) -> RgbaImage {
     d.window();
     d.at(3000);
     d.at(3016);
+    d
+}
+
+/// The frame of the desktop with two windows on an output of framebuffer `mode`, turned by `transform`.
+fn frame(mode: (i32, i32), transform: Transform, scale: f64) -> RgbaImage {
+    let mut d = desktop(mode, transform, scale);
     let mut backend = d.state.backend.take().unwrap();
     #[allow(irrefutable_let_patterns)]
     let Backend::Headless(ref mut h) = backend
@@ -137,6 +143,53 @@ fn every_transform_of_an_output_shows_the_upright_frame_turned() {
             assert!(
                 beyond.is_empty(),
                 "{transform:?} at {scale}x: pixels beyond the tolerance {beyond:?}"
+            );
+        }
+    }
+}
+
+/// The screenshot of that desktop: what screenshots and screen captures hand out.
+fn screenshot(mode: (i32, i32), transform: Transform, scale: f64) -> RgbaImage {
+    let mut d = desktop(mode, transform, scale);
+    let mut backend = d.state.backend.take().unwrap();
+    #[allow(irrefutable_let_patterns)]
+    let Backend::Headless(ref mut h) = backend
+    else {
+        panic!("headless backend required")
+    };
+    let image = d
+        .state
+        .draw_output_image(&mut h.renderer, 0, true, false)
+        .unwrap();
+    d.state.backend = Some(backend);
+    image
+}
+
+#[test]
+fn a_screenshot_of_a_turned_output_is_what_the_upright_output_of_its_logical_space_shows() {
+    let transforms = [
+        Transform::_90,
+        Transform::_180,
+        Transform::_270,
+        Transform::Flipped,
+        Transform::Flipped90,
+        Transform::Flipped180,
+        Transform::Flipped270,
+    ];
+    for scale in [1.0, 1.5] {
+        for transform in transforms {
+            let logical = match transform {
+                Transform::_90 | Transform::_270 | Transform::Flipped90 | Transform::Flipped270 => {
+                    (MODE.1, MODE.0)
+                }
+                _ => MODE,
+            };
+            let upright = screenshot(logical, Transform::Normal, scale);
+            let shot = screenshot(mode_for(logical, transform), transform, scale);
+            let beyond = beyond_tolerance(&upright, &shot);
+            assert!(
+                beyond.is_empty(),
+                "{transform:?} at {scale}x: the screenshot differs from the upright output's {beyond:?}"
             );
         }
     }

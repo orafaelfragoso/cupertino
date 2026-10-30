@@ -43,6 +43,8 @@ zeroize = "1"
 
 [dev-dependencies]
 cupertino-test-bus = { path = "../cupertino-test-bus" }
+cupertino-ui-atspi = { path = "../cupertino-ui-atspi" }
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 tempfile = "3"
 
 [[bin]]

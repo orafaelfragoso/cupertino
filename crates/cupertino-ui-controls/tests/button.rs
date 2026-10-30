@@ -267,6 +267,27 @@ fn a_click_activates_once_and_a_release_elsewhere_or_a_cancel_does_nothing() {
 }
 
 #[test]
+fn deactivating_the_window_while_space_is_held_ends_the_press() {
+    let mut h = Harness::<App>::new();
+    h.tap(TAB);
+    h.key(SPACE, true);
+    h.send(WindowEvent::Focus(false));
+    h.send(WindowEvent::Focus(true));
+    h.key(SPACE, false);
+    assert!(
+        h.model().pressed.is_empty(),
+        "the release of the cancelled press does nothing"
+    );
+    h.key(SPACE, true);
+    h.key(SPACE, false);
+    assert_eq!(
+        h.model().pressed,
+        ["ok"],
+        "the next press and release activate once"
+    );
+}
+
+#[test]
 fn space_activates_on_release_return_on_press_and_a_repeat_or_escape_never() {
     let mut h = Harness::<App>::new();
     h.tap(TAB);

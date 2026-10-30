@@ -4,6 +4,7 @@
 //! object. Nothing is exported until an assistive technology is on the accessibility bus; core builds no tree until
 //! then. AccessKit runs on an executor thread of its own; requests from assistive technology reach the application
 //! only through [`AccessibilityAdapter::drain_actions`] on its own loop, after the window system's waker woke it.
+//! While the session is locked no node it sends is a live region, so nothing is announced.
 
 mod convert;
 
@@ -20,6 +21,7 @@ use cupertino_ui_platform::WindowId;
 pub struct AtspiAdapter {
     shared: Arc<Shared>,
     windows: HashMap<WindowId, Window>,
+    muted: bool,
 }
 
 /// The most action requests waiting for the application's loop; more are dropped until it drains them, and an
@@ -103,6 +105,16 @@ impl AtspiAdapter {
                 waker,
             }),
             windows: HashMap::new(),
+            muted: false,
+        }
+    }
+
+    /// Like [`Self::new`], but muted until the first [`AccessibilityAdapter::session_locked`]: an application started
+    /// while the session is locked announces nothing before it learns so.
+    pub fn muted(waker: Waker) -> AtspiAdapter {
+        AtspiAdapter {
+            muted: true,
+            ..AtspiAdapter::new(waker)
         }
     }
 
@@ -135,6 +147,7 @@ impl AccessibilityAdapter for AtspiAdapter {
 
     fn update(&mut self, update: &AccessibilityUpdate) {
         let epoch = self.shared.epoch.load(Ordering::Acquire);
+        let muted = self.muted;
         let window = self.window(update.window);
         let delta = {
             let mut m = lock(&window.mirror);
@@ -146,8 +159,12 @@ impl AccessibilityAdapter for AtspiAdapter {
                 m.nodes.remove(id);
             }
             for (id, node) in &update.nodes {
+                let mut converted = convert::node(node);
+                if muted {
+                    converted.clear_live();
+                }
                 let published = Published {
-                    node: convert::node(node),
+                    node: converted,
                     actions: node.actions.clone(),
                     protected: convert::protected(node),
                 };
@@ -176,6 +193,12 @@ impl AccessibilityAdapter for AtspiAdapter {
                 m.full(update.root)
             }
         });
+    }
+
+    /// AccessKit announces a live region only as it is added or renamed, from the node it is sent then, so a node sent
+    /// while muted announces nothing and the next one sent after is announced as usual.
+    fn session_locked(&mut self, locked: bool) {
+        self.muted = locked;
     }
 
     fn window_closed(&mut self, window: WindowId) {

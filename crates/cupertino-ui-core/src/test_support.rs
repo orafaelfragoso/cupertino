@@ -466,6 +466,7 @@ pub(crate) struct FakeAdapter {
     pub(crate) active: Rc<Cell<bool>>,
     pub(crate) updates: Rc<RefCell<Vec<AccessibilityUpdate>>>,
     pub(crate) closed: Rc<RefCell<Vec<WindowId>>>,
+    pub(crate) locked: Rc<RefCell<Vec<bool>>>,
 }
 
 impl AccessibilityAdapter for FakeAdapter {
@@ -483,6 +484,10 @@ impl AccessibilityAdapter for FakeAdapter {
 
     fn window_closed(&mut self, window: WindowId) {
         self.closed.borrow_mut().push(window);
+    }
+
+    fn session_locked(&mut self, locked: bool) {
+        self.locked.borrow_mut().push(locked);
     }
 }
 

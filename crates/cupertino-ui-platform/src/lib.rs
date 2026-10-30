@@ -329,6 +329,9 @@ pub enum PlatformEvent {
     Wake,
     /// The session's appearance or display options, once when the window system learns them and on every change.
     Appearance(SystemAppearance),
+    /// Whether the session is locked, once when the window system learns it and on every change; a window system that
+    /// can't tell sends false once.
+    SessionLock(bool),
 }
 
 /// The session's appearance and the display options that change how windows draw.

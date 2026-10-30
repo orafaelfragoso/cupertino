@@ -1117,6 +1117,22 @@ mod window_system {
         }
     }
 
+    /// The compositor has no app effects, so it can't tell the session is locked: the first dispatch says it isn't,
+    /// once, so an adapter that starts muted speaks.
+    #[test]
+    fn a_compositor_that_cannot_tell_the_lock_state_is_reported_unlocked_once() {
+        let (mut kit, _control, _committed, _seen) = created();
+        let locks = |kit: &mut Kit| {
+            kit.pump();
+            std::mem::take(&mut kit.stash)
+                .into_iter()
+                .filter(|e| matches!(e, PlatformEvent::SessionLock(_)))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(locks(&mut kit), [PlatformEvent::SessionLock(false)]);
+        assert_eq!(locks(&mut kit), []);
+    }
+
     #[test]
     fn frames_are_paced_by_the_compositor_and_damage_a_frame_could_not_show_is_carried() {
         let (mut kit, control, committed, _seen) = mapped();

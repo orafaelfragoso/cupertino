@@ -1,0 +1,195 @@
+//! The Cupertino theme's regular control geometry, type roles, focus ring and caret timing. Control heights and the
+//! switch size come from the theme's control metrics, body and caption sizes from its type scale; every other value is
+//! a design value of its own (approximate).
+
+use crate::{
+    ColorTokens, ControlMetrics, ControlSize, FocusRing, Motion, Size, ThemePreferences,
+    ThemeTokens, TypeRole, TypeScale,
+};
+use cupertino_theme::metrics::{alignment_height, control_metric, Control};
+use cupertino_theme::{Result, Theme};
+
+/// Horizontal space between a button's chrome and its label.
+const BUTTON_INSET: f64 = 10.0;
+const BUTTON_RADIUS: f64 = 5.0;
+/// Horizontal space between a text field's chrome and its text.
+const FIELD_INSET: f64 = 6.0;
+const FIELD_RADIUS: f64 = 5.0;
+const SWITCH_THUMB: f64 = 18.0;
+/// Space between the switch thumb and the edge of its track.
+const SWITCH_THUMB_INSET: f64 = 2.0;
+/// The smallest pointer and touch target, reached with layout padding.
+const MIN_TARGET: f64 = 24.0;
+const REGULAR: u16 = 400;
+const SEMIBOLD: u16 = 600;
+const SECTION_SIZE: f32 = 12.0;
+const TITLE_SIZE: f32 = 15.0;
+const FOCUS_RING_WIDTH: f64 = 2.0;
+const FOCUS_RING_OUTSET: f64 = 2.0;
+const FOCUS_RING_RADIUS_EXTRA: f64 = 3.0;
+/// How long the caret stays shown, then hidden, while it blinks.
+const CARET_PHASE_MS: u32 = 500;
+
+impl ThemeTokens {
+    /// The Cupertino theme for `preferences`: colours from [`ColorTokens::cupertino`], regular control metrics, and
+    /// type roles in the theme's font family. Fails when the theme lacks a colour or a regular control metric.
+    pub fn cupertino(theme: &Theme, preferences: ThemePreferences) -> Result<Self> {
+        let regular = |control| {
+            alignment_height(control, ControlSize::Regular).ok_or_else(|| {
+                cupertino_theme::Error::NotFound(format!("regular height of {control:?}"))
+            })
+        };
+        let switch_width = control_metric(Control::Switch)
+            .fixed_width(ControlSize::Regular)
+            .ok_or_else(|| cupertino_theme::Error::NotFound("regular width of Switch".into()))?;
+        let typography = theme.tokens.typography();
+        let role = |size: f64, weight| TypeRole {
+            size: size as f32,
+            weight,
+        };
+        Ok(ThemeTokens {
+            preferences,
+            colors: ColorTokens::cupertino(&theme.tokens, preferences.appearance)?,
+            metrics: ControlMetrics {
+                size: ControlSize::Regular,
+                button_height: regular(Control::PushButton)?,
+                button_inset: BUTTON_INSET,
+                button_radius: BUTTON_RADIUS,
+                field_height: regular(Control::TextField)?,
+                field_inset: FIELD_INSET,
+                field_radius: FIELD_RADIUS,
+                switch: Size::new(switch_width, regular(Control::Switch)?),
+                switch_thumb: SWITCH_THUMB,
+                switch_thumb_inset: SWITCH_THUMB_INSET,
+                min_target: Size::new(MIN_TARGET, MIN_TARGET),
+            },
+            type_scale: TypeScale {
+                family: typography.family.to_owned(),
+                body: role(typography.sizes.regular, REGULAR),
+                caption: role(typography.sizes.small, REGULAR),
+                section: TypeRole {
+                    size: SECTION_SIZE,
+                    weight: SEMIBOLD,
+                },
+                title: TypeRole {
+                    size: TITLE_SIZE,
+                    weight: SEMIBOLD,
+                },
+            },
+            focus: FocusRing {
+                width: FOCUS_RING_WIDTH,
+                outset: FOCUS_RING_OUTSET,
+                radius_extra: FOCUS_RING_RADIUS_EXTRA,
+            },
+            motion: Motion {
+                reduce: preferences.reduce_motion,
+                caret_phase_ms: CARET_PHASE_MS,
+            },
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Appearance, StateVariant};
+
+    fn preferences(appearance: Appearance) -> ThemePreferences {
+        ThemePreferences {
+            appearance,
+            reduce_transparency: false,
+            reduce_motion: false,
+        }
+    }
+
+    #[test]
+    fn heights_and_the_switch_come_from_the_theme_metrics_and_the_rest_from_the_spec() {
+        let theme = Theme::load().unwrap();
+        let tokens = ThemeTokens::cupertino(&theme, preferences(Appearance::Light)).unwrap();
+        let regular = |control| alignment_height(control, ControlSize::Regular).unwrap();
+        let m = tokens.metrics;
+        assert_eq!(m.size, ControlSize::Regular);
+        assert_eq!(m.button_height, regular(Control::PushButton));
+        assert_eq!(m.field_height, regular(Control::TextField));
+        assert_eq!(
+            m.switch,
+            Size::new(
+                control_metric(Control::Switch)
+                    .fixed_width(ControlSize::Regular)
+                    .unwrap(),
+                regular(Control::Switch)
+            )
+        );
+        assert_eq!(
+            (m.button_height, m.field_height, m.switch),
+            (20.0, 20.0, Size::new(38.0, 22.0))
+        );
+        assert_eq!(
+            (
+                m.button_inset,
+                m.button_radius,
+                m.field_inset,
+                m.field_radius
+            ),
+            (10.0, 5.0, 6.0, 5.0)
+        );
+        assert_eq!((m.switch_thumb, m.switch_thumb_inset), (18.0, 2.0));
+        assert_eq!(m.min_target, Size::new(24.0, 24.0));
+        assert_eq!(
+            tokens.focus,
+            FocusRing {
+                width: 2.0,
+                outset: 2.0,
+                radius_extra: 3.0
+            }
+        );
+        assert_eq!(tokens.motion.caret_phase_ms, 500);
+    }
+
+    #[test]
+    fn body_and_caption_follow_the_theme_type_scale() {
+        let theme = Theme::load().unwrap();
+        let tokens = ThemeTokens::cupertino(&theme, preferences(Appearance::Dark)).unwrap();
+        let typography = theme.tokens.typography();
+        let t = &tokens.type_scale;
+        assert_eq!(t.family, typography.family);
+        assert_eq!(t.body.size, typography.sizes.regular as f32);
+        assert_eq!(t.caption.size, typography.sizes.small as f32);
+        assert_eq!((t.body.weight, t.caption.weight), (400, 400));
+        assert_eq!((t.body.size, t.caption.size), (13.0, 11.0));
+        assert_eq!((t.section.size, t.section.weight), (12.0, 600));
+        assert_eq!((t.title.size, t.title.weight), (15.0, 600));
+
+        let json =
+            std::fs::read_to_string(cupertino_theme::spec_dir().join("tokens.json")).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        value["typography"]["sizes"]["regular"] = 14.into();
+        let larger = Theme {
+            tokens: cupertino_theme::DesignTokens::from_str(&value.to_string()).unwrap(),
+            ..theme
+        };
+        let tokens = ThemeTokens::cupertino(&larger, preferences(Appearance::Dark)).unwrap();
+        assert_eq!(tokens.type_scale.body.size, 14.0);
+    }
+
+    #[test]
+    fn preferences_choose_the_colours_and_reduce_motion() {
+        let theme = Theme::load().unwrap();
+        let prefs = ThemePreferences {
+            appearance: Appearance::DarkHighContrast,
+            reduce_transparency: true,
+            reduce_motion: true,
+        };
+        let tokens = ThemeTokens::cupertino(&theme, prefs).unwrap();
+        assert_eq!(tokens.preferences, prefs);
+        assert!(tokens.motion.reduce);
+        assert_eq!(
+            tokens.colors,
+            ColorTokens::cupertino(&theme.tokens, Appearance::DarkHighContrast).unwrap()
+        );
+        assert!(tokens
+            .colors
+            .get(crate::ColorRole::Text, StateVariant::NORMAL)
+            .is_some());
+    }
+}

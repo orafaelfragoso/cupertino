@@ -7,6 +7,7 @@ use std::collections::HashMap;
 pub use cupertino_theme::{Appearance, Color, ControlSize, DesignTokens};
 
 mod adapter;
+mod metrics;
 mod neutral;
 mod palette;
 

@@ -28,3 +28,12 @@ Accepted exceptions: the Cupertino light and dark palettes keep their look below
 in places (white on the accent and red fills, secondary, placeholder and light header text, control, field and switch
 outlines, separators, the light focus ring at 2.49:1). High contrast and neutral are the accessible palettes. Switch
 tracks and separators of the neutral palettes keep the Cupertino look below 3:1.
+
+## Theme tokens
+
+`ThemeTokens::cupertino(theme, preferences)` is the Cupertino theme: the colours above for the preferred appearance;
+button and field heights (20 pt) and the switch (38 × 22 pt) from the theme's regular control metrics; body (13 pt) and
+caption (11 pt) sizes and the font family from its type scale; the reduce-motion preference. Approximate: button inset
+10 pt and radius 5 pt, field inset 6 pt and radius 5 pt, switch thumb 18 pt with a 2 pt inset, 24 × 24 pt minimum
+target, section 12 pt and title 15 pt semibold, a 2 pt focus ring 2 pt outside the chrome with 3 pt added radius, and
+500 ms caret phases.

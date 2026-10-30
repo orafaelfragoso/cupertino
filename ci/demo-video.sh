@@ -10,7 +10,7 @@
 # --bins, cargo build --release -p cupertino-kit --example forms), SIZE (output pixels, default 2560x1440), SCALE
 # (default 2), ENCODER (ffmpeg video encoder; default h264_nvenc when ffmpeg has it, else libx264),
 # CUPERTINO_ASSET_DIR (the asset pack, as session.sh reads it).
-# Needs: ffmpeg, python3, and what session.sh needs.
+# Needs: ffmpeg, python3, unshare (util-linux, unprivileged user namespaces), and what session.sh needs.
 set -euo pipefail
 
 usage() { sed -n '7,8p' "$0" >&2; exit 2; }
@@ -33,8 +33,17 @@ printf 'Super+k = exec:%s\n' "$forms" >"$scratch/home/.config/cupertino/shortcut
 mkdir -p "$scratch/share"
 for dir in mime icons; do [ -d "/usr/share/$dir" ] && ln -s "/usr/share/$dir" "$scratch/share/$dir"; done
 
+# the session runs in namespaces of its own where the machine is named "cupertino" (the host name, /etc/hostname, and
+# an empty /etc/machine-info), so About This Computer and the Files sidebar do not show the recording machine's name
+echo cupertino >"$scratch/hostname"
+: >"$scratch/machine-info"
 session() {
-  FIXTURE_DIR="$scratch/home" HOME_NAME=avery SYSTEM_DATA_DIRS="$scratch/share" SIZE="$size" "$root/crates/cupertino-server/scripts/session.sh" --scale "${SCALE:-2}" "$@"
+  FIXTURE_DIR="$scratch/home" HOME_NAME=avery SYSTEM_DATA_DIRS="$scratch/share" SIZE="$size" NAMES="$scratch" \
+    unshare --map-root-user --uts --mount sh -c 'hostname cupertino &&
+      mount --bind "$NAMES/hostname" /etc/hostname &&
+      { [ ! -e /etc/machine-info ] || mount --bind "$NAMES/machine-info" /etc/machine-info; } &&
+      exec "$0" "$@"' \
+    "$root/crates/cupertino-server/scripts/session.sh" --scale "${SCALE:-2}" "$@"
 }
 
 if [ -n "${frames:-}" ]; then

@@ -52,7 +52,7 @@ pub fn run<A: Application>() -> Result<(), AppError> {
     // the first frame already has the session's appearance
     let (mut options, theme) = options_and_theme(start_preferences(system.appearance()))?;
     let follow = theme_for(theme, Arc::clone(&options.theme));
-    options.accessibility = Some(Box::new(AtspiAdapter::new(system.waker())));
+    options.accessibility = Some(Box::new(AtspiAdapter::muted(system.waker())));
     Runtime::<A, _>::new(system, options)
         .with_theme_for(follow)
         .run()

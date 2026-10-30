@@ -66,6 +66,8 @@ struct BackdropState {
 enum Control {
     /// Switch the session to the light appearance with reduce transparency and increase contrast.
     AppearanceChange,
+    /// Lock the session, telling an observer of version 5 or later.
+    Lock,
     /// Resize the toplevel to 640 x 480 and activate it.
     ResizeToplevel,
     /// Enter the toplevel with the pointer and scroll it twice down and once right.
@@ -448,6 +450,9 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Mock {
                 // the session starts dark and with reduce motion
                 observer.appearance(1);
                 observer.display_options(DisplayOption::ReduceMotion);
+                if observer.version() >= 5 {
+                    observer.session_lock(0);
+                }
                 state.appearance = Some(observer);
             }
             _ => {}
@@ -531,6 +536,12 @@ fn spawn_server(
                     observer.display_options(
                         DisplayOption::ReduceTransparency | DisplayOption::IncreaseContrast,
                     );
+                }
+                Ok(Control::Lock) => {
+                    let observer = mock.appearance.as_ref().unwrap();
+                    if observer.version() >= 5 {
+                        observer.session_lock(1);
+                    }
                 }
                 Ok(Control::ResizeToplevel) => {
                     let t = mock.toplevel.as_ref().unwrap();
@@ -690,6 +701,42 @@ fn the_appearance_and_display_options_arrive_at_once_and_on_every_change() {
             }),
         ]
     );
+}
+
+#[test]
+fn a_version_5_observer_is_told_the_lock_state_after_the_appearance_and_on_every_change() {
+    for (version, told) in [(4, false), (5, true)] {
+        let (mut conn, control, _committed, _seen) = connect_at(version);
+        let effects = AppEffects::bind(&mut conn).unwrap();
+        assert_eq!(effects.tells_session_lock(), told);
+        let _appearance = effects.appearance(&conn);
+        conn.roundtrip().unwrap();
+        control.send(Control::Lock).unwrap();
+        control.send(Control::AppearanceChange).unwrap();
+        let mut stash = Stash::new();
+        let mut changes = Vec::new();
+        wait_for(&mut conn, &mut stash, |e| {
+            changes.extend(app_event(e));
+            matches!(changes.last(), Some(AppEvent::DisplayOptions(_)) if changes.len() > 2)
+                .then_some(())
+        });
+        let locks: Vec<_> = changes
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| matches!(e, AppEvent::SessionLock { .. }))
+            .collect();
+        if told {
+            assert_eq!(
+                locks,
+                [
+                    (2, &AppEvent::SessionLock { locked: false }),
+                    (3, &AppEvent::SessionLock { locked: true })
+                ]
+            );
+        } else {
+            assert_eq!(locks, []);
+        }
+    }
 }
 
 #[test]

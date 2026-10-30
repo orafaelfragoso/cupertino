@@ -12,6 +12,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use cupertino_protocols::client::app_effects::cupertino_app_effects_v1::CupertinoAppEffectsV1;
+use cupertino_protocols::client::app_effects::cupertino_appearance_v1::{
+    self, CupertinoAppearanceV1,
+};
 use cupertino_server::Cupertino;
 use smithay::reexports::calloop::EventLoop;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
@@ -115,6 +119,8 @@ struct LockStatus {
     motions: Vec<(f64, f64)>,
     /// The unaccelerated deltas of the relative pointer's motion events.
     relative: Vec<(f64, f64)>,
+    /// The session lock's `locked` and the appearance observer's `session_lock` events, in order.
+    lock_events: Vec<String>,
 }
 
 struct ClientState {
@@ -162,8 +168,25 @@ ignore_events!(
     wl_region::WlRegion,
     wl_subcompositor::WlSubcompositor,
     wl_subsurface::WlSubsurface,
-    zwlr_layer_shell_v1::ZwlrLayerShellV1
+    zwlr_layer_shell_v1::ZwlrLayerShellV1,
+    CupertinoAppEffectsV1
 );
+
+impl Dispatch<CupertinoAppearanceV1, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        _: &CupertinoAppearanceV1,
+        event: cupertino_appearance_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let cupertino_appearance_v1::Event::SessionLock { locked } = event {
+            let mut status = state.lock_status.lock().unwrap();
+            status.lock_events.push(format!("session_lock {locked}"));
+        }
+    }
+}
 
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for ClientState {
     fn event(
@@ -219,7 +242,10 @@ impl Dispatch<ext_session_lock_v1::ExtSessionLockV1, ()> for ClientState {
     ) {
         let mut status = state.lock_status.lock().unwrap();
         match event {
-            ext_session_lock_v1::Event::Locked => status.locked = true,
+            ext_session_lock_v1::Event::Locked => {
+                status.locked = true;
+                status.lock_events.push("locked".into());
+            }
             ext_session_lock_v1::Event::Finished => status.finished = true,
             _ => {}
         }
@@ -831,8 +857,23 @@ impl Client {
 
     /// A client that locks the session and covers the output with a lock surface.
     pub fn locker(stream: UnixStream) -> Client {
-        Self::run_over(stream, |queue, client, globals| {
+        Self::locking(stream, false)
+    }
+
+    /// A [`Self::locker`] that observes the session's appearance at version 5 before it locks, so the order of what it
+    /// is told shows in [`Self::lock_events`].
+    pub fn observing_locker(stream: UnixStream) -> Client {
+        Self::locking(stream, true)
+    }
+
+    fn locking(stream: UnixStream, observe: bool) -> Client {
+        Self::run_over(stream, move |queue, client, globals| {
             let qh = queue.handle();
+            let observer = observe.then(|| {
+                let effects: CupertinoAppEffectsV1 = globals.bind(&qh, 5..=5, ()).unwrap();
+                let observer = effects.get_appearance(&qh, ());
+                (effects, observer)
+            });
             let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
             let manager: ext_session_lock_manager_v1::ExtSessionLockManagerV1 =
                 globals.bind(&qh, 1..=1, ()).unwrap();
@@ -843,7 +884,7 @@ impl Client {
             let lock_surface = lock.get_lock_surface(&surface, &output, &qh, surface.clone());
             queue.roundtrip(client).unwrap();
             Setup {
-                objects: Box::new((manager, output, seat, surface, lock_surface)),
+                objects: Box::new((manager, output, seat, surface, lock_surface, observer)),
                 lock: Some(lock),
                 release: None,
             }
@@ -883,6 +924,25 @@ impl Client {
                 })),
             }
         })
+    }
+
+    /// A client that observes the session's appearance through `cupertino_app_effects_v1` bound at `version`.
+    pub fn appearance_observer(socket: PathBuf, version: u32) -> Client {
+        Self::run(socket, move |queue, _, globals| {
+            let qh = queue.handle();
+            let effects: CupertinoAppEffectsV1 = globals.bind(&qh, version..=version, ()).unwrap();
+            let observer = effects.get_appearance(&qh, ());
+            Setup {
+                objects: Box::new((effects, observer)),
+                lock: None,
+                release: None,
+            }
+        })
+    }
+
+    /// The session lock's `locked` and the appearance observer's `session_lock` events the client got, in order.
+    pub fn lock_events(&self) -> Vec<String> {
+        self.lock_status.lock().unwrap().lock_events.clone()
     }
 
     pub fn locked(&self) -> bool {

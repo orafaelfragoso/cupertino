@@ -58,6 +58,13 @@ pub enum Checked {
     Mixed,
 }
 
+/// How assistive technology announces a node's changes as they happen: politely when it is idle, or at once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Live {
+    Polite,
+    Assertive,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum AccessibleValue {
     Text {
@@ -133,6 +140,8 @@ pub struct AccessibilityNode {
     pub relations: Vec<Relation>,
     /// In reading order.
     pub children: Vec<NodeId>,
+    /// A live region: its changes are announced as they happen.
+    pub live: Option<Live>,
 }
 
 /// What changed in one window's tree since the previous update.

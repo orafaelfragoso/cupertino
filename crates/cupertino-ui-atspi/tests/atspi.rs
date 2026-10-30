@@ -55,6 +55,7 @@ fn node(
         actions,
         relations: Vec::new(),
         children,
+        live: None,
     }
 }
 

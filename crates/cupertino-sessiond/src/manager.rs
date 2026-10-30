@@ -76,16 +76,47 @@ pub fn run() -> ExitCode {
     }
 }
 
-/// `cupertino-sessiond --check-config`: print each line of the settings file that was not understood, and fail when there
-/// is one, so packaging and administrators see a typo the manager only logs. A refused file lists its refusals alone.
+/// `cupertino-sessiond --check-config`: print each line of the settings file that was not understood, and each key the
+/// manager ignores because the file is not root's alone, and fail when there is one, so packaging and administrators see
+/// what the manager only logs. A refused file lists its refusals alone.
 pub fn check_config() -> ExitCode {
     let path = LoginConfig::path();
-    let (problems, outcome) = match LoginConfig::load() {
-        Ok(loaded) => (loaded.problems, "the setting takes its safe value"),
-        Err(problems) => (problems, "the manager refuses the file"),
+    if let Err(e) = File::open(&path) {
+        if e.kind() == io::ErrorKind::PermissionDenied {
+            eprintln!(
+                "{}: cannot be read by this user; run the check as root",
+                path.display()
+            );
+            return ExitCode::FAILURE;
+        }
+    }
+    let problems: Vec<String> = match LoginConfig::load() {
+        Ok(loaded) => {
+            let mut problems: Vec<String> = loaded
+                .problems
+                .iter()
+                .map(|p| format!("{}; the setting takes its safe value", describe(p)))
+                .collect();
+            if let Err(reason) = auto_login::settings_are_trusted(&path) {
+                let config = &loaded.config;
+                for (key, set) in [
+                    ("auto-login", config.auto_login.is_some()),
+                    ("admin-groups", config.admin_groups.is_some()),
+                ] {
+                    if set {
+                        problems.push(format!("{key} is ignored: {reason}"));
+                    }
+                }
+            }
+            problems
+        }
+        Err(problems) => problems
+            .iter()
+            .map(|p| format!("{}; the manager refuses the file", describe(p)))
+            .collect(),
     };
     for problem in &problems {
-        eprintln!("{}: {}; {outcome}", path.display(), describe(problem));
+        eprintln!("{}: {problem}", path.display());
     }
     if problems.is_empty() {
         println!("{}: ok", path.display());

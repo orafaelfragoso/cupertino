@@ -1676,6 +1676,30 @@ fn the_session_managers_check_fails_on_each_line_it_does_not_understand() {
         errors.contains("greeter-command is required; the manager refuses the file"),
         "{errors}"
     );
+
+    // Safety: geteuid has no preconditions.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    // the test's own file is not root's alone, so the manager would ignore the keys only root may set
+    let (ok, errors) = check(&format!("{required}auto-login = alice\n"));
+    assert!(!ok);
+    assert_eq!(errors.lines().count(), 1, "{errors}");
+    assert!(errors.contains("auto-login is ignored"), "{errors}");
+
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let output = Command::new(&sessiond)
+        .arg("--check-config")
+        .env("CUPERTINO_LOGIN_CONF", &file)
+        .output()
+        .expect("the binary starts");
+    assert!(!output.status.success());
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        errors.contains("cannot be read by this user; run the check as root"),
+        "{errors}"
+    );
 }
 
 /// The session manager refuses a mode it does not know. Its start without an argument is a system service (it binds

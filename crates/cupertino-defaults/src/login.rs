@@ -134,14 +134,17 @@ impl LoginConfig {
             if line.is_empty() {
                 continue;
             }
-            // a line without `=` is bad for the key it starts with, so `hide-admin-users true` does not leave it open
+            // a line without `=` is bad for the key it starts with, so `hide-admin-users true` or `hide-admin-users: true`
+            // does not leave it open
             let (key, applied) = match line.split_once('=') {
                 Some((key, value)) => {
                     let key = key.trim();
                     (key, config.apply(key, value.trim()))
                 }
                 None => (
-                    line.split_whitespace().next().unwrap_or(line),
+                    line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+                        .next()
+                        .unwrap_or(line),
                     Err(format!("expected `key = value`, got {line:?}")),
                 ),
             };
@@ -427,7 +430,7 @@ mod tests {
     #[test]
     fn a_line_without_equals_is_a_bad_line_of_its_first_word() {
         let text =
-            format!("{REQUIRED}hidden-users alice\nhide-admin-users false\nauto-login alice\n");
+            format!("{REQUIRED}hidden-users alice\nhide-admin-users: false\nauto-login:alice\n");
         let Loaded { config, problems } = LoginConfig::parse(&text).unwrap();
         assert_eq!(
             problems,
@@ -438,11 +441,11 @@ mod tests {
                 ),
                 (
                     4,
-                    "expected `key = value`, got \"hide-admin-users false\"".to_owned()
+                    "expected `key = value`, got \"hide-admin-users: false\"".to_owned()
                 ),
                 (
                     5,
-                    "expected `key = value`, got \"auto-login alice\"".to_owned()
+                    "expected `key = value`, got \"auto-login:alice\"".to_owned()
                 ),
             ]
         );
@@ -452,14 +455,14 @@ mod tests {
         assert_eq!(config.auto_login, None);
 
         let problems = LoginConfig::parse(
-            "greeter-command /usr/bin/cupertino-server\nsession-command = /usr/bin/true\n",
+            "greeter-command:/usr/bin/cupertino-server\nsession-command = /usr/bin/true\n",
         )
         .unwrap_err();
         assert_eq!(
             problems,
             [(
                 1,
-                "expected `key = value`, got \"greeter-command /usr/bin/cupertino-server\""
+                "expected `key = value`, got \"greeter-command:/usr/bin/cupertino-server\""
                     .to_owned()
             )]
         );

@@ -4,9 +4,10 @@
 use cupertino_assets::{Assets, FontRole, FontSource, BUILTIN_FONT};
 use cupertino_modifiers::Profile;
 use cupertino_theme::Theme;
+use cupertino_ui_atspi::AtspiAdapter;
 use cupertino_ui_core::{Application, MonotonicClock, Runtime, RuntimeOptions, UiError};
 use cupertino_ui_layout::LayoutDirection;
-use cupertino_ui_platform::PlatformError;
+use cupertino_ui_platform::{PlatformError, WindowSystem};
 use cupertino_ui_render::{CpuConfig, CpuRenderer};
 use cupertino_ui_text::{FontIndex, GlyphRaster, TextSystem};
 use cupertino_ui_theme::{Appearance, ThemePreferences, ThemeTokens};
@@ -38,11 +39,12 @@ impl fmt::Display for AppError {
 
 impl std::error::Error for AppError {}
 
-/// Opens `A`'s windows on the session's Wayland display and runs until the application exits or its last window
-/// without a close handler is closed.
+/// Opens `A`'s windows on the session's Wayland display, publishes them to assistive technology over AT-SPI, and runs
+/// until the application exits or its last window without a close handler is closed.
 pub fn run<A: Application>() -> Result<(), AppError> {
-    let options = options()?;
+    let mut options = options()?;
     let system = WaylandWindowSystem::connect(Profile::cupertino()).map_err(AppError::Connect)?;
+    options.accessibility = Some(Box::new(AtspiAdapter::new(system.waker())));
     Runtime::<A, _>::new(system, options)
         .run()
         .map_err(AppError::Runtime)

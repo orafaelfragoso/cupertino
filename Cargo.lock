@@ -1138,6 +1138,7 @@ dependencies = [
  "cupertino-geometry",
  "cupertino-modifiers",
  "cupertino-theme",
+ "cupertino-ui-atspi",
  "cupertino-ui-controls",
  "cupertino-ui-core",
  "cupertino-ui-layout",

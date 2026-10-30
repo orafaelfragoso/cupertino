@@ -1148,7 +1148,10 @@ fn a_toplevel_of_the_authentication_prompt_ends_its_connection_and_is_no_window(
 fn a_connection_with_the_capture_role_alone_captures_a_window() {
     let Some(mut h) = Harness::new() else { return };
     let (_app, frame) = mapped_app(&mut h);
-    let (_process, stream) = holder_with_capture_role(&h);
+    let (stream, _holder) = common::held_shell_connection(
+        &h.state,
+        &[cupertino_server::authorization::ShellRole::Capture],
+    );
     let mut c = TestClient::connect(&mut h, stream, Capturer::default());
     let interfaces = c.interfaces();
     for name in CAPTURE_GLOBALS

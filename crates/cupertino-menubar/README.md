@@ -193,8 +193,13 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   in both text colours when the icons load, and drawn in the one of the bar's tone), the dot of a status item without
   an icon and the open title's highlight. What keeps the appearance: the menus and the screen capture indicator's
   indigo. Third-party status items keep their own icons. Before the first value, below version 14, and while Increase
-  Contrast or Reduce Transparency makes the bar solid, the whole bar keeps the appearance's palette. A bar redraws only
-  when its tone changes.
+  Contrast or Reduce Transparency makes the bar solid, the whole bar keeps the appearance's palette. Over a mid-tone
+  wallpaper neither text colour reaches 4.5:1 alone (about 4.0:1 at 500, 3.4:1 at the band's edges), so the bar paints a
+  scrim over its whole strip before anything else (`BarTone::scrim`): black under light text, white under dark text, at
+  the smallest alpha that brings the text to 4.6:1 over the measured lightness (black from about 458, 0.089 at 500,
+  0.175 at 549; white up to about 536, 0.069 at 500, 0.146 at 451), and none outside that range or on the appearance's
+  palette. The server measures the lightness through the bar's material, so the scrim is worked out against what is
+  under the text. A bar redraws when its tone or its scrim changes.
 - **System menu.** The first slot draws the system mark (`cupertino_icons::system_mark`, tinted with the label colour) and
   opens `Extras::system_menu`: About This Computer, Settings…, Recent Items, Force Quit…, then Sleep, Restart…, Shut Down…, Lock Screen, Log
   Out <name>… and, when the session agent can switch, Login Window…, with separators between the groups. Every row and
@@ -262,7 +267,8 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   colour, dimmed to 0.4 when the radio is off or has no link; no signal-strength or charge-level variants) are approximate.
   Third-party status items keep their own icons (ARGB pixmap, absolute path or `hicolor`).
 - **approximate.** Bar height (24 pt), paddings, popup metrics, submenu open / close delays, the safe triangle, the
-  type-ahead timeout, the backdrop thresholds (550 and 450, split at 500 when decided afresh) and what the tone covers.
+  type-ahead timeout, the backdrop thresholds (550 and 450, split at 500 when decided afresh), what the tone covers, and the
+  scrim's target (4.6:1, against the 4.5:1 of normal text) and cap (0.25).
 
 **Text.** The `ui` font is a variable font whose optical size follows the point size, so every `TextRenderer` owner calls `set_scale` with the output scale before it draws and measures (`BarText` sets it from the output's scale on every measure and draw): text is laid out in points at the same optical size it is drawn with, at every output scale.
 
@@ -282,4 +288,5 @@ cargo clippy -p cupertino-menubar --all-targets
 | Test | Proves |
 |---|---|
 | `tests/dbus_integration.rs` | Fake DBusMenu, StatusNotifier and GMenuModel peers work against the clients and services, on a private bus from `cupertino-test-bus` (a `dbus-daemon` child that dies with its test). It skips with a message when `dbus-daemon` is not installed. |
+| `src/raster.rs` tests (feature `app`) | The bar's text reaches 4.5:1 with its scrim at every lightness from 0 to 1000 for every tone it can hold there, and through each appearance's `MenuBar` colour ops (from `cupertino-glass`, a dev-dependency) for every wallpaper grey; no scrim outside the mid band or on the appearance's palette; the scrim values at 500 and 549; the bar paints its scrim over the whole surface. |
 | `tests/extras_bus.rs` (feature `app`) | Stand-ins for the network, power, Bluetooth and notification services, served on one bus used as both system and session bus. Checks what the extras read, that joining an open network calls `Connect` without a passphrase and is read back, and that a service leaving the bus hides its item. |

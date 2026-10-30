@@ -553,9 +553,10 @@ impl App {
                                 .apply(update, &mut self.shared, |id| app_name(id, data_dirs));
                             if let Some(lightness) = update.backdrop_lightness {
                                 let bar = &mut self.bars[i];
+                                let scrim = bar.tone.scrim(bar.backdrop_lightness);
                                 bar.backdrop_lightness = Some(lightness);
                                 let tone = bar.tone.next(Some(lightness), self.observed.display);
-                                if tone != bar.tone {
+                                if tone != bar.tone || tone.scrim(Some(lightness)) != scrim {
                                     bar.tone = tone;
                                     bar.presenter.request_redraw();
                                 }
@@ -1110,6 +1111,7 @@ impl App {
                     &self.style,
                     &self.shared,
                 );
+                let scrim = tone.scrim(bar.backdrop_lightness);
                 bar.presenter.draw(&mut self.conn, None, |pm, scale| {
                     style.paint_bar(
                         text,
@@ -1118,6 +1120,7 @@ impl App {
                         c.content(),
                         c.highlighted_slot(),
                         tone,
+                        scrim,
                         shared,
                         scale.factor(),
                     )

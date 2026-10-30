@@ -26,6 +26,14 @@ palettes, at 3:1 or more against the window there. The dialog scrim (`DialogScri
 translucent in every palette, since it dims what it covers: 20 % black in light, 40 % in dark, 60 % in high-contrast
 dark.
 
+Links (`Link`) take the theme's link token in light and dark and reach 4.5:1 against the window and text backgrounds in
+the built-in palettes. A page indicator dot for a page not shown (`PageDot`) is text at 20 % in light and dark and an
+opaque grey at 3:1 or more in the built-in palettes; the shown page's dot is `Text`.
+
+`ThemeTokens::surface` gives a sidebar, menu or popover the material to ask the compositor for (`Sidebar`, or `Menu`
+for menus and popovers) and the opaque window background to paint where there is none. With reduced transparency or in
+high contrast it asks for no material.
+
 Approximate: every state colour, the disabled fills and borders, the opaque thumb, the dark white role text and the
 dark tooltip in the Cupertino light and dark palettes; all neutral and high-contrast values.
 

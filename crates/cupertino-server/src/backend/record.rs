@@ -37,11 +37,11 @@ pub struct Recorder {
     writer: JoinHandle<Result<Written>>,
 }
 
-/// Record output 0 into `path` from `after` on. Opening a FIFO waits for its reader.
+/// Record output 0 into `path` from `started` on. Opening a FIFO waits for its reader.
 pub fn start(
     event_loop: &EventLoop<'static, Cupertino>,
     path: &Path,
-    after: Duration,
+    started: Instant,
 ) -> Result<Recorder> {
     let file = File::create(path).with_context(|| format!("opening {}", path.display()))?;
     let (send, receive) = sync_channel::<Frame>(2);
@@ -66,7 +66,6 @@ pub fn start(
         .context("starting the recording thread")?;
     let frames = Rc::new(RefCell::new(Some(send)));
     let sender = frames.clone();
-    let started = Instant::now() + after;
     let mut due = 0;
     let mut unsent = 0;
     let mut size = None;

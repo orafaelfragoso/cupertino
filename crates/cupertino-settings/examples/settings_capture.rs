@@ -5,7 +5,8 @@
 //! `ci/capture.sh settings/accessibility --login saving --scale 2` (the flags are `cupertino-capture`'s)
 //!
 //! State flags: `--login none|saving|refused` (Accessibility: no login screen service, a write waiting for its reply,
-//! a write refused; default: the service with no file) and `--mice one|two` (Mouse; default one). The settings are
+//! a write refused; default: the service with no file), `--mice one|two` (Mouse; default one) and `--scroll PT` (the
+//! pane scrolled by PT points, clamped to the form as the app does). The settings are
 //! the defaults (no files are read); the live readings are example data, not a machine's. The sidebar material is the
 //! server's: here a flat fill of the window background stands in for it.
 
@@ -253,13 +254,15 @@ impl Capture {
         })
     }
 
-    /// The window on `pane` drawn with `live`, the Login Screen row refused when `refused`.
+    /// The window on `pane` drawn with `live`, the Login Screen row refused when `refused`, the pane scrolled by
+    /// `scroll` points (clamped to the form, as the app does).
     #[allow(clippy::too_many_arguments)]
     fn window(
         &mut self,
         pane: PaneId,
         live: &Live,
         refused: bool,
+        scroll: f64,
         size: Size,
         scale: f32,
         session: Session,
@@ -295,7 +298,9 @@ impl Capture {
                 footer: s.footer.is_some(),
             })
             .collect();
-        let (form, _) = form::layout(&specs, layout.content.x, layout.content.w, layout.content.y);
+        let (form, form_height) =
+            form::layout(&specs, layout.content.x, layout.content.w, layout.content.y);
+        let scroll = scroll.clamp(0.0, (form_height - layout.content.h).max(0.0));
         let history = History::new(pane);
         let search = SearchField::default();
         let state = WindowState {
@@ -317,7 +322,7 @@ impl Capture {
             &PaneView {
                 sections: &sections,
                 layout: &form,
-                scroll: 0.0,
+                scroll,
                 dragging: None,
             },
             pal,
@@ -328,7 +333,7 @@ impl Capture {
 
 impl App for Capture {
     const NAME: &'static str = "settings";
-    const STATE_FLAGS: &'static [&'static str] = &["login", "mice"];
+    const STATE_FLAGS: &'static [&'static str] = &["login", "mice", "scroll"];
 
     fn surfaces(&self) -> Vec<String> {
         PANES
@@ -354,8 +359,21 @@ impl App for Capture {
     fn capture(&mut self, r: &Request<'_>) -> Result<Pixmap, String> {
         let mut live = self.live.clone();
         let mut refused = false;
+        let mut scroll = 0.0;
         for (flag, value) in r.state {
             match (flag.as_str(), r.surface, value.as_str()) {
+                ("scroll", "search-results", _) => {
+                    return Err("settings/search-results does not scroll".into())
+                }
+                ("scroll", ..) => {
+                    scroll = value
+                        .parse()
+                        .ok()
+                        .filter(|s: &f64| s.is_finite() && *s >= 0.0)
+                        .ok_or_else(|| {
+                            format!("--scroll {value}: points from the top, 0 or more")
+                        })?
+                }
                 ("login", "accessibility", "none") => live.login_screen = None,
                 ("login", "accessibility", "saving") => {
                     live.login_screen = Some(LoginScreen {
@@ -419,6 +437,7 @@ impl App for Capture {
                     PaneId::Wallpaper,
                     &live,
                     false,
+                    scroll,
                     size,
                     r.scale,
                     session,
@@ -449,7 +468,7 @@ impl App for Capture {
             key => {
                 let pane = PaneId::from_key(key).ok_or_else(|| format!("{key}: no pane"))?;
                 Ok(self
-                    .window(pane, &live, refused, size, r.scale, session, &pal)?
+                    .window(pane, &live, refused, scroll, size, r.scale, session, &pal)?
                     .0)
             }
         }

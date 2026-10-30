@@ -68,3 +68,4 @@ name = "files_samples"
 
 [[example]]
 name = "files_capture"
+test = true

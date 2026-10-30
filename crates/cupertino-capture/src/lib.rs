@@ -151,6 +151,11 @@ pub fn parse(
             },
         }
     }
+    if let (true, Some((name, _))) = (options.sheet, options.state.first()) {
+        return Err(format!(
+            "--sheet shows the states {app} lists; drop --{name}"
+        ));
+    }
     let order = |(name, _): &(String, String)| state_flags.iter().position(|f| f == name);
     options.state.sort_by_key(order);
     match (&options.surface, list) {

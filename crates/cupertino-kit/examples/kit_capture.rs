@@ -1,6 +1,9 @@
 //! The toolkit's surfaces for look checks, each a window drawn on the headless window system with the CPU renderer:
-//! `kit/controls`, a sheet of the choice and value controls in their states (check boxes, radio buttons, a segmented
-//! control, sliders and progress), and `kit/icons`, a grid of system symbols at the toolkit's sizes and tints.
+//! `kit/controls`, the sheet of the choice and value controls of Kit's row 167a capture (check boxes off, on, mixed and
+//! disabled, radio buttons, a segmented control, the regular, ticked, level and disabled sliders, and progress), and
+//! `kit/icons`, a grid of system symbols at the toolkit's sizes and tints with the chevrons along the reading direction
+//! and the placeholder of a missing symbol. `--direction ltr|rtl` (default ltr) lays a surface out in that direction;
+//! the sheet shows both.
 //!
 //! `ci/capture.sh kit/controls --scale 2` (the flags are `cupertino-capture`'s)
 //!
@@ -18,6 +21,7 @@ use cupertino_kit::controls::{
 };
 use cupertino_kit::core::{Checked, CommandRegistry};
 use cupertino_kit::geometry::{Insets, Size};
+use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{
     Capabilities, DecorationMode, SystemAppearance, Timestamp, WindowEvent, WindowStates,
 };
@@ -29,24 +33,28 @@ use cupertino_theme::Theme;
 use cupertino_ui_test::{ManualClock, TestDriver};
 use tiny_skia::{IntSize, Pixmap};
 
-/// Between the sheet's sections and between a section's title and its controls, an approximate design value.
-const SECTION_GAP: f64 = 12.0;
 /// Between the controls of a row, an approximate design value.
 const ROW_GAP: f64 = 16.0;
-/// The symbols of the icon grid: the toolbar, sidebar and status symbols the apps draw.
-const SYMBOLS: [&str; 12] = [
-    "symbol.chevron.left",
-    "symbol.chevron.right",
-    "symbol.magnifyingglass",
-    "symbol.house",
-    "symbol.desktop",
-    "symbol.document",
-    "symbol.download",
-    "symbol.trash",
-    "symbol.wifi",
-    "symbol.bluetooth",
-    "symbol.speaker.high",
-    "symbol.battery",
+/// Between the rows of a window, an approximate design value.
+const LINE_GAP: f64 = 12.0;
+/// The rows of the icon grid: the toolbar, sidebar and status symbols the apps draw, the chevrons again along the
+/// reading direction (mirrored under `--direction rtl`), and a name no pack provides (the placeholder).
+const SYMBOLS: [(&str, IconDirection); 15] = [
+    ("symbol.chevron.left", IconDirection::Fixed),
+    ("symbol.chevron.right", IconDirection::Fixed),
+    ("symbol.magnifyingglass", IconDirection::Fixed),
+    ("symbol.house", IconDirection::Fixed),
+    ("symbol.desktop", IconDirection::Fixed),
+    ("symbol.document", IconDirection::Fixed),
+    ("symbol.download", IconDirection::Fixed),
+    ("symbol.trash", IconDirection::Fixed),
+    ("symbol.wifi", IconDirection::Fixed),
+    ("symbol.bluetooth", IconDirection::Fixed),
+    ("symbol.speaker.high", IconDirection::Fixed),
+    ("symbol.battery", IconDirection::Fixed),
+    ("symbol.chevron.left", IconDirection::Semantic),
+    ("symbol.chevron.right", IconDirection::Semantic),
+    ("symbol.does-not-exist", IconDirection::Fixed),
 ];
 /// The icon sizes of the grid in points: small, regular and large symbols.
 const ICON_SIZES: [f64; 3] = [16.0, 20.0, 24.0];
@@ -80,14 +88,6 @@ fn stack(axis: Axis, spacing: f64, children: Vec<Element<Message>>) -> Element<M
     })
 }
 
-fn section(title: &str, content: Element<Message>) -> Element<Message> {
-    stack(
-        Axis::Vertical,
-        SECTION_GAP,
-        vec![text(title, TextRole::Section), content],
-    )
-}
-
 fn window(title: &'static str, size: Size, content: Vec<Element<Message>>) -> Vec<Window<Message>> {
     vec![Window {
         key: WindowKey(title.into()),
@@ -105,7 +105,7 @@ fn window(title: &'static str, size: Size, content: Vec<Element<Message>>) -> Ve
         content: Element::new(Stack {
             axis: Axis::Vertical,
             padding: WINDOW_CONTENT_INSET,
-            spacing: ROW_GAP,
+            spacing: LINE_GAP,
             align: Align::Stretch,
             children: content,
         }),
@@ -148,100 +148,48 @@ impl Application for Controls {
                 on_change: None,
             })
         };
-        let progress = |label: &str, value| {
-            Element::new(Progress {
-                label: label.into(),
-                value: Some(value),
-            })
-        };
         window(
             "Controls",
-            Size::new(460.0, 560.0),
+            Size::new(440.0, 330.0),
             vec![
-                section(
-                    "Check boxes",
-                    stack(
-                        Axis::Horizontal,
-                        ROW_GAP,
-                        vec![
-                            check("Off", Checked::False, true),
-                            check("On", Checked::True, true),
-                            check("Mixed", Checked::Mixed, true),
-                            check("Disabled", Checked::True, false),
-                        ],
-                    ),
+                stack(
+                    Axis::Horizontal,
+                    ROW_GAP,
+                    vec![
+                        check("Off", Checked::False, true),
+                        check("On", Checked::True, true),
+                        check("Mixed", Checked::Mixed, true),
+                        check("Disabled", Checked::True, false),
+                    ],
                 ),
-                section(
-                    "Radio buttons",
-                    stack(
-                        Axis::Horizontal,
-                        ROW_GAP,
-                        vec![
-                            Element::new(RadioGroup {
-                                label: "Size".into(),
-                                options: vec!["Small".into(), "Medium".into(), "Large".into()],
-                                selected: Some(1),
-                                axis: Axis::Vertical,
-                                spacing: 6.0,
-                                enabled: true,
-                                on_select: None,
-                            }),
-                            Element::new(RadioGroup {
-                                label: "Disabled".into(),
-                                options: vec!["Left".into(), "Right".into()],
-                                selected: Some(0),
-                                axis: Axis::Vertical,
-                                spacing: 6.0,
-                                enabled: false,
-                                on_select: None,
-                            }),
-                        ],
-                    ),
+                Element::new(RadioGroup {
+                    label: "Size".into(),
+                    options: vec!["Small".into(), "Medium".into(), "Large".into()],
+                    selected: Some(1),
+                    axis: Axis::Horizontal,
+                    spacing: ROW_GAP,
+                    enabled: true,
+                    on_select: None,
+                }),
+                stack(
+                    Axis::Horizontal,
+                    0.0,
+                    vec![Element::new(SegmentedControl {
+                        label: "View".into(),
+                        segments: vec!["Icons".into(), "List".into(), "Columns".into()],
+                        selected: Some(1),
+                        enabled: true,
+                        on_select: None,
+                    })],
                 ),
-                section(
-                    "Segmented control",
-                    stack(
-                        Axis::Horizontal,
-                        ROW_GAP,
-                        vec![
-                            Element::new(SegmentedControl {
-                                label: "Range".into(),
-                                segments: vec!["Day".into(), "Week".into(), "Month".into()],
-                                selected: Some(1),
-                                enabled: true,
-                                on_select: None,
-                            }),
-                            Element::new(SegmentedControl {
-                                label: "Disabled".into(),
-                                segments: vec!["On".into(), "Off".into()],
-                                selected: Some(0),
-                                enabled: false,
-                                on_select: None,
-                            }),
-                        ],
-                    ),
-                ),
-                section(
-                    "Sliders",
-                    stack(
-                        Axis::Vertical,
-                        SECTION_GAP,
-                        vec![
-                            slider("Regular", 0.3, 0, SliderStyle::Regular, true),
-                            slider("Ticks", 0.5, 5, SliderStyle::Regular, true),
-                            slider("Level", 0.6, 0, SliderStyle::Level, true),
-                            slider("Disabled", 0.4, 0, SliderStyle::Regular, false),
-                        ],
-                    ),
-                ),
-                section(
-                    "Progress",
-                    stack(
-                        Axis::Vertical,
-                        SECTION_GAP,
-                        vec![progress("Started", 0.1), progress("Half", 0.5)],
-                    ),
-                ),
+                slider("Regular", 0.4, 0, SliderStyle::Regular, true),
+                slider("Ticks", 0.7, 5, SliderStyle::Regular, true),
+                slider("Level", 0.6, 0, SliderStyle::Level, true),
+                slider("Disabled", 0.3, 0, SliderStyle::Regular, false),
+                Element::new(Progress {
+                    label: "Progress".into(),
+                    value: Some(0.6),
+                }),
             ],
         )
     }
@@ -262,37 +210,47 @@ impl Application for Icons {
     }
 
     fn view(_: &()) -> Vec<Window<Message>> {
-        let icon = |name: &str, size, tint| {
-            Element::new(Icon {
-                name: name.into(),
-                size,
-                direction: IconDirection::Fixed,
-                label: None,
-                tint,
-            })
-        };
         let rows = SYMBOLS
             .iter()
-            .map(|name| {
+            .map(|&(name, direction)| {
+                let icon = |size, tint| {
+                    Element::new(Icon {
+                        name: name.into(),
+                        size,
+                        direction,
+                        label: None,
+                        tint,
+                    })
+                };
                 let mut row: Vec<Element<Message>> =
-                    ICON_SIZES.iter().map(|&s| icon(name, s, None)).collect();
-                row.push(icon(name, 20.0, Some(ColorRole::SecondaryText)));
-                row.push(icon(name, 20.0, Some(ColorRole::KeyboardFocusIndicator)));
-                row.push(text(name.trim_start_matches("symbol."), TextRole::Caption));
+                    ICON_SIZES.iter().map(|&s| icon(s, None)).collect();
+                row.push(icon(20.0, Some(ColorRole::SecondaryText)));
+                row.push(icon(20.0, Some(ColorRole::KeyboardFocusIndicator)));
+                let mut caption = name.trim_start_matches("symbol.").to_string();
+                if direction == IconDirection::Semantic {
+                    caption.push_str(", semantic");
+                }
+                row.push(text(&caption, TextRole::Caption));
                 stack(Axis::Horizontal, ROW_GAP, row)
             })
             .collect();
         window(
             "Icons",
-            Size::new(340.0, 440.0),
+            Size::new(360.0, 540.0),
             vec![stack(Axis::Vertical, 8.0, rows)],
         )
     }
 }
 
-/// The window of `A` drawn at rest in `look` at `scale`, `size` points when given.
-fn draw<A: Application>(look: Look, scale: f32, size: Option<Size>) -> Result<Pixmap, String> {
+/// The window of `A` drawn at rest in `look` at `scale` and `direction`, `size` points when given.
+fn draw<A: Application>(
+    look: Look,
+    scale: f32,
+    direction: LayoutDirection,
+    size: Option<Size>,
+) -> Result<Pixmap, String> {
     let mut options = cupertino_kit::app::options().map_err(|e| e.to_string())?;
+    options.direction = direction;
     let preferences = cupertino_kit::app::preferences(&SystemAppearance {
         dark: look.dark,
         increase_contrast: look.increase_contrast,
@@ -360,21 +318,32 @@ struct Capture;
 
 impl App for Capture {
     const NAME: &'static str = "kit";
-    const STATE_FLAGS: &'static [&'static str] = &[];
+    const STATE_FLAGS: &'static [&'static str] = &["direction"];
 
     fn surfaces(&self) -> Vec<String> {
         vec!["controls".into(), "icons".into()]
     }
 
     fn sheet_states(&self, _: &str) -> Vec<State> {
-        vec![State::new()]
+        vec![
+            State::new(),
+            vec![("direction".to_string(), "rtl".to_string())],
+        ]
     }
 
     fn capture(&mut self, r: &Request<'_>) -> Result<Pixmap, String> {
         let size = r.size.map(|(w, h)| Size::new(w, h));
+        let mut direction = LayoutDirection::Ltr;
+        for (_, value) in r.state {
+            direction = match value.as_str() {
+                "ltr" => LayoutDirection::Ltr,
+                "rtl" => LayoutDirection::Rtl,
+                _ => return Err(format!("--direction {value}: ltr or rtl")),
+            };
+        }
         match r.surface {
-            "controls" => draw::<Controls>(r.look, r.scale, size),
-            _ => draw::<Icons>(r.look, r.scale, size),
+            "controls" => draw::<Controls>(r.look, r.scale, direction, size),
+            _ => draw::<Icons>(r.look, r.scale, direction, size),
         }
     }
 }

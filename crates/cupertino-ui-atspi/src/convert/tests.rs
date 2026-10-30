@@ -138,6 +138,17 @@ fn a_password_field_never_carries_its_value_nor_takes_one() {
 }
 
 #[test]
+fn a_secret_is_never_a_live_region() {
+    let mut field = base(Role::PasswordInput);
+    field.live = Some(Live::Assertive);
+    assert_eq!(node(&field).live(), None);
+    let mut field = base(Role::TextInput);
+    field.value = Some(AccessibleValue::Protected);
+    field.live = Some(Live::Polite);
+    assert_eq!(node(&field).live(), None);
+}
+
+#[test]
 fn a_protected_value_of_any_role_is_a_secret() {
     let mut field = base(Role::TextInput);
     field.value = Some(AccessibleValue::Protected);

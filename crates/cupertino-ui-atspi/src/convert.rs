@@ -23,7 +23,8 @@ pub(crate) fn protected(node: &AccessibilityNode) -> bool {
     node.role == Role::PasswordInput || node.value == Some(AccessibleValue::Protected)
 }
 
-/// The AccessKit node for `node`. A protected node gets no value and offers no way to set one or its selection.
+/// The AccessKit node for `node`. A protected node gets no value, offers no way to set one or its selection, and is
+/// never a live region.
 pub(crate) fn node(node: &AccessibilityNode) -> accesskit::Node {
     let secret = protected(node);
     let mut out = accesskit::Node::new(role(node.role));
@@ -118,6 +119,7 @@ pub(crate) fn node(node: &AccessibilityNode) -> accesskit::Node {
             .collect::<Vec<_>>(),
     );
     match node.live {
+        _ if secret => {}
         Some(Live::Polite) => out.set_live(accesskit::Live::Polite),
         Some(Live::Assertive) => out.set_live(accesskit::Live::Assertive),
         None => {}

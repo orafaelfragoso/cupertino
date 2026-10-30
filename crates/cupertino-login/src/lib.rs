@@ -27,6 +27,7 @@
 //! Sizes, positions, the shake, the fades and the hide timer come from the analysis; the wallpaper source, the field material, the dots and the notice are approximate, each
 //! labelled where it is defined.
 
+pub mod access;
 #[cfg(feature = "app")]
 pub mod auth;
 pub mod autostart;

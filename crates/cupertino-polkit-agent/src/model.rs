@@ -14,7 +14,7 @@ use crate::text::shown;
 /// Helper runs per prompt: after this many failures polkitd is told the authentication is over, unauthorised.
 pub const ATTEMPTS: u8 = 3;
 /// What the prompt says after a failed attempt.
-pub const TRY_AGAIN: &str = "Sorry, that didn't work. Try again.";
+pub const TRY_AGAIN: &str = "Incorrect password. Try again.";
 /// The longest answer the field takes, in bytes.
 pub const MAX_ANSWER: usize = 512;
 

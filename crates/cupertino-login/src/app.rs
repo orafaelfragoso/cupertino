@@ -432,7 +432,7 @@ impl App {
         let now = self.now();
         let screen = match &self.lock {
             Some(lock) => {
-                let to_next_minute = 60 - screen::unix_seconds()?.rem_euclid(60) as u64;
+                let to_next_minute = 60 - screen::display_unix_seconds()?.rem_euclid(60) as u64;
                 let by_screen = lock.screen.next_wakeup(now);
                 Some(by_screen.map_or(Duration::from_secs(to_next_minute), |s| {
                     Duration::from_secs_f64(s).min(Duration::from_secs(to_next_minute))

@@ -90,7 +90,7 @@ impl Icons {
 
     /// The trash's icon, empty or full as the trash folder is.
     fn trash(&mut self, px: u32) -> &Pixmap {
-        let now = Instant::now();
+        let now = cupertino_shell_client::test_clock::display_now();
         let full = match self.trash {
             Some((at, full)) if now.duration_since(at) < TRASH_CHECK_EVERY => full,
             _ => {

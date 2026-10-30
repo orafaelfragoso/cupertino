@@ -1,11 +1,12 @@
 //! The cursor drawn by the client from an XCursor theme, for a compositor without `wp_cursor_shape_v1`. An animated
-//! cursor shows its first image.
+//! cursor plays its images, each for its own delay, while the pointer stays on the surface it was set over.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Write;
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use rustix::fs::{memfd_create, MemfdFlags};
 use wayland_client::protocol::wl_buffer::WlBuffer;
@@ -140,20 +141,38 @@ fn inherits(index: &Path) -> Option<Vec<String>> {
     )
 }
 
-/// A cursor image in a buffer of its own.
-struct Loaded {
+/// The most images of one animated cursor kept; themes ship a few dozen at most.
+const MAX_FRAMES: usize = 64;
+/// The shortest an animated cursor shows an image: a frame of a 60 Hz output. A shorter or zero delay in a theme file
+/// would redraw the cursor on every wake of the loop.
+const MIN_DELAY: Duration = Duration::from_millis(16);
+
+/// A cursor image in a buffer of its own, shown for `delay` when the cursor is animated.
+struct Frame {
     buffer: WlBuffer,
     size: (u32, u32),
     hotspot: (u32, u32),
+    delay: Duration,
+}
+
+/// The cursor on screen: which images, the one shown, and when the next is due.
+struct Showing {
+    key: (u32, u32),
+    frame: usize,
+    next: Option<Instant>,
+    pointer: WlPointer,
+    serial: u32,
+    scale: u32,
 }
 
 /// The theme (the user's, read when first needed, unless one was set), the images loaded from it for each shape and
-/// scale, and the surface the cursor is drawn on.
+/// scale, the cursor shown and the surface it is drawn on.
 pub(crate) struct ThemedCursor {
     compositor: WlCompositor,
     shm: WlShm,
     theme: Option<CursorTheme>,
-    loaded: HashMap<(u32, u32), Loaded>,
+    loaded: HashMap<(u32, u32), Vec<Frame>>,
+    showing: Option<Showing>,
     surface: Option<WlSurface>,
 }
 
@@ -164,16 +183,53 @@ impl ThemedCursor {
             shm,
             theme: None,
             loaded: HashMap::new(),
+            showing: None,
             surface: None,
         }
     }
 
     /// Draw from `theme` from now on.
     pub(crate) fn set_theme(&mut self, theme: CursorTheme) {
-        for (_, loaded) in self.loaded.drain() {
-            loaded.buffer.destroy();
+        self.stop();
+        for frame in self.loaded.drain().flat_map(|(_, frames)| frames) {
+            frame.buffer.destroy();
         }
         self.theme = Some(theme);
+    }
+
+    /// No cursor of this client is on screen any more: the pointer left, or another cursor replaced it.
+    pub(crate) fn stop(&mut self) {
+        self.showing = None;
+    }
+
+    /// When the next image of an animated cursor is due.
+    pub(crate) fn deadline(&self) -> Option<Instant> {
+        self.showing.as_ref()?.next
+    }
+
+    /// Show the next image of an animated cursor when it is due at `now`; whether one was shown.
+    pub(crate) fn advance(&mut self, now: Instant) -> bool {
+        let Some(showing) = self
+            .showing
+            .as_mut()
+            .filter(|s| s.next.is_some_and(|at| at <= now))
+        else {
+            return false;
+        };
+        let frames = &self.loaded[&showing.key];
+        showing.frame = (showing.frame + 1) % frames.len();
+        let frame = &frames[showing.frame];
+        showing.next = Some(now + frame.delay);
+        if let Some(surface) = &self.surface {
+            draw(
+                surface,
+                &showing.pointer,
+                showing.serial,
+                frame,
+                showing.scale,
+            );
+        }
+        true
     }
 
     /// Show `shape` drawn for `scale` as the cursor of the pointer entered with `serial`.
@@ -188,36 +244,34 @@ impl ThemedCursor {
         let scale = scale.max(1);
         let key = (shape as u32, scale);
         if !self.loaded.contains_key(&key) {
-            let loaded = self.load(qh, shape, scale)?;
-            self.loaded.insert(key, loaded);
+            let frames = self.load(qh, shape, scale)?;
+            self.loaded.insert(key, frames);
         }
-        let loaded = &self.loaded[&key];
-        let (width, height) = loaded.size;
-        // a buffer scale must divide the buffer's size; a theme without a size for this scale draws it at 1
-        let buffer_scale = if width.is_multiple_of(scale) && height.is_multiple_of(scale) {
-            scale
-        } else {
-            1
-        };
+        let frames = &self.loaded[&key];
         let surface = self
             .surface
             .get_or_insert_with(|| self.compositor.create_surface(qh, ()));
-        surface.set_buffer_scale(buffer_scale as i32);
-        surface.attach(Some(&loaded.buffer), 0, 0);
-        surface.damage_buffer(0, 0, width as i32, height as i32);
-        surface.commit();
-        pointer.set_cursor(
+        draw(surface, pointer, serial, &frames[0], scale);
+        let animated = frames.len() > 1;
+        self.showing = Some(Showing {
+            key,
+            frame: 0,
+            next: animated.then(|| Instant::now() + frames[0].delay),
+            pointer: pointer.clone(),
             serial,
-            Some(surface),
-            (loaded.hotspot.0 / buffer_scale) as i32,
-            (loaded.hotspot.1 / buffer_scale) as i32,
-        );
+            scale,
+        });
         Ok(())
     }
 
-    /// The image of the theme's file for `shape`, or else its default cursor, whose nominal size is nearest to the
+    /// The images of the theme's file for `shape`, or else its default cursor, at the nominal size nearest to the
     /// theme's size at `scale`.
-    fn load(&mut self, qh: &QueueHandle<State>, shape: Shape, scale: u32) -> Result<Loaded, Error> {
+    fn load(
+        &mut self,
+        qh: &QueueHandle<State>,
+        shape: Shape,
+        scale: u32,
+    ) -> Result<Vec<Frame>, Error> {
         let theme = self.theme.get_or_insert_with(CursorTheme::from_env);
         let names: Vec<&str> = names(shape)
             .iter()
@@ -231,14 +285,43 @@ impl ThemedCursor {
             .ok()
             .and_then(|bytes| images(&bytes))
             .ok_or(Error::Protocol("a cursor file that is not an XCursor file"))?;
-        let image = nearest(&images, theme.size.saturating_mul(scale))
-            .ok_or(Error::Protocol("a cursor file without an image"))?;
-        Ok(Loaded {
-            buffer: upload(&self.shm, qh, image)?,
-            size: (image.width, image.height),
-            hotspot: (image.xhot.min(image.width), image.yhot.min(image.height)),
-        })
+        let images = frames(&images, theme.size.saturating_mul(scale));
+        if images.is_empty() {
+            return Err(Error::Protocol("a cursor file without an image"));
+        }
+        images
+            .into_iter()
+            .map(|image| {
+                Ok(Frame {
+                    buffer: upload(&self.shm, qh, image)?,
+                    size: (image.width, image.height),
+                    hotspot: (image.xhot.min(image.width), image.yhot.min(image.height)),
+                    delay: delay(image.delay),
+                })
+            })
+            .collect()
     }
+}
+
+/// Show `frame` drawn for `scale` as the cursor of the pointer entered with `serial`.
+fn draw(surface: &WlSurface, pointer: &WlPointer, serial: u32, frame: &Frame, scale: u32) {
+    let (width, height) = frame.size;
+    // a buffer scale must divide the buffer's size; a theme without a size for this scale draws it at 1
+    let buffer_scale = if width.is_multiple_of(scale) && height.is_multiple_of(scale) {
+        scale
+    } else {
+        1
+    };
+    surface.set_buffer_scale(buffer_scale as i32);
+    surface.attach(Some(&frame.buffer), 0, 0);
+    surface.damage_buffer(0, 0, width as i32, height as i32);
+    surface.commit();
+    pointer.set_cursor(
+        serial,
+        Some(surface),
+        (frame.hotspot.0 / buffer_scale) as i32,
+        (frame.hotspot.1 / buffer_scale) as i32,
+    );
 }
 
 /// Whether the table of contents and every image an XCursor file declares lie within the file. The parser sizes an
@@ -282,8 +365,30 @@ fn images(bytes: &[u8]) -> Option<Vec<Image>> {
 fn nearest(images: &[Image], wanted: u32) -> Option<&Image> {
     images
         .iter()
-        .filter(|i| (1..=MAX_SIDE).contains(&i.width) && (1..=MAX_SIDE).contains(&i.height))
+        .filter(|i| drawable(i))
         .min_by_key(|i| i.size.abs_diff(wanted))
+}
+
+/// The images of the cursor at the nominal size nearest to `wanted`, in the file's order, at most [`MAX_FRAMES`]: one
+/// for a still cursor, each animation step for an animated one.
+fn frames(images: &[Image], wanted: u32) -> Vec<&Image> {
+    let Some(size) = nearest(images, wanted).map(|i| i.size) else {
+        return Vec::new();
+    };
+    images
+        .iter()
+        .filter(|i| i.size == size && drawable(i))
+        .take(MAX_FRAMES)
+        .collect()
+}
+
+/// How long an image whose file says `millis` is shown, at least [`MIN_DELAY`].
+fn delay(millis: u32) -> Duration {
+    Duration::from_millis(millis.into()).max(MIN_DELAY)
+}
+
+fn drawable(image: &Image) -> bool {
+    (1..=MAX_SIDE).contains(&image.width) && (1..=MAX_SIDE).contains(&image.height)
 }
 
 /// A buffer holding `image`. XCursor pixels are little-endian ARGB, the byte order of `wl_shm`'s `argb8888`.
@@ -380,6 +485,27 @@ mod tests {
             out.extend(std::iter::repeat_n(0xff, pixels));
         }
         out
+    }
+
+    #[test]
+    fn an_image_shows_for_its_delay_but_never_less_than_a_frame() {
+        assert_eq!(delay(0), MIN_DELAY);
+        assert_eq!(delay(1), MIN_DELAY);
+        assert_eq!(delay(30), Duration::from_millis(30));
+    }
+
+    #[test]
+    fn an_animated_cursor_keeps_each_image_of_the_nearest_size_in_order() {
+        let bytes = file(
+            &[(24, 4, 4), (48, 4, 4), (24, 4, 4), (48, 4, 4), (24, 4, 4)],
+            64,
+        );
+        let images = parse_xcursor(&bytes).unwrap();
+        assert_eq!(frames(&images, 24).len(), 3);
+        assert!(frames(&images, 40).iter().all(|i| i.size == 48));
+        assert_eq!(frames(&images, 40).len(), 2);
+        let many = file(&vec![(24, 4, 4); MAX_FRAMES + 6], 64);
+        assert_eq!(frames(&parse_xcursor(&many).unwrap(), 24).len(), MAX_FRAMES);
     }
 
     #[test]

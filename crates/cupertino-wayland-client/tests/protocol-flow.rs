@@ -129,6 +129,8 @@ enum Control {
         x: f64,
         y: f64,
     },
+    /// The pointer leaves the toplevel.
+    Leave,
     TypeKey(u32),
     Offer(Vec<&'static str>),
     /// Configure the layer surface this many times in a row, each a pixel wider.
@@ -1217,6 +1219,12 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
             pointer.enter(serial, &surface, x, y);
             pointer.motion(4000, x, y);
             pointer.button(serial + 1, 4242, BTN_LEFT, wl_pointer::ButtonState::Pressed);
+            pointer.frame();
+        }
+        Control::Leave => {
+            let (serial, surface) = (mock.serial(), mock.surface().clone());
+            let pointer = mock.pointer.as_ref().unwrap();
+            pointer.leave(serial, &surface);
             pointer.frame();
         }
         Control::TypeKey(code) => {
@@ -2379,6 +2387,11 @@ fn presented_frames_report_their_time_on_the_compositors_clock_and_discarded_one
 
 /// An XCursor file holding one opaque image per `(nominal size, width, height, hotspot)`.
 fn xcursor(images: &[(u32, u32, u32, (u32, u32))]) -> Vec<u8> {
+    animated_xcursor(images, 0)
+}
+
+/// [`xcursor`] with each image shown for `delay` milliseconds.
+fn animated_xcursor(images: &[(u32, u32, u32, (u32, u32))], delay: u32) -> Vec<u8> {
     const IMAGE: u32 = 0xfffd_0002;
     let words = |out: &mut Vec<u8>, ws: &[u32]| ws.iter().for_each(|w| out.extend(w.to_le_bytes()));
     let mut out = b"Xcur".to_vec();
@@ -2391,11 +2404,85 @@ fn xcursor(images: &[(u32, u32, u32, (u32, u32))]) -> Vec<u8> {
     for (nominal, width, height, (x, y)) in images {
         words(
             &mut out,
-            &[36, IMAGE, *nominal, 1, *width, *height, *x, *y, 0],
+            &[36, IMAGE, *nominal, 1, *width, *height, *x, *y, delay],
         );
         words(&mut out, &vec![0xff00_0000; (width * height) as usize]);
     }
     out
+}
+
+#[test]
+fn an_animated_theme_cursor_plays_its_images_until_the_pointer_leaves() {
+    let themes = std::env::temp_dir().join(format!("cupertino-animated-{}", std::process::id()));
+    let cursors = themes.join("test").join("cursors");
+    std::fs::create_dir_all(&cursors).unwrap();
+    let steps = [(24, 8, 8, (1, 1)), (24, 8, 8, (2, 2)), (24, 8, 8, (3, 3))];
+    std::fs::write(cursors.join("wait"), animated_xcursor(&steps, 30)).unwrap();
+    let (mut conn, control, seen) = connect(Globals {
+        seat: true,
+        ..Globals::core()
+    });
+    conn.set_cursor_theme(CursorTheme {
+        name: "test".into(),
+        size: 24,
+        search_path: vec![themes.clone()],
+    });
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    control.send(Control::Click { x: 5.0, y: 5.0 }).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(
+            e,
+            Event::Pointer {
+                event: PointerEvent::Enter(_),
+                ..
+            }
+        )
+        .then_some(())
+    });
+    conn.set_cursor(CursorShape::Wait).unwrap();
+    let mut hotspots = Vec::new();
+    let started = Instant::now();
+    // a wait longer than the whole animation: only the cursor's own timer ends each one in time
+    while hotspots.len() < 4 && started.elapsed() < Duration::from_secs(5) {
+        stash.extend(conn.wait(Some(Duration::from_secs(2))).unwrap());
+        hotspots.extend(seen.try_iter().filter_map(|s| match s {
+            Seen::Cursor { hotspot, .. } => Some(hotspot),
+            _ => None,
+        }));
+    }
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "the wait did not wake for the next image: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        hotspots,
+        [(1, 1), (2, 2), (3, 3), (1, 1)],
+        "each image in turn, then again"
+    );
+    control.send(Control::Leave).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(
+            e,
+            Event::Pointer {
+                event: PointerEvent::Leave,
+                ..
+            }
+        )
+        .then_some(())
+    });
+    seen.try_iter().for_each(drop);
+    let quiet = Instant::now() + Duration::from_millis(150);
+    while Instant::now() < quiet {
+        conn.wait(Some(Duration::from_millis(10))).unwrap();
+    }
+    assert!(
+        !seen.try_iter().any(|s| matches!(s, Seen::Cursor { .. })),
+        "the cursor animated after the pointer left"
+    );
+    std::fs::remove_dir_all(&themes).unwrap();
 }
 
 #[test]

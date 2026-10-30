@@ -340,6 +340,8 @@ pub struct Cupertino {
     pub xdg_activation_state: XdgActivationState,
     /// Keyboard shortcuts inhibitors and the releases of the person.
     pub shortcut_inhibit: crate::shortcut_inhibit::ShortcutInhibit,
+    /// The surfaces with a pointer constraint (`crate::pointer_constraints`).
+    pub pointer_constraints: crate::pointer_constraints::PointerConstraints,
     /// The keyboard focus being given now follows the person's own input (`Cupertino::as_input`).
     pub input_focus: bool,
     pub cursor_shape_state: CursorShapeManagerState,
@@ -594,6 +596,7 @@ impl Cupertino {
         ));
         let _ = PointerGesturesState::new::<Self>(&dh);
         let _ = RelativePointerManagerState::new::<Self>(&dh);
+        let _ = smithay::wayland::pointer_constraints::PointerConstraintsState::new::<Self>(&dh);
 
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(&dh, "seat0");
@@ -660,6 +663,7 @@ impl Cupertino {
             presentation_state,
             xdg_activation_state,
             shortcut_inhibit,
+            pointer_constraints: Default::default(),
             input_focus: false,
             cursor_shape_state,
             foreign_toplevel_state,
@@ -1512,6 +1516,7 @@ impl Cupertino {
         self.tick_overlays(now);
         let focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
         self.refresh_shortcut_inhibitors(focus.as_ref());
+        self.refresh_pointer_constraints(focus.as_ref());
         // windows without a close transform are skipped by `refresh_snapshot`
         let missing: Vec<WindowId> = self
             .windows
@@ -1775,6 +1780,7 @@ impl Cupertino {
             current_workspace: current,
             locked: self.session_lock.is_active(),
             input_held: self.shortcut_inhibit.holding(),
+            pointer_held: self.pointer_held(),
             key_window_fullscreen: self
                 .wm
                 .key_window()

@@ -39,6 +39,7 @@ pub mod logging;
 pub mod menu_bar;
 pub mod overlays;
 pub mod owner_check;
+pub mod pointer_constraints;
 pub mod policy;
 pub mod popup_grab;
 pub mod power;

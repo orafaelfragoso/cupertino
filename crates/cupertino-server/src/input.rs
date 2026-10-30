@@ -822,9 +822,11 @@ pub struct ActionContext {
     pub current_workspace: usize,
     /// The session is locked: only VT switching stays bound.
     pub locked: bool,
-    /// An application holds the keys or the pointer of the focused window: the chord that releases them acts only
-    /// then, and is the application's key otherwise.
+    /// An application holds the keys of the focused window: only the reserved actions stay the compositor's.
     pub input_held: bool,
+    /// An application holds the pointer. The chord that releases the keys and the pointer acts only while one of the
+    /// two is held, and is the application's key otherwise.
+    pub pointer_held: bool,
     /// The key window is in full screen: the full-screen toggle leaves it.
     pub key_window_fullscreen: bool,
 }
@@ -1136,7 +1138,7 @@ impl KeyRouter {
         match self
             .bindings
             .lookup(ev.sym, ev.mods)
-            .filter(|action| ctx.input_held || *action != Action::ReleaseShortcuts)
+            .filter(|action| ctx.pointer_held || *action != Action::ReleaseShortcuts)
         {
             Some(action) => {
                 if matches!(action, Action::SwitcherNext | Action::SwitcherPrev) {
@@ -2176,5 +2178,25 @@ mod tests {
             panic!("the release chord is consumed while the input is held");
         };
         assert_eq!(plan.ops, [ShellOp::ReleaseShortcuts]);
+    }
+
+    #[test]
+    fn a_held_pointer_alone_takes_the_release_chord_and_leaves_the_shortcuts_to_the_system() {
+        let mut r = KeyRouter::new(Config::default().keybindings);
+        let pointer = ActionContext {
+            pointer_held: true,
+            ..ctx()
+        };
+        let KeyOutcome::Consumed(plan) = press(&mut r, "Super+Escape", &pointer) else {
+            panic!("the release chord is consumed while the pointer is held");
+        };
+        assert_eq!(plan.ops, [ShellOp::ReleaseShortcuts]);
+        assert!(
+            matches!(
+                press(&mut r, "Super+Tab", &pointer),
+                KeyOutcome::Consumed(_)
+            ),
+            "the other shortcuts stay the system's"
+        );
     }
 }

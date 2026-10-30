@@ -457,7 +457,8 @@ mod tests {
 
     #[test]
     fn fallback_lookups_grow_with_the_text_not_faster() {
-        for unit in ["Hello", "日本"] {
+        // a cluster with the emoji selector looks for a colour face before any face
+        for unit in ["Hello", "日本", "❤\u{FE0F}"] {
             let (one, four) = (lookups(&unit.repeat(8)), lookups(&unit.repeat(32)));
             assert!(one > 0);
             assert_eq!(
@@ -470,6 +471,11 @@ mod tests {
             lookups("日"),
             3,
             "the matched face, the next and the one that has it"
+        );
+        assert_eq!(
+            lookups("❤\u{FE0F}"),
+            3,
+            "no colour face is loaded, so only the pass over every face looks up the heart"
         );
     }
 }

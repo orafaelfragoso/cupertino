@@ -117,18 +117,32 @@ fn main() {
         let convert = best(|| rgba_to_argb8888(pm.data(), &mut shm));
         // a damaged frame: only the rows of the search field's caret blink, and of a hovered list row
         let s = f64::from(scale);
-        let caret: Vec<(u32, u32)> = cupertino_files::window::caret_areas(&frame, None)
-            .unwrap()
-            .iter()
-            .map(|r| {
-                (
-                    (r.y() * s).floor() as u32,
-                    ((r.y() + r.height()) * s).ceil() as u32,
-                )
-            })
-            .collect();
+        let rows_of = |areas: &[cupertino_geometry::Rect]| -> Vec<(u32, u32)> {
+            areas
+                .iter()
+                .map(|r| {
+                    (
+                        (r.y() * s).floor() as u32,
+                        ((r.y() + r.height()) * s).ceil() as u32,
+                    )
+                })
+                .collect()
+        };
+        let caret = rows_of(&cupertino_files::window::caret_areas(&frame, None).unwrap());
         let row_top = ((frame.window.content.y + 100.0) * s) as u32;
         let hover = [(row_top, row_top + (24.0 * s) as u32)];
+        // a drag moving its drop outline from one item to the next, and a rubber band growing by 40 pt
+        let outline =
+            rows_of(&[3, 4].map(|i| cupertino_files::window::item_area(&frame, i).unwrap()));
+        let origin = cupertino_files::Point { x: 40.0, y: 60.0 };
+        let band = rows_of(&[300.0, 340.0].map(|y| {
+            cupertino_files::window::marquee_area(
+                &frame,
+                origin,
+                cupertino_files::Point { x: 600.0, y },
+            )
+            .unwrap()
+        }));
         let mut damaged = |rows: &[(u32, u32)]| {
             best(|| {
                 pm.fill(Color::TRANSPARENT);
@@ -137,10 +151,13 @@ fn main() {
             .saturating_sub(clear)
         };
         let (caret_paint, hover_paint) = (damaged(&caret), damaged(&hover));
+        let (outline_paint, band_paint) = (damaged(&outline), damaged(&band));
         println!(
-            "  damaged paint: search caret {:.2} ms, one list row {:.2} ms",
+            "  damaged paint: search caret {:.2} ms, one list row {:.2} ms, drop outline move {:.2} ms, rubber band move {:.2} ms",
             ms(caret_paint),
-            ms(hover_paint)
+            ms(hover_paint),
+            ms(outline_paint),
+            ms(band_paint)
         );
         // the parts: the content view's own pixmap, its blit, a full-window opaque fill
         let content = frame.window.content;

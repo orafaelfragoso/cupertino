@@ -467,14 +467,15 @@ fn wallpaper_element(p: &mut SceneParams<'_>) -> Piece {
         .config
         .appearance
         .with_high_contrast(p.display.increase_contrast);
-    let bar = p
-        .res
-        .recipe("MenuBar", appearance, p.display.reduce_transparency);
-    p.overlays.wallpaper.set_bar_ops(
-        bar.as_ref()
-            .and_then(|r| r.backdrop.as_ref())
-            .map_or(&[], |(_, _, ops)| ops.as_slice()),
-    );
+    let reduce_transparency = p.display.reduce_transparency;
+    let res = &p.res;
+    p.overlays
+        .wallpaper
+        .set_bar_material((appearance, reduce_transparency), || {
+            res.recipe("MenuBar", appearance, reduce_transparency)
+                .and_then(|r| r.backdrop.as_ref().map(|(_, _, ops)| ops.clone()))
+                .unwrap_or_default()
+        });
     // the image is laid in the logical space, which a quarter-turned output has on its side
     let px = p
         .output

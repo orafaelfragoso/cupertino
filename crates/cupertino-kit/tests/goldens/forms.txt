@@ -1,5 +1,5 @@
 window 1
-pending messages=0 tasks=0 frames=0 animating=false
+pending messages=0 tasks=0 frames=0 animating=false next_wake=Some(500000000)
 focus Some(NodeId(7v1))
 pointer_capture None
 text_input None
@@ -25,13 +25,13 @@ display
   paint 4294967297 parent=Some(4294967296) revision=2 bounds=[8,13.625 252x30] hit=[20,20 240x14.51953125] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 20.0]
     Glyphs origin=0,11.625 font=FontId(0) size=12 count=7 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
   paint 4294967298 parent=Some(4294967296) revision=3 bounds=[7,43.69953125 253x96.54900390625] hit=[20,46.51953125 240x88] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 46.51953125]
-  paint 4294967299 parent=Some(4294967298) revision=13 bounds=[13,43.69953125 247x32.50000000000001] hit=[20,46.51953125 240x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 46.51953125]
+  paint 4294967299 parent=Some(4294967298) revision=17 bounds=[13,43.69953125 247x32.50000000000001] hit=[20,46.51953125 240x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 46.51953125]
     Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 2.0 }, size: Size { width: 240.0, height: 20.0 } }, radius: 5.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
     Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.5, y: 2.5 }, size: Size { width: 239.0, height: 19.0 } }, radius: 4.5 }, width: 1.0, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.24705882 }) }
     PushClip(Rect(Rect { origin: Point { x: 6.0, y: 2.0 }, size: Size { width: 228.0, height: 20.0 } }))
     Glyphs origin=6,16.68 font=FontId(1) size=13 count=3 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
     PopClip
-  paint 4294967300 parent=Some(4294967298) revision=22 bounds=[13,75.69953125 247x32.5] hit=[20,78.51953125 240x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 78.51953125]
+  paint 4294967300 parent=Some(4294967298) revision=36 bounds=[13,75.69953125 247x32.5] hit=[20,78.51953125 240x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 78.51953125]
     Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 2.0 }, size: Size { width: 240.0, height: 20.0 } }, radius: 5.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
     Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.5, y: 2.5 }, size: Size { width: 239.0, height: 19.0 } }, radius: 4.5 }, width: 1.0, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.24705882 }) }
     PushClip(Rect(Rect { origin: Point { x: 6.0, y: 2.0 }, size: Size { width: 228.0, height: 20.0 } }))
@@ -40,7 +40,7 @@ display
   paint 4294967301 parent=Some(4294967298) revision=6 bounds=[7,107.51953125 253x32.72900390625] hit=[20,110.51953125 240x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 110.51953125]
   paint 4294967302 parent=Some(4294967301) revision=7 bounds=[7,107.74853515625 120.58642578125x32.5] hit=[20,114.65478515625 89.16552734375x15.7294921875] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 114.65478515625]
     Glyphs origin=0,12.59375 font=FontId(1) size=13 count=11 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
-  paint 4294967303 parent=Some(4294967301) revision=25 bounds=[113.16552734375,107.51953125 46x30] hit=[117.16552734375,110.51953125 38x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 117.16552734375, 110.51953125]
+  paint 4294967303 parent=Some(4294967301) revision=39 bounds=[113.16552734375,107.51953125 46x30] hit=[117.16552734375,110.51953125 38x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 117.16552734375, 110.51953125]
     Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 1.0 }, size: Size { width: 38.0, height: 22.0 } }, radius: 11.0 }, paint: Solid(Color { r: 0.0, g: 0.47843137, b: 1.0, a: 1.0 }) }
     Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 18.0, y: 3.0 }, size: Size { width: 18.0, height: 18.0 } }, radius: 9.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
     Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: -3.0, y: -2.0 }, size: Size { width: 44.0, height: 28.0 } }, radius: 14.0 }, width: 2.0, paint: Solid(Color { r: 0.23137255, g: 0.6, b: 0.9882353, a: 1.0 }) }

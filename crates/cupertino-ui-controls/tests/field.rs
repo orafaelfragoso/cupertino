@@ -6,11 +6,11 @@ use cupertino_ui_core::{
     AccessibleValue, Application, Command, Element, Role, TextSemantics, Window,
 };
 use cupertino_ui_layout::{Align, Axis};
-use cupertino_ui_platform::{ClipboardKind, Mods, WindowEvent};
+use cupertino_ui_platform::{ClipboardKind, Mods, PointerEvent, Timestamp, WindowEvent};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_text::{ContentPurpose, ImeBatch, ImeEvent, Preedit, CARET_WIDTH};
 use cupertino_ui_theme::{Color, ColorRole, InteractionVariant};
-use support::{color, point, window, Harness, ESCAPE, RETURN, TAB};
+use support::{color, label_width, point, window, Harness, ESCAPE, RETURN, TAB};
 
 const LEFT: (u32, u32) = (105, 0xff51);
 const BACKSPACE: (u32, u32) = (14, 0xff08);
@@ -499,4 +499,118 @@ fn a_keystroke_costs_no_more_than_linear_in_the_text() {
         ratio < 10.0,
         "a keystroke into 2000 characters took {long:?} against {short:?} for 500, {ratio:.1}x for 4x the text"
     );
+}
+
+const MS: u64 = 1_000_000;
+
+/// Moves the clock to `ms` milliseconds and lets the runtime deliver what is due.
+fn at(h: &mut Harness<App>, ms: u64) {
+    h.clock().advance_to(Timestamp(ms * MS)).unwrap();
+    h.settle();
+}
+
+fn next_wake(h: &Harness<App>) -> Option<u64> {
+    h.snapshot().pending.next_wake.map(|t| t.0 / MS)
+}
+
+#[test]
+fn the_caret_blinks_in_phases_from_its_last_move() {
+    let mut h = focused_name();
+    assert!(caret(&h).is_some());
+    assert_eq!(next_wake(&h), Some(500));
+    at(&mut h, 500);
+    assert!(caret(&h).is_none(), "off for the second phase");
+    at(&mut h, 1000);
+    assert!(caret(&h).is_some());
+
+    at(&mut h, 1200);
+    h.type_text("A");
+    at(&mut h, 1600);
+    assert!(caret(&h).is_some(), "a key restarts the on phase");
+    at(&mut h, 1700);
+    assert!(caret(&h).is_none());
+}
+
+#[test]
+fn an_idle_field_stops_blinking_with_the_caret_on_and_a_key_starts_it_again() {
+    let mut h = focused_name();
+    for ms in (500..=10_000).step_by(500) {
+        at(&mut h, ms);
+    }
+    assert!(caret(&h).is_some());
+    assert_eq!(next_wake(&h), None, "an idle focused window settles");
+    h.type_text("A");
+    assert_eq!(next_wake(&h), Some(10_500));
+}
+
+#[test]
+fn no_wake_is_left_while_text_is_selected_or_the_window_is_inactive() {
+    let mut h = focused_name();
+    h.type_text("Ada");
+    h.press_key(A, 'a' as u32, true, false, Mods::PRIMARY);
+    at(&mut h, 500);
+    assert_eq!(next_wake(&h), None, "a selection has no caret to blink");
+
+    h.press_key(LEFT.0, LEFT.1, true, false, Mods::NONE);
+    assert_eq!(next_wake(&h), Some(1000));
+    h.send(WindowEvent::Focus(false));
+    at(&mut h, 1000);
+    assert!(caret(&h).is_none(), "an inactive window shows no caret");
+    assert_eq!(next_wake(&h), None);
+
+    h.send(WindowEvent::Focus(true));
+    assert!(caret(&h).is_some(), "activation shows the caret again");
+    assert_eq!(next_wake(&h), Some(1500));
+}
+
+#[test]
+fn an_unfocused_field_asks_for_no_wake() {
+    let h = Harness::<App>::new();
+    assert_eq!(next_wake(&h), None);
+}
+
+/// The point inside the name field just after `prefix`, on the text's line.
+fn after(h: &Harness<App>, prefix: &str) -> cupertino_geometry::Point {
+    let field = h.rect("name");
+    point(
+        field.min_x() + 6.0 + label_width(prefix) - 1.0,
+        field.center().y,
+    )
+}
+
+#[test]
+fn a_second_and_third_click_select_the_word_and_then_everything() {
+    let mut h = focused_name();
+    h.type_text("hello world");
+    let world = after(&h, "hello wo");
+    h.click(world);
+    assert_eq!(editing(&h).1.selection, 8..8);
+    h.click(world);
+    assert_eq!(editing(&h).1.selection, 6..11, "the word");
+    h.click(world);
+    assert_eq!(editing(&h).1.selection, 0..11, "everything");
+}
+
+#[test]
+fn clicks_further_apart_than_the_interval_only_move_the_caret() {
+    let mut h = focused_name();
+    h.type_text("hello world");
+    let world = after(&h, "hello wo");
+    h.click(world);
+    h.clock().advance_to(Timestamp(600 * MS)).unwrap();
+    h.click(world);
+    assert_eq!(editing(&h).1.selection, 8..8);
+}
+
+#[test]
+fn a_drag_selects_from_the_press_to_the_pointer_even_past_the_field() {
+    let mut h = focused_name();
+    h.type_text("hello world");
+    let start = after(&h, "he");
+    h.pointer(PointerEvent::Motion { position: start });
+    h.button(start, true);
+    let past = point(h.rect("name").max_x() + 40.0, start.y);
+    h.pointer(PointerEvent::Motion { position: past });
+    h.button(past, false);
+    assert_eq!(editing(&h).1.selection, 2..11);
 }

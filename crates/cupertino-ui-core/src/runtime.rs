@@ -109,6 +109,8 @@ struct WindowState<M> {
     /// Each key held down and the node that took its press; it gets [`Event::Cancel`] if the window deactivates first.
     held: Vec<(HeldKey, NodeId)>,
     animate: BTreeSet<NodeId>,
+    /// When each node asked to be woken, one time per node; ordered so that nodes due together wake in a fixed order.
+    wakes: BTreeMap<NodeId, Timestamp>,
     text_input: Option<NodeId>,
     geometry: Geometry,
     accessibility: BTreeMap<NodeId, AccessibilityNode>,
@@ -206,9 +208,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 continue;
             }
             if !self.exit {
+                // a wake due later bounds the wait; `ready` makes one already due run before waiting at all
+                let timeout = self.next_wake().map(|at| {
+                    Duration::from_nanos(at.0.saturating_sub(self.options.clock.now().0))
+                });
                 let events = &mut self.events;
                 self.system
-                    .dispatch(None, events)
+                    .dispatch(timeout, events)
                     .map_err(UiError::Platform)?;
             }
         }
@@ -241,8 +247,19 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         })
     }
 
+    fn next_wake(&self) -> Option<Timestamp> {
+        self.windows
+            .iter()
+            .flat_map(|w| w.wakes.values())
+            .min()
+            .copied()
+    }
+
     fn ready(&self) -> bool {
         !self.events.is_empty()
+            || self
+                .next_wake()
+                .is_some_and(|at| at <= self.options.clock.now())
             || !self.messages.is_empty()
             || self.view_dirty
             || self.executor.has_ready()
@@ -263,10 +280,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 .filter(|w| w.dirty && !(w.configured && w.frame_ready))
                 .count(),
             animating: self.windows.iter().any(|w| !w.animate.is_empty()),
+            next_wake: self.next_wake(),
         }
     }
 
     fn turn(&mut self) -> Result<(), UiError> {
+        self.wake_due();
         for event in std::mem::take(&mut self.events) {
             self.platform_event(event)?;
         }
@@ -387,6 +406,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             for w in &mut self.windows {
                 w.pointer.retain(&self.tree);
                 w.animate.retain(|n| self.tree.contains(*n));
+                w.wakes.retain(|n, _| self.tree.contains(*n));
                 w.touches
                     .retain(|_, path| path.last().is_some_and(|&n| self.tree.contains(n)));
                 if w.text_input.is_some_and(|n| !self.tree.contains(n)) {
@@ -432,6 +452,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             touches: HashMap::new(),
             held: Vec::new(),
             animate: BTreeSet::new(),
+            wakes: BTreeMap::new(),
             text_input: None,
             geometry: Geometry::new(),
             accessibility: BTreeMap::new(),
@@ -476,7 +497,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.damage.invalidate();
                 if w.active != c.states.activated {
                     w.active = c.states.activated;
+                    if let Some(node) = w.focus.node() {
+                        let event = Event::WindowActive(w.active);
+                        route(&mut self.tree, w, now, &mut effects).notify(node, &event);
+                    }
                     self.invalidate_window(i);
+                    self.apply(i, effects);
                 }
                 return Ok(());
             }
@@ -519,6 +545,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 self.key(i, key, time, now, &mut effects);
             }
             WindowEvent::Focus(focused) => {
+                let changed = w.active != focused;
                 w.active = focused;
                 if !focused {
                     let held: BTreeSet<NodeId> = w.held.drain(..).map(|(_, node)| node).collect();
@@ -531,6 +558,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                         }
                     }
                     w.pointer = pointer;
+                }
+                if let Some(node) = w.focus.node().filter(|_| changed) {
+                    let event = Event::WindowActive(focused);
+                    route(&mut self.tree, w, now, &mut effects).notify(node, &event);
                 }
                 if let Some(adapter) = &mut self.options.accessibility {
                     adapter.window_focus(w.id, focused);
@@ -628,6 +659,32 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     }
 
     /// Carries out what handlers asked for while one event was routed.
+    /// Wakes every node whose time has come, before this turn's input.
+    fn wake_due(&mut self) {
+        let now = self.options.clock.now();
+        for i in 0..self.windows.len() {
+            let w = &mut self.windows[i];
+            let due: Vec<NodeId> = w
+                .wakes
+                .iter()
+                .filter(|&(_, &at)| at <= now)
+                .map(|(&node, _)| node)
+                .collect();
+            if due.is_empty() {
+                continue;
+            }
+            w.wakes.retain(|_, at| *at > now);
+            let mut effects = Effects::default();
+            let mut route = route(&mut self.tree, w, now, &mut effects);
+            for node in due {
+                if route.tree.contains(node) {
+                    route.notify(node, &Event::Wake(now));
+                }
+            }
+            self.apply(i, effects);
+        }
+    }
+
     fn apply(&mut self, i: usize, effects: Effects<A::Message>) {
         let now = self.options.clock.now();
         let w = &mut self.windows[i];
@@ -644,6 +701,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         if let Some(text) = effects.clipboard {
             Self::set_clipboard(&mut self.system, text);
         }
+        w.wakes.extend(effects.wakes);
         if !effects.animate.is_empty() {
             w.animate.extend(effects.animate);
             w.invalidate();
@@ -695,6 +753,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             return Effects::default();
         };
         w.invalidate();
+        // the same node with its ring shown or hidden keeps its focus: no events, only a repaint
+        if change.from == change.to {
+            return Effects::default();
+        }
         let mut effects = Effects::default();
         let mut route = route(tree, w, now, &mut effects);
         if let Some(from) = change.from {

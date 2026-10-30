@@ -1,6 +1,6 @@
 use super::*;
 use crate::test_support::{
-    leaf, options, options_with, row, FakeAdapter, FakeSystem, Leaf, MAX_PIXELS,
+    leaf, options, options_with, row, FakeAdapter, FakeClock, FakeSystem, Leaf, MAX_PIXELS,
 };
 use crate::{Role, Shortcut};
 use cupertino_ui_platform::{
@@ -8,6 +8,7 @@ use cupertino_ui_platform::{
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::Ordering;
 
 /// Two buttons; pressing `plus` (or Primary+=) counts up, and a `wait` message starts a task.
 struct Counter;
@@ -723,5 +724,140 @@ fn a_theme_equal_to_the_current_one_lays_nothing_out_again() {
     assert!(
         rt.windows[0].dirty,
         "a different theme lays the window out again"
+    );
+}
+
+/// One node that takes keys and asks to be woken 500 ns after each, logging what reaches it; `hide` unmounts it.
+struct Sleeper;
+
+impl Application for Sleeper {
+    type Model = Vec<String>;
+    type Message = String;
+
+    fn init() -> (Vec<String>, Vec<Command<String>>) {
+        (Vec::new(), Vec::new())
+    }
+
+    fn update(log: &mut Vec<String>, message: String) -> Vec<Command<String>> {
+        log.push(message);
+        Vec::new()
+    }
+
+    fn view(log: &Vec<String>) -> Vec<Window<String>> {
+        let content = if log.iter().any(|m| m == "hide") {
+            row(Vec::new())
+        } else {
+            row(vec![Element::new(Leaf {
+                stop: true,
+                wake_after: Some(500),
+                ..leaf("sleeper")
+            })])
+        };
+        vec![Window {
+            key: WindowKey("main".into()),
+            spec: WindowSpec {
+                title: "Sleeper".into(),
+                app_id: "test.sleeper".into(),
+                size: Size::new(200.0, 100.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Preferred,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            content: Element::new(content),
+        }]
+    }
+}
+
+type Sleepy = Runtime<Sleeper, FakeSystem>;
+
+/// A sleeper focused by Tab, with a clock the test moves.
+fn sleeper() -> (Sleepy, WindowId, Arc<FakeClock>) {
+    let clock = Arc::new(FakeClock::default());
+    let mut options = options(&Rc::default());
+    options.clock = clock.clone();
+    let mut rt = Sleepy::new(FakeSystem::default(), options);
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+    tap(&mut rt, window, 0xff09);
+    (rt, window, clock)
+}
+
+fn tap(rt: &mut Sleepy, window: WindowId, keysym: u32) {
+    rt.window_system_mut().send(
+        window,
+        WindowEvent::Key(
+            KeyEvent {
+                code: 0,
+                keysym: Keysym(keysym),
+                text: None,
+                pressed: true,
+                repeat: false,
+                mods: Mods::NONE,
+            },
+            Timestamp(0),
+        ),
+    );
+    rt.step(steps()).unwrap();
+}
+
+fn wakes(rt: &Sleepy) -> usize {
+    rt.model().iter().filter(|m| m.ends_with(":wake")).count()
+}
+
+#[test]
+fn a_node_is_woken_once_the_clock_reaches_the_time_it_asked_for() {
+    let (mut rt, window, clock) = sleeper();
+    clock.0.store(100, Ordering::SeqCst);
+    tap(&mut rt, window, 0x61);
+    assert_eq!(rt.pending().next_wake, Some(Timestamp(600)));
+
+    clock.0.store(599, Ordering::SeqCst);
+    rt.step(steps()).unwrap();
+    assert_eq!(wakes(&rt), 0, "not before its time");
+
+    clock.0.store(650, Ordering::SeqCst);
+    rt.step(steps()).unwrap();
+    assert_eq!(wakes(&rt), 1);
+    assert_eq!(rt.pending().next_wake, None, "a wake is delivered once");
+}
+
+#[test]
+fn a_new_request_moves_the_wake_and_an_unmounted_node_loses_it() {
+    let (mut rt, window, clock) = sleeper();
+    tap(&mut rt, window, 0x61);
+    clock.0.store(300, Ordering::SeqCst);
+    tap(&mut rt, window, 0x61);
+    assert_eq!(rt.pending().next_wake, Some(Timestamp(800)));
+    clock.0.store(700, Ordering::SeqCst);
+    rt.step(steps()).unwrap();
+    assert_eq!(wakes(&rt), 0, "the first request was replaced");
+
+    rt.messages.push_back("hide".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.pending().next_wake, None);
+}
+
+#[test]
+fn the_loop_waits_only_until_the_earliest_wake() {
+    let (mut rt, window, clock) = sleeper();
+    tap(&mut rt, window, 0x61);
+    clock.0.store(200, Ordering::SeqCst);
+    rt.window_system_mut().close_on_wait = true;
+    let waits = Rc::clone(&rt.window_system().waits);
+    rt.run().unwrap();
+    // steps poll without waiting; the first wait that may block is `run`'s
+    let blocking = waits
+        .borrow()
+        .iter()
+        .copied()
+        .find(|&w| w != Some(Duration::ZERO));
+    assert_eq!(
+        blocking,
+        Some(Some(Duration::from_nanos(300))),
+        "the wake due at 500 bounds the wait at 200: {:?}",
+        waits.borrow()
     );
 }

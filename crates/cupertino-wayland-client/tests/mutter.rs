@@ -309,52 +309,85 @@ fn message(line: &str) -> Option<Message<'_>> {
     })
 }
 
-/// What a client's own Wayland traffic (`WAYLAND_DEBUG=client`) shows of its window: whether it named itself `app_id`
-/// and `title`, was configured, created a buffer of `size`, and had a frame callback it asked for after a commit
-/// answered.
+/// What a client's own Wayland traffic (`WAYLAND_DEBUG=client`) shows of its window, followed by ids: the toplevel that
+/// named itself `app_id` and `title`, its xdg_surface and that surface's configure, and on its own wl_surface an attach
+/// of a buffer of `size`, a frame request, a commit after both, and that frame callback answered. Another surface's
+/// frame (a cursor) or a buffer of the right size that is never attached does not count.
 fn presented(trace: &str, app_id: &str, title: &str, size: (u32, u32)) -> Result<(), String> {
     let messages: Vec<Message> = trace.lines().filter_map(message).collect();
-    let requested = |name: &str, args: &[&str]| {
+    let request = |object: &str, name: &str| {
+        let object = object.to_owned();
+        let name = name.to_owned();
+        move |m: &&Message| m.request && m.object == object && m.name == name
+    };
+    let named = |name: &str, value: &str| {
         messages
             .iter()
-            .any(|m| m.request && m.name == name && m.args == args)
+            .find(|m| m.request && m.name == name && m.args == [format!("\"{value}\"").as_str()])
+            .map(|m| m.object)
     };
-    if !requested("set_app_id", &[&format!("\"{app_id}\"")]) {
-        return Err(format!("no set_app_id(\"{app_id}\")"));
+    let toplevel =
+        named("set_app_id", app_id).ok_or_else(|| format!("no set_app_id(\"{app_id}\")"))?;
+    if named("set_title", title) != Some(toplevel) {
+        return Err(format!("no set_title(\"{title}\") on {toplevel}"));
     }
-    if !requested("set_title", &[&format!("\"{title}\"")]) {
-        return Err(format!("no set_title(\"{title}\")"));
-    }
-    if !messages.iter().any(|m| {
-        !m.request
-            && m.name == "configure"
-            && m.object.split(['@', '#']).next() == Some("xdg_surface")
-    }) {
-        return Err("no xdg_surface.configure".to_owned());
+    let created_by = |name: &str, id: &str| {
+        messages
+            .iter()
+            .find(|m| m.request && m.name == name && m.args.first() == Some(&id))
+    };
+    let xdg_surface = created_by("get_toplevel", toplevel)
+        .map(|m| m.object)
+        .ok_or_else(|| format!("no get_toplevel for {toplevel}"))?;
+    let surface = created_by("get_xdg_surface", xdg_surface)
+        .and_then(|m| m.args.get(1).copied())
+        .ok_or_else(|| format!("no get_xdg_surface for {xdg_surface}"))?;
+    if !messages
+        .iter()
+        .any(|m| !m.request && m.object == xdg_surface && m.name == "configure")
+    {
+        return Err(format!("no configure of {xdg_surface}"));
     }
     let (width, height) = (size.0.to_string(), size.1.to_string());
-    if !messages.iter().any(|m| {
-        m.request
-            && m.name == "create_buffer"
-            && m.args.get(2) == Some(&width.as_str())
-            && m.args.get(3) == Some(&height.as_str())
-    }) {
+    let buffers: Vec<&str> = messages
+        .iter()
+        .filter(|m| {
+            m.request
+                && m.name == "create_buffer"
+                && m.args.get(2) == Some(&width.as_str())
+                && m.args.get(3) == Some(&height.as_str())
+        })
+        .filter_map(|m| m.args.first().copied())
+        .collect();
+    if buffers.is_empty() {
         return Err(format!("no buffer of {}x{}", size.0, size.1));
     }
+    let position = |found: &dyn Fn(&&Message) -> bool| messages.iter().position(|m| found(&m));
+    let attach = request(surface, "attach");
+    let attached =
+        position(&|m: &&Message| attach(m) && m.args.first().is_some_and(|b| buffers.contains(b)))
+            .ok_or_else(|| format!("no {}x{} buffer attached to {surface}", size.0, size.1))?;
+    let frame = request(surface, "frame");
+    let commit = request(surface, "commit");
     let answered = messages.iter().enumerate().any(|(i, m)| {
-        m.request
-            && m.name == "frame"
+        frame(&m)
             && m.args.first().is_some_and(|callback| {
-                messages[i..]
+                messages
                     .iter()
-                    .any(|m| m.request && m.name == "commit")
-                    && messages[i..]
-                        .iter()
-                        .any(|m| !m.request && m.name == "done" && m.object == *callback)
+                    .enumerate()
+                    .skip(i.max(attached))
+                    .find(|(_, m)| commit(m))
+                    .is_some_and(|(c, _)| {
+                        messages[c..]
+                            .iter()
+                            .any(|m| !m.request && m.object == *callback && m.name == "done")
+                    })
             })
     });
     if !answered {
-        return Err("no frame callback answered after a commit".to_owned());
+        return Err(format!(
+            "no frame callback of {surface} answered after a commit"
+        ));
     }
     Ok(())
 }
@@ -374,8 +407,9 @@ fn window_lines(trace: &str) -> String {
         .join("\n")
 }
 
-/// The CupertinoKit examples name themselves, are configured and present frames of their window's size on Mutter, and
-/// are still running when the test ends them.
+/// The CupertinoKit examples name themselves, are configured and present frames of their window's size on Mutter
+/// ([`presented`]). Still running when the test ends them only means they did not crash; that they render is what
+/// [`presented`] shows.
 #[test]
 fn kit_examples_present_frames_on_mutter() {
     if !mutter_installed() {
@@ -434,65 +468,104 @@ fn kit_examples_present_frames_on_mutter() {
     }
 }
 
-/// The trace check names what is missing, in libwayland's and the Rust backend's format.
+/// The trace check follows the window's own toplevel, xdg_surface and wl_surface by id and names what is missing, in
+/// libwayland's and the Rust backend's format.
 #[test]
-fn a_trace_is_presented_only_with_identity_configure_buffer_and_an_answered_frame() {
+fn a_trace_is_presented_only_by_the_windows_own_surface() {
     let full = [
+        "[1.0] {Default Queue}  -> xdg_wm_base#6.get_xdg_surface(new id xdg_surface#8, wl_surface#7)",
+        "[1.0] {Default Queue}  -> xdg_surface#8.get_toplevel(new id xdg_toplevel#9)",
         "[1.0] {Default Queue}  -> xdg_toplevel#9.set_app_id(\"org.example.App\")",
         "[1.1] {Default Queue}  -> xdg_toplevel#9.set_title(\"App\")",
         "[1.2] {Default Queue} xdg_surface#8.configure(3)",
         "[1.3] {Default Queue}  -> wl_shm_pool#11.create_buffer(new id wl_buffer#12, 0, 200, 64, 800, 0)",
+        "[1.4] {Default Queue}  -> wl_surface#7.attach(wl_buffer#12, 0, 0)",
         "[1.4] {Default Queue}  -> wl_surface#7.frame(new id wl_callback#13)",
         "[1.5] {Default Queue}  -> wl_surface#7.commit()",
         "[1.6] {Default Queue} wl_callback#13.done(1234)",
     ];
     let check = |lines: &[&str]| presented(&lines.join("\n"), "org.example.App", "App", (200, 64));
+    let replaced = |n: usize, line: &'static str| {
+        let mut lines = full.to_vec();
+        lines[n] = line;
+        lines
+    };
+    let without = |n: usize| [&full[..n], &full[n + 1..]].concat();
     assert_eq!(check(&full), Ok(()));
     assert_eq!(
-        check(&full[1..]),
+        check(&without(2)),
         Err("no set_app_id(\"org.example.App\")".to_owned())
     );
-    let without = |n: usize| [&full[..n], &full[n + 1..]].concat();
     assert_eq!(
-        check(&without(2)),
-        Err("no xdg_surface.configure".to_owned())
+        check(&without(4)),
+        Err("no configure of xdg_surface#8".to_owned())
     );
-    assert_eq!(check(&without(3)), Err("no buffer of 200x64".to_owned()));
+    assert_eq!(check(&without(5)), Err("no buffer of 200x64".to_owned()));
+    // a buffer of the right size that is never attached, another one attached instead
     assert_eq!(
-        check(&full[..6]),
-        Err("no frame callback answered after a commit".to_owned())
+        check(&replaced(
+            6,
+            "[1.4] {Default Queue}  -> wl_surface#7.attach(wl_buffer#14, 0, 0)"
+        )),
+        Err("no 200x64 buffer attached to wl_surface#7".to_owned())
     );
-    let mut other = full.to_vec();
-    other[6] = "[1.6] {Default Queue} wl_callback#14.done(1234)";
+    // the only answered frame callback is a cursor surface's
+    let cursor = [
+        &full[..7],
+        &[
+            "[1.4] {Default Queue}  -> wl_surface#5.frame(new id wl_callback#13)",
+            "[1.5] {Default Queue}  -> wl_surface#5.commit()",
+            "[1.5] {Default Queue}  -> wl_surface#7.commit()",
+            "[1.6] {Default Queue} wl_callback#13.done(1234)",
+        ][..],
+    ]
+    .concat();
     assert_eq!(
-        check(&other),
-        Err("no frame callback answered after a commit".to_owned())
+        check(&cursor),
+        Err("no frame callback of wl_surface#7 answered after a commit".to_owned())
+    );
+    assert_eq!(
+        check(&full[..9]),
+        Err("no frame callback of wl_surface#7 answered after a commit".to_owned())
+    );
+    assert_eq!(
+        check(&replaced(
+            9,
+            "[1.6] {Default Queue} wl_callback#14.done(1234)"
+        )),
+        Err("no frame callback of wl_surface#7 answered after a commit".to_owned())
     );
     let libwayland = [
+        "[100.0]  -> xdg_wm_base@6.get_xdg_surface(new id xdg_surface@8, wl_surface@7)",
+        "[100.0]  -> xdg_surface@8.get_toplevel(new id xdg_toplevel@9)",
         "[100.0]  -> xdg_toplevel@9.set_app_id(\"org.example.App\")",
         "[100.1]  -> xdg_toplevel@9.set_title(\"App\")",
         "[100.2] xdg_surface@8.configure(3)",
         "[100.3]  -> wl_shm_pool@11.create_buffer(new id wl_buffer@12, 0, 200, 64, 800, 0)",
+        "[100.4]  -> wl_surface@7.attach(wl_buffer@12, 0, 0)",
         "[100.4]  -> wl_surface@7.frame(new id wl_callback@13)",
         "[100.5]  -> wl_surface@7.commit()",
         "[100.6] wl_callback@13.done(1234)",
     ];
     assert_eq!(check(&libwayland), Ok(()));
     let wayland_rs = [
+        "[1869906.700][rs] -> xdg_wm_base@6.get_xdg_surface(xdg_surface@21, wl_surface@20)",
+        "[1869906.701][rs] -> xdg_surface@21.get_toplevel(xdg_toplevel@22)",
         "[1869906.785][rs] -> xdg_toplevel@22.set_app_id(Some(\"org.example.App\"))",
         "[1869906.816][rs] -> xdg_toplevel@22.set_title(Some(\"App\"))",
         "[1869909.907][rs] <- xdg_surface@21.configure, (1)",
         "[1869911.405][rs] -> wl_shm_pool@25.create_buffer(wl_buffer@26, 0, 200, 64, 800, 0)",
+        "[1869911.500][rs] -> wl_surface@20.attach(Some(wl_buffer@26), 0, 0)",
         "[1869911.616][rs] -> wl_surface@20.frame(wl_callback@27)",
         "[1869911.644][rs] -> wl_surface@20.commit()",
         "[1869926.975][rs] <- wl_callback@27.done, (49385751)",
     ];
     assert_eq!(check(&wayland_rs), Ok(()));
     let mut wide = wayland_rs.to_vec();
-    wide[3] = "[1869911.405][rs] -> wl_shm_pool@25.create_buffer(wl_buffer@26, 0, 64, 200, 256, 0)";
+    wide[5] = "[1869911.405][rs] -> wl_shm_pool@25.create_buffer(wl_buffer@26, 0, 64, 200, 256, 0)";
     assert_eq!(check(&wide), Err("no buffer of 200x64".to_owned()));
     let mut discarded = wayland_rs.to_vec();
-    discarded[0] =
+    discarded[2] =
         "[1869906.785][rs][discarded] -> xdg_toplevel@22.set_app_id(Some(\"org.example.App\"))";
     assert_eq!(
         check(&discarded),

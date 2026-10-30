@@ -1,7 +1,7 @@
 use crate::paragraph::Item;
 use crate::{
-    AttributedText, Direction, FaceId, FontIndex, FontMetrics, FontStyle, Paragraph,
-    ParagraphStyle, ShapeRequest, ShapedRun, TextError, TextStyle,
+    AttributedText, Direction, FaceId, FontId, FontIndex, FontMetrics, FontStyle, FontWeight,
+    Paragraph, ParagraphStyle, ShapeRequest, ShapedRun, TextError, TextStyle,
 };
 use cupertino_geometry::Size;
 use std::collections::HashMap;
@@ -9,6 +9,7 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard};
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Paragraphs shaped before the cache starts a new generation.
 const CACHE_LIMIT: usize = 512;
@@ -173,39 +174,46 @@ fn shape_paragraph(
     loop {
         let (line_end, next_start) = next_line(&text.text, line_start);
         let pieces = pieces_of(&segments, line_start..line_end);
-        for (range, style) in pieces {
-            let font = resolve(fonts, theme_family, style)?;
-            let metrics = fonts.metrics(font)?;
-            let mut run = if range.is_empty() {
-                ShapedRun {
-                    font,
-                    size: style.size,
-                    direction: Direction::Ltr,
-                    glyphs: Vec::new(),
-                }
+        for (piece, style) in pieces {
+            let primary = resolve(fonts, theme_family, style)?;
+            let runs = if piece.is_empty() {
+                vec![(piece, primary)]
             } else {
-                fonts.shape(
-                    &text.text[range.clone()],
-                    &ShapeRequest {
+                font_runs(fonts, &text.text, piece, primary, style.weight)?
+            };
+            for (range, font) in runs {
+                let metrics = fonts.metrics(font)?;
+                let mut run = if range.is_empty() {
+                    ShapedRun {
                         font,
                         size: style.size,
                         direction: Direction::Ltr,
-                        features: &style.features,
-                        lang: style.lang.as_deref(),
-                        letter_spacing: style.letter_spacing,
-                    },
-                )?
-            };
-            for glyph in &mut run.glyphs {
-                glyph.cluster += range.start;
+                        glyphs: Vec::new(),
+                    }
+                } else {
+                    fonts.shape(
+                        &text.text[range.clone()],
+                        &ShapeRequest {
+                            font,
+                            size: style.size,
+                            direction: Direction::Ltr,
+                            features: &style.features,
+                            lang: style.lang.as_deref(),
+                            letter_spacing: style.letter_spacing,
+                        },
+                    )?
+                };
+                for glyph in &mut run.glyphs {
+                    glyph.cluster += range.start;
+                }
+                items.push(Item {
+                    range,
+                    run,
+                    ascent: metrics.ascent * style.size,
+                    descent: metrics.descent * style.size,
+                    line_gap: metrics.line_gap * style.size,
+                });
             }
-            items.push(Item {
-                range,
-                run,
-                ascent: metrics.ascent * style.size,
-                descent: metrics.descent * style.size,
-                line_gap: metrics.line_gap * style.size,
-            });
         }
         match next_start {
             Some(next) => line_start = next,
@@ -217,6 +225,58 @@ fn shape_paragraph(
         *paragraph_style,
         items,
     ))
+}
+
+/// `range` of `text` cut where the font drawing it changes. Each grapheme cluster takes the first font that has every
+/// character of it, `primary` first and then the other faces in load order; a cluster no font has stays in `primary`,
+/// and a cluster of white space stays in the font before it, so a gap between words does not split a run.
+fn font_runs(
+    fonts: &mut FontIndex,
+    text: &str,
+    range: Range<usize>,
+    primary: FontId,
+    weight: FontWeight,
+) -> Result<Vec<(Range<usize>, FontId)>, TextError> {
+    let mut fallbacks: Option<Arc<[FontId]>> = None;
+    let mut runs: Vec<(Range<usize>, FontId)> = Vec::new();
+    for (offset, cluster) in text[range.clone()].grapheme_indices(true) {
+        let (start, end) = (range.start + offset, range.start + offset + cluster.len());
+        let font = if cluster.chars().all(char::is_whitespace) {
+            runs.last().map_or(primary, |(_, font)| *font)
+        } else if covers(fonts, primary, cluster)? {
+            primary
+        } else {
+            let candidates = match &fallbacks {
+                Some(candidates) => Arc::clone(candidates),
+                None => Arc::clone(fallbacks.insert(fonts.fallbacks(primary, weight)?)),
+            };
+            let mut found = primary;
+            for &candidate in candidates.iter() {
+                if covers(fonts, candidate, cluster)? {
+                    found = candidate;
+                    break;
+                }
+            }
+            found
+        };
+        match runs.last_mut() {
+            Some((run, last)) if *last == font => run.end = end,
+            _ => runs.push((start..end, font)),
+        }
+    }
+    Ok(runs)
+}
+
+/// Whether `font` has every character of `cluster` that draws: joiners and variation selectors only steer the shaping.
+fn covers(fonts: &FontIndex, font: FontId, cluster: &str) -> Result<bool, TextError> {
+    for ch in cluster.chars().filter(|ch| {
+        !matches!(ch, '\u{200C}' | '\u{200D}' | '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
+    }) {
+        if !fonts.has_glyph(font, ch)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// The text cut into consecutive ranges of one style; ranges the runs leave out take the style before them.
@@ -343,5 +403,57 @@ impl AttributedText {
             text,
             runs: vec![(range, style)],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::font::GLYPH_LOOKUPS;
+
+    const INTER: &[u8] = include_bytes!("../../cupertino-assets/fonts/InterVariable-subset.ttf");
+    const BOXES: &[u8] = include_bytes!("../tests/fixtures/fallback-test.ttf");
+
+    /// The charmap lookups of shaping `text` once, with Inter matched and two more faces loaded after it.
+    fn lookups(text: &str) -> usize {
+        let mut fonts = FontIndex::new();
+        for (family, data) in [("Inter", INTER), ("Other", INTER), ("Boxes", BOXES)] {
+            fonts
+                .add_face(
+                    family,
+                    FontWeight::REGULAR,
+                    FontStyle::Normal,
+                    Arc::new(data.to_vec()),
+                    0,
+                )
+                .unwrap();
+        }
+        let system = TextSystem::new(fonts, "Inter");
+        GLYPH_LOOKUPS.with(|count| count.set(0));
+        system
+            .paragraph(
+                &AttributedText::plain(text, TextStyle::new(16.0)),
+                &ParagraphStyle::default(),
+            )
+            .unwrap();
+        GLYPH_LOOKUPS.with(|count| count.get())
+    }
+
+    #[test]
+    fn fallback_lookups_grow_with_the_text_not_faster() {
+        for unit in ["Hello", "日本"] {
+            let (one, four) = (lookups(&unit.repeat(8)), lookups(&unit.repeat(32)));
+            assert!(one > 0);
+            assert_eq!(
+                four,
+                4 * one,
+                "{unit:?}: {one} lookups, then {four} for four times the text"
+            );
+        }
+        assert_eq!(
+            lookups("日"),
+            3,
+            "the matched face, the next and the one that has it"
+        );
     }
 }

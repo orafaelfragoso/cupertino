@@ -68,6 +68,7 @@ fn a_locked_screen_names_its_clock_user_field_and_power_item_with_the_field_focu
     );
     let root = found(&update, LockNode::Window).unwrap();
     assert_eq!(root.children.len(), update.nodes.len() - 1);
+    assert!(update.nodes.iter().all(|(_, n)| n.live.is_none()));
     assert_eq!(
         found(&update, LockNode::Power).unwrap().actions,
         [Action::Click]
@@ -89,7 +90,7 @@ fn the_password_never_shows_its_text_or_length_nor_takes_one() {
 }
 
 #[test]
-fn every_rejected_attempt_says_the_same_and_an_error_says_what_the_screen_shows() {
+fn every_rejected_attempt_is_announced_the_same_and_an_error_says_what_the_screen_shows() {
     let mut denied = screen();
     type_str(&mut denied, "wrong");
     denied.press(1.0, Key::Return);
@@ -99,9 +100,10 @@ fn every_rejected_attempt_says_the_same_and_an_error_says_what_the_screen_shows(
     );
     denied.finish_auth(2.0, AuthOutcome::Denied).unwrap();
     let update = tree(&denied);
+    let said = found(&update, LockNode::Denied).unwrap();
     assert_eq!(
-        found(&update, LockNode::Denied).unwrap().name.as_deref(),
-        Some(DENIED)
+        (said.name.as_deref(), said.live),
+        (Some(DENIED), Some(Live::Assertive))
     );
     assert!(found(&update, LockNode::Password).unwrap().states.invalid);
     denied.press(3.0, Key::Char('x'));
@@ -118,9 +120,10 @@ fn every_rejected_attempt_says_the_same_and_an_error_says_what_the_screen_shows(
         .unwrap();
     let update = tree(&error);
     assert!(found(&update, LockNode::Denied).is_none());
+    let said = found(&update, LockNode::Notice).unwrap();
     assert_eq!(
-        found(&update, LockNode::Notice).unwrap().name.as_deref(),
-        error.notice()
+        (said.name.as_deref(), said.live),
+        (error.notice(), Some(Live::Assertive))
     );
 }
 

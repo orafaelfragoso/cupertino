@@ -25,7 +25,7 @@ use cupertino_server::render::screenshot::render_to_image;
 use cupertino_server::Cupertino;
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
-use smithay::backend::input::{ButtonState, KeyState};
+use smithay::backend::input::InputEvent;
 use smithay::backend::renderer::gles::ffi;
 use smithay::desktop::layer_map_for_output;
 use smithay::reexports::calloop::EventLoop;
@@ -69,6 +69,8 @@ struct Scene {
     clients: Vec<common::Client>,
     size: (i32, i32),
     milliseconds: u32,
+    /// Whether the injected device was announced to the server.
+    device_added: bool,
 }
 
 impl Scene {
@@ -104,6 +106,7 @@ impl Scene {
             clients: Vec::new(),
             size,
             milliseconds: 0,
+            device_added: false,
         }
     }
 
@@ -182,32 +185,17 @@ impl Scene {
         }
     }
 
+    /// Inject `event` where a device's events enter the server (`process_input_event`), at its time on the model clock.
     fn input(&mut self, event: Event) {
         self.at(event.milliseconds);
-        match event.input {
-            Input::Pointer { x, y } => {
-                self.state
-                    .pointer_moved_to((x, y).into(), event.milliseconds, None);
-            }
-            Input::Button { code, pressed } => self.state.pointer_button(
-                code,
-                if pressed {
-                    ButtonState::Pressed
-                } else {
-                    ButtonState::Released
-                },
-                event.milliseconds,
-            ),
-            Input::Key { code, pressed } => self.state.keyboard_event_now(
-                code.into(),
-                if pressed {
-                    KeyState::Pressed
-                } else {
-                    KeyState::Released
-                },
-                event.milliseconds,
-            ),
+        if !self.device_added {
+            self.state
+                .process_input_event::<injected::Backend>(InputEvent::DeviceAdded {
+                    device: injected::Device,
+                });
+            self.device_added = true;
         }
+        self.state.process_input_event(injected::event(&event));
         self.pump();
     }
 
@@ -442,7 +430,11 @@ fn isolated(test: &str, shell: bool, work: impl FnOnce(&str)) {
     let output = child.output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     print!("{stdout}");
-    assert!(output.status.success(), "isolated golden worker failed");
+    assert!(
+        output.status.success(),
+        "isolated golden worker failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(
         stdout.lines().any(|l| l == format!("test {test} ... ok")),
         "the worker did not run {test}: its name is passed to isolated() and must match the test function"
@@ -580,7 +572,8 @@ fn desktop_goldens_and_input_replay() {
         }
         baseline(&root, "desktop-windows", &mut windows, update);
 
-        // XKB keycodes are evdev + 8. Ctrl+Up enters overview through the real key router.
+        // XKB keycodes are evdev + 8. Ctrl+Up enters overview through the device entry and the real key router. The trace
+        // is this injected gesture as written, not a capture of a device; re-recording writes it, a comparison replays it.
         let trace_path = root.join("overview-trace.json");
         let trace = if update {
             vec![
@@ -833,5 +826,187 @@ mod fake_logind {
             .unwrap()
             .build()
             .unwrap()
+    }
+}
+
+/// The goldens' input device: a keyboard and an absolute pointer whose events enter the server through
+/// `process_input_event`, as a real device's do. Positions are logical pixels of the first output.
+mod injected {
+    use super::{Event, Input};
+    use smithay::backend::input::{
+        AbsolutePositionEvent, ButtonState, DeviceCapability, Event as InputEventTrait,
+        InputBackend, InputEvent, KeyState, KeyboardKeyEvent, PointerButtonEvent,
+        PointerMotionAbsoluteEvent, UnusedEvent,
+    };
+    use smithay::input::keyboard::Keycode;
+    use std::path::PathBuf;
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    pub struct Device;
+
+    impl smithay::backend::input::Device for Device {
+        fn id(&self) -> String {
+            "goldens-input".to_owned()
+        }
+
+        fn name(&self) -> String {
+            "goldens input".to_owned()
+        }
+
+        fn has_capability(&self, capability: DeviceCapability) -> bool {
+            matches!(
+                capability,
+                DeviceCapability::Keyboard | DeviceCapability::Pointer
+            )
+        }
+
+        fn usb_id(&self) -> Option<(u32, u32)> {
+            None
+        }
+
+        fn syspath(&self) -> Option<PathBuf> {
+            None
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct Backend;
+
+    impl InputBackend for Backend {
+        type Device = Device;
+        type KeyboardKeyEvent = Key;
+        type PointerAxisEvent = UnusedEvent;
+        type PointerButtonEvent = Button;
+        type PointerMotionEvent = UnusedEvent;
+        type PointerMotionAbsoluteEvent = Absolute;
+        type GestureSwipeBeginEvent = UnusedEvent;
+        type GestureSwipeUpdateEvent = UnusedEvent;
+        type GestureSwipeEndEvent = UnusedEvent;
+        type GesturePinchBeginEvent = UnusedEvent;
+        type GesturePinchUpdateEvent = UnusedEvent;
+        type GesturePinchEndEvent = UnusedEvent;
+        type GestureHoldBeginEvent = UnusedEvent;
+        type GestureHoldEndEvent = UnusedEvent;
+        type TouchDownEvent = UnusedEvent;
+        type TouchUpEvent = UnusedEvent;
+        type TouchMotionEvent = UnusedEvent;
+        type TouchCancelEvent = UnusedEvent;
+        type TouchFrameEvent = UnusedEvent;
+        type TabletToolAxisEvent = UnusedEvent;
+        type TabletToolProximityEvent = UnusedEvent;
+        type TabletToolTipEvent = UnusedEvent;
+        type TabletToolButtonEvent = UnusedEvent;
+        type SwitchToggleEvent = UnusedEvent;
+        type SpecialEvent = UnusedEvent;
+    }
+
+    macro_rules! timed {
+        ($($event:ident),+) => {$(
+            impl InputEventTrait<Backend> for $event {
+                fn time(&self) -> u64 {
+                    u64::from(self.milliseconds) * 1000
+                }
+
+                fn device(&self) -> Device {
+                    Device
+                }
+            }
+        )+};
+    }
+
+    pub struct Key {
+        milliseconds: u32,
+        code: u32,
+        pressed: bool,
+    }
+
+    pub struct Button {
+        milliseconds: u32,
+        code: u32,
+        pressed: bool,
+    }
+
+    pub struct Absolute {
+        milliseconds: u32,
+        x: f64,
+        y: f64,
+    }
+
+    timed!(Key, Button, Absolute);
+
+    impl KeyboardKeyEvent<Backend> for Key {
+        fn key_code(&self) -> Keycode {
+            self.code.into()
+        }
+
+        fn state(&self) -> KeyState {
+            if self.pressed {
+                KeyState::Pressed
+            } else {
+                KeyState::Released
+            }
+        }
+
+        fn count(&self) -> u32 {
+            u32::from(self.pressed)
+        }
+    }
+
+    impl PointerButtonEvent<Backend> for Button {
+        fn button_code(&self) -> u32 {
+            self.code
+        }
+
+        fn state(&self) -> ButtonState {
+            if self.pressed {
+                ButtonState::Pressed
+            } else {
+                ButtonState::Released
+            }
+        }
+    }
+
+    impl AbsolutePositionEvent<Backend> for Absolute {
+        fn x(&self) -> f64 {
+            self.x
+        }
+
+        fn y(&self) -> f64 {
+            self.y
+        }
+
+        fn x_transformed(&self, _width: i32) -> f64 {
+            self.x
+        }
+
+        fn y_transformed(&self, _height: i32) -> f64 {
+            self.y
+        }
+    }
+
+    impl PointerMotionAbsoluteEvent<Backend> for Absolute {}
+
+    /// The device event of `event`.
+    pub fn event(event: &Event) -> InputEvent<Backend> {
+        let milliseconds = event.milliseconds;
+        match event.input {
+            Input::Pointer { x, y } => InputEvent::PointerMotionAbsolute {
+                event: Absolute { milliseconds, x, y },
+            },
+            Input::Button { code, pressed } => InputEvent::PointerButton {
+                event: Button {
+                    milliseconds,
+                    code,
+                    pressed,
+                },
+            },
+            Input::Key { code, pressed } => InputEvent::Keyboard {
+                event: Key {
+                    milliseconds,
+                    code,
+                    pressed,
+                },
+            },
+        }
     }
 }

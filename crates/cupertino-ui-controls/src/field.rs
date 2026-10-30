@@ -510,7 +510,7 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
                 cx.request_paint();
                 Propagation::Continue
             }
-            Event::Focus { gained: false, .. } | Event::Cancel => {
+            Event::Focus { gained: false, .. } => {
                 state.buffer.cancel_composition();
                 state.buffer.blur();
                 cx.request_paint();

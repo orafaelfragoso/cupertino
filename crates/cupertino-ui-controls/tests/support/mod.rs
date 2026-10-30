@@ -105,6 +105,7 @@ pub fn theme() -> ThemeTokens {
         SelectedTextBackground,
         KeyboardFocusIndicator,
         Separator,
+        WindowBackground,
     ];
     let mut entries = Vec::new();
     for (i, role) in roles.into_iter().enumerate() {

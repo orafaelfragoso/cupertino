@@ -1,9 +1,10 @@
 mod support;
 
+use cupertino_geometry::Rect;
 use cupertino_ui_controls::{Stack, Text, TextRole};
 use cupertino_ui_core::{Application, Command, Element, Role, Window};
 use cupertino_ui_layout::{Align, Axis};
-use cupertino_ui_render::PaintOp;
+use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_text::{AttributedText, TextStyle};
 use cupertino_ui_theme::{ColorRole, InteractionVariant};
 use support::{color, label_width, window, Harness};
@@ -80,4 +81,27 @@ fn text_is_static_in_the_text_colour_and_never_a_tab_stop() {
     assert_eq!(node.role, Role::StaticText);
     assert_eq!(node.name.as_deref(), Some("Wi-Fi"));
     assert!(!node.states.focusable);
+}
+
+#[test]
+fn the_window_paints_its_background_under_the_content() {
+    let h = Harness::<Texts>::new();
+    let snapshot = h.snapshot();
+    let root = snapshot
+        .display_list
+        .nodes
+        .iter()
+        .find(|n| n.parent.is_none())
+        .unwrap();
+    assert_eq!(
+        root.ops.first(),
+        Some(&PaintOp::Fill {
+            shape: Shape::Rect(Rect::new(0.0, 0.0, 200.0, 100.0)),
+            paint: Paint::Solid(color(
+                ColorRole::WindowBackground,
+                InteractionVariant::Normal,
+                false
+            )),
+        })
+    );
 }

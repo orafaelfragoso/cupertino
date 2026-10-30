@@ -37,7 +37,7 @@ pub use runtime::{
 pub use widget::{Change, Element, Propagation, Widget};
 
 use cupertino_geometry::{Point, Rect, Size};
-use cupertino_ui_layout::{LayoutDirection, LayoutError};
+use cupertino_ui_layout::{LayoutDirection, LayoutError, LayoutStats};
 use cupertino_ui_platform::{
     KeyEvent, Keysym, Mods, PlatformError, PointerEvent, Timestamp, TouchEvent, WindowId,
     WindowRequest, WindowSpec,
@@ -293,6 +293,8 @@ pub struct FrameSnapshot {
     pub accessibility: Vec<(NodeId, AccessibilityNode)>,
     pub display_list: DisplayList,
     pub pending: Pending,
+    /// What the window's last layout did.
+    pub layout: LayoutStats,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

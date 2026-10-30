@@ -433,6 +433,11 @@ fn extending_replaces_only_the_anchors_range_and_clamp_drops_rows_past_the_end()
     s.clamp(5);
     assert_eq!(pairs(&s), [(1, 3), (4, 5)]);
     assert_eq!((s.anchor(), s.cursor()), (Some(3), Some(3)));
+    assert_eq!(
+        pairs(&Selection::new([4..5, 0..0, 1..3, 2..4], None, None)),
+        [(1, 5)],
+        "built from overlapping, touching and empty ranges"
+    );
     s.clamp(3);
     assert_eq!((pairs(&s), s.cursor()), (vec![(1, 3)], None));
 }

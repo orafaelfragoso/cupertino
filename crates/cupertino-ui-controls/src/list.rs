@@ -55,6 +55,24 @@ const CHEVRON_GAP: f64 = 4.0;
 const TYPE_SELECT_NS: u64 = 1_000_000_000;
 
 impl Selection {
+    /// The rows in `ranges`, in any order and overlapping or not, with the cursor and the anchor: what an application
+    /// builds after it moved its rows.
+    pub fn new(
+        ranges: impl IntoIterator<Item = Range<usize>>,
+        cursor: Option<usize>,
+        anchor: Option<usize>,
+    ) -> Self {
+        let mut selection = Self {
+            ranges: Vec::new(),
+            cursor,
+            anchor,
+        };
+        for range in ranges.into_iter().filter(|r| r.start < r.end) {
+            selection.insert(range);
+        }
+        selection
+    }
+
     pub fn ranges(&self) -> &[Range<usize>] {
         &self.ranges
     }

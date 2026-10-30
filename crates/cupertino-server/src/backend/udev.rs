@@ -132,7 +132,7 @@ fn frame_due(stopped: bool, waiting: bool, due: bool) -> bool {
 /// asleep, off) wait for an event, not a frame deadline.
 fn loop_timeout(state: &Cupertino) -> Duration {
     const MAX: Duration = Duration::from_secs(1);
-    // a passed deadline the tick did not act on must not spin the loop
+    // a passed deadline nothing acted on must not spin the loop
     const PASSED: Duration = Duration::from_millis(1);
     let tick = state.next_tick_deadline().map(|at| {
         let wait = (at - state.now()) / state.time_scale;
@@ -157,7 +157,7 @@ fn loop_timeout(state: &Cupertino) -> Duration {
                     }
                 })
                 .min()
-                .map(|due| due.saturating_sub(now))
+                .map(|due| if due < now { PASSED } else { due - now })
         }
         _ => None,
     };

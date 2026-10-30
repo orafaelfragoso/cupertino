@@ -26,7 +26,7 @@ def failure(name: str, message: str, later: str | None = None) -> str:
     parent = (
         f"{message}\n"
         if message.startswith("re-recorded ") and later is None
-        else f"isolated golden worker failed:\n{worker}"
+        else f"isolated golden worker failed (exit status: 101):\n{worker}"
     )
     return f"""---- {name} stdout ----
 

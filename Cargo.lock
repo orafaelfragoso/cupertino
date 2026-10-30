@@ -924,6 +924,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-capture"
+version = "0.1.0"
+dependencies = [
+ "cupertino-assets",
+ "tempfile",
+ "tiny-skia",
+]
+
+[[package]]
 name = "cupertino-controlcenter"
 version = "0.1.0"
 dependencies = [
@@ -1038,6 +1047,7 @@ version = "0.1.0"
 dependencies = [
  "cupertino-apps",
  "cupertino-assets",
+ "cupertino-capture",
  "cupertino-decorations",
  "cupertino-defaults",
  "cupertino-geometry",
@@ -1136,6 +1146,7 @@ name = "cupertino-kit"
 version = "0.1.0"
 dependencies = [
  "cupertino-assets",
+ "cupertino-capture",
  "cupertino-geometry",
  "cupertino-icons",
  "cupertino-modifiers",
@@ -1151,6 +1162,7 @@ dependencies = [
  "cupertino-ui-theme",
  "cupertino-ui-wayland",
  "tempfile",
+ "tiny-skia",
 ]
 
 [[package]]
@@ -1524,6 +1536,7 @@ dependencies = [
  "async-channel",
  "cupertino-alsa",
  "cupertino-assets",
+ "cupertino-capture",
  "cupertino-decorations",
  "cupertino-defaults",
  "cupertino-filepicker",

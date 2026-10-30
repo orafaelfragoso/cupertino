@@ -92,6 +92,7 @@ mod tests {
             "greeter-command = /bin/g\nsession-command = /bin/s\n{extra}"
         ))
         .unwrap()
+        .config
     }
 
     fn account(uid: u32, login: &str) -> Account {

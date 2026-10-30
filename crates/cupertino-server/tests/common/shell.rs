@@ -86,14 +86,19 @@ pub fn private_bus() -> cupertino_test_bus::PrivateBus {
         .expect("goldens need dbus-daemon")
 }
 
-/// The shell binary `binary` on the private bus with the built-in assets, no host application data, and `args`. The
-/// calling worker's `HOME`, `XDG_*`, `LANG` and `TZ` are already the isolated ones; `env` passes the bus and the empty
-/// asset search path on.
+/// The time the shell processes show (`CUPERTINO_TEST_CLOCK`, debug builds): 2027-01-01 09:41 UTC, a Friday. Their
+/// display clocks stand still at it, so a scene settles.
+pub const TEST_CLOCK: &str = "1798796460";
+
+/// The shell binary `binary` on the private bus with the built-in assets, no host application data, the fixed
+/// [`TEST_CLOCK`], and `args`. The calling worker's `HOME`, `XDG_*`, `LANG` and `TZ` are already the isolated ones; `env`
+/// passes the bus, the empty asset search path and the clock on.
 pub fn process(binary: &str, bus_address: &str, args: &[&str]) -> ShellProcess {
     let mut command = vec![
         "env".to_string(),
         format!("DBUS_SESSION_BUS_ADDRESS={bus_address}"),
         "CUPERTINO_ASSET_SEARCH_PATH=".to_string(),
+        format!("CUPERTINO_TEST_CLOCK={TEST_CLOCK}"),
         bin_dir().join(binary).display().to_string(),
     ];
     command.extend(args.iter().map(|a| (*a).to_string()));

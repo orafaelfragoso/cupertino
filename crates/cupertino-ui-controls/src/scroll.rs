@@ -114,9 +114,9 @@ pub(crate) fn frame<M: 'static>(
 }
 
 /// Lays out a viewport and its bars: layered (`None`) or in a row or column.
-struct Frame<M> {
-    kind: Option<Axis>,
-    children: Vec<Element<M>>,
+pub(crate) struct Frame<M> {
+    pub(crate) kind: Option<Axis>,
+    pub(crate) children: Vec<Element<M>>,
 }
 
 impl<M: 'static> Widget<M> for Frame<M> {

@@ -6,6 +6,7 @@ mod checkbox;
 mod choice;
 mod field;
 mod icon;
+mod list;
 mod look;
 mod press;
 mod progress;
@@ -16,6 +17,7 @@ mod text;
 mod toggle;
 
 pub use field::{FieldState, SecureState};
+pub use list::ListState;
 pub use press::Press;
 pub use scroll::{BarState, ViewportState};
 pub use slider::SliderState;
@@ -25,6 +27,7 @@ use cupertino_ui_core::{Checked, Element};
 use cupertino_ui_layout::{Align, Axis, ScrollState};
 use cupertino_ui_text::{AttributedText, ContentPurpose, SecureBuffer};
 use cupertino_ui_theme::ColorRole;
+use std::ops::Range;
 
 /// The space a form-style window (a form, a dialog) leaves between its edges and its content, for a [`Stack`]'s
 /// padding. Windows add none themselves: sidebars, lists and canvases run to the edges.
@@ -242,6 +245,84 @@ pub struct ScrollView<M> {
     pub vertical: bool,
     pub scroller: Scroller,
     pub on_scroll: Handler<ScrollState, M>,
+}
+
+/// The selected rows of a list, as indices into the rows as currently shown, and the row the keyboard is on. When the
+/// application sorts or changes its rows, it maps the selection to the new indices itself, or [`clamp`]s it.
+///
+/// [`clamp`]: Self::clamp
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Selection {
+    /// Sorted, disjoint and never touching, so selecting every row of any list is one range.
+    ranges: Vec<Range<usize>>,
+    cursor: Option<usize>,
+    /// Where a Shift extension starts.
+    anchor: Option<usize>,
+}
+
+/// A long list of rows of one height, of which only those near the viewport are built, so scrolling and a change cost
+/// the same for any number of rows. One Tab stop at the cursor row; the arrows, Home, End and the page keys move the
+/// cursor and select, and typing selects the next row whose text starts with what was typed. Build its element with
+/// `Element::from`.
+pub struct ListView<M> {
+    /// The accessible name.
+    pub label: String,
+    pub count: usize,
+    pub row_height: f64,
+    pub scroll: ScrollState,
+    pub selection: Selection,
+    /// More than one row can be selected: Shift extends, Primary-click toggles, Primary+A selects all.
+    pub multiple: bool,
+    /// Row `index`'s content; `selected` asks for the selected text colours ([`Text::selected`]).
+    pub row: Box<dyn Fn(usize, bool) -> Element<M>>,
+    /// Row `index`'s text for typing to select; without it typing selects nothing.
+    pub type_select: Option<Box<dyn Fn(usize) -> String>>,
+    pub on_scroll: Handler<ScrollState, M>,
+    pub on_select: Option<Handler<Selection, M>>,
+    /// Return on the cursor row.
+    pub on_activate: Option<Handler<usize, M>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ColumnWidth {
+    Fixed(f64),
+    /// A share of the width the fixed columns leave, equal among such columns.
+    Fill,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Column {
+    pub title: String,
+    pub width: ColumnWidth,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum SortOrder {
+    #[default]
+    Ascending,
+    Descending,
+}
+
+/// A [`ListView`] whose rows lay their cells out in columns under a header. A click on a column's title asks to sort
+/// by it, the other way round when it is the sorted column already. It scrolls vertically; the columns share its
+/// width. Build its element with `Element::from`.
+pub struct TableView<M> {
+    /// The accessible name.
+    pub label: String,
+    pub columns: Vec<Column>,
+    pub sort: Option<(usize, SortOrder)>,
+    pub on_sort: Option<Handler<(usize, SortOrder), M>>,
+    pub count: usize,
+    pub row_height: f64,
+    pub scroll: ScrollState,
+    pub selection: Selection,
+    pub multiple: bool,
+    /// The cell of row `index` in column `column`, given as `(index, column, selected)`.
+    pub cell: Box<dyn Fn(usize, usize, bool) -> Element<M>>,
+    pub type_select: Option<Box<dyn Fn(usize) -> String>>,
+    pub on_scroll: Handler<ScrollState, M>,
+    pub on_select: Option<Handler<Selection, M>>,
+    pub on_activate: Option<Handler<usize, M>>,
 }
 
 /// Flexible empty space in a stack.

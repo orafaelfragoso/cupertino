@@ -1,5 +1,6 @@
-//! The live services (feature `app`): `org.cupertino.Network1`, `org.cupertino.Bluetooth1` and `org.cupertino.Power1`
-//! with UPower's display device on the system bus, `org.cupertino.NotificationCenter1` on the session bus, and the mixer's
+//! The live services (feature `app`): `org.cupertino.Network1`, `org.cupertino.Bluetooth1`, `org.cupertino.Power1` and
+//! `org.cupertino.LoginManager1` with UPower's display device on the system bus, `org.cupertino.NotificationCenter1` on
+//! the session bus, and the mixer's
 //! master through `cupertino-alsa` (in-process, as the control panel does, §1). Each connection is made on first use and
 //! again after a failure, so a daemon that starts later is picked up; properties are read every time, never cached.
 
@@ -32,6 +33,10 @@ pub const CENTRE_NAME: &str = "org.cupertino.NotificationCenter1";
 pub const SESSION_NAME: &str = "org.cupertino.Session1";
 pub const SESSION_PATH: &str = "/org/cupertino/Session1";
 pub const CENTRE_PATH: &str = "/org/cupertino/NotificationCenter1";
+pub const LOGIN_NAME: &str = "org.cupertino.LoginManager1";
+pub const LOGIN_PATH: &str = "/org/cupertino/LoginManager1";
+/// The prefix of sessiond's refusals of `SetSystemAccessibility`.
+const LOGIN_ERROR: &str = "org.cupertino.LoginManager1.Error.";
 /// The Bluetooth daemon's refusal to replace another client's live agent.
 const AGENT_EXISTS: &str = "org.cupertino.Bluetooth1.AgentExists";
 
@@ -205,6 +210,23 @@ fn error_text(name: &str, message: Option<&str>) -> String {
         Some(m) if !m.is_empty() => m.to_string(),
         _ => name.rsplit('.').next().unwrap_or(name).to_string(),
     }
+}
+
+/// The row's sentence for a refused `SetSystemAccessibility`, by the refusal's name: sessiond's message is for the log.
+/// Any other failure is logged and shown as [`SERVICE_UNAVAILABLE`].
+pub fn login_screen_failure(e: &zbus::Error) -> String {
+    let name = error_name(e);
+    let sentence = match name.as_deref().and_then(|n| n.strip_prefix(LOGIN_ERROR)) {
+        Some("NotAdministrator") => "Only an administrator can change the login screen.",
+        Some("NotAtConsole") => "Change this at the computer itself.",
+        Some("TooManyWrites") => "Wait a moment, then try again.",
+        Some("InvalidArgs") => "These settings can't be used for the login screen.",
+        _ => {
+            log_once(&e.to_string());
+            SERVICE_UNAVAILABLE
+        }
+    };
+    sentence.to_string()
 }
 
 /// The bus's errors for a name nobody owns.
@@ -612,6 +634,66 @@ impl Services {
             .proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
             .and_then(|p| p.call::<_, _, ()>(method, &()));
         self.system.checked(result).map_err(|e| failure(&e))
+    }
+
+    /// Ask sessiond on a thread of its own whether this person may set the machine's accessibility defaults (each
+    /// opening of the Accessibility pane, never kept). `done` gets the answer: false when sessiond says no, fails or
+    /// is not running.
+    pub fn can_set_system_accessibility(
+        &mut self,
+        done: impl FnOnce(bool) + Send + 'static,
+    ) -> Result<(), String> {
+        let proxy = self.system.proxy(LOGIN_NAME, LOGIN_PATH, LOGIN_NAME);
+        let proxy = self.system.checked(proxy).map_err(|e| failure(&e))?;
+        std::thread::Builder::new()
+            .name("login-screen".into())
+            .spawn(move || {
+                done(
+                    match proxy.call::<_, _, bool>("CanSetSystemAccessibility", &()) {
+                        Ok(allowed) => allowed,
+                        Err(e) => {
+                            if !absent(&e) {
+                                log_once(&e.to_string());
+                            }
+                            false
+                        }
+                    },
+                )
+            })
+            .map_err(|e| {
+                log_once(&format!("cannot ask for the login screen: {e}"));
+                SERVICE_UNAVAILABLE.to_string()
+            })?;
+        Ok(())
+    }
+
+    /// Make `options` the machine's accessibility defaults (`SetSystemAccessibility`) on a thread of its own, so the
+    /// row shows "Saving…" meanwhile. `done` gets the outcome: the row's sentence for a refusal
+    /// ([`login_screen_failure`]).
+    pub fn set_system_accessibility(
+        &mut self,
+        options: HashMap<String, String>,
+        done: impl FnOnce(Result<(), String>) + Send + 'static,
+    ) -> Result<(), String> {
+        let proxy = self.system.proxy(LOGIN_NAME, LOGIN_PATH, LOGIN_NAME);
+        let proxy = self
+            .system
+            .checked(proxy)
+            .map_err(|e| login_screen_failure(&e))?;
+        std::thread::Builder::new()
+            .name("login-screen".into())
+            .spawn(move || {
+                done(
+                    proxy
+                        .call::<_, _, ()>("SetSystemAccessibility", &(options,))
+                        .map_err(|e| login_screen_failure(&e)),
+                )
+            })
+            .map_err(|e| {
+                log_once(&format!("cannot change the login screen: {e}"));
+                SERVICE_UNAVAILABLE.to_string()
+            })?;
+        Ok(())
     }
 }
 

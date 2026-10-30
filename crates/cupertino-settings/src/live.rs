@@ -3,6 +3,8 @@
 //! `panes`. A reading is unknown before its first read, or the reason it is unavailable (no daemon on the bus, no
 //! device), which the pane shows instead of an empty list (ST-19).
 
+use cupertino_defaults::accessibility::AccessibilitySettings;
+
 /// One service's state.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Reading<T> {
@@ -199,6 +201,15 @@ pub struct Bluetooth {
     pub failure: Option<String>,
 }
 
+/// The machine's accessibility defaults for the login screen and new users (`org.cupertino.LoginManager1`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LoginScreen {
+    /// The machine's file as the login screen reads it; `None` without one or with one the readers refuse.
+    pub current: Option<AccessibilitySettings>,
+    /// A write waits for its reply.
+    pub saving: bool,
+}
+
 /// Every live reading.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Live {
@@ -214,6 +225,8 @@ pub struct Live {
     pub battery: Reading<Option<Battery>>,
     pub wifi: Reading<Wifi>,
     pub bluetooth: Reading<Bluetooth>,
+    /// Shown only after `CanSetSystemAccessibility` said yes at this opening of the Accessibility pane.
+    pub login_screen: Option<LoginScreen>,
 }
 
 impl Default for Live {
@@ -227,6 +240,7 @@ impl Default for Live {
             battery: Reading::Unknown,
             wifi: Reading::Unknown,
             bluetooth: Reading::Unknown,
+            login_screen: None,
         }
     }
 }

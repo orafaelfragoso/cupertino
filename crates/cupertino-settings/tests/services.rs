@@ -1018,3 +1018,164 @@ fn the_bus_daemons_own_errors_never_reach_the_pane_but_a_services_plain_refusal_
         other => panic!("unavailable, got {other:?}"),
     }
 }
+
+// ---- Login screen ------------------------------------------------------------------------------------------------
+
+#[derive(Debug, zbus::DBusError)]
+#[zbus(prefix = "org.cupertino.LoginManager1.Error")]
+enum FakeLoginError {
+    #[zbus(error)]
+    ZBus(zbus::Error),
+    AccessDenied(String),
+    InvalidArgs(String),
+    Failed(String),
+    NotAdministrator(String),
+    NotAtConsole(String),
+    TooManyWrites(String),
+}
+
+/// The options sessiond wrote, in order.
+type Written = Arc<Mutex<Vec<HashMap<String, String>>>>;
+
+/// sessiond's machine settings: `can_set` `None` fails the question, `refuse` names the refusal of a write.
+struct FakeLoginManager {
+    can_set: Option<bool>,
+    refuse: Option<&'static str>,
+    written: Written,
+}
+
+#[zbus::interface(name = "org.cupertino.LoginManager1")]
+impl FakeLoginManager {
+    fn can_set_system_accessibility(&self) -> Result<bool, FakeLoginError> {
+        self.can_set
+            .ok_or_else(|| FakeLoginError::Failed("logind did not answer".into()))
+    }
+
+    fn set_system_accessibility(
+        &self,
+        options: HashMap<String, String>,
+    ) -> Result<(), FakeLoginError> {
+        // the journal's wording, which the row never shows
+        let detail = "uid 1000 refused: see the journal".to_string();
+        match self.refuse {
+            None => {
+                self.written.lock().unwrap().push(options);
+                Ok(())
+            }
+            Some("AccessDenied") => Err(FakeLoginError::AccessDenied(detail)),
+            Some("InvalidArgs") => Err(FakeLoginError::InvalidArgs(detail)),
+            Some("NotAdministrator") => Err(FakeLoginError::NotAdministrator(detail)),
+            Some("NotAtConsole") => Err(FakeLoginError::NotAtConsole(detail)),
+            Some("TooManyWrites") => Err(FakeLoginError::TooManyWrites(detail)),
+            Some(_) => Err(FakeLoginError::Failed(detail)),
+        }
+    }
+}
+
+fn serve_login(
+    bus: &common::PrivateBus,
+    can_set: Option<bool>,
+) -> (zbus::blocking::Connection, Written) {
+    let written = Arc::default();
+    let fake = FakeLoginManager {
+        can_set,
+        refuse: None,
+        written: Arc::clone(&written),
+    };
+    let c = zbus::blocking::connection::Builder::address(bus.address.as_str())
+        .unwrap()
+        .serve_at("/org/cupertino/LoginManager1", fake)
+        .unwrap()
+        .name("org.cupertino.LoginManager1")
+        .unwrap()
+        .build()
+        .unwrap();
+    (c, written)
+}
+
+fn can_set(services: &mut Services) -> bool {
+    let (done, answer) = mpsc::channel();
+    match services.can_set_system_accessibility(move |allowed| done.send(allowed).unwrap()) {
+        Ok(()) => answer.recv_timeout(Duration::from_secs(5)).unwrap(),
+        Err(_) => false,
+    }
+}
+
+fn save(services: &mut Services, options: HashMap<String, String>) -> Result<(), String> {
+    let (done, outcome) = mpsc::channel();
+    services.set_system_accessibility(options, move |result| done.send(result).unwrap())?;
+    outcome.recv_timeout(Duration::from_secs(5)).unwrap()
+}
+
+#[test]
+fn the_login_screen_is_offered_only_when_sessiond_says_yes() {
+    let Some(bus) = common::bus() else { return };
+    let mut services = services(&bus);
+    assert!(!can_set(&mut services), "no sessiond");
+    for (answer, offered) in [(Some(true), true), (Some(false), false), (None, false)] {
+        let (_daemon, _) = serve_login(&bus, answer);
+        assert_eq!(can_set(&mut services), offered, "{answer:?}");
+    }
+}
+
+#[test]
+fn use_my_settings_sends_the_allow_listed_values_and_a_refusal_gets_its_sentence() {
+    use cupertino_settings::panes::login_screen_options;
+    use cupertino_settings::services::SERVICE_UNAVAILABLE;
+    let Some(bus) = common::bus() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = settings(dir.path());
+    s.accessibility.invert_colors = true;
+    let session = Session {
+        display: DisplayOptions {
+            reduce_motion: true,
+            ..DisplayOptions::default()
+        },
+        ..LIGHT
+    };
+    let mut services = services(&bus);
+    assert_eq!(
+        save(&mut services, login_screen_options(session, &s)),
+        Err(SERVICE_UNAVAILABLE.to_string()),
+        "no sessiond"
+    );
+
+    let (daemon, written) = serve_login(&bus, Some(true));
+    save(&mut services, login_screen_options(session, &s)).unwrap();
+    assert_eq!(
+        *written.lock().unwrap(),
+        [HashMap::from([(
+            "reduce_motion".to_string(),
+            "on".to_string()
+        )])],
+        "the person's value, and no invert"
+    );
+
+    for (refusal, sentence) in [
+        (
+            "NotAdministrator",
+            "Only an administrator can change the login screen.",
+        ),
+        ("NotAtConsole", "Change this at the computer itself."),
+        ("TooManyWrites", "Wait a moment, then try again."),
+        (
+            "InvalidArgs",
+            "These settings can't be used for the login screen.",
+        ),
+        ("AccessDenied", SERVICE_UNAVAILABLE),
+        ("Failed", SERVICE_UNAVAILABLE),
+    ] {
+        daemon
+            .object_server()
+            .interface::<_, FakeLoginManager>("/org/cupertino/LoginManager1")
+            .unwrap()
+            .get_mut()
+            .refuse = Some(refusal);
+        assert_eq!(
+            save(&mut services, login_screen_options(session, &s)),
+            Err(sentence.to_string()),
+            "{refusal}"
+        );
+    }
+    assert_eq!(written.lock().unwrap().len(), 1);
+}

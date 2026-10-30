@@ -364,7 +364,8 @@ async fn read_session(
         .unwrap_or_default();
     let capabilities: HashMap<String, bool> =
         login.get_property("Capabilities").await.unwrap_or_default();
-    let can = |key: &str| capabilities.get(key).copied().unwrap_or(true);
+    // a capability the agent does not report is not offered: the item is drawn disabled
+    let can = |key: &str| capabilities.get(key).copied().unwrap_or(false);
     Ok(Some(SessionState {
         user_name,
         caps: SessionCaps {

@@ -21,6 +21,11 @@ both.
   the focus ring at least 3:1 against their surface in every enabled state (tested per resolved pair). Hover and press
   turn borders black (light) or white (dark). The dark switch thumb is dark, so it stands out on both tracks.
 
+The overlay scroller thumb (`ScrollerThumb`) is translucent in Cupertino light and dark and opaque in the built-in
+palettes, at 3:1 or more against the window there. The dialog scrim (`DialogScrim`) is the one colour that is
+translucent in every palette, since it dims what it covers: 20 % black in light, 40 % in dark, 60 % in high-contrast
+dark.
+
 Approximate: every state colour, the disabled fills and borders, the opaque thumb, the dark white role text and the
 dark tooltip in the Cupertino light and dark palettes; all neutral and high-contrast values.
 

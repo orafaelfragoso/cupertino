@@ -63,18 +63,7 @@ pub fn show_about(
 ) -> zbus::Result<()> {
     zbus::block_on(async {
         let connection = builder.build().await?;
-        let daemon = fdo::DBusProxy::new(&connection).await?;
-        let owner = daemon
-            .get_name_owner(ABOUT_BUS_NAME.try_into().expect("a valid bus name"))
-            .await?;
-        let pid = daemon
-            .get_connection_unix_process_id(owner.as_ref().into())
-            .await?;
-        if !runs_this_program(pid) {
-            return Err(zbus::Error::Failure(format!(
-                "{ABOUT_BUS_NAME} is owned by another program"
-            )));
-        }
+        let owner = checked_owner(&connection, ABOUT_BUS_NAME).await?;
         connection
             .call_method(
                 Some(owner.as_str()),
@@ -88,15 +77,46 @@ pub fn show_about(
     })
 }
 
+/// The owner of `name`, when it runs this very program; refused (and logged) otherwise, so another program holding the
+/// name never receives a launch's activation token.
+async fn checked_owner(
+    connection: &Connection,
+    name: &'static str,
+) -> zbus::Result<zbus::names::OwnedUniqueName> {
+    let daemon = fdo::DBusProxy::new(connection).await?;
+    let owner = daemon
+        .get_name_owner(name.try_into().expect("a valid bus name"))
+        .await?;
+    let pid = daemon
+        .get_connection_unix_process_id(owner.as_ref().into())
+        .await?;
+    if runs_this_program(pid) {
+        Ok(owner)
+    } else {
+        eprintln!("cupertino-settings: {name} is owned by another program; the launch is not handed to it");
+        Err(zbus::Error::Failure(format!(
+            "{name} is owned by another program"
+        )))
+    }
+}
+
 /// Whether process `pid` runs the same executable as this process.
 fn runs_this_program(pid: u32) -> bool {
     match (
         std::fs::read_link(format!("/proc/{pid}/exe")),
         std::env::current_exe(),
     ) {
-        (Ok(owner), Ok(own)) => owner == own,
+        (Ok(owner), Ok(own)) => same_program(&owner, &own),
         _ => false,
     }
+}
+
+/// Whether `owner`, a process's executable link, is `own`. A binary replaced by a package upgrade while it runs reads
+/// "<path> (deleted)"; it still ran from the same installed path.
+fn same_program(owner: &std::path::Path, own: &std::path::Path) -> bool {
+    let owner = owner.as_os_str().as_encoded_bytes();
+    let owner = owner.strip_suffix(b" (deleted)").unwrap_or(owner);
+    owner == own.as_os_str().as_encoded_bytes()
 }
 
 /// Whether a hand-over failed because About's owner left the bus after the name was found taken.
@@ -191,7 +211,8 @@ pub fn serve(
     })
 }
 
-/// Ask the running settings process on the bus `builder` connects to to show the pane with the id `pane_id`.
+/// Ask the running settings process on the bus `builder` connects to to show the pane with the id `pane_id`. A launch
+/// with an activation token hands it only to an owner that runs this very program, and calls the owner it checked.
 pub fn show(
     builder: connection::Builder<'static>,
     pane_id: &str,
@@ -211,9 +232,10 @@ pub fn show(
                 .await
                 .map(drop)
         } else {
+            let owner = checked_owner(&connection, BUS_NAME).await?;
             connection
                 .call_method(
-                    Some(BUS_NAME),
+                    Some(owner.as_str()),
                     OBJECT_PATH,
                     Some(INTERFACE),
                     "ShowPaneWithToken",
@@ -288,6 +310,23 @@ mod tests {
         );
         assert!(matches!(outcome, Err(zbus::Error::Failure(_))));
         assert_eq!(serves, 1);
+    }
+
+    #[test]
+    fn a_binary_replaced_by_an_upgrade_is_still_this_program() {
+        use std::path::Path;
+        let own = Path::new("/usr/bin/cupertino-settings");
+        assert!(same_program(own, own));
+        assert!(same_program(
+            Path::new("/usr/bin/cupertino-settings (deleted)"),
+            own
+        ));
+        assert!(!same_program(Path::new("/usr/bin/other"), own));
+        assert!(!same_program(Path::new("/usr/bin/other (deleted)"), own));
+        assert!(!same_program(
+            Path::new("/usr/bin/cupertino-settings (deleted) (deleted)"),
+            own
+        ));
     }
 
     #[test]

@@ -119,10 +119,13 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
         let chrome = chrome(cx.size(), self.style, &theme);
         let radius = self.radius(chrome, &theme);
         let (fill, text) = self.roles();
-        if self.style != ButtonStyle::Borderless || state.pressed {
+        let fills = self.style != ButtonStyle::Borderless || state.pressed;
+        if fills {
             look::fill(cx, chrome, radius, look::color(&theme, fill, &state));
         }
-        if self.style != ButtonStyle::Borderless {
+        // in high contrast a filled button always shows its border: a fill alone may not stand out from the window
+        let high_contrast = theme.preferences.appearance.is_high_contrast();
+        if self.style != ButtonStyle::Borderless || (fills && high_contrast) {
             look::stroke(
                 cx,
                 chrome.inset(cupertino_geometry::Insets::uniform(0.5)),

@@ -1,20 +1,23 @@
 //! Session manager settings (`login.conf`, `$CUPERTINO_LOGIN_CONF` overrides the path): the login screen's VT and accounts,
 //! the commands the manager starts, which accounts and power items the screen offers. One `key = value` per line, `# starts
-//! a comment. System configuration, owned by root: unlike the user settings, a missing file or a bad line is an error, and the
-//! manager refuses to start on it (no silent fallback).
+//! a comment. System configuration, owned by root. A missing file, or a missing or bad `greeter-command` or
+//! `session-command`, is an error and the manager refuses to start on it. Any other bad line is reported and the manager
+//! starts: its key takes its safe value (the last column), so one typo cannot keep the machine without a login screen.
 //!
-//! | Key | Value | Default |
-//! |---|---|---|
-//! | `vt` | the login screen's virtual terminal, 1 to 63 | 1 |
-//! | `greeter-user` | the account the login screen runs as | `cupertino-greeter` |
-//! | `greeter-command`, `session-command` | program (an absolute path) and arguments, split at spaces, no quoting | required |
-//! | `hidden-users`, `deny-list` | account names separated by commas | none |
-//! | `allow-list` | account names separated by commas; given and empty lists nobody | absent |
-//! | `hide-admin-users`, `show-other-users` | `true` or `false` | false, and absent (the screen's rule) |
-//! | `restart-disabled`, `shut-down-disabled`, `sleep-disabled`, `power-off-disabled` | `true` or `false` | absent |
-//! | `retries-until-hint` | failed attempts until the password help shows, 0 for the setting absent | 0 |
-//! | `admin-groups` | group names separated by commas: a member of any of them is an administrator; the manager uses the key only when this file is root-owned and writable by root alone | the build's ([`DEFAULT_ADMIN_GROUPS`]) |
-//! | `auto-login` | the account logged in without a password once per boot (semantics unknown in the design); the manager refuses it unless this file is root-owned and writable by root alone | off |
+//! Names in a list are separated by commas, with spaces around them allowed; a name with a space or `:` inside is bad.
+//!
+//! | Key | Value | Default | When the value is bad |
+//! |---|---|---|---|
+//! | `vt` | the login screen's virtual terminal, 1 to 63 | 1 | 1 |
+//! | `greeter-user` | the account the login screen runs as | `cupertino-greeter` | `cupertino-greeter` |
+//! | `greeter-command`, `session-command` | program (an absolute path) and arguments, split at spaces, no quoting | required | refused |
+//! | `hidden-users`, `deny-list` | account names | none | the picker lists nobody and offers "Other…" |
+//! | `allow-list` | account names; given and empty lists nobody | absent | the picker lists nobody and offers "Other…" |
+//! | `hide-admin-users`, `show-other-users` | `true` or `false` | false, and absent (the screen's rule) | true, and true |
+//! | `restart-disabled`, `shut-down-disabled`, `sleep-disabled`, `power-off-disabled` | `true` or `false` | absent | true |
+//! | `retries-until-hint` | failed attempts until the password help shows, 0 for the setting absent | 0 | 0 |
+//! | `admin-groups` | group names: a member of any of them is an administrator; the manager uses the key only when this file is root-owned and writable by root alone | the build's ([`DEFAULT_ADMIN_GROUPS`]) | no administrator |
+//! | `auto-login` | the account logged in without a password once per boot (semantics unknown in the design); the manager refuses it unless this file is root-owned and writable by root alone | off | off |
 //!
 //! The filter and power keys are the login window preferences of the design (`HiddenUsersList`, `HideAdminUsers`,
 //! `AllowList`, `DenyList`, `SHOWOTHERUSERS_MANAGED`, `RestartDisabled`, `ShutDownDisabled`, `SleepDisabled`,
@@ -78,6 +81,14 @@ pub struct LoginConfig {
 /// A line that was not understood, as `(line number, message)`; a missing required key is line 0.
 pub type Problem = (usize, String);
 
+/// The settings of a file the manager starts with, and its lines that were not understood: each one's key took its safe
+/// value.
+#[derive(Debug)]
+pub struct Loaded {
+    pub config: LoginConfig,
+    pub problems: Vec<Problem>,
+}
+
 impl LoginConfig {
     /// The settings file: [`LOGIN_CONF_ENV`] when set and not empty, else [`LOGIN_CONF_PATH`].
     pub fn path() -> PathBuf {
@@ -87,15 +98,15 @@ impl LoginConfig {
     }
 
     /// Read and parse the settings file; every problem comes back, in the order of the file.
-    pub fn load() -> Result<Self, Vec<Problem>> {
+    pub fn load() -> Result<Loaded, Vec<Problem>> {
         let path = Self::path();
         let text = std::fs::read_to_string(&path)
             .map_err(|e| vec![(0, format!("{}: {e}", path.display()))])?;
         Self::parse(&text)
     }
 
-    /// Parse the text of a settings file.
-    pub fn parse(text: &str) -> Result<Self, Vec<Problem>> {
+    /// Parse the text of a settings file: an error only when a command is missing or bad.
+    pub fn parse(text: &str) -> Result<Loaded, Vec<Problem>> {
         let mut config = LoginConfig {
             vt: DEFAULT_VT,
             greeter_user: DEFAULT_GREETER_USER.to_owned(),
@@ -115,6 +126,8 @@ impl LoginConfig {
             admin_groups: None,
         };
         let mut problems = Vec::new();
+        let mut bad_keys = Vec::new();
+        let mut fatal = Vec::new();
         for (i, raw) in text.lines().enumerate() {
             let line = raw.split('#').next().unwrap_or("").trim();
             if line.is_empty() {
@@ -124,22 +137,54 @@ impl LoginConfig {
                 problems.push((i + 1, format!("expected `key = value`, got {line:?}")));
                 continue;
             };
-            if let Err(message) = config.apply(key.trim(), value.trim()) {
-                problems.push((i + 1, message));
+            let key = key.trim();
+            if let Err(message) = config.apply(key, value.trim()) {
+                if matches!(key, "greeter-command" | "session-command") {
+                    fatal.push((i + 1, message));
+                } else {
+                    problems.push((i + 1, message));
+                }
+                bad_keys.push(key.to_owned());
             }
+        }
+        // after every line, so a good line of the same key further down does not undo it
+        for key in &bad_keys {
+            config.fail_closed(key);
         }
         for (key, command) in [
             ("greeter-command", &config.greeter_command),
             ("session-command", &config.session_command),
         ] {
-            if command.is_empty() {
-                problems.push((0, format!("{key} is required")));
+            if command.is_empty() && !bad_keys.iter().any(|bad| bad == key) {
+                fatal.push((0, format!("{key} is required")));
             }
         }
-        if problems.is_empty() {
-            Ok(config)
+        if fatal.is_empty() {
+            Ok(Loaded { config, problems })
         } else {
-            Err(problems)
+            Err(fatal)
+        }
+    }
+
+    /// The safe value of `key`, whose line was bad.
+    fn fail_closed(&mut self, key: &str) {
+        match key {
+            "vt" => self.vt = DEFAULT_VT,
+            "greeter-user" => self.greeter_user = DEFAULT_GREETER_USER.to_owned(),
+            "auto-login" => self.auto_login = None,
+            "admin-groups" => self.admin_groups = Some(Vec::new()),
+            "hidden-users" | "deny-list" | "allow-list" => {
+                self.allow_list = Some(Vec::new());
+                self.show_other_users = Some(true);
+            }
+            "hide-admin-users" => self.hide_admin_users = true,
+            "show-other-users" => self.show_other_users = Some(true),
+            "restart-disabled" => self.restart_disabled = Some(true),
+            "shut-down-disabled" => self.shut_down_disabled = Some(true),
+            "sleep-disabled" => self.sleep_disabled = Some(true),
+            "power-off-disabled" => self.power_off_disabled = Some(true),
+            "retries-until-hint" => self.retries_until_hint = 0,
+            _ => {}
         }
     }
 
@@ -217,15 +262,19 @@ fn flag(key: &str, value: &str) -> Result<bool, String> {
     }
 }
 
-/// Account names separated by commas; the empty text is the empty list, an empty or spaced entry is an error.
+/// Account or group names separated by commas, with spaces around them allowed; the empty text is the empty list, an
+/// empty entry or one with a space or `:` inside is an error.
 fn names(key: &str, value: &str) -> Result<Vec<String>, String> {
     if value.is_empty() {
         return Ok(Vec::new());
     }
-    let names: Vec<String> = value.split(',').map(str::to_owned).collect();
+    let names: Vec<String> = value
+        .split(',')
+        .map(|name| name.trim().to_owned())
+        .collect();
     if names
         .iter()
-        .any(|name| name.is_empty() || name.contains(char::is_whitespace))
+        .any(|name| name.is_empty() || name.contains(|c: char| c.is_whitespace() || c == ':'))
     {
         return Err(format!(
             "{key}: expected account names separated by commas, got {value:?}"
@@ -254,7 +303,7 @@ mod tests {
 
     #[test]
     fn the_required_commands_alone_give_the_defaults() {
-        let config = LoginConfig::parse(REQUIRED).unwrap();
+        let config = LoginConfig::parse(REQUIRED).unwrap().config;
         assert_eq!(
             (config.vt, config.greeter_user.as_str()),
             (1, "cupertino-greeter")
@@ -273,7 +322,7 @@ mod tests {
     #[test]
     fn keys_override_the_defaults() {
         let text = format!("{REQUIRED}vt = 5 # login screen\nhidden-users = mallory,eve\nallow-list =\nhide-admin-users = true\nsleep-disabled = false\nretries-until-hint = 3\n");
-        let config = LoginConfig::parse(&text).unwrap();
+        let config = LoginConfig::parse(&text).unwrap().config;
         assert_eq!(config.vt, 5);
         assert_eq!(config.hidden_users, ["mallory", "eve"]);
         assert_eq!(config.allow_list, Some(Vec::new()));
@@ -290,31 +339,48 @@ mod tests {
 
     #[test]
     fn auto_login_is_off_unless_the_file_names_one_account() {
-        assert_eq!(LoginConfig::parse(REQUIRED).unwrap().auto_login, None);
+        assert_eq!(
+            LoginConfig::parse(REQUIRED).unwrap().config.auto_login,
+            None
+        );
         assert_eq!(
             LoginConfig::parse(&format!("{REQUIRED}auto-login = alice\n"))
                 .unwrap()
+                .config
                 .auto_login
                 .as_deref(),
             Some("alice")
         );
-        let problems =
-            LoginConfig::parse(&format!("{REQUIRED}auto-login =\nauto-login = a b\n")).unwrap_err();
+        let loaded =
+            LoginConfig::parse(&format!("{REQUIRED}auto-login = alice\nauto-login = a b\n"))
+                .unwrap();
         assert_eq!(
-            problems.iter().map(|(line, _)| *line).collect::<Vec<_>>(),
-            [3, 4]
+            loaded
+                .problems
+                .iter()
+                .map(|(line, _)| *line)
+                .collect::<Vec<_>>(),
+            [4]
         );
+        assert_eq!(loaded.config.auto_login, None, "a bad line turns it off");
     }
 
     #[test]
     fn the_administrators_groups_come_from_the_file_else_from_the_build() {
-        assert_eq!(LoginConfig::parse(REQUIRED).unwrap().admin_groups, None);
-        let config = LoginConfig::parse(&format!("{REQUIRED}admin-groups = sudo,admin\n")).unwrap();
+        assert_eq!(
+            LoginConfig::parse(REQUIRED).unwrap().config.admin_groups,
+            None
+        );
+        let config = LoginConfig::parse(&format!("{REQUIRED}admin-groups = sudo, admin\n"))
+            .unwrap()
+            .config;
         assert_eq!(
             config.admin_groups,
             Some(vec!["sudo".to_owned(), "admin".to_owned()])
         );
-        let config = LoginConfig::parse(&format!("{REQUIRED}admin-groups =\n")).unwrap();
+        let config = LoginConfig::parse(&format!("{REQUIRED}admin-groups =\n"))
+            .unwrap()
+            .config;
         assert_eq!(
             config.admin_groups,
             Some(Vec::new()),
@@ -327,13 +393,39 @@ mod tests {
     }
 
     #[test]
-    fn every_bad_line_is_reported_by_number_and_a_missing_command_is_line_zero() {
-        let text = "vt = 0\nvt = 64\nbogus = 1\nhide-admin-users = yes\nhidden-users = a,,b\nsession-command = relative/path\nno equals sign\n";
-        let problems = LoginConfig::parse(text).unwrap_err();
+    fn a_bad_line_is_reported_by_number_and_its_key_takes_its_safe_value() {
+        let text = format!("{REQUIRED}vt = 0\nbogus = 1\nhide-admin-users = yes\nhidden-users = a,,b\nshow-other-users = false\nrestart-disabled = no\nadmin-groups = su do\nretries-until-hint = many\nno equals sign\n");
+        let Loaded { config, problems } = LoginConfig::parse(&text).unwrap();
         assert_eq!(
             problems.iter().map(|(line, _)| *line).collect::<Vec<_>>(),
-            [1, 2, 3, 4, 5, 6, 7, 0, 0]
+            [3, 4, 5, 6, 8, 9, 10, 11]
         );
-        assert_eq!(problems[7].1, "greeter-command is required");
+        assert_eq!(config.vt, 1);
+        assert!(config.hide_admin_users);
+        assert_eq!(
+            config.allow_list,
+            Some(Vec::new()),
+            "a bad filter lists nobody"
+        );
+        assert_eq!(
+            config.show_other_users,
+            Some(true),
+            "and offers Other…, over a good line"
+        );
+        assert_eq!(config.restart_disabled, Some(true));
+        assert_eq!(config.admin_groups, Some(Vec::new()), "no administrator");
+        assert_eq!(config.retries_until_hint, 0);
+    }
+
+    #[test]
+    fn a_missing_or_bad_command_refuses_the_file() {
+        let problems = LoginConfig::parse("session-command = relative/path\nvt = 0\n").unwrap_err();
+        assert_eq!(
+            problems,
+            [
+                (1, "session-command: expected an absolute program path and arguments, got \"relative/path\"".to_owned()),
+                (0, "greeter-command is required".to_owned()),
+            ]
+        );
     }
 }

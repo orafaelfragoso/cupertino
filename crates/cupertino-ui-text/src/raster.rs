@@ -1,13 +1,18 @@
+use crate::strike::strikes_fit;
 use crate::{
     FontId, FontSource, GlyphFormat, GlyphKey, GlyphRasterizer, RasterGlyph, TextError, TextSystem,
 };
-use cupertino_glyph::{declarative_size, rasterize, Smoothing};
+use cupertino_glyph::{declarative_size, mask_bounds, rasterize, Smoothing};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 use swash::scale::image::Content;
 use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::{tag_from_bytes, CacheKey, FontRef, Setting};
+
+/// The largest size a glyph is drawn at, in [`GlyphKey::size_q`] steps (2048 pixels per em); larger keys draw at it.
+/// This bounds the scale only: a colour glyph's extent is checked on its own before it is drawn.
+const MAX_SIZE_Q: u32 = 2048 * 64;
 
 struct Loaded {
     source: FontSource,
@@ -55,7 +60,7 @@ fn load<'a>(
 
 impl GlyphRasterizer for GlyphRaster {
     fn rasterize(&mut self, key: &GlyphKey) -> Result<Option<RasterGlyph>, TextError> {
-        let size = key.size_q as f32 / 64.0;
+        let size = key.size_q.min(MAX_SIZE_Q) as f32 / 64.0;
         let Ok(glyph) = u16::try_from(key.glyph.0) else {
             return Ok(None);
         };
@@ -83,11 +88,26 @@ impl GlyphRasterizer for GlyphRaster {
             }))
             .build();
 
-        let colour = Render::new(&[
-            Source::ColorOutline(0),
-            Source::ColorBitmap(StrikeWith::BestFit),
-        ])
-        .render(&mut scaler, glyph);
+        let mut sources = Vec::with_capacity(2);
+        if scaler.has_color_outlines()
+            && scaler.scale_color_outline(glyph).is_some_and(|outline| {
+                let bounds = outline.bounds();
+                mask_bounds((bounds.min.x, bounds.min.y), (bounds.max.x, bounds.max.y)).is_some()
+            })
+        {
+            sources.push(Source::ColorOutline(0));
+        }
+        if font.table(tag_from_bytes(b"sbix")).is_none()
+            && font
+                .table(tag_from_bytes(b"CBLC"))
+                .zip(font.table(tag_from_bytes(b"CBDT")))
+                .is_some_and(|(cblc, cbdt)| strikes_fit(cblc, cbdt, glyph, size))
+        {
+            sources.push(Source::ColorBitmap(StrikeWith::BestFit));
+        }
+        let colour = (!sources.is_empty())
+            .then(|| Render::new(&sources).render(&mut scaler, glyph))
+            .flatten();
         if let Some(image) = colour.filter(|image| image.content == Content::Color) {
             return Ok(Some(RasterGlyph {
                 format: GlyphFormat::ColorPremultiplied,
@@ -301,5 +321,20 @@ mod tests {
             ratio < 100.0,
             "256 px took {large:?} against {small:?} for 64 px, {ratio:.0}x for 16x the area"
         );
+    }
+
+    #[test]
+    fn a_size_past_the_cap_draws_at_the_cap() {
+        let (mut raster, font, id) = raster();
+        let mut draw = |size_q| {
+            let key = GlyphKey {
+                size_q,
+                ..key(font, id('H'), true, 0.0, 0.0)
+            };
+            raster.rasterize(&key).unwrap().unwrap()
+        };
+        let capped = draw(MAX_SIZE_Q);
+        assert!(capped.height <= cupertino_glyph::MAX_MASK_SIDE);
+        assert_eq!(draw(u32::MAX), capped);
     }
 }

@@ -341,4 +341,8 @@ fn a_lost_rendering_context_ends_the_session_after_one_draw() {
     d.at(3000);
     assert_eq!(fail_for_a_second(&mut d, Failure::ContextLost), 1);
     assert!(!d.state.running, "the session ends");
+    assert!(
+        d.state.rendering_lost.is_some(),
+        "with an error, so the session command sees a failure"
+    );
 }

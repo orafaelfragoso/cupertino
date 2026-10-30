@@ -570,6 +570,7 @@ impl Cupertino {
     ) {
         if error.failure() == Failure::ContextLost {
             tracing::error!(error = %error, "the rendering context is lost: ending the session");
+            self.rendering_lost = Some(error.to_string());
             self.running = false;
             return;
         }

@@ -103,6 +103,7 @@ fn main() {
             edit: None,
             edit_caret: false,
             drop_target: None,
+            increase_contrast: false,
             marquee: None,
             status: "40 items",
         };

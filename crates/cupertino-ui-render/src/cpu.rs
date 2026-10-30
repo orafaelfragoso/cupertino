@@ -525,10 +525,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         }
         source_over(
             t.pixmap,
-            (
-                (visible.x0 - t.origin.0) as usize,
-                (visible.y0 - t.origin.1) as usize,
-            ),
+            (visible.x0 - t.origin.0, visible.y0 - t.origin.1),
             &shown,
             opacity,
         );
@@ -891,21 +888,29 @@ fn skia_paint(paint: &Paint) -> Option<tiny_skia::Paint<'static>> {
 
 /// Source-over of the premultiplied `src`, scaled by `opacity`, onto the pixmap with its top-left pixel at `at`, in
 /// 8-bit integers. Whatever of `src` falls outside the pixmap is not drawn.
-fn source_over(dst: &mut PixmapMut<'_>, at: (usize, usize), src: &Pixmap, opacity: f32) {
+fn source_over(dst: &mut PixmapMut<'_>, at: (i32, i32), src: &Pixmap, opacity: f32) {
     let k = (opacity.clamp(0.0, 1.0) * 255.0).round() as u32;
     let stride = dst.width() as usize * 4;
     let row = src.width() as usize * 4;
+    let (Ok(x), Ok(top)) = (usize::try_from(at.0), usize::try_from(at.1)) else {
+        debug_assert!(false, "the layer starts before the target");
+        return;
+    };
+    let fits = x.checked_mul(4).and_then(|left| left.checked_add(row));
     debug_assert!(
-        at.0 * 4 + row <= stride,
+        fits.is_some_and(|right| right <= stride),
         "the layer is wider than the target"
     );
-    if at.0 * 4 + row > stride {
+    if fits.is_none_or(|right| right > stride) {
         return;
     }
     let dst = dst.data_mut();
     for (y, s) in src.data().chunks_exact(row).enumerate() {
-        let start = (at.1 + y) * stride + at.0 * 4;
-        let Some(d) = dst.get_mut(start..start + row) else {
+        let start = top
+            .checked_add(y)
+            .and_then(|line| line.checked_mul(stride))
+            .and_then(|line| line.checked_add(x * 4));
+        let Some(d) = start.and_then(|start| dst.get_mut(start..start.checked_add(row)?)) else {
             debug_assert!(false, "the layer is taller than the target");
             return;
         };

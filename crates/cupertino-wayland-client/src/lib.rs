@@ -24,7 +24,7 @@ mod text_input;
 
 pub use buffer::{BufferFormat, BufferLayout, PixelRect};
 pub use capability::{Capability, CapabilitySet, Extension};
-pub use clipboard::ClipboardOffer;
+pub use clipboard::{ClipboardOffer, ReadId};
 pub use configure::{Decorations, WindowConfigure, WindowStates, WmCapabilities};
 pub use connection::{
     BufferLease, Connection, Event, ExtensionEvent, ExternalRole, FrameCallback, Popup,

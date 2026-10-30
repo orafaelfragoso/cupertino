@@ -434,6 +434,9 @@ fn isolated(test: &str, shell: bool, work: impl FnOnce(&str)) {
         output.status.success(),
         "isolated golden worker failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .map(|line| format!("    {line}\n"))
+            .collect::<String>()
     );
     assert!(
         stdout.lines().any(|l| l == format!("test {test} ... ok")),

@@ -135,7 +135,7 @@ impl WaylandWindowSystem {
             let observer = effects.appearance(&conn);
             (effects, observer)
         });
-        WaylandWindowSystem {
+        let mut system = WaylandWindowSystem {
             conn,
             profile,
             windows: Vec::new(),
@@ -151,7 +151,24 @@ impl WaylandWindowSystem {
             woken: Arc::new(AtomicBool::new(false)),
             effects,
             appearance: SystemAppearance::default(),
+        };
+        // the compositor answers the observer at once: learn the session's appearance before the first window draws
+        if system.effects.is_some() && system.conn.roundtrip().is_ok() {
+            if let Ok(events) = system.conn.wait(Some(Duration::ZERO)) {
+                let mut queued = Vec::new();
+                for event in events {
+                    system.translate(event, &mut queued);
+                }
+                system.queued = queued;
+            }
         }
+        system
+    }
+
+    /// The session's appearance and display options as the compositor last reported them; `None` on a compositor
+    /// without the desktop's effects.
+    pub fn appearance(&self) -> Option<SystemAppearance> {
+        self.effects.as_ref().map(|_| self.appearance)
     }
 
     /// The transport, for an extension protocol such as the desktop's effects.

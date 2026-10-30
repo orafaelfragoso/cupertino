@@ -39,6 +39,7 @@ use crate::input::{ActionPlan, KeyEvent, KeyOutcome, Mods};
 use crate::kbd_filters::RepeatTarget;
 use crate::kbd_ui::AccentRoute;
 use crate::overlays::OverlayKey;
+use crate::pointer_constraints::Constrained;
 use crate::state::{Cupertino, PointerMode, WindowTarget};
 use cupertino_keyboard::rewrite::Rewrite;
 use smithay::input::keyboard::{keysyms, Keycode};
@@ -801,6 +802,20 @@ impl Cupertino {
         time: u32,
         rel: Option<RelativeMotionEvent>,
     ) {
+        let pos = match self.constrain_motion(pos) {
+            Some(Constrained::Locked) => {
+                // the pointer stays; the client gets the motion as relative motion only
+                if let Some(rel) = rel {
+                    let pointer = self.pointer.clone();
+                    let under = self.surface_under(pointer.current_location());
+                    pointer.relative_motion(self, under, &rel);
+                    pointer.frame(self);
+                }
+                return;
+            }
+            Some(Constrained::Confined(to)) => to,
+            None => pos,
+        };
         let pos = self.clamp_to_outputs(pos);
         self.shake_motion(pos);
         let now = self.now();
@@ -865,6 +880,8 @@ impl Cupertino {
         self.update_decor_hover(target.as_ref());
         let under = self.surface_under(pos);
         self.send_pointer_motion(under, pos, time, rel);
+        let focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
+        self.refresh_pointer_constraints(focus.as_ref());
     }
 
     /// Move the pointer to `pos`, focused on `under`.
@@ -976,6 +993,9 @@ impl Cupertino {
         if state == ButtonState::Pressed && self.press_consumed(pos, button, now) {
             self.consumed_buttons.push(button);
             return;
+        }
+        if state == ButtonState::Pressed {
+            self.arm_by_press();
         }
 
         pointer.button(

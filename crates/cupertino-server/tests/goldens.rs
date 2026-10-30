@@ -354,16 +354,36 @@ fn compare_pixels(name: &str, expected: &RgbaImage, actual: &RgbaImage) {
 /// Baselines this worker re-recorded.
 static RECORDED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+const RERUN: &str = "; rerun without CUPERTINO_UPDATE_GOLDENS";
+
 /// An update run fails after recording, so a `CUPERTINO_UPDATE_GOLDENS` that leaks into a test run can never pass it.
 fn fail_after_update(update: bool) {
     if update {
         let message = format!(
-            "re-recorded {} goldens; rerun without CUPERTINO_UPDATE_GOLDENS",
+            "re-recorded {} goldens{RERUN}",
             RECORDED.load(std::sync::atomic::Ordering::Relaxed)
         );
         println!("{message}");
         panic!("{message}");
     }
+}
+
+/// The re-record message when it is the worker's only failure: libtest's failure status and a single panic, that of
+/// `fail_after_update`. The parent then fails with that message alone, so ci/goldens_log.py tells an update from an
+/// update followed by another failure.
+fn only_re_recorded(status: std::process::ExitStatus, stderr: &str) -> Option<&str> {
+    if status.code() != Some(101) {
+        return None;
+    }
+    let lines: Vec<&str> = stderr.lines().collect();
+    let panics: Vec<usize> = (0..lines.len())
+        .filter(|&i| lines[i].starts_with("thread '") && lines[i].contains(" panicked at "))
+        .collect();
+    let [at] = panics[..] else { return None };
+    lines
+        .get(at + 1)
+        .copied()
+        .filter(|message| message.starts_with("re-recorded ") && message.ends_with(RERUN))
 }
 
 fn baseline(root: &Path, name: &str, scene: &mut Scene, update: bool) {
@@ -464,10 +484,15 @@ fn isolated(test: &str, shell: bool, work: impl FnOnce(&str)) {
     let output = child.output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     print!("{stdout}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if let Some(message) = only_re_recorded(output.status, &stderr) {
+        panic!("{message}");
+    }
     assert!(
         output.status.success(),
-        "isolated golden worker failed:\n{}",
-        String::from_utf8_lossy(&output.stderr)
+        "isolated golden worker failed ({}):\n{}",
+        output.status,
+        stderr
             .lines()
             .map(|line| format!("    {line}\n"))
             .collect::<String>()
@@ -499,6 +524,23 @@ fn pixel_comparison_fails_on_a_change_at_unchanged_geometry() {
         "{message}"
     );
     assert!(message.contains("left: 1"), "{message}");
+}
+
+#[test]
+fn only_a_lone_re_record_panic_is_an_update() {
+    use std::os::unix::process::ExitStatusExt;
+    let failed = std::process::ExitStatus::from_raw(101 << 8);
+    let recorded = "\nthread 'desktop_goldens_and_input_replay' (5631) panicked at crates/cupertino-server/tests/goldens.rs:367:9:\nre-recorded 3 goldens; rerun without CUPERTINO_UPDATE_GOLDENS\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
+    assert_eq!(
+        only_re_recorded(failed, recorded),
+        Some("re-recorded 3 goldens; rerun without CUPERTINO_UPDATE_GOLDENS")
+    );
+    let again = format!(
+        "{recorded}\nthread '<unnamed>' (5640) panicked at crates/cupertino-server/tests/goldens.rs:689:9:\ninjected\n"
+    );
+    assert_eq!(only_re_recorded(failed, &again), None);
+    let killed = std::process::ExitStatus::from_raw(9);
+    assert_eq!(only_re_recorded(killed, recorded), None);
 }
 
 #[derive(Serialize)]

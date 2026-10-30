@@ -135,9 +135,10 @@ fn owner_left(e: &zbus::Error) -> bool {
     }
 }
 
-/// Serve About, or hand the launch to the About that runs (`Ok(None)`). An owner that leaves between the two, as an
-/// About quitting while it is launched again, lets this launch claim the name once more.
-pub fn serve_or_show_about<C>(
+/// Serve, or hand the launch to the process that owns the name (`Ok(None)`): About and Settings both start this way. An
+/// owner that leaves between the two, as a window quitting while it is launched again, lets this launch claim the name
+/// once more.
+pub fn serve_or_hand_over<C>(
     mut serve: impl FnMut() -> zbus::Result<C>,
     mut show: impl FnMut() -> zbus::Result<()>,
 ) -> zbus::Result<Option<C>> {
@@ -258,7 +259,7 @@ mod tests {
     #[test]
     fn a_taken_name_hands_the_launch_over() {
         let mut serves = 0;
-        let outcome = serve_or_show_about(
+        let outcome = serve_or_hand_over(
             || -> zbus::Result<()> {
                 serves += 1;
                 Err(zbus::Error::NameTaken)
@@ -272,7 +273,7 @@ mod tests {
     #[test]
     fn an_owner_that_left_lets_the_launch_claim_the_name_once_more() {
         let mut serves = 0;
-        let outcome = serve_or_show_about(
+        let outcome = serve_or_hand_over(
             || {
                 serves += 1;
                 if serves == 1 {
@@ -290,7 +291,7 @@ mod tests {
     #[test]
     fn the_name_is_claimed_again_only_once_and_other_failures_are_not_retried() {
         let mut serves = 0;
-        let outcome = serve_or_show_about(
+        let outcome = serve_or_hand_over(
             || -> zbus::Result<()> {
                 serves += 1;
                 Err(zbus::Error::NameTaken)
@@ -301,7 +302,7 @@ mod tests {
         assert_eq!(serves, 2);
 
         let mut serves = 0;
-        let outcome = serve_or_show_about(
+        let outcome = serve_or_hand_over(
             || -> zbus::Result<()> {
                 serves += 1;
                 Err(zbus::Error::NameTaken)

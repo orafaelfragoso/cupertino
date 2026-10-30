@@ -377,20 +377,21 @@ pub fn run(pane: PaneId, activation_token: String) -> Result<()> {
         }
     });
     let to_loop = notify.clone();
-    let instance =
-        match instance::serve(zbus::connection::Builder::session()?, move |pane, token| {
-            to_loop(Background::ShowPane(pane, token))
-        }) {
-            Ok(connection) => connection,
-            Err(zbus::Error::NameTaken) => {
-                return Ok(instance::show(
-                    zbus::connection::Builder::session()?,
-                    pane.key(),
-                    &activation_token,
-                )?)
-            }
-            Err(e) => return Err(format!("cannot claim {}: {e}", instance::BUS_NAME).into()),
-        };
+    let on_show = move |pane, token| to_loop(Background::ShowPane(pane, token));
+    let Some(instance) = instance::serve_or_hand_over(
+        || instance::serve(zbus::connection::Builder::session()?, on_show.clone()),
+        || {
+            instance::show(
+                zbus::connection::Builder::session()?,
+                pane.key(),
+                &activation_token,
+            )
+        },
+    )
+    .map_err(|e| format!("cannot claim or reach {}: {e}", instance::BUS_NAME))?
+    else {
+        return Ok(());
+    };
     let assets = Assets::discover();
     let theme = Theme::load()?;
     let painter = Painter::new(&assets)?;

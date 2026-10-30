@@ -122,7 +122,7 @@ Everything but the wallpaper is one layer whose opacity is animated. Times are o
 |---|---|---|
 | `Locked` | Waiting for a password. | Return with a non-empty field: `Authenticating`. |
 | `Authenticating` | The attempt is at PAM. The field takes a retry; Return waits. | The answer: success `Unlocking`, wrong password `Failed`, error `Locked` with a notice. |
-| `Failed` | The field shakes for 0.4 s and takes a retry. | 0.4 s later: `Locked`. Return with a non-empty field: `Authenticating`. |
+| `Failed` | The field shakes for 0.4 s (not under Reduce Motion) and takes a retry; the pill is outlined in red until the person edits the field. | 0.4 s later: `Locked`. Return with a non-empty field: `Authenticating`. |
 | `Unlocking` | The interface fades out. | The fade ends: `Unlocked`. |
 | `Unlocked` | The process unlocks the session. | |
 
@@ -372,7 +372,8 @@ network users).
 
 | Item | Value |
 |---|---|
-| Shake | 0.4 s, `v = 0.5 + 0.5 sin(6 pi p) d`, `d = 1` for `p < 0.5` else `exp(-0.8 p)`, `x = (v - 0.5) * 2 * 14` pt, zero at `p = 1` |
+| Shake | 0.4 s, `v = 0.5 + 0.5 sin(6 pi p) d`, `d = 1` for `p < 0.5` else `exp(-0.8 p)`, `x = (v - 0.5) * 2 * 14` pt, zero at `p = 1`; none under the session's Reduce Motion (the lock screen; the greeter has no person's options) |
+| Failure outline | 2 pt red around the password pill after a wrong password, until the person's next edit, with or without Reduce Motion (approximate) |
 | Fade of the interface | linear, `\|to - from\| * 0.25 s` |
 | Interface hides after | 30 s without input, 5 s after a lock the person asked for (the lock shortcut: server `LockNow`, lock request type 8); the greeter always 30 s |
 | Date | size 0.028 S, first baseline 0.09 H, `EEEEMMMMd` as `%A, %B %-d` |

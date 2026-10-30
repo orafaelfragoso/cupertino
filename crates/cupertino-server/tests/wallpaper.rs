@@ -379,3 +379,78 @@ fn a_quarter_turned_output_draws_the_image_upright() {
         "top {top:?}, below {below:?}"
     );
 }
+
+#[test]
+fn the_procedural_wallpaper_is_measured_by_its_average_colour_once_per_change() {
+    use cupertino_server::render::scene::wallpaper_tint;
+    use cupertino_server::render::wallpaper::colour_lightness;
+    let Some(mut h) = Harness::new(|_, _| {}) else {
+        return;
+    };
+    let out = h.state.outputs[0].id;
+    let light = colour_lightness(wallpaper_tint(false));
+    h.wait_until("the measure", |s| s.backdrop_lightness(out) == Some(light));
+    // told once: no output is marked for frames again by it
+    for _ in 0..20 {
+        h.wait_until("a frame", |_| true);
+        assert!(!h.state.outputs[0].scheduler.damaged() || h.state.animating());
+    }
+    h.state.set_appearance(Appearance::Dark);
+    let dark = colour_lightness(wallpaper_tint(true));
+    h.wait_until("the dark measure", |s| {
+        s.backdrop_lightness(out) == Some(dark)
+    });
+}
+
+#[test]
+fn an_output_whose_new_image_another_output_took_in_is_marked_for_a_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = Config::default();
+    let first = dark_topped(dir.path(), "first.png", (600, 600), 60);
+    config.wallpaper.light = Some(first.clone());
+    let mut d = Desktop::configured(
+        config,
+        &[display("one", (600, 600)), display("two", (600, 600))],
+        1.0,
+    );
+    measures(&mut d);
+    // a new image for both: each output asks in its frame, then only the first output composes
+    let second = dark_topped(dir.path(), "second.png", (600, 600), 0);
+    let before = CompositorSettings {
+        wallpaper: Some(first.display().to_string()),
+        ..CompositorSettings::default()
+    };
+    let after = CompositorSettings {
+        wallpaper: Some(second.display().to_string()),
+        ..CompositorSettings::default()
+    };
+    d.state.apply_compositor_change(&before, &after);
+    let mut frame = 1000;
+    d.at(frame * 16);
+    assert!(d.state.overlays.wallpaper.pending());
+    let two = d.state.outputs[1].id;
+    let mut backend = d.state.backend.take().unwrap();
+    #[allow(irrefutable_let_patterns)]
+    let cupertino_server::backend::Backend::Headless(ref mut renderer) = backend
+    else {
+        panic!("headless backend required")
+    };
+    let end = Instant::now() + Duration::from_secs(10);
+    while d.state.overlays.wallpaper.pending() {
+        assert!(Instant::now() < end, "no answer");
+        std::thread::sleep(Duration::from_millis(5));
+        frame += 1;
+        d.state.fixed_time = Some(f64::from(frame) * 0.016);
+        d.state.build_output_elements(&mut renderer.renderer, 0);
+    }
+    d.state.backend = Some(backend);
+    assert!(
+        d.state.backdrop_lightness(two).is_some_and(|l| l > 900),
+        "the second output's new image is put up: {:?}",
+        d.state.backdrop_lightness(two)
+    );
+    assert!(
+        d.state.outputs[1].scheduler.damaged(),
+        "the second output draws its new image at its next frame"
+    );
+}

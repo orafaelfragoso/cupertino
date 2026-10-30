@@ -1511,6 +1511,14 @@ fn a_version_8_bar_is_told_which_process_is_the_session_agent() {
     assert_eq!(bar.error(), None);
 }
 
+/// Wait for the procedural wallpaper's measure of `out` (the harness shows no image), and return it.
+fn procedural_measure(h: &mut Harness, out: cupertino_wm::OutputId) -> u16 {
+    h.wait_until("the procedural wallpaper's measure", |s| {
+        s.backdrop_lightness(out).is_some()
+    });
+    h.state.backdrop_lightness(out).unwrap()
+}
+
 /// The `backdrop_luminance` values the bar got, in order.
 fn backdrop_values(bar: &BarClient) -> Vec<u32> {
     bar.groups()
@@ -1536,25 +1544,33 @@ fn a_version_14_bar_is_told_the_backdrop_lightness_in_a_group_of_its_own_when_it
 ) {
     let Some(mut h) = Harness::new() else { return };
     let out = h.state.outputs[0].id;
+    // the procedural wallpaper's measure is in before the bar binds: it gets that after its first groups
+    let procedural = procedural_measure(&mut h, out);
     let bar = bar_at(&mut h, 14);
+    h.wait_for_groups(&bar, 5);
+    assert_eq!(backdrop_values(&bar), [u32::from(procedural)]);
     h.state.set_backdrop_lightness(out, None);
     session_agent_group(&mut h, &bar);
-    assert!(backdrop_values(&bar).is_empty(), "no measure, no event");
+    assert_eq!(
+        backdrop_values(&bar),
+        [u32::from(procedural)],
+        "a forgotten measure sends nothing"
+    );
 
     h.state.set_backdrop_lightness(out, Some(620));
-    h.wait_for_groups(&bar, 6);
+    h.wait_for_groups(&bar, 7);
     assert_eq!(
-        bar.groups()[5],
+        bar.groups()[6],
         [BarEvent::BackdropLuminance(620), BarEvent::Done]
     );
     h.state.set_backdrop_lightness(out, Some(630));
     h.state.set_backdrop_lightness(out, Some(610));
     h.state.set_backdrop_lightness(out, Some(631));
     h.state.set_backdrop_lightness(out, Some(1200));
-    h.wait_for_groups(&bar, 8);
+    h.wait_for_groups(&bar, 9);
     assert_eq!(
         backdrop_values(&bar),
-        [620, 631, 1000],
+        [u32::from(procedural), 620, 631, 1000],
         "a move of 10 is not sent, and the value is clamped to white"
     );
     assert_eq!(bar.error(), None);
@@ -1564,6 +1580,8 @@ fn a_version_14_bar_is_told_the_backdrop_lightness_in_a_group_of_its_own_when_it
 fn a_version_14_bar_gets_the_known_backdrop_lightness_after_its_first_groups() {
     let Some(mut h) = Harness::new() else { return };
     let out = h.state.outputs[0].id;
+    // the procedural wallpaper's measure comes once, before the test's own
+    procedural_measure(&mut h, out);
     h.state.set_backdrop_lightness(out, Some(300));
     let bar = bar_at(&mut h, 14);
     h.wait_for_groups(&bar, 5);

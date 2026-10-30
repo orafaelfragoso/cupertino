@@ -173,7 +173,11 @@ async fn run(
     let mut last: Option<Extras> = None;
     let mut agent = SessionAgent::None;
     loop {
-        let extras = read_all(system.as_ref(), &session, agent, &mut reasons).await;
+        let previous = last
+            .as_ref()
+            .and_then(|e| e.session.as_ref())
+            .map(|s| s.caps);
+        let extras = read_all(system.as_ref(), &session, agent, previous, &mut reasons).await;
         if last.as_ref() != Some(&extras) {
             // a closed channel means the process is shutting down
             if out.send(extras.clone()).is_err() {
@@ -287,6 +291,7 @@ async fn read_all(
     system: Option<&Connection>,
     session: &Connection,
     agent: SessionAgent,
+    previous: Option<SessionCaps>,
     reasons: &mut Reasons,
 ) -> Extras {
     let mut extras = Extras {
@@ -304,7 +309,7 @@ async fn read_all(
     extras.focus = reasons.note("Focus", absent_if_not_running(read_focus(session).await));
     extras.session = reasons.note(
         "system menu",
-        absent_if_not_running(read_session(session, agent).await),
+        absent_if_not_running(read_session(session, agent, previous).await),
     );
     extras
 }
@@ -343,6 +348,7 @@ async fn agent_owner(
 async fn read_session(
     conn: &Connection,
     agent: SessionAgent,
+    previous: Option<SessionCaps>,
 ) -> zbus::Result<Option<SessionState>> {
     let Some(owner) = agent_owner(conn, agent).await? else {
         return Ok(None);
@@ -365,7 +371,7 @@ async fn read_session(
     let capabilities: Option<HashMap<String, bool>> = login.get_property("Capabilities").await.ok();
     Ok(Some(SessionState {
         user_name,
-        caps: session_caps(capabilities.as_ref()),
+        caps: session_caps(capabilities.as_ref(), previous),
     }))
 }
 
@@ -534,12 +540,15 @@ async fn act(
 }
 
 /// The system menu's session entries from the agent's `Capabilities`. A capability the agent does not report is not
-/// offered (drawn disabled). A map that could not be read at all (the agent still starting, a timeout) offers every
-/// entry, as before the read: the agent and logind still refuse what is not allowed, and Lock and Log Out stay
-/// reachable until the next read.
-fn session_caps(capabilities: Option<&HashMap<String, bool>>) -> SessionCaps {
+/// offered (drawn disabled). A map that could not be read (the agent still starting, a timeout) is no answer: the
+/// entries stay as the last read gave them (`previous`), and with none yet every entry is offered, so Lock and Log Out
+/// stay reachable; the agent and logind still refuse what is not allowed.
+fn session_caps(
+    capabilities: Option<&HashMap<String, bool>>,
+    previous: Option<SessionCaps>,
+) -> SessionCaps {
     let Some(capabilities) = capabilities else {
-        return SessionCaps::default();
+        return previous.unwrap_or_default();
     };
     let can = |key: &str| capabilities.get(key).copied().unwrap_or(false);
     SessionCaps {
@@ -559,8 +568,13 @@ mod tests {
     #[test]
     fn an_unreported_capability_is_off_but_an_unreadable_map_offers_everything() {
         let reported: HashMap<String, bool> = [("lock".to_string(), true)].into();
-        let caps = session_caps(Some(&reported));
+        let caps = session_caps(Some(&reported), None);
         assert!(caps.lock && !caps.log_out && !caps.shut_down);
-        assert_eq!(session_caps(None), SessionCaps::default());
+        assert_eq!(session_caps(None, None), SessionCaps::default());
+        assert_eq!(
+            session_caps(None, Some(caps)),
+            caps,
+            "a failed read keeps what the last one gave"
+        );
     }
 }

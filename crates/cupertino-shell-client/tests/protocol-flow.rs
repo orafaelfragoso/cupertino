@@ -1298,6 +1298,7 @@ fn menu_bar_groups_arrive_typed_and_requests_reach_the_server() {
             window_state: Some(WindowState {
                 can_minimize: true,
                 can_zoom: true,
+                full_screen: false,
                 workspace: 2,
                 workspaces: 4
             }),

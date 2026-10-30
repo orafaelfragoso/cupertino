@@ -44,10 +44,14 @@ pub enum ColorRole {
     Header,
     ToolTip,
     ToolTipText,
+    /// The overlay scroller's thumb.
+    ScrollerThumb,
+    /// The layer that dims a window behind a dialog or sheet. Translucent in every palette: it must not hide what it dims.
+    DialogScrim,
 }
 
 impl ColorRole {
-    pub const ALL: [ColorRole; 29] = {
+    pub const ALL: [ColorRole; 31] = {
         use ColorRole::*;
         [
             WindowBackground,
@@ -79,6 +83,8 @@ impl ColorRole {
             Header,
             ToolTip,
             ToolTipText,
+            ScrollerThumb,
+            DialogScrim,
         ]
     };
 }
@@ -137,7 +143,7 @@ impl ColorTokens {
         }
     }
 
-    /// The built-in theme, which needs no theme data. Every colour is opaque.
+    /// The built-in theme, which needs no theme data. Every colour is opaque but the dialog scrim, which dims.
     pub fn neutral(appearance: Appearance) -> Self {
         match appearance {
             Appearance::Light => neutral::LIGHT,

@@ -53,6 +53,8 @@ pub(crate) const LIGHT: Palette<Source> = Palette {
         (Header, Token("header")),
         (ToolTip, Token("tool-tip")),
         (ToolTipText, Token("tool-tip-text")),
+        (ScrollerThumb, Rgba([0, 0, 0, 128])),
+        (DialogScrim, Rgba([0, 0, 0, 51])),
     ],
     states: StateColors {
         emphasized_border: Rgba([0, 0, 0, 96]),
@@ -102,6 +104,8 @@ pub(crate) const DARK: Palette<Source> = Palette {
         (Header, Token("header")),
         (ToolTip, Rgba([40, 40, 40, 255])),
         (ToolTipText, Token("tool-tip-text")),
+        (ScrollerThumb, Rgba([255, 255, 255, 128])),
+        (DialogScrim, Rgba([0, 0, 0, 102])),
     ],
     states: StateColors {
         emphasized_border: Rgba([255, 255, 255, 96]),
@@ -146,6 +150,20 @@ mod tests {
             assert_eq!(get(ControlFill), token("control"));
             assert_eq!(get(ControlBorder), token("container-border"));
             assert_eq!(get(DefaultButtonFill), token("control-accent-blue"));
+        }
+    }
+
+    #[test]
+    fn the_scroller_thumb_and_the_dialog_scrim_are_translucent_in_light_and_dark() {
+        let tokens = tokens();
+        for (appearance, thumb, scrim) in [
+            (Appearance::Light, [0, 0, 0, 128], [0, 0, 0, 51]),
+            (Appearance::Dark, [255, 255, 255, 128], [0, 0, 0, 102]),
+        ] {
+            let colors = ColorTokens::cupertino(&tokens, appearance).unwrap();
+            let get = |role| colors.get(role, StateVariant::NORMAL).unwrap().to_rgba8();
+            assert_eq!(get(ScrollerThumb), thumb);
+            assert_eq!(get(DialogScrim), scrim);
         }
     }
 

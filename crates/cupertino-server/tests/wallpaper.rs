@@ -305,3 +305,77 @@ fn a_quarter_turned_output_is_measured_at_its_logical_top() {
     let measured = measures(&mut d);
     assert!(measured[0] < 100, "{measured:?}");
 }
+
+#[test]
+fn an_output_that_is_off_when_its_image_comes_in_holds_nothing_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = Config::default();
+    config.wallpaper.light = Some(dark_topped(dir.path(), "w.png", (600, 600), 60));
+    let mut d = Desktop::configured(
+        config,
+        &[display("square", (600, 600)), display("wide", (1200, 300))],
+        1.0,
+    );
+    // both outputs ask for the image in their first frame; the second goes off before its answer is put up
+    d.at(16);
+    let second = d.state.outputs[1].id;
+    d.state.set_output_power(second, false).unwrap();
+    let end = Instant::now() + Duration::from_secs(10);
+    let mut frame = 2;
+    while d.state.overlays.wallpaper.pending() || d.state.animating() {
+        d.at(frame * 16);
+        frame += 1;
+        assert!(
+            Instant::now() < end,
+            "frames are still wanted: pending {}, animating {}",
+            d.state.overlays.wallpaper.pending(),
+            d.state.animating()
+        );
+    }
+    assert!(
+        d.state.backdrop_lightness(second).is_some_and(|l| l > 900),
+        "the output that is off is measured too: {:?}",
+        d.state.backdrop_lightness(second)
+    );
+}
+
+#[test]
+fn a_quarter_turned_output_draws_the_image_upright() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = Config::default();
+    config.wallpaper.light = Some(dark_topped(dir.path(), "w.png", (600, 900), 60));
+    let mut d = Desktop::configured(config, &[display("turned", (900, 600))], 1.0);
+    let id = d.state.outputs[0].id;
+    d.state.configure_output(
+        id,
+        Mode {
+            size: (900, 600).into(),
+            refresh: 60_000,
+        },
+        1.0,
+        Transform::_90,
+        (0, 0),
+    );
+    measures(&mut d);
+    let shot = dir.path().join("turned.png");
+    d.state.screenshot_requests.push(shot.clone());
+    d.state.request_redraw();
+    let end = Instant::now() + Duration::from_secs(10);
+    let mut frame = 1000;
+    while !shot.exists() {
+        d.at(frame * 16);
+        frame += 1;
+        assert!(Instant::now() < end, "no screenshot");
+    }
+    // the screenshot draws the logical space unturned into an image of the mode's size, so its top-left 600 x 600 are
+    // the logical space's: the image's dark top must be at the top there, not a crop of its light middle
+    let shot = image::open(&shot).unwrap().to_rgba8();
+    assert_eq!(shot.dimensions(), (900, 600));
+    // under the bar and below it, in the middle where no shell process draws
+    let top = shot.get_pixel(300, 40);
+    let below = shot.get_pixel(300, 450);
+    assert!(
+        top[0] < 60 && below[0] > 200,
+        "top {top:?}, below {below:?}"
+    );
+}

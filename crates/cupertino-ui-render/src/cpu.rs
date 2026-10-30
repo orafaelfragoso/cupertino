@@ -735,6 +735,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             blend_glyph(
                 t.pixmap,
                 t.clips.last().map(Mask::data),
+                &t.limit.offset(-t.origin.0, -t.origin.1),
                 x,
                 y,
                 &glyph,
@@ -889,14 +890,25 @@ fn skia_paint(paint: &Paint) -> Option<tiny_skia::Paint<'static>> {
 }
 
 /// Source-over of the premultiplied `src`, scaled by `opacity`, onto the pixmap with its top-left pixel at `at`, in
-/// 8-bit integers; `src` lies inside the pixmap.
+/// 8-bit integers. Whatever of `src` falls outside the pixmap is not drawn.
 fn source_over(dst: &mut PixmapMut<'_>, at: (usize, usize), src: &Pixmap, opacity: f32) {
     let k = (opacity.clamp(0.0, 1.0) * 255.0).round() as u32;
     let stride = dst.width() as usize * 4;
     let row = src.width() as usize * 4;
+    debug_assert!(
+        at.0 * 4 + row <= stride,
+        "the layer is wider than the target"
+    );
+    if at.0 * 4 + row > stride {
+        return;
+    }
     let dst = dst.data_mut();
     for (y, s) in src.data().chunks_exact(row).enumerate() {
-        let d = &mut dst[(at.1 + y) * stride + at.0 * 4..][..row];
+        let start = (at.1 + y) * stride + at.0 * 4;
+        let Some(d) = dst.get_mut(start..start + row) else {
+            debug_assert!(false, "the layer is taller than the target");
+            return;
+        };
         for (s, d) in s.as_chunks::<4>().0.iter().zip(d.as_chunks_mut::<4>().0) {
             let s = if k == 255 {
                 s.map(u32::from)
@@ -917,16 +929,20 @@ fn source_over(dst: &mut PixmapMut<'_>, at: (usize, usize), src: &Pixmap, opacit
     }
 }
 
-/// Source-over of a glyph image at (`x`, `y`) in the pixmap, through the clip mask.
+/// Source-over of a glyph image at (`x`, `y`) in the pixmap, through the clip mask and inside `limit` (pixmap
+/// pixels): a raster can reach past the box its node's extent allows.
 fn blend_glyph(
     pm: &mut PixmapMut<'_>,
     mask: Option<&[u8]>,
+    limit: &Bounds,
     x: i32,
     y: i32,
     g: &RasterGlyph,
     color: Color,
 ) {
     let (w, h) = (pm.width() as i32, pm.height() as i32);
+    let (x0, x1) = (limit.x0.max(0), limit.x1.min(w));
+    let (y0, y1) = (limit.y0.max(0), limit.y1.min(h));
     let tint = color
         .premultiplied()
         .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u32);
@@ -937,12 +953,12 @@ fn blend_glyph(
     };
     for gy in 0..g.height as i32 {
         let py = y + gy;
-        if py < 0 || py >= h {
+        if py < y0 || py >= y1 {
             continue;
         }
         for gx in 0..g.width as i32 {
             let px = x + gx;
-            if px < 0 || px >= w {
+            if px < x0 || px >= x1 {
                 continue;
             }
             let at = gy as usize * g.stride as usize + gx as usize * bytes_per;

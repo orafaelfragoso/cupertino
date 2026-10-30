@@ -630,3 +630,75 @@ fn a_release_ends_its_press_by_physical_key_even_when_its_symbol_changed() {
         "a key still held is cancelled"
     );
 }
+
+#[test]
+fn an_appearance_change_redraws_open_windows_with_the_new_theme_and_keeps_the_focus() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let (mut rt, window, _) = start();
+    let dark = Arc::new(ThemeTokens {
+        preferences: cupertino_ui_theme::ThemePreferences {
+            appearance: cupertino_ui_theme::Appearance::Dark,
+            reduce_transparency: false,
+            reduce_motion: true,
+        },
+        ..(*rt.options.theme).clone()
+    });
+    let made = Arc::clone(&dark);
+    let asked = Rc::clone(&seen);
+    rt = rt.with_theme_for(Box::new(move |appearance: &SystemAppearance| {
+        asked.borrow_mut().push(*appearance);
+        Arc::clone(&made)
+    }));
+    configure(&mut rt, window, 1);
+    key(&mut rt, window, 0xff09, Mods::NONE);
+    let focus = rt.snapshot(window).unwrap().focus;
+    assert!(focus.is_some());
+    let frame = |rt: &mut Rt| {
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(1)));
+        rt.step(steps()).unwrap();
+    };
+    frame(&mut rt);
+    let presented = rt.window_system().presented.len();
+
+    let appearance = SystemAppearance {
+        dark: true,
+        reduce_motion: true,
+        ..SystemAppearance::default()
+    };
+    rt.window_system_mut()
+        .queue
+        .push_back(PlatformEvent::Appearance(appearance));
+    rt.step(steps()).unwrap();
+    frame(&mut rt);
+
+    assert_eq!(*seen.borrow(), [appearance]);
+    assert!(
+        Arc::ptr_eq(&rt.windows[0].env.theme, &dark),
+        "the open window draws with it"
+    );
+    assert!(
+        Arc::ptr_eq(&rt.options.theme, &dark),
+        "a new window would too"
+    );
+    assert!(
+        rt.window_system().presented.len() > presented,
+        "the window draws again"
+    );
+    assert_eq!(rt.snapshot(window).unwrap().focus, focus);
+}
+
+#[test]
+fn without_a_theme_maker_an_appearance_change_keeps_the_theme() {
+    let (mut rt, window, _) = start();
+    configure(&mut rt, window, 1);
+    let before = Arc::clone(&rt.windows[0].env.theme);
+    rt.window_system_mut()
+        .queue
+        .push_back(PlatformEvent::Appearance(SystemAppearance {
+            dark: true,
+            ..SystemAppearance::default()
+        }));
+    rt.step(steps()).unwrap();
+    assert!(Arc::ptr_eq(&rt.windows[0].env.theme, &before));
+}

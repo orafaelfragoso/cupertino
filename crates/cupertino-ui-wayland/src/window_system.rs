@@ -8,10 +8,11 @@ use std::time::{Duration, Instant};
 
 use cupertino_geometry::Size;
 use cupertino_modifiers::Profile;
+use cupertino_protocol_app::{AppEffects, AppEvent, Appearance as AppearanceObserver};
 use cupertino_ui_platform::{
     ActivationRequest, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, ConfigureId,
     CursorShape, KeyEvent, Keysym, PlatformError, PlatformEvent, PopupSpec, PresentOutcome,
-    Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
+    SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::CpuFrame;
 use cupertino_ui_text::TextInputState;
@@ -94,6 +95,23 @@ pub struct WaylandWindowSystem {
     /// Events produced outside a dispatch (a clipboard read, a frame that needs no wait), returned by the next one.
     queued: Vec<PlatformEvent>,
     woken: Arc<AtomicBool>,
+    /// The desktop's effects and the observer of the session's appearance, on a compositor that offers them.
+    effects: Option<(AppEffects, AppearanceObserver)>,
+    appearance: SystemAppearance,
+}
+
+/// Take the session's appearance or display options from `event` into `appearance`; false for any other event.
+fn apply_appearance(appearance: &mut SystemAppearance, event: &AppEvent) -> bool {
+    match event {
+        AppEvent::Appearance { dark } => appearance.dark = *dark,
+        AppEvent::DisplayOptions(options) => {
+            appearance.increase_contrast = options.increase_contrast;
+            appearance.reduce_transparency = options.reduce_transparency;
+            appearance.reduce_motion = options.reduce_motion;
+        }
+        _ => return false,
+    }
+    true
 }
 
 fn platform_error(e: Error) -> PlatformError {
@@ -112,7 +130,11 @@ impl WaylandWindowSystem {
             .map_err(platform_error)
     }
 
-    pub fn new(conn: Connection, profile: Profile) -> WaylandWindowSystem {
+    pub fn new(mut conn: Connection, profile: Profile) -> WaylandWindowSystem {
+        let effects = AppEffects::bind(&mut conn).map(|effects| {
+            let observer = effects.appearance(&conn);
+            (effects, observer)
+        });
         WaylandWindowSystem {
             conn,
             profile,
@@ -127,6 +149,8 @@ impl WaylandWindowSystem {
             next_activation: 0,
             queued: Vec::new(),
             woken: Arc::new(AtomicBool::new(false)),
+            effects,
+            appearance: SystemAppearance::default(),
         }
     }
 
@@ -354,9 +378,16 @@ impl WaylandWindowSystem {
                 }
                 return;
             }
+            Event::Extension(extension) => {
+                if let Some(event) = extension.downcast_ref::<AppEvent>() {
+                    if apply_appearance(&mut self.appearance, event) {
+                        out.push(PlatformEvent::Appearance(self.appearance));
+                    }
+                }
+                return;
+            }
             // the platform has no events for these yet: frame time stays the frame callback's
             Event::OutputsChanged
-            | Event::Extension(_)
             | Event::PopupRepositioned { .. }
             | Event::Presented(_)
             | Event::Discarded(_) => return,
@@ -385,7 +416,7 @@ impl WindowSystem for WaylandWindowSystem {
             drag_and_drop: false,
             server_decorations: has(Capability::ServerDecoration),
             activation: has(Capability::Activation),
-            app_effects: false,
+            app_effects: self.effects.is_some(),
         }
     }
 
@@ -730,6 +761,53 @@ fn clip(r: PixelRect, width: u32, height: u32) -> Option<PixelRect> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_session_appearance_and_display_options_make_one_system_appearance() {
+        use cupertino_defaults::accessibility::DisplayOptions;
+        let mut appearance = SystemAppearance::default();
+        assert!(apply_appearance(
+            &mut appearance,
+            &AppEvent::Appearance { dark: true }
+        ));
+        let options = DisplayOptions {
+            reduce_motion: true,
+            reduce_transparency: true,
+            increase_contrast: true,
+            differentiate_without_color: true,
+        };
+        assert!(apply_appearance(
+            &mut appearance,
+            &AppEvent::DisplayOptions(options)
+        ));
+        assert_eq!(
+            appearance,
+            SystemAppearance {
+                dark: true,
+                increase_contrast: true,
+                reduce_transparency: true,
+                reduce_motion: true,
+            }
+        );
+        assert!(apply_appearance(
+            &mut appearance,
+            &AppEvent::Appearance { dark: false }
+        ));
+        assert!(!appearance.dark);
+        assert!(
+            appearance.increase_contrast,
+            "a change of appearance keeps the display options"
+        );
+        let before = appearance;
+        assert!(!apply_appearance(
+            &mut appearance,
+            &AppEvent::ScrollCount {
+                vertical: true,
+                count: 1
+            }
+        ));
+        assert_eq!(appearance, before);
+    }
 
     fn r(x: u32) -> PixelRect {
         PixelRect {

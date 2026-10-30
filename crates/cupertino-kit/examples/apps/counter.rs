@@ -56,6 +56,7 @@ impl Application for Counter {
             },
             shortcuts: CommandRegistry::new(),
             on_close: None,
+            background: WindowBackground::Theme,
             content: Element::new(Stack {
                 axis: Axis::Horizontal,
                 padding: WINDOW_CONTENT_INSET,

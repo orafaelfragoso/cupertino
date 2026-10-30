@@ -17,7 +17,7 @@ use crate::tree::Tree;
 use crate::{
     AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, Application, Clock, Command,
     Environment, Event, FrameSnapshot, Key, NodeId, NodeSnapshot, Pending, Propagation, StepStatus,
-    UiError, Window, WindowKey,
+    UiError, Window, WindowBackground, WindowKey,
 };
 use cupertino_geometry::{Point, Size};
 use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutOptions};
@@ -91,6 +91,7 @@ struct WindowState<M> {
     spec: WindowSpec,
     shortcuts: CommandRegistry<M>,
     on_close: Option<M>,
+    background: WindowBackground,
     root: Option<NodeId>,
     env: Environment,
     size: Size,
@@ -360,6 +361,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             spec,
             shortcuts,
             on_close,
+            background,
             content,
         } in A::view(&self.model)
         {
@@ -394,6 +396,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             };
             w.shortcuts = shortcuts;
             w.on_close = on_close;
+            w.background = background;
             w.root = Some(self.tree.reconcile(w.root, content)?);
             w.invalidate();
             self.windows.push(w);
@@ -434,6 +437,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             spec,
             shortcuts: CommandRegistry::new(),
             on_close: None,
+            background: WindowBackground::Theme,
             root: None,
             env: Environment {
                 theme: Arc::clone(&self.options.theme),
@@ -897,6 +901,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 focus: w.focus.node(),
                 focus_visible: w.focus.visible(),
                 window_active: w.active,
+                background: w.background,
                 now,
             },
         );

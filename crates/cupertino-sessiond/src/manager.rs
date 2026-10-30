@@ -321,7 +321,7 @@ impl Manager {
     /// Read the configuration, bind the socket and start the login screen.
     fn start() -> Result<Manager> {
         harden()?;
-        let config = LoginConfig::load().map_err(|problems| {
+        let loaded = LoginConfig::load().map_err(|problems| {
             let lines: Vec<String> = problems
                 .iter()
                 .map(|(line, message)| {
@@ -334,6 +334,13 @@ impl Manager {
                 .collect();
             format!("{}: {}", LoginConfig::path().display(), lines.join("; "))
         })?;
+        for (line, message) in &loaded.problems {
+            eprintln!(
+                "cupertino-sessiond: {} line {line}: {message}; the setting takes its safe value",
+                LoginConfig::path().display()
+            );
+        }
+        let config = loaded.config;
         let greeter = users::by_name(&config.greeter_user)?.ok_or_else(|| {
             format!(
                 "greeter-user {:?} has no password database entry",

@@ -10,7 +10,7 @@ use cupertino_settings::instance::{serve, show};
 use cupertino_settings::PaneId;
 
 #[test]
-fn about_has_an_independent_owner_and_repeat_launches_reach_it() {
+fn about_has_an_independent_owner_and_only_its_own_program_receives_launches() {
     let bus = common::bus().expect("dbus-daemon is needed to test About instance handling");
     let (tx, rx) = mpsc::channel();
     let tx = std::sync::Mutex::new(tx);
@@ -42,10 +42,10 @@ fn about_has_an_independent_owner_and_repeat_launches_reach_it() {
         .status()
         .unwrap();
     assert!(
-        status.success(),
-        "the second launch must reach About without opening a display"
+        !status.success(),
+        "a launch never hands its activation token to an About of another program"
     );
-    assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(String::new()));
+    assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
     drop(_about);
     // the bus releases a closed connection's names on its own time; claim the name again once it is free
     let watcher = zbus::blocking::connection::Builder::address(bus.address.as_str())

@@ -25,24 +25,21 @@ pub fn run(activation_token: String) -> Result<()> {
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     let waker = std::sync::Arc::new(std::sync::OnceLock::<cupertino_wayland_client::Waker>::new());
     let wake = waker.clone();
-    let _instance =
-        match instance::serve_about(zbus::connection::Builder::session()?, move |token| {
-            // A pending activation already represents all repeat launches; never queue an unbounded number of calls.
-            if sender.try_send(token).is_ok() {
-                if let Some(waker) = wake.get() {
-                    waker.wake();
-                }
+    let on_show = move |token| {
+        // A pending activation already represents all repeat launches; never queue an unbounded number of calls.
+        if sender.try_send(token).is_ok() {
+            if let Some(waker) = wake.get() {
+                waker.wake();
             }
-        }) {
-            Ok(connection) => connection,
-            Err(zbus::Error::NameTaken) => {
-                return Ok(instance::show_about(
-                    zbus::connection::Builder::session()?,
-                    &activation_token,
-                )?);
-            }
-            Err(e) => return Err(e.into()),
-        };
+        }
+    };
+    let Some(_instance) = instance::serve_or_show_about(
+        || instance::serve_about(zbus::connection::Builder::session()?, on_show.clone()),
+        || instance::show_about(zbus::connection::Builder::session()?, &activation_token),
+    )?
+    else {
+        return Ok(());
+    };
     let mut about = About::read(Path::new("/"));
     let theme = Theme::load()?;
     let mut painter = Painter::new(&Assets::discover())?;

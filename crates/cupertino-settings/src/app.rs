@@ -629,7 +629,8 @@ impl App {
             | Event::TextInput { .. }
             | Event::PopupRepositioned { .. }
             | Event::Presented(_)
-            | Event::Discarded(_) => {}
+            | Event::Discarded(_)
+            | Event::Received { .. } => {}
         }
         Ok(true)
     }

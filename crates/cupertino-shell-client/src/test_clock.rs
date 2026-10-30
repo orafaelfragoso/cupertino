@@ -69,7 +69,7 @@ mod fixed {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, debug_assertions))]
 mod tests {
     use super::fixed::parse;
 

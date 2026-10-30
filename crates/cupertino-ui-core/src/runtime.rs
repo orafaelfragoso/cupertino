@@ -497,7 +497,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.damage.invalidate();
                 if w.active != c.states.activated {
                     w.active = c.states.activated;
+                    if let Some(node) = w.focus.node() {
+                        let event = Event::WindowActive(w.active);
+                        route(&mut self.tree, w, now, &mut effects).notify(node, &event);
+                    }
                     self.invalidate_window(i);
+                    self.apply(i, effects);
                 }
                 return Ok(());
             }
@@ -540,6 +545,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 self.key(i, key, time, now, &mut effects);
             }
             WindowEvent::Focus(focused) => {
+                let changed = w.active != focused;
                 w.active = focused;
                 if !focused {
                     let held: BTreeSet<NodeId> = w.held.drain(..).map(|(_, node)| node).collect();
@@ -552,6 +558,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                         }
                     }
                     w.pointer = pointer;
+                }
+                if let Some(node) = w.focus.node().filter(|_| changed) {
+                    let event = Event::WindowActive(focused);
+                    route(&mut self.tree, w, now, &mut effects).notify(node, &event);
                 }
                 if let Some(adapter) = &mut self.options.accessibility {
                     adapter.window_focus(w.id, focused);

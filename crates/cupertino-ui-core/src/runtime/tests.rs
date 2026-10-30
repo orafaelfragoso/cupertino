@@ -861,3 +861,51 @@ fn the_loop_waits_only_until_the_earliest_wake() {
         waits.borrow()
     );
 }
+
+#[test]
+fn a_theme_switch_repaints_what_draws_in_the_themes_colours() {
+    use cupertino_ui_render::{Paint, PaintOp};
+    use cupertino_ui_theme::{Appearance, ColorRole, ColorTokens, StateVariant};
+    let themed = |appearance| {
+        move |theme: &ThemeTokens| {
+            Arc::new(ThemeTokens {
+                colors: ColorTokens::neutral(appearance),
+                ..theme.clone()
+            })
+        }
+    };
+    let (mut rt, window, _) = start_with(|o| o.theme = themed(Appearance::Light)(&o.theme));
+    configure(&mut rt, window, 1);
+    let frame = |rt: &mut Rt| {
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(1)));
+        rt.step(steps()).unwrap();
+    };
+    frame(&mut rt);
+    // the window's background, the first thing its root node paints
+    let background = |rt: &Rt| match &rt.snapshot(window).unwrap().display_list.nodes[0].ops[0] {
+        PaintOp::Fill {
+            paint: Paint::Solid(color),
+            ..
+        } => *color,
+        other => panic!("the root paints its background first, not {other:?}"),
+    };
+    let light = background(&rt);
+    let dark = themed(Appearance::Dark)(&rt.options.theme);
+    let expected = dark
+        .colors
+        .get(ColorRole::WindowBackground, StateVariant::NORMAL)
+        .unwrap();
+    assert_ne!(
+        light, expected,
+        "the two themes differ in the window background"
+    );
+
+    rt.set_theme(dark);
+    frame(&mut rt);
+    assert_eq!(
+        background(&rt),
+        expected,
+        "the same-size root paints in the new theme"
+    );
+}

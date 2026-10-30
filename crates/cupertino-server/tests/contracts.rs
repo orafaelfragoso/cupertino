@@ -43,13 +43,14 @@ fn registry() -> String {
         .expect("the contracts registry")
 }
 
-const ROLES: [ShellRole; 6] = [
+const ROLES: [ShellRole; 7] = [
     ShellRole::Session,
     ShellRole::MenuBar,
     ShellRole::Dock,
     ShellRole::WindowManager,
     ShellRole::Capture,
     ShellRole::SessionLock,
+    ShellRole::DataControl,
 ];
 
 const DMABUF: &str = "zwp_linux_dmabuf_v1";
@@ -309,8 +310,6 @@ fn a_sandboxed_connection_is_not_offered_the_globals_that_reach_other_clients() 
     let ordinary = registered(&registry, Peer::Ordinary, false, true);
     let sandboxed = registered(&registry, Peer::Sandboxed, false, true);
     for name in [
-        "ext_data_control_manager_v1",
-        "zwlr_data_control_manager_v1",
         "zwlr_output_manager_v1",
         "zwlr_output_power_manager_v1",
         "wp_security_context_manager_v1",

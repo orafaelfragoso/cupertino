@@ -109,10 +109,7 @@ pub fn only_root_changes(file: &std::fs::Metadata) -> bool {
     is_root_only(file.uid(), file.mode())
 }
 
-/// [`only_root_changes`] by the owner and the `st_mode` (type and permission bits) of a file.
-pub fn is_root_only(owner: u32, mode: u32) -> bool {
-    mode & libc::S_IFMT == libc::S_IFREG && owner == 0 && mode & 0o022 == 0
-}
+pub use cupertino_defaults::system::is_root_only;
 
 /// What a method call answers with when it fails; the names are `org.cupertino.LoginManager1.Error.<variant>`.
 #[derive(Debug, zbus::DBusError)]

@@ -37,6 +37,8 @@ pub enum ShellRole {
     /// Draw the authentication prompt: its overlay surfaces are hidden from capture, and while one is mapped no
     /// application holds the pointer or the shortcuts.
     Prompt,
+    /// See and bind the data control globals ([`crate::data_control`]).
+    DataControl,
 }
 
 impl ShellRole {
@@ -53,6 +55,7 @@ impl From<ShellRoleName> for ShellRole {
             ShellRoleName::Dock => ShellRole::Dock,
             ShellRoleName::WindowManager => ShellRole::WindowManager,
             ShellRoleName::SessionLock => ShellRole::SessionLock,
+            ShellRoleName::Clipboard => ShellRole::DataControl,
         }
     }
 }
@@ -143,8 +146,9 @@ impl ClientState {
 }
 
 /// Whether `client` is not in a sandbox: it did not connect through a security context. The globals that read or change
-/// what other clients own (the clipboard managers, display configuration and power, and the security context global
-/// itself, which a sandboxed client must not use to make a context of its own) are offered to these only.
+/// what other clients own (display configuration and power, and the security context global itself, which a sandboxed
+/// client must not use to make a context of its own) are offered to these only; data control asks for more
+/// ([`crate::data_control`]).
 pub fn unsandboxed(client: &Client) -> bool {
     client
         .get_data::<ClientState>()

@@ -56,6 +56,8 @@ impl Harness {
             &cupertino_assets::Assets::builtin(),
         )
         .expect("create test compositor");
+        // the clipboard managers below are clients of this program
+        common::allow_data_control(&mut state);
         match headless::init(&mut state, OUTPUT, 1.0) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {

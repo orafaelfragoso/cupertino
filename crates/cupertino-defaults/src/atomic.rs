@@ -17,18 +17,26 @@ const TEMP_ATTEMPTS: u32 = 16;
 
 /// Replace `path` with `contents` atomically, creating its directory. An existing file keeps its permissions.
 pub fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
-    write_atomic_with(path, contents, &|_| Ok(()))
+    write_atomic_with(path, contents, None, &|_| Ok(()))
 }
 
-/// [`write_atomic`] with `before_rename` run on the flushed temporary file just before the rename (tests use it to
-/// fail or crash there).
+/// [`write_atomic`] for a file only its owner may read or change: the file gets mode `0600` whatever the old one had,
+/// and a link at `path` is replaced by the file rather than followed.
+pub fn write_atomic_private(path: &Path, contents: &[u8]) -> io::Result<()> {
+    write_atomic_with(path, contents, Some(0o600), &|_| Ok(()))
+}
+
+/// [`write_atomic`], or [`write_atomic_private`] with the mode `private`, with `before_rename` run on the flushed
+/// temporary file just before the rename (tests use it to fail or crash there).
 pub(crate) fn write_atomic_with(
     path: &Path,
     contents: &[u8],
+    private: Option<u32>,
     before_rename: &dyn Fn(&Path) -> io::Result<()>,
 ) -> io::Result<()> {
     // a link is followed: the file it names is replaced, in that file's directory
     let path = &match fs::canonicalize(path) {
+        _ if private.is_some() => path.to_path_buf(),
         Ok(resolved) => resolved,
         Err(e) if e.kind() == io::ErrorKind::NotFound => path.to_path_buf(),
         Err(e) => return Err(e),
@@ -45,7 +53,7 @@ pub(crate) fn write_atomic_with(
     };
     fs::create_dir_all(&dir)?;
     let (tmp, file) = create_temp(&dir, &name.to_string_lossy())?;
-    let written = write_temp(file, path, contents)
+    let written = write_temp(file, path, private, contents)
         .and_then(|()| before_rename(&tmp))
         .and_then(|()| fs::rename(&tmp, path));
     if let Err(e) = written {
@@ -79,11 +87,20 @@ fn create_temp(dir: &Path, name: &str) -> io::Result<(PathBuf, File)> {
     Err(last.expect("at least one attempt was made"))
 }
 
-fn write_temp(mut file: File, target: &Path, contents: &[u8]) -> io::Result<()> {
-    match fs::metadata(target) {
-        Ok(meta) => file.set_permissions(meta.permissions())?,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e),
+fn write_temp(
+    mut file: File,
+    target: &Path,
+    private: Option<u32>,
+    contents: &[u8],
+) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    match private {
+        Some(mode) => file.set_permissions(fs::Permissions::from_mode(mode))?,
+        None => match fs::metadata(target) {
+            Ok(meta) => file.set_permissions(meta.permissions())?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        },
     }
     file.write_all(contents)?;
     file.sync_all()
@@ -140,6 +157,30 @@ mod tests {
     }
 
     #[test]
+    fn a_private_write_replaces_a_link_and_an_open_file_with_one_only_its_owner_reads() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir.path().join("elsewhere");
+        fs::write(&elsewhere, "kept\n").unwrap();
+        let path = dir.path().join("data-control.conf");
+        std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+
+        write_atomic_private(&path, b"allow = /usr/bin/x\n").unwrap();
+        let meta = fs::symlink_metadata(&path).unwrap();
+        assert!(meta.is_file(), "the link is replaced by a file");
+        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+        assert_eq!(fs::read_to_string(&elsewhere).unwrap(), "kept\n");
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+        write_atomic_private(&path, b"allow = /usr/bin/y\n").unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "allow = /usr/bin/y\n");
+    }
+
+    #[test]
     fn a_leftover_temporary_name_is_skipped() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("power.conf");
@@ -179,7 +220,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("dock.conf");
         fs::write(&path, "tile_size = 48\n").unwrap();
-        let error = write_atomic_with(&path, b"tile_size = 64\n", &|_| {
+        let error = write_atomic_with(&path, b"tile_size = 64\n", None, &|_| {
             Err(io::Error::other("disk full"))
         })
         .unwrap_err();
@@ -192,7 +233,7 @@ mod tests {
     fn a_process_killed_between_write_and_rename_leaves_the_old_file() {
         if let Some(target) = std::env::var_os(CRASH_CHILD_ENV) {
             // the child: the new contents are on disk in the temporary file when the process dies
-            write_atomic_with(Path::new(&target), b"tile_size = 64\n", &|_| {
+            write_atomic_with(Path::new(&target), b"tile_size = 64\n", None, &|_| {
                 std::process::abort()
             })
             .unwrap();

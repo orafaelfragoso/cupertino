@@ -28,7 +28,8 @@ use cupertino_login::user::User;
 use cupertino_login::{session, upower};
 use cupertino_shell_client::{
     Anchor, IdleNotifier, IdleWatch, KeyboardInteractivity, Layer, LayerShell, LayerSurface,
-    LayerSurfaceConfig, Margin, Session, SessionLock, SessionLockManager, Shell, ShellEvent,
+    LayerSurfaceConfig, Margin, Session, SessionChange, SessionLock, SessionLockManager,
+    SessionState, Shell, ShellEvent,
 };
 use cupertino_theme::Theme;
 use cupertino_ui_wayland::{Ready, ShmPresenter};
@@ -118,6 +119,8 @@ struct App {
     lock_manager: Option<SessionLockManager>,
     /// Keeps the lock and log-out requests coming.
     _session: Session,
+    /// The session's appearance and display options: the lock screen follows Reduce Motion.
+    session_state: SessionState,
     _idle: Option<IdleWatch>,
     /// The seat went idle and input has not resumed since.
     idled: bool,
@@ -170,7 +173,7 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     let mut conn = Connection::connect()?;
     let layer_shell = LayerShell::bind(&mut conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
     let shell = Shell::bind(&mut conn).ok_or("the server lacks cupertino_shell_v1")?;
-    let (session, _, early) = shell.observe(&mut conn)?;
+    let (session, session_state, early) = shell.observe(&mut conn)?;
     let lock_manager = SessionLockManager::bind(&mut conn);
     let idle_notifier = IdleNotifier::bind(&mut conn);
     let (sender, messages) = mpsc::channel();
@@ -288,6 +291,7 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
         layer_shell,
         lock_manager,
         _session: session,
+        session_state,
         _idle: idle,
         idled: false,
         user,
@@ -485,6 +489,13 @@ impl App {
             Event::Pointer { surface, event, .. } => self.pointer(now, surface, event)?,
             Event::OutputsChanged => self.arrange_surfaces()?,
             Event::Extension(event) => {
+                if let Some(SessionChange::DisplayOptions(options)) =
+                    self.session_state.apply(&event)
+                {
+                    if let Some(lock) = &mut self.lock {
+                        lock.screen.set_reduce_motion(options.reduce_motion);
+                    }
+                }
                 if let Some(event) = event.downcast_ref::<ShellEvent>() {
                     self.shell_event(now, event)?;
                 }
@@ -846,15 +857,17 @@ impl App {
             .as_mut()
             .ok_or("the server lacks ext_session_lock_manager_v1")?
             .lock(&self.conn);
+        let mut screen = LockScreen::new(
+            now,
+            if explicit {
+                HIDE_AFTER_EXPLICIT_LOCK
+            } else {
+                HIDE_AFTER
+            },
+        );
+        screen.set_reduce_motion(self.session_state.display.reduce_motion);
         self.lock = Some(Lock {
-            screen: LockScreen::new(
-                now,
-                if explicit {
-                    HIDE_AFTER_EXPLICIT_LOCK
-                } else {
-                    HIDE_AFTER
-                },
-            ),
+            screen,
             session_lock,
             surfaces: Vec::new(),
             answer: None,

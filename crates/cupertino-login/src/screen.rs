@@ -67,6 +67,7 @@ pub struct FrameKey {
     power_prompts: bool,
     opacity: f64,
     shake: f64,
+    failure_outline: bool,
 }
 
 /// What the field of a frame holds.
@@ -103,6 +104,7 @@ impl FrameKey {
             power_prompts: scene.power.is_some_and(Menu::will_prompt),
             opacity: screen.opacity(now),
             shake: screen.shake(now),
+            failure_outline: screen.failure_outline(),
         })
     }
 
@@ -119,6 +121,7 @@ impl FrameKey {
             power_prompts: power.is_some_and(Menu::will_prompt),
             opacity: 1.0,
             shake: 0.0,
+            failure_outline: false,
         })
     }
 }
@@ -239,6 +242,7 @@ pub fn draw(
         power: power_view(power),
         opacity: key.opacity,
         shake: key.shake,
+        failure_outline: key.failure_outline,
     };
     presenter.draw(conn, None, |pixmap, scale| {
         renderer.render(&view, pixmap, scale.factor() as f32)

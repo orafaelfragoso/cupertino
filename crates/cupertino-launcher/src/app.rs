@@ -618,25 +618,20 @@ impl App {
         Ok(())
     }
 
-    /// Whether the query field's caret shows now: the panel is open with the keyboard in the field and the blink is on.
+    /// Whether the query field's caret shows now; steady under Reduce Motion.
     fn caret_visible(&self) -> bool {
-        self.panel.is_visible()
-            && self.panel.focus() == Focus::Field
-            && self
-                .panel
-                .field()
-                .caret_visible(cupertino_shell_client::test_clock::display_now())
+        self.panel.caret_visible(
+            cupertino_shell_client::test_clock::display_now(),
+            self.session.display.reduce_motion,
+        )
     }
 
-    /// Until the caret's next blink while it can show.
+    /// Until the caret's next blink while it can show; none under Reduce Motion.
     fn blink_due(&self) -> Option<std::time::Duration> {
-        (self.panel.is_visible() && self.panel.focus() == Focus::Field)
-            .then(|| {
-                self.panel
-                    .field()
-                    .next_blink(cupertino_shell_client::test_clock::display_now())
-            })
-            .flatten()
+        self.panel.next_blink(
+            cupertino_shell_client::test_clock::display_now(),
+            self.session.display.reduce_motion,
+        )
     }
 
     fn housekeeping(&mut self) -> Result<()> {

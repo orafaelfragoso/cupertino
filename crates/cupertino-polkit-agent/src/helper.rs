@@ -2,8 +2,9 @@
 //! polkitd's cookie; the helper then sends one line per PAM message and, last, `SUCCESS` or `FAILURE`, which it has
 //! already told polkitd itself. The agent only relays what the person types.
 //!
-//! Newer polkit runs the helper as a socket-activated service at [`SOCKET`]; otherwise the agent starts the helper
-//! binary from a fixed path. Either way the cookie travels on the stream, never on a command line.
+//! Newer polkit runs the helper as a socket-activated service at [`SOCKET`]; otherwise, or when nothing answers there
+//! (a distribution that ships the socket disabled), the agent starts the helper binary from a fixed path. Either way
+//! the cookie travels on the stream, never on a command line.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -30,19 +31,19 @@ pub enum Route {
 }
 
 impl Route {
-    /// The socket when it exists, else the first helper binary installed; `None` when polkit has neither.
-    pub fn find() -> Option<Route> {
+    /// The routes to try in order: the socket when it exists, then the first helper binary installed. Empty when
+    /// polkit has neither.
+    pub fn find() -> Vec<Route> {
         Self::find_in(Path::new(SOCKET), &BINARIES.map(Path::new))
     }
 
-    fn find_in(socket: &Path, binaries: &[&Path]) -> Option<Route> {
-        if socket.exists() {
-            return Some(Route::Socket(socket.to_owned()));
-        }
-        binaries
+    fn find_in(socket: &Path, binaries: &[&Path]) -> Vec<Route> {
+        let socket = socket.exists().then(|| Route::Socket(socket.to_owned()));
+        let binary = binaries
             .iter()
             .find(|path| path.is_file())
-            .map(|path| Route::Binary(path.to_path_buf()))
+            .map(|path| Route::Binary(path.to_path_buf()));
+        socket.into_iter().chain(binary).collect()
     }
 }
 
@@ -161,9 +162,21 @@ pub struct Helper {
 }
 
 impl Helper {
-    /// Starts authenticating `user` for polkitd's `cookie` through `route`. A started helper gets an empty
-    /// environment, no descriptors but its pipes and stderr discarded; only the user is on its command line.
-    pub fn start(route: &Route, user: &str, cookie: &str) -> io::Result<Helper> {
+    /// Starts authenticating `user` for polkitd's `cookie` through the first of `routes` that answers. A started
+    /// helper gets an empty environment, no descriptors but its pipes and stderr discarded; only the user is on its
+    /// command line.
+    pub fn start(routes: &[Route], user: &str, cookie: &str) -> io::Result<Helper> {
+        let mut failed = io::Error::new(io::ErrorKind::NotFound, "polkit has no agent helper");
+        for route in routes {
+            match Self::start_on(route, user, cookie) {
+                Ok(helper) => return Ok(helper),
+                Err(error) => failed = error,
+            }
+        }
+        Err(failed)
+    }
+
+    fn start_on(route: &Route, user: &str, cookie: &str) -> io::Result<Helper> {
         let mut helper = match route {
             Route::Socket(path) => {
                 let stream = UnixStream::connect(path)?;

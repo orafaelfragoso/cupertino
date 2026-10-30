@@ -23,9 +23,10 @@ buffer follow.
   `AttributedText` per style run and hard line and caches the result, `measure` lays it out for a size. A family
   no face matches falls back to the first registered face. A character the run's face lacks is drawn by the first
   other face, in load order, that has its whole grapheme cluster (joiners and variation selectors do not decide);
-  white space stays in the face before it, and a cluster no face has shows the missing glyph. Known limit: a cluster
-  with an emoji presentation selector (U+FE0F) takes the first face that has it, colour or not, so a text face that
-  covers U+2764 draws ❤️ in its outline style. The cache keeps two generations of 512 paragraphs, a size
+  white space stays in the face before it, and a cluster no face has shows the missing glyph. A cluster with the
+  emoji presentation selector (U+FE0F) takes the first colour face (COLR, CBDT or sbix) that has it, the run's face
+  included, before any face without colour, so ❤️ is the colour heart even when the text face has a heart; without
+  the selector the run's face keeps it. The cache keeps two generations of 512 paragraphs, a size
   or spacing that is not finite (or a size of zero or less) is `TextError::InvalidValue`, and variation values are
   kept in quarter units so an animated axis shares instances.
 - `Paragraph::layout(width)` re-wraps the shaped text without reshaping (UAX 14 breaks from `icu_segmenter`; a word

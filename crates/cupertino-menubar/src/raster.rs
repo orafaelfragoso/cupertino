@@ -1052,17 +1052,43 @@ mod tests {
     }
 
     #[test]
-    fn the_scrim_covers_the_whole_bar_surface() {
-        let mut pm = Pixmap::new(40, 8).unwrap();
-        fill_scrim(&mut pm, BarTone::LightText.scrim(Some(500)));
-        for px in [pm.pixel(0, 0), pm.pixel(39, 7), pm.pixel(20, 4)] {
-            let px = px.unwrap();
+    fn the_bar_paints_its_scrim_over_the_whole_surface() {
+        let theme = cupertino_theme::Theme::load().unwrap();
+        let text = BarText::new(theme.tokens.typography(), &Assets::discover()).unwrap();
+        let style = Style {
+            palette: MenuPalette::new(false),
+            bar: BarMetrics::default(),
+            menu: MenuMetrics::default(),
+        };
+        let layout = BarLayout {
+            bar: Rect::new(0.0, 0.0, 40.0, 8.0),
+            slots: Vec::new(),
+            hidden_menus: Vec::new(),
+            hidden_status: Vec::new(),
+        };
+        let paint = |lightness| {
+            let tone = BarTone::LightText;
+            let mut pm = Pixmap::new(80, 16).unwrap();
+            style.paint_bar(
+                &text,
+                &mut pm,
+                &layout,
+                &BarContent::default(),
+                None,
+                tone,
+                tone.scrim(Some(lightness)),
+                &Shared::default(),
+                2.0,
+            );
+            pm
+        };
+        let scrimmed = paint(500);
+        for (x, y) in [(0, 0), (79, 15), (40, 8)] {
+            let px = scrimmed.pixel(x, y).unwrap();
             assert!((i32::from(px.alpha()) - 23).abs() <= 1, "{px:?}");
             assert_eq!((px.red(), px.green(), px.blue()), (0, 0, 0));
         }
-        let mut clear = Pixmap::new(4, 4).unwrap();
-        fill_scrim(&mut clear, BarTone::LightText.scrim(Some(300)));
-        assert_eq!(clear.pixel(1, 1).unwrap().alpha(), 0);
+        assert_eq!(paint(300).pixel(40, 8).unwrap().alpha(), 0);
     }
 
     /// From wallpaper grey to text: the strip through each appearance's MenuBar colour ops, the lightness the server

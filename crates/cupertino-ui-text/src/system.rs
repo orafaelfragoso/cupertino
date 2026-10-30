@@ -405,3 +405,55 @@ impl AttributedText {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::font::GLYPH_LOOKUPS;
+
+    const INTER: &[u8] = include_bytes!("../../cupertino-assets/fonts/InterVariable-subset.ttf");
+    const BOXES: &[u8] = include_bytes!("../tests/fixtures/fallback-test.ttf");
+
+    /// The charmap lookups of shaping `text` once, with Inter matched and two more faces loaded after it.
+    fn lookups(text: &str) -> usize {
+        let mut fonts = FontIndex::new();
+        for (family, data) in [("Inter", INTER), ("Other", INTER), ("Boxes", BOXES)] {
+            fonts
+                .add_face(
+                    family,
+                    FontWeight::REGULAR,
+                    FontStyle::Normal,
+                    Arc::new(data.to_vec()),
+                    0,
+                )
+                .unwrap();
+        }
+        let system = TextSystem::new(fonts, "Inter");
+        GLYPH_LOOKUPS.with(|count| count.set(0));
+        system
+            .paragraph(
+                &AttributedText::plain(text, TextStyle::new(16.0)),
+                &ParagraphStyle::default(),
+            )
+            .unwrap();
+        GLYPH_LOOKUPS.with(|count| count.get())
+    }
+
+    #[test]
+    fn fallback_lookups_grow_with_the_text_not_faster() {
+        for unit in ["Hello", "日本"] {
+            let (one, four) = (lookups(&unit.repeat(8)), lookups(&unit.repeat(32)));
+            assert!(one > 0);
+            assert_eq!(
+                four,
+                4 * one,
+                "{unit:?}: {one} lookups, then {four} for four times the text"
+            );
+        }
+        assert_eq!(
+            lookups("日"),
+            3,
+            "the matched face, the next and the one that has it"
+        );
+    }
+}

@@ -7,6 +7,12 @@ use swash::{FontDataRef, StringId, Style};
 
 const WEIGHT_AXIS: [u8; 4] = *b"wght";
 
+#[cfg(test)]
+thread_local! {
+    /// The charmap lookups of [`FontIndex::has_glyph`] on this thread: what a fallback costs.
+    pub(crate) static GLYPH_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Vertical metrics of a font as fractions of the em; multiply by the size in points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FontMetrics {
@@ -276,6 +282,8 @@ impl FontIndex {
 
     /// Whether the font has a glyph for `ch`.
     pub fn has_glyph(&self, font: FontId, ch: char) -> Result<bool, TextError> {
+        #[cfg(test)]
+        GLYPH_LOOKUPS.with(|count| count.set(count.get() + 1));
         self.font(font)
             .map(|font| font.charmap().map_unicode(ch).is_some())
     }

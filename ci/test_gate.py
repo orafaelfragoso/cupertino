@@ -47,6 +47,19 @@ class ServiceManagerKeyTest(unittest.TestCase):
         self.assertEqual(run({"crates/x/src/lib.rs": "fn keep_alive_interval() {}\nlet exit_ok = true;\n"}), [])
 
 
+class VendorIdentifierTest(unittest.TestCase):
+    name = "app" + "le"  # built from parts so that this file passes the gate itself
+
+    def test_the_vendor_name_fails_in_any_case_and_inside_an_identifier(self):
+        for text in (f"{self.name}_cursor", f"{self.name.upper()}_THEME", self.name.capitalize(), f"{self.name}-cursors"):
+            problems = run({"crates/x/src/lib.rs": f"// {text}\n"})
+            self.assertEqual(len(problems), 1, (text, problems))
+            self.assertIn("vendor or product name", problems[0])
+
+    def test_longer_words_that_contain_it_pass(self):
+        self.assertEqual(run({"crates/x/src/lib.rs": f"// pine{self.name} {self.name}t {self.name}s\n"}), [])
+
+
 class HolderTest(unittest.TestCase):
     holder = "Status " + "Re" + "search & Development GmbH"  # built from parts so that this file passes the gate itself
     path = "packaging/licenses/THIRD-PARTY-LICENSES"

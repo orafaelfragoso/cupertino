@@ -33,7 +33,9 @@ GATE = [
     ("private document path", re.compile(r"\b(?:research|references|specifications|extraction)/\S|\b(?:REA|AGENTS|BACKLOG|ARCHITECTURE)\.md\b|\.\./\.\./\.\./|\bspecifications\b")),
     ("analysis wording", re.compile(r"\breference[ -](?:screenshot|system|build|desktop|product)s?\b", re.I)),
     ("cleanup remnant", re.compile(r"\(`\)|\(full source\)|\( \)")),
-    ("vendor or product name", re.compile(r"\b(?:Apple|macOS|Mac OS|OS X|iPhone|iPad|iOS|Sequoia|Cocoa|AppKit|QuartzCore|Core Animation|CoreUI|SkyLight|SwiftUI|UIKit|Finder|Spotlight|Launchpad|Mission Control|Stage Manager|Exposé|Siri|Safari|Xcode|SF Pro|SF Mono|New York|Lucida Grande|Aqua)\b")),
+    # in any case and inside identifiers (`apple_cursor`), not inside longer words (pineapple, applet)
+    ("vendor or product name", re.compile(r"(?<![a-z0-9])apple(?=_|\b)", re.I)),
+    ("vendor or product name", re.compile(r"\b(?:macOS|Mac OS|OS X|iPhone|iPad|iOS|Sequoia|Cocoa|AppKit|QuartzCore|Core Animation|CoreUI|SkyLight|SwiftUI|UIKit|Finder|Spotlight|Launchpad|Mission Control|Stage Manager|Exposé|Siri|Safari|Xcode|SF Pro|SF Mono|New York|Lucida Grande|Aqua)\b")),
 ]
 
 GATE_EXEMPT = {

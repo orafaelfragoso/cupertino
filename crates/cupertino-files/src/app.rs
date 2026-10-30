@@ -534,7 +534,7 @@ impl App {
                         menus.handle(&event);
                     }
                 }
-                Some(AppEvent::ScrollCount { .. }) | None => {}
+                Some(AppEvent::ScrollCount { .. } | AppEvent::SessionLock { .. }) | None => {}
             },
             // the server dismissed the menu (a click outside it); popups this process destroyed itself end no menu
             Event::PopupDone(popup) => {

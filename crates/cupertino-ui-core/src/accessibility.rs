@@ -183,4 +183,7 @@ pub trait AccessibilityAdapter {
     fn drain_actions(&mut self, out: &mut Vec<ActionRequest>);
     /// The window is gone; the adapter drops what it holds for it.
     fn window_closed(&mut self, _window: WindowId) {}
+    /// The session was locked or unlocked. While it is locked the application's windows aren't shown, so the adapter
+    /// announces nothing.
+    fn session_locked(&mut self, _locked: bool) {}
 }

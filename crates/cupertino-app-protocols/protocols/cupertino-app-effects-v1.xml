@@ -12,11 +12,11 @@
     arrangement or the session; those roles are in the private cupertino_shell_v1.
   </description>
 
-  <interface name="cupertino_app_effects_v1" version="4">
+  <interface name="cupertino_app_effects_v1" version="5">
     <description summary="effects for the client's own surfaces">
       Global singleton, offered to every client. Version 2 adds get_menu, version 3 the menu_reader
-      event of cupertino_app_menu_v1, version 4 set_disabled_controls; the other interfaces of the
-      protocol are unchanged in each.
+      event of cupertino_app_menu_v1, version 4 set_disabled_controls, version 5 the session_lock
+      event of cupertino_appearance_v1; the other interfaces of the protocol are unchanged in each.
     </description>
 
     <enum name="error">
@@ -175,10 +175,11 @@
     </request>
   </interface>
 
-  <interface name="cupertino_appearance_v1" version="2">
+  <interface name="cupertino_appearance_v1" version="5">
     <description summary="appearance and display options of the session">
-      Right after the object is created the server sends appearance, then display_options. Later
-      events say what changed; an event is complete by itself and is not part of a group.
+      Right after the object is created the server sends appearance, then display_options, then
+      from version 5 session_lock. The object has the version of the cupertino_app_effects_v1
+      that created it. Later events say what changed; an event is complete by itself and is not part of a group.
     </description>
 
     <request name="destroy" type="destructor">
@@ -210,6 +211,16 @@
         are reserved and stay 0.
       </description>
       <arg name="options" type="uint" enum="display_option"/>
+    </event>
+
+    <event name="session_lock" since="5">
+      <description summary="the session was locked or unlocked">
+        1 from the moment the session starts to lock, 0 once it is unlocked again. While the
+        session is locked no application surface is shown, so the client keeps what it offers
+        assistive technology quiet: it announces nothing until the session is unlocked. This is
+        advice to a cooperating client; it hides nothing by itself.
+      </description>
+      <arg name="locked" type="uint"/>
     </event>
   </interface>
 

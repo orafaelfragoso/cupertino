@@ -162,6 +162,13 @@ impl WaylandWindowSystem {
                 system.queued = queued;
             }
         }
+        if !system
+            .effects
+            .as_ref()
+            .is_some_and(|(effects, _)| effects.tells_session_lock())
+        {
+            system.queued.push(PlatformEvent::SessionLock(false));
+        }
         system
     }
 
@@ -396,10 +403,14 @@ impl WaylandWindowSystem {
                 return;
             }
             Event::Extension(extension) => {
-                if let Some(event) = extension.downcast_ref::<AppEvent>() {
-                    if apply_appearance(&mut self.appearance, event) {
+                match extension.downcast_ref::<AppEvent>() {
+                    Some(AppEvent::SessionLock { locked }) => {
+                        out.push(PlatformEvent::SessionLock(*locked));
+                    }
+                    Some(event) if apply_appearance(&mut self.appearance, event) => {
                         out.push(PlatformEvent::Appearance(self.appearance));
                     }
+                    _ => {}
                 }
                 return;
             }

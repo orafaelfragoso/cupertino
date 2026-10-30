@@ -521,6 +521,19 @@ fn an_assistive_technology_listening_from_the_start_gets_each_window_once() {
 }
 
 #[test]
+fn the_adapter_learns_each_lock_state_the_window_system_reports() {
+    let adapter = FakeAdapter::default();
+    let (mut rt, _, _) = start_with(|o| o.accessibility = Some(Box::new(adapter.clone())));
+    for locked in [false, true, false] {
+        rt.window_system_mut()
+            .queue
+            .push_back(PlatformEvent::SessionLock(locked));
+    }
+    rt.step(steps()).unwrap();
+    assert_eq!(*adapter.locked.borrow(), [false, true, false]);
+}
+
+#[test]
 fn a_failing_window_reports_each_error_once_and_its_animation_waits_for_a_frame_that_presents() {
     let damage = Rc::default();
     let broken = Rc::new(Cell::new(false));

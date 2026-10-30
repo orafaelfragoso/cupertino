@@ -619,7 +619,7 @@ impl App {
                         menus.handle(&event);
                     }
                 }
-                Some(AppEvent::ScrollCount { .. }) | None => {}
+                Some(AppEvent::ScrollCount { .. } | AppEvent::SessionLock { .. }) | None => {}
             },
             // the server dismissed the popup (a click outside it): the field keeps its text
             Event::PopupDone(popup) => {

@@ -180,12 +180,13 @@ impl<M: 'static> Tree<M> {
         elements: Vec<Element<M>>,
     ) -> Result<(), UiError> {
         let old = std::mem::take(&mut self.node_mut(parent).children);
+        // with each keyed child's place, so the ones left over are freed in order and slots are reused alike every run
         let mut keyed = HashMap::new();
         let mut unkeyed = VecDeque::new();
-        for &child in &old {
+        for (at, &child) in old.iter().enumerate() {
             match &self.node(child).key {
                 Some(key) => {
-                    keyed.insert(key.clone(), child);
+                    keyed.insert(key.clone(), (at, child));
                 }
                 None => unkeyed.push_back(child),
             }
@@ -194,7 +195,7 @@ impl<M: 'static> Tree<M> {
         let mut result = Ok(());
         for element in elements {
             let candidate = match &element.key {
-                Some(key) => keyed.remove(key),
+                Some(key) => keyed.remove(key).map(|(_, id)| id),
                 None => unkeyed.pop_front(),
             };
             let id = match candidate {
@@ -213,7 +214,9 @@ impl<M: 'static> Tree<M> {
                 }
             }
         }
-        for old in keyed.into_values().chain(unkeyed) {
+        let mut left: Vec<(usize, NodeId)> = keyed.into_values().collect();
+        left.sort_unstable_by_key(|&(at, _)| at);
+        for old in left.into_iter().map(|(_, id)| id).chain(unkeyed) {
             self.unmount(old);
         }
         if children != old {

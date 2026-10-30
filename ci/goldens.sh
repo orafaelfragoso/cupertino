@@ -16,10 +16,11 @@ elif [ "$#" -ne 0 ]; then
   exit 2
 fi
 
-# The session bus needs the caller's uid in the password database.
+# The session bus needs the caller's uid in the password database. The name is fixed: the lock screen draws it, and the
+# baseline must not depend on who runs this.
 passwd="$(mktemp)"
 trap 'rm -f "$passwd"' EXIT
-printf 'root:x:0:0:root:/root:/bin/sh\n%s:x:%s:%s::/tmp:/bin/sh\n' "$(id -un)" "$(id -u)" "$(id -g)" >"$passwd"
+printf 'root:x:0:0:root:/root:/bin/sh\ngolden:x:%s:%s:Golden User:/tmp:/bin/sh\n' "$(id -u)" "$(id -g)" >"$passwd"
 
 docker build --quiet --tag cupertino-goldens "$root/ci/goldens" >/dev/null
 log="$(mktemp)"

@@ -499,3 +499,16 @@ fn under_reduce_motion_the_caret_is_steady() {
         "no caret when the panel is closed"
     );
 }
+
+#[test]
+fn a_settled_appear_is_at_its_end_without_animating() {
+    let (mut p, _l) = open();
+    assert!(p.is_animating(0.0));
+    p.settle_appear();
+    assert_eq!(p.progress(0.0), 1.0);
+    assert!(!p.is_animating(0.0));
+    p.hide(1.0);
+    p.settle_appear();
+    assert_eq!(p.progress(1.0), 0.0);
+    assert!(!p.is_animating(1.0));
+}

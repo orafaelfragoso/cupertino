@@ -27,6 +27,8 @@ cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-login-ipc = { path = "../cupertino-login-ipc" }
 cupertino-peer = { path = "../cupertino-peer" }
 cupertino-theme = { path = "../cupertino-theme" }
+cupertino-ui-core = { path = "../cupertino-ui-core" }
+cupertino-ui-platform = { path = "../cupertino-ui-platform" }
 cupertino-seat = { path = "../cupertino-seat", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }

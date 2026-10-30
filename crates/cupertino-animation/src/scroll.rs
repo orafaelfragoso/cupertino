@@ -9,7 +9,7 @@
 //!
 //! Every query is a pure function of the supplied absolute time; mutating calls take the time too.
 
-use cupertino_animation::{ElasticMotion, Momentum, MomentumModel, QuarticMomentum, RubberBand};
+use crate::{ElasticMotion, Momentum, MomentumModel, QuarticMomentum, RubberBand};
 
 use crate::velocity::VelocityTracker;
 
@@ -40,7 +40,7 @@ impl Default for ScrollConfig {
             momentum: MomentumKind::Quartic,
             elastic: ElasticMotion::default(),
             dimension: 800.0,
-            drag_coefficient: cupertino_animation::rubber_band::DEFAULT_COEFFICIENT,
+            drag_coefficient: crate::rubber_band::DEFAULT_COEFFICIENT,
             velocity_window: 0.1,
             min_fling_velocity: 50.0,
         }

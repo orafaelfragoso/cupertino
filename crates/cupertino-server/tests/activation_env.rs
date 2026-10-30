@@ -367,7 +367,11 @@ fn server_publishing_with_a_portal(
     dir: &std::path::Path,
 ) -> (Cupertino, EventLoop<'static, Cupertino>) {
     use std::os::unix::fs::PermissionsExt;
-    let portal = dir.join("cupertino-portal");
+    // a prefix the test's user owns, as a development install
+    let bin = dir.join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let portal = bin.join("cupertino-portal");
     std::fs::write(&portal, "#!/bin/sh\nexec sleep 60\n").unwrap();
     std::fs::set_permissions(&portal, std::fs::Permissions::from_mode(0o755)).unwrap();
     let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().unwrap();

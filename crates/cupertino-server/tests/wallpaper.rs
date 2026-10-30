@@ -1,19 +1,23 @@
 //! Image wallpapers against a headless compositor: an image covers the output, the dark appearance takes its own image,
-//! a change of `wallpaper` in `compositor.json` applies live, and an image that is not there leaves the procedural
-//! wallpaper. Tests skip (pass) when no EGL device is available.
+//! a change of `wallpaper` in `compositor.json` applies live, an image that is not there leaves the procedural
+//! wallpaper, and the lightness of the strip under each output's menu bar is measured as that output shows the image,
+//! turned outputs included. Tests skip (pass) when no EGL device is available.
 
 mod common;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use common::desktop::Desktop;
 use cupertino_defaults::compositor::CompositorSettings;
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
 use cupertino_server::Cupertino;
 use cupertino_theme::Appearance;
+use smithay::output::Mode;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
+use smithay::utils::Transform;
 
 const OUTPUT: (i32, i32) = (800, 600);
 
@@ -200,4 +204,178 @@ fn an_image_that_cannot_be_read_leaves_the_procedural_wallpaper() {
     );
     h.state.set_appearance(Appearance::Light);
     assert_eq!(*h.screenshot().get_pixel(400, 300), procedural);
+}
+
+/// An image of `size` whose top `dark_rows` rows are near black and the rest near white.
+fn dark_topped(dir: &Path, name: &str, size: (u32, u32), dark_rows: u32) -> PathBuf {
+    let mut img = image::RgbImage::new(size.0, size.1);
+    for (_, y, p) in img.enumerate_pixels_mut() {
+        *p = image::Rgb(if y < dark_rows { [10; 3] } else { [245; 3] });
+    }
+    let path = dir.join(name);
+    img.save(&path).unwrap();
+    path
+}
+
+/// Step `d` until every output has a measure under its bar; the measures, in output order.
+fn measures(d: &mut Desktop) -> Vec<u16> {
+    let end = Instant::now() + Duration::from_secs(10);
+    for frame in 1.. {
+        d.at(frame * 16);
+        let measured: Option<Vec<u16>> = d
+            .state
+            .outputs
+            .iter()
+            .map(|o| d.state.backdrop_lightness(o.id))
+            .collect();
+        if let Some(measured) = measured {
+            return measured;
+        }
+        assert!(Instant::now() < end, "timed out waiting for the measures");
+    }
+    unreachable!()
+}
+
+fn display(name: &str, size: (i32, i32)) -> headless::HeadlessDisplay {
+    headless::HeadlessDisplay {
+        name: name.into(),
+        size,
+        physical_mm: (0, 0),
+    }
+}
+
+#[test]
+fn the_strip_under_the_bar_is_measured_once_the_image_is_up_and_again_when_it_changes() {
+    let Some(mut h) = Harness::new(|config, dir| {
+        // dark only in the 30 rows under the 24 pt bar
+        config.wallpaper.light = Some(dark_topped(dir, "dark-top.png", (800, 600), 30));
+    }) else {
+        return;
+    };
+    let out = h.state.outputs[0].id;
+    h.wait_until("the measure", |s| s.backdrop_lightness(out).is_some());
+    let dark = h.state.backdrop_lightness(out).unwrap();
+    assert!(dark < 100, "{dark}");
+
+    let path = dark_topped(h.dir.path(), "light.png", (800, 600), 0);
+    let before = CompositorSettings::default();
+    let after = CompositorSettings {
+        wallpaper: Some(path.display().to_string()),
+        ..CompositorSettings::default()
+    };
+    h.state.apply_compositor_change(&before, &after);
+    h.wait_until("the new measure", |s| {
+        s.backdrop_lightness(out).is_some_and(|l| l > 900)
+    });
+}
+
+#[test]
+fn each_output_is_measured_at_its_own_crop() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = Config::default();
+    config.wallpaper.light = Some(dark_topped(dir.path(), "w.png", (600, 600), 60));
+    // the square output shows the image's top; the wide one only its middle rows, which are light
+    let mut d = Desktop::configured(
+        config,
+        &[display("square", (600, 600)), display("wide", (1200, 300))],
+        1.0,
+    );
+    let measured = measures(&mut d);
+    assert!(measured[0] < 100 && measured[1] > 900, "{measured:?}");
+}
+
+#[test]
+fn a_quarter_turned_output_is_measured_at_its_logical_top() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = Config::default();
+    // portrait, as the turned output's logical space: dark across the top
+    config.wallpaper.light = Some(dark_topped(dir.path(), "w.png", (600, 900), 60));
+    let mut d = Desktop::configured(config, &[display("turned", (900, 600))], 1.0);
+    let id = d.state.outputs[0].id;
+    d.state.configure_output(
+        id,
+        Mode {
+            size: (900, 600).into(),
+            refresh: 60_000,
+        },
+        1.0,
+        Transform::_90,
+        (0, 0),
+    );
+    let measured = measures(&mut d);
+    assert!(measured[0] < 100, "{measured:?}");
+}
+
+#[test]
+fn an_output_that_is_off_when_its_image_comes_in_holds_nothing_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = Config::default();
+    config.wallpaper.light = Some(dark_topped(dir.path(), "w.png", (600, 600), 60));
+    let mut d = Desktop::configured(
+        config,
+        &[display("square", (600, 600)), display("wide", (1200, 300))],
+        1.0,
+    );
+    // both outputs ask for the image in their first frame; the second goes off before its answer is put up
+    d.at(16);
+    let second = d.state.outputs[1].id;
+    d.state.set_output_power(second, false).unwrap();
+    let end = Instant::now() + Duration::from_secs(10);
+    let mut frame = 2;
+    while d.state.overlays.wallpaper.pending() || d.state.animating() {
+        d.at(frame * 16);
+        frame += 1;
+        assert!(
+            Instant::now() < end,
+            "frames are still wanted: pending {}, animating {}",
+            d.state.overlays.wallpaper.pending(),
+            d.state.animating()
+        );
+    }
+    assert!(
+        d.state.backdrop_lightness(second).is_some_and(|l| l > 900),
+        "the output that is off is measured too: {:?}",
+        d.state.backdrop_lightness(second)
+    );
+}
+
+#[test]
+fn a_quarter_turned_output_draws_the_image_upright() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = Config::default();
+    config.wallpaper.light = Some(dark_topped(dir.path(), "w.png", (600, 900), 60));
+    let mut d = Desktop::configured(config, &[display("turned", (900, 600))], 1.0);
+    let id = d.state.outputs[0].id;
+    d.state.configure_output(
+        id,
+        Mode {
+            size: (900, 600).into(),
+            refresh: 60_000,
+        },
+        1.0,
+        Transform::_90,
+        (0, 0),
+    );
+    measures(&mut d);
+    let shot = dir.path().join("turned.png");
+    d.state.screenshot_requests.push(shot.clone());
+    d.state.request_redraw();
+    let end = Instant::now() + Duration::from_secs(10);
+    let mut frame = 1000;
+    while !shot.exists() {
+        d.at(frame * 16);
+        frame += 1;
+        assert!(Instant::now() < end, "no screenshot");
+    }
+    // the screenshot draws the logical space unturned into an image of the mode's size, so its top-left 600 x 600 are
+    // the logical space's: the image's dark top must be at the top there, not a crop of its light middle
+    let shot = image::open(&shot).unwrap().to_rgba8();
+    assert_eq!(shot.dimensions(), (900, 600));
+    // under the bar and below it, in the middle where no shell process draws
+    let top = shot.get_pixel(300, 40);
+    let below = shot.get_pixel(300, 450);
+    assert!(
+        top[0] < 60 && below[0] > 200,
+        "top {top:?}, below {below:?}"
+    );
 }

@@ -111,6 +111,39 @@ pub fn scale_cover(source: &RgbaImage, dst: (u32, u32)) -> Result<(Pixmap, [f32;
     ))
 }
 
+/// The lightness of the top `rows` rows of `pixmap`, where the menu bar sits: CIE L* of their mean relative luminance,
+/// in tenths (0 black to 1000 white). The mean is taken before L*, as the bar's material blurs what it covers. About
+/// 16 000 pixels are read, whatever the size.
+pub fn strip_lightness(pixmap: &Pixmap, rows: u32) -> u16 {
+    let rows = rows.clamp(1, pixmap.height().max(1)) as usize;
+    let width = pixmap.width() as usize;
+    let (pixels, _) = pixmap.data().as_chunks::<4>();
+    let strip = &pixels[..(rows * width).min(pixels.len())];
+    let step = (strip.len() / 16_384).max(1);
+    let linear = |c: u8| {
+        let c = f64::from(c) / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let (sum, n) = strip
+        .iter()
+        .step_by(step)
+        .fold((0.0, 0u32), |(sum, n), px| {
+            let y = 0.2126 * linear(px[0]) + 0.7152 * linear(px[1]) + 0.0722 * linear(px[2]);
+            (sum + y, n + 1)
+        });
+    let y = sum / f64::from(n.max(1));
+    let l = if y > 216.0 / 24_389.0 {
+        116.0 * y.cbrt() - 16.0
+    } else {
+        y * 24_389.0 / 27.0
+    };
+    (l * 10.0).round().clamp(0.0, 1000.0) as u16
+}
+
 /// What identifies the contents of a file at a time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct Stamp {
@@ -152,6 +185,8 @@ struct Request {
     /// Files to try, best first.
     candidates: Vec<PathBuf>,
     dst: (u32, u32),
+    /// Rows of `dst` under the menu bar, measured for its backdrop.
+    strip_rows: u32,
     /// The file and state the output shows, for an answer of "unchanged".
     known: Option<(PathBuf, Stamp)>,
 }
@@ -162,6 +197,8 @@ enum Outcome {
     Loaded {
         pixmap: Pixmap,
         tint: [f32; 3],
+        /// [`strip_lightness`] of the rows under the menu bar.
+        bar_lightness: u16,
         path: PathBuf,
         stamp: Stamp,
     },
@@ -265,6 +302,7 @@ impl WorkerState {
             match scale_cover(&source, request.dst) {
                 Ok((pixmap, tint)) => {
                     return Outcome::Loaded {
+                        bar_lightness: strip_lightness(&pixmap, request.strip_rows),
                         pixmap,
                         tint,
                         path: path.clone(),
@@ -360,8 +398,6 @@ struct OutputState {
     seen_at: f64,
     /// The file and state the shown image was made from.
     loaded: Option<(PathBuf, Stamp)>,
-    /// An answer not yet turned into a buffer.
-    ready: Option<(Pixmap, [f32; 3])>,
     shown: Option<Shown>,
 }
 
@@ -381,6 +417,8 @@ pub struct Wallpapers {
     next_ticket: u64,
     /// Average colour of the image drawn last, for the materials' tint; `None` while the procedural wallpaper shows.
     pub tint: Option<[f32; 3]>,
+    /// The lightness under the menu bar of each output whose new image has just been put up, until taken.
+    measured: Vec<(u64, u16)>,
 }
 
 impl Wallpapers {
@@ -399,6 +437,7 @@ impl Wallpapers {
             outputs: HashMap::new(),
             next_ticket: 0,
             tint: None,
+            measured: Vec::new(),
         }
     }
 
@@ -427,7 +466,8 @@ impl Wallpapers {
         }
     }
 
-    /// Take in the answers the worker has.
+    /// Take in the answers the worker has, and put a new image up at once, whichever output's frame takes it in: an
+    /// output that does not draw now (off, or locked) has it ready, and nothing waits on it.
     fn collect(&mut self) {
         let Some(loader) = &self.loader else { return };
         while let Ok(reply) = loader.replies.try_recv() {
@@ -443,15 +483,29 @@ impl Wallpapers {
                 Outcome::Loaded {
                     pixmap,
                     tint,
+                    bar_lightness,
                     path,
                     stamp,
                 } => {
-                    state.ready = Some((pixmap, tint));
+                    let size = (pixmap.width() as i32, pixmap.height() as i32);
+                    let buffer = MemoryRenderBuffer::from_slice(
+                        pixmap.data(),
+                        Fourcc::Abgr8888,
+                        size,
+                        1,
+                        Transform::Normal,
+                        None,
+                    );
+                    state.shown = Some(Shown {
+                        buffer,
+                        px: size,
+                        tint,
+                    });
                     state.loaded = Some((path, stamp));
+                    self.measured.push((reply.output, bar_lightness));
                 }
                 Outcome::Failed => {
                     state.loaded = None;
-                    state.ready = None;
                     state.shown = None;
                 }
             }
@@ -463,6 +517,7 @@ impl Wallpapers {
         output: u64,
         candidates: Vec<PathBuf>,
         dst: (u32, u32),
+        strip_rows: u32,
         now: f64,
         known: Option<(PathBuf, Stamp)>,
     ) {
@@ -486,6 +541,7 @@ impl Wallpapers {
             ticket,
             candidates,
             dst,
+            strip_rows,
             known,
         };
         if self
@@ -502,7 +558,14 @@ impl Wallpapers {
     }
 
     /// Bring the output's state up to date with what is wanted: no file system access, no waiting.
-    fn update(&mut self, output: u64, candidates: Vec<PathBuf>, dst: (u32, u32), now: f64) {
+    fn update(
+        &mut self,
+        output: u64,
+        candidates: Vec<PathBuf>,
+        dst: (u32, u32),
+        strip_rows: u32,
+        now: f64,
+    ) {
         self.collect();
         let idle: Vec<u64> = self
             .outputs
@@ -513,22 +576,21 @@ impl Wallpapers {
         for output in idle {
             self.forget(output);
         }
-        let key = key_of(&candidates, dst);
+        let key = key_of(&candidates, dst, strip_rows);
         let state = self.outputs.entry(output).or_default();
         state.seen_at = now;
         if state.key != key || state.ticket == 0 {
             state.key = key;
-            state.ready = None;
             state.loaded = None;
-            self.request(output, candidates, dst, now, None);
+            self.request(output, candidates, dst, strip_rows, now, None);
         } else if !state.in_flight && now - state.checked_at >= REVALIDATE_SECONDS {
             let known = state.loaded.clone();
-            self.request(output, candidates, dst, now, known);
+            self.request(output, candidates, dst, strip_rows, now, known);
         }
     }
 
     /// The wallpaper element of an output of `px` device pixels at `scale`, or `None` for the procedural wallpaper.
-    /// Until the image is in, the output keeps what it showed.
+    /// Until the image is in, the output keeps what it showed. `strip_rows` are the rows under the menu bar.
     #[allow(clippy::too_many_arguments)]
     pub fn element(
         &mut self,
@@ -537,21 +599,25 @@ impl Wallpapers {
         config: &WallpaperSettings,
         dark: bool,
         px: (i32, i32),
+        strip_rows: u32,
         scale: f64,
         now: f64,
     ) -> Option<CupertinoElement> {
-        let (buffer, px) = self.shown(output, config, dark, px, now)?;
+        let (buffer, px) = self.shown(output, config, dark, px, strip_rows, now)?;
         image_element(renderer, &buffer, px, 0.0, 0.0, scale, 1.0)
     }
 
     /// The pixels the wallpaper of an output of `px` device pixels shows, or `None` for the procedural wallpaper.
-    /// Until the image is in, the output keeps what it showed.
+    /// Until the image is in, the output keeps what it showed. The lightness of its top `strip_rows` rows, under the
+    /// menu bar, is measured once per image and handed out by [`Wallpapers::take_bar_lightness`] once the image is put
+    /// up.
     pub fn shown(
         &mut self,
         output: u64,
         config: &WallpaperSettings,
         dark: bool,
         px: (i32, i32),
+        strip_rows: u32,
         now: f64,
     ) -> Option<(MemoryRenderBuffer, (i32, i32))> {
         let dst = (u32::try_from(px.0).ok()?, u32::try_from(px.1).ok()?);
@@ -564,24 +630,8 @@ impl Wallpapers {
             self.tint = None;
             return None;
         }
-        self.update(output, candidates, dst, now);
-        let state = self.outputs.get_mut(&output)?;
-        if let Some((pixmap, tint)) = state.ready.take() {
-            let size = (pixmap.width() as i32, pixmap.height() as i32);
-            let buffer = MemoryRenderBuffer::from_slice(
-                pixmap.data(),
-                Fourcc::Abgr8888,
-                size,
-                1,
-                Transform::Normal,
-                None,
-            );
-            state.shown = Some(Shown {
-                buffer,
-                px: size,
-                tint,
-            });
-        }
+        self.update(output, candidates, dst, strip_rows, now);
+        let state = self.outputs.get(&output)?;
         match state.shown.as_ref().filter(|s| s.px == px) {
             Some(shown) => {
                 self.tint = Some(shown.tint);
@@ -592,6 +642,11 @@ impl Wallpapers {
                 None
             }
         }
+    }
+
+    /// The lightness under the menu bar of each output whose new image was put up since the last call.
+    pub fn take_bar_lightness(&mut self) -> Vec<(u64, u16)> {
+        std::mem::take(&mut self.measured)
     }
 
     /// Bytes of the decoded image the worker holds: none once no output wants its file.
@@ -610,11 +665,12 @@ impl Wallpapers {
 }
 
 /// What a request is for: the files and the size.
-fn key_of(candidates: &[PathBuf], dst: (u32, u32)) -> u64 {
+fn key_of(candidates: &[PathBuf], dst: (u32, u32), strip_rows: u32) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     candidates.hash(&mut h);
     dst.hash(&mut h);
+    strip_rows.hash(&mut h);
     h.finish()
 }
 
@@ -643,6 +699,46 @@ mod tests {
         let path = dir.join(name);
         img.save(&path).unwrap();
         path
+    }
+
+    /// A pixmap of `size` whose rows above `split` are `top` and the others `rest` (opaque sRGB greys).
+    fn split_pixmap(size: (u32, u32), split: u32, top: u8, rest: u8) -> Pixmap {
+        let mut pixmap = Pixmap::new(size.0, size.1).unwrap();
+        let width = size.0 as usize;
+        let (pixels, _) = pixmap.data_mut().as_chunks_mut::<4>();
+        for (i, px) in pixels.iter_mut().enumerate() {
+            let v = if ((i / width) as u32) < split {
+                top
+            } else {
+                rest
+            };
+            *px = [v, v, v, 255];
+        }
+        pixmap
+    }
+
+    #[test]
+    fn the_lightness_under_the_bar_runs_from_black_to_white_in_cie_l_star() {
+        assert_eq!(strip_lightness(&split_pixmap((64, 48), 48, 0, 0), 24), 0);
+        assert_eq!(
+            strip_lightness(&split_pixmap((64, 48), 48, 255, 255), 24),
+            1000
+        );
+        // sRGB 119 is L* 50.0
+        let grey = strip_lightness(&split_pixmap((64, 48), 48, 119, 119), 24);
+        assert!(grey.abs_diff(500) <= 3, "{grey}");
+    }
+
+    #[test]
+    fn only_the_rows_under_the_bar_are_measured() {
+        let pixmap = split_pixmap((300, 200), 24, 10, 245);
+        assert!(strip_lightness(&pixmap, 24) < 60, "the bar's rows are dark");
+        assert!(
+            strip_lightness(&pixmap, 200) > 800,
+            "the whole image is mostly light"
+        );
+        // a strip taller than the image measures the image
+        assert_eq!(strip_lightness(&pixmap, 900), strip_lightness(&pixmap, 200));
     }
 
     #[test]
@@ -780,7 +876,7 @@ mod tests {
             let end = std::time::Instant::now() + Duration::from_secs(10);
             loop {
                 self.wallpapers
-                    .update(1, vec![path.to_path_buf()], dst, now);
+                    .update(1, vec![path.to_path_buf()], dst, 1, now);
                 if !self.wallpapers.pending() {
                     return;
                 }
@@ -791,9 +887,9 @@ mod tests {
 
         fn shown_size(&self) -> Option<(u32, u32)> {
             self.wallpapers.outputs[&1]
-                .ready
+                .shown
                 .as_ref()
-                .map(|(p, _)| (p.width(), p.height()))
+                .map(|s| (s.px.0 as u32, s.px.1 as u32))
         }
     }
 
@@ -806,7 +902,7 @@ mod tests {
         let hold = rig.gate.lock().unwrap();
         for width in 100..150 {
             rig.wallpapers
-                .update(1, vec![path.clone()], (width, 80), 0.0);
+                .update(1, vec![path.clone()], (width, 80), 1, 0.0);
         }
         drop(hold);
         rig.settle(&path, (149, 80), 0.0);
@@ -817,7 +913,7 @@ mod tests {
         );
         assert_eq!(rig.wallpapers.decodes(), 1);
         // another size of the same file only scales it
-        rig.wallpapers.outputs.get_mut(&1).unwrap().ready = None;
+        rig.wallpapers.outputs.get_mut(&1).unwrap().shown = None;
         rig.settle(&path, (320, 200), 0.0);
         assert_eq!(rig.shown_size(), Some((320, 200)));
         assert_eq!(rig.wallpapers.decodes(), 1);
@@ -832,7 +928,7 @@ mod tests {
         let started = std::time::Instant::now();
         for frame in 0..100 {
             rig.wallpapers
-                .update(1, vec![path.clone()], (32, 32), f64::from(frame) / 60.0);
+                .update(1, vec![path.clone()], (32, 32), 1, f64::from(frame) / 60.0);
         }
         assert!(
             started.elapsed() < Duration::from_millis(500),
@@ -840,7 +936,7 @@ mod tests {
             started.elapsed()
         );
         assert!(rig.wallpapers.pending());
-        assert!(rig.wallpapers.outputs[&1].ready.is_none());
+        assert!(rig.wallpapers.outputs[&1].shown.is_none());
         drop(hold);
         rig.settle(&path, (32, 32), 2.0);
         assert!(rig.shown_size().is_some());
@@ -853,7 +949,7 @@ mod tests {
         let mut rig = rig();
         rig.settle(&path, (8, 8), 0.0);
         assert_eq!(rig.wallpapers.decodes(), 1);
-        rig.wallpapers.outputs.get_mut(&1).unwrap().ready = None;
+        rig.wallpapers.outputs.get_mut(&1).unwrap().shown = None;
         // not due yet, then due with the file unchanged: nothing is decoded or delivered again
         rig.settle(&path, (8, 8), 1.0);
         rig.settle(&path, (8, 8), 6.0);
@@ -863,8 +959,8 @@ mod tests {
         write_png(dir.path(), "w.png", (32, 32), |_, _| [0, 200, 0, 255]);
         rig.settle(&path, (8, 8), 12.0);
         assert_eq!(rig.wallpapers.decodes(), 2);
-        let (pixmap, _) = rig.wallpapers.outputs[&1].ready.as_ref().unwrap();
-        assert_eq!(pixmap.pixel(0, 0).unwrap().green(), 200);
+        let tint = rig.wallpapers.outputs[&1].shown.as_ref().unwrap().tint;
+        assert!((tint[1] - 200.0 / 255.0).abs() < 0.01, "{tint:?}");
     }
 
     #[test]
@@ -878,7 +974,7 @@ mod tests {
         let end = std::time::Instant::now() + Duration::from_secs(10);
         for now in [0.0, 6.0, 12.0] {
             loop {
-                rig.wallpapers.update(1, candidates.clone(), (4, 4), now);
+                rig.wallpapers.update(1, candidates.clone(), (4, 4), 1, now);
                 if !rig.wallpapers.pending() {
                     break;
                 }
@@ -919,13 +1015,13 @@ mod tests {
             let end = std::time::Instant::now() + Duration::from_secs(10);
             while !done(&rig.wallpapers) {
                 assert!(std::time::Instant::now() < end, "the worker did not let go");
-                rig.wallpapers.update(1, vec![path.clone()], (8, 4), now);
+                rig.wallpapers.update(1, vec![path.clone()], (8, 4), 1, now);
                 std::thread::sleep(Duration::from_millis(2));
             }
         };
         // two outputs share the file: one going away keeps the image for the other
         rig.settle(&path, (8, 4), 0.0);
-        rig.wallpapers.update(2, vec![path.clone()], (8, 4), 0.0);
+        rig.wallpapers.update(2, vec![path.clone()], (8, 4), 1, 0.0);
         until(&mut rig, 0.0, &|w| {
             !w.pending() && w.cached_source_bytes() == 16 * 8 * 4
         });
@@ -940,15 +1036,17 @@ mod tests {
             std::thread::sleep(Duration::from_millis(2));
         }
         // an output nobody asks about for a minute is forgotten too
-        rig.wallpapers.update(3, vec![path.clone()], (8, 4), 100.0);
+        rig.wallpapers
+            .update(3, vec![path.clone()], (8, 4), 1, 100.0);
         let end = std::time::Instant::now() + Duration::from_secs(10);
         while rig.wallpapers.cached_source_bytes() == 0 {
             assert!(std::time::Instant::now() < end);
-            rig.wallpapers.update(3, vec![path.clone()], (8, 4), 100.0);
+            rig.wallpapers
+                .update(3, vec![path.clone()], (8, 4), 1, 100.0);
             std::thread::sleep(Duration::from_millis(2));
         }
         rig.wallpapers
-            .update(4, vec![dir.path().join("other.png")], (8, 4), 200.0);
+            .update(4, vec![dir.path().join("other.png")], (8, 4), 1, 200.0);
         let end = std::time::Instant::now() + Duration::from_secs(10);
         while rig.wallpapers.cached_source_bytes() != 0 {
             assert!(
@@ -956,7 +1054,7 @@ mod tests {
                 "the idle output kept its image"
             );
             rig.wallpapers
-                .update(4, vec![dir.path().join("other.png")], (8, 4), 200.0);
+                .update(4, vec![dir.path().join("other.png")], (8, 4), 1, 200.0);
             std::thread::sleep(Duration::from_millis(2));
         }
     }

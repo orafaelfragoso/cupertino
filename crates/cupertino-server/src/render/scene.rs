@@ -453,10 +453,27 @@ fn standalone(
 /// The wallpaper of the output: the image of the user or of the asset pack, else the procedural one.
 fn wallpaper_element(p: &mut SceneParams<'_>) -> Piece {
     let dark = p.config.is_dark();
-    let image =
-        p.overlays
-            .wallpaper
-            .shown(p.output_id.0, &p.config.wallpaper, dark, p.output_px, p.now);
+    // the device rows the menu bar covers, measured for its backdrop when a new image is put up
+    let strip_rows = p
+        .menu_bars
+        .set
+        .bar_height(p.output_id)
+        .map_or(0, |h| (h * p.scale).ceil() as u32);
+    // the image is laid in the logical space, which a quarter-turned output has on its side
+    let px = p
+        .output
+        .current_transform()
+        .transform_size(smithay::utils::Size::<i32, smithay::utils::Physical>::from(
+            p.output_px,
+        ));
+    let image = p.overlays.wallpaper.shown(
+        p.output_id.0,
+        &p.config.wallpaper,
+        dark,
+        (px.w, px.h),
+        strip_rows,
+        p.now,
+    );
     match image {
         Some((buffer, px)) => image_piece(
             &buffer,

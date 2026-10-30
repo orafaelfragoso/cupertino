@@ -1135,6 +1135,11 @@ impl Cupertino {
         }
     }
 
+    /// The lightness of the wallpaper under the bar of `output`, as last measured.
+    pub fn backdrop_lightness(&self, output: OutputId) -> Option<u16> {
+        self.menu_bars.backdrops.get(&output).copied()
+    }
+
     /// Tell the bars of version 14 or later the lightness of the wallpaper under them, each one the first time and
     /// when it moved by more than [`BACKDROP_LIGHTNESS_STEP`] since.
     fn refresh_backdrop_lightness(&mut self) {

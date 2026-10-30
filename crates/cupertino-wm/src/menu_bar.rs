@@ -384,6 +384,11 @@ impl MenuBarSet {
             .is_some_and(|o| !Self::hidden_target_of(&self.cfg, o))
     }
 
+    /// Height of the bar of `id` in points, whether it shows or is auto-hidden.
+    pub fn bar_height(&self, id: OutputId) -> Option<f64> {
+        self.outputs.get(&id).map(|o| o.height)
+    }
+
     /// Height the bar takes from windows on `id`: its height, or 0 while it is auto-hidden.
     pub fn reserved_height(&self, id: OutputId) -> Option<f64> {
         let o = self.outputs.get(&id)?;

@@ -20,6 +20,10 @@ pub struct CallerSession {
     pub seat: String,
     /// Whether the session is in the foreground.
     pub active: bool,
+    /// `Remote`: the session was opened over the network (ssh, a remote desktop).
+    pub remote: bool,
+    /// `State`: `active`, `online` or `closing`.
+    pub state: String,
 }
 
 /// What a method requires of its caller.
@@ -29,6 +33,9 @@ pub enum Need {
     ActiveUserSession,
     /// A user session on the seat, in the foreground or not (a session announces itself before it is shown).
     UserSession,
+    /// The person at the console itself: the active user session of the seat, opened there (not remote) and in state
+    /// `active`. For what changes the machine for everyone.
+    Console,
 }
 
 /// Why a caller is refused.
@@ -44,6 +51,8 @@ pub enum Denial {
     NotActive,
     /// The process runs as another user than its session's: a process of a session that changed its user is not the session.
     OtherUser,
+    /// The session was opened over the network.
+    Remote,
 }
 
 impl fmt::Display for Denial {
@@ -54,6 +63,7 @@ impl fmt::Display for Denial {
             Denial::NotOnSeat => "the caller's session is not on the console's seat",
             Denial::NotActive => "the caller's session is not the active session",
             Denial::OtherUser => "the caller does not run as the user of its session",
+            Denial::Remote => "the caller's session was opened over the network",
         })
     }
 }
@@ -75,8 +85,16 @@ pub fn authorise(
     if session.uid != caller_uid {
         return Err(Denial::OtherUser);
     }
-    if need == Need::ActiveUserSession && !session.active {
+    if need != Need::UserSession && !session.active {
         return Err(Denial::NotActive);
+    }
+    if need == Need::Console {
+        if session.remote {
+            return Err(Denial::Remote);
+        }
+        if session.state != "active" {
+            return Err(Denial::NotActive);
+        }
     }
     Ok(session)
 }
@@ -119,6 +137,8 @@ mod tests {
             class: "user".to_owned(),
             seat: SEAT.to_owned(),
             active: true,
+            remote: false,
+            state: "active".to_owned(),
         }
     }
 
@@ -135,6 +155,38 @@ mod tests {
         assert_eq!(
             authorise(Some(session()), 1000, Need::ActiveUserSession),
             Ok(session())
+        );
+    }
+
+    #[test]
+    fn only_the_person_at_the_console_changes_the_machine() {
+        assert_eq!(
+            authorise(Some(session()), 1000, Need::Console),
+            Ok(session())
+        );
+        let remote = CallerSession {
+            remote: true,
+            ..session()
+        };
+        assert_eq!(
+            authorise(Some(remote), 1000, Need::Console),
+            Err(Denial::Remote)
+        );
+        for (active, state) in [(false, "active"), (true, "online"), (true, "closing")] {
+            let away = CallerSession {
+                active,
+                state: state.to_owned(),
+                ..session()
+            };
+            assert_eq!(
+                authorise(Some(away), 1000, Need::Console),
+                Err(Denial::NotActive),
+                "{active} {state}"
+            );
+        }
+        assert_eq!(
+            authorise(Some(session()), 1001, Need::Console),
+            Err(Denial::OtherUser)
         );
     }
 

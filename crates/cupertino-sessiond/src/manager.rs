@@ -10,7 +10,7 @@ use std::io;
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::{chown, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, ExitStatus, Stdio};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
@@ -31,6 +31,7 @@ use crate::channel::{Channel, ChannelError};
 use crate::limits::{RateLimit, ATTEMPTS_PER_WINDOW, ATTEMPT_TIMEOUT, ATTEMPT_WINDOW};
 use crate::logind::{self, Logind, SeatSession, Signal};
 use crate::service::{self, Authorizer, Call, ReadyRefusal};
+use crate::system_accessibility;
 use crate::worker_protocol::{FromWorker, Mode, SessionClass, ToWorker, MAX_FRAME};
 use crate::{picture, roster, users, vt};
 
@@ -247,6 +248,19 @@ impl Authorizer for LogindAuthorizer {
     fn session_of(&self, pid: u32) -> std::result::Result<Option<CallerSession>, String> {
         self.0.session_of_pid(pid).map_err(|e| e.to_string())
     }
+
+    fn is_administrator(&self, uid: u32) -> std::result::Result<bool, String> {
+        users::is_administrator(uid).map_err(|e| e.to_string())
+    }
+}
+
+/// Where the installed programs are: `/usr`, and the prefix the build names (`CUPERTINO_INSTALL_PREFIX`), as the server
+/// has it.
+fn installed_roots() -> impl Iterator<Item = &'static Path> {
+    ["/usr"]
+        .into_iter()
+        .chain(option_env!("CUPERTINO_INSTALL_PREFIX"))
+        .map(Path::new)
 }
 
 struct Manager {
@@ -335,6 +349,15 @@ impl Manager {
                     }
                 }
             });
+        // the machine's files are watched by every compositor, the login screen's first: their directory must be there
+        if let Err(e) =
+            system_accessibility::ensure_dir(Path::new(system_accessibility::MACHINE_DIR))
+        {
+            eprintln!(
+                "cupertino-sessiond: {}: {e}; the machine's accessibility settings apply after a restart only",
+                system_accessibility::MACHINE_DIR
+            );
+        }
         let listener = bind(Path::new(SOCKET_PATH), greeter.uid, greeter.gid)?;
         let (logind, incoming, mailbox) = watch_logind()?;
         let bus = serve_bus(&mailbox)?;
@@ -1730,10 +1753,17 @@ fn serve_bus(mailbox: &Mailbox) -> Result<zbus::blocking::Connection> {
     let authorizer = Arc::new(LogindAuthorizer(Logind::connect()?));
     let commands = mailbox.clone();
     let sink: service::Sink = Arc::new(move |call| commands.post(Incoming::Call(call)));
+    let machine = service::MachineFiles {
+        dir: PathBuf::from(system_accessibility::MACHINE_DIR),
+        settings_program: Arc::new(|exe: &Path| {
+            installed_roots().any(|root| exe == root.join("bin/cupertino-settings"))
+        }),
+    };
     Ok(service::serve(
         zbus::blocking::connection::Builder::system()?,
         authorizer,
         sink,
+        machine,
     )
     .map_err(|e| format!("serving {}: {e}", service::BUS_NAME))?)
 }

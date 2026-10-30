@@ -21,6 +21,7 @@ pub mod picture;
 pub mod roster;
 #[cfg(feature = "app")]
 pub mod service;
+pub mod system_accessibility;
 pub mod users;
 #[cfg(feature = "app")]
 pub mod vt;

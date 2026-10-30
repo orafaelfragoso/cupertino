@@ -80,12 +80,12 @@ impl About {
     }
 }
 
-/// Prefer whole words, splitting an overlong word only at character boundaries. No value text is elided.
 /// Whitespace a line may break at: any but the no-break spaces, which hold their neighbours together.
 fn breakable(c: char) -> bool {
     c.is_whitespace() && !matches!(c, NO_BREAK_SPACE | NARROW_NO_BREAK_SPACE)
 }
 
+/// Prefer whole words, splitting an overlong word only at character boundaries. No value text is elided.
 fn wrap_value(text: &str, width: f64, measure: &mut impl FnMut(&str) -> f64) -> Vec<String> {
     let mut lines = Vec::new();
     let mut line = String::new();
@@ -126,7 +126,7 @@ const MM_PER_INCH: f64 = 25.4;
 /// so one outside this range is left out (approximate).
 const PLAUSIBLE_DIAGONAL: std::ops::RangeInclusive<f64> = 10.0..=100.0;
 const NO_BREAK_SPACE: char = '\u{a0}';
-/// Joins a mode's width, "×" and height, so a wrapped value never splits the mode.
+/// Joins a mode's width, "×" and height, and "@" to the scale, so a wrapped value never splits either.
 const NARROW_NO_BREAK_SPACE: char = '\u{202f}';
 
 /// What the Displays row shows of one display, as the compositor announces it.
@@ -173,7 +173,7 @@ pub fn display_value(display: &Display<'_>) -> Option<String> {
     let scale = (display.scale * SCALE_STEPS).round() / SCALE_STEPS;
     let nb = NARROW_NO_BREAK_SPACE;
     Some(format!(
-        "{title}{size} {w}{nb}×{nb}{h} @ {}x",
+        "{title}{size} {w}{nb}×{nb}{h} @{nb}{}x",
         decimals(scale, 2)
     ))
 }
@@ -448,7 +448,7 @@ mod tests {
         };
         assert_eq!(
             display_value(&display).as_deref(),
-            Some("ACME Panel 27 13.3-inch 2560\u{202f}×\u{202f}1600 @ 1.5x")
+            Some("ACME Panel 27 13.3-inch 2560\u{202f}×\u{202f}1600 @\u{202f}1.5x")
         );
         let integer = Display {
             physical_size_mm: Some((597, 336)),
@@ -458,7 +458,7 @@ mod tests {
         };
         assert_eq!(
             display_value(&integer).as_deref(),
-            Some("ACME Panel 27 27-inch 3840\u{202f}×\u{202f}2160 @ 2x")
+            Some("ACME Panel 27 27-inch 3840\u{202f}×\u{202f}2160 @\u{202f}2x")
         );
         let quarter = Display {
             scale: 1.25,
@@ -467,7 +467,7 @@ mod tests {
         };
         assert_eq!(
             display_value(&quarter).as_deref(),
-            Some("ACME Panel 27 2560\u{202f}×\u{202f}1600 @ 1.25x")
+            Some("ACME Panel 27 2560\u{202f}×\u{202f}1600 @\u{202f}1.25x")
         );
     }
 
@@ -510,6 +510,7 @@ mod tests {
             lines.contains(&"2560\u{202f}×\u{202f}1600".to_owned()),
             "{lines:?}"
         );
+        assert!(lines.contains(&"@\u{202f}1.5x".to_owned()), "{lines:?}");
         assert_eq!(
             wrap_value("a\u{a0}b c", 3.0, &mut measure),
             ["a\u{a0}b", "c"]
@@ -527,7 +528,7 @@ mod tests {
         };
         assert_eq!(
             display_value(&unnamed).as_deref(),
-            Some("HDMI-A-1 1920\u{202f}×\u{202f}1080 @ 1x")
+            Some("HDMI-A-1 1920\u{202f}×\u{202f}1080 @\u{202f}1x")
         );
         assert_eq!(
             display_value(&Display {
@@ -553,7 +554,7 @@ mod tests {
         assert!(value.starts_with(&format!("{}…", "M".repeat(MAX_IDENTIFICATION_CHARS - 1))));
         assert_eq!(
             value.chars().count(),
-            MAX_IDENTIFICATION_CHARS + " 1920\u{202f}×\u{202f}1080 @ 1x".chars().count()
+            MAX_IDENTIFICATION_CHARS + " 1920\u{202f}×\u{202f}1080 @\u{202f}1x".chars().count()
         );
     }
 

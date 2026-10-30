@@ -150,3 +150,52 @@ fn a_fixed_size_window_is_refused_fill() {
     h.settle();
     assert!(!matches!(h.state(w), LifecycleState::Tiled(_)));
 }
+
+fn fullscreen(h: &mut H, window: WindowId, requested_by: Requester) {
+    h.cmd(Command::Fullscreen {
+        window,
+        output: None,
+        requested_by,
+    });
+    h.settle();
+}
+
+#[test]
+fn the_person_cannot_full_screen_a_window_that_cannot_zoom_but_its_client_can() {
+    let mut h = H::new();
+    let w = h.map("a");
+    h.settle();
+    disable(&mut h, w, false, true);
+    fullscreen(&mut h, w, Requester::User);
+    assert!(
+        !h.state(w).is_fullscreen(),
+        "the shortcut and the menu are refused"
+    );
+
+    fullscreen(&mut h, w, Requester::Client);
+    assert!(
+        h.state(w).is_fullscreen(),
+        "the client's own request is kept"
+    );
+    h.cmd(Command::ExitFullscreen { window: w });
+    h.settle();
+    assert!(
+        !h.state(w).is_fullscreen(),
+        "leaving full screen always works"
+    );
+}
+
+#[test]
+fn the_person_cannot_full_screen_a_fixed_size_window() {
+    let mut h = H::new();
+    let w = h.map("a");
+    h.cmd(Command::SetSizeHints {
+        window: w,
+        min: Some(Size::new(400.0, 300.0)),
+        max: Some(Size::new(400.0, 300.0)),
+        content: None,
+    });
+    h.settle();
+    fullscreen(&mut h, w, Requester::User);
+    assert!(!h.state(w).is_fullscreen());
+}

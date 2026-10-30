@@ -870,6 +870,7 @@ pub fn translate_action(action: Action, ctx: &ActionContext) -> ActionPlan {
         Action::ToggleFullscreen => {
             plan.commands
                 .extend(window.map(|window| Command::Fullscreen {
+                    requested_by: cupertino_wm::Requester::User,
                     window,
                     output: None,
                 }))

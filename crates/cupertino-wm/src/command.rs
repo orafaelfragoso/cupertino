@@ -51,6 +51,13 @@ pub enum Activation {
     Policy(MapFocus),
 }
 
+/// Who asked for a change of a window: the person (a shortcut, a menu, a gesture) or the window's client itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Requester {
+    User,
+    Client,
+}
+
 #[derive(Clone, Debug)]
 pub struct MapParams {
     pub window: WindowId,
@@ -182,6 +189,7 @@ pub enum Command {
     Fullscreen {
         window: WindowId,
         output: Option<OutputId>,
+        requested_by: Requester,
     },
     ExitFullscreen {
         window: WindowId,

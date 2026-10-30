@@ -420,7 +420,11 @@ pub fn menus(
         MenuItem::submenu(
             VIEW_MENU.0,
             "View",
-            vec![chords.item(FallbackAction::ToggleFullscreen, "Enter Full Screen")],
+            // the server refuses the person's full screen where it refuses zoom
+            vec![MenuItem {
+                enabled: can_zoom,
+                ..chords.item(FallbackAction::ToggleFullscreen, "Enter Full Screen")
+            }],
         ),
         window_menu(workspaces, current, can_minimize, can_zoom, windows, chords),
         MenuItem::submenu(
@@ -537,7 +541,15 @@ mod tests {
             "every Edit item but the separator is enabled once it can"
         );
         assert_eq!(labels(&ms[2].children), vec!["Enter Full Screen"]);
+        assert!(ms[2].children[0].enabled);
         assert_eq!(ids(&ms[4].children), vec![-1030]);
+    }
+
+    #[test]
+    fn enter_full_screen_is_disabled_where_zoom_is() {
+        let ms = menus(1, Some(1), true, false, &[], &Chords::default(), true);
+        assert_eq!(labels(&ms[2].children), vec!["Enter Full Screen"]);
+        assert!(!ms[2].children[0].enabled);
     }
 
     #[test]

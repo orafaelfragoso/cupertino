@@ -415,4 +415,15 @@ impl Cupertino {
         let lock = &mut self.outputs[idx].lock;
         lock.presented |= lock.built_locked;
     }
+
+    /// Whether the frame last built for output `idx` showed the locked scene.
+    pub fn scene_built_locked(&self, idx: usize) -> bool {
+        self.outputs[idx].lock.built_locked
+    }
+
+    /// A frame of output `idx` that showed the locked scene when `locked` is on the screen: the frame itself, not the
+    /// one last built, which may be newer.
+    pub fn note_frame_presented(&mut self, idx: usize, locked: bool) {
+        self.outputs[idx].lock.presented |= locked;
+    }
 }

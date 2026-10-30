@@ -2199,10 +2199,10 @@ fn holding_clipboard() -> (
 }
 
 /// What `read` gives and how long it took, with each wait allowed three seconds: only the read's own pipe or deadline
-/// ends one sooner.
+/// ends one sooner. It gives up after 15 s, past every bound the tests assert, so their asserts decide.
 fn received_in(conn: &mut Connection, read: ReadId) -> (Option<Vec<u8>>, Duration) {
     let started = Instant::now();
-    while started.elapsed() < Duration::from_secs(10) {
+    while started.elapsed() < Duration::from_secs(15) {
         for event in conn.wait(Some(Duration::from_secs(3))).unwrap() {
             if let Event::Received { id, data } = event {
                 if id == read {

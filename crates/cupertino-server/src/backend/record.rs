@@ -38,14 +38,21 @@ pub struct Recorder {
 }
 
 /// Record output 0 into `path` from `after` on. Opening a FIFO waits for its reader.
-pub fn start(event_loop: &EventLoop<'static, Cupertino>, path: &Path, after: Duration) -> Result<Recorder> {
+pub fn start(
+    event_loop: &EventLoop<'static, Cupertino>,
+    path: &Path,
+    after: Duration,
+) -> Result<Recorder> {
     let file = File::create(path).with_context(|| format!("opening {}", path.display()))?;
     let (send, receive) = sync_channel::<Frame>(2);
     let writer = std::thread::Builder::new()
         .name("record".into())
         .spawn(move || {
             let mut out = BufWriter::with_capacity(1 << 22, file);
-            let mut written = Written { frames: 0, drawn: 0 };
+            let mut written = Written {
+                frames: 0,
+                drawn: 0,
+            };
             for (image, repeats) in receive {
                 for _ in 0..repeats {
                     out.write_all(&image).context("writing a frame")?;

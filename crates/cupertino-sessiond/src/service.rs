@@ -7,6 +7,12 @@
 //! | `RequestPower(s action)` | the active user session | restart (`restart`), shut down (`shut-down`) or sleep (`sleep`) the computer |
 //! | `SwitchToLoginWindow()` | the active user session | the login screen takes the console; the caller has locked its screen first |
 //! | `SessionReady()` | a user session | the session's agent is up; the manager registers the caller as the session's agent |
+//! | `SetSystemAccessibility(a{ss} options)` | an administrator at the console, through the installed settings application | writes the machine's accessibility defaults ([`crate::system_accessibility`]) |
+//! | `CanSetSystemAccessibility() → b` | — | whether the caller would be allowed to (a hint for the settings application; the setter checks again) |
+//!
+//! The two accessibility methods take the caller from the `ProcessFD` the bus daemon gives (`cupertino_peer`): a daemon that
+//! gives none is refused. The program, the session and the user are looked up through that descriptor, and the process is
+//! checked to be still alive after them, so a process id that was reused cannot pass for the caller.
 //!
 //! The manager's only signal is `Unlock`, sent to one agent (the one that called `SessionReady` for the session) when the person
 //! at the login screen has proved the session's password, so the agent unlocks without asking again.
@@ -15,9 +21,14 @@
 //! the manager, as root, that calls logind for the agent. The service runs on the bus daemon's thread of the connection: a
 //! method that needs the manager's state sends a [`Call`] to the main loop and waits for its answer, a bounded time.
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{sync_channel, SyncSender};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use cupertino_defaults::accessibility::{AccessibilitySettings, SYSTEM_KEYS};
+use cupertino_peer::Caller;
 
 use cupertino_login_ipc::{PowerAction, PowerRefusal};
 use zbus::fdo::{self, RequestNameFlags, RequestNameReply};
@@ -25,7 +36,8 @@ use zbus::message::Header;
 use zbus::names::BusName;
 use zbus::Connection;
 
-use crate::caller::{authorise, CallerSession, Need};
+use crate::caller::{authorise, CallerSession, Denial, Need};
+use crate::system_accessibility::{Limiter, MAX_FIELD};
 
 pub const BUS_NAME: &str = "org.cupertino.LoginManager1";
 pub const OBJECT_PATH: &str = "/org/cupertino/LoginManager1";
@@ -73,6 +85,17 @@ pub enum ReadyRefusal {
 pub trait Authorizer: Send + Sync {
     /// The logind session of process `pid`; `None` when it belongs to none. An `Err` is a failure to find out, not a refusal.
     fn session_of(&self, pid: u32) -> Result<Option<CallerSession>, String>;
+    /// Whether the account `uid` is an administrator, asked at every call (`crate::users::is_administrator`).
+    fn is_administrator(&self, uid: u32) -> Result<bool, String>;
+}
+
+/// Where the machine's files are and which program is the settings application.
+#[derive(Clone)]
+pub struct MachineFiles {
+    /// `/etc/cupertino`.
+    pub dir: PathBuf,
+    /// Whether a program (as `/proc/<pid>/exe` names it) is the installed settings application.
+    pub settings_program: Arc<dyn Fn(&Path) -> bool + Send + Sync>,
 }
 
 /// What a method call answers with when it fails; the names are `org.cupertino.LoginManager1.Error.<variant>`.
@@ -92,6 +115,12 @@ pub enum Error {
     Failed(String),
     /// The manager did not start the caller's session.
     UnknownSession(String),
+    /// The caller's user is not an administrator.
+    NotAdministrator(String),
+    /// The caller is not the person at the console (a session in the background, over the network, or none).
+    NotAtConsole(String),
+    /// The caller's user, or anyone, wrote the machine's settings a moment ago.
+    TooManyWrites(String),
 }
 
 impl From<PowerRefusal> for Error {
@@ -118,6 +147,8 @@ pub type Sink = Arc<dyn Fn(Call) -> bool + Send + Sync>;
 pub struct LoginManager {
     authorizer: Arc<dyn Authorizer>,
     sink: Sink,
+    machine: MachineFiles,
+    limiter: Mutex<Limiter>,
 }
 
 impl LoginManager {
@@ -152,6 +183,68 @@ impl LoginManager {
         let session = authorise(session, uid, need)
             .map_err(|denial| Error::AccessDenied(denial.to_string()))?;
         Ok((session, sender.to_string()))
+    }
+
+    /// The user of the caller of `header`, when the caller is the installed settings application of an administrator at
+    /// the console (the account's groups asked now).
+    async fn console_administrator(
+        &self,
+        header: &Header<'_>,
+        connection: &Connection,
+    ) -> Result<u32, Error> {
+        let sender = header
+            .sender()
+            .ok_or_else(|| Error::Failed("the call has no sender".to_owned()))?;
+        let bus = fdo::DBusProxy::new(connection)
+            .await
+            .map_err(|e| Error::Failed(format!("connecting to the bus daemon: {e}")))?;
+        let credentials = bus
+            .get_connection_credentials(BusName::from(sender.clone()))
+            .await
+            .map_err(|e| Error::Failed(format!("reading the caller's credentials: {e}")))?;
+        let uid = credentials
+            .unix_user_id()
+            .ok_or_else(|| Error::Failed("the bus did not report the caller's user".to_owned()))?;
+        let Caller::Process(caller) = Caller::from_process_fd(&credentials, Path::new("/proc"))
+        else {
+            return Err(Error::AccessDenied(
+                "the bus gave no process descriptor for the caller, or its process cannot be checked".to_owned(),
+            ));
+        };
+        if caller.sandbox.is_some()
+            || !caller
+                .exe
+                .as_deref()
+                .is_some_and(|exe| (self.machine.settings_program)(exe))
+        {
+            return Err(Error::AccessDenied(
+                "only the settings application changes the machine's settings".to_owned(),
+            ));
+        }
+        let session = self
+            .authorizer
+            .session_of(caller.process.pid)
+            .map_err(|e| Error::Failed(format!("finding the caller's session: {e}")))?;
+        authorise(session, uid, Need::Console).map_err(|denial| match denial {
+            Denial::OtherUser => Error::AccessDenied(denial.to_string()),
+            _ => Error::NotAtConsole(denial.to_string()),
+        })?;
+        let administrator = self
+            .authorizer
+            .is_administrator(uid)
+            .map_err(|e| Error::Failed(format!("finding the caller's groups: {e}")))?;
+        if !administrator {
+            return Err(Error::NotAdministrator(
+                "the caller's user is not an administrator".to_owned(),
+            ));
+        }
+        // the lookups went by the process id: it must still be the process the descriptor holds
+        if caller.process.has_exited() {
+            return Err(Error::AccessDenied(
+                "the caller ended while it was checked".to_owned(),
+            ));
+        }
+        Ok(uid)
     }
 
     /// Send a command and wait for the answer.
@@ -234,6 +327,76 @@ impl LoginManager {
             Error::UnknownSession("the session manager did not start this session".to_owned())
         })
     }
+
+    /// Set the machine's accessibility defaults: `options` are keys of the machine's file with values as the file writes
+    /// them (`reduce_motion` `on`), each replacing the file's; the others keep theirs. Refused, in this order: a call over
+    /// the bounds (`InvalidArgs`), a caller that is not the installed settings application of an administrator at the
+    /// console (`AccessDenied`, `NotAtConsole`, `NotAdministrator`), a key or value the file does not take (`InvalidArgs`), a
+    /// write too soon after the last (`TooManyWrites`): only a call that would write counts against the limit.
+    async fn set_system_accessibility(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        options: HashMap<String, String>,
+    ) -> Result<(), Error> {
+        if options.len() > SYSTEM_KEYS.len()
+            || options
+                .iter()
+                .any(|(k, v)| k.len() > MAX_FIELD || v.len() > MAX_FIELD)
+        {
+            return Err(Error::InvalidArgs(
+                "too many settings, or a setting too long".to_owned(),
+            ));
+        }
+        let uid = self.console_administrator(&header, connection).await?;
+        let path = self
+            .machine
+            .dir
+            .join(cupertino_defaults::accessibility::ACCESSIBILITY_FILE);
+        let current = match cupertino_defaults::system::read_root_file(&path) {
+            Ok(text) => AccessibilitySettings::from_system_text(text.as_deref().unwrap_or("")).0,
+            Err(e) => {
+                eprintln!(
+                    "cupertino-sessiond: replacing {}, which is no file of root's: {e}",
+                    path.display()
+                );
+                AccessibilitySettings::default()
+            }
+        };
+        let settings =
+            crate::system_accessibility::apply(current, &options).map_err(Error::InvalidArgs)?;
+        if !self
+            .limiter
+            .lock()
+            .map_err(|_| Error::Failed("the write limit is unusable".to_owned()))?
+            .admit(uid, Instant::now())
+        {
+            return Err(Error::TooManyWrites(
+                "the machine's settings were written a moment ago".to_owned(),
+            ));
+        }
+        crate::system_accessibility::write(&self.machine.dir, &settings).map_err(|e| {
+            eprintln!("cupertino-sessiond: cannot write the machine's accessibility settings: {e}");
+            Error::Failed("the machine's settings could not be written".to_owned())
+        })?;
+        eprintln!(
+            "cupertino-sessiond: user {uid} set the machine's accessibility settings {:?}",
+            options.keys().collect::<Vec<_>>()
+        );
+        Ok(())
+    }
+
+    /// Whether the caller may set the machine's accessibility defaults now: a hint for the settings application, which
+    /// shows its control only then; [`Self::set_system_accessibility`] checks again.
+    async fn can_set_system_accessibility(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+    ) -> bool {
+        self.console_administrator(&header, connection)
+            .await
+            .is_ok()
+    }
 }
 
 /// Send `Unlock` to the agent `agent` (a unique bus name from `SessionReady`) and to no one else.
@@ -247,9 +410,18 @@ pub fn serve(
     builder: zbus::blocking::connection::Builder<'_>,
     authorizer: Arc<dyn Authorizer>,
     sink: Sink,
+    machine: MachineFiles,
 ) -> zbus::Result<zbus::blocking::Connection> {
     let connection = builder
-        .serve_at(OBJECT_PATH, LoginManager { authorizer, sink })?
+        .serve_at(
+            OBJECT_PATH,
+            LoginManager {
+                authorizer,
+                sink,
+                machine,
+                limiter: Mutex::new(Limiter::default()),
+            },
+        )?
         .build()?;
     match connection.request_name_with_flags(BUS_NAME, RequestNameFlags::DoNotQueue.into())? {
         RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => Ok(connection),

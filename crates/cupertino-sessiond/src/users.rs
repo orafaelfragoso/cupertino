@@ -122,6 +122,70 @@ pub fn by_uid(uid: u32) -> Result<Option<Account>, UsersError> {
     })
 }
 
+/// Whether the account `uid` is an administrator: a member of [`ADMIN_GROUP`] by the system's own lookup (`getgrouplist`,
+/// so its primary group and a directory service's groups count), asked again at every call. `false` for an id with no
+/// account, or when the group does not exist.
+pub fn is_administrator(uid: u32) -> Result<bool, UsersError> {
+    let Some(account) = by_uid(uid)? else {
+        return Ok(false);
+    };
+    let Some(admin) = group_id(ADMIN_GROUP)? else {
+        return Ok(false);
+    };
+    Ok(group_list(&account)?.contains(&admin))
+}
+
+/// The id of the group `name`, from the group database.
+fn group_id(name: &str) -> Result<Option<u32>, UsersError> {
+    let name = CString::new(name).map_err(|e| UsersError::Database(io::Error::other(e)))?;
+    let mut buffer = vec![0u8; 1024];
+    // Safety: all-zero is a valid `group`, and `getgrnam_r` overwrites it.
+    let mut group: libc::group = unsafe { std::mem::zeroed() };
+    let mut found: *mut libc::group = std::ptr::null_mut();
+    loop {
+        // Safety: valid pointers and the buffer's own length.
+        match unsafe {
+            libc::getgrnam_r(
+                name.as_ptr(),
+                &mut group,
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                &mut found,
+            )
+        } {
+            0 => break,
+            libc::ERANGE => buffer.resize(buffer.len() * 2, 0),
+            errno => return Err(UsersError::Database(io::Error::from_raw_os_error(errno))),
+        }
+    }
+    Ok((!found.is_null()).then_some(group.gr_gid))
+}
+
+/// Every group `account` is in, its primary group first.
+fn group_list(account: &Account) -> Result<Vec<u32>, UsersError> {
+    let login = CString::new(account.login.as_str())
+        .map_err(|e| UsersError::Database(io::Error::other(e)))?;
+    let mut groups: Vec<libc::gid_t> = vec![0; 64];
+    loop {
+        let mut count = groups.len() as libc::c_int;
+        // Safety: `groups` holds `count` entries, which `getgrouplist` fills at most, setting `count` to how many it needs.
+        let result = unsafe {
+            libc::getgrouplist(login.as_ptr(), account.gid, groups.as_mut_ptr(), &mut count)
+        };
+        let count = usize::try_from(count).unwrap_or(0);
+        if result >= 0 {
+            groups.truncate(count);
+            return Ok(groups);
+        }
+        if count <= groups.len() {
+            return Err(UsersError::Database(io::Error::other(
+                "getgrouplist failed without asking for more room",
+            )));
+        }
+        groups.resize(count, 0);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct UidRange {
     min: u32,
@@ -290,6 +354,27 @@ unsafe fn field(ptr: *const libc::c_char) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_administrator_is_a_member_of_the_group_by_the_systems_own_lookup() {
+        // Safety: `getuid` has no preconditions.
+        let me = unsafe { libc::getuid() };
+        let mine = group_list(&by_uid(me).unwrap().unwrap()).unwrap();
+        let wheel = group_id(ADMIN_GROUP).unwrap();
+        assert_eq!(
+            is_administrator(me).unwrap(),
+            wheel.is_some_and(|gid| mine.contains(&gid))
+        );
+        assert!(
+            !is_administrator(u32::MAX - 7).unwrap(),
+            "no account, no administrator"
+        );
+        // an account that is not in the group is no administrator
+        if let (Some(nobody), Some(wheel)) = (by_name("nobody").unwrap(), wheel) {
+            assert!(!group_list(&nobody).unwrap().contains(&wheel));
+            assert!(!is_administrator(nobody.uid).unwrap());
+        }
+    }
 
     #[test]
     fn an_account_is_found_by_name_and_by_id() {

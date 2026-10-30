@@ -420,6 +420,8 @@ pub fn menus(
         MenuItem::submenu(
             VIEW_MENU.0,
             "View",
+            // stays enabled where zoom is not: it is also how a window its client put in full screen is left, and the
+            // bar does not know whether the window is in full screen; the server refuses entering there
             vec![chords.item(FallbackAction::ToggleFullscreen, "Enter Full Screen")],
         ),
         window_menu(workspaces, current, can_minimize, can_zoom, windows, chords),
@@ -537,7 +539,14 @@ mod tests {
             "every Edit item but the separator is enabled once it can"
         );
         assert_eq!(labels(&ms[2].children), vec!["Enter Full Screen"]);
+        assert!(ms[2].children[0].enabled);
         assert_eq!(ids(&ms[4].children), vec![-1030]);
+    }
+
+    #[test]
+    fn full_screen_stays_enabled_where_zoom_is_not_so_a_window_can_always_leave_it() {
+        let ms = menus(1, Some(1), true, false, &[], &Chords::default(), true);
+        assert!(ms[2].children[0].enabled);
     }
 
     #[test]

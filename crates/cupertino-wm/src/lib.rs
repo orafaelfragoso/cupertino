@@ -31,7 +31,7 @@ pub use activation::{
     token_accepted, GRANT_LIFETIME, LATE_ACTIVATION, TYPING_QUIET, USER_EVENT_SLACK,
 };
 pub use command::{
-    Activation, AnimationKind, Command, Effect, Grant, MapFocus, MapParams, Modifiers,
+    Activation, AnimationKind, Command, Effect, Grant, MapFocus, MapParams, Modifiers, Requester,
 };
 pub use config::{
     AnimationConfig, DesktopPeekConfig, FocusConfig, MagnetConfig, SnapConfig, WmConfig,

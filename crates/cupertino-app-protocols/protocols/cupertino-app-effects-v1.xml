@@ -113,9 +113,10 @@
         The state is double-buffered: it applies at the surface's next wl_surface.commit. It may
         change at any time, also after the window is mapped. The default is none.
         The close button can't be disabled. Hide, the application switcher, the overview, the
-        moves between workspaces and Force Quit act on the window as on any other. Full screen is
-        not a window control: the full-screen shortcut, the Window menu's full-screen item and the
-        client's own request act on the window as on any other. A window that
+        moves between workspaces and Force Quit act on the window as on any other. Where zoom is
+        disabled, the full-screen shortcut and the menu bar's full-screen item do not put the window
+        in full screen either; the client's own full-screen request still applies, and leaving full
+        screen always works, through the same shortcut and item too. A window that
         isn't resizable (its minimum size equals its maximum size) has zoom disabled whatever this
         says.
         Posts invalid_surface when the surface belongs to another client, window when it is not an

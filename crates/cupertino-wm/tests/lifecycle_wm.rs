@@ -144,6 +144,7 @@ fn fullscreen_zoomed_exit_returns_to_zoomed_and_dock_hides_nothing() {
     h.cmd(Command::ToggleZoom { window: w });
     h.settle();
     h.cmd(Command::Fullscreen {
+        requested_by: Requester::Client,
         window: w,
         output: None,
     });
@@ -159,6 +160,7 @@ fn minimize_ignored_for_fullscreen() {
     let mut h = H::new();
     let w = h.map("a");
     h.cmd(Command::Fullscreen {
+        requested_by: Requester::Client,
         window: w,
         output: None,
     });
@@ -269,6 +271,7 @@ fn output_resize_refits_fullscreen_zoomed_tiled_and_normal_windows() {
     let mut h = H::new();
     let fs = h.map("fullscreen");
     h.cmd(Command::Fullscreen {
+        requested_by: Requester::Client,
         window: fs,
         output: None,
     });

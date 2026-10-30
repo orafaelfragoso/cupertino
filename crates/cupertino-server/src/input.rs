@@ -825,6 +825,8 @@ pub struct ActionContext {
     /// An application holds the keys or the pointer of the focused window: the chord that releases them acts only
     /// then, and is the application's key otherwise.
     pub input_held: bool,
+    /// The key window is in full screen: the full-screen toggle leaves it.
+    pub key_window_fullscreen: bool,
 }
 
 /// Translate an action into commands and operations.
@@ -867,9 +869,14 @@ pub fn translate_action(action: Action, ctx: &ActionContext) -> ActionPlan {
         Action::ToggleZoom => plan
             .commands
             .extend(window.map(|window| Command::ToggleZoom { window })),
+        // leaving is never refused, so a window full-screened by its client always has a way out
+        Action::ToggleFullscreen if ctx.key_window_fullscreen => plan
+            .commands
+            .extend(window.map(|window| Command::ExitFullscreen { window })),
         Action::ToggleFullscreen => {
             plan.commands
                 .extend(window.map(|window| Command::Fullscreen {
+                    requested_by: cupertino_wm::Requester::User,
                     window,
                     output: None,
                 }))
@@ -1594,6 +1601,30 @@ mod tests {
             })
         );
         assert_eq!(plan.commands.len(), 2);
+    }
+
+    #[test]
+    fn the_full_screen_toggle_enters_as_the_person_and_leaves_a_full_screen_window() {
+        let plan = translate_action(Action::ToggleFullscreen, &ctx());
+        assert_eq!(
+            dbg(&plan.commands),
+            dbg(&vec![Command::Fullscreen {
+                window: WindowId(7),
+                output: None,
+                requested_by: cupertino_wm::Requester::User,
+            }])
+        );
+        let full = ActionContext {
+            key_window_fullscreen: true,
+            ..ctx()
+        };
+        let plan = translate_action(Action::ToggleFullscreen, &full);
+        assert_eq!(
+            dbg(&plan.commands),
+            dbg(&vec![Command::ExitFullscreen {
+                window: WindowId(7)
+            }])
+        );
     }
 
     #[test]

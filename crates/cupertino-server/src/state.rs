@@ -1772,6 +1772,11 @@ impl Cupertino {
             current_workspace: current,
             locked: self.session_lock.is_active(),
             input_held: self.shortcut_inhibit.holding(),
+            key_window_fullscreen: self
+                .wm
+                .key_window()
+                .and_then(|w| self.wm.window(w))
+                .is_some_and(|w| w.state().is_fullscreen()),
         }
     }
 

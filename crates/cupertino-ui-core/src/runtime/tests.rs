@@ -98,7 +98,12 @@ fn configure(rt: &mut Rt, window: WindowId, id: u32) {
     configure_at(rt, window, id, Size::new(200.0, 100.0));
 }
 
-fn configure_at(rt: &mut Rt, window: WindowId, id: u32, size: Size) {
+fn configure_at<A: Application>(
+    rt: &mut Runtime<A, FakeSystem>,
+    window: WindowId,
+    id: u32,
+    size: Size,
+) {
     rt.window_system_mut().send(
         window,
         WindowEvent::Configure(Configure {
@@ -543,4 +548,85 @@ fn a_failing_window_reports_each_error_once_and_its_animation_waits_for_a_frame_
     broken.set(true);
     frame(&mut rt);
     assert_eq!(errors.borrow().len(), 2, "a failure after a success is new");
+}
+
+/// One node that takes every key, logging what reaches it.
+struct Holder;
+
+impl Application for Holder {
+    type Model = Vec<String>;
+    type Message = String;
+
+    fn init() -> (Vec<String>, Vec<Command<String>>) {
+        (Vec::new(), Vec::new())
+    }
+
+    fn update(log: &mut Vec<String>, message: String) -> Vec<Command<String>> {
+        log.push(message);
+        Vec::new()
+    }
+
+    fn view(_: &Vec<String>) -> Vec<Window<String>> {
+        vec![Window {
+            key: WindowKey("main".into()),
+            spec: WindowSpec {
+                title: "Holder".into(),
+                app_id: "test.holder".into(),
+                size: Size::new(200.0, 100.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Preferred,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            content: Element::new(Leaf {
+                stop: true,
+                ..leaf("hold")
+            }),
+        }]
+    }
+}
+
+#[test]
+fn a_release_ends_its_press_by_physical_key_even_when_its_symbol_changed() {
+    let damage = Rc::default();
+    let mut rt = Runtime::<Holder, _>::new(FakeSystem::default(), options(&damage));
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+    let send = |rt: &mut Runtime<Holder, FakeSystem>, event| {
+        rt.window_system_mut().send(window, event);
+        rt.step(steps()).unwrap();
+    };
+    let key = |keysym, pressed| {
+        WindowEvent::Key(
+            KeyEvent {
+                code: 30,
+                keysym: Keysym(keysym),
+                text: None,
+                pressed,
+                repeat: false,
+                mods: Mods::NONE,
+            },
+            Timestamp(0),
+        )
+    };
+    // `a` pressed, then Shift goes down and the same key is released as `A`
+    send(&mut rt, key(0x61, true));
+    send(&mut rt, key(0x41, false));
+    send(&mut rt, WindowEvent::Focus(false));
+    assert!(
+        !rt.model().iter().any(|m| m.ends_with(":cancel")),
+        "the released key holds nothing: {:?}",
+        rt.model()
+    );
+
+    send(&mut rt, key(0x61, true));
+    send(&mut rt, WindowEvent::Focus(true));
+    send(&mut rt, WindowEvent::Focus(false));
+    assert_eq!(
+        rt.model().iter().filter(|m| m.ends_with(":cancel")).count(),
+        1,
+        "a key still held is cancelled"
+    );
 }

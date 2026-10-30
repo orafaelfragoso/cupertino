@@ -237,7 +237,8 @@ pub enum SessionAction {
     RefreshCapabilities,
 }
 
-/// Which entries of the system menu the session can carry out; a missing key reads as `true`.
+/// Which entries of the system menu the session can carry out; a key the session agent does not report reads as `false`
+/// (the default, all `true`, stands for an agent that reports every one).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SessionCaps {
     pub sleep: bool,

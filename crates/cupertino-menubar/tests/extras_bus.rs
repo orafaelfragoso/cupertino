@@ -34,7 +34,13 @@ impl FakeLogin {
 
     #[zbus(property)]
     fn capabilities(&self) -> HashMap<String, bool> {
-        [("sleep".to_string(), false)].into()
+        // shut-down, log-out and switch-user are not reported
+        [
+            ("sleep".to_string(), false),
+            ("restart".to_string(), true),
+            ("lock".to_string(), true),
+        ]
+        .into()
     }
 
     fn sleep(&self) {
@@ -321,6 +327,10 @@ fn the_extras_follow_the_services_and_act_on_them() {
     let session = with_agent.session.as_ref().expect("the session agent");
     assert_eq!(session.user_name, "Rafael");
     assert!(!session.caps.sleep && session.caps.restart && session.caps.lock);
+    assert!(
+        !session.caps.shut_down && !session.caps.log_out && !session.caps.switch_user,
+        "a capability the agent does not report is not offered"
+    );
     // the session menu's entries go to the server over the shell protocol: the bus side never calls the agent
     for action in [SessionAction::Restart, SessionAction::RefreshCapabilities] {
         extras.act(ExtraAction::Session(action)).unwrap();

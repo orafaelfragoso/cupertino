@@ -84,6 +84,11 @@ impl ForceQuits {
     pub fn pending(&self) -> usize {
         self.promised.len()
     }
+
+    /// When the next promised SIGKILL is due.
+    pub fn next_deadline(&self) -> Option<f64> {
+        self.promised.iter().map(|p| p.at).reduce(f64::min)
+    }
 }
 
 impl Cupertino {

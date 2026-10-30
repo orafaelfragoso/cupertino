@@ -126,24 +126,46 @@ fn frame_due(stopped: bool, waiting: bool, due: bool) -> bool {
     !stopped && !waiting && due
 }
 
-/// How long the loop may sleep: until the earliest output is due, at most 4 ms. Outputs that cannot draw (paused,
-/// asleep, off, waiting for their vblank) wait for an event, not a deadline.
+/// How long the loop may sleep: until the earliest output is due to draw, a flip in flight is overdue, or
+/// [`Cupertino::tick`] has time-driven work ([`Cupertino::next_tick_deadline`]). Events (clients, input, vblanks) wake
+/// it sooner. At most a second, so work that names no deadline still runs, if late. Outputs that cannot draw (paused,
+/// asleep, off) wait for an event, not a frame deadline.
 fn loop_timeout(state: &Cupertino) -> Duration {
-    const MAX: Duration = Duration::from_millis(4);
-    let Some(Backend::Udev(u)) = state.backend.as_ref() else {
-        return MAX;
+    const MAX: Duration = Duration::from_secs(1);
+    // a passed deadline the tick did not act on must not spin the loop
+    const PASSED: Duration = Duration::from_millis(1);
+    let tick = state.next_tick_deadline().map(|at| {
+        let wait = (at - state.now()) / state.time_scale;
+        if wait > 0.0 {
+            Duration::from_secs_f64(wait)
+        } else {
+            PASSED
+        }
+    });
+    let frames = match state.backend.as_ref() {
+        Some(Backend::Udev(u)) if !(u.paused || u.asleep || u.renderer_lost) => {
+            let now = state.frame_now();
+            u.surfaces
+                .values()
+                .filter(|s| state.displays.powered(s.output))
+                .filter_map(|s| {
+                    let idx = state.outputs.iter().position(|o| o.id == s.output)?;
+                    if s.pending {
+                        state.outputs[idx].scheduler.overdue_deadline(s.refresh)
+                    } else {
+                        state.frame_deadline(idx, now)
+                    }
+                })
+                .min()
+                .map(|due| due.saturating_sub(now))
+        }
+        _ => None,
     };
-    if u.paused || u.asleep || u.renderer_lost {
-        return MAX;
-    }
-    let now = state.frame_now();
-    u.surfaces
-        .values()
-        .filter(|s| !s.pending && state.displays.powered(s.output))
-        .filter_map(|s| state.outputs.iter().position(|o| o.id == s.output))
-        .filter_map(|idx| state.frame_deadline(idx, now))
+    [tick, frames]
+        .into_iter()
+        .flatten()
         .min()
-        .map_or(MAX, |due| due.saturating_sub(now).min(MAX))
+        .map_or(MAX, |wait| wait.min(MAX))
 }
 
 impl UdevBackend {

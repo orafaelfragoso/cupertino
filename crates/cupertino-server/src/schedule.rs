@@ -248,10 +248,10 @@ impl FrameScheduler {
     pub fn overdue(&mut self, now: Duration, refresh: Duration) -> Option<Overdue> {
         let flight = self.in_flight.as_mut()?;
         let waited = now.saturating_sub(flight.queued_at);
-        if waited < (3 * refresh).max(Duration::from_millis(50)) {
+        if waited < timeout_after(refresh) {
             return None;
         }
-        if !flight.given_up && waited >= (10 * refresh).max(Duration::from_secs(1)) {
+        if !flight.given_up && waited >= give_up_after(refresh) {
             flight.given_up = true;
             return Some(Overdue::GiveUp);
         }
@@ -271,9 +271,33 @@ impl FrameScheduler {
         }
     }
 
+    /// When [`FrameScheduler::overdue`] next has something to report for the flip in flight: its timeout, its next
+    /// paced callback, or the moment it is given up.
+    pub fn overdue_deadline(&self, refresh: Duration) -> Option<Duration> {
+        let flight = self.in_flight?;
+        let next = flight
+            .callback_at
+            .unwrap_or(flight.queued_at + timeout_after(refresh));
+        Some(if flight.given_up {
+            next
+        } else {
+            next.min(flight.queued_at + give_up_after(refresh))
+        })
+    }
+
     pub fn counts(&self) -> FrameCounts {
         self.counts
     }
+}
+
+/// How long a flip waits for its vblank before its clients are called back without it.
+fn timeout_after(refresh: Duration) -> Duration {
+    (3 * refresh).max(Duration::from_millis(50))
+}
+
+/// How long a flip waits for its vblank before it is given up.
+fn give_up_after(refresh: Duration) -> Duration {
+    (10 * refresh).max(Duration::from_secs(1))
 }
 
 #[cfg(test)]

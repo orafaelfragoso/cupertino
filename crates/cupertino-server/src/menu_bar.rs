@@ -510,6 +510,11 @@ pub struct MenuBars {
 }
 
 impl MenuBars {
+    /// When a pending edit is dropped for waiting too long.
+    pub fn edit_deadline(&self) -> Option<f64> {
+        self.edit.as_ref().map(|e| e.since + EDIT_WAIT)
+    }
+
     pub fn new(bar_height: f64) -> Self {
         Self {
             set: MenuBarSet::new(BarSetConfig {

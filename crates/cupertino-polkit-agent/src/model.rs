@@ -59,15 +59,25 @@ pub struct Prompt {
     /// Whether the field shows what is typed; false for a secret.
     pub echo: bool,
     field: Zeroizing<String>,
+    /// How many characters the field showed when the answer went to the helper; it keeps showing them while checking.
+    sent_len: usize,
     pub error: Option<String>,
     pub info: Option<String>,
     failures: u8,
 }
 
 impl Prompt {
-    /// Characters in the field.
+    /// Characters the field shows.
     pub fn field_len(&self) -> usize {
-        self.field.chars().count()
+        match self.phase {
+            Phase::Checking => self.sent_len,
+            _ => self.field.chars().count(),
+        }
+    }
+
+    /// Whether Return answers: the helper asked and the field isn't empty.
+    pub fn can_answer(&self) -> bool {
+        self.phase == Phase::Asking && !self.field.is_empty()
     }
 
     /// The field's text when it may be shown: only for a question PAM asks in clear.
@@ -181,13 +191,17 @@ impl Agent {
             Key::Char(c) => {
                 if !c.is_control() && prompt.field.len() + c.len_utf8() <= MAX_ANSWER {
                     prompt.field.push(c);
+                    prompt.error = None;
                 }
             }
             Key::Backspace => {
                 prompt.field.pop();
+                prompt.error = None;
             }
             Key::Escape => unreachable!("handled above"),
+            Key::Return if prompt.field.is_empty() => {}
             Key::Return => {
+                prompt.sent_len = prompt.field.chars().count();
                 prompt.phase = Phase::Checking;
                 prompt.error = None;
                 let field = std::mem::replace(&mut prompt.field, Zeroizing::new(String::new()));
@@ -289,6 +303,7 @@ impl Agent {
             question: String::new(),
             echo: false,
             field: Zeroizing::new(String::new()),
+            sent_len: 0,
             error: None,
             info: None,
             failures: 0,

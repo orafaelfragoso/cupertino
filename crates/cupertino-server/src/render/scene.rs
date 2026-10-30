@@ -459,6 +459,19 @@ fn wallpaper_element(p: &mut SceneParams<'_>) -> Piece {
         .set
         .bar_height(p.output_id)
         .map_or(0, |h| (h * p.scale).ceil() as u32);
+    // the bar's text sits on its material, so what is under the text is the strip through the material's colour ops
+    let appearance = p
+        .config
+        .appearance
+        .with_high_contrast(p.display.increase_contrast);
+    let bar = p
+        .res
+        .recipe("MenuBar", appearance, p.display.reduce_transparency);
+    p.overlays.wallpaper.set_bar_ops(
+        bar.as_ref()
+            .and_then(|r| r.backdrop.as_ref())
+            .map_or(&[], |(_, _, ops)| ops.as_slice()),
+    );
     // the image is laid in the logical space, which a quarter-turned output has on its side
     let px = p
         .output

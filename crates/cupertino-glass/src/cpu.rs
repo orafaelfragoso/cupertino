@@ -1,4 +1,5 @@
-//! CPU reference implementation of the material pipeline (validation only).
+//! CPU reference implementation of the material pipeline (validation), and the colour filter chain for measuring what a
+//! material shows ([`apply_color_ops`]).
 //!
 //! `exact_blur = true` replaces the downsample pyramid by a single full Gaussian at capture
 //! resolution, quantifying the pyramid approximation error. `exact_mask = true` uses the design
@@ -163,6 +164,13 @@ fn color_op(c: [f32; 3], o: &Op, next: Option<&Op>) -> [f32; 3] {
     }
 }
 
+/// The colour filter chain `ops` ([`color_ops`]) applied to one gamma-encoded colour, as the GPU's colour pass does.
+pub fn apply_color_ops(c: [f32; 3], ops: &[Op]) -> [f32; 3] {
+    ops.iter()
+        .enumerate()
+        .fold(c, |c, (i, o)| color_op(c, o, ops.get(i + 1)))
+}
+
 fn soft_light(s: f32, d: f32) -> f32 {
     if s <= 0.5 {
         return d - (1.0 - 2.0 * s) * d * (1.0 - d);
@@ -228,10 +236,7 @@ fn processed_backdrop(
     }
     let ops = color_ops(&b.ops);
     for p in cur.px.iter_mut() {
-        for (i, o) in ops.iter().enumerate() {
-            *p = color_op(*p, o, ops.get(i + 1));
-        }
-        *p = p.map(round_f16);
+        *p = apply_color_ops(*p, &ops).map(round_f16);
     }
     Some(cur)
 }

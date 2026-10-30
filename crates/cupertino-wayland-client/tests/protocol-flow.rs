@@ -2064,7 +2064,9 @@ fn a_replaced_selection_cancels_its_reads_and_eight_run_at_once() {
     ));
     control.send(Control::Offer(vec!["text/plain"])).unwrap();
     // the reads end in the same return of wait as the new selection, not later at their deadline
+    let give_up = Instant::now() + Duration::from_secs(10);
     let (fresh, ended) = loop {
+        assert!(Instant::now() < give_up, "the new selection never arrived");
         let events = conn.wait(Some(Duration::from_secs(3))).unwrap();
         let fresh = events.iter().find_map(|e| match e {
             Event::Selection(Some(o)) if *o != offer => Some(o.clone()),

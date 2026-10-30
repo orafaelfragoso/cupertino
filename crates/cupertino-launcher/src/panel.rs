@@ -285,6 +285,12 @@ impl Panel {
         self.requery(launcher, now.unix);
     }
 
+    /// Put the appear animation at its end at once (the shell client's fixed test clock).
+    pub fn settle_appear(&mut self) {
+        self.appear
+            .set_immediately(if self.visible { 1.0 } else { 0.0 });
+    }
+
     pub fn hide(&mut self, now: f64) {
         self.visible = false;
         self.focus = Focus::Field;

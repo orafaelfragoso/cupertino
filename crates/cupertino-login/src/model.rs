@@ -174,6 +174,11 @@ impl LockScreen {
         self.failure_outline
     }
 
+    /// Show the interface at full opacity at once instead of fading it in (the shell client's fixed test clock).
+    pub fn settle_interface(&mut self) {
+        self.interface.from = self.interface.to;
+    }
+
     pub fn phase(&self) -> Phase {
         self.phase
     }
@@ -378,6 +383,17 @@ mod tests {
         approx(shake_offset(SHAKE_DURATION), 0.0);
         approx(shake_offset(-0.1), 0.0);
         approx(shake_offset(2.0), 0.0);
+    }
+
+    #[test]
+    fn a_settled_interface_is_fully_shown_at_once_and_keeps_its_timers() {
+        let mut screen = LockScreen::new(10.0, HIDE_AFTER);
+        screen.settle_interface();
+        approx(screen.opacity(10.0), 1.0);
+        screen.tick(10.0 + HIDE_AFTER - 0.01);
+        approx(screen.opacity(10.0 + HIDE_AFTER - 0.01), 1.0);
+        screen.tick(10.0 + HIDE_AFTER);
+        approx(screen.opacity(10.0 + HIDE_AFTER + FADE_DURATION), 0.0);
     }
 
     #[test]

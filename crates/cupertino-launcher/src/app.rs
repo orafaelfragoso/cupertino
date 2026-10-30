@@ -665,6 +665,9 @@ impl App {
     fn show(&mut self) -> Result<()> {
         let now = self.now();
         self.panel.show(&self.launcher, now);
+        if cupertino_shell_client::test_clock::motion_settled() {
+            self.panel.settle_appear();
+        }
         if let (Some(config), None, None) = (&self.files, &self.index, self.launcher.file_index()) {
             let (config, waker) = (config.clone(), self.waker.clone());
             self.index = Some(std::thread::spawn(move || {

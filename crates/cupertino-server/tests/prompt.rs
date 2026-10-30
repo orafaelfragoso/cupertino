@@ -134,8 +134,13 @@ fn the_keyboard_stays_with_the_prompt_until_the_lock_takes_it_and_returns_at_the
     wait_until(&mut d, "the lock surface to take the keyboard", |s| {
         keyboard_focus(s).is_some_and(|focus| s.is_lock_surface(&focus))
     });
-    // what a commit of the prompt under the lock does
+    // what commits of the prompt under the lock do: it lets the keyboard go, then asks for it again
+    d.state.layer_keyboard_exclusivity(&prompt, false);
     d.state.layer_keyboard_exclusivity(&prompt, true);
+    assert!(
+        keyboard_focus(&d.state).is_some_and(|focus| d.state.is_lock_surface(&focus)),
+        "the prompt's claim under the lock does not take the keyboard from the lock"
+    );
     locker.unlock();
     wait_until(&mut d, "the unlock", |s| !s.session_lock.is_active());
     assert_eq!(keyboard_focus(&d.state), Some(prompt));

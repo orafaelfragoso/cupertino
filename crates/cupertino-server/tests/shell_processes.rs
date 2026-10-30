@@ -287,8 +287,12 @@ fn the_built_in_processes_run_with_exactly_their_roles() {
     use cupertino_server::authorization::ClientCapabilitySet;
     use std::os::unix::fs::PermissionsExt;
     let dir = TempDir::new("built-ins");
+    // a prefix the test's user owns, as a development install
+    let bin = dir.file("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     let program = |name: &str| {
-        let path = dir.file(name);
+        let path = bin.join(name);
         let log = dir.file(&format!("{name}.log"));
         let script = format!("#!/bin/sh\necho $$ >> {}\nexec sleep 60\n", log.display());
         std::fs::write(&path, script).unwrap();

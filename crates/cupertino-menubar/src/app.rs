@@ -18,7 +18,7 @@ use cupertino_menubar::feed::{
     status_icon, status_icon_px, BarFeed, Shared, StatusState, TintedIcon,
 };
 use cupertino_menubar::geom::{Point, Rect};
-use cupertino_menubar::layout::{BarMetrics, MenuMetrics};
+use cupertino_menubar::layout::{BarMetrics, MenuMetrics, SlotKey};
 use cupertino_menubar::popups::{self, PopupOp};
 use cupertino_menubar::raster::{BarText, BarTone, MenuPalette, Style, POPUP_RADIUS};
 use cupertino_menubar::recent::RecentSources;
@@ -725,7 +725,18 @@ impl App {
         loop {
             match self.extras_events.try_recv() {
                 Ok(extras) => {
+                    // the session agent went away: the system menu's session items would do nothing, so it closes
+                    let agent_gone = self.shared.extras.loses_session(&extras);
                     self.shared.extras = extras;
+                    if agent_gone {
+                        for i in 0..self.bars.len() {
+                            if let Some(outcome) =
+                                self.bars[i].controller.close_slot(&SlotKey::System)
+                            {
+                                self.apply(i, outcome)?;
+                            }
+                        }
+                    }
                     self.reload_extra_icons();
                     self.redraw_all();
                 }

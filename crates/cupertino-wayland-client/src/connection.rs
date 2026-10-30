@@ -67,10 +67,13 @@ use crate::input::{InputClock, Modifiers, PointerTracker, Repeat, Translator};
 use crate::output::{identification, physical_size, OutputBuilder, OutputId, OutputTransform};
 use crate::scale::ScaleSources;
 use crate::text_input::TextInput;
+use wayland_client::protocol::wl_data_device_manager::DndAction as DragActions;
+
 use crate::{
     BufferFormat, BufferLayout, Capability, CapabilitySet, ClipboardOffer, Decorations, Disconnect,
-    Error, Extension, KeyboardEvent, OutputInfo, PixelRect, PointerEvent, Presented, ReadId, Scale,
-    TextInputEvent, TextInputState, WindowConfigure, WindowStates, WmCapabilities,
+    DragEvent, DragOffer, DragSource, DragSourceEvent, Error, Extension, KeyboardEvent, OutputInfo,
+    PixelRect, PointerEvent, Presented, ReadId, Scale, TextInputEvent, TextInputState,
+    WindowConfigure, WindowStates, WmCapabilities,
 };
 
 /// A surface of this connection.
@@ -204,7 +207,18 @@ pub enum Event {
     },
     /// Another selection was set, or it was cleared.
     Selection(Option<ClipboardOffer>),
-    /// What a read of [`Connection::receive_async`] gave; `None` when it was cancelled or failed.
+    /// Another client's drag over a surface of this client.
+    Drag {
+        surface: SurfaceId,
+        event: DragEvent,
+    },
+    /// How a drag this client started goes.
+    DragSource {
+        source: DragSource,
+        event: DragSourceEvent,
+    },
+    /// What a read of [`Connection::receive_async`] or [`Connection::receive_drop`] gave; `None` when it was cancelled
+    /// or failed.
     Received {
         id: ReadId,
         data: Option<Vec<u8>>,
@@ -688,6 +702,7 @@ impl Connection {
             .position(|s| s.id == surface)
             .ok_or(Error::UnknownSurface)?;
         let s = self.state.surfaces.remove(i);
+        self.state.clipboard.forget_surface(surface);
         match &s.role {
             Role::Toplevel {
                 xdg,
@@ -1030,6 +1045,66 @@ impl Connection {
     pub fn receive_async(&mut self, offer: &ClipboardOffer, mime: &str) -> Result<ReadId, Error> {
         self.state.capabilities.require(Capability::Clipboard)?;
         self.state.clipboard.receive_async(&self.conn, offer, mime)
+    }
+
+    /// Start dragging `contents`, offered in each of their MIME types, from `origin` with the pointer button held, the
+    /// target allowed the `actions`; [`Event::DragSource`] tells how it goes. A drag started before replaces the last.
+    pub fn start_drag(
+        &mut self,
+        origin: SurfaceId,
+        contents: Vec<(String, Vec<u8>)>,
+        actions: DragActions,
+    ) -> Result<DragSource, Error> {
+        self.state.capabilities.require(Capability::Clipboard)?;
+        let serial = self
+            .state
+            .last_serial
+            .ok_or(Error::PermissionDenied("a drag without a button press"))?;
+        let qh = self.queue.handle();
+        let origin = self.state.surface(origin)?.wl.clone();
+        let manager = self
+            .state
+            .data_device_manager
+            .clone()
+            .expect("bound with the capability");
+        let source = self
+            .state
+            .clipboard
+            .start_drag(&manager, &origin, contents, actions, serial, &qh)?;
+        self.flush()?;
+        Ok(source)
+    }
+
+    /// Accept the drag `offer` in `mime`, one of its [`DragOffer::mime_types`], or refuse it with `None`; it may change
+    /// until the drop, and only an accepted drop can be read.
+    pub fn accept_drag(&mut self, offer: &DragOffer, mime: Option<&str>) -> Result<(), Error> {
+        self.state.clipboard.accept_drag(offer, mime)
+    }
+
+    /// The `actions` this client takes for the drag `offer`, and the one it prefers; the compositor's choice arrives as
+    /// [`DragEvent::Action`].
+    pub fn set_drag_actions(
+        &mut self,
+        offer: &DragOffer,
+        actions: DragActions,
+        preferred: DragActions,
+    ) -> Result<(), Error> {
+        self.state
+            .clipboard
+            .set_drag_actions(offer, actions, preferred)
+    }
+
+    /// Start reading the drop of `offer` in `mime`, the type it was accepted in; the data arrives as
+    /// [`Event::Received`], with the limits of [`Connection::receive_async`]. Before the drop, or in another type, it
+    /// is refused.
+    pub fn receive_drop(&mut self, offer: &DragOffer, mime: &str) -> Result<ReadId, Error> {
+        self.state.clipboard.receive_drop(&self.conn, offer, mime)
+    }
+
+    /// Tell the dragging client the drop of `offer` was taken, after reading it.
+    pub fn finish_drag(&mut self, offer: &DragOffer) -> Result<(), Error> {
+        self.state.clipboard.finish_drag(offer)?;
+        self.flush()
     }
 
     /// The queue extensions create their objects on.

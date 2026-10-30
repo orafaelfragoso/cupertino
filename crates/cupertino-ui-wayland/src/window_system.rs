@@ -386,11 +386,14 @@ impl WaylandWindowSystem {
                 }
                 return;
             }
-            // the platform has no events for these yet: frame time stays the frame callback's
+            // the platform has no events for these yet: frame time stays the frame callback's, and drags wait for the
+            // platform's drag events
             Event::OutputsChanged
             | Event::PopupRepositioned { .. }
             | Event::Presented(_)
-            | Event::Discarded(_) => return,
+            | Event::Discarded(_)
+            | Event::Drag { .. }
+            | Event::DragSource { .. } => return,
         };
         let window = self.windows[i].id;
         out.push(PlatformEvent::Window { window, event });

@@ -57,12 +57,19 @@ fn the_session_user_is_offered_first_and_a_right_answer_finishes() {
     );
 
     asked(&mut agent);
+    assert!(agent.key(Key::Return).is_empty(), "nothing to answer yet");
+    assert!(!agent.prompt().unwrap().can_answer());
     assert_eq!(
         typed(&mut agent, "hunter2"),
         [Effect::Answer(Zeroizing::new(b"hunter2".to_vec()))]
     );
     let prompt = agent.prompt().unwrap();
-    assert_eq!((prompt.phase, prompt.field_len()), (Phase::Checking, 0));
+    assert_eq!(
+        (prompt.phase, prompt.field_len()),
+        (Phase::Checking, 7),
+        "the dots stay while checking"
+    );
+    assert!(!prompt.can_answer());
     assert_eq!(agent.helper(Line::Success), [finish("a", Outcome::Done)]);
     assert!(agent.prompt().is_none());
 }
@@ -101,7 +108,13 @@ fn a_failure_tries_again_and_the_third_tells_polkitd_it_is_over() {
         );
     }
     asked(&mut agent);
-    typed(&mut agent, "wrong");
+    agent.key(Key::Char('w'));
+    assert_eq!(
+        agent.prompt().unwrap().error,
+        None,
+        "typing clears the error line"
+    );
+    typed(&mut agent, "rong");
     assert_eq!(agent.helper(Line::Failure), [finish("a", Outcome::Done)]);
 }
 

@@ -373,7 +373,7 @@ impl SemanticsCx<'_> {
     }
 
     /// Makes the node a live region: assistive technology announces its changes as they happen (a toast, a form
-    /// error).
+    /// error). A node without a role is left out of the tree, and so is never announced.
     pub fn live(&mut self, live: Live) {
         self.semantics.live = Some(live);
     }

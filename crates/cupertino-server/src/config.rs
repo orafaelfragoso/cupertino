@@ -23,7 +23,7 @@ pub const GREETER_CONFIG: &str = "/etc/cupertino/greeter.json";
 
 /// Where the programs of the shell processes and the screenshot process must be installed. The install prefix of the
 /// build is added to `/usr` when it is set (`CUPERTINO_INSTALL_PREFIX` at compile time).
-pub(crate) fn installed_roots() -> impl Iterator<Item = &'static Path> {
+pub(crate) fn installed_roots() -> impl DoubleEndedIterator<Item = &'static Path> {
     ["/usr"].into_iter().chain(INSTALL_PREFIX).map(Path::new)
 }
 
@@ -40,6 +40,82 @@ const _: () = {
 
 /// The screenshot process of an installation.
 const INSTALLED_SCREENSHOT: &str = "/usr/bin/cupertino-screenshot";
+
+/// A process the server starts in every user session from a fixed install path, with one role. No configuration file
+/// names, changes or removes it, and no [`ShellRoleName`](cupertino_defaults::compositor::ShellRoleName) grants its role.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuiltIn {
+    /// The desktop portal's backend, owner of [`PORTAL_BUS_NAME`]: it captures the screen for what the person allows.
+    Portal,
+    /// The polkit authentication agent, which draws the authentication prompt.
+    PolkitAgent,
+}
+
+/// The bus name the portal's backend owns once it serves.
+pub const PORTAL_BUS_NAME: &str = "org.freedesktop.impl.portal.desktop.cupertino";
+
+impl BuiltIn {
+    pub const ALL: [BuiltIn; 2] = [BuiltIn::Portal, BuiltIn::PolkitAgent];
+
+    /// Name in log lines.
+    pub const fn name(self) -> &'static str {
+        match self {
+            BuiltIn::Portal => "portal",
+            BuiltIn::PolkitAgent => "polkit-agent",
+        }
+    }
+
+    const fn program_name(self) -> &'static str {
+        match self {
+            BuiltIn::Portal => "cupertino-portal",
+            BuiltIn::PolkitAgent => "cupertino-polkit-agent",
+        }
+    }
+
+    /// The only role of the process's connection.
+    pub const fn role(self) -> ShellRole {
+        match self {
+            BuiltIn::Portal => ShellRole::Capture,
+            BuiltIn::PolkitAgent => ShellRole::Prompt,
+        }
+    }
+
+    /// Where the install put the program: the build's install prefix before `/usr`; `None` when it is not installed.
+    pub fn installed(self) -> Option<PathBuf> {
+        installed_roots()
+            .rev()
+            .map(|root| root.join("bin").join(self.program_name()))
+            .find(|program| program.is_file())
+    }
+
+    /// The supervised process that runs `program`, holding [`BuiltIn::role`] alone.
+    pub fn process(self, program: &Path) -> ShellProcess {
+        ShellProcess {
+            name: self.name().to_string(),
+            command: vec![program.display().to_string()],
+            roles: vec![self.role()],
+        }
+    }
+
+    /// Whether a `shell` entry names this process, by its name or its program.
+    fn named_by(self, name: &str, command: &[String]) -> bool {
+        name == self.name()
+            || command
+                .first()
+                .and_then(|program| Path::new(program).file_name())
+                .is_some_and(|file| file == self.program_name())
+    }
+}
+
+/// Whether the server runs the login screen: its configuration is the login screen's file, or logind made its session
+/// one of class `greeter`.
+pub fn login_screen(
+    config: Option<&std::ffi::OsStr>,
+    session_class: Option<&std::ffi::OsStr>,
+) -> bool {
+    config.is_some_and(|path| Path::new(path) == Path::new(GREETER_CONFIG))
+        || session_class.is_some_and(|class| class == "greeter")
+}
 
 /// Whether `command` starts a program the install put in place: an absolute path under an install root, with no `..`.
 pub fn is_installed_program(command: &[String]) -> bool {
@@ -665,15 +741,31 @@ impl Config {
     pub fn apply_privileged(&mut self, f: &CompositorSettings, trust: LayerTrust) -> Vec<String> {
         let mut problems = Vec::new();
         if let Some(list) = &f.shell {
+            let list: Vec<_> = list
+                .iter()
+                .filter(|e| {
+                    let built_in = BuiltIn::ALL
+                        .into_iter()
+                        .find(|b| b.named_by(&e.name, &e.command));
+                    if let Some(b) = built_in {
+                        problems.push(format!(
+                            "shell: {}: the server starts the {} process itself",
+                            e.name,
+                            b.name()
+                        ));
+                    }
+                    built_in.is_none()
+                })
+                .collect();
             let entry = |e: &cupertino_defaults::compositor::ShellEntry| ShellProcess {
                 name: e.name.clone(),
                 command: e.command.clone(),
                 roles: e.roles.iter().copied().map(ShellRole::from).collect(),
             };
             self.shell_processes = match trust {
-                LayerTrust::Dev => list.iter().map(entry).collect(),
+                LayerTrust::Dev => list.into_iter().map(entry).collect(),
                 LayerTrust::System => list
-                    .iter()
+                    .into_iter()
                     .filter(|e| {
                         let allowed = e.roles.is_empty() || is_installed_program(&e.command);
                         if !allowed {
@@ -688,7 +780,7 @@ impl Config {
                     .map(entry)
                     .collect(),
                 LayerTrust::User => list
-                    .iter()
+                    .into_iter()
                     .filter_map(|e| {
                         let known = self.shell_processes.iter().find(|p| p.name == e.name);
                         match (known, e.roles.is_empty()) {
@@ -1076,6 +1168,45 @@ mod tests {
         );
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert_eq!(names(&c), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn no_file_names_a_built_in_process_and_no_role_name_grants_a_built_in_role() {
+        let json = r#"{"shell":[
+            {"name":"portal","command":["/usr/bin/cupertino-dock"],"roles":["session"]},
+            {"name":"agent","command":["/usr/bin/cupertino-polkit-agent"],"roles":[]},
+            {"name":"capture","command":["target/debug/cupertino-portal"],"roles":["session"]},
+            {"name":"dock","command":["/usr/bin/cupertino-dock"],"roles":["session","dock"]}]}"#;
+        for trust in [LayerTrust::System, LayerTrust::User, LayerTrust::Dev] {
+            let mut c = Config::default();
+            let problems = c.apply_privileged(&settings(json), trust);
+            assert!(
+                names(&c).iter().all(|n| *n == "dock"),
+                "{trust:?}: {:?}",
+                names(&c)
+            );
+            assert!(problems.len() >= 3, "{trust:?}: {problems:?}");
+        }
+        let granted: Vec<ShellRole> = cupertino_defaults::compositor::ShellRoleName::ALL
+            .into_iter()
+            .map(ShellRole::from)
+            .collect();
+        for b in BuiltIn::ALL {
+            assert!(
+                !granted.contains(&b.role()),
+                "a file can grant {:?}",
+                b.role()
+            );
+        }
+    }
+
+    #[test]
+    fn the_login_screen_is_told_by_its_file_or_its_session_class() {
+        let os = |s: &'static str| Some(std::ffi::OsStr::new(s));
+        assert!(login_screen(os(GREETER_CONFIG), None));
+        assert!(login_screen(None, os("greeter")));
+        assert!(!login_screen(os(SYSTEM_CONFIG), os("user")));
+        assert!(!login_screen(None, None));
     }
 
     #[test]

@@ -18,6 +18,7 @@ use cupertino_protocols::client::screenshot::cupertino_screenshot_v1::{
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
 use cupertino_server::Cupertino;
+use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use wayland_client::globals::{registry_queue_init, GlobalList, GlobalListContents};
@@ -978,8 +979,23 @@ fn a_session_resumed_or_made_while_locked_is_copied_black() {
     let source = c.output_source();
     let capture = c.session(&mut h, &source, true);
     let locker = locked(&mut h);
+    // the lock screen is drawn and the fade from black after the resume is over, so only the black copy keeps its
+    // colour out of the frames below
+    h.clients_until(&mut [&mut c], "the lock surface to be drawn", |s| {
+        s.lock_surface_of(0).is_some_and(|surface| {
+            with_renderer_surface_state(&surface, |state| state.buffer().is_some()).unwrap_or(false)
+        })
+    });
 
     h.state.session_activated();
+    let after_fade = h.state.now() + 1.0;
+    let event_loop = &mut h.event_loop;
+    common::set_time_with(&mut h.state, after_fade, |state| {
+        app.pump();
+        headless::step(state, event_loop, Duration::from_millis(2)).unwrap();
+        app.pump();
+    });
+    assert_eq!(h.state.activation_overlay_alpha(), None);
     next_frame(
         &mut h,
         &mut c,
@@ -1088,6 +1104,78 @@ fn the_authentication_prompt_is_not_in_an_output_capture() {
     assert!(area
         .iter()
         .all(|&(x, y)| after.pixel(x, y) == before.pixel(x, y)));
+}
+
+/// The prompt draws on layer surfaces only: a toplevel it asks for ends its connection and never becomes a window that a
+/// capture or the window list could show.
+#[test]
+fn a_toplevel_of_the_authentication_prompt_ends_its_connection_and_is_no_window() {
+    let Some(mut h) = Harness::new() else { return };
+    let stream = common::prompt_agent(&h.state);
+    let mut prompt = TestClient::connect(&mut h, stream, App::default());
+    let qh = prompt.qh();
+    prompt.state.shm = Some(prompt.globals.bind(&qh, 1..=1, ()).unwrap());
+    let compositor: wl_compositor::WlCompositor = prompt.globals.bind(&qh, 4..=6, ()).unwrap();
+    let wm_base: xdg_wm_base::XdgWmBase = prompt.globals.bind(&qh, 1..=5, ()).unwrap();
+    let surface = compositor.create_surface(&qh, ());
+    let xdg = wm_base.get_xdg_surface(&surface, &qh, surface.clone());
+    let toplevel = xdg.get_toplevel(&qh, ());
+    toplevel.set_title("Authenticate".to_string());
+    surface.commit();
+    let end = Instant::now() + Duration::from_secs(10);
+    while prompt.conn.protocol_error().is_none() {
+        assert!(Instant::now() < end, "the prompt's toplevel was accepted");
+        let _ = prompt.conn.flush();
+        h.step();
+        if let Some(guard) = prompt.queue.prepare_read() {
+            let _ = guard.read();
+        }
+        let _ = prompt.queue.dispatch_pending(&mut prompt.state);
+    }
+    assert_eq!(
+        prompt.conn.protocol_error().unwrap().object_interface,
+        "xdg_toplevel"
+    );
+    for _ in 0..5 {
+        h.step();
+    }
+    assert_eq!(h.state.wm.windows().count(), 0, "a window of the prompt");
+}
+
+/// The portal's connection holds Capture alone: it sees the capture globals and the window list but not the shell
+/// protocol, and it captures a window.
+#[test]
+fn a_connection_with_the_capture_role_alone_captures_a_window() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_app, frame) = mapped_app(&mut h);
+    let (_process, stream) = holder_with_capture_role(&h);
+    let mut c = TestClient::connect(&mut h, stream, Capturer::default());
+    let interfaces = c.interfaces();
+    for name in CAPTURE_GLOBALS
+        .into_iter()
+        .chain(["ext_foreign_toplevel_list_v1"])
+    {
+        assert!(
+            interfaces.iter().any(|i| i == name),
+            "{name} is not offered"
+        );
+    }
+    assert!(!interfaces.iter().any(|i| i == "cupertino_shell_v1"));
+
+    let qh = c.qh();
+    let _list: ext_foreign_toplevel_list_v1::ExtForeignToplevelListV1 =
+        c.globals.bind(&qh, 1..=1, ()).unwrap();
+    h.pump_until(&mut c, "the foreign toplevel", |s| {
+        s.toplevels.iter().any(|t| t.1 == APP_ID)
+    });
+    let handle = c.state.toplevels[0].0.clone();
+    let manager: ext_foreign_toplevel_image_capture_source_manager_v1::ExtForeignToplevelImageCaptureSourceManagerV1 = c.globals.bind(&qh, 1..=1, ()).unwrap();
+    let source = manager.create_source(&handle, &qh, ());
+    let capture = c.session(&mut h, &source, false);
+    assert_eq!(capture.size, (frame.w as i32, frame.h as i32));
+    next_frame(&mut h, &mut c, &capture, "the window frame");
+    assert!(c.state.frame.ready, "failed: {:?}", c.state.frame.failed);
+    assert_eq!(capture.pixel(capture.size.0 / 2, capture.size.1 / 4), RED);
 }
 
 /// A `sleep` process holding a connection with the Capture role.

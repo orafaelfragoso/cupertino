@@ -246,6 +246,8 @@ enum Job {
     Call(Request),
     Owner(OwnerQuery),
     WatchOwner(&'static str, OwnerChanged),
+    /// Run the callback once the name has an owner.
+    AwaitOwner(&'static str, Box<dyn FnOnce() + Send>),
     /// The session's variables, and defaults that apply only where the user manager has no value of its own.
     Publish(Vec<(String, String)>, Vec<(String, String)>),
 }
@@ -343,6 +345,34 @@ impl DbusHandle {
     pub fn watch_owner(&self, name: &'static str, changed: OwnerChanged) -> bool {
         self.tx.try_send(Job::WatchOwner(name, changed)).is_ok()
     }
+
+    /// Call `owned` on the worker once `name` has an owner, at once when it has one already. It is never called when the
+    /// name is not taken while the connection lives; the caller bounds the wait. False when the worker is gone (no
+    /// session bus).
+    pub fn await_owner(&self, name: &'static str, owned: Box<dyn FnOnce() + Send>) -> bool {
+        self.tx.try_send(Job::AwaitOwner(name, owned)).is_ok()
+    }
+}
+
+/// Return once `name` has an owner. The watch is set up before the first look, so an owner that comes between the two
+/// is not missed.
+async fn await_owner(conn: &zbus::Connection, name: &'static str) -> zbus::Result<()> {
+    use zbus::export::futures_core::Stream;
+    let proxy = zbus::fdo::DBusProxy::new(conn).await?;
+    let mut changes = proxy
+        .receive_name_owner_changed_with_args(&[(0, name)])
+        .await?;
+    if proxy.name_has_owner(BusName::try_from(name)?).await? {
+        return Ok(());
+    }
+    while let Some(change) =
+        std::future::poll_fn(|cx| std::pin::Pin::new(&mut changes).poll_next(cx)).await
+    {
+        if change.args()?.new_owner().is_some() {
+            return Ok(());
+        }
+    }
+    Err(zbus::Error::Failure(format!("the watch of {name} ended")))
 }
 
 /// Follow the owner of `name` on a thread of its own, for as long as the connection lives.
@@ -400,6 +430,21 @@ async fn worker(
             Job::Call(what) => what,
             Job::WatchOwner(name, changed) => {
                 watch_owner(&conn, name, changed);
+                continue;
+            }
+            Job::AwaitOwner(name, owned) => {
+                conn.executor()
+                    .clone()
+                    .spawn(
+                        async move {
+                            match await_owner(&conn, name).await {
+                                Ok(()) => owned(),
+                                Err(e) => tracing::warn!(name, error = %e, "cannot wait for the owner of a bus name"),
+                            }
+                        },
+                        "cupertino-await-owner",
+                    )
+                    .detach();
                 continue;
             }
             Job::Publish(variables, defaults) => {

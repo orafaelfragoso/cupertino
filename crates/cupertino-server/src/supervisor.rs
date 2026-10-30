@@ -1,13 +1,14 @@
-//! Supervision of the shell processes named in the configuration: started with the server,
+//! Supervision of the shell processes named in the configuration and of the built-in ones ([`BuiltIn`]): started with the server,
 //! restarted by [`crate::restart_policy`], and killed when the server goes away. A pass of
 //! [`Supervisor::poll`] runs when a child's pidfd becomes readable (it exited) or at the earliest
 //! restart ([`Supervisor::next_deadline`]), see [`Wakeups`]; `try_wait` reaps it there. The server
 //! installs no SIGCHLD handler, and nothing wakes the loop while every child runs.
 
+use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
-use crate::config::ShellProcess;
+use crate::config::{BuiltIn, ShellProcess};
 use crate::restart_policy::{decide, Backoff, Decision};
 use crate::shell_connection::{bind_holder, hand_over, BoundConnection};
 use crate::xwayland::XDisplay;
@@ -47,6 +48,40 @@ impl Supervisor {
                 })
                 .collect(),
         }
+    }
+
+    /// Supervise the built-in processes from `programs`, each at the first [`Supervisor::poll`] at or after `now`. One
+    /// whose program is not installed (no path, or nothing at it) is logged once and never started.
+    pub fn add_built_ins(
+        &mut self,
+        programs: impl IntoIterator<Item = (BuiltIn, Option<PathBuf>)>,
+        now: Instant,
+    ) {
+        for (built_in, program) in programs {
+            match program.filter(|p| p.is_file()) {
+                Some(program) => self.procs.push(Supervised {
+                    spec: built_in.process(&program),
+                    phase: Phase::Waiting(now),
+                    backoff: Backoff::default(),
+                }),
+                None => {
+                    tracing::info!(
+                        name = built_in.name(),
+                        "not installed: the process is not started"
+                    )
+                }
+            }
+        }
+    }
+
+    /// Whether the process named `name` is supervised, running or not.
+    pub fn supervises(&self, name: &str) -> bool {
+        self.procs.iter().any(|p| p.spec.name == name)
+    }
+
+    /// Whether no process is supervised.
+    pub fn is_empty(&self) -> bool {
+        self.procs.is_empty()
     }
 
     /// Start due processes and restart exited ones as the policy says. Children get `WAYLAND_DISPLAY=socket` and the X
@@ -294,6 +329,26 @@ mod tests {
             None,
             "a running process waits for its exit"
         );
+    }
+
+    #[test]
+    fn a_built_in_process_that_is_not_installed_is_never_started() {
+        let now = Instant::now();
+        let mut s = Supervisor::new(&[], now);
+        s.add_built_ins(
+            [
+                (
+                    BuiltIn::Portal,
+                    Some(PathBuf::from("/nonexistent/cupertino-portal")),
+                ),
+                (BuiltIn::PolkitAgent, None),
+            ],
+            now,
+        );
+        let mut connect = connect;
+        s.poll(now, "wayland-test", None, &mut connect);
+        assert!(s.is_empty());
+        assert_eq!(s.next_deadline(), None, "no start is ever due");
     }
 
     #[test]

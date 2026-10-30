@@ -170,6 +170,12 @@ enum Control {
     SourceCancelled,
     /// Write `bytes` to every held clipboard read and close it.
     Release(&'static [u8]),
+    /// From a thread of its own, write one byte every `every` to every held clipboard read, `count` times, then close
+    /// it; `None` writes until the reader goes.
+    Trickle {
+        every: Duration,
+        count: Option<usize>,
+    },
     /// Write this many bytes to every held clipboard read from a thread of its own, keeping it open for two seconds
     /// after.
     Flood(usize),
@@ -1479,6 +1485,18 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
                 let _ = file.write_all(bytes);
             }
         }
+        Control::Trickle { every, count } => {
+            for mut file in mock.held.drain(..) {
+                std::thread::spawn(move || {
+                    for _ in 0..count.unwrap_or(usize::MAX) {
+                        std::thread::sleep(every);
+                        if file.write_all(b"x").is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        }
         Control::Flood(len) => {
             for mut file in mock.held.drain(..) {
                 // the reader stops at its limit and closes the pipe, which ends the write
@@ -2221,6 +2239,42 @@ fn a_paste_longer_than_the_limit_is_cut_and_one_that_never_ends_gives_up() {
     assert!(
         (Duration::from_millis(900)..Duration::from_millis(2800)).contains(&took),
         "a read gives up after a second, waking the wait: {took:?}"
+    );
+}
+
+#[test]
+fn a_paste_that_keeps_coming_is_read_past_a_second_and_an_endless_one_stops_at_ten() {
+    let (mut conn, control, seen, _stash, offer) = holding_clipboard();
+    let held = |conn: &mut Connection| {
+        let read = conn.receive_async(&offer, "text/plain").unwrap();
+        assert!(std::iter::repeat_with(|| next_seen(&seen)).any(|s| matches!(s, Seen::Receive(_))));
+        read
+    };
+    // a byte every 300 ms for three seconds: never a second without one
+    let steady = held(&mut conn);
+    let every = Duration::from_millis(300);
+    control
+        .send(Control::Trickle {
+            every,
+            count: Some(10),
+        })
+        .unwrap();
+    let (data, took) = received_in(&mut conn, steady);
+    assert_eq!(data, Some(b"xxxxxxxxxx".to_vec()));
+    assert!(
+        took >= Duration::from_secs(2),
+        "a read of three seconds ran out early: {took:?}"
+    );
+    let endless = held(&mut conn);
+    control
+        .send(Control::Trickle { every, count: None })
+        .unwrap();
+    let (data, took) = received_in(&mut conn, endless);
+    assert_eq!(data, None);
+    // at the ten-second cap, woken by it rather than by the wait's own three seconds
+    assert!(
+        (Duration::from_millis(9500)..Duration::from_secs(13)).contains(&took),
+        "an endless read stops at its cap: {took:?}"
     );
 }
 

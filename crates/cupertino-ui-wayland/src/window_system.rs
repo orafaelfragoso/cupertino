@@ -579,8 +579,9 @@ impl WindowSystem for WaylandWindowSystem {
         }
     }
 
-    /// The read runs in the transport's loop while dispatch goes on; its data arrives with the dispatch it ends in (at
-    /// most a second later, the transport's limit). One that can't start answers `None` with the next dispatch.
+    /// The read runs in the transport's loop while dispatch goes on; its data arrives with the dispatch it ends in (the
+    /// transport gives up on a source silent for a second, or after ten seconds). One that can't start answers `None`
+    /// with the next dispatch.
     fn read_clipboard(&mut self, kind: ClipboardKind, mime: &str) -> ClipboardToken {
         self.next_clipboard += 1;
         let token = ClipboardToken(self.next_clipboard);

@@ -543,6 +543,8 @@ impl App {
             | Event::PopupRepositioned { .. }
             | Event::Presented(_)
             | Event::Discarded(_)
+            | Event::Drag { .. }
+            | Event::DragSource { .. }
             | Event::Received { .. } => {}
         }
         Ok(true)

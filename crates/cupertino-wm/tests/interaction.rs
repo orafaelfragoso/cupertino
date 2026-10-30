@@ -855,3 +855,21 @@ fn size_snapping_while_resizing_is_off_by_default_and_waits_0_4_s() {
         "the resize goes on from the snapped frame"
     );
 }
+
+#[test]
+fn a_window_that_cannot_zoom_is_not_offered_the_fill_zone_but_keeps_the_corners() {
+    let mut h = H::new();
+    let w = h.map_at("a", Rect::new(500.0, 300.0, 600.0, 400.0));
+    h.cmd(Command::SetDisabledControls {
+        window: w,
+        disabled: DisabledControls {
+            minimize: false,
+            zoom: true,
+        },
+    });
+    titlebar_grab(&mut h, w, 700.0, 310.0);
+    h.cmd(motion_opt(960.0, 0.0));
+    assert!(h.wm.snap_preview(h.now).is_none(), "no fill preview");
+    h.cmd(motion_opt(1919.0, 2.0));
+    assert_eq!(h.wm.snap_preview(h.now).unwrap().kind, TileKind::TopRight);
+}

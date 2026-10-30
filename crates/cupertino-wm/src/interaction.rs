@@ -335,7 +335,11 @@ impl Wm {
         let (out_rect, dock_zone) = self
             .output(m.output)
             .map_or((Rect::default(), None), |o| (o.rect, o.dock_zone));
-        match hot_zone_hit(&cfg, out_rect, usable, pointer, modifiers.option, dock_zone) {
+        // a window that cannot zoom is not offered the fill zone, which it would be refused
+        let can_zoom = self.windows[&m.window].can_zoom();
+        let hit = hot_zone_hit(&cfg, out_rect, usable, pointer, modifiers.option, dock_zone)
+            .filter(|hit| hit.kind != TileKind::Fill || can_zoom);
+        match hit {
             None => self.clear_preview(m, out),
             Some(hit) => {
                 if m.snap.map(|s| s.kind) != Some(hit.kind) {

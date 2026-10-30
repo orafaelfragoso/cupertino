@@ -9,7 +9,7 @@ filters and vibrant blending, driven by the recipes of `cupertino-theme`.
 |---|---|
 | `MaterialRenderer` | library API on an external wgpu `Device`/`Queue`; `render` records into the caller's encoder from a `FrameDesc` and a list of `MaterialRegion`s |
 | `glass-renderer` | headless binary (`--demo`, `--cpu-check`, `--bench N`) |
-| `cpu` | f32 CPU reference of the same pipeline (half-float intermediates emulated) |
+| `cpu` | f32 CPU reference of the same pipeline (half-float intermediates emulated); `apply_color_ops` runs a recipe's colour chain on one colour, which the server uses to measure the wallpaper as the menu bar's material shows it |
 | `shaders/gles/ | GLSL ES 3.00 port of every shader for the compositor's GLES renderer |
 | `display_filter` | the display's colour filter, invert and contrast as a colour chain over a whole output (settings from `cupertino-defaults`) |
 
@@ -102,7 +102,8 @@ cargo test -p cupertino-glass
 
 Tests cover recipe → ops encoding, blur plan, uniform layout, display filter matrices against the
 reference builders, the CPU chain of matrix, invert and contrast, GPU vs CPU PSNR ≥ 60 dB (multi-region frames at scale 1
-and 2), the rounded mask against `cupertino-geometry` coverage, circle area, opacity, backdrop cache hit/miss accounting,
+and 2), the CPU colour chain against the GPU colour pass within one level (both menu bar recipes, unblurred, on a grey
+ramp, a saturated hue ramp and the procedural wallpaper), the rounded mask against `cupertino-geometry` coverage, circle area, opacity, backdrop cache hit/miss accounting,
 vibrant blend GPU vs CPU, and WGSL and GLSL ES validation (`tests/shaders.rs`). GPU tests skip (pass) when no adapter is
 available.
 

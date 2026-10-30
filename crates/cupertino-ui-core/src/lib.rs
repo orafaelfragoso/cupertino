@@ -22,7 +22,8 @@ mod widget;
 
 pub use accessibility::{
     AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, AccessibleStates,
-    AccessibleValue, Action, ActionData, ActionRequest, Checked, Relation, Role, TextSemantics,
+    AccessibleValue, Action, ActionData, ActionRequest, Checked, Live, Relation, Role,
+    TextSemantics,
 };
 pub use clock::MonotonicClock;
 pub use command::CommandRegistry;

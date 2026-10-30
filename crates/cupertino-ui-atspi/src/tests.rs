@@ -49,6 +49,7 @@ fn publish(h: &Handlers, role: Role, value: Option<AccessibleValue>, actions: Ve
         actions,
         relations: Vec::new(),
         children: Vec::new(),
+        live: None,
     };
     let mut m = lock(&h.mirror);
     m.root = Some(id(1));

@@ -49,10 +49,14 @@ pub enum ColorRole {
     /// The layer that dims a window behind a dialog or sheet. Translucent in every palette: it must not hide what it
     /// dims.
     DialogScrim,
+    /// Text of a link.
+    Link,
+    /// A page indicator dot for a page that is not shown; the shown page's dot is `Text`.
+    PageDot,
 }
 
 impl ColorRole {
-    pub const ALL: [ColorRole; 31] = {
+    pub const ALL: [ColorRole; 33] = {
         use ColorRole::*;
         [
             WindowBackground,
@@ -86,6 +90,8 @@ impl ColorRole {
             ToolTipText,
             ScrollerThumb,
             DialogScrim,
+            Link,
+            PageDot,
         ]
     };
 }
@@ -232,6 +238,23 @@ pub struct ThemePreferences {
     pub reduce_motion: bool,
 }
 
+/// A surface that shows a compositor material behind it where the compositor offers one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Surface {
+    Sidebar,
+    Menu,
+    Popover,
+}
+
+/// How a surface paints: the compositor material to ask for, if any, and the opaque fill to paint where there is none.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceLook {
+    /// A material name of the theme data (`materials.json`).
+    pub material: Option<&'static str>,
+    /// `None` when the theme has no window background colour: the surface then paints nothing.
+    pub fill: Option<Color>,
+}
+
 /// Everything a control reads from the theme.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ThemeTokens {
@@ -241,6 +264,24 @@ pub struct ThemeTokens {
     pub type_scale: TypeScale,
     pub focus: FocusRing,
     pub motion: Motion,
+}
+
+impl ThemeTokens {
+    /// The look of `surface`. With reduced transparency or in high contrast it asks for no material and is opaque.
+    pub fn surface(&self, surface: Surface) -> SurfaceLook {
+        let opaque =
+            self.preferences.reduce_transparency || self.preferences.appearance.is_high_contrast();
+        let material = match surface {
+            Surface::Sidebar => "Sidebar",
+            Surface::Menu | Surface::Popover => "Menu",
+        };
+        SurfaceLook {
+            material: (!opaque).then_some(material),
+            fill: self
+                .colors
+                .get(ColorRole::WindowBackground, StateVariant::NORMAL),
+        }
+    }
 }
 
 #[cfg(test)]

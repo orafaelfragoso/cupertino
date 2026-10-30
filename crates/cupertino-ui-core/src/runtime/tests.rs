@@ -154,6 +154,7 @@ fn click<A: Application>(rt: &mut Runtime<A, FakeSystem>, window: WindowId, x: f
                     button: MouseButton::Left,
                     pressed,
                     serial: 1,
+                    mods: cupertino_ui_platform::Mods::NONE,
                 },
                 Timestamp(0),
             ),

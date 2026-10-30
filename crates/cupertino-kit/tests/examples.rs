@@ -148,6 +148,7 @@ impl<A: Application> Run<A> {
                 button: MouseButton::Left,
                 pressed,
                 serial: 1,
+                mods: Mods::NONE,
             }));
         }
     }

@@ -320,19 +320,28 @@ impl<A: Application> Harness<A> {
     }
 
     pub fn button(&mut self, position: Point, pressed: bool) {
+        self.button_with(position, pressed, Mods::NONE);
+    }
+
+    pub fn button_with(&mut self, position: Point, pressed: bool, mods: Mods) {
         self.pointer(PointerEvent::Button {
             position,
             button: MouseButton::Left,
             pressed,
             serial: 1,
+            mods,
         });
     }
 
     /// Moves the pointer onto `position`, presses and releases there.
     pub fn click(&mut self, position: Point) {
+        self.click_with(position, Mods::NONE);
+    }
+
+    pub fn click_with(&mut self, position: Point, mods: Mods) {
         self.pointer(PointerEvent::Motion { position });
-        self.button(position, true);
-        self.button(position, false);
+        self.button_with(position, true, mods);
+        self.button_with(position, false, mods);
     }
 
     pub fn touch(&mut self, event: TouchEvent) {

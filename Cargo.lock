@@ -1137,6 +1137,7 @@ version = "0.1.0"
 dependencies = [
  "cupertino-assets",
  "cupertino-geometry",
+ "cupertino-icons",
  "cupertino-modifiers",
  "cupertino-theme",
  "cupertino-ui-atspi",

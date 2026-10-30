@@ -10,8 +10,8 @@ use crate::{Environment, NodeId, WindowBackground};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_platform::Timestamp;
 use cupertino_ui_render::{
-    DisplayList, Effect, Group, Paint, PaintNode, PaintNodeId, PaintOp, PaintRevision, PathVerb,
-    Shape, Transform,
+    DisplayList, Effect, Group, ImageResource, Paint, PaintNode, PaintNodeId, PaintOp,
+    PaintResources, PaintRevision, PathVerb, ResourceId, Shape, Transform,
 };
 use cupertino_ui_theme::{ColorRole, StateVariant};
 use std::collections::{HashMap, HashSet};
@@ -25,6 +25,8 @@ struct Painted {
     group: Option<Group>,
     /// What the ops may touch, in node coordinates.
     extent: Option<Rect>,
+    /// The images the ops draw.
+    images: Vec<(ResourceId, ImageResource)>,
 }
 
 /// How far a blur reaches beyond the content it blurs, per unit of radius.
@@ -133,10 +135,13 @@ pub(crate) struct Painter {
     painted_in: Option<Environment>,
 }
 
-/// Whether paint made in `a` is paint made in `b`: the same theme, text system and scale, the same direction.
+/// Whether paint made in `a` is paint made in `b`: the same theme, text system, icons and scale, the same direction.
+/// Compares the shared parts by identity, not `Environment`'s `==`, so an environment's owner keeps its `Arc`s across
+/// frames; one rebuilt every frame repaints every node every frame.
 fn same_environment(a: &Environment, b: &Environment) -> bool {
     Arc::ptr_eq(&a.theme, &b.theme)
         && Arc::ptr_eq(&a.text, &b.text)
+        && Arc::ptr_eq(&a.icons, &b.icons)
         && a.scale == b.scale
         && a.direction == b.direction
 }
@@ -147,6 +152,8 @@ pub(crate) struct Painting {
     pub(crate) own: Vec<Rect>,
     /// The nodes that asked for the next frame while they painted.
     pub(crate) animating: Vec<NodeId>,
+    /// The images the list draws.
+    pub(crate) resources: PaintResources,
 }
 
 pub(crate) struct PaintInput<'a> {
@@ -184,6 +191,7 @@ impl Painter {
         }
         let mut list = DisplayList::default();
         let mut animating = Vec::new();
+        let mut resources = PaintResources::default();
         let mut seen = HashSet::with_capacity(self.nodes.len());
         let mut clips = Vec::new();
         for id in tree.preorder(root) {
@@ -224,6 +232,7 @@ impl Painter {
                 }
                 let mut group = None;
                 let mut animate = false;
+                let mut images = Vec::new();
                 node.widget.paint(
                     &*node.state,
                     &mut PaintCx {
@@ -237,6 +246,7 @@ impl Painter {
                         ops: &mut ops,
                         group: &mut group,
                         animate: &mut animate,
+                        images: &mut images,
                     },
                 );
                 if animate {
@@ -252,10 +262,21 @@ impl Painter {
                         extent: extent(&ops),
                         ops,
                         group,
+                        images,
                     },
                 );
             }
             let painted = &self.nodes[&id];
+            for (image, pixels) in &painted.images {
+                let kept = resources
+                    .images
+                    .entry(*image)
+                    .or_insert_with(|| pixels.clone());
+                debug_assert!(
+                    kept.revision == pixels.revision && Arc::ptr_eq(&kept.pixels, &pixels.pixels),
+                    "resource {image:?} names two images; new pixels take a new id"
+                );
+            }
             let origin = placement.rect.origin;
             list.nodes.push(PaintNode {
                 id: id.into(),
@@ -302,6 +323,7 @@ impl Painter {
             list,
             own,
             animating,
+            resources,
         }
     }
 }

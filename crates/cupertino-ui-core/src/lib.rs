@@ -8,6 +8,7 @@ mod command;
 mod cx;
 mod damage;
 mod focus;
+mod icons;
 mod layout_view;
 mod paint;
 mod pointer;
@@ -28,6 +29,7 @@ pub use accessibility::{
 pub use clock::MonotonicClock;
 pub use command::CommandRegistry;
 pub use cx::{EventCx, FocusTarget, MeasureCx, PaintCx, SemanticsCx};
+pub use icons::{next_resource_id, IconImage, Icons, PlaceholderIcons};
 pub use runtime::{
     RendererFactory, Runtime, RuntimeOptions, ThemeForAppearance, WindowErrorHandler,
 };
@@ -210,6 +212,8 @@ pub struct Environment {
     pub direction: LayoutDirection,
     /// Physical pixels per logical point; layout never reads it.
     pub scale: f64,
+    /// The system's symbols; shared by all the app's windows.
+    pub icons: Arc<dyn Icons>,
 }
 
 /// The text system compares by identity: two environments with the same fonts shape alike only if they share one.
@@ -217,6 +221,7 @@ impl PartialEq for Environment {
     fn eq(&self, other: &Self) -> bool {
         self.theme == other.theme
             && Arc::ptr_eq(&self.text, &other.text)
+            && Arc::ptr_eq(&self.icons, &other.icons)
             && self.direction == other.direction
             && self.scale == other.scale
     }

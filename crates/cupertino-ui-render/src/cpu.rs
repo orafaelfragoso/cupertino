@@ -686,7 +686,16 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         let Some(path) = geometry::path(&Shape::Rect(*dst)) else {
             return Ok(());
         };
-        let ts = self.ts(t, node);
+        let mut ts = self.ts(t, node);
+        // an image drawn one source pixel per device pixel lands on whole pixels, so it is copied, not resampled
+        let device = ts.pre_concat(place);
+        if device.kx == 0.0
+            && device.ky == 0.0
+            && (device.sx - 1.0).abs() < 1e-4
+            && (device.sy - 1.0).abs() < 1e-4
+        {
+            ts = ts.post_translate(device.tx.round() - device.tx, device.ty.round() - device.ty);
+        }
         t.pixmap.fill_path(
             &path,
             &paint,

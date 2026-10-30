@@ -380,25 +380,29 @@ impl Cupertino {
 }
 
 /// The data control globals of clipboard managers, `ext-data-control-v1` and its predecessor
-/// `zwlr-data-control-v1`, both with the primary selection. Every client outside a sandbox may bind them (clipboard
-/// managers need no focus); a client that connected through a security context does not see them.
+/// `zwlr-data-control-v1`, both with the primary selection. Only the clients `access` allows see and bind them
+/// ([`crate::data_control`]).
 pub fn data_control_states(
     dh: &DisplayHandle,
     primary: &PrimarySelectionState,
+    access: &std::sync::Arc<crate::data_control::DataControlAccess>,
 ) -> (
     ext_data_control::DataControlState,
     wlr_data_control::DataControlState,
 ) {
+    let filter = |access: std::sync::Arc<crate::data_control::DataControlAccess>| {
+        move |client: &smithay::reexports::wayland_server::Client| access.may_view(client)
+    };
     (
         ext_data_control::DataControlState::new::<Cupertino, _>(
             dh,
             Some(primary),
-            crate::authorization::unsandboxed,
+            filter(access.clone()),
         ),
         wlr_data_control::DataControlState::new::<Cupertino, _>(
             dh,
             Some(primary),
-            crate::authorization::unsandboxed,
+            filter(access.clone()),
         ),
     )
 }

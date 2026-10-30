@@ -70,6 +70,8 @@ impl Harness {
             &cupertino_assets::Assets::builtin(),
         )
         .expect("create test compositor");
+        // this program is an allowed clipboard manager: a sandboxed client of it is still refused
+        common::allow_data_control(&mut state);
         match headless::init(&mut state, OUTPUT, 1.0) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
@@ -364,7 +366,7 @@ fn a_plain_client_sees_the_three_globals_and_a_sandboxed_one_none_of_them() {
         has_all(&plain, &DATA_CONTROL)
             && has_all(&plain, &DISPLAY)
             && has_all(&plain, &SHELL_SURFACES),
-        "a client outside a sandbox sees the clipboard managers and the display globals: {plain:?}"
+        "a client of an allowed program outside a sandbox sees the clipboard managers and the display globals: {plain:?}"
     );
     assert!(has_all(&plain, &[SECURITY_CONTEXT]));
 
@@ -375,7 +377,7 @@ fn a_plain_client_sees_the_three_globals_and_a_sandboxed_one_none_of_them() {
         has_none(&sandboxed, &DATA_CONTROL)
             && has_none(&sandboxed, &DISPLAY)
             && has_none(&sandboxed, &SHELL_SURFACES),
-        "a sandboxed client sees neither the clipboard managers, the display globals nor the layer shell and the toplevel list: {sandboxed:?}"
+        "a sandboxed client, even of an allowed program, sees neither the clipboard managers, the display globals nor the layer shell and the toplevel list: {sandboxed:?}"
     );
     assert!(
         has_none(&sandboxed, &[SECURITY_CONTEXT]),

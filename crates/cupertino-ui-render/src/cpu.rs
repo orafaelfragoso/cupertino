@@ -499,16 +499,14 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             Site::Node => self.stats.node_composite.add(moved),
             Site::Group => self.stats.group_composite.add(moved),
         }
-        t.pixmap.draw_pixmap(
-            visible.x0 - t.origin.0,
-            visible.y0 - t.origin.1,
-            shown.as_ref(),
-            &PixmapPaint {
-                opacity,
-                ..PixmapPaint::default()
-            },
-            tiny_skia::Transform::identity(),
-            None,
+        source_over(
+            t.pixmap,
+            (
+                (visible.x0 - t.origin.0) as usize,
+                (visible.y0 - t.origin.1) as usize,
+            ),
+            &shown,
+            opacity,
         );
         Ok(())
     }
@@ -866,6 +864,35 @@ fn skia_paint(paint: &Paint) -> Option<tiny_skia::Paint<'static>> {
     })
 }
 
+/// Source-over of the premultiplied `src`, scaled by `opacity`, onto the pixmap with its top-left pixel at `at`, in
+/// 8-bit integers; `src` lies inside the pixmap.
+fn source_over(dst: &mut PixmapMut<'_>, at: (usize, usize), src: &Pixmap, opacity: f32) {
+    let k = (opacity.clamp(0.0, 1.0) * 255.0).round() as u32;
+    let stride = dst.width() as usize * 4;
+    let row = src.width() as usize * 4;
+    let dst = dst.data_mut();
+    for (y, s) in src.data().chunks_exact(row).enumerate() {
+        let d = &mut dst[(at.1 + y) * stride + at.0 * 4..][..row];
+        for (s, d) in s.as_chunks::<4>().0.iter().zip(d.as_chunks_mut::<4>().0) {
+            let s = if k == 255 {
+                s.map(u32::from)
+            } else {
+                s.map(|c| div255(u32::from(c) * k))
+            };
+            match s[3] {
+                0 if s == [0; 4] => {}
+                255 => *d = s.map(|c| c as u8),
+                a => {
+                    let keep = 255 - a;
+                    for i in 0..4 {
+                        d[i] = (s[i] + div255(u32::from(d[i]) * keep)).min(255) as u8;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Source-over of a glyph image at (`x`, `y`) in the pixmap, through the clip mask.
 fn blend_glyph(
     pm: &mut PixmapMut<'_>,
@@ -917,6 +944,63 @@ fn blend_glyph(
             for i in 0..4 {
                 out[i] = (src[i] + div255(u32::from(out[i]) * keep)).min(255) as u8;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A pixmap of premultiplied pixels drawn from `seed`, with every alpha from transparent to opaque.
+    fn noise(width: u32, height: u32, seed: u64) -> Pixmap {
+        let mut state = seed;
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 33) as u32
+        };
+        let mut pixmap = Pixmap::new(width, height).unwrap();
+        for px in pixmap.data_mut().as_chunks_mut::<4>().0 {
+            let alpha = match next() % 4 {
+                0 => 0,
+                1 => 255,
+                _ => next() % 256,
+            };
+            let mut channel = || (next() % (alpha + 1)) as u8;
+            *px = [channel(), channel(), channel(), alpha as u8];
+        }
+        pixmap
+    }
+
+    #[test]
+    fn the_integer_composite_matches_the_float_one_within_one_step() {
+        for (seed, opacity) in [(1, 1.0), (2, 1.0), (3, 0.5), (4, 0.3), (5, 0.0), (6, 0.9)] {
+            let src = noise(37, 23, seed);
+            let dst = noise(64, 48, seed + 100);
+            let mut integer = dst.clone();
+            source_over(&mut integer.as_mut(), (11, 7), &src, opacity);
+            let mut float = dst.clone();
+            float.draw_pixmap(
+                11,
+                7,
+                src.as_ref(),
+                &PixmapPaint {
+                    opacity,
+                    ..PixmapPaint::default()
+                },
+                tiny_skia::Transform::identity(),
+                None,
+            );
+            let delta = integer
+                .data()
+                .iter()
+                .zip(float.data())
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap();
+            assert!(delta <= 1, "opacity {opacity}: {delta} steps apart");
         }
     }
 }

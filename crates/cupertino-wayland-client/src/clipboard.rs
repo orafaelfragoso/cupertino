@@ -32,6 +32,9 @@ use crate::{Error, Event, SurfaceId};
 const READ_TIMEOUT: Duration = Duration::from_secs(1);
 /// The longest a read of [`Clipboard::receive_async`] takes, however steadily its bytes come.
 const READ_CAP: Duration = Duration::from_secs(10);
+/// The most MIME types kept of one offer, and the longest; the rest are dropped.
+const MAX_OFFER_TYPES: usize = 64;
+const MAX_MIME_LEN: usize = 255;
 /// The most reads of [`Clipboard::receive_async`] running at once.
 const MAX_READS: usize = 8;
 /// The most a read takes; a longer selection is cut there.
@@ -726,7 +729,11 @@ impl Dispatch<WlDataOffer, OfferTypes> for State {
     ) {
         match event {
             wl_data_offer::Event::Offer { mime_type } => {
-                types.types.lock().expect("offer types").push(mime_type);
+                let mut offered = types.types.lock().expect("offer types");
+                // another client chooses how many types it offers and how long they are
+                if offered.len() < MAX_OFFER_TYPES && mime_type.len() <= MAX_MIME_LEN {
+                    offered.push(mime_type);
+                }
             }
             wl_data_offer::Event::SourceActions {
                 source_actions: wayland_client::WEnum::Value(actions),

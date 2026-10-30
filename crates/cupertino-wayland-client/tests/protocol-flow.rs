@@ -249,6 +249,8 @@ enum Seen {
     },
     /// The serial of a drag's enter.
     DragEntered(u32),
+    /// A drag motion was sent to the client.
+    DragMoved,
     /// What the client wrote for a type its drag source was asked for.
     SourceData(Vec<u8>),
     /// `wl_data_offer` requests of the drag offer.
@@ -1454,7 +1456,10 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
             mock.drag_offer = Some(offer);
             mock.seen.send(Seen::DragEntered(serial)).unwrap();
         }
-        Control::DragMotion => mock.data_device.as_ref().unwrap().motion(5000, 6.0, 7.5),
+        Control::DragMotion => {
+            mock.data_device.as_ref().unwrap().motion(5000, 6.0, 7.5);
+            mock.seen.send(Seen::DragMoved).unwrap();
+        }
         Control::DragAction(action) => mock.drag_offer.as_ref().unwrap().action(action),
         Control::DragDrop => mock.data_device.as_ref().unwrap().drop(),
         Control::DragLeave => mock.data_device.as_ref().unwrap().leave(),
@@ -2112,6 +2117,28 @@ fn pointer_and_key_input_arrive_typed_on_the_focused_window() {
 }
 
 #[test]
+fn an_offer_keeps_at_most_64_types_and_none_longer_than_255_bytes() {
+    let (mut conn, control, _seen) = connect(Globals {
+        seat: true,
+        clipboard: true,
+        ..Globals::core()
+    });
+    let mut stash = Stash::new();
+    let long: &'static str = Box::leak("x".repeat(256).into_boxed_str());
+    let mut types = vec![long];
+    types.extend(
+        (0..70).map(|i| -> &'static str { Box::leak(format!("type/{i}").into_boxed_str()) }),
+    );
+    control.send(Control::Offer(types)).unwrap();
+    let offer = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::Selection(Some(offer)) => Some(offer.clone()),
+        _ => None,
+    });
+    let kept: Vec<String> = (0..64).map(|i| format!("type/{i}")).collect();
+    assert_eq!(offer.mime_types(), kept.as_slice());
+}
+
+#[test]
 fn the_selection_is_read_in_an_offered_type_only_and_a_replaced_offer_is_cancelled() {
     let (mut conn, control, seen) = connect(Globals {
         seat: true,
@@ -2477,6 +2504,48 @@ fn a_drag_that_leaves_lets_its_offer_go_and_finishes_only_after_a_drop() {
 }
 
 #[test]
+fn a_drag_needs_the_button_still_held_after_the_pointer_left_or_went_away() {
+    for (what, gone) in [
+        ("leave", Control::Leave),
+        ("pointer gone", Control::DropPointer),
+    ] {
+        let (mut conn, control, _seen) = connect(Globals {
+            seat: true,
+            clipboard: true,
+            ..Globals::core()
+        });
+        let mut stash = Stash::new();
+        let w = window(&mut conn, Decorations::Client);
+        configured(&mut conn, &mut stash, w);
+        control.send(Control::Click { x: 3.0, y: 4.0 }).unwrap();
+        wait_for(&mut conn, &mut stash, |e| {
+            matches!(
+                e,
+                Event::Pointer {
+                    event: PointerEvent::Button { pressed: true, .. },
+                    ..
+                }
+            )
+            .then_some(())
+        });
+        control.send(gone).unwrap();
+        conn.roundtrip().unwrap();
+        stash.extend(conn.wait(Some(Duration::ZERO)).unwrap());
+        assert!(
+            matches!(
+                conn.start_drag(
+                    w.surface(),
+                    vec![("text/plain".into(), b"x".to_vec())],
+                    DragActions::Copy
+                ),
+                Err(Error::PermissionDenied(_))
+            ),
+            "{what}: the press is gone with the pointer"
+        );
+    }
+}
+
+#[test]
 fn a_window_destroyed_under_a_drag_lets_the_offer_go_and_hears_no_more() {
     let (mut conn, control, seen, mut stash, w, offer) = dragged_over();
     conn.destroy(w.surface()).unwrap();
@@ -2486,8 +2555,10 @@ fn a_window_destroyed_under_a_drag_lets_the_offer_go_and_hears_no_more() {
         Seen::OfferDestroyed
     );
     control.send(Control::DragMotion).unwrap();
+    // the motion is on the wire before the round trip's answer, so the round trip dispatches it
+    seen_matching(&seen, |s| matches!(s, Seen::DragMoved));
     conn.roundtrip().unwrap();
-    stash.extend(conn.wait(Some(Duration::from_millis(50))).unwrap());
+    stash.extend(conn.wait(Some(Duration::ZERO)).unwrap());
     assert!(!stash.iter().any(|e| matches!(e, Event::Drag { .. })));
     assert!(matches!(
         conn.accept_drag(&offer, None),

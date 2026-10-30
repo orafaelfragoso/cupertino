@@ -117,6 +117,7 @@ fn options_and_theme(preferences: ThemePreferences) -> Result<(RuntimeOptions, T
     let options = RuntimeOptions {
         theme: Arc::new(theme),
         text,
+        icons: Arc::new(crate::icons::PackIcons::new(&assets)),
         direction: LayoutDirection::Ltr,
         node_limit: NODE_LIMIT,
         renderers: Box::new(move || {

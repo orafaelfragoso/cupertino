@@ -4,7 +4,9 @@ use crate::widget::Change;
 use crate::{Environment, NodeId, Phase};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_platform::{CursorShape, Timestamp};
-use cupertino_ui_render::{Effect, Group, PaintOp};
+use cupertino_ui_render::{
+    Effect, Group, ImageResource, PaintOp, ResourceId, ResourceRef, Sampling,
+};
 use cupertino_ui_text::TextInputState;
 use std::collections::BTreeSet;
 
@@ -237,6 +239,7 @@ pub struct PaintCx<'a> {
     pub(crate) ops: &'a mut Vec<PaintOp>,
     pub(crate) group: &'a mut Option<Group>,
     pub(crate) animate: &'a mut bool,
+    pub(crate) images: &'a mut Vec<(ResourceId, ImageResource)>,
 }
 
 impl PaintCx<'_> {
@@ -277,6 +280,23 @@ impl PaintCx<'_> {
     /// moves by itself from its first paint, as an indeterminate progress bar does.
     pub fn request_animation_frame(&mut self) {
         *self.animate = true;
+    }
+
+    /// Draws all of `image` into `dst` (node coordinates). `id` names these pixels for good: new pixels take a new id
+    /// ([`next_resource_id`](crate::next_resource_id)).
+    pub fn image(&mut self, id: ResourceId, image: &ImageResource, dst: Rect, sampling: Sampling) {
+        self.ops.push(PaintOp::Image {
+            image: ResourceRef {
+                id,
+                revision: image.revision,
+            },
+            src: Rect::new(0.0, 0.0, f64::from(image.width), f64::from(image.height)),
+            dst,
+            sampling,
+        });
+        if !self.images.iter().any(|(drawn, _)| *drawn == id) {
+            self.images.push((id, image.clone()));
+        }
     }
 
     /// Paints this node and its whole subtree as one layer, with `opacity` applied once and `effects` (a fade, or a

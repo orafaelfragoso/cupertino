@@ -5,8 +5,8 @@
 
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_core::{
-    AccessibilityNode, Application, CommandRegistry, Element, Environment, FrameSnapshot, Key,
-    Runtime, RuntimeOptions, Window, WindowBackground, WindowKey,
+    AccessibilityNode, Application, CommandRegistry, Element, Environment, FrameSnapshot, Icons,
+    Key, PlaceholderIcons, Runtime, RuntimeOptions, Window, WindowBackground, WindowKey,
 };
 use cupertino_ui_layout::LayoutDirection;
 use cupertino_ui_platform::{
@@ -82,6 +82,10 @@ pub fn state(interaction: InteractionVariant, selected: bool) -> StateVariant {
         selected,
         window_active: true,
     }
+}
+
+fn placeholder_icons() -> Arc<dyn Icons> {
+    Arc::new(PlaceholderIcons::default())
 }
 
 /// Every role gets its own grey per state, 13 apart: `base + 1` hover, `+ 2` pressed, `+ 3` disabled, `+ 8` selected.
@@ -201,6 +205,7 @@ pub struct Harness<A: Application> {
     clock: Arc<ManualClock>,
     text: Arc<TextSystem>,
     animated: bool,
+    icons: Arc<dyn Icons>,
 }
 
 impl<A: Application> Harness<A> {
@@ -209,26 +214,37 @@ impl<A: Application> Harness<A> {
     }
 
     pub fn with_direction(direction: LayoutDirection) -> Self {
-        Self::build(direction, theme(), false)
+        Self::build(direction, theme(), placeholder_icons(), false)
     }
 
     /// A harness for content that animates without end: each settle shows one more frame instead of waiting for the
     /// window to stop asking.
     pub fn animated() -> Self {
-        Self::build(LayoutDirection::Ltr, theme(), true)
+        Self::build(LayoutDirection::Ltr, theme(), placeholder_icons(), true)
+    }
+
+    /// A harness whose widgets draw their symbols from `icons`.
+    pub fn with_icons(direction: LayoutDirection, icons: Arc<dyn Icons>) -> Self {
+        Self::build(direction, theme(), icons, false)
     }
 
     /// A harness whose window draws with `theme` instead of the fixture theme.
     pub fn with_theme(theme: ThemeTokens) -> Self {
-        Self::build(LayoutDirection::Ltr, theme, false)
+        Self::build(LayoutDirection::Ltr, theme, placeholder_icons(), false)
     }
 
-    fn build(direction: LayoutDirection, theme: ThemeTokens, animated: bool) -> Self {
+    fn build(
+        direction: LayoutDirection,
+        theme: ThemeTokens,
+        icons: Arc<dyn Icons>,
+        animated: bool,
+    ) -> Self {
         let clock = Arc::new(ManualClock::new(Timestamp(0)));
         let text = text();
         let options = RuntimeOptions {
             theme: Arc::new(theme),
             text: text.clone(),
+            icons: icons.clone(),
             direction,
             node_limit: 1000,
             renderers: Box::new(|| {
@@ -258,6 +274,7 @@ impl<A: Application> Harness<A> {
             clock,
             text,
             animated,
+            icons,
         };
         harness.settle();
         harness
@@ -414,6 +431,7 @@ impl<A: Application> Harness<A> {
             text: self.text.clone(),
             direction: LayoutDirection::Ltr,
             scale: 1.0,
+            icons: self.icons.clone(),
         }
     }
 

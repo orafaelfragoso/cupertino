@@ -173,6 +173,12 @@ for b in /usr/bin/cupertino-*; do
     if ldd "$b" | grep -q 'not found'; then ldd "$b"; exit 1; fi
 done
 echo 'all binaries resolve their libraries'
+# the shell processes' test clock exists only in debug builds (cupertino-shell-client test_clock): a packaged binary that
+# holds its variable's name was built with debug assertions
+for b in /usr/bin/cupertino-login /usr/bin/cupertino-dock /usr/bin/cupertino-launcher; do
+    if grep -q -a CUPERTINO_TEST_CLOCK "$b"; then echo "$b holds the test clock: a debug build was packaged"; exit 1; fi
+done
+echo 'no packaged shell process reads the test clock'
 /usr/bin/cupertino-server --help >/dev/null
 echo 'cupertino-server --help: ok'
 test -f /usr/share/cupertino/theme/tokens.json && test -f /usr/share/cupertino/assets/manifest.json

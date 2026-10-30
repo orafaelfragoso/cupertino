@@ -11,7 +11,6 @@ use cupertino_ui_wayland::{Ready, ShmPresenter};
 use cupertino_wayland_client::{key, Connection, Modifiers, OutputId, SurfaceId, Waker};
 use std::error::Error;
 use std::sync::mpsc::Sender;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -48,8 +47,10 @@ impl<M> Notifier<M> {
     }
 }
 
-pub fn unix_seconds() -> Result<i64> {
-    Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64)
+/// The time the screens show: only the display clock, never what times authentication, back-off or the lock
+/// ([`cupertino_shell_client::test_clock`]).
+pub fn display_unix_seconds() -> Result<i64> {
+    Ok(cupertino_shell_client::test_clock::display_unix_seconds()?)
 }
 
 /// What a frame shows that changes without the state machine's say: when this differs from the last frame, redraw.
@@ -92,7 +93,7 @@ impl FrameKey {
     pub fn new(scene: &Scene<'_>, now: f64) -> Result<FrameKey> {
         let screen = scene.screen;
         Ok(FrameKey {
-            time: format_time(unix_seconds()?, TIME_FORMAT)?,
+            time: format_time(display_unix_seconds()?, TIME_FORMAT)?,
             field: FieldKey::Password(screen.password_len()),
             notice: screen.notice().map(str::to_owned),
             caps_lock: scene.caps_lock,
@@ -108,7 +109,7 @@ impl FrameKey {
     /// A frame of the screen where a name is typed for the "Other…" tile, or for an administrator; `notice` says which.
     pub fn name(entry: &NameEntry, notice: Option<&str>, power: Option<&Menu>) -> Result<FrameKey> {
         Ok(FrameKey {
-            time: format_time(unix_seconds()?, TIME_FORMAT)?,
+            time: format_time(display_unix_seconds()?, TIME_FORMAT)?,
             field: FieldKey::Name(entry.text().to_owned()),
             notice: notice.map(str::to_owned),
             caps_lock: false,
@@ -142,7 +143,7 @@ impl PickerKey {
             .map(|tile| matches!(tile, Tile::Account(user) if user.logged_in))
             .collect();
         Ok(PickerKey {
-            time: format_time(unix_seconds()?, TIME_FORMAT)?,
+            time: format_time(display_unix_seconds()?, TIME_FORMAT)?,
             selected: picker.selected_index(),
             max_per_page,
             power_open: power.and_then(Menu::open),
@@ -221,7 +222,7 @@ pub fn draw(
     user: Option<&User>,
     power: Option<&Menu>,
 ) -> Result<()> {
-    let date = format_time(unix_seconds()?, DATE_FORMAT)?;
+    let date = format_time(display_unix_seconds()?, DATE_FORMAT)?;
     let field = match &key.field {
         FieldKey::Password(len) => Field::Password(*len),
         FieldKey::Name(text) => Field::Name(text),
@@ -254,7 +255,7 @@ pub fn draw_picker(
     picker: &Picker,
     power: Option<&Menu>,
 ) -> Result<()> {
-    let date = format_time(unix_seconds()?, DATE_FORMAT)?;
+    let date = format_time(display_unix_seconds()?, DATE_FORMAT)?;
     let page = picker.page(key.max_per_page);
     let view = PickerView {
         power: power_view(power),

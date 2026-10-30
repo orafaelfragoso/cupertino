@@ -1993,19 +1993,13 @@ fn received_in(conn: &mut Connection, read: ReadId) -> (Option<Vec<u8>>, Duratio
     panic!("the read never ended");
 }
 
-fn received(conn: &mut Connection, stash: &mut Stash, read: ReadId) -> Option<Vec<u8>> {
-    wait_for(conn, stash, |e| match e {
-        Event::Received { id, data } if *id == read => Some(data.clone()),
-        _ => None,
-    })
-}
-
 #[test]
 fn a_paste_is_read_while_the_loop_keeps_serving_input() {
     let (mut conn, control, seen, mut stash, offer) = holding_clipboard();
     let w = window(&mut conn, Decorations::Client);
     configured(&mut conn, &mut stash, w);
     let read = conn.receive_async(&offer, "text/plain").unwrap();
+    let read_started = Instant::now();
     assert_eq!(
         std::iter::repeat_with(|| next_seen(&seen)).find(|s| matches!(s, Seen::Receive(_))),
         Some(Seen::Receive("text/plain".into()))
@@ -2024,11 +2018,13 @@ fn a_paste_is_read_while_the_loop_keeps_serving_input() {
     });
     assert!(!stash.iter().any(|e| matches!(e, Event::Received { .. })));
     control.send(Control::Release(b"pasted")).unwrap();
-    let (data, took) = received_in(&mut conn, read);
+    let (data, _) = received_in(&mut conn, read);
     assert_eq!(data, Some(b"pasted".to_vec()));
+    // before the read's own deadline, which would also end the wait: the pipe did
     assert!(
-        took < Duration::from_millis(500),
-        "the pipe did not end the wait: {took:?}"
+        read_started.elapsed() < Duration::from_secs(1),
+        "the pipe did not end the wait: {:?}",
+        read_started.elapsed()
     );
 }
 
@@ -2045,15 +2041,16 @@ fn a_paste_longer_than_the_limit_is_cut_and_one_that_never_ends_gives_up() {
     let stuck = conn.receive_async(&offer, "text/plain").unwrap();
     let (data, took) = received_in(&mut conn, stuck);
     assert_eq!(data, None);
+    // at its deadline, before the wait's own three seconds
     assert!(
-        (Duration::from_millis(900)..Duration::from_secs(2)).contains(&took),
+        (Duration::from_millis(900)..Duration::from_millis(2800)).contains(&took),
         "a read gives up after a second, waking the wait: {took:?}"
     );
 }
 
 #[test]
 fn a_replaced_selection_cancels_its_reads_and_eight_run_at_once() {
-    let (mut conn, control, _seen, mut stash, offer) = holding_clipboard();
+    let (mut conn, control, _seen, _stash, offer) = holding_clipboard();
     let reads: Vec<_> = (0..8)
         .map(|_| conn.receive_async(&offer, "text/plain").unwrap())
         .collect();
@@ -2065,19 +2062,28 @@ fn a_replaced_selection_cancels_its_reads_and_eight_run_at_once() {
         conn.receive_async(&offer, "image/png"),
         Err(Error::PermissionDenied(_) | Error::UnsupportedFormat(_))
     ));
-    let replaced = Instant::now();
     control.send(Control::Offer(vec!["text/plain"])).unwrap();
-    let fresh = wait_for(&mut conn, &mut stash, |e| match e {
-        Event::Selection(Some(o)) if *o != offer => Some(o.clone()),
-        _ => None,
-    });
-    for read in reads {
-        assert_eq!(received(&mut conn, &mut stash, read), None);
-    }
-    assert!(
-        replaced.elapsed() < Duration::from_millis(500),
-        "cancelled by the new selection, not by the reads' deadline: {:?}",
-        replaced.elapsed()
+    // the reads end in the same return of wait as the new selection, not later at their deadline
+    let (fresh, ended) = loop {
+        let events = conn.wait(Some(Duration::from_secs(3))).unwrap();
+        let fresh = events.iter().find_map(|e| match e {
+            Event::Selection(Some(o)) if *o != offer => Some(o.clone()),
+            _ => None,
+        });
+        if let Some(fresh) = fresh {
+            let ended: Vec<_> = events
+                .into_iter()
+                .filter_map(|e| match e {
+                    Event::Received { id, data } => Some((id, data)),
+                    _ => None,
+                })
+                .collect();
+            break (fresh, ended);
+        }
+    };
+    assert_eq!(
+        ended,
+        reads.into_iter().map(|id| (id, None)).collect::<Vec<_>>()
     );
     assert!(matches!(
         conn.receive_async(&offer, "text/plain"),

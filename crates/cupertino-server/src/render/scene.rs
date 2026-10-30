@@ -364,6 +364,9 @@ pub struct SceneParams<'a> {
     pub lock: LockView,
     /// Black overlays over everything, front to back: the activation fade, then the power dimming.
     pub session_overlays: [Option<SessionOverlay>; 2],
+    /// The frame leaves the compositor (screen capture, screenshot files, recordings): the surfaces of the
+    /// authentication prompt are left out.
+    pub for_capture: bool,
 }
 
 /// A black overlay of the session over the whole output.
@@ -1061,6 +1064,9 @@ fn layer_elements(p: &mut SceneParams<'_>, layer: Layer, captures: &mut Vec<Piec
     let mut out: Vec<Piece> = Vec::new();
     // later surfaces are drawn on top of earlier ones
     for surface in map.layers_on(layer).rev() {
+        if p.for_capture && crate::authorization::is_prompt(surface.wl_surface()) {
+            continue;
+        }
         let Some(geo) = map.layer_geometry(surface) else {
             continue;
         };

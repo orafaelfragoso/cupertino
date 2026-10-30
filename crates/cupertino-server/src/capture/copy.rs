@@ -64,6 +64,12 @@ impl Image {
         })
     }
 
+    /// An opaque black image of `size`.
+    fn black((width, height): (i32, i32)) -> Result<Self> {
+        let pixels = usize::try_from(width)? * usize::try_from(height)?;
+        Self::new(width, height, [0, 0, 0, 255].repeat(pixels))
+    }
+
     fn size(&self) -> (i32, i32) {
         (self.width, self.height)
     }
@@ -257,7 +263,6 @@ impl Cupertino {
             stopped: false,
         };
         match self.placement(&session.source) {
-            Some(_) if self.session_lock.is_active() => session.stop(),
             Some(p) => session.send_constraints(p.size),
             None => session.stop(),
         }
@@ -265,17 +270,16 @@ impl Cupertino {
         self.refresh_capture_indicator();
     }
 
-    /// Stop the copy sessions that must not deliver: every one when `all` (the session was locked), else those whose
-    /// connection no longer holds the Capture role (its process exited). Frames waiting on a stopped session fail.
-    pub(crate) fn stop_captures(&mut self, all: bool) {
+    /// Stop the copy sessions whose connection no longer holds the Capture role (its process exited). Frames waiting
+    /// on a stopped session fail.
+    pub(crate) fn stop_captures(&mut self) {
         let copy = &mut self.capture.copy;
         let mut ended = Vec::new();
         for session in copy.sessions.iter_mut().filter(|s| !s.stopped) {
-            let holds = !all
-                && session
-                    .resource
-                    .client()
-                    .is_some_and(|c| authorized(&c, ShellRole::Capture));
+            let holds = session
+                .resource
+                .client()
+                .is_some_and(|c| authorized(&c, ShellRole::Capture));
             if !holds {
                 session.stop();
                 ended.push(session.id);
@@ -300,8 +304,10 @@ impl Cupertino {
     }
 
     /// Stop the sessions whose source went away, fail the frames waiting on them, then copy the waiting frames of the
-    /// sources drawn on output `idx`.
+    /// sources drawn on output `idx`. While the session is locked an output source is black and a window source keeps
+    /// its frames waiting.
     pub(super) fn copy_frames(&mut self, renderer: &mut GlesRenderer, idx: usize) {
+        let locked = self.session_lock.is_active();
         let placements: Vec<Option<Placement>> = self
             .capture
             .copy
@@ -338,7 +344,7 @@ impl Cupertino {
                 Some(si) => {
                     let placement =
                         placements[si].expect("a session that is not stopped has a placement");
-                    if placement.output == idx {
+                    if placement.output == idx && !(locked && placement.window.is_some()) {
                         due.push((fi, si, placement));
                     }
                 }
@@ -355,6 +361,7 @@ impl Cupertino {
                 Some((_, image)) => image.clone(),
                 None => {
                     let image = match placement.window {
+                        None if locked => Image::black(placement.size),
                         None => self.render_output_image(renderer, idx, key.1),
                         Some(window) => self.render_toplevel_image(renderer, idx, window),
                     };
@@ -593,7 +600,7 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, SessionId> for Cupertino {
             return;
         }
         if !authorized(client, ShellRole::Capture) {
-            state.stop_captures(false);
+            state.stop_captures();
         }
         let copy = &mut state.capture.copy;
         let f = copy.frame_mut(resource);

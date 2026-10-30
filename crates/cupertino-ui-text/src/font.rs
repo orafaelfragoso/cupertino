@@ -47,6 +47,8 @@ struct Face {
     style: FontStyle,
     font: Font,
     weight_range: Option<(f32, f32)>,
+    /// The face has colour glyphs (COLR, CBDT or sbix).
+    colour: bool,
 }
 
 struct Instance {
@@ -96,6 +98,11 @@ impl FontIndex {
             .axes()
             .get_by_tag(Tag::new(&WEIGHT_AXIS))
             .map(|axis| (axis.min_value(), axis.max_value()));
+        let colour = swash::FontRef::from_index(&data, index as usize).is_some_and(|font| {
+            [b"COLR", b"CBDT", b"sbix"]
+                .into_iter()
+                .any(|tag| font.table(swash::tag_from_bytes(tag)).is_some())
+        });
         let id = FaceId(self.faces.len() as u32);
         self.fallbacks.clear();
         self.faces.push(Face {
@@ -106,6 +113,7 @@ impl FontIndex {
             style,
             font,
             weight_range,
+            colour,
         });
         Ok(id)
     }
@@ -278,6 +286,12 @@ impl FontIndex {
 
     pub fn metrics(&self, font: FontId) -> Result<FontMetrics, TextError> {
         self.instance_entry(font).map(|instance| instance.metrics)
+    }
+
+    /// Whether the font's face has colour glyphs (COLR, CBDT or sbix).
+    pub fn is_colour(&self, font: FontId) -> Result<bool, TextError> {
+        let face = self.face_of(font)?;
+        Ok(self.faces[face.0 as usize].colour)
     }
 
     /// Whether the font has a glyph for `ch`.

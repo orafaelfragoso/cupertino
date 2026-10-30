@@ -16,6 +16,8 @@ ALLOWED_BINARIES = {
     "crates/cupertino-assets/fonts/InterVariable-subset.ttf": "8082ab1587b6b1a0ee14e44287b204f3aae7f2021583ca76beb1f717a093dcea",
     # our own boxes for the fallback tests, written by make-fallback-font.py beside it
     "crates/cupertino-ui-text/tests/fixtures/fallback-test.ttf": "73b6c3d00132c6a20b18be6f8a3e13340e2e03c482544e30a5793ad6ded3e476",
+    # our own colour-layer boxes for the emoji tests, written by make-colour-font.py beside it
+    "crates/cupertino-ui-text/tests/fixtures/colour-test.ttf": "466f5457b35e2f111ab8384e3bf71cae279600f0e3f0faaef760cb43af95137a",
 }
 
 

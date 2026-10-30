@@ -1,6 +1,6 @@
 //! The Cupertino theme's regular control geometry, type roles, focus ring and caret timing. Control heights and the
-//! switch size come from the theme's control metrics, body and caption sizes from its type scale; every other value is
-//! a design value of its own (approximate).
+//! switch size come from `cupertino_theme`'s control metrics table (not from the theme data), body and caption sizes
+//! from the theme's type scale; every other value is a design value of its own (approximate).
 
 use crate::{
     ColorTokens, ControlMetrics, ControlSize, FocusRing, Motion, Size, ThemePreferences,
@@ -31,8 +31,9 @@ const FOCUS_RING_RADIUS_EXTRA: f64 = 3.0;
 const CARET_PHASE_MS: u32 = 500;
 
 impl ThemeTokens {
-    /// The Cupertino theme for `preferences`: colours from [`ColorTokens::cupertino`], regular control metrics, and
-    /// type roles in the theme's font family. Fails when the theme lacks a colour or a regular control metric.
+    /// The Cupertino theme for `preferences`: colours from [`ColorTokens::cupertino`], or the opaque
+    /// [`ColorTokens::neutral`] when transparency is reduced; regular control metrics; type roles in the theme's font
+    /// family. Fails when the theme lacks a colour or a regular control metric.
     pub fn cupertino(theme: &Theme, preferences: ThemePreferences) -> Result<Self> {
         let regular = |control| {
             alignment_height(control, ControlSize::Regular).ok_or_else(|| {
@@ -49,7 +50,11 @@ impl ThemeTokens {
         };
         Ok(ThemeTokens {
             preferences,
-            colors: ColorTokens::cupertino(&theme.tokens, preferences.appearance)?,
+            colors: if preferences.reduce_transparency {
+                ColorTokens::neutral(preferences.appearance)
+            } else {
+                ColorTokens::cupertino(&theme.tokens, preferences.appearance)?
+            },
             metrics: ControlMetrics {
                 size: ControlSize::Regular,
                 button_height: regular(Control::PushButton)?,
@@ -170,6 +175,36 @@ mod tests {
         };
         let tokens = ThemeTokens::cupertino(&larger, preferences(Appearance::Dark)).unwrap();
         assert_eq!(tokens.type_scale.body.size, 14.0);
+    }
+
+    #[test]
+    fn reduced_transparency_makes_every_colour_opaque_and_leaves_high_contrast_alone() {
+        let theme = Theme::load().unwrap();
+        for appearance in Appearance::ALL {
+            let reduced = ThemeTokens::cupertino(
+                &theme,
+                ThemePreferences {
+                    reduce_transparency: true,
+                    ..preferences(appearance)
+                },
+            )
+            .unwrap();
+            assert!(
+                reduced.colors.map.values().all(|c| c.a == 1.0),
+                "{appearance:?}"
+            );
+            assert_eq!(reduced.colors, ColorTokens::neutral(appearance));
+            let ordinary = ThemeTokens::cupertino(&theme, preferences(appearance)).unwrap();
+            assert_eq!(
+                ordinary.colors,
+                ColorTokens::cupertino(&theme.tokens, appearance).unwrap()
+            );
+            if appearance.is_high_contrast() {
+                assert_eq!(reduced.colors, ordinary.colors);
+            } else {
+                assert!(ordinary.colors.map.values().any(|c| c.a < 1.0));
+            }
+        }
     }
 
     #[test]

@@ -205,10 +205,19 @@ impl<A: Application> Harness<A> {
     }
 
     pub fn with_direction(direction: LayoutDirection) -> Self {
+        Self::build(direction, theme())
+    }
+
+    /// A harness whose window draws with `theme` instead of the fixture theme.
+    pub fn with_theme(theme: ThemeTokens) -> Self {
+        Self::build(LayoutDirection::Ltr, theme)
+    }
+
+    fn build(direction: LayoutDirection, theme: ThemeTokens) -> Self {
         let clock = Arc::new(ManualClock::new(Timestamp(0)));
         let text = text();
         let options = RuntimeOptions {
-            theme: Arc::new(theme()),
+            theme: Arc::new(theme),
             text: text.clone(),
             direction,
             node_limit: 1000,

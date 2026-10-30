@@ -53,7 +53,9 @@ removed and created again is watched again. A panic in the callback ends the wat
 a shell process to its client's waker.
 
 Only the compositor reads and writes `displays.conf` and `accessibility.conf`. It sends the display options to the shell
-processes on the session object.
+processes on the session object. `SYSTEM_ACCESSIBILITY` (`/etc/cupertino/accessibility.conf`) is the machine's file in the
+same format, for the login screen and accounts without their own; `AccessibilitySettings::from_system_text` applies only
+`SYSTEM_KEYS` (`reduce_motion`) from it and reports any other key. A key joins `SYSTEM_KEYS` only after a security review.
 
 **Power defaults.** Display sleep is 600 s on mains and 120 s on battery, system sleep is 600 s on both, and dim is on (the
 reference's built-in power table, no model overrides them). The session locks 300 s after the

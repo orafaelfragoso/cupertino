@@ -5,176 +5,20 @@
 mod counter;
 #[path = "../examples/apps/forms.rs"]
 mod forms;
+#[path = "../examples/apps/virtual-list.rs"]
+mod virtual_list;
 
-use cupertino_assets::BUILTIN_FONT;
-use cupertino_kit::core::{Application, RuntimeOptions};
+mod support;
+
+use cupertino_kit::core::{Key, Role};
 use cupertino_kit::geometry::Point;
-use cupertino_kit::layout::LayoutDirection;
-use cupertino_kit::platform::{
-    Capabilities, KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp, WindowEvent,
-    WindowId, WindowStates,
-};
-use cupertino_kit::render::{CpuConfig, CpuRenderer};
-use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
-use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
-use cupertino_theme::Theme;
-use cupertino_ui_test::{Inspector, ManualClock, TestDriver};
-use std::num::NonZeroU32;
-use std::sync::Arc;
+use cupertino_kit::platform::Mods;
+use support::{Run, RETURN, SPACE, TAB};
+use virtual_list::{VirtualList, ROW_HEIGHT};
 
-const TAB: u32 = 0xff09;
-const RETURN: u32 = 0xff0d;
-const SPACE: u32 = 0x20;
-
-/// The repository's Cupertino theme in Light, so the dumps never depend on installed theme data.
-fn theme() -> ThemeTokens {
-    let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
-    let preferences = ThemePreferences {
-        appearance: Appearance::Light,
-        reduce_transparency: false,
-        reduce_motion: false,
-    };
-    ThemeTokens::cupertino(&Theme::from_dir(data).unwrap(), preferences).unwrap()
-}
-
-struct Run<A: Application> {
-    driver: TestDriver<A>,
-    window: WindowId,
-}
-
-impl<A: Application> Run<A> {
-    fn new() -> Self {
-        let mut fonts = FontIndex::new();
-        fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
-        let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
-        let glyphs = Arc::clone(&text);
-        let options = RuntimeOptions {
-            theme: Arc::new(theme()),
-            text,
-            icons: Arc::new(cupertino_ui_core::PlaceholderIcons::default()),
-            direction: LayoutDirection::Ltr,
-            node_limit: 1000,
-            renderers: Box::new(move || {
-                Box::new(CpuRenderer::new(
-                    CpuConfig {
-                        max_pixels: 1 << 22,
-                        glyph_cache_bytes: 1 << 20,
-                        image_cache_bytes: 1 << 20,
-                        font_smoothing: true,
-                    },
-                    GlyphRaster::new(Arc::clone(&glyphs)),
-                ))
-            }),
-            accessibility: None,
-            clock: Arc::new(ManualClock::new(Timestamp(0))),
-            on_window_error: None,
-        };
-        let mut driver = TestDriver::new(
-            Capabilities::default(),
-            options,
-            ManualClock::new(Timestamp(0)),
-        );
-        driver.run_until_idle(budget()).unwrap();
-        let window = driver.runtime().windows()[0].1;
-        let active = WindowStates {
-            activated: true,
-            ..WindowStates::default()
-        };
-        driver
-            .window_system_mut()
-            .configure(window, None, active)
-            .unwrap();
-        let mut run = Self { driver, window };
-        run.settle();
-        run
-    }
-
-    fn settle(&mut self) {
-        for _ in 0..8 {
-            self.driver.run_until_idle(budget()).unwrap();
-            let system = self.driver.window_system_mut();
-            if !system.frame_requested(self.window).unwrap() {
-                return;
-            }
-            system.frame_ready(self.window, Timestamp(0)).unwrap();
-        }
-        panic!("the window keeps asking for frames");
-    }
-
-    fn send(&mut self, event: WindowEvent) {
-        self.driver
-            .window_system_mut()
-            .enqueue_window(self.window, event)
-            .unwrap();
-        self.settle();
-    }
-
-    fn key(&mut self, keysym: u32, text: Option<char>) {
-        for pressed in [true, false] {
-            self.send(WindowEvent::Key(
-                KeyEvent {
-                    code: 0,
-                    keysym: Keysym(keysym),
-                    text: text.filter(|_| pressed),
-                    pressed,
-                    repeat: false,
-                    mods: Mods::NONE,
-                },
-                Timestamp(0),
-            ));
-        }
-    }
-
-    fn type_text(&mut self, text: &str) {
-        for c in text.chars() {
-            self.key(c as u32, Some(c));
-        }
-    }
-
-    fn click(&mut self, key: &'static str) {
-        let runtime = self.driver.runtime();
-        let id = runtime.find(self.window, &key.into()).unwrap();
-        let snapshot = runtime.snapshot(self.window).unwrap();
-        let rect = snapshot.nodes.iter().find(|n| n.id == id).unwrap().rect;
-        let position = Point::new(
-            rect.origin.x + rect.size.width / 2.0,
-            rect.origin.y + rect.size.height / 2.0,
-        );
-        let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
-        self.send(pointer(PointerEvent::Motion { position }));
-        for pressed in [true, false] {
-            self.send(pointer(PointerEvent::Button {
-                position,
-                button: MouseButton::Left,
-                pressed,
-                serial: 1,
-            }));
-        }
-    }
-
-    fn model(&self) -> &A::Model {
-        self.driver.runtime().model()
-    }
-
-    /// Compares the window's dump with `tests/goldens/<name>.txt` and returns it.
-    fn golden(&self, name: &str) -> String {
-        let snapshot = self.driver.runtime().snapshot(self.window).unwrap();
-        let dump = Inspector::default().dump(&snapshot);
-        let path = format!("{}/tests/goldens/{name}.txt", env!("CARGO_MANIFEST_DIR"));
-        if std::env::var("CUPERTINO_UPDATE_GOLDENS").as_deref() == Ok("1") {
-            std::fs::write(&path, &dump).unwrap();
-        }
-        let expected = std::fs::read_to_string(&path).unwrap();
-        if let Some(difference) = Inspector::first_difference(&expected, &dump) {
-            panic!("{name} differs from its golden: {difference}");
-        }
-        dump
-    }
-}
-
-fn budget() -> NonZeroU32 {
-    NonZeroU32::new(64).unwrap()
-}
+const DOWN: u32 = 0xff54;
+const PAGE_UP: u32 = 0xff55;
+const END: u32 = 0xff57;
 
 #[test]
 fn the_counter_counts_clicks_and_keys() {
@@ -204,4 +48,79 @@ fn the_form_takes_a_name_a_password_and_a_choice() {
     );
     let dump = run.golden("forms");
     assert!(!dump.contains("hunter2"));
+}
+
+fn selected<const N: usize>(run: &Run<VirtualList<N>>) -> Vec<(usize, usize)> {
+    let selection = &run.model().selection;
+    selection
+        .ranges()
+        .iter()
+        .map(|r| (r.start, r.end))
+        .collect()
+}
+
+#[test]
+fn the_virtual_list_moves_selects_scrolls_and_reverses_50_000_rows() {
+    let mut run = Run::<VirtualList<50_000>>::new();
+    let viewport = run.model().scroll.viewport.height;
+    run.key(TAB, None);
+    for _ in 0..3 {
+        run.key(DOWN, None);
+    }
+    run.chord(DOWN, None, Mods::SHIFT);
+    assert_eq!(selected(&run), [(2, 4)]);
+    run.key(END, None);
+    assert_eq!(selected(&run), [(49_999, 50_000)]);
+    assert_eq!(
+        run.model().scroll.offset.y,
+        50_000.0 * ROW_HEIGHT - viewport
+    );
+    run.key(PAGE_UP, None);
+    let page = (viewport / ROW_HEIGHT).floor() as usize;
+    assert_eq!(selected(&run), [(49_999 - page, 50_000 - page)]);
+    let offset = run.model().scroll.offset.y;
+    run.wheel(Point::new(240.0, 200.0), -100.0);
+    let offset = offset - 100.0;
+    assert_eq!(run.model().scroll.offset.y, offset);
+    let row = (offset / ROW_HEIGHT).ceil() as usize;
+    run.click(Key::Int(row as u64));
+    assert_eq!(selected(&run), [(row, row + 1)]);
+    run.click("reverse");
+    assert_eq!(selected(&run), [(49_999 - row, 50_000 - row)]);
+    assert!(run.model().descending);
+    run.golden("virtual-list");
+}
+
+/// The rows built, the nodes the last layout sized and the nodes painted: first, then after End.
+fn work<const N: usize>() -> ([(usize, usize, usize); 2], f64) {
+    let mut run = Run::<VirtualList<N>>::new();
+    let viewport = run.model().scroll.viewport.height;
+    let measure = |run: &Run<VirtualList<N>>| {
+        let snapshot = run.snapshot();
+        let rows = snapshot
+            .accessibility
+            .iter()
+            .filter(|(_, n)| n.role == Role::ListItem)
+            .count();
+        (
+            rows,
+            snapshot.layout.solves,
+            snapshot.display_list.nodes.len(),
+        )
+    };
+    let first = measure(&run);
+    run.key(TAB, None);
+    run.key(END, None);
+    ([first, measure(&run)], viewport)
+}
+
+#[test]
+fn a_list_builds_lays_out_and_paints_as_much_for_50_000_rows_as_for_1_000() {
+    let (small, viewport) = work::<1_000>();
+    let bound = (2.0 * viewport / ROW_HEIGHT).ceil() as usize + 1 + 2;
+    for (rows, _, _) in small {
+        assert!(rows <= bound, "{rows} rows built, bound {bound}");
+    }
+    assert_eq!(work::<10_000>().0, small);
+    assert_eq!(work::<50_000>().0, small);
 }

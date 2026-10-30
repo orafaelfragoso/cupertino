@@ -14,6 +14,7 @@ mod paint;
 mod pointer;
 mod route;
 mod runtime;
+mod scroll;
 mod semantics;
 mod task;
 #[cfg(test)]
@@ -35,8 +36,8 @@ pub use runtime::{
 };
 pub use widget::{Change, Element, Propagation, Widget};
 
-use cupertino_geometry::Rect;
-use cupertino_ui_layout::{LayoutDirection, LayoutError};
+use cupertino_geometry::{Point, Rect, Size};
+use cupertino_ui_layout::{LayoutDirection, LayoutError, LayoutStats};
 use cupertino_ui_platform::{
     KeyEvent, Keysym, Mods, PlatformError, PointerEvent, Timestamp, TouchEvent, WindowId,
     WindowRequest, WindowSpec,
@@ -159,6 +160,14 @@ pub enum Event {
     AnimationFrame(Timestamp),
     /// The time a node asked for with [`EventCx::wake_at`] has come; it carries the clock's time now.
     Wake(Timestamp),
+    /// A scroll container's size or its content's size changed since it last heard, or it was laid out for the
+    /// first time. `content` counts from the start edge, as the offset does.
+    ScrollGeometry {
+        viewport: Size,
+        content: Size,
+    },
+    /// Keyboard or programmatic focus moved to a node this scroll container hides; scrolling to this offset shows it.
+    Reveal(Point),
     /// The window of the focused node became active (`true`) or inactive; only that node hears it.
     WindowActive(bool),
     /// A press, drag or composition in progress ends without effect: focus, pointer capture or the surface was lost.
@@ -284,6 +293,8 @@ pub struct FrameSnapshot {
     pub accessibility: Vec<(NodeId, AccessibilityNode)>,
     pub display_list: DisplayList,
     pub pending: Pending,
+    /// What the window's last layout did.
+    pub layout: LayoutStats,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

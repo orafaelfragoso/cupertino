@@ -194,3 +194,41 @@ fn no_divider_sits_beside_the_chosen_segment() {
         "the first segment is chosen: only the divider between the other two"
     );
 }
+
+/// A radio group with one option, counting what it emits.
+struct Alone;
+
+impl Application for Alone {
+    type Model = usize;
+    type Message = ();
+
+    fn init() -> (usize, Vec<Command<()>>) {
+        (0, Vec::new())
+    }
+
+    fn update(model: &mut usize, _: ()) -> Vec<Command<()>> {
+        *model += 1;
+        Vec::new()
+    }
+
+    fn view(_: &usize) -> Vec<Window<()>> {
+        window(Element::new(RadioGroup {
+            label: "Only".into(),
+            options: vec!["One".into()],
+            selected: Some(0),
+            axis: Axis::Vertical,
+            spacing: 0.0,
+            enabled: true,
+            on_select: Some(Box::new(|_| ())),
+        }))
+    }
+}
+
+#[test]
+fn an_arrow_in_a_group_of_one_emits_nothing() {
+    let mut h = Harness::<Alone>::new();
+    h.tap(TAB);
+    h.tap(DOWN);
+    h.tap(RIGHT);
+    assert_eq!(*h.model(), 0);
+}

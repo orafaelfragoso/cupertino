@@ -51,6 +51,8 @@ pub(crate) fn build<M: 'static>(
         roving_groups: Vec::new(),
         roving_items: Vec::new(),
     };
+    // Each fallback and where it would stand among the Tab stops, in reading order.
+    let mut fallbacks = Vec::new();
     // Each entry is a node and its nearest ancestor in the accessibility tree.
     let mut stack = vec![(root, None::<NodeId>)];
     while let Some((id, owner)) = stack.pop() {
@@ -65,6 +67,8 @@ pub(crate) fn build<M: 'static>(
         );
         if semantics.focusable {
             pass.focusable.push(id);
+        } else if semantics.focus_fallback {
+            fallbacks.push((id, pass.focusable.len()));
         }
         if semantics.focus_scope {
             pass.scopes.push(id);
@@ -117,6 +121,19 @@ pub(crate) fn build<M: 'static>(
             None => owner,
         };
         stack.extend(node.children.iter().rev().map(|&c| (c, next_owner)));
+    }
+    // The last first, so an inner fallback that becomes a stop keeps its outer one from becoming one, and the
+    // positions of the earlier ones still hold.
+    for (id, at) in fallbacks.into_iter().rev() {
+        let covered = pass.focusable[at..]
+            .iter()
+            .any(|&n| tree.path(n).contains(&id));
+        if !covered {
+            pass.focusable.insert(at, id);
+            if let Some(node) = pass.nodes.get_mut(&id) {
+                node.states.focusable = true;
+            }
+        }
     }
     pass
 }

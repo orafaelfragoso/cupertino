@@ -11,6 +11,7 @@ use crate::layout_view::{placements, TreeView};
 use crate::paint::{PaintInput, Painter};
 use crate::pointer::Pointer;
 use crate::route::{hit_test, Geometry, Route};
+use crate::scroll::{geometry_events, reveal_events};
 use crate::semantics::{build, diff, protected};
 use crate::task::Executor;
 use crate::tree::Tree;
@@ -20,7 +21,7 @@ use crate::{
     Propagation, StepStatus, UiError, Window, WindowBackground, WindowKey,
 };
 use cupertino_geometry::{Point, Size};
-use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutOptions};
+use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutOptions, LayoutStats};
 use cupertino_ui_platform::{
     ClipboardData, ClipboardKind, ConfigureId, KeyEvent, Keysym, PlatformError, PlatformEvent,
     PresentOutcome, SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest,
@@ -37,6 +38,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const TAB: Keysym = Keysym(0xff09);
+/// How many frames in a row a window holds back while its scroll containers tell the model a new geometry.
+const HELD_PAINTS: u8 = 4;
 const LEFT_TAB: Keysym = Keysym(0xfe20);
 
 pub type RendererFactory = Box<dyn FnMut() -> Box<dyn UiRenderer<Frame = CpuFrame>>>;
@@ -124,7 +127,14 @@ struct WindowState<M> {
     roving_groups: Vec<NodeId>,
     roving_items: Vec<NodeId>,
     /// The item a roving group asked to focus, moved to at the next frame if it is a Tab stop by then.
-    focus_request: Option<NodeId>,
+    focus_request: Option<FocusRequest>,
+    /// The node keyboard or programmatic focus moved to, for its scroll containers to show at the next layout.
+    reveal: Option<NodeId>,
+    /// Each scroll container's viewport and content as it last heard them.
+    scroll_heard: HashMap<NodeId, (Size, Size)>,
+    /// Frames held back in a row, so the model could take a scroll geometry first.
+    held_paints: u8,
+    layout: LayoutStats,
     painter: Painter,
     damage: DamageTracker,
     display_list: DisplayList,
@@ -475,6 +485,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             roving_groups: Vec::new(),
             roving_items: Vec::new(),
             focus_request: None,
+            reveal: None,
+            scroll_heard: HashMap::new(),
+            held_paints: 0,
+            layout: LayoutStats::default(),
             painter: Painter::default(),
             damage: DamageTracker::default(),
             display_list: DisplayList::default(),
@@ -781,6 +795,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             return Effects::default();
         };
         w.invalidate();
+        if change.visible {
+            w.reveal = change.to;
+        }
         // the same node with its ring shown or hidden keeps its focus: no events, only a repaint
         if change.from == change.to {
             return Effects::default();
@@ -865,6 +882,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             return Ok(());
         }
         let mut focus_effects = Effects::default();
+        let mut hold = false;
         if !w.prepared {
             let available = Constraints::tight(w.size).map_err(UiError::Layout)?;
             let result = layout(
@@ -880,13 +898,18 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 },
             )
             .map_err(UiError::Layout)?;
+            w.layout = result.stats;
             w.geometry = placements(&self.tree, root, &result, w.env.direction);
 
             let semantics = build(&self.tree, root, &w.geometry, w.focus.node());
             w.focusable = semantics.focusable;
             w.roving_groups = semantics.roving_groups;
             w.roving_items = semantics.roving_items;
-            let requested = match w.focus_request.take() {
+            let requested = match w
+                .focus_request
+                .take()
+                .and_then(|r| resolve(&self.tree, &w.roving_groups, &w.roving_items, r))
+            {
                 Some(item) if w.focusable.contains(&item) => {
                     w.focus.set(&self.tree, Some(item), true)
                 }
@@ -925,9 +948,37 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
             w.accessibility = nodes;
             w.prepared = true;
+
+            let mut scroll = geometry_events(
+                &self.tree,
+                root,
+                &w.geometry,
+                w.env.direction,
+                &mut w.scroll_heard,
+            );
+            if let Some(target) = w.reveal.take() {
+                scroll.extend(reveal_events(
+                    &self.tree,
+                    &w.geometry,
+                    w.env.direction,
+                    target,
+                ));
+            }
+            let mut scroll_effects = Effects::default();
+            let mut route = route(&mut self.tree, w, now, &mut scroll_effects);
+            for (node, event) in &scroll {
+                route.notify(*node, event);
+            }
+            // the model takes the new geometry before this frame paints, so a list never shows the rows of an old size
+            hold = !scroll_effects.messages.is_empty() && w.held_paints < HELD_PAINTS;
+            focus_effects.absorb(scroll_effects);
         }
         self.apply(i, focus_effects);
         let w = &mut self.windows[i];
+        if hold {
+            w.held_paints += 1;
+            return Ok(());
+        }
 
         if !(w.configured && w.frame_ready) {
             return Ok(());
@@ -950,6 +1001,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         w.display_list = painting.list;
         w.resources = painting.resources;
         w.dirty = false;
+        w.held_paints = 0;
         if matches!(&damage, DamageRegion::Rects(r) if r.is_empty()) {
             return Ok(());
         }
@@ -1073,6 +1125,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 .collect(),
             display_list: w.display_list.clone(),
             pending: self.pending(),
+            layout: w.layout,
         })
     }
 
@@ -1106,6 +1159,37 @@ fn physical(logical: f64, scale: f64) -> u32 {
     (logical * scale).round().clamp(0.0, f64::from(u32::MAX)) as u32
 }
 
+/// A roving focus move waiting for the next frame.
+enum FocusRequest {
+    Node(NodeId),
+    /// The item with this key in this group, found once the view is rebuilt.
+    Key(NodeId, Key),
+}
+
+/// The nearest roving group above `node`.
+fn group_of<M: 'static>(tree: &Tree<M>, groups: &[NodeId], node: NodeId) -> Option<NodeId> {
+    tree.path(node)
+        .into_iter()
+        .rev()
+        .skip(1)
+        .find(|a| groups.contains(a))
+}
+
+fn resolve<M: 'static>(
+    tree: &Tree<M>,
+    groups: &[NodeId],
+    items: &[NodeId],
+    request: FocusRequest,
+) -> Option<NodeId> {
+    match request {
+        FocusRequest::Node(node) => Some(node),
+        FocusRequest::Key(group, key) => items.iter().copied().find(|&item| {
+            tree.get(item).is_some_and(|n| n.key.as_ref() == Some(&key))
+                && group_of(tree, groups, item) == Some(group)
+        }),
+    }
+}
+
 /// The item `target` names among the items of `node`'s roving group (the group itself, or the nearest one above it),
 /// counted from the focused item, else from `node`.
 fn roving_target<M: 'static>(
@@ -1113,24 +1197,20 @@ fn roving_target<M: 'static>(
     w: &WindowState<M>,
     node: NodeId,
     target: FocusTarget,
-) -> Option<NodeId> {
-    let group_of = |n: NodeId| {
-        tree.path(n)
-            .into_iter()
-            .rev()
-            .skip(1)
-            .find(|a| w.roving_groups.contains(a))
-    };
+) -> Option<FocusRequest> {
     let group = if w.roving_groups.contains(&node) {
         node
     } else {
-        group_of(node)?
+        group_of(tree, &w.roving_groups, node)?
     };
+    if let FocusTarget::Key(key) = target {
+        return Some(FocusRequest::Key(group, key));
+    }
     let items: Vec<NodeId> = w
         .roving_items
         .iter()
         .copied()
-        .filter(|&item| group_of(item) == Some(group))
+        .filter(|&item| group_of(tree, &w.roving_groups, item) == Some(group))
         .collect();
     let n = items.len();
     if n == 0 {
@@ -1144,8 +1224,9 @@ fn roving_target<M: 'static>(
         FocusTarget::First => 0,
         FocusTarget::Last => n - 1,
         FocusTarget::Index(k) => (k < n).then_some(k)?,
+        FocusTarget::Key(_) => unreachable!("resolved after the rebuild, above"),
     };
-    Some(items[index])
+    Some(FocusRequest::Node(items[index]))
 }
 
 fn route<'a, M: 'static>(

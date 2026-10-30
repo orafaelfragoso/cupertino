@@ -78,7 +78,11 @@ pub(crate) fn scroll_source(source: Option<wl::ScrollSource>) -> platform::Scrol
 }
 
 /// `serial` is that of the latest input event, which a button press is.
-pub(crate) fn pointer(event: wl::PointerEvent, serial: u32) -> platform::PointerEvent {
+pub(crate) fn pointer(
+    event: wl::PointerEvent,
+    serial: u32,
+    mods: platform::Mods,
+) -> platform::PointerEvent {
     match event {
         wl::PointerEvent::Enter(position) => platform::PointerEvent::Enter { position },
         wl::PointerEvent::Motion(position) => platform::PointerEvent::Motion { position },
@@ -92,6 +96,7 @@ pub(crate) fn pointer(event: wl::PointerEvent, serial: u32) -> platform::Pointer
             button: button(b),
             pressed,
             serial,
+            mods,
         },
         wl::PointerEvent::Scroll {
             dx,

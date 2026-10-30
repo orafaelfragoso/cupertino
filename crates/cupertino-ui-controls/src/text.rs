@@ -78,11 +78,21 @@ impl<M: 'static> Widget<M> for Text {
         let Some(layout) = self.laid_out(cx.env(), cx.size().width) else {
             return;
         };
-        let color = cx
-            .env()
-            .theme
-            .colors
-            .get(ColorRole::Text, StateVariant::NORMAL);
+        let (role, variant) = if self.selected {
+            (
+                ColorRole::ControlText,
+                StateVariant {
+                    selected: true,
+                    window_active: cx.window_active(),
+                    ..StateVariant::NORMAL
+                },
+            )
+        } else if self.secondary {
+            (ColorRole::SecondaryText, StateVariant::NORMAL)
+        } else {
+            (ColorRole::Text, StateVariant::NORMAL)
+        };
+        let color = cx.env().theme.colors.get(role, variant);
         look::glyphs(cx, &layout, Point::ZERO, color);
     }
 

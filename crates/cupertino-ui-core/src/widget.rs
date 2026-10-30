@@ -48,6 +48,11 @@ pub trait Widget<M>: 'static {
     fn scroll_offset(&self, _state: &Self::State) -> Point {
         Point::new(0.0, 0.0)
     }
+    /// Whether the pointer at `point` (node coordinates, inside the node) hits the node itself rather than what lies
+    /// under it, such as an overlay scroll bar that shows only its thumb. Children are hit-tested either way.
+    fn hit(&self, _state: &Self::State, _point: Point) -> bool {
+        true
+    }
 }
 
 /// An immutable description of one widget and its children.
@@ -99,6 +104,7 @@ pub(crate) trait AnyWidget<M> {
     fn paint(&self, state: &dyn Any, cx: &mut PaintCx<'_>);
     fn semantics(&self, state: &dyn Any, cx: &mut SemanticsCx<'_>);
     fn scroll_offset(&self, state: &dyn Any) -> Point;
+    fn hit(&self, state: &dyn Any, point: Point) -> bool;
 }
 
 const STATE: &str = "a node's state is the one its widget type created";
@@ -159,5 +165,9 @@ impl<M, W: Widget<M>> AnyWidget<M> for W {
 
     fn scroll_offset(&self, state: &dyn Any) -> Point {
         Widget::scroll_offset(self, state.downcast_ref().expect(STATE))
+    }
+
+    fn hit(&self, state: &dyn Any, point: Point) -> bool {
+        Widget::hit(self, state.downcast_ref().expect(STATE), point)
     }
 }

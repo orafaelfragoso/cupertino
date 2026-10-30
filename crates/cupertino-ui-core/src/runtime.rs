@@ -87,6 +87,8 @@ struct WindowState<M> {
     focus: Focus,
     pointer: Pointer,
     touches: HashMap<i32, Vec<NodeId>>,
+    /// Each key held down and the node that took its press; it gets [`Event::Cancel`] if the window deactivates first.
+    held: Vec<(Keysym, NodeId)>,
     animate: BTreeSet<NodeId>,
     text_input: Option<NodeId>,
     geometry: Geometry,
@@ -384,6 +386,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             focus: Focus::default(),
             pointer: Pointer::default(),
             touches: HashMap::new(),
+            held: Vec::new(),
             animate: BTreeSet::new(),
             text_input: None,
             geometry: Geometry::new(),
@@ -467,9 +470,16 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             WindowEvent::Focus(focused) => {
                 w.active = focused;
                 if !focused {
+                    let mut held: Vec<NodeId> = w.held.drain(..).map(|(_, node)| node).collect();
+                    held.dedup();
                     let mut pointer = std::mem::take(&mut w.pointer);
                     let mut route = route(&mut self.tree, w, now, &mut effects);
                     pointer.revoke(&mut route);
+                    for node in held {
+                        if route.tree.contains(node) {
+                            route.notify(node, &Event::Cancel);
+                        }
+                    }
                     w.pointer = pointer;
                 }
                 if let Some(adapter) = &mut self.options.accessibility {
@@ -511,6 +521,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         };
         let handled =
             route(&mut self.tree, w, now, effects).dispatch(&path, &Event::Key(key, time));
+        w.held.retain(|&(keysym, _)| keysym != key.keysym);
+        if handled == Propagation::Stop && key.pressed {
+            w.held.extend(path.last().map(|&node| (key.keysym, node)));
+        }
         if handled == Propagation::Stop || !key.pressed {
             return;
         }

@@ -176,6 +176,15 @@ fn typing_reports_each_edit_with_a_newer_revision_and_the_model_keeps_it() {
 }
 
 #[test]
+fn deactivating_the_window_while_a_chord_is_held_keeps_the_selection() {
+    let mut h = focused_name();
+    h.type_text("Ada");
+    h.press_key(A, 'a' as u32, true, false, Mods::PRIMARY);
+    h.send(WindowEvent::Focus(false));
+    assert_eq!(editing(&h).1.selection, 0..3);
+}
+
+#[test]
 fn the_editing_chords_move_select_and_delete() {
     let mut h = focused_name();
     h.type_text("Ada");

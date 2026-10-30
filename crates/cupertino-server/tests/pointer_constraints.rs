@@ -342,3 +342,66 @@ fn a_client_that_does_not_answer_its_pings_holds_neither_the_keys_nor_the_pointe
             && vm.inhibitor_events().last() == Some(&true)
     });
 }
+
+#[test]
+fn a_lock_holds_while_the_pointer_is_over_a_subsurface_of_its_surface() {
+    let Some(mut h) = Harness::new() else { return };
+    let game = Client::constraining_under_subsurface(h.socket_path(), "org.example.game");
+    let window = h.mapped(1, "org.example.game");
+    let centre = h.in_window(window, 200.0, 150.0);
+    h.move_to(centre);
+    h.wait_until("the lock", |_| game.constraint_events() == [true]);
+
+    h.move_to(centre + Point::from((50.0, 30.0)));
+    assert_eq!(
+        h.state.pointer.current_location(),
+        centre,
+        "the pointer stays"
+    );
+    assert_eq!(game.relative_motions().last(), Some(&(50.0, 30.0)));
+}
+
+#[test]
+fn the_notice_goes_with_the_hold_however_it_ends() {
+    let Some(mut h) = Harness::new() else { return };
+    let game = Client::constraining(h.socket_path(), "org.example.game", Constraint::Lock, false);
+    let window = h.mapped(1, "org.example.game");
+    h.move_to(h.in_window(window, 200.0, 150.0));
+    h.wait_until("the lock", |_| game.constraint_events() == [true]);
+    assert!(h.state.overlays.shortcut_notice.is_some());
+
+    // the client ends the lock itself: no unlock comes from the compositor, and the notice goes well before its time
+    game.unlock();
+    h.wait_until("the notice to go", |s| {
+        !s.pointer_held() && s.overlays.shortcut_notice.is_none()
+    });
+}
+
+#[test]
+fn the_release_chord_releases_the_application_not_only_its_window() {
+    let Some(mut h) = Harness::new() else { return };
+    let _vm = Client::inhibiting_twice(h.socket_path(), "org.example.vm");
+    h.wait_until("both windows", |s| s.wm.windows().count() == 2);
+    h.advance(1.0);
+    let windows: Vec<WindowId> = h.state.wm.windows().map(|w| w.id).collect();
+    h.state.focus_window_by_input(windows[0]);
+    h.advance(0.5);
+    h.wait_until("held", |s| s.shortcut_inhibit.holding());
+
+    h.release_chord();
+    assert!(!h.state.shortcut_inhibit.holding());
+    // the application moves the focus to its other window itself: still released
+    h.state
+        .command(cupertino_wm::Command::FocusWindow { window: windows[1] });
+    h.advance(0.5);
+    assert_eq!(h.state.wm.key_window(), Some(windows[1]));
+    assert!(
+        !h.state.shortcut_inhibit.holding(),
+        "a window of a released application holds nothing"
+    );
+
+    // the person focuses a window of the application: held again
+    h.state.focus_window_by_input(windows[0]);
+    h.advance(0.5);
+    h.wait_until("held again", |s| s.shortcut_inhibit.holding());
+}

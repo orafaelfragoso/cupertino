@@ -7,15 +7,18 @@
 //! overview or switcher is running, and the pointer is inside the constraint's region. A lock keeps the pointer where
 //! it is and the client gets only relative motion; a confine keeps the pointer inside the region. The release chord
 //! gives the pointer back together with the shortcuts, and the same rule arms it again: focus from the person's own
-//! input (`crate::shortcut_inhibit`). A released window never hides the cursor.
+//! input (`crate::shortcut_inhibit`). A released window never hides the cursor. A subsurface under the pointer counts as
+//! its surface: games and video draw in one.
 
 use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::input::pointer::{MotionEvent, PointerHandle};
+use smithay::reexports::wayland_server::backend::ObjectId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
 use smithay::wayland::compositor::{
-    with_states, RectangleKind, RegionAttributes, SurfaceAttributes,
+    get_parent, with_states, RectangleKind, RegionAttributes, SubsurfaceCachedState,
+    SurfaceAttributes,
 };
 use smithay::wayland::pointer_constraints::{
     with_pointer_constraint, PointerConstraint, PointerConstraintsHandler,
@@ -27,6 +30,29 @@ use crate::state::{Cupertino, PointerMode};
 #[derive(Default)]
 pub struct PointerConstraints {
     surfaces: Vec<WlSurface>,
+    /// The window with the keyboard focus that has shown its notice for the pointer: once per focus or release, not
+    /// again when Smithay ends the constraint as the pointer crosses into one of its subsurfaces and it is taken again.
+    noticed: Option<ObjectId>,
+}
+
+/// The origin of `surface` when `under`, a surface at its origin, is `surface` or one of its subsurfaces.
+fn origin_of(
+    surface: &WlSurface,
+    under: &(WlSurface, Point<f64, Logical>),
+) -> Option<Point<f64, Logical>> {
+    let (mut at, mut origin) = under.clone();
+    while at != *surface {
+        let parent = get_parent(&at)?;
+        let offset = with_states(&at, |s| {
+            s.cached_state
+                .get::<SubsurfaceCachedState>()
+                .current()
+                .location
+        });
+        origin -= offset.to_f64();
+        at = parent;
+    }
+    Some(origin)
 }
 
 /// What an active constraint does to a motion of the pointer.
@@ -110,16 +136,21 @@ impl Cupertino {
         })
     }
 
-    /// The surface under the pointer with its origin, when it has an active constraint.
+    /// The surface with an active constraint under the pointer, itself or through a subsurface, with its origin.
     fn active_constraint(&self) -> Option<(WlSurface, Point<f64, Logical>)> {
         if self.pointer_constraints.surfaces.is_empty() {
             return None;
         }
-        self.surface_under(self.pointer.current_location())
-            .filter(|(surface, _)| {
+        let under = self.surface_under(self.pointer.current_location())?;
+        self.pointer_constraints
+            .surfaces
+            .iter()
+            .find_map(|surface| {
+                let origin = origin_of(surface, &under)?;
                 with_pointer_constraint(surface, &self.pointer, |c| {
                     c.is_some_and(|c| c.is_active())
                 })
+                .then(|| (surface.clone(), origin))
             })
     }
 
@@ -170,16 +201,18 @@ impl Cupertino {
         self.pointer_constraints.surfaces.retain(|surface| {
             surface.is_alive() && with_pointer_constraint(surface, &pointer, |c| c.is_some())
         });
+        if focus.map(|f| f.id()) != self.pointer_constraints.noticed {
+            self.pointer_constraints.noticed = None;
+        }
         if self.pointer_constraints.surfaces.is_empty() {
+            self.settle_hold_notice();
             return;
         }
         let pos = pointer.current_location();
         let under = self.surface_under(pos);
         for surface in self.pointer_constraints.surfaces.clone() {
-            let local = under
-                .as_ref()
-                .filter(|(s, _)| *s == surface)
-                .map(|(_, origin)| pos - *origin);
+            let origin = under.as_ref().and_then(|u| origin_of(&surface, u));
+            let local = origin.map(|origin| pos - origin);
             let may = local.is_some() && self.may_constrain(&surface, focus);
             let (want, active, hint) = with_pointer_constraint(&surface, &pointer, |c| {
                 let Some(c) = c else {
@@ -198,7 +231,11 @@ impl Cupertino {
                         c.activate();
                     }
                 });
-                if let Some(root) = self.root_window_surface(&surface) {
+                if let Some(root) = self
+                    .root_window_surface(&surface)
+                    .filter(|root| self.pointer_constraints.noticed.as_ref() != Some(&root.id()))
+                {
+                    self.pointer_constraints.noticed = Some(root.id());
                     self.show_hold_notice(&root);
                 }
                 self.request_redraw();
@@ -208,23 +245,25 @@ impl Cupertino {
                         c.deactivate();
                     }
                 });
-                if let Some(root) = self.root_window_surface(&surface) {
-                    self.end_hold_notice(&root);
-                }
                 // the pointer comes back where the client drew it, if that is on the surface
-                if let (Some(hint), Some((_, origin))) =
-                    (hint, under.as_ref().filter(|(s, _)| *s == surface))
-                {
+                if let (Some(hint), Some(origin)) = (hint, origin) {
                     let inside = with_renderer_surface_state(&surface, |s| s.surface_size())
                         .flatten()
                         .is_some_and(|size| Rectangle::from_size(size).to_f64().contains(hint));
                     if inside {
-                        self.warp_pointer(&pointer, *origin + hint);
+                        self.warp_pointer(&pointer, origin + hint);
                     }
                 }
                 self.request_redraw();
             }
         }
+        // Smithay also ends a constraint by itself when its surface loses the pointer, without this pass
+        self.settle_hold_notice();
+    }
+
+    /// The release chord gave the pointer back: the next hold shows its notice again.
+    pub(crate) fn forget_pointer_notice(&mut self) {
+        self.pointer_constraints.noticed = None;
     }
 
     /// Put the pointer at `pos` without a motion of the person's: no relative motion and no constraint check.

@@ -88,7 +88,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | press on empty space and drag | rubber band (icon and list view): the items it touches are selected live; Shift or Ctrl toggles them against the selection kept; near the top or bottom edge (50 pt) the view scrolls up to 20 pt every 0.05 s |
 | Super+Backspace | move the selection to the trash (`$XDG_DATA_HOME/Trash`, freedesktop Trash 1.0) |
 | click on the name of the only selected item, or Rename | edit the name in place in a shared text field (`cupertino-text-field`: caret with blink, word and line moves, Shift selection, click, double and triple click, drag, copy, cut and paste, undo): the name without its extension is selected; Return commits, Escape cancels; a name that exists is refused (never replaced) and an invalid one keeps the editor open |
-| press an item and move 5 pt | drag the selection onto a folder of the window or a place of the sidebar: moves there (Alt copies, Super moves, copy across volumes, a clash renames the arrival `name copy`); onto the trash place it is trashed; Escape cancels |
+| press an item and move 5 pt | drag the selection onto a folder of the window or a place of the sidebar: moves there (Alt copies, Super moves, copy across volumes, a clash renames the arrival `name copy`); onto the trash place it is trashed; Escape cancels. The folder or place under the pointer that takes the drop is marked with the accent; under Increase Contrast it is also outlined in the label colour |
 
 ## Design
 
@@ -139,8 +139,9 @@ converts and reports only those. The painter still draws the whole frame, into a
 rectangles of it are copied into the presenter's pixmap, so the pixels equal those of a whole redraw; a painter that
 clips to the rectangles is a separate piece of work. Three changes say where they are: a blink of the search or name
 caret (the toolbar, and the edited item with its row, `window::caret_areas`), a change of the selection (the items
-that were and are selected, `window::item_area`) and a scroll (the content view). Every other change, hover has no
-state in this window, a rubber band, a drag target, a filter, the status text, a resize or a new folder, redraws the
+that were and are selected, `window::item_area`), a scroll (the content view), the rubber band (where it was and is, `window::marquee_area`) and the
+drop target (the folder or sidebar place it left and reached, `window::item_area` and `window::place_area`). Every other
+change, hover has no state in this window, a filter, the status text, a resize or a new folder, redraws the
 whole window, which is correct without further work. The unit tests paint each classified change with and without it
 and require the frames to differ only inside the reported areas.
 

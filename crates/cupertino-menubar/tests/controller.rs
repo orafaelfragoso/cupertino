@@ -1159,3 +1159,20 @@ fn the_system_menu_keeps_force_quit_on_the_desktop_and_greys_the_alternate_below
     assert!(row_labels(&c).contains(&"Force Quit Files".to_owned()));
     assert!(!choose(&mut c, SystemRow::ForceQuitApp.id()));
 }
+
+#[test]
+fn the_system_menu_closes_when_its_content_goes_and_other_menus_stay() {
+    let mut c = system_menu_with_alt(None);
+    assert_eq!(c.open_slot(), Some(&SlotKey::System));
+    assert!(
+        c.close_slot(&SlotKey::AppMenu).is_none(),
+        "another slot leaves it open"
+    );
+    assert!(c.is_open());
+    assert!(c.close_slot(&SlotKey::System).is_some());
+    assert!(!c.is_open());
+    assert!(
+        c.close_slot(&SlotKey::System).is_none(),
+        "nothing left to close"
+    );
+}

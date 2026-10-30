@@ -1182,6 +1182,12 @@ impl MenuController {
         Some(out)
     }
 
+    /// Close the menus when `slot`'s menu is the open one (its content went away); `None` when another menu, or none, is
+    /// open.
+    pub fn close_slot(&mut self, slot: &SlotKey) -> Option<Outcome> {
+        (self.open_slot.as_ref() == Some(slot)).then(|| self.close())
+    }
+
     /// Close everything (focus lost, the app changed, the compositor needs the pointer).
     pub fn close(&mut self) -> Outcome {
         let mut out = Outcome::default();

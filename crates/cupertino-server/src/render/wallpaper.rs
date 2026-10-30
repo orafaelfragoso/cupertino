@@ -27,6 +27,7 @@ use tiny_skia::Pixmap;
 use cupertino_assets::Assets;
 use cupertino_glass::cpu::apply_color_ops;
 use cupertino_glass::ops::Op;
+use cupertino_theme::Appearance;
 
 use super::image::image_element;
 use super::CupertinoElement;
@@ -217,6 +218,8 @@ struct Request {
     strip_rows: u32,
     /// The file and state the output shows, for an answer of "unchanged".
     known: Option<(PathBuf, Stamp)>,
+    /// The colour operations of the menu bar's material, which the strip is measured through.
+    bar_ops: Vec<Op>,
 }
 
 enum Outcome {
@@ -227,6 +230,9 @@ enum Outcome {
         tint: [f32; 3],
         /// [`strip_samples`] of the rows under the menu bar.
         strip: Vec<[u8; 4]>,
+        /// [`strip_lightness`] of `strip` through the request's `bar_ops`.
+        bar_lightness: u16,
+        bar_ops: Vec<Op>,
         path: PathBuf,
         stamp: Stamp,
     },
@@ -329,13 +335,16 @@ impl WorkerState {
             };
             match scale_cover(&source, request.dst) {
                 Ok((pixmap, tint)) => {
+                    let strip = strip_samples(&pixmap, request.strip_rows);
                     return Outcome::Loaded {
-                        strip: strip_samples(&pixmap, request.strip_rows),
+                        bar_lightness: strip_lightness(&strip, &request.bar_ops),
+                        bar_ops: request.bar_ops.clone(),
+                        strip,
                         pixmap,
                         tint,
                         path: path.clone(),
                         stamp,
-                    }
+                    };
                 }
                 Err(e) => self.note(path, &e),
             }
@@ -453,6 +462,10 @@ pub struct Wallpapers {
     sent: HashMap<u64, u16>,
     /// The colour operations of the menu bar's material, which the lightness under it is measured through.
     bar_ops: Vec<Op>,
+    /// The appearance and Reduce Transparency the operations are those of.
+    bar_material: Option<(Appearance, bool)>,
+    /// When each output was last asked about; what is kept for one nobody asks about any more is dropped.
+    seen: HashMap<u64, f64>,
 }
 
 impl Wallpapers {
@@ -474,12 +487,28 @@ impl Wallpapers {
             measured: Vec::new(),
             sent: HashMap::new(),
             bar_ops: Vec::new(),
+            bar_material: None,
+            seen: HashMap::new(),
+        }
+    }
+
+    /// The menu bar's material is that of `material` (the appearance, and Reduce Transparency), whose colour operations
+    /// `ops` gives; it is asked only when `material` changes.
+    pub fn set_bar_material(
+        &mut self,
+        material: (Appearance, bool),
+        ops: impl FnOnce() -> Vec<Op>,
+    ) {
+        if self.bar_material != Some(material) {
+            self.bar_material = Some(material);
+            self.set_bar_ops(&ops());
         }
     }
 
     /// The menu bar's material now has the colour operations `ops` (another appearance or material option): every
-    /// image shown is measured through them again, and a lightness that changed is handed out.
-    pub fn set_bar_ops(&mut self, ops: &[Op]) {
+    /// image shown is measured through them again, and a lightness that changed is handed out. An output with the
+    /// procedural wallpaper is measured through them at its next frame; each of those changes asks every output for one.
+    fn set_bar_ops(&mut self, ops: &[Op]) {
         if self.bar_ops == ops {
             return;
         }
@@ -536,10 +565,17 @@ impl Wallpapers {
                     pixmap,
                     tint,
                     strip,
+                    bar_lightness,
+                    bar_ops,
                     path,
                     stamp,
                 } => {
-                    let bar_lightness = strip_lightness(&strip, &self.bar_ops);
+                    // the operations changed while the image was read
+                    let bar_lightness = if bar_ops == self.bar_ops {
+                        bar_lightness
+                    } else {
+                        strip_lightness(&strip, &self.bar_ops)
+                    };
                     let size = (pixmap.width() as i32, pixmap.height() as i32);
                     let buffer = MemoryRenderBuffer::from_slice(
                         pixmap.data(),
@@ -599,6 +635,7 @@ impl Wallpapers {
             dst,
             strip_rows,
             known,
+            bar_ops: self.bar_ops.clone(),
         };
         if self
             .loader
@@ -665,7 +702,7 @@ impl Wallpapers {
 
     /// The pixels the wallpaper of an output of `px` device pixels shows, or `None` for the procedural wallpaper.
     /// Until the image is in, the output keeps what it showed. The lightness of its top `strip_rows` rows, under the
-    /// menu bar, is measured through the colour operations given to [`Wallpapers::set_bar_ops`] once per image and
+    /// menu bar, is measured through the colour operations given to [`Wallpapers::set_bar_material`] once per image and
     /// once per change of those, and handed out by [`Wallpapers::take_bar_lightness`].
     pub fn shown(
         &mut self,
@@ -676,6 +713,14 @@ impl Wallpapers {
         strip_rows: u32,
         now: f64,
     ) -> Option<(MemoryRenderBuffer, (i32, i32))> {
+        self.seen.insert(output, now);
+        self.seen.retain(|output, at| {
+            let asked = now - *at < FORGET_SECONDS;
+            if !asked {
+                self.sent.remove(output);
+            }
+            asked
+        });
         let dst = (u32::try_from(px.0).ok()?, u32::try_from(px.1).ok()?);
         if dst.0 == 0 || dst.1 == 0 {
             return None;
@@ -838,6 +883,56 @@ mod tests {
         assert_eq!(rig.wallpapers.take_bar_lightness(), []);
         rig.wallpapers.set_bar_ops(&ops);
         assert_eq!(rig.wallpapers.take_bar_lightness(), [(1, through)]);
+    }
+
+    #[test]
+    fn an_image_read_while_the_bar_material_changes_is_measured_through_the_new_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_png(dir.path(), "w.png", (32, 32), |_, _| [119, 119, 119, 255]);
+        let mut rig = rig();
+        rig.wallpapers
+            .set_bar_ops(&bar_ops(cupertino_theme::Appearance::Light));
+        let hold = rig.gate.lock().unwrap();
+        rig.wallpapers
+            .update(1, vec![path.clone()], (32, 32), 1, 0.0);
+        rig.wallpapers.set_bar_ops(&[]);
+        drop(hold);
+        rig.settle(&path, (32, 32), 0.0);
+        assert_eq!(rig.wallpapers.take_bar_lightness(), [(1, 500)]);
+    }
+
+    #[test]
+    fn the_bar_materials_operations_are_asked_for_once_per_change() {
+        use cupertino_theme::Appearance;
+        let mut wallpapers = Wallpapers::with_decoder([None, None], Arc::new(decode_file));
+        let asked = std::cell::Cell::new(0);
+        let ops = || {
+            asked.set(asked.get() + 1);
+            bar_ops(Appearance::Light)
+        };
+        for _ in 0..3 {
+            wallpapers.set_bar_material((Appearance::Light, false), ops);
+        }
+        assert_eq!(asked.get(), 1);
+        wallpapers.set_bar_material((Appearance::Light, true), Vec::new);
+        wallpapers.set_bar_material((Appearance::Light, false), ops);
+        assert_eq!(asked.get(), 2);
+    }
+
+    #[test]
+    fn an_output_nobody_asked_about_for_a_while_is_told_its_lightness_again() {
+        let mut wallpapers = Wallpapers::with_decoder([None, None], Arc::new(decode_file));
+        let none = WallpaperSettings::default();
+        let light = colour_lightness(crate::render::scene::wallpaper_tint(false));
+        wallpapers.shown(1, &none, false, (8, 8), 1, 0.0);
+        assert_eq!(wallpapers.take_bar_lightness(), [(1, light)]);
+        // output 1 is unplugged; a minute later another output draws, then output 1 comes back
+        wallpapers.shown(2, &none, false, (8, 8), 1, FORGET_SECONDS);
+        assert_eq!(wallpapers.take_bar_lightness(), [(2, light)]);
+        wallpapers.shown(1, &none, false, (8, 8), 1, FORGET_SECONDS + 1.0);
+        assert_eq!(wallpapers.take_bar_lightness(), [(1, light)]);
+        wallpapers.shown(1, &none, false, (8, 8), 1, FORGET_SECONDS + 2.0);
+        assert_eq!(wallpapers.take_bar_lightness(), []);
     }
 
     #[test]

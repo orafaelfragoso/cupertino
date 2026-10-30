@@ -1,5 +1,5 @@
 use super::*;
-use crate::accessibility::TextSemantics;
+use crate::accessibility::{Live, TextSemantics};
 use crate::route::Placement;
 use crate::test_support::{group, leaf, spec};
 use crate::{Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, Widget};
@@ -52,6 +52,42 @@ impl Widget<M> for Secret {
     }
 }
 
+/// A form error that assistive technology announces at once.
+struct Alert;
+
+impl Widget<M> for Alert {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::StaticText);
+        cx.name("Incorrect password");
+        cx.live(Live::Assertive);
+    }
+}
+
 fn pass(view: Element<M>) -> (Tree<M>, NodeId, SemanticsPass) {
     let mut tree = Tree::new(20);
     let root = tree.reconcile(None, view).unwrap();
@@ -84,6 +120,27 @@ fn a_protected_value_reaches_the_tree_as_protected_with_no_text_or_caret() {
     assert_eq!(field.value, Some(AccessibleValue::Protected));
     assert_eq!(field.name.as_deref(), Some("Password"));
     assert!(!format!("{:?}", pass.nodes).contains("hunter2"));
+}
+
+#[test]
+fn a_live_region_reaches_the_tree_with_its_politeness_and_other_nodes_are_not_live() {
+    let (_, root, pass) = pass(Element::new(group(vec![
+        Element::new(Alert),
+        Element::new(Secret),
+    ])));
+    let alert = pass
+        .nodes
+        .values()
+        .find(|n| n.role == Role::StaticText)
+        .unwrap();
+    assert_eq!(alert.live, Some(Live::Assertive));
+    let field = pass
+        .nodes
+        .values()
+        .find(|n| n.role == Role::PasswordInput)
+        .unwrap();
+    assert_eq!(field.live, None);
+    assert_eq!(pass.nodes[&root].live, None);
 }
 
 #[test]

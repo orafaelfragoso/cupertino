@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 
 use accesskit::{Invalid, Toggled};
 use cupertino_ui_core::{
-    AccessibilityNode, AccessibleValue, Action, ActionData, ActionRequest, Checked, NodeId,
+    AccessibilityNode, AccessibleValue, Action, ActionData, ActionRequest, Checked, Live, NodeId,
     Relation, Role,
 };
 
@@ -117,6 +117,11 @@ pub(crate) fn node(node: &AccessibilityNode) -> accesskit::Node {
             .map(node_id)
             .collect::<Vec<_>>(),
     );
+    match node.live {
+        Some(Live::Polite) => out.set_live(accesskit::Live::Polite),
+        Some(Live::Assertive) => out.set_live(accesskit::Live::Assertive),
+        None => {}
+    }
     out
 }
 

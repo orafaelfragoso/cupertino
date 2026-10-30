@@ -26,9 +26,10 @@ fn node(out: &mut String, id: impl std::fmt::Debug, n: &AccessibilityNode) {
         Some(AccessibleValue::Protected) => "<protected>".to_string(),
         Some(other) => format!("{other:?}"),
     };
+    let live = n.live.map(|l| format!(" live={l:?}")).unwrap_or_default();
     let _ = writeln!(
         out,
-        "  {id:?} role={:?} name={:?} description={:?} value={value} states={:?} bounds=[{}] actions={:?} \
+        "  {id:?} role={:?} name={:?} description={:?} value={value}{live} states={:?} bounds=[{}] actions={:?} \
          relations={:?} children={:?}",
         n.role,
         n.name,
@@ -185,6 +186,7 @@ mod tests {
                     actions: vec![Action::Focus],
                     relations: vec![],
                     children: vec![],
+                    live: None,
                 },
             )],
             display_list: DisplayList {

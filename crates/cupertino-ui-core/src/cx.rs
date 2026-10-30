@@ -1,4 +1,4 @@
-use crate::accessibility::{AccessibleStates, AccessibleValue, Action, Relation, Role};
+use crate::accessibility::{AccessibleStates, AccessibleValue, Action, Live, Relation, Role};
 use crate::route::Placement;
 use crate::widget::Change;
 use crate::{Environment, NodeId, Phase};
@@ -268,6 +268,7 @@ pub(crate) struct Semantics {
     pub(crate) focusable: bool,
     pub(crate) focus_scope: bool,
     pub(crate) protected: bool,
+    pub(crate) live: Option<Live>,
 }
 
 /// A node without a role is left out of the accessibility tree and its children take its place.
@@ -324,5 +325,11 @@ impl SemanticsCx<'_> {
     /// [`AccessibleValue::Protected`].
     pub fn protected(&mut self) {
         self.semantics.protected = true;
+    }
+
+    /// Makes the node a live region: assistive technology announces its changes as they happen (a toast, a form
+    /// error).
+    pub fn live(&mut self, live: Live) {
+        self.semantics.live = Some(live);
     }
 }

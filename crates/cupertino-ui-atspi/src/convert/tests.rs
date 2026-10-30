@@ -17,6 +17,7 @@ fn base(role: Role) -> AccessibilityNode {
         actions: Vec::new(),
         relations: Vec::new(),
         children: Vec::new(),
+        live: None,
     }
 }
 
@@ -79,6 +80,19 @@ fn static_text_is_named_through_its_value_as_accesskit_reads_a_label() {
     let out = node(&text);
     assert_eq!(out.role(), accesskit::Role::Label);
     assert_eq!(out.value(), Some("Version 1.0"));
+}
+
+#[test]
+fn a_live_region_keeps_its_politeness_and_other_nodes_have_none() {
+    let mut toast = base(Role::StaticText);
+    assert_eq!(node(&toast).live(), None);
+    for (live, expected) in [
+        (Live::Polite, accesskit::Live::Polite),
+        (Live::Assertive, accesskit::Live::Assertive),
+    ] {
+        toast.live = Some(live);
+        assert_eq!(node(&toast).live(), Some(expected));
+    }
 }
 
 #[test]

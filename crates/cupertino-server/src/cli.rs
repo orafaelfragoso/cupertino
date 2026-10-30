@@ -326,10 +326,6 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
     Ok(())
 }
 
-/// How often the supervisor looks for exited shell processes; the restart throttle is 1 s, so a
-/// restart is at most this late.
-const SUPERVISION_INTERVAL: Duration = Duration::from_millis(100);
-
 /// Poll the shell processes of the configuration (starting them on the first tick) and the X display's satellite from
 /// the event loop.
 pub fn start_shell_supervision(
@@ -339,36 +335,122 @@ pub fn start_shell_supervision(
     if state.config.shell_processes.is_empty() && state.xwayland.is_none() {
         return Ok(());
     }
-    let timer = Timer::immediate();
     event_loop
         .handle()
-        .insert_source(timer, |_, _, state| {
-            let socket = state
-                .socket_name
-                .clone()
-                .expect("the server listens on a socket when it supervises shell processes");
-            let display = state.display_handle.clone();
-            if let Some(x) = &mut state.xwayland {
-                x.poll(&state.loop_handle, Instant::now());
-            }
-            let x11 = state.xwayland.as_ref().map(|x| x.display());
-            state
-                .supervisor
-                .poll(Instant::now(), &socket, x11, &mut |spec| {
-                    crate::shell_connection::connect_bound_client(
-                        &display,
-                        crate::shell_connection::shell_process_state(&spec.roles),
-                    )
-                });
-            let trust = state.login_trust();
-            if let Some(dbus) = &state.dbus {
-                dbus.set_login(trust);
-            }
-            state.refresh_session_agent();
-            TimeoutAction::ToDuration(SUPERVISION_INTERVAL)
+        .insert_source(Timer::immediate(), |_, _, state| {
+            supervise(state);
+            TimeoutAction::Drop
         })
         .map_err(|e| anyhow::anyhow!("inserting the shell supervision timer: {e}"))?;
     Ok(())
+}
+
+/// When a child whose exit cannot be watched (no pidfd) is looked at again.
+const UNWATCHED_POLL: Duration = Duration::from_millis(100);
+
+/// Start due processes, reap exited ones, and arm what wakes the next pass: a pidfd per running child, readable when it
+/// exits, and a timer at the earliest restart. While every child runs, nothing wakes the loop for them.
+fn supervise(state: &mut Cupertino) {
+    let socket = state
+        .socket_name
+        .clone()
+        .expect("the server listens on a socket when it supervises shell processes");
+    let display = state.display_handle.clone();
+    if let Some(x) = &mut state.xwayland {
+        x.poll(&state.loop_handle, Instant::now());
+    }
+    let x11 = state.xwayland.as_ref().map(|x| x.display());
+    state
+        .supervisor
+        .poll(Instant::now(), &socket, x11, &mut |spec| {
+            crate::shell_connection::connect_bound_client(
+                &display,
+                crate::shell_connection::shell_process_state(&spec.roles),
+            )
+        });
+    let trust = state.login_trust();
+    if let Some(dbus) = &state.dbus {
+        dbus.set_login(trust);
+    }
+    state.refresh_session_agent();
+
+    let mut next = [
+        state.supervisor.next_deadline(),
+        state.xwayland.as_ref().and_then(|x| x.next_deadline()),
+    ]
+    .into_iter()
+    .flatten()
+    .min();
+    let running: Vec<u32> = state
+        .supervisor
+        .pids()
+        .into_iter()
+        .chain(state.xwayland.as_ref().and_then(|x| x.pid()))
+        .collect();
+    for pid in running {
+        if state.supervision_wakeups.watched.contains_key(&pid) {
+            continue;
+        }
+        match watch_exit(state, pid) {
+            Ok(token) => {
+                state.supervision_wakeups.watched.insert(pid, token);
+            }
+            Err(e) => {
+                tracing::warn!(pid, error = %e, "cannot watch the exit of a supervised process: it is polled");
+                let poll = Instant::now() + UNWATCHED_POLL;
+                next = Some(next.map_or(poll, |n| n.min(poll)));
+            }
+        }
+    }
+    if let Some(at) = next {
+        arm_supervision_timer(state, at);
+    }
+}
+
+/// A source that runs [`supervise`] once `pid` (a child the server started and has not reaped) exits.
+fn watch_exit(
+    state: &Cupertino,
+    pid: u32,
+) -> std::io::Result<smithay::reexports::calloop::RegistrationToken> {
+    use smithay::reexports::calloop::generic::Generic;
+    use smithay::reexports::calloop::{Interest, Mode, PostAction};
+    let raw =
+        rustix::process::Pid::from_raw(pid as i32).ok_or_else(|| std::io::Error::other("pid 0"))?;
+    let pidfd = rustix::process::pidfd_open(raw, rustix::process::PidfdFlags::empty())?;
+    state
+        .loop_handle
+        .insert_source(
+            Generic::new(pidfd, Interest::READ, Mode::Level),
+            move |_, _, state| {
+                state.supervision_wakeups.watched.remove(&pid);
+                supervise(state);
+                Ok(PostAction::Remove)
+            },
+        )
+        .map_err(|e| std::io::Error::other(e.to_string()))
+}
+
+/// Make sure a supervision pass runs at `at`: an armed timer that fires sooner is kept, a later one is replaced.
+fn arm_supervision_timer(state: &mut Cupertino, at: Instant) {
+    if let Some((token, armed)) = state.supervision_wakeups.timer {
+        if armed <= at {
+            return;
+        }
+        state.loop_handle.remove(token);
+    }
+    let inserted = state
+        .loop_handle
+        .insert_source(Timer::from_deadline(at), |_, _, state| {
+            state.supervision_wakeups.timer = None;
+            supervise(state);
+            TimeoutAction::Drop
+        });
+    match inserted {
+        Ok(token) => state.supervision_wakeups.timer = Some((token, at)),
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot arm the supervision timer: a restart waits for the next exit")
+        }
+    }
 }
 
 /// Takes an X display for X11 programs when `xwayland-satellite` is installed; without it, or when no display can be
@@ -389,9 +471,14 @@ fn start_xwayland(state: &mut Cupertino) {
         std::path::Path::new(&runtime_dir),
     )
     .and_then(|display| {
-        crate::xwayland::XWayland::start(display, program, socket, &state.loop_handle, |s| {
-            s.xwayland.as_mut()
-        })
+        crate::xwayland::XWayland::start(
+            display,
+            program,
+            socket,
+            &state.loop_handle,
+            |s| s.xwayland.as_mut(),
+            supervise,
+        )
     });
     match started {
         Ok(x) => state.xwayland = Some(x),

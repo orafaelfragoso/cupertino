@@ -182,6 +182,27 @@ fn every_configured_process_runs_with_the_servers_socket() {
     assert_eq!(server.wait_for_lines(&b, 1), vec![socket]);
 }
 
+/// While every process runs, nothing but its exit wakes the supervision: no timer is armed, and each child is watched.
+#[test]
+fn running_processes_are_watched_for_their_exit_and_no_timer_polls_them() {
+    let dir = TempDir::new("watched");
+    let log = dir.file("log");
+    let script = r#"echo $$ >> "$1"; exec sleep 60"#;
+    let mut server = Server::start(vec![stand_in("idle", script, &log)], false).unwrap();
+    let pid: u32 = server.wait_for_lines(&log, 1)[0].parse().unwrap();
+    assert!(server.state.supervision_wakeups.timer.is_none());
+    assert!(
+        server.state.supervision_wakeups.watched.contains_key(&pid),
+        "{:?}",
+        server
+            .state
+            .supervision_wakeups
+            .watched
+            .keys()
+            .collect::<Vec<_>>()
+    );
+}
+
 /// A process killed by SIGKILL is a failure: it comes back, but not before the throttle.
 #[test]
 fn a_killed_process_is_restarted_after_the_throttle() {

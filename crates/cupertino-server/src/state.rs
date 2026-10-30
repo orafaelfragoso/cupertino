@@ -451,6 +451,8 @@ pub struct Cupertino {
     pub shell_v1: ShellV1Global,
     pub app_effects_v1: AppEffectsV1Global,
     pub supervisor: Supervisor,
+    /// What wakes the supervision of the shell processes and the satellite.
+    pub supervision_wakeups: crate::supervisor::Wakeups,
     /// The X display for X11 programs and its satellite; `None` without `xwayland-satellite` and in headless runs.
     pub xwayland: Option<crate::xwayland::XWayland>,
     /// Screen capture for the screenshot process: its globals, sessions and pending frames.
@@ -726,6 +728,7 @@ impl Cupertino {
             shell_v1,
             app_effects_v1,
             supervisor,
+            supervision_wakeups: Default::default(),
             xwayland: None,
             capture,
             wm,

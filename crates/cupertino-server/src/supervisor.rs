@@ -1,7 +1,8 @@
 //! Supervision of the shell processes named in the configuration: started with the server,
-//! restarted by [`crate::restart_policy`], and killed when the server goes away. Exits are found
-//! by polling `try_wait` from a timer of the event loop: the server installs no SIGCHLD handler
-//! and the existing spawn code does not either, and a poll adds no thread or fd to the loop.
+//! restarted by [`crate::restart_policy`], and killed when the server goes away. A pass of
+//! [`Supervisor::poll`] runs when a child's pidfd becomes readable (it exited) or at the earliest
+//! restart ([`Supervisor::next_deadline`]), see [`Wakeups`]; `try_wait` reaps it there. The server
+//! installs no SIGCHLD handler, and nothing wakes the loop while every child runs.
 
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
@@ -107,6 +108,17 @@ impl Supervisor {
             .collect()
     }
 
+    /// When the next restart is due: the earliest start of a process waiting out its throttle.
+    pub fn next_deadline(&self) -> Option<Instant> {
+        self.procs
+            .iter()
+            .filter_map(|p| match p.phase {
+                Phase::Waiting(at) => Some(at),
+                Phase::Running { .. } | Phase::Stopped => None,
+            })
+            .min()
+    }
+
     /// The pid of the running process named `name`; `None` while it is not running.
     pub fn pid_of(&self, name: &str) -> Option<u32> {
         self.procs
@@ -166,6 +178,16 @@ fn start(
             Phase::Waiting(now + backoff.next_interval(Duration::ZERO))
         }
     }
+}
+
+/// The event-loop sources that wake the supervision (`crate::cli::start_shell_supervision`): a pidfd per running child,
+/// readable when it exits, and one timer at the earliest restart. Nothing wakes it while every child runs.
+#[derive(Default)]
+pub struct Wakeups {
+    /// The pidfd source of each watched child, by pid.
+    pub watched: std::collections::HashMap<u32, smithay::reexports::calloop::RegistrationToken>,
+    /// The restart timer and when it fires.
+    pub timer: Option<(smithay::reexports::calloop::RegistrationToken, Instant)>,
 }
 
 impl Drop for Supervisor {
@@ -257,6 +279,21 @@ mod tests {
         let (first, second) = (starts[1] - starts[0], starts[2] - starts[1]);
         assert!(first >= RESTART_THROTTLE, "first wait {first:?}");
         assert!(second >= 2 * RESTART_THROTTLE, "second wait {second:?}");
+    }
+
+    #[test]
+    fn the_next_deadline_is_the_earliest_restart_and_none_while_all_run() {
+        let now = Instant::now();
+        let s = Supervisor::new(&[spec("exit 1"), spec("exit 1")], now);
+        assert_eq!(s.next_deadline(), Some(now), "both are due to start");
+        let mut s = Supervisor::new(&[spec("exec sleep 60")], now);
+        let mut connect = connect;
+        s.poll(now, "wayland-test", None, &mut connect);
+        assert_eq!(
+            s.next_deadline(),
+            None,
+            "a running process waits for its exit"
+        );
     }
 
     #[test]

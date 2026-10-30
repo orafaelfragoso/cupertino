@@ -5,7 +5,7 @@
 //! `XAUTHORITY`: the display takes only clients that hold its cookie, since the abstract socket has no file permissions
 //! and any local user could reach it. When the satellite ends, the display listens again: after a failure only once
 //! the restart throttle ([`crate::restart_policy`]) has passed, so the next X11 program starts it again and a satellite
-//! that cannot run is not started in a loop. Its exit is found by polling, like the shell processes'.
+//! that cannot run is not started in a loop. Its exit wakes the supervision pass of the shell processes (a pidfd).
 
 use std::fs::OpenOptions;
 use std::io::{ErrorKind, Read, Write};
@@ -269,13 +269,15 @@ pub struct XWayland {
 }
 
 impl XWayland {
-    /// Listens on `display` from `handle`'s loop; `get` finds this value in the loop's state.
+    /// Listens on `display` from `handle`'s loop; `get` finds this value in the loop's state, and `started` runs after a
+    /// waiting client may have started the satellite (the server watches the new child's exit there).
     pub fn start<D: 'static>(
         display: XDisplay,
         program: PathBuf,
         socket: String,
         handle: &LoopHandle<'static, D>,
         get: fn(&mut D) -> Option<&mut XWayland>,
+        started: fn(&mut D),
     ) -> std::io::Result<Self> {
         let mut sources = Vec::new();
         for listener in &display.listeners {
@@ -288,6 +290,7 @@ impl XWayland {
                         if let Some(x) = get(state) {
                             x.connection_waiting(&loop_handle, Instant::now());
                         }
+                        started(state);
                         Ok(PostAction::Continue)
                     },
                 )
@@ -309,6 +312,14 @@ impl XWayland {
 
     pub fn display(&self) -> &XDisplay {
         &self.display
+    }
+
+    /// When the display listens again after a failed satellite.
+    pub fn next_deadline(&self) -> Option<Instant> {
+        match self.phase {
+            Phase::Waiting(at) => Some(at),
+            Phase::Listening | Phase::Running { .. } => None,
+        }
     }
 
     /// The pid of the running satellite.
@@ -613,6 +624,7 @@ mod tests {
             "wayland-test".into(),
             &event_loop.handle(),
             |s| s.as_mut(),
+            |_| {},
         )
         .unwrap();
         Fixture {

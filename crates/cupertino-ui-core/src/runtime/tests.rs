@@ -702,3 +702,26 @@ fn without_a_theme_maker_an_appearance_change_keeps_the_theme() {
     rt.step(steps()).unwrap();
     assert!(Arc::ptr_eq(&rt.windows[0].env.theme, &before));
 }
+
+#[test]
+fn a_theme_equal_to_the_current_one_lays_nothing_out_again() {
+    let (mut rt, window, _) = start();
+    configure(&mut rt, window, 1);
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(1)));
+    rt.step(steps()).unwrap();
+    assert!(!rt.windows[0].dirty);
+    let current = Arc::clone(&rt.options.theme);
+
+    rt.set_theme(Arc::new((*current).clone()));
+    assert!(!rt.windows[0].dirty, "an equal theme is no change");
+    assert!(Arc::ptr_eq(&rt.windows[0].env.theme, &current));
+
+    let mut other = (*current).clone();
+    other.motion.reduce = !other.motion.reduce;
+    rt.set_theme(Arc::new(other));
+    assert!(
+        rt.windows[0].dirty,
+        "a different theme lays the window out again"
+    );
+}

@@ -40,7 +40,7 @@
         The close button is not among them: a window can always be closed.
       </description>
       <entry name="minimize" value="1" summary="the minimize button, the minimize shortcut and the Window menu's Minimize"/>
-      <entry name="zoom" value="2" summary="the zoom button, the zoom shortcut, the Window menu's Zoom and the title bar's double click"/>
+      <entry name="zoom" value="2" summary="the zoom button, the zoom shortcut, the Window menu's Zoom, the title bar's double click and the fill tile"/>
     </enum>
 
     <request name="destroy" type="destructor">
@@ -105,14 +105,16 @@
       <description summary="disable window controls of an application window">
         Disables the controls of the xdg toplevel of the surface. A disabled button is drawn dimmed
         and takes no click, and the matching shortcut and Window menu items do nothing on this
-        window, nor, for zoom, does a double click on the title bar. The client's own
+        window, nor, for zoom, does a double click on the title bar or filling the screen by
+        tiling (half and quarter tiles stay possible). The client's own
         xdg_toplevel.set_minimized and xdg_toplevel.set_maximized are refused too. Unzooming a
         window that is already zoomed and restoring a minimized one stay possible, so a window is
         never kept zoomed or minimized by this request.
         The state is double-buffered: it applies at the surface's next wl_surface.commit. It may
         change at any time, also after the window is mapped. The default is none.
         The close button can't be disabled. Hide, the application switcher, the overview, the
-        moves between workspaces and Force Quit act on the window as on any other. A window that
+        moves between workspaces and Force Quit act on the window as on any other, and full screen
+        is not a window control: the client asks for it itself. A window that
         isn't resizable (its minimum size equals its maximum size) has zoom disabled whatever this
         says.
         Posts invalid_surface when the surface belongs to another client, window when it is not an

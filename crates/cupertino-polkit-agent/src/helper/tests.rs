@@ -46,19 +46,19 @@ fn the_socket_comes_first_then_the_first_installed_binary() {
     let binaries = [first.as_path(), second.as_path()];
     assert_eq!(
         Route::find_in(&socket, &binaries),
-        Some(Route::Binary(second.clone()))
+        [Route::Binary(second.clone())]
     );
     std::fs::write(&first, b"").unwrap();
     assert_eq!(
         Route::find_in(&socket, &binaries),
-        Some(Route::Binary(first.clone()))
+        [Route::Binary(first.clone())]
     );
     let _listener = UnixListener::bind(&socket).unwrap();
     assert_eq!(
         Route::find_in(&socket, &binaries),
-        Some(Route::Socket(socket.clone()))
+        [Route::Socket(socket.clone()), Route::Binary(first.clone())]
     );
-    assert_eq!(Route::find_in(&dir.path().join("none"), &[]), None);
+    assert_eq!(Route::find_in(&dir.path().join("none"), &[]), []);
 }
 
 #[test]
@@ -77,7 +77,7 @@ fn over_the_socket_the_user_and_cookie_come_first_and_the_answer_follows_the_pro
         writeln!(stream, "SUCCESS").unwrap();
         (user, cookie, answer)
     });
-    let mut helper = Helper::start(&Route::Socket(path), "ada", "cookie-1").unwrap();
+    let mut helper = Helper::start(&[Route::Socket(path)], "ada", "cookie-1").unwrap();
     assert_eq!(
         helper.read_line().unwrap(),
         Line::Prompt {
@@ -114,7 +114,7 @@ fn fake_binary(dir: &Path) -> PathBuf {
 fn a_started_helper_gets_only_the_user_on_its_command_line_and_no_environment() {
     let dir = tempfile::tempdir().unwrap();
     let route = Route::Binary(fake_binary(dir.path()));
-    let mut helper = Helper::start(&route, "ada", "cookie-2").unwrap();
+    let mut helper = Helper::start(std::slice::from_ref(&route), "ada", "cookie-2").unwrap();
     assert_eq!(
         helper.read_line().unwrap(),
         Line::Info("user=ada args=1 cookie=cookie-2 home=none".into())
@@ -127,7 +127,7 @@ fn a_started_helper_gets_only_the_user_on_its_command_line_and_no_environment() 
     assert_eq!(helper.read_line().unwrap(), Line::Failure);
     assert!(matches!(helper.read_line(), Err(HelperError::Closed)));
 
-    let mut helper = Helper::start(&route, "ada", "cookie-3").unwrap();
+    let mut helper = Helper::start(std::slice::from_ref(&route), "ada", "cookie-3").unwrap();
     helper.read_line().unwrap();
     helper.read_line().unwrap();
     helper.answer(b"right").unwrap();
@@ -137,7 +137,7 @@ fn a_started_helper_gets_only_the_user_on_its_command_line_and_no_environment() 
 #[test]
 fn an_answer_with_a_line_break_is_refused() {
     let dir = tempfile::tempdir().unwrap();
-    let mut helper = Helper::start(&Route::Binary(fake_binary(dir.path())), "ada", "c").unwrap();
+    let mut helper = Helper::start(&[Route::Binary(fake_binary(dir.path()))], "ada", "c").unwrap();
     assert_eq!(
         helper.answer(b"right\nSUCCESS").unwrap_err().kind(),
         io::ErrorKind::InvalidInput
@@ -154,17 +154,34 @@ fn an_overlong_line_is_an_error() {
         let line = format!("PAM_TEXT_INFO {}\n", "x".repeat(MAX_LINE));
         let _ = stream.write_all(line.as_bytes());
     });
-    let mut helper = Helper::start(&Route::Socket(path), "ada", "c").unwrap();
+    let mut helper = Helper::start(&[Route::Socket(path)], "ada", "c").unwrap();
     assert!(matches!(helper.read_line(), Err(HelperError::TooLong)));
 }
 
 #[test]
 fn dropping_a_helper_stops_one_waiting_for_an_answer() {
     let dir = tempfile::tempdir().unwrap();
-    let mut helper = Helper::start(&Route::Binary(fake_binary(dir.path())), "ada", "c").unwrap();
+    let mut helper = Helper::start(&[Route::Binary(fake_binary(dir.path()))], "ada", "c").unwrap();
     helper.read_line().unwrap();
     helper.read_line().unwrap();
     let started = std::time::Instant::now();
     drop(helper);
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+#[test]
+fn a_socket_nothing_listens_on_falls_back_to_the_binary() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("agent-helper.socket");
+    drop(UnixListener::bind(&socket).unwrap());
+    let routes = [
+        Route::Socket(socket),
+        Route::Binary(fake_binary(dir.path())),
+    ];
+    let mut helper = Helper::start(&routes, "ada", "cookie-4").unwrap();
+    assert_eq!(
+        helper.read_line().unwrap(),
+        Line::Info("user=ada args=1 cookie=cookie-4 home=none".into())
+    );
+    assert!(Helper::start(&routes[..1], "ada", "c").is_err());
 }

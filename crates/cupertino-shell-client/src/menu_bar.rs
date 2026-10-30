@@ -53,6 +53,8 @@ pub struct WindowState {
     /// Whether the window's minimize is enabled; from version 15, else always `true`.
     pub can_minimize: bool,
     pub can_zoom: bool,
+    /// Whether the window is in full screen; from version 16, else always `false`.
+    pub full_screen: bool,
     /// 1-based workspace of the window, `0` for none.
     pub workspace: u32,
     /// Number of workspaces of the output.
@@ -376,6 +378,8 @@ pub(crate) struct GroupBuilder {
     lists_windows: bool,
     /// The enabled controls of the active window, for the group's `window_state` (version 15).
     controls: Option<WindowControl>,
+    /// Whether the active window is in full screen, for the group's `window_state` (version 16).
+    full_screen: Option<bool>,
 }
 
 impl GroupBuilder {
@@ -385,6 +389,7 @@ impl GroupBuilder {
             update: MenuBarUpdate::default(),
             lists_windows: version >= DEFAULT_MENUS_VERSION,
             controls: None,
+            full_screen: None,
         }
     }
 
@@ -425,6 +430,7 @@ impl GroupBuilder {
                 self.update.window_state = Some(WindowState {
                     can_minimize: true,
                     can_zoom: can_zoom != 0,
+                    full_screen: false,
                     workspace,
                     workspaces,
                 })
@@ -481,6 +487,7 @@ impl GroupBuilder {
                     WEnum::Unknown(bits) => WindowControl::from_bits_truncate(bits),
                 })
             }
+            Event::WindowFullScreen { full_screen } => self.full_screen = Some(full_screen != 0),
             Event::Done => {
                 if self.lists_windows && self.update.window_state.is_some() {
                     self.update.windows.get_or_insert_with(Vec::new);
@@ -490,6 +497,11 @@ impl GroupBuilder {
                 {
                     state.can_minimize = enabled.contains(WindowControl::Minimize);
                     state.can_zoom &= enabled.contains(WindowControl::Zoom);
+                }
+                if let (Some(state), Some(full_screen)) =
+                    (self.update.window_state.as_mut(), self.full_screen.take())
+                {
+                    state.full_screen = full_screen;
                 }
                 let update = std::mem::take(&mut self.update);
                 return (update != MenuBarUpdate::default()).then_some(update);
@@ -542,6 +554,7 @@ mod tests {
                 window_state: Some(WindowState {
                     can_minimize: true,
                     can_zoom: true,
+                    full_screen: false,
                     workspace: 2,
                     workspaces: 4
                 }),
@@ -755,6 +768,29 @@ mod tests {
                     ..MenuBarUpdate::default()
                 }
             ]
+        );
+    }
+
+    #[test]
+    fn whether_the_window_is_in_full_screen_comes_with_its_window_state() {
+        let full = |on: u32| Event::WindowFullScreen { full_screen: on };
+        let updates = feed(vec![
+            full(1),
+            window_state(),
+            Event::Done,
+            window_state(),
+            full(0),
+            Event::Done,
+            window_state(),
+            Event::Done,
+        ]);
+        assert_eq!(
+            updates
+                .iter()
+                .map(|u| u.window_state.map(|s| s.full_screen))
+                .collect::<Vec<_>>(),
+            [Some(true), Some(false), Some(false)],
+            "in either order; not in full screen without the event"
         );
     }
 

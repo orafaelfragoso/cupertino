@@ -621,6 +621,7 @@ mod tests {
             window_state: Some(WindowState {
                 can_minimize: true,
                 can_zoom: true,
+                full_screen: false,
                 workspace: 1,
                 workspaces: 3,
             }),

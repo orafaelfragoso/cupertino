@@ -48,10 +48,42 @@ built-in fallback. Resolution is per logical name: the first pack that provides 
 
 | Kind | Built-in fallback |
 |---|---|
-| Fonts | the embedded subset of Inter (`fonts/InterVariable-subset.ttf`, family `Inter Variable`, SIL Open Font License 1.1 in `fonts/OFL.txt`; rebuilt by), always loaded last |
+| Fonts | the embedded subset of Inter (`fonts/InterVariable-subset.ttf`, family `Inter Variable`, SIL Open Font License 1.1 in `fonts/OFL.txt`; rebuilt as [The embedded font](#the-embedded-font) says), always loaded last |
 | Icons, symbols | a placeholder rounded square drawn by `cupertino-icons` (filled grey for an icon, an outline in the tint for a symbol) |
 | Cursors | the procedural cursor set of `cupertino-cursor`, drawn by the server |
 | Wallpaper | the procedural wallpaper |
+
+## The embedded font
+
+`fonts/InterVariable-subset.ttf` is `InterVariable.ttf` from the Inter 4.1 release
+(<https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip>, sha256
+`9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e`; the font inside, version
+`4.001;git-9221beed3`, sha256 `4989b125924991b90d05b2d16e0e388c48f7d5bb8b30539bbf9c755278d0ccaf`) cut down with
+`pyftsubset` from fontTools 4.67.0. It keeps both variation axes (`opsz` 14–32, `wght` 100–900) and the features
+`calt`, `case`, `ccmp`, `frac`, `locl`, `tnum`, `kern`, `mark` and `mkmk`. With the code points below saved as
+`unicodes.txt`:
+
+```sh
+pyftsubset InterVariable.ttf --unicodes-file=unicodes.txt --name-IDs='*' --name-languages='*' \
+  --layout-features=calt,case,ccmp,frac,locl,tnum,kern,mark,mkmk --notdef-outline \
+  --output-file=InterVariable-subset.ttf
+```
+
+The result is byte-identical to the committed file, sha256
+`8082ab1587b6b1a0ee14e44287b204f3aae7f2021583ca76beb1f717a093dcea`, which `ci/gate.py` pins. The 1216 code points:
+
+```text
+U+0000, U+0020-007E, U+00A0-00AC, U+00AE-0148, U+014A-01C3, U+01C5-024F, U+0300-0304, U+0306-030A, U+030C, U+030F,
+U+0313, U+0315, U+031B, U+0323, U+0326-0328, U+032C, U+0337-0338, U+0342-0343, U+0346-036F, U+0374-0376,
+U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03D7, U+03DC-03DD, U+03F0-03F6, U+03F9-03FA, U+03FC-045F,
+U+1E00-1E9B, U+1E9D-1EFF, U+2000-200B, U+2010-2027, U+202F-2055, U+2057, U+205F, U+20A0-20AF, U+20B1-20B5,
+U+20B8-20BA, U+20BC-20C0, U+2100-2101, U+2103, U+2105-2106, U+2109, U+2113, U+2116-2117, U+211E-2122, U+2126,
+U+212A-212B, U+212E, U+2132, U+213B, U+214D, U+2190-2199, U+21A9-21AA, U+21B0-21B1, U+21B3-21B5, U+21BA-21BB,
+U+21D0, U+21D2, U+21D4, U+21DE-21DF, U+21E4-21E5, U+21E7, U+21EA, U+2212, U+221E, U+2248, U+2260, U+2264-2265,
+U+2303, U+2318, U+2325-2326, U+232B, U+238B, U+25CB, U+25CF
+```
+
+Inter has no keypad Enter symbol (U+2324), so the menu bar names that key `Enter`.
 
 ## API
 

@@ -47,6 +47,22 @@ fn about_has_an_independent_owner_and_repeat_launches_reach_it() {
     );
     assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(String::new()));
     drop(_about);
+    // the bus releases a closed connection's names on its own time; claim the name again once it is free
+    let watcher = zbus::blocking::connection::Builder::address(bus.address.as_str())
+        .unwrap()
+        .build()
+        .unwrap();
+    let daemon = zbus::blocking::fdo::DBusProxy::new(&watcher).unwrap();
+    let about =
+        zbus::names::BusName::try_from(cupertino_settings::instance::ABOUT_BUS_NAME).unwrap();
+    let end = std::time::Instant::now() + Duration::from_secs(10);
+    while daemon.name_has_owner(about.clone()).unwrap() {
+        assert!(
+            std::time::Instant::now() < end,
+            "the dropped About owner keeps its name"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
     let _replacement = cupertino_settings::instance::serve_about(bus.builder(), |_| {}).unwrap();
 }
 

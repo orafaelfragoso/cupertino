@@ -377,7 +377,7 @@ fn only_re_recorded(status: std::process::ExitStatus, stderr: &str) -> Option<&s
     }
     let lines: Vec<&str> = stderr.lines().collect();
     let panics: Vec<usize> = (0..lines.len())
-        .filter(|&i| lines[i].contains("' panicked at "))
+        .filter(|&i| lines[i].starts_with("thread '") && lines[i].contains(" panicked at "))
         .collect();
     let [at] = panics[..] else { return None };
     lines
@@ -490,7 +490,8 @@ fn isolated(test: &str, shell: bool, work: impl FnOnce(&str)) {
     }
     assert!(
         output.status.success(),
-        "isolated golden worker failed:\n{}",
+        "isolated golden worker failed ({}):\n{}",
+        output.status,
         stderr
             .lines()
             .map(|line| format!("    {line}\n"))
@@ -523,6 +524,23 @@ fn pixel_comparison_fails_on_a_change_at_unchanged_geometry() {
         "{message}"
     );
     assert!(message.contains("left: 1"), "{message}");
+}
+
+#[test]
+fn only_a_lone_re_record_panic_is_an_update() {
+    use std::os::unix::process::ExitStatusExt;
+    let failed = std::process::ExitStatus::from_raw(101 << 8);
+    let recorded = "\nthread 'desktop_goldens_and_input_replay' (5631) panicked at crates/cupertino-server/tests/goldens.rs:367:9:\nre-recorded 3 goldens; rerun without CUPERTINO_UPDATE_GOLDENS\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
+    assert_eq!(
+        only_re_recorded(failed, recorded),
+        Some("re-recorded 3 goldens; rerun without CUPERTINO_UPDATE_GOLDENS")
+    );
+    let again = format!(
+        "{recorded}\nthread '<unnamed>' (5640) panicked at crates/cupertino-server/tests/goldens.rs:689:9:\ninjected\n"
+    );
+    assert_eq!(only_re_recorded(failed, &again), None);
+    let killed = std::process::ExitStatus::from_raw(9);
+    assert_eq!(only_re_recorded(killed, recorded), None);
 }
 
 #[derive(Serialize)]

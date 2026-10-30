@@ -13,6 +13,7 @@
 //! | `hide-admin-users`, `show-other-users` | `true` or `false` | false, and absent (the screen's rule) |
 //! | `restart-disabled`, `shut-down-disabled`, `sleep-disabled`, `power-off-disabled` | `true` or `false` | absent |
 //! | `retries-until-hint` | failed attempts until the password help shows, 0 for the setting absent | 0 |
+//! | `admin-groups` | group names separated by commas: a member of any of them is an administrator; the manager uses the key only when this file is root-owned and writable by root alone | the build's ([`DEFAULT_ADMIN_GROUPS`]) |
 //! | `auto-login` | the account logged in without a password once per boot (semantics unknown in the design); the manager refuses it unless this file is root-owned and writable by root alone | off |
 //!
 //! The filter and power keys are the login window preferences of the design (`HiddenUsersList`, `HideAdminUsers`,
@@ -32,6 +33,18 @@ pub const LOGIN_CONF_PATH: &str = "/etc/cupertino/login.conf";
 const DEFAULT_VT: u32 = 1;
 /// The account the login screen runs as when the file does not name one (the sysusers entry of the package).
 const DEFAULT_GREETER_USER: &str = "cupertino-greeter";
+/// The administrators' groups when the file does not name them: the build's `CUPERTINO_ADMIN_GROUPS` (the packaging sets the
+/// distribution's, `sudo` on Debian), else `wheel`.
+pub const DEFAULT_ADMIN_GROUPS: &str = match option_env!("CUPERTINO_ADMIN_GROUPS") {
+    Some(groups) => groups,
+    None => "wheel",
+};
+
+const _: () = assert!(
+    is_name_list(DEFAULT_ADMIN_GROUPS),
+    "CUPERTINO_ADMIN_GROUPS must be group names separated by commas"
+);
+
 /// The number of virtual terminals Linux has (`MAX_NR_CONSOLES`, `vt(4)).
 const MAX_VT: u32 = 63;
 
@@ -57,6 +70,9 @@ pub struct LoginConfig {
     /// The account that is logged in without a password once per boot; `None` (the default) is off. The manager refuses the key
     /// unless the file is root-owned and writable by no one else.
     pub auto_login: Option<String>,
+    /// The groups whose members are administrators; `None` takes [`DEFAULT_ADMIN_GROUPS`]. The manager refuses the key
+    /// unless the file is root-owned and writable by no one else.
+    pub admin_groups: Option<Vec<String>>,
 }
 
 /// A line that was not understood, as `(line number, message)`; a missing required key is line 0.
@@ -96,6 +112,7 @@ impl LoginConfig {
             power_off_disabled: None,
             retries_until_hint: 0,
             auto_login: None,
+            admin_groups: None,
         };
         let mut problems = Vec::new();
         for (i, raw) in text.lines().enumerate() {
@@ -139,6 +156,7 @@ impl LoginConfig {
             }
             "greeter-user" => self.greeter_user = account(key, value)?,
             "auto-login" => self.auto_login = Some(account(key, value)?),
+            "admin-groups" => self.admin_groups = Some(names(key, value)?),
             "greeter-command" => self.greeter_command = command(key, value)?,
             "session-command" => self.session_command = command(key, value)?,
             "hidden-users" => self.hidden_users = names(key, value)?,
@@ -159,6 +177,28 @@ impl LoginConfig {
         }
         Ok(())
     }
+}
+
+/// [`DEFAULT_ADMIN_GROUPS`] as a list.
+pub fn default_admin_groups() -> Vec<String> {
+    DEFAULT_ADMIN_GROUPS.split(',').map(str::to_owned).collect()
+}
+
+/// Whether `list` is names separated by commas, each one not empty, without spaces or `:`.
+const fn is_name_list(list: &str) -> bool {
+    let bytes = list.as_bytes();
+    let mut i = 0;
+    let mut entry = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b',' if entry == 0 => return false,
+            b',' => entry = 0,
+            b' ' | b'\t' | b'\n' | b':' => return false,
+            _ => entry += 1,
+        }
+        i += 1;
+    }
+    entry > 0
 }
 
 /// One account name.
@@ -264,6 +304,26 @@ mod tests {
             problems.iter().map(|(line, _)| *line).collect::<Vec<_>>(),
             [3, 4]
         );
+    }
+
+    #[test]
+    fn the_administrators_groups_come_from_the_file_else_from_the_build() {
+        assert_eq!(LoginConfig::parse(REQUIRED).unwrap().admin_groups, None);
+        let config = LoginConfig::parse(&format!("{REQUIRED}admin-groups = sudo,admin\n")).unwrap();
+        assert_eq!(
+            config.admin_groups,
+            Some(vec!["sudo".to_owned(), "admin".to_owned()])
+        );
+        let config = LoginConfig::parse(&format!("{REQUIRED}admin-groups =\n")).unwrap();
+        assert_eq!(
+            config.admin_groups,
+            Some(Vec::new()),
+            "an empty list: no administrators"
+        );
+        assert!(is_name_list("wheel") && is_name_list("sudo,admin"));
+        for bad in ["", ",", "sudo,", ",sudo", "a,,b", "su do", "wheel:"] {
+            assert!(!is_name_list(bad), "{bad:?}");
+        }
     }
 
     #[test]

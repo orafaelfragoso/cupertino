@@ -48,9 +48,10 @@ impl std::error::Error for AppError {}
 /// the session's appearance and display options, and runs until the application exits or its last window without a
 /// close handler is closed.
 pub fn run<A: Application>() -> Result<(), AppError> {
-    let (mut options, theme) = options_and_theme()?;
-    let follow = theme_for(theme, Arc::clone(&options.theme));
     let system = WaylandWindowSystem::connect(Profile::cupertino()).map_err(AppError::Connect)?;
+    // the first frame already has the session's appearance
+    let (mut options, theme) = options_and_theme(start_preferences(system.appearance()))?;
+    let follow = theme_for(theme, Arc::clone(&options.theme));
     options.accessibility = Some(Box::new(AtspiAdapter::new(system.waker())));
     Runtime::<A, _>::new(system, options)
         .with_theme_for(follow)
@@ -58,10 +59,16 @@ pub fn run<A: Application>() -> Result<(), AppError> {
         .map_err(AppError::Runtime)
 }
 
-/// The runtime options of an application on this system. It starts in the light appearance with motion on; [`run`]
-/// then follows the session's appearance and display options.
+/// The runtime options of an application on this system, in the light appearance with motion on. [`run`] starts in the
+/// session's appearance and display options instead and follows them.
 pub fn options() -> Result<RuntimeOptions, AppError> {
-    options_and_theme().map(|(options, _)| options)
+    options_and_theme(start_preferences(None)).map(|(options, _)| options)
+}
+
+/// The theme preferences an application starts with: the session's when the window system knows them, else light with
+/// motion on.
+pub fn start_preferences(appearance: Option<SystemAppearance>) -> ThemePreferences {
+    preferences(&appearance.unwrap_or_default())
 }
 
 /// The theme preferences of the session's appearance and display options.
@@ -95,12 +102,7 @@ fn theme_for(theme: Theme, start: Arc<ThemeTokens>) -> ThemeForAppearance {
     })
 }
 
-fn options_and_theme() -> Result<(RuntimeOptions, Theme), AppError> {
-    let preferences = ThemePreferences {
-        appearance: Appearance::Light,
-        reduce_transparency: false,
-        reduce_motion: false,
-    };
+fn options_and_theme(preferences: ThemePreferences) -> Result<(RuntimeOptions, Theme), AppError> {
     let data = Theme::load().map_err(AppError::Theme)?;
     let theme = ThemeTokens::cupertino(&data, preferences).map_err(AppError::Theme)?;
     let assets = Assets::discover();
@@ -242,6 +244,27 @@ mod tests {
         let all = preferences(&session(true, true, true, true));
         assert_eq!(all.appearance, Appearance::DarkHighContrast);
         assert!(all.reduce_transparency && all.reduce_motion);
+    }
+
+    #[test]
+    fn an_application_starts_in_the_session_appearance_so_its_first_frame_has_it() {
+        assert_eq!(
+            start_preferences(None),
+            preferences(&SystemAppearance::default())
+        );
+        assert_eq!(start_preferences(None).appearance, Appearance::Light);
+        let dark = SystemAppearance {
+            dark: true,
+            reduce_transparency: true,
+            ..SystemAppearance::default()
+        };
+        let (options, theme) = options_and_theme(start_preferences(Some(dark))).unwrap();
+        assert_eq!(
+            *options.theme,
+            ThemeTokens::cupertino(&theme, preferences(&dark)).unwrap(),
+            "every window opens with this theme"
+        );
+        assert_eq!(options.theme.preferences.appearance, Appearance::Dark);
     }
 
     #[test]

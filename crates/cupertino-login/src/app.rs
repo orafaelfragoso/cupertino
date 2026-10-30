@@ -7,7 +7,7 @@
 use crate::options::SessionOptions;
 use crate::screen::{self, FrameKey, Notifier, OutputSurface, Result, Scene};
 use cupertino_assets::Assets;
-use cupertino_login::access::{lock_tree, LockView};
+use cupertino_login::access::{lock_tree, panel_click, panel_tree, LockView};
 use cupertino_login::auth::{self, Authenticator};
 use cupertino_login::autostart;
 use cupertino_login::capabilities::{Answer, Capabilities, Inputs};
@@ -115,6 +115,8 @@ struct InterruptState {
 }
 
 /// Namespace of the panel's layer surface for the server.
+/// The window assistive technology knows the confirmation panel as; outputs' registry names never reach it.
+const PANEL_WINDOW: WindowId = WindowId(u32::MAX);
 const PANEL_NAMESPACE: &str = "login-panel";
 
 struct App {
@@ -729,7 +731,7 @@ impl App {
     /// Carry out the queued requests, follow the lock and the screen's timers, and redraw what changed.
     fn housekeeping(&mut self) -> Result<()> {
         let now = self.now();
-        self.follow_access();
+        self.follow_access()?;
         while let Ok(message) = self.messages.try_recv() {
             match message {
                 Message::Lock { explicit } => self.request_lock(now, explicit)?,
@@ -962,6 +964,11 @@ impl App {
                     renderer.render_panel(&view, pixmap, scale.factor() as f32)
                 })?;
             panel.drawn = Some(view.seconds_left);
+            if self.access.is_active() {
+                let tree = panel_tree(PANEL_WINDOW, view.kind, &view.frames, view.seconds_left);
+                self.access.window_focus(PANEL_WINDOW, true);
+                self.access.update(&tree);
+            }
             return Ok(());
         }
         if let Some(shown) = self
@@ -1010,17 +1017,33 @@ impl App {
         Ok(())
     }
 
-    /// Draw the lock screen again when assistive technology starts listening, so it gets the whole screen, and drop what
-    /// it asks: the only action offered, focus on the already focused field, needs nothing done.
-    fn follow_access(&mut self) {
+    /// Draw the lock screen and the panel again when assistive technology starts listening, so it gets them whole, and
+    /// do what it asks: a click on a panel's button decides as a click there does; focus on the lock screen's already
+    /// focused field needs nothing done.
+    fn follow_access(&mut self) -> Result<()> {
         let active = self.access.is_active();
         if active && !self.access_active {
             if let Some(lock) = self.lock.as_mut() {
                 lock.drawn = None;
             }
+            if let Some(panel) = self.panel.as_mut() {
+                panel.drawn = None;
+            }
         }
         self.access_active = active;
-        self.access.drain_actions(&mut Vec::new());
+        let mut requests = Vec::new();
+        self.access.drain_actions(&mut requests);
+        for request in requests {
+            let decision = self
+                .panel
+                .as_ref()
+                .filter(|_| request.action == cupertino_ui_core::Action::Click)
+                .and_then(|panel| panel_click(&panel.frames, request.target));
+            if let Some(decision) = decision {
+                self.decide(decision)?;
+            }
+        }
+        Ok(())
     }
 
     /// Tell assistive technology what lock surface `i` shows now, while one listens.

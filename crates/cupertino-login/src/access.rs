@@ -12,6 +12,7 @@ use cupertino_ui_platform::WindowId;
 
 use crate::layout::Layout;
 use crate::model::{LockScreen, Phase};
+use crate::panel::{Decision, Frames, Kind};
 
 /// What every rejected attempt says, whatever the reason: a wrong password, an unknown account or an authentication
 /// error look alike.
@@ -143,6 +144,76 @@ pub fn lock_tree(window: WindowId, view: &LockView<'_>) -> AccessibilityUpdate {
         removed: Vec::new(),
         full: true,
     }
+}
+
+/// The first node id of a panel's buttons; button `i` is this plus `i`.
+const PANEL_BUTTONS: u32 = 10;
+
+fn panel_id(index: u32) -> NodeId {
+    NodeId::new(index, NonZeroU32::MIN)
+}
+
+/// The whole tree of a confirmation panel of `kind` laid out in `frames` on `window`, with `seconds_left` on its
+/// countdown. The button Return presses has the focus; each button's only action is a click.
+pub fn panel_tree(
+    window: WindowId,
+    kind: Kind,
+    frames: &Frames,
+    seconds_left: Option<u32>,
+) -> AccessibilityUpdate {
+    let text = kind.text();
+    let mut nodes = vec![(panel_id(2), self::text(text.title, frames.title))];
+    let info = seconds_left.and_then(|s| kind.countdown_message(s));
+    if let (Some(info), Some(frame)) = (info, frames.info) {
+        nodes.push((panel_id(3), self::text(&info, frame)));
+    }
+    let default = Decision::Do(kind.default_action());
+    let mut focus = None;
+    for (i, button) in frames.buttons.iter().enumerate() {
+        let id = panel_id(PANEL_BUTTONS + i as u32);
+        let focused = button.decision == default;
+        if focused {
+            focus = Some(id);
+        }
+        nodes.push((
+            id,
+            AccessibilityNode {
+                actions: vec![Action::Click],
+                states: AccessibleStates {
+                    focusable: true,
+                    focused,
+                    ..AccessibleStates::default()
+                },
+                ..node(Role::Button, Some(button.label), button.frame)
+            },
+        ));
+    }
+    let mut root = node(
+        Role::AlertDialog,
+        Some(text.title),
+        Rect::new(0.0, 0.0, frames.width, frames.height),
+    );
+    root.states.modal = true;
+    root.children = nodes.iter().map(|(id, _)| *id).collect();
+    nodes.insert(0, (panel_id(1), root));
+    AccessibilityUpdate {
+        window,
+        root: panel_id(1),
+        focus,
+        nodes,
+        removed: Vec::new(),
+        full: true,
+    }
+}
+
+/// The decision a click from assistive technology on node `id` of a panel laid out in `frames` makes: the same as a
+/// click on that button.
+pub fn panel_click(frames: &Frames, id: NodeId) -> Option<Decision> {
+    let index = id.index().checked_sub(PANEL_BUTTONS)?;
+    (id.generation() == NonZeroU32::MIN)
+        .then(|| frames.buttons.get(index as usize))
+        .flatten()
+        .map(|button| button.decision)
 }
 
 /// The password field: its value is protected in every phase, and the only action it offers is focus.

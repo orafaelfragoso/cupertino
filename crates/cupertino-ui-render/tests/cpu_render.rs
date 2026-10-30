@@ -1007,3 +1007,57 @@ fn a_glyph_wider_than_its_box_is_cut_to_the_damage() {
         "pixels outside the damage are not painted again"
     );
 }
+
+#[test]
+fn an_image_drawn_one_pixel_per_device_pixel_keeps_its_pixels_at_a_fractional_position() {
+    let side = 6u32;
+    let pixels: Vec<u8> = (0..side * side)
+        .flat_map(|i| {
+            [
+                (i * 7 % 256) as u8,
+                (i * 13 % 256) as u8,
+                (i * 29 % 256) as u8,
+                255,
+            ]
+        })
+        .collect();
+    let mut resources = PaintResources::default();
+    resources.images.insert(
+        ResourceId(9),
+        ImageResource {
+            revision: 1,
+            width: side,
+            height: side,
+            stride: side * 4,
+            format: PixelFormat::Rgba8Premultiplied,
+            pixels: Arc::from(pixels.clone()),
+        },
+    );
+    // 4 points at 1.5x are the image's 6 device pixels; the origin (3.3, 2.2) points is (4.95, 3.3) device pixels
+    let dst = rect(3.3, 2.2, 4.0, 4.0);
+    let list = DisplayList {
+        nodes: vec![node(
+            1,
+            dst,
+            vec![PaintOp::Image {
+                image: ResourceRef {
+                    id: ResourceId(9),
+                    revision: 1,
+                },
+                src: rect(0.0, 0.0, 6.0, 6.0),
+                dst,
+                sampling: cupertino_ui_render::Sampling::Linear,
+            }],
+        )],
+    };
+    let frame = render(&mut renderer(), &list, &resources, 1.5, &DamageRegion::Full).unwrap();
+    for y in 0..side as usize {
+        let at = ((3 + y) * 96 + 5) * 4;
+        assert_eq!(
+            &frame[at..at + side as usize * 4],
+            &pixels[y * side as usize * 4..(y + 1) * side as usize * 4],
+            "row {y} lands on device pixels 5.. of row {}",
+            3 + y
+        );
+    }
+}

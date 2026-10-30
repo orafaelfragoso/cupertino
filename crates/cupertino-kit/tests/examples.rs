@@ -51,6 +51,7 @@ impl<A: Application> Run<A> {
         let options = RuntimeOptions {
             theme: Arc::new(theme()),
             text,
+            icons: Arc::new(cupertino_ui_core::PlaceholderIcons::default()),
             direction: LayoutDirection::Ltr,
             node_limit: 1000,
             renderers: Box::new(move || {

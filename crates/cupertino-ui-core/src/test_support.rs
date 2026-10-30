@@ -79,6 +79,7 @@ pub(crate) fn env() -> Environment {
         text: Arc::new(TextSystem::new(FontIndex::new(), "Inter")),
         direction: LayoutDirection::Ltr,
         scale: 1.0,
+        icons: Arc::new(crate::PlaceholderIcons::default()),
     }
 }
 
@@ -508,6 +509,7 @@ pub(crate) fn options_with(
     RuntimeOptions {
         theme: env().theme,
         text: env().text,
+        icons: env().icons,
         direction: LayoutDirection::Ltr,
         node_limit: 1000,
         renderers: Box::new(move || {

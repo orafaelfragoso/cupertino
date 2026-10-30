@@ -6,11 +6,11 @@ use cupertino_ui_core::{
     AccessibleValue, Application, Command, Element, Role, TextSemantics, Window,
 };
 use cupertino_ui_layout::{Align, Axis};
-use cupertino_ui_platform::{ClipboardKind, Mods, Timestamp, WindowEvent};
+use cupertino_ui_platform::{ClipboardKind, Mods, PointerEvent, Timestamp, WindowEvent};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_text::{ContentPurpose, ImeBatch, ImeEvent, Preedit, CARET_WIDTH};
 use cupertino_ui_theme::{Color, ColorRole, InteractionVariant};
-use support::{color, point, window, Harness, ESCAPE, RETURN, TAB};
+use support::{color, label_width, point, window, Harness, ESCAPE, RETURN, TAB};
 
 const LEFT: (u32, u32) = (105, 0xff51);
 const BACKSPACE: (u32, u32) = (14, 0xff08);
@@ -567,4 +567,50 @@ fn no_wake_is_left_while_text_is_selected_or_the_window_is_inactive() {
 fn an_unfocused_field_asks_for_no_wake() {
     let h = Harness::<App>::new();
     assert_eq!(next_wake(&h), None);
+}
+
+/// The point inside the name field just after `prefix`, on the text's line.
+fn after(h: &Harness<App>, prefix: &str) -> cupertino_geometry::Point {
+    let field = h.rect("name");
+    point(
+        field.min_x() + 6.0 + label_width(prefix) - 1.0,
+        field.center().y,
+    )
+}
+
+#[test]
+fn a_second_and_third_click_select_the_word_and_then_everything() {
+    let mut h = focused_name();
+    h.type_text("hello world");
+    let world = after(&h, "hello wo");
+    h.click(world);
+    assert_eq!(editing(&h).1.selection, 8..8);
+    h.click(world);
+    assert_eq!(editing(&h).1.selection, 6..11, "the word");
+    h.click(world);
+    assert_eq!(editing(&h).1.selection, 0..11, "everything");
+}
+
+#[test]
+fn clicks_further_apart_than_the_interval_only_move_the_caret() {
+    let mut h = focused_name();
+    h.type_text("hello world");
+    let world = after(&h, "hello wo");
+    h.click(world);
+    h.clock().advance_to(Timestamp(600 * MS)).unwrap();
+    h.click(world);
+    assert_eq!(editing(&h).1.selection, 8..8);
+}
+
+#[test]
+fn a_drag_selects_from_the_press_to_the_pointer_even_past_the_field() {
+    let mut h = focused_name();
+    h.type_text("hello world");
+    let start = after(&h, "he");
+    h.pointer(PointerEvent::Motion { position: start });
+    h.button(start, true);
+    let past = point(h.rect("name").max_x() + 40.0, start.y);
+    h.pointer(PointerEvent::Motion { position: past });
+    h.button(past, false);
+    assert_eq!(editing(&h).1.selection, 2..11);
 }

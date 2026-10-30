@@ -753,6 +753,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             return Effects::default();
         };
         w.invalidate();
+        // the same node with its ring shown or hidden keeps its focus: no events, only a repaint
+        if change.from == change.to {
+            return Effects::default();
+        }
         let mut effects = Effects::default();
         let mut route = route(tree, w, now, &mut effects);
         if let Some(from) = change.from {

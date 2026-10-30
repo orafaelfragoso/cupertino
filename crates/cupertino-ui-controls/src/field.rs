@@ -20,6 +20,7 @@ use cupertino_ui_text::{
 use cupertino_ui_theme::{ColorRole, ThemeTokens};
 use std::cell::Cell;
 use std::ops::Range;
+use std::time::Duration;
 
 const RETURN: Keysym = Keysym(0xff0d);
 const KP_ENTER: Keysym = Keysym(0xff8d);
@@ -388,19 +389,58 @@ impl FieldState {
         ))
     }
 
-    /// Puts the caret at the text position under `point`, in window coordinates.
-    fn place_caret<M>(&mut self, point: Point, cx: &EventCx<'_, M>) {
-        let Some(bounds) = cx.bounds() else {
-            return;
-        };
-        let Some((layout, origin)) =
-            placed(cx.env(), self.buffer.text(), bounds.size, self.scroll.get())
-        else {
-            return;
-        };
-        let local = point - bounds.origin - origin;
-        let at = layout.index_at(local).byte;
-        self.buffer.select(at..at);
+    /// The text position under `point`, in window coordinates.
+    fn index_at<M>(&self, point: Point, cx: &EventCx<'_, M>) -> Option<usize> {
+        let bounds = cx.bounds()?;
+        let (layout, origin) =
+            placed(cx.env(), self.buffer.text(), bounds.size, self.scroll.get())?;
+        Some(layout.index_at(point - bounds.origin - origin).byte)
+    }
+
+    /// A press, a drag with the button held and its release: the caret, then a word or the whole text on a second
+    /// and third press, extended to where the pointer goes. The press captures the pointer, so a drag past the field
+    /// still extends the selection.
+    fn select<M>(&mut self, event: &Event, cx: &mut EventCx<'_, M>) -> Option<Propagation> {
+        match *event {
+            Event::Pointer(
+                PointerEvent::Button {
+                    position,
+                    button: MouseButton::Left,
+                    pressed: true,
+                    ..
+                },
+                _,
+            ) if cx.node() == cx.target() && self.buffer.composition().is_none() => {
+                let at = self.index_at(position, cx)?;
+                let now = Duration::from_nanos(cx.now().0);
+                self.buffer.press_at(at, false, now);
+                cx.capture_pointer();
+                None
+            }
+            Event::Pointer(PointerEvent::Motion { position }, _) if self.buffer.is_dragging() => {
+                let at = self.index_at(position, cx)?;
+                self.buffer.drag_to(at);
+                Some(Propagation::Stop)
+            }
+            Event::Pointer(
+                PointerEvent::Button {
+                    button: MouseButton::Left,
+                    pressed: false,
+                    ..
+                },
+                _,
+            ) if self.buffer.is_dragging() => {
+                self.buffer.release();
+                cx.release_pointer();
+                Some(Propagation::Stop)
+            }
+            // the capture was lost: the drag ends where it is
+            Event::Cancel if self.buffer.is_dragging() => {
+                self.buffer.release();
+                Some(Propagation::Continue)
+            }
+            _ => None,
+        }
     }
 
     /// Tells the input method where the field stands now.
@@ -462,22 +502,17 @@ impl<M: Clone + 'static> TextField<M> {
         event: &Event,
         cx: &mut EventCx<'_, M>,
     ) -> Propagation {
-        if let Event::Pointer(
-            PointerEvent::Button {
-                position,
-                button: MouseButton::Left,
-                pressed: true,
-                ..
-            },
-            _,
-        ) = event
-        {
-            if self.enabled && cx.node() == cx.target() && state.buffer.composition().is_none() {
-                state.place_caret(*position, cx);
+        if self.enabled {
+            let selection = state.buffer.selection();
+            let ended = state.select(event, cx);
+            if state.buffer.selection() != selection || state.buffer.is_dragging() {
                 if cx.is_focused() {
                     state.sync_input(ChangeCause::Other, cx);
                 }
                 cx.request_paint();
+            }
+            if let Some(propagation) = ended {
+                return propagation;
             }
         }
         if let Some(propagation) = pointer(event, self.enabled, &mut state.hovered, cx) {

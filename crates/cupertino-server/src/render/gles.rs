@@ -23,7 +23,7 @@ use super::material::SharedMaterial;
 use super::mesh::{capture, SharedMesh};
 use super::programs::Programs;
 use super::scene::{finalize_materials, RenderResources};
-use super::screenshot::render_to_image;
+use super::screenshot::render_shown_image;
 use super::shader_rect::ElementCache;
 use super::snapshots::Snapshots;
 use super::CupertinoElement;
@@ -118,7 +118,8 @@ pub enum GlesTarget<'a> {
         output: &'a mut crate::backend::udev::DrmSurfaceOutput,
         clear: Color32F,
     },
-    /// A fresh offscreen image of the frame's output size, read back as RGBA.
+    /// A fresh offscreen image of the output as it is shown, upright at the output's device size (a quarter-turned
+    /// output's mode on its side), read back as RGBA: what screenshots and screen captures hand out.
     Image {
         renderer: &'a mut GlesRenderer,
         clear: Color32F,
@@ -200,6 +201,22 @@ fn tracked(e: smithay::backend::renderer::damage::Error<GlesError>) -> RenderErr
     }
 }
 
+/// The output transform as Smithay draws it.
+fn output_transform(t: cupertino_scene::Transform) -> smithay::utils::Transform {
+    use cupertino_scene::Transform as T;
+    use smithay::utils::Transform as S;
+    match t {
+        T::Normal => S::Normal,
+        T::Rotate90 => S::_90,
+        T::Rotate180 => S::_180,
+        T::Rotate270 => S::_270,
+        T::Flipped => S::Flipped,
+        T::Flipped90 => S::Flipped90,
+        T::Flipped180 => S::Flipped180,
+        T::Flipped270 => S::Flipped270,
+    }
+}
+
 impl Renderer for Gles {
     type Resources<'a> = GlesResources<'a>;
     type Target<'a> = GlesTarget<'a>;
@@ -276,9 +293,16 @@ impl Renderer for Gles {
             }
             GlesTarget::Image { renderer, clear } => {
                 let elements = Gles::lower(renderer, scene, resources)?;
-                render_to_image(renderer, &elements, size, scale, clear)
-                    .map(GlesCompletion::Image)
-                    .map_err(|e| RenderError::Target(format!("{e:#}")))
+                render_shown_image(
+                    renderer,
+                    &elements,
+                    size,
+                    scale,
+                    output_transform(scene.output.transform),
+                    clear,
+                )
+                .map(GlesCompletion::Image)
+                .map_err(|e| RenderError::Target(format!("{e:#}")))
             }
             GlesTarget::Snapshot { renderer } => {
                 let elements = Gles::lower(renderer, scene, resources)?;

@@ -178,7 +178,11 @@ fn a_rebuild_with_the_models_crlf_text_keeps_the_caret() {
     h.type_text("x");
     assert!(h.focused("after"));
     assert_eq!(h.model().text, "line 0\r\nline 1\r\nline 2");
-    assert_eq!(caret(&h), 0, "the view was rebuilt with the same text and revision");
+    assert_eq!(
+        caret(&h),
+        0,
+        "the view was rebuilt with the same text and revision"
+    );
 }
 
 #[test]

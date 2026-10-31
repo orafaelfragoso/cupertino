@@ -334,6 +334,12 @@ fn kit_examples_map_at_their_size_and_exit_on_close() {
             (200, 64),
         ),
         ("forms", "org.cupertino.examples.Forms", "Forms", (280, 180)),
+        (
+            "virtual-list",
+            "org.cupertino.examples.VirtualList",
+            "Virtual List",
+            (480, 600),
+        ),
     ];
     for (example, app_id, title, size) in examples {
         let Some(mut server) = Server::start() else {

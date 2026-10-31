@@ -305,6 +305,10 @@ pub enum WindowEvent {
         frame: RenderFrameId,
         time: Timestamp,
     },
+    /// The compositor never showed a presented frame, such as one a later frame replaced first.
+    Discarded {
+        frame: RenderFrameId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

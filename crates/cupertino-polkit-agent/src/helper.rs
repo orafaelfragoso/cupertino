@@ -154,11 +154,21 @@ fn unescape(line: &[u8]) -> Vec<u8> {
 }
 
 /// The helper's side of one authentication: read its lines with [`Helper::read_line`], answer its prompts with
-/// [`Helper::answer`]. Dropping it ends the conversation and stops a helper the agent started.
+/// [`Helper::answer`], or [`Helper::split`] it to read on one thread and answer from another. Dropping the [`Answers`]
+/// ends the conversation: a helper the agent started is stopped, and a read waiting on the socket returns.
 pub struct Helper {
-    lines: BufReader<Box<dyn Read + Send>>,
-    answers: Box<dyn Write + Send>,
+    lines: Lines,
+    answers: Answers,
+}
+
+/// The reading half of a [`Helper`].
+pub struct Lines(BufReader<Box<dyn Read + Send>>);
+
+/// The answering half of a [`Helper`]; dropping it ends the conversation.
+pub struct Answers {
+    writer: Box<dyn Write + Send>,
     child: Option<Child>,
+    socket: Option<UnixStream>,
 }
 
 impl Helper {
@@ -181,11 +191,14 @@ impl Helper {
             Route::Socket(path) => {
                 let stream = UnixStream::connect(path)?;
                 let mut helper = Helper {
-                    lines: BufReader::new(Box::new(stream.try_clone()?)),
-                    answers: Box::new(stream),
-                    child: None,
+                    lines: Lines(BufReader::new(Box::new(stream.try_clone()?))),
+                    answers: Answers {
+                        writer: Box::new(stream.try_clone()?),
+                        child: None,
+                        socket: Some(stream),
+                    },
                 };
-                helper.send(user.as_bytes())?;
+                helper.answers.send(user.as_bytes())?;
                 helper
             }
             Route::Binary(path) => {
@@ -201,20 +214,39 @@ impl Helper {
                     unreachable!("both pipes were asked for");
                 };
                 Helper {
-                    lines: BufReader::new(Box::new(stdout)),
-                    answers: Box::new(stdin),
-                    child: Some(child),
+                    lines: Lines(BufReader::new(Box::new(stdout))),
+                    answers: Answers {
+                        writer: Box::new(stdin),
+                        child: Some(child),
+                        socket: None,
+                    },
                 }
             }
         };
-        helper.send(cookie.as_bytes())?;
+        helper.answers.send(cookie.as_bytes())?;
         Ok(helper)
     }
 
     /// The helper's next line; blocks until it comes.
     pub fn read_line(&mut self) -> Result<Line, HelperError> {
+        self.lines.read_line()
+    }
+
+    /// See [`Answers::answer`].
+    pub fn answer(&mut self, answer: &[u8]) -> io::Result<()> {
+        self.answers.answer(answer)
+    }
+
+    pub fn split(self) -> (Lines, Answers) {
+        (self.lines, self.answers)
+    }
+}
+
+impl Lines {
+    /// The helper's next line; blocks until it comes, or until the [`Answers`] are dropped.
+    pub fn read_line(&mut self) -> Result<Line, HelperError> {
         let mut line = Vec::new();
-        let read = (&mut self.lines)
+        let read = (&mut self.0)
             .take(MAX_LINE as u64)
             .read_until(b'\n', &mut line)?;
         match line.pop() {
@@ -224,7 +256,9 @@ impl Helper {
             _ => Err(HelperError::Closed),
         }
     }
+}
 
+impl Answers {
     /// Answers the last prompt. The answer and the buffer it is written from are wiped once sent; a line break in
     /// the answer would end it early, so it is refused.
     pub fn answer(&mut self, answer: &[u8]) -> io::Result<()> {
@@ -241,15 +275,18 @@ impl Helper {
         let mut line = Zeroizing::new(Vec::with_capacity(text.len() + 1));
         line.extend_from_slice(text);
         line.push(b'\n');
-        self.answers.write_all(&line)?;
-        self.answers.flush()
+        self.writer.write_all(&line)?;
+        self.writer.flush()
     }
 }
 
-impl Drop for Helper {
+impl Drop for Answers {
     fn drop(&mut self) {
         // a helper still reading an answer stops at the end of its input
-        self.answers = Box::new(io::sink());
+        self.writer = Box::new(io::sink());
+        if let Some(socket) = &self.socket {
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
         if let Some(child) = &mut self.child {
             let _ = child.kill();
             let _ = child.wait();

@@ -55,6 +55,7 @@
 "symbol.keyboard-brightness" = ["keyboard-brightness-symbolic"]
 "symbol.keyboard-brightness.off" = ["keyboard-brightness-off-symbolic", "keyboard-brightness-symbolic"]
 "symbol.list" = ["view-list-symbolic", "view-list-bullet-symbolic"]
+"symbol.lock" = ["changes-prevent-symbolic", "security-high-symbolic", "system-lock-screen-symbolic"]
 "symbol.lock-screen" = ["system-lock-screen-symbolic", "changes-prevent-symbolic"]
 "symbol.magnifyingglass" = ["edit-find-symbolic", "system-search-symbolic"]
 "symbol.moon" = ["weather-clear-night-symbolic", "night-light-symbolic"]

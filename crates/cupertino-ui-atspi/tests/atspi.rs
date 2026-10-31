@@ -59,6 +59,7 @@ fn node(
         children,
         live: None,
         item_count: None,
+        level: None,
         item_index: None,
         column_index: None,
     }
@@ -113,6 +114,7 @@ fn tree() -> AccessibilityUpdate {
                 id(5),
                 AccessibilityNode {
                     item_count: Some(50_000),
+                    level: None,
                     ..node(Role::List, "Items", None, Vec::new(), vec![id(6)])
                 },
             ),

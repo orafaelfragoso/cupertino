@@ -83,7 +83,8 @@ impl Palette<Color> {
             (Disabled, ControlBorder | TextFieldBorder) => self.normal(DisabledControlBorder),
             (
                 Disabled,
-                ControlText | DefaultButtonText | DestructiveText | Text | PlaceholderText,
+                ControlText | DefaultButtonText | DestructiveText | Text | SecondaryText
+                | PlaceholderText,
             ) => self.normal(DisabledControlText),
             (Disabled, SwitchTrack) if selected => s.disabled_selected_switch_track,
             (Disabled, SwitchTrack) => s.disabled_switch_track,
@@ -158,10 +159,12 @@ mod tests {
                 get(ControlFill, state(Disabled, selected, true)),
                 palette.normal(DisabledControlFill)
             );
-            assert_eq!(
-                get(Text, state(Disabled, selected, true)),
-                palette.normal(DisabledControlText)
-            );
+            for text in [Text, SecondaryText] {
+                assert_eq!(
+                    get(text, state(Disabled, selected, true)),
+                    palette.normal(DisabledControlText)
+                );
+            }
         }
         assert_eq!(
             get(SwitchTrack, state(Disabled, true, true)),

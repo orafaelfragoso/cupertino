@@ -1,4 +1,5 @@
 use crate::{FontStyle, FontWeight};
+use std::collections::HashSet;
 use std::ffi::CString;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -47,7 +48,7 @@ impl InstalledFonts {
                 path: PathBuf::from(found.filename().ok()?),
                 index: u32::try_from(found.face_index().ok()?).ok()?,
             },
-            found.name().ok()?.to_owned(),
+            found.get_string(c"family").ok()?.to_owned(),
         ))
     }
 
@@ -84,15 +85,51 @@ impl SystemFonts for InstalledFonts {
         weight: FontWeight,
         style: FontStyle,
     ) -> Option<FontFile> {
+        // Fontconfig's best match is only the nearest face, which can lack the character: take the nearest face of the
+        // ones whose character set has it
+        let mut has = fontconfig::Pattern::new(&self.fc).ok()?;
+        has.add_charset(self.chars(ch)?).ok()?;
+        let mut objects = fontconfig::ObjectSet::new(&self.fc).ok()?;
+        objects.add(c"file").ok()?;
+        objects.add(c"index").ok()?;
+        let covering: HashSet<FontFile> = fontconfig::list_fonts(&has, Some(&objects))
+            .ok()?
+            .iter()
+            .filter_map(|found| file_of(&found))
+            .collect();
+        if covering.is_empty() {
+            return None;
+        }
         let mut pattern = self.pattern(weight, style)?;
-        let mut chars = fontconfig::CharSet::new(&self.fc).ok()?;
-        chars.add_char(ch).ok()?;
-        pattern.add_charset(chars).ok()?;
+        pattern.add_charset(self.chars(ch)?).ok()?;
         if let Some(lang) = lang.and_then(|lang| CString::new(lang).ok()) {
             pattern.add_string(c"lang", &lang).ok()?;
         }
-        self.best(&mut pattern).map(|(file, _)| file)
+        pattern.config_substitute().ok()?;
+        pattern.default_substitute();
+        let nearest = pattern
+            .sort_fonts(fontconfig::UnicodeCoverage::NoTrim)
+            .ok()?
+            .iter()
+            .filter_map(|found| file_of(&found))
+            .find(|file| covering.contains(file));
+        nearest.or_else(|| covering.into_iter().min_by(|a, b| a.path.cmp(&b.path)))
     }
+}
+
+impl InstalledFonts {
+    fn chars(&self, ch: char) -> Option<fontconfig::CharSet> {
+        let mut chars = fontconfig::CharSet::new(&self.fc).ok()?;
+        chars.add_char(ch).ok()?;
+        Some(chars)
+    }
+}
+
+fn file_of(found: &fontconfig::Pattern<'_>) -> Option<FontFile> {
+    Some(FontFile {
+        path: PathBuf::from(found.filename().ok()?),
+        index: u32::try_from(found.face_index().ok()?).ok()?,
+    })
 }
 
 /// Fontconfig's weight scale for an OpenType weight.

@@ -423,6 +423,12 @@ fn kit_examples_present_frames_on_mutter() {
             (200, 64),
         ),
         ("forms", "org.cupertino.examples.Forms", "Forms", (280, 180)),
+        (
+            "virtual-list",
+            "org.cupertino.examples.VirtualList",
+            "Virtual List",
+            (480, 600),
+        ),
     ];
     for (example, app_id, title, size) in examples {
         let binary = example_binary("cupertino-kit", example);

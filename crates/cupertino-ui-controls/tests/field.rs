@@ -5,7 +5,7 @@ use cupertino_ui_controls::{SecureField, Stack, TextChange, TextField};
 use cupertino_ui_core::{
     AccessibleValue, Application, Command, Element, Role, TextSemantics, Window,
 };
-use cupertino_ui_layout::{Align, Axis};
+use cupertino_ui_layout::{Align, Axis, LayoutDirection};
 use cupertino_ui_platform::{ClipboardKind, Mods, PointerEvent, Timestamp, WindowEvent};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_text::{ContentPurpose, ImeBatch, ImeEvent, Preedit, CARET_WIDTH};
@@ -402,6 +402,48 @@ fn long_text_scrolls_to_keep_the_caret_inside_the_field() {
         caret(&h).unwrap().min_x(),
         6.0,
         "Home scrolls back to the start"
+    );
+}
+
+#[test]
+fn right_to_left_fields_keep_their_text_placeholder_and_caret_at_the_leading_edge() {
+    let mut h = Harness::<App>::with_direction(LayoutDirection::Rtl);
+    h.tap(TAB);
+    let field = h.rect("name");
+    let width = field.width();
+    let glyphs_x = |h: &Harness<App>| {
+        h.ops("name")
+            .into_iter()
+            .find_map(|op| match op {
+                PaintOp::Glyphs { origin, .. } => Some(origin.x),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert!(glyphs_x(&h) > width / 2.0, "the placeholder sits right");
+    let empty = caret(&h).unwrap();
+    assert_eq!(empty.max_x(), width - 6.0);
+
+    h.type_text("Ada");
+    assert!(glyphs_x(&h) > width / 2.0, "the text sits right");
+    let end = caret(&h).unwrap();
+    assert_eq!(end, empty, "the text grows leftward from the caret");
+    assert_eq!(
+        h.rt.window_system()
+            .text_input(h.window)
+            .unwrap()
+            .unwrap()
+            .cursor_rect
+            .map(|r| r.min_x()),
+        Some(field.min_x() + end.min_x())
+    );
+
+    h.click(point(field.min_x() + 6.5, field.center().y));
+    h.type_text("X");
+    assert_eq!(
+        h.model().text,
+        "XAda",
+        "a click left of the text lands at its start"
     );
 }
 

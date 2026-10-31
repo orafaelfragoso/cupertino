@@ -133,7 +133,8 @@ struct Shown<'a> {
 }
 
 /// Paints a field's text, or its placeholder while empty, with the selection and caret while focused and the
-/// composition's underline, all clipped to the interior. Scrolls so the caret stays inside.
+/// composition's underline, all clipped to the interior. Scrolls so the caret stays inside while focused, and to the
+/// text's start otherwise.
 fn paint_text(
     cx: &mut PaintCx<'_>,
     look: &ControlState,
@@ -150,12 +151,13 @@ fn paint_text(
         return;
     };
     let caret = layout.caret_rect(shown.caret);
-    let offset = follow(
-        scroll.get(),
-        caret.min_x(),
-        layout.size().width,
-        area.width(),
-    );
+    let focused = look.focused && enabled;
+    let shown_x = if focused {
+        caret.min_x()
+    } else {
+        layout.caret_rect(position(0)).min_x()
+    };
+    let offset = follow(scroll.get(), shown_x, layout.size().width, area.width());
     scroll.set(offset);
     let origin = Point::new(
         leading_x(&env, area, layout.size().width) - offset,
@@ -163,7 +165,6 @@ fn paint_text(
     );
     let color = |role| look::color(&env.theme, role, look);
     cx.push(PaintOp::PushClip(Shape::Rect(area)));
-    let focused = look.focused && enabled;
     if focused && !shown.selection.is_empty() {
         for rect in layout.selection_rects(shown.selection.clone()) {
             fill_rect(

@@ -492,6 +492,20 @@ impl Cupertino {
         Err(first)
     }
 
+    /// The backend cannot show `id` at all (it cannot show the render GPU's frames): its output goes, and it is listed as
+    /// off while it stays connected. Its stored state is kept, so plugged in again it is tried again.
+    pub fn head_unsupported(&mut self, id: HeadId) {
+        if self.displays.head(id).is_some_and(|h| h.output.is_some()) {
+            if let Err(e) = self.head_op(id, HeadOp::Disable) {
+                tracing::warn!(error = %format!("{e:#}"), "turning off an unsupported display failed");
+            }
+        }
+        if let Some(head) = self.displays.head_mut(id) {
+            head.state.enabled = false;
+        }
+        self.heads_changed();
+    }
+
     /// The output of a head being enabled, in its state, for the backend to set up. Nothing sees it until the backend
     /// shows it and hands it to [`Cupertino::create_head_output`]. Backends call this for [`HeadOp::Enable`].
     pub fn prepare_head_output(&self, id: HeadId) -> Result<Output> {

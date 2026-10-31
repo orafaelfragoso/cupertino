@@ -1,5 +1,6 @@
-//! TTY backend: logind session, sysfs device discovery, one GPU (the primary one) with DRM/KMS
-//! outputs (one head per connected connector, see `crate::displays`), evdev input devices (see `input.rs`). Single-GPU only (no multi-GPU copies).
+//! TTY backend: logind session, sysfs device discovery, every DRM card with its KMS outputs (one head per connected
+//! connector, see `crate::displays`), evdev input devices (see `input.rs`). One card renders every frame (the render
+//! GPU); a display on another card shows a copy of it that its own card draws.
 //!
 //! The render loop is driven by the main loop: an output is rendered when the compositor wants
 //! frames and no frame is waiting for its vblank; the vblank event reports presentation.
@@ -9,23 +10,23 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
-use cupertino_devices::{Action, Monitor, Subsystem, SEAT0};
+use cupertino_devices::{Action, DevT, DeviceEvent, Monitor, Subsystem, SEAT0};
 use cupertino_render_api::{Completion as _, Failure, RenderFailure as _, RenderStatus, Renderer};
 use cupertino_seat::LogindSession;
 use cupertino_wm::OutputId;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::Fourcc;
-use smithay::backend::drm::compositor::FrameError;
+use smithay::backend::drm::compositor::{FrameError, FrameFlags, RenderFrameError};
 use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
 use smithay::backend::drm::output::{
     DrmOutput, DrmOutputManager, DrmOutputManagerError, DrmOutputRenderElements,
 };
 use smithay::backend::drm::{
-    DrmDevice, DrmDeviceFd, DrmError, DrmEvent, DrmEventTime, DrmNode, NodeType,
+    DrmDevice, DrmDeviceFd, DrmDeviceNotifier, DrmError, DrmEvent, DrmEventTime, DrmNode, NodeType,
 };
 use smithay::backend::egl::context::ContextPriority;
 use smithay::backend::egl::{EGLContext, EGLDevice, EGLDisplay};
@@ -34,7 +35,9 @@ use smithay::backend::renderer::Color32F;
 use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::desktop::utils::OutputPresentationFeedback;
 use smithay::reexports::calloop::generic::Generic;
-use smithay::reexports::calloop::{EventLoop, Interest, Mode, PostAction};
+use smithay::reexports::calloop::{
+    EventLoop, Interest, LoopHandle, Mode, PostAction, RegistrationToken,
+};
 use smithay::reexports::drm::control::{
     self, connector, crtc, Device as ControlDevice, ModeFlags, ModeTypeFlags,
 };
@@ -46,10 +49,11 @@ use smithay::wayland::drm_syncobj::{supports_syncobj_eventfd, DrmSyncobjState};
 use smithay::wayland::presentation::Refresh;
 use smithay_drm_extras::drm_scanner::DrmScanner;
 
+use super::copy::{self, FrameCopy, Unsupported, Via};
 use super::input;
 use super::Backend;
 use crate::displays::{edid, HeadCaps, HeadId, HeadInfo, HeadMode, HeadOp};
-use crate::render::gles::{Gles, GlesResources, GlesTarget};
+use crate::render::gles::{Gles, GlesCompletion, GlesResources, GlesTarget, RenderError};
 use crate::render::scene::RenderResources;
 use crate::schedule::{Overdue, PresentationId};
 use crate::state::Cupertino;
@@ -73,6 +77,8 @@ type Frame = (PresentationId, OutputPresentationFeedback);
 struct Surface {
     output: OutputId,
     drm_output: DrmSurfaceOutput,
+    /// On a card that does not render: the copies of the render GPU's frames it shows.
+    copy: Option<FrameCopy<DrmDeviceFd>>,
     /// A frame was queued and its vblank has not arrived yet.
     pending: bool,
     refresh: Duration,
@@ -104,9 +110,17 @@ impl DrmHead {
     }
 }
 
-pub struct UdevBackend {
-    session: LogindSession,
+/// A DRM card and the displays on it.
+struct Card {
+    /// The device number its uevents carry.
+    devnum: DevT,
+    /// What its connectors' names start with: nothing on the primary card, `card1-` on another one, so two cards' `DP-1`
+    /// are told apart.
+    prefix: String,
+    /// The render GPU's renderer draws every frame; another card's only draws the copy of one onto its display.
     renderer: GlesRenderer,
+    /// Allocates the render GPU's buffers for the displays of other cards.
+    gbm: GbmDevice<DrmDeviceFd>,
     manager: Manager,
     scanner: DrmScanner,
     /// The enabled heads' outputs.
@@ -115,6 +129,15 @@ pub struct UdevBackend {
     heads: HashMap<crtc::Handle, DrmHead>,
     /// Connected connectors the scanner found no free CRTC for, told once.
     waiting: HashSet<connector::Handle>,
+    /// Its vblank source, removed with the card.
+    events: RegistrationToken,
+}
+
+pub struct UdevBackend {
+    session: LogindSession,
+    /// The card that renders. It stays while the session runs.
+    render_node: DrmNode,
+    cards: HashMap<DrmNode, Card>,
     /// The command line's scale for every display.
     scale: Option<f64>,
     /// The session is paused: the DRM device rejects every frame until it resumes.
@@ -151,8 +174,9 @@ fn loop_timeout(state: &Cupertino) -> Duration {
     let frames = match state.backend.as_ref() {
         Some(Backend::Udev(u)) if !(u.paused || u.asleep || u.renderer_lost) => {
             let now = state.frame_now();
-            u.surfaces
+            u.cards
                 .values()
+                .flat_map(|card| card.surfaces.values())
                 .filter(|s| state.displays.powered(s.output))
                 .filter_map(|s| {
                     let idx = state.outputs.iter().position(|o| o.id == s.output)?;
@@ -176,7 +200,29 @@ fn loop_timeout(state: &Cupertino) -> Duration {
 
 impl UdevBackend {
     pub fn renderer(&mut self) -> &mut GlesRenderer {
-        &mut self.renderer
+        &mut self
+            .cards
+            .get_mut(&self.render_node)
+            .expect("the render GPU's card stays")
+            .renderer
+    }
+
+    /// The card of the uevents that carry `devnum`.
+    fn card_of(&self, devnum: DevT) -> Option<DrmNode> {
+        self.cards
+            .iter()
+            .find(|(_, card)| card.devnum == devnum)
+            .map(|(node, _)| *node)
+    }
+
+    /// The card and CRTC that drive `head`.
+    fn head_place(&self, head: HeadId) -> Option<(DrmNode, crtc::Handle)> {
+        self.cards.iter().find_map(|(node, card)| {
+            card.heads
+                .iter()
+                .find(|(_, h)| h.head == head)
+                .map(|(crtc, _)| (*node, *crtc))
+        })
     }
 
     pub fn renderer_lost(&self) -> bool {
@@ -189,7 +235,11 @@ impl UdevBackend {
             return;
         }
         self.asleep = asleep;
-        for s in self.surfaces.values_mut() {
+        for s in self
+            .cards
+            .values_mut()
+            .flat_map(|c| c.surfaces.values_mut())
+        {
             if asleep {
                 // a frame waiting for its vblank is dropped with the cleared state
                 s.pending = false;
@@ -213,6 +263,229 @@ fn udev(state: &mut Cupertino) -> Option<&mut UdevBackend> {
     match state.backend.as_mut() {
         Some(Backend::Udev(u)) => Some(u),
         _ => None,
+    }
+}
+
+/// A card opened through the session.
+struct Opened {
+    drm: DrmDevice,
+    notifier: DrmDeviceNotifier,
+    fd: DrmDeviceFd,
+    gbm: GbmDevice<DrmDeviceFd>,
+    renderer: GlesRenderer,
+    /// The card's render node, for the exporter's direct scan-out of client buffers.
+    render_node: Option<DrmNode>,
+    /// Its only EGL device is a software one.
+    software: bool,
+}
+
+fn open_card(session: &LogindSession, path: &Path) -> Result<Opened> {
+    let node =
+        DrmNode::from_path(path).map_err(|e| anyhow!("drm node for {}: {e}", path.display()))?;
+    let fd = session
+        .clone()
+        .open(
+            path,
+            OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK,
+        )
+        .map_err(|e| anyhow!("opening {}: {e}", path.display()))?;
+    let fd = DrmDeviceFd::new(DeviceFd::from(fd));
+    let (drm, notifier) =
+        DrmDevice::new(fd.clone(), true).map_err(|e| anyhow!("drm device: {e}"))?;
+    let gbm = GbmDevice::new(fd.clone()).map_err(|e| anyhow!("gbm device: {e} (the driver's GBM backend is missing or refused the device; run `cupertino-server --check-hardware`)"))?;
+    let display = unsafe { EGLDisplay::new(gbm.clone()) }.map_err(|e| {
+        anyhow!(
+            "EGL display: {e} (no EGL platform for GBM; check the driver's EGL and GBM libraries)"
+        )
+    })?;
+    let egl_device =
+        EGLDevice::device_for_display(&display).map_err(|e| anyhow!("EGL device: {e}"))?;
+    let render_node = egl_device
+        .try_get_render_node()
+        .ok()
+        .flatten()
+        .or_else(|| node.node_with_type(NodeType::Render).and_then(|n| n.ok()));
+    let context = EGLContext::new_with_priority(&display, ContextPriority::High)
+        .map_err(|e| anyhow!("EGL context: {e}"))?;
+    let renderer =
+        unsafe { GlesRenderer::new(context) }.map_err(|e| anyhow!("GLES renderer: {e}"))?;
+    Ok(Opened {
+        drm,
+        notifier,
+        fd,
+        gbm,
+        renderer,
+        render_node,
+        software: egl_device.is_software(),
+    })
+}
+
+/// The connector-name prefix of `gpu`'s displays: none on the primary card, its name on another one.
+fn card_prefix(gpu: &cupertino_devices::Gpu, primary: &cupertino_devices::Gpu) -> String {
+    if gpu.device == primary.device {
+        String::new()
+    } else {
+        format!("{}-", gpu.device.sysname())
+    }
+}
+
+/// Set up the displays of an opened card and listen for its vblanks. `renders`: it is the render GPU, whose exporter
+/// may scan client buffers out directly.
+fn card(
+    handle: &LoopHandle<'static, Cupertino>,
+    node: DrmNode,
+    devnum: DevT,
+    prefix: String,
+    opened: Opened,
+    renders: bool,
+) -> Result<Card> {
+    let render_formats = opened
+        .renderer
+        .egl_context()
+        .dmabuf_render_formats()
+        .iter()
+        .copied()
+        .collect::<smithay::backend::allocator::format::FormatSet>();
+    let allocator = GbmAllocator::new(
+        opened.gbm.clone(),
+        GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
+    );
+    let import_node = if renders { opened.render_node } else { None };
+    let exporter = GbmFramebufferExporter::new(opened.gbm.clone(), import_node);
+    let manager = DrmOutputManager::new(
+        opened.drm,
+        allocator,
+        exporter,
+        Some(opened.gbm.clone()),
+        COLOR_FORMATS,
+        render_formats,
+    );
+    let events = handle
+        .insert_source(opened.notifier, move |event, metadata, state| match event {
+            DrmEvent::VBlank(crtc) => frame_finish(
+                state,
+                node,
+                crtc,
+                metadata.as_ref().map(|m| m.time),
+                metadata.as_ref().map(|m| m.sequence),
+            ),
+            DrmEvent::Error(e) => tracing::error!(error = %e, "DRM error"),
+        })
+        .map_err(|e| anyhow!("inserting the DRM source: {e}"))?;
+    Ok(Card {
+        devnum,
+        prefix,
+        renderer: opened.renderer,
+        gbm: opened.gbm,
+        manager,
+        scanner: DrmScanner::new(),
+        surfaces: HashMap::new(),
+        heads: HashMap::new(),
+        waiting: HashSet::new(),
+        events,
+    })
+}
+
+/// Open a card that does not render; a scan brings up its displays. A card that cannot be opened is logged and left
+/// alone.
+fn open_display_card(state: &mut Cupertino, path: &Path, prefix: String) -> Option<DrmNode> {
+    let added = (|| -> Result<DrmNode> {
+        let node = DrmNode::from_path(path).map_err(|e| anyhow!("drm node: {e}"))?;
+        let devnum = DevT::from_raw(node.dev_id());
+        let opened = open_card(&udev(state).context("the TTY backend")?.session, path)?;
+        let card = card(&state.loop_handle, node, devnum, prefix, opened, false)?;
+        udev(state)
+            .context("the TTY backend")?
+            .cards
+            .insert(node, card);
+        Ok(node)
+    })();
+    match added {
+        Ok(node) => {
+            tracing::info!(path = %path.display(), "showing the displays of another GPU");
+            Some(node)
+        }
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %format!("{e:#}"), "the displays of this GPU are not used");
+            None
+        }
+    }
+}
+
+/// A card that does not render went away: its displays go with it.
+fn remove_card(state: &mut Cupertino, node: DrmNode) {
+    let Some(card) = udev(state).and_then(|u| u.cards.remove(&node)) else {
+        return;
+    };
+    state.loop_handle.remove(card.events);
+    for head in card.heads.values() {
+        state.disconnect_head(head.head);
+    }
+    tracing::info!(?node, "a GPU went away with its displays");
+}
+
+/// What a DRM uevent does.
+#[derive(Debug, PartialEq, Eq)]
+enum CardEvent<N> {
+    /// A connector of a known card changed: scan it.
+    Scan(N),
+    /// A card node appeared: open it.
+    Open,
+    /// A card that does not render went away.
+    Remove(N),
+    /// The render GPU went away: the session cannot go on drawing.
+    RenderGone,
+    Ignore,
+}
+
+/// Route a DRM uevent of `action`: `card` is the known card its device number matches, `node_is_card` whether its node
+/// is a `card*` node (not a render node or a connector).
+fn card_event<N: PartialEq>(
+    action: &Action,
+    card: Option<N>,
+    render: N,
+    node_is_card: bool,
+) -> CardEvent<N> {
+    match (action, card) {
+        (Action::Changed, Some(node)) => CardEvent::Scan(node),
+        (Action::Added, None) if node_is_card => CardEvent::Open,
+        (Action::Removed, Some(node)) if node == render => CardEvent::RenderGone,
+        (Action::Removed, Some(node)) => CardEvent::Remove(node),
+        _ => CardEvent::Ignore,
+    }
+}
+
+fn drm_uevent(state: &mut Cupertino, event: &DeviceEvent) {
+    let Some(u) = udev(state) else { return };
+    let card = event.devnum.and_then(|devnum| u.card_of(devnum));
+    let node_is_card = event
+        .devnode
+        .as_deref()
+        .and_then(Path::file_name)
+        .is_some_and(|name| name.to_string_lossy().starts_with("card"));
+    match card_event(&event.action, card, u.render_node, node_is_card) {
+        CardEvent::Scan(node) => scan_card(state, node),
+        CardEvent::Open => {
+            let primary = cupertino_devices::primary_gpu(Path::new("/sys"))
+                .ok()
+                .flatten();
+            let gpu = cupertino_devices::gpus(Path::new("/sys"))
+                .ok()
+                .and_then(|gpus| gpus.into_iter().find(|g| g.device.devnum() == event.devnum));
+            if let (Some(gpu), Some(primary), Some(path)) = (gpu, primary, event.devnode.as_deref())
+            {
+                if let Some(node) = open_display_card(state, path, card_prefix(&gpu, &primary)) {
+                    scan_card(state, node);
+                }
+            }
+        }
+        CardEvent::Remove(node) => remove_card(state, node),
+        CardEvent::RenderGone => {
+            tracing::error!(
+                "the GPU that renders went away; nothing can be drawn until the session restarts"
+            )
+        }
+        CardEvent::Ignore => {}
     }
 }
 
@@ -272,9 +545,18 @@ pub fn run(
                 .map_err(|e| anyhow!("waiting for the session: {e}"))?;
         }
     }
-    let gpu = cupertino_devices::primary_gpu(Path::new("/sys"))
-        .map_err(|e| anyhow!("listing GPUs: {e}"))?
+    let gpus =
+        cupertino_devices::gpus(Path::new("/sys")).map_err(|e| anyhow!("listing GPUs: {e}"))?;
+    let primary = cupertino_devices::select_primary(gpus.clone()).context("no GPU found")?;
+    let wanted = std::env::var_os("CUPERTINO_RENDER_GPU").map(PathBuf::from);
+    let gpu = cupertino_devices::select_render(gpus.clone(), wanted.as_deref())
         .context("no GPU found")?;
+    if let Some(wanted) = wanted
+        .as_deref()
+        .filter(|w| gpu.device.devnode() != Some(*w))
+    {
+        tracing::warn!(wanted = %wanted.display(), "CUPERTINO_RENDER_GPU names no GPU; the primary one renders");
+    }
     let gpu_path = gpu
         .device
         .devnode()
@@ -284,92 +566,51 @@ pub fn run(
         .device
         .devnum()
         .context("the GPU has no device number")?;
-    tracing::info!(path = %gpu_path.display(), seat = %seat, "using GPU");
+    tracing::info!(path = %gpu_path.display(), seat = %seat, "rendering on this GPU");
 
     let node = DrmNode::from_path(&gpu_path)
         .map_err(|e| anyhow!("drm node for {}: {e}", gpu_path.display()))?;
-    let fd = session
-        .clone()
-        .open(
-            &gpu_path,
-            OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK,
-        )
-        .map_err(|e| anyhow!("opening {}: {e}", gpu_path.display()))?;
-    let fd = DrmDeviceFd::new(DeviceFd::from(fd));
-    let (drm, drm_notifier) =
-        DrmDevice::new(fd.clone(), true).map_err(|e| anyhow!("drm device: {e}"))?;
-    let import_fd = fd.clone();
-    let gbm = GbmDevice::new(fd).map_err(|e| anyhow!("gbm device: {e} (the driver's GBM backend is missing or refused the device; run `cupertino-server --check-hardware`)"))?;
-
-    let display = unsafe { EGLDisplay::new(gbm.clone()) }.map_err(|e| {
-        anyhow!(
-            "EGL display: {e} (no EGL platform for GBM; check the driver's EGL and GBM libraries)"
-        )
-    })?;
-    let egl_device =
-        EGLDevice::device_for_display(&display).map_err(|e| anyhow!("EGL device: {e}"))?;
-    if egl_device.is_software() {
+    let opened = open_card(&session, &gpu_path)?;
+    if opened.software {
         return Err(anyhow!(
             "only a software renderer is available on {}",
             gpu_path.display()
         ));
     }
-    let render_node = egl_device
-        .try_get_render_node()
-        .ok()
-        .flatten()
-        .or_else(|| node.node_with_type(NodeType::Render).and_then(|n| n.ok()));
-    let context = EGLContext::new_with_priority(&display, ContextPriority::High)
-        .map_err(|e| anyhow!("EGL context: {e}"))?;
-    let mut renderer =
-        unsafe { GlesRenderer::new(context) }.map_err(|e| anyhow!("GLES renderer: {e}"))?;
-    let render_formats = renderer
-        .egl_context()
-        .dmabuf_render_formats()
-        .iter()
-        .copied()
-        .collect::<smithay::backend::allocator::format::FormatSet>();
-
+    let mut renderer = opened.renderer;
     state.render = Some(RenderResources::new(&mut renderer)?);
     super::init_buffers(state, &renderer);
-    if supports_syncobj_eventfd(&import_fd) {
+    if supports_syncobj_eventfd(&opened.fd) {
         let dh = state.display_handle.clone();
-        state.syncobj_state = Some(DrmSyncobjState::new::<Cupertino>(&dh, import_fd));
+        state.syncobj_state = Some(DrmSyncobjState::new::<Cupertino>(&dh, opened.fd.clone()));
         tracing::info!("explicit sync (linux-drm-syncobj-v1) is offered");
     } else {
         tracing::warn!("explicit sync is not offered: the kernel cannot wait on syncobj timelines");
     }
-
-    let allocator = GbmAllocator::new(
-        gbm.clone(),
-        GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
-    );
-    let exporter = GbmFramebufferExporter::new(gbm.clone(), render_node);
-    let manager = DrmOutputManager::new(
-        drm,
-        allocator,
-        exporter,
-        Some(gbm),
-        COLOR_FORMATS,
-        render_formats,
-    );
-
-    let backend = UdevBackend {
+    let handle = event_loop.handle();
+    let card = card(
+        &handle,
+        node,
+        gpu_devnum,
+        card_prefix(&gpu, &primary),
+        Opened { renderer, ..opened },
+        true,
+    )?;
+    state.backend = Some(Backend::Udev(Box::new(UdevBackend {
         session: session.clone(),
-        renderer,
-        manager,
-        scanner: DrmScanner::new(),
-        surfaces: HashMap::new(),
-        heads: HashMap::new(),
-        waiting: HashSet::new(),
+        render_node: node,
+        cards: HashMap::from([(node, card)]),
         scale,
         paused: false,
         asleep: false,
         renderer_lost: false,
-    };
-    state.backend = Some(Backend::Udev(Box::new(backend)));
+    })));
+    for other in gpus.iter().filter(|g| g.device != gpu.device) {
+        if let Some(path) = other.device.devnode() {
+            open_display_card(state, path, card_prefix(other, &primary));
+        }
+    }
 
-    let handle = event_loop.handle();
     let inputs = input::new_inputs(handle.clone(), session.clone());
 
     let session_inputs = inputs.clone();
@@ -380,7 +621,9 @@ pub fn run(
                 input::close_all(&session_inputs, state);
                 if let Some(u) = udev(state) {
                     u.paused = true;
-                    u.manager.pause();
+                    for card in u.cards.values_mut() {
+                        card.manager.pause();
+                    }
                 }
             }
             SessionEvent::ActivateSession => {
@@ -390,10 +633,12 @@ pub fn run(
                 }
                 if let Some(u) = udev(state) {
                     u.paused = false;
-                    if let Err(e) = u.manager.activate(false) {
-                        tracing::error!(error = %e, "re-activating the DRM device failed");
+                    for card in u.cards.values_mut() {
+                        if let Err(e) = card.manager.activate(false) {
+                            tracing::error!(error = %e, "re-activating the DRM device failed");
+                        }
                     }
-                    for s in u.surfaces.values_mut() {
+                    for s in u.cards.values_mut().flat_map(|c| c.surfaces.values_mut()) {
                         // Smithay keeps a frame that waited for its vblank at the pause and holds every later frame of
                         // the CRTC behind it; if that vblank never comes, the head freezes. Another session had the
                         // device, so no flip of ours is under way: clearing the CRTC drops the frame, and the next one
@@ -414,18 +659,6 @@ pub fn run(
         })
         .map_err(|e| anyhow!("inserting the session source: {e}"))?;
 
-    handle
-        .insert_source(drm_notifier, move |event, metadata, state| match event {
-            DrmEvent::VBlank(crtc) => frame_finish(
-                state,
-                crtc,
-                metadata.as_ref().map(|m| m.time),
-                metadata.as_ref().map(|m| m.sequence),
-            ),
-            DrmEvent::Error(e) => tracing::error!(error = %e, "DRM error"),
-        })
-        .map_err(|e| anyhow!("inserting the DRM source: {e}"))?;
-
     let monitor = Monitor::new().map_err(|e| anyhow!("opening the uevent socket: {e}"))?;
     let hotplug_inputs = inputs.clone();
     handle
@@ -440,11 +673,8 @@ pub fn run(
                         for event in drained.events {
                             if event.subsystem == Subsystem::Input.as_str() {
                                 input::hotplug(&hotplug_inputs, &event, state);
-                            } else if event.subsystem == Subsystem::Drm.as_str()
-                                && event.action == Action::Changed
-                                && event.devnum == Some(gpu_devnum)
-                            {
-                                scan_connectors(state);
+                            } else if event.subsystem == Subsystem::Drm.as_str() {
+                                drm_uevent(state, &event);
                             }
                         }
                         // Events were lost: the open devices may no longer match the nodes.
@@ -481,19 +711,27 @@ pub fn run(
         }
     }
     if let (Some(Backend::Udev(u)), Some(res)) = (state.backend.as_mut(), state.render.as_ref()) {
-        res.destroy(&mut u.renderer);
+        res.destroy(u.renderer());
     }
     Ok(())
 }
 
-/// Announce the heads of newly connected connectors (enabling them unless their stored state is
-/// off) and disconnect the ones that went away.
-/// Bring the heads in line with the connectors: every connected connector with a CRTC is driven, and nothing else.
+/// Scan the connectors of every card ([`scan_card`]).
+pub(crate) fn scan_connectors(state: &mut Cupertino) {
+    let nodes: Vec<DrmNode> =
+        udev(state).map_or_else(Vec::new, |u| u.cards.keys().copied().collect());
+    for node in nodes {
+        scan_card(state, node);
+    }
+}
+
+/// Bring the heads of a card in line with its connectors: every connected connector with a CRTC is driven, and nothing
+/// else.
 /// Smithay's scanner reports a connector once, when it connects; a connector that waited for a CRTC gets one later
 /// without an event (another display let it go), and a display swapped on the same connector while the session was away
 /// is no event either. So the heads are compared with the scanner's whole mapping, and a driven connector whose display
 /// is another one (its EDID changed) is connected afresh.
-pub(crate) fn scan_connectors(state: &mut Cupertino) {
+fn scan_card(state: &mut Cupertino, node: DrmNode) {
     let Some(Backend::Udev(u)) = state.backend.as_mut() else {
         return;
     };
@@ -501,6 +739,9 @@ pub(crate) fn scan_connectors(state: &mut Cupertino) {
     if u.paused {
         return;
     }
+    let Some(u) = u.cards.get_mut(&node) else {
+        return;
+    };
     if let Err(e) = u.scanner.scan_connectors(u.manager.device()) {
         tracing::warn!(error = %e, "scanning connectors failed");
         return;
@@ -517,7 +758,7 @@ pub(crate) fn scan_connectors(state: &mut Cupertino) {
             && u.scanner.crtc_for_connector(handle).is_none()
         {
             if !u.waiting.contains(handle) {
-                tracing::warn!(connector = %connector_name(info), "a display is connected but every CRTC is in use: it stays off until another display is unplugged");
+                tracing::warn!(connector = %format!("{}{}", u.prefix, connector_name(info)), "a display is connected but every CRTC is in use: it stays off until another display is unplugged");
             }
             waiting.insert(*handle);
         }
@@ -546,7 +787,7 @@ pub(crate) fn scan_connectors(state: &mut Cupertino) {
     let (dropped, added) = reconcile(&driven, &wanted);
     gone.extend(dropped);
     for crtc in gone {
-        let Some(Backend::Udev(u)) = state.backend.as_mut() else {
+        let Some(u) = udev(state).and_then(|u| u.cards.get_mut(&node)) else {
             return;
         };
         u.surfaces.remove(&crtc);
@@ -559,7 +800,7 @@ pub(crate) fn scan_connectors(state: &mut Cupertino) {
             .iter()
             .find(|(c, info)| *c == crtc && info.handle() == connector)
         {
-            connector_connected(state, info.clone(), crtc);
+            connector_connected(state, node, info.clone(), crtc);
         }
     }
 }
@@ -633,11 +874,20 @@ fn connector_edid(device: &impl ControlDevice, connector: connector::Handle) -> 
     })
 }
 
-fn connector_connected(state: &mut Cupertino, connector: connector::Info, crtc: crtc::Handle) {
+fn connector_connected(
+    state: &mut Cupertino,
+    node: DrmNode,
+    connector: connector::Info,
+    crtc: crtc::Handle,
+) {
     let Some(Backend::Udev(u)) = state.backend.as_mut() else {
         return;
     };
-    let name = connector_name(&connector);
+    let scale = u.scale;
+    let Some(u) = u.cards.get_mut(&node) else {
+        return;
+    };
+    let name = format!("{}{}", u.prefix, connector_name(&connector));
     let preferred = connector
         .modes()
         .iter()
@@ -687,9 +937,8 @@ fn connector_connected(state: &mut Cupertino, connector: connector::Info, crtc: 
         },
         base_transform: Transform::Normal,
     };
-    let scale = u.scale;
     let (head, initial) = state.connect_head(info, scale);
-    let Some(Backend::Udev(u)) = state.backend.as_mut() else {
+    let Some(u) = udev(state).and_then(|u| u.cards.get_mut(&node)) else {
         return;
     };
     u.heads.insert(
@@ -716,12 +965,9 @@ pub(crate) fn head_op(
     head: HeadId,
     op: HeadOp,
 ) -> Result<()> {
-    let (crtc, drm_head) = u
-        .heads
-        .iter()
-        .find(|(_, h)| h.head == head)
-        .map(|(c, h)| (*c, h))
-        .context("the head has no connector")?;
+    let (node, crtc) = u.head_place(head).context("the head has no connector")?;
+    let u = u.cards.get_mut(&node).expect("the head's card");
+    let drm_head = &u.heads[&crtc];
     match op {
         HeadOp::Enable => {
             let mode = state
@@ -765,6 +1011,7 @@ pub(crate) fn head_op(
                         Surface {
                             output: id,
                             drm_output,
+                            copy: None,
                             pending: false,
                             refresh,
                         },
@@ -867,11 +1114,16 @@ fn render_outputs(state: &mut Cupertino) {
     let Some(mut backend) = state.backend.take() else {
         return;
     };
+    let mut unsupported = Vec::new();
     if let Backend::Udev(u) = &mut backend {
-        let crtcs: Vec<crtc::Handle> = u.surfaces.keys().copied().collect();
+        let places: Vec<(DrmNode, crtc::Handle)> = u
+            .cards
+            .iter()
+            .flat_map(|(node, card)| card.surfaces.keys().map(|crtc| (*node, *crtc)))
+            .collect();
         let now = state.frame_now();
-        for crtc in crtcs {
-            let Some(s) = u.surfaces.get(&crtc) else {
+        for (node, crtc) in places {
+            let Some(s) = u.cards.get(&node).and_then(|c| c.surfaces.get(&crtc)) else {
                 continue;
             };
             let Some(idx) = state.outputs.iter().position(|o| o.id == s.output) else {
@@ -880,7 +1132,7 @@ fn render_outputs(state: &mut Cupertino) {
             if s.pending && !(u.paused || u.asleep) {
                 let overdue = state.outputs[idx].scheduler.overdue(now, s.refresh);
                 if let Some(overdue) = overdue {
-                    flip_overdue(state, u, crtc, idx, overdue);
+                    flip_overdue(state, u, node, crtc, idx, overdue);
                 }
                 continue;
             }
@@ -893,10 +1145,13 @@ fn render_outputs(state: &mut Cupertino) {
             {
                 continue;
             }
-            render_surface(state, u, crtc, idx);
+            unsupported.extend(render_surface(state, u, node, crtc, idx));
         }
     }
     state.backend = Some(backend);
+    for head in unsupported {
+        state.head_unsupported(head);
+    }
 }
 
 /// A flip whose vblank is overdue: its clients are called back once per refresh, so none waits on a dead head, and after
@@ -905,11 +1160,16 @@ fn render_outputs(state: &mut Cupertino) {
 fn flip_overdue(
     state: &mut Cupertino,
     u: &mut UdevBackend,
+    node: DrmNode,
     crtc: crtc::Handle,
     idx: usize,
     overdue: Overdue,
 ) {
-    let Some(surface) = u.surfaces.get_mut(&crtc) else {
+    let Some(surface) = u
+        .cards
+        .get_mut(&node)
+        .and_then(|c| c.surfaces.get_mut(&crtc))
+    else {
         return;
     };
     let name = state.outputs[idx].output.name();
@@ -939,56 +1199,76 @@ fn already_shown(scene: bool, rendered: bool) -> bool {
     scene && !rendered
 }
 
-fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle, idx: usize) {
-    // without a scene (no render resources or no mode yet) or a drawn frame, nothing is queued, but the tail still runs
-    let mut scene = true;
-    let mut failed = None;
-    let rendered = match state.compose_for_present(&mut u.renderer, idx) {
-        None => {
-            scene = false;
-            false
-        }
-        Some(composed) => {
-            let Some(surface) = u.surfaces.get_mut(&crtc) else {
-                return;
-            };
-            let Some((res, cache, _)) = state.gles_parts(idx) else {
-                return;
-            };
-            let mut resources = GlesResources::new(res, cache, composed.resources);
-            let result = Gles.render(
-                &composed.frame,
-                &mut resources,
-                GlesTarget::Drm {
-                    renderer: &mut u.renderer,
-                    output: &mut surface.drm_output,
-                    clear: CLEAR,
-                },
-            );
-            state.outputs[idx].scheduler.rendered();
-            match result {
-                Ok(completion) => {
-                    state.frame_drawn(idx);
-                    let rendered = completion.status() == RenderStatus::Rendered;
-                    if !rendered {
-                        state.outputs[idx].scheduler.empty();
-                    }
-                    rendered
+/// What drawing a frame of a display came to.
+struct Drawn {
+    /// A scene was composed and drawn, so the screen's content is known ([`already_shown`]).
+    scene: bool,
+    /// Something differs from the frame before: it waits to be queued.
+    rendered: bool,
+    failed: Option<RenderError>,
+}
+
+impl Drawn {
+    const NOTHING: Drawn = Drawn {
+        scene: false,
+        rendered: false,
+        failed: None,
+    };
+
+    /// The outcome of a render of the scene of output `idx`.
+    fn of(
+        state: &mut Cupertino,
+        idx: usize,
+        result: Result<bool, RenderError>,
+        lost: &mut bool,
+    ) -> Self {
+        state.outputs[idx].scheduler.rendered();
+        match result {
+            Ok(rendered) => {
+                state.frame_drawn(idx);
+                if !rendered {
+                    state.outputs[idx].scheduler.empty();
                 }
-                Err(e) => {
-                    u.renderer_lost |= e.failure() == Failure::ContextLost;
-                    failed = Some(e);
-                    scene = false;
-                    false
+                Drawn {
+                    scene: true,
+                    rendered,
+                    failed: None,
+                }
+            }
+            Err(e) => {
+                *lost |= e.failure() == Failure::ContextLost;
+                Drawn {
+                    failed: Some(e),
+                    ..Drawn::NOTHING
                 }
             }
         }
+    }
+}
+
+/// Draw and queue a frame of output `idx` on the display at `crtc` of card `node`. Returns the head when its display
+/// turned out unsupported: it cannot show the render GPU's frames.
+fn render_surface(
+    state: &mut Cupertino,
+    u: &mut UdevBackend,
+    node: DrmNode,
+    crtc: crtc::Handle,
+    idx: usize,
+) -> Option<HeadId> {
+    // without a scene (no render resources or no mode yet) or a drawn frame, nothing is queued, but the tail still runs
+    let drawn = if node == u.render_node {
+        draw_direct(state, u, node, crtc, idx)?
+    } else {
+        match draw_copy(state, u, node, crtc, idx)? {
+            Ok(drawn) => drawn,
+            Err(Unsupported) => {
+                return u.cards[&node].heads.get(&crtc).map(|h| h.head);
+            }
+        }
     };
-    let Some(surface) = u.surfaces.get_mut(&crtc) else {
-        return;
-    };
+    let surface = u.cards.get_mut(&node)?.surfaces.get_mut(&crtc)?;
     let time = Duration::from(state.clock.now());
-    if rendered {
+    if drawn.rendered {
         let feedback = state.collect_feedback(idx);
         let id = state.outputs[idx].scheduler.next_presentation();
         match surface.drm_output.queue_frame((id, feedback)) {
@@ -1007,18 +1287,147 @@ fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle
             Err(e) => tracing::warn!(error = %e, "queueing the frame failed"),
         }
     }
-    if already_shown(scene, rendered) {
+    let refresh = surface.refresh;
+    if already_shown(drawn.scene, drawn.rendered) {
         state.note_frame_shown(idx);
     }
-    state.process_screenshots(&mut u.renderer, idx);
-    match failed {
-        Some(e) => state.frame_failed(idx, time, surface.refresh, &e),
+    state.process_screenshots(u.renderer(), idx);
+    match drawn.failed {
+        Some(e) => state.frame_failed(idx, time, refresh, &e),
         None => state.send_frames(idx, time),
     }
+    None
+}
+
+/// Draw a frame of a display of the render GPU: its DRM compositor draws the scene's elements.
+fn draw_direct(
+    state: &mut Cupertino,
+    u: &mut UdevBackend,
+    node: DrmNode,
+    crtc: crtc::Handle,
+    idx: usize,
+) -> Option<Drawn> {
+    let card = u.cards.get_mut(&node)?;
+    let Some(composed) = state.compose_for_present(&mut card.renderer, idx) else {
+        return Some(Drawn::NOTHING);
+    };
+    let surface = card.surfaces.get_mut(&crtc)?;
+    let (res, cache, _) = state.gles_parts(idx)?;
+    let mut resources = GlesResources::new(res, cache, composed.resources);
+    let result = Gles
+        .render(
+            &composed.frame,
+            &mut resources,
+            GlesTarget::Drm {
+                renderer: &mut card.renderer,
+                output: &mut surface.drm_output,
+                clear: CLEAR,
+            },
+        )
+        .map(|completion| completion.status() == RenderStatus::Rendered);
+    Some(Drawn::of(state, idx, result, &mut u.renderer_lost))
+}
+
+/// Draw a frame of a display of another card: the render GPU draws the scene into a buffer of the display's copy, and
+/// the display's card draws that buffer ([`copy`]).
+fn draw_copy(
+    state: &mut Cupertino,
+    u: &mut UdevBackend,
+    node: DrmNode,
+    crtc: crtc::Handle,
+    idx: usize,
+) -> Option<Result<Drawn, Unsupported>> {
+    let [Some(render), Some(card)] = u.cards.get_disjoint_mut([&u.render_node, &node]) else {
+        return None;
+    };
+    let output = &state.outputs[idx].output;
+    let mode = output.current_mode()?;
+    let size = output.current_transform().transform_size(mode.size);
+    let scale = output.current_scale().fractional_scale();
+    let surface = card.surfaces.get_mut(&crtc)?;
+    let copy = match &mut surface.copy {
+        Some(copy) if copy.fits(size, scale) => copy,
+        slot => {
+            let via = slot.as_ref().map(FrameCopy::via);
+            let allocator = GbmAllocator::new(render.gbm.clone(), GbmBufferFlags::RENDERING);
+            let copy = slot.insert(FrameCopy::new(
+                allocator,
+                copy::render_modifiers(&render.renderer),
+                size,
+                scale,
+            ));
+            if let Some(via) = via {
+                copy.continue_via(via);
+            }
+            copy
+        }
+    };
+    let (slot, mut dmabuf) = match copy.acquire() {
+        Ok(acquired) => acquired,
+        Err(_) if copy.via() == Via::Unsupported => return Some(Err(Unsupported)),
+        Err(e) => {
+            tracing::warn!(error = %format!("{e:#}"), "no buffer to draw the display's frame into");
+            return Some(Ok(Drawn::NOTHING));
+        }
+    };
+    let Some(composed) = state.compose_for_present(&mut render.renderer, idx) else {
+        return Some(Ok(Drawn::NOTHING));
+    };
+    let (res, cache, _) = state.gles_parts(idx)?;
+    let mut resources = GlesResources::new(res, cache, composed.resources);
+    let result = Gles.render(
+        &composed.frame,
+        &mut resources,
+        GlesTarget::Dmabuf {
+            renderer: &mut render.renderer,
+            dmabuf: &mut dmabuf,
+            tracker: &mut copy.tracker,
+            age: usize::from(slot.age()),
+            clear: CLEAR,
+        },
+    );
+    let result = match result {
+        Ok(GlesCompletion::Offscreen {
+            damage: Some(damage),
+            sync,
+        }) => {
+            let copied = match copy.bring(
+                &mut render.renderer,
+                &mut card.renderer,
+                slot,
+                dmabuf,
+                sync,
+                &damage,
+            ) {
+                Ok(copied) => copied,
+                Err(Unsupported) => return Some(Err(Unsupported)),
+            };
+            surface
+                .drm_output
+                .render_frame(&mut card.renderer, &[copied], CLEAR, FrameFlags::DEFAULT)
+                .map(|r| !r.is_empty)
+                .map_err(|e| match e {
+                    RenderFrameError::PrepareFrame(e) => RenderError::Rendering(e.into()),
+                    RenderFrameError::RenderFrame(e) => RenderError::Target(format!("{e:?}")),
+                })
+        }
+        Ok(_) => Ok(false),
+        // the render GPU cannot draw into the copy's buffer: the next frame tries another kind, or the display goes
+        Err(RenderError::Target(e)) => {
+            copy.cannot_draw(&e);
+            if copy.via() == Via::Unsupported {
+                return Some(Err(Unsupported));
+            }
+            Err(RenderError::Target(e))
+        }
+        Err(e) => Err(e),
+    };
+    Some(Ok(Drawn::of(state, idx, result, &mut u.renderer_lost)))
 }
 
 fn frame_finish(
     state: &mut Cupertino,
+    node: DrmNode,
     crtc: crtc::Handle,
     time: Option<DrmEventTime>,
     seq: Option<u32>,
@@ -1036,7 +1445,11 @@ fn frame_finish(
     };
     let clock = hardware.map_or_else(|| state.clock.now(), Into::into);
     let Some(u) = udev(state) else { return };
-    let Some(surface) = u.surfaces.get_mut(&crtc) else {
+    let Some(surface) = u
+        .cards
+        .get_mut(&node)
+        .and_then(|c| c.surfaces.get_mut(&crtc))
+    else {
         return;
     };
     surface.pending = false;
@@ -1088,7 +1501,44 @@ fn frame_finish(
 
 #[cfg(test)]
 mod tests {
-    use super::{already_shown, frame_due, reconcile};
+    use super::{already_shown, card_event, frame_due, reconcile, CardEvent};
+    use cupertino_devices::Action;
+
+    #[test]
+    fn a_drm_uevent_goes_to_the_card_its_device_number_names() {
+        // card 1 renders, card 2 shows displays
+        assert_eq!(
+            card_event(&Action::Changed, Some(2), 1, true),
+            CardEvent::Scan(2)
+        );
+        assert_eq!(
+            card_event(&Action::Changed, None, 1, true),
+            CardEvent::Ignore
+        );
+        assert_eq!(card_event(&Action::Added, None, 1, true), CardEvent::Open);
+        assert_eq!(
+            card_event(&Action::Added, None, 1, false),
+            CardEvent::Ignore,
+            "a render node or a connector is no card"
+        );
+        assert_eq!(
+            card_event(&Action::Added, Some(2), 1, true),
+            CardEvent::Ignore,
+            "a card already open"
+        );
+        assert_eq!(
+            card_event(&Action::Removed, Some(2), 1, true),
+            CardEvent::Remove(2)
+        );
+        assert_eq!(
+            card_event(&Action::Removed, Some(1), 1, true),
+            CardEvent::RenderGone
+        );
+        assert_eq!(
+            card_event(&Action::Removed, None, 1, true),
+            CardEvent::Ignore
+        );
+    }
 
     #[test]
     fn a_connector_that_waited_for_a_crtc_is_brought_up_when_another_display_lets_one_go() {

@@ -1777,6 +1777,7 @@ dependencies = [
  "harfrust",
  "icu_segmenter",
  "swash",
+ "tempfile",
  "unicode-bidi",
  "unicode-segmentation",
  "zeroize",

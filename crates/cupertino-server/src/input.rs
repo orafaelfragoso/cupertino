@@ -1009,6 +1009,9 @@ pub struct KeyEvent {
     pub mods: Mods,
     /// A press the compositor's key repeat produced.
     pub repeat: bool,
+    /// With Shift down, the symbol the key types at its shift level, which a chord matches when the key's own symbol
+    /// matches none: Shift+7 types `/` on a German layout, so it is Shift+slash there.
+    pub shifted: Option<u32>,
 }
 
 /// What a key does while the application switcher is open (key table), or `None`
@@ -1080,6 +1083,13 @@ impl KeyRouter {
         self.suppressed.insert(normalize_sym(sym), None);
     }
 
+    fn lookup(&self, ev: &KeyEvent) -> Option<Action> {
+        self.bindings.lookup(ev.sym, ev.mods).or_else(|| {
+            ev.shifted
+                .and_then(|sym| self.bindings.lookup(sym, ev.mods))
+        })
+    }
+
     /// Route a key press or release.
     pub fn key(&mut self, ev: KeyEvent, ctx: &ActionContext) -> KeyOutcome {
         let sym = normalize_sym(ev.sym);
@@ -1097,7 +1107,7 @@ impl KeyRouter {
             return KeyOutcome::Consumed(ActionPlan::default());
         }
         if ctx.locked {
-            return match self.bindings.lookup(ev.sym, ev.mods) {
+            return match self.lookup(&ev) {
                 Some(Action::SwitchVt(n)) => {
                     self.suppressed.insert(sym, None);
                     KeyOutcome::Consumed(translate_action(Action::SwitchVt(n), ctx))
@@ -1108,11 +1118,7 @@ impl KeyRouter {
         // an application holds the shortcuts: only the reserved actions stay the compositor's, matched on the physical
         // chord before anything else looks at the key
         if ctx.input_held {
-            return match self
-                .bindings
-                .lookup(ev.sym, ev.mods)
-                .filter(Action::is_reserved)
-            {
+            return match self.lookup(&ev).filter(Action::is_reserved) {
                 Some(action) => {
                     self.suppressed.insert(sym, None);
                     KeyOutcome::Consumed(translate_action(action, ctx))
@@ -1136,8 +1142,7 @@ impl KeyRouter {
             return KeyOutcome::Consumed(switcher_key(sym, ev.mods, ev.repeat).unwrap_or_default());
         }
         match self
-            .bindings
-            .lookup(ev.sym, ev.mods)
+            .lookup(&ev)
             .filter(|action| ctx.pointer_held || *action != Action::ReleaseShortcuts)
         {
             Some(action) => {
@@ -1217,6 +1222,7 @@ mod tests {
                 pressed: true,
                 mods: ch.mods,
                 repeat: false,
+                shifted: None,
             },
             c,
         )
@@ -1237,6 +1243,41 @@ mod tests {
     fn shifted_tab_and_capitals_normalise() {
         assert_eq!(normalize_sym(keysyms::KEY_ISO_Left_Tab), keysyms::KEY_Tab);
         assert_eq!(normalize_sym(keysyms::KEY_Q), keysyms::KEY_q);
+    }
+
+    #[test]
+    fn a_chord_on_a_shifted_key_matches_by_what_the_key_types_unless_the_key_itself_is_bound() {
+        let shift_7 = |r: &mut KeyRouter| {
+            r.key(
+                KeyEvent {
+                    sym: keysyms::KEY_7,
+                    pressed: true,
+                    mods: parse_chord("Super+Shift+7").unwrap().mods,
+                    repeat: false,
+                    shifted: Some(keysyms::KEY_slash),
+                },
+                &ctx(),
+            )
+        };
+        let mut bindings = KeyBindings::empty();
+        bindings
+            .bind_str("Super+Shift+slash", Action::HelpSearch)
+            .unwrap();
+        assert_eq!(
+            dbg(&shift_7(&mut KeyRouter::new(bindings.clone()))),
+            dbg(&KeyOutcome::Consumed(translate_action(
+                Action::HelpSearch,
+                &ctx()
+            )))
+        );
+        bindings.bind_str("Super+Shift+7", Action::QuitApp).unwrap();
+        assert_eq!(
+            dbg(&shift_7(&mut KeyRouter::new(bindings))),
+            dbg(&KeyOutcome::Consumed(translate_action(
+                Action::QuitApp,
+                &ctx()
+            )))
+        );
     }
 
     #[test]
@@ -1452,6 +1493,7 @@ mod tests {
             pressed: false,
             mods: alt,
             repeat: false,
+            shifted: None,
         };
         assert!(matches!(r.key(release, &c), KeyOutcome::Consumed(_)));
     }
@@ -1504,6 +1546,7 @@ mod tests {
             pressed: true,
             mods,
             repeat: false,
+            shifted: None,
         };
         let super_ = Mods {
             logo: true,
@@ -1689,6 +1732,7 @@ mod tests {
                     pressed: true,
                     mods,
                     repeat,
+                    shifted: None,
                 },
                 &c,
             ) {
@@ -1754,7 +1798,8 @@ mod tests {
                         sym: shift,
                         pressed: true,
                         mods: held,
-                        repeat: false
+                        repeat: false,
+                        shifted: None,
                     },
                     &c
                 ),
@@ -1775,7 +1820,8 @@ mod tests {
                     sym: ch.sym,
                     pressed: true,
                     mods: ch.mods,
-                    repeat: false
+                    repeat: false,
+                    shifted: None,
                 },
                 &c
             ),
@@ -1787,7 +1833,8 @@ mod tests {
                     sym: ch.sym,
                     pressed: false,
                     mods: Mods::NONE,
-                    repeat: false
+                    repeat: false,
+                    shifted: None,
                 },
                 &c
             ),
@@ -1799,7 +1846,8 @@ mod tests {
                     sym: ch.sym,
                     pressed: false,
                     mods: Mods::NONE,
-                    repeat: false
+                    repeat: false,
+                    shifted: None,
                 },
                 &c
             )),
@@ -1812,7 +1860,8 @@ mod tests {
                     sym: plain.sym,
                     pressed: true,
                     mods: Mods::NONE,
-                    repeat: false
+                    repeat: false,
+                    shifted: None,
                 },
                 &c
             )),
@@ -1953,6 +2002,7 @@ mod tests {
             pressed,
             mods: Mods::NONE,
             repeat: false,
+            shifted: None,
         };
         assert_eq!(
             ops(r.key(event(true), &c)),
@@ -1987,7 +2037,8 @@ mod tests {
                     sym: power.sym,
                     pressed: true,
                     mods: Mods::NONE,
-                    repeat: false
+                    repeat: false,
+                    shifted: None,
                 },
                 &locked
             )),
@@ -1999,7 +2050,8 @@ mod tests {
                     sym: power.sym,
                     pressed: false,
                     mods: Mods::NONE,
-                    repeat: false
+                    repeat: false,
+                    shifted: None,
                 },
                 &locked
             )),

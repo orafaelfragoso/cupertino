@@ -21,6 +21,7 @@ const STATUS_INSETS: Insets = Insets {
 
 pub struct VirtualList<const COUNT: usize>;
 
+#[derive(Debug)]
 pub struct Items {
     pub scroll: ScrollState,
     pub selection: Selection,

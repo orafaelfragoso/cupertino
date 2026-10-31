@@ -14,7 +14,7 @@ const SECTION_GAP: f64 = 12.0;
 
 pub struct Forms;
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Account {
     pub name: String,
     pub revision: u64,

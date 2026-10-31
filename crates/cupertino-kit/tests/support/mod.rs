@@ -1,9 +1,11 @@
-//! Runs an example's application on the headless window system and compares its Inspector dump with a golden.
+//! Runs an example's application on the headless window system and compares its Inspector dump with a golden. A
+//! [`Traced`] application's golden starts with its trace: each input, then each message it caused and the model after
+//! that message, in order.
 
 #![allow(dead_code)]
 
 use cupertino_assets::BUILTIN_FONT;
-use cupertino_kit::core::{Application, FrameSnapshot, Key, RuntimeOptions};
+use cupertino_kit::core::{Application, Command, FrameSnapshot, Key, RuntimeOptions, Window};
 use cupertino_kit::geometry::Point;
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{
@@ -15,12 +17,74 @@ use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_theme::Theme;
 use cupertino_ui_test::{Inspector, ManualClock, TestDriver};
+use std::cell::RefCell;
+use std::fmt::Debug;
+use std::marker::PhantomData;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
 pub const TAB: u32 = 0xff09;
 pub const RETURN: u32 = 0xff0d;
 pub const SPACE: u32 = 0x20;
+pub const DOWN: u32 = 0xff54;
+pub const PAGE_UP: u32 = 0xff55;
+pub const END: u32 = 0xff57;
+
+thread_local! {
+    /// The trace of this thread's [`Traced`] application, `None` while none has started.
+    static TRACE: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+fn trace(line: impl FnOnce() -> String) {
+    TRACE.with_borrow_mut(|trace| {
+        if let Some(trace) = trace {
+            trace.push_str(&line());
+            trace.push('\n');
+        }
+    });
+}
+
+/// `A`, writing each message it handles and its model after that message to the trace. A key typed into a protected
+/// field is traced without its content.
+pub struct Traced<A>(PhantomData<A>);
+
+impl<A: Application> Application for Traced<A>
+where
+    A::Model: Debug,
+    A::Message: Debug,
+{
+    type Model = A::Model;
+    type Message = A::Message;
+
+    fn init() -> (A::Model, Vec<Command<A::Message>>) {
+        let (model, commands) = A::init();
+        TRACE.set(Some(format!("init {model:?}\n")));
+        (model, commands)
+    }
+
+    fn update(model: &mut A::Model, message: A::Message) -> Vec<Command<A::Message>> {
+        let handled = format!("  {message:?}");
+        let commands = A::update(model, message);
+        trace(|| format!("{handled}\n    = {model:?}"));
+        commands
+    }
+
+    fn view(model: &A::Model) -> Vec<Window<A::Message>> {
+        A::view(model)
+    }
+}
+
+fn key_name(keysym: u32, text: Option<char>) -> String {
+    match (keysym, text) {
+        (_, Some(c)) => format!("{c:?}"),
+        (TAB, None) => "Tab".into(),
+        (RETURN, None) => "Return".into(),
+        (DOWN, None) => "Down".into(),
+        (PAGE_UP, None) => "Page_Up".into(),
+        (END, None) => "End".into(),
+        _ => format!("{keysym:#x}"),
+    }
+}
 
 /// The repository's Cupertino theme in Light, so the dumps never depend on installed theme data.
 fn theme() -> ThemeTokens {
@@ -103,6 +167,11 @@ impl<A: Application> Run<A> {
     }
 
     pub fn send(&mut self, event: WindowEvent) {
+        trace(|| format!("> {event:?}"));
+        self.deliver(event);
+    }
+
+    fn deliver(&mut self, event: WindowEvent) {
         self.driver
             .window_system_mut()
             .enqueue_window(self.window, event)
@@ -116,8 +185,14 @@ impl<A: Application> Run<A> {
 
     /// Presses and releases a key with `mods` held.
     pub fn chord(&mut self, keysym: u32, text: Option<char>, mods: Mods) {
+        let protected = self.driver.runtime().protected_focus(self.window).unwrap();
+        trace(|| match (protected, mods) {
+            (true, _) => "> key, protected".into(),
+            (false, Mods::NONE) => format!("> key {}", key_name(keysym, text)),
+            (false, mods) => format!("> key {} {mods:?}", key_name(keysym, text)),
+        });
         for pressed in [true, false] {
-            self.send(WindowEvent::Key(
+            self.deliver(WindowEvent::Key(
                 KeyEvent {
                     code: 0,
                     keysym: Keysym(keysym),
@@ -138,8 +213,10 @@ impl<A: Application> Run<A> {
     }
 
     pub fn click(&mut self, key: impl Into<Key>) {
+        let key = key.into();
+        trace(|| format!("> click {key:?}"));
         let runtime = self.driver.runtime();
-        let id = runtime.find(self.window, &key.into()).unwrap();
+        let id = runtime.find(self.window, &key).unwrap();
         let snapshot = runtime.snapshot(self.window).unwrap();
         let rect = snapshot.nodes.iter().find(|n| n.id == id).unwrap().rect;
         let position = Point::new(
@@ -147,9 +224,9 @@ impl<A: Application> Run<A> {
             rect.origin.y + rect.size.height / 2.0,
         );
         let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
-        self.send(pointer(PointerEvent::Motion { position }));
+        self.deliver(pointer(PointerEvent::Motion { position }));
         for pressed in [true, false] {
-            self.send(pointer(PointerEvent::Button {
+            self.deliver(pointer(PointerEvent::Button {
                 position,
                 button: MouseButton::Left,
                 pressed,
@@ -161,7 +238,8 @@ impl<A: Application> Run<A> {
 
     /// One wheel detent's worth of movement, `dy` points down, at `position`.
     pub fn wheel(&mut self, position: Point, dy: f64) {
-        self.send(WindowEvent::Pointer(
+        trace(|| format!("> wheel {dy} at ({}, {})", position.x, position.y));
+        self.deliver(WindowEvent::Pointer(
             PointerEvent::Scroll {
                 position,
                 delta: Point::new(0.0, dy),
@@ -181,20 +259,38 @@ impl<A: Application> Run<A> {
         self.driver.runtime().model()
     }
 
-    /// Compares the window's dump with `tests/goldens/<name>.txt` and returns it.
-    pub fn golden(&self, name: &str) -> String {
+    /// The trace so far, then the window's dump.
+    pub fn dump(&self) -> String {
         let snapshot = self.driver.runtime().snapshot(self.window).unwrap();
         let dump = Inspector::default().dump(&snapshot);
-        let path = format!("{}/tests/goldens/{name}.txt", env!("CARGO_MANIFEST_DIR"));
-        if std::env::var("CUPERTINO_UPDATE_GOLDENS").as_deref() == Ok("1") {
-            std::fs::write(&path, &dump).unwrap();
+        match TRACE.with_borrow(Clone::clone) {
+            Some(trace) => format!("{trace}\n{dump}"),
+            None => dump,
         }
-        let expected = std::fs::read_to_string(&path).unwrap();
-        if let Some(difference) = Inspector::first_difference(&expected, &dump) {
-            panic!("{name} differs from its golden: {difference}");
-        }
-        dump
     }
+
+    /// Compares [`Self::dump`] with `tests/goldens/<name>.txt` and returns it.
+    pub fn golden(&self, name: &str) -> String {
+        if std::env::var("CUPERTINO_UPDATE_GOLDENS").as_deref() == Ok("1") {
+            std::fs::write(golden_path(name), self.dump()).unwrap();
+        }
+        self.compare(name)
+            .unwrap_or_else(|difference| panic!("{name} differs from its golden: {difference}"))
+    }
+
+    /// [`Self::dump`] if it matches `tests/goldens/<name>.txt`, otherwise the first line where it differs.
+    pub fn compare(&self, name: &str) -> Result<String, String> {
+        let dump = self.dump();
+        let expected = std::fs::read_to_string(golden_path(name)).unwrap();
+        match Inspector::first_difference(&expected, &dump) {
+            Some(difference) => Err(difference),
+            None => Ok(dump),
+        }
+    }
+}
+
+fn golden_path(name: &str) -> String {
+    format!("{}/tests/goldens/{name}.txt", env!("CARGO_MANIFEST_DIR"))
 }
 
 pub fn budget() -> NonZeroU32 {

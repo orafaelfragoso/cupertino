@@ -1561,6 +1561,7 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "cupertino-alsa",
+ "cupertino-apps",
  "cupertino-assets",
  "cupertino-capture",
  "cupertino-decorations",

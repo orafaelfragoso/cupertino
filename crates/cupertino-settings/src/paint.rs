@@ -10,7 +10,7 @@ use cupertino_decorations::palette::Rgba;
 use cupertino_decorations::shape::rounded_path;
 use cupertino_decorations::text::TextRenderer;
 use cupertino_geometry::{CornerStyle, Radii, Rect as GeoRect};
-use cupertino_icons::SystemIcons;
+use cupertino_icons::{SystemIcons, ThemeIcons};
 use cupertino_text_field::TextField;
 use cupertino_theme::{Appearance, SemanticColor, Theme};
 use std::collections::HashMap;
@@ -225,6 +225,8 @@ pub fn required_symbols() -> Vec<&'static str> {
     all
 }
 
+/// The icon of an application whose icon theme has none.
+const GENERIC_APPLICATION_ICON: &str = "application.generic";
 /// The accent colour's token.
 const ACCENT: &str = "control-accent-blue";
 const WHITE: Rgba = [1.0, 1.0, 1.0, 1.0];
@@ -407,6 +409,9 @@ pub fn caret_area(layout: &WindowLayout) -> Rect {
 pub struct Painter {
     pub text: TextRenderer,
     symbols: SystemIcons,
+    apps: ThemeIcons,
+    /// The icon theme's application icons by name and size; `None` when the theme has none.
+    app_icons: HashMap<(String, u32), Option<Pixmap>>,
     /// The thumbnails of the pictures of a grid, by the image they show.
     thumbnails: HashMap<PathBuf, Pixmap>,
 }
@@ -530,7 +535,13 @@ impl Painter {
         text.set_declarative(true);
         Ok(Painter {
             text,
-            symbols: SystemIcons::required(assets, &[], &required_symbols()),
+            symbols: SystemIcons::required(
+                assets,
+                &[GENERIC_APPLICATION_ICON],
+                &required_symbols(),
+            ),
+            apps: ThemeIcons::new(assets),
+            app_icons: HashMap::new(),
             thumbnails: HashMap::new(),
         })
     }
@@ -555,6 +566,28 @@ impl Painter {
     fn raster_icon(&mut self, pm: &mut Pixmap, r: &Rect, name: &str, s: f32) {
         let px = (r.w.min(r.h) * f64::from(s)).round().max(1.0) as u32;
         let icon = self.symbols.raster(name, px);
+        pm.draw_pixmap(
+            (r.x as f32 * s).round() as i32,
+            (r.y as f32 * s).round() as i32,
+            icon.as_ref(),
+            &PixmapPaint::default(),
+            Transform::identity(),
+            None,
+        );
+    }
+
+    /// Draw the application icon `name` from the icon theme fitted into `r`, else the generic application icon.
+    fn app_icon(&mut self, pm: &mut Pixmap, r: &Rect, name: &str, s: f32) {
+        let px = (r.w.min(r.h) * f64::from(s)).round().max(1.0) as u32;
+        let key = (name.to_string(), px);
+        if !self.app_icons.contains_key(&key) {
+            let own = self.apps.load(name, px);
+            self.app_icons.insert(key.clone(), own);
+        }
+        let icon = match &self.app_icons[&key] {
+            Some(own) => own,
+            None => self.symbols.raster(GENERIC_APPLICATION_ICON, px),
+        };
         pm.draw_pixmap(
             (r.x as f32 * s).round() as i32,
             (r.y as f32 * s).round() as i32,
@@ -1013,8 +1046,25 @@ impl Painter {
                             s,
                             pal.secondary_text,
                         ),
-                        (None, None) => {}
+                        (None, None) => {
+                            if let Some(detail) = &row.detail {
+                                self.label(
+                                    pm,
+                                    &r.offset(0.0, dy),
+                                    detail,
+                                    Font {
+                                        size: fm::ERROR_SIZE,
+                                        weight: 400,
+                                    },
+                                    s,
+                                    pal.secondary_text,
+                                );
+                            }
+                        }
                     }
+                }
+                if let (Some(name), Some(r)) = (&row.icon, rl.icon) {
+                    self.app_icon(pm, &r.offset(0.0, dy), name, s);
                 }
                 let shown = view
                     .dragging
@@ -1495,6 +1545,9 @@ impl Painter {
             Kind::Passphrase {
                 failure: Some(_),
                 ..
+            } | Kind::Picker {
+                failure: Some(_),
+                ..
             }
         );
         self.label(
@@ -1545,6 +1598,7 @@ impl Painter {
             Kind::Passphrase { .. }
             | Kind::Resolution { .. }
             | Kind::Picker { .. }
+            | Kind::Apps { .. }
             | Kind::Pairing { .. } => {
                 fill_rounded(pm, &l.action, cm::RADIUS, false, s, pal.accent);
                 let w = f64::from(self.text.measure(sheet.action_title(), 13.0 * s, 400, 0.0) / s);
@@ -1599,6 +1653,7 @@ impl Painter {
                 chooser,
                 top,
                 hovered,
+                ..
             },
             Some(list),
             Some(up),
@@ -1670,6 +1725,82 @@ impl Painter {
                         size: 12.0,
                         weight: 400,
                     },
+                    s,
+                    color,
+                );
+            }
+        }
+        if let (
+            Kind::Apps {
+                apps,
+                selected,
+                top,
+                hovered,
+                ..
+            },
+            Some(list),
+        ) = (&sheet.kind, l.list)
+        {
+            fill_rounded(pm, &list, cm::RADIUS, false, s, pal.control_background);
+            stroke_rounded(pm, &list.inset(0.5, 0.5), cm::RADIUS, 1.0, s, pal.separator);
+            for (k, (i, app)) in apps
+                .iter()
+                .enumerate()
+                .skip(*top)
+                .take(crate::sheet::metrics::PICKER_ROWS)
+                .enumerate()
+            {
+                let row = Rect::new(
+                    list.x + 4.0,
+                    list.y + k as f64 * crate::sheet::metrics::PICKER_ROW,
+                    list.w - 8.0,
+                    crate::sheet::metrics::PICKER_ROW,
+                );
+                let on = *selected == Some(i);
+                if on {
+                    fill_rounded(pm, &row, 5.0, false, s, pal.accent);
+                } else if *hovered == Some(i) && app.reason.is_none() {
+                    fill_rounded(pm, &row, 5.0, false, s, pal.box_fill);
+                }
+                self.app_icon(
+                    pm,
+                    &Rect::new(row.x + 6.0, row.y + 3.0, 16.0, 16.0),
+                    app.icon.as_deref().unwrap_or_default(),
+                    s,
+                );
+                let font = Font {
+                    size: 12.0,
+                    weight: 400,
+                };
+                let reason_w = match app.reason {
+                    Some(reason) => {
+                        let caption = Font {
+                            size: 11.0,
+                            weight: 400,
+                        };
+                        let w = f64::from(self.text.measure(reason.text(), 11.0 * s, 400, 0.0) / s);
+                        self.label(
+                            pm,
+                            &Rect::new(row.right() - 8.0 - w, row.y, w, row.h),
+                            reason.text(),
+                            caption,
+                            s,
+                            pal.secondary_text,
+                        );
+                        w + 8.0
+                    }
+                    None => 0.0,
+                };
+                let color = match (on, app.reason) {
+                    (true, _) => WHITE,
+                    (false, None) => pal.text,
+                    (false, Some(_)) => pal.placeholder,
+                };
+                self.label(
+                    pm,
+                    &Rect::new(row.x + 28.0, row.y, row.w - 36.0 - reason_w, row.h),
+                    &app.name,
+                    font,
                     s,
                     color,
                 );
@@ -1987,7 +2118,7 @@ mod tests {
         scroll: f64,
         dragging: Option<f64>,
     ) -> (Pixmap, WindowLayout, Vec<crate::form::SectionLayout>) {
-        use crate::form::{RowSpec, SectionSpec};
+        use crate::form::SectionSpec;
         use crate::panes::Session;
         use cupertino_defaults::accessibility::{AccessibilitySettings, DisplayOptions};
         use cupertino_defaults::compositor::CompositorSettings;
@@ -2004,6 +2135,7 @@ mod tests {
             power: cupertino_defaults::power::PowerSettings::default(),
             accessibility: AccessibilitySettings::default(),
             display_height: 1080.0,
+            clipboard: crate::clipboard::List::default(),
         };
         let session = Session {
             dark: false,
@@ -2032,14 +2164,7 @@ mod tests {
             .iter()
             .map(|sec| SectionSpec {
                 header: sec.header.is_some(),
-                rows: sec
-                    .rows
-                    .iter()
-                    .map(|r| RowSpec {
-                        control: &r.control,
-                        error: r.error.is_some() || r.disabled.is_some(),
-                    })
-                    .collect(),
+                rows: sec.rows.iter().map(|r| r.spec()).collect(),
                 footer: sec.footer.is_some(),
             })
             .collect();

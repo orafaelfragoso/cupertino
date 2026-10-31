@@ -22,6 +22,7 @@ pub enum PaneId {
     Sound,
     Focus,
     LockScreen,
+    Privacy,
     Keyboard,
     Mouse,
     Trackpad,
@@ -83,7 +84,7 @@ const fn pane(
 }
 
 /// Every pane of the minimum set.
-pub const PANES: [Pane; 16] = [
+pub const PANES: [Pane; 17] = [
     pane(
         PaneId::Wifi,
         "Wi-Fi",
@@ -228,6 +229,22 @@ pub const PANES: [Pane; 16] = [
         &["lock", "inactive", "screen off"],
     ),
     pane(
+        PaneId::Privacy,
+        "Privacy & Security",
+        "symbol.privacy",
+        Enclosure::Blue,
+        Tier::File,
+        &["Clipboard Access"],
+        &[
+            "clipboard",
+            "copy",
+            "paste",
+            "clipboard manager",
+            "clipboard history",
+            "data control",
+        ],
+    ),
+    pane(
         PaneId::Keyboard,
         "Keyboard",
         "symbol.keyboard",
@@ -299,6 +316,7 @@ impl PaneId {
             PaneId::Sound => "sound",
             PaneId::Focus => "focus",
             PaneId::LockScreen => "lock-screen",
+            PaneId::Privacy => "privacy",
             PaneId::Keyboard => "keyboard",
             PaneId::Mouse => "mouse",
             PaneId::Trackpad => "trackpad",

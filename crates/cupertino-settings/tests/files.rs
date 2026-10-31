@@ -16,6 +16,7 @@ fn paths(dir: &std::path::Path) -> Paths {
         power: Some(dir.join("power.conf")),
         accessibility: Some(dir.join("accessibility.conf")),
         system_accessibility: None,
+        data_control: Some(dir.join("data-control.conf")),
     }
 }
 

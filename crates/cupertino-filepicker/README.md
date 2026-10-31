@@ -9,7 +9,7 @@ Settings wallpaper pane today, the file-chooser portal later.
   true. An answer for an older request is dropped. `Picker::open(start, mode)` is the same with the answers read in place
   (`settle`), for callers with nothing to keep responsive.
 - `Mode::Folder` shows folders, `Mode::Photo` shows folders and PNG and JPEG
-  files. Folders come first, then files, each by name without regard to case. Names that start with a dot are hidden
+  files, `Mode::Program` shows folders and the files someone may execute. Folders come first, then files, each by name without regard to case. Names that start with a dot are hidden
   until `set_hidden(true)`.
 - `Picker::key(key, now)` takes the keys of the chooser: Up, Down, Home and End move the highlight (no wrap); Return
   enters the highlighted folder or chooses the highlighted file; Super+Return (`Key::Choose`) chooses (in `Folder`

@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use cupertino_defaults::data_control::{refusal, DataControlConf, Entry, Pin};
+use cupertino_defaults::data_control::{refusal, DataControlConf, Entry};
 use cupertino_peer::{Caller, ProcessHandle};
 use smithay::reexports::wayland_server::backend::protocol::ProtocolError;
 use smithay::reexports::wayland_server::backend::{ClientId, DisconnectReason};
@@ -103,13 +103,8 @@ fn allows(allowed: &[Entry], running: &Running) -> bool {
     refusal(&running.exe).is_none()
         && allowed.iter().any(|entry| {
             entry.program == running.exe
-                && match entry.pin {
-                    Some(pin) => pin == Pin::of(&running.image),
-                    None => {
-                        cupertino_defaults::system::only_root_can_change(&entry.program)
-                            && is_running(&entry.program)
-                    }
-                }
+                && entry.allows_file(&running.image)
+                && (entry.pin.is_some() || is_running(&entry.program))
         })
 }
 
@@ -165,6 +160,7 @@ impl Cupertino {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cupertino_defaults::data_control::Pin;
 
     fn entry(program: &Path, pin: Option<Pin>) -> Entry {
         Entry {

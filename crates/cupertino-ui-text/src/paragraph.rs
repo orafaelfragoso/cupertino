@@ -251,12 +251,21 @@ fn clusters_of(shaped: &Shaped, items: Range<usize>) -> Vec<Cluster> {
         let glyphs = &item.run.glyphs;
         // a right-to-left run lists its glyphs in visual order, the last cluster first
         let rtl = item.level.is_rtl();
+        let mut graphemes = shaped.text[item.range.clone()]
+            .grapheme_indices(true)
+            .map(|(offset, _)| item.range.start + offset)
+            .peekable();
         for step in 0..glyphs.len() {
             work::step();
             let glyph_index = if rtl { glyphs.len() - 1 - step } else { step };
             let glyph = &glyphs[glyph_index];
+            while graphemes.next_if(|&start| start < glyph.cluster).is_some() {}
+            // a shaping cluster that starts inside a grapheme (a conjunct's second half) joins the one before it
+            let starts_grapheme = graphemes.peek() == Some(&glyph.cluster);
             match clusters.last_mut() {
-                Some(last) if last.item == index && last.start == glyph.cluster => {
+                Some(last)
+                    if last.item == index && (last.start == glyph.cluster || !starts_grapheme) =>
+                {
                     last.width += glyph.advance;
                     if rtl {
                         last.glyphs.start = glyph_index;

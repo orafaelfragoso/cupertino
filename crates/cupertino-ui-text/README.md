@@ -18,7 +18,8 @@ buffer follow.
   and Right move to the next caret stop on screen through text of either direction, each hard line in the direction it
   is laid out in, and past a line's edge on in that line's reading order (`TextBuffer::caret_position` keeps
   the side of a direction change the caret is on, and `TextBuffer::set_direction` takes the base direction the field
-  lays the text out in); Backward, Forward and the word moves keep the text's order.
+  lays the text out in). Option+Left and Option+Right move by word the same way, to the drawn edge of the next word on
+  that side; Backward, Forward, the word moves by those names and the deletes keep the text's order.
 - `Surrounding::around` costs the window, not the document; a text that is one huge run of regional indicators (flags)
   is the exception, because the boundary rule scans back over the run.
 - `FontIndex` holds the faces the app registers from font bytes and resolves a family, weight and variation set to a

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Runs a Cupertino session in a disposable guest on three virtio-gpu heads and checks that it follows the connected
 heads through an unplug and replug, a VT round trip with a head unplugged while away, and an S3 cycle with a head
-unplugged while asleep. Writes a screenshot of every output after each step, the session log and a results file to
---out; exits 1 when a step fails. Build the image first: `ci/vm/build-image.sh build`.
+unplugged while asleep, and that an animating window keeps presenting frames at every step. Writes a screenshot of
+every output after each step, the session log and a results file to --out; exits 1 when a step fails. Build the image
+first: `ci/vm/build-image.sh build`.
 
     ci/vm/daily_driver.py --binaries "$CARGO_TARGET_DIR/debug" --out /tmp/daily-driver [--gpus 2]
 
@@ -24,6 +25,9 @@ from guest import ROOT, Guest  # noqa: E402
 SERVER_LOG = "/home/qa/.local/state/cupertino/server.log"
 SESSION_LOG = "/home/qa/session.log"
 SHOTS = "/home/qa/shots"
+FRAMES = "/home/qa/one.frames"
+# an animating window that presents fewer frames a second has stalled on buffers the server does not release
+MIN_FRAME_RATE = 10
 EVENTS = r"display (dis)?connected|output initialised|session (paused|resumed)|cannot show its mode|fallback mode|CRTC"
 
 
@@ -62,6 +66,16 @@ class Run:
         _, running = self.guest.sh("readlink /proc/[0-9]*/exe")
         return tuple(running.split().count(f"/usr/bin/cupertino-{name}") for name in ["server", "testclient"])
 
+    def presented(self) -> int:
+        _, text = self.guest.sh(f"cat {FRAMES} 2>/dev/null; echo")
+        return int(text) if text.strip().isdigit() else 0
+
+    def frame_rate(self) -> int:
+        """How many frames the animating window presented in a second."""
+        before = self.presented()
+        time.sleep(1)
+        return self.presented() - before
+
     def settle(self, read, expected, seconds: float = 20):
         """Reads until the value is `expected` or `seconds` pass, and returns the last value read."""
         deadline = time.monotonic() + seconds
@@ -73,16 +87,17 @@ class Run:
         connected = self.settle(self.connected, heads)
         outputs = self.settle(self.outputs, heads)
         server, clients = self.settle(self.processes, (1, 3))
+        frame_rate = self.frame_rate()
         _, cards = self.guest.sh("ls -d /sys/class/drm/card[0-9]")
         shots = self.screenshots(step)
         failures = self.flip_failures()
         flips = sorted(set(failures[self.step_start:]))
         self.step_start = len(failures)
         passed = (connected == heads and outputs == heads and server == 1 and clients == 3 and len(shots) == len(heads)
-                  and len(cards.split()) == self.guest.gpus and not flips)
+                  and len(cards.split()) == self.guest.gpus and not flips and frame_rate >= MIN_FRAME_RATE)
         result = {"step": step, "passed": passed, "expected": sorted(heads), "guest_connected": sorted(connected),
                   "server_outputs": sorted(outputs), "servers": server, "clients": clients,
-                  "cards": len(cards.split()), "flip_failures": flips, "screenshots": shots}
+                  "cards": len(cards.split()), "flip_failures": flips, "frame_rate": frame_rate, "screenshots": shots}
         self.results.append(result)
         print(json.dumps(result), flush=True)
         return passed

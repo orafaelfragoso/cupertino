@@ -127,7 +127,8 @@ pub(crate) const HIGH_CONTRAST_LIGHT: Palette<[u8; 4]> = Palette {
         (ControlText, BLACK),
         (DisabledControlFill, gray(235)),
         (DisabledControlBorder, gray(128)),
-        (DisabledControlText, gray(90)),
+        // the lightest grey with 4.5:1 on the disabled fill, as far from the enabled black as that allows (approximate)
+        (DisabledControlText, gray(105)),
         (DefaultButtonFill, [0, 64, 221, 255]),
         (DefaultButtonText, WHITE),
         (DestructiveFill, [215, 0, 21, 255]),
@@ -333,6 +334,17 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn high_contrast_disabled_text_stays_readable_and_apart_from_enabled_text() {
+        use ColorRole::*;
+        let colors = ColorTokens::neutral(Appearance::LightHighContrast);
+        let normal = |role| colors.get(role, StateVariant::NORMAL).unwrap();
+        let disabled = contrast(normal(DisabledControlText), normal(DisabledControlFill));
+        assert!(disabled >= 4.5, "{disabled:.2} on the disabled fill");
+        let apart = contrast(normal(DisabledControlText), normal(ControlText));
+        assert!(apart >= 3.5, "{apart:.2} from enabled text");
     }
 
     #[test]

@@ -23,6 +23,8 @@ buffer follow.
   stable `FontId`; `FontIndex::shape` shapes one run with `harfrust` (visual order, byte clusters, advances in points).
   `set_system_fonts` gives it the installed fonts: `InstalledFonts` asks Fontconfig, loaded at run time, so the
   font configuration picks the face per script and language; without the library only the registered faces draw.
+  A run that must not depend on the machine's fonts sets `FONTCONFIG_FILE` to a configuration of its own, as
+  `tests/fontconfig.rs` does; Kit's golden tests build their own font index and never see installed fonts.
   Kit apps set it. `tests/installed.rs` shapes Arabic, Devanagari and Hebrew with Noto Sans subsets (OFL-1.1).
 - `TextSystem` is the shared entry point (`&self` methods, one `Arc` for measuring and painting): `paragraph` shapes an
   `AttributedText` per style run and hard line and caches the result, `measure` lays it out for a size. A family

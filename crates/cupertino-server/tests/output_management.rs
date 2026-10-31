@@ -873,6 +873,67 @@ fn a_display_that_cannot_show_its_mode_falls_back_and_keeps_its_own_stored() {
 }
 
 #[test]
+fn a_display_the_backend_cannot_show_is_off_but_stays_stored_on() {
+    let Some(mut h) = Harness::new() else { return };
+    let path = std::env::temp_dir().join(format!(
+        "cupertino-test-{}-unsupported-displays.conf",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    h.state.displays.use_store(path.clone()).unwrap();
+    let client = Client::connect(h.socket_path());
+    h.wait_until(&client, "both heads", |_, seen| listed(seen));
+    let third = headless::add_display(
+        &mut h.state,
+        &display_of("headless-3", (640, 480)),
+        Some(1.0),
+    )
+    .unwrap();
+    h.state.head_unsupported(third);
+    let head = h.state.displays.head(third).unwrap();
+    assert!(!head.state.enabled);
+    assert!(head.output.is_none());
+
+    // a configuration of the other heads that leaves it off stores it on
+    let unchanged = Some(HeadChange::default());
+    h.wait_until(&client, "headless-3 off", |_, seen| {
+        seen.head("headless-3").is_some_and(|h| !h.enabled)
+    });
+    let mut answers = 0;
+    let mut configure = |h: &mut Harness, third: Option<HeadChange>| {
+        client.configure(
+            client.serial(),
+            vec![
+                ("headless-1", unchanged),
+                ("headless-2", unchanged),
+                ("headless-3", third),
+            ],
+            false,
+        );
+        answers += 1;
+        h.wait_until(&client, "the configuration", |_, seen| {
+            seen.results.len() == answers
+                && seen
+                    .head("headless-3")
+                    .is_some_and(|h| h.enabled == third.is_some())
+        });
+        assert_eq!(
+            client.seen.lock().unwrap().results.last(),
+            Some(&"succeeded")
+        );
+        let key = display_key("headless-3", "Cupertino", "headless-3", None);
+        let (stored, _) = DisplaysConfig::load(&path).unwrap();
+        stored.get(&key).expect("the display's section").enabled
+    };
+    assert!(configure(&mut h, None));
+
+    // turned on by the person, then off, it is stored off
+    assert!(configure(&mut h, unchanged));
+    assert!(!configure(&mut h, None));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn a_client_binding_an_output_as_it_goes_away_stays_connected_until_the_global_is_gone() {
     let Some(mut h) = Harness::new() else { return };
     let client = Client::connect(h.socket_path());

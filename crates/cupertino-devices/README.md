@@ -10,7 +10,7 @@ Device discovery for the compositor without libudev. It reads `/sys` and the ker
 | `device` | `enumerate(sysfs_root, Subsystem::{Input, Drm})`: `event*` and `card*` nodes, lowest number first. A `Device` has its syspath, sysname, `/dev` node (`DEVNAME`), `DevT` (`MAJOR`/`MINOR`), `uevent` properties and `parent` / `parents |
 | `input_id` | `classify(&InputCapabilities)` and `classify_device(&Device, sysfs_root)`: keyboard, mouse, touchpad, touchscreen, tablet, tablet pad, joystick, pointing stick, accelerometer, switch, and `clickpad` (`INPUT_PROP_BUTTONPAD`). Same rules as udev's `input_id` builtin |
 | `capabilities` | `CapabilityMask`: the hex-word bitmasks of `capabilities/*` and `properties` (highest word first) |
-| `gpu` | `gpus`, `primary_gpu`, `select_primary`: the card whose PCI parent has `boot_vga` = 1, else the first card |
+| `gpu` | `gpus`, `primary_gpu`, `select_primary`: the card whose PCI parent has `boot_vga` = 1, else the first card; `select_render`: the card with a given node, else the primary one |
 | `monitor` | `Monitor`: a non-blocking uevent socket on the kernel group (`AsFd`, register it with the event loop; `drain` returns `DeviceEvent`s). `parse_datagram is the pure parser |
 | `seat` | `seat_name`: `ID_SEAT`, else `seat0` |
 | `dev_t` | `DevT`, the device number newtype |

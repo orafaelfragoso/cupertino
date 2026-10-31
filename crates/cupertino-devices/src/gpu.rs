@@ -40,6 +40,17 @@ pub fn select_primary(gpus: Vec<Gpu>) -> Option<Gpu> {
     gpus.into_iter().nth(index)
 }
 
+/// Picks the GPU that renders from `gpus`: the card whose node is `wanted`, else the primary one.
+pub fn select_render(gpus: Vec<Gpu>, wanted: Option<&Path>) -> Option<Gpu> {
+    match gpus
+        .iter()
+        .position(|gpu| wanted.is_some() && gpu.device.devnode() == wanted)
+    {
+        Some(index) => gpus.into_iter().nth(index),
+        None => select_primary(gpus),
+    }
+}
+
 /// Reads `boot_vga` from the nearest ancestor of the card that has it.
 fn boot_vga(syspath: &Path, devices_dir: &Path) -> Result<bool> {
     for dir in sysfs::ancestor_dirs(syspath, devices_dir) {

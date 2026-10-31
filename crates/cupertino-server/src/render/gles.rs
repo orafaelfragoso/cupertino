@@ -9,10 +9,12 @@
 use cupertino_render_api::{Completion, Failure, RenderFailure, RenderStatus, Renderer};
 use cupertino_scene::SceneFrame;
 use image::RgbaImage;
+use smithay::backend::allocator::dmabuf::Dmabuf;
 #[cfg(feature = "udev")]
 use smithay::backend::drm::compositor::RenderFrameError;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::gles::{GlesError, GlesRenderer, GlesTexture};
+use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::{Bind, Color32F};
 use smithay::backend::SwapBuffersError;
 use smithay::utils::{Physical, Rectangle};
@@ -96,11 +98,22 @@ impl<'a> GlesResources<'a> {
 
 /// Where a frame is drawn, with the device it is drawn on.
 pub enum GlesTarget<'a> {
-    /// An offscreen texture of the headless backend, drawn through the output's damage tracker.
+    /// An offscreen texture (of the headless backend, or that another card's display copies), drawn through the
+    /// damage tracker at the texture's `age`.
     Texture {
         renderer: &'a mut GlesRenderer,
         texture: &'a mut GlesTexture,
         tracker: &'a mut OutputDamageTracker,
+        age: usize,
+        clear: Color32F,
+    },
+    /// A buffer of the render GPU that another card copies onto its display, drawn through the copy's damage tracker at
+    /// the buffer's `age`.
+    Dmabuf {
+        renderer: &'a mut GlesRenderer,
+        dmabuf: &'a mut Dmabuf,
+        tracker: &'a mut OutputDamageTracker,
+        age: usize,
         clear: Color32F,
     },
     /// The window of the nested backend, drawn through the output's damage tracker at the buffer's `age`.
@@ -134,6 +147,11 @@ pub enum GlesCompletion {
     Drawn {
         damage: Option<Vec<Rectangle<i32, Physical>>>,
     },
+    /// Drawn into a buffer another device reads once `sync` is signalled: the damage, `None` when nothing differs.
+    Offscreen {
+        damage: Option<Vec<Rectangle<i32, Physical>>>,
+        sync: SyncPoint,
+    },
     /// Drawn by the DRM compositor, which keeps the frame for the queue: `empty` when nothing differs.
     Direct {
         empty: bool,
@@ -146,7 +164,7 @@ impl GlesCompletion {
     /// The damage a presenter submits, when a tracker drew something.
     pub fn damage(&self) -> Option<&[Rectangle<i32, Physical>]> {
         match self {
-            Self::Drawn { damage } => damage.as_deref(),
+            Self::Drawn { damage } | Self::Offscreen { damage, .. } => damage.as_deref(),
             _ => None,
         }
     }
@@ -155,8 +173,13 @@ impl GlesCompletion {
 impl Completion for GlesCompletion {
     fn status(&self) -> RenderStatus {
         match self {
-            Self::Drawn { damage: None } | Self::Direct { empty: true } => RenderStatus::Empty,
+            Self::Drawn { damage: None }
+            | Self::Offscreen { damage: None, .. }
+            | Self::Direct { empty: true } => RenderStatus::Empty,
             Self::Drawn { damage: Some(_) }
+            | Self::Offscreen {
+                damage: Some(_), ..
+            }
             | Self::Direct { empty: false }
             | Self::Image(_)
             | Self::Snapshot(_) => RenderStatus::Rendered,
@@ -240,6 +263,7 @@ impl Renderer for Gles {
                 renderer,
                 texture,
                 tracker,
+                age,
                 clear,
             } => {
                 let elements = Gles::lower(renderer, scene, resources)?;
@@ -247,9 +271,28 @@ impl Renderer for Gles {
                     .bind(texture)
                     .map_err(|e| RenderError::Target(e.to_string()))?;
                 tracker
-                    .render_output(renderer, &mut framebuffer, 0, &elements, clear)
+                    .render_output(renderer, &mut framebuffer, age, &elements, clear)
                     .map(|r| GlesCompletion::Drawn {
                         damage: r.damage.cloned(),
+                    })
+                    .map_err(tracked)
+            }
+            GlesTarget::Dmabuf {
+                renderer,
+                dmabuf,
+                tracker,
+                age,
+                clear,
+            } => {
+                let elements = Gles::lower(renderer, scene, resources)?;
+                let mut framebuffer = renderer
+                    .bind(dmabuf)
+                    .map_err(|e| RenderError::Target(e.to_string()))?;
+                tracker
+                    .render_output(renderer, &mut framebuffer, age, &elements, clear)
+                    .map(|r| GlesCompletion::Offscreen {
+                        damage: r.damage.cloned(),
+                        sync: r.sync,
                     })
                     .map_err(tracked)
             }

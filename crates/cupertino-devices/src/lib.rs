@@ -29,7 +29,7 @@ pub use capabilities::CapabilityMask;
 pub use dev_t::DevT;
 pub use device::{enumerate, Device, Subsystem};
 pub use error::{Error, ParseError, Result};
-pub use gpu::{gpus, primary_gpu, select_primary, Gpu};
+pub use gpu::{gpus, primary_gpu, select_primary, select_render, Gpu};
 pub use input_id::{classify, classify_device, InputCapabilities, InputClass};
 pub use monitor::{parse_datagram, Action, DeviceEvent, Drained, Monitor};
 pub use seat::{seat_name, SEAT0};

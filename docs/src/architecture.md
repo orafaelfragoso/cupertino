@@ -27,6 +27,7 @@ A crash in a shell process never takes the desktop down.
 | `cupertino-login` | the login screen, the lock screen (`ext-session-lock`) and the session agent |
 | `cupertino-sessiond` | the root-owned half of login: the login screen's socket, PAM in a worker per attempt, logind sessions and virtual terminals, fast user switching, power, auto login |
 | `cupertino-screenshot` | screen, window and selection capture, toolbar, floating thumbnail |
+| `cupertino-polkit-agent` | the session's polkit authentication agent and its prompt |
 | `cupertino-files` | the file manager |
 | `cupertino-settings` | the settings app |
 | `cupertino-netd` | links, Wi-Fi through iwd, DHCPv4, `resolv.conf`, `org.cupertino.Network1`, on the system bus |
@@ -39,7 +40,7 @@ A crash in a shell process never takes the desktop down.
 2. **Standard protocols first:** layer-shell, `ext-foreign-toplevel-list`, `ext-session-lock`, `ext-idle-notify`, `ext-image-copy-capture`, `xdg-activation`.
 3. **A private protocol covers the gaps.** The public `cupertino_app_effects_v1` carries backdrop materials by recipe, the title bar style, the appearance, whether the session is locked and where a window's menus are on the session bus; the private `cupertino_shell_v1`, offered only to the shell processes the server starts, carries dock tile rectangles for the minimize effect, overview and workspace transforms driven by the dock, menu bar overrides, application activation and grouping, gesture events, and session lock and appearance notifications.
 4. **One settings store:** `cupertino-defaults`. Files live in `$XDG_CONFIG_HOME/cupertino/`, each with its own environment override. Writes are atomic and change notification is an inotify watch coalesced until a burst is quiet.
-5. **Privileges stay in the daemons.** They authorise callers by D-Bus peer credentials plus "is this the active seat user". There is no polkit. System daemons ship unit files; that is packaging, not a code dependency.
+5. **Privileges stay in the daemons.** They authorise callers by D-Bus peer credentials plus "is this the active seat user". There is no polkit. The session runs a polkit authentication agent for other software's actions; no Cupertino daemon asks polkit. System daemons ship unit files; that is packaging, not a code dependency.
 6. **IPC:** Wayland between the server and the shell; D-Bus between the shell, apps and the daemons.
 
 ## Crate layers

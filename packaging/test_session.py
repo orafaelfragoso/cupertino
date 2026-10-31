@@ -12,6 +12,7 @@ SESSION = Path(__file__).resolve().parent / 'files/usr/bin/cupertino-session'
 FAKE_SERVER = """#!/bin/sh
 trap 'touch "$OUT/term"; exit "${EXIT_ON_TERM:-143}"' TERM
 printf '%s\\n' "$@" >"$OUT/args"
+[ -z "${REASON:-}" ] || printf '%s\\n' "$REASON" >"$CUPERTINO_SESSION_END"
 tr '\\0' ' ' </proc/$PPID/cmdline >"$OUT/parent"
 if [ -n "${HANG:-}" ]; then
     sleep 30 &
@@ -81,8 +82,22 @@ class SessionTest(unittest.TestCase):
     def test_a_crash_ends_the_session_with_the_servers_status_and_is_logged(self):
         result = self.run_session(EXIT='139')
         self.assertEqual(result.returncode, 139)
-        self.assertIn('status 139', self.log())
+        self.assertIn('ended by signal 11 (status 139)', self.log())
         self.assertIn('server.log', self.log())
+
+    def test_the_reason_the_compositor_wrote_is_logged_on_one_line_and_removed(self):
+        result = self.run_session(EXIT='101', REASON="panic: panicked at src/frame.rs:1:2:\x07 no output")
+        self.assertEqual(result.returncode, 101)
+        self.assertRegex(self.log(), r'ended with status 101 after \d+ s: panic: panicked at src/frame.rs:1:2: no output\n')
+        self.assertFalse((self.root / 'state/cupertino/session-end').exists())
+
+    def test_a_reason_left_by_an_earlier_run_is_not_reported(self):
+        (self.root / 'state/cupertino').mkdir(parents=True)
+        (self.root / 'state/cupertino/session-end').write_text('the rendering context was lost (reset)\n')
+        result = self.run_session()
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('ended normally', self.log())
+        self.assertNotIn('rendering context', self.log())
 
     def test_a_limit_file_bounds_the_server_and_leading_zeros_are_decimal(self):
         (self.root / 'config/cupertino/session-limit').write_text('0700\n')

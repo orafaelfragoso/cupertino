@@ -12,6 +12,9 @@ state=${XDG_STATE_HOME:-$HOME/.local/state}/cupertino
 config=${XDG_CONFIG_HOME:-$HOME/.config}/cupertino
 server=${CUPERTINO_SESSION_SERVER:-/usr/bin/cupertino-server}
 mkdir -p "$state" 2>/dev/null || true
+# the compositor writes why it ended there (a panic, a lost rendering context, an error); bounded, it ends within seconds
+export CUPERTINO_SESSION_END="$state/session-end"
+rm -f "$CUPERTINO_SESSION_END" 2>/dev/null || true
 
 # The log is best effort: a state directory that cannot be written must not keep the compositor from starting.
 note() {
@@ -106,12 +109,21 @@ if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet cu
     note "stopped cupertino-session.target and removed the session's variables from the user manager"
 fi
 
+reason=
+if [ -f "$CUPERTINO_SESSION_END" ]; then
+    reason=$(head -c 512 "$CUPERTINO_SESSION_END" 2>/dev/null | head -n 1 | tr -d '[:cntrl:]') || true
+    rm -f "$CUPERTINO_SESSION_END" 2>/dev/null || true
+fi
+
 if [ -n "$stopped" ] && [ "$status" -ne 0 ]; then
     note "the compositor was stopped by the session (status $status) after $seconds s"
+elif [ -n "$reason" ]; then
+    note "the compositor ended with status $status after $seconds s: $reason"
 else
     case $status in
     0) note "the compositor ended normally after $seconds s" ;;
     124 | 137) note "the compositor did not stop in time and was ended by the watchdog (status $status) after $seconds s" ;;
+    129 | 13[0-9] | 1[4-5][0-9]) note "the compositor was ended by signal $((status - 128)) (status $status) after $seconds s; see server.log" ;;
     *) note "the compositor ended with status $status after $seconds s; see server.log" ;;
     esac
 fi

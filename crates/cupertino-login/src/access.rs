@@ -257,6 +257,8 @@ fn node(role: Role, name: Option<&str>, bounds: Rect) -> AccessibilityNode {
         relations: Vec::new(),
         children: Vec::new(),
         live: None,
+        item_count: None,
+        item_index: None,
     }
 }
 

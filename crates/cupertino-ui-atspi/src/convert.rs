@@ -91,6 +91,18 @@ pub(crate) fn node(node: &AccessibilityNode) -> accesskit::Node {
     if s.multiselectable {
         out.set_multiselectable();
     }
+    if let Some(count) = node.item_count {
+        out.set_size_of_set(count);
+        if node.role == Role::Table {
+            out.set_row_count(count);
+        }
+    }
+    if let Some(index) = node.item_index {
+        out.set_position_in_set(index);
+        if node.role == Role::Row {
+            out.set_row_index(index);
+        }
+    }
     let b = node.bounds;
     out.set_bounds(accesskit::Rect::new(
         b.min_x(),

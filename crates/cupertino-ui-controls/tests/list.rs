@@ -11,6 +11,7 @@ use cupertino_ui_render::{Paint, PaintNodeId, PaintOp, Shape};
 use cupertino_ui_text::{AttributedText, TextStyle};
 use cupertino_ui_theme::{ColorRole, InteractionVariant};
 use std::cell::Cell;
+use std::collections::HashMap;
 use support::{color, window, Harness, RETURN, TAB};
 
 const UP: u32 = 0xff52;
@@ -342,6 +343,34 @@ fn only_the_cursor_row_is_a_tab_stop_and_rows_say_whether_they_are_selected() {
     let mut expected = vec![(false, false); 8];
     expected[2] = (true, true);
     assert_eq!(items, expected);
+}
+
+#[test]
+fn a_list_and_a_table_tell_assistive_technology_all_their_rows_and_each_built_rows_place() {
+    for (table, container, item) in [
+        (false, Role::List, Role::ListItem),
+        (true, Role::Table, Role::Row),
+    ] {
+        let mut h = harness(1000, true, table);
+        h.tap(TAB);
+        h.tap(END);
+        let nodes: HashMap<_, _> = h.snapshot().accessibility.into_iter().collect();
+        let rows = nodes.values().find(|n| n.role == container).unwrap();
+        let places: Vec<_> = rows
+            .children
+            .iter()
+            .map(|c| (nodes[c].role, nodes[c].item_index))
+            .collect();
+        assert_eq!(rows.item_count, Some(1000), "{container:?}");
+        assert_eq!(built(&h).last(), Some(&999));
+        assert_eq!(
+            places,
+            built(&h)
+                .into_iter()
+                .map(|i| (item, Some(i)))
+                .collect::<Vec<_>>()
+        );
+    }
 }
 
 #[test]

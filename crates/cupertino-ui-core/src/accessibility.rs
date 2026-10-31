@@ -142,6 +142,10 @@ pub struct AccessibilityNode {
     pub children: Vec<NodeId>,
     /// A live region: its changes are announced as they happen.
     pub live: Option<Live>,
+    /// On a list, table or tree: how many items it holds, though only those in view may be in the tree.
+    pub item_count: Option<usize>,
+    /// On an item of a list, table or tree: its place among all of the container's items, from 0.
+    pub item_index: Option<usize>,
 }
 
 /// What changed in one window's tree since the previous update.

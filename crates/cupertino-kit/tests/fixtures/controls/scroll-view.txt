@@ -1,0 +1,160 @@
+Light Ltr Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(3v1), NodeId(5v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 161x88] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 161x125.8359375] actions=[] relations=[] children=[]
+  NodeId(5v1) role=ScrollBar name=None description=None value=Number { value: 0.0, min: 0.0, max: 37.8359375, step: Some(40.0) } states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[173,12 15x88] actions=[] relations=[] children=[]
+Light Ltr Hover
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(3v1), NodeId(5v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 161x88] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 161x125.8359375] actions=[] relations=[] children=[]
+  NodeId(5v1) role=ScrollBar name=None description=None value=Number { value: 0.0, min: 0.0, max: 37.8359375, step: Some(40.0) } states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[173,12 15x88] actions=[] relations=[] children=[]
+Light Ltr Pressed
+  n/a
+Light Ltr Disabled
+  n/a
+Light Ltr Focused
+  n/a
+Light Ltr Selected
+  n/a
+Light Rtl Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(3v1), NodeId(5v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[27,12 161x88] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[27,12 161x125.8359375] actions=[] relations=[] children=[]
+  NodeId(5v1) role=ScrollBar name=None description=None value=Number { value: 0.0, min: 0.0, max: 37.8359375, step: Some(40.0) } states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 15x88] actions=[] relations=[] children=[]
+Light Rtl Hover
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(3v1), NodeId(5v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[27,12 161x88] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[27,12 161x125.8359375] actions=[] relations=[] children=[]
+  NodeId(5v1) role=ScrollBar name=None description=None value=Number { value: 0.0, min: 0.0, max: 37.8359375, step: Some(40.0) } states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 15x88] actions=[] relations=[] children=[]
+Light Rtl Pressed
+  n/a
+Light Rtl Disabled
+  n/a
+Light Rtl Focused
+  n/a
+Light Rtl Selected
+  n/a
+Dark Ltr Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(3v1), NodeId(5v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 161x88] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 161x125.8359375] actions=[] relations=[] children=[]
+  NodeId(5v1) role=ScrollBar name=None description=None value=Number { value: 0.0, min: 0.0, max: 37.8359375, step: Some(40.0) } states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[173,12 15x88] actions=[] relations=[] children=[]
+Dark Ltr Hover
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(3v1), NodeId(5v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 161x88] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 161x125.8359375] actions=[] relations=[] children=[]
+  NodeId(5v1) role=ScrollBar name=None description=None value=Number { value: 0.0, min: 0.0, max: 37.8359375, step: Some(40.0) } states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[173,12 15x88] actions=[] relations=[] children=[]
+Dark Ltr Pressed
+  n/a
+Dark Ltr Disabled
+  n/a
+Dark Ltr Focused
+  n/a
+Dark Ltr Selected
+  n/a
+Dark Rtl Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(3v1), NodeId(5v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[27,12 161x88] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[27,12 161x125.8359375] actions=[] relations=[] children=[]
+  NodeId(5v1) role=ScrollBar name=None description=None value=Number { value: 0.0, min: 0.0, max: 37.8359375, step: Some(40.0) } states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 15x88] actions=[] relations=[] children=[]
+Dark Rtl Hover
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(3v1), NodeId(5v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[27,12 161x88] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[27,12 161x125.8359375] actions=[] relations=[] children=[]
+  NodeId(5v1) role=ScrollBar name=None description=None value=Number { value: 0.0, min: 0.0, max: 37.8359375, step: Some(40.0) } states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 15x88] actions=[] relations=[] children=[]
+Dark Rtl Pressed
+  n/a
+Dark Rtl Disabled
+  n/a
+Dark Rtl Focused
+  n/a
+Dark Rtl Selected
+  n/a
+LightHighContrast Ltr Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(3v1), NodeId(5v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 161x88] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 161x125.8359375] actions=[] relations=[] children=[]
+  NodeId(5v1) role=ScrollBar name=None description=None value=Number { value: 0.0, min: 0.0, max: 37.8359375, step: Some(40.0) } states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[173,12 15x88] actions=[] relations=[] children=[]
+LightHighContrast Ltr Hover
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(3v1), NodeId(5v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 161x88] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 161x125.8359375] actions=[] relations=[] children=[]
+  NodeId(5v1) role=ScrollBar name=None description=None value=Number { value: 0.0, min: 0.0, max: 37.8359375, step: Some(40.0) } states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[173,12 15x88] actions=[] relations=[] children=[]
+LightHighContrast Ltr Pressed
+  n/a
+LightHighContrast Ltr Disabled
+  n/a
+LightHighContrast Ltr Focused
+  n/a
+LightHighContrast Ltr Selected
+  n/a
+LightHighContrast Rtl Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(3v1), NodeId(5v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[27,12 161x88] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[27,12 161x125.8359375] actions=[] relations=[] children=[]
+  NodeId(5v1) role=ScrollBar name=None description=None value=Number { value: 0.0, min: 0.0, max: 37.8359375, step: Some(40.0) } states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 15x88] actions=[] relations=[] children=[]
+LightHighContrast Rtl Hover
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(3v1), NodeId(5v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[27,12 161x88] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[27,12 161x125.8359375] actions=[] relations=[] children=[]
+  NodeId(5v1) role=ScrollBar name=None description=None value=Number { value: 0.0, min: 0.0, max: 37.8359375, step: Some(40.0) } states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 15x88] actions=[] relations=[] children=[]
+LightHighContrast Rtl Pressed
+  n/a
+LightHighContrast Rtl Disabled
+  n/a
+LightHighContrast Rtl Focused
+  n/a
+LightHighContrast Rtl Selected
+  n/a
+DarkHighContrast Ltr Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(3v1), NodeId(5v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 161x88] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 161x125.8359375] actions=[] relations=[] children=[]
+  NodeId(5v1) role=ScrollBar name=None description=None value=Number { value: 0.0, min: 0.0, max: 37.8359375, step: Some(40.0) } states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[173,12 15x88] actions=[] relations=[] children=[]
+DarkHighContrast Ltr Hover
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(3v1), NodeId(5v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 161x88] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 161x125.8359375] actions=[] relations=[] children=[]
+  NodeId(5v1) role=ScrollBar name=None description=None value=Number { value: 0.0, min: 0.0, max: 37.8359375, step: Some(40.0) } states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[173,12 15x88] actions=[] relations=[] children=[]
+DarkHighContrast Ltr Pressed
+  n/a
+DarkHighContrast Ltr Disabled
+  n/a
+DarkHighContrast Ltr Focused
+  n/a
+DarkHighContrast Ltr Selected
+  n/a
+DarkHighContrast Rtl Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(3v1), NodeId(5v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[27,12 161x88] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[27,12 161x125.8359375] actions=[] relations=[] children=[]
+  NodeId(5v1) role=ScrollBar name=None description=None value=Number { value: 0.0, min: 0.0, max: 37.8359375, step: Some(40.0) } states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 15x88] actions=[] relations=[] children=[]
+DarkHighContrast Rtl Hover
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(3v1), NodeId(5v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[27,12 161x88] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[27,12 161x125.8359375] actions=[] relations=[] children=[]
+  NodeId(5v1) role=ScrollBar name=None description=None value=Number { value: 0.0, min: 0.0, max: 37.8359375, step: Some(40.0) } states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 15x88] actions=[] relations=[] children=[]
+DarkHighContrast Rtl Pressed
+  n/a
+DarkHighContrast Rtl Disabled
+  n/a
+DarkHighContrast Rtl Focused
+  n/a
+DarkHighContrast Rtl Selected
+  n/a

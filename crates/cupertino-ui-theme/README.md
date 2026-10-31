@@ -53,3 +53,6 @@ text, borders and the focus ring to their contrast ratios; high contrast is opaq
 pt and radius 5 pt, field inset 6 pt and radius 5 pt, switch thumb 18 pt with a 2 pt inset, 24 × 24 pt minimum target,
 section 12 pt and title 15 pt semibold, a 2 pt focus ring 2 pt outside the chrome with 3 pt added radius, and 500 ms
 caret phases.
+
+`ThemeTokens::neutral(preferences)` is the theme without theme data: the neutral colours on the same metrics, body 13 pt
+and caption 11 pt (the theme data's sizes), and no font family, so the application's UI font draws the text.

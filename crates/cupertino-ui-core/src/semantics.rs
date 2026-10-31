@@ -107,6 +107,8 @@ pub(crate) fn build<M: 'static>(
                         relations: semantics.relations,
                         children: Vec::new(),
                         live: semantics.live,
+                        item_count: semantics.item_count,
+                        item_index: semantics.item_index,
                     },
                 );
                 if let Some(owner) = owner {

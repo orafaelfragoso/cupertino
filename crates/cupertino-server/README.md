@@ -141,6 +141,7 @@ backend (winit | udev | headless)  ──input──▶  events.rs ─▶ input.
 | `power.rs` | the idle policy on the compositor state: input activity, effects (overlay, DPMS, lock, suspend), the dim overlay element, system bus watchers (UPower `OnBattery`, logind `BlockInhibited` and `PrepareForSleep`, `Suspend`) |
 | `quit.rs` | `org.cupertino.Session1`: quitting applications one at a time before a log out; the appearance and accessibility setters; each method checks its caller |
 | `caller.rs` | `identify`, `Caller`, `Need`, `Denial`: who is on the other end of a bus message (pidfd, Flatpak and Snap classification) |
+| `localed.rs` | the system keyboard layout of `org.freedesktop.locale1` (`X11Layout`, `X11Variant`, `X11Options`), read on a worker at login: the input sources when `keyboard.conf` sets none, and its xkb options |
 | `live.rs` | live settings: the watch on `compositor.json` (the system file and the user's), `keyboard.conf` and `power.conf`, and what a change applies |
 | `protocols.rs` | KDE appmenu (`org_kde_kwin_appmenu`) and GTK shell (`gtk_shell1`, generated from `protocols/gtk-shell.xml`) globals; an announced menu address is used once its bus name's owner is checked |
 | `owner_check.rs` | whether a Wayland client owns a bus name: requests by key (`OwnerKey`), latest wins, one check of a key on the D-Bus worker at a time, 8 at once and 2 of one client, a 3 s deadline, at most 16 identification threads alive and 3 of one client, the answer (`OwnerChecked`) back in the loop; no retries of its own (each caller decides) |
@@ -447,7 +448,7 @@ Without a counterpart here (logged): focus dock, toggle dock auto-hide, move to 
 repeat_delay = 500          # ms before the first repeat, 0 = repeat off              (default)
 repeat_interval = 83        # ms between repeats                                      (default)
 modifier_profile = cupertino    # or classic-pc
-input_sources = us, de, fr(nodeadkeys)  # xkb layout[(variant)], menu order
+input_sources = us, de, fr(nodeadkeys)  # xkb layout[(variant)], menu order; unset: the layouts localed holds
 caps_lock_delay = 75        # ms, 0 = off                                             (default)
 accent_picker = on
 accent_table = ~/.config/cupertino/accents.json
@@ -461,6 +462,7 @@ caps_lock_switch = off      # on: a caps-lock tap switches the input source, a h
 caps_lock_hold = 500        # ms a caps-lock press must last to count as a hold, 1-1500 (default)
 layout_keyboard = ansi      # key arrangement of `decoded:` sources: ansi, iso, jis
 layout_level3 = right-alt   # level-3 keys of `decoded:` sources: both-alt, right-alt, none
+compose_key = right-alt     # compose key of the system layouts: off, right-alt, right-ctrl, menu, caps-lock, scroll-lock; unset keeps localed's; its grp: switch keys are left out
 slow_keys = off             # a key counts only once held for the delay
 slow_keys_delay = 250       # ms                                                      (default)
 sticky_keys = off           # modifiers latch for the next key, a second tap locks

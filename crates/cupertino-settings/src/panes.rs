@@ -2798,7 +2798,11 @@ mod tests {
             }
         );
         assert!(change(ControlId::LoginScreen, Value::Index(0), &mut s, &saving).is_empty());
-        let (written, _) = AccessibilitySettings::from_system_text("reduce_motion = on\n");
+        let written = cupertino_defaults::accessibility::SystemAccessibility::from_text(
+            "reduce_motion = on\n",
+        )
+        .0
+        .settings;
         let saved = login_live(Some(LoginScreen {
             current: Some(written),
             saving: false,
@@ -2829,9 +2833,17 @@ mod tests {
         let current = crate::settings::system_accessibility(&dir.path().join("accessibility.conf"));
         assert_eq!(current, None);
         assert_eq!(login_screen_state(current.as_ref()), "Default settings");
-        let (off, _) = AccessibilitySettings::from_system_text("reduce_motion = off\n");
+        let off = cupertino_defaults::accessibility::SystemAccessibility::from_text(
+            "reduce_motion = off\n",
+        )
+        .0
+        .settings;
         assert_eq!(login_screen_state(Some(&off)), "Reduce motion off");
-        let (on, _) = AccessibilitySettings::from_system_text("reduce_motion = on\n");
+        let on = cupertino_defaults::accessibility::SystemAccessibility::from_text(
+            "reduce_motion = on\n",
+        )
+        .0
+        .settings;
         assert_eq!(login_screen_state(Some(&on)), "Reduce motion on");
         let section = login_screen_section(&LoginScreen::default());
         assert_eq!(section.footer.as_deref(), Some(LOGIN_SCREEN_FOOTER));

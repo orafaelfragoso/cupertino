@@ -23,8 +23,9 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use pam_client2::{Context, ConversationHandler, ErrorCode, Flag};
 
 use crate::channel::Channel;
+use crate::reader;
 use crate::users;
-use crate::worker_protocol::{FromWorker, Mode, ToWorker, MAX_FRAME};
+use crate::worker_protocol::{FromWorker, Mode, SessionClass, ToWorker, MAX_FRAME};
 use cupertino_login_ipc::Outcome;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -192,6 +193,7 @@ fn session(channel: &mut Channel) -> Result<u8> {
         command,
         environment,
         path,
+        screen_reader,
     } = channel.receive()?
     else {
         return Err("the first message is not Begin".into());
@@ -260,20 +262,59 @@ fn session(channel: &mut Channel) -> Result<u8> {
             value.to_string_lossy().into_owned(),
         );
     }
-    let launch = Launch::new(&account, &command, variables, &environment, &path)?;
+    let runtime = variables
+        .get("XDG_RUNTIME_DIR")
+        .cloned()
+        .unwrap_or_default();
+    let bus = variables.get("DBUS_SESSION_BUS_ADDRESS").cloned();
+    let mut environment = environment;
+    // the login screen's compositor alone turns the screen reader on and off, over a socket only it is given
+    let toggle = if class == SessionClass::Greeter {
+        let (mine, theirs) = rustix::net::socketpair(
+            rustix::net::AddressFamily::UNIX,
+            rustix::net::SocketType::SEQPACKET,
+            rustix::net::SocketFlags::CLOEXEC,
+            None,
+        )?;
+        environment.push(format!("{}={}", reader::READER_FD_ENV, reader::READER_FD));
+        Some((mine, theirs))
+    } else {
+        None
+    };
+    let mut launch = Launch::new(&account, &command, variables, &environment, &path)?;
+    launch.toggle = toggle.as_ref().map(|(_, theirs)| theirs.as_raw_fd());
     let leader = spawn_leader(&launch)?;
 
     // the manager learns the session now; it needs nothing from this process afterwards
     let started = cupertino_login_ipc::encode(
         &FromWorker::Started {
-            session_id,
+            session_id: session_id.clone(),
             leader: leader as u32,
             uid: account.uid,
         },
         MAX_FRAME,
     )?;
     let _ = channel.send_frame(&started);
-    let status = wait_for(leader);
+    let status = match toggle {
+        Some((mine, theirs)) => {
+            drop(theirs);
+            let reader = reader::Reader::new(
+                reader::Account {
+                    login: launch.login.clone(),
+                    uid: account.uid,
+                    gid: account.gid,
+                },
+                reader::resolve(reader::READERS),
+                runtime.into(),
+                bus.as_deref(),
+                leader as u32,
+                reader::session_procs(&session_id),
+                screen_reader,
+            );
+            supervise(channel, leader, &mine, reader)
+        }
+        None => wait_for(leader),
+    };
     session
         .close(Flag::NONE)
         .map_err(|e| format!("closing the session: {e}"))?;
@@ -305,6 +346,8 @@ struct Launch {
     program: CString,
     arguments: Vec<CString>,
     environment: Vec<CString>,
+    /// The login screen's end of the screen reader's toggle socket, given to the leader as [`reader::READER_FD`].
+    toggle: Option<libc::c_int>,
 }
 
 impl Launch {
@@ -353,6 +396,7 @@ impl Launch {
                 .iter()
                 .map(|(name, value)| cstring(&format!("{name}={value}")))
                 .collect::<std::result::Result<Vec<_>, _>>()?,
+            toggle: None,
         })
     }
 }
@@ -429,13 +473,13 @@ fn spawn_leader(launch: &Launch) -> Result<libc::pid_t> {
 ///
 /// # Safety
 /// Call in the child of `fork` only.
-unsafe fn fail(report: libc::c_int, step: &str) -> ! {
+pub(crate) unsafe fn fail(report: libc::c_int, step: &str) -> ! {
     fail_with(report, &format!("{step}: {}", io::Error::last_os_error()))
 }
 
 /// # Safety
 /// Call in the child of `fork` only.
-unsafe fn fail_with(report: libc::c_int, text: &str) -> ! {
+pub(crate) unsafe fn fail_with(report: libc::c_int, text: &str) -> ! {
     libc::write(report, text.as_ptr().cast(), text.len());
     libc::_exit(127)
 }
@@ -480,12 +524,31 @@ unsafe fn become_user_and_exec(launch: &Launch, report: libc::c_int) -> ! {
     if null < 0 || libc::dup2(null, libc::STDIN_FILENO) < 0 {
         fail(report, "opening /dev/null");
     }
-    // every descriptor above 2 goes, except the report pipe (it closes by itself on `execve`)
+    // the login screen's toggle socket becomes descriptor 3: the report pipe moves above it first
+    let mut report = report;
+    let mut first_closed = 3;
+    if let Some(toggle) = launch.toggle {
+        report = libc::fcntl(report, libc::F_DUPFD_CLOEXEC, reader::READER_FD + 1);
+        if report < 0 {
+            libc::_exit(127);
+        }
+        let placed = if toggle == reader::READER_FD {
+            libc::fcntl(toggle, libc::F_SETFD, 0)
+        } else {
+            libc::dup2(toggle, reader::READER_FD)
+        };
+        if placed < 0 {
+            fail(report, "placing the screen reader's socket");
+        }
+        first_closed = reader::READER_FD as libc::c_uint + 1;
+    }
+    // every other descriptor above 2 goes, except the report pipe (it closes by itself on `execve`)
     let close_range = |first: libc::c_uint, last: libc::c_uint| {
         libc::syscall(libc::SYS_close_range, first, last, 0)
     };
     let kept = report as libc::c_uint;
-    if (kept > 3 && close_range(3, kept - 1) != 0) || close_range(kept + 1, libc::c_uint::MAX) != 0
+    if (kept > first_closed && close_range(first_closed, kept - 1) != 0)
+        || close_range(kept + 1, libc::c_uint::MAX) != 0
     {
         fail(report, "close_range");
     }
@@ -504,6 +567,92 @@ unsafe fn become_user_and_exec(launch: &Launch, report: libc::c_int) -> ! {
         environment.as_ptr(),
     );
     fail(report, "execve")
+}
+
+/// The login screen's session: wait for `leader` while running the screen reader as the compositor (`toggle`) and the
+/// manager (`channel`) ask. The reader stops before this returns, and for good once the manager is gone.
+fn supervise(
+    channel: &mut Channel,
+    leader: libc::pid_t,
+    toggle: &OwnedFd,
+    mut reader: reader::Reader,
+) -> u8 {
+    use rustix::event::{poll, PollFd, PollFlags};
+    let Some(leader_fd) = rustix::process::Pid::from_raw(leader).and_then(|pid| {
+        rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).ok()
+    }) else {
+        return wait_for(leader);
+    };
+    let mut manager = true;
+    let mut compositor = true;
+    loop {
+        let readable = |fd: &PollFd<'_>| {
+            fd.revents()
+                .intersects(PollFlags::IN | PollFlags::HUP | PollFlags::ERR)
+        };
+        let mut fds = vec![PollFd::new(&leader_fd, PollFlags::IN)];
+        let at_manager = manager.then(|| {
+            fds.push(PollFd::new(channel.stream(), PollFlags::IN));
+            fds.len() - 1
+        });
+        let at_compositor = compositor.then(|| {
+            fds.push(PollFd::new(toggle, PollFlags::IN));
+            fds.len() - 1
+        });
+        let reader_fd = reader.pidfd();
+        let at_reader = reader_fd.as_ref().map(|fd| {
+            fds.push(PollFd::new(fd, PollFlags::IN));
+            fds.len() - 1
+        });
+        match poll(&mut fds, None) {
+            Ok(_) => {}
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(e) => {
+                eprintln!("cupertino-sessiond: worker: poll: {e}");
+                reader.stop();
+                return wait_for(leader);
+            }
+        }
+        let ready: Vec<bool> = fds.iter().map(readable).collect();
+        drop(fds);
+        if ready[0] {
+            reader.stop();
+            return wait_for(leader);
+        }
+        if at_reader.is_some_and(|i| ready[i]) {
+            eprintln!("cupertino-sessiond: worker: the screen reader ended");
+            reader.exited();
+        }
+        if at_compositor.is_some_and(|i| ready[i]) {
+            let mut frame = [0u8; reader::MAX_REQUEST + 1];
+            match rustix::net::recv(toggle, &mut frame, rustix::net::RecvFlags::DONTWAIT) {
+                Ok((0, _)) | Err(_) => compositor = false,
+                Ok((count, _)) => {
+                    if let Some(reply) = reader.request(&frame[..count.min(frame.len())]) {
+                        let _ = rustix::net::send(
+                            toggle,
+                            reply.text(),
+                            rustix::net::SendFlags::DONTWAIT,
+                        );
+                    }
+                }
+            }
+        }
+        if at_manager.is_some_and(|i| ready[i]) {
+            match channel.read_message::<ToWorker>() {
+                Ok(Some(ToWorker::Shown { shown })) => reader.shown(shown),
+                Ok(Some(_)) => {
+                    eprintln!("cupertino-sessiond: worker: ignored a message for the login screen")
+                }
+                Ok(None) => {}
+                Err(_) => {
+                    // without the manager no one says the login screen is shown again: the reader ends for good
+                    manager = false;
+                    reader.shown(false);
+                }
+            }
+        }
+    }
 }
 
 /// Wait for `leader`; its exit status, or 128 plus the signal that ended it.

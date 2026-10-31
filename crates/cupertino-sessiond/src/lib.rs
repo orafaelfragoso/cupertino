@@ -18,6 +18,8 @@ pub mod logind;
 #[cfg(feature = "app")]
 pub mod manager;
 pub mod picture;
+#[cfg(feature = "app")]
+pub mod reader;
 pub mod roster;
 #[cfg(feature = "app")]
 pub mod service;

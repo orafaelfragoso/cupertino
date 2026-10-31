@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::{bidi, Affinity, TextPosition};
+
 /// How long the caret shows and hides while it blinks; it shows for a whole period after every edit, move or click.
 /// Both are approximate: design values, not measured.
 pub const CARET_BLINK_ON: Duration = Duration::from_millis(500);
@@ -75,6 +77,8 @@ pub struct TextBuffer {
     scroll: f64,
     /// The most bytes the text holds; `None` for no limit.
     max_len: Option<usize>,
+    /// The caret's byte when a visual move put it on the end edge of the grapheme before it, at a direction change.
+    upstream: Option<usize>,
 }
 
 impl TextBuffer {
@@ -93,6 +97,18 @@ impl TextBuffer {
 
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// The caret with the side of a direction change it is drawn on, for `ParagraphLayout::caret_rect`.
+    pub fn caret_position(&self) -> TextPosition {
+        TextPosition {
+            byte: self.caret,
+            affinity: if self.upstream == Some(self.caret) {
+                Affinity::Upstream
+            } else {
+                Affinity::Downstream
+            },
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -126,7 +142,7 @@ impl TextBuffer {
     /// Replace the whole text (not an edit: undo starts over); the caret goes to the end.
     pub fn set_text(&mut self, text: &str) {
         self.text = self.fit(&single_line(text), 0).to_string();
-        self.caret = self.text.len();
+        self.set_caret(self.text.len());
         self.anchor = self.caret;
         self.composition = None;
         self.undo.clear();
@@ -138,7 +154,7 @@ impl TextBuffer {
     /// Select `range` (clamped to the text and to grapheme boundaries), the caret at its end.
     pub fn select(&mut self, range: Range<usize>) {
         self.anchor = self.boundary_at_or_before(range.start.min(self.text.len()));
-        self.caret = self.boundary_at_or_before(range.end.min(self.text.len()));
+        self.set_caret(self.boundary_at_or_before(range.end.min(self.text.len())));
         self.group = None;
     }
 
@@ -240,7 +256,7 @@ impl TextBuffer {
         match self.composition.take() {
             Some(range) => {
                 self.anchor = range.start;
-                self.caret = range.end;
+                self.set_caret(range.end);
             }
             // a composition starts an undo step of its own
             None => self.group = None,
@@ -261,7 +277,7 @@ impl TextBuffer {
         if self.composition.take().is_some() {
             if let Some(before) = self.undo.pop() {
                 self.text = before.text;
-                self.caret = before.caret;
+                self.set_caret(before.caret);
                 self.anchor = before.anchor;
             }
         }
@@ -332,10 +348,10 @@ impl TextBuffer {
         };
         if reach.start < origin.start {
             self.anchor = origin.end;
-            self.caret = reach.start;
+            self.set_caret(reach.start);
         } else {
             self.anchor = origin.start;
-            self.caret = reach.end.max(origin.end);
+            self.set_caret(reach.end.max(origin.end));
         }
     }
 
@@ -419,7 +435,7 @@ impl TextBuffer {
         if !range.is_empty() {
             self.kill = self.text[range.clone()].to_string();
             self.anchor = range.start;
-            self.caret = range.end;
+            self.set_caret(range.end);
             self.replace_selection("", None);
         }
     }
@@ -430,8 +446,13 @@ impl TextBuffer {
         self.replace_selection(&kill, None);
     }
 
-    fn move_to(&mut self, to: usize, extend: bool) {
+    fn set_caret(&mut self, to: usize) {
         self.caret = to;
+        self.upstream = None;
+    }
+
+    fn move_to(&mut self, to: usize, extend: bool) {
+        self.set_caret(to);
         if !extend {
             self.anchor = to;
         }
@@ -449,6 +470,35 @@ impl TextBuffer {
             (false, true) => selection.end,
         };
         self.move_to(to, extend);
+    }
+
+    /// One caret stop left or right on screen, through text of either direction; without `extend` a selection
+    /// collapses to its side in that direction instead.
+    pub fn move_visual(&mut self, rightward: bool, extend: bool) {
+        let edges = bidi::caret_edges(&self.text, None);
+        let selection = self.selection();
+        if extend || selection.is_empty() {
+            let to = bidi::visual_neighbour(&edges, self.caret_position(), rightward)
+                .unwrap_or_else(|| self.caret_position());
+            self.move_to(to.byte, extend);
+            self.upstream = (to.affinity == Affinity::Upstream).then_some(to.byte);
+        } else {
+            let edge = |byte| {
+                bidi::edge_at(
+                    &edges,
+                    TextPosition {
+                        byte,
+                        affinity: Affinity::Downstream,
+                    },
+                )
+            };
+            let to = if (edge(selection.end) > edge(selection.start)) == rightward {
+                selection.end
+            } else {
+                selection.start
+            };
+            self.move_to(to, extend);
+        }
     }
 
     /// Delete the selection, or from the caret to `target(self)`.
@@ -478,7 +528,7 @@ impl TextBuffer {
         }
         let swapped = format!("{}{}", &self.text[at..end], &self.text[start..at]);
         self.anchor = start;
-        self.caret = end;
+        self.set_caret(end);
         self.replace_selection(&swapped, None);
     }
 
@@ -511,7 +561,7 @@ impl TextBuffer {
         self.group = group;
         let range = self.selection();
         self.text.replace_range(range.clone(), s);
-        self.caret = range.start + s.len();
+        self.set_caret(range.start + s.len());
         self.anchor = self.caret;
     }
 
@@ -538,7 +588,7 @@ impl TextBuffer {
             anchor: self.anchor,
         });
         self.text = state.text;
-        self.caret = state.caret;
+        self.set_caret(state.caret);
         self.anchor = state.anchor;
         self.group = None;
         self.composition = None;

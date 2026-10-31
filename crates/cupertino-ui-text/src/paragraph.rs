@@ -496,8 +496,20 @@ impl Stop {
 }
 
 impl Line {
-    /// The x of the caret at `byte`: the start edge of the cluster that starts there, else the end edge of the last.
-    fn x_at(&self, byte: usize) -> f64 {
+    /// The x of the caret at `at`: the start edge of the cluster that starts there, else the end edge of the last. An
+    /// upstream position takes the end edge of the cluster that ends there.
+    fn x_at(&self, at: TextPosition) -> f64 {
+        let byte = at.byte;
+        if at.affinity == Affinity::Upstream {
+            let before = self.stops.partition_point(|stop| stop.end < byte);
+            if let Some(stop) = self
+                .stops
+                .get(before)
+                .filter(|stop| stop.end == byte && stop.start < byte)
+            {
+                return stop.x_at(byte);
+            }
+        }
         let at = self.stops.partition_point(|stop| stop.end <= byte);
         let stop = &self.stops[at.min(self.stops.len() - 1)];
         stop.x_at(byte.clamp(stop.start, stop.end))
@@ -530,10 +542,14 @@ impl ParagraphLayout {
     }
 
     /// The caret at `at`: a thin rectangle the height of its line. A position at a soft wrap belongs to the next line
-    /// unless its affinity is upstream.
+    /// unless its affinity is upstream; at a direction change, upstream is drawn at the end edge of the character
+    /// before it and downstream at the start edge of the character after it.
     pub fn caret_rect(&self, at: TextPosition) -> Rect {
         let line = self.line_of(at);
-        let x = line.x_at(at.byte.min(self.text.len()));
+        let x = line.x_at(TextPosition {
+            byte: at.byte.min(self.text.len()),
+            ..at
+        });
         Rect::new(x, line.rect.y(), CARET_WIDTH, line.rect.height())
     }
 
@@ -559,7 +575,13 @@ impl ParagraphLayout {
                     visible.iter().max_by(|a, b| a.right.total_cmp(&b.right))
                 }
             });
-        let byte = hit.map_or(line.range.0.start, |stop| {
+        let Some(stop) = hit else {
+            return TextPosition {
+                byte: line.range.0.start,
+                affinity: Affinity::Downstream,
+            };
+        };
+        let byte = {
             std::iter::once(stop.start)
                 .chain(
                     self.text[stop.start..stop.end]
@@ -574,10 +596,15 @@ impl ParagraphLayout {
                     da.total_cmp(&db)
                 })
                 .unwrap_or(stop.start)
-        });
+        };
+        let downstream = TextPosition {
+            byte,
+            affinity: Affinity::Downstream,
+        };
+        let elsewhere = byte == stop.end && (line.x_at(downstream) - stop.x_at(byte)).abs() > 1e-9;
         TextPosition {
             byte,
-            affinity: if line.soft_wrapped && byte == line.range.0.end {
+            affinity: if (line.soft_wrapped && byte == line.range.0.end) || elsewhere {
                 Affinity::Upstream
             } else {
                 Affinity::Downstream
@@ -888,6 +915,12 @@ mod tests {
     #[test]
     fn right_to_left_characters_are_shown_last_first_inside_left_to_right_text() {
         let layout = layout(MIXED, None);
+        let runs: Vec<Range<usize>> = layout.lines()[0]
+            .runs
+            .iter()
+            .map(|run| run.range.0.clone())
+            .collect();
+        assert_eq!(runs, [0..4, 4..10, 10..14]);
         assert_eq!(
             visual_clusters(&layout.lines()[0]),
             [0, 1, 2, 3, 8, 6, 4, 10, 11, 12, 13]
@@ -937,6 +970,52 @@ mod tests {
             visual_clusters(&layout.lines()[0]),
             [0, 1, 2, 3, 8, 6, 4, 10]
         );
+    }
+
+    #[test]
+    fn right_from_the_end_of_abc_moves_the_caret_one_stop_rightward_through_the_hebrew() {
+        let layout = layout(MIXED, None);
+        let mut buffer = crate::TextBuffer::new();
+        buffer.set_text(MIXED);
+        buffer.select(3..3);
+        let mut stops = vec![buffer.caret_position()];
+        for _ in 0..5 {
+            buffer.move_visual(true, false);
+            stops.push(buffer.caret_position());
+        }
+        let bytes: Vec<usize> = stops.iter().map(|at| at.byte).collect();
+        assert_eq!(bytes, [3, 4, 8, 6, 4, 11]);
+        assert_eq!(
+            stops[1].affinity,
+            Affinity::Upstream,
+            "after the space, before the Hebrew"
+        );
+        let xs: Vec<f64> = stops.iter().map(|at| layout.caret_rect(*at).x()).collect();
+        assert!(xs.windows(2).all(|pair| pair[1] > pair[0]), "{xs:?}");
+        for _ in 0..5 {
+            buffer.move_visual(false, false);
+        }
+        assert_eq!(buffer.caret(), 3);
+    }
+
+    #[test]
+    fn a_click_at_a_direction_change_draws_the_caret_where_it_hit() {
+        let layout = layout(MIXED, None);
+        let after_space = layout.caret_rect(TextPosition {
+            byte: 4,
+            affinity: Affinity::Upstream,
+        });
+        assert!(after_space.x() < layout.caret_rect(position(4)).x());
+        let hit = layout.index_at(Point::new(after_space.x() + 0.1, after_space.y() + 1.0));
+        assert_eq!(
+            hit,
+            TextPosition {
+                byte: 10,
+                affinity: Affinity::Upstream
+            },
+            "the end of the Hebrew, drawn after the space"
+        );
+        assert!((layout.caret_rect(hit).x() - after_space.x()).abs() < 1e-9);
     }
 
     #[test]

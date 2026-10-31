@@ -1,3 +1,4 @@
+use crate::bidi;
 use crate::paragraph::Item;
 use crate::{
     AttributedText, Direction, FaceId, FontId, FontIndex, FontMetrics, FontStyle, FontWeight,
@@ -170,16 +171,8 @@ fn shape_paragraph(
     paragraph_style: &ParagraphStyle,
 ) -> Result<Paragraph, TextError> {
     let segments = style_segments(text)?;
-    let direction = paragraph_style.direction.unwrap_or_else(|| {
-        match unicode_bidi::get_base_direction_full(text.text.as_str()) {
-            unicode_bidi::Direction::Rtl => Direction::Rtl,
-            unicode_bidi::Direction::Ltr | unicode_bidi::Direction::Mixed => Direction::Ltr,
-        }
-    });
-    let base = match direction {
-        Direction::Ltr => Level::ltr(),
-        Direction::Rtl => Level::rtl(),
-    };
+    let direction = bidi::base_direction(&text.text, paragraph_style.direction);
+    let base = bidi::base_level(direction);
     let mut items = Vec::new();
     let mut line_start = 0;
     loop {

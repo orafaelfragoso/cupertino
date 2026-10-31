@@ -334,6 +334,8 @@ pub struct Cupertino {
     pub wlr_data_control_state: smithay::wayland::selection::wlr_data_control::DataControlState,
     /// Who may see and bind the data control globals (`data_control`).
     pub data_control_access: Arc<crate::data_control::DataControlAccess>,
+    /// The login screen's toggle of its screen reader (`screen_reader`); `None` anywhere else.
+    pub screen_reader: Option<crate::screen_reader::ScreenReader>,
     /// The server's copy of the clipboard, kept when its client exits (`clipboard`).
     pub clipboard: crate::clipboard::Clipboard,
     pub viewporter_state: ViewporterState,
@@ -669,6 +671,7 @@ impl Cupertino {
             security_context_state,
             wlr_data_control_state,
             data_control_access,
+            screen_reader: None,
             clipboard: crate::clipboard::Clipboard::default(),
             viewporter_state,
             fractional_scale_state,

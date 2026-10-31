@@ -545,6 +545,15 @@ fn check_hardware() -> Result<()> {
 }
 
 pub fn run(cli: Cli) -> Result<()> {
+    // the login screen's process is not dumpable, and its screen reader socket is taken before any thread or child exists
+    let login_screen = crate::config::login_screen(
+        std::env::var_os(crate::config::CONFIG_ENV).as_deref(),
+        std::env::var_os("XDG_SESSION_CLASS").as_deref(),
+    );
+    if login_screen {
+        crate::screen_reader::harden();
+    }
+    let screen_reader = crate::screen_reader::take(login_screen);
     if cli.check_hardware {
         #[cfg(feature = "udev")]
         return check_hardware();
@@ -604,10 +613,6 @@ pub fn run(cli: Cli) -> Result<()> {
     }
     // the built-in processes belong to a user's session on the hardware: not to the login screen, nor to nested and
     // offscreen runs
-    let login_screen = crate::config::login_screen(
-        std::env::var_os(crate::config::CONFIG_ENV).as_deref(),
-        std::env::var_os("XDG_SESSION_CLASS").as_deref(),
-    );
     if mode == Mode::Udev && !login_screen {
         let programs = BuiltIn::ALL.map(|b| (b, b.installed()));
         state.supervisor.add_built_ins(programs, Instant::now());
@@ -615,6 +620,9 @@ pub fn run(cli: Cli) -> Result<()> {
     start_shell_supervision(&state, &event_loop)?;
     state.overlays.hold_modifiers = cli.hold_modifiers;
     state.connect_input_method();
+    if let Some(socket) = screen_reader {
+        state.start_screen_reader(socket);
+    }
     if mode != Mode::Headless || cli.dbus {
         start_dbus(&mut state);
     }

@@ -8,7 +8,7 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use cupertino_defaults::accessibility::{AccessibilitySettings, SYSTEM_KEYS};
+use cupertino_defaults::accessibility::{SystemAccessibility, SYSTEM_KEYS};
 
 /// The most bytes of a key or a value a call may carry; a longer one refuses the call before anything else is done.
 pub const MAX_FIELD: usize = 64;
@@ -21,9 +21,9 @@ pub const ANYONE: Duration = Duration::from_millis(200);
 /// value one the file takes. A call with more entries than there are keys, or a field over [`MAX_FIELD`] bytes, is refused
 /// before any key is looked at; any bad entry refuses the whole call.
 pub fn apply(
-    current: AccessibilitySettings,
+    current: SystemAccessibility,
     options: &HashMap<String, String>,
-) -> Result<AccessibilitySettings, String> {
+) -> Result<SystemAccessibility, String> {
     if options.len() > SYSTEM_KEYS.len() {
         return Err(format!("at most {} settings", SYSTEM_KEYS.len()));
     }
@@ -88,7 +88,7 @@ pub fn ensure_dir(dir: &Path) -> std::io::Result<()> {
 /// ([`ensure_dir`]) when it is missing; the text goes to a new file made beside it
 /// (exclusively, never through a link, mode 644), is flushed, and is renamed over the old one, and the directory is flushed
 /// too, so a reader sees the old file or the new one and a crash leaves one of them. Run as root, both are root's.
-pub fn write(dir: &Path, settings: &AccessibilitySettings) -> std::io::Result<PathBuf> {
+pub fn write(dir: &Path, settings: &SystemAccessibility) -> std::io::Result<PathBuf> {
     ensure_dir(dir)?;
     let target = dir.join(cupertino_defaults::accessibility::ACCESSIBILITY_FILE);
     let temporary = dir.join(format!(".accessibility.conf.{}", std::process::id()));
@@ -101,7 +101,7 @@ pub fn write(dir: &Path, settings: &AccessibilitySettings) -> std::io::Result<Pa
             .open(&temporary)?;
         // the mode the creation asked for is narrowed by the umask
         file.set_permissions(std::fs::Permissions::from_mode(0o644))?;
-        file.write_all(settings.system_text().as_bytes())?;
+        file.write_all(settings.to_text().as_bytes())?;
         file.sync_all()?;
         std::fs::rename(&temporary, &target)?;
         std::fs::File::open(dir)?.sync_all()
@@ -128,13 +128,15 @@ mod tests {
     #[test]
     fn only_allowed_keys_with_good_values_and_within_bounds_change_the_settings() {
         let on = apply(
-            AccessibilitySettings::default(),
+            SystemAccessibility::default(),
             &options(&[("reduce_motion", "on")]),
         )
         .unwrap();
-        assert!(on.display.reduce_motion);
+        assert!(on.settings.display.reduce_motion);
+        let reader = apply(on, &options(&[("screen_reader_at_login", "on")])).unwrap();
+        assert!(reader.screen_reader_at_login && reader.settings.display.reduce_motion);
         let off = apply(on, &options(&[("reduce_motion", "off")])).unwrap();
-        assert!(!off.display.reduce_motion);
+        assert!(!off.settings.display.reduce_motion);
         assert_eq!(
             apply(on, &HashMap::new()),
             Ok(on),
@@ -148,7 +150,7 @@ mod tests {
             options(&[("reduce_motion", &"o".repeat(MAX_FIELD + 1))]),
         ] {
             assert!(
-                apply(AccessibilitySettings::default(), &bad).is_err(),
+                apply(SystemAccessibility::default(), &bad).is_err(),
                 "{bad:?}"
             );
         }
@@ -172,9 +174,9 @@ mod tests {
     fn the_file_is_replaced_whole_with_mode_644_and_only_the_machines_keys() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("cupertino");
-        let mut settings = AccessibilitySettings::default();
-        settings.display.reduce_motion = true;
-        settings.invert_colors = true;
+        let mut settings = SystemAccessibility::default();
+        settings.settings.display.reduce_motion = true;
+        settings.settings.invert_colors = true;
         let path = write(&dir, &settings).unwrap();
         assert_eq!(
             std::fs::metadata(&dir).unwrap().mode() & 0o777,
@@ -184,13 +186,13 @@ mod tests {
         assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o777, 0o644);
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            "reduce_motion = on\n"
+            "reduce_motion = on\nscreen_reader_at_login = off\n"
         );
-        settings.display.reduce_motion = false;
+        settings.settings.display.reduce_motion = false;
         write(&dir, &settings).unwrap();
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            "reduce_motion = off\n"
+            "reduce_motion = off\nscreen_reader_at_login = off\n"
         );
         assert_eq!(
             std::fs::read_dir(&dir).unwrap().count(),
@@ -226,14 +228,14 @@ mod tests {
         std::fs::create_dir(&elsewhere).unwrap();
         let dir = root.path().join("cupertino");
         std::os::unix::fs::symlink(&elsewhere, &dir).unwrap();
-        assert!(write(&dir, &AccessibilitySettings::default()).is_err());
+        assert!(write(&dir, &SystemAccessibility::default()).is_err());
         assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
 
         let real = root.path().join("real");
         std::fs::create_dir(&real).unwrap();
         let planted = real.join(format!(".accessibility.conf.{}", std::process::id()));
         std::os::unix::fs::symlink(root.path().join("target"), &planted).unwrap();
-        assert!(write(&real, &AccessibilitySettings::default()).is_err());
+        assert!(write(&real, &SystemAccessibility::default()).is_err());
         assert!(
             !root.path().join("target").exists(),
             "the link was not followed"

@@ -352,21 +352,52 @@ fn an_account_with_its_own_file_keeps_its_settings() {
 }
 
 #[test]
-fn a_change_the_person_makes_keeps_what_they_saw_and_leaves_the_machines_defaults() {
+fn a_person_who_changed_one_key_keeps_following_the_machine_for_the_rest() {
     let Some(mut h) = Harness::new() else { return };
     let own = h.path("accessibility.conf");
     h.state.set_system_accessibility(machine(true));
     h.state.use_accessibility_store(own.clone()).unwrap();
-    assert!(h.state.display_options().reduce_motion);
     h.state
         .set_display_option(DisplayOption::ReduceTransparency, true);
-    let written = std::fs::read_to_string(&own).unwrap();
-    assert!(written.contains("reduce_motion = on"), "{written}");
-    h.state.set_system_accessibility(machine(false));
-    assert!(
-        h.state.display_options().reduce_motion,
-        "the account's own settings stay"
+    assert_eq!(
+        std::fs::read_to_string(&own).unwrap(),
+        "reduce_transparency = on\n",
+        "only the changed key is written"
     );
+    h.state.set_system_accessibility(machine(false));
+    let options = h.state.display_options();
+    assert!(
+        options.reduce_transparency && !options.reduce_motion,
+        "{options:?}"
+    );
+}
+
+#[test]
+fn a_key_the_person_set_back_to_the_machines_value_stays_theirs() {
+    let Some(mut h) = Harness::new() else { return };
+    let own = h.path("accessibility.conf");
+    h.state.set_system_accessibility(machine(true));
+    h.state.use_accessibility_store(own.clone()).unwrap();
+    h.state
+        .set_display_option(DisplayOption::ReduceMotion, false);
+    h.state
+        .set_display_option(DisplayOption::ReduceMotion, true);
+    h.state.set_system_accessibility(machine(false));
+    assert!(h.state.display_options().reduce_motion);
+    assert_eq!(
+        std::fs::read_to_string(&own).unwrap(),
+        "reduce_motion = on\n"
+    );
+}
+
+#[test]
+fn a_file_with_every_key_keeps_them_all_over_the_machines() {
+    let Some(mut h) = Harness::new() else { return };
+    let own = h.path("accessibility.conf");
+    std::fs::write(&own, AccessibilitySettings::default().to_text()).unwrap();
+    h.state.set_system_accessibility(machine(true));
+    h.state.use_accessibility_store(own).unwrap();
+    assert!(!h.state.display_options().reduce_motion);
 }
 
 #[test]

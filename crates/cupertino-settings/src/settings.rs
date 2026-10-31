@@ -6,7 +6,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use cupertino_defaults::accessibility::{
-    AccessibilitySettings, ACCESSIBILITY_ENV, ACCESSIBILITY_FILE,
+    AccessibilitySettings, PersonalAccessibility, ACCESSIBILITY_ENV, ACCESSIBILITY_FILE,
+    SYSTEM_ACCESSIBILITY,
 };
 use cupertino_defaults::compositor::{CompositorSettings, MinimizeEffectName};
 use cupertino_defaults::conf::Problem;
@@ -69,6 +70,8 @@ pub struct Paths {
     pub power: Option<PathBuf>,
     /// `accessibility.conf`: read only; the server is its only writer (`Session1.SetAccessibility`).
     pub accessibility: Option<PathBuf>,
+    /// The machine's accessibility defaults (`SYSTEM_ACCESSIBILITY`), under every key `accessibility.conf` does not record.
+    pub system_accessibility: Option<PathBuf>,
 }
 
 impl Paths {
@@ -80,6 +83,7 @@ impl Paths {
             keyboard: KeyboardSettings::path(),
             power: PowerSettings::path(),
             accessibility: cupertino_defaults::config_file(ACCESSIBILITY_ENV, ACCESSIBILITY_FILE),
+            system_accessibility: Some(PathBuf::from(SYSTEM_ACCESSIBILITY)),
         }
     }
 
@@ -199,14 +203,19 @@ impl Settings {
             }
             None => PowerSettings::default(),
         };
+        let system = paths
+            .system_accessibility
+            .as_deref()
+            .and_then(system_accessibility)
+            .unwrap_or_default();
         let accessibility = match &paths.accessibility {
-            Some(p) => AccessibilitySettings::load(p).map(|(s, problems)| {
+            Some(p) => PersonalAccessibility::load(p).map(|(personal, problems)| {
                 problems.iter().for_each(|(line, message)| {
                     eprintln!("cupertino-settings: accessibility.conf line {line}: {message}")
                 });
-                s
+                personal.over(&system)
             })?,
-            None => AccessibilitySettings::default(),
+            None => system,
         };
         Ok(Settings {
             dock,

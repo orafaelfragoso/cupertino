@@ -241,6 +241,7 @@ impl Capture {
             keyboard: None,
             power: None,
             accessibility: None,
+            system_accessibility: None,
         };
         let settings = Settings::load(&paths, 1080.0).map_err(|e| e.to_string())?;
         let scratch = tempfile::tempdir().map_err(|e| e.to_string())?;

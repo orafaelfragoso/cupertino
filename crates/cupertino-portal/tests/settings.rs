@@ -173,3 +173,17 @@ fn the_portal_file_names_the_bus_name_and_the_settings_interface() {
         .unwrap();
     assert!(interfaces.split(';').any(|i| i == INTERFACE));
 }
+
+#[test]
+fn the_portals_conf_prefers_this_backend_for_settings_and_names_a_default() {
+    let conf = include_str!("../data/cupertino-portals.conf");
+    let mut lines = conf.lines();
+    assert_eq!(lines.next(), Some("[preferred]"));
+    let keys: HashMap<&str, &str> = lines.filter_map(|l| l.split_once('=')).collect();
+    assert_eq!(keys["default"], "gtk");
+    assert_eq!(
+        keys[INTERFACE].split(';').next(),
+        Some(BUS_NAME.rsplit('.').next().unwrap()),
+        "this backend answers Settings first"
+    );
+}

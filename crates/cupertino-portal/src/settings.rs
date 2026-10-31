@@ -20,6 +20,21 @@ pub struct Appearance {
 }
 
 impl Appearance {
+    /// The appearance after `event`; events of other kinds leave it as it is.
+    #[cfg(feature = "app")]
+    pub fn after(mut self, event: &cupertino_protocol_app::AppEvent) -> Self {
+        use cupertino_protocol_app::AppEvent;
+        match event {
+            AppEvent::Appearance { dark } => self.dark = *dark,
+            AppEvent::DisplayOptions(options) => {
+                self.increase_contrast = options.increase_contrast;
+                self.reduce_motion = options.reduce_motion;
+            }
+            _ => {}
+        }
+        self
+    }
+
     /// The namespace's keys and values: `color-scheme` 1 prefers dark and 2 light; `contrast` and `reduced-motion` are 1
     /// when asked for.
     pub fn values(self) -> [(&'static str, u32); 3] {
@@ -139,6 +154,27 @@ impl Service {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "app")]
+    #[test]
+    fn the_session_s_events_set_the_appearance_and_other_events_leave_it() {
+        use cupertino_protocol_app::AppEvent;
+        let options = cupertino_defaults::accessibility::DisplayOptions {
+            increase_contrast: true,
+            reduce_motion: true,
+            ..Default::default()
+        };
+        let dark = Appearance::default().after(&AppEvent::Appearance { dark: true });
+        assert_eq!(dark.values()[0], ("color-scheme", 1));
+        assert_eq!(
+            dark.after(&AppEvent::DisplayOptions(options)),
+            Appearance {
+                dark: true,
+                increase_contrast: true,
+                reduce_motion: true,
+            }
+        );
+    }
 
     #[test]
     fn a_pattern_matches_its_namespace_every_namespace_or_a_trailing_prefix() {

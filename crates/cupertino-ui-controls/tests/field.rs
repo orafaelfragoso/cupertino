@@ -447,6 +447,60 @@ fn right_to_left_fields_keep_their_text_placeholder_and_caret_at_the_leading_edg
     );
 }
 
+/// Types `text`, too long for the field, and moves focus away: the harness, where the glyphs start, and the field's
+/// width.
+fn blurred_overlong(direction: LayoutDirection, text: &str) -> (Harness<App>, f64, f64) {
+    let mut h = Harness::<App>::with_direction(direction);
+    h.tap(TAB);
+    h.type_text(text);
+    h.tap(TAB);
+    assert!(!h.focused("name"));
+    assert_eq!(
+        editing(&h).1.caret,
+        text.len(),
+        "blur leaves the caret where it was"
+    );
+    let origin = h
+        .ops("name")
+        .into_iter()
+        .find_map(|op| match op {
+            PaintOp::Glyphs { origin, .. } => Some(origin.x),
+            _ => None,
+        })
+        .unwrap();
+    let width = h.rect("name").width();
+    (h, origin, width)
+}
+
+#[test]
+fn an_unfocused_overlong_field_shows_the_start_of_its_text() {
+    let text = "the quick brown fox jumps over the lazy dog again and again";
+    let (mut h, origin, width) = blurred_overlong(LayoutDirection::Ltr, text);
+    assert!(label_width(text) > width);
+    assert_eq!(origin, 6.0, "the first letter sits at the leading edge");
+
+    h.tap(TAB);
+    assert!(h.focused("name"));
+    assert_eq!(
+        caret(&h).unwrap().min_x(),
+        width - 6.0,
+        "a focused field follows its caret back to the end"
+    );
+}
+
+#[test]
+fn an_unfocused_overlong_right_to_left_field_shows_the_start_of_its_text() {
+    let text = "שלום עולם שלום עולם שלום עולם שלום עולם שלום עולם";
+    let (_, origin, width) = blurred_overlong(LayoutDirection::Rtl, text);
+    let text_width = label_width(text);
+    assert!(text_width > width);
+    assert_eq!(
+        origin + text_width,
+        width - 6.0,
+        "the first letter, at the text's right end, sits at the leading edge"
+    );
+}
+
 #[test]
 fn a_composition_is_underlined_one_pixel_below_the_baseline() {
     let mut h = focused_name();

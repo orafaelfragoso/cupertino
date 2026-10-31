@@ -494,6 +494,16 @@ fixtures! {
         on_change: Some(Box::new(|_| Message::Nothing)),
         on_submit: None,
     });
+    text_field_long: "text-field-long", WIDE, FIELD, |look| Element::new(TextField {
+        label: "Name".into(),
+        placeholder: "Your name".into(),
+        value: "Augusta Ada King, Countess of Lovelace, mathematician".into(),
+        revision: 0,
+        purpose: ContentPurpose::Normal,
+        enabled: look.enabled,
+        on_change: Some(Box::new(|_| Message::Nothing)),
+        on_submit: None,
+    });
     secure_field: "secure-field", WIDE, FIELD, |look| Element::new(SecureField {
         label: "Password".into(),
         placeholder: "Required".into(),

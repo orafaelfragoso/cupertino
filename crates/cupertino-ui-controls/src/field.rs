@@ -9,13 +9,15 @@ use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Environment,
     Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, TextSemantics, Widget,
 };
-use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
+use cupertino_ui_layout::{
+    Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
+};
 use cupertino_ui_platform::{KeyEvent, Keysym, MouseButton, PointerEvent, Timestamp};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_text::{
     Affinity, ChangeCause, ContentHints, ContentPurpose, ImeBatch, ImeEvent, Keymap,
     ParagraphLayout, Response, SecureBuffer, Selection, Surrounding, TextBuffer, TextFieldKeys,
-    TextInputSession, TextPosition, SURROUNDING_MAX_BYTES,
+    TextInputSession, TextPosition, CARET_WIDTH, SURROUNDING_MAX_BYTES,
 };
 use cupertino_ui_theme::{ColorRole, ThemeTokens};
 use std::cell::Cell;
@@ -85,6 +87,15 @@ fn follow(scroll: f64, caret_x: f64, text_width: f64, width: f64) -> f64 {
     scroll.min((text_width - width).max(0.0)).max(0.0)
 }
 
+/// The left edge of text `width` wide before it scrolls: the interior's start, or in right-to-left as far right as
+/// leaves the caret room after it.
+fn leading_x(env: &Environment, area: Rect, width: f64) -> f64 {
+    match env.direction {
+        LayoutDirection::Ltr => area.min_x(),
+        LayoutDirection::Rtl => area.min_x() + (area.width() - CARET_WIDTH - width).max(0.0),
+    }
+}
+
 /// The text laid out where the field paints it: the layout and its top-left corner in node coordinates.
 fn placed(
     env: &Environment,
@@ -94,8 +105,9 @@ fn placed(
 ) -> Option<(ParagraphLayout, Point)> {
     let layout = look::paragraph(env, text)?;
     let chrome = chrome(size, &env.theme);
+    let area = interior(size, &env.theme);
     let origin = Point::new(
-        interior(size, &env.theme).min_x() - scroll,
+        leading_x(env, area, layout.size().width) - scroll,
         look::top(&layout, chrome, env),
     );
     Some((layout, origin))
@@ -145,7 +157,10 @@ fn paint_text(
         area.width(),
     );
     scroll.set(offset);
-    let origin = Point::new(area.min_x() - offset, look::top(&layout, chrome, &env));
+    let origin = Point::new(
+        leading_x(&env, area, layout.size().width) - offset,
+        look::top(&layout, chrome, &env),
+    );
     let color = |role| look::color(&env.theme, role, look);
     cx.push(PaintOp::PushClip(Shape::Rect(area)));
     let focused = look.focused && enabled;
@@ -160,7 +175,10 @@ fn paint_text(
     }
     if shown.text.is_empty() {
         if let Some(placeholder) = look::label(&env, placeholder) {
-            let at = Point::new(area.min_x(), look::top(&placeholder, chrome, &env));
+            let at = Point::new(
+                leading_x(&env, area, placeholder.size().width),
+                look::top(&placeholder, chrome, &env),
+            );
             look::glyphs(cx, &placeholder, at, color(ColorRole::PlaceholderText));
         }
     } else {

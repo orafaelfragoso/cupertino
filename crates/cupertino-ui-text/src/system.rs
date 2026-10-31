@@ -83,6 +83,7 @@ impl TextSystem {
             return Ok(paragraph);
         }
         let paragraph = shape_paragraph(&mut state.fonts, &self.theme_family, text, style)?;
+        crate::TextWork::record(|work| work.shaped += 1);
         insert(&mut state, key, text, style, paragraph.clone());
         Ok(paragraph)
     }

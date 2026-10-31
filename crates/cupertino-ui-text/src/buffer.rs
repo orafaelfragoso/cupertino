@@ -1,4 +1,4 @@
-//! The editable text of a single-line field: text, caret, selection, undo, clicks, blink and scroll.
+//! The editable text of a field or a multi-line editor: text, caret, selection, undo, clicks, blink and scroll.
 
 use std::ops::Range;
 use std::sync::OnceLock;
@@ -54,11 +54,11 @@ struct Press {
     count: u8,
 }
 
-/// The editable text of a single-line field, with its selection and undo history.
+/// The editable text of a field, with its selection and undo history.
 ///
 /// Its `Debug` output shows the text, the undo snapshots and the kill buffer, so protected input never enters a
-/// `TextBuffer`: a password field uses [`SecureBuffer`](crate::SecureBuffer) only. It strips line breaks; a
-/// multi-line editor needs a different model or a flag.
+/// `TextBuffer`: a password field uses [`SecureBuffer`](crate::SecureBuffer) only. A field's buffer strips line breaks;
+/// a [`TextBuffer::multiline`] one keeps them and tabs.
 #[derive(Clone, Debug, Default)]
 pub struct TextBuffer {
     text: String,
@@ -81,11 +81,35 @@ pub struct TextBuffer {
     upstream: Option<usize>,
     /// The base direction the text is laid out in; `None` takes it from the first strong character.
     direction: Option<Direction>,
+    multiline: bool,
+    /// The x a run of vertical moves aims for, so a short line in between does not pull the caret to its end.
+    goal: Option<f64>,
+}
+
+/// The visual lines of a multi-line text as it is laid out, for the caret moves that depend on them.
+pub trait LineLayout {
+    fn line_count(&self) -> usize;
+    /// The visual line `at` is drawn on, and its x in points.
+    fn locate(&self, at: TextPosition) -> (usize, f64);
+    /// The caret position on visual line `line` nearest to `x`.
+    fn position_on(&self, line: usize, x: f64) -> TextPosition;
+    /// The caret positions at the logical start and end of visual line `line`.
+    fn line_edges(&self, line: usize) -> (TextPosition, TextPosition);
+    /// How many visual lines a page up or down moves.
+    fn page_lines(&self) -> usize;
 }
 
 impl TextBuffer {
     pub fn new() -> Self {
         TextBuffer::default()
+    }
+
+    /// The buffer of a multi-line editor: line breaks and tabs stay.
+    pub fn multiline() -> Self {
+        TextBuffer {
+            multiline: true,
+            ..TextBuffer::default()
+        }
     }
 
     /// A field whose text holds at most `max_len` bytes: typing, a paste or a composition past it is cut at a grapheme
@@ -149,7 +173,7 @@ impl TextBuffer {
 
     /// Replace the whole text (not an edit: undo starts over); the caret goes to the end.
     pub fn set_text(&mut self, text: &str) {
-        self.text = self.fit(&single_line(text), 0).to_string();
+        self.text = self.cleaned(text);
         self.set_caret(self.text.len());
         self.anchor = self.caret;
         self.composition = None;
@@ -250,13 +274,13 @@ impl TextBuffer {
     /// Insert typed text in place of the selection (or the composition); consecutive typing undoes as one.
     pub fn insert(&mut self, s: &str) {
         self.composition = None;
-        self.replace_selection(&single_line(s), Some(Group::Typing));
+        self.replace_selection(&self.clean(s), Some(Group::Typing));
     }
 
-    /// Insert the clipboard's text in place of the selection; line breaks become spaces.
+    /// Insert the clipboard's text in place of the selection; in a field line breaks become spaces.
     pub fn paste(&mut self, s: &str) {
         self.composition = None;
-        self.replace_selection(&single_line(s), None);
+        self.replace_selection(&self.clean(s), None);
     }
 
     /// Show `preedit` as the text being composed, in place of the earlier composition or else the selection.
@@ -416,7 +440,7 @@ impl TextBuffer {
     }
 
     pub fn delete_to_line_start(&mut self) {
-        self.delete_toward(|_| 0);
+        self.delete_toward(|f| f.line_start(f.caret));
     }
 
     /// Delete the selection; with only a caret nothing happens.
@@ -433,10 +457,16 @@ impl TextBuffer {
         cut
     }
 
-    /// Delete the selection, or from the caret to the end, and keep it in the kill buffer.
+    /// Delete the selection, or from the caret to the end of its line (at the end, the line break), and keep it in the
+    /// kill buffer.
     pub fn kill_to_end(&mut self) {
         let range = if self.selection().is_empty() {
-            self.caret..self.text.len()
+            let end = self.line_end(self.caret);
+            self.caret..if end == self.caret {
+                self.next_boundary(end)
+            } else {
+                end
+            }
         } else {
             self.selection()
         };
@@ -454,9 +484,58 @@ impl TextBuffer {
         self.replace_selection(&kill, None);
     }
 
+    /// To the start of the caret's line: in a multi-line buffer the line after the last line break before it.
+    pub fn move_to_line_start(&mut self, extend: bool) {
+        self.move_to(self.line_start(self.caret), extend);
+    }
+
+    pub fn move_to_line_end(&mut self, extend: bool) {
+        self.move_to(self.line_end(self.caret), extend);
+    }
+
+    /// `lines` visual lines down (up when negative), toward the x the run of vertical moves started at; past the first
+    /// or last line the caret goes to the text's start or end. Without `extend` it moves from the selection's start
+    /// going up and its end going down.
+    pub fn move_vertical(&mut self, layout: &impl LineLayout, lines: isize, extend: bool) {
+        let selection = self.selection();
+        let from = match (extend || selection.is_empty(), lines < 0) {
+            (true, _) => self.caret_position(),
+            (false, true) => downstream(selection.start),
+            (false, false) => downstream(selection.end),
+        };
+        let (line, x) = layout.locate(from);
+        let goal = self.goal.unwrap_or(x);
+        let to = match line.checked_add_signed(lines) {
+            None => downstream(0),
+            Some(line) if line >= layout.line_count() => downstream(self.text.len()),
+            Some(line) => layout.position_on(line, goal),
+        };
+        self.move_to_position(to, extend);
+        self.goal = Some(goal);
+    }
+
+    /// One page of visual lines down or up, as [`TextBuffer::move_vertical`].
+    pub fn move_page(&mut self, layout: &impl LineLayout, down: bool, extend: bool) {
+        let lines = isize::try_from(layout.page_lines().max(1)).unwrap_or(isize::MAX);
+        self.move_vertical(layout, if down { lines } else { -lines }, extend);
+    }
+
+    /// To the start or end of the caret's visual line.
+    pub fn move_to_visual_line_edge(&mut self, layout: &impl LineLayout, end: bool, extend: bool) {
+        let (line, _) = layout.locate(self.caret_position());
+        let (start, stop) = layout.line_edges(line);
+        self.move_to_position(if end { stop } else { start }, extend);
+    }
+
+    fn move_to_position(&mut self, to: TextPosition, extend: bool) {
+        self.move_to(to.byte.min(self.text.len()), extend);
+        self.upstream = (to.affinity == Affinity::Upstream).then_some(self.caret);
+    }
+
     fn set_caret(&mut self, to: usize) {
         self.caret = to;
         self.upstream = None;
+        self.goal = None;
     }
 
     fn move_to(&mut self, to: usize, extend: bool) {
@@ -603,6 +682,30 @@ impl TextBuffer {
         true
     }
 
+    /// `text` as [`TextBuffer::set_text`] keeps it: without the characters this buffer drops or converts, cut to its
+    /// length limit. A model value that differs from the buffer's text only in those is the same text.
+    pub fn cleaned(&self, text: &str) -> String {
+        self.fit(&self.clean(text), 0).to_string()
+    }
+
+    fn clean(&self, s: &str) -> String {
+        if self.multiline {
+            multi_line(s)
+        } else {
+            single_line(s)
+        }
+    }
+
+    fn line_start(&self, at: usize) -> usize {
+        self.text[..at].rfind('\n').map_or(0, |i| i + 1)
+    }
+
+    fn line_end(&self, at: usize) -> usize {
+        self.text[at..]
+            .find('\n')
+            .map_or(self.text.len(), |i| at + i)
+    }
+
     fn prev_boundary(&self, at: usize) -> usize {
         self.text[..at]
             .grapheme_indices(true)
@@ -660,6 +763,28 @@ impl TextBuffer {
         }
         last
     }
+}
+
+fn downstream(byte: usize) -> TextPosition {
+    TextPosition {
+        byte,
+        affinity: Affinity::Downstream,
+    }
+}
+
+/// `s` as typing could have produced it in an editor: line breaks become `\n`, tabs stay; other control characters and
+/// the bidi embedding, override and isolate controls are dropped.
+fn multi_line(s: &str) -> String {
+    s.replace("\r\n", "\n")
+        .chars()
+        .filter_map(|c| match c {
+            '\r' | '\u{2028}' | '\u{2029}' => Some('\n'),
+            '\n' | '\t' => Some(c),
+            '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' => None,
+            c if c.is_control() => None,
+            c => Some(c),
+        })
+        .collect()
 }
 
 /// `s` as typing could have produced it: line breaks and tabs become spaces; other control characters and the bidi
@@ -756,5 +881,21 @@ mod tests {
         assert!(!b.caret_visible(t0 + CARET_BLINK_ON + CARET_BLINK_OFF / 2));
         b.touch(t0 + CARET_BLINK_ON + CARET_BLINK_OFF / 2);
         assert!(b.caret_visible(t0 + CARET_BLINK_ON + CARET_BLINK_OFF / 2));
+    }
+
+    #[test]
+    fn a_multiline_buffer_keeps_line_breaks_and_tabs_and_line_edits_stop_at_them() {
+        let mut b = TextBuffer::multiline();
+        b.set_text("one\r\ntwo\tthree\rfour");
+        assert_eq!(b.text(), "one\ntwo\tthree\nfour");
+        b.select(6..6);
+        b.delete_to_line_start();
+        assert_eq!(b.text(), "one\no\tthree\nfour");
+        b.kill_to_end();
+        assert_eq!(b.text(), "one\n\nfour");
+        b.kill_to_end();
+        assert_eq!(b.text(), "one\nfour", "at a line's end the line break goes");
+        b.move_to_line_end(true);
+        assert_eq!(b.selected_text(), "four");
     }
 }

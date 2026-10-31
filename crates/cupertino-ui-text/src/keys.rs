@@ -1,8 +1,8 @@
-//! The key handling of a text field: a [`TextBuffer`] driven by the keys the [`Keymap`] resolves.
+//! The key handling of a text field or editor: a [`TextBuffer`] driven by the keys the [`Keymap`] resolves.
 
 use std::time::Instant;
 
-use crate::TextBuffer;
+use crate::{LineLayout, TextBuffer};
 use cupertino_key_bindings::TextAction;
 
 use crate::keymap::{Command, KeyInput, Keymap};
@@ -40,9 +40,23 @@ pub trait TextFieldKeys {
     ) -> Response;
 }
 
+/// A multi-line editor that takes key presses: the field's keys, the moves its layout decides (Up and Down by visual
+/// line, a page, the ends of a visual line) and the keys that insert a line break or a tab.
+pub trait TextEditorKeys {
+    /// A key press with logical modifiers, as [`TextFieldKeys::logical_key`], on text laid out as `layout`.
+    fn editor_key(
+        &mut self,
+        keymap: &mut Keymap,
+        code: u32,
+        mods: Mods,
+        character: Option<char>,
+        layout: &impl LineLayout,
+    ) -> Response;
+}
+
 impl TextFieldKeys for TextBuffer {
     fn key(&mut self, keymap: &mut Keymap, key: KeyInput, now: Instant) -> Response {
-        let response = run(self, keymap.command(key));
+        let response = run(self, keymap.command(key), apply);
         if response != Response::Ignored {
             self.touch(now);
         }
@@ -56,11 +70,32 @@ impl TextFieldKeys for TextBuffer {
         mods: Mods,
         character: Option<char>,
     ) -> Response {
-        run(self, keymap.logical_command(code, mods, character))
+        run(self, keymap.logical_command(code, mods, character), apply)
     }
 }
 
-fn run(buffer: &mut TextBuffer, command: Command) -> Response {
+impl TextEditorKeys for TextBuffer {
+    fn editor_key(
+        &mut self,
+        keymap: &mut Keymap,
+        code: u32,
+        mods: Mods,
+        character: Option<char>,
+        layout: &impl LineLayout,
+    ) -> Response {
+        run(
+            self,
+            keymap.logical_command(code, mods, character),
+            |buffer, action| apply_in_editor(buffer, action, layout),
+        )
+    }
+}
+
+fn run(
+    buffer: &mut TextBuffer,
+    command: Command,
+    apply: impl Fn(&mut TextBuffer, TextAction) -> bool,
+) -> Response {
     match command {
         Command::Ignored => Response::Ignored,
         Command::Pending => Response::Moved,
@@ -176,6 +211,42 @@ fn apply(buffer: &mut TextBuffer, action: TextAction) -> bool {
         | A::ScrollPageDown
         | A::ScrollPageUp
         | A::TogglePlatformInputSystem => {}
+    }
+    true
+}
+
+/// Carry out an editing action in a multi-line editor; `false` for an action the window handles (Tab, Escape).
+fn apply_in_editor(buffer: &mut TextBuffer, action: TextAction, layout: &impl LineLayout) -> bool {
+    use TextAction as A;
+    match action {
+        A::InsertNewline | A::InsertNewlineIgnoringFieldEditor | A::InsertLineBreak => {
+            buffer.insert("\n")
+        }
+        A::InsertTabIgnoringFieldEditor => buffer.insert("\t"),
+        A::MoveUp => buffer.move_vertical(layout, -1, false),
+        A::MoveDown => buffer.move_vertical(layout, 1, false),
+        A::MoveUpAndModifySelection => buffer.move_vertical(layout, -1, true),
+        A::MoveDownAndModifySelection => buffer.move_vertical(layout, 1, true),
+        A::PageUp | A::ScrollPageUp => buffer.move_page(layout, false, false),
+        A::PageDown | A::ScrollPageDown => buffer.move_page(layout, true, false),
+        A::PageUpAndModifySelection => buffer.move_page(layout, false, true),
+        A::PageDownAndModifySelection => buffer.move_page(layout, true, true),
+        A::MoveToLeftEndOfLine => buffer.move_to_visual_line_edge(layout, false, false),
+        A::MoveToRightEndOfLine => buffer.move_to_visual_line_edge(layout, true, false),
+        A::MoveToLeftEndOfLineAndModifySelection => {
+            buffer.move_to_visual_line_edge(layout, false, true)
+        }
+        A::MoveToRightEndOfLineAndModifySelection => {
+            buffer.move_to_visual_line_edge(layout, true, true)
+        }
+        A::MoveToBeginningOfParagraph => buffer.move_to_line_start(false),
+        A::MoveToEndOfParagraph => buffer.move_to_line_end(false),
+        A::MoveToBeginningOfParagraphAndModifySelection
+        | A::MoveParagraphBackwardAndModifySelection => buffer.move_to_line_start(true),
+        A::MoveToEndOfParagraphAndModifySelection | A::MoveParagraphForwardAndModifySelection => {
+            buffer.move_to_line_end(true)
+        }
+        _ => return apply(buffer, action),
     }
     true
 }

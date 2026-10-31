@@ -2,13 +2,21 @@
 //! `kit/controls`, the sheet of the choice and value controls of Kit's row 167a capture (check boxes off, on, mixed and
 //! disabled, radio buttons, a segmented control, the regular, ticked, level and disabled sliders, and progress), and
 //! `kit/icons`, a grid of system symbols at the toolkit's sizes and tints with the chevrons along the reading direction
-//! and the placeholder of a missing symbol. `--direction ltr|rtl` (default ltr) lays a surface out in that direction;
-//! the sheet shows both.
+//! and the placeholder of a missing symbol. `kit/counter`, `kit/forms` and `kit/virtual-list` are the examples' windows
+//! at their own sizes, as they open. `--direction ltr|rtl` (default ltr) lays a surface out in that direction; the sheet
+//! shows both.
 //!
 //! `ci/capture.sh kit/controls --scale 2` (the flags are `cupertino-capture`'s)
 //!
 //! The fonts, symbols and theme are the system's, as an application's ([`cupertino_kit::app::options`]). The clock
 //! stands still, so every control shows its resting look.
+
+#[path = "apps/counter.rs"]
+mod counter;
+#[path = "apps/forms.rs"]
+mod forms;
+#[path = "apps/virtual-list.rs"]
+mod virtual_list;
 
 use std::num::NonZeroU32;
 use std::process::ExitCode;
@@ -324,7 +332,9 @@ impl App for Capture {
     const STATE_FLAGS: &'static [&'static str] = &["direction"];
 
     fn surfaces(&self) -> Vec<String> {
-        vec!["controls".into(), "icons".into()]
+        ["controls", "icons", "counter", "forms", "virtual-list"]
+            .map(String::from)
+            .to_vec()
     }
 
     fn sheet_states(&self, _: &str) -> Vec<State> {
@@ -346,6 +356,11 @@ impl App for Capture {
         }
         match r.surface {
             "controls" => draw::<Controls>(r.look, r.scale, direction, size),
+            "counter" => draw::<counter::Counter>(r.look, r.scale, direction, size),
+            "forms" => draw::<forms::Forms>(r.look, r.scale, direction, size),
+            "virtual-list" => {
+                draw::<virtual_list::VirtualList<50_000>>(r.look, r.scale, direction, size)
+            }
             _ => draw::<Icons>(r.look, r.scale, direction, size),
         }
     }

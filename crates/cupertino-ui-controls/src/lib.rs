@@ -5,6 +5,7 @@ mod badge;
 mod button;
 mod checkbox;
 mod choice;
+mod dialog;
 mod disclosure;
 mod editor;
 mod field;
@@ -413,6 +414,56 @@ pub struct Popover<M> {
     pub content: Element<M>,
     /// Sent on Escape or a press outside; the application then stops declaring the popover.
     pub on_close: M,
+}
+
+/// A window's content with a modal sheet over it while `dialog` is set. The content behind takes no pointer, keyboard
+/// or window shortcut input and is hidden from assistive technology; the sheet takes the focus, keeps Tab inside, and
+/// gives the focus back when it closes. Build its element with `Element::from`.
+pub struct Modal<M> {
+    pub content: Element<M>,
+    pub dialog: Option<Dialog<M>>,
+}
+
+/// What assistive technology calls a dialog; it looks the same either way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DialogKind {
+    #[default]
+    Dialog,
+    /// Asks about something urgent, usually a confirmation.
+    Alert,
+}
+
+/// A sheet's title, message, optional controls and buttons. Return activates the default button and Escape the cancel
+/// button, wherever the focus is in the sheet, except that a focused text field keeps Return for its own submit.
+pub struct Dialog<M> {
+    pub kind: DialogKind,
+    /// Names the sheet.
+    pub title: String,
+    /// Below the title in the secondary text colour; describes the sheet. May be empty.
+    pub message: String,
+    /// Controls between the message and the buttons, such as a field.
+    pub body: Option<Element<M>>,
+    /// Leading to trailing: the default last, so the first focus lands on the safer choice.
+    pub buttons: Vec<DialogButton<M>>,
+}
+
+/// What a dialog button does besides sending its message.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DialogAction {
+    #[default]
+    Other,
+    /// Return activates it.
+    Default,
+    /// Escape activates it; without one, Escape does nothing.
+    Cancel,
+    /// Drawn as destructive; never the default.
+    Destructive,
+}
+
+pub struct DialogButton<M> {
+    pub label: String,
+    pub action: DialogAction,
+    pub on_press: M,
 }
 
 /// The selected rows of a list, as indices into the rows as currently shown, and the row the keyboard is on. When the

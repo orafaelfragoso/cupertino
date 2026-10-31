@@ -138,3 +138,57 @@ fn the_details_open_and_close_by_key_and_by_click() {
     assert_eq!(p.click(Control::Field), Command::Focused);
     assert_eq!(p.focus, Control::Field);
 }
+
+fn asking(echo: bool) -> crate::model::Agent {
+    use crate::agent::{Request, User};
+    use crate::helper::Line;
+    let mut agent = crate::model::Agent::new(User(1000));
+    agent.begin(Request {
+        cookie: "c".into(),
+        action: "org.example.mount".into(),
+        message: "Authentication is required to mount the disk".into(),
+        details: Vec::new(),
+        users: vec![User(1000)],
+    });
+    agent.helper(Line::Info("Touch the reader".into()));
+    agent.helper(Line::Prompt {
+        text: "Password: ".into(),
+        echo,
+    });
+    agent
+}
+
+#[test]
+fn the_status_lines_are_the_error_then_the_information_then_caps_lock_for_a_secret() {
+    let mut agent = asking(false);
+    for c in "wrong".chars() {
+        agent.key(Key::Char(c));
+    }
+    agent.key(Key::Return);
+    agent.helper_lost();
+    agent.helper(crate::helper::Line::Info("Touch the reader".into()));
+    let prompt = agent.prompt().unwrap();
+    assert_eq!(
+        Status::of(prompt, true),
+        [
+            Status::Error(crate::model::TRY_AGAIN.into()),
+            Status::Info("Touch the reader".into()),
+            Status::CapsLock
+        ]
+    );
+    assert_eq!(Status::of(prompt, true)[2].text(), "Caps Lock is on");
+    let clear = asking(true);
+    assert_eq!(
+        Status::of(clear.prompt().unwrap(), true),
+        [Status::Info("Touch the reader".into())],
+        "Caps Lock is told only for a secret"
+    );
+}
+
+#[test]
+fn the_field_is_labelled_password_for_the_password_question_and_by_any_other_question() {
+    assert_eq!(field_label("Password: "), "Password");
+    assert_eq!(field_label("password:"), "Password");
+    assert_eq!(field_label(""), "Password");
+    assert_eq!(field_label("Verification code: "), "Verification code");
+}

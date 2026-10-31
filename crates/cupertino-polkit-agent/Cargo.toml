@@ -10,6 +10,8 @@ layer = "shell"
 
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-ui-core = { path = "../cupertino-ui-core" }
+cupertino-ui-platform = { path = "../cupertino-ui-platform" }
 async-channel = "2"
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 zeroize = "1"

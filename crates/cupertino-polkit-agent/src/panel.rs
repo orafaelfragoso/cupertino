@@ -3,7 +3,7 @@
 
 use cupertino_geometry::{Point, Rect};
 
-use crate::model::Key;
+use crate::model::{Key, Prompt};
 
 pub const WIDTH: f64 = 360.0;
 pub const PADDING: f64 = 24.0;
@@ -256,6 +256,57 @@ impl Panel {
         self.details = !self.details;
         Command::ToggleDetails
     }
+}
+
+/// A caption line under the field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Status {
+    /// The last attempt failed, or PAM reported an error.
+    Error(String),
+    /// What PAM tells the person, such as to touch a fingerprint reader.
+    Info(String),
+    CapsLock,
+}
+
+impl Status {
+    pub fn text(&self) -> &str {
+        match self {
+            Status::Error(text) | Status::Info(text) => text,
+            Status::CapsLock => CAPS_LOCK,
+        }
+    }
+
+    /// The lines `prompt` shows under its field, Caps Lock last.
+    pub fn of(prompt: &Prompt, caps_lock: bool) -> Vec<Status> {
+        let error = prompt.error.clone().map(Status::Error);
+        let info = prompt.info.clone().map(Status::Info);
+        let caps = (caps_lock && !prompt.echo).then_some(Status::CapsLock);
+        error.into_iter().chain(info).chain(caps).collect()
+    }
+}
+
+/// The field's label and placeholder: "Password" for PAM's password question, else the question PAM asks.
+pub fn field_label(question: &str) -> String {
+    let question = question.trim().trim_end_matches(':').trim_end();
+    if question.is_empty() || question.eq_ignore_ascii_case(PLACEHOLDER) {
+        PLACEHOLDER.to_owned()
+    } else {
+        question.to_owned()
+    }
+}
+
+/// Everything one frame of the panel shows.
+pub struct View<'a> {
+    pub frames: &'a Frames,
+    pub panel: &'a Panel,
+    pub prompt: &'a Prompt,
+    /// The message as it wraps, cut to [`MAX_MESSAGE_LINES`].
+    pub message: &'a [String],
+    /// The chosen user's name, when polkitd offers several.
+    pub user: Option<&'a str>,
+    pub status: &'a [Status],
+    /// The expanded details' rows: a label and its value.
+    pub details: &'a [(&'static str, String)],
 }
 
 #[cfg(test)]

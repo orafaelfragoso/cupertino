@@ -10,11 +10,13 @@ mod field;
 mod icon;
 mod list;
 mod look;
+mod navigation;
 mod pages;
 mod press;
 mod progress;
 mod scroll;
 mod slider;
+mod split;
 mod stack;
 mod stepper;
 mod text;
@@ -25,6 +27,7 @@ pub use list::ListState;
 pub use press::Press;
 pub use scroll::{BarState, ViewportState};
 pub use slider::SliderState;
+pub use split::DividerState;
 pub use stepper::StepperState;
 
 use cupertino_geometry::Insets;
@@ -304,6 +307,54 @@ pub struct ScrollView<M> {
     pub vertical: bool,
     pub scroller: Scroller,
     pub on_scroll: Handler<ScrollState, M>,
+}
+
+/// Where a navigation stack's back and forward buttons ask to go.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Navigation {
+    Back,
+    Forward,
+}
+
+/// A page under a back and forward button group, which the model's history enables. Primary+[ and Primary+] go back
+/// and forward from anywhere in the page; Escape does not go back. The page changes at once, without a transition.
+/// Build its element with `Element::from`.
+pub struct NavigationStack<M> {
+    pub content: Element<M>,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    pub on_navigate: Option<Handler<Navigation, M>>,
+}
+
+/// One of a split view's two panes: the leading one is at the top, or at the reading direction's start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SplitPane {
+    Leading,
+    Trailing,
+}
+
+/// Where a split view's divider stands, as the model keeps it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SplitLayout {
+    /// The leading pane's extent along the split axis. A collapsed pane keeps it, so restoring returns there.
+    pub position: f64,
+    pub collapsed: Option<SplitPane>,
+}
+
+/// Two panes along `axis` with a divider between them, which a drag or the keyboard moves. Dragging a pane below half
+/// its minimum collapses it; Return collapses the leading pane or restores a collapsed one. The divider is one Tab
+/// stop; a collapsed pane's content is not built. Build its element with `Element::from`.
+pub struct SplitView<M> {
+    /// The divider's accessible name.
+    pub label: String,
+    /// Horizontal puts the panes side by side.
+    pub axis: Axis,
+    pub leading: Element<M>,
+    pub trailing: Element<M>,
+    pub layout: SplitLayout,
+    pub min_leading: f64,
+    pub min_trailing: f64,
+    pub on_change: Option<Handler<SplitLayout, M>>,
 }
 
 /// The selected rows of a list, as indices into the rows as currently shown, and the row the keyboard is on. When the

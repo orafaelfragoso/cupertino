@@ -59,6 +59,10 @@ impl Cupertino {
 
     /// Start the screenshot process for a shortcut (see the module documentation).
     pub fn start_screenshot(&mut self, request: ScreenshotRequest) {
+        if self.login_screen {
+            tracing::warn!(?request, "the login screen starts no programs");
+            return;
+        }
         if self.screenshot_overlay_shown() {
             tracing::info!(?request, "a screenshot overlay is already open");
             return;

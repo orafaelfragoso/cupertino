@@ -210,8 +210,10 @@ keyboard (`wayland-<digits>`, at most 64 bytes, anything else refused); the work
 
 The reader is the first of `reader::READERS` (`/usr/bin/orca`) that only root can change, never one from `$PATH`. It runs while it
 is wanted (the machine's setting, flipped by each toggle) and the login screen is on the console: the manager sends
-`ToWorker::Shown { shown }` before another session takes the console and after the login screen takes it back, and a manager that
-is gone counts as not shown for good. The worker forks it as a second child, so it is in the greeter's logind session and
+`ToWorker::Shown { shown }` before its own switch to another session and after the login screen takes the console back, and
+again on every change of the seat's `ActiveSession` (logind's `PropertiesChanged`), whoever switched: shown only while the
+seat's active session is the login screen's, hidden when logind does not answer. A manager that is gone counts as not shown for
+good. The worker forks it as a second child, so it is in the greeter's logind session and
 cgroup. The child: `setsid`, the privilege drop and check of step 4, `PR_SET_PDEATHSIG(SIGKILL)` (after the drop, which clears
 it), `PR_SET_NO_NEW_PRIVS`, then, as the greeter, `$XDG_RUNTIME_DIR/cupertino-reader-<worker>-<n>/{config,data,cache}` made with
 `mkdirat` under an `O_DIRECTORY | O_NOFOLLOW` descriptor (mode 0700), standard input from `/dev/null`, `close_range` above 2, and
@@ -226,7 +228,8 @@ removes the private directory in a child that dropped to the greeter: root never
 
 `greeter.sock` takes only the greeter's user, and, when this run started the login screen, only the leader or a descendant of
 it: the peer is held by `SO_PEERPIDFD`, its parents are read from `/proc`, and both it and the leader must still run after. The
-reader, a child of the worker, can never connect.
+reader, a child of the worker, can never connect, and the login screen's compositor starts no program (cupertino-server's
+README), so no process but the login screen's own descends from the leader.
 
 The worker runs no threads (so `fork` is safe) and makes no D-Bus calls. It starts with an empty environment and its only
 channel is one socketpair end as standard input.

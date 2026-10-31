@@ -75,11 +75,16 @@ fn io(e: std::io::Error) -> String {
     e.to_string()
 }
 
-/// The sample home folder under `root`: the user folders and the sample files (sparse, with their ages).
+/// The sample home folder under `root`: the user folders (an hour old) and the sample files (sparse, with their ages),
+/// dated by the capture's clock.
 fn home(root: &Path) -> Result<PathBuf, String> {
     let home = root.join(HOME);
     for (_, name) in USER_DIRS {
-        std::fs::create_dir_all(home.join(name)).map_err(io)?;
+        let dir = home.join(name);
+        std::fs::create_dir_all(&dir).map_err(io)?;
+        std::fs::File::open(&dir)
+            .and_then(|d| d.set_modified(now() - Duration::from_secs(3_600)))
+            .map_err(io)?;
     }
     for (name, size, days) in FILES {
         let file = std::fs::File::create(home.join(name)).map_err(io)?;
@@ -312,6 +317,13 @@ mod tests {
             .iter()
             .find(|e| e.name == "notes.txt");
         let modified = notes.and_then(|e| e.modified).unwrap();
+        assert_eq!(relative_date(modified, now()), "Today at 14:00");
+        let documents = first
+            .browser
+            .entries()
+            .iter()
+            .find(|e| e.name == "Documents");
+        let modified = documents.and_then(|e| e.modified).unwrap();
         assert_eq!(relative_date(modified, now()), "Today at 14:00");
         let drawn = first.capture(&request).unwrap();
         let again = Capture::new(Assets::builtin())

@@ -98,6 +98,24 @@ fn header(h: &Harness<Sorted>, column: usize) -> NodeId {
 }
 
 #[test]
+fn each_header_is_named_by_its_column_title() {
+    let h = Harness::<Sorted>::new();
+    let names: Vec<_> = (0..2)
+        .map(|column| {
+            let header = header(&h, column);
+            h.snapshot()
+                .accessibility
+                .into_iter()
+                .find(|(id, _)| *id == header)
+                .unwrap()
+                .1
+                .name
+        })
+        .collect();
+    assert_eq!(names, [Some("Name".to_owned()), Some("Size".to_owned())]);
+}
+
+#[test]
 fn tab_reaches_each_header_and_space_or_return_sorts_by_its_column() {
     let mut h = Harness::<Sorted>::new();
     h.tap(TAB);

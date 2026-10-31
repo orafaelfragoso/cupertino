@@ -66,7 +66,7 @@ A pack uses the logical names the shell looks up: 26 raster icon names (such as 
 
 1. Create a directory, for example `~/.local/share/cupertino/assets/my-pack/`, and make it the pack: point `CUPERTINO_ASSET_DIR` at it, or install it directly as `~/.local/share/cupertino/assets`.
 2. Copy `manifest.json` from the example above; set `version` to 2 and a `name`.
-3. **Fonts:** put your UI family in `fonts/` and set `fonts.ui.family` to its family name. Add fallback faces for the scripts you need (text is shaped left to right only).
+3. **Fonts:** put your UI family in `fonts/` and set `fonts.ui.family` to its family name. Add fallback faces for the scripts you need.
 4. **Icons:** for each logical name you want to replace, add an entry (`raster`, `svg`, `symbol` or `theme`). Rasters are RGBA PNGs at the sizes the shell asks for. Symbols are single-colour SVGs on a transparent background with a square `viewBox` and no hard-coded colour; the shell tints them. Names you skip come from the host theme.
 5. **Cursors:** install or copy a freedesktop cursor theme (a directory with `index.theme` and `cursors/`) that provides the 34 CSS cursor names (`default`, `pointer`, `text`, `grab`, `not-allowed`, the `*-resize` names, and so on; aliases may be symlinks) and set `cursors.theme` to its directory name. `default` or `left_ptr` is the only mandatory name.
 6. **Wallpapers:** add `wallpapers.default` (`light`, optionally `dark`), large enough for your displays, and credit the author in your credits file.

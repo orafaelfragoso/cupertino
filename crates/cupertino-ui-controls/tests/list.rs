@@ -356,19 +356,25 @@ fn a_list_and_a_table_tell_assistive_technology_all_their_rows_and_each_built_ro
         h.tap(END);
         let nodes: HashMap<_, _> = h.snapshot().accessibility.into_iter().collect();
         let rows = nodes.values().find(|n| n.role == container).unwrap();
-        let places: Vec<_> = rows
-            .children
-            .iter()
-            .map(|c| (nodes[c].role, nodes[c].item_index))
-            .collect();
+        let mut stack: Vec<NodeId> = rows.children.iter().rev().copied().collect();
+        let mut places = Vec::new();
+        while let Some(id) = stack.pop() {
+            let node = &nodes[&id];
+            if node.role == item {
+                places.push(node.item_index);
+            }
+            stack.extend(node.children.iter().rev());
+        }
         assert_eq!(rows.item_count, Some(1000), "{container:?}");
         assert_eq!(built(&h).last(), Some(&999));
+        let header = table.then_some(None);
         assert_eq!(
             places,
-            built(&h)
+            header
                 .into_iter()
-                .map(|i| (item, Some(i)))
-                .collect::<Vec<_>>()
+                .chain(built(&h).into_iter().map(Some))
+                .collect::<Vec<_>>(),
+            "{item:?} in reading order, a table's header row first and without a place"
         );
     }
 }
@@ -450,6 +456,61 @@ fn a_table_lines_its_cells_up_under_the_header_and_a_title_click_sorts_the_other
     let title = Point::new(headers[0].min_x() + 10.0, 14.0);
     h.click(title);
     assert_eq!(h.model().sorted, [(0, SortOrder::Descending)]);
+}
+
+#[test]
+fn assistive_technology_reads_one_table_with_its_header_row_first_and_every_row_under_it() {
+    let h = harness(1000, true, true);
+    let nodes: HashMap<_, _> = h.snapshot().accessibility.into_iter().collect();
+    let (&table, node) = nodes.iter().find(|(_, n)| n.role == Role::Table).unwrap();
+    assert_eq!(
+        (node.name.as_deref(), node.states.multiselectable),
+        (Some("Fruit"), true)
+    );
+    let header = &nodes[&node.children[0]];
+    let titles: Vec<Role> = header.children.iter().map(|c| nodes[c].role).collect();
+    assert_eq!(
+        (header.role, titles),
+        (Role::Row, vec![Role::ColumnHeader; 2])
+    );
+    let parents: HashMap<NodeId, NodeId> = nodes
+        .iter()
+        .flat_map(|(&p, n)| n.children.iter().map(move |&c| (c, p)))
+        .collect();
+    let in_table = |mut id: NodeId| loop {
+        match parents.get(&id) {
+            Some(&p) if p == table => break true,
+            Some(&p) => id = p,
+            None => break false,
+        }
+    };
+    let rows: Vec<bool> = nodes
+        .iter()
+        .filter(|(_, n)| n.role == Role::Row)
+        .map(|(&id, _)| in_table(id))
+        .collect();
+    assert_eq!(rows, vec![true; built(&h).len() + 1]);
+    let headers: Vec<Option<usize>> = header
+        .children
+        .iter()
+        .map(|c| nodes[c].column_index)
+        .collect();
+    assert_eq!(headers, [Some(0), Some(1)]);
+    let cells: Vec<Option<usize>> = nodes
+        .values()
+        .filter(|n| {
+            n.role == Role::Row
+                && !n.children.is_empty()
+                && nodes[&n.children[0]].role == Role::Cell
+        })
+        .flat_map(|n| n.children.iter().map(|c| nodes[c].column_index))
+        .collect();
+    assert_eq!(
+        cells.len(),
+        2 * built(&h).len(),
+        "every cell carries its column"
+    );
+    assert!(cells.chunks(2).all(|pair| pair == headers), "{cells:?}");
 }
 
 #[test]

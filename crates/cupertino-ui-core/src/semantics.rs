@@ -109,6 +109,7 @@ pub(crate) fn build<M: 'static>(
                         live: semantics.live,
                         item_count: semantics.item_count,
                         item_index: semantics.item_index,
+                        column_index: semantics.column_index,
                     },
                 );
                 if let Some(owner) = owner {

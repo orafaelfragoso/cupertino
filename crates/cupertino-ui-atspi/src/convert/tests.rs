@@ -20,6 +20,7 @@ fn base(role: Role) -> AccessibilityNode {
         live: None,
         item_count: None,
         item_index: None,
+        column_index: None,
     }
 }
 
@@ -121,6 +122,16 @@ fn a_table_counts_its_rows_and_a_row_its_place_and_a_list_only_its_items() {
     assert_eq!((list.size_of_set(), list.row_count()), (Some(3), None));
     assert_eq!((item.position_in_set(), item.row_index()), (Some(2), None));
     assert_eq!(node(&base(Role::Button)).position_in_set(), None);
+}
+
+#[test]
+fn a_cell_and_a_column_header_carry_their_column() {
+    for role in [Role::Cell, Role::ColumnHeader] {
+        let mut cell = base(role);
+        cell.column_index = Some(1);
+        assert_eq!(node(&cell).column_index(), Some(1), "{role:?}");
+    }
+    assert_eq!(node(&base(Role::Row)).column_index(), None);
 }
 
 #[test]

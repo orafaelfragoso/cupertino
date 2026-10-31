@@ -146,6 +146,8 @@ pub struct AccessibilityNode {
     pub item_count: Option<usize>,
     /// On an item of a list, table or tree: its place among all of the container's items, from 0.
     pub item_index: Option<usize>,
+    /// On a table's cell or column header: its column, from 0, which pairs a cell with its header.
+    pub column_index: Option<usize>,
 }
 
 /// What changed in one window's tree since the previous update.

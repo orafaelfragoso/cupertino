@@ -1,4 +1,5 @@
 use crate::{Affinity, Direction, TextPosition};
+use std::ops::Range;
 use unicode_bidi::{BidiInfo, Level, ParagraphBidiInfo};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -35,11 +36,38 @@ pub(crate) fn base_level(direction: Direction) -> Level {
 /// `ParagraphLayout` places them: downstream at the start edge of the grapheme after it (the end edge of the last at the
 /// end), upstream at the end edge of the grapheme before it where that is another edge.
 pub(crate) fn caret_edges(text: &str, direction: Option<Direction>) -> Vec<(TextPosition, usize)> {
-    let base = base_level(base_direction(text, direction));
-    let graphemes: Vec<(usize, &str)> = text.grapheme_indices(true).collect();
+    let Drawn {
+        graphemes,
+        levels,
+        place,
+    } = drawn(text, direction);
     let Some(last) = graphemes.len().checked_sub(1) else {
         return vec![(TextPosition::default(), 0)];
     };
+    let start_edge = |index: usize| place[index] + usize::from(levels[index].is_rtl());
+    let end_edge = |index: usize| place[index] + usize::from(!levels[index].is_rtl());
+    let mut edges = Vec::with_capacity(graphemes.len() * 2 + 1);
+    for (index, (start, _)) in graphemes.iter().enumerate() {
+        let downstream = start_edge(index);
+        if index > 0 && end_edge(index - 1) != downstream {
+            edges.push((upstream(*start), end_edge(index - 1)));
+        }
+        edges.push((downstream_at(*start), downstream));
+    }
+    edges.push((downstream_at(text.len()), end_edge(last)));
+    edges
+}
+
+/// The graphemes of a single-line text in logical order, the level of each and the place it is drawn at from the left.
+struct Drawn<'a> {
+    graphemes: Vec<(usize, &'a str)>,
+    levels: Vec<Level>,
+    place: Vec<usize>,
+}
+
+fn drawn(text: &str, direction: Option<Direction>) -> Drawn<'_> {
+    let base = base_level(base_direction(text, direction));
+    let graphemes: Vec<(usize, &str)> = text.grapheme_indices(true).collect();
     let bidi = ParagraphBidiInfo::new(text, Some(base));
     // UAX 9 L1: the spaces that end the line take the paragraph's level
     let visible = graphemes
@@ -61,18 +89,61 @@ pub(crate) fn caret_edges(text: &str, direction: Option<Direction>) -> Vec<(Text
     for (visual, logical) in BidiInfo::reorder_visual(&levels).into_iter().enumerate() {
         place[logical] = visual;
     }
-    let start_edge = |index: usize| place[index] + usize::from(levels[index].is_rtl());
-    let end_edge = |index: usize| place[index] + usize::from(!levels[index].is_rtl());
-    let mut edges = Vec::with_capacity(graphemes.len() * 2 + 1);
-    for (index, (start, _)) in graphemes.iter().enumerate() {
-        let downstream = start_edge(index);
-        if index > 0 && end_edge(index - 1) != downstream {
-            edges.push((upstream(*start), end_edge(index - 1)));
-        }
-        edges.push((downstream_at(*start), downstream));
+    Drawn {
+        graphemes,
+        levels,
+        place,
     }
-    edges.push((downstream_at(text.len()), end_edge(last)));
-    edges
+}
+
+/// Where a word move from `at` lands: past the spaces and punctuation right (or left) of its caret, then past the
+/// word there to its drawn edge, so the caret only moves in that direction on screen. Past no word it goes to that end
+/// of the line; `None` when it is already there. `words` are the byte ranges of the words, in logical order.
+pub(crate) fn visual_word_neighbour(
+    text: &str,
+    direction: Option<Direction>,
+    words: &[Range<usize>],
+    at: TextPosition,
+    rightward: bool,
+) -> Option<TextPosition> {
+    let edges = caret_edges(text, direction);
+    let Drawn {
+        graphemes, place, ..
+    } = drawn(text, direction);
+    let mut word_at_place = vec![None; graphemes.len()];
+    for (index, (start, _)) in graphemes.iter().enumerate() {
+        word_at_place[place[index]] = words.iter().position(|word| word.contains(start));
+    }
+    let beside = |edge: usize| {
+        if rightward {
+            word_at_place.get(edge).copied()
+        } else {
+            edge.checked_sub(1).map(|slot| word_at_place[slot])
+        }
+    };
+    let step = |edge: usize| if rightward { edge + 1 } else { edge - 1 };
+    let from = edge_at(&edges, at);
+    let mut edge = from;
+    while beside(edge) == Some(None) {
+        edge = step(edge);
+    }
+    let word = beside(edge).flatten();
+    if let Some(word) = word {
+        while beside(edge) == Some(Some(word)) {
+            edge = step(edge);
+        }
+    }
+    if edge == from {
+        return None;
+    }
+    let landing = edges.iter().filter(|(_, at_edge)| *at_edge == edge);
+    word.and_then(|word| {
+        landing.clone().find(|(position, _)| {
+            position.byte == words[word].start || position.byte == words[word].end
+        })
+    })
+    .or_else(|| landing.clone().next())
+    .map(|(position, _)| *position)
 }
 
 fn downstream_at(byte: usize) -> TextPosition {
@@ -149,16 +220,59 @@ pub(crate) fn visual_neighbour_in(
     rightward: bool,
 ) -> Option<TextPosition> {
     let index = line_at(lines, at.byte);
+    visual_neighbour(&lines[index].edges, at, rightward)
+        .or_else(|| past_line(lines, index, rightward))
+}
+
+/// [`visual_word_neighbour`] within the hard line of `at`, in that line's direction; past that edge of the line it goes
+/// on as [`visual_neighbour_in`] does.
+pub(crate) fn visual_word_neighbour_in(
+    text: &str,
+    lines: &[CaretLine],
+    words: &[Range<usize>],
+    at: TextPosition,
+    rightward: bool,
+) -> Option<TextPosition> {
+    let index = line_at(lines, at.byte);
     let line = &lines[index];
-    visual_neighbour(&line.edges, at, rightward).or_else(|| {
-        if rightward != line.rtl {
-            lines.get(index + 1).map(|next| downstream_at(next.start))
-        } else {
-            index
-                .checked_sub(1)
-                .map(|before| downstream_at(lines[before].end))
-        }
+    let words: Vec<Range<usize>> = words
+        .iter()
+        .filter(|word| line.start <= word.start && word.end <= line.end)
+        .map(|word| word.start - line.start..word.end - line.start)
+        .collect();
+    let direction = if line.rtl {
+        Direction::Rtl
+    } else {
+        Direction::Ltr
+    };
+    let at = TextPosition {
+        byte: at.byte - line.start,
+        ..at
+    };
+    visual_word_neighbour(
+        &text[line.start..line.end],
+        Some(direction),
+        &words,
+        at,
+        rightward,
+    )
+    .map(|to| TextPosition {
+        byte: line.start + to.byte,
+        ..to
     })
+    .or_else(|| past_line(lines, index, rightward))
+}
+
+/// The caret past the right (or left) edge of line `index`, in reading order: the start of the next line when that
+/// edge is the line's end, else the end of the line before.
+fn past_line(lines: &[CaretLine], index: usize, rightward: bool) -> Option<TextPosition> {
+    if rightward != lines[index].rtl {
+        lines.get(index + 1).map(|next| downstream_at(next.start))
+    } else {
+        index
+            .checked_sub(1)
+            .map(|before| downstream_at(lines[before].end))
+    }
 }
 
 /// The line and the edge of the caret at `at`, for ordering carets on screen.

@@ -962,6 +962,7 @@ fn row_of_cells() -> LayoutSpec {
 /// A column's sorting header: what a click on its title asks for.
 struct Sort<M> {
     index: usize,
+    title: String,
     /// The last column draws no divider after it.
     last: bool,
     order: Option<SortOrder>,
@@ -1013,6 +1014,7 @@ fn header_cell<M: 'static>(
         column: index,
         header: Some(Sort {
             index,
+            title: column.title.clone(),
             last,
             order,
             on_sort,
@@ -1126,6 +1128,7 @@ impl<M: 'static> Widget<M> for Cell<M> {
         match &self.header {
             Some(sort) => {
                 cx.role(Role::ColumnHeader);
+                cx.name(sort.title.clone());
                 if sort.on_sort.is_some() {
                     cx.focusable();
                     cx.action(Action::Click);

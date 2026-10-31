@@ -9,6 +9,8 @@ use smithay::wayland::dmabuf::DmabufFeedbackBuilder;
 
 use crate::state::Cupertino;
 
+#[cfg(feature = "udev")]
+pub mod copy;
 pub mod headless;
 #[cfg(feature = "udev")]
 pub mod input;

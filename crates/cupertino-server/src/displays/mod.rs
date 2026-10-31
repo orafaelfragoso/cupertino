@@ -102,6 +102,9 @@ pub struct Head {
     /// The mode the head was to show when the display could not show it and fell back to `state.mode`: it is what
     /// stays stored, so the fallback is never taken for the person's choice.
     pub wanted_mode: Option<HeadMode>,
+    /// The backend could not show the head, so it is off: it stays stored as on, so the display is tried again when
+    /// plugged in again.
+    pub unsupported: bool,
     /// The state and modes output-management clients were last told, `None` before the first time.
     advertised: Option<(HeadState, Vec<HeadMode>)>,
 }
@@ -259,7 +262,7 @@ fn from_stored_transform(t: StoredTransform) -> Transform {
 fn stored_settings(head: &Head) -> DisplaySettings {
     let (state, mode) = (&head.state, head.wanted_mode.unwrap_or(head.state.mode));
     DisplaySettings {
-        enabled: state.enabled,
+        enabled: state.enabled || head.unsupported,
         mode: ModeSetting {
             width: mode.width as u32,
             height: mode.height as u32,
@@ -412,6 +415,7 @@ impl Cupertino {
             output: None,
             powered: true,
             wanted_mode: None,
+            unsupported: false,
             advertised: None,
         });
         self.heads_changed();
@@ -490,6 +494,21 @@ impl Cupertino {
         }
         self.displays.head_mut(id).expect("checked").state.mode = wanted;
         Err(first)
+    }
+
+    /// The backend cannot show `id` at all (it cannot show the render GPU's frames): its output goes, and it is listed as
+    /// off while it stays connected. Its stored state is kept, so plugged in again it is tried again.
+    pub fn head_unsupported(&mut self, id: HeadId) {
+        if self.displays.head(id).is_some_and(|h| h.output.is_some()) {
+            if let Err(e) = self.head_op(id, HeadOp::Disable) {
+                tracing::warn!(error = %format!("{e:#}"), "turning off an unsupported display failed");
+            }
+        }
+        if let Some(head) = self.displays.head_mut(id) {
+            head.state.enabled = false;
+            head.unsupported = true;
+        }
+        self.heads_changed();
     }
 
     /// The output of a head being enabled, in its state, for the backend to set up. Nothing sees it until the backend
@@ -588,12 +607,15 @@ impl Cupertino {
                 tracing::error!(error = %e, "restoring the previous display configuration failed");
             }
         } else {
-            // a head the person gave another mode shows what they chose; one left in its fallback still wants its own
+            // what the person changed is their choice; a fallback or an unsupported head they left alone keeps its own
             for (id, state) in wanted {
-                let was = before.iter().find(|(h, _)| h == id).map(|(_, s)| s.mode);
+                let was = before.iter().find(|(h, _)| h == id).map(|(_, s)| *s);
                 if let Some(head) = self.displays.head_mut(*id) {
-                    if was != Some(state.mode) {
+                    if was.map(|s| s.mode) != Some(state.mode) {
                         head.wanted_mode = None;
+                    }
+                    if was.map(|s| s.enabled) != Some(state.enabled) {
+                        head.unsupported = false;
                     }
                 }
             }
@@ -808,6 +830,7 @@ mod tests {
             output: None,
             powered: true,
             wanted_mode: None,
+            unsupported: false,
             advertised: None,
         }
     }

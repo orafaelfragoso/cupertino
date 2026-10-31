@@ -280,6 +280,7 @@ pub fn render(state: &mut Cupertino) {
                             renderer: &mut h.renderer,
                             texture: &mut target.texture,
                             tracker,
+                            age: 0,
                             clear: CLEAR,
                         },
                     );

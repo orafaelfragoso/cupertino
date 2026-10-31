@@ -198,6 +198,9 @@ impl Cupertino {
             }
             BusEvent::Resumed => {
                 tracing::info!("the system woke from sleep");
+                // a display plugged or swapped while the system slept sends no uevent when the kernel did not see it
+                #[cfg(feature = "udev")]
+                crate::backend::udev::scan_connectors(self);
                 self.input_activity();
             }
             BusEvent::Stopped(reason) => tracing::warn!(reason, "the system bus watcher stopped"),

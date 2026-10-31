@@ -309,6 +309,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         for event in std::mem::take(&mut self.events) {
             self.platform_event(event)?;
         }
+        self.assistive_actions();
         self.messages.extend(self.executor.run_ready());
         while let Some(message) = self.messages.pop_front() {
             for command in A::update(&mut self.model, message) {
@@ -611,7 +612,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     route(&mut self.tree, w, now, &mut effects).notify(node, &Event::Ime(ime));
                 }
             }
-            WindowEvent::PopupDone | WindowEvent::Presented { .. } => return Ok(()),
+            WindowEvent::PopupDone
+            | WindowEvent::Presented { .. }
+            | WindowEvent::Discarded { .. } => return Ok(()),
         }
         self.apply(i, effects);
         Ok(())
@@ -769,6 +772,32 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         if w.text_input.is_some() && w.text_input != w.focus.node() {
             w.text_input = None;
             self.system.set_text_input(w.id, None);
+        }
+    }
+
+    /// Hands each action assistive technology asked for to its node, in the window whose published tree holds it.
+    fn assistive_actions(&mut self) {
+        let mut requests = Vec::new();
+        if let Some(adapter) = &mut self.options.accessibility {
+            adapter.drain_actions(&mut requests);
+        }
+        let now = self.options.clock.now();
+        for request in requests {
+            let target = request.target;
+            let Some(i) = self
+                .windows
+                .iter()
+                .position(|w| w.accessibility.contains_key(&target))
+            else {
+                continue;
+            };
+            if !self.tree.contains(target) {
+                continue;
+            }
+            let mut effects = Effects::default();
+            route(&mut self.tree, &self.windows[i], now, &mut effects)
+                .notify(target, &Event::Action(request));
+            self.apply(i, effects);
         }
     }
 

@@ -22,6 +22,10 @@ use std::os::unix::net::UnixStream;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use wayland_protocols::wp::presentation_time::server::wp_presentation::{self, WpPresentation};
+use wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::{
+    Kind, WpPresentationFeedback,
+};
 use wayland_protocols::xdg::shell::server::xdg_surface::{self, XdgSurface};
 use wayland_protocols::xdg::shell::server::xdg_toplevel::XdgToplevel;
 use wayland_protocols::xdg::shell::server::xdg_wm_base::{self, XdgWmBase};
@@ -82,6 +86,10 @@ enum Control {
     HoldBuffers,
     /// Release the held buffers and release replaced ones again.
     ReleaseBuffers,
+    /// Tell the oldest presentation feedback its frame turned visible this long ago, on `CLOCK_MONOTONIC`.
+    Shown(Duration),
+    /// Tell the oldest presentation feedback its frame was discarded.
+    Discard,
 }
 
 /// A request the server saw that the commit record does not cover.
@@ -134,6 +142,8 @@ struct Mock {
     data_device: Option<WlDataDevice>,
     /// The read end of a paste from the client's selection, and what arrived so far.
     pasting: Option<(std::io::PipeReader, Vec<u8>)>,
+    /// Presentation feedback not yet answered, oldest first.
+    feedbacks: VecDeque<WpPresentationFeedback>,
 }
 
 struct Data;
@@ -279,6 +289,49 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
             }
             _ => {}
         }
+    }
+}
+
+impl GlobalDispatch<WpPresentation, ()> for Mock {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<WpPresentation>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
+        init.init(r, ())
+            .clock_id(rustix::time::ClockId::Monotonic as u32);
+    }
+}
+
+impl Dispatch<WpPresentation, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &WpPresentation,
+        request: wp_presentation::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        if let wp_presentation::Request::Feedback { callback, .. } = request {
+            state.feedbacks.push_back(init.init(callback, ()));
+        }
+    }
+}
+
+impl Dispatch<WpPresentationFeedback, ()> for Mock {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &WpPresentationFeedback,
+        _: <WpPresentationFeedback as Resource>::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
     }
 }
 
@@ -529,6 +582,7 @@ fn spawn_server_with(
         dh.create_global::<Mock, WlSeat, _>(7, ());
         dh.create_global::<Mock, XdgWmBase, _>(6, ());
         dh.create_global::<Mock, WlDataDeviceManager, _>(3, ());
+        dh.create_global::<Mock, WpPresentation, _>(1, ());
         if let Some(version) = effects {
             dh.create_global::<Mock, CupertinoAppEffectsV1, _>(version, ());
         }
@@ -544,6 +598,7 @@ fn spawn_server_with(
             toplevel: None,
             data_device: None,
             pasting: None,
+            feedbacks: VecDeque::new(),
         };
         let mut display_handle = display.handle();
         display_handle
@@ -559,6 +614,21 @@ fn spawn_server_with(
                     .into_iter()
                     .flatten()
                     .for_each(|b| b.release()),
+                Ok(Control::Shown(ago)) => {
+                    let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+                    let at = Duration::new(now.tv_sec as u64, now.tv_nsec as u32) - ago;
+                    let seconds = at.as_secs();
+                    mock.feedbacks.pop_front().unwrap().presented(
+                        (seconds >> 32) as u32,
+                        seconds as u32,
+                        at.subsec_nanos(),
+                        16_666_666,
+                        0,
+                        0,
+                        Kind::Vsync,
+                    );
+                }
+                Ok(Control::Discard) => mock.feedbacks.pop_front().unwrap().discarded(),
                 Ok(Control::PointerPress) => {
                     let (pointer, t) = (
                         mock.pointer.as_ref().unwrap(),
@@ -1341,6 +1411,51 @@ mod window_system {
         assert_eq!(
             kit.ws.present(w, &frame(9, [0; 4], &[]), None).unwrap(),
             PresentOutcome::Presented
+        );
+    }
+
+    #[test]
+    fn each_presented_frame_is_reported_shown_at_the_compositors_time_or_discarded() {
+        let (mut kit, control, committed, _seen) = mapped();
+        let w = kit.window;
+        assert!(kit.ws.capabilities().presentation_time);
+        kit.ws.request_frame(w);
+        kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+        kit.ws.present(w, &frame(1, [0; 4], &[]), None).unwrap();
+        kit.pump();
+        committed.recv_timeout(Duration::from_secs(5)).unwrap();
+        kit.ws.request_frame(w);
+        control.send(Control::FrameDone).unwrap();
+        kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+        kit.ws.present(w, &frame(2, [0; 4], &[]), None).unwrap();
+        kit.pump();
+        committed.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        control.send(Control::Discard).unwrap();
+        control
+            .send(Control::Shown(Duration::from_millis(4)))
+            .unwrap();
+        let discarded = kit.window_event(|e| match e {
+            WindowEvent::Discarded { frame } => Some(*frame),
+            _ => None,
+        });
+        let (shown, at) = kit.window_event(|e| match e {
+            WindowEvent::Presented { frame, time } => Some((*frame, *time)),
+            _ => None,
+        });
+        assert_eq!((discarded, shown), (RenderFrameId(1), RenderFrameId(2)));
+
+        // the compositor's time is on the window system's clock: 4 ms before a frame callback that comes after it
+        kit.ws.request_frame(w);
+        control.send(Control::FrameDone).unwrap();
+        let later = kit.window_event(|e| match e {
+            WindowEvent::Frame(t) => Some(*t),
+            _ => None,
+        });
+        let ago = Duration::from_nanos(later.0 - at.0);
+        assert!(
+            ago >= Duration::from_millis(4) && ago < Duration::from_secs(1),
+            "{ago:?}"
         );
     }
 

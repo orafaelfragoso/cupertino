@@ -1,6 +1,7 @@
 //! CupertinoKit's [`WindowSystem`] on the transport: one [`Connection`], its windows and popups, and the renderer's
 //! frames copied into the transport's buffers.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Wake, Waker};
@@ -14,12 +15,13 @@ use cupertino_ui_platform::{
     CursorShape, KeyEvent, Keysym, PlatformError, PlatformEvent, PopupSpec, PresentOutcome,
     SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
-use cupertino_ui_render::CpuFrame;
+use cupertino_ui_render::{CpuFrame, RenderFrameId};
 use cupertino_ui_text::TextInputState;
 use cupertino_wayland_client::{
     BufferFormat, Capability, ClipboardOffer, Connection, Error, Event, KeyboardEvent, PixelRect,
     Popup, ReadId, SurfaceId, TokenRequest, Toplevel, ToplevelConfig,
 };
+use rustix::time::ClockId;
 
 use crate::convert::{self, InputTimeline};
 use crate::pixels::convert_rects;
@@ -58,6 +60,8 @@ struct Window {
     stalled: Option<Stall>,
     /// The runtime asked for a frame.
     frame_wanted: bool,
+    /// Presented frames the compositor has not yet said it showed or discarded, oldest first.
+    in_flight: VecDeque<RenderFrameId>,
 }
 
 /// Sets the flag [`WindowSystem::dispatch`] reports as [`PlatformEvent::Wake`] and wakes the connection's wait.
@@ -238,6 +242,7 @@ impl WaylandWindowSystem {
             frame_pending: false,
             stalled: None,
             frame_wanted: false,
+            in_flight: VecDeque::new(),
         });
         id
     }
@@ -270,6 +275,25 @@ impl WaylandWindowSystem {
         w.carried.extend(damage);
         bound(&mut w.carried, frame.width, frame.height);
         Ok(())
+    }
+
+    /// When a presented frame turned visible, `time_ns` on the compositor's presentation clock, on the window system's
+    /// clock; now when that clock cannot be read.
+    fn presented_time(&self, time_ns: u64) -> Timestamp {
+        let now = self.now().0;
+        let clock_now = self
+            .conn
+            .presentation_clock()
+            .and_then(|id| ClockId::try_from(id as i32).ok())
+            .map(|id| {
+                let t = rustix::time::clock_gettime(id);
+                (t.tv_sec as u64)
+                    .saturating_mul(1_000_000_000)
+                    .saturating_add(t.tv_nsec as u64)
+            });
+        Timestamp(clock_now.map_or(now, |clock_now| {
+            convert::on_window_clock(time_ns, clock_now, now)
+        }))
     }
 
     fn input_time(&mut self, millis: u32) -> Timestamp {
@@ -415,12 +439,28 @@ impl WaylandWindowSystem {
                 }
                 return;
             }
-            // the platform has no events for these yet: frame time stays the frame callback's, and drags wait for the
-            // platform's drag events
+            Event::Presented(presented) => {
+                let Some(i) = on(&self.windows, presented.surface) else {
+                    return;
+                };
+                let Some(frame) = self.windows[i].in_flight.pop_front() else {
+                    return;
+                };
+                let time = self.presented_time(presented.time_ns);
+                (i, WindowEvent::Presented { frame, time })
+            }
+            Event::Discarded(surface) => {
+                let Some(i) = on(&self.windows, surface) else {
+                    return;
+                };
+                let Some(frame) = self.windows[i].in_flight.pop_front() else {
+                    return;
+                };
+                (i, WindowEvent::Discarded { frame })
+            }
+            // the platform has no events for these yet: drags wait for the platform's drag events
             Event::OutputsChanged
             | Event::PopupRepositioned { .. }
-            | Event::Presented(_)
-            | Event::Discarded(_)
             | Event::Drag { .. }
             | Event::DragSource { .. } => return,
         };
@@ -440,7 +480,7 @@ impl WindowSystem for WaylandWindowSystem {
         let has = |c| self.conn.capabilities().contains(c);
         Capabilities {
             fractional_scale: has(Capability::FractionalScale),
-            presentation_time: false,
+            presentation_time: has(Capability::Presentation),
             text_input: has(Capability::TextInput),
             touch: false,
             cursor_shape: has(Capability::CursorShape),
@@ -662,7 +702,11 @@ impl WindowSystem for WaylandWindowSystem {
         }));
         match copy_and_present(&mut self.conn, surface, size, frame, &damage, resized)? {
             Ok(()) => {
+                let feedback = self.conn.capabilities().contains(Capability::Presentation);
                 let w = self.window_mut(window)?;
+                if feedback {
+                    w.in_flight.push_back(frame.id);
+                }
                 w.frame_pending = true;
                 w.shown = Some((frame.width, frame.height));
                 Ok(PresentOutcome::Presented)

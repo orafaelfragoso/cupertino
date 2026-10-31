@@ -83,7 +83,8 @@ pub(crate) fn head_op(
 ) -> Result<()> {
     match op {
         HeadOp::Enable => {
-            state.create_head_output(head);
+            let output = state.prepare_head_output(head)?;
+            state.create_head_output(head, output);
             w.head = Some(head);
             Ok(())
         }

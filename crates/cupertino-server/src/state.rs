@@ -16,9 +16,12 @@ use smithay::input::pointer::{CursorImageStatus, PointerHandle};
 use smithay::input::{Seat, SeatState};
 use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Scale as OutputScale};
 use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Interest, LoopHandle, LoopSignal, Mode, PostAction};
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
-use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
+use smithay::reexports::wayland_server::backend::{
+    ClientData, ClientId, DisconnectReason, GlobalId,
+};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::BindError;
 use smithay::reexports::wayland_server::Resource;
@@ -188,6 +191,9 @@ pub fn set_minimize_timing(cfg: &mut WmConfig, effects: crate::fx::EffectsConfig
 /// desktop-specific files (`cupertino-mimeapps.list`, `OnlyShowIn=Cupertino`) apply to them.
 pub const CURRENT_DESKTOP: &str = "Cupertino";
 
+/// How long a global that went away can still be bound, for the clients that bind it before they hear that it is gone.
+pub const RETIRED_GLOBAL_LIFETIME: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// One toplevel as the compositor sees it.
 pub struct WindowEntry {
     pub id: WindowId,
@@ -275,7 +281,7 @@ pub struct OutputEntry {
     pub scale: f64,
     pub tracker: OutputDamageTracker,
     pub cache: ElementCache,
-    pub global: Option<smithay::reexports::wayland_server::backend::GlobalId>,
+    pub global: Option<GlobalId>,
     pub lock: crate::session_lock::OutputLock,
     pub scheduler: crate::schedule::FrameScheduler,
 }
@@ -805,30 +811,17 @@ impl Cupertino {
 
     // ---- outputs -------------------------------------------------------------------------
 
-    /// Register an output of `mode` at `scale` and `transform` with its top-left corner at
-    /// `position` in the global logical space. Returns its model id. Outputs are created for the
-    /// enabled heads of `crate::displays`.
-    pub fn add_output(
-        &mut self,
-        name: &str,
-        physical: PhysicalProperties,
-        mode: OutputMode,
-        scale: f64,
-        transform: Transform,
-        position: (i32, i32),
-    ) -> OutputId {
-        let output = Output::new(name.to_string(), physical);
+    /// Register `output` in its current state, which [`new_output`] set, and announce its global. Returns its model id.
+    /// Outputs are created for the enabled heads of `crate::displays`, once their backend shows them.
+    pub fn add_output(&mut self, output: Output) -> OutputId {
         let global = output.create_global::<Self>(&self.display_handle);
-        output.change_current_state(
-            Some(mode),
-            Some(transform),
-            Some(OutputScale::Fractional(scale)),
-            Some(position.into()),
-        );
-        output.set_preferred(mode);
+        let mode = output.current_mode().expect("a new output has a mode");
+        let scale = output.current_scale().fractional_scale();
+        let transform = output.current_transform();
+        let position = output.current_location();
         let id = OutputId(self.next_output);
         self.next_output += 1;
-        let rect = output_rect(mode, scale, transform, position);
+        let rect = output_rect(mode, scale, transform, (position.x, position.y));
         let tracker = OutputDamageTracker::from_output(&output);
         self.outputs.push(OutputEntry {
             output: output.clone(),
@@ -870,12 +863,28 @@ impl Cupertino {
         self.docks.remove_output(id);
         self.window_managers.remove_output(id);
         if let Some(g) = entry.global {
-            self.display_handle.remove_global::<Self>(g);
+            self.retire_global(g);
         }
         let now = self.now();
         let fx = self.wm.handle(Command::RemoveOutput { output: id }, now);
         self.apply_effects(fx);
         self.request_redraw();
+    }
+
+    /// Take a global away without disconnecting a client that binds it before it hears that it is gone: clients are
+    /// told now, and the global is destroyed after [`RETIRED_GLOBAL_LIFETIME`].
+    fn retire_global(&mut self, global: GlobalId) {
+        self.display_handle.disable_global::<Self>(global.clone());
+        let timer = self.loop_handle.insert_source(
+            Timer::from_duration(RETIRED_GLOBAL_LIFETIME),
+            move |_, _, state| {
+                state.display_handle.remove_global::<Self>(global.clone());
+                TimeoutAction::Drop
+            },
+        );
+        if let Err(e) = timer {
+            tracing::warn!(error = %e, "cannot time the removal of a global; it stays disabled");
+        }
     }
 
     /// Give an output a new mode, scale, transform or position (a nested window resized, an
@@ -1985,6 +1994,27 @@ impl Cupertino {
     pub fn preferred_scale(&self) -> f64 {
         self.outputs.first().map_or(1.0, |o| o.scale)
     }
+}
+
+/// An output of `mode` at `scale` and `transform` with its top-left corner at `position` in the global logical space,
+/// not yet registered or announced ([`Cupertino::add_output`]).
+pub fn new_output(
+    name: &str,
+    physical: PhysicalProperties,
+    mode: OutputMode,
+    scale: f64,
+    transform: Transform,
+    position: (i32, i32),
+) -> Output {
+    let output = Output::new(name.to_string(), physical);
+    output.change_current_state(
+        Some(mode),
+        Some(transform),
+        Some(OutputScale::Fractional(scale)),
+        Some(position.into()),
+    );
+    output.set_preferred(mode);
+    output
 }
 
 /// The rectangle of an output in the global logical space: its mode turned by `transform`, divided

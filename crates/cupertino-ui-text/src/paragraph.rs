@@ -56,8 +56,14 @@ struct Shaped {
     /// line takes its own from its first strong character.
     direction: Direction,
     items: Vec<Item>,
-    /// Byte offsets where UAX 14 allows a line to start, without 0 and the text length.
-    breaks: Vec<usize>,
+    hard_lines: Vec<HardLine>,
+}
+
+/// The clusters of one hard line, which do not depend on the width it is laid out at.
+#[derive(Debug)]
+struct HardLine {
+    items: Range<usize>,
+    clusters: Vec<Cluster>,
 }
 
 /// Shaped text ready to lay out at any width. Cloning shares the shaping.
@@ -119,13 +125,29 @@ impl Paragraph {
         items: Vec<Item>,
     ) -> Self {
         let breaks = break_opportunities(&text);
+        let mut groups: Vec<Range<usize>> = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            match groups.last_mut() {
+                Some(group) if items[group.end - 1].range.end == item.range.start => {
+                    group.end = index + 1
+                }
+                _ => groups.push(index..index + 1),
+            }
+        }
+        let hard_lines = groups
+            .into_iter()
+            .map(|group| HardLine {
+                clusters: clusters_of(&text, &items, group.clone(), &breaks),
+                items: group,
+            })
+            .collect();
         Self {
             shaped: Arc::new(Shaped {
                 text,
                 style,
                 direction,
                 items,
-                breaks,
+                hard_lines,
             }),
         }
     }
@@ -147,6 +169,7 @@ impl Paragraph {
     }
 }
 
+/// Byte offsets where UAX 14 allows a line to start, without 0 and the text length.
 fn break_opportunities(text: &str) -> Vec<usize> {
     LineSegmenter::new_auto(LineBreakOptions::default())
         .segment_str(text)
@@ -154,6 +177,7 @@ fn break_opportunities(text: &str) -> Vec<usize> {
         .collect()
 }
 
+#[derive(Debug)]
 struct Cluster {
     start: usize,
     end: usize,
@@ -161,6 +185,8 @@ struct Cluster {
     item: usize,
     glyphs: Range<usize>,
     space: bool,
+    /// UAX 14 allows a line to start at `start`.
+    breakable: bool,
 }
 
 struct LineSpec {
@@ -178,32 +204,13 @@ fn layout(shaped: &Shaped, max_width: Option<f32>) -> ParagraphLayout {
         Wrap::Word => max_width,
         Wrap::None => None,
     };
-    let mut groups: Vec<Range<usize>> = Vec::new();
-    for (index, item) in shaped.items.iter().enumerate() {
-        match groups.last_mut() {
-            Some(group) if shaped.items[group.end - 1].range.end == item.range.start => {
-                group.end = index + 1
-            }
-            _ => groups.push(index..index + 1),
-        }
-    }
-
-    struct HardLine {
-        clusters: Vec<Cluster>,
-        lines: Vec<LineSpec>,
-        items: Range<usize>,
-    }
-    let mut hard_lines: Vec<HardLine> = Vec::with_capacity(groups.len());
+    let mut hard_lines: Vec<(&HardLine, Vec<LineSpec>)> =
+        Vec::with_capacity(shaped.hard_lines.len());
     let mut line_count = 0;
-    for group in groups {
-        let clusters = clusters_of(shaped, group.clone());
-        let lines = break_lines(shaped, &clusters, wrap_width);
+    for hard in &shaped.hard_lines {
+        let lines = break_lines(&hard.clusters, wrap_width);
         line_count += lines.len();
-        hard_lines.push(HardLine {
-            clusters,
-            lines,
-            items: group,
-        });
+        hard_lines.push((hard, lines));
         if line_count >= line_limit {
             break;
         }
@@ -211,18 +218,14 @@ fn layout(shaped: &Shaped, max_width: Option<f32>) -> ParagraphLayout {
 
     let natural_width = hard_lines
         .iter()
-        .flat_map(|hard| {
-            hard.lines
-                .iter()
-                .map(|line| trimmed_width(&hard.clusters, line))
-        })
+        .flat_map(|(hard, lines)| lines.iter().map(|line| trimmed_width(&hard.clusters, line)))
         .fold(0.0_f32, f32::max);
     let container = f64::from(max_width.unwrap_or(natural_width).max(natural_width));
 
     let mut lines = Vec::with_capacity(line_count);
     let mut top = 0.0_f64;
-    'build: for hard in &hard_lines {
-        for spec in &hard.lines {
+    'build: for (hard, specs) in &hard_lines {
+        for spec in specs {
             if lines.len() >= line_limit {
                 break 'build;
             }
@@ -247,15 +250,20 @@ fn layout(shaped: &Shaped, max_width: Option<f32>) -> ParagraphLayout {
 }
 
 /// The clusters of a hard line, in logical order, with the glyphs of each.
-fn clusters_of(shaped: &Shaped, items: Range<usize>) -> Vec<Cluster> {
+fn clusters_of(
+    text: &str,
+    all_items: &[Item],
+    items: Range<usize>,
+    breaks: &[usize],
+) -> Vec<Cluster> {
     let mut clusters: Vec<Cluster> = Vec::new();
     for index in items {
-        let item = &shaped.items[index];
+        let item = &all_items[index];
         let first_of_item = clusters.len();
         let glyphs = &item.run.glyphs;
         // a right-to-left run lists its glyphs in visual order, the last cluster first
         let rtl = item.level.is_rtl();
-        let mut graphemes = shaped.text[item.range.clone()]
+        let mut graphemes = text[item.range.clone()]
             .grapheme_indices(true)
             .map(|(offset, _)| item.range.start + offset)
             .peekable();
@@ -284,6 +292,7 @@ fn clusters_of(shaped: &Shaped, items: Range<usize>) -> Vec<Cluster> {
                     item: index,
                     glyphs: glyph_index..glyph_index + 1,
                     space: false,
+                    breakable: false,
                 }),
             }
         }
@@ -298,15 +307,18 @@ fn clusters_of(shaped: &Shaped, items: Range<usize>) -> Vec<Cluster> {
             clusters[position].end = end;
         }
     }
+    let mut breaks = breaks.iter().peekable();
     for cluster in &mut clusters {
-        cluster.space = shaped.text[cluster.start..cluster.end]
+        cluster.space = text[cluster.start..cluster.end]
             .chars()
             .all(char::is_whitespace);
+        while breaks.next_if(|&&at| at < cluster.start).is_some() {}
+        cluster.breakable = breaks.peek() == Some(&&cluster.start);
     }
     clusters
 }
 
-fn break_lines(shaped: &Shaped, clusters: &[Cluster], max_width: Option<f32>) -> Vec<LineSpec> {
+fn break_lines(clusters: &[Cluster], max_width: Option<f32>) -> Vec<LineSpec> {
     let mut specs = Vec::new();
     let mut start = 0;
     let mut width = 0.0_f32;
@@ -315,7 +327,7 @@ fn break_lines(shaped: &Shaped, clusters: &[Cluster], max_width: Option<f32>) ->
     while i < clusters.len() {
         work::step();
         let cluster = &clusters[i];
-        if i > start && shaped.breaks.binary_search(&cluster.start).is_ok() {
+        if i > start && cluster.breakable {
             last_opportunity = Some(i);
         }
         let overflows = max_width
@@ -1272,16 +1284,16 @@ mod tests {
         }
     }
 
-    /// Steps of layout work (glyphs grouped, clusters visited by the line breaker, clusters placed) to lay out
-    /// `length` characters at two widths.
+    /// Steps of layout work (glyphs grouped, clusters visited by the line breaker, clusters placed) to shape
+    /// `length` characters and lay them out at two widths.
     fn steps_for(length: usize) -> usize {
         let sentence = "The quick brown fox jumps over the lazy dog and keeps running far away. ";
         let text: String = sentence.chars().cycle().take(length).collect();
         let attributed = crate::AttributedText::plain(text, TextStyle::new(16.0));
+        work::take();
         let paragraph = system()
             .paragraph(&attributed, &ParagraphStyle::default())
             .unwrap();
-        work::take();
         paragraph.layout(Some(300.0));
         paragraph.layout(Some(420.0));
         work::take()

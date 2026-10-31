@@ -60,6 +60,8 @@ pub(crate) struct Effects<M> {
     pub(crate) wakes: Vec<(NodeId, Timestamp)>,
     pub(crate) text_input: Option<(NodeId, Option<TextInputState>)>,
     pub(crate) clipboard: Option<String>,
+    /// A part of a node, in its coordinates, for its scroll containers to show.
+    pub(crate) reveal: Option<(NodeId, Rect)>,
 }
 
 impl<M> Default for Effects<M> {
@@ -75,6 +77,7 @@ impl<M> Default for Effects<M> {
             wakes: Vec::new(),
             text_input: None,
             clipboard: None,
+            reveal: None,
         }
     }
 }
@@ -96,6 +99,7 @@ impl<M> Effects<M> {
         if other.clipboard.is_some() {
             self.clipboard = other.clipboard;
         }
+        self.reveal = other.reveal.or(self.reveal);
     }
 }
 
@@ -214,6 +218,12 @@ impl<M> EventCx<'_, M> {
         self.effects.text_input = Some((self.node, state));
     }
 
+    /// Scrolls the scroll containers around this node so `rect`, in its coordinates, shows after the next layout, as an
+    /// editor shows its caret.
+    pub fn reveal(&mut self, rect: Rect) {
+        self.effects.reveal = Some((self.node, rect));
+    }
+
     /// Puts `text` on the clipboard, as a field's copy or cut does.
     pub fn set_clipboard(&mut self, text: String) {
         self.effects.clipboard = Some(text);
@@ -243,6 +253,8 @@ pub struct PaintCx<'a> {
     pub(crate) group: &'a mut Option<Group>,
     pub(crate) animate: &'a mut bool,
     pub(crate) images: &'a mut Vec<(ResourceId, ImageResource)>,
+    pub(crate) visible: Rect,
+    pub(crate) reads_visible: &'a mut bool,
 }
 
 impl PaintCx<'_> {
@@ -277,6 +289,14 @@ impl PaintCx<'_> {
 
     pub fn push(&mut self, op: PaintOp) {
         self.ops.push(op);
+    }
+
+    /// The part of the node that shows inside the window and its scroll containers, in its coordinates. A node that
+    /// asks paints again whenever that part changes, so it can paint only what shows, as an editor paints its visible
+    /// lines.
+    pub fn visible(&mut self) -> Rect {
+        *self.reads_visible = true;
+        self.visible
     }
 
     /// Delivers [`Event::AnimationFrame`](crate::Event::AnimationFrame) to this node on the next frame, for what

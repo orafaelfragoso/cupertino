@@ -32,7 +32,7 @@ const BULLET: char = '\u{2022}';
 /// Points between the baseline and the composition's one-pixel underline.
 const COMPOSITION_DROP: f64 = 1.5;
 
-fn session(purpose: ContentPurpose, protected: bool) -> TextInputSession {
+pub(crate) fn session(purpose: ContentPurpose, protected: bool) -> TextInputSession {
     let caret = TextPosition {
         byte: 0,
         affinity: Affinity::Downstream,
@@ -50,7 +50,7 @@ fn session(purpose: ContentPurpose, protected: bool) -> TextInputSession {
     }
 }
 
-fn position(byte: usize) -> TextPosition {
+pub(crate) fn position(byte: usize) -> TextPosition {
     TextPosition {
         byte,
         affinity: Affinity::Downstream,
@@ -113,7 +113,11 @@ fn placed(
     Some((layout, origin))
 }
 
-fn fill_rect(cx: &mut PaintCx<'_>, rect: Rect, color: Option<cupertino_ui_theme::Color>) {
+pub(crate) fn fill_rect(
+    cx: &mut PaintCx<'_>,
+    rect: Rect,
+    color: Option<cupertino_ui_theme::Color>,
+) {
     if let Some(color) = color {
         cx.push(PaintOp::Fill {
             shape: Shape::Rect(rect),
@@ -212,7 +216,7 @@ const BLINK_LIMIT_NS: u64 = 10_000_000_000;
 /// The caret's blink: on for the first phase after each edit, move, click or focus gain, then alternating, steady with
 /// Reduce Motion and after [`BLINK_LIMIT_NS`].
 #[derive(Clone, Copy, Debug, Default)]
-struct Blink {
+pub(crate) struct Blink {
     since: Timestamp,
 }
 
@@ -223,7 +227,7 @@ impl Blink {
         (!motion.reduce && phase > 0).then_some(phase)
     }
 
-    fn on(&self, env: &Environment, now: Timestamp) -> bool {
+    pub(crate) fn on(&self, env: &Environment, now: Timestamp) -> bool {
         let elapsed = now.0.saturating_sub(self.since.0);
         match Self::phase(env) {
             Some(phase) if elapsed < BLINK_LIMIT_NS => (elapsed / phase).is_multiple_of(2),
@@ -264,7 +268,7 @@ impl Blink {
     }
 
     /// Restarts on the events that move the caret, and keeps blinking on a wake, after the field handled `event`.
-    fn follow<M>(&mut self, event: &Event, selecting: bool, cx: &mut EventCx<'_, M>) {
+    pub(crate) fn follow<M>(&mut self, event: &Event, selecting: bool, cx: &mut EventCx<'_, M>) {
         if Self::restarts(event) {
             self.since = cx.now();
             self.arm(selecting, cx);
@@ -314,7 +318,7 @@ fn paint_chrome(cx: &mut PaintCx<'_>, state: &ControlState) {
     paint_focus_ring(cx, rect, radius);
 }
 
-fn control_state(enabled: bool, hovered: bool, cx: &PaintCx<'_>) -> ControlState {
+pub(crate) fn control_state(enabled: bool, hovered: bool, cx: &PaintCx<'_>) -> ControlState {
     ControlState {
         enabled,
         hovered,
@@ -326,7 +330,7 @@ fn control_state(enabled: bool, hovered: bool, cx: &PaintCx<'_>) -> ControlState
 }
 
 /// Hover, a press that focuses the field, and the keys a field never takes (Tab moves the focus).
-fn pointer<M>(
+pub(crate) fn pointer<M>(
     event: &Event,
     enabled: bool,
     hovered: &mut bool,
@@ -376,23 +380,85 @@ pub struct FieldState {
     blink: Blink,
 }
 
-impl FieldState {
-    /// The text without what an input method is still composing: what the model holds.
-    fn committed(&self) -> String {
-        let text = self.buffer.text();
-        match self.buffer.composition() {
-            Some(range) => format!("{}{}", &text[..range.start], &text[range.end..]),
-            None => text.to_string(),
+/// The text without what an input method is still composing: what the model holds.
+pub(crate) fn committed(buffer: &TextBuffer) -> String {
+    let text = buffer.text();
+    match buffer.composition() {
+        Some(range) => format!("{}{}", &text[..range.start], &text[range.end..]),
+        None => text.to_string(),
+    }
+}
+
+/// Whether a model's `value` is the text the buffer holds, once the buffer's own clean-up is applied to it, so a value
+/// with a line break the buffer converted is not taken again on every rebuild.
+pub(crate) fn holds(buffer: &TextBuffer, value: &str) -> bool {
+    let held = committed(buffer);
+    value == held || buffer.cleaned(value) == held
+}
+
+fn anchor(buffer: &TextBuffer) -> usize {
+    let selection = buffer.selection();
+    if buffer.caret() == selection.start {
+        selection.end
+    } else {
+        selection.start
+    }
+}
+
+/// Tells the input method where an editable text stands now, with its caret at `caret` in window coordinates.
+pub(crate) fn sync_input<M>(
+    buffer: &TextBuffer,
+    session: &mut TextInputSession,
+    caret: Option<Rect>,
+    cause: ChangeCause,
+    cx: &mut EventCx<'_, M>,
+) {
+    session.select(Selection {
+        anchor: position(anchor(buffer)),
+        focus: position(buffer.caret()),
+    });
+    let surrounding = Surrounding::around(
+        buffer.text(),
+        buffer.caret(),
+        anchor(buffer),
+        SURROUNDING_MAX_BYTES,
+    );
+    let field = cx.bounds();
+    cx.set_text_input(Some(session.state(Some(surrounding), cause, caret, field)));
+}
+
+/// Applies one input-method batch: delete around the caret, commit, then show the preedit. A batch that answers an
+/// older state resets the composition instead.
+pub(crate) fn apply_ime(buffer: &mut TextBuffer, session: &TextInputSession, batch: &ImeBatch) {
+    if !session.accepts(batch) {
+        buffer.cancel_composition();
+        return;
+    }
+    let (before, after) = batch.delete;
+    if before > 0 || after > 0 {
+        let caret = buffer.caret();
+        let start = caret.saturating_sub(before as usize);
+        let end = (caret + after as usize).min(buffer.text().len());
+        buffer.select(start..end);
+        buffer.delete_selection();
+    }
+    if let Some(commit) = &batch.commit {
+        if buffer.composition().is_some() {
+            buffer.set_composition(commit);
+            buffer.commit_composition();
+        } else {
+            buffer.insert(commit);
         }
     }
+    match &batch.preedit {
+        Some(preedit) => buffer.set_composition(&preedit.text),
+        None => buffer.cancel_composition(),
+    }
+}
 
-    fn anchor(&self) -> usize {
-        let selection = self.buffer.selection();
-        if self.buffer.caret() == selection.start {
-            selection.end
-        } else {
-            selection.start
-        }
+impl FieldState {
+    fn committed(&self) -> String {
+        committed(&self.buffer)
     }
 
     /// The caret in window coordinates, for the input method's candidate window, at the scroll the next paint takes.
@@ -464,53 +530,8 @@ impl FieldState {
 
     /// Tells the input method where the field stands now.
     fn sync_input<M>(&mut self, cause: ChangeCause, cx: &mut EventCx<'_, M>) {
-        self.session.select(Selection {
-            anchor: position(self.anchor()),
-            focus: position(self.buffer.caret()),
-        });
-        let surrounding = Surrounding::around(
-            self.buffer.text(),
-            self.buffer.caret(),
-            self.anchor(),
-            SURROUNDING_MAX_BYTES,
-        );
         let caret = self.caret_rect(cx);
-        let field = cx.bounds();
-        cx.set_text_input(Some(self.session.state(
-            Some(surrounding),
-            cause,
-            caret,
-            field,
-        )));
-    }
-
-    /// Applies one input-method batch: delete around the caret, commit, then show the preedit. A batch that answers
-    /// an older state resets the composition instead.
-    fn ime(&mut self, batch: &ImeBatch) {
-        if !self.session.accepts(batch) {
-            self.buffer.cancel_composition();
-            return;
-        }
-        let (before, after) = batch.delete;
-        if before > 0 || after > 0 {
-            let caret = self.buffer.caret();
-            let start = caret.saturating_sub(before as usize);
-            let end = (caret + after as usize).min(self.buffer.text().len());
-            self.buffer.select(start..end);
-            self.buffer.delete_selection();
-        }
-        if let Some(commit) = &batch.commit {
-            if self.buffer.composition().is_some() {
-                self.buffer.set_composition(commit);
-                self.buffer.commit_composition();
-            } else {
-                self.buffer.insert(commit);
-            }
-        }
-        match &batch.preedit {
-            Some(preedit) => self.buffer.set_composition(&preedit.text),
-            None => self.buffer.cancel_composition(),
-        }
+        sync_input(&self.buffer, &mut self.session, caret, cause, cx);
     }
 }
 
@@ -554,7 +575,7 @@ impl<M: Clone + 'static> TextField<M> {
             }
             Event::Ime(ImeEvent::Done(batch)) if self.enabled => {
                 let before = state.committed();
-                state.ime(batch);
+                apply_ime(&mut state.buffer, &state.session, batch);
                 if state.committed() != before {
                     self.report(state, cx);
                 }
@@ -661,7 +682,7 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
     /// reported, with a different text. An older revision is the model catching up and is ignored.
     fn update(&self, old: &Self, state: &mut FieldState) -> Change {
         state.session.purpose = self.purpose;
-        if self.revision >= state.reported && self.value != state.committed() {
+        if self.revision >= state.reported && !holds(&state.buffer, &self.value) {
             state.buffer.set_text(&self.value);
             state.reported = self.revision;
             return Change::Paint;

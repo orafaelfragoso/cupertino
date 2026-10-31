@@ -18,6 +18,10 @@ ALLOWED_BINARIES = {
     "crates/cupertino-ui-text/tests/fixtures/fallback-test.ttf": "73b6c3d00132c6a20b18be6f8a3e13340e2e03c482544e30a5793ad6ded3e476",
     # our own colour-layer boxes for the emoji tests, written by make-colour-font.py beside it
     "crates/cupertino-ui-text/tests/fixtures/colour-test.ttf": "466f5457b35e2f111ab8384e3bf71cae279600f0e3f0faaef760cb43af95137a",
+    # Noto Sans subsets (OFL-1.1, OFL.txt beside them) for the script tests, written by make-script-fonts.py beside them
+    "crates/cupertino-ui-text/tests/fixtures/noto-arabic-subset.ttf": "c6da012fdf8f32e7cc5bbf8e5e359bce4a91df29e3c8649e44c8db4a492fa99e",
+    "crates/cupertino-ui-text/tests/fixtures/noto-devanagari-subset.ttf": "d92eacd722dbe467ef8a0cf5d667a273cc1b3badfb1f1781c0d6c7ea48de8eea",
+    "crates/cupertino-ui-text/tests/fixtures/noto-hebrew-subset.ttf": "c8aeb1cd9d81fb2c291c8edcf8f65f76e2baefd97dd77adfc0a2d49881877f62",
 }
 
 

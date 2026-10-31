@@ -11,7 +11,9 @@ use cupertino_ui_core::{
 use cupertino_ui_layout::LayoutDirection;
 use cupertino_ui_platform::{PlatformError, SystemAppearance, WindowSystem};
 use cupertino_ui_render::{CpuConfig, CpuRenderer};
-use cupertino_ui_text::{FontIndex, FontStyle, FontWeight, GlyphRaster, TextSystem};
+use cupertino_ui_text::{
+    FontIndex, FontStyle, FontWeight, GlyphRaster, InstalledFonts, TextSystem,
+};
 use cupertino_ui_theme::{Appearance, ColorTokens, ThemePreferences, ThemeTokens};
 use cupertino_ui_wayland::WaylandWindowSystem;
 use std::fmt;
@@ -207,8 +209,8 @@ fn ui_family<'a>(
         .to_owned()
 }
 
-/// The asset packs' fonts, then the built-in Inter, with the family Inter registered under. A file that cannot be
-/// read or parsed is skipped with a message.
+/// The asset packs' fonts, then the built-in Inter, with the family Inter registered under, and the installed fonts
+/// for the characters and families none of them has. A file that cannot be read or parsed is skipped with a message.
 fn fonts(assets: &Assets) -> (FontIndex, Option<String>) {
     let mut index = FontIndex::new();
     let mut builtin = None;
@@ -233,6 +235,9 @@ fn fonts(assets: &Assets) -> (FontIndex, Option<String>) {
             Ok(_) => {}
             Err(e) => eprintln!("cupertino-kit: skipping the font {}: {e:?}", source.label()),
         }
+    }
+    if let Some(installed) = InstalledFonts::new() {
+        index.set_system_fonts(Box::new(installed));
     }
     (index, builtin)
 }

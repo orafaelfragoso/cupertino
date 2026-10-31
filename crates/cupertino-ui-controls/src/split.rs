@@ -426,7 +426,7 @@ impl<M: 'static> Widget<M> for Divider<M> {
                     (Action::Increment, _) => self.place(position + KEY_STEP, extent, cx),
                     (Action::Decrement, _) => self.place(position - KEY_STEP, extent, cx),
                     (Action::SetValue, Some(ActionData::Number(value))) => {
-                        self.place(*value, extent, cx)
+                        self.set(self.moved(*value, extent), cx)
                     }
                     (Action::Focus, _) => cx.request_focus(),
                     _ => return Propagation::Continue,
@@ -475,13 +475,11 @@ impl<M: 'static> Widget<M> for Divider<M> {
         let extent = self.extent(size);
         cx.role(Role::Splitter);
         cx.name(self.label.clone());
+        // the whole span the line can stand on, collapsed ends included, so the value never leaves it
         cx.value(AccessibleValue::Number {
-            value: match self.layout.collapsed {
-                Some(SplitPane::Leading) => 0.0,
-                _ => self.line(extent),
-            },
-            min: self.min_leading.min(self.max(extent)),
-            max: self.max(extent),
+            value: self.line(extent),
+            min: 0.0,
+            max: (extent - DIVIDER).max(0.0),
             step: Some(KEY_STEP),
         });
         cx.states(AccessibleStates::default());

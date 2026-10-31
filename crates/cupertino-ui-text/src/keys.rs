@@ -109,14 +109,14 @@ fn apply(buffer: &mut TextBuffer, action: TextAction) -> bool {
         | A::Complete
         | A::SelectNextKeyView
         | A::SelectPreviousKeyView => return false,
-        A::MoveLeft | A::MoveBackward => buffer.move_char(false, false),
-        A::MoveRight | A::MoveForward => buffer.move_char(true, false),
-        A::MoveLeftAndModifySelection | A::MoveBackwardAndModifySelection => {
-            buffer.move_char(false, true)
-        }
-        A::MoveRightAndModifySelection | A::MoveForwardAndModifySelection => {
-            buffer.move_char(true, true)
-        }
+        A::MoveLeft => buffer.move_visual(false, false),
+        A::MoveBackward => buffer.move_char(false, false),
+        A::MoveRight => buffer.move_visual(true, false),
+        A::MoveForward => buffer.move_char(true, false),
+        A::MoveLeftAndModifySelection => buffer.move_visual(false, true),
+        A::MoveBackwardAndModifySelection => buffer.move_char(false, true),
+        A::MoveRightAndModifySelection => buffer.move_visual(true, true),
+        A::MoveForwardAndModifySelection => buffer.move_char(true, true),
         A::MoveWordLeft | A::MoveWordBackward => buffer.move_word(false, false),
         A::MoveWordRight | A::MoveWordForward => buffer.move_word(true, false),
         A::MoveWordLeftAndModifySelection | A::MoveWordBackwardAndModifySelection => {

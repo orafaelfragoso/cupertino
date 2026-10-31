@@ -143,6 +143,7 @@ impl Paragraph {
     /// Breaks the paragraph into lines no wider than `max_width` (`None`, or a width that is not finite, for no limit).
     /// It reuses the shaping. `max_lines` of zero keeps one line.
     pub fn layout(&self, max_width: Option<f32>) -> ParagraphLayout {
+        crate::TextWork::record(|work| work.laid_out += 1);
         layout(&self.shaped, max_width)
     }
 }

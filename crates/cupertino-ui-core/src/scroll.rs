@@ -105,18 +105,22 @@ pub(crate) fn geometry_events<M: 'static>(
     events
 }
 
-/// [`Event::Reveal`] for each scroll container around `target` that has to move to show it, innermost first. Each
-/// outer container shows what of the target its inner one will show once moved.
+/// [`Event::Reveal`] for each scroll container around `target` that has to move to show it, or `part` of it (in its
+/// coordinates), innermost first. Each outer container shows what of the target its inner one will show once moved.
 pub(crate) fn reveal_events<M: 'static>(
     tree: &Tree<M>,
     geometry: &Geometry,
     direction: LayoutDirection,
     target: NodeId,
+    part: Option<Rect>,
 ) -> Vec<(NodeId, Event)> {
     let mut events = Vec::new();
-    let Some(mut rect) = geometry.get(&target).map(|p| p.rect) else {
+    let Some(bounds) = geometry.get(&target).map(|p| p.rect) else {
         return events;
     };
+    let mut rect = part.map_or(bounds, |part| {
+        part.translate(bounds.origin.x, bounds.origin.y)
+    });
     for id in tree.path(target).into_iter().rev().skip(1) {
         let Some(s) = scroller(tree, geometry, id, direction) else {
             continue;

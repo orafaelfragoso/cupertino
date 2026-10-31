@@ -27,6 +27,8 @@ struct Painted {
     extent: Option<Rect>,
     /// The images the ops draw.
     images: Vec<(ResourceId, ImageResource)>,
+    /// The part of the node that showed, when its paint depended on it.
+    visible: Option<Rect>,
 }
 
 /// How far a blur reaches beyond the content it blurs, per unit of radius.
@@ -194,6 +196,7 @@ impl Painter {
         let mut resources = PaintResources::default();
         let mut seen = HashSet::with_capacity(self.nodes.len());
         let mut clips = Vec::new();
+        let window = geometry.get(&root).map(|p| p.rect);
         for id in tree.preorder(root) {
             let (Some(node), Some(placement)) = (tree.get(id), geometry.get(&id)) else {
                 continue;
@@ -208,10 +211,17 @@ impl Painter {
                 | u64::from(input.window_active) << 2
                 | u64::from(focused) << 1
                 | u64::from(focused && input.focus_visible);
-            let fresh = self
-                .nodes
-                .get(&id)
-                .is_some_and(|p| p.source == source && p.size == size);
+            let origin = placement.rect.origin;
+            let visible = [placement.clip, window]
+                .into_iter()
+                .flatten()
+                .try_fold(placement.rect, |shown, clip| shown.intersection(&clip))
+                .map_or(Rect::new(0.0, 0.0, 0.0, 0.0), |shown| {
+                    shown.translate(-origin.x, -origin.y)
+                });
+            let fresh = self.nodes.get(&id).is_some_and(|p| {
+                p.source == source && p.size == size && p.visible.is_none_or(|v| v == visible)
+            });
             if !fresh {
                 let mut ops = Vec::new();
                 // the window's own background, under everything its content paints
@@ -233,6 +243,7 @@ impl Painter {
                 let mut group = None;
                 let mut animate = false;
                 let mut images = Vec::new();
+                let mut reads_visible = false;
                 node.widget.paint(
                     &*node.state,
                     &mut PaintCx {
@@ -247,6 +258,8 @@ impl Painter {
                         group: &mut group,
                         animate: &mut animate,
                         images: &mut images,
+                        visible,
+                        reads_visible: &mut reads_visible,
                     },
                 );
                 if animate {
@@ -263,6 +276,7 @@ impl Painter {
                         ops,
                         group,
                         images,
+                        visible: reads_visible.then_some(visible),
                     },
                 );
             }
@@ -277,7 +291,6 @@ impl Painter {
                     "resource {image:?} names two images; new pixels take a new id"
                 );
             }
-            let origin = placement.rect.origin;
             list.nodes.push(PaintNode {
                 id: id.into(),
                 parent: node.parent.map(PaintNodeId::from),

@@ -1409,10 +1409,13 @@ dependencies = [
 name = "cupertino-portal"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
  "cupertino-defaults",
  "cupertino-protocol-app",
  "cupertino-test-bus",
  "cupertino-wayland-client",
+ "futures-lite",
+ "percent-encoding",
  "zbus",
 ]
 

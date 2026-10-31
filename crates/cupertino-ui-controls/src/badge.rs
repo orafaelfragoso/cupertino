@@ -43,6 +43,8 @@ impl<M: 'static> Widget<M> for Badge {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if self.text != old.text {
             Change::Layout
+        } else if self.description != old.description {
+            Change::Paint
         } else {
             Change::None
         }

@@ -1,7 +1,7 @@
 use crate::button::SheetButton;
 use crate::look;
 use crate::{
-    Button, ButtonRole, ButtonStyle, Dialog, DialogAction, DialogKind, Modal, Text, TextRole,
+    Button, ButtonRole, ButtonStyle, Dialog, DialogAction, DialogKind, Modal, Stack, Text, TextRole,
 };
 use cupertino_geometry::{Insets, Rect, Size};
 use cupertino_ui_core::{
@@ -49,13 +49,20 @@ impl<M: Clone + 'static> From<Modal<M>> for Element<M> {
     }
 }
 
+/// Text at the leading edge, so it mirrors in right-to-left layouts with the sheet's controls.
 fn label<M: 'static>(content: &str, role: TextRole, secondary: bool) -> Element<M> {
-    Element::new(Text {
-        content: AttributedText::plain(content, TextStyle::new(13.0)),
-        role,
-        wrap: true,
-        secondary,
-        selected: false,
+    Element::new(Stack {
+        axis: Axis::Vertical,
+        padding: Insets::ZERO,
+        spacing: 0.0,
+        align: Align::Start,
+        children: vec![Element::new(Text {
+            content: AttributedText::plain(content, TextStyle::new(13.0)),
+            role,
+            wrap: true,
+            secondary,
+            selected: false,
+        })],
     })
 }
 

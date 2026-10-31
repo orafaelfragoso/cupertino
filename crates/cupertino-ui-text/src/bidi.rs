@@ -10,6 +10,20 @@ pub(crate) fn base_direction(text: &str, direction: Option<Direction>) -> Direct
     })
 }
 
+/// The base direction of one hard line: `direction`, else the line's first strong character's, else `text_direction`
+/// (the whole text's), so a line of digits or an empty line stays with the text around it.
+pub(crate) fn line_direction(
+    line: &str,
+    direction: Option<Direction>,
+    text_direction: Direction,
+) -> Direction {
+    direction.unwrap_or_else(|| match unicode_bidi::get_base_direction(line) {
+        unicode_bidi::Direction::Rtl => Direction::Rtl,
+        unicode_bidi::Direction::Ltr => Direction::Ltr,
+        unicode_bidi::Direction::Mixed => text_direction,
+    })
+}
+
 pub(crate) fn base_level(direction: Direction) -> Level {
     match direction {
         Direction::Ltr => Level::ltr(),

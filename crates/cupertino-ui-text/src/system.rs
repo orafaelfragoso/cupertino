@@ -173,11 +173,15 @@ fn shape_paragraph(
 ) -> Result<Paragraph, TextError> {
     let segments = style_segments(text)?;
     let direction = bidi::base_direction(&text.text, paragraph_style.direction);
-    let base = bidi::base_level(direction);
     let mut items = Vec::new();
     let mut line_start = 0;
     loop {
         let (line_end, next_start) = next_line(&text.text, line_start);
+        let base = bidi::base_level(bidi::line_direction(
+            &text.text[line_start..line_end],
+            paragraph_style.direction,
+            direction,
+        ));
         let bidi = ParagraphBidiInfo::new(&text.text[line_start..line_end], Some(base));
         let pieces = pieces_of(&segments, line_start..line_end);
         for (piece, style) in pieces {
@@ -222,6 +226,7 @@ fn shape_paragraph(
                     items.push(Item {
                         range,
                         level,
+                        base,
                         run,
                         ascent: metrics.ascent * style.size,
                         descent: metrics.descent * style.size,

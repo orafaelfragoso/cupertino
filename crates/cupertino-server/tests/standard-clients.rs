@@ -95,9 +95,17 @@ impl Server {
 
     /// `binary` with `args`, connected as an application the server did not start.
     fn launch(&mut self, binary: Binary, args: &[&str]) -> Child {
+        self.launch_with(binary, args, &[])
+    }
+
+    /// [`Self::launch`] with the environment variables `env` set.
+    fn launch_with(&mut self, binary: Binary, args: &[&str], env: &[(&str, &Path)]) -> Child {
         let home = std::env::temp_dir();
         let mut command = spawn::cleared(built(binary), &home);
-        command.args(args).stdout(Stdio::piped());
+        command
+            .args(args)
+            .envs(env.iter().copied())
+            .stdout(Stdio::piped());
         let stream = connect_client(&self.state.display_handle, ClientState::default()).unwrap();
         hand_over(&mut command, &stream);
         command.spawn().unwrap()
@@ -105,10 +113,23 @@ impl Server {
 
     /// Press and release the key with evdev code `code`.
     fn tap(&mut self, code: u32) {
-        for pressed in [KeyState::Pressed, KeyState::Released] {
+        self.chord(&[], code);
+    }
+
+    /// Press `code` while the keys `held` are down, in order.
+    fn chord(&mut self, held: &[u32], code: u32) {
+        let mut key = |code: u32, state: KeyState| {
             self.state
-                .keyboard_event_now(Keycode::new(code + XKB_OFFSET), pressed, 0);
+                .keyboard_event_now(Keycode::new(code + XKB_OFFSET), state, 0);
             self.step();
+        };
+        for &modifier in held {
+            key(modifier, KeyState::Pressed);
+        }
+        key(code, KeyState::Pressed);
+        key(code, KeyState::Released);
+        for &modifier in held.iter().rev() {
+            key(modifier, KeyState::Released);
         }
     }
 
@@ -257,6 +278,79 @@ fn fullscreen_sizes(state: &Cupertino) -> Option<(Extent, Option<Extent>)> {
         .flatten()
         .map(|size| (size.w, size.h));
     acked.size.map(|size| ((size.w, size.h), buffer))
+}
+
+#[test]
+fn dead_keys_and_the_compose_key_type_a_tilde_and_c_cedilla_in_a_client() {
+    const KEY_A: u32 = 30;
+    const KEY_X: u32 = 45;
+    const KEY_C: u32 = 46;
+    const KEY_COMMA: u32 = 51;
+    const KEY_APOSTROPHE: u32 = 40;
+    const KEY_GRAVE: u32 = 41;
+    const KEY_LEFTSHIFT: u32 = 42;
+    const KEY_RIGHTALT: u32 = 100;
+    const KEY_COMPOSE: u32 = 127;
+    let Some(mut server) = Server::start() else {
+        return;
+    };
+    let keyboard = server.state.seat.get_keyboard().unwrap();
+    let us_intl = smithay::input::keyboard::XkbConfig {
+        layout: "us",
+        variant: "intl",
+        options: Some("compose:menu".into()),
+        ..Default::default()
+    };
+    keyboard.set_xkb_config(&mut server.state, us_intl).unwrap();
+    let compose = TempFile::new("compose");
+    std::fs::write(
+        compose.path(),
+        "<dead_acute> <c> : \"\u{e7}\" ccedilla\n<dead_tilde> <a> : \"\u{e3}\" atilde\n\
+         <Multi_key> <comma> <c> : \"\u{e7}\" ccedilla\n<Multi_key> <asciitilde> <a> : \"\u{e3}\" atilde\n",
+    )
+    .unwrap();
+    let output = TempFile::new("compose-output");
+    let mut child = server.launch_with(
+        Binary::TestClient,
+        &[
+            "--app-id",
+            "org.cupertino.TestClient",
+            "--title",
+            "Compose",
+            "--output",
+            output.path().to_str().unwrap(),
+        ],
+        &[("XCOMPOSEFILE", compose.path())],
+    );
+    server.wait_until("the window to map and the output file", |s| {
+        s.windows.iter().any(|w| w.mapped) && output.path().exists()
+    });
+    // dead keys of us(intl): ' then c, ~ (Shift+`) then a
+    server.tap(KEY_APOSTROPHE);
+    server.tap(KEY_C);
+    server.chord(&[KEY_LEFTSHIFT], KEY_GRAVE);
+    server.tap(KEY_A);
+    // the compose key: , then c, ~ (AltGr+Shift+`) then a
+    server.tap(KEY_COMPOSE);
+    server.tap(KEY_COMMA);
+    server.tap(KEY_C);
+    server.tap(KEY_COMPOSE);
+    server.chord(&[KEY_RIGHTALT, KEY_LEFTSHIFT], KEY_GRAVE);
+    server.tap(KEY_A);
+    // a sequence with no result types nothing, and the key after it types
+    server.tap(KEY_APOSTROPHE);
+    server.tap(KEY_X);
+    server.tap(KEY_X);
+    server.tap(KEY_ENTER);
+    server.wait_until("the typed text in the output file", |_| {
+        std::fs::read_to_string(output.path()).is_ok_and(|text| text.ends_with('\n'))
+    });
+    assert_eq!(
+        std::fs::read_to_string(output.path()).unwrap(),
+        "\u{e7}\u{e3}\u{e7}\u{e3}x\n"
+    );
+    child.kill().unwrap();
+    child.wait().unwrap();
 }
 
 #[test]

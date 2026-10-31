@@ -1819,6 +1819,7 @@ dependencies = [
  "cupertino-geometry",
  "memmap2",
  "rustix 1.1.5",
+ "tempfile",
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",

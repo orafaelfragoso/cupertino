@@ -1216,6 +1216,20 @@ impl Manager {
         }
     }
 
+    /// The seat's active session changed, by the manager's own switch or by any other (a key that changes the virtual
+    /// terminal): the login screen's reader runs only while its session has the console.
+    fn active_session_changed(&mut self) {
+        let active = self.logind.active_session();
+        if let Err(e) = &active {
+            eprintln!("cupertino-sessiond: {e}; the login screen counts as hidden");
+        }
+        let shown = greeter_shown(
+            active.ok().flatten().as_deref(),
+            self.greeter_session.as_deref(),
+        );
+        self.tell_greeter_shown(shown);
+    }
+
     /// Start `cupertino-sessiond worker` with one end of a socketpair as its standard input and send it `begin`.
     fn spawn_worker(
         &mut self,
@@ -1665,6 +1679,7 @@ impl Manager {
         while let Ok(item) = self.incoming.try_recv() {
             match item {
                 Incoming::Logind(Signal::SessionRemoved(id)) => self.session_removed(&id)?,
+                Incoming::Logind(Signal::ActiveSessionChanged) => self.active_session_changed(),
                 Incoming::Logind(Signal::Ended(reason)) => {
                     return Err(format!("logind's signals ended ({reason})").into())
                 }
@@ -1891,6 +1906,12 @@ impl Manager {
     }
 }
 
+/// Whether the login screen is on the console: its session is the seat's active one. An unknown active session (logind did
+/// not answer) or an unknown login screen session counts as hidden.
+fn greeter_shown(active: Option<&str>, greeter: Option<&str>) -> bool {
+    active.is_some() && active == greeter
+}
+
 /// Connect to logind and start its signal thread. The thread queues each signal and writes the eventfd that `poll` watches.
 fn watch_logind() -> Result<(Logind, Receiver<Incoming>, Mailbox)> {
     let logind = Logind::connect()?;
@@ -2000,6 +2021,21 @@ mod tests {
         // a stale socket of an earlier run does not stop the next bind
         drop(_listener);
         bind(&path, uid, gid).unwrap();
+    }
+
+    #[test]
+    fn the_login_screen_is_shown_only_while_its_session_has_the_console() {
+        assert!(greeter_shown(Some("c1"), Some("c1")));
+        assert!(!greeter_shown(Some("2"), Some("c1")), "a person's session");
+        assert!(
+            !greeter_shown(None, Some("c1")),
+            "no session in the foreground, or logind did not answer"
+        );
+        assert!(!greeter_shown(None, None));
+        assert!(
+            !greeter_shown(Some("c1"), None),
+            "no login screen session known"
+        );
     }
 
     #[test]

@@ -545,15 +545,13 @@ fn check_hardware() -> Result<()> {
 }
 
 pub fn run(cli: Cli) -> Result<()> {
-    // the login screen's process is not dumpable, and its screen reader socket is taken before any thread or child exists
+    // the login screen's process is not dumpable, and its screen reader socket is taken before any thread or child exists:
+    // a dumpable login screen does not take it at all
     let login_screen = crate::config::login_screen(
         std::env::var_os(crate::config::CONFIG_ENV).as_deref(),
         std::env::var_os("XDG_SESSION_CLASS").as_deref(),
     );
-    if login_screen {
-        crate::screen_reader::harden();
-    }
-    let screen_reader = crate::screen_reader::take(login_screen);
+    let screen_reader = crate::screen_reader::take(login_screen && crate::screen_reader::harden());
     if cli.check_hardware {
         #[cfg(feature = "udev")]
         return check_hardware();
@@ -574,6 +572,7 @@ pub fn run(cli: Cli) -> Result<()> {
         true,
         &assets,
     )?;
+    state.login_screen = login_screen;
     if let Some(f) = cli.time_scale.filter(|f| *f > 0.0) {
         state.time_scale = f;
     }

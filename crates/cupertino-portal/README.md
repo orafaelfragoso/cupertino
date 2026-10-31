@@ -14,8 +14,9 @@ There is no D-Bus activation file: an instance that the bus starts would lack th
 cargo build -p cupertino-portal --features app
 ```
 
-It exits with a failure (and the server restarts it) when the Wayland or the bus connection is lost, or when another
-process holds the bus name.
+It reads the session's appearance before it takes the bus name, so the first read after the server publishes the
+session already has it. It exits with a failure (and the server restarts it) when the Wayland connection is lost, when a
+change cannot be sent on the bus, or when another process holds the bus name.
 
 ## Settings
 
@@ -36,3 +37,5 @@ appearance, as `cupertino_app_effects_v1` sends it:
 
 - `bin/cupertino-portal`
 - `data/cupertino.portal` to `/usr/share/xdg-desktop-portal/portals/`
+- `data/cupertino-portals.conf` to `/usr/share/xdg-desktop-portal/`: Settings from this backend first, then the GTK
+  backend for the namespaces it does not serve; every other interface from the GTK backend until this one serves it

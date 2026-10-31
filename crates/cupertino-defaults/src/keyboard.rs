@@ -15,6 +15,7 @@
 //! | `fn_key` | `do-nothing`, `change-input-source`, `emoji`, `dictation` |
 //! | `layout_keyboard` | `ansi`, `iso`, `jis` |
 //! | `layout_level3` | `both-alt`, `right-alt`, `none` |
+//! | `compose_key` | `off`, `right-alt`, `right-ctrl`, `menu`, `caps-lock`, `scroll-lock`; unset keeps the system's |
 //! | `caps_lock_switch`, `slow_keys`, `sticky_keys`, `sticky_keys_shortcut`, `mouse_keys`, `mouse_keys_shortcut`, `client_rewrite`, `accent_picker` | `on`, `off` |
 //! | `rewrite_terminals`, `rewrite_off`, `accent_keyboards`, `accent_disabled_apps` | comma-separated names |
 //! | `accent_table` | a path (`~/ is the home folder) |
@@ -82,6 +83,11 @@ file_enum!(
 file_enum!(
     /// Keys that select the alternate symbol tables of decoded layouts.
     Level3 { BothAlt = "both-alt", RightAlt = "right-alt", None = "none" }
+);
+
+file_enum!(
+    /// The key that starts a compose sequence in the system layouts.
+    ComposeKey { Off = "off", RightAlt = "right-alt", RightCtrl = "right-ctrl", Menu = "menu", CapsLock = "caps-lock", ScrollLock = "scroll-lock" }
 );
 
 /// One entry of the input-source list: an xkb layout with an optional variant, or a decoded layout file.
@@ -170,6 +176,7 @@ pub struct KeyboardSettings {
     pub fn_key: Option<FnKey>,
     pub layout_keyboard: Option<LayoutKeyboard>,
     pub layout_level3: Option<Level3>,
+    pub compose_key: Option<ComposeKey>,
     pub slow_keys: Option<bool>,
     pub slow_keys_delay_ms: Option<u32>,
     pub sticky_keys: Option<bool>,
@@ -286,6 +293,12 @@ const KEYS: &[Key<KeyboardSettings>] = &[
         layout_level3,
         Level3::from_name,
         |k: &Level3| k.name().to_string()
+    ),
+    field_key!(
+        "compose_key",
+        compose_key,
+        ComposeKey::from_name,
+        |k: &ComposeKey| k.name().to_string()
     ),
     field_key!("slow_keys", slow_keys, parse_switch, switch_ref),
     field_key!(
@@ -427,14 +440,16 @@ mod tests {
     fn ranges_and_choices_are_checked() {
         let (s, problems) = KeyboardSettings::parse(
             "caps_lock_hold = 800\nlayout_keyboard = iso\nlayout_level3 = both-alt\nfn_key = do-nothing\n\
-             caps_lock_hold = 0\ncaps_lock_hold = 1501\nslow_keys_delay = 0\nfn_key = sing\nmouse_keys_max_speed = 0\nlayout_keyboard = x\n",
+             caps_lock_hold = 0\ncaps_lock_hold = 1501\nslow_keys_delay = 0\nfn_key = sing\nmouse_keys_max_speed = 0\nlayout_keyboard = x\n\
+             compose_key = right-ctrl\ncompose_key = ralt\n",
             None,
         );
         assert_eq!(
             problems.iter().map(|p| p.line).collect::<Vec<_>>(),
-            vec![5, 6, 7, 8, 9, 10]
+            vec![5, 6, 7, 8, 9, 10, 12]
         );
         assert_eq!(s.caps_lock_hold_ms, Some(800));
+        assert_eq!(s.compose_key, Some(ComposeKey::RightCtrl));
         assert_eq!(
             (s.layout_keyboard, s.layout_level3, s.fn_key),
             (

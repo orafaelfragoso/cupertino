@@ -74,17 +74,19 @@ fn interior(size: Size, theme: &ThemeTokens) -> Rect {
     })
 }
 
-/// How far the text scrolls left so the caret stays inside `width`: unchanged while it is visible, else just enough
-/// to show it, and never past the text's end.
-fn follow(scroll: f64, caret_x: f64, text_width: f64, width: f64) -> f64 {
+/// How far the text scrolls left so a caret `caret_width` wide stays inside `width`: unchanged while it is visible,
+/// else just enough to show all of it, and never further than leaves room for it after the text's end.
+fn follow(scroll: f64, caret_x: f64, caret_width: f64, text_width: f64, width: f64) -> f64 {
     let scroll = if caret_x < scroll {
         caret_x
-    } else if caret_x > scroll + width {
-        caret_x - width
+    } else if caret_x + caret_width > scroll + width {
+        caret_x + caret_width - width
     } else {
         scroll
     };
-    scroll.min((text_width - width).max(0.0)).max(0.0)
+    scroll
+        .min((text_width + caret_width - width).max(0.0))
+        .max(0.0)
 }
 
 /// The left edge of text `width` wide before it scrolls: the interior's start, or in right-to-left as far right as
@@ -156,12 +158,18 @@ fn paint_text(
     };
     let caret = layout.caret_rect(shown.caret);
     let focused = look.focused && enabled;
-    let shown_x = if focused {
-        caret.min_x()
+    let (shown_x, shown_width) = if focused {
+        (caret.min_x(), CARET_WIDTH)
     } else {
-        layout.caret_rect(position(0)).min_x()
+        (layout.caret_rect(position(0)).min_x(), 0.0)
     };
-    let offset = follow(scroll.get(), shown_x, layout.size().width, area.width());
+    let offset = follow(
+        scroll.get(),
+        shown_x,
+        shown_width,
+        layout.size().width,
+        area.width(),
+    );
     scroll.set(offset);
     let origin = Point::new(
         leading_x(&env, area, layout.size().width) - offset,
@@ -467,7 +475,13 @@ impl FieldState {
         let (layout, origin) = placed(cx.env(), self.buffer.text(), bounds.size, 0.0)?;
         let caret = layout.caret_rect(self.buffer.caret_position());
         let width = interior(bounds.size, &cx.env().theme).width();
-        let scroll = follow(self.scroll.get(), caret.min_x(), layout.size().width, width);
+        let scroll = follow(
+            self.scroll.get(),
+            caret.min_x(),
+            CARET_WIDTH,
+            layout.size().width,
+            width,
+        );
         Some(caret.translate(
             bounds.min_x() + origin.x - scroll,
             bounds.min_y() + origin.y,

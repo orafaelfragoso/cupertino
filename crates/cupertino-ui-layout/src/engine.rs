@@ -80,7 +80,7 @@ pub(crate) struct Engine<'a, T: LayoutTree> {
     direction: LayoutDirection,
     pub node_limit: usize,
     cache: &'a mut LayoutCache<T::Id>,
-    stats: LayoutStats,
+    pub stats: LayoutStats,
 }
 
 /// Lays out the tree under `root` within `available`. The root sits at the origin; every other node is in its parent's

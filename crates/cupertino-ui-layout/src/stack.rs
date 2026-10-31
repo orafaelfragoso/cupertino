@@ -75,7 +75,8 @@ pub(crate) fn arrange<T: LayoutTree>(
             item.lower = floor.min(item.basis);
         }
     }
-    let sizes = distribute(&items, main - gaps)?;
+    let (sizes, passes) = distribute(&items, main - gaps);
+    engine.stats.flex_passes += passes;
 
     let mut solved = Vec::with_capacity(items.len());
     for (item, main_size) in items.iter().zip(&sizes) {
@@ -167,51 +168,201 @@ pub(crate) fn arrange<T: LayoutTree>(
     })
 }
 
-/// Shares `room` among the items: leftover space by `grow`, a shortfall by `shrink` times basis. An item that would
-/// leave its bounds is frozen at the bound and the rest is shared again, until nothing violates. Every pass but the
-/// last freezes at least one item, so `items.len() + 1` passes always settle; the error guards that invariant.
-fn distribute<Id>(items: &[Item<Id>], room: f64) -> Result<Vec<f64>, LayoutError> {
+/// Shares `room` among the items: leftover space by `grow`, a shortfall by `shrink` times basis, each item held within
+/// its bounds (`lower <= basis <= upper`, so growing meets only upper bounds and shrinking only lower ones). The share
+/// per unit of weight is solved in one pass: with the items ordered by the share at which each reaches its bound, an
+/// item whose bound comes before the share of those still free sits at its bound, and the rest take that share.
+/// Returns the sizes and the number of passes, 0 when there is nothing to share.
+fn distribute<Id>(items: &[Item<Id>], room: f64) -> (Vec<f64>, usize) {
     let mut sizes: Vec<f64> = items.iter().map(|i| i.basis).collect();
-    let growing = room - sizes.iter().sum::<f64>() > 0.0;
+    let free = room - sizes.iter().sum::<f64>();
+    let growing = free > 0.0;
     let weight = |i: &Item<Id>| if growing { i.grow } else { i.shrink * i.basis };
-    let mut frozen: Vec<bool> = items
+    let slack = |i: &Item<Id>| {
+        if growing {
+            i.upper - i.basis
+        } else {
+            i.basis - i.lower
+        }
+    };
+    let mut flexible: Vec<(f64, usize)> = items
         .iter()
-        .map(|i| weight(i) <= 0.0 || i.lower == i.upper)
+        .enumerate()
+        .filter(|(_, i)| weight(i) > 0.0 && i.lower != i.upper)
+        .map(|(index, i)| (slack(i) / weight(i), index))
         .collect();
-    for _ in 0..=items.len() {
-        let used: f64 = sizes.iter().sum();
-        let free = room - used;
-        let weights: f64 = items
-            .iter()
-            .zip(&frozen)
-            .filter(|(_, f)| !**f)
-            .map(|(i, _)| weight(i))
-            .sum();
-        if weights <= 0.0
-            || free.abs() < EPSILON
-            || (growing && free < 0.0)
-            || (!growing && free > 0.0)
-        {
-            return Ok(sizes);
+    if flexible.is_empty() || free.abs() < EPSILON {
+        return (sizes, 0);
+    }
+    flexible.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // the weight of the items from each position on, summed from the end so a small weight is not lost in a large one
+    let mut weights = vec![0.0; flexible.len() + 1];
+    for (k, &(_, index)) in flexible.iter().enumerate().rev() {
+        weights[k] = weights[k + 1] + weight(&items[index]);
+    }
+    let mut left = free.abs();
+    let mut bounded = 0;
+    for &(reach, index) in &flexible {
+        if reach >= left / weights[bounded] {
+            break;
         }
-        let mut violated = false;
-        let mut next = sizes.clone();
-        for (index, item) in items.iter().enumerate() {
-            if frozen[index] {
-                continue;
-            }
-            let wanted = sizes[index] + free * weight(item) / weights;
-            let bounded = wanted.max(item.lower).min(item.upper);
-            violated |= bounded != wanted;
-            next[index] = bounded;
-            if bounded != wanted {
-                frozen[index] = true;
-            }
-        }
-        sizes = next;
-        if !violated {
-            return Ok(sizes);
+        let item = &items[index];
+        left -= slack(item);
+        sizes[index] = if growing { item.upper } else { item.lower };
+        bounded += 1;
+    }
+    if bounded < flexible.len() {
+        let share = free.signum() * left / weights[bounded];
+        for &(_, index) in &flexible[bounded..] {
+            let item = &items[index];
+            sizes[index] = (item.basis + share * weight(item)).clamp(item.lower, item.upper);
         }
     }
-    Err(LayoutError::NoConvergence)
+    (sizes, 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn item(basis: f64, lower: f64, upper: f64, grow: f64, shrink: f64) -> Item<()> {
+        Item {
+            id: (),
+            basis,
+            lower,
+            upper,
+            grow,
+            shrink,
+            align: Align::Start,
+            cross_fixed: false,
+            natural: None,
+        }
+    }
+
+    /// Freeze-and-share: share the room, freeze every item that leaves its bounds at the bound, share again. Returns the
+    /// sizes and the passes it took.
+    fn iterated(items: &[Item<()>], room: f64) -> (Vec<f64>, usize) {
+        let mut sizes: Vec<f64> = items.iter().map(|i| i.basis).collect();
+        let growing = room - sizes.iter().sum::<f64>() > 0.0;
+        let weight = |i: &Item<()>| if growing { i.grow } else { i.shrink * i.basis };
+        let mut frozen: Vec<bool> = items
+            .iter()
+            .map(|i| weight(i) <= 0.0 || i.lower == i.upper)
+            .collect();
+        for pass in 0.. {
+            let free = room - sizes.iter().sum::<f64>();
+            let weights: f64 = items
+                .iter()
+                .zip(&frozen)
+                .filter(|(_, f)| !**f)
+                .map(|(i, _)| weight(i))
+                .sum();
+            if weights <= 0.0 || free.abs() < EPSILON || (growing != (free > 0.0)) {
+                return (sizes, pass);
+            }
+            let mut violated = false;
+            for (index, item) in items.iter().enumerate() {
+                if frozen[index] {
+                    continue;
+                }
+                let wanted = sizes[index] + free * weight(item) / weights;
+                let bounded = wanted.max(item.lower).min(item.upper);
+                if bounded != wanted {
+                    violated = true;
+                    frozen[index] = true;
+                }
+                sizes[index] = bounded;
+            }
+            if !violated {
+                return (sizes, pass + 1);
+            }
+        }
+        unreachable!()
+    }
+
+    fn close(a: &[f64], b: &[f64]) -> bool {
+        a.iter()
+            .zip(b)
+            .all(|(x, y)| (x - y).abs() <= 1e-6 * x.abs().max(y.abs()).max(1.0))
+    }
+
+    /// Each child's weight is 0.6 of what is left and its slack 0.7 of the share per weight, so freezing and sharing again
+    /// frees one child per pass.
+    fn one_bound_per_pass(count: usize, shortfall: f64) -> Vec<Item<()>> {
+        let mut weights = Vec::with_capacity(count);
+        let mut left = 1.0;
+        for k in 0..count {
+            let w = if k + 1 < count { 0.6 * left } else { left };
+            weights.push(w);
+            left -= w;
+        }
+        let (mut room, mut total) = (shortfall, 1.0);
+        let mut slacks = Vec::with_capacity(count);
+        for w in &weights {
+            let slack = 0.7 * room / total * w;
+            slacks.push(slack);
+            room -= slack;
+            total -= w;
+        }
+        let basis = 2.0 * slacks.iter().cloned().fold(0.0, f64::max);
+        weights
+            .iter()
+            .zip(&slacks)
+            .map(|(w, s)| item(basis, basis - s, basis, 0.0, *w))
+            .collect()
+    }
+
+    #[test]
+    fn a_shortfall_that_bounds_one_child_per_pass_is_shared_in_one() {
+        let items = one_bound_per_pass(60, 1e5);
+        let room = items.iter().map(|i| i.basis).sum::<f64>() - 1e5;
+        let (reference, passes) = iterated(&items, room);
+        assert!(passes > 32, "freeze-and-share takes {passes} passes");
+        let (sizes, solved) = distribute(&items, room);
+        assert_eq!(solved, 1);
+        assert!(close(&sizes, &reference));
+        assert!(items.iter().zip(&sizes).all(|(i, s)| *s == i.lower));
+    }
+
+    /// Basis, lower, upper, grow and shrink of each item, with `lower <= basis <= upper` as the stack makes them.
+    fn specs() -> impl Strategy<Value = Vec<(f64, f64, f64, f64, f64)>> {
+        prop::collection::vec(
+            (
+                0.0..500.0f64,
+                0.0..1.0f64,
+                prop::option::of(0.0..300.0f64),
+                0.0..3.0f64,
+                0.0..3.0f64,
+                prop::bool::weighted(0.1),
+            ),
+            1..12,
+        )
+        .prop_map(|v| {
+            v.into_iter()
+                .map(|(basis, floor, extra, grow, shrink, pinned)| {
+                    if pinned {
+                        (basis, basis, basis, grow, shrink)
+                    } else {
+                        let upper = extra.map_or(f64::INFINITY, |e| basis + e);
+                        (basis, basis * floor, upper, grow, shrink)
+                    }
+                })
+                .collect()
+        })
+    }
+
+    proptest! {
+        #[test]
+        fn the_one_pass_share_is_the_freeze_and_share_fixpoint(specs in specs(), room in 0.0..4000.0f64) {
+            let items: Vec<Item<()>> = specs.iter().map(|&(b, l, u, g, s)| item(b, l, u, g, s)).collect();
+            let (sizes, passes) = distribute(&items, room);
+            let (reference, _) = iterated(&items, room);
+            prop_assert!(passes <= 1);
+            prop_assert!(close(&sizes, &reference), "{sizes:?} != {reference:?}");
+            for (i, s) in items.iter().zip(&sizes) {
+                prop_assert!(*s >= i.lower && *s <= i.upper);
+            }
+        }
+    }
 }

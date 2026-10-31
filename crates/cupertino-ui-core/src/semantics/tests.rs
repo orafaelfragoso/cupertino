@@ -88,6 +88,40 @@ impl Widget<M> for Alert {
     }
 }
 
+/// A badge: no node of its own, only words for the node it sits in.
+struct Note(&'static str);
+
+impl Widget<M> for Note {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.description(self.0);
+    }
+}
+
 fn pass(view: Element<M>) -> (Tree<M>, NodeId, SemanticsPass) {
     let mut tree = Tree::new(20);
     let root = tree.reconcile(None, view).unwrap();
@@ -156,6 +190,22 @@ fn children_of_a_node_without_a_role_belong_to_its_nearest_ancestor_with_one() {
     assert!(!pass.nodes.contains_key(&middle));
     assert_eq!(pass.nodes[&root].children, leaves);
     assert_eq!(pass.focusable, leaves);
+}
+
+#[test]
+fn a_description_without_a_role_joins_its_nearest_ancestor_with_one() {
+    let (tree, root, pass) = pass(Element::new(group(vec![Element::new(group(vec![
+        Element::new(Note("3 unread")),
+        Element::new(Note("flagged")),
+    ]))])));
+    let middle = tree.get(root).unwrap().children[0];
+
+    assert_eq!(
+        pass.nodes[&root].description.as_deref(),
+        Some("3 unread, flagged")
+    );
+    assert_eq!(pass.nodes.len(), 1, "{:?}", pass.nodes.keys());
+    assert!(!pass.nodes.contains_key(&middle));
 }
 
 #[test]

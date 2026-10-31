@@ -1008,6 +1008,38 @@ mod tests {
     }
 
     #[test]
+    fn right_walks_latin_text_laid_out_right_to_left_in_the_order_it_is_drawn() {
+        let text = "abc!";
+        let style = ParagraphStyle {
+            direction: Some(Direction::Rtl),
+            ..ParagraphStyle::default()
+        };
+        let layout = layout_with(text, style, None);
+        let mut buffer = crate::TextBuffer::new();
+        buffer.set_text(text);
+        buffer.set_direction(Some(Direction::Rtl));
+        buffer.select(text.len()..text.len());
+        for _ in 0..text.len() + 1 {
+            buffer.move_visual(false, false);
+        }
+        let mut xs = vec![layout.caret_rect(buffer.caret_position()).x()];
+        for _ in 0..text.len() + 1 {
+            buffer.move_visual(true, false);
+            xs.push(layout.caret_rect(buffer.caret_position()).x());
+        }
+        assert!((xs[0] - 0.0).abs() < 1e-6, "{xs:?}");
+        assert!(
+            xs.windows(2).take(text.len()).all(|pair| pair[1] > pair[0]),
+            "every Right moves right on screen: {xs:?}"
+        );
+        assert_eq!(
+            xs[text.len()],
+            xs[text.len() + 1],
+            "and stops at the right edge"
+        );
+    }
+
+    #[test]
     fn a_click_at_a_direction_change_draws_the_caret_where_it_hit() {
         let layout = layout(MIXED, None);
         let after_space = layout.caret_rect(TextPosition {

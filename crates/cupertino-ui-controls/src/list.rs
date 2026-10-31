@@ -494,7 +494,11 @@ impl<M: 'static> Rows<M> {
         }
         match (open, item.expanded) {
             (true, Some(false)) | (false, Some(true)) => outline.toggle(toggle(open, false), cx),
-            (true, Some(true)) if at + 1 < self.count => self.move_to(at + 1, false, cx),
+            (true, Some(true))
+                if at + 1 < self.count && (outline.item)(at + 1).level > item.level =>
+            {
+                self.move_to(at + 1, false, cx)
+            }
             (false, _) if item.level > 0 => {
                 let parent = (0..at)
                     .rev()
@@ -578,6 +582,7 @@ impl<M: 'static> Widget<M> for Rows<M> {
                     selected,
                     cursor: cursor == Some(index),
                     item,
+                    outline: self.outline.clone(),
                     content,
                 })
                 .key(Key::Int(index as u64))
@@ -667,6 +672,7 @@ struct ListRow<M> {
     /// The list's one Tab stop.
     cursor: bool,
     item: Option<TreeItem>,
+    outline: Option<Rc<Outline<M>>>,
     content: Vec<Element<M>>,
 }
 
@@ -714,8 +720,32 @@ impl<M: 'static> Widget<M> for ListRow<M> {
     }
 
     /// A press focuses the row without showing the ring or scrolling, then goes on to the list, which selects.
+    /// Assistive technology opens and closes a tree row with its Expand and Collapse actions.
     fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         match event {
+            Event::Action(request) if cx.node() == cx.target() => {
+                let (Some(outline), Some(expanded)) =
+                    (&self.outline, self.item.and_then(|i| i.expanded))
+                else {
+                    return Propagation::Continue;
+                };
+                let open = match request.action {
+                    Action::Expand => true,
+                    Action::Collapse => false,
+                    _ => return Propagation::Continue,
+                };
+                if open != expanded {
+                    outline.toggle(
+                        TreeToggle {
+                            index: self.index,
+                            expanded: open,
+                            recursive: false,
+                        },
+                        cx,
+                    );
+                }
+                return Propagation::Stop;
+            }
             Event::Pointer(
                 PointerEvent::Button {
                     button: MouseButton::Left,

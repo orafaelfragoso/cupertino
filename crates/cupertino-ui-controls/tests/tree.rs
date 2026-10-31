@@ -20,10 +20,12 @@ const FILES: usize = 9;
 struct Setup {
     folders: usize,
     open: bool,
+    /// Folder 0 holds no files.
+    empty: bool,
 }
 
 thread_local! {
-    static SETUP: Cell<Setup> = const { Cell::new(Setup { folders: 3, open: false }) };
+    static SETUP: Cell<Setup> = const { Cell::new(Setup { folders: 3, open: false, empty: false }) };
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -35,6 +37,7 @@ enum Message {
 
 struct Model {
     folders: usize,
+    empty: bool,
     open: BTreeSet<usize>,
     scroll: ScrollState,
     selection: Selection,
@@ -46,7 +49,7 @@ fn rows(model: &Model) -> Vec<(usize, Option<usize>)> {
     let mut rows = Vec::new();
     for folder in 0..model.folders {
         rows.push((folder, None));
-        if model.open.contains(&folder) {
+        if model.open.contains(&folder) && !(model.empty && folder == 0) {
             rows.extend((0..FILES).map(|file| (folder, Some(file))));
         }
     }
@@ -63,6 +66,7 @@ impl Application for Folders {
         let setup = SETUP.get();
         let model = Model {
             folders: setup.folders,
+            empty: setup.empty,
             open: if setup.open {
                 (0..setup.folders).collect()
             } else {
@@ -145,7 +149,11 @@ impl Application for Folders {
 }
 
 fn harness(folders: usize, open: bool, direction: LayoutDirection) -> Harness<Folders> {
-    SETUP.set(Setup { folders, open });
+    SETUP.set(Setup {
+        folders,
+        open,
+        empty: false,
+    });
     Harness::with_direction(direction)
 }
 
@@ -273,4 +281,20 @@ fn an_open_tree_of_ten_thousand_rows_builds_as_many_nodes_as_one_of_a_thousand()
         h.snapshot().nodes.len()
     };
     assert_eq!(nodes(100), nodes(1000));
+}
+
+#[test]
+fn right_on_an_open_row_without_children_stays_on_it() {
+    SETUP.set(Setup {
+        folders: 3,
+        open: false,
+        empty: true,
+    });
+    let mut h = Harness::<Folders>::new();
+    h.tap(TAB);
+    h.tap(RIGHT);
+    assert!(h.model().open.contains(&0), "the empty folder opened");
+    assert_eq!(rows(h.model()).len(), 3);
+    h.tap(RIGHT);
+    assert_eq!(focused_row(&h), Some(0), "not to the next folder");
 }

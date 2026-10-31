@@ -60,7 +60,7 @@ value is protected, so neither what is typed nor its length leaves the process; 
 | `surfaces` | the layer surfaces (feature `app`) |
 
 The colours are the design tokens of the session's appearance; the scrim is `authentication-scrim`. Values marked
-APPROXIMATED in `panel` and `render` are Cupertino's own.
+approximate in `panel` and `render` are Cupertino's own.
 
 ## Not yet
 

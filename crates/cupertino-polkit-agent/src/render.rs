@@ -32,13 +32,13 @@ const CONTROL_RADIUS: f64 = 5.0;
 const FIELD_INSET: f64 = 6.0;
 const FOCUS_RING: f64 = 3.0;
 const FAILURE_OUTLINE: f64 = 2.0;
-/// The spinner that stands in for Authenticate's title while the answer is checked (APPROXIMATED proportions).
+/// The spinner that stands in for Authenticate's title while the answer is checked (approximate proportions).
 const SPINNER: f64 = 12.0;
 const SPOKES: usize = 12;
 const SPINNER_PERIOD: f64 = 1.0;
 /// A typed character of a secret.
 const BULLET: char = '•';
-/// The disclosure's and the pop-up's chevrons (APPROXIMATED).
+/// The disclosure's and the pop-up's chevrons (approximate).
 const CHEVRON: f64 = 3.5;
 const CHEVRON_STROKE: f64 = 1.5;
 const POPUP_CHEVRONS: f64 = 16.0;

@@ -102,6 +102,9 @@ pub struct Head {
     /// The mode the head was to show when the display could not show it and fell back to `state.mode`: it is what
     /// stays stored, so the fallback is never taken for the person's choice.
     pub wanted_mode: Option<HeadMode>,
+    /// The backend could not show the head, so it is off: it stays stored as on, so the display is tried again when
+    /// plugged in again.
+    pub unsupported: bool,
     /// The state and modes output-management clients were last told, `None` before the first time.
     advertised: Option<(HeadState, Vec<HeadMode>)>,
 }
@@ -259,7 +262,7 @@ fn from_stored_transform(t: StoredTransform) -> Transform {
 fn stored_settings(head: &Head) -> DisplaySettings {
     let (state, mode) = (&head.state, head.wanted_mode.unwrap_or(head.state.mode));
     DisplaySettings {
-        enabled: state.enabled,
+        enabled: state.enabled || head.unsupported,
         mode: ModeSetting {
             width: mode.width as u32,
             height: mode.height as u32,
@@ -412,6 +415,7 @@ impl Cupertino {
             output: None,
             powered: true,
             wanted_mode: None,
+            unsupported: false,
             advertised: None,
         });
         self.heads_changed();
@@ -502,6 +506,7 @@ impl Cupertino {
         }
         if let Some(head) = self.displays.head_mut(id) {
             head.state.enabled = false;
+            head.unsupported = true;
         }
         self.heads_changed();
     }
@@ -602,12 +607,15 @@ impl Cupertino {
                 tracing::error!(error = %e, "restoring the previous display configuration failed");
             }
         } else {
-            // a head the person gave another mode shows what they chose; one left in its fallback still wants its own
+            // what the person changed is their choice; a fallback or an unsupported head they left alone keeps its own
             for (id, state) in wanted {
-                let was = before.iter().find(|(h, _)| h == id).map(|(_, s)| s.mode);
+                let was = before.iter().find(|(h, _)| h == id).map(|(_, s)| *s);
                 if let Some(head) = self.displays.head_mut(*id) {
-                    if was != Some(state.mode) {
+                    if was.map(|s| s.mode) != Some(state.mode) {
                         head.wanted_mode = None;
+                    }
+                    if was.map(|s| s.enabled) != Some(state.enabled) {
+                        head.unsupported = false;
                     }
                 }
             }
@@ -822,6 +830,7 @@ mod tests {
             output: None,
             powered: true,
             wanted_mode: None,
+            unsupported: false,
             advertised: None,
         }
     }

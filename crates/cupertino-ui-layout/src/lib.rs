@@ -267,8 +267,6 @@ impl LayoutSpec {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutError {
-    /// Flexible space did not settle within one pass per child plus one; unreachable for finite specs.
-    NoConvergence,
     InvalidConstraint,
     NonFiniteValue,
     /// More nodes than [`LayoutOptions::node_limit`], a tree deeper than 256 levels, or a grid whose cells or placement
@@ -323,6 +321,9 @@ pub struct LayoutStats {
     pub solves: usize,
     /// Calls to `LayoutTree::measure_leaf`.
     pub leaf_measures: usize,
+    /// Passes in which a stack shared its room among its flexible children: one per solved stack with room to share,
+    /// however many children reach a bound.
+    pub flex_passes: usize,
 }
 
 /// A scroll view's position, kept in the application's model.

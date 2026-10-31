@@ -611,7 +611,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     route(&mut self.tree, w, now, &mut effects).notify(node, &Event::Ime(ime));
                 }
             }
-            WindowEvent::PopupDone | WindowEvent::Presented { .. } => return Ok(()),
+            WindowEvent::PopupDone
+            | WindowEvent::Presented { .. }
+            | WindowEvent::Discarded { .. } => return Ok(()),
         }
         self.apply(i, effects);
         Ok(())

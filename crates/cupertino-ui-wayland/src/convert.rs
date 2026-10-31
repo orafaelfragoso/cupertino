@@ -32,6 +32,11 @@ impl InputTimeline {
     }
 }
 
+/// `time` on a clock that reads `clock_now`, on the window system's clock that reads `now`; never later than `now`.
+pub(crate) fn on_window_clock(time: u64, clock_now: u64, now: u64) -> u64 {
+    now.saturating_sub(clock_now.saturating_sub(time))
+}
+
 /// A size in logical points as whole points, rounded up and at least 1.
 pub(crate) fn whole(size: Size) -> (u32, u32) {
     let side = |v: f64| v.ceil().clamp(1.0, f64::from(u32::MAX)) as u32;
@@ -361,6 +366,16 @@ mod tests {
         let mut t = InputTimeline::default();
         t.map(u32::MAX - 5, 50 * MS);
         assert_eq!(t.map(4, 60 * MS), 60 * MS);
+    }
+
+    #[test]
+    fn a_presentation_time_keeps_its_distance_from_now_and_is_never_later() {
+        assert_eq!(on_window_clock(9_960 * MS, 10_000 * MS, 500 * MS), 460 * MS);
+        assert_eq!(
+            on_window_clock(10_005 * MS, 10_000 * MS, 500 * MS),
+            500 * MS
+        );
+        assert_eq!(on_window_clock(0, 10_000 * MS, 500 * MS), 0);
     }
 
     #[test]

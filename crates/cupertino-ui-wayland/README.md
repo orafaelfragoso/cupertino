@@ -51,10 +51,12 @@ compositor is told only the frame's damage and the carried damage, or all of the
 No free buffer, no configure yet, or a frame at another size than the latest configure asks for is `NotReady`, and the
 damage is carried (more than 64 rectangles become the whole frame). The transport acknowledges the latest configure
 with every frame. `request_frame` answers at once when no frame callback is outstanding, else with the callback; a
-callback nobody asked for is not reported.
+callback nobody asked for is not reported. On a compositor with `wp_presentation`, each presented frame is reported as
+`Presented` with the time it turned visible, moved from the compositor's presentation clock onto the window system's
+clock and never later than now, or as `Discarded` when the compositor never showed it.
 
 A clipboard read finishes before `read_clipboard` returns (the transport's one-second limit) and its data arrives with
-the next `dispatch`. Not offered yet, so their flags are false: presentation times, touch, the primary selection, drag
+the next `dispatch`. Not offered yet, so their flags are false: touch, the primary selection, drag
 and drop, and the desktop's effects protocol, which an extension binds through `connection`. A popup's `offset` moves
 its anchor rectangle; `reactive` is not sent.
 

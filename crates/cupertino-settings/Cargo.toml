@@ -24,6 +24,7 @@ app = [
 cupertino-menu-model = { path = "../cupertino-menu-model" }
 cupertino-ui-menus = { path = "../cupertino-ui-menus", optional = true }
 cupertino-assets = { path = "../cupertino-assets" }
+cupertino-apps = { path = "../cupertino-apps" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-filepicker = { path = "../cupertino-filepicker" }
 cupertino-thumbnails = { path = "../cupertino-thumbnails" }

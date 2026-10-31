@@ -1,3 +1,30 @@
+init Account { name: "", revision: 0, remember: false, signed_in: None }
+> key Tab
+> key 'A'
+  Name(TextChange { text: "A", revision: 1 })
+    = Account { name: "A", revision: 1, remember: false, signed_in: None }
+> key 'd'
+  Name(TextChange { text: "Ad", revision: 2 })
+    = Account { name: "Ad", revision: 2, remember: false, signed_in: None }
+> key 'a'
+  Name(TextChange { text: "Ada", revision: 3 })
+    = Account { name: "Ada", revision: 3, remember: false, signed_in: None }
+> key Tab
+> key, protected
+> key, protected
+> key, protected
+> key, protected
+> key, protected
+> key, protected
+> key, protected
+> key, protected
+  SignIn(7)
+    = Account { name: "Ada", revision: 3, remember: false, signed_in: Some(7) }
+> key, protected
+> key ' '
+  Remember(true)
+    = Account { name: "Ada", revision: 3, remember: true, signed_in: Some(7) }
+
 window 1
 pending messages=0 tasks=0 frames=0 animating=false next_wake=Some(500000000)
 focus Some(NodeId(7v1))

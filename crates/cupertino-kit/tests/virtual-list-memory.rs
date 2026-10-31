@@ -9,10 +9,9 @@ mod support;
 use cupertino_kit::core::Application;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
-use support::{Run, TAB};
+use support::{Run, END, TAB};
 use virtual_list::VirtualList;
 
-const END: u32 = 0xff57;
 /// Stated before measuring: what 49,000 more rows may cost.
 const MARGIN: isize = 64 * 1024;
 

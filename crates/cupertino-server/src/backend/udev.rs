@@ -32,6 +32,7 @@ use smithay::backend::egl::context::ContextPriority;
 use smithay::backend::egl::{EGLContext, EGLDevice, EGLDisplay};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::sync::SyncPoint;
+use smithay::backend::renderer::utils::Buffer;
 use smithay::backend::renderer::Color32F;
 use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::desktop::utils::OutputPresentationFeedback;
@@ -72,8 +73,15 @@ type Manager = DrmOutputManager<
     DrmDeviceFd,
 >;
 
-/// What a queued flip carries to its vblank: the scheduler's id for it and its presentation feedback.
-type Frame = (PresentationId, OutputPresentationFeedback);
+/// What a queued flip carries to its vblank.
+pub struct Frame {
+    /// The scheduler's id for it.
+    id: PresentationId,
+    feedback: OutputPresentationFeedback,
+    /// The client buffers it was drawn from. Dropping the last handle of one signals its explicit-sync release point,
+    /// which must wait until the GPU finished reading it: once the flip is done, the frame drawn from it is finished.
+    _buffers: Vec<Buffer>,
+}
 
 struct Surface {
     output: OutputId,
@@ -1207,6 +1215,8 @@ struct Drawn {
     /// Something differs from the frame before: it waits to be queued.
     rendered: bool,
     failed: Option<RenderError>,
+    /// The client buffers of the surfaces the frame was drawn from ([`crate::frame::drawn_buffers`]).
+    buffers: Vec<Buffer>,
 }
 
 impl Drawn {
@@ -1214,13 +1224,15 @@ impl Drawn {
         scene: false,
         rendered: false,
         failed: None,
+        buffers: Vec::new(),
     };
 
-    /// The outcome of a render of the scene of output `idx`.
+    /// The outcome of a render of the scene of output `idx` from `buffers`.
     fn of(
         state: &mut Cupertino,
         idx: usize,
         result: Result<bool, RenderError>,
+        buffers: Vec<Buffer>,
         lost: &mut bool,
     ) -> Self {
         state.outputs[idx].scheduler.rendered();
@@ -1234,6 +1246,7 @@ impl Drawn {
                     scene: true,
                     rendered,
                     failed: None,
+                    buffers,
                 }
             }
             Err(e) => {
@@ -1272,7 +1285,12 @@ fn render_surface(
     if drawn.rendered {
         let feedback = state.collect_feedback(idx);
         let id = state.outputs[idx].scheduler.next_presentation();
-        match surface.drm_output.queue_frame((id, feedback)) {
+        let frame = Frame {
+            id,
+            feedback,
+            _buffers: drawn.buffers,
+        };
+        match surface.drm_output.queue_frame(frame) {
             Ok(()) => {
                 surface.pending = true;
                 let locked = state.scene_built_locked(idx);
@@ -1315,6 +1333,7 @@ fn draw_direct(
         return Some(Drawn::NOTHING);
     };
     let surface = card.surfaces.get_mut(&crtc)?;
+    let buffers = crate::frame::drawn_buffers(&composed.resources.surfaces);
     let (res, cache, _) = state.gles_parts(idx)?;
     let mut resources = GlesResources::new(res, cache, composed.resources);
     let result = Gles
@@ -1328,7 +1347,7 @@ fn draw_direct(
             },
         )
         .map(|completion| completion.status() == RenderStatus::Rendered);
-    Some(Drawn::of(state, idx, result, &mut u.renderer_lost))
+    Some(Drawn::of(state, idx, result, buffers, &mut u.renderer_lost))
 }
 
 /// Draw a frame of a display of another card: the render GPU draws the scene into a buffer of the display's copy, and
@@ -1370,6 +1389,7 @@ fn draw_copy(
     let Some(composed) = state.compose_for_present(&mut render.renderer, idx) else {
         return Some(Ok(Drawn::NOTHING));
     };
+    let buffers = crate::frame::drawn_buffers(&composed.resources.surfaces);
     let (res, cache, _) = state.gles_parts(idx)?;
     let mut resources = GlesResources::new(res, cache, composed.resources);
     let result = match &mut target {
@@ -1439,7 +1459,13 @@ fn draw_copy(
         }
         Err(e) => Err(e),
     };
-    Some(Ok(Drawn::of(state, idx, result, &mut u.renderer_lost)))
+    Some(Ok(Drawn::of(
+        state,
+        idx,
+        result,
+        buffers,
+        &mut u.renderer_lost,
+    )))
 }
 
 fn frame_finish(
@@ -1490,9 +1516,9 @@ fn frame_finish(
     }
     // only the flip in flight is shown: a late event of a flip dropped by a reset confirms no frame, a lock frame least
     // of all, and the refresh grid does not follow it; its feedback is discarded
-    let presented = shown.as_ref().and_then(|(id, _)| scheduler.presented(*id));
+    let presented = shown.as_ref().and_then(|f| scheduler.presented(f.id));
     if let Some(presented) = presented {
-        if let Some((_, mut feedback)) = shown {
+        if let Some(Frame { mut feedback, .. }) = shown {
             feedback.presented(
                 clock,
                 Refresh::fixed(refresh),

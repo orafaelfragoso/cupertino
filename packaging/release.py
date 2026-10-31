@@ -51,7 +51,7 @@ APPS = ('cupertino-files', 'cupertino-settings')
 BINARIES = (
     'cupertino-server',
     'cupertino-dock', 'cupertino-menubar', 'cupertino-launcher', 'cupertino-notifications', 'cupertino-controlcenter',
-    'cupertino-osd', 'cupertino-screenshot', 'cupertino-windowmanager', 'cupertino-login',
+    'cupertino-osd', 'cupertino-screenshot', 'cupertino-windowmanager', 'cupertino-login', 'cupertino-polkit-agent',
     *APPS,
     'cupertino-sessiond', 'cupertino-netd', 'cupertino-btd', 'cupertino-powerd',
 )
@@ -115,6 +115,7 @@ def runtime(fmt):
         ('usr/lib/systemd/user/cupertino-session.target', 0o644, False),
         ('usr/lib/sysusers.d/cupertino-greeter.conf', 0o644, False),
         ('usr/share/dbus-1/system.d/org.cupertino.conf', 0o644, False),
+        ('usr/share/xdg-desktop-portal/cupertino-portals.conf', 0o644, False),
         ('etc/cupertino/login.conf', 0o644, True),
         ('etc/cupertino/greeter.json', 0o644, True),
         ('etc/cupertino/compositor.json', 0o644, True),

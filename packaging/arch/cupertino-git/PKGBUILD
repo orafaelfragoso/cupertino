@@ -48,7 +48,7 @@ check() {
 }
 
 package() {
-  depends=('glibc' 'sh' 'gcc-libs' 'mesa' 'libglvnd' 'pam' 'systemd' 'dbus' 'xkeyboard-config' 'shared-mime-info' 'adwaita-icon-theme' 'cupertino-data')
+  depends=('glibc' 'sh' 'gcc-libs' 'mesa' 'libglvnd' 'pam' 'systemd' 'dbus' 'polkit' 'xdg-desktop-portal' 'xdg-desktop-portal-gtk' 'xkeyboard-config' 'shared-mime-info' 'adwaita-icon-theme' 'cupertino-data')
   optdepends=('wayland: nested session inside another Wayland desktop'
               'libxkbcommon: nested session'
               'foot: terminal for the nested try-out'

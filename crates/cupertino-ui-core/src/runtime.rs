@@ -130,7 +130,7 @@ struct WindowState<M> {
     /// The item a roving group asked to focus, moved to at the next frame if it is a Tab stop by then.
     focus_request: Option<FocusRequest>,
     /// The node keyboard or programmatic focus moved to, for its scroll containers to show at the next layout.
-    reveal: Option<NodeId>,
+    reveal: Option<(NodeId, Option<Rect>)>,
     /// Each scroll container's viewport and content as it last heard them.
     scroll_heard: HashMap<NodeId, (Size, Size)>,
     /// Frames held back in a row, so the model could take a scroll geometry first.
@@ -869,6 +869,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             Self::set_clipboard(&mut self.system, text);
         }
         w.wakes.extend(effects.wakes);
+        if let Some((node, rect)) = effects.reveal {
+            w.reveal = Some((node, Some(rect)));
+            w.invalidate();
+        }
         if !effects.animate.is_empty() {
             w.animate.extend(effects.animate);
             w.invalidate();
@@ -951,7 +955,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         };
         w.invalidate();
         if change.visible {
-            w.reveal = change.to;
+            w.reveal = change.to.map(|node| (node, None));
         }
         // the same node with its ring shown or hidden keeps its focus: no events, only a repaint
         if change.from == change.to {
@@ -1170,12 +1174,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.env.direction,
                 &mut w.scroll_heard,
             );
-            if let Some(target) = w.reveal.take() {
+            if let Some((target, part)) = w.reveal.take() {
                 scroll.extend(reveal_events(
                     &self.tree,
                     &w.geometry,
                     w.env.direction,
                     target,
+                    part,
                 ));
             }
             let mut scroll_effects = Effects::default();

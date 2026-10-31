@@ -6,6 +6,7 @@ mod button;
 mod checkbox;
 mod choice;
 mod disclosure;
+mod editor;
 mod field;
 mod icon;
 mod list;
@@ -23,6 +24,7 @@ mod stepper;
 mod text;
 mod toggle;
 
+pub use editor::EditorState;
 pub use field::{FieldState, SecureState};
 pub use list::ListState;
 pub use press::Press;
@@ -269,6 +271,19 @@ pub struct TextField<M> {
     pub enabled: bool,
     pub on_change: Option<Handler<TextChange, M>>,
     pub on_submit: Option<M>,
+}
+
+/// A multi-line text editor without chrome, as tall as its text: a vertical [`ScrollView`] around it scrolls it.
+/// Return inserts a line break and Tab moves the focus.
+pub struct TextEditor<M> {
+    /// The accessible name, separate from the placeholder.
+    pub label: String,
+    pub placeholder: String,
+    pub value: String,
+    /// The revision of `value` the model last accepted, as a [`TextField`]'s.
+    pub revision: u64,
+    pub enabled: bool,
+    pub on_change: Option<Handler<TextChange, M>>,
 }
 
 /// A password field. Its text stays in the field's own buffer and reaches the application only on submit.

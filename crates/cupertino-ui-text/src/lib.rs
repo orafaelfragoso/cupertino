@@ -21,12 +21,38 @@ mod shape;
 mod strike;
 mod system;
 
-pub use buffer::{TextBuffer, CARET_BLINK_OFF, CARET_BLINK_ON, MULTI_CLICK_INTERVAL};
+/// The text work this thread has done: paragraphs shaped (not found in the shaping cache) and laid out. For tests
+/// that hold the work of an edit to what it changed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TextWork {
+    pub shaped: u64,
+    pub laid_out: u64,
+}
+
+thread_local!(static TEXT_WORK: std::cell::Cell<TextWork> = const {
+    std::cell::Cell::new(TextWork { shaped: 0, laid_out: 0 })
+});
+
+impl TextWork {
+    pub fn current() -> TextWork {
+        TEXT_WORK.with(std::cell::Cell::get)
+    }
+
+    fn record(change: impl FnOnce(&mut TextWork)) {
+        TEXT_WORK.with(|work| {
+            let mut now = work.get();
+            change(&mut now);
+            work.set(now);
+        });
+    }
+}
+
+pub use buffer::{LineLayout, TextBuffer, CARET_BLINK_OFF, CARET_BLINK_ON, MULTI_CLICK_INTERVAL};
 pub use font::{FontIndex, FontMetrics, FontSource};
 pub use input::SURROUNDING_MAX_BYTES;
 pub use installed::{FontFile, InstalledFonts, SystemFonts};
 pub use keymap::{KeyInput, Keymap};
-pub use keys::{Response, TextFieldKeys};
+pub use keys::{Response, TextEditorKeys, TextFieldKeys};
 pub use paragraph::{Line, LineRun, Paragraph, ParagraphLayout, CARET_WIDTH};
 pub use raster::GlyphRaster;
 pub use secure::SecureBuffer;

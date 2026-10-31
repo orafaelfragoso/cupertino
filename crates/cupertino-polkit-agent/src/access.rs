@@ -72,7 +72,13 @@ pub fn prompt_tree(window: WindowId, view: &View<'_>) -> AccessibilityUpdate {
                     value: name.to_owned(),
                     editing: None,
                 }),
-                ..control(Role::PopUpButton, USER, frame, focused(Control::User), false)
+                ..control(
+                    Role::PopUpButton,
+                    USER,
+                    frame,
+                    focused(Control::User),
+                    false,
+                )
             },
         ));
     }
@@ -195,7 +201,13 @@ fn field(view: &View<'_>, focused: bool) -> AccessibilityNode {
     }
 }
 
-fn control(role: Role, name: &str, frame: Rect, focused: bool, disabled: bool) -> AccessibilityNode {
+fn control(
+    role: Role,
+    name: &str,
+    frame: Rect,
+    focused: bool,
+    disabled: bool,
+) -> AccessibilityNode {
     AccessibilityNode {
         actions: vec![Action::Click],
         states: AccessibleStates {

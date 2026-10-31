@@ -46,7 +46,7 @@ fn tree(agent: &Agent, panel: &Panel, user: Option<&str>) -> AccessibilityUpdate
             frames: &frames,
             panel,
             prompt,
-            message: &[prompt.request.message.clone()],
+            message: std::slice::from_ref(&prompt.request.message),
             user,
             status: &status,
             details: &details,
@@ -83,7 +83,10 @@ fn the_dialog_is_a_modal_alert_labelled_by_its_title_and_described_by_the_messag
         Some("Authentication is required to mount the disk")
     );
     assert_eq!(update.focus, Some(PromptNode::Field.id()));
-    assert!(update.nodes.iter().all(|(id, _)| *id != PromptNode::User.id()));
+    assert!(update
+        .nodes
+        .iter()
+        .all(|(id, _)| *id != PromptNode::User.id()));
 }
 
 #[test]

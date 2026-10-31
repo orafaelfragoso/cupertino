@@ -184,7 +184,9 @@ pub enum Command {
     Authenticate,
     Cancel,
     /// Another of polkitd's users: the next one, or the one before.
-    User { back: bool },
+    User {
+        back: bool,
+    },
     ToggleDetails,
     /// Only the focus moved.
     Focused,
@@ -206,6 +208,11 @@ impl Panel {
             details: false,
             users,
         }
+    }
+
+    /// polkitd offers more than one user, so the panel has the user row.
+    pub fn users(&self) -> bool {
+        self.users
     }
 
     fn order(&self) -> &'static [Control] {

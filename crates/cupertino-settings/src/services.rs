@@ -1,12 +1,13 @@
 //! The live services (feature `app`): `org.cupertino.Network1`, `org.cupertino.Bluetooth1`, `org.cupertino.Power1` and
 //! `org.cupertino.LoginManager1` with UPower's display device on the system bus, `org.cupertino.NotificationCenter1` on
-//! the session bus, and the mixer's
-//! master through `cupertino-alsa` (in-process, as the control panel does, §1). Each connection is made on first use and
+//! the session bus, and the default PipeWire sink through `cupertino-pipewire`, else the mixer's master through
+//! `cupertino-alsa` (in-process, as the control panel does, §1). Each connection is made on first use and
 //! again after a failure, so a daemon that starts later is picked up; properties are read every time, never cached.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use cupertino_pipewire::{Target, Wpctl};
 use zbus::blocking::proxy::Builder;
 use zbus::blocking::{Connection, Proxy};
 use zbus::proxy::CacheProperties;
@@ -271,6 +272,8 @@ pub struct Services {
     pub session: Bus,
     mixer: Option<cupertino_alsa::Master>,
     alsa_dir: PathBuf,
+    wpctl: Wpctl,
+    pipewire: bool,
 }
 
 impl Services {
@@ -280,6 +283,8 @@ impl Services {
             session: Bus::session(),
             mixer: None,
             alsa_dir: PathBuf::from(cupertino_alsa::DEVICE_DIR),
+            wpctl: Wpctl::default(),
+            pipewire: true,
         }
     }
 
@@ -290,6 +295,17 @@ impl Services {
             session,
             mixer: None,
             alsa_dir: PathBuf::from(cupertino_alsa::DEVICE_DIR),
+            wpctl: Wpctl::default(),
+            pipewire: true,
+        }
+    }
+
+    /// Read and change the sound output through `wpctl`, else the mixer below `alsa_dir` (tests).
+    pub fn with_sound(self, wpctl: Wpctl, alsa_dir: PathBuf) -> Self {
+        Services {
+            wpctl,
+            alsa_dir,
+            ..self
         }
     }
 
@@ -458,7 +474,17 @@ impl Services {
         reading(self.system.checked(result), "Bluetooth is not available")
     }
 
+    /// The default PipeWire sink; when no PipeWire daemon answers, the mixer's master, which the changes after this
+    /// reading then go to as well.
     pub fn volume(&mut self) -> Reading<Volume> {
+        if let Ok(sink) = self.wpctl.volume(Target::DefaultSink) {
+            self.pipewire = true;
+            return Reading::Ready(Volume {
+                level: sink.level,
+                muted: sink.muted,
+            });
+        }
+        self.pipewire = false;
         match self.with_mixer(|m| {
             let level = m.level()?;
             Ok(Volume {
@@ -509,6 +535,14 @@ impl Services {
                 let result = self.session.proxy(CENTRE_NAME, CENTRE_PATH, CENTRE_NAME).and_then(|p| p.call::<_, _, ()>("SetDoNotDisturbFor", &(id.as_str(),)));
                 self.session.checked(result).map_err(|e| failure(&e))
             }
+            Call::SetVolume { level, muted } if self.pipewire => self
+                .wpctl
+                .set_level(Target::DefaultSink, *level)
+                .and_then(|()| self.wpctl.set_muted(Target::DefaultSink, *muted))
+                .map_err(|e| {
+                    log_once(&format!("the volume could not be changed: {e}"));
+                    "The volume could not be changed.".to_string()
+                }),
             Call::SetVolume { level, muted } => self
                 .with_mixer(|m| {
                     m.set_level(*level)?;

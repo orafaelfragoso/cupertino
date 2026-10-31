@@ -24,6 +24,7 @@ app = [
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-alsa = { path = "../cupertino-alsa" }
 cupertino-icons = { path = "../cupertino-icons" }
+cupertino-pipewire = { path = "../cupertino-pipewire" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-decorations = { path = "../cupertino-decorations" }
@@ -40,4 +41,6 @@ path = "src/main.rs"
 required-features = ["app"]
 
 [dev-dependencies]
+cupertino-pipewire = { path = "../cupertino-pipewire", features = ["fake"] }
 cupertino-test-bus = { path = "../cupertino-test-bus" }
+tempfile = "3"

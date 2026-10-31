@@ -195,6 +195,7 @@ impl<const COUNT: usize> Application for VirtualList<COUNT> {
             shortcuts: CommandRegistry::new(),
             on_close: None,
             background: WindowBackground::Theme,
+            popup: None,
             content: Element::new(Stack {
                 axis: Axis::Vertical,
                 padding: Insets::ZERO,

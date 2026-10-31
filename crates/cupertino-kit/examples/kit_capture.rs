@@ -104,6 +104,7 @@ fn window(title: &'static str, size: Size, content: Vec<Element<Message>>) -> Ve
         shortcuts: CommandRegistry::new(),
         on_close: None,
         background: WindowBackground::Theme,
+        popup: None,
         content: Element::new(Stack {
             axis: Axis::Vertical,
             padding: WINDOW_CONTENT_INSET,

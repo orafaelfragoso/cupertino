@@ -23,6 +23,8 @@ pub enum Role {
     RadioButton,
     RadioGroup,
     Slider,
+    /// A number stepped up and down, with a value range.
+    SpinButton,
     ProgressIndicator,
     TextInput,
     MultilineTextInput,

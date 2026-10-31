@@ -1,18 +1,22 @@
 //! The standard CupertinoKit controls. Each is a [`cupertino_ui_core::Widget`] that reads its look from the theme
 //! tokens, takes values from the application's model and reports changes as messages.
 
+mod badge;
 mod button;
 mod checkbox;
 mod choice;
+mod disclosure;
 mod field;
 mod icon;
 mod list;
 mod look;
+mod pages;
 mod press;
 mod progress;
 mod scroll;
 mod slider;
 mod stack;
+mod stepper;
 mod text;
 mod toggle;
 
@@ -21,6 +25,7 @@ pub use list::ListState;
 pub use press::Press;
 pub use scroll::{BarState, ViewportState};
 pub use slider::SliderState;
+pub use stepper::StepperState;
 
 use cupertino_geometry::Insets;
 use cupertino_ui_core::{Checked, Element};
@@ -147,6 +152,60 @@ pub struct Slider<M> {
     pub ticks: u32,
     pub enabled: bool,
     pub on_change: Option<Handler<f64, M>>,
+}
+
+/// A number stepped by an up and a down arrow, as beside a field; one Tab stop. The arrow that would pass a limit is
+/// disabled.
+pub struct Stepper<M> {
+    /// The accessible name.
+    pub label: String,
+    pub value: f64,
+    pub min: f64,
+    pub max: f64,
+    pub step: f64,
+    pub enabled: bool,
+    pub on_change: Option<Handler<f64, M>>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DisclosureStyle {
+    /// A triangle that points along the reading direction while closed and down while open.
+    #[default]
+    Triangle,
+    /// A bordered button with a chevron, for revealing a section.
+    Bordered,
+}
+
+/// Shows or hides a region, which the application lays out from `expanded`.
+pub struct DisclosureButton<M> {
+    /// The accessible name.
+    pub label: String,
+    pub expanded: bool,
+    pub style: DisclosureStyle,
+    pub enabled: bool,
+    /// Asked with the new state.
+    pub on_toggle: Option<Handler<bool, M>>,
+}
+
+/// A count or a dot on another control, as unread items on a sidebar row. It is no node of its own to accessibility:
+/// its description joins that of the control it sits in.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Badge {
+    /// The count's text, such as `3` or `99+`; `None` draws a dot.
+    pub text: Option<String>,
+    /// What it says to assistive technology, such as "3 unread".
+    pub description: String,
+}
+
+/// Which of several pages shows, as a row of dots; one Tab stop, Left and Right change the page and a click picks
+/// one.
+pub struct PageDots<M> {
+    /// The accessible name.
+    pub label: String,
+    pub count: usize,
+    pub current: usize,
+    pub enabled: bool,
+    pub on_select: Option<Handler<usize, M>>,
 }
 
 /// How far a task has come, or that it is going on (`value: None`); not a Tab stop.

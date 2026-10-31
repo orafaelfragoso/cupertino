@@ -164,6 +164,7 @@ fn role(role: Role) -> accesskit::Role {
         Role::RadioButton => A::RadioButton,
         Role::RadioGroup => A::RadioGroup,
         Role::Slider => A::Slider,
+        Role::SpinButton => A::SpinButton,
         Role::ProgressIndicator => A::ProgressIndicator,
         Role::TextInput => A::TextInput,
         Role::MultilineTextInput => A::MultilineTextInput,

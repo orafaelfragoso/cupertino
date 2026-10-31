@@ -25,6 +25,7 @@ pub enum MenuAction {
     Duplicate,
     MakeAlias,
     ShowOriginal,
+    Eject,
     SelectAll,
     View(ViewMode),
     SortBy(SortKey, bool),
@@ -37,7 +38,7 @@ pub enum MenuAction {
 }
 
 /// What the menus depend on.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MenuState {
     /// Number of selected items.
     pub count: usize,
@@ -53,6 +54,8 @@ pub struct MenuState {
     pub can_go_back: bool,
     pub can_go_forward: bool,
     pub has_parent: bool,
+    /// The name of the removable file system the folder shown is on.
+    pub eject: Option<String>,
 }
 
 /// The sort choices the window has data for, with their action names.
@@ -92,6 +95,7 @@ impl MenuAction {
             Duplicate => (Scope::Win, "duplicate"),
             MakeAlias => (Scope::Win, "make-alias"),
             ShowOriginal => (Scope::Win, "show-original"),
+            Eject => (Scope::Win, "eject"),
             SelectAll => (Scope::Win, "select-all"),
             View(ViewMode::Icons) => (Scope::Win, "view-icons"),
             View(ViewMode::List) => (Scope::Win, "view-list"),
@@ -122,6 +126,7 @@ impl MenuAction {
             Duplicate,
             MakeAlias,
             ShowOriginal,
+            Eject,
             SelectAll,
             View(ViewMode::Icons),
             View(ViewMode::List),
@@ -147,7 +152,8 @@ fn item(label: &str, action: MenuAction, chord: Option<Chord>) -> Entry {
     Entry::Item(Item::new(label, action.name(), chord))
 }
 
-/// The menus for `state`. Put Back is there only in the trash, and the toggles name what they will do.
+/// The menus for `state`. Put Back is there only in the trash, Eject only on a removable file system, and the toggles
+/// name what they will do.
 pub fn menu_bar(state: &MenuState) -> MenuBar {
     use MenuAction::*;
     use Modifier::{Alt, Ctrl, Primary, Shift};
@@ -197,7 +203,15 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
             .into_iter()
             .flatten()
             .collect(),
-        ],
+            state
+                .eject
+                .iter()
+                .map(|name| item(&format!("Eject “{name}”"), Eject, chord(&[Primary], "e")))
+                .collect(),
+        ]
+        .into_iter()
+        .filter(|section: &Vec<Entry>| !section.is_empty())
+        .collect(),
     );
     let edit = Menu::new(
         "Edit",
@@ -372,9 +386,29 @@ mod tests {
     }
 
     #[test]
+    fn eject_names_the_removable_file_system_shown_and_is_there_only_on_one() {
+        let on_stick = MenuState {
+            eject: Some("KINGSTON".into()),
+            ..MenuState::default()
+        };
+        let lines = outline(&menu_bar(&on_stick).exported());
+        let at = lines
+            .iter()
+            .position(|l| l == "  Eject “KINGSTON” win.eject")
+            .expect("the Eject item");
+        assert_eq!(
+            lines[at - 2..at],
+            ["  Show Original win.show-original", "  ---"]
+        );
+        let elsewhere = outline(&menu_bar(&MenuState::default()).exported());
+        assert!(elsewhere.iter().all(|l| !l.contains("win.eject")));
+    }
+
+    #[test]
     fn every_published_action_maps_back_to_its_item() {
         let bar = menu_bar(&MenuState {
             in_trash: true,
+            eject: Some("KINGSTON".into()),
             ..MenuState::default()
         });
         fn actions(menu: &Menu, out: &mut Vec<ActionName>) {

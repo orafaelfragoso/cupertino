@@ -4,7 +4,9 @@
 //! `ci/capture.sh files/sidebar --drop-place Desktop --scale 2` (the flags are `cupertino-capture`'s)
 //!
 //! State flags: `--view icon|list` (default icon), `--drop-place NAME` (the sidebar place) or `--drop-item NAME` (the
-//! item), with the drop look of a drag over it, and `--selected NAME` (the item, selected). The home folder `avery` is made
+//! item), with the drop look of a drag over it, `--selected NAME` (the item, selected), and `--devices removable` (three
+//! removable file systems under Locations: "Backup Disk" mounted, "Camera Card" busy, "KINGSTON" not mounted). The
+//! home folder `avery` is made
 //! under a temporary directory with the user folders and sample files; the places are those of a session with that
 //! home on a computer named `cupertino`. File types come from the system's MIME database. The sidebar material is
 //! the server's: here a flat fill of the window background stands in for it.
@@ -160,7 +162,8 @@ fn state(flag: &str, value: &str) -> State {
 
 impl App for Capture {
     const NAME: &'static str = "files";
-    const STATE_FLAGS: &'static [&'static str] = &["view", "drop-place", "drop-item", "selected"];
+    const STATE_FLAGS: &'static [&'static str] =
+        &["view", "drop-place", "drop-item", "selected", "devices"];
 
     fn surfaces(&self) -> Vec<String> {
         vec!["window".into(), "sidebar".into()]
@@ -174,7 +177,11 @@ impl App for Capture {
                 state("selected", "notes.txt"),
                 state("drop-item", "Documents"),
             ],
-            _ => vec![State::new(), state("drop-place", "Desktop")],
+            _ => vec![
+                State::new(),
+                state("drop-place", "Desktop"),
+                state("devices", "removable"),
+            ],
         }
     }
 
@@ -182,6 +189,7 @@ impl App for Capture {
         let mut mode = ViewMode::Icons;
         let mut drop_target = None;
         let mut selected = None;
+        let mut places = self.places.clone();
         let item = |name: &str| {
             self.browser
                 .entries()
@@ -194,6 +202,16 @@ impl App for Capture {
                 ("view", "icon") => mode = ViewMode::Icons,
                 ("view", "list") => mode = ViewMode::List,
                 ("view", _) => return Err(format!("--view {value}: icon or list")),
+                ("devices", "removable") => places.extend([
+                    Place::removable(
+                        "Backup Disk",
+                        Some(Path::new("/run/media/avery/Backup")),
+                        false,
+                    ),
+                    Place::removable("Camera Card", Some(Path::new("/run/media/avery/CAM")), true),
+                    Place::removable("KINGSTON", None, false),
+                ]),
+                ("devices", _) => return Err(format!("--devices {value}: removable")),
                 ("drop-place", name) => {
                     let place = self.places.iter().position(|p| p.name == name);
                     let place = place.ok_or_else(|| format!("{name}: no sidebar place"))?;
@@ -215,7 +233,7 @@ impl App for Capture {
         let (w, h) = r.size.unwrap_or(window_metrics::DEFAULT_SIZE);
         let frame = self.painter.frame(
             Size { w, h },
-            &self.places,
+            &places,
             Bars::HIDDEN,
             window_metrics::TOOLBAR_SEARCH_FIELD.0,
             &path,
@@ -234,7 +252,7 @@ impl App for Capture {
         );
         let state = WindowState {
             browser: &self.browser,
-            places: &self.places,
+            places: &places,
             mode,
             active: true,
             search: &TextField::new(),

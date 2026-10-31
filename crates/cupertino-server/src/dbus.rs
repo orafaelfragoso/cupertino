@@ -161,6 +161,7 @@ impl Request {
                     OsdKey::VolumeUp => ("VolumeStep", Body::Step(1, fine)),
                     OsdKey::VolumeDown => ("VolumeStep", Body::Step(-1, fine)),
                     OsdKey::Mute => ("ToggleMute", Body::Empty),
+                    OsdKey::MicMute => ("ToggleMicrophoneMute", Body::Empty),
                     OsdKey::BrightnessUp => ("BrightnessStep", Body::Step(1, fine)),
                     OsdKey::BrightnessDown => ("BrightnessStep", Body::Step(-1, fine)),
                     OsdKey::KeyboardBrightnessUp => ("KeyboardBrightnessStep", Body::Step(1, fine)),
@@ -1229,6 +1230,10 @@ mod tests {
         assert_eq!(
             call(OsdKey::Mute, false),
             ("org.cupertino.Osd1", "ToggleMute", Body::Empty)
+        );
+        assert_eq!(
+            call(OsdKey::MicMute, false),
+            ("org.cupertino.Osd1", "ToggleMicrophoneMute", Body::Empty)
         );
         assert_eq!(
             call(OsdKey::BrightnessDown, false),

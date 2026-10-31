@@ -188,6 +188,36 @@ impl Volume for AlsaVolume {
     }
 }
 
+/// The default PipeWire source through `wpctl`; without a PipeWire daemon there is no microphone to mute.
+pub struct SessionMicrophone {
+    wpctl: Wpctl,
+}
+
+impl SessionMicrophone {
+    pub fn new(wpctl: Wpctl) -> Self {
+        Self { wpctl }
+    }
+}
+
+impl Volume for SessionMicrophone {
+    fn state(&mut self) -> Result<VolumeState, BackendError> {
+        let source = self.wpctl.volume(Target::DefaultSource)?;
+        Ok(VolumeState {
+            level: source.level,
+            muted: source.muted,
+        })
+    }
+
+    fn set_level(&mut self, level: f64) -> Result<f64, BackendError> {
+        self.wpctl.set_level(Target::DefaultSource, level)?;
+        Ok(self.wpctl.volume(Target::DefaultSource)?.level)
+    }
+
+    fn set_muted(&mut self, muted: bool) -> Result<(), BackendError> {
+        Ok(self.wpctl.set_muted(Target::DefaultSource, muted)?)
+    }
+}
+
 /// The default PipeWire sink through `wpctl`, so the overlay shows the level `wpctl get-volume` reports. A read that
 /// no PipeWire daemon answers goes to the ALSA master instead, and so do the changes after it until the next read.
 pub struct SessionVolume {

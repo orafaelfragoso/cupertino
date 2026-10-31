@@ -4,7 +4,7 @@
 use cupertino_alsa::DEVICE_DIR;
 use cupertino_assets::Assets;
 use cupertino_osd::backend::{
-    AlsaVolume, Backlight, MemoryBacklight, MemoryVolume, SessionVolume, Volume,
+    AlsaVolume, MemoryBacklight, MemoryVolume, SessionMicrophone, SessionVolume, Volume,
 };
 use cupertino_osd::control;
 use cupertino_osd::controller::{Command, Controller};
@@ -100,26 +100,25 @@ fn first_output(conn: &Connection) -> Result<OutputId> {
 }
 
 fn controller(options: &Options) -> Controller {
-    let (volume, display, keyboard): (Box<dyn Volume>, Box<dyn Backlight>, Box<dyn Backlight>) =
-        if options.fake_backends {
-            (
-                Box::new(MemoryVolume::new(FAKE_LEVEL, false)),
-                Box::new(MemoryBacklight::new(FAKE_LEVEL)),
-                Box::new(MemoryBacklight::new(FAKE_LEVEL)),
-            )
-        } else {
-            let alsa = AlsaVolume::new(PathBuf::from(DEVICE_DIR), options.alsa_card);
-            let volume: Box<dyn Volume> = match options.alsa_card {
-                Some(_) => Box::new(alsa),
-                None => Box::new(SessionVolume::new(Wpctl::default(), alsa)),
-            };
-            (
-                volume,
-                Box::new(DisplayBacklight::new()),
-                Box::new(KeyboardBacklight::new()),
-            )
-        };
-    Controller::new(volume, display, keyboard)
+    if options.fake_backends {
+        return Controller::new(
+            Box::new(MemoryVolume::new(FAKE_LEVEL, false)),
+            Box::new(MemoryVolume::new(FAKE_LEVEL, false)),
+            Box::new(MemoryBacklight::new(FAKE_LEVEL)),
+            Box::new(MemoryBacklight::new(FAKE_LEVEL)),
+        );
+    }
+    let alsa = AlsaVolume::new(PathBuf::from(DEVICE_DIR), options.alsa_card);
+    let volume: Box<dyn Volume> = match options.alsa_card {
+        Some(_) => Box::new(alsa),
+        None => Box::new(SessionVolume::new(Wpctl::default(), alsa)),
+    };
+    Controller::new(
+        volume,
+        Box::new(SessionMicrophone::new(Wpctl::default())),
+        Box::new(DisplayBacklight::new()),
+        Box::new(KeyboardBacklight::new()),
+    )
 }
 
 /// The renderer for the session's appearance and display options.

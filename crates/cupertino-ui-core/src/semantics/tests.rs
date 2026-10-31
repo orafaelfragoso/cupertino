@@ -4,7 +4,7 @@ use crate::route::Placement;
 use crate::test_support::{group, leaf, spec};
 use crate::{Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, Widget};
 use cupertino_geometry::Size;
-use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
+use cupertino_ui_layout::{Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured};
 
 type M = String;
 
@@ -139,7 +139,7 @@ fn pass(view: Element<M>) -> (Tree<M>, NodeId, SemanticsPass) {
             )
         })
         .collect();
-    let pass = build(&tree, root, &geometry, None);
+    let pass = build(&tree, root, &geometry, None, LayoutDirection::Ltr);
     (tree, root, pass)
 }
 

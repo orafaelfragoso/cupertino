@@ -562,24 +562,24 @@ impl TextBuffer {
     /// One caret stop left or right on screen, through text of either direction; without `extend` a selection
     /// collapses to its side in that direction instead.
     pub fn move_visual(&mut self, rightward: bool, extend: bool) {
-        let edges = bidi::caret_edges(&self.text, self.direction);
+        let lines = bidi::caret_lines(&self.text, self.direction);
         let selection = self.selection();
         if extend || selection.is_empty() {
-            let to = bidi::visual_neighbour(&edges, self.caret_position(), rightward)
+            let to = bidi::visual_neighbour_in(&lines, self.caret_position(), rightward)
                 .unwrap_or_else(|| self.caret_position());
             self.move_to(to.byte, extend);
             self.upstream = (to.affinity == Affinity::Upstream).then_some(to.byte);
         } else {
-            let edge = |byte| {
-                bidi::edge_at(
-                    &edges,
+            let place = |byte| {
+                bidi::place_of(
+                    &lines,
                     TextPosition {
                         byte,
                         affinity: Affinity::Downstream,
                     },
                 )
             };
-            let to = if (edge(selection.end) > edge(selection.start)) == rightward {
+            let to = if (place(selection.end) > place(selection.start)) == rightward {
                 selection.end
             } else {
                 selection.start

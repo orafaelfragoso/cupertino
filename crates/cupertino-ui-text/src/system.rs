@@ -403,7 +403,7 @@ fn style_segments(text: &AttributedText) -> Result<Vec<(Range<usize>, &TextStyle
 }
 
 /// The end of the hard line starting at `start`, and where the next one starts (`None` after the last).
-fn next_line(text: &str, start: usize) -> (usize, Option<usize>) {
+pub(crate) fn next_line(text: &str, start: usize) -> (usize, Option<usize>) {
     let rest = &text[start..];
     match rest.find(['\n', '\r', '\u{2028}', '\u{2029}']) {
         None => (text.len(), None),

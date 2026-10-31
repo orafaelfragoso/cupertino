@@ -304,8 +304,12 @@ impl Cupertino {
 
     /// Apply the keys whose value differs between `before` and `after`, the values `keyboard.conf` held.
     pub fn apply_keyboard_change(&mut self, before: &KeyboardConf, after: &KeyboardConf) {
-        let mut target = crate::kbd::KeyboardSettings::default();
+        let mut target = crate::kbd::KeyboardSettings {
+            system: self.config.keyboard.system.clone(),
+            ..crate::kbd::KeyboardSettings::default()
+        };
         target.apply_file(after);
+        target.use_system_layout();
         let (kb, t) = (&mut self.config.keyboard, &target);
         macro_rules! changed {
             ($($key:ident),+) => { false $(|| before.$key != after.$key)+ };
@@ -327,6 +331,7 @@ impl Cupertino {
         take!(fn_key => fn_usage);
         take!(layout_keyboard => layout_keyboard);
         take!(layout_level3 => layout_level3);
+        take!(compose_key => compose);
         take!(slow_keys => access.slow_keys);
         take!(slow_keys_delay_ms => access.slow_keys_delay_ms);
         take!(sticky_keys => access.sticky_keys);
@@ -376,7 +381,7 @@ impl Cupertino {
         ) {
             self.key_filters = crate::kbd_filters::KeyFilters::new(&self.config.keyboard);
         }
-        if changed!(input_sources, layout_keyboard, layout_level3) {
+        if changed!(input_sources, layout_keyboard, layout_level3, compose_key) {
             self.overlays.inputs =
                 crate::kbd::InputSources::new(self.config.keyboard.sources.clone());
             // the repeat too, and the keymap of the new sources

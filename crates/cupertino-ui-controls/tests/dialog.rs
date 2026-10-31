@@ -24,10 +24,12 @@ type App = Page<false, true>;
 #[derive(Default)]
 struct Model {
     open: bool,
+    name: String,
+    revision: u64,
     said: Vec<Message>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Message {
     Open,
     Behind,
@@ -36,7 +38,7 @@ enum Message {
     Cancel,
     Save,
     Submit,
-    Edit,
+    Edit(TextChange),
 }
 
 impl<const FIELD: bool, const CANCEL: bool> Application for Page<FIELD, CANCEL> {
@@ -51,11 +53,14 @@ impl<const FIELD: bool, const CANCEL: bool> Application for Page<FIELD, CANCEL> 
         match message {
             Message::Open => model.open = true,
             Message::DontSave | Message::Cancel | Message::Save => model.open = false,
+            Message::Edit(change) => {
+                model.name = change.text;
+                model.revision = change.revision;
+                return Vec::new();
+            }
             _ => {}
         }
-        if message != Message::Edit {
-            model.said.push(message);
-        }
+        model.said.push(message);
         Vec::new()
     }
 
@@ -102,11 +107,11 @@ impl<const FIELD: bool, const CANCEL: bool> Application for Page<FIELD, CANCEL> 
                 Element::new(TextField {
                     label: "File name".into(),
                     placeholder: String::new(),
-                    value: String::new(),
-                    revision: 0,
+                    value: model.name.clone(),
+                    revision: model.revision,
                     purpose: ContentPurpose::Normal,
                     enabled: true,
-                    on_change: Some(Box::new(|_: TextChange| Message::Edit)),
+                    on_change: Some(Box::new(Message::Edit)),
                     on_submit: Some(Message::Submit),
                 })
                 .key("field")
@@ -172,7 +177,7 @@ fn opened<const FIELD: bool, const CANCEL: bool>() -> Harness<Page<FIELD, CANCEL
 fn said<const FIELD: bool, const CANCEL: bool>(
     h: &Harness<Page<FIELD, CANCEL>>,
 ) -> Option<Message> {
-    h.model().said.last().copied()
+    h.model().said.last().cloned()
 }
 
 #[test]
@@ -250,11 +255,16 @@ fn the_content_behind_takes_no_press_or_shortcut_while_the_sheet_is_up() {
 }
 
 #[test]
+fn a_body_field_takes_the_focus_when_the_sheet_opens() {
+    let mut h = opened::<true, true>();
+    assert!(h.focused("field"));
+    h.type_text("a");
+    assert_eq!(h.model().name, "a");
+}
+
+#[test]
 fn a_focused_field_keeps_return_and_escape_while_composing() {
     let mut h = opened::<true, true>();
-    while !h.focused("field") {
-        h.tap(TAB);
-    }
     h.send(WindowEvent::Ime(ImeEvent::Done(ImeBatch {
         preedit: Some(Preedit {
             text: "ka".into(),

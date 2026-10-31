@@ -73,8 +73,12 @@ fn sheet<M: Clone + 'static>(dialog: Dialog<M>) -> Element<M> {
     if !dialog.message.is_empty() {
         children.push(label(&dialog.message, TextRole::Body, true));
     }
-    children.extend(dialog.body);
-    // the least destructive answer takes the focus, so a stray Space does no harm
+    children.extend(dialog.body.map(|body| {
+        Element::new(Body {
+            children: vec![body],
+        })
+    }));
+    // a body control takes the focus first; otherwise the least destructive answer does, so a stray Space does no harm
     let initial = [
         DialogAction::Cancel,
         DialogAction::Default,
@@ -197,6 +201,43 @@ impl<M: 'static> Widget<M> for Behind<M> {
         if self.hidden {
             cx.hidden();
         }
+    }
+}
+
+/// The dialog's own controls, whose first Tab stop takes the focus when the sheet opens.
+struct Body<M> {
+    children: Vec<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for Body<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Overlay)
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.initial_focus();
     }
 }
 

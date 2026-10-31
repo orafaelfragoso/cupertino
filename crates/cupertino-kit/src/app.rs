@@ -25,7 +25,7 @@ const NODE_LIMIT: usize = 100_000;
 
 #[derive(Debug)]
 pub enum AppError {
-    /// The theme data could not be read: a broken installation.
+    /// Not even the neutral theme could be made: the built-in control metrics lack a regular size.
     Theme(cupertino_theme::Error),
     /// The Wayland display could not be reached.
     Connect(PlatformError),
@@ -85,26 +85,46 @@ pub fn preferences(appearance: &SystemAppearance) -> ThemePreferences {
     }
 }
 
-/// Makes the Cupertino theme for each appearance from `theme`. Where the theme data lacks something the theme needs,
-/// the built-in neutral colours take the place of its colours, on `start`'s metrics and type.
-fn theme_for(theme: Theme, start: Arc<ThemeTokens>) -> ThemeForAppearance {
+/// Makes the Cupertino theme for each appearance from `theme`. Without theme data, or where it lacks something the
+/// theme needs, the built-in neutral colours take the place of its colours, on `start`'s metrics and type.
+fn theme_for(theme: Option<Theme>, start: Arc<ThemeTokens>) -> ThemeForAppearance {
     Box::new(move |appearance| {
         let preferences = preferences(appearance);
-        let tokens = ThemeTokens::cupertino(&theme, preferences).unwrap_or_else(|e| {
-            eprintln!("cupertino-kit: the theme cannot follow the session ({e}); using the neutral colours");
+        let followed = theme.as_ref().and_then(|theme| {
+            ThemeTokens::cupertino(theme, preferences)
+                .map_err(|e| {
+                    eprintln!("cupertino-kit: the theme cannot follow the session ({e}); using the neutral colours");
+                })
+                .ok()
+        });
+        Arc::new(followed.unwrap_or_else(|| {
             let mut tokens = (*start).clone();
             tokens.preferences = preferences;
             tokens.colors = ColorTokens::neutral(preferences.appearance);
             tokens.motion.reduce = preferences.reduce_motion;
             tokens
-        });
-        Arc::new(tokens)
+        }))
     })
 }
 
-fn options_and_theme(preferences: ThemePreferences) -> Result<(RuntimeOptions, Theme), AppError> {
-    let data = Theme::load().map_err(AppError::Theme)?;
-    let theme = ThemeTokens::cupertino(&data, preferences).map_err(AppError::Theme)?;
+/// The Cupertino theme from the installed theme data, else the neutral one: an application starts without the
+/// desktop's data, and says why on stderr.
+fn start_theme(preferences: ThemePreferences) -> Result<(ThemeTokens, Option<Theme>), AppError> {
+    let cupertino = Theme::load().and_then(|data| {
+        ThemeTokens::cupertino(&data, preferences).map(|theme| (theme, Some(data)))
+    });
+    cupertino.or_else(|e| {
+        eprintln!("cupertino-kit: no Cupertino theme ({e}); using the neutral theme");
+        ThemeTokens::neutral(preferences)
+            .map(|theme| (theme, None))
+            .map_err(AppError::Theme)
+    })
+}
+
+fn options_and_theme(
+    preferences: ThemePreferences,
+) -> Result<(RuntimeOptions, Option<Theme>), AppError> {
+    let (theme, data) = start_theme(preferences)?;
     let assets = Assets::discover();
     let (fonts, builtin) = fonts(&assets);
     let preferred = [
@@ -262,7 +282,7 @@ mod tests {
         let (options, theme) = options_and_theme(start_preferences(Some(dark))).unwrap();
         assert_eq!(
             *options.theme,
-            ThemeTokens::cupertino(&theme, preferences(&dark)).unwrap(),
+            ThemeTokens::cupertino(&theme.unwrap(), preferences(&dark)).unwrap(),
             "every window opens with this theme"
         );
         assert_eq!(options.theme.preferences.appearance, Appearance::Dark);
@@ -274,7 +294,7 @@ mod tests {
         let start = Arc::new(
             ThemeTokens::cupertino(&theme, preferences(&SystemAppearance::default())).unwrap(),
         );
-        let mut follow = theme_for(theme, start);
+        let mut follow = theme_for(Some(theme), start);
         let dark = SystemAppearance {
             dark: true,
             reduce_motion: true,
@@ -284,6 +304,23 @@ mod tests {
         let expected = ThemeTokens::cupertino(&Theme::load().unwrap(), preferences(&dark)).unwrap();
         assert_eq!(*tokens, expected);
         assert!(tokens.motion.reduce);
+    }
+
+    #[test]
+    fn without_theme_data_following_the_session_makes_its_neutral_theme() {
+        let start =
+            Arc::new(ThemeTokens::neutral(preferences(&SystemAppearance::default())).unwrap());
+        let mut follow = theme_for(None, start);
+        let dark = SystemAppearance {
+            dark: true,
+            increase_contrast: true,
+            reduce_motion: true,
+            ..SystemAppearance::default()
+        };
+        assert_eq!(
+            *follow(&dark),
+            ThemeTokens::neutral(preferences(&dark)).unwrap()
+        );
     }
 
     #[test]

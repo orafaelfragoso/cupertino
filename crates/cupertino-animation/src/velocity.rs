@@ -1,7 +1,7 @@
 //! Velocity estimation over a short sliding window of samples.
 //!
-//! approximate: the window length (0.1 s) is a design choice; the design's own estimator was
-//! not analysed.
+//! The tracker keeps the samples of the last 0.1 s by default and reports the least-squares slope
+//! of position over time across them. A sample earlier than the newest one clears the window.
 
 use std::collections::VecDeque;
 

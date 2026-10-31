@@ -72,15 +72,7 @@ impl Entry {
     /// The entry that allows the program at `program` as it is now: by its path when only root can change it, else
     /// pinned. `Err` when it can never be allowed or cannot be looked at.
     pub fn for_program(program: &Path) -> Result<Self, String> {
-        if !program.is_absolute() || program.as_os_str().to_string_lossy().contains(['#', '\n']) {
-            return Err(format!(
-                "{} cannot be written as an entry",
-                program.display()
-            ));
-        }
-        if let Some(reason) = refusal(program) {
-            return Err(reason.to_owned());
-        }
+        writable(program)?;
         let meta = std::fs::symlink_metadata(program)
             .map_err(|e| format!("{}: {e}", program.display()))?;
         if !meta.is_file() {
@@ -170,7 +162,8 @@ impl DataControlConf {
     fn load_as(path: &Path, user: u32) -> io::Result<(Self, Vec<Problem>)> {
         let mut file = match std::fs::OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            // without O_NONBLOCK a FIFO put at the path would block the open before the check refuses it
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
             .open(path)
         {
             Ok(file) => file,
@@ -187,14 +180,34 @@ impl DataControlConf {
         Ok(Self::parse(&text))
     }
 
-    /// Write the entries into `path` atomically with mode `0600`, replacing the file.
+    /// Write the entries into `path` atomically with mode `0600`, replacing the file. An entry whose program could not be
+    /// read back as itself, or can never be allowed, is an error and nothing is written.
     pub fn store(&self, path: &Path) -> io::Result<()> {
+        for entry in &self.allowed {
+            writable(&entry.program).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        }
         let text: String = self
             .allowed
             .iter()
             .map(|e| format!("allow = {}\n", e.text()))
             .collect();
         crate::atomic::write_atomic_private(path, text.as_bytes())
+    }
+}
+
+/// Refuse a program that a line of the file cannot hold as itself (a relative path, `#`, a line break, or white space at
+/// either end, which a read trims) or that can never be allowed ([`refusal`]).
+fn writable(program: &Path) -> Result<(), String> {
+    let text = program.as_os_str().to_string_lossy();
+    if !program.is_absolute() || text.contains(['#', '\n']) || text.trim() != text {
+        return Err(format!(
+            "{} cannot be written as an entry",
+            program.display()
+        ));
+    }
+    match refusal(program) {
+        Some(reason) => Err(reason.to_owned()),
+        None => Ok(()),
     }
 }
 
@@ -407,5 +420,55 @@ mod tests {
             DataControlConf::load_as(&dir.path().join("missing.conf"), user).unwrap(),
             Default::default()
         );
+
+        let fifo = dir.path().join("fifo.conf");
+        let name = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        // Safety: `name` is a valid C string.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        assert_eq!(
+            error(&fifo, user),
+            io::ErrorKind::PermissionDenied,
+            "a FIFO, refused without waiting for a writer"
+        );
+    }
+
+    #[test]
+    fn an_entry_a_line_cannot_hold_as_itself_is_not_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_CONTROL_FILE);
+        store_ok(&path);
+        for program in [
+            "/home/me/clipd\nallow = /usr/bin/ls",
+            "/usr/bin/ls\r",
+            "/usr/bin/ls ",
+            "/home/me/#clipd",
+            "clipd",
+            "/usr/bin/python3",
+        ] {
+            let conf = DataControlConf {
+                allowed: vec![Entry {
+                    program: program.into(),
+                    pin: None,
+                }],
+            };
+            assert_eq!(
+                conf.store(&path).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput,
+                "{program:?}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                "allow = /usr/bin/ls\n",
+                "{program:?}: the file is unchanged"
+            );
+        }
+    }
+
+    fn store_ok(path: &Path) {
+        DataControlConf {
+            allowed: vec![Entry::for_program(Path::new("/usr/bin/ls")).unwrap()],
+        }
+        .store(path)
+        .unwrap();
     }
 }

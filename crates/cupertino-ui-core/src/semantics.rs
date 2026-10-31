@@ -121,7 +121,19 @@ pub(crate) fn build<M: 'static>(
                 }
                 Some(id)
             }
-            None => owner,
+            None => {
+                if let (Some(description), Some(owner)) = (semantics.description, owner) {
+                    let owner = pass
+                        .nodes
+                        .get_mut(&owner)
+                        .expect("an owner is inserted before its descendants");
+                    owner.description = Some(match owner.description.take() {
+                        Some(own) => format!("{own}, {description}"),
+                        None => description,
+                    });
+                }
+                owner
+            }
         };
         stack.extend(node.children.iter().rev().map(|&c| (c, next_owner)));
     }

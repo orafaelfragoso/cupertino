@@ -1,7 +1,8 @@
+use crate::installed::{read_font, FontFile, SystemFonts};
 use crate::{FaceId, FontId, FontStyle, FontVariation, FontWeight, TextError};
 use harfrust::font::{Font, Variation};
 use harfrust::Tag;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use swash::{FontDataRef, StringId, Style};
 
@@ -72,6 +73,17 @@ pub struct FontIndex {
     instances: Vec<Instance>,
     instance_ids: HashMap<InstanceKey, FontId>,
     fallbacks: HashMap<(FontId, FontWeight), Arc<[FontId]>>,
+    system: Option<Box<dyn SystemFonts>>,
+    /// The installed faces asked for so far, and the face each became (`None` for a file that did not load).
+    system_faces: HashMap<FontFile, Option<FaceId>>,
+    /// Characters and families the installed fonts were asked for and had nothing new for.
+    system_misses: HashSet<SystemQuery>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum SystemQuery {
+    Char(char, Option<Box<str>>),
+    Family(Box<str>, FontWeight, FontStyle),
 }
 
 impl FontIndex {
@@ -123,39 +135,78 @@ impl FontIndex {
     pub fn add_font(&mut self, data: Arc<Vec<u8>>) -> Result<Vec<FaceId>, TextError> {
         let file = FontDataRef::new(&data)
             .ok_or_else(|| TextError::InvalidFont("not a TrueType or OpenType file".into()))?;
-        let mut named = Vec::new();
         // a collection's header states its face count; each face needs a 4-byte offset, so no more fit in the file
-        for index in 0..file.len().min(data.len() / 4) {
-            let Some(font) = file.get(index) else {
-                break;
-            };
-            let name = |id| {
-                font.localized_strings()
-                    .find(|s| s.id() == id)
-                    .map(|s| s.to_string())
-            };
-            let Some(family) = name(StringId::TypographicFamily).or_else(|| name(StringId::Family))
-            else {
-                continue;
-            };
-            let attributes = font.attributes();
-            let style = match attributes.style() {
-                Style::Normal => FontStyle::Normal,
-                _ => FontStyle::Italic,
-            };
-            named.push((
-                family,
-                FontWeight(attributes.weight().0),
-                style,
-                index as u32,
-            ));
-        }
+        let named: Vec<_> = (0..file.len().min(data.len() / 4) as u32)
+            .map_while(|index| file.get(index as usize).map(|_| index))
+            .filter_map(|index| named_face(&data, index).map(|named| (named, index)))
+            .collect();
         named
             .into_iter()
-            .map(|(family, weight, style, index)| {
+            .map(|((family, weight, style), index)| {
                 self.add_face(&family, weight, style, Arc::clone(&data), index)
             })
             .collect()
+    }
+
+    /// Lets the index load installed fonts: a family no registered face has, and, after every registered face, a face
+    /// for a character none of them draws. Installed faces load once, when first needed.
+    pub fn set_system_fonts(&mut self, system: Box<dyn SystemFonts>) {
+        self.system = Some(system);
+        self.system_misses.clear();
+    }
+
+    /// The installed face of `family`, loaded on first use; `None` without installed fonts or such a family.
+    pub(crate) fn system_family(
+        &mut self,
+        family: &str,
+        weight: FontWeight,
+        style: FontStyle,
+    ) -> Option<FaceId> {
+        let query = SystemQuery::Family(family.into(), weight, style);
+        if self.system_misses.contains(&query) {
+            return None;
+        }
+        let file = self.system.as_ref()?.family(family, weight, style);
+        let face = file.and_then(|file| self.load_system(file));
+        if face.is_none() {
+            self.system_misses.insert(query);
+        }
+        face
+    }
+
+    /// An installed face that draws `ch` and was not loaded before, loaded now; `None` when the system has nothing new.
+    pub(crate) fn system_covering(
+        &mut self,
+        ch: char,
+        lang: Option<&str>,
+        weight: FontWeight,
+        style: FontStyle,
+    ) -> Option<FaceId> {
+        let query = SystemQuery::Char(ch, lang.map(Into::into));
+        if self.system_misses.contains(&query) {
+            return None;
+        }
+        let file = self.system.as_ref()?.covering(ch, lang, weight, style);
+        let face = file
+            .filter(|file| !self.system_faces.contains_key(file))
+            .and_then(|file| self.load_system(file));
+        if face.is_none() {
+            self.system_misses.insert(query);
+        }
+        face
+    }
+
+    fn load_system(&mut self, file: FontFile) -> Option<FaceId> {
+        if let Some(face) = self.system_faces.get(&file) {
+            return *face;
+        }
+        let face = read_font(&file.path).ok().and_then(|data| {
+            let (family, weight, style) = named_face(&data, file.index)?;
+            self.add_face(&family, weight, style, Arc::new(data), file.index)
+                .ok()
+        });
+        self.system_faces.insert(file, face);
+        face
     }
 
     pub fn family(&self, face: FaceId) -> Option<&str> {
@@ -311,6 +362,23 @@ impl FontIndex {
             .get(font.0 as usize)
             .ok_or(TextError::UnknownFont(font))
     }
+}
+
+/// The family, weight and style the name and OS/2 tables of face `index` in `data` give; `None` without a family name.
+fn named_face(data: &[u8], index: u32) -> Option<(String, FontWeight, FontStyle)> {
+    let font = FontDataRef::new(data)?.get(index as usize)?;
+    let name = |id| {
+        font.localized_strings()
+            .find(|s| s.id() == id)
+            .map(|s| s.to_string())
+    };
+    let family = name(StringId::TypographicFamily).or_else(|| name(StringId::Family))?;
+    let attributes = font.attributes();
+    let style = match attributes.style() {
+        Style::Normal => FontStyle::Normal,
+        _ => FontStyle::Italic,
+    };
+    Some((family, FontWeight(attributes.weight().0), style))
 }
 
 /// Coordinates are kept in quarter units, so an animated axis shares instances instead of making one per frame.

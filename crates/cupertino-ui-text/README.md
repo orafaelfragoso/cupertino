@@ -21,11 +21,16 @@ buffer follow.
   is the exception, because the boundary rule scans back over the run.
 - `FontIndex` holds the faces the app registers from font bytes and resolves a family, weight and variation set to a
   stable `FontId`; `FontIndex::shape` shapes one run with `harfrust` (visual order, byte clusters, advances in points).
+  `set_system_fonts` gives it the installed fonts: `InstalledFonts` asks Fontconfig, loaded at run time, so the
+  font configuration picks the face per script and language; without the library only the registered faces draw.
+  Kit apps set it. `tests/installed.rs` shapes Arabic, Devanagari and Hebrew with Noto Sans subsets (OFL-1.1).
 - `TextSystem` is the shared entry point (`&self` methods, one `Arc` for measuring and painting): `paragraph` shapes an
   `AttributedText` per style run and hard line and caches the result, `measure` lays it out for a size. A family
-  no face matches falls back to the first registered face. A character the run's face lacks is drawn by the first
-  other face, in load order, that has its whole grapheme cluster (joiners and variation selectors do not decide);
-  white space stays in the face before it, and a cluster no face has shows the missing glyph. A cluster with the
+  no face matches is looked up among the installed fonts, else falls back to the first registered face. A character
+  the run's face lacks is drawn by the first other face, in load order, that has its whole grapheme cluster (joiners
+  and variation selectors do not decide), then by the installed face the system picks for its first character and
+  the style's language, loaded once; white space stays in the face before it, and a cluster no face has shows the
+  missing glyph. A cluster with the
   emoji presentation selector (U+FE0F) takes the first colour face (COLR, CBDT or sbix) that has it, the run's face
   included, before any face without colour, so ❤️ is the colour heart even when the text face has a heart; without
   the selector the run's face keeps it. The cache keeps two generations of 512 paragraphs, a size
@@ -40,7 +45,7 @@ buffer follow.
   the paragraph's level so they hang past its end edge. `Start` and `End` follow the base direction. Positions stay
   logical: a downstream caret sits at the start edge of the character after it and an upstream one at the end edge of
   the character before it, `index_at` returns the side a click lands on, and a selection across a direction change can
-  be several rectangles on one line. Script fallback and system fonts follow. `tests/corpus.rs` pins the caret stops,
+  be several rectangles on one line. `tests/corpus.rs` pins the caret stops,
   glyph order, wrap points and hit testing of Latin, combining marks, Hebrew, Arabic, Devanagari, ZWJ emoji, flags and
   digits inside right-to-left text.
 - `GlyphRaster` implements `GlyphRasterizer` over a `TextSystem`'s fonts with `swash` and `cupertino-glyph`: unhinted

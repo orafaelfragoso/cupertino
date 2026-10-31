@@ -298,3 +298,26 @@ fn right_on_an_open_row_without_children_stays_on_it() {
     h.tap(RIGHT);
     assert_eq!(focused_row(&h), Some(0), "not to the next folder");
 }
+
+#[test]
+fn a_screen_reader_opens_and_closes_a_row_with_its_expand_and_collapse_actions() {
+    SETUP.set(Setup {
+        folders: 3,
+        open: false,
+        empty: false,
+    });
+    let mut h = Harness::<Folders>::assistive();
+    h.ask(&Key::Int(1), Action::Expand);
+    h.ask(&Key::Int(1), Action::Expand);
+    h.ask(&Key::Int(1), Action::Collapse);
+    let toggle = |expanded| TreeToggle {
+        index: 1,
+        expanded,
+        recursive: false,
+    };
+    assert_eq!(
+        h.model().toggles,
+        [toggle(true), toggle(false)],
+        "an Expand on an open row changes nothing"
+    );
+}

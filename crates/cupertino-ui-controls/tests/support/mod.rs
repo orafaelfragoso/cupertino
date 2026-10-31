@@ -5,13 +5,14 @@
 
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_core::{
-    AccessibilityNode, Application, CommandRegistry, Element, Environment, FrameSnapshot, Icons,
-    Key, PlaceholderIcons, Runtime, RuntimeOptions, Window, WindowBackground, WindowKey,
+    AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, Action, ActionRequest,
+    Application, CommandRegistry, Element, Environment, FrameSnapshot, Icons, Key,
+    PlaceholderIcons, Runtime, RuntimeOptions, Window, WindowBackground, WindowKey,
 };
 use cupertino_ui_layout::LayoutDirection;
 use cupertino_ui_platform::{
-    DecorationMode, KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp, TouchEvent,
-    WindowEvent, WindowId, WindowSpec, WindowStates,
+    DecorationMode, KeyEvent, Keysym, Mods, MouseButton, PlatformEvent, PointerEvent, Timestamp,
+    TouchEvent, WindowEvent, WindowId, WindowSpec, WindowStates,
 };
 use cupertino_ui_render::{CpuConfig, CpuRenderer, PaintNodeId, PaintOp};
 use cupertino_ui_test::{HeadlessWindowSystem, ManualClock};
@@ -23,7 +24,9 @@ use cupertino_ui_theme::{
     Appearance, Color, ColorRole, ColorTokens, ControlMetrics, ControlSize, FocusRing,
     InteractionVariant, Motion, StateVariant, ThemePreferences, ThemeTokens, TypeRole, TypeScale,
 };
+use std::cell::RefCell;
 use std::num::NonZeroU32;
+use std::rc::Rc;
 use std::sync::Arc;
 
 pub const SPACE: u32 = 0x20;
@@ -219,6 +222,24 @@ pub struct Harness<A: Application> {
     text: Arc<TextSystem>,
     animated: bool,
     icons: Arc<dyn Icons>,
+    asked: Option<Rc<RefCell<Vec<ActionRequest>>>>,
+}
+
+/// An active screen reader that only asks for the actions a test queues.
+struct Assistive(Rc<RefCell<Vec<ActionRequest>>>);
+
+impl AccessibilityAdapter for Assistive {
+    fn is_active(&self) -> bool {
+        true
+    }
+
+    fn window_focus(&mut self, _: WindowId, _: bool) {}
+
+    fn update(&mut self, _: &AccessibilityUpdate) {}
+
+    fn drain_actions(&mut self, out: &mut Vec<ActionRequest>) {
+        out.append(&mut self.0.borrow_mut());
+    }
 }
 
 impl<A: Application> Harness<A> {
@@ -228,6 +249,20 @@ impl<A: Application> Harness<A> {
 
     pub fn with_direction(direction: LayoutDirection) -> Self {
         Self::build(direction, theme(), placeholder_icons(), false)
+    }
+
+    /// A harness with a screen reader attached, which [`ask`](Self::ask) speaks for.
+    pub fn assistive() -> Self {
+        let asked = Rc::new(RefCell::new(Vec::new()));
+        let mut harness = Self::build_with(
+            LayoutDirection::Ltr,
+            theme(),
+            placeholder_icons(),
+            false,
+            Some(Rc::clone(&asked)),
+        );
+        harness.asked = Some(asked);
+        harness
     }
 
     /// A harness for content that animates without end: each settle shows one more frame instead of waiting for the
@@ -252,6 +287,16 @@ impl<A: Application> Harness<A> {
         icons: Arc<dyn Icons>,
         animated: bool,
     ) -> Self {
+        Self::build_with(direction, theme, icons, animated, None)
+    }
+
+    fn build_with(
+        direction: LayoutDirection,
+        theme: ThemeTokens,
+        icons: Arc<dyn Icons>,
+        animated: bool,
+        asked: Option<Rc<RefCell<Vec<ActionRequest>>>>,
+    ) -> Self {
         let clock = Arc::new(ManualClock::new(Timestamp(0)));
         let text = text();
         let options = RuntimeOptions {
@@ -271,7 +316,8 @@ impl<A: Application> Harness<A> {
                     NoGlyphs,
                 ))
             }),
-            accessibility: None,
+            accessibility: asked
+                .map(|asked| Box::new(Assistive(asked)) as Box<dyn AccessibilityAdapter>),
             clock: clock.clone(),
             on_window_error: None,
         };
@@ -288,6 +334,7 @@ impl<A: Application> Harness<A> {
             text,
             animated,
             icons,
+            asked: None,
         };
         harness.settle();
         harness
@@ -390,6 +437,25 @@ impl<A: Application> Harness<A> {
                 Timestamp(0),
             ));
         }
+    }
+
+    /// Asks for `action` on the node keyed `key` as a screen reader does, and wakes the application for it.
+    pub fn ask(&mut self, key: &Key, action: Action) {
+        let target = self.rt.find(self.window, key).unwrap();
+        self.asked
+            .as_ref()
+            .expect("an assistive harness")
+            .borrow_mut()
+            .push(ActionRequest {
+                target,
+                action,
+                data: None,
+            });
+        self.rt
+            .window_system_mut()
+            .enqueue(PlatformEvent::Wake)
+            .unwrap();
+        self.settle();
     }
 
     /// Presses and releases a key.

@@ -393,6 +393,51 @@ pub struct ListView<M> {
     pub on_activate: Option<Handler<usize, M>>,
 }
 
+/// One shown row of a tree, as the application's outline describes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TreeItem {
+    /// 0 at the top level.
+    pub level: usize,
+    /// Whether its children are shown; `None` for a row without children.
+    pub expanded: Option<bool>,
+    /// Its place among its siblings, from 0.
+    pub position: usize,
+    /// How many siblings it has, itself included.
+    pub siblings: usize,
+}
+
+/// A request to show or hide a tree row's children.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TreeToggle {
+    pub index: usize,
+    pub expanded: bool,
+    /// Every row under it too.
+    pub recursive: bool,
+}
+
+/// A tree of rows of one height, given as its shown rows in order: a row's children follow it while it is expanded.
+/// Built and navigated as a [`ListView`], with each row indented by its level after a disclosure triangle. Right
+/// opens a row or moves to its first child, Left closes it or moves to its parent, mirrored in right-to-left
+/// layouts; with Primary they open or close every row under it. Build its element with `Element::from`.
+pub struct TreeView<M> {
+    /// The accessible name.
+    pub label: String,
+    /// The shown rows.
+    pub count: usize,
+    pub row_height: f64,
+    pub scroll: ScrollState,
+    pub selection: Selection,
+    pub multiple: bool,
+    pub item: Box<dyn Fn(usize) -> TreeItem>,
+    /// Row `index`'s content, after its indent and triangle.
+    pub row: Box<dyn Fn(usize, bool) -> Element<M>>,
+    pub type_select: Option<Box<dyn Fn(usize) -> String>>,
+    pub on_scroll: Handler<ScrollState, M>,
+    pub on_select: Option<Handler<Selection, M>>,
+    pub on_activate: Option<Handler<usize, M>>,
+    pub on_toggle: Option<Handler<TreeToggle, M>>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ColumnWidth {
     Fixed(f64),

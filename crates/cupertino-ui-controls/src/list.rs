@@ -1,14 +1,15 @@
-//! ListView and TableView: a scroll view around one content node as tall as every row, which builds only the rows near
+//! ListView, TableView and TreeView: a scroll view around one content node as tall as every row, which builds only the rows near
 //! the viewport plus the cursor row, each at its index times the row height. The model keeps the offset and the
 //! selection; keys and clicks report a new selection and move the focus to the cursor row, which the runtime scrolls
 //! into view.
 
+use crate::disclosure;
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use crate::scroll;
 use crate::{
     Column, ColumnWidth, Handler, Icon, IconDirection, ListView, Scroller, Selection, SortOrder,
-    TableView, Text, TextRole,
+    TableView, Text, TextRole, TreeItem, TreeToggle, TreeView,
 };
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_core::{
@@ -34,6 +35,8 @@ const DOWN: Keysym = Keysym(0xff54);
 const PAGE_UP: Keysym = Keysym(0xff55);
 const PAGE_DOWN: Keysym = Keysym(0xff56);
 const END: Keysym = Keysym(0xff57);
+const LEFT: Keysym = Keysym(0xff51);
+const RIGHT: Keysym = Keysym(0xff53);
 const A: Keysym = Keysym(0x61);
 const SHIFTED_A: Keysym = Keysym(0x41);
 
@@ -51,6 +54,10 @@ const HEADER_TEXT_SIZE: f32 = 11.0;
 const HEADER_TEXT_WEIGHT: u16 = 600;
 const CHEVRON: f64 = 9.0;
 const CHEVRON_GAP: f64 = 4.0;
+/// A tree row's indent per level, and the column its disclosure triangle sits in. Approximate design values.
+const INDENT: f64 = 15.0;
+const TRIANGLE_COLUMN: f64 = 16.0;
+const TRIANGLE: f64 = 9.0;
 /// How long typed characters keep adding to one search.
 const TYPE_SELECT_NS: u64 = 1_000_000_000;
 
@@ -179,6 +186,21 @@ impl Selection {
 enum Kind {
     List,
     Table,
+    Tree,
+}
+
+/// A tree's rows and the requests to open and close them, shared by its rows.
+struct Outline<M> {
+    item: Box<dyn Fn(usize) -> TreeItem>,
+    on_toggle: Option<Handler<TreeToggle, M>>,
+}
+
+impl<M> Outline<M> {
+    fn toggle(&self, toggle: TreeToggle, cx: &mut EventCx<'_, M>) {
+        if let Some(on_toggle) = &self.on_toggle {
+            cx.emit(on_toggle(toggle));
+        }
+    }
 }
 
 impl<M: 'static> From<ListView<M>> for Element<M> {
@@ -195,6 +217,7 @@ impl<M: 'static> From<ListView<M>> for Element<M> {
             type_select: list.type_select,
             on_select: list.on_select,
             on_activate: list.on_activate,
+            outline: None,
         };
         scroll::frame(
             Element::new(rows),
@@ -202,6 +225,35 @@ impl<M: 'static> From<ListView<M>> for Element<M> {
             (false, true),
             Scroller::Overlay,
             Rc::new(list.on_scroll),
+        )
+    }
+}
+
+impl<M: 'static> From<TreeView<M>> for Element<M> {
+    fn from(tree: TreeView<M>) -> Self {
+        let rows = Rows {
+            kind: Kind::Tree,
+            label: tree.label,
+            count: tree.count,
+            row_height: tree.row_height,
+            scroll: tree.scroll,
+            selection: tree.selection,
+            multiple: tree.multiple,
+            row: tree.row,
+            type_select: tree.type_select,
+            on_select: tree.on_select,
+            on_activate: tree.on_activate,
+            outline: Some(Rc::new(Outline {
+                item: tree.item,
+                on_toggle: tree.on_toggle,
+            })),
+        };
+        scroll::frame(
+            Element::new(rows),
+            tree.scroll,
+            (false, true),
+            Scroller::Overlay,
+            Rc::new(tree.on_scroll),
         )
     }
 }
@@ -238,6 +290,7 @@ impl<M: 'static> From<TableView<M>> for Element<M> {
             type_select: table.type_select,
             on_select: table.on_select,
             on_activate: table.on_activate,
+            outline: None,
         };
         let on_sort = table.on_sort.map(Rc::new);
         let header = Element::new(Header {
@@ -287,6 +340,7 @@ struct Rows<M> {
     type_select: Option<Box<dyn Fn(usize) -> String>>,
     on_select: Option<Handler<Selection, M>>,
     on_activate: Option<Handler<usize, M>>,
+    outline: Option<Rc<Outline<M>>>,
 }
 
 /// The node state of a list. Opaque.
@@ -371,6 +425,11 @@ impl<M: 'static> Rows<M> {
         let last = self.count - 1;
         let page = ((self.scroll.viewport.height / self.row_height).floor() as usize).max(1);
         let cursor = self.selection.cursor.filter(|&c| c < self.count);
+        if let Some(outline) = &self.outline {
+            if let Some(propagation) = self.tree_key(outline, at, key, cx) {
+                return propagation;
+            }
+        }
         let to = match key.keysym {
             UP if plain => cursor.map_or(at, |c| c.saturating_sub(1)),
             DOWN if plain => cursor.map_or(at, |c| (c + 1).min(last)),
@@ -398,6 +457,55 @@ impl<M: 'static> Rows<M> {
         };
         self.move_to(to, shift, cx);
         Propagation::Stop
+    }
+
+    /// Left and Right in a tree: open or close the cursor row, or move to its first child or its parent.
+    fn tree_key(
+        &self,
+        outline: &Outline<M>,
+        at: usize,
+        key: &KeyEvent,
+        cx: &mut EventCx<'_, M>,
+    ) -> Option<Propagation> {
+        let (forward, back) = match cx.env().direction {
+            LayoutDirection::Ltr => (RIGHT, LEFT),
+            LayoutDirection::Rtl => (LEFT, RIGHT),
+        };
+        let open = match key.keysym {
+            k if k == forward => true,
+            k if k == back => false,
+            _ => return None,
+        };
+        let mods = key.mods;
+        if mods.contains(Mods::CTRL) || mods.contains(Mods::ALT) || mods.contains(Mods::SHIFT) {
+            return None;
+        }
+        let item = (outline.item)(at);
+        let toggle = |expanded, recursive| TreeToggle {
+            index: at,
+            expanded,
+            recursive,
+        };
+        if mods.contains(Mods::PRIMARY) {
+            if item.expanded.is_some() {
+                outline.toggle(toggle(open, true), cx);
+            }
+            return Some(Propagation::Stop);
+        }
+        match (open, item.expanded) {
+            (true, Some(false)) | (false, Some(true)) => outline.toggle(toggle(open, false), cx),
+            (true, Some(true)) if at + 1 < self.count => self.move_to(at + 1, false, cx),
+            (false, _) if item.level > 0 => {
+                let parent = (0..at)
+                    .rev()
+                    .find(|&i| (outline.item)(i).level < item.level);
+                if let Some(parent) = parent {
+                    self.move_to(parent, false, cx);
+                }
+            }
+            _ => {}
+        }
+        Some(Propagation::Stop)
     }
 
     /// Selects the next row whose text starts with what was typed in the last second: after the cursor for a new
@@ -453,13 +561,24 @@ impl<M: 'static> Widget<M> for Rows<M> {
             .into_iter()
             .map(|index| {
                 let selected = self.selection.contains(index);
+                let item = self.outline.as_ref().map(|o| (o.item)(index));
+                let mut content = Vec::with_capacity(2);
+                if let (Some(outline), Some(item)) = (&self.outline, item) {
+                    content.push(Element::new(Twisty {
+                        index,
+                        item,
+                        outline: Rc::clone(outline),
+                    }));
+                }
+                content.push((self.row)(index, selected));
                 Element::new(ListRow {
                     kind: self.kind,
                     index,
                     row_height: self.row_height,
                     selected,
                     cursor: cursor == Some(index),
-                    content: Some((self.row)(index, selected)),
+                    item,
+                    content,
                 })
                 .key(Key::Int(index as u64))
             })
@@ -520,14 +639,20 @@ impl<M: 'static> Widget<M> for Rows<M> {
 
     fn semantics(&self, _: &ListState, cx: &mut SemanticsCx<'_>) {
         // A table's rows sit under its frame, with its header
-        if self.kind == Kind::List {
-            cx.role(Role::List);
+        // a tree's set sizes are per parent, on its items
+        if self.kind != Kind::Table {
+            cx.role(match self.kind {
+                Kind::Tree => Role::Tree,
+                _ => Role::List,
+            });
             cx.name(self.label.clone());
             cx.states(AccessibleStates {
                 multiselectable: self.multiple,
                 ..AccessibleStates::default()
             });
-            cx.item_count(self.count);
+            if self.kind == Kind::List {
+                cx.item_count(self.count);
+            }
         }
         cx.roving_group();
     }
@@ -541,7 +666,8 @@ struct ListRow<M> {
     selected: bool,
     /// The list's one Tab stop.
     cursor: bool,
-    content: Option<Element<M>>,
+    item: Option<TreeItem>,
+    content: Vec<Element<M>>,
 }
 
 impl<M: 'static> Widget<M> for ListRow<M> {
@@ -568,7 +694,7 @@ impl<M: 'static> Widget<M> for ListRow<M> {
     }
 
     fn take_children(&mut self) -> Vec<Element<M>> {
-        self.content.take().into_iter().collect()
+        std::mem::take(&mut self.content)
     }
 
     fn state(&self) {}
@@ -576,7 +702,7 @@ impl<M: 'static> Widget<M> for ListRow<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if (self.index, self.row_height) != (old.index, old.row_height) {
             Change::Layout
-        } else if (self.selected, self.cursor) != (old.selected, old.cursor) {
+        } else if (self.selected, self.cursor, self.item) != (old.selected, old.cursor, old.item) {
             Change::Paint
         } else {
             Change::None
@@ -631,17 +757,127 @@ impl<M: 'static> Widget<M> for ListRow<M> {
         cx.role(match self.kind {
             Kind::List => Role::ListItem,
             Kind::Table => Role::Row,
+            Kind::Tree => Role::TreeItem,
         });
         cx.states(AccessibleStates {
             selected: self.selected,
+            expanded: self.item.and_then(|i| i.expanded),
             ..AccessibleStates::default()
         });
-        cx.item_index(self.index);
+        match self.item {
+            Some(item) => {
+                cx.level(item.level + 1);
+                cx.item_index(item.position);
+                cx.item_count(item.siblings);
+                if let Some(expanded) = item.expanded {
+                    cx.action(if expanded {
+                        Action::Collapse
+                    } else {
+                        Action::Expand
+                    });
+                }
+            }
+            None => cx.item_index(self.index),
+        }
         cx.roving_item();
         if self.cursor {
             cx.focusable();
         }
     }
+}
+
+/// A tree row's indent and its disclosure triangle, before its content; a press on it opens or closes the row.
+struct Twisty<M> {
+    index: usize,
+    item: TreeItem,
+    outline: Rc<Outline<M>>,
+}
+
+impl<M: 'static> Widget<M> for Twisty<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(self.item.level as f64 * INDENT + TRIANGLE_COLUMN),
+            height: SizeSpec::Fill,
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.item.level != old.item.level {
+            Change::Layout
+        } else if self.item.expanded != old.item.expanded {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        match (event, self.item.expanded) {
+            (
+                Event::Pointer(
+                    PointerEvent::Button {
+                        button: MouseButton::Left,
+                        pressed: true,
+                        mods,
+                        ..
+                    },
+                    _,
+                ),
+                Some(expanded),
+            ) if cx.node() == cx.target() => {
+                let toggle = TreeToggle {
+                    index: self.index,
+                    expanded: !expanded,
+                    recursive: mods.contains(Mods::PRIMARY),
+                };
+                self.outline.toggle(toggle, cx);
+                Propagation::Stop
+            }
+            _ => Propagation::Continue,
+        }
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let Some(open) = self.item.expanded else {
+            return;
+        };
+        let size = cx.size();
+        let rtl = cx.env().direction == LayoutDirection::Rtl;
+        let column = if rtl {
+            0.0
+        } else {
+            size.width - TRIANGLE_COLUMN
+        };
+        let area = Rect::new(
+            column + (TRIANGLE_COLUMN - TRIANGLE) / 2.0,
+            (size.height - TRIANGLE) / 2.0,
+            TRIANGLE,
+            TRIANGLE,
+        );
+        let points = disclosure::place([(0.25, 0.15), (0.8, 0.5), (0.25, 0.85)], area, open, rtl);
+        let state = ControlState {
+            enabled: true,
+            window_active: cx.window_active(),
+            ..ControlState::default()
+        };
+        if let Some(color) = look::color(&cx.env().theme, ColorRole::SecondaryText, &state) {
+            cx.push(PaintOp::Fill {
+                shape: disclosure::path(&points, true),
+                paint: Paint::Solid(color),
+            });
+        }
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
 /// A table row's cells, across its width.

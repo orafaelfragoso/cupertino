@@ -188,6 +188,7 @@ mod tests {
                     children: vec![],
                     live: None,
                     item_count: None,
+                    level: None,
                     item_index: None,
                     column_index: None,
                 },

@@ -35,13 +35,14 @@ fn node(out: &mut String, id: impl std::fmt::Debug, n: &AccessibilityNode) {
         .item_index
         .map(|i| format!(" index={i}"))
         .unwrap_or_default();
+    let level = n.level.map(|l| format!(" level={l}")).unwrap_or_default();
     let column = n
         .column_index
         .map(|c| format!(" column={c}"))
         .unwrap_or_default();
     let _ = writeln!(
         out,
-        "  {id:?} role={:?} name={:?} description={:?} value={value}{live}{items}{index}{column} states={:?} bounds=[{}] actions={:?} \
+        "  {id:?} role={:?} name={:?} description={:?} value={value}{live}{items}{index}{level}{column} states={:?} bounds=[{}] actions={:?} \
          relations={:?} children={:?}",
         n.role,
         n.name,
@@ -266,10 +267,11 @@ display
         let node = &mut frame.accessibility[0].1;
         node.item_count = Some(6);
         node.item_index = Some(0);
+        node.level = Some(2);
         node.column_index = Some(1);
         let dump = Inspector::default().dump(&frame);
         assert!(
-            dump.contains("value=<protected> items=6 index=0 column=1 states="),
+            dump.contains("value=<protected> items=6 index=0 level=2 column=1 states="),
             "{dump}"
         );
     }

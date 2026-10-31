@@ -124,3 +124,73 @@ fn a_list_builds_lays_out_and_paints_as_much_for_50_000_rows_as_for_1_000() {
     assert_eq!(work::<10_000>().0, small);
     assert_eq!(work::<50_000>().0, small);
 }
+
+/// The median of `times` in µs.
+fn median_us(mut times: Vec<std::time::Duration>) -> f64 {
+    times.sort();
+    times[times.len() / 2].as_secs_f64() * 1e6
+}
+
+/// Time `step` on `run` `count` times: the median in µs, and the frames presented and the pixels they damaged over all
+/// steps.
+fn timed<const N: usize>(
+    run: &mut Run<VirtualList<N>>,
+    count: usize,
+    mut step: impl FnMut(&mut Run<VirtualList<N>>),
+) -> (f64, usize, u64) {
+    let window = run.window;
+    let before = run.driver.window_system_mut().frames(window).unwrap().len();
+    let mut times = Vec::new();
+    for _ in 0..count {
+        let start = std::time::Instant::now();
+        step(run);
+        times.push(start.elapsed());
+    }
+    let presented = &run.driver.window_system_mut().frames(window).unwrap()[before..];
+    let damaged = presented
+        .iter()
+        .flat_map(|f| &f.damage)
+        .map(|r| u64::from(r.width) * u64::from(r.height))
+        .sum();
+    (median_us(times), presented.len(), damaged)
+}
+
+/// One row of the Virtual List matrix at `scale`: open, 30 Down keys, 30 wheel detents and End, through the runtime,
+/// layout, paint and the CPU renderer onto the headless window system.
+fn virtual_list_row<const N: usize>(scale: f64) {
+    let start = std::time::Instant::now();
+    let mut run = Run::<VirtualList<N>>::new();
+    run.send(cupertino_kit::platform::WindowEvent::Scale(scale));
+    let open = start.elapsed().as_secs_f64() * 1e3;
+    run.key(TAB, None);
+    let centre = Point::new(240.0, 300.0);
+    let (down, down_frames, down_px) = timed(&mut run, 30, |run| run.key(DOWN, None));
+    let (wheel, wheel_frames, wheel_px) = timed(&mut run, 30, |run| run.wheel(centre, 40.0));
+    let (end, _, end_px) = timed(&mut run, 1, |run| run.key(END, None));
+    let snapshot = run.snapshot();
+    let rows = snapshot
+        .accessibility
+        .iter()
+        .filter(|(_, n)| n.role == Role::ListItem)
+        .count();
+    println!(
+        "{N} | @{scale} | {open:.1} | {down:.0} ({down_frames} frames, {} px/frame) | {wheel:.0} ({wheel_frames} frames, {} px/frame) | {end:.0} ({end_px} px) | {rows} rows, {} solves, {} nodes",
+        down_px / down_frames.max(1) as u64,
+        wheel_px / wheel_frames.max(1) as u64,
+        snapshot.layout.solves,
+        snapshot.display_list.nodes.len(),
+    );
+}
+
+/// Open, select and scroll the Virtual List at 1,000, 10,000 and 50,000 rows, @1 and @2: open in ms, steps as the
+/// median µs per key or wheel event, each with the frames it presented and the pixels they damaged.
+#[test]
+#[ignore = "timing matrix; run with --release --ignored --nocapture"]
+fn virtual_list_matrix() {
+    println!("rows | scale | open ms | Down µs | wheel µs | End µs | after End");
+    for scale in [1.0, 2.0] {
+        virtual_list_row::<1_000>(scale);
+        virtual_list_row::<10_000>(scale);
+        virtual_list_row::<50_000>(scale);
+    }
+}

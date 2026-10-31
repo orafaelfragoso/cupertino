@@ -555,6 +555,11 @@ impl<S> Pump for TestClient<S> {
 
 impl Harness {
     fn new() -> Option<Harness> {
+        Harness::with_output(OUTPUT, 1.0)
+    }
+
+    /// A server with a headless output of `size` pixels at `scale`.
+    fn with_output(size: (i32, i32), scale: f64) -> Option<Harness> {
         let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().unwrap();
         let display: Display<Cupertino> = Display::new().unwrap();
         let mut state = Cupertino::new(
@@ -566,7 +571,7 @@ impl Harness {
             &cupertino_assets::Assets::builtin(),
         )
         .unwrap();
-        match headless::init(&mut state, OUTPUT, 1.0) {
+        match headless::init(&mut state, size, scale) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
                 common::egl_unavailable(format_args!("{e:#}"));
@@ -1270,4 +1275,74 @@ fn a_frame_already_waiting_when_the_process_exits_is_stopped_at_the_next_render(
         Some(ext_image_copy_capture_frame_v1::FailureReason::Stopped)
     );
     assert!(!h.state.capture_running());
+}
+
+/// The server's time for the steps that draw one pointer move, `moves` times, with an output frame captured on each
+/// move or not: the pointer moves each step, so every step draws the output.
+fn move_steps(
+    h: &mut Harness,
+    c: &mut TestClient<Capturer>,
+    capture: Option<&Capture>,
+    moves: u32,
+) -> Vec<Duration> {
+    let mut times = Vec::new();
+    for i in 0..moves {
+        let x = 100.0 + f64::from(i % 20) * 30.0;
+        h.state.pointer_moved_to((x, 300.0).into(), i, None);
+        let frame = capture.map(|capture| c.request_frame(capture));
+        c.pump();
+        let mut time = Duration::ZERO;
+        loop {
+            let start = Instant::now();
+            headless::step(&mut h.state, &mut h.event_loop, Duration::ZERO).unwrap();
+            time += start.elapsed();
+            c.pump();
+            if frame.is_none() || c.state.frame.ready {
+                break;
+            }
+            assert!(c.state.frame.failed.is_none(), "the frame failed");
+        }
+        if let Some(frame) = frame {
+            frame.destroy();
+        }
+        times.push(time);
+    }
+    times
+}
+
+fn median_ms(mut times: Vec<Duration>) -> f64 {
+    times.sort();
+    times[times.len() / 2].as_secs_f64() * 1e3
+}
+
+/// The cost of capturing the output on each of 60 pointer moves at 1080p @1 and 4K @2, against the same moves drawn
+/// without a capture: medians in ms. A captured frame draws the output again into an image, reads it back, compares it
+/// with the session's last frame and copies it into the client's buffer.
+#[test]
+#[ignore = "timing matrix; run with --release --ignored --nocapture"]
+fn capture_matrix() {
+    const MOVES: u32 = 60;
+    println!("output | scale | frame MB | move ms | move + capture ms | capture ms");
+    for (size, scale) in [((1920, 1080), 1.0), ((3840, 2160), 2.0)] {
+        let Some(mut h) = Harness::with_output(size, scale) else {
+            return;
+        };
+        let (mut app, _) = mapped_app(&mut h);
+        h.idle(&mut app, 5);
+        let mut c = TestClient::privileged(&mut h);
+        let source = c.output_source();
+        let capture = c.session(&mut h, &source, true);
+        assert_eq!(capture.size, size);
+        move_steps(&mut h, &mut c, Some(&capture), 5);
+        let plain = median_ms(move_steps(&mut h, &mut c, None, MOVES));
+        let captured = median_ms(move_steps(&mut h, &mut c, Some(&capture), MOVES));
+        let bytes = f64::from(size.0) * f64::from(size.1) * 4.0;
+        println!(
+            "{}x{} | {scale} | {:.1} | {plain:.2} | {captured:.2} | {:.2}",
+            size.0,
+            size.1,
+            bytes / 1e6,
+            captured - plain
+        );
+    }
 }

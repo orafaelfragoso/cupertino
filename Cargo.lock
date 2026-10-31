@@ -1056,6 +1056,7 @@ dependencies = [
  "cupertino-menu-model",
  "cupertino-modifiers",
  "cupertino-protocol-app",
+ "cupertino-test-bus",
  "cupertino-text-field",
  "cupertino-theme",
  "cupertino-thumbnails",
@@ -1073,6 +1074,7 @@ dependencies = [
  "tiny-skia",
  "tree_magic_mini",
  "xattr",
+ "zbus",
 ]
 
 [[package]]

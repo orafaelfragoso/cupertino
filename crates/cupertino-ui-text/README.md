@@ -32,7 +32,7 @@ buffer follow.
   or spacing that is not finite (or a size of zero or less) is `TextError::InvalidValue`, and variation values are
   kept in quarter units so an animated axis shares instances.
 - `Paragraph::layout(width)` re-wraps the shaped text without reshaping (UAX 14 breaks from `icu_segmenter`; a word
-  wider than the width breaks between clusters; spaces at a soft wrap hang past the line). `ParagraphLayout` gives
+  wider than the width breaks between graphemes, never inside one even where shaping splits it, as in a conjunct; spaces at a soft wrap hang past the line). `ParagraphLayout` gives
   lines with glyph runs, `caret_rect`, `index_at` (always a grapheme boundary) and `selection_rects` (`max_lines` of
   zero keeps one line, a width that is not finite means no limit). Bidi follows UAX 9 (`unicode-bidi`): the base
   direction is `ParagraphStyle::direction` or the first strong character's (`Paragraph::direction`), each run of one
@@ -40,7 +40,9 @@ buffer follow.
   the paragraph's level so they hang past its end edge. `Start` and `End` follow the base direction. Positions stay
   logical: a downstream caret sits at the start edge of the character after it and an upstream one at the end edge of
   the character before it, `index_at` returns the side a click lands on, and a selection across a direction change can
-  be several rectangles on one line. Script fallback and system fonts follow.
+  be several rectangles on one line. Script fallback and system fonts follow. `tests/corpus.rs` pins the caret stops,
+  glyph order, wrap points and hit testing of Latin, combining marks, Hebrew, Arabic, Devanagari, ZWJ emoji, flags and
+  digits inside right-to-left text.
 - `GlyphRaster` implements `GlyphRasterizer` over a `TextSystem`'s fonts with `swash` and `cupertino-glyph`: unhinted
   coverage with the stem darkening that `GlyphKey::dilation_q` names (0 is font smoothing off, 1 to 5 is the fill's
   luminance in quarters; build keys with `GlyphKey::for_draw`, and the size the dilation reads is floored to a power of

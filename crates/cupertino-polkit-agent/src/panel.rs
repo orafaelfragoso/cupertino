@@ -16,7 +16,7 @@ pub const CAPTION_LINE: f64 = 14.0;
 pub const MAX_MESSAGE_LINES: usize = 6;
 pub const CONTROL_HEIGHT: f64 = 20.0;
 pub const FIELD_HEIGHT: f64 = 22.0;
-/// Below the symbol, and between the title and the message (APPROXIMATED).
+/// Below the symbol, and between the title and the message (approximate).
 const SYMBOL_GAP: f64 = 8.0;
 const TITLE_GAP: f64 = 4.0;
 const MESSAGE_GAP: f64 = 16.0;
@@ -25,10 +25,10 @@ const STATUS_GAP: f64 = 6.0;
 const DETAILS_GAP: f64 = 8.0;
 const BUTTONS_GAP: f64 = 20.0;
 const BUTTON_SPACING: f64 = 8.0;
-/// A push button is its title plus this on each side, and never narrower than [`BUTTON_MIN_WIDTH`] (APPROXIMATED).
+/// A push button is its title plus this on each side, and never narrower than [`BUTTON_MIN_WIDTH`] (approximate).
 pub const BUTTON_INSET: f64 = 12.0;
 const BUTTON_MIN_WIDTH: f64 = 80.0;
-/// The width of the label column of the user row and of the details (APPROXIMATED).
+/// The width of the label column of the user row and of the details (approximate).
 pub const LABEL_COLUMN: f64 = 64.0;
 
 pub const TITLE: &str = "Authentication Required";

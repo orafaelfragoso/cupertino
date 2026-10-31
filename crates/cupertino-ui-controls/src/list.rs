@@ -1075,7 +1075,7 @@ impl<M: 'static> Widget<M> for Cell<M> {
         let Some(sort) = &self.header else {
             return Propagation::Continue;
         };
-        match press.event(event, sort.on_sort.is_some(), Keys::Space, cx) {
+        match press.event(event, sort.on_sort.is_some(), Keys::SpaceAndReturn, cx) {
             Outcome::Ignored => Propagation::Continue,
             Outcome::Changed => Propagation::Stop,
             Outcome::Activated(_) => {
@@ -1091,9 +1091,16 @@ impl<M: 'static> Widget<M> for Cell<M> {
         }
     }
 
-    /// A header cell other than the last draws the divider at its trailing edge.
+    /// A header cell other than the last draws the divider at its trailing edge; a sorting one shows the keyboard focus.
     fn paint(&self, _: &Press, cx: &mut PaintCx<'_>) {
-        if self.header.as_ref().is_none_or(|h| h.last) {
+        let Some(sort) = &self.header else {
+            return;
+        };
+        if sort.on_sort.is_some() {
+            let size = cx.size();
+            paint_focus_ring(cx, Rect::new(0.0, 0.0, size.width, size.height), 0.0);
+        }
+        if sort.last {
             return;
         }
         let env = cx.env();
@@ -1120,6 +1127,7 @@ impl<M: 'static> Widget<M> for Cell<M> {
             Some(sort) => {
                 cx.role(Role::ColumnHeader);
                 if sort.on_sort.is_some() {
+                    cx.focusable();
                     cx.action(Action::Click);
                 }
             }

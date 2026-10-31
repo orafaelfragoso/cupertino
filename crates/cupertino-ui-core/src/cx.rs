@@ -349,6 +349,8 @@ impl SemanticsCx<'_> {
         self.semantics.name = Some(name.into());
     }
 
+    /// On a node without a role, describes its nearest ancestor in the tree instead, after that node's own
+    /// description: a badge's "3 unread" on the row it sits in.
     pub fn description(&mut self, description: impl Into<String>) {
         self.semantics.description = Some(description.into());
     }

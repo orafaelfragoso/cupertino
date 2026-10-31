@@ -131,7 +131,9 @@ impl<M: 'static> Widget<M> for Slider<M> {
         } else if self.value != old.value
             || self.min != old.min
             || self.max != old.max
+            || self.step != old.step
             || self.enabled != old.enabled
+            || self.label != old.label
         {
             Change::Paint
         } else {

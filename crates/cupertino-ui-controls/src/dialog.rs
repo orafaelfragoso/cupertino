@@ -23,7 +23,7 @@ const LEFT_TAB: Keysym = Keysym(0xfe20);
 const WIDTH: f64 = 340.0;
 const RADIUS: f64 = 10.0;
 const PADDING: f64 = 20.0;
-/// Between the title, the message, the body and the buttons. APPROXIMATED.
+/// Between the title, the message, the body and the buttons.
 const SPACING: f64 = 12.0;
 const BUTTON_SPACING: f64 = 8.0;
 const EDGE: f64 = 1.0;

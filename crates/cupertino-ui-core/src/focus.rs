@@ -72,8 +72,8 @@ impl Focus {
     }
 
     /// Brings focus up to date after a frame: closed scopes give the focus back, a focus whose node unmounted moves
-    /// to its nearest surviving ancestor, and a newly open scope takes the focus to its initial-focus node, or else its
-    /// first focusable one. `scopes` and `focusable` are in reading order.
+    /// to its nearest surviving ancestor, and a newly open scope takes the focus to its first Tab stop at or under an
+    /// initial-focus node, or else its first focusable one. `scopes` and `focusable` are in reading order.
     pub(crate) fn sync<M: 'static>(
         &mut self,
         tree: &Tree<M>,
@@ -118,7 +118,12 @@ impl Focus {
                 target = inside
                     .iter()
                     .copied()
-                    .find(|&n| initial_focus(tree, n))
+                    .find(|&n| {
+                        tree.path(n)
+                            .into_iter()
+                            .skip_while(|&p| p != scope)
+                            .any(|p| initial_focus(tree, p))
+                    })
                     .or(inside.first().copied())
                     .or(Some(scope));
                 moved = true;

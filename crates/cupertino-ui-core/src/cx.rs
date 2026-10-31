@@ -430,7 +430,8 @@ impl SemanticsCx<'_> {
         self.semantics.focus_scope = true;
     }
 
-    /// Makes the node the one its focus scope gives the focus to when it opens, in place of its first Tab stop.
+    /// Makes the node, or its first Tab stop, the one its focus scope gives the focus to when it opens, in place of the
+    /// scope's first Tab stop. The first such stop in reading order wins.
     pub fn initial_focus(&mut self) {
         self.semantics.initial_focus = true;
     }

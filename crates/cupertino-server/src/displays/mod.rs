@@ -19,13 +19,13 @@ use cupertino_defaults::displays::{
     display_key, DisplaySettings, DisplaysConfig, ModeSetting, Transform as StoredTransform,
 };
 use cupertino_wm::OutputId;
-use smithay::output::{Mode as OutputMode, PhysicalProperties, Subpixel};
+use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel};
 use smithay::reexports::wayland_server::backend::GlobalId;
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::utils::Transform;
 
 use crate::backend::Backend;
-use crate::state::{output_rect, Cupertino};
+use crate::state::{new_output, output_rect, Cupertino};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct HeadId(pub u64);
@@ -292,6 +292,19 @@ pub fn fallback_modes(wanted: HeadMode, modes: &[HeadMode]) -> Vec<HeadMode> {
     fallbacks
 }
 
+/// Whether a head that failed to turn on with `error` may turn on in another mode: not when the device is busy, paused
+/// or no longer ours.
+fn another_mode_may_help(error: &anyhow::Error) -> bool {
+    !error.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|e| {
+            matches!(
+                e.kind(),
+                std::io::ErrorKind::ResourceBusy | std::io::ErrorKind::PermissionDenied
+            )
+        })
+    })
+}
+
 /// Why `wanted` cannot be applied to `head`, if it cannot.
 fn check_head(head: &Head, wanted: &HeadState) -> Result<(), String> {
     let name = &head.info.connector;
@@ -457,6 +470,9 @@ impl Cupertino {
         let head = self.displays.head(id).context("the head being enabled")?;
         let wanted = head.state.mode;
         tracing::warn!(connector = %head.info.connector, ?wanted, error = %format!("{first:#}"), "the display cannot show its mode; trying smaller ones");
+        if !another_mode_may_help(&first) {
+            return Err(first);
+        }
         for mode in fallback_modes(wanted, &head.info.modes.clone()) {
             self.displays.head_mut(id).expect("checked").state.mode = mode;
             match self.head_op(id, HeadOp::Enable) {
@@ -476,28 +492,29 @@ impl Cupertino {
         Err(first)
     }
 
-    /// Create the output of an enabled head in its state. Backends call this for [`HeadOp::Enable`].
-    pub fn create_head_output(&mut self, id: HeadId) -> OutputId {
-        let head = self.displays.head(id).expect("the head being enabled");
+    /// The output of a head being enabled, in its state, for the backend to set up. Nothing sees it until the backend
+    /// shows it and hands it to [`Cupertino::create_head_output`]. Backends call this for [`HeadOp::Enable`].
+    pub fn prepare_head_output(&self, id: HeadId) -> Result<Output> {
+        let head = self.displays.head(id).context("the head being enabled")?;
         let physical = PhysicalProperties {
             size: head.info.physical_mm.into(),
             subpixel: Subpixel::Unknown,
             make: head.info.make.clone(),
             model: head.info.model.clone(),
         };
-        let (name, s, transform) = (
-            head.info.connector.clone(),
-            head.state,
-            head.output_transform(),
-        );
-        let output = self.add_output(
-            &name,
+        Ok(new_output(
+            &head.info.connector,
             physical,
-            s.mode.output_mode(),
-            s.scale,
-            transform,
-            s.position,
-        );
+            head.state.mode.output_mode(),
+            head.state.scale,
+            head.output_transform(),
+            head.state.position,
+        ))
+    }
+
+    /// Register and announce the output of [`Cupertino::prepare_head_output`] once the backend shows it.
+    pub fn create_head_output(&mut self, id: HeadId, output: Output) -> OutputId {
+        let output = self.add_output(output);
         let head = self.displays.head_mut(id).expect("the head being enabled");
         head.output = Some(output);
         head.powered = true;

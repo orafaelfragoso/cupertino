@@ -21,7 +21,9 @@ use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::drm::compositor::FrameError;
 use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
-use smithay::backend::drm::output::{DrmOutput, DrmOutputManager, DrmOutputRenderElements};
+use smithay::backend::drm::output::{
+    DrmOutput, DrmOutputManager, DrmOutputManagerError, DrmOutputRenderElements,
+};
 use smithay::backend::drm::{
     DrmDevice, DrmDeviceFd, DrmError, DrmEvent, DrmEventTime, DrmNode, NodeType,
 };
@@ -730,11 +732,7 @@ pub(crate) fn head_op(
                 .mode;
             let drm_mode = drm_head.drm_mode(mode)?;
             let connector = drm_head.connector;
-            let id = state.create_head_output(head);
-            let output = state
-                .output_entry(id)
-                .map(|o| o.output.clone())
-                .context("the output just created")?;
+            let output = state.prepare_head_output(head)?;
             let elements =
                 DrmOutputRenderElements::<GlesRenderer, crate::render::CupertinoElement>::default();
             let mut planes = u.manager.device().planes(&crtc).ok();
@@ -759,6 +757,7 @@ pub(crate) fn head_op(
                 &elements,
             ) {
                 Ok(drm_output) => {
+                    let id = state.create_head_output(head, output.clone());
                     let refresh =
                         Duration::from_secs_f64(1000.0 / mode.refresh_mhz.max(1000) as f64);
                     u.surfaces.insert(
@@ -774,8 +773,20 @@ pub(crate) fn head_op(
                     Ok(())
                 }
                 Err(e) => {
-                    state.drop_head_output(head);
-                    Err(anyhow!("initialising {}: {e}", output.name()))
+                    // a paused session is busy for every mode, as a device another program holds
+                    let paused = matches!(
+                        e,
+                        DrmOutputManagerError::Drm(DrmError::DeviceInactive)
+                            | DrmOutputManagerError::Frame(FrameError::DrmError(
+                                DrmError::DeviceInactive
+                            ))
+                    );
+                    let e = if paused {
+                        anyhow::Error::new(std::io::Error::new(ErrorKind::ResourceBusy, e))
+                    } else {
+                        anyhow::Error::new(e)
+                    };
+                    Err(e.context(format!("initialising {}", output.name())))
                 }
             }
         }

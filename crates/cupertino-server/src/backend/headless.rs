@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use cupertino_render_api::{Completion as _, RenderStatus, Renderer};
 use cupertino_wm::OutputId;
 use smithay::backend::allocator::gbm::GbmDevice;
@@ -40,8 +40,9 @@ pub struct HeadlessTarget {
 pub struct HeadlessBackend {
     pub renderer: GlesRenderer,
     pub targets: Vec<HeadlessTarget>,
-    /// Modes no display can show, as over a link too slow for them: enabling a head in one fails.
-    pub unshowable: Vec<HeadMode>,
+    /// Modes enabling a head in fails, with the error kind the device gives: `InvalidInput` as over a link too slow for
+    /// the mode, `ResourceBusy` as when another program holds the device.
+    pub refused: Vec<(HeadMode, std::io::ErrorKind)>,
 }
 
 /// An offscreen display to plug in: its connector name, pixel size and physical size in
@@ -135,7 +136,7 @@ pub fn init_displays(
     state.backend = Some(Backend::Headless(Box::new(HeadlessBackend {
         renderer,
         targets: Vec::new(),
-        unshowable: Vec::new(),
+        refused: Vec::new(),
     })));
     for display in displays {
         add_display(state, display, scale)?;
@@ -224,11 +225,13 @@ pub(crate) fn head_op(
                 .context("the head being enabled")?
                 .state
                 .mode;
-            if h.unshowable.contains(&mode) {
-                bail!("the display cannot show {mode:?}");
+            let output = state.prepare_head_output(head)?;
+            if let Some((_, kind)) = h.refused.iter().find(|(m, _)| *m == mode) {
+                return Err(anyhow::Error::new(std::io::Error::from(*kind))
+                    .context(format!("the display cannot show {mode:?}")));
             }
             let texture = target_texture(&mut h.renderer, mode)?;
-            let output = state.create_head_output(head);
+            let output = state.create_head_output(head, output);
             h.targets.push(HeadlessTarget {
                 head,
                 output,

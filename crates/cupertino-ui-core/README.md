@@ -52,7 +52,9 @@ all on one thread.
   becomes `AccessibleValue::Protected`, here, before any adapter, snapshot or test sees it. An adapter gets each
   window's whole tree, marked `full`, when it becomes active or the window opens, then only diffs while
   `is_active`. An adapter wakes the runtime's waker when it becomes active, since `run` may be blocked. A protected
-  field's input-method state goes out without its surrounding text.
+  field's input-method state goes out without its surrounding text. Each turn takes the adapter's actions and gives
+  each one to its target as `Event::Action`, in the window whose published tree holds it; one for a node that is gone
+  is dropped.
 
 ## Not yet
 

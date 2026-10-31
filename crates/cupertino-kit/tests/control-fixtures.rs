@@ -12,9 +12,10 @@ mod support;
 
 use cupertino_kit::controls::{
     Badge, Button, ButtonRole, ButtonStyle, CheckBox, Column, ColumnWidth, DisclosureButton,
-    DisclosureStyle, Icon, IconDirection, ListView, PageDots, Progress, RadioGroup, ScrollView,
-    Scroller, SecureField, SegmentedControl, Selection, Separator, Slider, SliderStyle, SortOrder,
-    Stack, Stepper, TableView, Text, TextField, TextRole, Toggle,
+    DisclosureStyle, Icon, IconDirection, ListView, NavigationStack, PageDots, Progress,
+    RadioGroup, ScrollView, Scroller, SecureField, SegmentedControl, Selection, Separator, Slider,
+    SliderStyle, SortOrder, SplitLayout, SplitView, Stack, Stepper, TableView, Text, TextField,
+    TextRole, Toggle,
 };
 use cupertino_kit::core::{
     Application, Checked, Command, CommandRegistry, Element, Window, WindowBackground, WindowKey,
@@ -302,6 +303,16 @@ fn label(text: &str) -> AttributedText {
     AttributedText::plain(text, TextStyle::new(13.0))
 }
 
+fn body(text: &str) -> Element<Message> {
+    Element::new(Text {
+        content: label(text),
+        role: TextRole::Body,
+        wrap: false,
+        secondary: false,
+        selected: false,
+    })
+}
+
 fn button(style: ButtonStyle, role: ButtonRole, look: &Look) -> Element<Message> {
     Element::new(Button {
         label: if style == ButtonStyle::RoundIcon {
@@ -574,4 +585,20 @@ fixtures! {
             }),
         ],
     });
+    split: "split", TALL, &[State::Normal, State::Hover, State::Pressed, State::Focused], |_| SplitView {
+        label: "Sidebar".into(),
+        axis: Axis::Horizontal,
+        leading: body("Mail"),
+        trailing: body("Inbox"),
+        layout: SplitLayout { position: 72.0, collapsed: None },
+        min_leading: 48.0,
+        min_trailing: 48.0,
+        on_change: Some(Box::new(|_| Message::Nothing)),
+    }.into();
+    navigation: "navigation", TALL, INTERACTIVE, |look| NavigationStack {
+        content: body("Page"),
+        can_go_back: look.enabled,
+        can_go_forward: false,
+        on_navigate: Some(Box::new(|_| Message::Nothing)),
+    }.into();
 }

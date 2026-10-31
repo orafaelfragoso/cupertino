@@ -547,7 +547,7 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
 
     /// Takes the model's text when the application changed it itself, as a text field does.
     fn update(&self, old: &Self, state: &mut EditorState) -> Change {
-        if self.revision >= state.reported && self.value != field::committed(&state.buffer) {
+        if self.revision >= state.reported && !field::holds(&state.buffer, &self.value) {
             state.buffer.set_text(&self.value);
             state.reported = self.revision;
             return Change::Layout;

@@ -173,7 +173,7 @@ impl TextBuffer {
 
     /// Replace the whole text (not an edit: undo starts over); the caret goes to the end.
     pub fn set_text(&mut self, text: &str) {
-        self.text = self.fit(&self.clean(text), 0).to_string();
+        self.text = self.cleaned(text);
         self.set_caret(self.text.len());
         self.anchor = self.caret;
         self.composition = None;
@@ -680,6 +680,12 @@ impl TextBuffer {
         self.group = None;
         self.composition = None;
         true
+    }
+
+    /// `text` as [`TextBuffer::set_text`] keeps it: without the characters this buffer drops or converts, cut to its
+    /// length limit. A model value that differs from the buffer's text only in those is the same text.
+    pub fn cleaned(&self, text: &str) -> String {
+        self.fit(&self.clean(text), 0).to_string()
     }
 
     fn clean(&self, s: &str) -> String {

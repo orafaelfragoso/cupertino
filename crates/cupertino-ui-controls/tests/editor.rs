@@ -14,7 +14,7 @@ const UP: (u32, u32) = (103, 0xff52);
 const DOWN: (u32, u32) = (108, 0xff54);
 const TAB_KEY: (u32, u32) = (15, TAB);
 
-/// A scrolled editor of `LINES` numbered lines over a text field.
+/// A scrolled editor of `LINES` numbered lines, as a file with CRLF line ends holds them, over a text field.
 struct Editor<const LINES: usize>;
 
 struct Model {
@@ -27,6 +27,7 @@ struct Model {
 enum Message {
     Changed(TextChange),
     Scrolled(ScrollState),
+    Other(TextChange),
 }
 
 impl<const LINES: usize> Application for Editor<LINES> {
@@ -37,7 +38,7 @@ impl<const LINES: usize> Application for Editor<LINES> {
         let text = (0..LINES)
             .map(|i| format!("line {i}"))
             .collect::<Vec<_>>()
-            .join("\n");
+            .join("\r\n");
         let scroll = ScrollState {
             offset: Point::ZERO,
             content: Size::ZERO,
@@ -60,6 +61,7 @@ impl<const LINES: usize> Application for Editor<LINES> {
                 model.revision = change.revision;
             }
             Message::Scrolled(scroll) => model.scroll = scroll,
+            Message::Other(_) => {}
         }
         Vec::new()
     }
@@ -95,7 +97,7 @@ impl<const LINES: usize> Application for Editor<LINES> {
                     revision: 0,
                     purpose: ContentPurpose::Normal,
                     enabled: true,
-                    on_change: None,
+                    on_change: Some(Box::new(Message::Other)),
                     on_submit: None,
                 })
                 .key("after"),
@@ -166,6 +168,17 @@ fn a_line_break_at_the_start_moves_every_line_after_it() {
         carets.push(caret(&h));
     }
     assert_eq!(carets, [1, 4, 7]);
+}
+
+#[test]
+fn a_rebuild_with_the_models_crlf_text_keeps_the_caret() {
+    let mut h = focused::<3>();
+    press(&mut h, UP, Mods::PRIMARY);
+    press(&mut h, TAB_KEY, Mods::NONE);
+    h.type_text("x");
+    assert!(h.focused("after"));
+    assert_eq!(h.model().text, "line 0\r\nline 1\r\nline 2");
+    assert_eq!(caret(&h), 0, "the view was rebuilt with the same text and revision");
 }
 
 #[test]

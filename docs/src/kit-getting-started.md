@@ -51,8 +51,8 @@ cargo build -p cupertino-kit --examples
 ```
 
 Run them in a nested Cupertino session, on another compositor, or on the host's Wayland session; see
-[Building and running](building.md) for the nested server. On a Wayland session, Counter and Forms stayed open until
-stopped (an 8-second timeout ended them).
+[Building and running](building.md) for the nested server. On a Wayland session, Counter and Forms run until you close
+them.
 
 ## Check the examples without a display
 
@@ -86,8 +86,9 @@ cargo test -p cupertino-ui-atspi
 cargo test -p cupertino-kit --test assistive-technology
 ```
 
-The first runs the mapping and filter tests and, when `dbus-daemon` is installed, a private bus with a fake AT-SPI
-registry. The second changes a form value and moves focus through assistive-technology requests. No screen reader was
+The first runs 19 mapping and filter tests, one test of the live-region rules while the session is locked, and, when
+`dbus-daemon` is installed, two tests on a private bus with a fake AT-SPI registry (22 tests ran with `dbus-daemon`
+present; without it the two bus tests print `SKIPPED`). The second changes a form value and moves focus through assistive-technology requests. No screen reader was
 run against the examples for this page, so how a screen reader reads them is not documented here.
 
 ## Right to left
@@ -111,8 +112,8 @@ What exists:
 
 Limits:
 
-- `app::run` and `app::options` start in left-to-right (`RuntimeOptions.direction`). The kit does not choose the
-  direction from the locale or the session; an application sets `direction` itself.
+- `app::run` always lays out left to right; it has no option to change that yet. The kit does not choose the direction
+  from the locale or the session.
 
 Commands behind these statements:
 

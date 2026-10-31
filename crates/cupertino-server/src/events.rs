@@ -525,6 +525,10 @@ impl Cupertino {
                 pressed,
                 mods: key.mods,
                 repeat,
+                shifted: key
+                    .text
+                    .filter(|_| key.mods.shift)
+                    .map(|c| smithay::input::keyboard::xkb::utf32_to_keysym(c as u32).raw()),
             },
             ctx,
         ) {
@@ -660,6 +664,7 @@ impl Cupertino {
                 pressed: true,
                 mods: key.mods,
                 repeat: false,
+                shifted: None,
             },
             &ctx,
         ) {
@@ -673,6 +678,7 @@ impl Cupertino {
                         pressed: false,
                         mods: key.mods,
                         repeat: false,
+                        shifted: None,
                     },
                     &ctx,
                 ) {

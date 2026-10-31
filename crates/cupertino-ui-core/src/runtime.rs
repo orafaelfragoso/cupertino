@@ -901,7 +901,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             w.layout = result.stats;
             w.geometry = placements(&self.tree, root, &result, w.env.direction);
 
-            let semantics = build(&self.tree, root, &w.geometry, w.focus.node());
+            let semantics = build(
+                &self.tree,
+                root,
+                &w.geometry,
+                w.focus.node(),
+                w.env.direction,
+            );
             w.focusable = semantics.focusable;
             w.roving_groups = semantics.roving_groups;
             w.roving_items = semantics.roving_items;
@@ -927,7 +933,14 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 now,
             ));
             let nodes = if refocused {
-                build(&self.tree, root, &w.geometry, w.focus.node()).nodes
+                build(
+                    &self.tree,
+                    root,
+                    &w.geometry,
+                    w.focus.node(),
+                    w.env.direction,
+                )
+                .nodes
             } else {
                 semantics.nodes
             };

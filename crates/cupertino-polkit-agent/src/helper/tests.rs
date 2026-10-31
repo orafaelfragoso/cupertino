@@ -170,6 +170,27 @@ fn dropping_a_helper_stops_one_waiting_for_an_answer() {
 }
 
 #[test]
+fn dropping_the_answers_ends_a_read_waiting_on_a_silent_socket() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("agent-helper.socket");
+    let listener = UnixListener::bind(&path).unwrap();
+    let (done, finished) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        // holds the connection open and never writes
+        finished.recv().ok();
+        drop(stream);
+    });
+    let (mut lines, answers) = Helper::start(&[Route::Socket(path)], "ada", "c")
+        .unwrap()
+        .split();
+    let reader = std::thread::spawn(move || lines.read_line());
+    drop(answers);
+    assert!(matches!(reader.join().unwrap(), Err(HelperError::Closed)));
+    drop(done);
+}
+
+#[test]
 fn a_socket_nothing_listens_on_falls_back_to_the_binary() {
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("agent-helper.socket");

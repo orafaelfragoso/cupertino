@@ -31,6 +31,7 @@ use smithay::backend::drm::{
 use smithay::backend::egl::context::ContextPriority;
 use smithay::backend::egl::{EGLContext, EGLDevice, EGLDisplay};
 use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::Color32F;
 use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::desktop::utils::OutputPresentationFeedback;
@@ -1348,21 +1349,15 @@ fn draw_copy(
     let copy = match &mut surface.copy {
         Some(copy) if copy.fits(size, scale) => copy,
         slot => {
-            let via = slot.as_ref().map(FrameCopy::via);
+            let via = match slot {
+                Some(copy) => copy.via(),
+                None => copy::first_via(&render.renderer, &card.renderer),
+            };
             let allocator = GbmAllocator::new(render.gbm.clone(), GbmBufferFlags::RENDERING);
-            let copy = slot.insert(FrameCopy::new(
-                allocator,
-                copy::render_modifiers(&render.renderer),
-                size,
-                scale,
-            ));
-            if let Some(via) = via {
-                copy.continue_via(via);
-            }
-            copy
+            slot.insert(FrameCopy::new(allocator, size, scale, via))
         }
     };
-    let (slot, mut dmabuf) = match copy.acquire() {
+    let mut target = match copy.acquire(&mut render.renderer) {
         Ok(acquired) => acquired,
         Err(_) if copy.via() == Via::Unsupported => return Some(Err(Unsupported)),
         Err(e) => {
@@ -1375,27 +1370,47 @@ fn draw_copy(
     };
     let (res, cache, _) = state.gles_parts(idx)?;
     let mut resources = GlesResources::new(res, cache, composed.resources);
-    let result = Gles.render(
-        &composed.frame,
-        &mut resources,
-        GlesTarget::Dmabuf {
-            renderer: &mut render.renderer,
-            dmabuf: &mut dmabuf,
-            tracker: &mut copy.tracker,
-            age: usize::from(slot.age()),
-            clear: CLEAR,
-        },
-    );
-    let result = match result {
+    let result = match &mut target {
+        copy::Target::Dmabuf { slot, dmabuf } => Gles.render(
+            &composed.frame,
+            &mut resources,
+            GlesTarget::Dmabuf {
+                renderer: &mut render.renderer,
+                dmabuf,
+                tracker: &mut copy.tracker,
+                age: usize::from(slot.age()),
+                clear: CLEAR,
+            },
+        ),
+        copy::Target::Texture { texture, age } => Gles.render(
+            &composed.frame,
+            &mut resources,
+            GlesTarget::Texture {
+                renderer: &mut render.renderer,
+                texture,
+                tracker: &mut copy.tracker,
+                age: *age,
+                clear: CLEAR,
+            },
+        ),
+    };
+    let drawn = match result {
         Ok(GlesCompletion::Offscreen {
             damage: Some(damage),
             sync,
-        }) => {
+        }) => Ok(Some((damage, sync))),
+        Ok(GlesCompletion::Drawn {
+            damage: Some(damage),
+        }) => Ok(Some((damage, SyncPoint::signaled()))),
+        Ok(_) => Ok(None),
+        Err(e) => Err(e),
+    };
+    let result = match drawn {
+        Ok(Some((damage, sync))) => {
             let copied = match copy.bring(
                 &mut render.renderer,
                 &mut card.renderer,
-                slot,
-                dmabuf,
+                target,
                 sync,
                 &damage,
             ) {

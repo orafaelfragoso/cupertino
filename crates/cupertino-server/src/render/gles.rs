@@ -98,11 +98,13 @@ impl<'a> GlesResources<'a> {
 
 /// Where a frame is drawn, with the device it is drawn on.
 pub enum GlesTarget<'a> {
-    /// An offscreen texture of the headless backend, drawn through the output's damage tracker.
+    /// An offscreen texture (of the headless backend, or that another card's display copies), drawn through the
+    /// damage tracker at the texture's `age`.
     Texture {
         renderer: &'a mut GlesRenderer,
         texture: &'a mut GlesTexture,
         tracker: &'a mut OutputDamageTracker,
+        age: usize,
         clear: Color32F,
     },
     /// A buffer of the render GPU that another card copies onto its display, drawn through the copy's damage tracker at
@@ -261,6 +263,7 @@ impl Renderer for Gles {
                 renderer,
                 texture,
                 tracker,
+                age,
                 clear,
             } => {
                 let elements = Gles::lower(renderer, scene, resources)?;
@@ -268,7 +271,7 @@ impl Renderer for Gles {
                     .bind(texture)
                     .map_err(|e| RenderError::Target(e.to_string()))?;
                 tracker
-                    .render_output(renderer, &mut framebuffer, 0, &elements, clear)
+                    .render_output(renderer, &mut framebuffer, age, &elements, clear)
                     .map(|r| GlesCompletion::Drawn {
                         damage: r.damage.cloned(),
                     })

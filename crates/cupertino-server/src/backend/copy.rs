@@ -1,26 +1,31 @@
-//! A frame of the render GPU on a display of another card. The render GPU draws into a buffer of its own; the
+//! A frame of the render GPU on a display of another card. The render GPU draws into a linear buffer of its own; the
 //! display's card imports that buffer as a texture and draws it, waiting on the render's sync point inside its own
-//! frame. The buffer is linear, which the other card can read. When the render GPU cannot draw into a linear buffer or
-//! the card cannot import it, the frame goes through memory, from a buffer in the render GPU's own layout; when that
-//! fails too, the display is unsupported and nothing is tried again.
+//! frame. When the render GPU cannot draw into a linear buffer or the card cannot import it (by the formats they list,
+//! or as it turns out), the render GPU draws into a texture of its own, read back into memory and uploaded to the card;
+//! when that fails too, the display is unsupported and nothing is tried again.
 
 use std::os::fd::AsFd;
 
 use anyhow::{anyhow, Context, Result};
 use smithay::backend::allocator::dmabuf::{AsDmabuf, Dmabuf};
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBuffer};
-use smithay::backend::allocator::{Fourcc, Modifier, Slot, Swapchain};
+use smithay::backend::allocator::{Format, Fourcc, Modifier, Slot, Swapchain};
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement};
-use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture};
+use smithay::backend::renderer::gles::{
+    GlesError, GlesFrame, GlesMapping, GlesRenderer, GlesTexture,
+};
 use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
 use smithay::backend::renderer::{
-    Bind, ExportMem, Frame, ImportDma, ImportMem, Texture, TextureMapping,
+    Bind, ExportMem, Frame, ImportDma, ImportMem, Offscreen, Texture,
 };
 use smithay::utils::{Buffer, Physical, Rectangle, Scale, Size, Transform};
 
+/// The format of the buffers the display's card imports.
 const FORMAT: Fourcc = Fourcc::Argb8888;
+/// The format of the frames that go through memory.
+const MEMORY_FORMAT: Fourcc = Fourcc::Abgr8888;
 
 /// How the display's card gets the frames.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,17 +42,27 @@ pub enum Via {
 #[derive(Debug)]
 pub struct Unsupported;
 
+/// What the render GPU draws the next frame into.
+pub enum Target {
+    /// A linear buffer for the display's card to import.
+    Dmabuf {
+        slot: Slot<GbmBuffer>,
+        dmabuf: Dmabuf,
+    },
+    /// A texture of the render GPU's own, read back through memory, holding the frame before when `age` is 1.
+    Texture { texture: GlesTexture, age: usize },
+}
+
 /// The copies of one display's frames.
 pub struct FrameCopy<F: AsFd + Clone + 'static> {
-    allocator: GbmAllocator<F>,
-    /// What the render GPU can draw into ([`render_modifiers`]).
-    modifiers: Vec<Modifier>,
     swapchain: Swapchain<GbmAllocator<F>>,
     /// Damage of the render GPU's frames, upright at the display's pixel size.
     pub tracker: OutputDamageTracker,
     size: Size<i32, Physical>,
     scale: f64,
     via: Via,
+    /// The memory path's texture on the render GPU.
+    drawn: Option<GlesTexture>,
     /// The memory path's texture on the display's card, updated in place.
     uploaded: Option<GlesTexture>,
     id: Id,
@@ -59,57 +74,46 @@ pub struct FrameCopy<F: AsFd + Clone + 'static> {
     refused: Vec<Via>,
 }
 
-/// The modifiers the render GPU can draw `FORMAT` with, for the memory path's buffers.
-pub fn render_modifiers(render: &GlesRenderer) -> Vec<Modifier> {
-    render
+/// How a display of `display`'s card gets the frames of `render` first: through a linear buffer where both list it.
+pub fn first_via(render: &GlesRenderer, display: &GlesRenderer) -> Via {
+    let linear = Format {
+        code: FORMAT,
+        modifier: Modifier::Linear,
+    };
+    match render
         .egl_context()
         .dmabuf_render_formats()
-        .iter()
-        .filter(|f| f.code == FORMAT)
-        .map(|f| f.modifier)
-        .collect()
-}
-
-impl<F: AsFd + Clone + 'static> FrameCopy<F> {
-    fn swapchain(&self) -> Swapchain<GbmAllocator<F>> {
-        let modifiers = match self.via {
-            Via::Dmabuf => vec![Modifier::Linear],
-            Via::Memory | Via::Unsupported => self.modifiers.clone(),
-        };
-        Swapchain::new(
-            self.allocator.clone(),
-            self.size.w as u32,
-            self.size.h as u32,
-            FORMAT,
-            modifiers,
-        )
+        .contains(&linear)
+        && display.dmabuf_formats().contains(&linear)
+    {
+        true => Via::Dmabuf,
+        false => Via::Memory,
     }
 }
 
 impl<F: AsFd + Clone + 'static> FrameCopy<F> {
-    /// The copies for a display of `size` pixels upright (its mode turned by its transform) at `scale`, in buffers of the
-    /// render GPU from `allocator`, which draws with `modifiers`.
+    /// The copies for a display of `size` pixels upright (its mode turned by its transform) at `scale`, in linear
+    /// buffers of the render GPU from `allocator`, starting `via` ([`first_via`], or the way an earlier copy of the
+    /// display found, so a display given another mode does not try again what failed).
     pub fn new(
         allocator: GbmAllocator<F>,
-        modifiers: Vec<Modifier>,
         size: Size<i32, Physical>,
         scale: f64,
+        via: Via,
     ) -> Self {
-        let swapchain = Swapchain::new(
-            allocator.clone(),
-            size.w as u32,
-            size.h as u32,
-            FORMAT,
-            vec![Modifier::Linear],
-        );
         Self {
-            swapchain,
-            allocator,
-            modifiers,
+            swapchain: Swapchain::new(
+                allocator,
+                size.w as u32,
+                size.h as u32,
+                FORMAT,
+                vec![Modifier::Linear],
+            ),
             tracker: OutputDamageTracker::new(size, scale, Transform::Normal),
             size,
             scale,
-            via: Via::Dmabuf,
+            via,
+            drawn: None,
             uploaded: None,
             id: Id::new(),
             commit: CommitCounter::default(),
@@ -128,19 +132,10 @@ impl<F: AsFd + Clone + 'static> FrameCopy<F> {
         self.size == size && self.scale == scale
     }
 
-    /// Go on the way an earlier copy of the display found, so a display given another mode does not try again what
-    /// failed.
-    pub fn continue_via(&mut self, via: Via) {
-        if via != self.via {
-            self.via = via;
-            self.swapchain = self.swapchain();
-        }
-    }
-
-    /// The render GPU could not draw into the buffer of [`FrameCopy::acquire`]: a linear one is given up for one in its
-    /// own layout, read back through memory; that failing too, the display is unsupported.
+    /// The render GPU could not draw into the target of [`FrameCopy::acquire`]: a linear buffer is given up for
+    /// memory; that failing too, the display is unsupported.
     pub fn cannot_draw(&mut self, error: &dyn std::fmt::Display) {
-        self.via = match self.via {
+        let via = match self.via {
             Via::Dmabuf => {
                 tracing::warn!(error = %error, "the render GPU cannot draw into a buffer another GPU reads; the display's frames go through memory");
                 Via::Memory
@@ -150,93 +145,123 @@ impl<F: AsFd + Clone + 'static> FrameCopy<F> {
                 Via::Unsupported
             }
         };
-        self.swapchain = self.swapchain();
+        self.change_via(via);
         self.shown = None;
+    }
+
+    /// Go on `via` as a new element: nothing of the last frame is on the next texture.
+    fn change_via(&mut self, via: Via) {
+        self.via = via;
+        self.drawn = None;
         self.id = Id::new();
     }
 
-    /// A buffer to draw the next frame into, its age and the buffer itself.
-    pub fn acquire(&mut self) -> Result<(Slot<GbmBuffer>, Dmabuf)> {
-        anyhow::ensure!(self.via != Via::Unsupported, "the display is unsupported");
-        let slot = self
-            .swapchain
-            .acquire()
-            .map_err(|e| anyhow!("allocating a copy buffer: {e}"))?
-            .context("every copy buffer is in use")?;
-        let dmabuf = slot
-            .export()
-            .map_err(|e| anyhow!("exporting a copy buffer: {e}"))?;
-        Ok((slot, dmabuf))
+    /// What to draw the next frame into.
+    pub fn acquire(&mut self, render: &mut GlesRenderer) -> Result<Target> {
+        match self.via {
+            Via::Dmabuf => {
+                let slot = self
+                    .swapchain
+                    .acquire()
+                    .map_err(|e| anyhow!("allocating a copy buffer: {e}"))?
+                    .context("every copy buffer is in use")?;
+                let dmabuf = slot
+                    .export()
+                    .map_err(|e| anyhow!("exporting a copy buffer: {e}"))?;
+                Ok(Target::Dmabuf { slot, dmabuf })
+            }
+            Via::Memory => match &self.drawn {
+                Some(texture) => Ok(Target::Texture {
+                    texture: texture.clone(),
+                    age: 1,
+                }),
+                None => {
+                    let texture: GlesTexture = render
+                        .create_buffer(MEMORY_FORMAT, (self.size.w, self.size.h).into())
+                        .map_err(|e| anyhow!("creating a copy texture: {e}"))?;
+                    self.drawn = Some(texture.clone());
+                    Ok(Target::Texture { texture, age: 0 })
+                }
+            },
+            Via::Unsupported => anyhow::bail!("the display is unsupported"),
+        }
     }
 
-    /// Hand the frame drawn into `slot`, finished once `sync` is signalled, to the display's card. `damage` is what
+    /// Hand the frame drawn into `target`, finished once `sync` is signalled, to the display's card. `damage` is what
     /// changed since the frame before. A way that fails is logged once and not tried again.
-    #[allow(clippy::too_many_arguments)]
     pub fn bring(
         &mut self,
         render: &mut GlesRenderer,
         display: &mut GlesRenderer,
-        slot: Slot<GbmBuffer>,
-        mut dmabuf: Dmabuf,
+        mut target: Target,
         sync: SyncPoint,
         damage: &[Rectangle<i32, Physical>],
     ) -> Result<CopiedFrame, Unsupported> {
-        self.swapchain.submitted(&slot);
-        let before = self.via;
-        let brought = loop {
-            match self.via {
-                Via::Dmabuf => match self.refuse(Via::Dmabuf).and_then(|()| {
+        if let Target::Dmabuf { slot, dmabuf } = &target {
+            self.swapchain.submitted(slot);
+            if self.via == Via::Dmabuf {
+                match self.refuse(Via::Dmabuf).and_then(|()| {
                     display
-                        .import_dmabuf(&dmabuf, None)
+                        .import_dmabuf(dmabuf, None)
                         .map_err(|e| anyhow!("{e}"))
                 }) {
-                    Ok(texture) => break (texture, sync),
+                    Ok(texture) => return Ok(self.copied(texture, sync, target, damage)),
                     Err(e) => {
                         tracing::warn!(error = %format!("{e:#}"), "the display's GPU cannot read the render GPU's buffers; its frames go through memory");
-                        self.via = Via::Memory;
+                        self.change_via(Via::Memory);
                     }
-                },
-                Via::Memory => match self
-                    .refuse(Via::Memory)
-                    .and_then(|()| self.upload(render, display, &mut dmabuf))
-                {
-                    Ok(texture) => break (texture, SyncPoint::signaled()),
-                    Err(e) => {
-                        tracing::error!(error = %format!("{e:#}"), "the display cannot show the render GPU's frames; it is unsupported");
-                        self.via = Via::Unsupported;
-                    }
-                },
-                Via::Unsupported => return Err(Unsupported),
+                }
             }
-        };
-        if self.via != before {
-            // the texture is another one: nothing of the last frame is on it
-            self.id = Id::new();
         }
+        if self.via == Via::Memory {
+            match self
+                .refuse(Via::Memory)
+                .and_then(|()| self.upload(render, display, &mut target))
+            {
+                Ok(texture) => {
+                    return Ok(self.copied(texture, SyncPoint::signaled(), target, damage))
+                }
+                Err(e) => {
+                    tracing::error!(error = %format!("{e:#}"), "the display cannot show the render GPU's frames; it is unsupported");
+                    self.change_via(Via::Unsupported);
+                }
+            }
+        }
+        Err(Unsupported)
+    }
+
+    fn copied(
+        &mut self,
+        texture: GlesTexture,
+        sync: SyncPoint,
+        target: Target,
+        damage: &[Rectangle<i32, Physical>],
+    ) -> CopiedFrame {
         self.commit.increment();
-        self.shown = Some(slot);
-        let (texture, sync) = brought;
-        Ok(CopiedFrame {
+        if let Target::Dmabuf { slot, .. } = target {
+            self.shown = Some(slot);
+        }
+        CopiedFrame {
             id: self.id.clone(),
             commit: self.commit,
             size: self.size,
             texture,
             sync,
             damage: damage.to_vec(),
-        })
+        }
     }
 
-    /// Read the frame back on the render GPU and upload it to the display's card.
+    /// Read the frame in `target` back on the render GPU and upload it to the display's card.
     fn upload(
         &mut self,
         render: &mut GlesRenderer,
         display: &mut GlesRenderer,
-        dmabuf: &mut Dmabuf,
+        target: &mut Target,
     ) -> Result<GlesTexture> {
         let region = Rectangle::from_size(Size::<i32, Buffer>::from((self.size.w, self.size.h)));
-        let mapping = {
-            let framebuffer = render.bind(dmabuf)?;
-            render.copy_framebuffer(&framebuffer, region, FORMAT)?
+        let mapping = match target {
+            Target::Dmabuf { dmabuf, .. } => read_back(render, dmabuf, region)?,
+            Target::Texture { texture, .. } => read_back(render, texture, region)?,
         };
         let data = render.map_texture(&mapping)?;
         match &self.uploaded {
@@ -245,8 +270,8 @@ impl<F: AsFd + Clone + 'static> FrameCopy<F> {
                 Ok(texture.clone())
             }
             None => {
-                let texture =
-                    display.import_memory(data, FORMAT, region.size, mapping.flipped())?;
+                // the rows come top first; a texture marked flipped would be drawn as its first row repeated
+                let texture = display.import_memory(data, MEMORY_FORMAT, region.size, false)?;
                 self.uploaded = Some(texture.clone());
                 Ok(texture)
             }
@@ -265,6 +290,18 @@ impl<F: AsFd + Clone + 'static> FrameCopy<F> {
     fn refuse(&self, _: Via) -> Result<()> {
         Ok(())
     }
+}
+
+fn read_back<T>(
+    render: &mut GlesRenderer,
+    buffer: &mut T,
+    region: Rectangle<i32, Buffer>,
+) -> Result<GlesMapping>
+where
+    GlesRenderer: Bind<T>,
+{
+    let framebuffer = render.bind(buffer)?;
+    Ok(render.copy_framebuffer(&framebuffer, region, MEMORY_FORMAT)?)
 }
 
 /// The render GPU's frame as the display's card draws it: one texture over the whole display.
@@ -354,6 +391,7 @@ mod tests {
 
     const RED: Color32F = Color32F::new(1.0, 0.0, 0.0, 1.0);
     const GREEN: Color32F = Color32F::new(0.0, 1.0, 0.0, 1.0);
+    const BLUE: Color32F = Color32F::new(0.0, 0.0, 1.0, 1.0);
 
     /// Buffers of the render node, and two renderers with displays of their own, as on two GPUs.
     fn devices() -> Option<(GbmDevice<DeviceFd>, GlesRenderer, GlesRenderer)> {
@@ -368,7 +406,27 @@ mod tests {
         Some((gbm, render, display))
     }
 
-    /// Draw `color` over a frame on the render GPU and hand it to the display's card.
+    /// Draw `color` with a blue last row into `buffer`.
+    fn draw<T>(
+        render: &mut GlesRenderer,
+        buffer: &mut T,
+        size: Size<i32, Physical>,
+        color: Color32F,
+    ) -> Result<SyncPoint, GlesError>
+    where
+        GlesRenderer: Bind<T>,
+    {
+        let mut framebuffer = render.bind(buffer)?;
+        let mut frame = render.render(&mut framebuffer, size, Transform::Normal)?;
+        frame.clear(color, &[Rectangle::from_size(size)])?;
+        frame.clear(
+            BLUE,
+            &[Rectangle::new((0, size.h - 1).into(), (size.w, 1).into())],
+        )?;
+        frame.finish()
+    }
+
+    /// Draw `color` over a frame with a blue last row on the render GPU and hand it to the display's card.
     fn frame(
         copy: &mut FrameCopy<DeviceFd>,
         render: &mut GlesRenderer,
@@ -377,38 +435,30 @@ mod tests {
     ) -> Result<CopiedFrame, Unsupported> {
         let size = copy.size;
         loop {
-            let Ok((slot, mut dmabuf)) = copy.acquire() else {
+            let Ok(mut target) = copy.acquire(render) else {
                 return Err(Unsupported);
             };
             // as the render target does it: a buffer the render GPU cannot draw into is given up
-            let drawn = render.bind(&mut dmabuf).and_then(|mut framebuffer| {
-                let mut frame = render.render(&mut framebuffer, size, Transform::Normal)?;
-                frame.clear(color, &[Rectangle::from_size(size)])?;
-                frame.finish()
-            });
+            let drawn = match &mut target {
+                Target::Dmabuf { dmabuf, .. } => draw(render, dmabuf, size, color),
+                Target::Texture { texture, .. } => draw(render, texture, size, color),
+            };
             match drawn {
                 Ok(sync) => {
-                    return copy.bring(
-                        render,
-                        display,
-                        slot,
-                        dmabuf,
-                        sync,
-                        &[Rectangle::from_size(size)],
-                    )
+                    return copy.bring(render, display, target, sync, &[Rectangle::from_size(size)])
                 }
                 Err(e) => copy.cannot_draw(&e),
             }
         }
     }
 
-    /// The first pixel of `copied` as the display's card draws it.
-    fn shown(display: &mut GlesRenderer, copied: &CopiedFrame) -> [u8; 4] {
+    /// The first pixels of the first and the last row of `copied` as the display's card draws it.
+    fn shown(display: &mut GlesRenderer, copied: &CopiedFrame) -> [[u8; 4]; 2] {
         let size = copied.size;
         let mut target: GlesTexture = display
             .create_buffer(FORMAT, Size::from((size.w, size.h)))
             .unwrap();
-        let region = Rectangle::from_size(Size::<i32, Buffer>::from((1, 1)));
+        let region = Rectangle::from_size(Size::<i32, Buffer>::from((1, size.h)));
         let mapping = {
             let mut framebuffer = display.bind(&mut target).unwrap();
             {
@@ -426,7 +476,11 @@ mod tests {
                 .unwrap()
         };
         let data = display.map_texture(&mapping).unwrap();
-        [data[0], data[1], data[2], data[3]]
+        let last = (size.h as usize - 1) * 4;
+        [
+            data[..4].try_into().unwrap(),
+            data[last..last + 4].try_into().unwrap(),
+        ]
     }
 
     #[test]
@@ -436,16 +490,13 @@ mod tests {
             return;
         };
         let allocator = GbmAllocator::new(gbm, GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT);
-        let mut copy = FrameCopy::new(
-            allocator,
-            render_modifiers(&render),
-            Size::from((64, 32)),
-            1.0,
-        );
+        let mut copy = FrameCopy::new(allocator, Size::from((64, 32)), 1.0, Via::Dmabuf);
+        let red = [[255, 0, 0, 255], [0, 0, 255, 255]];
+        let green = [[0, 255, 0, 255], [0, 0, 255, 255]];
 
         // through the buffer where the render GPU can draw into a linear one (not on the proprietary NVIDIA driver)
         let copied = frame(&mut copy, &mut render, &mut display, RED).unwrap();
-        assert_eq!(shown(&mut display, &copied), [255, 0, 0, 255]);
+        assert_eq!(shown(&mut display, &copied), red);
         let first = copied.id().clone();
 
         // the display's card cannot import the buffer: the frame goes through memory, as a new element
@@ -453,10 +504,10 @@ mod tests {
         copy.refused = vec![Via::Dmabuf];
         let copied = frame(&mut copy, &mut render, &mut display, GREEN).unwrap();
         assert_eq!(copy.via(), Via::Memory);
-        assert_eq!(shown(&mut display, &copied), [0, 255, 0, 255]);
+        assert_eq!(shown(&mut display, &copied), green);
         assert_ne!(copied.id(), &first);
         let copied = frame(&mut copy, &mut render, &mut display, RED).unwrap();
-        assert_eq!(shown(&mut display, &copied), [255, 0, 0, 255]);
+        assert_eq!(shown(&mut display, &copied), red);
 
         // memory fails too: the display is unsupported, and nothing is tried again once the cause is gone
         copy.refused = vec![Via::Dmabuf, Via::Memory];

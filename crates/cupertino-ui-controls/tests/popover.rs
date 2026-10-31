@@ -12,6 +12,7 @@ const ESCAPE: u32 = 0xff1b;
 
 thread_local! {
     static OPEN_AT_START: Cell<bool> = const { Cell::new(false) };
+    static POPOVER_FIRST: Cell<bool> = const { Cell::new(false) };
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -77,7 +78,12 @@ impl Application for Options {
             children: vec![button("Open", Message::Open)],
         }));
         if model.open {
-            windows.push(
+            windows.insert(
+                if POPOVER_FIRST.get() {
+                    0
+                } else {
+                    windows.len()
+                },
                 Popover {
                     parent: WindowKey("test".into()),
                     anchor: "Open".into(),
@@ -216,4 +222,16 @@ fn it_follows_its_anchor_when_the_anchor_moves() {
         matches!(requests.last(), Some(WindowRequest::Reposition(p)) if p.anchor_rect == moved),
         "{requests:?}"
     );
+}
+
+#[test]
+fn one_declared_before_its_parent_opens_and_stays_open() {
+    POPOVER_FIRST.set(true);
+    let mut h = harness(false);
+    h.click(h.center("Open"));
+    let id = popover(&h).expect("open");
+    enter(&mut h);
+    h.tap(TAB);
+    assert_eq!(popover(&h), Some(id), "a later view keeps it");
+    assert!(h.focused("Second"));
 }

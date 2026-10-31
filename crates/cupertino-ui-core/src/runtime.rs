@@ -391,6 +391,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     /// Rebuilds every window from the model and reconciles it with the tree.
     fn view(&mut self) -> Result<(), UiError> {
         let mut old: Vec<WindowState<A::Message>> = std::mem::take(&mut self.windows);
+        let (mut popups, toplevels): (Vec<_>, Vec<_>) = A::view(&self.model)
+            .into_iter()
+            .partition(|w| w.popup.is_some());
         for Window {
             key,
             spec,
@@ -398,19 +401,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             on_close,
             background,
             content,
-            popup,
-        } in A::view(&self.model)
+            popup: _,
+        } in toplevels
         {
-            if let Some(popup) = popup {
-                if let Some(mut w) = self.popup(key, spec, popup, content, &mut old)? {
-                    w.shortcuts = shortcuts;
-                    w.on_close = on_close;
-                    w.background = background;
-                    w.invalidate();
-                    self.windows.push(w);
-                }
-                continue;
-            }
             let mut w = match old.iter().position(|w| w.key == key && w.popup.is_none()) {
                 Some(i) => {
                     let mut w = old.remove(i);
@@ -446,6 +439,30 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             w.root = Some(self.tree.reconcile(w.root, content)?);
             w.invalidate();
             self.windows.push(w);
+        }
+        // each popup after its parent, which may be a popup declared later; one without an open parent stays closed
+        while let Some(i) = popups.iter().position(|w| {
+            w.popup
+                .as_ref()
+                .is_some_and(|p| self.windows.iter().any(|open| open.key == p.parent))
+        }) {
+            let Window {
+                key,
+                spec,
+                shortcuts,
+                on_close,
+                background,
+                content,
+                popup,
+            } = popups.remove(i);
+            let popup = popup.expect("partitioned as a popup");
+            if let Some(mut w) = self.popup(key, spec, popup, content, &mut old)? {
+                w.shortcuts = shortcuts;
+                w.on_close = on_close;
+                w.background = background;
+                w.invalidate();
+                self.windows.push(w);
+            }
         }
         // popups go before their parents, the latest first, as the protocol destroys them
         old.reverse();
@@ -529,8 +546,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         }
     }
 
-    /// Opens or keeps a declared popup. `None` when it cannot open yet: its parent is not open, or the parent has
-    /// not laid out its anchor.
+    /// Opens or keeps a declared popup of an open parent. `None` when the parent has not laid out its anchor yet.
     fn popup(
         &mut self,
         key: WindowKey,
@@ -543,12 +559,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             .iter()
             .position(|w| w.key == key && w.popup.is_some())
             .map(|i| old.remove(i));
-        let Some(parent) = self.windows.iter().find(|w| w.key == popup.parent) else {
-            if let Some(w) = existing {
-                self.close(w);
-            }
-            return Ok(None);
-        };
+        let parent = self
+            .windows
+            .iter()
+            .find(|w| w.key == popup.parent)
+            .expect("a popup is opened after its parent");
         let root = self
             .tree
             .reconcile(existing.as_mut().and_then(|w| w.root.take()), content)?;

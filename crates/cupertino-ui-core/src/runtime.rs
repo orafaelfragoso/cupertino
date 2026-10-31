@@ -1441,27 +1441,51 @@ fn place<M: 'static>(
     grab: bool,
     size: Size,
 ) -> Option<PopupSpec> {
-    let (anchor_rect, edge, offset) = match anchor {
-        PopupAnchor::Below { key, gap } => {
-            let node = tree
-                .preorder(parent.root?)
-                .into_iter()
-                .find(|&n| tree.get(n).is_some_and(|n| n.key.as_ref() == Some(key)))?;
-            let rect = parent.geometry.get(&node)?.rect;
-            (rect, PopupEdge::Bottom, Point::new(0.0, *gap))
-        }
+    let rect_of = |key: &Key| {
+        let node = tree
+            .preorder(parent.root?)
+            .into_iter()
+            .find(|&n| tree.get(n).is_some_and(|n| n.key.as_ref() == Some(key)))?;
+        Some(parent.geometry.get(&node)?.rect)
+    };
+    let rtl = parent.env.direction == LayoutDirection::Rtl;
+    let (anchor_rect, edge, gravity, offset) = match anchor {
+        PopupAnchor::Below { key, gap } => (
+            rect_of(key)?,
+            PopupEdge::Bottom,
+            PopupEdge::Bottom,
+            Point::new(0.0, *gap),
+        ),
         PopupAnchor::At(point) => {
-            let edge = match parent.env.direction {
-                LayoutDirection::Ltr => PopupEdge::BottomRight,
-                LayoutDirection::Rtl => PopupEdge::BottomLeft,
+            let edge = if rtl {
+                PopupEdge::BottomLeft
+            } else {
+                PopupEdge::BottomRight
             };
-            (Rect::new(point.x, point.y, 1.0, 1.0), edge, Point::ZERO)
+            (
+                Rect::new(point.x, point.y, 1.0, 1.0),
+                edge,
+                edge,
+                Point::ZERO,
+            )
         }
+        PopupAnchor::Beside { key, offset } if rtl => (
+            rect_of(key)?,
+            PopupEdge::TopLeft,
+            PopupEdge::BottomLeft,
+            Point::new(-offset.x, offset.y),
+        ),
+        PopupAnchor::Beside { key, offset } => (
+            rect_of(key)?,
+            PopupEdge::TopRight,
+            PopupEdge::BottomRight,
+            *offset,
+        ),
     };
     Some(PopupSpec {
         anchor_rect,
         anchor: edge,
-        gravity: edge,
+        gravity,
         offset,
         size,
         constraint: ConstraintAdjust {

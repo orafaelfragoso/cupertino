@@ -12,6 +12,7 @@ mod field;
 mod icon;
 mod list;
 mod look;
+mod menu;
 mod navigation;
 mod pages;
 mod popover;
@@ -38,7 +39,7 @@ pub use split::DividerState;
 pub use stepper::StepperState;
 pub use tooltip::{TooltipChange, TooltipState};
 
-use cupertino_geometry::Insets;
+use cupertino_geometry::{Insets, Point};
 use cupertino_ui_core::{Checked, Element, Key, WindowKey};
 use cupertino_ui_layout::{Align, Axis, ScrollState};
 use cupertino_ui_text::{AttributedText, ContentPurpose, SecureBuffer};
@@ -464,6 +465,71 @@ pub struct DialogButton<M> {
     pub label: String,
     pub action: DialogAction,
     pub on_press: M,
+}
+
+/// A row of a [`Menu`].
+pub enum MenuItem<M> {
+    /// Chosen by a click, Return or Space, which sends `on_select` and closes the menu.
+    Item {
+        label: String,
+        enabled: bool,
+        /// Drawn with a check mark: the option a pop-up button shows, or a setting that is on.
+        checked: bool,
+        on_select: M,
+    },
+    /// Opens a menu of `items` beside itself on a click, Return, Space or the arrow toward the trailing side.
+    Submenu {
+        label: String,
+        enabled: bool,
+        items: Vec<MenuItem<M>>,
+    },
+    Separator,
+}
+
+/// Where a [`Menu`] opens in its parent window.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MenuAnchor {
+    /// Below the node with this key: a pop-up button's menu.
+    Below(Key),
+    /// At a point, opening down and to the trailing side: a context menu.
+    At(Point),
+}
+
+/// A menu in a popup window that takes the keyboard while open. Up, Down, Home and End move between the enabled items,
+/// a typed character moves to the next item it starts, and Escape or the arrow toward the leading side closes a
+/// submenu. Escape in the menu itself, a chosen item and a press outside send `on_close`. Declare [`Menu::windows`]
+/// with the other windows while it is open.
+pub struct Menu<M> {
+    /// The window the anchor is in.
+    pub parent: WindowKey,
+    pub anchor: MenuAnchor,
+    /// What assistive technology calls it, usually the anchor's label.
+    pub label: String,
+    pub items: Vec<MenuItem<M>>,
+    /// The open submenus: the index of each one's item in the menu before it.
+    pub open: Vec<usize>,
+    /// Asks for other submenus open, as a new `open`.
+    pub on_open: Handler<Vec<usize>, M>,
+    pub on_close: M,
+}
+
+/// A region with a context menu: a secondary click, the Menu key or Shift+F10 sends `on_open` with where the menu
+/// opens, in window coordinates, and the application then declares a [`Menu`] anchored there.
+pub struct ContextMenu<M> {
+    pub content: Element<M>,
+    pub on_open: Option<Handler<Point, M>>,
+}
+
+/// A button that shows the chosen option and opens a menu of the options below itself on a click, Space, Return, Up
+/// or Down. Give its element a key and declare [`PopUpButton::menu`] while `open`.
+pub struct PopUpButton<M> {
+    /// The button's accessible name; its value is the chosen option.
+    pub label: String,
+    pub options: Vec<String>,
+    pub selected: usize,
+    pub open: bool,
+    pub enabled: bool,
+    pub on_open: Option<M>,
 }
 
 /// The selected rows of a list, as indices into the rows as currently shown, and the row the keyboard is on. When the

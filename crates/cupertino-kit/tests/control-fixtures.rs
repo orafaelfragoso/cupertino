@@ -14,9 +14,10 @@ use cupertino_kit::controls::Tabs;
 use cupertino_kit::controls::{
     Badge, Button, ButtonRole, ButtonStyle, CheckBox, Column, ColumnWidth, Dialog, DialogAction,
     DialogButton, DialogKind, DisclosureButton, DisclosureStyle, Icon, IconDirection, ListView,
-    Modal, NavigationStack, PageDots, Progress, RadioGroup, ScrollView, Scroller, SecureField,
-    SegmentedControl, Selection, Separator, Slider, SliderStyle, SortOrder, SplitLayout, SplitView,
-    Stack, Stepper, TableView, Text, TextField, TextRole, Toggle,
+    Menu, MenuAnchor, MenuItem, Modal, NavigationStack, PageDots, PopUpButton, Progress,
+    RadioGroup, ScrollView, Scroller, SecureField, SegmentedControl, Selection, Separator, Slider,
+    SliderStyle, SortOrder, SplitLayout, SplitView, Stack, Stepper, TableView, Text, TextField,
+    TextRole, Toggle,
 };
 use cupertino_kit::controls::{Sidebar, SidebarItem, SidebarSection};
 use cupertino_kit::core::{
@@ -716,4 +717,40 @@ fixtures! {
             ],
         }),
     }.into();
+    pop_up_button: "pop-up-button", CONTROL, INTERACTIVE, |look| Element::new(PopUpButton {
+        label: "Size".into(),
+        options: vec!["Small".into(), "Medium".into(), "Large".into()],
+        selected: 1,
+        open: false,
+        enabled: look.enabled,
+        on_open: Some(Message::Nothing),
+    });
+    menu: "menu", TALL, &[State::Normal, State::Hover, State::Pressed, State::Focused], |_| {
+        let item = |label: &str, enabled, checked| MenuItem::Item {
+            label: label.into(),
+            enabled,
+            checked,
+            on_select: Message::Nothing,
+        };
+        let mut windows = Menu {
+            parent: WindowKey("fixture".into()),
+            anchor: MenuAnchor::At(Point::ZERO),
+            label: "Edit".into(),
+            items: vec![
+                item("Wrap Lines", true, true),
+                item("Paste", false, false),
+                MenuItem::Separator,
+                MenuItem::Submenu {
+                    label: "Share".into(),
+                    enabled: true,
+                    items: Vec::new(),
+                },
+            ],
+            open: Vec::new(),
+            on_open: Box::new(|_| Message::Nothing),
+            on_close: Message::Nothing,
+        }
+        .windows(WindowKey("menu".into()));
+        windows.remove(0).content
+    };
 }

@@ -12,7 +12,7 @@
 //! * [`render`]: CPU rendering of the icon and list views;
 //! * [`places`], [`recents`], [`history`], [`browser`]: the sidebar's standard places, the Recents folder, back / forward history and
 //!   the state of one browser window; [`window`]: its layout, hit testing and drawing;
-//! * `udisks` (feature `app`): removable media on the system bus.
+//! * `udisks` (feature `app`): removable media on the system bus; `notice` (feature `app`): failures as notifications.
 
 pub mod browser;
 pub mod context_menu;
@@ -28,6 +28,8 @@ pub mod mime;
 pub mod model;
 pub mod name_edit;
 pub mod natural;
+#[cfg(feature = "app")]
+pub mod notice;
 pub mod open;
 pub mod operations;
 pub mod places;

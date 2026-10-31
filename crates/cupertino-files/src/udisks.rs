@@ -2,7 +2,7 @@
 //! that udisks neither hides nor counts as the system's ([`devices`]); a click mounts one, the eject button unmounts the
 //! drive's file systems and ejects or powers off the drive. The calls never set `auth.no_user_interaction`, so polkit
 //! may ask through the session's authentication agent; Files never asks for a password itself. A call that fails is
-//! reported as one notification on the session bus ([`notice`]); a prompt the person dismissed is not.
+//! reported as one notification ([`notice`]); a prompt the person dismissed is not.
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -19,6 +19,7 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 use zbus::MatchRule;
 
 use crate::natural::compare_names;
+use crate::notice::{escape, shown, Notice, Notices};
 use crate::render::human_size;
 
 pub const UDISKS_NAME: &str = "org.freedesktop.UDisks2";
@@ -27,8 +28,6 @@ pub const BLOCK: &str = "org.freedesktop.UDisks2.Block";
 pub const FILESYSTEM: &str = "org.freedesktop.UDisks2.Filesystem";
 pub const DRIVE: &str = "org.freedesktop.UDisks2.Drive";
 const ERROR: &str = "org.freedesktop.UDisks2.Error.";
-const NOTIFICATIONS: &str = "org.freedesktop.Notifications";
-const APP_NAME: &str = "Files";
 /// The notification's icon: the freedesktop name the device symbol maps to first.
 const DEVICE_ICON: &str = "drive-removable-media-symbolic";
 
@@ -100,41 +99,6 @@ pub fn devices(objects: &ManagedObjects) -> Vec<Device> {
     out
 }
 
-/// The most characters of a device's text that Files shows; longer text ends in an ellipsis.
-const MAX_CHARS: usize = 256;
-
-/// `text` as shown: a label or an error message is the device's own text, so it loses the control and bidirectional
-/// formatting characters that would break the row or reorder the sentence around it, and is cut to [`MAX_CHARS`].
-fn shown(text: &str) -> String {
-    let mut out = String::new();
-    for (count, c) in text
-        .chars()
-        .filter(|c| {
-            !c.is_control()
-                && !matches!(
-                    c,
-                    '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
-                )
-        })
-        .enumerate()
-    {
-        if count == MAX_CHARS {
-            out.pop();
-            out.push('…');
-            break;
-        }
-        out.push(c);
-    }
-    out
-}
-
-/// `text` as literal notification body text: the body is read as markup, where a link would open.
-fn escape(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
 fn text(properties: &HashMap<String, OwnedValue>, key: &str) -> Option<String> {
     properties
         .get(key)
@@ -161,13 +125,6 @@ fn first_mount(filesystem: &HashMap<String, OwnedValue>) -> Option<PathBuf> {
 pub enum Operation {
     Mount,
     Eject,
-}
-
-/// A notification's text.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Notice {
-    pub summary: String,
-    pub body: String,
 }
 
 /// The notification for a failed call on the device `name`; `None` when the person dismissed the polkit prompt.
@@ -197,7 +154,11 @@ pub fn notice(operation: Operation, name: &str, e: &zbus::Error) -> Option<Notic
             )),
         ),
     };
-    Some(Notice { summary, body })
+    Some(Notice {
+        summary,
+        body,
+        icon: DEVICE_ICON,
+    })
 }
 
 /// What the reader and the calls report to the window.
@@ -217,18 +178,18 @@ pub enum Report {
 /// The removable media of a system bus: a reader that reports the devices whenever udisks changes them, and the calls.
 pub struct Volumes {
     system: Connection,
-    session: Option<Connection>,
+    notices: Notices,
     sender: Sender<Report>,
     reports: Receiver<Report>,
     wake: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl Volumes {
-    /// Read the devices of `system` now and whenever udisks changes them or comes to the bus; `session` takes the
-    /// failure notifications. `wake` runs on other threads after each report.
+    /// Read the devices of `system` now and whenever udisks changes them or comes to the bus; `notices` takes the
+    /// failures. `wake` runs on other threads after each report.
     pub fn watch(
         system: Connection,
-        session: Option<Connection>,
+        notices: Notices,
         wake: Arc<dyn Fn() + Send + Sync>,
     ) -> zbus::Result<Volumes> {
         let (sender, reports) = mpsc::channel();
@@ -278,7 +239,7 @@ impl Volumes {
         }
         Ok(Volumes {
             system,
-            session,
+            notices,
             sender,
             reports,
             wake,
@@ -293,14 +254,16 @@ impl Volumes {
     /// Mount `device`: [`Report::Mounted`] follows, or a notification and [`Report::Done`].
     pub fn mount(&self, device: &Device) {
         let device = device.clone();
-        self.call(device.object.clone(), move |system, session| {
+        self.call(device.object.clone(), move |system, notices| {
             match mount(system, &device) {
                 Ok(at) => Report::Mounted {
                     object: device.object,
                     at,
                 },
                 Err(e) => {
-                    post(session, notice(Operation::Mount, &device.name, &e));
+                    if let Some(notice) = notice(Operation::Mount, &device.name, &e) {
+                        notices.post(notice);
+                    }
                     Report::Done {
                         object: device.object,
                     }
@@ -313,8 +276,10 @@ impl Volumes {
     /// that fails, then eject the drive, else power it off. [`Report::Done`] for `device` follows.
     pub fn eject(&self, device: &Device, filesystems: Vec<Device>) {
         let device = device.clone();
-        self.call(device.object.clone(), move |system, session| {
-            post(session, eject(system, &device, &filesystems));
+        self.call(device.object.clone(), move |system, notices| {
+            if let Some(notice) = eject(system, &device, &filesystems) {
+                notices.post(notice);
+            }
             Report::Done {
                 object: device.object,
             }
@@ -324,14 +289,14 @@ impl Volumes {
     fn call(
         &self,
         object: OwnedObjectPath,
-        run: impl FnOnce(&Connection, Option<&Connection>) -> Report + Send + 'static,
+        run: impl FnOnce(&Connection, &Notices) -> Report + Send + 'static,
     ) {
-        let (system, session) = (self.system.clone(), self.session.clone());
+        let (system, notices) = (self.system.clone(), self.notices.clone());
         let (sender, wake) = (self.sender.clone(), Arc::clone(&self.wake));
         let spawned = std::thread::Builder::new()
             .name("udisks-call".into())
             .spawn(move || {
-                let _ = sender.send(run(&system, session.as_ref()));
+                let _ = sender.send(run(&system, &notices));
                 wake();
             });
         if let Err(e) = spawned {
@@ -429,35 +394,6 @@ fn eject(system: &Connection, device: &Device, filesystems: &[Device]) -> Option
         .and_then(|e| notice(Operation::Eject, &device.name, &e))
 }
 
-/// Post `notice` on `session`; a failure to post is logged.
-fn post(session: Option<&Connection>, notice: Option<Notice>) {
-    let (Some(session), Some(notice)) = (session, notice) else {
-        return;
-    };
-    let actions: Vec<&str> = Vec::new();
-    let hints = HashMap::from([("transient", Value::Bool(true))]);
-    // -1: the notification service decides how long the banner stays
-    let posted = session.call_method(
-        Some(NOTIFICATIONS),
-        "/org/freedesktop/Notifications",
-        Some(NOTIFICATIONS),
-        "Notify",
-        &(
-            APP_NAME,
-            0u32,
-            DEVICE_ICON,
-            notice.summary.as_str(),
-            notice.body.as_str(),
-            actions,
-            hints,
-            -1i32,
-        ),
-    );
-    if let Err(e) = posted {
-        eprintln!("cupertino-files: cannot post “{}”: {e}", notice.summary);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,14 +482,5 @@ mod tests {
             link.body,
             "Error mounting /dev/sdb1 at /run/media/ada/&lt;a href=x&gt;y&lt;/a&gt;: bad superblock"
         );
-    }
-
-    #[test]
-    fn device_text_loses_what_would_disguise_it_and_is_cut_at_256_characters() {
-        assert_eq!(shown("\u{202e}Spoo\u{061c}f\ned\u{2069}"), "Spoofed");
-        let long = shown(&"x".repeat(300));
-        assert_eq!(long.chars().count(), 256);
-        assert!(long.ends_with("x…"));
-        assert_eq!(shown(&"x".repeat(256)), "x".repeat(256));
     }
 }

@@ -11,7 +11,8 @@
 //!   [`metrics`]; [`preview`]: quick-preview transition geometry;
 //! * [`render`]: CPU rendering of the icon and list views;
 //! * [`places`], [`recents`], [`history`], [`browser`]: the sidebar's standard places, the Recents folder, back / forward history and
-//!   the state of one browser window; [`window`]: its layout, hit testing and drawing.
+//!   the state of one browser window; [`window`]: its layout, hit testing and drawing;
+//! * `udisks` (feature `app`): removable media on the system bus.
 
 pub mod browser;
 pub mod context_menu;
@@ -42,6 +43,8 @@ pub mod tags;
 pub use cupertino_thumbnails as thumbnail;
 pub mod trash;
 pub mod typeselect;
+#[cfg(feature = "app")]
+pub mod udisks;
 pub mod window;
 
 pub use browser::{Activation, Browser};

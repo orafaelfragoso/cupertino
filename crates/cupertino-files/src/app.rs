@@ -32,13 +32,16 @@ use cupertino_files::metrics::{
 use cupertino_files::name_edit::NameEdit;
 use cupertino_files::open::{command_with, default_app_id, open_command, open_with};
 use cupertino_files::operations;
-use cupertino_files::places::{session_places, Place, PlaceKind, SessionPlaces};
+use cupertino_files::places::{
+    removable_holding, session_places, Place, PlaceKind, SessionPlaces, Volume,
+};
 use cupertino_files::recents;
 use cupertino_files::rename::{RenameEvent, RenameTrigger};
 use cupertino_files::render::{Palette, Renderer};
 use cupertino_files::selection::Modifiers;
 use cupertino_files::tags::{self, TagColor};
 use cupertino_files::trash::Trash;
+use cupertino_files::udisks::{Device, Report, Volumes};
 use cupertino_files::window::{
     metrics, status_text, Bars, DropOutline, Frame, Hit, Move, SearchWidth, ToolbarItem, ViewMode,
     WindowPainter, WindowState, SEARCH_MAX_LEN,
@@ -57,7 +60,7 @@ use cupertino_wayland_client::{
     PointerEvent, Popup, SurfaceId, TokenRequest, Toplevel, ToplevelConfig, WindowConfigure,
 };
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -99,7 +102,16 @@ struct App {
     palette: Palette,
     painter: WindowPainter,
     browser: Browser,
+    /// The session's places, then a row per removable file system.
     places: Vec<Place>,
+    standard_places: usize,
+    /// The removable media; `None` without a system bus.
+    volumes: Option<Volumes>,
+    /// The removable file systems, in the order of their rows.
+    devices: Vec<Device>,
+    /// The block objects a mount or an eject is running for.
+    busy: HashSet<zbus::zvariant::OwnedObjectPath>,
+    home: PathBuf,
     mode: ViewMode,
     /// The path bar and status bar shown (hidden by default).
     bars: Bars,
@@ -401,6 +413,17 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
     )?;
     let sidebar = effects.backdrop(&conn, window.toplevel.surface())?;
     sidebar.set_material(SIDEBAR_MATERIAL);
+    let waker = conn.waker();
+    let volumes = zbus::blocking::Connection::system()
+        .and_then(|system| {
+            Volumes::watch(
+                system,
+                zbus::blocking::Connection::session().ok(),
+                Arc::new(move || waker.wake()),
+            )
+        })
+        .map_err(|e| eprintln!("cupertino-files: no removable media: {e}"))
+        .ok();
     let mut app = App {
         palette: palette(&theme, dark),
         conn,
@@ -413,7 +436,12 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
         theme,
         painter: WindowPainter::new(Renderer::new(icons, &assets)?),
         browser,
+        standard_places: places.len(),
         places,
+        volumes,
+        devices: Vec::new(),
+        busy: HashSet::new(),
+        home,
         mode: ViewMode::Icons,
         bars: Bars::HIDDEN,
         available: None,
@@ -585,6 +613,7 @@ impl App {
 
     /// Take what the folder's model queued; draw again when the listing changed.
     fn refresh(&mut self) -> Result<()> {
+        self.poll_volumes()?;
         let dir = self.browser.dir().to_path_buf();
         let polled = self.browser.poll();
         for e in &polled.errors {
@@ -597,6 +626,123 @@ impl App {
             self.follow_edit();
             self.window.redraw();
         }
+        Ok(())
+    }
+
+    /// Take what the removable media reported: the rows follow the devices, a window on a file system that went away
+    /// goes home, and a finished mount goes to its folder.
+    fn poll_volumes(&mut self) -> Result<()> {
+        let Some(volumes) = &self.volumes else {
+            return Ok(());
+        };
+        let reports = volumes.poll();
+        if reports.is_empty() {
+            return Ok(());
+        }
+        let mut go = None;
+        for report in reports {
+            match report {
+                Report::Devices(devices) => {
+                    self.busy
+                        .retain(|object| devices.iter().any(|d| &d.object == object));
+                    self.devices = devices;
+                }
+                Report::Mounted { object, at } => {
+                    self.busy.remove(&object);
+                    go = Some(at);
+                }
+                Report::Done { object } => {
+                    let drive = self
+                        .devices
+                        .iter()
+                        .find(|d| d.object == object)
+                        .map(|d| d.drive.clone());
+                    let devices = &self.devices;
+                    self.busy.retain(|o| {
+                        *o != object
+                            && !devices
+                                .iter()
+                                .any(|d| &d.object == o && Some(&d.drive) == drive.as_ref())
+                    });
+                }
+            }
+        }
+        let held = removable_holding(self.browser.dir(), &self.places);
+        self.places.truncate(self.standard_places);
+        let rows: Vec<Place> = self
+            .devices
+            .iter()
+            .map(|d| Place::removable(&d.name, d.mount.as_deref(), self.busy.contains(&d.object)))
+            .collect();
+        self.places.extend(rows);
+        self.window.redraw();
+        if let Some(at) = go {
+            return self.go(at);
+        }
+        let mut mounted = self.devices.iter().filter_map(|d| d.mount.as_deref());
+        if held.is_some() && !mounted.any(|m| self.browser.dir().starts_with(m)) {
+            return self.go(self.home.clone());
+        }
+        Ok(())
+    }
+
+    /// Mount the removable file system of place `index`.
+    fn mount(&mut self, index: usize) {
+        let (Some(volumes), Some(device)) = (
+            &self.volumes,
+            index
+                .checked_sub(self.standard_places)
+                .and_then(|i| self.devices.get(i)),
+        ) else {
+            return;
+        };
+        self.busy.insert(device.object.clone());
+        volumes.mount(device);
+        self.places[index] = Place::removable(&device.name, None, true);
+        self.window.redraw();
+    }
+
+    /// Eject the drive of the removable file system of place `index`: a window on one of its file systems goes home
+    /// first, so it holds none of them.
+    fn eject(&mut self, index: usize) -> Result<()> {
+        let Some(device) = index
+            .checked_sub(self.standard_places)
+            .and_then(|i| self.devices.get(i))
+            .filter(|d| !self.busy.contains(&d.object))
+            .cloned()
+        else {
+            return Ok(());
+        };
+        let filesystems: Vec<Device> = self
+            .devices
+            .iter()
+            .filter(|d| d.drive == device.drive && d.mount.is_some())
+            .cloned()
+            .collect();
+        if filesystems
+            .iter()
+            .filter_map(|d| d.mount.as_deref())
+            .any(|m| self.browser.dir().starts_with(m))
+        {
+            self.go(self.home.clone())?;
+        }
+        let Some(volumes) = &self.volumes else {
+            return Ok(());
+        };
+        for fs in &filesystems {
+            self.busy.insert(fs.object.clone());
+        }
+        self.busy.insert(device.object.clone());
+        volumes.eject(&device, filesystems);
+        for (place, d) in self.places[self.standard_places..]
+            .iter_mut()
+            .zip(&self.devices)
+        {
+            if self.busy.contains(&d.object) {
+                *place = Place::removable(&d.name, d.mount.as_deref(), true);
+            }
+        }
+        self.window.redraw();
         Ok(())
     }
 
@@ -909,10 +1055,18 @@ impl App {
                     .map(|(_, r)| *r)
                     .expect("a hit item is laid out"),
             ),
-            Hit::Place(i) => {
-                let path = self.places[i].path.clone();
-                self.go(path)
-            }
+            Hit::Place(i) => match self.places[i].kind {
+                PlaceKind::Removable(Volume::Unmounted) => {
+                    self.mount(i);
+                    Ok(())
+                }
+                PlaceKind::Removable(Volume::Busy) => Ok(()),
+                _ => {
+                    let path = self.places[i].path.clone();
+                    self.go(path)
+                }
+            },
+            Hit::Eject(i) => self.eject(i),
             Hit::PathSegment(i) => {
                 let path = frame.path[i].path.clone();
                 self.go(path)
@@ -1034,6 +1188,7 @@ impl App {
                 (_, Some('d')) => return self.menu_action(MenuAction::Duplicate),
                 (_, Some('r')) => return self.menu_action(MenuAction::ShowOriginal),
                 (_, Some('w')) => return self.menu_action(MenuAction::CloseWindow),
+                (_, Some('e')) => return self.menu_action(MenuAction::Eject),
                 // the design's View menu shortcut for the status bar
                 (_, Some('/')) => return self.toggle_bar(false),
                 (_, Some('1')) => return self.set_mode(ViewMode::Icons),
@@ -1818,6 +1973,9 @@ impl App {
             can_go_back: history.back_target().is_some(),
             can_go_forward: history.forward_target().is_some(),
             has_parent: self.browser.dir().parent().is_some(),
+            eject: removable_holding(self.browser.dir(), &self.places)
+                .filter(|&i| self.places[i].ejectable())
+                .map(|i| self.places[i].name.clone()),
         }
     }
 
@@ -1847,9 +2005,17 @@ impl App {
         }
         let state = self.current_menu_state();
         let menus = self.menus.as_mut().expect("checked above");
-        let last = self.menu_state.unwrap_or_default();
+        let last = self.menu_state.clone().unwrap_or_default();
         if state != last {
-            let shape = |s: &MenuState| (s.in_trash, s.path_bar, s.status_bar, s.full_screen);
+            let shape = |s: &MenuState| {
+                (
+                    s.in_trash,
+                    s.path_bar,
+                    s.status_bar,
+                    s.full_screen,
+                    s.eject.clone(),
+                )
+            };
             if shape(&state) != shape(&last) {
                 menus.update(&menu_bar::menu_bar(&state));
             }
@@ -1886,6 +2052,11 @@ impl App {
             MenuAction::Duplicate => self.run(MenuCommand::Duplicate)?,
             MenuAction::MakeAlias => self.run(MenuCommand::MakeAlias)?,
             MenuAction::ShowOriginal => self.run(MenuCommand::ShowOriginal)?,
+            MenuAction::Eject => {
+                if let Some(i) = removable_holding(self.browser.dir(), &self.places) {
+                    self.eject(i)?;
+                }
+            }
             MenuAction::SelectAll => {
                 self.browser.select_all();
                 self.window.redraw();
@@ -2265,7 +2436,10 @@ impl App {
                     DropOutline::Item(i),
                 )
             }
-            Hit::Place(i) => (self.places.get(i)?.path.clone(), DropOutline::Place(i)),
+            Hit::Place(i) => (
+                self.places.get(i)?.folder()?.to_path_buf(),
+                DropOutline::Place(i),
+            ),
             _ => return None,
         };
         let trash = path == trash_files;

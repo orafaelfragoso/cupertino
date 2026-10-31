@@ -23,7 +23,7 @@ use crate::layout::icon::{IconLayout, SectionSpec};
 use crate::layout::list::{ListLayout, RowSpec};
 use crate::metrics::{list_view, marquee, menu as menu_metrics, sidebar, window};
 use crate::name_edit::NameEdit;
-use crate::places::{Place, PlaceGroup, PlaceKind};
+use crate::places::{Place, PlaceGroup, PlaceKind, Volume};
 use crate::render::{
     available_size, copy_opaque, fill_rect, fill_rounded, paint, stroke_rounded, truncate_middle,
     truncate_tail, Band, Palette, Renderer,
@@ -193,6 +193,8 @@ pub enum Hit {
     Toolbar(ToolbarItem),
     /// A sidebar row: the index into the places.
     Place(usize),
+    /// The eject button of a sidebar row: the index into the places.
+    Eject(usize),
     /// An item of the folder: its index in display order.
     Item(usize),
     /// The disclosure triangle of a folder row of the list: its index in display order.
@@ -285,6 +287,8 @@ pub struct WindowLayout {
     pub groups: Vec<(PlaceGroup, Rect)>,
     /// Sidebar rows, in the order of the places.
     pub places: Vec<Rect>,
+    /// The eject buttons' targets, with the index of their place: [`EJECT_TARGET`] and the row's end after it.
+    pub ejects: Vec<(usize, Rect)>,
 }
 
 impl WindowLayout {
@@ -361,7 +365,8 @@ impl WindowLayout {
         );
 
         let row = sidebar::RowSize::DEFAULT.row_height();
-        let (mut groups, mut rows) = (Vec::new(), Vec::with_capacity(places.len()));
+        let (mut groups, mut rows, mut ejects) =
+            (Vec::new(), Vec::with_capacity(places.len()), Vec::new());
         let mut y = m::TOOLBAR_HEIGHT + m::SIDEBAR_TOP;
         let mut current: Option<PlaceGroup> = None;
         for p in places {
@@ -381,12 +386,17 @@ impl WindowLayout {
                 y += sidebar::GROUP_ROW_HEIGHT;
                 current = Some(p.group);
             }
-            rows.push(Rect::new(
+            let r = Rect::new(
                 m::SIDEBAR_ROW_INSET,
                 y,
                 sidebar_w - 2.0 * m::SIDEBAR_ROW_INSET,
                 row,
-            ));
+            );
+            if p.ejectable() {
+                let x = r.right() - NAME_TRAILING - EJECT_TARGET;
+                ejects.push((rows.len(), Rect::new(x, r.y, r.right() - x, r.h)));
+            }
+            rows.push(r);
             y += row;
         }
         WindowLayout {
@@ -402,6 +412,7 @@ impl WindowLayout {
             items,
             groups,
             places: rows,
+            ejects,
         }
     }
 
@@ -418,6 +429,9 @@ impl WindowLayout {
             } else {
                 Hit::Chrome
             });
+        }
+        if let Some((i, _)) = self.ejects.iter().find(|(_, r)| r.contains(p)) {
+            return Some(Hit::Eject(*i));
         }
         if let Some(i) = self.places.iter().position(|r| r.contains(p)) {
             return Some(Hit::Place(i));
@@ -627,6 +641,13 @@ const SEARCH_RING: f64 = 2.0;
 /// Longest side of a sidebar symbol in points: 16 of the 17 pt icon field; the symbol's size inside the field
 /// and the accent tint of the sidebar symbols are approximate (not known).
 const SIDEBAR_GLYPH: f64 = 16.0;
+/// Points the end of a sidebar name keeps from the row's trailing edge.
+const NAME_TRAILING: f64 = 4.0;
+/// The eject button of a mounted removable place: a target this wide before the row's last [`NAME_TRAILING`] points,
+/// which take the click too (approximate), holding the row's button ([`sidebar::CELL_BUTTON`]) with a symbol of this
+/// size (approximate).
+const EJECT_TARGET: f64 = 24.0;
+const EJECT_GLYPH: f64 = 14.0;
 const EDITOR_PADDING: f64 = 4.0;
 const EDITOR_MIN_WIDTH: f64 = 48.0;
 const EDITOR_BORDER: f64 = 2.0;
@@ -1652,13 +1673,32 @@ impl WindowPainter {
                 scale,
                 pal.accent,
             );
+            let mut end = r.right() - NAME_TRAILING;
+            if let Some((_, target)) = w.ejects.iter().find(|(e, _)| *e == i) {
+                let (bw, bh) = sidebar::CELL_BUTTON;
+                let button = Rect::new(
+                    target.x + (EJECT_TARGET - bw) / 2.0,
+                    target.y + (target.h - bh) / 2.0,
+                    bw,
+                    bh,
+                );
+                self.renderer.draw_symbol(
+                    pm,
+                    &button,
+                    "symbol.eject",
+                    EJECT_GLYPH,
+                    scale,
+                    pal.secondary_text,
+                );
+                end = target.x;
+            }
             let px = rows.font_size() as f32 * scale;
             let x = icon.x + sidebar::CELL_TEXT_X;
             let name = truncate_tail(
                 &mut self.renderer.text,
                 &place.name,
                 px,
-                ((r.right() - x) as f32 - 4.0) * scale,
+                ((end - x) as f32) * scale,
             );
             self.renderer.text.draw(
                 pm,
@@ -1668,7 +1708,11 @@ impl WindowPainter {
                 px,
                 400,
                 0.0,
-                pal.text,
+                if place.kind == PlaceKind::Removable(Volume::Busy) {
+                    pal.secondary_text
+                } else {
+                    pal.text
+                },
             );
         }
     }
@@ -1984,6 +2028,34 @@ mod tests {
     }
 
     #[test]
+    fn the_end_of_a_mounted_removable_row_ejects_and_the_rest_of_it_goes_there() {
+        let mut ps = places();
+        ps.push(Place::removable(
+            "KINGSTON",
+            Some(Path::new("/run/media/ada/K")),
+            false,
+        ));
+        ps.push(Place::removable("Camera Card", None, false));
+        ps.push(Place::removable(
+            "Backup Disk",
+            Some(Path::new("/run/media/ada/B")),
+            true,
+        ));
+        let l = WindowLayout::new(Size { w: 920.0, h: 436.0 }, &ps, Bars::HIDDEN);
+        let click = |i: usize, from_end: f64| {
+            let r = l.places[i];
+            l.chrome_hit(Point {
+                x: r.right() - from_end,
+                y: r.y + r.h / 2.0,
+            })
+        };
+        assert_eq!(click(3, 4.0), Some(Hit::Eject(3)));
+        assert_eq!(click(3, 30.0), Some(Hit::Place(3)));
+        assert_eq!(click(4, 4.0), Some(Hit::Place(4)), "not mounted: no button");
+        assert_eq!(click(5, 4.0), Some(Hit::Place(5)), "busy: no button");
+    }
+
+    #[test]
     fn hits_find_controls_places_items_and_list_headers() {
         let mut painter = WindowPainter::new(crate::render::renderer());
         let size = Size { w: 920.0, h: 436.0 };
@@ -2024,6 +2096,7 @@ mod tests {
             "Group By is disabled"
         );
         assert_eq!(frame.hit(at(&frame.window.places[2])), Hit::Place(2));
+        assert!(frame.window.ejects.is_empty(), "no removable place");
         // the strip without a control moves the window, over the sidebar's top and the toolbar alike
         assert_eq!(frame.hit(Point { x: 100.0, y: 20.0 }), Hit::Titlebar);
         assert_eq!(frame.hit(at(&frame.window.title)), Hit::Titlebar);

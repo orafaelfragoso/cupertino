@@ -8,11 +8,12 @@ manager (and a desktop-icon layer) needs.
 ## Usage
 
 ```sh
-cargo test -p cupertino-files --features app                    # 140+ unit tests, 2 workflow tests, 3 session handler tests
+cargo test -p cupertino-files --features app                    # 200+ unit tests, 2 workflow tests, 3 session handler tests, 7 removable media tests (a fake udisks2 on a private bus)
 cargo run -p cupertino-files --features app -- [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]  # the window (default $HOME), in a running session
 cargo clippy -p cupertino-files --all-targets
 cargo run -p cupertino-files --release --example files_samples # PNGs in output/ (needs CUPERTINO_ASSET_DIR)
 ci/capture.sh files/window --view list   # a window or its sidebar on a sample home folder (crates/cupertino-capture)
+ci/capture.sh files/sidebar --devices removable --scale 2   # the sidebar with a mounted, a busy and an unmounted device
 cargo bench -p cupertino-files --bench directory                # 50k entries
 ```
 
@@ -53,6 +54,25 @@ the tail. The home folder and the other user directories keep their folder icons
 the first `applications` folder of `$XDG_DATA_DIRS` (the system's desktop entries), a real folder rather than a merged
 virtual one (approximate).
 
+Removable media come from udisks2 on the system bus (`udisks`): after Trash, Locations lists every file system of a drive
+that udisks neither hides (`HintIgnore`) nor counts as the system's (`HintSystem`), with usage `filesystem`. A block without
+a drive, such as a loop device, is left out. Encrypted containers are left out too, because unlocking is not built. A row
+is named by `HintName`, then `IdLabel`, then the drive's vendor and model, then "<size> Volume". It wears
+`symbol.externaldrive` and lists again whenever udisks reports a change or comes to the bus.
+* **Mount:** a click on a row that is not mounted mounts it and goes to the mount point.
+* **Eject:** a mounted row has an eject button (`symbol.eject`, 14 pt in `SecondaryText`) in a 24 pt slot at its trailing
+  edge, and File › Eject (Super+E) acts on the file system the folder shown is on. Ejecting first takes the window home,
+  then unmounts every mounted file system of the drive in order, then ejects the drive, else powers it off. It stops at
+  the first unmount that fails.
+* **Busy and failures:** while a call runs, the row's name is in `SecondaryText` and the row takes no other call. A failure
+  is one transient notification from "Files" on the session bus (`org.freedesktop.Notifications`). A polkit prompt the
+  person dismissed is not reported.
+* **Permission:** no call sets `auth.no_user_interaction`, so polkit may ask through the session's authentication agent,
+  and Files never asks for a password itself.
+* **A file system that goes away:** a window on it goes home.
+
+The slot, the symbol size and the copy are approximate.
+
 In the list every folder has a disclosure triangle: a click on it, Right and Left expand and collapse the folder in place, its
 items one level (15 pt) deeper, read only when it expands and kept live. Left on an item inside an expanded folder
 moves to that folder; collapsing moves a selection inside to the folder (both ). Another view or another folder shows
@@ -89,6 +109,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | press on empty space and drag | rubber band (icon and list view): the items it touches are selected live; Shift or Ctrl toggles them against the selection kept; near the top or bottom edge (50 pt) the view scrolls up to 20 pt every 0.05 s |
 | Super+Backspace | move the selection to the trash (`$XDG_DATA_HOME/Trash`, freedesktop Trash 1.0) |
 | click on the name of the only selected item, or Rename | edit the name in place in a shared text field (`cupertino-text-field`: caret with blink, word and line moves, Shift selection, click, double and triple click, drag, copy, cut and paste, undo): the name without its extension is selected; Return commits, Escape cancels; a name that exists is refused (never replaced) and an invalid one keeps the editor open |
+| click a removable row that is not mounted / its eject button, File › Eject, Super+E | mount it and go there / eject its drive (above) |
 | press an item and move 5 pt | drag the selection onto a folder of the window or a place of the sidebar: moves there (Alt copies, Super moves, copy across volumes, a clash renames the arrival `name copy`); onto the trash place it is trashed; Escape cancels. The folder or place under the pointer that takes the drop is marked with the accent; under Increase Contrast it is also outlined in the label colour |
 
 ## Design
@@ -116,6 +137,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | `history`, `places`, `recents` | navigation state | `History::{visit, back, forward}`; `standard_places` (Recents, Applications, Desktop, Documents, Downloads, the computer, Trash), `folder_icons`, `session_places` (`SessionPlaces`), `computer_name`, `applications_folder`; `recents::{parse_xbel, recent_entries}` (the bookmark file is read with `cupertino_apps::recent`, which `parse_xbel` and `XBEL_NAME` re-export) |
 | `browser` | one window's folder | `Browser::{open, go, back, forward, parent, poll, sort_by, press, release, move_focus, select_all, type_text, tab, activation, outline, expand, collapse, toggle_expanded, disclose_focus, collapse_all, available_space}: model, history, the list's outline of expanded folders, selection by path across reloads, nearest-ancestor fallback for a deleted folder |
 | `window` | window layout and painting | `WindowLayout` (toolbar, sidebar, browser, path and status bars), `Bars`, `path_chain`, `path_segments`, `status_text`, `Frame::{hit, reveal, scroll_by}`, `WindowPainter`, `ViewMode`, `metrics` |
+| `udisks` (feature `app`) | removable media | `devices` (the listed file systems of udisks' managed objects), `Volumes::{watch, poll, mount, eject}` → `Report` (`Devices`, `Mounted`, `Done`), `notice` (a failure's notification text) |
 | `app`, `main` (feature `app`) | the binary | toplevel, input, `open` (default application, one activation token per file), asset file icons (`cupertino-icons::document`), inotify wake-ups through the connection's `Waker`, session appearance |
 
 ### Measured defaults
@@ -198,5 +220,9 @@ and require the frames to differ only inside the reported areas.
   spring open under a drag (`spring::SpringLoad` is not wired).
 * The trash place appears in the sidebar only at the next start after the first item was trashed.
 * The lock badge is not drawn, because entries carry no permission bits.
-* Errors go to stderr only: a file without an application is reported there, not in a dialog.
+* Errors go to stderr only: a file without an application is reported there, not in a dialog. Removable media are the
+  exception: their failures are notifications.
+* Removable media: encrypted containers are not listed (no unlock), and neither are disc images or network mounts. The
+  sidebar has no keyboard navigation and Files no accessibility tree, so a device row has no label or description for
+  assistive technology yet, and only the folder shown can be ejected from the keyboard.
 * Opening several files opens each without confirmation; a mixed selection enters the first folder only (approximate).

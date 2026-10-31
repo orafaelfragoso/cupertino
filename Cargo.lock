@@ -1372,6 +1372,8 @@ dependencies = [
  "async-channel",
  "cupertino-geometry",
  "cupertino-test-bus",
+ "cupertino-ui-core",
+ "cupertino-ui-platform",
  "tempfile",
  "zbus",
  "zeroize",

@@ -103,6 +103,9 @@ pub(crate) fn node(node: &AccessibilityNode) -> accesskit::Node {
             out.set_row_index(index);
         }
     }
+    if let Some(column) = node.column_index {
+        out.set_column_index(column);
+    }
     let b = node.bounds;
     out.set_bounds(accesskit::Rect::new(
         b.min_x(),

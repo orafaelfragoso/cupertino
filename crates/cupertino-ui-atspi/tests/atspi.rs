@@ -60,6 +60,7 @@ fn node(
         live: None,
         item_count: None,
         item_index: None,
+        column_index: None,
     }
 }
 

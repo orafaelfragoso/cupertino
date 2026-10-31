@@ -389,6 +389,13 @@ pub(crate) fn committed(buffer: &TextBuffer) -> String {
     }
 }
 
+/// Whether a model's `value` is the text the buffer holds, once the buffer's own clean-up is applied to it, so a value
+/// with a line break the buffer converted is not taken again on every rebuild.
+pub(crate) fn holds(buffer: &TextBuffer, value: &str) -> bool {
+    let held = committed(buffer);
+    value == held || buffer.cleaned(value) == held
+}
+
 fn anchor(buffer: &TextBuffer) -> usize {
     let selection = buffer.selection();
     if buffer.caret() == selection.start {
@@ -675,7 +682,7 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
     /// reported, with a different text. An older revision is the model catching up and is ignored.
     fn update(&self, old: &Self, state: &mut FieldState) -> Change {
         state.session.purpose = self.purpose;
-        if self.revision >= state.reported && self.value != state.committed() {
+        if self.revision >= state.reported && !holds(&state.buffer, &self.value) {
             state.buffer.set_text(&self.value);
             state.reported = self.revision;
             return Change::Paint;

@@ -674,7 +674,7 @@ Crates touched, with test counts: `cupertino-wm` 161 (`SetOutputRect`, the `menu
 What is open for using Cupertino every day, as of this file. Nothing here has a date. "Not run on hardware" means it has only been tried headless, nested or in a virtual machine; a real session on a discrete GPU with one 4K monitor has not been run yet.
 
 * **First real session.** Starting Cupertino from a display manager (GDM) on real hardware, with the NVIDIA driver, has not been run (*From the display manager*).
-* **NVIDIA.** Explicit sync (the release point is signalled when the compositor drops the buffer) has not run on NVIDIA. Lock, unlock, sleep and resume, and log out, restart and shut down through logind, are not run on hardware either.
+* **NVIDIA.** Explicit sync (the release point is signalled once the flip of the last frame drawn from the buffer is done) has not run on NVIDIA. Lock, unlock, sleep and resume, and log out, restart and shut down through logind, are not run on hardware either.
 * **Lost GPU context.** The session ends and the display manager shows the login screen; the renderer is not rebuilt in place (*Lost rendering context* below).
 * **Portals.** The session supervisor starts `cupertino-portal`, but that program does not exist yet and no portal configuration is installed. Until it does, browser file choosers, screen sharing in video calls and the dark-mode setting for apps do not go through Cupertino.
 * **Authentication prompt.** The polkit agent is built and tested but is not in the packaged binaries, so an installed session does not start it.

@@ -179,6 +179,7 @@ pub enum OsdKey {
     VolumeUp,
     VolumeDown,
     Mute,
+    MicMute,
     BrightnessUp,
     BrightnessDown,
     KeyboardBrightnessUp,
@@ -293,6 +294,13 @@ const NAMES: &[(&str, Action)] = &[
         "volume-mute",
         Action::Osd {
             key: OsdKey::Mute,
+            fine: false,
+        },
+    ),
+    (
+        "microphone-mute",
+        Action::Osd {
+            key: OsdKey::MicMute,
             fine: false,
         },
     ),
@@ -675,13 +683,22 @@ impl KeyBindings {
             ("XF86KbdBrightnessUp", OsdKey::KeyboardBrightnessUp),
             ("XF86KbdBrightnessDown", OsdKey::KeyboardBrightnessDown),
         ];
-        let mut media = vec![(
-            "XF86AudioMute".to_string(),
-            Action::Osd {
-                key: OsdKey::Mute,
-                fine: false,
-            },
-        )];
+        let mut media = vec![
+            (
+                "XF86AudioMute".to_string(),
+                Action::Osd {
+                    key: OsdKey::Mute,
+                    fine: false,
+                },
+            ),
+            (
+                "XF86AudioMicMute".to_string(),
+                Action::Osd {
+                    key: OsdKey::MicMute,
+                    fine: false,
+                },
+            ),
+        ];
         for (sym, key) in steps {
             media.push((
                 (*sym).to_string(),
@@ -801,7 +818,7 @@ impl ActionPlan {
         };
         let op = |o: &ShellOp| match o {
             ShellOp::InputSource { .. } => true,
-            ShellOp::Osd { key, .. } => !matches!(key, OsdKey::Mute),
+            ShellOp::Osd { key, .. } => !matches!(key, OsdKey::Mute | OsdKey::MicMute),
             _ => false,
         };
         !self.is_empty() && self.commands.iter().all(command) && self.ops.iter().all(op)
@@ -2087,6 +2104,13 @@ mod tests {
                 fine: false
             })
         );
+        assert_eq!(
+            look("XF86AudioMicMute"),
+            Some(Action::Osd {
+                key: OsdKey::MicMute,
+                fine: false
+            })
+        );
         assert_eq!(look("Shift+XF86MonBrightnessUp"), None);
         assert_eq!(
             look("Shift+Alt+XF86KbdBrightnessDown"),
@@ -2151,6 +2175,10 @@ mod tests {
             Action::PowerKey,
             Action::Osd {
                 key: OsdKey::Mute,
+                fine: false,
+            },
+            Action::Osd {
+                key: OsdKey::MicMute,
                 fine: false,
             },
             Action::SpawnTerminal,

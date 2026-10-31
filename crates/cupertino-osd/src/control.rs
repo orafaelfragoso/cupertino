@@ -79,6 +79,24 @@ impl Control {
         Ok(())
     }
 
+    /// Mute the microphone, or unmute it when muted.
+    async fn toggle_microphone_mute(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallerError> {
+        check_call(
+            connection,
+            &header,
+            "org.cupertino.Osd1",
+            "ToggleMicrophoneMute",
+            SERVER,
+        )
+        .await?;
+        (self.on_command)(Command::ToggleMicrophoneMute);
+        Ok(())
+    }
+
     /// Raise or lower the display brightness one press.
     async fn brightness_step(
         &self,

@@ -26,8 +26,8 @@ pub mod sender;
 pub mod system;
 
 pub use backend::{
-    AlsaVolume, BackendError, Backlight, MemoryBacklight, MemoryVolume, SessionVolume, Volume,
-    VolumeState,
+    AlsaVolume, BackendError, Backlight, MemoryBacklight, MemoryVolume, SessionMicrophone,
+    SessionVolume, Volume, VolumeState,
 };
 pub use controller::{Command, Controller, EffectError};
 pub use model::{segments, Fill, Hud, Kind, Overlay, Phase, View};

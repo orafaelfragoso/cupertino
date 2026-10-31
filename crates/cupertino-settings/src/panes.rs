@@ -979,8 +979,8 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                     row(
                         ControlId::MouseNatural,
                         "Natural scrolling",
-                        switch(settings.natural_scrolling()),
-                        key("natural_scrolling"),
+                        switch(settings.mouse_natural_scrolling()),
+                        key("mouse_natural_scrolling"),
                     ),
                 ],
                 footer: file_footer(File::Compositor),
@@ -2178,8 +2178,11 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
         ControlId::ClipboardAdd => vec![Effect::AskClipboardApp {
             program: index_of(value) == 1,
         }],
-        ControlId::MouseNatural | ControlId::TrackpadNatural => {
-            // one value for the mouse and the trackpad, as in the design
+        ControlId::MouseNatural => {
+            settings.compositor.mouse_natural_scrolling = Some(bool_of(value));
+            store(File::Compositor)
+        }
+        ControlId::TrackpadNatural => {
             settings.compositor.natural_scrolling = Some(bool_of(value));
             store(File::Compositor)
         }
@@ -2477,6 +2480,20 @@ mod tests {
             ),
             [Effect::SetAppearance { dark: true }]
         );
+        assert_eq!(
+            (
+                control(PaneId::Mouse, ControlId::MouseNatural, &s),
+                control(PaneId::Trackpad, ControlId::TrackpadNatural, &s)
+            ),
+            (Control::Switch { on: false }, Control::Switch { on: true }),
+            "a wheel scrolls the view, a trackpad the content"
+        );
+        change(
+            ControlId::MouseNatural,
+            Value::Bool(true),
+            &mut s,
+            &Live::default(),
+        );
         change(
             ControlId::TrackpadNatural,
             Value::Bool(false),
@@ -2484,9 +2501,12 @@ mod tests {
             &Live::default(),
         );
         assert_eq!(
-            control(PaneId::Mouse, ControlId::MouseNatural, &s),
-            Control::Switch { on: false },
-            "one value for both"
+            (
+                s.compositor.mouse_natural_scrolling,
+                s.compositor.natural_scrolling
+            ),
+            (Some(true), Some(false)),
+            "each has its own value"
         );
     }
 

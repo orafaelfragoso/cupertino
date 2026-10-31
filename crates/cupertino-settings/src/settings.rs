@@ -427,7 +427,7 @@ impl Settings {
             .unwrap_or(MinimizeEffectName::Warp)
     }
 
-    /// Defaults: 0.6875 for both (settled), acceleration on, natural scrolling on.
+    /// Defaults: 0.6875 for both (settled), acceleration on, natural scrolling on for the trackpad and off for the mouse.
     pub fn mouse_speed(&self) -> f64 {
         self.compositor
             .mouse_speed
@@ -446,6 +446,10 @@ impl Settings {
 
     pub fn natural_scrolling(&self) -> bool {
         self.compositor.natural_scrolling.unwrap_or(true)
+    }
+
+    pub fn mouse_natural_scrolling(&self) -> bool {
+        self.compositor.mouse_natural_scrolling.unwrap_or(false)
     }
 
     /// Defaults: 500 ms delay, 83 ms interval (settled).

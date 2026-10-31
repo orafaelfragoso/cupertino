@@ -537,7 +537,9 @@ Banners and the notification centre list are drawn by the `cupertino-notificatio
 
 ### Display power and idle
 
-`display_power.rs` decides, `power.rs` carries it out. The settings are `power.conf` (`cupertino-defaults::power`, read at start and on every change (*Live settings*); `$CUPERTINO_POWER_CONF` overrides the path; an invalid line is logged and skipped): display and system sleep per power source, `dim_before_display_sleep`, `require_password_after`, `lock_screen_display_sleep`. The defaults are the design's (display sleep 10 min on mains power and 2 min on battery, system sleep 10 min;: password after 300 s).
+`display_power.rs` decides, `power.rs` carries it out. The settings are `power.conf` (`cupertino-defaults::power`, read at start and on every change (*Live settings*); `$CUPERTINO_POWER_CONF` overrides the path; an invalid line is logged and skipped): display and system sleep per power source, `dim_before_display_sleep`, `require_password_after`, `lock_screen_display_sleep`. The defaults are the design's (display sleep 10 min on mains power and 2 min on battery; password after 300 s), except system sleep: never on mains
+power, because nothing says a build, a download or a remote session is running (none takes a sleep inhibitor), and 10 min on
+battery.
 
 | Step | When (T = display sleep of the current power source) |
 |---|---|
@@ -683,7 +685,6 @@ What is open for using Cupertino every day, as of this file. Nothing here has a 
 * **X11 applications.** Started through `xwayland-satellite` and tested with a fake satellite only. Scale on a 4K monitor is not handled for them.
 * **Keyboard layout.** Layouts come only from `keyboard.conf`; the system layout at login (localed) and a Compose key setting are not read.
 * **Terminal.** No terminal is shipped, and the launcher falls back to `xterm`.
-* **Idle defaults.** On mains power the screen turns off after 10 minutes and the system sleeps after 10 minutes (*Display power and idle*), so a desktop can suspend during a long build or download.
 * **Scrolling.** Natural scrolling is on by default, mice included.
 * **Crash recovery.** A server crash ends the session and returns to the display manager; windows are not reopened.
 * **Long runs.** No soak or endurance test has been run.

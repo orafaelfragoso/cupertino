@@ -1,7 +1,10 @@
 use super::*;
-use crate::test_support::{env, group, leaf, Leaf};
-use crate::Element;
+use crate::test_support::{env, group, leaf, spec, Leaf};
+use crate::{Change, Element, MeasureCx, PaintCx, SemanticsCx, Widget};
+use cupertino_geometry::Size;
+use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 use cupertino_ui_platform::{KeyEvent, Keysym, Mods, Timestamp};
+use proptest::prelude::*;
 
 type M = String;
 
@@ -137,4 +140,130 @@ fn a_node_is_hit_only_inside_its_rect_and_every_clip_above_it() {
     assert!(placement.hit(Point::new(10.0, 10.0)));
     assert!(!placement.hit(Point::new(70.0, 10.0)), "clipped away");
     assert!(!placement.hit(Point::new(10.0, 30.0)), "outside the rect");
+}
+
+/// A node that records each delivery as `label:phase` and stops the event in the phase `stop` names.
+struct Probe {
+    label: usize,
+    stop: Option<Phase>,
+    children: Vec<Element<M>>,
+}
+
+impl Widget<M> for Probe {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Overlay)
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        cx.emit(format!("{}:{:?}", self.label, cx.phase()));
+        if self.stop == Some(cx.phase()) {
+            Propagation::Stop
+        } else {
+            Propagation::Continue
+        }
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// The element for node `label` of the tree `parents` describes (`parents[i] < i` for every node but the root).
+fn probe(parents: &[usize], label: usize, stop: Option<(usize, Phase)>) -> Element<M> {
+    let children = (1..parents.len())
+        .filter(|&child| parents[child] == label)
+        .map(|child| probe(parents, child, stop))
+        .collect();
+    Element::new(Probe {
+        label,
+        stop: stop.filter(|(at, _)| *at == label).map(|(_, phase)| phase),
+        children,
+    })
+}
+
+/// The node of each label, found by walking the mounted tree in the order `probe` built it.
+fn ids(tree: &Tree<M>, parents: &[usize], label: usize, id: NodeId, out: &mut [NodeId]) {
+    out[label] = id;
+    let kids = (1..parents.len()).filter(|&child| parents[child] == label);
+    for (child, &node) in kids.zip(&tree.get(id).unwrap().children) {
+        ids(tree, parents, child, node, out);
+    }
+}
+
+fn trees() -> impl Strategy<Value = Vec<usize>> {
+    (1usize..24).prop_flat_map(|n| {
+        (1..n)
+            .map(|i| (0..i).boxed())
+            .collect::<Vec<_>>()
+            .prop_map(|rest| std::iter::once(0).chain(rest).collect())
+    })
+}
+
+proptest! {
+    #[test]
+    fn delivery_captures_from_the_root_bubbles_back_in_reverse_and_ends_at_a_stop(
+        (parents, target, stop) in trees().prop_flat_map(|parents| {
+            let n = parents.len();
+            (
+                Just(parents),
+                0..n,
+                prop::option::of((0..n, prop_oneof![
+                    Just(Phase::Capture),
+                    Just(Phase::Target),
+                    Just(Phase::Bubble),
+                ])),
+            )
+        })
+    ) {
+        let mut tree = Tree::new(64);
+        let root = tree.reconcile(None, probe(&parents, 0, stop)).unwrap();
+        let mut id = vec![root; parents.len()];
+        ids(&tree, &parents, 0, root, &mut id);
+
+        let mut labels = vec![target];
+        while let Some(&last) = labels.last().filter(|&&l| l != 0) {
+            labels.push(parents[last]);
+        }
+        labels.reverse();
+        let path: Vec<NodeId> = labels.iter().map(|&l| id[l]).collect();
+
+        let (ancestors, _) = labels.split_at(labels.len() - 1);
+        let steps: Vec<(usize, Phase)> = ancestors
+            .iter()
+            .map(|&l| (l, Phase::Capture))
+            .chain([(target, Phase::Target)])
+            .chain(ancestors.iter().rev().map(|&l| (l, Phase::Bubble)))
+            .collect();
+        let end = stop.and_then(|s| steps.iter().position(|step| *step == s));
+        let expected: Vec<String> = steps[..end.map_or(steps.len(), |e| e + 1)]
+            .iter()
+            .map(|(l, phase)| format!("{l}:{phase:?}"))
+            .collect();
+
+        let (result, seen) = route(&mut tree, &path);
+        prop_assert_eq!(seen, expected);
+        prop_assert_eq!(
+            result,
+            if end.is_some() { Propagation::Stop } else { Propagation::Continue }
+        );
+    }
 }

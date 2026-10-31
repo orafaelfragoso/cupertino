@@ -15,6 +15,7 @@ pub mod cli;
 pub mod clipboard;
 pub mod config;
 pub mod cursor;
+pub mod data_control;
 pub mod dbus;
 pub mod decor;
 pub mod desktop;

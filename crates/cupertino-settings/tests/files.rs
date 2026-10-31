@@ -15,6 +15,7 @@ fn paths(dir: &std::path::Path) -> Paths {
         keyboard: Some(dir.join("keyboard.conf")),
         power: Some(dir.join("power.conf")),
         accessibility: Some(dir.join("accessibility.conf")),
+        system_accessibility: None,
     }
 }
 

@@ -11,15 +11,17 @@
 //!   the pointer ([`Accessibility::display_filter`], `cupertino_glass::display_filter`).
 //!
 //! The machine's defaults (`/etc/cupertino/accessibility.conf`, read as every system file is, only its allowed keys) are
-//! the settings of an account without an `accessibility.conf` of its own, and of the login screen, whose account has none;
-//! a change of that file applies to them at once. Once the person changes a setting, their own file is written with every
-//! key and the machine's file no longer applies to them.
+//! the login screen's settings, and those of an account for every key its own `accessibility.conf` does not record. The
+//! person's file records only the keys they changed (`PersonalAccessibility`), so a change of the machine's file applies
+//! at once to every other key.
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use anyhow::{anyhow, Result};
-use cupertino_defaults::accessibility::{AccessibilitySettings, DisplayOption, DisplayOptions};
+use cupertino_defaults::accessibility::{
+    AccessibilitySettings, DisplayOption, DisplayOptions, PersonalAccessibility,
+};
 use cupertino_effects::{TransformKind, WindowKind};
 use cupertino_glass::display_filter::display_filter_ops;
 use cupertino_theme::recipe::{Backdrop, Recipe};
@@ -32,13 +34,14 @@ use crate::state::Cupertino;
 /// The settings and where they are stored.
 #[derive(Debug, Default)]
 pub struct Accessibility {
+    /// In effect: `personal` over `system`.
     pub settings: AccessibilitySettings,
     /// `None` keeps changes in memory (offscreen runs and tests).
     store: Option<PathBuf>,
     /// The machine's defaults, from the system file.
     system: AccessibilitySettings,
-    /// The person has a file of their own (read at start, or written since): the machine's defaults no longer apply.
-    own: bool,
+    /// The keys the person changed.
+    personal: PersonalAccessibility,
 }
 
 /// The machine's defaults at `path`, read with the rules of every system file (no link, owned by root, writable by no one
@@ -62,14 +65,13 @@ impl Accessibility {
     /// Read the settings in `path` and store every later change there. Lines that are not
     /// understood are logged and skipped; a file that cannot be read is an error.
     pub fn use_store(&mut self, path: PathBuf) -> Result<()> {
-        let (settings, problems) = AccessibilitySettings::load(&path)
+        let (personal, problems) = PersonalAccessibility::load(&path)
             .map_err(|e| anyhow!("reading {}: {e}", path.display()))?;
         for (line, problem) in problems {
             tracing::warn!(path = %path.display(), line, problem, "ignoring accessibility setting");
         }
-        // a file that cannot be looked at counts as the person's, so the machine's defaults never override it
-        self.own = path.try_exists().unwrap_or(true);
-        self.settings = if self.own { settings } else { self.system };
+        self.settings = personal.over(&self.system);
+        self.personal = personal;
         self.store = Some(path);
         Ok(())
     }
@@ -93,11 +95,13 @@ impl Accessibility {
         Some(Rc::new(GpuRecipe::new(&recipe)))
     }
 
-    /// The person changed a setting: from now on it is theirs, whether or not the file could be written.
-    fn save(&mut self) {
-        self.own = true;
+    /// The person changed the settings to `settings`: the keys that differ are theirs from now on, whether or not the
+    /// file could be written.
+    fn change(&mut self, settings: AccessibilitySettings) {
+        self.personal.record(&self.settings, &settings);
+        self.settings = settings;
         let Some(path) = &self.store else { return };
-        if let Err(e) = self.settings.store(path) {
+        if let Err(e) = self.personal.store(path) {
             tracing::error!(path = %path.display(), error = %e, "cannot store the accessibility settings: the change lasts until the server stops");
         }
     }
@@ -127,15 +131,16 @@ impl Cupertino {
         )
     }
 
-    /// The machine's defaults are now `system` (the defaults when its file is gone): they apply at once unless the person
-    /// has settings of their own.
+    /// The machine's defaults are now `system` (the defaults when its file is gone): they apply at once to every key the
+    /// person did not change.
     pub fn set_system_accessibility(&mut self, system: AccessibilitySettings) {
         self.accessibility.system = system;
-        if self.accessibility.own || self.accessibility.settings == self.accessibility.system {
+        let settings = self.accessibility.personal.over(&system);
+        if self.accessibility.settings == settings {
             return;
         }
         let before = self.display_options();
-        self.accessibility.settings = self.accessibility.system;
+        self.accessibility.settings = settings;
         tracing::info!("the machine's accessibility settings changed");
         self.apply_accessibility(before);
     }
@@ -155,9 +160,10 @@ impl Cupertino {
             return;
         }
         let before = self.display_options();
-        self.accessibility.settings.display.set(option, on);
+        let mut settings = self.accessibility.settings;
+        settings.display.set(option, on);
         tracing::info!(option = option.key(), on, "display option changed");
-        self.accessibility.save();
+        self.accessibility.change(settings);
         self.apply_accessibility(before);
     }
 
@@ -172,8 +178,7 @@ impl Cupertino {
             return;
         }
         let before = self.display_options();
-        self.accessibility.settings = settings;
-        self.accessibility.save();
+        self.accessibility.change(settings);
         self.apply_accessibility(before);
     }
 

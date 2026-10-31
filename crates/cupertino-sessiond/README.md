@@ -197,7 +197,36 @@ sleep no longer call logind; removing polkit needs a `SwitchVt` method here (gre
    descriptor 2, `execve` with exactly the PAM environment, `HOME`, `USER`, `LOGNAME`, `SHELL`, `PATH` (`ENV_PATH` of
    `login.defs`) and the configured extras. A failure in the child comes back through a close-on-exec pipe.
 5. The worker reports `Started { session_id, leader, uid }`, waits for the leader (it forwards `SIGTERM`, `SIGHUP` and `SIGINT` to
-   it), closes the PAM session and exits with the leader's status.
+   it), closes the PAM session and exits with the leader's status. The login screen's worker also supervises its screen reader
+   (below) while it waits.
+
+### The screen reader at the login screen
+
+The machine's `/etc/cupertino/accessibility.conf` may set `screen_reader_at_login = on` (a `SYSTEM_KEYS` boolean, never a command
+or a path); the manager reads it, with the system-file rules, each time it starts the login screen and passes it in `Begin`.
+For the login screen only, the worker makes a `SOCK_SEQPACKET` socketpair before the fork, and the leader gets its end as
+descriptor 3 (`CUPERTINO_READER_FD=3`). The compositor sends `ready <socket>` once and `toggle <socket>` for Super+Alt+S from a
+keyboard (`wayland-<digits>`, at most 64 bytes, anything else refused); the worker answers a toggle `on`, `off` or `unavailable`.
+
+The reader is the first of `reader::READERS` (`/usr/bin/orca`) that only root can change, never one from `$PATH`. It runs while it
+is wanted (the machine's setting, flipped by each toggle) and the login screen is on the console: the manager sends
+`ToWorker::Shown { shown }` before another session takes the console and after the login screen takes it back, and a manager that
+is gone counts as not shown for good. The worker forks it as a second child, so it is in the greeter's logind session and
+cgroup. The child: `setsid`, the privilege drop and check of step 4, `PR_SET_PDEATHSIG(SIGKILL)` (after the drop, which clears
+it), `PR_SET_NO_NEW_PRIVS`, then, as the greeter, `$XDG_RUNTIME_DIR/cupertino-reader-<worker>-<n>/{config,data,cache}` made with
+`mkdirat` under an `O_DIRECTORY | O_NOFOLLOW` descriptor (mode 0700), standard input from `/dev/null`, `close_range` above 2, and
+`execve` with only `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`,
+`WAYLAND_DISPLAY` and `HOME` (the private directory). The bus is `unix:path=$XDG_RUNTIME_DIR/bus`, or PAM's value when it is
+exactly a `unix:path=` directly in that directory.
+
+Stopping it (a toggle, `Shown { shown: false }`, the leader's end, the manager's channel closing) sends `SIGTERM` to its process
+group, `SIGKILL` after 2 s, reaps it, then kills every process of the greeter in the session scope's `cgroup.procs` that does not
+descend from the leader (a daemon that left the group with `setsid`; only when the worker's cgroup is `session-<id>.scope`), and
+removes the private directory in a child that dropped to the greeter: root never follows a path the greeter can write.
+
+`greeter.sock` takes only the greeter's user, and, when this run started the login screen, only the leader or a descendant of
+it: the peer is held by `SO_PEERPIDFD`, its parents are read from `/proc`, and both it and the leader must still run after. The
+reader, a child of the worker, can never connect.
 
 The worker runs no threads (so `fork` is safe) and makes no D-Bus calls. It starts with an empty environment and its only
 channel is one socketpair end as standard input.
@@ -248,12 +277,15 @@ a typed name not at all (`attempt for a typed name`: people type passwords there
 | `auto_login` | `settings_are_trusted` (the mode and owner rule), `claim` (the once-per-boot flag) |
 | `caller` | `CallerSession`, `Need`, `Denial`, `authorise`: who may call the bus interface; `Asker`, `may_end_other_sessions`: who may restart or shut down while other sessions are open (pure) |
 | `channel` | `Channel`: one read per call over a socket, frames of `cupertino-login-ipc` |
-| `worker_protocol` | `ToWorker::Begin` (with `Mode::{Open, Verify}`), `FromWorker::{Started, Failed}`, `SessionClass` |
+| `worker_protocol` | `ToWorker::Begin` (with `Mode::{Open, Verify}` and `screen_reader`), `ToWorker::Shown`, `FromWorker::{Started, Failed}`, `SessionClass` |
+| `reader` (feature `app`) | the login screen's screen reader: `READERS`, `resolve`, `bus_address`, `parse_request`, `Wish`, `descends_from`, `kill_strays`, `Reader` |
 | `manager`, `worker`, `vt`, `logind` (`SeatSession`: the sessions adoption reads), `service` (feature `app`) | the main loop, the PAM transaction and privilege drop, the terminals, the logind calls, the bus interface |
 
 ## Tests
 
 `cargo test -p cupertino-sessiond --features app`: the roster (filters, picture budget, row cap, the `logged_in` mark, power rule), the account
 database parsers, the picture read (missing file, symlink, directory, foreign owner, size cap), auto login's mode rule and exclusive claim, the socket's mode, the authoriser and the rule for ending other users' sessions
-(`caller`) and the bus interface on a private `dbus-daemon` (skipped when the binary is missing; `SwitchToLoginWindow` and the unicast `Unlock` included). The manager and
+(`caller`), the screen reader (`reader`: the program list, the bus address, the requests, the ancestry walk, and a fake reader run as
+the test's user that sees only its environment, descriptors 0 to 2 and its 0700 directories, and whose `setsid` daemon ends with it;
+`manager`: only the leader's descendants may connect) and the bus interface on a private `dbus-daemon` (skipped when the binary is missing; `SwitchToLoginWindow` and the unicast `Unlock` included). The manager and
 the worker run as root in the QEMU harness (`11-login-session`, `12-greeter-picker`, `14-greeter-filters`, `28`, `30-two-sessions`, `31-login-crash`, `32-auto-login`).

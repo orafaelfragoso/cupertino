@@ -376,7 +376,7 @@ fn an_administrator_at_the_console_sets_the_machines_accessibility_through_the_s
     .unwrap();
     assert_eq!(
         machine_file(&fixture).as_deref(),
-        Some("reduce_motion = on\n")
+        Some("reduce_motion = on\nscreen_reader_at_login = off\n")
     );
     assert_eq!(
         error_name(call(
@@ -396,7 +396,7 @@ fn an_administrator_at_the_console_sets_the_machines_accessibility_through_the_s
     .unwrap();
     assert_eq!(
         machine_file(&fixture).as_deref(),
-        Some("reduce_motion = off\n")
+        Some("reduce_motion = off\nscreen_reader_at_login = off\n")
     );
     assert!(
         fixture.calls.try_recv().is_err(),

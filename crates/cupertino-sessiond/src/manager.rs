@@ -154,6 +154,41 @@ struct Worker {
     terminal: Option<File>,
 }
 
+/// Whether the peer of `stream` is `leader` or one of its descendants. The peer is held by the pidfd the kernel gives
+/// for the socket and must still be running after its parents were read, and so must the leader, so a reused pid passes
+/// for neither; a peer whose parents cannot be read is not.
+fn started_by(
+    stream: &UnixStream,
+    leader: &cupertino_peer::ProcessHandle,
+    proc_root: &Path,
+) -> bool {
+    let Ok(peer) = cupertino_peer::ProcessHandle::of_peer(stream) else {
+        return false;
+    };
+    crate::reader::descends_from(proc_root, peer.pid, leader.pid)
+        && !peer.has_exited()
+        && !leader.has_exited()
+}
+
+/// The machine's `screen_reader_at_login` in `dir` (`/etc/cupertino`), read with the rules of every system file; off
+/// without a file or with one the rules refuse.
+fn screen_reader_at_login(dir: &Path) -> bool {
+    let path = dir.join(cupertino_defaults::accessibility::ACCESSIBILITY_FILE);
+    match cupertino_defaults::system::read_root_file(&path) {
+        Ok(text) => {
+            cupertino_defaults::accessibility::SystemAccessibility::from_text(
+                text.as_deref().unwrap_or(""),
+            )
+            .0
+            .screen_reader_at_login
+        }
+        Err(e) => {
+            eprintln!("cupertino-sessiond: ignoring {}: {e}", path.display());
+            false
+        }
+    }
+}
+
 /// A session the manager started for a user.
 struct Session {
     /// The logind session id.
@@ -351,6 +386,9 @@ struct Manager {
     greeter_session: Option<String>,
     /// The login screen's session was found in logind when the manager started: no worker of this run supervises it.
     greeter_adopted: bool,
+    /// The leader of the login screen's session when a worker of this run started it: only its descendants may connect to
+    /// the login screen's socket, so the screen reader (a child of the worker) never can.
+    greeter_leader: Option<cupertino_peer::ProcessHandle>,
     /// Sessions of an earlier run that this run watches.
     adopted: Vec<Adopted>,
     /// The account to log in without a password once the login screen's session is up; `None` when the setting is off, refused
@@ -464,6 +502,7 @@ impl Manager {
             greeter_restart_at: None,
             greeter_session: None,
             greeter_adopted: false,
+            greeter_leader: None,
             adopted: Vec::new(),
             auto_login,
             admin_groups,
@@ -596,6 +635,12 @@ impl Manager {
         if self.screen.is_some() {
             eprintln!("cupertino-sessiond: refused a second connection of the login screen");
             return Ok(());
+        }
+        if let Some(leader) = &self.greeter_leader {
+            if !started_by(&stream, leader, Path::new("/proc")) {
+                eprintln!("cupertino-sessiond: refused a connection of the greeter's user from outside the login screen");
+                return Ok(());
+            }
         }
         stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
         self.screen = Some(Screen {
@@ -892,6 +937,7 @@ impl Manager {
             command: self.config.session_command.clone(),
             environment: Vec::new(),
             path: self.session_path.clone(),
+            screen_reader: false,
         };
         let worker = self
             .spawn_worker(Role::Session, &begin, terminal)
@@ -1125,6 +1171,7 @@ impl Manager {
             command: self.config.session_command.clone(),
             environment: Vec::new(),
             path: self.session_path.clone(),
+            screen_reader: false,
         };
         let worker = self
             .spawn_worker(Role::Session, &begin, Some(terminal))
@@ -1146,8 +1193,27 @@ impl Manager {
             command: self.config.greeter_command.clone(),
             environment: vec![format!("{SOCKET_VARIABLE}={SOCKET_PATH}")],
             path: self.session_path.clone(),
+            screen_reader: screen_reader_at_login(Path::new(system_accessibility::MACHINE_DIR)),
         };
         self.spawn_worker(Role::Greeter, &begin, None).map(drop)
+    }
+
+    /// Tell the login screen's worker whether the login screen is on the console: its screen reader runs only then.
+    fn tell_greeter_shown(&mut self, shown: bool) {
+        let Some(channel) = self
+            .workers
+            .iter_mut()
+            .find(|worker| worker.role == Role::Greeter)
+            .and_then(|worker| worker.channel.as_mut())
+        else {
+            return;
+        };
+        let sent = encode(&ToWorker::Shown { shown }, MAX_FRAME)
+            .map_err(|e| e.to_string())
+            .and_then(|frame| channel.send_frame(&frame).map_err(|e| e.to_string()));
+        if let Err(e) = sent {
+            eprintln!("cupertino-sessiond: cannot tell the login screen's worker whether it is shown: {e}");
+        }
     }
 
     /// Start `cupertino-sessiond worker` with one end of a socketpair as its standard input and send it `begin`.
@@ -1325,7 +1391,15 @@ impl Manager {
 
     /// Activate the logind session `id` and note the switch as under way.
     fn activate(&mut self, id: &str) -> std::result::Result<(), logind::Error> {
+        // the screen reader of the login screen stops before another session takes the console
+        let greeter = self.greeter_session.as_deref() == Some(id);
+        if !greeter {
+            self.tell_greeter_shown(false);
+        }
         self.logind.activate_session(id)?;
+        if greeter {
+            self.tell_greeter_shown(true);
+        }
         let now = Instant::now();
         self.switch = Some(Switch {
             target: id.to_owned(),
@@ -1371,6 +1445,7 @@ impl Manager {
         }
         if role == Role::Greeter {
             self.greeter_session = Some(session_id.to_owned());
+            self.greeter_leader = cupertino_peer::ProcessHandle::open(leader).ok();
             self.try_auto_login();
             return;
         }
@@ -1560,6 +1635,7 @@ impl Manager {
     /// The login screen's worker ended: start it again after a second, unless it keeps failing.
     fn greeter_ended(&mut self) -> Result<()> {
         self.greeter_session = None;
+        self.greeter_leader = None;
         let now = Instant::now();
         self.greeter_failures.push_back(now);
         while self
@@ -1924,6 +2000,28 @@ mod tests {
         // a stale socket of an earlier run does not stop the next bind
         drop(_listener);
         bind(&path, uid, gid).unwrap();
+    }
+
+    #[test]
+    fn only_the_login_screens_own_processes_may_connect() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("greeter.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let _client = UnixStream::connect(&path).unwrap();
+        let (accepted, _) = listener.accept().unwrap();
+        let me = cupertino_peer::ProcessHandle::open(std::process::id()).unwrap();
+        assert!(
+            started_by(&accepted, &me, Path::new("/proc")),
+            "the leader itself"
+        );
+        let mut sibling = Command::new("/usr/bin/sleep").arg("60").spawn().unwrap();
+        let other = cupertino_peer::ProcessHandle::open(sibling.id()).unwrap();
+        assert!(
+            !started_by(&accepted, &other, Path::new("/proc")),
+            "not a descendant of the leader"
+        );
+        sibling.kill().unwrap();
+        sibling.wait().unwrap();
     }
 
     fn attempt_asking(conversation: u64) -> Attempt {

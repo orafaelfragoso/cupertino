@@ -27,7 +27,7 @@ use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use cupertino_defaults::accessibility::{AccessibilitySettings, SYSTEM_KEYS};
+use cupertino_defaults::accessibility::{SystemAccessibility, SYSTEM_KEYS};
 use cupertino_peer::Caller;
 
 use cupertino_login_ipc::{PowerAction, PowerRefusal};
@@ -373,13 +373,13 @@ impl LoginManager {
             .dir
             .join(cupertino_defaults::accessibility::ACCESSIBILITY_FILE);
         let current = match cupertino_defaults::system::read_root_file(&path) {
-            Ok(text) => AccessibilitySettings::from_system_text(text.as_deref().unwrap_or("")).0,
+            Ok(text) => SystemAccessibility::from_text(text.as_deref().unwrap_or("")).0,
             Err(e) => {
                 eprintln!(
                     "cupertino-sessiond: replacing {}, which is no file of root's: {e}",
                     path.display()
                 );
-                AccessibilitySettings::default()
+                SystemAccessibility::default()
             }
         };
         let settings =

@@ -9,7 +9,9 @@ mod common;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use cupertino_defaults::accessibility::{AccessibilitySettings, DisplayOption};
+use cupertino_defaults::accessibility::{
+    AccessibilitySettings, DisplayOption, SystemAccessibility,
+};
 use cupertino_defaults::atomic::write_atomic;
 use cupertino_defaults::power::Timer;
 use cupertino_server::backend::headless;
@@ -317,11 +319,12 @@ fn the_system_file_applies_live_under_the_users_file_and_a_removed_user_key_fall
 
 /// The machine's defaults with Reduce Motion `on` or off.
 fn machine(on: bool) -> AccessibilitySettings {
-    AccessibilitySettings::from_system_text(&format!(
+    SystemAccessibility::from_text(&format!(
         "reduce_motion = {}",
         if on { "on" } else { "off" }
     ))
     .0
+    .settings
 }
 
 #[test]

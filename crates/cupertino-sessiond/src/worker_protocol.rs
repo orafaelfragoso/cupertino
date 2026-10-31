@@ -53,11 +53,15 @@ pub enum ToWorker {
         environment: Vec<String>,
         /// `ENV_PATH` of `login.defs`.
         path: String,
+        /// The login screen starts with the screen reader on (the machine's `screen_reader_at_login`).
+        screen_reader: bool,
     },
     /// The answer to the last `Prompt`.
     Answer { secret: Secret },
     /// Give up the attempt: the pending prompt fails.
     Cancel {},
+    /// To the login screen's worker: whether the login screen is on the console. Its screen reader runs only while it is.
+    Shown { shown: bool },
 }
 
 /// Worker to manager.

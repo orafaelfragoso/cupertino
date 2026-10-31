@@ -21,6 +21,7 @@ use std::rc::Rc;
 use anyhow::{anyhow, Result};
 use cupertino_defaults::accessibility::{
     AccessibilitySettings, DisplayOption, DisplayOptions, PersonalAccessibility,
+    SystemAccessibility,
 };
 use cupertino_effects::{TransformKind, WindowKind};
 use cupertino_glass::display_filter::display_filter_ops;
@@ -54,11 +55,11 @@ pub fn read_system_accessibility(path: &Path) -> Option<AccessibilitySettings> {
             return None;
         }
     };
-    let (settings, problems) = AccessibilitySettings::from_system_text(&text);
+    let (system, problems) = SystemAccessibility::from_text(&text);
     for (line, problem) in problems {
         tracing::warn!(path = %path.display(), line, problem, "ignoring a machine accessibility setting");
     }
-    Some(settings)
+    Some(system.settings)
 }
 
 impl Accessibility {

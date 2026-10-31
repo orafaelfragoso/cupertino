@@ -83,6 +83,11 @@ impl ProcessHandle {
         Self::from_pidfd(unsafe { OwnedFd::from_raw_fd(fd) })
     }
 
+    /// The pidfd: readable once the process has exited.
+    pub fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.fd.as_fd()
+    }
+
     /// Another handle on the same process.
     pub fn try_clone(&self) -> std::io::Result<Self> {
         Ok(Self {

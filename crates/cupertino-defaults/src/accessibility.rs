@@ -33,9 +33,12 @@ pub const ACCESSIBILITY_FILE: &str = "accessibility.conf";
 /// The machine's defaults, written by an administrator: the login screen's settings, and those of every account without
 /// an `accessibility.conf` of its own. Same format, owned by root, readable by everyone (it names no one).
 pub const SYSTEM_ACCESSIBILITY: &str = "/etc/cupertino/accessibility.conf";
-/// The keys the machine's file may set: display options that cannot make the login screen unusable for someone else.
-/// A key joins only after a security review.
-pub const SYSTEM_KEYS: &[&str] = &["reduce_motion"];
+/// The key of the machine's file that starts the screen reader with the login screen. No person's file has it, so one
+/// person's choice never reaches another's login.
+pub const SCREEN_READER_AT_LOGIN: &str = "screen_reader_at_login";
+/// The keys the machine's file may set: display options that cannot make the login screen unusable for someone else,
+/// and [`SCREEN_READER_AT_LOGIN`]. A key joins only after a security review.
+pub const SYSTEM_KEYS: &[&str] = &["reduce_motion", SCREEN_READER_AT_LOGIN];
 
 /// Lowest filter intensity the design's reader returns.
 pub const MIN_FILTER_INTENSITY: f64 = 0.25;
@@ -186,15 +189,6 @@ impl AccessibilitySettings {
         entries
     }
 
-    /// The machine's file: the [`SYSTEM_KEYS`] with their values, which [`Self::from_system_text`] reads back.
-    pub fn system_text(&self) -> String {
-        self.entries()
-            .into_iter()
-            .filter(|(key, _)| SYSTEM_KEYS.contains(key))
-            .map(|(k, v)| format!("{k} = {v}\n"))
-            .collect()
-    }
-
     /// Every key with its value, in the order of the table above; [`Self::apply_text`] reads it back unchanged.
     pub fn to_text(&self) -> String {
         self.entries()
@@ -205,15 +199,7 @@ impl AccessibilitySettings {
 
     /// Apply `key = value` lines; returns `(line, message)` for every line that was not understood.
     pub fn apply_text(&mut self, text: &str) -> Vec<(usize, String)> {
-        self.apply_lines(text, |_| true)
-    }
-
-    /// The machine's defaults from the text of [`SYSTEM_ACCESSIBILITY`]: only the [`SYSTEM_KEYS`] apply, every other
-    /// key is reported and stays off.
-    pub fn from_system_text(text: &str) -> (Self, Vec<(usize, String)>) {
-        let mut settings = Self::default();
-        let errors = settings.apply_lines(text, |key| SYSTEM_KEYS.contains(&key));
-        (settings, errors)
+        apply_lines(text, |key, value| self.set(key, value))
     }
 
     /// `self` with the value of `key` taken from `from`; an unknown key changes nothing.
@@ -231,50 +217,9 @@ impl AccessibilitySettings {
         }
     }
 
-    fn apply_lines(&mut self, text: &str, allowed: impl Fn(&str) -> bool) -> Vec<(usize, String)> {
-        self.apply_lines_recording(text, allowed, |_| {})
-    }
-
-    fn apply_lines_recording(
-        &mut self,
-        text: &str,
-        allowed: impl Fn(&str) -> bool,
-        mut applied: impl FnMut(&'static str),
-    ) -> Vec<(usize, String)> {
-        let mut errors = Vec::new();
-        for (i, raw) in text.lines().enumerate() {
-            let line = raw.split('#').next().unwrap_or("").trim();
-            if line.is_empty() {
-                continue;
-            }
-            let Some((key, value)) = line.split_once('=') else {
-                errors.push((i + 1, format!("expected `key = value`, got {line:?}")));
-                continue;
-            };
-            let key = key.trim();
-            if !allowed(key) {
-                errors.push((i + 1, format!("{key}: not a setting of the machine's file")));
-                continue;
-            }
-            match self.set(key, value.trim()) {
-                Ok(()) => {
-                    if let Some(key) = known_key(key) {
-                        applied(key);
-                    }
-                }
-                Err(e) => errors.push((i + 1, e)),
-            }
-        }
-        errors
-    }
-
     /// Set one key to a value written as in the file; `Err` names the problem and changes nothing.
     pub fn set(&mut self, key: &str, value: &str) -> Result<(), String> {
-        let on = |v: &str| match v.to_ascii_lowercase().as_str() {
-            "on" | "true" | "yes" | "1" => Ok(true),
-            "off" | "false" | "no" | "0" => Ok(false),
-            _ => Err(format!("{key}: expected on or off, got {v:?}")),
-        };
+        let on = |v: &str| parse_on(key, v);
         let fraction = |v: &str, min: f64| match v.parse::<f64>() {
             Ok(x) if (min..=1.0).contains(&x) => Ok(x),
             _ => Err(format!(
@@ -329,15 +274,11 @@ impl PersonalAccessibility {
     /// The keys a file sets; a line that is not understood records nothing.
     pub fn from_text(text: &str) -> (Self, Vec<(usize, String)>) {
         let mut personal = Self::default();
-        let mut keys = BTreeSet::new();
-        let errors = personal.values.apply_lines_recording(
-            text,
-            |_| true,
-            |key| {
-                keys.insert(key);
-            },
-        );
-        personal.keys = keys;
+        let errors = apply_lines(text, |key, value| {
+            personal.values.set(key, value)?;
+            personal.keys.extend(known_key(key));
+            Ok(())
+        });
         (personal, errors)
     }
 
@@ -371,6 +312,87 @@ impl PersonalAccessibility {
         for key in &self.keys {
             self.values.copy_key(after, key);
         }
+    }
+}
+
+/// The machine's file, [`SYSTEM_ACCESSIBILITY`]: only the [`SYSTEM_KEYS`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SystemAccessibility {
+    /// The login screen's settings, and those of every key a person's file does not record.
+    pub settings: AccessibilitySettings,
+    /// [`SCREEN_READER_AT_LOGIN`]: the login screen starts with the screen reader on.
+    pub screen_reader_at_login: bool,
+}
+
+impl SystemAccessibility {
+    /// The machine's defaults from the text of [`SYSTEM_ACCESSIBILITY`]: every key that is not one of [`SYSTEM_KEYS`] is
+    /// reported and stays off.
+    pub fn from_text(text: &str) -> (Self, Vec<(usize, String)>) {
+        let mut system = Self::default();
+        let errors = apply_lines(text, |key, value| system.set(key, value));
+        (system, errors)
+    }
+
+    /// The [`SYSTEM_KEYS`] with their values, which [`Self::from_text`] reads back.
+    pub fn to_text(&self) -> String {
+        let reader = (
+            SCREEN_READER_AT_LOGIN,
+            if self.screen_reader_at_login {
+                "on"
+            } else {
+                "off"
+            }
+            .to_string(),
+        );
+        self.settings
+            .entries()
+            .into_iter()
+            .filter(|(key, _)| SYSTEM_KEYS.contains(key))
+            .chain([reader])
+            .map(|(k, v)| format!("{k} = {v}\n"))
+            .collect()
+    }
+
+    /// Set one of the [`SYSTEM_KEYS`] to a value written as in the file; `Err` names the problem and changes nothing.
+    pub fn set(&mut self, key: &str, value: &str) -> Result<(), String> {
+        if !SYSTEM_KEYS.contains(&key) {
+            return Err(format!("{key}: not a setting of the machine's file"));
+        }
+        if key == SCREEN_READER_AT_LOGIN {
+            self.screen_reader_at_login = parse_on(key, value)?;
+            return Ok(());
+        }
+        self.settings.set(key, value)
+    }
+}
+
+/// Each `key = value` line of `text` given to `set`; returns `(line, message)` for every line that was not understood.
+fn apply_lines(
+    text: &str,
+    mut set: impl FnMut(&str, &str) -> Result<(), String>,
+) -> Vec<(usize, String)> {
+    let mut errors = Vec::new();
+    for (i, raw) in text.lines().enumerate() {
+        let line = raw.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            errors.push((i + 1, format!("expected `key = value`, got {line:?}")));
+            continue;
+        };
+        if let Err(e) = set(key.trim(), value.trim()) {
+            errors.push((i + 1, e));
+        }
+    }
+    errors
+}
+
+fn parse_on(key: &str, value: &str) -> Result<bool, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "on" | "true" | "yes" | "1" => Ok(true),
+        "off" | "false" | "no" | "0" => Ok(false),
+        _ => Err(format!("{key}: expected on or off, got {value:?}")),
     }
 }
 
@@ -464,9 +486,15 @@ mod tests {
 
     #[test]
     fn the_machines_file_sets_only_its_keys() {
-        let (settings, errors) = AccessibilitySettings::from_system_text(
-            "reduce_motion = on\ninvert_colors = on\ncolor_filter = grayscale\nreduce_motion = maybe\n",
+        let (system, errors) = SystemAccessibility::from_text(
+            "reduce_motion = on\ninvert_colors = on\ncolor_filter = grayscale\nreduce_motion = maybe\nscreen_reader_at_login = on\n",
         );
+        assert!(system.screen_reader_at_login);
+        assert_eq!(
+            SystemAccessibility::from_text(&system.to_text()),
+            (system, Vec::new())
+        );
+        let settings = system.settings;
         assert!(settings.display.reduce_motion);
         assert!(!settings.invert_colors && settings.color_filter.is_none());
         assert_eq!(
@@ -500,6 +528,16 @@ mod tests {
             },
             ..AccessibilitySettings::default()
         }
+    }
+
+    #[test]
+    fn a_persons_file_cannot_start_the_screen_reader_at_login() {
+        let (personal, errors) = PersonalAccessibility::from_text("screen_reader_at_login = on\n");
+        assert_eq!(
+            errors.iter().map(|(line, _)| *line).collect::<Vec<_>>(),
+            [1]
+        );
+        assert_eq!(personal, PersonalAccessibility::default());
     }
 
     #[test]

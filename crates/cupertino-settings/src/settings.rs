@@ -6,8 +6,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use cupertino_defaults::accessibility::{
-    AccessibilitySettings, PersonalAccessibility, ACCESSIBILITY_ENV, ACCESSIBILITY_FILE,
-    SYSTEM_ACCESSIBILITY,
+    AccessibilitySettings, PersonalAccessibility, SystemAccessibility, ACCESSIBILITY_ENV,
+    ACCESSIBILITY_FILE, SYSTEM_ACCESSIBILITY,
 };
 use cupertino_defaults::compositor::{CompositorSettings, MinimizeEffectName};
 use cupertino_defaults::conf::Problem;
@@ -400,5 +400,5 @@ impl Settings {
 /// without a file or with one the readers refuse (not root's, writable by others, a link, unreadable).
 pub fn system_accessibility(path: &Path) -> Option<AccessibilitySettings> {
     let text = read_root_file(path).ok()??;
-    Some(AccessibilitySettings::from_system_text(&text).0)
+    Some(SystemAccessibility::from_text(&text).0.settings)
 }

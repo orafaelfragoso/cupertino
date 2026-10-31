@@ -42,6 +42,7 @@ impl Application for Fields {
             shortcuts: CommandRegistry::new(),
             on_close: None,
             background: WindowBackground::Theme,
+            popup: None,
             content: Element::new(Field {
                 protected: false,
                 container: true,

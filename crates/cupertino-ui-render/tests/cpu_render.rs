@@ -9,7 +9,7 @@ use cupertino_ui_text::{
     FontId, GlyphFormat, GlyphId, GlyphKey, GlyphRasterizer, GlyphRun, PositionedGlyph,
     RasterGlyph, TextError,
 };
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 const BAD_FONT: FontId = FontId(99);
 
@@ -1060,4 +1060,183 @@ fn an_image_drawn_one_pixel_per_device_pixel_keeps_its_pixels_at_a_fractional_po
             3 + y
         );
     }
+}
+
+/// Records the size of every glyph it is asked to rasterize.
+struct Sizes(Arc<Mutex<Vec<u32>>>);
+
+impl GlyphRasterizer for Sizes {
+    fn rasterize(&mut self, key: &GlyphKey) -> Result<Option<RasterGlyph>, TextError> {
+        self.0.lock().unwrap().push(key.size_q);
+        Boxes { fail: false }.rasterize(key)
+    }
+}
+
+#[test]
+fn glyphs_are_rasterized_at_each_scales_device_size_and_kept_for_both() {
+    let sizes = Arc::new(Mutex::new(Vec::new()));
+    let mut r = CpuRenderer::new(config(), Sizes(Arc::clone(&sizes)));
+    let list = DisplayList {
+        nodes: vec![glyph_node(4)],
+    };
+    let none = PaintResources::default();
+    let mut frame = |scale: f64| {
+        r.render(&RenderRequest {
+            list: &list,
+            resources: &none,
+            scale,
+            width: 96,
+            height: 64,
+            damage: &DamageRegion::Full,
+        })
+        .unwrap();
+        r.stats().glyph_rasterize.count
+    };
+    assert_eq!((frame(1.0), frame(2.0)), (4, 4));
+    assert_eq!(
+        (frame(1.0), frame(2.0)),
+        (0, 0),
+        "both scales' rasters are kept"
+    );
+    let sizes = sizes.lock().unwrap().clone();
+    assert_eq!(sizes.len(), 8);
+    assert!(sizes[..4].iter().all(|s| *s == sizes[0]));
+    assert!(
+        sizes[4..].iter().all(|s| *s == 2 * sizes[0]),
+        "at 2x the glyphs are rasterized at twice the size: {sizes:?}"
+    );
+}
+
+#[test]
+fn an_image_is_decoded_once_and_drawn_at_each_scales_device_size() {
+    let texels: [[u8; 4]; 4] = [
+        [255, 0, 0, 255],
+        [0, 255, 0, 255],
+        [0, 0, 255, 255],
+        [255, 255, 255, 255],
+    ];
+    let mut resources = PaintResources::default();
+    resources.images.insert(
+        ResourceId(5),
+        ImageResource {
+            revision: 1,
+            width: 2,
+            height: 2,
+            stride: 8,
+            format: PixelFormat::Rgba8Premultiplied,
+            pixels: Arc::from(texels.concat()),
+        },
+    );
+    let dst = rect(8.0, 8.0, 4.0, 4.0);
+    let list = DisplayList {
+        nodes: vec![node(
+            1,
+            dst,
+            vec![PaintOp::Image {
+                image: ResourceRef {
+                    id: ResourceId(5),
+                    revision: 1,
+                },
+                src: rect(0.0, 0.0, 2.0, 2.0),
+                dst,
+                sampling: cupertino_ui_render::Sampling::Nearest,
+            }],
+        )],
+    };
+    let mut r = renderer();
+    let at = |frame: &[u8], x: usize, y: usize| -> [u8; 4] {
+        frame[(y * 96 + x) * 4..(y * 96 + x) * 4 + 4]
+            .try_into()
+            .unwrap()
+    };
+    let one = render(&mut r, &list, &resources, 1.0, &DamageRegion::Full).unwrap();
+    assert_eq!(r.stats().image_decode.count, 1);
+    assert_eq!(
+        (at(&one, 8, 8), at(&one, 11, 11), at(&one, 12, 12)),
+        (texels[0], texels[3], [0; 4])
+    );
+    let two = render(&mut r, &list, &resources, 2.0, &DamageRegion::Full).unwrap();
+    assert_eq!(
+        r.stats().image_decode.count,
+        0,
+        "the decode is kept across scales"
+    );
+    assert_eq!(
+        (
+            at(&two, 16, 16),
+            at(&two, 19, 16),
+            at(&two, 20, 16),
+            at(&two, 16, 20),
+            at(&two, 23, 23),
+            at(&two, 24, 24)
+        ),
+        (texels[0], texels[0], texels[1], texels[2], texels[3], [0; 4]),
+        "the 4 point image covers 8 device pixels at 2x"
+    );
+}
+
+#[test]
+fn a_blur_reads_only_its_own_layer_never_what_is_drawn_under_it() {
+    let under = node(
+        1,
+        rect(0.0, 0.0, 96.0, 64.0),
+        vec![fill(
+            Shape::Rect(rect(0.0, 0.0, 48.0, 64.0)),
+            solid(1.0, 0.0, 0.0, 1.0),
+        )],
+    );
+    let blurred = node(
+        2,
+        rect(0.0, 0.0, 96.0, 64.0),
+        vec![
+            PaintOp::PushLayer {
+                opacity: 1.0,
+                effects: vec![Effect::Blur { radius: 6.0 }],
+            },
+            // invisible, so the layer spans the red edge
+            fill(
+                Shape::Rect(rect(36.0, 0.0, 1.0, 1.0)),
+                solid(0.0, 0.0, 0.0, 0.0),
+            ),
+            fill(
+                Shape::Rect(rect(76.0, 24.0, 10.0, 10.0)),
+                solid(0.0, 0.0, 1.0, 1.0),
+            ),
+            PaintOp::PopLayer,
+        ],
+    );
+    let none = PaintResources::default();
+    let alone = render(
+        &mut renderer(),
+        &DisplayList {
+            nodes: vec![under.clone()],
+        },
+        &none,
+        1.0,
+        &DamageRegion::Full,
+    )
+    .unwrap();
+    let both = render(
+        &mut renderer(),
+        &DisplayList {
+            nodes: vec![under, blurred],
+        },
+        &none,
+        1.0,
+        &DamageRegion::Full,
+    )
+    .unwrap();
+    for y in 0..64 {
+        let row = |f: &[u8]| f[(y * 96 + 40) * 4..(y * 96 + 56) * 4].to_vec();
+        assert_eq!(
+            row(&both),
+            row(&alone),
+            "row {y}: the red edge under the blurred layer stays sharp"
+        );
+    }
+    let blue = (29 * 96 + 72) * 4;
+    assert!(
+        both[blue + 2] > 0 && both[blue + 2] < 255,
+        "the layer's own square is blurred past its edge"
+    );
 }

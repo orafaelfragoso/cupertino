@@ -12,6 +12,7 @@
 mod buffer;
 mod capability;
 mod clipboard;
+mod compose;
 mod configure;
 mod connection;
 mod cursor;

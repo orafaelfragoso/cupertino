@@ -2436,6 +2436,9 @@ impl Dispatch<WlKeyboard, ()> for State {
             }
             wl_keyboard::Event::Leave { .. } => {
                 state.repeat.clear();
+                if let Some(t) = state.translator.as_mut() {
+                    t.reset_compose();
+                }
                 if let Some(surface) = state.key_focus.take() {
                     let time = state.input_time(Instant::now());
                     state.events.push(Event::Keyboard {
@@ -2454,7 +2457,7 @@ impl Dispatch<WlKeyboard, ()> for State {
                 state.note_time(time);
                 state.last_serial = Some(serial);
                 let pressed = key_state == KeyState::Pressed;
-                let (Some(surface), Some(t)) = (state.key_focus, &state.translator) else {
+                let (Some(surface), Some(t)) = (state.key_focus, state.translator.as_mut()) else {
                     return;
                 };
                 if pressed {
@@ -2464,7 +2467,11 @@ impl Dispatch<WlKeyboard, ()> for State {
                 } else {
                     state.repeat.release(key);
                 }
-                let k = t.translate(key);
+                let k = if pressed {
+                    t.press(key)
+                } else {
+                    t.translate(key)
+                };
                 state.events.push(Event::Keyboard {
                     surface,
                     time,

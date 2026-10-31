@@ -655,6 +655,15 @@ impl Cupertino {
 }
 delegate_xdg_activation!(Cupertino);
 
+/// A parent set through an imported handle reaches the model through `parent_changed`, as `xdg_toplevel.set_parent`
+/// does; a handle names no window, and a parent that is not a window is no parent.
+impl smithay::wayland::xdg_foreign::XdgForeignHandler for Cupertino {
+    fn xdg_foreign_state(&mut self) -> &mut smithay::wayland::xdg_foreign::XdgForeignState {
+        &mut self.xdg_foreign_state
+    }
+}
+smithay::delegate_xdg_foreign!(Cupertino);
+
 impl XdgDecorationHandler for Cupertino {
     fn new_decoration(&mut self, toplevel: ToplevelSurface) {
         self.set_decoration_mode(&toplevel, DecorationMode::ServerSide);

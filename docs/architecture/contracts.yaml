@@ -231,6 +231,30 @@
   test_owner: crates/cupertino-server/tests/dock_v1.rs
   source: crates/cupertino-server/src/state.rs
   source_match: XdgActivationState::new
+- name: zxdg_exporter_v2
+  kind: wayland-global
+  version: 1
+  owner_crate: cupertino-server
+  owner_area: compositor
+  scope: public
+  role: none
+  advertised: always
+  test_owner: crates/cupertino-server/tests/xdg_foreign.rs
+  source: crates/cupertino-server/src/state.rs
+  source_match: XdgForeignState::new
+  note: a random handle per export, naming no window; the export ends with its object or its client
+- name: zxdg_importer_v2
+  kind: wayland-global
+  version: 1
+  owner_crate: cupertino-server
+  owner_area: compositor
+  scope: public
+  role: none
+  advertised: always
+  test_owner: crates/cupertino-server/tests/xdg_foreign.rs
+  source: crates/cupertino-server/src/state.rs
+  source_match: XdgForeignState::new
+  note: set_parent_of makes the imported toplevel the parent of a toplevel of the importer; an unknown handle is destroyed at once
 - name: wp_cursor_shape_manager_v1
   kind: wayland-global
   version: 2

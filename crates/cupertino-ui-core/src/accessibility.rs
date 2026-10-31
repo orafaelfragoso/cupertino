@@ -146,6 +146,8 @@ pub struct AccessibilityNode {
     pub live: Option<Live>,
     /// On a list, table or tree: how many items it holds, though only those in view may be in the tree.
     pub item_count: Option<usize>,
+    /// A tree item's depth, from 1 at the top level.
+    pub level: Option<usize>,
     /// On an item of a list, table or tree: its place among all of the container's items, from 0.
     pub item_index: Option<usize>,
     /// On a table's cell or column header: its column, from 0, which pairs a cell with its header.

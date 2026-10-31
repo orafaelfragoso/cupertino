@@ -122,6 +122,7 @@ pub(crate) fn build<M: 'static>(
                         children: Vec::new(),
                         live: semantics.live,
                         item_count: semantics.item_count,
+                        level: semantics.level,
                         item_index: semantics.item_index,
                         column_index: semantics.column_index,
                     },

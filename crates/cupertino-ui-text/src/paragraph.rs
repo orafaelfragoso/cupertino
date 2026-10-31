@@ -1,12 +1,13 @@
 use crate::{
-    Affinity, GlyphRun, ParagraphStyle, PositionedGlyph, ShapedRun, TextAlign, TextPosition,
-    TextRange, Wrap,
+    Affinity, Direction, GlyphRun, ParagraphStyle, PositionedGlyph, ShapedRun, TextAlign,
+    TextPosition, TextRange, Wrap,
 };
 use cupertino_geometry::{Point, Rect, Size};
 use icu_segmenter::options::LineBreakOptions;
 use icu_segmenter::LineSegmenter;
 use std::ops::Range;
 use std::sync::Arc;
+use unicode_bidi::{BidiInfo, Level};
 use unicode_segmentation::UnicodeSegmentation;
 
 #[cfg(test)]
@@ -33,10 +34,12 @@ mod work {
 /// Width of the rectangle `caret_rect` returns, in points.
 pub const CARET_WIDTH: f64 = 1.0;
 
-/// One shaped piece of a paragraph: a run of one style on one hard line.
+/// One shaped piece of a paragraph: a run of one style, one font and one embedding level on one hard line.
 #[derive(Clone, Debug)]
 pub(crate) struct Item {
     pub range: Range<usize>,
+    /// The UAX 9 embedding level; an odd level is shaped right to left.
+    pub level: Level,
     pub run: ShapedRun,
     pub ascent: f32,
     pub descent: f32,
@@ -47,6 +50,8 @@ pub(crate) struct Item {
 struct Shaped {
     text: Arc<str>,
     style: ParagraphStyle,
+    /// The base direction: `style.direction`, or the first strong character's.
+    direction: Direction,
     items: Vec<Item>,
     /// Byte offsets where UAX 14 allows a line to start, without 0 and the text length.
     breaks: Vec<usize>,
@@ -75,16 +80,27 @@ pub struct Line {
     pub rect: Rect,
     /// The y of the baseline, relative to the layout's top.
     pub baseline: f64,
+    /// In visual order, left to right.
     pub runs: Vec<LineRun>,
-    /// Byte offset and x of every cluster start, and of the line end.
-    stops: Vec<(usize, f64)>,
+    /// Every cluster of the line in logical order with its box; an empty line has one empty stop.
+    stops: Vec<Stop>,
     /// The end of the last character that is not a space.
     visible_end: usize,
     soft_wrapped: bool,
 }
 
-/// A paragraph broken into lines at one width: line boxes, caret and selection geometry, hit testing. Lines and
-/// glyphs are laid out in logical order, left to right; direction-aware layout comes with bidi.
+/// The bytes of one cluster and the edges of its box on the line. A right-to-left cluster starts at its right edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Stop {
+    start: usize,
+    end: usize,
+    left: f64,
+    right: f64,
+    rtl: bool,
+}
+
+/// A paragraph broken into lines at one width: line boxes, caret and selection geometry, hit testing. Each line is
+/// reordered for display by UAX 9; positions stay logical byte offsets.
 #[derive(Clone, Debug)]
 pub struct ParagraphLayout {
     text: Arc<str>,
@@ -93,12 +109,18 @@ pub struct ParagraphLayout {
 }
 
 impl Paragraph {
-    pub(crate) fn new(text: Arc<str>, style: ParagraphStyle, items: Vec<Item>) -> Self {
+    pub(crate) fn new(
+        text: Arc<str>,
+        style: ParagraphStyle,
+        direction: Direction,
+        items: Vec<Item>,
+    ) -> Self {
         let breaks = break_opportunities(&text);
         Self {
             shaped: Arc::new(Shaped {
                 text,
                 style,
+                direction,
                 items,
                 breaks,
             }),
@@ -107,6 +129,11 @@ impl Paragraph {
 
     pub fn text(&self) -> &str {
         &self.shaped.text
+    }
+
+    /// The base direction the lines are laid out and aligned in.
+    pub fn direction(&self) -> Direction {
+        self.shaped.direction
     }
 
     /// Breaks the paragraph into lines no wider than `max_width` (`None`, or a width that is not finite, for no limit).
@@ -221,12 +248,21 @@ fn clusters_of(shaped: &Shaped, items: Range<usize>) -> Vec<Cluster> {
     for index in items {
         let item = &shaped.items[index];
         let first_of_item = clusters.len();
-        for (glyph_index, glyph) in item.run.glyphs.iter().enumerate() {
+        let glyphs = &item.run.glyphs;
+        // a right-to-left run lists its glyphs in visual order, the last cluster first
+        let rtl = item.level.is_rtl();
+        for step in 0..glyphs.len() {
             work::step();
+            let glyph_index = if rtl { glyphs.len() - 1 - step } else { step };
+            let glyph = &glyphs[glyph_index];
             match clusters.last_mut() {
                 Some(last) if last.item == index && last.start == glyph.cluster => {
                     last.width += glyph.advance;
-                    last.glyphs.end = glyph_index + 1;
+                    if rtl {
+                        last.glyphs.start = glyph_index;
+                    } else {
+                        last.glyphs.end = glyph_index + 1;
+                    }
                 }
                 _ => clusters.push(Cluster {
                     start: glyph.cluster,
@@ -312,10 +348,13 @@ fn build_line(
 ) -> Line {
     let line_clusters = &clusters[spec.clusters.clone()];
     let width = f64::from(trimmed_width(clusters, spec));
-    let offset = match shaped.style.align {
-        TextAlign::Start | TextAlign::Justify => 0.0,
-        TextAlign::Center => (container - width) / 2.0,
-        TextAlign::End => container - width,
+    let rtl = shaped.direction == Direction::Rtl;
+    let offset = match (shaped.style.align, rtl) {
+        (TextAlign::Center, _) => (container - width) / 2.0,
+        (TextAlign::Start | TextAlign::Justify, false) | (TextAlign::End, true) => 0.0,
+        (TextAlign::Start | TextAlign::Justify, true) | (TextAlign::End, false) => {
+            container - width
+        }
     };
 
     let (start, end) = match (line_clusters.first(), line_clusters.last()) {
@@ -342,23 +381,60 @@ fn build_line(
     let height = f64::from(ascent + descent + line_gap);
     let baseline = top + f64::from(ascent);
 
-    let mut runs = Vec::new();
-    let mut stops = Vec::with_capacity(line_clusters.len() + 1);
-    let mut x = offset;
-    let mut piece_start = 0;
-    while piece_start < line_clusters.len() {
-        let item_index = line_clusters[piece_start].item;
-        let piece_end = line_clusters[piece_start..]
-            .iter()
-            .position(|cluster| cluster.item != item_index)
-            .map_or(line_clusters.len(), |count| piece_start + count);
-        let item = &shaped.items[item_index];
+    // UAX 9 L1: the spaces that end the line take the paragraph's level, so they hang past its end edge
+    let visible = line_clusters
+        .iter()
+        .rposition(|cluster| !cluster.space)
+        .map_or(0, |last| last + 1);
+    let base = if rtl { Level::rtl() } else { Level::ltr() };
+    let mut pieces: Vec<(Range<usize>, Level)> = Vec::new();
+    for (index, cluster) in line_clusters.iter().enumerate() {
+        let level = if index < visible {
+            shaped.items[cluster.item].level
+        } else {
+            base
+        };
+        match pieces.last_mut() {
+            Some((piece, last))
+                if *last == level && line_clusters[piece.start].item == cluster.item =>
+            {
+                piece.end = index + 1
+            }
+            _ => pieces.push((index..index + 1, level)),
+        }
+    }
+    let levels: Vec<Level> = pieces.iter().map(|(_, level)| *level).collect();
+    let hanging: f64 = line_clusters[visible..]
+        .iter()
+        .map(|cluster| f64::from(cluster.width))
+        .sum();
+
+    let mut runs = Vec::with_capacity(pieces.len());
+    let mut stops = vec![
+        Stop {
+            start,
+            end: start,
+            left: offset,
+            right: offset,
+            rtl,
+        };
+        line_clusters.len().max(1)
+    ];
+    let mut x = if rtl { offset - hanging } else { offset };
+    for piece_index in BidiInfo::reorder_visual(&levels) {
+        let (piece, level) = &pieces[piece_index];
+        let item = &shaped.items[line_clusters[piece.start].item];
         let origin_x = x;
         let mut glyphs = Vec::new();
         let mut pen = 0.0_f32;
-        for cluster in &line_clusters[piece_start..piece_end] {
+        for step in 0..piece.len() {
             work::step();
-            stops.push((cluster.start, x));
+            let index = if level.is_rtl() {
+                piece.end - 1 - step
+            } else {
+                piece.start + step
+            };
+            let cluster = &line_clusters[index];
             for glyph in &item.run.glyphs[cluster.glyphs.clone()] {
                 glyphs.push(PositionedGlyph {
                     id: glyph.id,
@@ -368,27 +444,29 @@ fn build_line(
                 });
                 pen += glyph.advance;
             }
-            x += f64::from(cluster.width);
+            let right = x + f64::from(cluster.width);
+            stops[index] = Stop {
+                start: cluster.start,
+                end: cluster.end,
+                left: x,
+                right,
+                rtl: level.is_rtl(),
+            };
+            x = right;
         }
         runs.push(LineRun {
             origin: Point::new(origin_x, baseline),
-            range: TextRange(line_clusters[piece_start].start..line_clusters[piece_end - 1].end),
+            range: TextRange(line_clusters[piece.start].start..line_clusters[piece.end - 1].end),
             run: GlyphRun {
                 font: item.run.font,
                 size: item.run.size,
                 glyphs,
             },
         });
-        piece_start = piece_end;
-    }
-    stops.push((end, x));
-    if line_clusters.is_empty() {
-        stops[0].1 = offset;
     }
 
-    let visible_end = line_clusters
-        .iter()
-        .rfind(|cluster| !cluster.space)
+    let visible_end = line_clusters[..visible]
+        .last()
         .map_or(start, |cluster| cluster.end);
     Line {
         range: TextRange(start..end),
@@ -401,18 +479,40 @@ fn build_line(
     }
 }
 
-impl Line {
+impl Stop {
+    /// The x of the caret at `byte` inside the cluster, by its share of the cluster's bytes.
     fn x_at(&self, byte: usize) -> f64 {
-        let at = self.stops.partition_point(|&(stop, _)| stop <= byte);
-        match at {
-            0 => self.stops[0].1,
-            _ if at == self.stops.len() => self.stops[at - 1].1,
-            _ => {
-                let (from, x0) = self.stops[at - 1];
-                let (to, x1) = self.stops[at];
-                x0 + (x1 - x0) * (byte - from) as f64 / (to - from) as f64
+        let along = if self.end > self.start {
+            (byte - self.start) as f64 / (self.end - self.start) as f64 * (self.right - self.left)
+        } else {
+            0.0
+        };
+        if self.rtl {
+            self.right - along
+        } else {
+            self.left + along
+        }
+    }
+}
+
+impl Line {
+    /// The x of the caret at `at`: the start edge of the cluster that starts there, else the end edge of the last. An
+    /// upstream position takes the end edge of the cluster that ends there.
+    fn x_at(&self, at: TextPosition) -> f64 {
+        let byte = at.byte;
+        if at.affinity == Affinity::Upstream {
+            let before = self.stops.partition_point(|stop| stop.end < byte);
+            if let Some(stop) = self
+                .stops
+                .get(before)
+                .filter(|stop| stop.end == byte && stop.start < byte)
+            {
+                return stop.x_at(byte);
             }
         }
+        let at = self.stops.partition_point(|stop| stop.end <= byte);
+        let stop = &self.stops[at.min(self.stops.len() - 1)];
+        stop.x_at(byte.clamp(stop.start, stop.end))
     }
 }
 
@@ -442,80 +542,109 @@ impl ParagraphLayout {
     }
 
     /// The caret at `at`: a thin rectangle the height of its line. A position at a soft wrap belongs to the next line
-    /// unless its affinity is upstream.
+    /// unless its affinity is upstream; at a direction change, upstream is drawn at the end edge of the character
+    /// before it and downstream at the start edge of the character after it.
     pub fn caret_rect(&self, at: TextPosition) -> Rect {
         let line = self.line_of(at);
-        let x = line.x_at(at.byte.min(self.text.len()));
+        let x = line.x_at(TextPosition {
+            byte: at.byte.min(self.text.len()),
+            ..at
+        });
         Rect::new(x, line.rect.y(), CARET_WIDTH, line.rect.height())
     }
 
     /// The position nearest `point`, on a grapheme boundary. A point above or below the text takes the first or last
-    /// line, and one past a line's end takes the line's end.
+    /// line, and one beside a line takes the nearest edge of the cluster at that side.
     pub fn index_at(&self, point: Point) -> TextPosition {
         let line = self
             .lines
             .iter()
             .find(|line| point.y < line.rect.max_y())
             .unwrap_or_else(|| &self.lines[self.lines.len() - 1]);
-        let first = line.stops[0];
-        if point.x <= first.1 {
+        let visible = &line.stops[..line
+            .stops
+            .partition_point(|stop| stop.start < line.visible_end)];
+        let hit = visible
+            .iter()
+            .find(|stop| stop.left <= point.x && point.x < stop.right)
+            .or_else(|| {
+                let leftmost = visible.iter().min_by(|a, b| a.left.total_cmp(&b.left))?;
+                if point.x < leftmost.left {
+                    Some(leftmost)
+                } else {
+                    visible.iter().max_by(|a, b| a.right.total_cmp(&b.right))
+                }
+            });
+        let Some(stop) = hit else {
             return TextPosition {
-                byte: first.0,
+                byte: line.range.0.start,
                 affinity: Affinity::Downstream,
             };
-        }
-        let visible_x = line.x_at(line.visible_end);
-        if point.x >= visible_x {
-            let upstream = line.soft_wrapped && line.visible_end == line.range.0.end;
-            return TextPosition {
-                byte: line.visible_end,
-                affinity: if upstream {
-                    Affinity::Upstream
-                } else {
-                    Affinity::Downstream
-                },
-            };
-        }
-        let at = line
-            .stops
-            .partition_point(|&(_, x)| x <= point.x)
-            .clamp(1, line.stops.len() - 1);
-        let (from, _) = line.stops[at - 1];
-        let (to, _) = line.stops[at];
-        let nearest = std::iter::once(from)
-            .chain(
-                self.text[from..to]
-                    .grapheme_indices(true)
-                    .map(|(offset, _)| from + offset)
-                    .skip(1),
-            )
-            .chain(std::iter::once(to))
-            .min_by(|a, b| {
-                let da = (line.x_at(*a) - point.x).abs();
-                let db = (line.x_at(*b) - point.x).abs();
-                da.total_cmp(&db)
-            })
-            .unwrap_or(from);
-        TextPosition {
-            byte: nearest,
+        };
+        let byte = {
+            std::iter::once(stop.start)
+                .chain(
+                    self.text[stop.start..stop.end]
+                        .grapheme_indices(true)
+                        .map(|(offset, _)| stop.start + offset)
+                        .skip(1),
+                )
+                .chain(std::iter::once(stop.end))
+                .min_by(|a, b| {
+                    let da = (stop.x_at(*a) - point.x).abs();
+                    let db = (stop.x_at(*b) - point.x).abs();
+                    da.total_cmp(&db)
+                })
+                .unwrap_or(stop.start)
+        };
+        let downstream = TextPosition {
+            byte,
             affinity: Affinity::Downstream,
+        };
+        let elsewhere = byte == stop.end && (line.x_at(downstream) - stop.x_at(byte)).abs() > 1e-9;
+        TextPosition {
+            byte,
+            affinity: if (line.soft_wrapped && byte == line.range.0.end) || elsewhere {
+                Affinity::Upstream
+            } else {
+                Affinity::Downstream
+            },
         }
     }
 
-    /// The rectangles that highlight `range` (logical bytes), one per line it touches.
+    /// The rectangles that highlight `range` (logical bytes), left to right on each line it touches; a range that
+    /// crosses a direction change can be several rectangles on one line.
     pub fn selection_rects(&self, range: Range<usize>) -> Vec<Rect> {
-        self.lines
-            .iter()
-            .filter_map(|line| {
-                let start = range.start.max(line.range.0.start);
-                let end = range.end.min(line.range.0.end);
-                if start >= end {
-                    return None;
+        let mut rects = Vec::new();
+        for line in &self.lines {
+            let start = range.start.max(line.range.0.start);
+            let end = range.end.min(line.range.0.end);
+            if start >= end {
+                continue;
+            }
+            let first = line.stops.partition_point(|stop| stop.end <= start);
+            let mut spans: Vec<(f64, f64)> = line.stops[first..]
+                .iter()
+                .take_while(|stop| stop.start < end)
+                .map(|stop| {
+                    let a = stop.x_at(start.max(stop.start));
+                    let b = stop.x_at(end.min(stop.end));
+                    (a.min(b), a.max(b))
+                })
+                .collect();
+            spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut merged: Vec<(f64, f64)> = Vec::with_capacity(spans.len());
+            for (left, right) in spans {
+                match merged.last_mut() {
+                    Some(last) if left <= last.1 => last.1 = last.1.max(right),
+                    _ => merged.push((left, right)),
                 }
-                let (x0, x1) = (line.x_at(start), line.x_at(end));
-                Some(Rect::new(x0, line.rect.y(), x1 - x0, line.rect.height()))
-            })
-            .collect()
+            }
+            rects.extend(merged.into_iter().map(|(left, right)| {
+                Rect::new(left, line.rect.y(), right - left, line.rect.height())
+            }));
+        }
+        rects
     }
 }
 
@@ -771,6 +900,151 @@ mod tests {
         }
         assert!(layout.selection_rects(3..3).is_empty());
         assert!(rects[0].x() > 0.0);
+    }
+
+    /// The cluster of every glyph of `line`, left to right.
+    fn visual_clusters(line: &Line) -> Vec<usize> {
+        line.runs
+            .iter()
+            .flat_map(|run| run.run.glyphs.iter().map(|glyph| glyph.cluster))
+            .collect()
+    }
+
+    const MIXED: &str = "abc \u{5D0}\u{5D1}\u{5D2} def";
+
+    #[test]
+    fn right_to_left_characters_are_shown_last_first_inside_left_to_right_text() {
+        let layout = layout(MIXED, None);
+        let runs: Vec<Range<usize>> = layout.lines()[0]
+            .runs
+            .iter()
+            .map(|run| run.range.0.clone())
+            .collect();
+        assert_eq!(runs, [0..4, 4..10, 10..14]);
+        assert_eq!(
+            visual_clusters(&layout.lines()[0]),
+            [0, 1, 2, 3, 8, 6, 4, 10, 11, 12, 13]
+        );
+        let x = |byte| layout.caret_rect(position(byte)).x();
+        assert!(
+            x(4) > x(6) && x(6) > x(8),
+            "the caret moves left through the Hebrew"
+        );
+        assert!(x(11) > x(4));
+    }
+
+    #[test]
+    fn the_first_strong_character_sets_the_base_direction_and_start_is_its_edge() {
+        let text = "\u{5D0}\u{5D1}\u{5D2} abc";
+        let paragraph = system()
+            .paragraph(
+                &crate::AttributedText::plain(text, TextStyle::new(16.0)),
+                &ParagraphStyle::default(),
+            )
+            .unwrap();
+        assert_eq!(paragraph.direction(), Direction::Rtl);
+        let layout = paragraph.layout(Some(200.0));
+        assert_eq!(visual_clusters(&layout.lines()[0]), [7, 8, 9, 6, 4, 2, 0]);
+        assert!((layout.caret_rect(position(0)).x() - 200.0).abs() < 1e-3);
+        assert!((layout.lines()[0].runs[0].origin.x - (200.0 - layout.size().width)).abs() < 1e-3);
+
+        let forced = layout_with(
+            "abc",
+            ParagraphStyle {
+                direction: Some(Direction::Rtl),
+                ..ParagraphStyle::default()
+            },
+            Some(200.0),
+        );
+        assert!((forced.caret_rect(position(3)).x() - 200.0).abs() < 1e-3);
+        assert!((forced.caret_rect(position(0)).x() - (200.0 - forced.size().width)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn spaces_that_end_a_wrapped_line_hang_at_its_end_edge_not_inside_a_right_to_left_word() {
+        let text = "abc \u{5D0}\u{5D1}\u{5D2} \u{5D3}\u{5D4}\u{5D5}";
+        let width = layout("abc \u{5D0}\u{5D1}\u{5D2}", None).size().width as f32 + 1.0;
+        let layout = layout(text, Some(width));
+        assert_eq!(line_texts(&layout, text)[0], "abc \u{5D0}\u{5D1}\u{5D2} ");
+        assert_eq!(
+            visual_clusters(&layout.lines()[0]),
+            [0, 1, 2, 3, 8, 6, 4, 10]
+        );
+    }
+
+    #[test]
+    fn right_from_the_end_of_abc_moves_the_caret_one_stop_rightward_through_the_hebrew() {
+        let layout = layout(MIXED, None);
+        let mut buffer = crate::TextBuffer::new();
+        buffer.set_text(MIXED);
+        buffer.select(3..3);
+        let mut stops = vec![buffer.caret_position()];
+        for _ in 0..5 {
+            buffer.move_visual(true, false);
+            stops.push(buffer.caret_position());
+        }
+        let bytes: Vec<usize> = stops.iter().map(|at| at.byte).collect();
+        assert_eq!(bytes, [3, 4, 8, 6, 4, 11]);
+        assert_eq!(
+            stops[1].affinity,
+            Affinity::Upstream,
+            "after the space, before the Hebrew"
+        );
+        let xs: Vec<f64> = stops.iter().map(|at| layout.caret_rect(*at).x()).collect();
+        assert!(xs.windows(2).all(|pair| pair[1] > pair[0]), "{xs:?}");
+        for _ in 0..5 {
+            buffer.move_visual(false, false);
+        }
+        assert_eq!(buffer.caret(), 3);
+    }
+
+    #[test]
+    fn a_click_at_a_direction_change_draws_the_caret_where_it_hit() {
+        let layout = layout(MIXED, None);
+        let after_space = layout.caret_rect(TextPosition {
+            byte: 4,
+            affinity: Affinity::Upstream,
+        });
+        assert!(after_space.x() < layout.caret_rect(position(4)).x());
+        let hit = layout.index_at(Point::new(after_space.x() + 0.1, after_space.y() + 1.0));
+        assert_eq!(
+            hit,
+            TextPosition {
+                byte: 10,
+                affinity: Affinity::Upstream
+            },
+            "the end of the Hebrew, drawn after the space"
+        );
+        assert!((layout.caret_rect(hit).x() - after_space.x()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_click_on_a_right_to_left_character_maps_its_right_half_to_its_start() {
+        let layout = layout(MIXED, None);
+        let (a, b) = (
+            layout.caret_rect(position(4)).x(),
+            layout.caret_rect(position(6)).x(),
+        );
+        let (left, right) = (a.min(b), a.max(b));
+        let y = layout.lines()[0].rect.y() + 1.0;
+        let at = |share: f64| layout.index_at(Point::new(left + (right - left) * share, y));
+        assert_eq!(at(0.75).byte, 4);
+        assert_eq!(at(0.25).byte, 6);
+    }
+
+    #[test]
+    fn a_selection_across_a_direction_change_is_one_rectangle_per_visual_span() {
+        let layout = layout(MIXED, None);
+        let x = |byte| layout.caret_rect(position(byte)).x();
+        let rects = layout.selection_rects(2..6);
+        assert_eq!(rects.len(), 2, "{rects:?}");
+        assert!((rects[0].x() - x(2)).abs() < 1e-6);
+        assert!(
+            rects[0].max_x() < rects[1].x(),
+            "the other Hebrew letters sit between them"
+        );
+        assert!((rects[1].x() - x(6)).abs() < 1e-6 && (rects[1].max_x() - x(4)).abs() < 1e-6);
+        assert_eq!(layout.selection_rects(0..MIXED.len()).len(), 1);
     }
 
     #[test]

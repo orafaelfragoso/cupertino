@@ -7,6 +7,7 @@ use cupertino_geometry::Rect;
 use std::ops::Range;
 use std::sync::Arc;
 
+mod bidi;
 mod buffer;
 mod font;
 mod input;

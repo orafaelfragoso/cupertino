@@ -97,6 +97,24 @@ fn typing_inserts_at_the_caret_and_arrows_move_by_grapheme() {
 }
 
 #[test]
+fn arrows_move_on_screen_through_right_to_left_text() {
+    let mut f = Fixture::new("abc \u{5D0}\u{5D1}\u{5D2} def");
+    f.press(HOME, "", None);
+    let mut carets = Vec::new();
+    for _ in 0..6 {
+        f.press(RIGHT, "", None);
+        carets.push(f.field.caret());
+    }
+    assert_eq!(
+        carets,
+        [1, 2, 3, 4, 8, 6],
+        "the Hebrew is crossed from its last letter"
+    );
+    f.press(RIGHT, "s", None);
+    assert_eq!(f.field.selection(), 4..6);
+}
+
+#[test]
 fn shift_extends_and_a_plain_arrow_collapses_the_selection_to_its_side() {
     let mut f = Fixture::new("hello world");
     f.press(HOME, "", None);

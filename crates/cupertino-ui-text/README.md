@@ -14,7 +14,9 @@ buffer follow.
 - `TextBuffer` is the single-line editing model that used to be `cupertino-text-field`'s: grapheme caret and selection,
   undo, kill buffer, composition range, click counting, caret blink and scroll. `Keymap` resolves a key (evdev code, modifiers
   physical through a profile or already logical, and the character) through `cupertino-key-bindings`' chords, and
-  `TextFieldKeys` carries the result out on the buffer; neither reads settings, which `cupertino-keyboard` does.
+  `TextFieldKeys` carries the result out on the buffer; neither reads settings, which `cupertino-keyboard` does. Left
+  and Right move to the next caret stop on screen through text of either direction (`TextBuffer::caret_position` keeps
+  the side of a direction change the caret is on); Backward, Forward and the word moves keep the text's order.
 - `Surrounding::around` costs the window, not the document; a text that is one huge run of regional indicators (flags)
   is the exception, because the boundary rule scans back over the run.
 - `FontIndex` holds the faces the app registers from font bytes and resolves a family, weight and variation set to a
@@ -31,8 +33,14 @@ buffer follow.
   kept in quarter units so an animated axis shares instances.
 - `Paragraph::layout(width)` re-wraps the shaped text without reshaping (UAX 14 breaks from `icu_segmenter`; a word
   wider than the width breaks between clusters; spaces at a soft wrap hang past the line). `ParagraphLayout` gives
-  lines with glyph runs, `caret_rect`, `index_at` (always a grapheme boundary) and `selection_rects`. Layout is
-  logical-order left to right for now (`max_lines` of zero keeps one line, a width that is not finite means no limit); bidi, script fallback and system fonts follow.
+  lines with glyph runs, `caret_rect`, `index_at` (always a grapheme boundary) and `selection_rects` (`max_lines` of
+  zero keeps one line, a width that is not finite means no limit). Bidi follows UAX 9 (`unicode-bidi`): the base
+  direction is `ParagraphStyle::direction` or the first strong character's (`Paragraph::direction`), each run of one
+  embedding level is shaped in its direction, and each line is reordered for display, with the spaces that end it at
+  the paragraph's level so they hang past its end edge. `Start` and `End` follow the base direction. Positions stay
+  logical: a downstream caret sits at the start edge of the character after it and an upstream one at the end edge of
+  the character before it, `index_at` returns the side a click lands on, and a selection across a direction change can
+  be several rectangles on one line. Script fallback and system fonts follow.
 - `GlyphRaster` implements `GlyphRasterizer` over a `TextSystem`'s fonts with `swash` and `cupertino-glyph`: unhinted
   coverage with the stem darkening that `GlyphKey::dilation_q` names (0 is font smoothing off, 1 to 5 is the fill's
   luminance in quarters; build keys with `GlyphKey::for_draw`, and the size the dilation reads is floored to a power of

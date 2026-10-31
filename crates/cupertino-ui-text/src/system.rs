@@ -1,3 +1,4 @@
+use crate::bidi;
 use crate::paragraph::Item;
 use crate::{
     AttributedText, Direction, FaceId, FontId, FontIndex, FontMetrics, FontStyle, FontWeight,
@@ -9,6 +10,7 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard};
+use unicode_bidi::{Level, ParagraphBidiInfo};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Paragraphs shaped before the cache starts a new generation.
@@ -169,50 +171,62 @@ fn shape_paragraph(
     paragraph_style: &ParagraphStyle,
 ) -> Result<Paragraph, TextError> {
     let segments = style_segments(text)?;
+    let direction = bidi::base_direction(&text.text, paragraph_style.direction);
+    let base = bidi::base_level(direction);
     let mut items = Vec::new();
     let mut line_start = 0;
     loop {
         let (line_end, next_start) = next_line(&text.text, line_start);
+        let bidi = ParagraphBidiInfo::new(&text.text[line_start..line_end], Some(base));
         let pieces = pieces_of(&segments, line_start..line_end);
         for (piece, style) in pieces {
             let primary = resolve(fonts, theme_family, style)?;
-            let runs = if piece.is_empty() {
-                vec![(piece, primary)]
-            } else {
-                font_runs(fonts, &text.text, piece, primary, style.weight)?
-            };
-            for (range, font) in runs {
-                let metrics = fonts.metrics(font)?;
-                let mut run = if range.is_empty() {
-                    ShapedRun {
-                        font,
-                        size: style.size,
-                        direction: Direction::Ltr,
-                        glyphs: Vec::new(),
-                    }
+            for (piece, level) in level_runs(&text.text, piece, &bidi.levels[..], line_start, base)
+            {
+                let direction = if level.is_rtl() {
+                    Direction::Rtl
                 } else {
-                    fonts.shape(
-                        &text.text[range.clone()],
-                        &ShapeRequest {
+                    Direction::Ltr
+                };
+                let runs = if piece.is_empty() {
+                    vec![(piece, primary)]
+                } else {
+                    font_runs(fonts, &text.text, piece, primary, style.weight)?
+                };
+                for (range, font) in runs {
+                    let metrics = fonts.metrics(font)?;
+                    let mut run = if range.is_empty() {
+                        ShapedRun {
                             font,
                             size: style.size,
-                            direction: Direction::Ltr,
-                            features: &style.features,
-                            lang: style.lang.as_deref(),
-                            letter_spacing: style.letter_spacing,
-                        },
-                    )?
-                };
-                for glyph in &mut run.glyphs {
-                    glyph.cluster += range.start;
+                            direction,
+                            glyphs: Vec::new(),
+                        }
+                    } else {
+                        fonts.shape(
+                            &text.text[range.clone()],
+                            &ShapeRequest {
+                                font,
+                                size: style.size,
+                                direction,
+                                features: &style.features,
+                                lang: style.lang.as_deref(),
+                                letter_spacing: style.letter_spacing,
+                            },
+                        )?
+                    };
+                    for glyph in &mut run.glyphs {
+                        glyph.cluster += range.start;
+                    }
+                    items.push(Item {
+                        range,
+                        level,
+                        run,
+                        ascent: metrics.ascent * style.size,
+                        descent: metrics.descent * style.size,
+                        line_gap: metrics.line_gap * style.size,
+                    });
                 }
-                items.push(Item {
-                    range,
-                    run,
-                    ascent: metrics.ascent * style.size,
-                    descent: metrics.descent * style.size,
-                    line_gap: metrics.line_gap * style.size,
-                });
             }
         }
         match next_start {
@@ -223,8 +237,34 @@ fn shape_paragraph(
     Ok(Paragraph::new(
         Arc::from(text.text.as_str()),
         *paragraph_style,
+        direction,
         items,
     ))
+}
+
+/// `range` of `text` cut where the UAX 9 embedding level changes; each grapheme cluster takes the level of its first
+/// character, so a cluster is never split between directions. `levels` are by byte from `line_start`; an empty range
+/// takes the paragraph's `base` level.
+fn level_runs(
+    text: &str,
+    range: Range<usize>,
+    levels: &[Level],
+    line_start: usize,
+    base: Level,
+) -> Vec<(Range<usize>, Level)> {
+    let mut runs: Vec<(Range<usize>, Level)> = Vec::new();
+    for (offset, cluster) in text[range.clone()].grapheme_indices(true) {
+        let start = range.start + offset;
+        let level = levels[start - line_start];
+        match runs.last_mut() {
+            Some((run, last)) if *last == level => run.end = start + cluster.len(),
+            _ => runs.push((start..start + cluster.len(), level)),
+        }
+    }
+    if runs.is_empty() {
+        runs.push((range, base));
+    }
+    runs
 }
 
 /// `range` of `text` cut where the font drawing it changes. Each grapheme cluster takes the first font that has every

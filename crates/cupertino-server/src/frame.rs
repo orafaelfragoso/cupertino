@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::utils::{Buffer, RendererSurfaceStateUserData};
 use smithay::desktop::utils::{
     send_frames_surface_tree, take_presentation_feedback_surface_tree, OutputPresentationFeedback,
 };
@@ -12,7 +13,9 @@ use smithay::input::pointer::{CursorImageStatus, CursorImageSurfaceData};
 use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point};
-use smithay::wayland::compositor::{get_parent, with_states};
+use smithay::wayland::compositor::{
+    get_parent, with_states, with_surface_tree_downward, TraversalAction,
+};
 use smithay::wayland::presentation::Refresh;
 
 use crate::render::compose::Composed;
@@ -751,4 +754,26 @@ impl Cupertino {
             );
         }
     }
+}
+
+/// The current buffers of the surface trees of `surfaces`, for a frame drawn from them to hold until it is shown:
+/// dropping the last handle of a buffer signals its explicit-sync release point.
+pub fn drawn_buffers(surfaces: &[WlSurface]) -> Vec<Buffer> {
+    let mut buffers = Vec::new();
+    for surface in surfaces {
+        with_surface_tree_downward(
+            surface,
+            (),
+            |_, _, _| TraversalAction::DoChildren(()),
+            |_, states, _| {
+                let buffer = states
+                    .data_map
+                    .get::<RendererSurfaceStateUserData>()
+                    .and_then(|s| s.lock().unwrap().buffer().cloned());
+                buffers.extend(buffer);
+            },
+            |_, _, _| true,
+        );
+    }
+    buffers
 }

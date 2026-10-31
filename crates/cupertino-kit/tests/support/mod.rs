@@ -5,7 +5,9 @@
 #![allow(dead_code)]
 
 use cupertino_assets::BUILTIN_FONT;
-use cupertino_kit::core::{Application, Command, FrameSnapshot, Key, RuntimeOptions, Window};
+use cupertino_kit::core::{
+    AccessibilityAdapter, Application, Command, FrameSnapshot, Key, RuntimeOptions, Window,
+};
 use cupertino_kit::geometry::Point;
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{
@@ -109,6 +111,15 @@ impl<A: Application> Run<A> {
 
     /// The application with `theme` instead of the repository's.
     pub fn with_theme(theme: ThemeTokens) -> Self {
+        Self::build(theme, None)
+    }
+
+    /// A run whose runtime publishes to `accessibility` and takes its actions.
+    pub fn with_accessibility(accessibility: Option<Box<dyn AccessibilityAdapter>>) -> Self {
+        Self::build(theme(), accessibility)
+    }
+
+    fn build(theme: ThemeTokens, accessibility: Option<Box<dyn AccessibilityAdapter>>) -> Self {
         let mut fonts = FontIndex::new();
         fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
         let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
@@ -130,7 +141,7 @@ impl<A: Application> Run<A> {
                     GlyphRaster::new(Arc::clone(&glyphs)),
                 ))
             }),
-            accessibility: None,
+            accessibility,
             clock: Arc::new(ManualClock::new(Timestamp(0))),
             on_window_error: None,
         };

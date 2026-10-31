@@ -360,7 +360,7 @@ pub struct SplitView<M> {
 
 /// A panel below a control of another window: a non-modal dialog that takes the keyboard while open, moves the focus
 /// to its first focusable item, keeps Tab inside, and closes on Escape or a press outside. Closing gives the focus
-/// back to the anchor. Declare [`Popover::window`] after the anchor's window while it is open.
+/// back to the anchor. Declare [`Popover::window`] with the other windows while it is open.
 pub struct Popover<M> {
     /// The window the anchor is in.
     pub parent: WindowKey,

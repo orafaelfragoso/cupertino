@@ -21,7 +21,7 @@ const MAX: Size = Size {
 };
 
 impl<M: Clone + 'static> Popover<M> {
-    /// The popup window that shows the popover; declare it after its parent while it is open.
+    /// The popup window that shows the popover; declare it while it is open.
     pub fn window(self, key: WindowKey) -> Window<M> {
         Window {
             key,

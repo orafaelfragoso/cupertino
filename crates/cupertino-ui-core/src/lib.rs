@@ -105,7 +105,7 @@ pub struct Window<M> {
 /// Where a popup opens and what tells the application it closed. The window's `spec.size` is the most the popup
 /// may take; it opens at the size its content measures within that.
 pub struct Popup<M> {
-    /// A window declared before the popup.
+    /// A toplevel or another popup, declared anywhere in the view.
     pub parent: WindowKey,
     pub anchor: PopupAnchor,
     /// Takes the keyboard and closes on a press outside, as a menu or a transient popover does; a tooltip does not.

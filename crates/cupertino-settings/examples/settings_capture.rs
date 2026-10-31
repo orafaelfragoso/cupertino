@@ -1,20 +1,25 @@
 //! The Settings surfaces for look checks: every pane as `settings/<pane-key>` in the default window (715 × 625 at
-//! 1×), the Wallpaper pane under its chooser sheet as `settings/wallpaper-chooser` and the results window of a search
-//! as `settings/search-results`.
+//! 1×), the Wallpaper pane under its chooser sheet as `settings/wallpaper-chooser`, the Privacy pane under its
+//! application chooser as `settings/privacy-chooser` and the results window of a search as `settings/search-results`.
 //!
 //! `ci/capture.sh settings/accessibility --login saving --scale 2` (the flags are `cupertino-capture`'s)
 //!
 //! State flags: `--login none|saving|refused` (Accessibility: no login screen service, a write waiting for its reply,
-//! a write refused; default: the service with no file), `--mice one|two` (Mouse; default one) and `--scroll PT` (the
+//! a write refused; default: the service with no file), `--mice one|two` (Mouse; default one), `--clipboard
+//! empty|refused` (Privacy: no entries, a refused file; default: an allowed, a changed and a missing entry and a line
+//! that allows nothing) and `--scroll PT` (the
 //! pane scrolled by PT points, clamped to the form as the app does). The settings are
 //! the defaults (no files are read); the live readings are example data, not a machine's. The sidebar material is the
 //! server's: here a flat fill of the window background stands in for it.
 
 use std::process::ExitCode;
 
+use cupertino_apps::entry::{parse_desktop_entry, Locale, Visibility};
 use cupertino_capture::{App, Look, Request, State};
 use cupertino_defaults::accessibility::DisplayOptions;
-use cupertino_settings::form::{self, RowSpec, SectionSpec};
+use cupertino_defaults::data_control::{DataControlConf, Entry, Unusable};
+use cupertino_settings::clipboard::{self, Installed};
+use cupertino_settings::form::{self, SectionSpec};
 use cupertino_settings::geom::Size;
 use cupertino_settings::history::History;
 use cupertino_settings::live::{
@@ -191,6 +196,90 @@ fn live(painter: &mut Painter, scratch: &std::path::Path) -> Live {
     }
 }
 
+/// Clipboard Access with an allowed system program, a program of the user changed since it was allowed, one that is
+/// gone and a line that allows nothing, and the installed applications the chooser lists.
+fn clipboard(scratch: &std::path::Path) -> Result<(clipboard::List, Vec<Installed>), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = scratch.join("bin");
+    std::fs::create_dir_all(&bin).map_err(|e| e.to_string())?;
+    let program = |name: &str, text: &str| -> Result<std::path::PathBuf, String> {
+        let path = bin.join(name);
+        std::fs::write(&path, text).map_err(|e| e.to_string())?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| e.to_string())?;
+        Ok(path)
+    };
+    let clipd = program("clipd", "x")?;
+    let pinned = Entry::for_program(&clipd)?;
+    program("clipd", "changed since")?;
+    for name in ["python3", "flatpak", "notes-sync", "screen-recorder"] {
+        program(name, "x")?;
+    }
+    let history = std::fs::canonicalize("/usr/bin/true").map_err(|e| e.to_string())?;
+    let (_, problems) = DataControlConf::parse("allow = python3");
+    let list = clipboard::List {
+        conf: DataControlConf {
+            allowed: vec![
+                Entry {
+                    program: history.clone(),
+                    pin: None,
+                },
+                pinned,
+                Entry {
+                    program: "/opt/gone/clipman".into(),
+                    pin: None,
+                },
+            ],
+        },
+        unusable: problems
+            .into_iter()
+            .map(|p| Unusable {
+                text: "allow = python3".into(),
+                message: p.message,
+            })
+            .collect(),
+        unreadable: None,
+    };
+    let vis = Visibility {
+        skip_try_exec: true,
+        ..Visibility::default()
+    };
+    let entry = |id: &str, name: &str, icon: &str, exec: &str| {
+        let text =
+            format!("[Desktop Entry]\nType=Application\nName={name}\nIcon={icon}\nExec={exec}\n");
+        parse_desktop_entry(id, &text, &Locale::parse("C"), &vis)
+            .map_err(|e| format!("{id}: {e:?}"))
+    };
+    let entries = vec![
+        entry(
+            "history.desktop",
+            "Clipboard History",
+            "edit-paste",
+            &history.display().to_string(),
+        )?,
+        entry("python.desktop", "Python", "python", "python3")?,
+        entry(
+            "org.example.Notes.desktop",
+            "Notes (Flatpak)",
+            "accessories-text-editor",
+            "flatpak run org.example.Notes",
+        )?,
+        entry(
+            "notes-sync.desktop",
+            "Notes Sync",
+            "folder-sync",
+            "notes-sync %U",
+        )?,
+        entry(
+            "screen-recorder.desktop",
+            "Screen Recorder",
+            "media-record",
+            "screen-recorder",
+        )?,
+    ];
+    Ok((list, clipboard::installed(entries, &[bin])))
+}
+
 fn fill(pm: &mut Pixmap, rgba: [f32; 4]) {
     pm.fill(
         Color::from_rgba(rgba[0], rgba[1], rgba[2], rgba[3]).expect("palette colours are in range"),
@@ -242,10 +331,12 @@ impl Capture {
             power: None,
             accessibility: None,
             system_accessibility: None,
+            data_control: None,
         };
-        let settings = Settings::load(&paths, 1080.0).map_err(|e| e.to_string())?;
+        let mut settings = Settings::load(&paths, 1080.0).map_err(|e| e.to_string())?;
         let scratch = tempfile::tempdir().map_err(|e| e.to_string())?;
-        let live = live(&mut painter, scratch.path());
+        let mut live = live(&mut painter, scratch.path());
+        (settings.clipboard, live.apps) = clipboard(scratch.path())?;
         Ok(Capture {
             painter,
             theme,
@@ -288,14 +379,7 @@ impl Capture {
             .iter()
             .map(|s| SectionSpec {
                 header: s.header.is_some(),
-                rows: s
-                    .rows
-                    .iter()
-                    .map(|r| RowSpec {
-                        control: &r.control,
-                        error: r.error.is_some() || r.disabled.is_some(),
-                    })
-                    .collect(),
+                rows: s.rows.iter().map(|r| r.spec()).collect(),
                 footer: s.footer.is_some(),
             })
             .collect();
@@ -334,13 +418,17 @@ impl Capture {
 
 impl App for Capture {
     const NAME: &'static str = "settings";
-    const STATE_FLAGS: &'static [&'static str] = &["login", "mice", "scroll"];
+    const STATE_FLAGS: &'static [&'static str] = &["login", "mice", "clipboard", "scroll"];
 
     fn surfaces(&self) -> Vec<String> {
         PANES
             .iter()
             .map(|p| p.id.key().to_string())
-            .chain(["wallpaper-chooser".into(), "search-results".into()])
+            .chain([
+                "wallpaper-chooser".into(),
+                "privacy-chooser".into(),
+                "search-results".into(),
+            ])
             .collect()
     }
 
@@ -353,12 +441,18 @@ impl App for Capture {
                 state("login", "none"),
             ],
             "mouse" => vec![State::new(), state("mice", "two")],
+            "privacy" => vec![
+                State::new(),
+                state("clipboard", "empty"),
+                state("clipboard", "refused"),
+            ],
             _ => vec![State::new()],
         }
     }
 
     fn capture(&mut self, r: &Request<'_>) -> Result<Pixmap, String> {
         let mut live = self.live.clone();
+        let shown = self.settings.clipboard.clone();
         let mut refused = false;
         let mut scroll = 0.0;
         for (flag, value) in r.state {
@@ -394,6 +488,21 @@ impl App for Capture {
                         ),
                         ("1532:0043:Gaming Mouse", "Gaming Mouse", 2400, true),
                     ])
+                }
+                ("clipboard", "privacy", "empty") => {
+                    self.settings.clipboard = clipboard::List::default()
+                }
+                ("clipboard", "privacy", "refused") => {
+                    self.settings.clipboard = clipboard::List {
+                        unreadable: Some("a group or other users can write the file".into()),
+                        ..clipboard::List::default()
+                    }
+                }
+                ("clipboard", "privacy", _) => {
+                    return Err(format!("--clipboard {value}: empty or refused"))
+                }
+                ("clipboard", ..) => {
+                    return Err("--clipboard is a state of settings/privacy".into())
                 }
                 ("login", "accessibility", _) => {
                     return Err(format!("--login {value}: none, saving or refused"))
@@ -466,11 +575,41 @@ impl App for Capture {
                 );
                 Ok(pm)
             }
+            "privacy-chooser" => {
+                let (mut pm, layout) = self.window(
+                    PaneId::Privacy,
+                    &live,
+                    false,
+                    scroll,
+                    size,
+                    r.scale,
+                    session,
+                    &pal,
+                )?;
+                let apps = clipboard::apps(
+                    &live.apps,
+                    &self.settings.clipboard,
+                    sidebar::standard_compare,
+                );
+                let mut sheet = Sheet::apps(apps);
+                sheet.key(SheetKey::Down);
+                let sheet_layout = sheet.layout(&layout.content);
+                self.painter.paint_sheet(
+                    &mut pm,
+                    r.scale,
+                    &sheet,
+                    &sheet_layout,
+                    &layout.content,
+                    &pal,
+                );
+                Ok(pm)
+            }
             key => {
                 let pane = PaneId::from_key(key).ok_or_else(|| format!("{key}: no pane"))?;
-                Ok(self
-                    .window(pane, &live, refused, scroll, size, r.scale, session, &pal)?
-                    .0)
+                let window =
+                    self.window(pane, &live, refused, scroll, size, r.scale, session, &pal);
+                self.settings.clipboard = shown;
+                Ok(window?.0)
             }
         }
     }

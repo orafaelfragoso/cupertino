@@ -14,7 +14,7 @@ use cupertino_geometry::Rect as PopupRect;
 use cupertino_protocol_app::{AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop};
 use cupertino_settings::agent::{Agent, AgentEvent};
 use cupertino_settings::controls::{self, Control, Press, Value};
-use cupertino_settings::form::{self, RowSpec, SectionLayout, SectionSpec};
+use cupertino_settings::form::{self, SectionLayout, SectionSpec};
 use cupertino_settings::history::History;
 use cupertino_settings::inflight::Reads;
 use cupertino_settings::instance;
@@ -29,7 +29,7 @@ use cupertino_settings::paint::{
 use cupertino_settings::panes::{self, Call, ControlId, Effect, Section, Session};
 use cupertino_settings::search::{popup, SearchField};
 use cupertino_settings::services::{self, Services, SESSION_NAME, SESSION_PATH};
-use cupertino_settings::settings::{system_accessibility, Paths, Settings};
+use cupertino_settings::settings::{system_accessibility, File, Paths, Settings};
 use cupertino_settings::sheet::{Answer, Outcome, Sheet, SheetKey};
 use cupertino_settings::sidebar::{self, RowSize};
 use cupertino_settings::window::{self, metrics, Hit, WindowLayout};
@@ -339,6 +339,8 @@ type Notify = std::sync::Arc<dyn Fn(Background) + Send + Sync>;
 
 /// Background events waiting for the window loop.
 const BACKGROUND_QUEUE: usize = 64;
+/// Where Choose Program… opens (approximate).
+const PROGRAM_CHOOSER_START: &str = "/usr/bin";
 
 /// The window loop owns the receiver until it ends; what arrives after that has no window. What arrives before the
 /// window exists waits for the loop's first turn. A full queue makes a worker thread wait. What comes from a bus is
@@ -802,6 +804,22 @@ impl App {
         if to == PaneId::Accessibility {
             self.ask_login_screen();
         }
+        if to == PaneId::Privacy {
+            self.settings.reload_clipboard(&self.paths);
+            let (locale, visibility) = (
+                cupertino_apps::entry::Locale::from_env(),
+                cupertino_apps::entry::Visibility::from_env(),
+            );
+            let entries = cupertino_apps::entry::index_dirs(
+                &cupertino_apps::entry::xdg_application_dirs(),
+                &locale,
+                &visibility,
+            );
+            let path_dirs: Vec<std::path::PathBuf> = std::env::var_os("PATH")
+                .map(|p| std::env::split_paths(&p).collect())
+                .unwrap_or_default();
+            self.live.apps = cupertino_settings::clipboard::installed(entries, &path_dirs);
+        }
         self.refresh(self.now())?;
         if to == PaneId::Bluetooth && self.live.bluetooth.ready().is_some_and(|b| b.available) {
             let notify = self.notify.clone();
@@ -884,14 +902,7 @@ impl App {
             .iter()
             .map(|sec| SectionSpec {
                 header: sec.header.is_some(),
-                rows: sec
-                    .rows
-                    .iter()
-                    .map(|r| RowSpec {
-                        control: &r.control,
-                        error: r.error.is_some() || r.disabled.is_some(),
-                    })
-                    .collect(),
+                rows: sec.rows.iter().map(|r| r.spec()).collect(),
                 footer: sec.footer.is_some(),
             })
             .collect();
@@ -1702,10 +1713,38 @@ impl App {
                     self.sheet = Some(Sheet::resolution(&key, &name));
                     Ok(())
                 }
-                Effect::Store(file) => self
-                    .settings
-                    .store(&self.paths, file)
-                    .map_err(|e| e.to_string()),
+                Effect::ConfirmUnallow { program, name } => {
+                    self.sheet = Some(Sheet::unallow(&program, &name));
+                    Ok(())
+                }
+                Effect::AskClipboardApp { program: true } => {
+                    self.sheet = Some(Sheet::picker_pending(
+                        std::path::Path::new(PROGRAM_CHOOSER_START),
+                        Mode::Program,
+                    ));
+                    self.drive_picker();
+                    Ok(())
+                }
+                Effect::AskClipboardApp { program: false } => {
+                    let apps = cupertino_settings::clipboard::apps(
+                        &self.live.apps,
+                        &self.settings.clipboard,
+                        sidebar::standard_compare,
+                    );
+                    self.sheet = Some(Sheet::apps(apps));
+                    Ok(())
+                }
+                Effect::Refuse(reason) => Err(reason),
+                Effect::Store(file) => {
+                    let stored = self
+                        .settings
+                        .store(&self.paths, file)
+                        .map_err(|e| e.to_string());
+                    if file == File::DataControl && stored.is_ok() {
+                        self.settings.reload_clipboard(&self.paths);
+                    }
+                    stored
+                }
                 Effect::SetAppearance { dark } => self.set_appearance(dark),
                 Effect::SetAccessibility { key, value } => self.set_accessibility(key, &value),
                 Effect::SetSystemAccessibility => self.save_login_screen(),
@@ -1796,6 +1835,23 @@ impl App {
                     eprintln!("cupertino-settings: {e}");
                 }
             }
+            Outcome::Unallow(program) => {
+                self.sheet = None;
+                if let Err(e) = self.settings.unallow_clipboard(&self.paths, &program) {
+                    eprintln!("cupertino-settings: {e}");
+                    self.errors.push((ControlId::ClipboardAdd, e));
+                }
+            }
+            // the sheet stays with the reason until the program is allowed
+            Outcome::Program(program) => match self.settings.allow_clipboard(&self.paths, &program)
+            {
+                Ok(()) => self.sheet = None,
+                Err(e) => {
+                    if let Some(sheet) = &mut self.sheet {
+                        sheet.failed(&e);
+                    }
+                }
+            },
             Outcome::Picked { path, folder } => {
                 self.sheet = None;
                 let added = if folder {

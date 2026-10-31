@@ -12,11 +12,13 @@ use cupertino_defaults::menubar::{HourCycle, ShowDate};
 use cupertino_defaults::power::Timer;
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cupertino_assets::WallpaperFile;
 
+use crate::clipboard::{self, State};
 use crate::controls::{Control, Tile, Value, MUTE_BELOW};
+use crate::form::RowSpec;
 use crate::live::{
     duration_text, BatteryState, Bluetooth, Live, LoginScreen, Mouse, Reading, Wifi,
 };
@@ -97,6 +99,12 @@ pub enum ControlId {
     BluetoothPower,
     /// A device of `Devices`, by index: its buttons.
     BluetoothDevice(usize),
+    /// An entry of `data-control.conf`, by index: Remove, or Allow Again and Remove once its file changed.
+    ClipboardApp(usize),
+    /// A line of `data-control.conf` that allows nothing, by index: Remove.
+    ClipboardUnusable(usize),
+    /// The buttons that add an application (0) or a program (1).
+    ClipboardAdd,
 }
 
 /// What a control's value reaches the system through.
@@ -122,6 +130,21 @@ pub struct Row {
     pub backend: Backend,
     pub error: Option<String>,
     pub disabled: Option<String>,
+    /// The application icon before the label: its icon name, the generic application icon when that has none.
+    pub icon: Option<String>,
+    /// A second line under the label in secondary text, when there is no error or disabled reason.
+    pub detail: Option<String>,
+}
+
+impl Row {
+    /// What the form lays out for the row.
+    pub fn spec(&self) -> RowSpec<'_> {
+        RowSpec {
+            control: &self.control,
+            error: self.error.is_some() || self.disabled.is_some() || self.detail.is_some(),
+            icon: self.icon.is_some(),
+        }
+    }
 }
 
 /// One section of a pane.
@@ -149,6 +172,12 @@ pub enum Effect {
     AskPicture { folder: bool },
     /// Ask for a resolution of the mouse `key` called `name` in a sheet.
     AskResolution { key: String, name: String },
+    /// Ask before `program`, shown as `name`, can no longer use the clipboard.
+    ConfirmUnallow { program: PathBuf, name: String },
+    /// Choose an installed application (`program` false) or a program file to allow to use the clipboard.
+    AskClipboardApp { program: bool },
+    /// The change is refused for this reason; nothing changed.
+    Refuse(String),
 }
 
 /// A call on a live service.
@@ -269,8 +298,90 @@ fn row(id: ControlId, label: impl Into<String>, control: Control, backend: Backe
         backend,
         error: None,
         disabled: None,
+        icon: None,
+        detail: None,
     }
 }
+
+/// Clipboard Access: the entries of `data-control.conf`, the lines that allow nothing, and the add buttons.
+fn privacy_sections(settings: &Settings, live: &Live) -> Vec<Section> {
+    let list = &settings.clipboard;
+    let backend = Backend::Key(File::DataControl, "allow");
+    let button = |title: &str| Control::Button {
+        title: title.to_string(),
+    };
+    let none = || Control::Text {
+        value: String::new(),
+    };
+    let mut rows = Vec::new();
+    if let Some(e) = &list.unreadable {
+        rows.push(Row {
+            error: Some(e.clone()),
+            ..row(ControlId::Reading, CLIPBOARD_UNREADABLE, none(), backend)
+        });
+    }
+    for (i, entry) in list.conf.allowed.iter().enumerate() {
+        let (name, icon) = clipboard::identity(&entry.program, &live.apps);
+        let (error, control) = match clipboard::state(entry) {
+            State::Allowed => (None, button("Remove")),
+            State::Missing => (Some("Not found"), button("Remove")),
+            State::Changed => (
+                Some("Changed since you allowed it"),
+                Control::Buttons {
+                    titles: vec!["Allow Again".into(), "Remove".into()],
+                },
+            ),
+        };
+        rows.push(Row {
+            error: error.map(str::to_string),
+            icon: Some(icon.unwrap_or_default()),
+            detail: Some(home_relative(&entry.program)),
+            ..row(ControlId::ClipboardApp(i), name, control, backend)
+        });
+    }
+    for (i, line) in list.unusable.iter().enumerate() {
+        rows.push(Row {
+            error: Some(line.message.clone()),
+            ..row(
+                ControlId::ClipboardUnusable(i),
+                line.text.clone(),
+                button("Remove"),
+                backend,
+            )
+        });
+    }
+    if rows.is_empty() {
+        rows.push(row(ControlId::Reading, "No applications", none(), backend));
+    }
+    let mut add = row(
+        ControlId::ClipboardAdd,
+        "Add an application",
+        Control::Buttons {
+            titles: vec!["Add App\u{2026}".to_string(), "Browse\u{2026}".to_string()],
+        },
+        backend,
+    );
+    // a refused file has no entries to remove; nothing may be added over it
+    if list.unreadable.is_some() {
+        add.disabled = Some(CLIPBOARD_UNREADABLE.to_string());
+    }
+    vec![
+        Section {
+            header: header("Clipboard Access"),
+            rows,
+            footer: None,
+        },
+        Section {
+            header: None,
+            rows: vec![add],
+            footer: Some(CLIPBOARD_FOOTER.to_string()),
+        },
+    ]
+}
+
+const CLIPBOARD_UNREADABLE: &str = "The list can't be read";
+/// One line of footer: what an allowed application can do (wording approximate).
+const CLIPBOARD_FOOTER: &str = "These apps can read and change what you copy, at any time.";
 
 /// A picture's name as a title: separators as spaces, the first letter capital.
 fn picture_title(name: &str) -> String {
@@ -1043,6 +1154,7 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
             }
             out
         }
+        PaneId::Privacy => privacy_sections(settings, live),
         PaneId::LockScreen => {
             let p = &settings.power;
             let key = |k| Backend::Key(File::Power, k);
@@ -2038,6 +2150,34 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
                 None => Vec::new(),
             }
         }
+        ControlId::ClipboardApp(i) => {
+            let Some(entry) = settings.clipboard.conf.allowed.get(i) else {
+                return Vec::new();
+            };
+            if clipboard::state(entry) == State::Changed && index_of(value) == 0 {
+                return match cupertino_defaults::data_control::Entry::for_program(&entry.program) {
+                    Ok(again) => {
+                        settings.clipboard.conf.allowed[i] = again;
+                        store(File::DataControl)
+                    }
+                    Err(reason) => vec![Effect::Refuse(reason)],
+                };
+            }
+            vec![Effect::ConfirmUnallow {
+                program: entry.program.clone(),
+                name: clipboard::identity(&entry.program, &live.apps).0,
+            }]
+        }
+        ControlId::ClipboardUnusable(i) => {
+            if i >= settings.clipboard.unusable.len() {
+                return Vec::new();
+            }
+            settings.clipboard.unusable.remove(i);
+            store(File::DataControl)
+        }
+        ControlId::ClipboardAdd => vec![Effect::AskClipboardApp {
+            program: index_of(value) == 1,
+        }],
         ControlId::MouseNatural | ControlId::TrackpadNatural => {
             // one value for the mouse and the trackpad, as in the design
             settings.compositor.natural_scrolling = Some(bool_of(value));
@@ -2066,6 +2206,7 @@ mod tests {
             power: cupertino_defaults::power::PowerSettings::default(),
             accessibility: cupertino_defaults::accessibility::AccessibilitySettings::default(),
             display_height: 1080.0,
+            clipboard: crate::clipboard::List::default(),
         }
     }
 
@@ -2190,6 +2331,7 @@ mod tests {
                 ..Bluetooth::default()
             }),
             login_screen: Some(crate::live::LoginScreen::default()),
+            apps: Vec::new(),
         };
         for pane in crate::pane::PANES.iter().map(|p| p.id) {
             for r in sections(pane, &unset(), LIGHT, &live)

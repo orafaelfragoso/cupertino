@@ -36,6 +36,9 @@ pub mod metrics {
     /// A row's error text under its label (11 pt).
     pub const ERROR_SIZE: f64 = 11.0;
     pub const ERROR_HEIGHT: f64 = 14.0;
+    /// An application's icon before a row's label, and the gap after it (approximate).
+    pub const ROW_ICON: f64 = 20.0;
+    pub const ROW_ICON_GAP: f64 = 8.0;
 }
 
 use metrics as m;
@@ -55,6 +58,8 @@ pub struct RowSpec<'a> {
     pub control: &'a Control,
     /// The row shows an error line under its label.
     pub error: bool,
+    /// The row shows an icon before its label.
+    pub icon: bool,
 }
 
 /// Where one row's parts lie.
@@ -65,6 +70,7 @@ pub struct RowLayout {
     pub control: Rect,
     /// The error line under the label, when there is one.
     pub error: Option<Rect>,
+    pub icon: Option<Rect>,
 }
 
 /// Where one section's parts lie.
@@ -117,6 +123,7 @@ pub fn layout(
                     label: Rect::new(cx, y, 0.0, 0.0),
                     control: row,
                     error: None,
+                    icon: None,
                 });
                 y += h;
                 continue;
@@ -128,6 +135,7 @@ pub fn layout(
                     label: Rect::new(cx, y, 0.0, 0.0),
                     control: row,
                     error: None,
+                    icon: None,
                 });
                 y += row.h;
                 continue;
@@ -142,9 +150,18 @@ pub fn layout(
                 cw,
                 ch,
             );
-            let label_w = (control.x - cx - 2.0 * m::ROW_PADDING_H).max(0.0);
+            let icon = spec.icon.then(|| {
+                Rect::new(
+                    cx + m::ROW_PADDING_H,
+                    y + (h - m::ROW_ICON) / 2.0,
+                    m::ROW_ICON,
+                    m::ROW_ICON,
+                )
+            });
+            let label_x = icon.map_or(cx + m::ROW_PADDING_H, |i| i.right() + m::ROW_ICON_GAP);
+            let label_w = (control.x - label_x - m::ROW_PADDING_H).max(0.0);
             let label_y = y + (h - text) / 2.0;
-            let label = Rect::new(cx + m::ROW_PADDING_H, label_y, label_w, m::LABEL_HEIGHT);
+            let label = Rect::new(label_x, label_y, label_w, m::LABEL_HEIGHT);
             let error = spec
                 .error
                 .then(|| Rect::new(label.x, label.bottom(), label_w, m::ERROR_HEIGHT));
@@ -153,6 +170,7 @@ pub fn layout(
                 label,
                 control,
                 error,
+                icon,
             });
             y += h;
         }
@@ -206,10 +224,12 @@ mod tests {
                     RowSpec {
                         control: &switch,
                         error: false,
+                        icon: false,
                     },
                     RowSpec {
                         control: &slider,
                         error: false,
+                        icon: false,
                     },
                 ],
                 footer: false,
@@ -219,6 +239,7 @@ mod tests {
                 rows: vec![RowSpec {
                     control: &switch,
                     error: true,
+                    icon: false,
                 }],
                 footer: true,
             },

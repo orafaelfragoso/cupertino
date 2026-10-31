@@ -278,7 +278,7 @@ mod tests {
             Rect::new(8.5, 52.0, 196.5, 28.0),
             "the large field, 196.5 wide as on the photograph"
         );
-        assert_eq!(l.rows.len(), 16);
+        assert_eq!(l.rows.len(), 17);
         assert_eq!(
             l.row(PaneId::Wifi),
             Some(Rect::new(10.0, 90.0, 195.0, 28.0))
@@ -326,7 +326,9 @@ mod tests {
         );
         assert_eq!(l.hit(Point { x: 600.0, y: 20.0 }), Hit::Titlebar);
         assert_eq!(l.hit(Point { x: 600.0, y: 300.0 }), Hit::Content);
-        assert_eq!(l.hit(Point { x: 100.0, y: 600.0 }), Hit::Sidebar);
+        let below = l.row(PaneId::Trackpad).unwrap().bottom() + 4.0;
+        assert!(below < m::DEFAULT_HEIGHT);
+        assert_eq!(l.hit(Point { x: 100.0, y: below }), Hit::Sidebar);
     }
 
     #[test]

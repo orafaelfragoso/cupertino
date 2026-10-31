@@ -8,6 +8,7 @@ use zeroize::{Zeroize, Zeroizing};
 use cupertino_defaults::compositor::MOUSE_DPI_RANGE;
 
 use cupertino_filepicker::{Key as PickerKey, Mode, Outcome as PickerOutcome, Picker};
+use cupertino_typeahead::TypeAhead;
 
 use crate::geom::{Point, Rect};
 use crate::panes::Call;
@@ -93,6 +94,18 @@ impl PartialEq for Chooser {
 
 impl Eq for Chooser {}
 
+/// The type-to-select text of a list; it never makes two sheets differ.
+#[derive(Clone, Debug, Default)]
+pub struct Typed(pub TypeAhead);
+
+impl PartialEq for Typed {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Typed {}
+
 /// What a sheet asks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -102,8 +115,9 @@ pub enum Kind {
         text: Secret,
         failure: Option<String>,
     },
-    /// Forget a Bluetooth device: Cancel is the default, "Forget Device" is destructive (wording approximate).
-    Forget { id: String, name: String },
+    /// Forget a Bluetooth device, or take an application off Clipboard Access: Cancel is the default, the action is
+    /// destructive (wording approximate).
+    Forget { what: Forget, name: String },
     /// A typed resolution of the mouse `key` called `name`, in dots per inch.
     Resolution {
         key: String,
@@ -116,6 +130,18 @@ pub enum Kind {
         top: usize,
         /// The row under the pointer.
         hovered: Option<usize>,
+        /// Why the chosen file was refused; the chooser stays up.
+        failure: Option<String>,
+    },
+    /// The installed applications to allow to use the clipboard; `selected` is an enabled row, `top` the first row that
+    /// shows. Return never allows: only the Allow button or a double click does.
+    Apps {
+        apps: Vec<crate::clipboard::App>,
+        selected: Option<usize>,
+        top: usize,
+        hovered: Option<usize>,
+        typed: Typed,
+        failure: Option<String>,
     },
     /// A question of the Bluetooth daemon to the pairing agent (`org.cupertino.Bluetooth1.Agent`); `id` is the pairing.
     /// The wording is approximate (the design's pairing dialog is not known).
@@ -158,6 +184,15 @@ pub struct Sheet {
     pub kind: Kind,
 }
 
+/// What a [`Kind::Forget`] sheet takes away.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Forget {
+    /// The Bluetooth device with this id.
+    Device(String),
+    /// The clipboard access of this program.
+    Clipboard(std::path::PathBuf),
+}
+
 /// What a key or a press does to a sheet.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Outcome {
@@ -173,6 +208,10 @@ pub enum Outcome {
         key: String,
         dpi: u32,
     },
+    /// Take `program` off Clipboard Access; the sheet closes.
+    Unallow(std::path::PathBuf),
+    /// The program file the chooser picked to allow to use the clipboard; the sheet stays until it is allowed.
+    Program(std::path::PathBuf),
     /// The chooser's result, a folder or a picture; the sheet closes.
     Picked {
         path: std::path::PathBuf,
@@ -208,7 +247,31 @@ impl Sheet {
     pub fn forget(id: &str, name: &str) -> Self {
         Sheet {
             kind: Kind::Forget {
-                id: id.to_string(),
+                what: Forget::Device(id.to_string()),
+                name: name.to_string(),
+            },
+        }
+    }
+
+    /// The chooser of the installed applications `apps` to allow to use the clipboard, nothing selected.
+    pub fn apps(apps: Vec<crate::clipboard::App>) -> Self {
+        Sheet {
+            kind: Kind::Apps {
+                apps,
+                selected: None,
+                top: 0,
+                hovered: None,
+                typed: Typed::default(),
+                failure: None,
+            },
+        }
+    }
+
+    /// Ask before `program`, shown as `name`, can no longer use the clipboard.
+    pub fn unallow(program: &std::path::Path, name: &str) -> Self {
+        Sheet {
+            kind: Kind::Forget {
+                what: Forget::Clipboard(program.to_path_buf()),
                 name: name.to_string(),
             },
         }
@@ -231,6 +294,7 @@ impl Sheet {
                 chooser: Chooser(Picker::open(start, mode)),
                 top: 0,
                 hovered: None,
+                failure: None,
             },
         }
     }
@@ -243,6 +307,7 @@ impl Sheet {
                 chooser: Chooser(Picker::new(start, mode)),
                 top: 0,
                 hovered: None,
+                failure: None,
             },
         }
     }
@@ -282,7 +347,8 @@ impl Sheet {
             Kind::Passphrase { .. }
             | Kind::Forget { .. }
             | Kind::Resolution { .. }
-            | Kind::Picker { .. } => None,
+            | Kind::Picker { .. }
+            | Kind::Apps { .. } => None,
         }
     }
 
@@ -291,11 +357,20 @@ impl Sheet {
             Kind::Passphrase { ssid, .. } => {
                 format!("Enter the password for \u{201c}{ssid}\u{201d}")
             }
-            Kind::Forget { name, .. } => format!("Forget \u{201c}{name}\u{201d}?"),
+            Kind::Forget {
+                what: Forget::Device(_),
+                name,
+            } => format!("Forget \u{201c}{name}\u{201d}?"),
+            Kind::Forget {
+                what: Forget::Clipboard(_),
+                name,
+            } => format!("Remove \u{201c}{name}\u{201d} from Clipboard Access?"),
             Kind::Picker { chooser, .. } => match chooser.0.mode() {
                 Mode::Folder => "Add a Folder".to_string(),
                 Mode::Photo => "Add a Photo".to_string(),
+                Mode::Program => "Choose a Program".to_string(),
             },
+            Kind::Apps { .. } => "Allow an Application to Use the Clipboard".to_string(),
             Kind::Resolution { name, .. } => format!("Resolution of \u{201c}{name}\u{201d}"),
             Kind::Pairing {
                 device,
@@ -319,6 +394,13 @@ impl Sheet {
         match &self.kind {
             Kind::Passphrase { failure: Some(f), .. } => f.clone(),
             Kind::Passphrase { .. } => "The network needs a password to join.".to_string(),
+            Kind::Picker {
+                failure: Some(f), ..
+            }
+            | Kind::Apps {
+                failure: Some(f), ..
+            } => f.clone(),
+            Kind::Apps { .. } => "It can read and change what you copy at any time.".to_string(),
             Kind::Picker { chooser, .. } if chooser.0.unreadable() => {
                 "That folder cannot be opened.".to_string()
             }
@@ -328,7 +410,8 @@ impl Sheet {
                 MOUSE_DPI_RANGE.start(),
                 MOUSE_DPI_RANGE.end()
             ),
-            Kind::Forget { .. } => "The device will need to be paired again to be used.".to_string(),
+            Kind::Forget { what: Forget::Device(_), .. } => "The device will need to be paired again to be used.".to_string(),
+            Kind::Forget { what: Forget::Clipboard(_), .. } => "If it's open, it's disconnected and has to be opened again.".to_string(),
             Kind::Pairing { prompt: Prompt::Confirm { passkey: Some(p) }, .. } => format!("Check that the device shows {p:06}."),
             Kind::Pairing { prompt: Prompt::Confirm { passkey: None }, .. } => "The device asks to pair with this computer.".to_string(),
             Kind::Pairing { prompt: Prompt::Request, .. } => "Type the six-digit code.".to_string(),
@@ -339,11 +422,20 @@ impl Sheet {
     pub fn action_title(&self) -> &'static str {
         match &self.kind {
             Kind::Passphrase { .. } => "Join",
-            Kind::Forget { .. } => "Forget Device",
+            Kind::Forget {
+                what: Forget::Device(_),
+                ..
+            } => "Forget Device",
+            Kind::Forget {
+                what: Forget::Clipboard(_),
+                ..
+            } => "Remove",
             Kind::Resolution { .. } => "Set",
+            Kind::Apps { .. } => "Allow",
             Kind::Picker { chooser, .. } => match chooser.0.mode() {
                 Mode::Folder => "Choose",
                 Mode::Photo => "Add",
+                Mode::Program => "Allow",
             },
             Kind::Pairing {
                 prompt: Prompt::Confirm { .. } | Prompt::Request,
@@ -367,7 +459,10 @@ impl Sheet {
                 ..
             } => Some(text.to_string()),
             Kind::Resolution { text, .. } => Some(text.clone()),
-            Kind::Forget { .. } | Kind::Pairing { .. } | Kind::Picker { .. } => None,
+            Kind::Forget { .. }
+            | Kind::Pairing { .. }
+            | Kind::Picker { .. }
+            | Kind::Apps { .. } => None,
         }
     }
 
@@ -381,12 +476,18 @@ impl Sheet {
                 passphrase: Some(std::mem::take(text)),
             }),
             Kind::Picker { chooser, .. } => match chooser.0.choice() {
-                Some(path) => Outcome::Picked {
-                    folder: chooser.0.mode() == Mode::Folder,
-                    path,
-                },
+                Some(path) => chosen(chooser, path),
                 None => Outcome::Stay,
             },
+            Kind::Apps { apps, selected, .. } => {
+                match selected
+                    .and_then(|i| apps.get(i))
+                    .and_then(|a| a.program.clone())
+                {
+                    Some(program) => Outcome::Program(program),
+                    None => Outcome::Stay,
+                }
+            }
             Kind::Resolution { key, text, .. } => match text.parse::<u32>() {
                 Ok(dpi) if MOUSE_DPI_RANGE.contains(&dpi) => Outcome::Resolution {
                     key: key.clone(),
@@ -394,10 +495,17 @@ impl Sheet {
                 },
                 _ => Outcome::Stay,
             },
-            Kind::Forget { id, .. } => Outcome::Do(Call::Remove {
+            Kind::Forget {
+                what: Forget::Device(id),
+                ..
+            } => Outcome::Do(Call::Remove {
                 id: id.clone(),
                 confirmed: true,
             }),
+            Kind::Forget {
+                what: Forget::Clipboard(program),
+                ..
+            } => Outcome::Unallow(program.clone()),
             Kind::Pairing {
                 prompt: Prompt::Confirm { .. },
                 ..
@@ -430,6 +538,7 @@ impl Sheet {
             | Kind::Forget { .. }
             | Kind::Resolution { .. }
             | Kind::Picker { .. }
+            | Kind::Apps { .. }
             | Kind::Pairing {
                 prompt: Prompt::Display { .. },
                 ..
@@ -460,6 +569,52 @@ impl Sheet {
             };
             let outcome = chooser.0.key(picker_key, now);
             return picked(chooser, top, outcome);
+        }
+        if let Kind::Apps {
+            apps,
+            selected,
+            top,
+            typed,
+            ..
+        } = &mut self.kind
+        {
+            let enabled: Vec<usize> = (0..apps.len())
+                .filter(|i| apps[*i].reason.is_none())
+                .collect();
+            let at = selected.and_then(|s| enabled.iter().position(|i| *i == s));
+            let to = match key {
+                SheetKey::Escape => return Outcome::Cancel,
+                SheetKey::Up => at.map_or(enabled.last(), |p| enabled.get(p.saturating_sub(1))),
+                SheetKey::Down => {
+                    at.map_or(enabled.first(), |p| enabled.get(p + 1).or(enabled.get(p)))
+                }
+                SheetKey::Home => enabled.first(),
+                SheetKey::End => enabled.last(),
+                SheetKey::Type(c) => {
+                    let titles: Vec<Option<&str>> = apps
+                        .iter()
+                        .map(|a| a.reason.is_none().then_some(a.name.as_str()))
+                        .collect();
+                    let from = selected.unwrap_or(apps.len().saturating_sub(1));
+                    return match typed.0.find(c, now, from, &titles) {
+                        Some(i) => {
+                            *selected = Some(i);
+                            *top = scrolled_to(i, *top, apps.len());
+                            Outcome::Stay
+                        }
+                        None => Outcome::Stay,
+                    };
+                }
+                // Return in the list never allows: a key press alone grants no access
+                SheetKey::Return | SheetKey::Choose | SheetKey::Parent | SheetKey::Backspace => {
+                    None
+                }
+            };
+            if let Some(&i) = to {
+                *selected = Some(i);
+                *top = scrolled_to(i, *top, apps.len());
+            }
+            return Outcome::Stay;
         }
         match (key, &mut self.kind) {
             (SheetKey::Escape, _) | (SheetKey::Return, Kind::Forget { .. }) => self.cancel(),
@@ -508,9 +663,10 @@ impl Sheet {
                 text.pop();
                 Outcome::Stay
             }
-            (SheetKey::Return | SheetKey::Type(_) | SheetKey::Backspace, Kind::Picker { .. }) => {
-                Outcome::Stay
-            }
+            (
+                SheetKey::Return | SheetKey::Type(_) | SheetKey::Backspace,
+                Kind::Picker { .. } | Kind::Apps { .. },
+            ) => Outcome::Stay,
             (
                 SheetKey::Type(_) | SheetKey::Backspace,
                 Kind::Forget { .. } | Kind::Pairing { .. },
@@ -529,16 +685,22 @@ impl Sheet {
 
     /// The daemon refused the passphrase: the sheet stays with the error and an empty field.
     pub fn failed(&mut self, error: &str) {
-        if let Kind::Passphrase { text, failure, .. } = &mut self.kind {
-            // zeroes the typed bytes, not only the length
-            text.zeroize();
-            *failure = Some(error.to_string());
+        match &mut self.kind {
+            Kind::Passphrase { text, failure, .. } => {
+                // zeroes the typed bytes, not only the length
+                text.zeroize();
+                *failure = Some(error.to_string());
+            }
+            Kind::Picker { failure, .. } | Kind::Apps { failure, .. } => {
+                *failure = Some(error.to_string())
+            }
+            _ => {}
         }
     }
 
     /// The layout of the sheet centred in the content column `content`, near its top.
     pub fn layout(&self, content: &Rect) -> SheetLayout {
-        if let Kind::Picker { .. } = self.kind {
+        if let Kind::Picker { .. } | Kind::Apps { .. } = self.kind {
             return self.picker_layout(content);
         }
         let field = self.field_text().is_some();
@@ -603,16 +765,19 @@ impl Sheet {
             h,
         );
         let inner = frame.inset(m::PADDING, m::PADDING);
-        let up = Rect::new(
-            inner.right() - m::PICKER_UP.0,
-            inner.y - 1.0,
-            m::PICKER_UP.0,
-            m::PICKER_UP.1,
-        );
+        // the application chooser has no folders to go up from
+        let up = matches!(self.kind, Kind::Picker { .. }).then(|| {
+            Rect::new(
+                inner.right() - m::PICKER_UP.0,
+                inner.y - 1.0,
+                m::PICKER_UP.0,
+                m::PICKER_UP.1,
+            )
+        });
         let title = Rect::new(
             inner.x,
             inner.y,
-            inner.w - m::PICKER_UP.0 - m::GAP,
+            inner.w - up.map_or(0.0, |u| u.w + m::GAP),
             m::TITLE_HEIGHT,
         );
         let message = Rect::new(
@@ -638,39 +803,45 @@ impl Sheet {
             cancel,
             action,
             list: Some(list),
-            up: Some(up),
+            up,
         }
     }
 
     /// The pointer is at `p` (`None`: it left): the chooser's row under it shows its hover. `true` when that changed.
     pub fn hover(&mut self, layout: &SheetLayout, p: Option<Point>) -> bool {
-        let Kind::Picker {
-            chooser,
-            top,
-            hovered,
-        } = &mut self.kind
-        else {
-            return false;
+        let (rows, top, hovered) = match &mut self.kind {
+            Kind::Picker {
+                chooser,
+                top,
+                hovered,
+                ..
+            } => (chooser.0.entries().len(), top, hovered),
+            Kind::Apps {
+                apps, top, hovered, ..
+            } => (apps.len(), top, hovered),
+            _ => return false,
         };
         let row = p.zip(layout.list).and_then(|(p, list)| {
             list.contains(p)
                 .then(|| *top + ((p.y - list.y) / m::PICKER_ROW) as usize)
         });
-        let row = row.filter(|r| *r < chooser.0.entries().len());
+        let row = row.filter(|r| *r < rows);
         std::mem::replace(hovered, row) != row
     }
 
     /// The wheel moved by `dy` points with the pointer at `p`: the chooser's list scrolls when `p` is over it. `true`
     /// when it moved.
     pub fn scroll(&mut self, layout: &SheetLayout, p: Point, dy: f64) -> bool {
-        let Kind::Picker { chooser, top, .. } = &mut self.kind else {
-            return false;
+        let (count, top) = match &mut self.kind {
+            Kind::Picker { chooser, top, .. } => (chooser.0.entries().len(), top),
+            Kind::Apps { apps, top, .. } => (apps.len(), top),
+            _ => return false,
         };
         if !layout.list.is_some_and(|list| list.contains(p)) || dy == 0.0 {
             return false;
         }
         let rows = (dy / m::PICKER_ROW).round().abs().max(1.0) as usize;
-        let last = chooser.0.entries().len().saturating_sub(m::PICKER_ROWS);
+        let last = count.saturating_sub(m::PICKER_ROWS);
         let to = if dy > 0.0 {
             (*top + rows).min(last)
         } else {
@@ -700,6 +871,25 @@ impl Sheet {
                 return Outcome::Stay;
             };
             return picked(chooser, top, outcome);
+        }
+        if let Kind::Apps {
+            apps,
+            selected,
+            top,
+            ..
+        } = &mut self.kind
+        {
+            if let Some(list) = layout.list.filter(|l| l.contains(p)) {
+                let row = *top + ((p.y - list.y) / m::PICKER_ROW) as usize;
+                if apps.get(row).is_some_and(|a| a.reason.is_none()) {
+                    // a press on the selected row allows it (the second press of a double click)
+                    if *selected == Some(row) {
+                        return self.action();
+                    }
+                    *selected = Some(row);
+                }
+                return Outcome::Stay;
+            }
         }
         if layout.cancel.contains(p) {
             self.cancel()
@@ -738,12 +928,31 @@ fn picked(chooser: &Chooser, top: &mut usize, outcome: PickerOutcome) -> Outcome
     }
     .min(rows.saturating_sub(m::PICKER_ROWS));
     match outcome {
-        PickerOutcome::Choose(path) => Outcome::Picked {
-            path,
-            folder: chooser.0.mode() == Mode::Folder,
-        },
+        PickerOutcome::Choose(path) => chosen(chooser, path),
         PickerOutcome::Cancel => Outcome::Cancel,
         PickerOutcome::Changed | PickerOutcome::Ignore => Outcome::Stay,
+    }
+}
+
+/// The first row of a list of `rows` that shows, moved from `top` just enough to show row `i`.
+fn scrolled_to(i: usize, top: usize, rows: usize) -> usize {
+    let top = if i < top {
+        i
+    } else if i >= top + m::PICKER_ROWS {
+        i + 1 - m::PICKER_ROWS
+    } else {
+        top
+    };
+    top.min(rows.saturating_sub(m::PICKER_ROWS))
+}
+
+fn chosen(chooser: &Chooser, path: std::path::PathBuf) -> Outcome {
+    match chooser.0.mode() {
+        Mode::Program => Outcome::Program(path),
+        mode => Outcome::Picked {
+            path,
+            folder: mode == Mode::Folder,
+        },
     }
 }
 

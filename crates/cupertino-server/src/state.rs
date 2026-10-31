@@ -340,6 +340,9 @@ pub struct Cupertino {
     pub fractional_scale_state: FractionalScaleManagerState,
     pub presentation_state: PresentationState,
     pub xdg_activation_state: XdgActivationState,
+    /// `zxdg_exporter_v2` and `zxdg_importer_v2`: a toplevel of one client made the parent of another's (a portal
+    /// dialog over the window that asked for it).
+    pub xdg_foreign_state: smithay::wayland::xdg_foreign::XdgForeignState,
     /// Keyboard shortcuts inhibitors and the releases of the person.
     pub shortcut_inhibit: crate::shortcut_inhibit::ShortcutInhibit,
     /// The surfaces with a pointer constraint (`crate::pointer_constraints`).
@@ -582,6 +585,7 @@ impl Cupertino {
         let fractional_scale_state = FractionalScaleManagerState::new::<Self>(&dh);
         let presentation_state = PresentationState::new::<Self>(&dh, clock.id() as u32);
         let xdg_activation_state = XdgActivationState::new::<Self>(&dh);
+        let xdg_foreign_state = smithay::wayland::xdg_foreign::XdgForeignState::new::<Self>(&dh);
         let shortcut_inhibit = crate::shortcut_inhibit::ShortcutInhibit::new(
             smithay::wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitState::new::<Self>(
                 &dh,
@@ -670,6 +674,7 @@ impl Cupertino {
             fractional_scale_state,
             presentation_state,
             xdg_activation_state,
+            xdg_foreign_state,
             shortcut_inhibit,
             pointer_constraints: Default::default(),
             input_focus: false,

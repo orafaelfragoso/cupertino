@@ -1152,6 +1152,7 @@ dependencies = [
  "cupertino-geometry",
  "cupertino-icons",
  "cupertino-modifiers",
+ "cupertino-test-bus",
  "cupertino-theme",
  "cupertino-ui-atspi",
  "cupertino-ui-controls",
@@ -1165,6 +1166,7 @@ dependencies = [
  "cupertino-ui-wayland",
  "tempfile",
  "tiny-skia",
+ "zbus",
 ]
 
 [[package]]

@@ -352,7 +352,10 @@ fn a_list_and_a_table_tell_assistive_technology_all_their_rows_and_each_built_ro
         (true, Role::Table, Role::Row),
     ] {
         let mut h = harness(1000, true, table);
-        h.tap(TAB);
+        // a table's two sorting headers come before its rows
+        for _ in 0..if table { 3 } else { 1 } {
+            h.tap(TAB);
+        }
         h.tap(END);
         let nodes: HashMap<_, _> = h.snapshot().accessibility.into_iter().collect();
         let rows = nodes.values().find(|n| n.role == container).unwrap();

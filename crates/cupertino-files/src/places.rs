@@ -308,14 +308,37 @@ pub fn standard_places(
         kind: PlaceKind::Computer,
     });
     if trash_files.is_dir() {
-        places.push(Place {
-            name: "Trash".into(),
-            path: trash_files.to_path_buf(),
-            group: PlaceGroup::Locations,
-            kind: PlaceKind::Trash,
-        });
+        places.push(trash_place(trash_files));
     }
     places
+}
+
+fn trash_place(trash_files: &Path) -> Place {
+    Place {
+        name: "Trash".into(),
+        path: trash_files.to_path_buf(),
+        group: PlaceGroup::Locations,
+        kind: PlaceKind::Trash,
+    }
+}
+
+/// Show the trash place, last of the `standard` first `places`, while `trash_files` exists: it comes with the first
+/// item trashed and goes when the trash folder is removed. The number of standard places after.
+pub fn follow_trash(places: &mut Vec<Place>, standard: usize, trash_files: &Path) -> usize {
+    let shown = places[..standard]
+        .iter()
+        .any(|p| matches!(p.kind, PlaceKind::Trash));
+    match (shown, trash_files.is_dir()) {
+        (false, true) => {
+            places.insert(standard, trash_place(trash_files));
+            standard + 1
+        }
+        (true, false) => {
+            places.retain(|p| !matches!(p.kind, PlaceKind::Trash));
+            standard - 1
+        }
+        _ => standard,
+    }
 }
 
 /// The folders that wear an icon of their own in listings and the path bar: the home folder, every
@@ -465,6 +488,34 @@ mod tests {
         assert_eq!(
             places.last().map(|p| (p.name.as_str(), p.path.as_path())),
             Some(("Trash", trash.as_path()))
+        );
+    }
+
+    #[test]
+    fn the_trash_place_comes_with_the_first_trashed_item_before_the_devices_and_goes_with_the_trash(
+    ) {
+        let home = tempfile::tempdir().unwrap();
+        let trash = home.path().join(".local/share/Trash/files");
+        let mut places = standard_places(home.path(), &[], &trash, None, "box");
+        let standard = places.len();
+        places.push(Place::removable("Card", None, false));
+        assert_eq!(follow_trash(&mut places, standard, &trash), standard);
+
+        std::fs::create_dir_all(&trash).unwrap();
+        let with_trash = follow_trash(&mut places, standard, &trash);
+        assert_eq!(with_trash, standard + 1);
+        assert_eq!(
+            places.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            ["Recents", "box", "Trash", "Card"]
+        );
+        assert_eq!(places[2].path, trash);
+        assert_eq!(follow_trash(&mut places, with_trash, &trash), with_trash);
+
+        std::fs::remove_dir(&trash).unwrap();
+        assert_eq!(follow_trash(&mut places, with_trash, &trash), standard);
+        assert_eq!(
+            places.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            ["Recents", "box", "Card"]
         );
     }
 

@@ -30,10 +30,11 @@ use cupertino_files::metrics::{
     drag, marquee as marquee_metrics, menu as menu_metrics, timing, window as window_metrics,
 };
 use cupertino_files::name_edit::NameEdit;
-use cupertino_files::open::{command_with, default_app_id, open_command, open_with};
-use cupertino_files::operations;
+use cupertino_files::notice::{self, Action, Notices};
+use cupertino_files::open::{command_with, default_app_id, open_command, open_with, OpenError};
+use cupertino_files::operations::{self, DropAction};
 use cupertino_files::places::{
-    removable_holding, session_places, Place, PlaceKind, SessionPlaces, Volume,
+    follow_trash, removable_holding, session_places, Place, PlaceKind, SessionPlaces, Volume,
 };
 use cupertino_files::recents;
 use cupertino_files::rename::{RenameEvent, RenameTrigger};
@@ -62,6 +63,7 @@ use cupertino_wayland_client::{
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
+use std::fmt::Display;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -107,6 +109,7 @@ struct App {
     standard_places: usize,
     /// The removable media; `None` without a system bus.
     volumes: Option<Volumes>,
+    notices: Notices,
     /// The removable file systems, in the order of their rows.
     devices: Vec<Device>,
     /// The block objects a mount or an eject is running for.
@@ -414,14 +417,9 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
     let sidebar = effects.backdrop(&conn, window.toplevel.surface())?;
     sidebar.set_material(SIDEBAR_MATERIAL);
     let waker = conn.waker();
+    let notices = Notices::start(zbus::blocking::Connection::session().ok());
     let volumes = zbus::blocking::Connection::system()
-        .and_then(|system| {
-            Volumes::watch(
-                system,
-                zbus::blocking::Connection::session().ok(),
-                Arc::new(move || waker.wake()),
-            )
-        })
+        .and_then(|system| Volumes::watch(system, notices.clone(), Arc::new(move || waker.wake())))
         .map_err(|e| eprintln!("cupertino-files: no removable media: {e}"))
         .ok();
     let mut app = App {
@@ -440,6 +438,7 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
         places,
         volumes,
         devices: Vec::new(),
+        notices,
         busy: HashSet::new(),
         home,
         mode: ViewMode::Icons,
@@ -614,6 +613,7 @@ impl App {
     /// Take what the folder's model queued; draw again when the listing changed.
     fn refresh(&mut self) -> Result<()> {
         self.poll_volumes()?;
+        self.follow_trash();
         let dir = self.browser.dir().to_path_buf();
         let polled = self.browser.poll();
         for e in &polled.errors {
@@ -627,6 +627,15 @@ impl App {
             self.window.redraw();
         }
         Ok(())
+    }
+
+    /// Show the trash place once something was trashed, by this window or another, and drop it with the trash.
+    fn follow_trash(&mut self) {
+        let standard = follow_trash(&mut self.places, self.standard_places, &self.trash_files);
+        if standard != self.standard_places {
+            self.standard_places = standard;
+            self.window.redraw();
+        }
     }
 
     /// Take what the removable media reported: the rows follow the devices, a window on a file system that went away
@@ -1084,9 +1093,9 @@ impl App {
                 Ok(())
             }
             Hit::Disclosure(index) => {
-                match self.browser.toggle_expanded(index) {
-                    Ok(_) => {}
-                    Err(e) => eprintln!("cupertino-files: cannot list the folder: {e}"),
+                if let Err(e) = self.browser.toggle_expanded(index) {
+                    let folder = self.browser.entries().get(index).map(|e| e.path.clone());
+                    self.failed(Action::Open, &items(folder.as_slice()), &e);
                 }
                 self.window.redraw();
                 Ok(())
@@ -1219,7 +1228,11 @@ impl App {
                     match self.browser.disclose_focus(code == key::RIGHT) {
                         Ok(changed) => changed,
                         Err(e) => {
-                            eprintln!("cupertino-files: cannot list the folder: {e}");
+                            let focus = self.browser.selection().focus();
+                            let folder = focus
+                                .and_then(|i| self.browser.entries().get(i))
+                                .map(|e| e.path.clone());
+                            self.failed(Action::Open, &items(folder.as_slice()), &e);
                             false
                         }
                     }
@@ -1306,9 +1319,13 @@ impl App {
     }
 
     fn go(&mut self, to: PathBuf) -> Result<()> {
-        let target = to.display().to_string();
-        let outcome = self.browser.go(to).map(|()| true);
-        self.navigated(outcome, &target)
+        match self.browser.go(to.clone()) {
+            Ok(()) => self.entered(),
+            Err(e) => {
+                self.failed(Action::Open, &[&to], &e);
+                Ok(())
+            }
+        }
     }
 
     /// Follow up a navigation: a new folder starts at the top with its name in the title bar; a folder that
@@ -1318,9 +1335,33 @@ impl App {
             Ok(true) => self.entered(),
             Ok(false) => Ok(()),
             Err(e) => {
-                eprintln!("cupertino-files: cannot open {target}: {e}");
+                self.notices.post(notice::unopened(target, &e));
                 Ok(())
             }
+        }
+    }
+
+    /// Report `action` failing on `items` as one notification.
+    fn failed(&self, action: Action, items: &[&Path], error: &dyn Display) {
+        self.notices.post(notice::failure(action, items, error));
+    }
+
+    /// Report the items of `results` that failed as one notification, worded by the first failure.
+    fn failed_some<'a, T, E: Display>(
+        &self,
+        action: Action,
+        results: impl IntoIterator<Item = (&'a PathBuf, std::result::Result<T, E>)>,
+    ) {
+        let mut failed = Vec::new();
+        let mut first = None;
+        for (path, result) in results {
+            if let Err(e) = result {
+                failed.push(path.as_path());
+                first.get_or_insert(e);
+            }
+        }
+        if let Some(e) = first {
+            self.failed(action, &failed, &e);
         }
     }
 
@@ -1433,7 +1474,7 @@ impl App {
         {
             Ok(request) => Some(request),
             Err(e) => {
-                eprintln!("cupertino-files: cannot open {}: {e}", path.display());
+                self.failed(Action::Open, &[path], &e);
                 None
             }
         }
@@ -1447,7 +1488,10 @@ impl App {
         let terminal = self.terminal.as_deref();
         // the associations are read at each open, so changed defaults and new applications apply at once
         let spec = applications().and_then(|apps| match &with {
-            None => Ok(open_command(&apps, &path, is_dir, terminal)?),
+            None => open_command(&apps, &path, is_dir, terminal).map_err(|e| match e {
+                OpenError::NoApplication { .. } => "No application is set to open it".into(),
+                e => e.into(),
+            }),
             Some(id) => {
                 let item = open_with(&apps, &path, is_dir)
                     .into_iter()
@@ -1461,7 +1505,7 @@ impl App {
             Ok(spec) => {
                 launch::spawn(APP_ID, spec.with_activation_token(token).to_command());
             }
-            Err(e) => eprintln!("cupertino-files: cannot open {}: {e}", path.display()),
+            Err(e) => self.failed(Action::Open, &[&path], &e),
         }
         Ok(())
     }
@@ -1591,13 +1635,13 @@ impl App {
                     Response::Moved | Response::Edited => {}
                     Response::Copy(text) | Response::Cut(text) => {
                         if let Err(e) = self.clipboard.set_text(&mut self.conn, text) {
-                            eprintln!("cupertino-files: copy: {e}");
+                            self.failed(Action::Copy, &[], &e);
                         }
                     }
                     Response::Paste => match self.clipboard.text(&mut self.conn) {
                         Ok(Some(text)) => self.search.paste(&text),
                         Ok(None) => {}
-                        Err(e) => eprintln!("cupertino-files: paste: {e}"),
+                        Err(e) => self.failed(Action::Paste, &[], &e),
                     },
                 }
             }
@@ -1870,10 +1914,7 @@ impl App {
             MenuCommand::NewFolder => {
                 match operations::new_folder(self.browser.dir()) {
                     Ok(path) => self.edit_new_folder(path),
-                    Err(e) => eprintln!(
-                        "cupertino-files: cannot create a folder in {}: {e}",
-                        self.browser.dir().display()
-                    ),
+                    Err(e) => self.failed(Action::NewFolder, &[], &e),
                 }
                 Ok(())
             }
@@ -1881,31 +1922,22 @@ impl App {
                 let paths: Vec<PathBuf> = self.selected_entries().map(|e| e.path.clone()).collect();
                 match operations::new_folder_with(self.browser.dir(), &paths) {
                     Ok(path) => self.edit_new_folder(path),
-                    Err(e) => eprintln!(
-                        "cupertino-files: cannot move the selection into a new folder: {e}"
-                    ),
+                    Err(e) => self.failed(Action::MoveIntoNewFolder, &items(&paths), &e),
                 }
                 Ok(())
             }
             MenuCommand::Duplicate => {
                 let paths: Vec<PathBuf> = self.selected_entries().map(|e| e.path.clone()).collect();
-                for (path, result) in paths.iter().zip(operations::duplicate(&paths)) {
-                    if let Err(e) = result {
-                        eprintln!("cupertino-files: cannot duplicate {}: {e}", path.display());
-                    }
-                }
+                self.failed_some(
+                    Action::Duplicate,
+                    paths.iter().zip(operations::duplicate(&paths)),
+                );
                 Ok(())
             }
             MenuCommand::MakeAlias => {
                 let paths: Vec<PathBuf> = self.selected_entries().map(|e| e.path.clone()).collect();
-                for path in paths {
-                    if let Err(e) = operations::make_alias(&path) {
-                        eprintln!(
-                            "cupertino-files: cannot make an alias of {}: {e}",
-                            path.display()
-                        );
-                    }
-                }
+                let made = paths.iter().map(|p| (p, operations::make_alias(p)));
+                self.failed_some(Action::MakeAlias, made);
                 Ok(())
             }
             MenuCommand::SortBy(key, ascending) => {
@@ -1940,15 +1972,12 @@ impl App {
 
     /// Open a window of its own for each of `folders`.
     fn open_windows(&self, folders: Vec<PathBuf>) {
+        let exe = match std::env::current_exe() {
+            Ok(exe) => exe,
+            Err(e) => return self.failed(Action::Open, &items(&folders), &e),
+        };
         for folder in folders {
-            let mut command = match std::env::current_exe() {
-                Ok(exe) => Command::new(exe),
-                Err(e) => {
-                    return eprintln!(
-                        "cupertino-files: cannot find this program to start a window: {e}"
-                    )
-                }
-            };
+            let mut command = Command::new(&exe);
             if let Some(program) = self.terminal.as_ref().and_then(|terminal| terminal.first()) {
                 command.arg("--terminal").arg(program);
             }
@@ -2093,10 +2122,7 @@ impl App {
         let target = match std::fs::canonicalize(&link) {
             Ok(target) => target,
             Err(e) => {
-                eprintln!(
-                    "cupertino-files: the original of {} is not there: {e}",
-                    link.display()
-                );
+                self.failed(Action::ShowOriginal, &[&link], &e);
                 return Ok(());
             }
         };
@@ -2115,18 +2141,16 @@ impl App {
         let trash = Trash::new();
         let listed = match trash.list() {
             Ok(listed) => listed,
-            Err(e) => return eprintln!("cupertino-files: cannot read the trash: {e}"),
+            Err(e) => return self.failed(Action::PutBack, &items(&paths), &e),
         };
-        for path in paths {
-            match listed.iter().find(|item| item.file_path() == path) {
-                Some(item) => {
-                    if let Err(e) = trash.restore(item) {
-                        eprintln!("cupertino-files: cannot put {} back: {e}", path.display());
-                    }
-                }
-                None => eprintln!("cupertino-files: {} has no trash record", path.display()),
-            }
-        }
+        let restored = paths.iter().map(|path| {
+            let restored = match listed.iter().find(|item| item.file_path() == *path) {
+                Some(item) => trash.restore(item).map_err(|e| e.to_string()),
+                None => Err("The Trash has no record of where it came from".to_string()),
+            };
+            (path, restored)
+        });
+        self.failed_some(Action::PutBack, restored);
     }
 
     /// Add the tag of `color` to every selected item, or take it off when they all have it.
@@ -2135,25 +2159,21 @@ impl App {
         let all_have = self
             .selected_entries()
             .all(|e| e.tags.iter().any(|t| t.eq_ignore_ascii_case(color.title())));
-        for path in paths {
-            let result = if all_have {
-                tags::remove_tag(&path, color.title())
+        let changed = paths.iter().map(|path| {
+            let changed = if all_have {
+                tags::remove_tag(path, color.title())
             } else {
-                tags::add_tag(&path, color.title())
+                tags::add_tag(path, color.title())
             };
-            if let Err(e) = result {
-                eprintln!(
-                    "cupertino-files: cannot change the tags of {}: {e}",
-                    path.display()
-                );
-            }
-        }
+            (path, changed)
+        });
+        self.failed_some(Action::Tag, changed);
     }
 
     /// Move the selected items to the trash (freedesktop Trash 1.0); the listing drops them when the watcher reports it.
     fn trash_selection(&mut self) -> Result<()> {
         let paths: Vec<PathBuf> = self.selected_entries().map(|e| e.path.clone()).collect();
-        trash_all(&paths);
+        self.trash_all(&paths);
         Ok(())
     }
 
@@ -2191,13 +2211,10 @@ impl App {
             Ok(None) => {}
             Ok(Some(name)) => match operations::rename_item(&path, &name) {
                 Ok(_) => self.browser.select_when_appears(path.with_file_name(&name)),
-                Err(e) => eprintln!(
-                    "cupertino-files: cannot rename {} to {name}: {e}",
-                    path.display()
-                ),
+                Err(e) => self.failed(Action::Rename, &[&path], &e),
             },
             Err(e) => {
-                eprintln!("cupertino-files: {:?} is not a name: {e:?}", edit.text());
+                self.notices.post(notice::bad_name(edit.text(), &e));
                 self.edit = Some((edit, path));
                 return Ok(false);
             }
@@ -2226,13 +2243,13 @@ impl App {
                     Response::Moved | Response::Edited => {}
                     Response::Copy(text) | Response::Cut(text) => {
                         if let Err(e) = self.clipboard.set_text(&mut self.conn, text) {
-                            eprintln!("cupertino-files: copy: {e}");
+                            self.notices.post(notice::failure(Action::Copy, &[], &e));
                         }
                     }
                     Response::Paste => match self.clipboard.text(&mut self.conn) {
                         Ok(Some(text)) => edit.field_mut().paste(&text),
                         Ok(None) => {}
-                        Err(e) => eprintln!("cupertino-files: paste: {e}"),
+                        Err(e) => self.notices.post(notice::failure(Action::Paste, &[], &e)),
                     },
                 }
             }
@@ -2483,7 +2500,7 @@ impl App {
             return Ok(());
         };
         if target.trash {
-            trash_all(&drag.sources);
+            self.trash_all(&drag.sources);
             return Ok(());
         }
         let same_volume = drag
@@ -2494,43 +2511,31 @@ impl App {
         let same_volume = match same_volume {
             Ok(each) => each.into_iter().all(|same| same),
             Err(e) => {
-                eprintln!(
-                    "cupertino-files: cannot drop on {}: {e}",
-                    target.path.display()
-                );
+                self.failed(Action::Drop(DropAction::Move), &items(&drag.sources), &e);
                 return Ok(());
             }
         };
         let held = self.conn.modifiers();
         let action = operations::drop_action(same_volume, held.alt, held.logo);
-        for (source, result) in
-            drag.sources
-                .iter()
-                .zip(operations::drop_into(&drag.sources, &target.path, action))
-        {
-            if let Err(e) = result {
-                eprintln!(
-                    "cupertino-files: cannot drop {} on {}: {e}",
-                    source.display(),
-                    target.path.display()
-                );
-            }
-        }
+        let dropped = operations::drop_into(&drag.sources, &target.path, action);
+        self.failed_some(Action::Drop(action), drag.sources.iter().zip(dropped));
         Ok(())
+    }
+
+    /// Move each of `paths` to the trash; the failures are reported together and the others still go.
+    fn trash_all(&mut self, paths: &[PathBuf]) {
+        let trash = Trash::new();
+        self.failed_some(
+            Action::Trash,
+            paths.iter().map(|path| (path, trash.trash(path))),
+        );
+        self.follow_trash();
     }
 }
 
-/// Move each of `paths` to the trash; a failure is reported and the others still go.
-fn trash_all(paths: &[PathBuf]) {
-    let trash = Trash::new();
-    for path in paths {
-        if let Err(e) = trash.trash(path) {
-            eprintln!(
-                "cupertino-files: cannot move {} to the trash: {e}",
-                path.display()
-            );
-        }
-    }
+/// `paths` as the items of a notice.
+fn items(paths: &[PathBuf]) -> Vec<&Path> {
+    paths.iter().map(PathBuf::as_path).collect()
 }
 
 #[cfg(test)]

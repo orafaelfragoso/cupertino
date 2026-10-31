@@ -8,7 +8,7 @@ manager (and a desktop-icon layer) needs.
 ## Usage
 
 ```sh
-cargo test -p cupertino-files --features app                    # 200+ unit tests, 2 workflow tests, 3 session handler tests, 7 removable media tests (a fake udisks2 on a private bus)
+cargo test -p cupertino-files --features app                    # 200+ unit tests, 2 workflow tests, 3 session handler tests, 7 removable media tests (a fake udisks2 on a private bus), 2 error notice tests
 cargo run -p cupertino-files --features app -- [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]  # the window (default $HOME), in a running session
 cargo clippy -p cupertino-files --all-targets
 cargo run -p cupertino-files --release --example files_samples # PNGs in output/ (needs CUPERTINO_ASSET_DIR)
@@ -49,10 +49,19 @@ the server's `Sidebar` material (a backdrop), and the server draws only the butt
 The sidebar lists the design's default Favorites, Recents, Applications, Desktop, Documents and Downloads (the nearby-sharing
 item has no counterpart), those that exist, and the computer (the file system root, under the pretty host name of
 `/etc/machine-info`, else the host name) and Trash under Locations (approximate, a screenshot); names are cut at
-the tail. The home folder and the other user directories keep their folder icons. Recents is the virtual folder `recent:///: the existing files of
+the tail. Trash shows while the home trash's `files` folder exists: it appears once the first item is trashed, by this
+window or another, and goes if the folder is removed. The home folder and the other user directories keep their folder icons. Recents is the virtual folder `recent:///: the existing files of
 `$XDG_DATA_HOME/recently-used.xbel`, listed again whenever the file is rewritten, in the window's sort order. Applications is
 the first `applications` folder of `$XDG_DATA_DIRS` (the system's desktop entries), a real folder rather than a merged
 virtual one (approximate).
+
+A failure of something a person did (open, a new folder, duplicate, make alias, show original, put back, tags, rename, a
+name that can't be used, copy, paste, a drop, move to the trash) is one transient notification from "Files" on the session
+bus (`org.freedesktop.Notifications`), posted in order from a thread of its own (`notice`). It names one item, or counts
+several, and its body is the first error, with control and bidirectional formatting characters removed, cut at 256
+characters and escaped, because the body is markup. Without a session bus, or when the post fails, the notice is logged
+to stderr once instead. Failures that only explain the window (an entry that can't be read, the free space, the default
+applications) stay on stderr. The wording is approximate.
 
 Removable media come from udisks2 on the system bus (`udisks`): after Trash, Locations lists every file system of a drive
 that udisks neither hides (`HintIgnore`) nor counts as the system's (`HintSystem`), with usage `filesystem`. A block without
@@ -138,6 +147,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | `browser` | one window's folder | `Browser::{open, go, back, forward, parent, poll, sort_by, press, release, move_focus, select_all, type_text, tab, activation, outline, expand, collapse, toggle_expanded, disclose_focus, collapse_all, available_space}: model, history, the list's outline of expanded folders, selection by path across reloads, nearest-ancestor fallback for a deleted folder |
 | `window` | window layout and painting | `WindowLayout` (toolbar, sidebar, browser, path and status bars), `Bars`, `path_chain`, `path_segments`, `status_text`, `Frame::{hit, reveal, scroll_by}`, `WindowPainter`, `ViewMode`, `metrics` |
 | `udisks` (feature `app`) | removable media | `devices` (the listed file systems of udisks' managed objects), `Volumes::{watch, poll, mount, eject}` → `Report` (`Devices`, `Mounted`, `Done`), `notice` (a failure's notification text) |
+| `notice` (feature `app`) | failures as notifications | `failure`, `unopened`, `bad_name` → `Notice`; `Notices::{start, post}`; `shown`, `escape` |
 | `app`, `main` (feature `app`) | the binary | toplevel, input, `open` (default application, one activation token per file), asset file icons (`cupertino-icons::document`), inotify wake-ups through the connection's `Waker`, session appearance |
 
 ### Measured defaults
@@ -218,10 +228,7 @@ and require the frames to differ only inside the reported areas.
   library to start and receive `wl_data_device` drags (it exposes neither the origin surface nor the data device), and the
   `text/uri-list` of the items (`thumbnail::file_uri`) is not offered yet. No drag image is drawn, and a folder does not
   spring open under a drag (`spring::SpringLoad` is not wired).
-* The trash place appears in the sidebar only at the next start after the first item was trashed.
 * The lock badge is not drawn, because entries carry no permission bits.
-* Errors go to stderr only: a file without an application is reported there, not in a dialog. Removable media are the
-  exception: their failures are notifications.
 * Removable media: encrypted containers are not listed (no unlock), and neither are disc images or network mounts. The
   sidebar has no keyboard navigation and Files no accessibility tree, so a device row has no label or description for
   assistive technology yet, and only the folder shown can be ejected from the keyboard.

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use cupertino_files::notice::Notices;
 use cupertino_files::udisks::{Device, Report, Volumes, MANAGER_PATH, UDISKS_NAME};
 use cupertino_test_bus::{missing_tool, PrivateBus};
 use zbus::blocking::Connection;
@@ -306,12 +307,25 @@ impl Fake {
         self.state.lock().unwrap().log.clone()
     }
 
+    /// The log once a notification came, waiting up to 5 s: notices are posted on a thread of their own.
+    fn log_once_notified(&self) -> Vec<String> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            let log = self.log();
+            if log.iter().any(|l| l.starts_with("Notify")) {
+                return log;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("no notification within 5 s; log {:?}", self.log());
+    }
+
     fn watch(&self) -> Watch {
         let (woke, woken) = mpsc::channel();
         let woke = Mutex::new(woke);
         let volumes = Volumes::watch(
             self.bus.connect(),
-            Some(self.bus.connect()),
+            Notices::start(Some(self.bus.connect())),
             Arc::new(move || {
                 let _ = woke.lock().unwrap().send(());
             }),
@@ -566,7 +580,7 @@ fn a_busy_file_system_stops_the_eject_with_one_notification_and_keeps_what_was_u
     watch.volumes.eject(&devices[0], devices.clone());
     watch.until(done(&devices[0].object));
     assert_eq!(
-        fake.log(),
+        fake.log_once_notified(),
         [
             "Unmount sdc1 0",
             "Unmount sdc2 0",
@@ -634,7 +648,7 @@ fn without_udisks_on_the_bus_there_are_no_devices_until_it_comes() {
     let woke = Mutex::new(woke);
     let volumes = Volumes::watch(
         bus.connect(),
-        None,
+        Notices::start(None),
         Arc::new(move || {
             let _ = woke.lock().unwrap().send(());
         }),

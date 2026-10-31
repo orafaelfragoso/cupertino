@@ -408,6 +408,17 @@ fixtures! {
         enabled: look.enabled,
         on_change: Some(Box::new(|_| Message::Nothing)),
     });
+    slider_ticks: "slider-ticks", WIDE, INTERACTIVE, |look| Element::new(Slider {
+        label: "Speed".into(),
+        value: 0.5,
+        min: 0.0,
+        max: 1.0,
+        step: Some(0.25),
+        style: SliderStyle::Regular,
+        ticks: 5,
+        enabled: look.enabled,
+        on_change: Some(Box::new(|_| Message::Nothing)),
+    });
     slider_level: "slider-level", WIDE, INTERACTIVE, |look| Element::new(Slider {
         label: "Brightness".into(),
         value: 0.4,

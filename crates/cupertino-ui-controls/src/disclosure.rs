@@ -80,7 +80,10 @@ impl<M: Clone + 'static> Widget<M> for DisclosureButton<M> {
     fn update(&self, old: &Self, _: &mut Press) -> Change {
         if self.style != old.style {
             Change::Layout
-        } else if self.expanded != old.expanded || self.enabled != old.enabled {
+        } else if self.expanded != old.expanded
+            || self.enabled != old.enabled
+            || self.label != old.label
+        {
             Change::Paint
         } else {
             Change::None

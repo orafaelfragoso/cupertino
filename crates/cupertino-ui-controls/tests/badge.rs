@@ -2,8 +2,14 @@ mod support;
 
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_controls::{Badge, ListView, Selection, Stack, Text, TextRole};
-use cupertino_ui_core::{Application, Command, Element, Role, Window};
-use cupertino_ui_layout::{Align, Axis, ScrollState};
+use cupertino_ui_core::{
+    Application, Change, Command, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, Role,
+    SemanticsCx, Widget, Window,
+};
+use cupertino_ui_layout::{
+    Align, Axis, Constraints, ContainerKind, LayoutSpec, Measured, ScrollState,
+};
+use cupertino_ui_platform::PointerEvent;
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_text::{AttributedText, TextStyle};
 use cupertino_ui_theme::{ColorRole, InteractionVariant};
@@ -134,4 +140,91 @@ fn a_count_is_a_red_pill_at_least_as_wide_as_high_and_without_one_a_dot() {
             false
         ))
     );
+}
+
+/// Sends its message on a press and changes nothing on screen, so no repaint hides a stale accessibility tree.
+struct Ping;
+
+impl Widget<()> for Ping {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(24.0, 24.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, ()>) -> Propagation {
+        match event {
+            Event::Pointer(PointerEvent::Button { pressed: true, .. }, _) => {
+                cx.emit(());
+                Propagation::Stop
+            }
+            _ => Propagation::Continue,
+        }
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// A dot badge whose words change from "unread" to "mentioned" on a press; nothing else changes.
+struct Mention;
+
+impl Application for Mention {
+    type Model = bool;
+    type Message = ();
+
+    fn init() -> (bool, Vec<Command<()>>) {
+        (false, Vec::new())
+    }
+
+    fn update(mentioned: &mut bool, _: ()) -> Vec<Command<()>> {
+        *mentioned = true;
+        Vec::new()
+    }
+
+    fn view(mentioned: &bool) -> Vec<Window<()>> {
+        window(Element::new(Stack {
+            axis: Axis::Horizontal,
+            padding: Insets::ZERO,
+            spacing: 8.0,
+            align: Align::Center,
+            children: vec![
+                Element::new(Ping).key("mention"),
+                Element::new(Badge {
+                    text: None,
+                    description: if *mentioned { "mentioned" } else { "unread" }.into(),
+                }),
+            ],
+        }))
+    }
+}
+
+#[test]
+fn a_new_description_alone_reaches_assistive_technology() {
+    let mut h = Harness::<Mention>::new();
+    let description = |h: &Harness<Mention>| {
+        h.snapshot()
+            .accessibility
+            .into_iter()
+            .find(|(_, n)| n.role == Role::Window)
+            .and_then(|(_, n)| n.description)
+    };
+    assert_eq!(description(&h).as_deref(), Some("unread"));
+    h.click(h.center("mention"));
+    assert!(*h.model());
+    assert_eq!(description(&h).as_deref(), Some("mentioned"));
 }

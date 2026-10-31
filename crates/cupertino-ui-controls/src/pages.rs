@@ -211,7 +211,7 @@ impl<M: Clone + 'static> Widget<M> for PageDots<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.current != old.current || self.enabled != old.enabled {
+        if self.current != old.current || self.enabled != old.enabled || self.label != old.label {
             Change::Paint
         } else {
             Change::None

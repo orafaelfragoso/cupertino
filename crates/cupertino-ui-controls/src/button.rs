@@ -47,6 +47,66 @@ fn chrome(size: Size, style: ButtonStyle, theme: &ThemeTokens) -> Rect {
     )
 }
 
+impl<M: Clone + 'static> Button<M> {
+    fn press(
+        &self,
+        press: &mut Press,
+        event: &Event,
+        keys: Keys,
+        cx: &mut EventCx<'_, M>,
+    ) -> Propagation {
+        match press.event(event, self.active(), keys, cx) {
+            Outcome::Ignored => Propagation::Continue,
+            Outcome::Changed => {
+                cx.request_paint();
+                Propagation::Stop
+            }
+            Outcome::Activated(_) => {
+                cx.request_paint();
+                if let Some(message) = &self.on_press {
+                    cx.emit(message.clone());
+                }
+                Propagation::Stop
+            }
+        }
+    }
+}
+
+/// A button that Space activates but Return passes over, so a sheet's Return reaches its default button.
+pub(crate) struct SheetButton<M>(pub(crate) Button<M>);
+
+impl<M: Clone + 'static> Widget<M> for SheetButton<M> {
+    type State = Press;
+
+    fn layout(&self) -> LayoutSpec {
+        self.0.layout()
+    }
+
+    fn state(&self) -> Press {
+        Press::default()
+    }
+
+    fn update(&self, old: &Self, press: &mut Press) -> Change {
+        self.0.update(&old.0, press)
+    }
+
+    fn measure(&self, press: &Press, constraints: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
+        self.0.measure(press, constraints, cx)
+    }
+
+    fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        self.0.press(press, event, Keys::Space, cx)
+    }
+
+    fn paint(&self, press: &Press, cx: &mut PaintCx<'_>) {
+        self.0.paint(press, cx)
+    }
+
+    fn semantics(&self, press: &Press, cx: &mut SemanticsCx<'_>) {
+        self.0.semantics(press, cx)
+    }
+}
+
 impl<M: Clone + 'static> Widget<M> for Button<M> {
     type State = Press;
 
@@ -88,20 +148,7 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
     }
 
     fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
-        match press.event(event, self.active(), Keys::SpaceAndReturn, cx) {
-            Outcome::Ignored => Propagation::Continue,
-            Outcome::Changed => {
-                cx.request_paint();
-                Propagation::Stop
-            }
-            Outcome::Activated(_) => {
-                cx.request_paint();
-                if let Some(message) = &self.on_press {
-                    cx.emit(message.clone());
-                }
-                Propagation::Stop
-            }
-        }
+        self.press(press, event, Keys::SpaceAndReturn, cx)
     }
 
     fn paint(&self, press: &Press, cx: &mut PaintCx<'_>) {

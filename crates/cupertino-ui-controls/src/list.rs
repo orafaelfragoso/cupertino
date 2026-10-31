@@ -5,7 +5,7 @@
 
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
-use crate::scroll::{self, Frame};
+use crate::scroll;
 use crate::{
     Column, ColumnWidth, Handler, Icon, IconDirection, ListView, Scroller, Selection, SortOrder,
     TableView, Text, TextRole,
@@ -218,6 +218,7 @@ impl<M: 'static> From<TableView<M>> for Element<M> {
                 .map(|(column, &width)| {
                     Element::new(Cell {
                         width,
+                        column,
                         header: None,
                         content: vec![cell(index, column, selected)],
                     })
@@ -227,7 +228,7 @@ impl<M: 'static> From<TableView<M>> for Element<M> {
         });
         let rows = Rows {
             kind: Kind::Table,
-            label: table.label,
+            label: table.label.clone(),
             count: table.count,
             row_height: table.row_height,
             scroll: table.scroll,
@@ -257,8 +258,10 @@ impl<M: 'static> From<TableView<M>> for Element<M> {
             Scroller::Overlay,
             Rc::new(table.on_scroll),
         );
-        Element::new(Frame {
-            kind: Some(Axis::Vertical),
+        Element::new(TableFrame {
+            label: table.label,
+            count: table.count,
+            multiple: table.multiple,
             children: vec![header, body],
         })
     }
@@ -516,16 +519,16 @@ impl<M: 'static> Widget<M> for Rows<M> {
     fn paint(&self, _: &ListState, _: &mut PaintCx<'_>) {}
 
     fn semantics(&self, _: &ListState, cx: &mut SemanticsCx<'_>) {
-        cx.role(match self.kind {
-            Kind::List => Role::List,
-            Kind::Table => Role::Table,
-        });
-        cx.name(self.label.clone());
-        cx.states(AccessibleStates {
-            multiselectable: self.multiple,
-            ..AccessibleStates::default()
-        });
-        cx.item_count(self.count);
+        // A table's rows sit under its frame, with its header
+        if self.kind == Kind::List {
+            cx.role(Role::List);
+            cx.name(self.label.clone());
+            cx.states(AccessibleStates {
+                multiselectable: self.multiple,
+                ..AccessibleStates::default()
+            });
+            cx.item_count(self.count);
+        }
         cx.roving_group();
     }
 }
@@ -702,6 +705,7 @@ struct Sort<M> {
 /// One column's share of a row or of the header, with its content inset from the column's edges.
 struct Cell<M> {
     width: ColumnWidth,
+    column: usize,
     /// Set on the header's cells.
     header: Option<Sort<M>>,
     content: Vec<Element<M>>,
@@ -740,6 +744,7 @@ fn header_cell<M: 'static>(
     }
     Element::new(Cell {
         width: column.width,
+        column: index,
         header: Some(Sort {
             index,
             last,
@@ -854,6 +859,63 @@ impl<M: 'static> Widget<M> for Cell<M> {
             }
             None => cx.role(Role::Cell),
         }
+        cx.column_index(self.column);
+    }
+}
+
+/// A table's header over its scroll view: the one table assistive technology reads, its header row first.
+struct TableFrame<M> {
+    label: String,
+    count: usize,
+    multiple: bool,
+    children: Vec<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for TableFrame<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fill,
+            flex: Flex::grow(1.0),
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: Axis::Vertical,
+                spacing: 0.0,
+                align: Align::Stretch,
+                justify: Justify::Start,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::Table);
+        cx.name(self.label.clone());
+        cx.states(AccessibleStates {
+            multiselectable: self.multiple,
+            ..AccessibleStates::default()
+        });
+        cx.item_count(self.count);
     }
 }
 

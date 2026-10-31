@@ -324,6 +324,7 @@ pub(crate) struct Semantics {
     pub(crate) live: Option<Live>,
     pub(crate) item_count: Option<usize>,
     pub(crate) item_index: Option<usize>,
+    pub(crate) column_index: Option<usize>,
     pub(crate) roving_group: bool,
     pub(crate) roving_item: bool,
     pub(crate) focus_fallback: bool,
@@ -411,6 +412,11 @@ impl SemanticsCx<'_> {
     /// Tells assistive technology an item's place among all of its container's items, from 0.
     pub fn item_index(&mut self, index: usize) {
         self.semantics.item_index = Some(index);
+    }
+
+    /// Tells assistive technology a table cell's or column header's column, from 0.
+    pub fn column_index(&mut self, index: usize) {
+        self.semantics.column_index = Some(index);
     }
 
     /// Makes the node a Tab stop only when no node under it is one, such as a scroll view around long text.

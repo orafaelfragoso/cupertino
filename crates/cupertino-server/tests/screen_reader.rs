@@ -1,5 +1,6 @@
 //! The login screen's screen reader toggle: Super+Alt+S from a keyboard sends `toggle <socket>` to the session manager's
-//! worker over the socket it gave the compositor, and nothing else does.
+//! worker over the socket it gave the compositor, and nothing else does. The login screen starts no program, so no process
+//! but its own descends from its compositor.
 
 use std::os::fd::OwnedFd;
 
@@ -130,4 +131,48 @@ fn away_from_the_login_screen_there_is_no_socket_and_no_toggle() {
     let Some(mut h) = Harness::new() else { return };
     h.chord(&[KEY_SUPER, KEY_LEFTALT, KEY_S]);
     assert!(h.state.screen_reader.is_none());
+}
+
+/// Whether `file` appears within 3 s.
+fn appears(file: &std::path::Path) -> bool {
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while std::time::Instant::now() < end {
+        if file.exists() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    false
+}
+
+#[test]
+fn the_login_screen_starts_no_program() {
+    let Some(mut h) = Harness::new() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let touch = |name: &str| format!("touch {}", dir.path().join(name).display());
+    h.state.config.screenshot_command = vec!["sh".into(), "-c".into(), touch("screenshot")];
+    h.state.login_screen = true;
+    h.state.spawn("sh", &["-c", &touch("spawned")]);
+    h.state
+        .start_screenshot(cupertino_input::ScreenshotRequest::Screen);
+    assert!(
+        !appears(&dir.path().join("spawned")),
+        "a program at the login screen"
+    );
+    assert!(
+        !dir.path().join("screenshot").exists(),
+        "a screenshot at the login screen"
+    );
+    h.state.login_screen = false;
+    h.state.spawn("sh", &["-c", &touch("spawned")]);
+    h.state
+        .start_screenshot(cupertino_input::ScreenshotRequest::Screen);
+    assert!(
+        appears(&dir.path().join("spawned")),
+        "elsewhere the same program starts"
+    );
+    assert!(
+        appears(&dir.path().join("screenshot")),
+        "and so does the screenshot"
+    );
 }

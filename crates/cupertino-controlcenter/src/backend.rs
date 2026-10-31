@@ -1,8 +1,8 @@
 //! What the panel reads and changes, behind traits so the controller and the tests run on in-memory stand-ins and the
 //! process can run without touching the machine (`--fake-backends`).
 //!
-//! The real implementations over the system bus are in `system` (feature `dbus`); the volume is here, over the kernel's
-//! sound control interface through `cupertino-alsa`.
+//! The real implementations over the system bus are in `system` (feature `dbus`); the volume is here: the default
+//! PipeWire sink through `cupertino-pipewire`, else the kernel's sound control interface through `cupertino-alsa`.
 
 use std::error::Error;
 use std::fmt;
@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use cupertino_alsa::{Master, OpenMode};
+use cupertino_pipewire::{Target, Wpctl};
 
 use crate::model::{Battery, VolumeState, WifiStatus};
 
@@ -341,9 +342,103 @@ impl Volume for AlsaVolume {
     }
 }
 
+/// The default PipeWire sink through `wpctl`, so the slider shows the level `wpctl get-volume` reports. A read that
+/// no PipeWire daemon answers goes to the ALSA master instead, and so do the changes after it until the next read.
+#[derive(Debug)]
+pub struct SessionVolume {
+    wpctl: Wpctl,
+    alsa: AlsaVolume,
+    pipewire: bool,
+}
+
+impl SessionVolume {
+    pub fn new(wpctl: Wpctl, alsa: AlsaVolume) -> Self {
+        Self {
+            wpctl,
+            alsa,
+            pipewire: true,
+        }
+    }
+
+    fn sink(&self) -> Result<VolumeState, BackendError> {
+        let sink = self.wpctl.volume(Target::DefaultSink)?;
+        Ok(VolumeState {
+            level: sink.level,
+            muted: sink.muted,
+        })
+    }
+}
+
+impl Volume for SessionVolume {
+    fn read(&mut self) -> Result<VolumeState, BackendError> {
+        match self.sink() {
+            Ok(sink) => {
+                self.pipewire = true;
+                Ok(sink)
+            }
+            Err(_) => {
+                self.pipewire = false;
+                self.alsa.read()
+            }
+        }
+    }
+
+    fn set(&mut self, level: f64, muted: bool) -> Result<VolumeState, BackendError> {
+        if !self.pipewire {
+            return self.alsa.set(level, muted);
+        }
+        self.wpctl.set_level(Target::DefaultSink, level)?;
+        self.wpctl.set_muted(Target::DefaultSink, muted)?;
+        self.sink()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cupertino_pipewire::fake::FakeWpctl;
+
+    #[test]
+    fn the_session_volume_sets_the_default_sink_wpctl_reports() {
+        let half = cupertino_pipewire::Volume {
+            level: 0.5,
+            muted: false,
+        };
+        let fake = FakeWpctl::new(half, half);
+        let alsa = tempfile::tempdir().unwrap();
+        let mut volume = SessionVolume::new(
+            Wpctl::new(fake.program()),
+            AlsaVolume::new(alsa.path().to_path_buf(), None),
+        );
+        assert_eq!(
+            volume.read().unwrap(),
+            VolumeState {
+                level: 0.5,
+                muted: false
+            }
+        );
+        let after = VolumeState {
+            level: 0.3,
+            muted: true,
+        };
+        assert_eq!(volume.set(0.3, true).unwrap(), after);
+        assert_eq!(
+            fake.volume(Target::DefaultSink),
+            cupertino_pipewire::Volume {
+                level: 0.3,
+                muted: true
+            }
+        );
+        assert_eq!(fake.volume(Target::DefaultSource), half);
+
+        fake.set_running(false);
+        assert!(
+            volume.read().is_err(),
+            "no ALSA card below the scratch directory"
+        );
+        fake.set_running(true);
+        assert_eq!(volume.read().unwrap(), after);
+    }
 
     #[test]
     fn the_memory_radio_loses_its_network_when_switched_off() {

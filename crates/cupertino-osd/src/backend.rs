@@ -5,6 +5,7 @@ use std::cmp::Ordering;
 use std::path::PathBuf;
 
 use cupertino_alsa::{Master, OpenMode};
+use cupertino_pipewire::{Target, Wpctl};
 
 /// Why an effect failed; shown to the user as a log line, never as an overlay.
 pub type BackendError = Box<dyn std::error::Error + Send + Sync>;
@@ -187,9 +188,105 @@ impl Volume for AlsaVolume {
     }
 }
 
+/// The default PipeWire sink through `wpctl`, so the overlay shows the level `wpctl get-volume` reports. A read that
+/// no PipeWire daemon answers goes to the ALSA master instead, and so do the changes after it until the next read.
+pub struct SessionVolume {
+    wpctl: Wpctl,
+    alsa: AlsaVolume,
+    pipewire: bool,
+}
+
+impl SessionVolume {
+    pub fn new(wpctl: Wpctl, alsa: AlsaVolume) -> Self {
+        Self {
+            wpctl,
+            alsa,
+            pipewire: true,
+        }
+    }
+}
+
+impl Volume for SessionVolume {
+    fn state(&mut self) -> Result<VolumeState, BackendError> {
+        match self.wpctl.volume(Target::DefaultSink) {
+            Ok(sink) => {
+                self.pipewire = true;
+                Ok(VolumeState {
+                    level: sink.level,
+                    muted: sink.muted,
+                })
+            }
+            Err(_) => {
+                self.pipewire = false;
+                self.alsa.state()
+            }
+        }
+    }
+
+    fn set_level(&mut self, level: f64) -> Result<f64, BackendError> {
+        if !self.pipewire {
+            return self.alsa.set_level(level);
+        }
+        self.wpctl.set_level(Target::DefaultSink, level)?;
+        Ok(self.wpctl.volume(Target::DefaultSink)?.level)
+    }
+
+    fn set_muted(&mut self, muted: bool) -> Result<(), BackendError> {
+        if !self.pipewire {
+            return self.alsa.set_muted(muted);
+        }
+        Ok(self.wpctl.set_muted(Target::DefaultSink, muted)?)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cupertino_pipewire::fake::FakeWpctl;
+    use cupertino_pipewire::Volume as Node;
+
+    fn node(level: f64, muted: bool) -> Node {
+        Node { level, muted }
+    }
+
+    #[test]
+    fn the_session_volume_is_the_default_sink_wpctl_reports() {
+        let fake = FakeWpctl::new(node(0.5, false), node(1.0, false));
+        let scratch = tempfile::tempdir().unwrap();
+        let mut volume = SessionVolume::new(
+            Wpctl::new(fake.program()),
+            AlsaVolume::new(scratch.path().to_path_buf(), None),
+        );
+        assert_eq!(
+            volume.state().unwrap(),
+            VolumeState {
+                level: 0.5,
+                muted: false
+            }
+        );
+        assert_eq!(volume.set_level(0.5625).unwrap(), 0.56);
+        volume.set_muted(true).unwrap();
+        assert_eq!(fake.volume(Target::DefaultSink), node(0.56, true));
+        assert_eq!(fake.volume(Target::DefaultSource), node(1.0, false));
+    }
+
+    #[test]
+    fn without_pipewire_the_session_volume_is_the_alsa_master() {
+        let fake = FakeWpctl::new(node(0.5, false), node(1.0, false));
+        fake.set_running(false);
+        let scratch = tempfile::tempdir().unwrap();
+        let mut volume = SessionVolume::new(
+            Wpctl::new(fake.program()),
+            AlsaVolume::new(scratch.path().to_path_buf(), None),
+        );
+        assert_eq!(
+            volume.state().unwrap_err().to_string(),
+            "no card has a playback volume control"
+        );
+        assert!(volume.set_muted(true).is_err());
+        fake.set_running(true);
+        assert_eq!(volume.state().unwrap().level, 0.5);
+    }
 
     #[test]
     fn a_level_maps_linearly_onto_the_raw_range() {

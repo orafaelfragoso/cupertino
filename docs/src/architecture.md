@@ -51,7 +51,7 @@ A crate's layer is declared in its manifest (`[package.metadata.cupertino] layer
 |---|---|---|
 | `foundation` | cupertino-animation, -apps, -assets, -capture, -defaults, -filepicker, -geometry, -glyph, -icons, -key-bindings, -keyboard, -menu-model, -modifiers, -test-bus, -theme, -thumbnails, -typeahead, xkbcommon | `foundation` |
 | `models` (pure logic, no I/O) | cupertino-displays, -effects, -input, -overview, -render-api, -scene, -stage, -wm | `foundation`, `models` |
-| `platform` (kernel interfaces only) | cupertino-alsa, -bluetooth, -devices, -evdev, -netlink, -peer, -seat | `foundation`, `platform` |
+| `platform` (kernel interfaces, and the PipeWire boundary) | cupertino-alsa, -bluetooth, -devices, -evdev, -netlink, -peer, -pipewire, -seat | `foundation`, `platform` |
 | `protocol` | cupertino-app-protocols, -login-ipc, -protocols | `foundation`, `protocol` |
 | `transport` | cupertino-protocol-app, -shell-client, -wayland-client | `foundation`, `platform`, `protocol`, `transport` |
 | `render` | cupertino-cursor, -decorations, -glass | `foundation`, `platform`, `render` |
@@ -98,4 +98,5 @@ Three checks keep it complete:
 - X11 programs need `xwayland-satellite` (0.8 or later) and `Xwayland` installed; without them the session serves Wayland clients only. Drag and drop between X11 and Wayland programs and per-output scales for X11 windows depend on the satellite (it uses one scale for all X11 windows), and none of it has been tested with real applications on hardware.
 - The settings setters on `org.cupertino.Session1` trust any client on the same user's session bus (see `SECURITY.md`).
 - The TTY backend has run in a virtual machine, not on real hardware.
-- Audio is not owned: applications use PipeWire, and the volume overlay reads the ALSA mixer.
+- Audio is not owned: applications use PipeWire. The volume overlay, the control panel and the Sound pane change the default
+  PipeWire sink through `cupertino-pipewire` (WirePlumber's `wpctl`), and the ALSA mixer only when no PipeWire daemon answers.

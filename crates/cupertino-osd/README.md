@@ -26,7 +26,7 @@ cupertino-osd [--fake-backends] [--alsa-card N]
 | Option | Default | Effect |
 |---|---|---|
 | `--fake-backends` | off | Change in-memory levels (0.5 each) instead of the machine's volume and backlights. For trying the overlay. |
-| `--alsa-card N` | the best master of all cards (rule in `cupertino-alsa`) | Use the master volume of sound card `N`. |
+| `--alsa-card N` | the default PipeWire sink, else the best master of all cards (rule in `cupertino-alsa`) | Use the master volume of sound card `N`. |
 
 The overlay has no config file. The session's display options select the meter palette: Increase Contrast makes the light
 track opaque black and the dark segment white, Reduce Transparency makes the dark track opaque, and both
@@ -46,8 +46,9 @@ substituted while drawing. The label's optical size follows the output scale (`T
 on a change the renderer is rebuilt and the overlay drawn again. The overlay takes no input and the server hides it while the
 session is locked, so `locked` needs no reaction.
 
-**Effects.** The volume and mute go through `cupertino-alsa` (the ALSA control interface, a kernel uAPI, until the audio
-decision is made, D3). The process opens the device on the first press and again after a failure. Display
+**Effects.** The volume and mute change the default PipeWire sink through `cupertino-pipewire` (`wpctl`), so the
+overlay shows the level `wpctl get-volume` reports. When no PipeWire daemon answers a press, the press goes to the ALSA
+master through `cupertino-alsa`, which the process opens on that press and again after a failure. Display
 brightness and the keyboard backlight go through `cupertino-powerd` on the system bus, connected on the first press and again
 after a failure. A failure (no sound card, no backlight, daemon absent) shows nothing and is logged on stderr with its reason.
 
@@ -126,7 +127,7 @@ The server calls the interface for these keys. Shift+Alt held makes the press fi
 |---|---|
 | `model` | `Kind`, `Overlay`, `segments` (the fill rule), `Hud` (show / hold / fade with injected time), `Phase`, `View` |
 | `sender` | `step_level`, `hold_seconds` and the step and hold constants; the display floor |
-| `backend` | `Volume` and `Backlight` traits (read and write a level, mute); `AlsaVolume`, `MemoryVolume`, `MemoryBacklight`; `linear_raw` |
+| `backend` | `Volume` and `Backlight` traits (read and write a level, mute); `SessionVolume` (PipeWire, else ALSA), `AlsaVolume`, `MemoryVolume`, `MemoryBacklight`; `linear_raw` |
 | `system` (feature `dbus`) | `DisplayBacklight`, `KeyboardBacklight` over the system bus |
 | `controller` | `Command`, `Controller`: applies a command (step rules, mute rules) through the backends, then shows the result with the hold of its effect; `EffectError` |
 | `control` (feature `dbus`) | the `org.cupertino.Osd1` interface (`serve`) |

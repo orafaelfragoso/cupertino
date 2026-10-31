@@ -90,9 +90,14 @@ fn key_name(keysym: u32, text: Option<char>) -> String {
 
 /// The repository's Cupertino theme in Light, so the dumps never depend on installed theme data.
 fn theme() -> ThemeTokens {
+    repository_theme(Appearance::Light)
+}
+
+/// The repository's Cupertino theme in `appearance`.
+pub fn repository_theme(appearance: Appearance) -> ThemeTokens {
     let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
     let preferences = ThemePreferences {
-        appearance: Appearance::Light,
+        appearance,
         reduce_transparency: false,
         reduce_motion: false,
     };
@@ -111,15 +116,24 @@ impl<A: Application> Run<A> {
 
     /// The application with `theme` instead of the repository's.
     pub fn with_theme(theme: ThemeTokens) -> Self {
-        Self::build(theme, None)
+        Self::with(theme, LayoutDirection::Ltr)
+    }
+
+    /// The application with `theme`, laid out in `direction`.
+    pub fn with(theme: ThemeTokens, direction: LayoutDirection) -> Self {
+        Self::build(theme, direction, None)
     }
 
     /// A run whose runtime publishes to `accessibility` and takes its actions.
     pub fn with_accessibility(accessibility: Option<Box<dyn AccessibilityAdapter>>) -> Self {
-        Self::build(theme(), accessibility)
+        Self::build(theme(), LayoutDirection::Ltr, accessibility)
     }
 
-    fn build(theme: ThemeTokens, accessibility: Option<Box<dyn AccessibilityAdapter>>) -> Self {
+    fn build(
+        theme: ThemeTokens,
+        direction: LayoutDirection,
+        accessibility: Option<Box<dyn AccessibilityAdapter>>,
+    ) -> Self {
         let mut fonts = FontIndex::new();
         fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
         let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
@@ -128,7 +142,7 @@ impl<A: Application> Run<A> {
             theme: Arc::new(theme),
             text,
             icons: Arc::new(cupertino_ui_core::PlaceholderIcons::default()),
-            direction: LayoutDirection::Ltr,
+            direction,
             node_limit: 1000,
             renderers: Box::new(move || {
                 Box::new(CpuRenderer::new(

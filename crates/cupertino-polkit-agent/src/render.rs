@@ -22,8 +22,8 @@ use crate::panel::{
     MAX_MESSAGE_LINES, RADIUS, TITLE, USER,
 };
 
-/// The symbol at the top of the panel.
-pub const SYMBOL: &str = "lock.fill";
+/// The symbol at the top of the panel (approximate).
+pub const SYMBOL: &str = "symbol.lock";
 const TEXT_SIZE: f64 = 13.0;
 const CAPTION_SIZE: f64 = 11.0;
 const TITLE_WEIGHT: u16 = 700;

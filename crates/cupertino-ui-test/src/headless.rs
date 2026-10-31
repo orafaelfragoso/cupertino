@@ -28,6 +28,8 @@ pub struct PresentedFrame {
 struct HeadlessWindow {
     spec: WindowSpec,
     parent: Option<WindowId>,
+    /// Where a popup was asked to open.
+    placement: Option<PopupSpec>,
     requests: Vec<WindowRequest>,
     cursor: Option<CursorShape>,
     text_input: Option<TextInputState>,
@@ -92,6 +94,7 @@ impl HeadlessWindowSystem {
             HeadlessWindow {
                 spec,
                 parent,
+                placement: None,
                 requests: Vec::new(),
                 cursor: Some(CursorShape::Default),
                 text_input: None,
@@ -207,6 +210,10 @@ impl HeadlessWindowSystem {
         Ok(self.window(window)?.parent)
     }
 
+    pub fn placement(&self, window: WindowId) -> Result<Option<&PopupSpec>, PlatformError> {
+        Ok(self.window(window)?.placement.as_ref())
+    }
+
     pub fn requests(&self, window: WindowId) -> Result<&[WindowRequest], PlatformError> {
         Ok(&self.window(window)?.requests)
     }
@@ -268,7 +275,9 @@ impl WindowSystem for HeadlessWindowSystem {
             max_size: None,
             decorations: cupertino_ui_platform::DecorationMode::None,
         };
-        Ok(self.open(window, Some(parent)))
+        let id = self.open(window, Some(parent));
+        self.window_mut(id)?.placement = Some(spec.clone());
+        Ok(id)
     }
 
     /// Destroying a window destroys its popups, as a compositor does, and drops their queued events.

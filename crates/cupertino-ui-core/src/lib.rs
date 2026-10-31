@@ -98,6 +98,30 @@ pub struct Window<M> {
     pub on_close: Option<M>,
     pub background: WindowBackground,
     pub content: Element<M>,
+    /// Opens the window as a popup of another window instead of as a toplevel.
+    pub popup: Option<Popup<M>>,
+}
+
+/// Where a popup opens and what tells the application it closed. The window's `spec.size` is the most the popup
+/// may take; it opens at the size its content measures within that.
+pub struct Popup<M> {
+    /// A toplevel or another popup, declared anywhere in the view.
+    pub parent: WindowKey,
+    pub anchor: PopupAnchor,
+    /// Takes the keyboard and closes on a press outside, as a menu or a transient popover does; a tooltip does not.
+    pub grab: bool,
+    /// Sent when the compositor dismisses the popup; the application then stops declaring it.
+    pub on_dismiss: M,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PopupAnchor {
+    /// Centred below the parent's node with this key, `gap` apart, flipping above it when there is no room. The popup
+    /// opens once that node has been laid out.
+    Below { key: Key, gap: f64 },
+    /// At a point of the parent, opening down and to the trailing side, flipping when there is no room: a context
+    /// menu.
+    At(Point),
 }
 
 /// What a window paints under its content.

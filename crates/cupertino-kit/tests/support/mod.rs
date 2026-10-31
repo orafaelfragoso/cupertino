@@ -40,12 +40,17 @@ pub struct Run<A: Application> {
 
 impl<A: Application> Run<A> {
     pub fn new() -> Self {
+        Self::with_theme(theme())
+    }
+
+    /// The application with `theme` instead of the repository's.
+    pub fn with_theme(theme: ThemeTokens) -> Self {
         let mut fonts = FontIndex::new();
         fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
         let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
         let glyphs = Arc::clone(&text);
         let options = RuntimeOptions {
-            theme: Arc::new(theme()),
+            theme: Arc::new(theme),
             text,
             icons: Arc::new(cupertino_ui_core::PlaceholderIcons::default()),
             direction: LayoutDirection::Ltr,

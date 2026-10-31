@@ -29,12 +29,50 @@ const FOCUS_RING_OUTSET: f64 = 2.0;
 const FOCUS_RING_RADIUS_EXTRA: f64 = 3.0;
 /// How long the caret stays shown, then hidden, while it blinks.
 const CARET_PHASE_MS: u32 = 500;
+/// Body and caption sizes without theme data: the theme data's regular and small sizes.
+const NEUTRAL_BODY_SIZE: f64 = 13.0;
+const NEUTRAL_CAPTION_SIZE: f64 = 11.0;
 
 impl ThemeTokens {
     /// The Cupertino theme for `preferences`: colours from [`ColorTokens::cupertino`], or the opaque
     /// [`ColorTokens::neutral`] when transparency is reduced; regular control metrics; type roles in the theme's font
     /// family. Fails when the theme lacks a colour or a regular control metric.
     pub fn cupertino(theme: &Theme, preferences: ThemePreferences) -> Result<Self> {
+        let typography = theme.tokens.typography();
+        let colors = if preferences.reduce_transparency {
+            ColorTokens::neutral(preferences.appearance)
+        } else {
+            ColorTokens::cupertino(&theme.tokens, preferences.appearance)?
+        };
+        Self::regular(
+            preferences,
+            colors,
+            typography.family.to_owned(),
+            typography.sizes.regular,
+            typography.sizes.small,
+        )
+    }
+
+    /// The theme without theme data: the [`ColorTokens::neutral`] colours, the same metrics as
+    /// [`Self::cupertino`], body and caption at the theme data's sizes and no font family of its own, so the application's
+    /// UI font draws the text. Fails only when a regular control metric is missing.
+    pub fn neutral(preferences: ThemePreferences) -> Result<Self> {
+        Self::regular(
+            preferences,
+            ColorTokens::neutral(preferences.appearance),
+            String::new(),
+            NEUTRAL_BODY_SIZE,
+            NEUTRAL_CAPTION_SIZE,
+        )
+    }
+
+    fn regular(
+        preferences: ThemePreferences,
+        colors: ColorTokens,
+        family: String,
+        body: f64,
+        caption: f64,
+    ) -> Result<Self> {
         let regular = |control| {
             alignment_height(control, ControlSize::Regular).ok_or_else(|| {
                 cupertino_theme::Error::NotFound(format!("regular height of {control:?}"))
@@ -43,18 +81,13 @@ impl ThemeTokens {
         let switch_width = control_metric(Control::Switch)
             .fixed_width(ControlSize::Regular)
             .ok_or_else(|| cupertino_theme::Error::NotFound("regular width of Switch".into()))?;
-        let typography = theme.tokens.typography();
         let role = |size: f64, weight| TypeRole {
             size: size as f32,
             weight,
         };
         Ok(ThemeTokens {
             preferences,
-            colors: if preferences.reduce_transparency {
-                ColorTokens::neutral(preferences.appearance)
-            } else {
-                ColorTokens::cupertino(&theme.tokens, preferences.appearance)?
-            },
+            colors,
             metrics: ControlMetrics {
                 size: ControlSize::Regular,
                 button_height: regular(Control::PushButton)?,
@@ -69,9 +102,9 @@ impl ThemeTokens {
                 min_target: Size::new(MIN_TARGET, MIN_TARGET),
             },
             type_scale: TypeScale {
-                family: typography.family.to_owned(),
-                body: role(typography.sizes.regular, REGULAR),
-                caption: role(typography.sizes.small, REGULAR),
+                family,
+                body: role(body, REGULAR),
+                caption: role(caption, REGULAR),
                 section: TypeRole {
                     size: SECTION_SIZE,
                     weight: SEMIBOLD,
@@ -175,6 +208,29 @@ mod tests {
         };
         let tokens = ThemeTokens::cupertino(&larger, preferences(Appearance::Dark)).unwrap();
         assert_eq!(tokens.type_scale.body.size, 14.0);
+    }
+
+    #[test]
+    fn without_theme_data_the_theme_is_the_neutral_colours_on_the_cupertino_metrics_and_sizes() {
+        let theme = Theme::load().unwrap();
+        for appearance in Appearance::ALL {
+            let neutral = ThemeTokens::neutral(preferences(appearance)).unwrap();
+            let cupertino = ThemeTokens::cupertino(&theme, preferences(appearance)).unwrap();
+            assert_eq!(neutral.colors, ColorTokens::neutral(appearance));
+            assert_eq!(neutral.metrics, cupertino.metrics);
+            assert_eq!(neutral.type_scale.family, "");
+            assert_eq!(
+                TypeScale {
+                    family: cupertino.type_scale.family.clone(),
+                    ..neutral.type_scale
+                },
+                cupertino.type_scale
+            );
+            assert_eq!(
+                (neutral.focus, neutral.motion),
+                (cupertino.focus, cupertino.motion)
+            );
+        }
     }
 
     #[test]

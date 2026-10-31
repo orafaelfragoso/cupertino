@@ -19,7 +19,7 @@ const CHEVRON_STROKE: f64 = 1.5;
 
 /// `points` in a unit square turned to `area`: rotated a quarter turn clockwise when open, mirrored in right-to-left
 /// layouts while closed, so a closed shape points along the reading direction and an open one down.
-fn place(points: [(f64, f64); 3], area: Rect, open: bool, rtl: bool) -> Vec<Point> {
+pub(crate) fn place(points: [(f64, f64); 3], area: Rect, open: bool, rtl: bool) -> Vec<Point> {
     points
         .into_iter()
         .map(|(x, y)| match (open, rtl) {
@@ -36,7 +36,7 @@ fn place(points: [(f64, f64); 3], area: Rect, open: bool, rtl: bool) -> Vec<Poin
         .collect()
 }
 
-fn path(points: &[Point], close: bool) -> Shape {
+pub(crate) fn path(points: &[Point], close: bool) -> Shape {
     let mut verbs = vec![PathVerb::MoveTo(points[0])];
     verbs.extend(points[1..].iter().map(|&p| PathVerb::LineTo(p)));
     if close {

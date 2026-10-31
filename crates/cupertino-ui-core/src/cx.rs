@@ -324,6 +324,7 @@ pub(crate) struct Semantics {
     pub(crate) protected: bool,
     pub(crate) live: Option<Live>,
     pub(crate) item_count: Option<usize>,
+    pub(crate) level: Option<usize>,
     pub(crate) item_index: Option<usize>,
     pub(crate) column_index: Option<usize>,
     pub(crate) roving_group: bool,
@@ -422,6 +423,11 @@ impl SemanticsCx<'_> {
     /// Tells assistive technology how many items a list, table or tree holds when it builds only some of them.
     pub fn item_count(&mut self, count: usize) {
         self.semantics.item_count = Some(count);
+    }
+
+    /// Tells assistive technology a tree item's depth, from 1 at the top level.
+    pub fn level(&mut self, level: usize) {
+        self.semantics.level = Some(level);
     }
 
     /// Tells assistive technology an item's place among all of its container's items, from 0.

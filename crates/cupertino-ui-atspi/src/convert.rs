@@ -97,6 +97,9 @@ pub(crate) fn node(node: &AccessibilityNode) -> accesskit::Node {
             out.set_row_count(count);
         }
     }
+    if let Some(level) = node.level {
+        out.set_level(level);
+    }
     if let Some(index) = node.item_index {
         out.set_position_in_set(index);
         if node.role == Role::Row {

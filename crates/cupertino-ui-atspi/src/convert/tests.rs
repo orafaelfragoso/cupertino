@@ -18,6 +18,8 @@ fn base(role: Role) -> AccessibilityNode {
         relations: Vec::new(),
         children: Vec::new(),
         live: None,
+        item_count: None,
+        item_index: None,
     }
 }
 
@@ -93,6 +95,32 @@ fn a_live_region_keeps_its_politeness_and_other_nodes_have_none() {
         toast.live = Some(live);
         assert_eq!(node(&toast).live(), Some(expected));
     }
+}
+
+#[test]
+fn a_table_counts_its_rows_and_a_row_its_place_and_a_list_only_its_items() {
+    let mut table = base(Role::Table);
+    table.item_count = Some(50_000);
+    let table = node(&table);
+    assert_eq!(
+        (table.size_of_set(), table.row_count()),
+        (Some(50_000), Some(50_000))
+    );
+    let mut row = base(Role::Row);
+    row.item_index = Some(41);
+    let row = node(&row);
+    assert_eq!(
+        (row.position_in_set(), row.row_index()),
+        (Some(41), Some(41))
+    );
+    let mut list = base(Role::List);
+    list.item_count = Some(3);
+    let mut item = base(Role::ListItem);
+    item.item_index = Some(2);
+    let (list, item) = (node(&list), node(&item));
+    assert_eq!((list.size_of_set(), list.row_count()), (Some(3), None));
+    assert_eq!((item.position_in_set(), item.row_index()), (Some(2), None));
+    assert_eq!(node(&base(Role::Button)).position_in_set(), None);
 }
 
 #[test]

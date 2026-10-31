@@ -322,6 +322,8 @@ pub(crate) struct Semantics {
     pub(crate) focus_scope: bool,
     pub(crate) protected: bool,
     pub(crate) live: Option<Live>,
+    pub(crate) item_count: Option<usize>,
+    pub(crate) item_index: Option<usize>,
     pub(crate) roving_group: bool,
     pub(crate) roving_item: bool,
     pub(crate) focus_fallback: bool,
@@ -399,6 +401,16 @@ impl SemanticsCx<'_> {
     /// error). A node without a role is left out of the tree, and so is never announced.
     pub fn live(&mut self, live: Live) {
         self.semantics.live = Some(live);
+    }
+
+    /// Tells assistive technology how many items a list, table or tree holds when it builds only some of them.
+    pub fn item_count(&mut self, count: usize) {
+        self.semantics.item_count = Some(count);
+    }
+
+    /// Tells assistive technology an item's place among all of its container's items, from 0.
+    pub fn item_index(&mut self, index: usize) {
+        self.semantics.item_index = Some(index);
     }
 
     /// Makes the node a Tab stop only when no node under it is one, such as a scroll view around long text.

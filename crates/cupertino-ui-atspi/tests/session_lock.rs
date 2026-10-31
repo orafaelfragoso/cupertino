@@ -50,6 +50,8 @@ fn text(name: &str, live: Option<Live>) -> AccessibilityNode {
         relations: Vec::new(),
         children: Vec::new(),
         live,
+        item_count: None,
+        item_index: None,
     }
 }
 

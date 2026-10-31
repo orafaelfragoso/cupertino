@@ -16,7 +16,8 @@ buffer follow.
   physical through a profile or already logical, and the character) through `cupertino-key-bindings`' chords, and
   `TextFieldKeys` carries the result out on the buffer; neither reads settings, which `cupertino-keyboard` does. Left
   and Right move to the next caret stop on screen through text of either direction (`TextBuffer::caret_position` keeps
-  the side of a direction change the caret is on); Backward, Forward and the word moves keep the text's order.
+  the side of a direction change the caret is on, and `TextBuffer::set_direction` takes the base direction the field
+  lays the text out in); Backward, Forward and the word moves keep the text's order.
 - `Surrounding::around` costs the window, not the document; a text that is one huge run of regional indicators (flags)
   is the exception, because the boundary rule scans back over the run.
 - `FontIndex` holds the faces the app registers from font bytes and resolves a family, weight and variation set to a

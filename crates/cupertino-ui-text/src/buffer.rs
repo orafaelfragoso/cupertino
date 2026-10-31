@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::{bidi, Affinity, TextPosition};
+use crate::{bidi, Affinity, Direction, TextPosition};
 
 /// How long the caret shows and hides while it blinks; it shows for a whole period after every edit, move or click.
 /// Both are approximate: design values, not measured.
@@ -79,6 +79,8 @@ pub struct TextBuffer {
     max_len: Option<usize>,
     /// The caret's byte when a visual move put it on the end edge of the grapheme before it, at a direction change.
     upstream: Option<usize>,
+    /// The base direction the text is laid out in; `None` takes it from the first strong character.
+    direction: Option<Direction>,
 }
 
 impl TextBuffer {
@@ -97,6 +99,12 @@ impl TextBuffer {
 
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// Sets the base direction the field lays its text out in, the `ParagraphStyle::direction` it paints with, so Left
+    /// and Right walk the carets as they are drawn.
+    pub fn set_direction(&mut self, direction: Option<Direction>) {
+        self.direction = direction;
     }
 
     /// The caret with the side of a direction change it is drawn on, for `ParagraphLayout::caret_rect`.
@@ -475,7 +483,7 @@ impl TextBuffer {
     /// One caret stop left or right on screen, through text of either direction; without `extend` a selection
     /// collapses to its side in that direction instead.
     pub fn move_visual(&mut self, rightward: bool, extend: bool) {
-        let edges = bidi::caret_edges(&self.text, None);
+        let edges = bidi::caret_edges(&self.text, self.direction);
         let selection = self.selection();
         if extend || selection.is_empty() {
             let to = bidi::visual_neighbour(&edges, self.caret_position(), rightward)

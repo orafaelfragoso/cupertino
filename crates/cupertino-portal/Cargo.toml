@@ -1,0 +1,28 @@
+[package]
+name = "cupertino-portal"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "xdg-desktop-portal backend of the session: the appearance settings applications read through the portal"
+
+[package.metadata.cupertino]
+layer = "shell"
+
+[features]
+default = []
+# the `cupertino-portal` process
+app = ["dep:cupertino-protocol-app", "dep:cupertino-wayland-client"]
+
+[dependencies]
+cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
+cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
+[dev-dependencies]
+cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-test-bus = { path = "../cupertino-test-bus" }
+
+[[bin]]
+name = "cupertino-portal"
+path = "src/main.rs"
+required-features = ["app"]

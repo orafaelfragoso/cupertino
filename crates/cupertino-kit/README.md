@@ -7,5 +7,19 @@ as modules and has a `prelude`. MPL-2.0.
 `ThemeTokens::neutral` when there is none or it is unusable (one line on stderr says why), so an application runs on any
 compositor. The `examples` test starts the Counter that way and compares it with `tests/goldens/counter-neutral.txt`.
 
+Each example runs on Cupertino headless and on headless Mutter. One test per example and host asserts its app id,
+title and buffer size, and that it presents a frame (on Cupertino it also exits when its window closes). Its behaviour
+is checked by its golden: the trace of inputs, messages and models, then the Inspector dump.
+
+| example | app id | size | Cupertino headless | Mutter headless | golden |
+|---|---|---|---|---|---|
+| Counter | `org.cupertino.examples.Counter` | 200×64 | `the_counter_example_maps_at_its_size_and_exits_on_close` | `the_counter_example_presents_frames_on_mutter` | `tests/goldens/counter.txt` |
+| Forms | `org.cupertino.examples.Forms` | 280×180 | `the_forms_example_maps_at_its_size_and_exits_on_close` | `the_forms_example_presents_frames_on_mutter` | `tests/goldens/forms.txt` |
+| Virtual List | `org.cupertino.examples.VirtualList` | 480×600 | `the_virtual_list_example_maps_at_its_size_and_exits_on_close` | `the_virtual_list_example_presents_frames_on_mutter` | `tests/goldens/virtual-list.txt` |
+
+The Cupertino tests are in `crates/cupertino-server/tests/standard-clients.rs`, the Mutter tests in
+`crates/cupertino-wayland-client/tests/mutter.rs` (they skip when `mutter` is not installed), and the goldens in this
+crate's `tests/examples.rs`.
+
 `ci/capture.sh kit/controls` and `kit/icons` draw the row 167a controls sheet and a grid of system symbols (`--direction rtl` mirrors them)
 headless, in light and dark at any scale (`examples/kit_capture.rs`, `crates/cupertino-capture`).

@@ -58,5 +58,6 @@ buffer follow.
   luminance in quarters; build keys with `GlyphKey::for_draw`, and the size the dilation reads is floored to a power of
   1.25), and colour glyphs as premultiplied RGBA without dilation.
 - Timing, release, medians of 15 (`cargo test --release -p cupertino-ui-text -- --ignored --nocapture timing`; the
-  shape figure is cold and includes loading the font and the break data): 200 characters shape 66 us, reflow 4 us;
-  5000 characters shape 530 us, reflow 125-150 us; a cache hit costs under 1 us.
+  shape figure is cold and includes loading the font and the break data, and the grouping of glyphs into clusters
+  that every layout reuses): 200 characters shape 85-105 us, reflow 4-5 us; 5000 characters shape 940-980 us, reflow
+  87-90 us; a cache hit costs under 1 us.

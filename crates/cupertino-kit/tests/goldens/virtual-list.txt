@@ -1,3 +1,39 @@
+init Items { scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 0.0, height: 0.0 }, viewport: Size { width: 0.0, height: 0.0 } }, selection: Selection { ranges: [], cursor: None, anchor: None }, descending: false, opened: None }
+  Scroll(ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 1800000.0 }, viewport: Size { width: 480.0, height: 563.0 } })
+    = Items { scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 1800000.0 }, viewport: Size { width: 480.0, height: 563.0 } }, selection: Selection { ranges: [], cursor: None, anchor: None }, descending: false, opened: None }
+> key Tab
+> key Down
+  Select(Selection { ranges: [0..1], cursor: Some(0), anchor: Some(0) })
+    = Items { scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 1800000.0 }, viewport: Size { width: 480.0, height: 563.0 } }, selection: Selection { ranges: [0..1], cursor: Some(0), anchor: Some(0) }, descending: false, opened: None }
+> key Down
+  Select(Selection { ranges: [1..2], cursor: Some(1), anchor: Some(1) })
+    = Items { scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 1800000.0 }, viewport: Size { width: 480.0, height: 563.0 } }, selection: Selection { ranges: [1..2], cursor: Some(1), anchor: Some(1) }, descending: false, opened: None }
+> key Down
+  Select(Selection { ranges: [2..3], cursor: Some(2), anchor: Some(2) })
+    = Items { scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 1800000.0 }, viewport: Size { width: 480.0, height: 563.0 } }, selection: Selection { ranges: [2..3], cursor: Some(2), anchor: Some(2) }, descending: false, opened: None }
+> key Down Mods(Shift)
+  Select(Selection { ranges: [2..4], cursor: Some(3), anchor: Some(2) })
+    = Items { scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 1800000.0 }, viewport: Size { width: 480.0, height: 563.0 } }, selection: Selection { ranges: [2..4], cursor: Some(3), anchor: Some(2) }, descending: false, opened: None }
+> key End
+  Select(Selection { ranges: [49999..50000], cursor: Some(49999), anchor: Some(49999) })
+    = Items { scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 1800000.0 }, viewport: Size { width: 480.0, height: 563.0 } }, selection: Selection { ranges: [49999..50000], cursor: Some(49999), anchor: Some(49999) }, descending: false, opened: None }
+  Scroll(ScrollState { offset: Point { x: 0.0, y: 1799437.0 }, content: Size { width: 480.0, height: 1800000.0 }, viewport: Size { width: 480.0, height: 563.0 } })
+    = Items { scroll: ScrollState { offset: Point { x: 0.0, y: 1799437.0 }, content: Size { width: 480.0, height: 1800000.0 }, viewport: Size { width: 480.0, height: 563.0 } }, selection: Selection { ranges: [49999..50000], cursor: Some(49999), anchor: Some(49999) }, descending: false, opened: None }
+> key Page_Up
+  Select(Selection { ranges: [49984..49985], cursor: Some(49984), anchor: Some(49984) })
+    = Items { scroll: ScrollState { offset: Point { x: 0.0, y: 1799437.0 }, content: Size { width: 480.0, height: 1800000.0 }, viewport: Size { width: 480.0, height: 563.0 } }, selection: Selection { ranges: [49984..49985], cursor: Some(49984), anchor: Some(49984) }, descending: false, opened: None }
+  Scroll(ScrollState { offset: Point { x: 0.0, y: 1799424.0 }, content: Size { width: 480.0, height: 1800000.0 }, viewport: Size { width: 480.0, height: 563.0 } })
+    = Items { scroll: ScrollState { offset: Point { x: 0.0, y: 1799424.0 }, content: Size { width: 480.0, height: 1800000.0 }, viewport: Size { width: 480.0, height: 563.0 } }, selection: Selection { ranges: [49984..49985], cursor: Some(49984), anchor: Some(49984) }, descending: false, opened: None }
+> wheel -100 at (240, 200)
+  Scroll(ScrollState { offset: Point { x: 0.0, y: 1799324.0 }, content: Size { width: 480.0, height: 1800000.0 }, viewport: Size { width: 480.0, height: 563.0 } })
+    = Items { scroll: ScrollState { offset: Point { x: 0.0, y: 1799324.0 }, content: Size { width: 480.0, height: 1800000.0 }, viewport: Size { width: 480.0, height: 563.0 } }, selection: Selection { ranges: [49984..49985], cursor: Some(49984), anchor: Some(49984) }, descending: false, opened: None }
+> click Int(49982)
+  Select(Selection { ranges: [49982..49983], cursor: Some(49982), anchor: Some(49982) })
+    = Items { scroll: ScrollState { offset: Point { x: 0.0, y: 1799324.0 }, content: Size { width: 480.0, height: 1800000.0 }, viewport: Size { width: 480.0, height: 563.0 } }, selection: Selection { ranges: [49982..49983], cursor: Some(49982), anchor: Some(49982) }, descending: false, opened: None }
+> click Str("reverse")
+  Reverse
+    = Items { scroll: ScrollState { offset: Point { x: 0.0, y: 1799324.0 }, content: Size { width: 480.0, height: 1800000.0 }, viewport: Size { width: 480.0, height: 563.0 } }, selection: Selection { ranges: [17..18], cursor: Some(17), anchor: Some(17) }, descending: true, opened: None }
+
 window 1
 pending messages=0 tasks=0 frames=0 animating=false next_wake=Some(300000000)
 focus Some(NodeId(134v1))

@@ -1,5 +1,5 @@
-//! The examples' applications driven by input on the headless window system, checked against Inspector dumps in
-//! `tests/goldens/`. `CUPERTINO_UPDATE_GOLDENS=1` rewrites the dumps.
+//! The examples' applications driven by input on the headless window system, checked against their traces and
+//! Inspector dumps in `tests/goldens/`. `CUPERTINO_UPDATE_GOLDENS=1` rewrites the goldens.
 
 #[path = "../examples/apps/counter.rs"]
 mod counter;
@@ -14,16 +14,12 @@ use cupertino_kit::core::{Key, Role};
 use cupertino_kit::geometry::Point;
 use cupertino_kit::platform::Mods;
 use cupertino_kit::theme::ThemeTokens;
-use support::{Run, RETURN, SPACE, TAB};
+use support::{Run, Traced, DOWN, END, PAGE_UP, RETURN, SPACE, TAB};
 use virtual_list::{VirtualList, ROW_HEIGHT};
-
-const DOWN: u32 = 0xff54;
-const PAGE_UP: u32 = 0xff55;
-const END: u32 = 0xff57;
 
 #[test]
 fn the_counter_counts_clicks_and_keys() {
-    let mut run = Run::<counter::Counter>::new();
+    let mut run = Run::<Traced<counter::Counter>>::new();
     run.click("more");
     run.click("more");
     run.key(TAB, None);
@@ -43,7 +39,7 @@ fn the_counter_starts_on_the_neutral_theme_without_theme_data_and_matches_its_go
     let neutral = ThemeTokens::neutral(cupertino_kit::app::start_preferences(None)).unwrap();
     assert_eq!(*options.theme, neutral);
 
-    let mut run = Run::<counter::Counter>::with_theme(neutral);
+    let mut run = Run::<Traced<counter::Counter>>::with_theme(neutral);
     run.click("more");
     run.click("more");
     run.key(TAB, None);
@@ -53,8 +49,22 @@ fn the_counter_starts_on_the_neutral_theme_without_theme_data_and_matches_its_go
 }
 
 #[test]
+fn the_counter_golden_fails_when_two_inputs_swap_places() {
+    let mut run = Run::<Traced<counter::Counter>>::new();
+    run.key(TAB, None);
+    run.key(SPACE, Some(' '));
+    run.click("more");
+    run.click("more");
+    assert_eq!(*run.model(), 1);
+    assert_eq!(
+        run.compare("counter").unwrap_err(),
+        "line 2:\n  expected: > click Str(\"more\")\n  actual:   > key Tab"
+    );
+}
+
+#[test]
 fn the_form_takes_a_name_a_password_and_a_choice() {
-    let mut run = Run::<forms::Forms>::new();
+    let mut run = Run::<Traced<forms::Forms>>::new();
     run.key(TAB, None);
     run.type_text("Ada");
     run.key(TAB, None);
@@ -69,9 +79,11 @@ fn the_form_takes_a_name_a_password_and_a_choice() {
     );
     let dump = run.golden("forms");
     assert!(!dump.contains("hunter2"));
+    // The password's seven keys, the Return that submits it and the Tab that leaves its field.
+    assert_eq!(dump.matches("> key, protected\n").count(), 9);
 }
 
-fn selected<const N: usize>(run: &Run<VirtualList<N>>) -> Vec<(usize, usize)> {
+fn selected<const N: usize>(run: &Run<Traced<VirtualList<N>>>) -> Vec<(usize, usize)> {
     let selection = &run.model().selection;
     selection
         .ranges()
@@ -82,7 +94,7 @@ fn selected<const N: usize>(run: &Run<VirtualList<N>>) -> Vec<(usize, usize)> {
 
 #[test]
 fn the_virtual_list_moves_selects_scrolls_and_reverses_50_000_rows() {
-    let mut run = Run::<VirtualList<50_000>>::new();
+    let mut run = Run::<Traced<VirtualList<50_000>>>::new();
     let viewport = run.model().scroll.viewport.height;
     run.key(TAB, None);
     for _ in 0..3 {

@@ -57,9 +57,9 @@ fn chevrons(h: &Harness<Count>) -> Vec<Color> {
         .filter_map(|op| match op {
             PaintOp::Stroke {
                 paint: Paint::Solid(color),
-                width,
+                width: 1.5,
                 ..
-            } if width == 1.5 => Some(color),
+            } => Some(color),
             _ => None,
         })
         .collect()

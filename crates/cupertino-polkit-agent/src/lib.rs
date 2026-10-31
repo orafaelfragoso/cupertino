@@ -6,8 +6,10 @@
 //! - [`text`]: the strings polkitd and PAM send, made safe to show.
 //! - [`helper`]: the conversation with polkit's helper.
 //! - [`model`]: the prompt and the requests waiting for it, as a pure model.
+//! - [`panel`]: where the prompt's parts sit and what a key or a click on them does.
 
 pub mod agent;
 pub mod helper;
 pub mod model;
+pub mod panel;
 pub mod text;

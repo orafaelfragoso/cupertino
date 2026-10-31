@@ -1370,6 +1370,7 @@ name = "cupertino-polkit-agent"
 version = "0.1.0"
 dependencies = [
  "async-channel",
+ "cupertino-geometry",
  "cupertino-test-bus",
  "tempfile",
  "zbus",

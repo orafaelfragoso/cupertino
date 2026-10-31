@@ -21,7 +21,8 @@
 //! repeat_delay = 500 # ms before the first repeat; 0 switches key repeat off (default)
 //! repeat_interval = 83 # ms between repeats (default)
 //! modifier_profile = cupertino # or classic-pc
-//! input_sources = us, de, fr(nodeadkeys) # xkb layout[(variant)], menu order; two or more enable the switcher
+//! input_sources = us, de, fr(nodeadkeys) # xkb layout[(variant)], menu order; two or more enable the switcher;
+//!   # unset, the layouts localed holds (X11Layout, X11Variant), read at login
 //! caps_lock_delay = 75 # ms the caps-lock key must be held; 0 = off (default)
 //! accent_picker = on # hold a letter key to pick an accented variant
 //! accent_table = ~/.config/cupertino/accents.json # JSON of `cupertino_keyboard::AccentTable::from_json`
@@ -32,6 +33,9 @@
 //! caps_lock_hold = 500 # ms a caps-lock press must last to count as a hold, 1 to 1500 (default)
 //! layout_keyboard = ansi # physical key arrangement of `decoded: input sources: ansi, iso, jis
 //! layout_level3 = right-alt # keys that select the alternate symbols of `decoded: sources: both-alt, right-alt, none
+//! compose_key = right-alt # the compose key of the system layouts: off, right-alt, right-ctrl, menu, caps-lock,
+//!   # scroll-lock; unset keeps the compose option of localed's X11Options, which apply except its layout
+//!   # switching keys (grp:*: the input sources switch the layouts); right-alt takes AltGr from layouts that use it
 //! slow_keys = off # a key counts only once it is held for the delay
 //! slow_keys_delay = 250 # ms (default)
 //! sticky_keys = off # modifiers latch for the next key, a second press locks them

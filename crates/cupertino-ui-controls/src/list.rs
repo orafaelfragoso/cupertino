@@ -525,6 +525,7 @@ impl<M: 'static> Widget<M> for Rows<M> {
             multiselectable: self.multiple,
             ..AccessibleStates::default()
         });
+        cx.item_count(self.count);
         cx.roving_group();
     }
 }
@@ -632,6 +633,7 @@ impl<M: 'static> Widget<M> for ListRow<M> {
             selected: self.selected,
             ..AccessibleStates::default()
         });
+        cx.item_index(self.index);
         cx.roving_item();
         if self.cursor {
             cx.focusable();

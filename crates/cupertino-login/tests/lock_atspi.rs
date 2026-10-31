@@ -68,6 +68,8 @@ fn with_markers(mut update: AccessibilityUpdate, markers: &[&str]) -> Accessibil
                 relations: Vec::new(),
                 children: Vec::new(),
                 live: Some(Live::Assertive),
+                item_count: None,
+                item_index: None,
             },
         ));
         let root = update.root;

@@ -187,6 +187,8 @@ mod tests {
                     relations: vec![],
                     children: vec![],
                     live: None,
+                    item_count: None,
+                    item_index: None,
                 },
             )],
             display_list: DisplayList {

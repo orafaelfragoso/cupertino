@@ -1,8 +1,10 @@
 //! On a private bus, a test acting as the accessibility registry and as an assistive technology: it sees the
 //! application's window and nodes with their roles and names, its Click reaches the application's loop, and its attempt
-//! to type into the password field never does. With accessibility off, nothing is exported. The application runs in a
+//! to type into the password field never does; a row of a list that builds only some of its rows still says its place
+//! among all of them. With accessibility off, nothing is exported. The application runs in a
 //! copy of this test binary, started with the bus addresses AccessKit reads from its environment.
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::num::NonZeroU32;
 use std::sync::mpsc::{channel, Sender};
@@ -56,10 +58,13 @@ fn node(
         relations: Vec::new(),
         children,
         live: None,
+        item_count: None,
+        item_index: None,
     }
 }
 
-/// A window with a text label, an OK button and a password field that, like a careless core, still carries its value.
+/// A window with a text label, an OK button, a password field that, like a careless core, still carries its value, and
+/// a list of 50,000 items that holds only the 40,000th.
 fn tree() -> AccessibilityUpdate {
     AccessibilityUpdate {
         window: WINDOW,
@@ -73,7 +78,7 @@ fn tree() -> AccessibilityUpdate {
                     "About",
                     None,
                     Vec::new(),
-                    vec![id(4), id(2), id(3)],
+                    vec![id(4), id(2), id(3), id(5)],
                 ),
             ),
             (
@@ -102,6 +107,20 @@ fn tree() -> AccessibilityUpdate {
                     vec![Action::Focus, Action::SetValue],
                     Vec::new(),
                 ),
+            ),
+            (
+                id(5),
+                AccessibilityNode {
+                    item_count: Some(50_000),
+                    ..node(Role::List, "Items", None, Vec::new(), vec![id(6)])
+                },
+            ),
+            (
+                id(6),
+                AccessibilityNode {
+                    item_index: Some(39_999),
+                    ..node(Role::ListItem, "Item 40,000", None, Vec::new(), Vec::new())
+                },
             ),
         ],
         removed: Vec::new(),
@@ -303,6 +322,22 @@ fn an_assistive_technology_reads_the_window_and_its_click_reaches_the_applicatio
         "a text label reaches assistive technology without its name: {nodes:?}"
     );
     assert_eq!(named("Password").0 .1, PASSWORD_TEXT);
+    let items = children(&conn, &peer, named("Items").1.as_str()).unwrap();
+    let item = Proxy::new(
+        &conn,
+        peer.clone(),
+        items[0].1.as_str().to_owned(),
+        "org.a11y.atspi.Accessible",
+    )
+    .unwrap();
+    let attributes: HashMap<String, String> = item.call("GetAttributes", &()).unwrap();
+    assert_eq!(
+        (
+            attributes.get("posinset").map(String::as_str),
+            attributes.get("setsize").map(String::as_str)
+        ),
+        (Some("40000"), Some("50000"))
+    );
     let password = Proxy::new(
         &conn,
         peer.clone(),

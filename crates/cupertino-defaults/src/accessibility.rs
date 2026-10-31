@@ -16,7 +16,12 @@
 //! by the design's reader; this file rejects values outside that range instead. The defaults of the intensities are
 //! 0.5 for the three colour-blindness corrections, 1.0 for grayscale and 0.4 for the tint. The
 //! reference stores one intensity per filter; this file keeps the intensity of the selected filter only.
+//!
+//! A person's file records only the keys they changed ([`PersonalAccessibility`]); the machine's file
+//! ([`SYSTEM_ACCESSIBILITY`]) fills every other key. A file with every key, as earlier versions wrote it, stays valid and
+//! sets them all.
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::io;
 use std::path::Path;
@@ -159,25 +164,6 @@ impl AccessibilitySettings {
         })
     }
 
-    /// The settings in `path` and every line that was not understood as `(line, message)`. A file that does not exist
-    /// gives the defaults; one that cannot be read is an error.
-    pub fn load(path: &Path) -> io::Result<(Self, Vec<(usize, String)>)> {
-        let mut settings = Self::default();
-        match std::fs::read_to_string(path) {
-            Ok(text) => {
-                let errors = settings.apply_text(&text);
-                Ok((settings, errors))
-            }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok((settings, Vec::new())),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Write `path` atomically ([`crate::atomic::write_atomic`]), creating its directory.
-    pub fn store(&self, path: &Path) -> io::Result<()> {
-        crate::atomic::write_atomic(path, self.to_text().as_bytes())
-    }
-
     /// Every key with its value as the file writes it, in the order of the table above.
     pub fn entries(&self) -> Vec<(&'static str, String)> {
         let on = |b: bool| if b { "on" } else { "off" }.to_string();
@@ -230,7 +216,31 @@ impl AccessibilitySettings {
         (settings, errors)
     }
 
+    /// `self` with the value of `key` taken from `from`; an unknown key changes nothing.
+    fn copy_key(&mut self, from: &Self, key: &str) {
+        if let Some(option) = DisplayOption::ALL.into_iter().find(|o| o.key() == key) {
+            self.display.set(option, from.display.get(option));
+            return;
+        }
+        match key {
+            "invert_colors" => self.invert_colors = from.invert_colors,
+            "display_contrast" => self.display_contrast = from.display_contrast,
+            "color_filter" => self.color_filter = from.color_filter,
+            "color_filter_intensity" => self.color_filter_intensity = from.color_filter_intensity,
+            _ => {}
+        }
+    }
+
     fn apply_lines(&mut self, text: &str, allowed: impl Fn(&str) -> bool) -> Vec<(usize, String)> {
+        self.apply_lines_recording(text, allowed, |_| {})
+    }
+
+    fn apply_lines_recording(
+        &mut self,
+        text: &str,
+        allowed: impl Fn(&str) -> bool,
+        mut applied: impl FnMut(&'static str),
+    ) -> Vec<(usize, String)> {
         let mut errors = Vec::new();
         for (i, raw) in text.lines().enumerate() {
             let line = raw.split('#').next().unwrap_or("").trim();
@@ -246,8 +256,13 @@ impl AccessibilitySettings {
                 errors.push((i + 1, format!("{key}: not a setting of the machine's file")));
                 continue;
             }
-            if let Err(e) = self.set(key, value.trim()) {
-                errors.push((i + 1, e));
+            match self.set(key, value.trim()) {
+                Ok(()) => {
+                    if let Some(key) = known_key(key) {
+                        applied(key);
+                    }
+                }
+                Err(e) => errors.push((i + 1, e)),
             }
         }
         errors
@@ -285,6 +300,87 @@ impl AccessibilitySettings {
         }
         Ok(())
     }
+}
+
+/// A person's `accessibility.conf`: the keys they changed, each with its value. Every other key is the machine's.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PersonalAccessibility {
+    /// The value of each of `keys`; the other keys' values mean nothing.
+    values: AccessibilitySettings,
+    keys: BTreeSet<&'static str>,
+}
+
+impl PersonalAccessibility {
+    /// The keys in `path` and every line that was not understood as `(line, message)`. A file that does not exist records
+    /// no key; one that cannot be read is an error.
+    pub fn load(path: &Path) -> io::Result<(Self, Vec<(usize, String)>)> {
+        match std::fs::read_to_string(path) {
+            Ok(text) => Ok(Self::from_text(&text)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok((Self::default(), Vec::new())),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Write `path` atomically ([`crate::atomic::write_atomic`]), creating its directory.
+    pub fn store(&self, path: &Path) -> io::Result<()> {
+        crate::atomic::write_atomic(path, self.to_text().as_bytes())
+    }
+
+    /// The keys a file sets; a line that is not understood records nothing.
+    pub fn from_text(text: &str) -> (Self, Vec<(usize, String)>) {
+        let mut personal = Self::default();
+        let mut keys = BTreeSet::new();
+        let errors = personal.values.apply_lines_recording(
+            text,
+            |_| true,
+            |key| {
+                keys.insert(key);
+            },
+        );
+        personal.keys = keys;
+        (personal, errors)
+    }
+
+    /// The recorded keys with their values, in the order of the table above; [`Self::from_text`] reads it back.
+    pub fn to_text(&self) -> String {
+        self.values
+            .entries()
+            .into_iter()
+            .filter(|(key, _)| self.keys.contains(key))
+            .map(|(k, v)| format!("{k} = {v}\n"))
+            .collect()
+    }
+
+    /// The settings in effect: `system` with the value of every recorded key.
+    pub fn over(&self, system: &AccessibilitySettings) -> AccessibilitySettings {
+        let mut settings = *system;
+        for key in &self.keys {
+            settings.copy_key(&self.values, key);
+        }
+        settings
+    }
+
+    /// The person changed the settings in effect from `before` to `after`: every key whose value differs is theirs from
+    /// now on, and stays theirs when they set it back.
+    pub fn record(&mut self, before: &AccessibilitySettings, after: &AccessibilitySettings) {
+        for ((key, was), (_, is)) in before.entries().into_iter().zip(after.entries()) {
+            if was != is {
+                self.keys.insert(key);
+            }
+        }
+        for key in &self.keys {
+            self.values.copy_key(after, key);
+        }
+    }
+}
+
+/// The key of the table above named `name`.
+fn known_key(name: &str) -> Option<&'static str> {
+    AccessibilitySettings::default()
+        .entries()
+        .into_iter()
+        .map(|(key, _)| key)
+        .find(|key| *key == name)
 }
 
 fn parse_filter(value: &str) -> Result<Option<ColorFilter>, String> {
@@ -367,26 +463,6 @@ mod tests {
     }
 
     #[test]
-    fn store_writes_a_file_that_load_reads() {
-        let dir =
-            std::env::temp_dir().join(format!("cupertino-accessibility-{}", std::process::id()));
-        let path = dir.join("nested").join(ACCESSIBILITY_FILE);
-        let mut s = AccessibilitySettings::default();
-        s.display.set(DisplayOption::ReduceTransparency, true);
-        s.color_filter = Some(ColorFilter::Protanopia);
-        s.store(&path).unwrap();
-        let (back, errors) = AccessibilitySettings::load(&path).unwrap();
-        std::fs::remove_dir_all(&dir).unwrap();
-        assert!(errors.is_empty());
-        assert_eq!(back, s);
-        assert_eq!(
-            AccessibilitySettings::load(&path).unwrap().0,
-            AccessibilitySettings::default(),
-            "a missing file is the defaults"
-        );
-    }
-
-    #[test]
     fn the_machines_file_sets_only_its_keys() {
         let (settings, errors) = AccessibilitySettings::from_system_text(
             "reduce_motion = on\ninvert_colors = on\ncolor_filter = grayscale\nreduce_motion = maybe\n",
@@ -413,6 +489,82 @@ mod tests {
         assert!(
             entries.contains(&("display_contrast", "0".to_string())),
             "the refused value changed nothing"
+        );
+    }
+
+    fn machine() -> AccessibilitySettings {
+        AccessibilitySettings {
+            display: DisplayOptions {
+                reduce_motion: true,
+                ..DisplayOptions::default()
+            },
+            ..AccessibilitySettings::default()
+        }
+    }
+
+    #[test]
+    fn a_person_who_changed_one_key_has_the_machines_value_for_every_other() {
+        let (personal, errors) =
+            PersonalAccessibility::from_text("invert_colors = on\nreduce_transparency = maybe\n");
+        assert_eq!(
+            errors.iter().map(|(line, _)| *line).collect::<Vec<_>>(),
+            [2]
+        );
+        let settings = personal.over(&machine());
+        assert!(settings.invert_colors && settings.display.reduce_motion);
+        assert!(
+            !settings.display.reduce_transparency,
+            "a refused line records nothing"
+        );
+        assert_eq!(personal.to_text(), "invert_colors = on\n");
+    }
+
+    #[test]
+    fn a_file_with_every_key_sets_them_all() {
+        let (personal, errors) =
+            PersonalAccessibility::from_text(&AccessibilitySettings::default().to_text());
+        assert!(errors.is_empty());
+        assert_eq!(personal.over(&machine()), AccessibilitySettings::default());
+    }
+
+    #[test]
+    fn a_changed_key_is_recorded_and_stays_the_persons_when_set_back() {
+        let mut personal = PersonalAccessibility::default();
+        let before = personal.over(&machine());
+        let mut after = before;
+        after.color_filter = Some(ColorFilter::Grayscale);
+        after.display.reduce_motion = false;
+        personal.record(&before, &after);
+        assert_eq!(
+            personal.to_text(),
+            "reduce_motion = off\ncolor_filter = grayscale\n"
+        );
+        let mut back = after;
+        back.display.reduce_motion = true;
+        personal.record(&after, &back);
+        assert_eq!(
+            personal.to_text(),
+            "reduce_motion = on\ncolor_filter = grayscale\n"
+        );
+        assert_eq!(personal.over(&AccessibilitySettings::default()), back);
+    }
+
+    #[test]
+    fn the_personal_file_is_stored_and_read_back() {
+        let dir = std::env::temp_dir().join(format!(
+            "cupertino-personal-accessibility-{}",
+            std::process::id()
+        ));
+        let path = dir.join(ACCESSIBILITY_FILE);
+        let (personal, _) = PersonalAccessibility::from_text("display_contrast = 0.5\n");
+        personal.store(&path).unwrap();
+        let read = PersonalAccessibility::load(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(read, (personal, Vec::new()));
+        assert_eq!(
+            PersonalAccessibility::load(&path).unwrap().0,
+            PersonalAccessibility::default(),
+            "a missing file records no key"
         );
     }
 }

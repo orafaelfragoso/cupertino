@@ -1004,7 +1004,9 @@ fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle
             {
                 tracing::debug!(error = %e, "the page flip was refused: the session is being paused")
             }
-            Err(e) => tracing::warn!(error = %e, "queueing the frame failed"),
+            Err(e) => {
+                tracing::warn!(output = %state.outputs[idx].output.name(), error = %e, "queueing the frame failed")
+            }
         }
     }
     if already_shown(scene, rendered) {

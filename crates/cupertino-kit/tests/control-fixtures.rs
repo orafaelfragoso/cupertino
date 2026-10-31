@@ -11,10 +11,10 @@
 mod support;
 
 use cupertino_kit::controls::{
-    Badge, Button, ButtonRole, ButtonStyle, CheckBox, DisclosureButton, DisclosureStyle, Icon,
-    IconDirection, ListView, PageDots, Progress, RadioGroup, ScrollView, Scroller, SecureField,
-    SegmentedControl, Selection, Slider, SliderStyle, Stack, Stepper, Text, TextField, TextRole,
-    Toggle,
+    Badge, Button, ButtonRole, ButtonStyle, CheckBox, Column, ColumnWidth, DisclosureButton,
+    DisclosureStyle, Icon, IconDirection, ListView, PageDots, Progress, RadioGroup, ScrollView,
+    Scroller, SecureField, SegmentedControl, Selection, Separator, Slider, SliderStyle, SortOrder,
+    Stack, Stepper, TableView, Text, TextField, TextRole, Toggle,
 };
 use cupertino_kit::core::{
     Application, Checked, Command, CommandRegistry, Element, Window, WindowBackground, WindowKey,
@@ -517,4 +517,61 @@ fixtures! {
         }
         .into()
     };
+    table: "table", TALL, &[State::Normal, State::Hover, State::Pressed, State::Focused, State::Selected], |look| {
+        let mut selection = Selection::default();
+        if look.selected {
+            selection.select_only(1);
+        }
+        TableView {
+            label: "Files".into(),
+            columns: vec![
+                Column { title: "Name".into(), width: ColumnWidth::Fill },
+                Column { title: "Size".into(), width: ColumnWidth::Fixed(56.0) },
+            ],
+            sort: Some((0, SortOrder::Ascending)),
+            on_sort: Some(Box::new(|_| Message::Nothing)),
+            count: 20,
+            row_height: 24.0,
+            scroll: look.scroll,
+            selection,
+            multiple: false,
+            cell: Box::new(|index, column, selected| Element::new(Text {
+                content: label(&if column == 0 { format!("File {index}") } else { format!("{index} KB") }),
+                role: TextRole::Body,
+                wrap: false,
+                secondary: column == 1,
+                selected,
+            })),
+            type_select: None,
+            on_scroll: Box::new(Message::Scroll),
+            on_select: Some(Box::new(|_| Message::Nothing)),
+            on_activate: None,
+        }
+        .into()
+    };
+    separator: "separator", CONTROL, &[State::Normal], |_| Element::new(Stack {
+        axis: Axis::Horizontal,
+        padding: Insets::ZERO,
+        spacing: 8.0,
+        align: Align::Start,
+        children: vec![
+            Element::new(Separator { axis: Axis::Vertical }),
+            Element::new(Stack {
+                axis: Axis::Vertical,
+                padding: Insets::ZERO,
+                spacing: 4.0,
+                align: Align::Start,
+                children: vec![
+                    Element::new(Text {
+                        content: label("Above"),
+                        role: TextRole::Body,
+                        wrap: false,
+                        secondary: false,
+                        selected: false,
+                    }),
+                    Element::new(Separator { axis: Axis::Horizontal }),
+                ],
+            }),
+        ],
+    });
 }

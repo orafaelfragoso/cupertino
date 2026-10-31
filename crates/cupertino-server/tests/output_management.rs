@@ -707,3 +707,101 @@ fn a_display_plugged_in_gets_its_stored_arrangement_back() {
     );
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn a_display_that_cannot_show_its_mode_falls_back_and_keeps_its_own_stored() {
+    use cupertino_server::backend::Backend;
+    use cupertino_server::displays::HeadMode;
+    let mode = |width, height, refresh_mhz| HeadMode {
+        width,
+        height,
+        refresh_mhz,
+    };
+    let Some(mut h) = Harness::new() else { return };
+    let path = std::env::temp_dir().join(format!(
+        "cupertino-test-{}-fallback-displays.conf",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    h.state.displays.use_store(path.clone()).unwrap();
+    let client = Client::connect(h.socket_path());
+    h.wait_until(&client, "both heads", |_, seen| listed(seen));
+    let set_unshowable = |state: &mut Cupertino, modes: Vec<HeadMode>| {
+        if let Some(Backend::Headless(b)) = state.backend.as_mut() {
+            b.unshowable = modes;
+        }
+    };
+    let offered = [mode(640, 480, 30_000), mode(320, 240, 60_000)];
+
+    // the link cannot carry 640x480 at 60 Hz: the same size at 30 Hz is shown
+    set_unshowable(&mut h.state, vec![mode(640, 480, 60_000)]);
+    let third = headless::add_display_with_modes(
+        &mut h.state,
+        &display_of("headless-3", (640, 480)),
+        &offered,
+        Some(1.0),
+    )
+    .unwrap();
+    let head = h.state.displays.head(third).unwrap();
+    assert_eq!(head.state.mode, mode(640, 480, 30_000));
+    assert!(head.output.is_some());
+
+    // a configuration of the other heads stores the display's own mode, not the fallback
+    let unchanged = Some(HeadChange::default());
+    h.wait_until(&client, "headless-3", |_, seen| {
+        seen.head("headless-3").is_some_and(|h| h.enabled)
+    });
+    client.configure(
+        client.serial(),
+        vec![
+            ("headless-1", unchanged),
+            ("headless-2", unchanged),
+            ("headless-3", unchanged),
+        ],
+        false,
+    );
+    h.wait_until(&client, "the configuration", |_, seen| {
+        seen.results == ["succeeded"]
+    });
+    let key = display_key("headless-3", "Cupertino", "headless-3", None);
+    let (stored, _) = DisplaysConfig::load(&path).unwrap();
+    let stored = stored.get(&key).expect("the display's section").mode;
+    assert_eq!(
+        (stored.width, stored.height, stored.refresh_mhz),
+        (640, 480, 60_000)
+    );
+
+    // plugged in again where the link can carry it, the display shows its own mode
+    headless::remove_display(&mut h.state, third).unwrap();
+    set_unshowable(&mut h.state, Vec::new());
+    let third = headless::add_display_with_modes(
+        &mut h.state,
+        &display_of("headless-3", (640, 480)),
+        &offered,
+        Some(1.0),
+    )
+    .unwrap();
+    assert_eq!(
+        h.state.displays.head(third).unwrap().state.mode,
+        mode(640, 480, 60_000)
+    );
+
+    // a display that can show none of its modes is announced but stays off
+    headless::remove_display(&mut h.state, third).unwrap();
+    set_unshowable(
+        &mut h.state,
+        vec![
+            mode(640, 480, 60_000),
+            mode(640, 480, 30_000),
+            mode(320, 240, 60_000),
+        ],
+    );
+    assert!(headless::add_display_with_modes(
+        &mut h.state,
+        &display_of("headless-3", (640, 480)),
+        &offered,
+        Some(1.0),
+    )
+    .is_err());
+    std::fs::remove_file(path).unwrap();
+}

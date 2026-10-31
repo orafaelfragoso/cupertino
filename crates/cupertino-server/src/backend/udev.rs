@@ -7,7 +7,7 @@
 //! NOTE: written against the Smithay 0.7 API and compile-checked; it cannot run while another
 //! session holds the DRM master (for example when started from a running desktop session).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -42,7 +42,7 @@ use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_pre
 use smithay::utils::{DeviceFd, Transform};
 use smithay::wayland::drm_syncobj::{supports_syncobj_eventfd, DrmSyncobjState};
 use smithay::wayland::presentation::Refresh;
-use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
+use smithay_drm_extras::drm_scanner::DrmScanner;
 
 use super::input;
 use super::Backend;
@@ -80,6 +80,8 @@ struct Surface {
 struct DrmHead {
     head: HeadId,
     connector: connector::Handle,
+    /// The display's EDID when it connected: another one means another display on the connector.
+    edid: Option<Vec<u8>>,
     modes: Vec<(HeadMode, control::Mode)>,
 }
 
@@ -109,6 +111,8 @@ pub struct UdevBackend {
     surfaces: HashMap<crtc::Handle, Surface>,
     /// Every connected head, by the CRTC the scanner gave its connector.
     heads: HashMap<crtc::Handle, DrmHead>,
+    /// Connected connectors the scanner found no free CRTC for, told once.
+    waiting: HashSet<connector::Handle>,
     /// The command line's scale for every display.
     scale: Option<f64>,
     /// The session is paused: the DRM device rejects every frame until it resumes.
@@ -355,6 +359,7 @@ pub fn run(
         scanner: DrmScanner::new(),
         surfaces: HashMap::new(),
         heads: HashMap::new(),
+        waiting: HashSet::new(),
         scale,
         paused: false,
         asleep: false,
@@ -400,6 +405,8 @@ pub fn run(
                 for o in &mut state.outputs {
                     o.scheduler.reset();
                 }
+                // displays plugged, unplugged or swapped while another session had the seat sent their uevents to it
+                scan_connectors(state);
                 state.session_activated();
             }
         })
@@ -441,9 +448,10 @@ pub fn run(
                         // Events were lost: the open devices may no longer match the nodes.
                         if drained.overflowed {
                             tracing::warn!(
-                                "the uevent queue overflowed, enumerating the input devices again"
+                                "the uevent queue overflowed, enumerating the input devices and displays again"
                             );
                             input::resync(&hotplug_inputs, state);
+                            scan_connectors(state);
                         }
                     }
                     Err(e) => tracing::warn!(error = %e, "reading a uevent failed"),
@@ -478,37 +486,107 @@ pub fn run(
 
 /// Announce the heads of newly connected connectors (enabling them unless their stored state is
 /// off) and disconnect the ones that went away.
-fn scan_connectors(state: &mut Cupertino) {
+/// Bring the heads in line with the connectors: every connected connector with a CRTC is driven, and nothing else.
+/// Smithay's scanner reports a connector once, when it connects; a connector that waited for a CRTC gets one later
+/// without an event (another display let it go), and a display swapped on the same connector while the session was away
+/// is no event either. So the heads are compared with the scanner's whole mapping, and a driven connector whose display
+/// is another one (its EDID changed) is connected afresh.
+pub(crate) fn scan_connectors(state: &mut Cupertino) {
     let Some(Backend::Udev(u)) = state.backend.as_mut() else {
         return;
     };
-    let events: Vec<DrmScanEvent> = match u.scanner.scan_connectors(u.manager.device()) {
-        Ok(result) => result.into_iter().collect(),
-        Err(e) => {
-            tracing::warn!(error = %e, "scanning connectors failed");
-            return;
-        }
-    };
-    for event in events {
-        match event {
-            DrmScanEvent::Connected {
-                connector,
-                crtc: Some(crtc),
-            } => connector_connected(state, connector, crtc),
-            DrmScanEvent::Disconnected {
-                crtc: Some(crtc), ..
-            } => {
-                let Some(Backend::Udev(u)) = state.backend.as_mut() else {
-                    return;
-                };
-                u.surfaces.remove(&crtc);
-                if let Some(gone) = u.heads.remove(&crtc) {
-                    state.disconnect_head(gone.head);
-                }
+    // a paused session cannot set a mode; its activation scans again
+    if u.paused {
+        return;
+    }
+    if let Err(e) = u.scanner.scan_connectors(u.manager.device()) {
+        tracing::warn!(error = %e, "scanning connectors failed");
+        return;
+    }
+    let mapped: Vec<(crtc::Handle, connector::Info)> = u
+        .scanner
+        .crtcs()
+        .filter(|(info, _)| info.state() == connector::State::Connected)
+        .map(|(info, crtc)| (crtc, info.clone()))
+        .collect();
+    let mut waiting = HashSet::new();
+    for (handle, info) in u.scanner.connectors() {
+        if info.state() == connector::State::Connected
+            && u.scanner.crtc_for_connector(handle).is_none()
+        {
+            if !u.waiting.contains(handle) {
+                tracing::warn!(connector = %connector_name(info), "a display is connected but every CRTC is in use: it stays off until another display is unplugged");
             }
-            _ => {}
+            waiting.insert(*handle);
         }
     }
+    u.waiting = waiting;
+    let device = u.manager.device();
+    let driven: Vec<(crtc::Handle, connector::Handle)> = u
+        .heads
+        .iter()
+        .filter(|(_, h)| {
+            // an EDID that cannot be read now is no other display
+            connector_edid(device, h.connector).is_none_or(|now| Some(now) == h.edid)
+        })
+        .map(|(crtc, h)| (*crtc, h.connector))
+        .collect();
+    let wanted: Vec<(crtc::Handle, connector::Handle)> = mapped
+        .iter()
+        .map(|(crtc, info)| (*crtc, info.handle()))
+        .collect();
+    let mut gone: Vec<crtc::Handle> = u
+        .heads
+        .keys()
+        .filter(|crtc| !driven.iter().any(|(c, _)| c == *crtc))
+        .copied()
+        .collect();
+    let (dropped, added) = reconcile(&driven, &wanted);
+    gone.extend(dropped);
+    for crtc in gone {
+        let Some(Backend::Udev(u)) = state.backend.as_mut() else {
+            return;
+        };
+        u.surfaces.remove(&crtc);
+        if let Some(head) = u.heads.remove(&crtc) {
+            state.disconnect_head(head.head);
+        }
+    }
+    for (crtc, connector) in added {
+        if let Some((_, info)) = mapped
+            .iter()
+            .find(|(c, info)| *c == crtc && info.handle() == connector)
+        {
+            connector_connected(state, info.clone(), crtc);
+        }
+    }
+}
+
+/// What a scan changes, from the (CRTC, connector) pairs driven and the pairs mapped now: the CRTCs whose head goes, then
+/// the pairs to bring up.
+fn reconcile<C: Copy + PartialEq, K: Copy + PartialEq>(
+    driven: &[(C, K)],
+    mapped: &[(C, K)],
+) -> (Vec<C>, Vec<(C, K)>) {
+    let gone = driven
+        .iter()
+        .filter(|pair| !mapped.contains(pair))
+        .map(|(crtc, _)| *crtc)
+        .collect();
+    let new = mapped
+        .iter()
+        .filter(|pair| !driven.contains(pair))
+        .copied()
+        .collect();
+    (gone, new)
+}
+
+fn connector_name(connector: &connector::Info) -> String {
+    format!(
+        "{}-{}",
+        connector.interface().as_str(),
+        connector.interface_id()
+    )
 }
 
 /// Refresh rate of a DRM mode in millihertz, from its pixel clock and totals (an interlaced mode
@@ -557,11 +635,7 @@ fn connector_connected(state: &mut Cupertino, connector: connector::Info, crtc: 
     let Some(Backend::Udev(u)) = state.backend.as_mut() else {
         return;
     };
-    let name = format!(
-        "{}-{}",
-        connector.interface().as_str(),
-        connector.interface_id()
-    );
+    let name = connector_name(&connector);
     let preferred = connector
         .modes()
         .iter()
@@ -588,8 +662,8 @@ fn connector_connected(state: &mut Cupertino, connector: connector::Info, crtc: 
         tracing::warn!(connector = %name, "no modes");
         return;
     }
-    let identity =
-        connector_edid(u.manager.device(), connector.handle()).and_then(|blob| edid::parse(&blob));
+    let edid = connector_edid(u.manager.device(), connector.handle());
+    let identity = edid.as_deref().and_then(edid::parse);
     let (make, model, serial) = match identity {
         Some(id) => (id.make, id.model, id.serial),
         None => ("Unknown".to_string(), name.clone(), None),
@@ -621,11 +695,12 @@ fn connector_connected(state: &mut Cupertino, connector: connector::Info, crtc: 
         DrmHead {
             head,
             connector: connector.handle(),
+            edid,
             modes,
         },
     );
     if initial.enabled {
-        if let Err(e) = state.head_op(head, HeadOp::Enable) {
+        if let Err(e) = state.enable_head(head) {
             tracing::warn!(error = %e, "enabling the display failed");
         }
         state.heads_changed();
@@ -1002,7 +1077,24 @@ fn frame_finish(
 
 #[cfg(test)]
 mod tests {
-    use super::{already_shown, frame_due};
+    use super::{already_shown, frame_due, reconcile};
+
+    #[test]
+    fn a_connector_that_waited_for_a_crtc_is_brought_up_when_another_display_lets_one_go() {
+        // three connectors, two CRTCs: `c` waits; unplugging `a` frees CRTC 1, which the scanner maps to `c`
+        let driven = [(1, 'a'), (2, 'b')];
+        assert_eq!(reconcile(&driven, &driven), (vec![], vec![]));
+        assert_eq!(
+            reconcile(&driven, &[(2, 'b'), (1, 'c')]),
+            (vec![1], vec![(1, 'c')])
+        );
+        // a connector moved to another CRTC goes down on the old one and comes up on the new one
+        assert_eq!(
+            reconcile(&driven, &[(1, 'a'), (3, 'b')]),
+            (vec![2], vec![(3, 'b')])
+        );
+        assert_eq!(reconcile(&driven, &[]), (vec![1, 2], vec![]));
+    }
 
     #[test]
     fn only_a_drawn_scene_that_changed_nothing_is_reported_as_shown() {

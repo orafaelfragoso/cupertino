@@ -150,6 +150,33 @@ fn children_stop_shrinking_at_their_smallest_size() {
 }
 
 #[test]
+fn sixty_children_that_all_reach_their_floor_are_shared_in_one_pass() {
+    let mut t = TestTree::default();
+    let children: Vec<usize> = (0..60)
+        .map(|k| {
+            let child = t.leaf(100.0, 10.0);
+            t.floor(child, 40.0 + k as f64, 10.0);
+            t.flex(
+                child,
+                Flex {
+                    grow: 0.0,
+                    shrink: 1.0 + k as f64 / 10.0,
+                    basis: None,
+                },
+            )
+        })
+        .collect();
+    let floors: f64 = (0..60).map(|k| 40.0 + k as f64).sum();
+    let root = t.stack(Axis::Horizontal, 0.0, children.clone());
+    let r = t.run_tight(root, Size::new(floors - 10.0, 10.0), LayoutDirection::Ltr);
+    for (k, child) in children.iter().enumerate() {
+        assert_eq!(r.nodes[child].rect.size.width, 40.0 + k as f64);
+    }
+    assert!(r.stats.flex_passes <= 32);
+    assert_eq!(r.stats.flex_passes, 1, "one stack, one pass");
+}
+
+#[test]
 fn a_container_child_cannot_shrink_below_what_its_own_children_need() {
     let mut t = TestTree::default();
     let (a, b) = (t.leaf(50.0, 10.0), t.leaf(50.0, 10.0));

@@ -21,8 +21,8 @@ its unconstrained width and shrinks.
   takes the offered maximum when it is finite and its content size otherwise; `Fit` takes its content size. A node never
   leaves the range its parent offers.
 - **Stack.** A child starts at its `flex.basis`, its fixed size, a fraction, or its unconstrained size. Leftover room is
-  shared by `grow`, a shortfall by `shrink` times basis, in passes that freeze children at their bounds (each pass freezes at least one, so
-  `children + 1` passes settle; `NoConvergence` guards that). A `Fit` stack does not grow past its content. A shrinking child stops at its smallest size: for a leaf what
+  shared by `grow`, a shortfall by `shrink` times basis, each child held at its bounds, in one pass however many children
+  reach a bound (`LayoutStats::flex_passes` counts the passes). A `Fit` stack does not grow past its content. A shrinking child stops at its smallest size: for a leaf what
   `measure_leaf` returns when the axis maximum is zero (text answers with its longest word), for a container the sum or
   largest of its children's, and its fixed size when it has one; children whose floors exceed the room overflow.
   Cross-axis `Align`; `Align::Baseline` lines up first baselines in horizontal stacks and acts as `Start` in vertical

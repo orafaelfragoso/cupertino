@@ -420,8 +420,11 @@ pub struct PointerSettings {
     /// Speed-dependent mouse acceleration (default on); off gives a constant gain by `mouse_speed`, per
     /// count of a 400 dpi mouse and scaled by the real resolution (a negative speed passes counts through).
     pub mouse_acceleration: bool,
-    /// Content follows the fingers (default on).
+    /// On touchpads, content follows the fingers (default on).
     pub natural_scrolling: bool,
+    /// On mouse wheels, content follows the wheel (default off: a wheel scrolls the view, as it does on every other
+    /// desktop, and a mouse user rarely expects it reversed).
+    pub mouse_natural_scrolling: bool,
     /// Cursor size as a scale of the theme's nominal size, 1…4 (range, the
     /// fresh 1.0 is derived from the plist default of the size key). It scales the
     /// cursors the server draws and the `XCURSOR_SIZE` of the clients it starts.
@@ -434,6 +437,15 @@ pub struct PointerSettings {
 }
 
 impl PointerSettings {
+    /// Natural scrolling for a touchpad, else for a wheel.
+    pub fn natural_scrolling_for(&self, touchpad: bool) -> bool {
+        if touchpad {
+            self.natural_scrolling
+        } else {
+            self.mouse_natural_scrolling
+        }
+    }
+
     /// Apply the pointer keys `f` sets.
     pub fn apply_file(&mut self, f: &CompositorSettings) {
         if let Some(v) = f.mouse_speed {
@@ -450,6 +462,9 @@ impl PointerSettings {
         }
         if let Some(b) = f.natural_scrolling {
             self.natural_scrolling = b;
+        }
+        if let Some(b) = f.mouse_natural_scrolling {
+            self.mouse_natural_scrolling = b;
         }
         if let Some(s) = f.cursor_size {
             // JSON has no NaN, so the clamp cannot panic
@@ -476,6 +491,7 @@ impl Default for PointerSettings {
             mouse_dpi: std::collections::BTreeMap::new(),
             mouse_acceleration: cupertino_input::DEFAULT_ACCELERATION,
             natural_scrolling: true,
+            mouse_natural_scrolling: false,
             cursor_scale: cupertino_input::CURSOR_SCALE_MIN,
             cursor_colors: crate::cursor::CursorColors::DEFAULT,
             shake_to_locate: true,
@@ -930,6 +946,13 @@ mod tests {
     }
 
     #[test]
+    fn by_default_a_touchpad_scrolls_naturally_and_a_wheel_does_not() {
+        let pointer = PointerSettings::default();
+        assert!(pointer.natural_scrolling_for(true));
+        assert!(!pointer.natural_scrolling_for(false));
+    }
+
+    #[test]
     fn shadow_presets_follow_evidence() {
         let s = ShadowStyle::default();
         assert_eq!(
@@ -1020,7 +1043,7 @@ mod tests {
         assert_eq!(
             apply(
                 &mut c,
-                r#"{"mouse_speed":0.6875,"trackpad_speed":3,"mouse_acceleration":false,"natural_scrolling":false}"#
+                r#"{"mouse_speed":0.6875,"trackpad_speed":3,"mouse_acceleration":false,"natural_scrolling":false,"mouse_natural_scrolling":true}"#
             ),
             Vec::<String>::new()
         );
@@ -1031,6 +1054,7 @@ mod tests {
                 trackpad_speed: 3.0,
                 mouse_acceleration: false,
                 natural_scrolling: false,
+                mouse_natural_scrolling: true,
                 ..PointerSettings::default()
             }
         );

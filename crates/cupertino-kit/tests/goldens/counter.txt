@@ -1,3 +1,15 @@
+init 0
+> click Str("more")
+  Add(1)
+    = 1
+> click Str("more")
+  Add(1)
+    = 2
+> key Tab
+> key ' '
+  Add(-1)
+    = 1
+
 window 1
 pending messages=0 tasks=0 frames=0 animating=false next_wake=None
 focus Some(NodeId(1v1))

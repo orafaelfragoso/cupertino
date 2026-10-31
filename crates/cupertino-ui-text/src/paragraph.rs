@@ -40,6 +40,8 @@ pub(crate) struct Item {
     pub range: Range<usize>,
     /// The UAX 9 embedding level; an odd level is shaped right to left.
     pub level: Level,
+    /// The paragraph level of the item's hard line (UAX 9 P2–P3): its direction and the side `Start` aligns to.
+    pub base: Level,
     pub run: ShapedRun,
     pub ascent: f32,
     pub descent: f32,
@@ -50,7 +52,8 @@ pub(crate) struct Item {
 struct Shaped {
     text: Arc<str>,
     style: ParagraphStyle,
-    /// The base direction: `style.direction`, or the first strong character's.
+    /// The base direction: `style.direction`, or the text's first strong character's. Without `style.direction` each hard
+    /// line takes its own from its first strong character.
     direction: Direction,
     items: Vec<Item>,
     /// Byte offsets where UAX 14 allows a line to start, without 0 and the text length.
@@ -131,7 +134,8 @@ impl Paragraph {
         &self.shaped.text
     }
 
-    /// The base direction the lines are laid out and aligned in.
+    /// The base direction of the text: `ParagraphStyle::direction`, else its first strong character's. Without a set
+    /// direction a hard line with a strong character of its own is laid out in that one's.
     pub fn direction(&self) -> Direction {
         self.shaped.direction
     }
@@ -357,7 +361,8 @@ fn build_line(
 ) -> Line {
     let line_clusters = &clusters[spec.clusters.clone()];
     let width = f64::from(trimmed_width(clusters, spec));
-    let rtl = shaped.direction == Direction::Rtl;
+    let base = shaped.items[items.start].base;
+    let rtl = base.is_rtl();
     let offset = match (shaped.style.align, rtl) {
         (TextAlign::Center, _) => (container - width) / 2.0,
         (TextAlign::Start | TextAlign::Justify, false) | (TextAlign::End, true) => 0.0,
@@ -395,7 +400,6 @@ fn build_line(
         .iter()
         .rposition(|cluster| !cluster.space)
         .map_or(0, |last| last + 1);
-    let base = if rtl { Level::rtl() } else { Level::ltr() };
     let mut pieces: Vec<(Range<usize>, Level)> = Vec::new();
     for (index, cluster) in line_clusters.iter().enumerate() {
         let level = if index < visible {
@@ -967,6 +971,45 @@ mod tests {
         );
         assert!((forced.caret_rect(position(3)).x() - 200.0).abs() < 1e-3);
         assert!((forced.caret_rect(position(0)).x() - (200.0 - forced.size().width)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn each_hard_line_takes_its_direction_from_its_own_first_strong_character() {
+        let text = "abc\n\u{5D0}\u{5D1}\u{5D2}\n123\n\u{5D3}\u{5D4} xyz";
+        let layout = layout(text, Some(200.0));
+        let starts: Vec<f64> = layout
+            .lines()
+            .iter()
+            .map(|line| layout.caret_rect(position(line.range.0.start)).x())
+            .collect();
+        assert!(starts[0].abs() < 1e-3, "{starts:?}");
+        assert!(
+            (starts[1] - 200.0).abs() < 1e-3,
+            "the Hebrew line starts at the right"
+        );
+        assert!(
+            starts[2].abs() < 1e-3,
+            "digits alone keep the text's direction"
+        );
+        assert!((starts[3] - 200.0).abs() < 1e-3);
+        assert_eq!(
+            visual_clusters(&layout.lines()[3]),
+            [20, 21, 22, 19, 17, 15],
+            "Latin inside a right-to-left line sits at its left"
+        );
+
+        let forced = layout_with(
+            text,
+            ParagraphStyle {
+                direction: Some(Direction::Ltr),
+                ..ParagraphStyle::default()
+            },
+            Some(200.0),
+        );
+        assert!(
+            forced.caret_rect(position(4)).x() < 100.0,
+            "a set direction holds for every line"
+        );
     }
 
     #[test]

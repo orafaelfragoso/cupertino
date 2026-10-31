@@ -101,6 +101,8 @@ pub(crate) struct Leaf {
     pub(crate) animated: bool,
     /// A key asks to be woken this many nanoseconds later.
     pub(crate) wake_after: Option<u64>,
+    /// Asks for the focus when its scope opens.
+    pub(crate) initial: bool,
 }
 
 pub(crate) fn leaf(label: &'static str) -> Leaf {
@@ -113,6 +115,7 @@ pub(crate) fn leaf(label: &'static str) -> Leaf {
         secret: false,
         animated: false,
         wake_after: None,
+        initial: false,
     }
 }
 
@@ -218,6 +221,9 @@ impl<M: From<String> + 'static> Widget<M> for Leaf {
         }
         if self.secret {
             cx.protected();
+        }
+        if self.initial {
+            cx.initial_focus();
         }
     }
 }

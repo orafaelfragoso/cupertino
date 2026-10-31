@@ -23,11 +23,9 @@ pub(crate) struct SemanticsPass {
     pub(crate) roving_items: Vec<NodeId>,
 }
 
-/// Whether the node marks its value as protected, such as a password field.
-pub(crate) fn protected<M: 'static>(tree: &Tree<M>, id: NodeId) -> bool {
-    let Some(node) = tree.get(id) else {
-        return false;
-    };
+/// What a mounted node declares, outside a pass.
+fn declared<M: 'static>(tree: &Tree<M>, id: NodeId) -> Option<Semantics> {
+    let node = tree.get(id)?;
     let mut semantics = Semantics::default();
     node.widget.semantics(
         &*node.state,
@@ -38,7 +36,17 @@ pub(crate) fn protected<M: 'static>(tree: &Tree<M>, id: NodeId) -> bool {
             semantics: &mut semantics,
         },
     );
-    semantics.protected
+    Some(semantics)
+}
+
+/// Whether the node marks its value as protected, such as a password field.
+pub(crate) fn protected<M: 'static>(tree: &Tree<M>, id: NodeId) -> bool {
+    declared(tree, id).is_some_and(|s| s.protected)
+}
+
+/// Whether the node asks for the focus when its scope opens.
+pub(crate) fn initial_focus<M: 'static>(tree: &Tree<M>, id: NodeId) -> bool {
+    declared(tree, id).is_some_and(|s| s.initial_focus)
 }
 
 pub(crate) fn build<M: 'static>(
@@ -76,6 +84,9 @@ pub(crate) fn build<M: 'static>(
                 semantics: &mut semantics,
             },
         );
+        if semantics.hidden {
+            continue;
+        }
         if semantics.focusable {
             pass.focusable.push(id);
         } else if semantics.focus_fallback {

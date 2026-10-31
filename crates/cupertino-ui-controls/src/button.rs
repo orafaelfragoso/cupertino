@@ -73,13 +73,17 @@ impl<M: Clone + 'static> Button<M> {
 }
 
 /// A button that Space activates but Return passes over, so a sheet's Return reaches its default button.
-pub(crate) struct SheetButton<M>(pub(crate) Button<M>);
+pub(crate) struct SheetButton<M> {
+    pub(crate) button: Button<M>,
+    /// Takes the focus when the sheet opens.
+    pub(crate) initial: bool,
+}
 
 impl<M: Clone + 'static> Widget<M> for SheetButton<M> {
     type State = Press;
 
     fn layout(&self) -> LayoutSpec {
-        self.0.layout()
+        self.button.layout()
     }
 
     fn state(&self) -> Press {
@@ -87,23 +91,26 @@ impl<M: Clone + 'static> Widget<M> for SheetButton<M> {
     }
 
     fn update(&self, old: &Self, press: &mut Press) -> Change {
-        self.0.update(&old.0, press)
+        self.button.update(&old.button, press)
     }
 
     fn measure(&self, press: &Press, constraints: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
-        self.0.measure(press, constraints, cx)
+        self.button.measure(press, constraints, cx)
     }
 
     fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
-        self.0.press(press, event, Keys::Space, cx)
+        self.button.press(press, event, Keys::Space, cx)
     }
 
     fn paint(&self, press: &Press, cx: &mut PaintCx<'_>) {
-        self.0.paint(press, cx)
+        self.button.paint(press, cx)
     }
 
     fn semantics(&self, press: &Press, cx: &mut SemanticsCx<'_>) {
-        self.0.semantics(press, cx)
+        self.button.semantics(press, cx);
+        if self.initial {
+            cx.initial_focus();
+        }
     }
 }
 

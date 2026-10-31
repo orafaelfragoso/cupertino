@@ -113,7 +113,7 @@ fn fill_rect(cx: &mut PaintCx<'_>, rect: Rect, color: Option<cupertino_ui_theme:
 /// What a field paints of its buffer, in byte offsets of `text`.
 struct Shown<'a> {
     text: &'a str,
-    caret: usize,
+    caret: TextPosition,
     selection: Range<usize>,
     composition: Option<Range<usize>>,
     /// The caret is in the on phase of its blink.
@@ -137,7 +137,7 @@ fn paint_text(
     let Some(layout) = look::paragraph(&env, shown.text) else {
         return;
     };
-    let caret = layout.caret_rect(position(shown.caret));
+    let caret = layout.caret_rect(shown.caret);
     let offset = follow(
         scroll.get(),
         caret.min_x(),
@@ -380,7 +380,7 @@ impl FieldState {
     fn caret_rect<M>(&self, cx: &EventCx<'_, M>) -> Option<Rect> {
         let bounds = cx.bounds()?;
         let (layout, origin) = placed(cx.env(), self.buffer.text(), bounds.size, 0.0)?;
-        let caret = layout.caret_rect(position(self.buffer.caret()));
+        let caret = layout.caret_rect(self.buffer.caret_position());
         let width = interior(bounds.size, &cx.env().theme).width();
         let scroll = follow(self.scroll.get(), caret.min_x(), layout.size().width, width);
         Some(caret.translate(
@@ -679,7 +679,7 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
         paint_chrome(cx, &look);
         let shown = Shown {
             text: state.buffer.text(),
-            caret: state.buffer.caret(),
+            caret: state.buffer.caret_position(),
             selection: state.buffer.selection(),
             composition: state.buffer.composition(),
             caret_on: state.blink.on(cx.env(), cx.now()),
@@ -865,7 +865,7 @@ impl<M: 'static> Widget<M> for SecureField<M> {
         let mask = state.buffer.mask(BULLET);
         let shown = Shown {
             text: &mask,
-            caret: caret * width,
+            caret: position(caret * width),
             selection: selection.start * width..selection.end * width,
             composition: None,
             caret_on: state.blink.on(cx.env(), cx.now()),

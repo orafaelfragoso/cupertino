@@ -17,4 +17,5 @@ swash = "0.2.10"
 unicode-segmentation = "1.13"
 harfrust = "0.15"
 icu_segmenter = "2.4"
+unicode-bidi = "0.3.18"
 zeroize = { version = "1.9", features = ["derive"] }

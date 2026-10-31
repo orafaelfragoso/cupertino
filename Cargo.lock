@@ -1395,6 +1395,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-portal"
+version = "0.1.0"
+dependencies = [
+ "cupertino-defaults",
+ "cupertino-protocol-app",
+ "cupertino-test-bus",
+ "cupertino-wayland-client",
+ "zbus",
+]
+
+[[package]]
 name = "cupertino-powerd"
 version = "0.1.0"
 dependencies = [

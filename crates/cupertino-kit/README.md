@@ -22,7 +22,8 @@ The Cupertino tests are in `crates/cupertino-server/tests/standard-clients.rs`, 
 crate's `tests/examples.rs`.
 
 `ci/capture.sh kit/controls` and `kit/icons` draw the row 167a controls sheet and a grid of system symbols (`--direction rtl` mirrors them)
-headless, in light and dark at any scale (`examples/kit_capture.rs`, `crates/cupertino-capture`).
+headless, in light and dark at any scale (`examples/kit_capture.rs`, `crates/cupertino-capture`). `kit/counter`, `kit/forms`
+and `kit/virtual-list` draw the examples' windows as they open.
 
 The `control-fixtures` test renders every control in each state it has (normal, hover, pressed, disabled, focused,
 selected) in Light, Dark and both high-contrast appearances, left to right and right to left, through the CPU renderer,

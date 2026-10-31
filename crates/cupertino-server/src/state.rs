@@ -336,6 +336,9 @@ pub struct Cupertino {
     pub data_control_access: Arc<crate::data_control::DataControlAccess>,
     /// The login screen's toggle of its screen reader (`screen_reader`); `None` anywhere else.
     pub screen_reader: Option<crate::screen_reader::ScreenReader>,
+    /// The server runs the login screen: it starts no program but its shell processes and Xwayland, so no terminal, screenshot
+    /// or `exec:` binding, and no process but the login screen's own descends from it.
+    pub login_screen: bool,
     /// The server's copy of the clipboard, kept when its client exits (`clipboard`).
     pub clipboard: crate::clipboard::Clipboard,
     pub viewporter_state: ViewporterState,
@@ -672,6 +675,7 @@ impl Cupertino {
             wlr_data_control_state,
             data_control_access,
             screen_reader: None,
+            login_screen: false,
             clipboard: crate::clipboard::Clipboard::default(),
             viewporter_state,
             fractional_scale_state,
@@ -1907,6 +1911,10 @@ impl Cupertino {
 
     /// Start a prepared command on this compositor's socket.
     pub fn spawn_prepared(&mut self, mut cmd: std::process::Command) {
+        if self.login_screen {
+            tracing::warn!(program = %cmd.get_program().to_string_lossy(), "the login screen starts no programs");
+            return;
+        }
         if let Some(s) = &self.socket_name {
             cmd.env("WAYLAND_DISPLAY", s);
         }

@@ -2,6 +2,7 @@
 //! them. The calls block the manager's thread for the time logind takes, which is short: they only change which session is
 //! in the foreground.
 
+use std::collections::HashMap;
 use std::fmt;
 
 use cupertino_login_ipc::PowerAction;
@@ -9,7 +10,7 @@ use zbus::blocking::proxy::Builder;
 use zbus::blocking::{Connection, MessageIterator, Proxy};
 use zbus::message::Type;
 use zbus::proxy::CacheProperties;
-use zbus::zvariant::OwnedObjectPath;
+use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 use zbus::MatchRule;
 
 use crate::caller::{CallerSession, SEAT};
@@ -19,6 +20,7 @@ const MANAGER_PATH: &str = "/org/freedesktop/login1";
 const MANAGER_INTERFACE: &str = "org.freedesktop.login1.Manager";
 const SESSION_INTERFACE: &str = "org.freedesktop.login1.Session";
 const SEAT_INTERFACE: &str = "org.freedesktop.login1.Seat";
+const PROPERTIES_INTERFACE: &str = "org.freedesktop.DBus.Properties";
 /// The error logind answers `GetSessionByPID` with for a process outside every session.
 const NO_SESSION_FOR_PID: &str = "org.freedesktop.login1.NoSessionForPID";
 /// The error logind answers a restart, shut down or sleep that a block inhibitor stops.
@@ -71,8 +73,26 @@ pub struct SeatSession {
 pub enum Signal {
     /// `SessionRemoved`: the session is gone.
     SessionRemoved(String),
+    /// The seat's `ActiveSession` changed: another session has the console, whoever switched it.
+    ActiveSessionChanged,
     /// The signal stream broke or ended; no signal follows. logind restarted, or the bus went away.
     Ended(String),
+}
+
+/// The body of `org.freedesktop.DBus.Properties.PropertiesChanged`: the interface, the changed and the invalidated properties.
+type PropertiesChanged = (String, HashMap<String, OwnedValue>, Vec<String>);
+
+/// Whether a `PropertiesChanged` of the seat names `ActiveSession`, with its value or without.
+fn names_active_session(changed: &HashMap<String, OwnedValue>, invalidated: &[String]) -> bool {
+    changed.contains_key("ActiveSession") || invalidated.iter().any(|name| name == "ActiveSession")
+}
+
+fn spawn(name: &str, run: impl FnOnce() + Send + 'static) -> zbus::Result<()> {
+    std::thread::Builder::new()
+        .name(name.into())
+        .spawn(run)
+        .map(drop)
+        .map_err(|e| zbus::Error::InputOutput(std::sync::Arc::new(e)))
 }
 
 #[derive(Clone)]
@@ -141,13 +161,14 @@ impl Logind {
             })
     }
 
-    /// Start a thread that calls `notify` for every `SessionRemoved`, and once with [`Signal::Ended`] when the stream ends.
-    pub fn watch(&self, notify: impl Fn(Signal) + Send + 'static) -> Result<(), Error> {
+    /// Start the threads that call `notify` for every `SessionRemoved` and every change of the seat's `ActiveSession`, and
+    /// once with [`Signal::Ended`] when a stream ends.
+    pub fn watch(&self, notify: impl Fn(Signal) + Send + Sync + 'static) -> Result<(), Error> {
         let fail = |source: zbus::Error| Error {
             what: "subscribing to logind's signals",
             source: Box::new(source),
         };
-        let rule = MatchRule::builder()
+        let removed = MatchRule::builder()
             .msg_type(Type::Signal)
             .sender(LOGIND)
             .and_then(|b| b.path(MANAGER_PATH))
@@ -155,24 +176,45 @@ impl Logind {
             .and_then(|b| b.member("SessionRemoved"))
             .map_err(fail)?
             .build();
-        let signals =
-            MessageIterator::for_match_rule(rule, &self.connection, None).map_err(fail)?;
-        std::thread::Builder::new()
-            .name("logind-signals".into())
-            .spawn(move || {
-                for message in signals {
-                    match message.and_then(|m| {
-                        m.body()
-                            .deserialize::<(String, zbus::zvariant::OwnedObjectPath)>()
-                    }) {
-                        Ok((id, _)) => notify(Signal::SessionRemoved(id)),
-                        Err(e) => return notify(Signal::Ended(e.to_string())),
-                    }
+        let changed = MatchRule::builder()
+            .msg_type(Type::Signal)
+            .sender(LOGIND)
+            .and_then(|b| b.interface(PROPERTIES_INTERFACE))
+            .and_then(|b| b.member("PropertiesChanged"))
+            .and_then(|b| b.arg(0, SEAT_INTERFACE))
+            .map_err(fail)?
+            .build();
+        let removed =
+            MessageIterator::for_match_rule(removed, &self.connection, None).map_err(fail)?;
+        let changed =
+            MessageIterator::for_match_rule(changed, &self.connection, None).map_err(fail)?;
+        let notify = std::sync::Arc::new(notify);
+        let on_removed = notify.clone();
+        spawn("logind-sessions", move || {
+            for message in removed {
+                match message.and_then(|m| m.body().deserialize::<(String, OwnedObjectPath)>()) {
+                    Ok((id, _)) => on_removed(Signal::SessionRemoved(id)),
+                    Err(e) => return on_removed(Signal::Ended(e.to_string())),
                 }
-                notify(Signal::Ended("the signal stream ended".to_owned()));
-            })
-            .map(drop)
-            .map_err(|e| fail(zbus::Error::InputOutput(std::sync::Arc::new(e))))
+            }
+            on_removed(Signal::Ended("the signal stream ended".to_owned()));
+        })
+        .map_err(fail)?;
+        spawn("logind-seat", move || {
+            for message in changed {
+                match message.and_then(|m| m.body().deserialize::<PropertiesChanged>()) {
+                    Ok((_, changed, invalidated))
+                        if names_active_session(&changed, &invalidated) =>
+                    {
+                        notify(Signal::ActiveSessionChanged)
+                    }
+                    Ok(_) => {}
+                    Err(e) => return notify(Signal::Ended(e.to_string())),
+                }
+            }
+            notify(Signal::Ended("the seat's signal stream ended".to_owned()));
+        })
+        .map_err(fail)
     }
 
     /// `ActivateSession(id)`: bring the session to the foreground (a switch to its virtual terminal).

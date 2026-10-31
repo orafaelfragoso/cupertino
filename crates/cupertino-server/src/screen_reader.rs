@@ -44,12 +44,15 @@ pub fn take(login_screen: bool) -> Option<OwnedFd> {
     Some(socket)
 }
 
-/// Make this process undumpable: no core file, and no `ptrace` by another process of the same user.
-pub fn harden() {
+/// Make this process undumpable: no core file, and no `ptrace` by another process of the same user. False when it stays
+/// dumpable, and then it must not hold the socket.
+pub fn harden() -> bool {
     // Safety: `prctl(PR_SET_DUMPABLE)` takes integers only.
     if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
-        tracing::error!(error = %std::io::Error::last_os_error(), "the login screen stays dumpable");
+        tracing::error!(error = %std::io::Error::last_os_error(), "the login screen stays dumpable: no screen reader");
+        return false;
     }
+    true
 }
 
 /// Super+Alt+S, with no other modifier.

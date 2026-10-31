@@ -70,6 +70,7 @@ fn with_markers(mut update: AccessibilityUpdate, markers: &[&str]) -> Accessibil
                 live: Some(Live::Assertive),
                 item_count: None,
                 item_index: None,
+                column_index: None,
             },
         ));
         let root = update.root;

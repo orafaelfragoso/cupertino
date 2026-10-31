@@ -27,6 +27,7 @@ A crash in a shell process never takes the desktop down.
 | `cupertino-login` | the login screen, the lock screen (`ext-session-lock`) and the session agent |
 | `cupertino-sessiond` | the root-owned half of login: the login screen's socket, PAM in a worker per attempt, logind sessions and virtual terminals, fast user switching, power, auto login |
 | `cupertino-screenshot` | screen, window and selection capture, toolbar, floating thumbnail |
+| `cupertino-polkit-agent` | the session's polkit authentication agent and its prompt |
 | `cupertino-files` | the file manager |
 | `cupertino-settings` | the settings app |
 | `cupertino-netd` | links, Wi-Fi through iwd, DHCPv4, `resolv.conf`, `org.cupertino.Network1`, on the system bus |

@@ -407,71 +407,88 @@ fn window_lines(trace: &str) -> String {
         .join("\n")
 }
 
-/// The CupertinoKit examples name themselves, are configured and present frames of their window's size on Mutter
-/// ([`presented`]). Still running when the test ends them only means they did not crash; that they render is what
+/// A CupertinoKit example names itself, is configured and presents frames of its window's size on Mutter
+/// ([`presented`]). Still running when the test ends it only means it did not crash; that it renders is what
 /// [`presented`] shows.
-#[test]
-fn kit_examples_present_frames_on_mutter() {
+fn kit_example_presents_frames_on_mutter(
+    example: &str,
+    app_id: &str,
+    title: &str,
+    size: (u32, u32),
+) {
     if !mutter_installed() {
         return;
     }
-    let examples = [
-        (
-            "counter",
-            "org.cupertino.examples.Counter",
-            "Counter",
-            (200, 64),
-        ),
-        ("forms", "org.cupertino.examples.Forms", "Forms", (280, 180)),
-        (
-            "virtual-list",
-            "org.cupertino.examples.VirtualList",
-            "Virtual List",
-            (480, 600),
-        ),
-    ];
-    for (example, app_id, title, size) in examples {
-        let binary = example_binary("cupertino-kit", example);
-        let runtime = runtime(example);
-        let _compositor = start(&runtime.0);
-        let trace = runtime.0.join("client-trace");
-        let process = Command::new(binary)
-            .env_clear()
-            .env("XDG_RUNTIME_DIR", &runtime.0)
-            .env("WAYLAND_DISPLAY", SOCKET)
-            .env("WAYLAND_DEBUG", "client")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(std::fs::File::create(&trace).unwrap())
-            .spawn()
-            .expect("start the example");
-        let mut client = Client(process);
-        let deadline = Instant::now() + TIMEOUT;
-        loop {
-            let text = std::fs::read_to_string(&trace).unwrap_or_default();
-            let result = presented(&text, app_id, title, size);
-            if result.is_ok() {
-                break;
-            }
-            if let Some(status) = client.0.try_wait().unwrap() {
-                panic!(
-                    "{example} exited ({status}) before it presented: {result:?}\n{}",
-                    window_lines(&text)
-                );
-            }
-            assert!(
-                Instant::now() < deadline,
-                "{example} did not present on mutter: {result:?}\n{}",
+    let binary = example_binary("cupertino-kit", example);
+    let runtime = runtime(example);
+    let _compositor = start(&runtime.0);
+    let trace = runtime.0.join("client-trace");
+    let process = Command::new(binary)
+        .env_clear()
+        .env("XDG_RUNTIME_DIR", &runtime.0)
+        .env("WAYLAND_DISPLAY", SOCKET)
+        .env("WAYLAND_DEBUG", "client")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(std::fs::File::create(&trace).unwrap())
+        .spawn()
+        .expect("start the example");
+    let mut client = Client(process);
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let text = std::fs::read_to_string(&trace).unwrap_or_default();
+        let result = presented(&text, app_id, title, size);
+        if result.is_ok() {
+            break;
+        }
+        if let Some(status) = client.0.try_wait().unwrap() {
+            panic!(
+                "{example} exited ({status}) before it presented: {result:?}\n{}",
                 window_lines(&text)
             );
-            std::thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(
-            client.0.try_wait().unwrap(),
-            None,
-            "{example} ended by itself"
+        assert!(
+            Instant::now() < deadline,
+            "{example} did not present on mutter: {result:?}\n{}",
+            window_lines(&text)
         );
+        std::thread::sleep(Duration::from_millis(20));
     }
+    assert_eq!(
+        client.0.try_wait().unwrap(),
+        None,
+        "{example} ended by itself"
+    );
+}
+
+#[test]
+fn the_counter_example_presents_frames_on_mutter() {
+    kit_example_presents_frames_on_mutter(
+        "counter",
+        "org.cupertino.examples.Counter",
+        "Counter",
+        (200, 64),
+    );
+}
+
+#[test]
+fn the_forms_example_presents_frames_on_mutter() {
+    kit_example_presents_frames_on_mutter(
+        "forms",
+        "org.cupertino.examples.Forms",
+        "Forms",
+        (280, 180),
+    );
+}
+
+#[test]
+fn the_virtual_list_example_presents_frames_on_mutter() {
+    kit_example_presents_frames_on_mutter(
+        "virtual-list",
+        "org.cupertino.examples.VirtualList",
+        "Virtual List",
+        (480, 600),
+    );
 }
 
 /// The trace check follows the window's own toplevel, xdg_surface and wl_surface by id and names what is missing, in

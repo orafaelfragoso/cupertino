@@ -322,48 +322,64 @@ fn testclient_writes_what_is_typed_and_exits_on_close() {
     server.wait_for_exit(&mut child);
 }
 
-/// The CupertinoKit examples map with their app id and title, commit a buffer of their window's size, and end with a
-/// success when the server closes their only window.
+/// A CupertinoKit example maps with its app id and title, commits a buffer of its window's size, and ends with a
+/// success when the server closes its only window.
+fn kit_example_maps_at_its_size_and_exits_on_close(
+    example: &'static str,
+    app_id: &str,
+    title: &str,
+    size: (i32, i32),
+) {
+    let Some(mut server) = Server::start() else {
+        return;
+    };
+    let mut child = server.launch(Binary::Kit(example), &[]);
+    server.wait_until("the window to map with a buffer", |s| {
+        s.windows.iter().find(|w| w.mapped).is_some_and(|w| {
+            with_renderer_surface_state(w.surface(), |s| s.buffer_size())
+                .flatten()
+                .is_some()
+        })
+    });
+    assert_eq!(
+        identity(&server.state),
+        (Some(app_id.to_owned()), Some(title.to_owned()))
+    );
+    let window = server.state.windows.iter().find(|w| w.mapped).unwrap();
+    let buffer = with_renderer_surface_state(window.surface(), |s| s.buffer_size())
+        .flatten()
+        .map(|size| (size.w, size.h));
+    assert_eq!(buffer, Some(size));
+    window.close();
+    server.wait_for_exit(&mut child);
+}
+
 #[test]
-fn kit_examples_map_at_their_size_and_exit_on_close() {
-    let examples = [
-        (
-            "counter",
-            "org.cupertino.examples.Counter",
-            "Counter",
-            (200, 64),
-        ),
-        ("forms", "org.cupertino.examples.Forms", "Forms", (280, 180)),
-        (
-            "virtual-list",
-            "org.cupertino.examples.VirtualList",
-            "Virtual List",
-            (480, 600),
-        ),
-    ];
-    for (example, app_id, title, size) in examples {
-        let Some(mut server) = Server::start() else {
-            return;
-        };
-        let mut child = server.launch(Binary::Kit(example), &[]);
-        server.wait_until("the window to map with a buffer", |s| {
-            s.windows.iter().find(|w| w.mapped).is_some_and(|w| {
-                with_renderer_surface_state(w.surface(), |s| s.buffer_size())
-                    .flatten()
-                    .is_some()
-            })
-        });
-        assert_eq!(
-            identity(&server.state),
-            (Some(app_id.to_owned()), Some(title.to_owned())),
-            "{example}"
-        );
-        let window = server.state.windows.iter().find(|w| w.mapped).unwrap();
-        let buffer = with_renderer_surface_state(window.surface(), |s| s.buffer_size())
-            .flatten()
-            .map(|size| (size.w, size.h));
-        assert_eq!(buffer, Some(size), "{example}");
-        window.close();
-        server.wait_for_exit(&mut child);
-    }
+fn the_counter_example_maps_at_its_size_and_exits_on_close() {
+    kit_example_maps_at_its_size_and_exits_on_close(
+        "counter",
+        "org.cupertino.examples.Counter",
+        "Counter",
+        (200, 64),
+    );
+}
+
+#[test]
+fn the_forms_example_maps_at_its_size_and_exits_on_close() {
+    kit_example_maps_at_its_size_and_exits_on_close(
+        "forms",
+        "org.cupertino.examples.Forms",
+        "Forms",
+        (280, 180),
+    );
+}
+
+#[test]
+fn the_virtual_list_example_maps_at_its_size_and_exits_on_close() {
+    kit_example_maps_at_its_size_and_exits_on_close(
+        "virtual-list",
+        "org.cupertino.examples.VirtualList",
+        "Virtual List",
+        (480, 600),
+    );
 }

@@ -208,6 +208,7 @@ pub fn window<M: Clone>(content: Element<M>) -> Vec<Window<M>> {
         shortcuts: CommandRegistry::new(),
         on_close: None,
         background: WindowBackground::Theme,
+        popup: None,
         content,
     }]
 }
@@ -303,7 +304,8 @@ impl<A: Application> Harness<A> {
             }
             self.rt.step(turns()).unwrap();
             let system = self.rt.window_system_mut();
-            if !system.frame_requested(self.window).unwrap() {
+            // a popup the step closed asks for nothing more
+            if !system.frame_requested(self.window).unwrap_or(false) {
                 return;
             }
             system.frame_ready(self.window, Timestamp(0)).unwrap();

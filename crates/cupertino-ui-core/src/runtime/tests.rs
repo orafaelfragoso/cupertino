@@ -70,6 +70,7 @@ impl Application for Counter {
                 "plus".to_string(),
             ),
             on_close: None,
+            popup: None,
             background: if model.panel {
                 WindowBackground::None
             } else {
@@ -612,6 +613,7 @@ impl Application for Holder {
             shortcuts: CommandRegistry::new(),
             on_close: None,
             background: WindowBackground::Theme,
+            popup: None,
             content: Element::new(Leaf {
                 stop: true,
                 ..leaf("hold")
@@ -798,6 +800,7 @@ impl Application for Sleeper {
             shortcuts: CommandRegistry::new(),
             on_close: None,
             background: WindowBackground::Theme,
+            popup: None,
             content: Element::new(content),
         }]
     }
@@ -1095,6 +1098,7 @@ impl Application for Choices {
             shortcuts: CommandRegistry::new(),
             on_close: None,
             background: WindowBackground::Theme,
+            popup: None,
             content: Element::new(row(vec![
                 Element::new(leaf("before")).key("before"),
                 Element::new(Group {
@@ -1427,6 +1431,7 @@ impl Application for Scrolling {
             shortcuts: CommandRegistry::new(),
             on_close: None,
             background: WindowBackground::Theme,
+            popup: None,
             content: Element::new(Pane {
                 name: "outer",
                 height: SizeSpec::Fill,
@@ -1579,6 +1584,7 @@ impl Application for NestedPanes {
             shortcuts: CommandRegistry::new(),
             on_close: None,
             background: WindowBackground::Theme,
+            popup: None,
             content: Element::new(Pane {
                 name: "outer",
                 height: SizeSpec::Fill,

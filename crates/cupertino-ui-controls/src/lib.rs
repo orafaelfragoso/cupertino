@@ -12,6 +12,7 @@ mod list;
 mod look;
 mod navigation;
 mod pages;
+mod popover;
 mod press;
 mod progress;
 mod scroll;
@@ -31,7 +32,7 @@ pub use split::DividerState;
 pub use stepper::StepperState;
 
 use cupertino_geometry::Insets;
-use cupertino_ui_core::{Checked, Element};
+use cupertino_ui_core::{Checked, Element, Key, WindowKey};
 use cupertino_ui_layout::{Align, Axis, ScrollState};
 use cupertino_ui_text::{AttributedText, ContentPurpose, SecureBuffer};
 use cupertino_ui_theme::ColorRole;
@@ -355,6 +356,21 @@ pub struct SplitView<M> {
     pub min_leading: f64,
     pub min_trailing: f64,
     pub on_change: Option<Handler<SplitLayout, M>>,
+}
+
+/// A panel below a control of another window: a non-modal dialog that takes the keyboard while open, moves the focus
+/// to its first focusable item, keeps Tab inside, and closes on Escape or a press outside. Closing gives the focus
+/// back to the anchor. Declare [`Popover::window`] with the other windows while it is open.
+pub struct Popover<M> {
+    /// The window the anchor is in.
+    pub parent: WindowKey,
+    /// The key of the node it opens below.
+    pub anchor: Key,
+    /// What assistive technology calls it, usually the anchor's label.
+    pub label: String,
+    pub content: Element<M>,
+    /// Sent on Escape or a press outside; the application then stops declaring the popover.
+    pub on_close: M,
 }
 
 /// The selected rows of a list, as indices into the rows as currently shown, and the row the keyboard is on. When the

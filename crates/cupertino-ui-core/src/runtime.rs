@@ -17,15 +17,16 @@ use crate::task::Executor;
 use crate::tree::Tree;
 use crate::{
     AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, Application, Clock, Command,
-    Environment, Event, FocusTarget, FrameSnapshot, Icons, Key, NodeId, NodeSnapshot, Pending,
-    Propagation, StepStatus, UiError, Window, WindowBackground, WindowKey,
+    Element, Environment, Event, FocusTarget, FrameSnapshot, Icons, Key, NodeId, NodeSnapshot,
+    Pending, Popup, PopupAnchor, Propagation, StepStatus, UiError, Window, WindowBackground,
+    WindowKey,
 };
-use cupertino_geometry::{Point, Size};
+use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutOptions, LayoutStats};
 use cupertino_ui_platform::{
-    ClipboardData, ClipboardKind, ConfigureId, KeyEvent, Keysym, PlatformError, PlatformEvent,
-    PresentOutcome, SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest,
-    WindowSpec, WindowSystem,
+    ClipboardData, ClipboardKind, ConfigureId, ConstraintAdjust, KeyEvent, Keysym, PlatformError,
+    PlatformEvent, PopupEdge, PopupSpec, PresentOutcome, SystemAppearance, Timestamp, TouchEvent,
+    WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, DisplayList, PaintResources, RenderRequest, UiRenderer,
@@ -143,6 +144,17 @@ struct WindowState<M> {
     renderer: Box<dyn UiRenderer<Frame = CpuFrame>>,
     /// The error of the last frame, until one renders and presents; animations wait for that.
     failed: Option<UiError>,
+    popup: Option<PopupState<M>>,
+}
+
+struct PopupState<M> {
+    parent: WindowKey,
+    anchor: PopupAnchor,
+    /// What the content measured at the last view.
+    size: Size,
+    on_dismiss: M,
+    /// Where the popup was last placed, so it moves only when its anchor or size changes.
+    placed: PopupSpec,
 }
 
 /// Runs an application on a window system.
@@ -156,6 +168,8 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     executor: Executor<A::Message>,
     events: Vec<PlatformEvent>,
     view_dirty: bool,
+    /// Parents whose popups wait for their first layout to find the anchor.
+    awaiting_layout: Vec<WindowKey>,
     exit: bool,
     theme_for: Option<ThemeForAppearance>,
 }
@@ -174,6 +188,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             executor,
             events: Vec::new(),
             view_dirty: true,
+            awaiting_layout: Vec::new(),
             exit: false,
             theme_for: None,
         };
@@ -376,6 +391,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     /// Rebuilds every window from the model and reconciles it with the tree.
     fn view(&mut self) -> Result<(), UiError> {
         let mut old: Vec<WindowState<A::Message>> = std::mem::take(&mut self.windows);
+        let (mut popups, toplevels): (Vec<_>, Vec<_>) = A::view(&self.model)
+            .into_iter()
+            .partition(|w| w.popup.is_some());
         for Window {
             key,
             spec,
@@ -383,9 +401,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             on_close,
             background,
             content,
-        } in A::view(&self.model)
+            popup: _,
+        } in toplevels
         {
-            let mut w = match old.iter().position(|w| w.key == key) {
+            let mut w = match old.iter().position(|w| w.key == key && w.popup.is_none()) {
                 Some(i) => {
                     let mut w = old.remove(i);
                     if w.spec.title != spec.title {
@@ -421,6 +440,33 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             w.invalidate();
             self.windows.push(w);
         }
+        // each popup after its parent, which may be a popup declared later; one without an open parent stays closed
+        while let Some(i) = popups.iter().position(|w| {
+            w.popup
+                .as_ref()
+                .is_some_and(|p| self.windows.iter().any(|open| open.key == p.parent))
+        }) {
+            let Window {
+                key,
+                spec,
+                shortcuts,
+                on_close,
+                background,
+                content,
+                popup,
+            } = popups.remove(i);
+            let popup = popup.expect("partitioned as a popup");
+            if let Some(mut w) = self.popup(key, spec, popup, content, &mut old)? {
+                w.shortcuts = shortcuts;
+                w.on_close = on_close;
+                w.background = background;
+                w.invalidate();
+                self.windows.push(w);
+            }
+        }
+        // popups go before their parents, the latest first, as the protocol destroys them
+        old.reverse();
+        old.sort_by_key(|w| w.popup.is_none());
         for w in old {
             self.close(w);
         }
@@ -496,7 +542,83 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             resources: PaintResources::default(),
             renderer: (self.options.renderers)(),
             failed: None,
+            popup: None,
         }
+    }
+
+    /// Opens or keeps a declared popup of an open parent. `None` when the parent has not laid out its anchor yet.
+    fn popup(
+        &mut self,
+        key: WindowKey,
+        spec: WindowSpec,
+        popup: Popup<A::Message>,
+        content: Element<A::Message>,
+        old: &mut Vec<WindowState<A::Message>>,
+    ) -> Result<Option<WindowState<A::Message>>, UiError> {
+        let mut existing = old
+            .iter()
+            .position(|w| w.key == key && w.popup.is_some())
+            .map(|i| old.remove(i));
+        let parent = self
+            .windows
+            .iter()
+            .find(|w| w.key == popup.parent)
+            .expect("a popup is opened after its parent");
+        let root = self
+            .tree
+            .reconcile(existing.as_mut().and_then(|w| w.root.take()), content)?;
+        let env = parent.env.clone();
+        let measured = layout(
+            &TreeView {
+                tree: &self.tree,
+                env: &env,
+            },
+            root,
+            Constraints::loose(spec.size).map_err(UiError::Layout)?,
+            &LayoutOptions {
+                direction: env.direction,
+                node_limit: self.options.node_limit,
+            },
+        )
+        .map_err(UiError::Layout)?;
+        let size = measured.nodes.get(&root).map_or(spec.size, |n| n.rect.size);
+        if let Some(mut w) = existing {
+            let state = w.popup.as_mut().expect("only popups are taken");
+            state.parent = popup.parent;
+            state.anchor = popup.anchor;
+            state.size = size;
+            state.on_dismiss = popup.on_dismiss;
+            w.spec = spec;
+            w.root = Some(root);
+            return Ok(Some(w));
+        }
+        let Some(placed) = place(&self.tree, parent, &popup.anchor, popup.grab, size) else {
+            // a parent laid out without the anchor waits for the next view; retrying at once would never settle
+            if parent.geometry.is_empty() && !self.awaiting_layout.contains(&popup.parent) {
+                self.awaiting_layout.push(popup.parent);
+            }
+            self.tree.unmount(root);
+            return Ok(None);
+        };
+        let id = match self.system.create_popup(parent.id, &placed) {
+            Ok(id) => id,
+            Err(e) => {
+                self.tree.unmount(root);
+                return Err(UiError::Platform(e));
+            }
+        };
+        let mut w = self.new_window(key, id, spec);
+        w.env = env;
+        w.size = size;
+        w.popup = Some(PopupState {
+            parent: popup.parent,
+            anchor: popup.anchor,
+            size,
+            on_dismiss: popup.on_dismiss,
+            placed,
+        });
+        w.root = Some(root);
+        Ok(Some(w))
     }
 
     fn platform_event(&mut self, event: PlatformEvent) -> Result<(), UiError> {
@@ -612,9 +734,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     route(&mut self.tree, w, now, &mut effects).notify(node, &Event::Ime(ime));
                 }
             }
-            WindowEvent::PopupDone
-            | WindowEvent::Presented { .. }
-            | WindowEvent::Discarded { .. } => return Ok(()),
+            WindowEvent::PopupDone => {
+                if let Some(popup) = &w.popup {
+                    self.messages.push_back(popup.on_dismiss.clone());
+                }
+                return Ok(());
+            }
+            WindowEvent::Presented { .. } | WindowEvent::Discarded { .. } => return Ok(()),
         }
         self.apply(i, effects);
         Ok(())
@@ -889,8 +1015,54 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
             }
         }
+        self.follow_anchors();
+        if !self.awaiting_layout.is_empty() {
+            let before = self.awaiting_layout.len();
+            let windows = &self.windows;
+            self.awaiting_layout.retain(|key| {
+                windows
+                    .iter()
+                    .any(|w| &w.key == key && w.geometry.is_empty())
+            });
+            if self.awaiting_layout.len() < before {
+                self.view_dirty = true;
+            }
+        }
         self.sync_accessibility();
         Ok(())
+    }
+
+    /// Moves each open popup whose anchor moved or whose content changed size, once the parents are laid out.
+    fn follow_anchors(&mut self) {
+        for i in 0..self.windows.len() {
+            let Some(state) = &self.windows[i].popup else {
+                continue;
+            };
+            let Some(placed) = self
+                .windows
+                .iter()
+                .find(|w| w.key == state.parent)
+                .and_then(|parent| {
+                    place(
+                        &self.tree,
+                        parent,
+                        &state.anchor,
+                        state.placed.grab,
+                        state.size,
+                    )
+                })
+                .filter(|placed| *placed != state.placed)
+            else {
+                continue;
+            };
+            let w = &mut self.windows[i];
+            let _ = self
+                .system
+                .request(w.id, WindowRequest::Reposition(placed.clone()));
+            if let Some(state) = &mut w.popup {
+                state.placed = placed;
+            }
+        }
     }
 
     fn frame_window(
@@ -1193,6 +1365,47 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 .is_some_and(|n| n.key.as_ref() == Some(key))
         })
     }
+}
+
+/// Where a popup of `parent` opens, in the parent's coordinates; `None` while its anchor is not laid out.
+fn place<M: 'static>(
+    tree: &Tree<M>,
+    parent: &WindowState<M>,
+    anchor: &PopupAnchor,
+    grab: bool,
+    size: Size,
+) -> Option<PopupSpec> {
+    let (anchor_rect, edge, offset) = match anchor {
+        PopupAnchor::Below { key, gap } => {
+            let node = tree
+                .preorder(parent.root?)
+                .into_iter()
+                .find(|&n| tree.get(n).is_some_and(|n| n.key.as_ref() == Some(key)))?;
+            let rect = parent.geometry.get(&node)?.rect;
+            (rect, PopupEdge::Bottom, Point::new(0.0, *gap))
+        }
+        PopupAnchor::At(point) => {
+            let edge = match parent.env.direction {
+                LayoutDirection::Ltr => PopupEdge::BottomRight,
+                LayoutDirection::Rtl => PopupEdge::BottomLeft,
+            };
+            (Rect::new(point.x, point.y, 1.0, 1.0), edge, Point::ZERO)
+        }
+    };
+    Some(PopupSpec {
+        anchor_rect,
+        anchor: edge,
+        gravity: edge,
+        offset,
+        size,
+        constraint: ConstraintAdjust {
+            slide: true,
+            flip: true,
+            resize: false,
+        },
+        reactive: true,
+        grab,
+    })
 }
 
 /// The buffer size of a logical length, rounded to the nearest pixel with halves up, as the window system sizes the

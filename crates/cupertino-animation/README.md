@@ -13,6 +13,8 @@ curve samples identically at any refresh rate.
 | `rubber_band` | `RubberBand` and free functions: elastic overscroll `d·(1 − 1/(x·c/d + 1))`, inverse, slope, clamp helper. Coefficient `c` is configurable, default 0.55 |
 | `rubber_band` | `ElasticMotion` (`(x0 + v·t·0.31)·exp(−20t/1.6)`), `RubberBandFilterConfig` / `RubberBandFilter` (stiffness 20, direction lock 1.0, min delta 10) |
 | `animator` | `AnimatedValue<T>`, `Curve`, `Animatable`: retargetable animations with C¹ continuity, gesture tracking and release |
+| `scroll` | `KineticScroller`: drag, fling and rubber-band overscroll along one axis, queried by absolute time. `ScrollConfig` (defaults: quartic momentum, viewport 800, drag coefficient 0.55, velocity window 0.1 s, no fling below 50 pt/s), `MomentumKind` (`Quartic` or `Exponential`) |
+| `velocity` | `VelocityTracker`: least-squares velocity over a sliding window of samples (0.1 s by default) |
 
 The physics are written up.
 

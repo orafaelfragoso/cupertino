@@ -47,7 +47,7 @@ pub struct Device {
 
 /// The listed file systems of `objects` (udisks' managed objects), sorted by name: a block with a file system whose
 /// usage is `filesystem`, which udisks neither hides nor counts as the system's, and which belongs to a drive (a loop
-/// device belongs to none). A name keeps only the characters [`shown`] lets through.
+/// device belongs to none). A name is [`shown`] text.
 pub fn devices(objects: &ManagedObjects) -> Vec<Device> {
     let mut out: Vec<Device> = objects
         .iter()
@@ -77,13 +77,7 @@ pub fn devices(objects: &ManagedObjects) -> Vec<Device> {
             ]
             .into_iter()
             .flatten()
-            .map(|n| {
-                n.chars()
-                    .filter(|c| shown(*c))
-                    .collect::<String>()
-                    .trim()
-                    .to_string()
-            })
+            .map(|n| shown(n.trim()).trim().to_string())
             .find(|n| !n.is_empty())
             .unwrap_or_else(|| {
                 let size = block
@@ -106,11 +100,39 @@ pub fn devices(objects: &ManagedObjects) -> Vec<Device> {
     out
 }
 
-/// Whether a character of a name is drawn: a label is the file system's own text, and a control or bidirectional
-/// formatting character in it would break the row or reorder the notification's sentence around it.
-fn shown(c: char) -> bool {
-    !c.is_control()
-        && !matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+/// The most characters of a device's text that Files shows; longer text ends in an ellipsis.
+const MAX_CHARS: usize = 256;
+
+/// `text` as shown: a label or an error message is the device's own text, so it loses the control and bidirectional
+/// formatting characters that would break the row or reorder the sentence around it, and is cut to [`MAX_CHARS`].
+fn shown(text: &str) -> String {
+    let mut out = String::new();
+    for (count, c) in text
+        .chars()
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(
+                    c,
+                    '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+                )
+        })
+        .enumerate()
+    {
+        if count == MAX_CHARS {
+            out.pop();
+            out.push('…');
+            break;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// `text` as literal notification body text: the body is read as markup, where a link would open.
+fn escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn text(properties: &HashMap<String, OwnedValue>, key: &str) -> Option<String> {
@@ -168,9 +190,11 @@ pub fn notice(operation: Operation, name: &str, e: &zbus::Error) -> Option<Notic
         Some("NotAuthorized") => (failed, "You aren't allowed to do this.".to_string()),
         _ => (
             failed,
-            message
-                .filter(|m| !m.is_empty())
-                .map_or_else(|| e.to_string(), str::to_string),
+            escape(&shown(
+                &message
+                    .filter(|m| !m.is_empty())
+                    .map_or_else(|| e.to_string(), str::to_string),
+            )),
         ),
     };
     Some(Notice { summary, body })
@@ -509,5 +533,27 @@ mod tests {
             .body,
             "wrong fs type"
         );
+        let link = notice(
+            Operation::Mount,
+            "KINGSTON",
+            &error(
+                "org.freedesktop.UDisks2.Error.Failed",
+                "Error mounting /dev/sdb1 at /run/media/ada/<a href=x>y</a>: bad superblock",
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            link.body,
+            "Error mounting /dev/sdb1 at /run/media/ada/&lt;a href=x&gt;y&lt;/a&gt;: bad superblock"
+        );
+    }
+
+    #[test]
+    fn device_text_loses_what_would_disguise_it_and_is_cut_at_256_characters() {
+        assert_eq!(shown("\u{202e}Spoo\u{061c}f\ned\u{2069}"), "Spoofed");
+        let long = shown(&"x".repeat(300));
+        assert_eq!(long.chars().count(), 256);
+        assert!(long.ends_with("x…"));
+        assert_eq!(shown(&"x".repeat(256)), "x".repeat(256));
     }
 }

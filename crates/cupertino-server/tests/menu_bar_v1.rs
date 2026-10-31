@@ -4119,6 +4119,7 @@ fn a_timed_out_check_of_the_reader_is_made_again() {
 const KEYCODE_SHIFT: u32 = 42 + 8;
 const KEYCODE_SUPER: u32 = 125 + 8;
 const KEYCODE_SLASH: u32 = 53 + 8;
+const KEYCODE_7: u32 = 8 + 8;
 
 /// The value of `help_search` in the bound_action enum.
 const HELP_SEARCH: u32 = 13;
@@ -4137,10 +4138,15 @@ impl Harness {
 
     /// Press and release Shift+Super+/.
     fn help_search_chord(&mut self) {
+        self.shift_super(KEYCODE_SLASH);
+    }
+
+    /// Press and release Shift+Super and the key `code`.
+    fn shift_super(&mut self, code: u32) {
         self.key(KEYCODE_SUPER, true);
         self.key(KEYCODE_SHIFT, true);
-        self.key(KEYCODE_SLASH, true);
-        self.key(KEYCODE_SLASH, false);
+        self.key(code, true);
+        self.key(code, false);
         self.key(KEYCODE_SHIFT, false);
         self.key(KEYCODE_SUPER, false);
     }
@@ -4244,6 +4250,31 @@ fn the_shortcut_group_carries_the_help_search_chord_under_both_profiles() {
     let before = engage_help_events(&bar);
     h.help_search_chord();
     h.wait_until("engage_help", |_| engage_help_events(&bar) == before + 1);
+}
+
+#[test]
+fn the_help_search_chord_is_shift_super_7_where_the_layout_types_slash_with_shift_7() {
+    let Some(mut h) = Harness::with_config(|c| {
+        c.keyboard.sources = vec![cupertino_server::kbd::SourceSpec::parse("de").unwrap()];
+    }) else {
+        return;
+    };
+    let bar = bar_at(&mut h, 12);
+    h.shift_super(KEYCODE_7);
+    h.wait_until("engage_help", |_| engage_help_events(&bar) == 1);
+    h.state.apply_keyboard_change(
+        &KeyboardSettings::default(),
+        &KeyboardSettings {
+            modifier_profile: Some(ModifierProfile::ClassicPc),
+            ..KeyboardSettings::default()
+        },
+    );
+    h.wait_for_groups(&bar, 5);
+    h.shift_super(KEYCODE_7);
+    h.wait_until("engage_help under classic-pc", |_| {
+        engage_help_events(&bar) == 2
+    });
+    assert_eq!(bar.error(), None);
 }
 
 // ---- Force Quit <app> with Alt held (version 13) -----------------------------------------------

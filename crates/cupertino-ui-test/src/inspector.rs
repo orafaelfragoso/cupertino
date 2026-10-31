@@ -27,9 +27,21 @@ fn node(out: &mut String, id: impl std::fmt::Debug, n: &AccessibilityNode) {
         Some(other) => format!("{other:?}"),
     };
     let live = n.live.map(|l| format!(" live={l:?}")).unwrap_or_default();
+    let items = n
+        .item_count
+        .map(|c| format!(" items={c}"))
+        .unwrap_or_default();
+    let index = n
+        .item_index
+        .map(|i| format!(" index={i}"))
+        .unwrap_or_default();
+    let column = n
+        .column_index
+        .map(|c| format!(" column={c}"))
+        .unwrap_or_default();
     let _ = writeln!(
         out,
-        "  {id:?} role={:?} name={:?} description={:?} value={value}{live} states={:?} bounds=[{}] actions={:?} \
+        "  {id:?} role={:?} name={:?} description={:?} value={value}{live}{items}{index}{column} states={:?} bounds=[{}] actions={:?} \
          relations={:?} children={:?}",
         n.role,
         n.name,
@@ -246,6 +258,20 @@ display
         assert!(shown.contains("value=Text { value: \"visible\""), "{shown}");
         let hidden = Inspector::default().dump(&snapshot(AccessibleValue::Protected));
         assert!(hidden.contains("value=<protected>"), "{hidden}");
+    }
+
+    #[test]
+    fn an_items_place_is_shown_only_when_set() {
+        let mut frame = snapshot(AccessibleValue::Protected);
+        let node = &mut frame.accessibility[0].1;
+        node.item_count = Some(6);
+        node.item_index = Some(0);
+        node.column_index = Some(1);
+        let dump = Inspector::default().dump(&frame);
+        assert!(
+            dump.contains("value=<protected> items=6 index=0 column=1 states="),
+            "{dump}"
+        );
     }
 
     #[test]

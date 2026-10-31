@@ -1,23 +1,29 @@
 //! The `cupertino-testclient` process: a first-party application window for the QEMU harness.
 //! It maps one window with the given application id and title, and appends what is typed into it to a file, so a
-//! check can tell which window has the keyboard focus. It is not part of the desktop.
+//! check can tell which window has the keyboard focus. With `--frames FILE` it draws a new frame at every frame callback
+//! and writes how many it presented to FILE, so a check can tell that the server keeps releasing its buffers. It is not
+//! part of the desktop.
 
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use cupertino_wayland_client::{
     BufferFormat, Connection, Decorations, Error as TransportError, Event, KeyboardEvent, Toplevel,
     ToplevelConfig,
 };
 
-const USAGE: &str = "usage: cupertino-testclient --app-id ID --title TITLE --output FILE";
+const USAGE: &str =
+    "usage: cupertino-testclient --app-id ID --title TITLE --output FILE [--frames FILE]";
 
 /// Logical size of the window when the server leaves it to the client; the test checks never depend on it.
 const WINDOW_SIZE: (u32, u32) = (480, 320);
 /// Content grey, distinct from the desktop picture so a mapped window changes a screendump.
 const FILL_GREY: u8 = 236;
+/// How long an animating window waits for the server to release a buffer before it tries again.
+const RETRY: Duration = Duration::from_millis(16);
 /// Evdev code of the Return key.
 const KEY_ENTER: u32 = 28;
 
@@ -25,17 +31,19 @@ struct Options {
     app_id: String,
     title: String,
     output: String,
+    frames: Option<String>,
 }
 
 impl Options {
     fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
-        let (mut app_id, mut title, mut output) = (None, None, None);
+        let (mut app_id, mut title, mut output, mut frames) = (None, None, None, None);
         let mut args = args;
         while let Some(flag) = args.next() {
             let slot = match flag.as_str() {
                 "--app-id" => &mut app_id,
                 "--title" => &mut title,
                 "--output" => &mut output,
+                "--frames" => &mut frames,
                 other => return Err(format!("unknown argument {other}")),
             };
             *slot = Some(args.next().ok_or_else(|| format!("{flag} needs a value"))?);
@@ -44,6 +52,7 @@ impl Options {
             app_id: app_id.ok_or("--app-id is required")?,
             title: title.ok_or("--title is required")?,
             output: output.ok_or("--output is required")?,
+            frames,
         })
     }
 }
@@ -57,15 +66,15 @@ fn typed_text(code: u32, character: Option<char>) -> Option<char> {
     }
 }
 
-/// Fill the window grey and present it; `false` when the server still holds every buffer, so the next frame callback
-/// has to retry.
-fn draw(conn: &mut Connection, toplevel: Toplevel) -> Result<bool, TransportError> {
+/// Fill the window with `grey` and present it; `false` when the server still holds every buffer, so the next frame
+/// callback has to retry.
+fn draw(conn: &mut Connection, toplevel: Toplevel, grey: u8) -> Result<bool, TransportError> {
     let mut lease = match conn.lease(toplevel.surface(), WINDOW_SIZE, BufferFormat::Xrgb8888) {
         Ok(lease) => lease,
         Err(TransportError::NoFreeBuffer) => return Ok(false),
         Err(e) => return Err(e),
     };
-    lease.pixels_mut().fill(FILL_GREY);
+    lease.pixels_mut().fill(grey);
     lease.present()?;
     Ok(true)
 }
@@ -82,9 +91,10 @@ fn run(options: &Options) -> Result<(), Box<dyn Error>> {
         decorations: Decorations::Server,
     })?;
     let mut output: Option<File> = None;
-    let (mut configured, mut dirty) = (false, false);
+    let (mut configured, mut dirty, mut blocked) = (false, false, false);
+    let mut presented: u64 = 0;
     loop {
-        for event in conn.wait(None)? {
+        for event in conn.wait(blocked.then_some(RETRY))? {
             match event {
                 Event::Configure { .. } => (configured, dirty) = (true, true),
                 Event::ScaleChanged { .. } => dirty = true,
@@ -102,14 +112,26 @@ fn run(options: &Options) -> Result<(), Box<dyn Error>> {
                         write!(file, "{c}")?;
                     }
                 }
+                Event::Frame(_) if options.frames.is_some() => dirty = true,
                 Event::Close(_) => return Ok(()),
                 _ => {}
             }
         }
-        if configured && dirty && draw(&mut conn, toplevel)? {
-            dirty = false;
-            if output.is_none() {
-                output = Some(File::create(&options.output)?);
+        if configured && dirty {
+            let grey = match options.frames {
+                Some(_) => FILL_GREY - (presented % 16) as u8,
+                None => FILL_GREY,
+            };
+            blocked = !draw(&mut conn, toplevel, grey)?;
+            if !blocked {
+                dirty = false;
+                presented += 1;
+                if output.is_none() {
+                    output = Some(File::create(&options.output)?);
+                }
+                if let Some(frames) = &options.frames {
+                    std::fs::write(frames, presented.to_string())?;
+                }
             }
         }
     }
@@ -161,6 +183,12 @@ mod tests {
             ),
             ("one", "Two", "/tmp/x")
         );
+        assert_eq!(parsed.frames, None);
+        let animating = Options::parse(args(
+            "--app-id one --title Two --output /tmp/x --frames /tmp/f",
+        ))
+        .unwrap();
+        assert_eq!(animating.frames.as_deref(), Some("/tmp/f"));
         assert_eq!(
             Options::parse(args("--app-id one --title Two"))
                 .err()

@@ -1576,7 +1576,9 @@ impl KeyInfo {
         // We can make a wrong assumption here,
         // but leaving gaps is worse.
 
-        let group0 = self.groups.get(&0).unwrap().clone();
+        // a key that only a later layout defines (the extra key of `br`) has no group 0: copy an empty one, as
+        // libxkbcommon's undefined first group
+        let group0 = self.groups.get(&0).cloned().unwrap_or_else(GroupInfo::new);
 
         for i in 0..self.groups.keys().max().copied().unwrap_or(0) {
             if let Some(groupi) = self.groups.get_mut(&i) {

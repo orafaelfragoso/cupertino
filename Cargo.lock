@@ -1182,6 +1182,7 @@ dependencies = [
  "cupertino-apps",
  "cupertino-assets",
  "cupertino-decorations",
+ "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-glass",
  "cupertino-icons",

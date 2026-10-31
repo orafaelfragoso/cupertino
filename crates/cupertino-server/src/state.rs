@@ -1897,13 +1897,10 @@ impl Cupertino {
 
     pub fn spawn_terminal(&mut self) {
         let candidates = self.config.terminals.clone();
-        for t in &candidates {
-            if which(t).is_some() {
-                self.spawn(t, &[]);
-                return;
-            }
+        match cupertino_defaults::terminal::resolve_installed(&candidates) {
+            Some(terminal) => self.spawn(&terminal, &[]),
+            None => tracing::warn!(?candidates, "no terminal emulator found"),
         }
-        tracing::warn!(?candidates, "no terminal emulator found");
     }
 
     /// Start a client on this compositor's socket. The application receives an activation token

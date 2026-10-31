@@ -18,6 +18,7 @@ pub mod login;
 pub mod menubar;
 pub mod power;
 pub mod system;
+pub mod terminal;
 pub mod watch;
 
 /// The user's configuration directory: `$XDG_CONFIG_HOME`, else `$HOME/.config`. `None` when

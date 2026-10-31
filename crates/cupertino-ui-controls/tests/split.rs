@@ -177,11 +177,33 @@ fn it_is_a_splitter_whose_value_is_the_leading_panes_extent_shown_as_its_strip()
         node.value,
         Some(AccessibleValue::Number {
             value: 80.0,
-            min: 60.0,
-            max: 139.0,
+            min: 0.0,
+            max: 199.0,
             step: Some(10.0),
         })
     );
     assert!(node.states.focusable);
     assert_eq!(node.bounds, Rect::new(77.5, 0.0, 6.0, 100.0));
+}
+
+#[test]
+fn a_collapsed_pane_puts_the_value_at_an_end_of_its_range() {
+    let mut h = Harness::<Panes>::new();
+    h.tap(TAB);
+    h.tap(RETURN);
+    let value = |h: &Harness<Panes>| match divider(h).value {
+        Some(AccessibleValue::Number {
+            value, min, max, ..
+        }) => (value, min, max),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(value(&h), (0.0, 0.0, 199.0));
+
+    h.button(Point::new(1.5, 50.0), true);
+    h.pointer(PointerEvent::Motion {
+        position: Point::new(195.0, 50.0),
+    });
+    h.button(Point::new(195.0, 50.0), false);
+    assert_eq!(h.model().collapsed, Some(SplitPane::Trailing));
+    assert_eq!(value(&h), (199.0, 0.0, 199.0));
 }

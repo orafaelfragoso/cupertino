@@ -168,27 +168,25 @@
   version: 1
   owner_crate: cupertino-server
   owner_area: compositor
-  scope: public
-  role: none
+  scope: shell-private
+  role: DataControl
   advertised: always
-  test_owner: unknown
+  test_owner: crates/cupertino-server/tests/data_control.rs
   source: crates/cupertino-server/src/clipboard.rs
   source_match: ext_data_control::DataControlState::new
-  visible_to: unsandboxed
-  note: hidden from a client connected through a security context; while the session is locked a selection set is cancelled and the clipboard put back, a clear is honoured
+  note: also offered to an unsandboxed application allowed in data-control.conf (crate::data_control), never through a security context; while the session is locked a selection set is cancelled and the clipboard put back, a clear is honoured
 - name: zwlr_data_control_manager_v1
   kind: wayland-global
   version: 2
   owner_crate: cupertino-server
   owner_area: compositor
-  scope: public
-  role: none
+  scope: shell-private
+  role: DataControl
   advertised: always
-  test_owner: unknown
+  test_owner: crates/cupertino-server/tests/data_control.rs
   source: crates/cupertino-server/src/clipboard.rs
   source_match: wlr_data_control::DataControlState::new
-  visible_to: unsandboxed
-  note: hidden from a client connected through a security context; while the session is locked a selection set is cancelled and the clipboard put back, a clear is honoured
+  note: also offered to an unsandboxed application allowed in data-control.conf (crate::data_control), never through a security context; while the session is locked a selection set is cancelled and the clipboard put back, a clear is honoured
 - name: wp_viewporter
   kind: wayland-global
   version: 1

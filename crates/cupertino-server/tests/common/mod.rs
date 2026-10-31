@@ -84,6 +84,14 @@ pub fn egl_unavailable(error: impl std::fmt::Display) {
     eprintln!("SKIPPED: no EGL device ({error}); set CUPERTINO_EGL_REQUIRED=1 to fail instead");
 }
 
+/// Let the clients of this test program use data control, as the person's `data-control.conf` would: the program's file
+/// is pinned as it is now.
+pub fn allow_data_control(state: &mut Cupertino) {
+    let exe = std::env::current_exe().expect("the test program");
+    let entry = cupertino_defaults::data_control::Entry::for_program(&exe).expect("an entry");
+    state.set_data_control_allowed(vec![entry]);
+}
+
 fn solid_buffer(
     shm: &wl_shm::WlShm,
     size: (i32, i32),

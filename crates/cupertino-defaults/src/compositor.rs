@@ -86,15 +86,18 @@ pub enum ShellRoleName {
     WindowManager,
     /// Take the session lock (`ext-session-lock`): the lock screen.
     SessionLock,
+    /// Use data control: read and set the selections without focus (a clipboard history).
+    Clipboard,
 }
 
 impl ShellRoleName {
-    pub const ALL: [ShellRoleName; 5] = [
+    pub const ALL: [ShellRoleName; 6] = [
         ShellRoleName::Session,
         ShellRoleName::MenuBar,
         ShellRoleName::Dock,
         ShellRoleName::WindowManager,
         ShellRoleName::SessionLock,
+        ShellRoleName::Clipboard,
     ];
 
     pub fn name(self) -> &'static str {
@@ -104,6 +107,7 @@ impl ShellRoleName {
             ShellRoleName::Dock => "dock",
             ShellRoleName::WindowManager => "window_manager",
             ShellRoleName::SessionLock => "session_lock",
+            ShellRoleName::Clipboard => "clipboard",
         }
     }
 

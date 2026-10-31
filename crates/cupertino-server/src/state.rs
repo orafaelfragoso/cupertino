@@ -332,6 +332,8 @@ pub struct Cupertino {
     pub security_context_state: smithay::wayland::security_context::SecurityContextState,
     pub ext_data_control_state: smithay::wayland::selection::ext_data_control::DataControlState,
     pub wlr_data_control_state: smithay::wayland::selection::wlr_data_control::DataControlState,
+    /// Who may see and bind the data control globals (`data_control`).
+    pub data_control_access: Arc<crate::data_control::DataControlAccess>,
     /// The server's copy of the clipboard, kept when its client exits (`clipboard`).
     pub clipboard: crate::clipboard::Clipboard,
     pub viewporter_state: ViewporterState,
@@ -569,8 +571,13 @@ impl Cupertino {
             Self,
             _,
         >(&dh, crate::authorization::unsandboxed);
+        let data_control_access = Arc::new(crate::data_control::DataControlAccess::default());
         let (ext_data_control_state, wlr_data_control_state) =
-            crate::clipboard::data_control_states(&dh, &primary_selection_state);
+            crate::clipboard::data_control_states(
+                &dh,
+                &primary_selection_state,
+                &data_control_access,
+            );
         let viewporter_state = ViewporterState::new::<Self>(&dh);
         let fractional_scale_state = FractionalScaleManagerState::new::<Self>(&dh);
         let presentation_state = PresentationState::new::<Self>(&dh, clock.id() as u32);
@@ -657,6 +664,7 @@ impl Cupertino {
             ext_data_control_state,
             security_context_state,
             wlr_data_control_state,
+            data_control_access,
             clipboard: crate::clipboard::Clipboard::default(),
             viewporter_state,
             fractional_scale_state,

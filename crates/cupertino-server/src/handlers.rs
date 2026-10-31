@@ -229,9 +229,9 @@ impl ShmHandler for Cupertino {
 delegate_shm!(Cupertino);
 
 /// The object id of the `wl_display`, which every connection has.
-const WL_DISPLAY_ID: u32 = 1;
+pub(crate) const WL_DISPLAY_ID: u32 = 1;
 /// `wl_display.error` `implementation`: a problem in the compositor or in what the client asks of it.
-const WL_DISPLAY_ERROR_IMPLEMENTATION: u32 = 3;
+pub(crate) const WL_DISPLAY_ERROR_IMPLEMENTATION: u32 = 3;
 
 /// Keeps the commit of `surface` back until `blocker` clears, which `source` reports. How many such commits a client may
 /// have depends on what they wait for ([`acquire_waits`]): past the limit of explicit-sync waits the client is

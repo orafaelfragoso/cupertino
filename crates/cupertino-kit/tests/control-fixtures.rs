@@ -477,7 +477,7 @@ fixtures! {
         enabled: look.enabled,
         on_submit: None,
     });
-    scroll_view: "scroll-view", TALL, &[State::Normal, State::Hover], |look| ScrollView {
+    scroll_view: "scroll-view", TALL, &[State::Normal, State::Hover, State::Focused], |look| ScrollView {
         content: Element::new(Text {
             content: label("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight"),
             role: TextRole::Body,

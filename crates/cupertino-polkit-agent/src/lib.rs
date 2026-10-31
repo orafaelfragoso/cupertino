@@ -4,14 +4,21 @@
 //!
 //! - [`access`]: what the prompt tells assistive technology.
 //! - [`agent`]: the agent on the system bus, which only polkitd may ask.
+//! - `surfaces` (with `app`): the scrims' and the panel's layer surfaces.
 //! - [`text`]: the strings polkitd and PAM send, made safe to show.
 //! - [`helper`]: the conversation with polkit's helper.
 //! - [`model`]: the prompt and the requests waiting for it, as a pure model.
 //! - [`panel`]: where the prompt's parts sit and what a key or a click on them does.
+//! - [`render`]: the scrim and the panel drawn.
+//! - [`users`]: how the prompt names the users polkitd offers.
 
 pub mod access;
 pub mod agent;
 pub mod helper;
 pub mod model;
 pub mod panel;
+pub mod render;
+#[cfg(feature = "app")]
+pub mod surfaces;
 pub mod text;
+pub mod users;

@@ -112,10 +112,7 @@ fn keys_go_to_the_field_only_while_it_has_the_focus() {
         p.key(PanelKey::Typed(Key::Char('a'))),
         Some(Command::Field(Key::Char('a')))
     );
-    assert_eq!(
-        p.key(PanelKey::Space),
-        Some(Command::Field(Key::Char(' ')))
-    );
+    assert_eq!(p.key(PanelKey::Space), Some(Command::Field(Key::Char(' '))));
     p.focus = Control::Cancel;
     assert_eq!(p.key(PanelKey::Typed(Key::Char('a'))), None);
     assert_eq!(p.key(PanelKey::Typed(Key::Backspace)), None);

@@ -13,6 +13,7 @@ mod support;
 use cupertino_kit::core::{Key, Role};
 use cupertino_kit::geometry::Point;
 use cupertino_kit::platform::Mods;
+use cupertino_kit::theme::ThemeTokens;
 use support::{Run, RETURN, SPACE, TAB};
 use virtual_list::{VirtualList, ROW_HEIGHT};
 
@@ -29,6 +30,26 @@ fn the_counter_counts_clicks_and_keys() {
     run.key(SPACE, Some(' '));
     assert_eq!(*run.model(), 1);
     run.golden("counter");
+}
+
+/// Points `CUPERTINO_SPEC_DIR` at an empty directory; no other test here reads the installed theme data.
+#[test]
+fn the_counter_starts_on_the_neutral_theme_without_theme_data_and_matches_its_golden() {
+    let empty = tempfile::tempdir().unwrap();
+    std::env::set_var(cupertino_theme::SPEC_DIR_ENV, empty.path());
+    assert!(cupertino_theme::Theme::load().is_err());
+
+    let options = cupertino_kit::app::options().unwrap();
+    let neutral = ThemeTokens::neutral(cupertino_kit::app::start_preferences(None)).unwrap();
+    assert_eq!(*options.theme, neutral);
+
+    let mut run = Run::<counter::Counter>::with_theme(neutral);
+    run.click("more");
+    run.click("more");
+    run.key(TAB, None);
+    run.key(SPACE, Some(' '));
+    assert_eq!(*run.model(), 1);
+    run.golden("counter-neutral");
 }
 
 #[test]

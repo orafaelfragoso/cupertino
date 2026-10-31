@@ -245,6 +245,16 @@ mod tests {
             .spawn()
             .unwrap();
         let process = || ProcessHandle::open(child.id()).unwrap();
+        // `spawn` can return before the kernel has switched the child's executable: `/proc` names the test binary until then
+        let exe = Path::new("/proc").join(child.id().to_string()).join("exe");
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::fs::read_link(&exe).ok().as_deref() != Some(Path::new("/usr/bin/sleep")) {
+            assert!(
+                std::time::Instant::now() < end,
+                "the child never ran /usr/bin/sleep"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         let found = running_program(process(), Path::new("/proc")).unwrap();
         assert_eq!(found.exe, Path::new("/usr/bin/sleep"));
         let held = process();

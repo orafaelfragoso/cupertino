@@ -6,6 +6,7 @@
 
 mod common;
 
+use std::io::ErrorKind;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,11 +16,15 @@ use std::time::{Duration, Instant};
 
 use cupertino_defaults::displays::{display_key, DisplaysConfig};
 use cupertino_server::backend::headless::{self, HeadlessDisplay};
+use cupertino_server::backend::Backend;
 use cupertino_server::config::Config;
+use cupertino_server::displays::HeadMode;
+use cupertino_server::state::RETIRED_GLOBAL_LIFETIME;
 use cupertino_server::Cupertino;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
+use wayland_client::protocol::wl_output::{self, WlOutput};
 use wayland_client::protocol::wl_registry;
 use wayland_client::{event_created_child, Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols_wlr::output_management::v1::client::{
@@ -144,6 +149,18 @@ struct Seen {
     serial: Option<u32>,
     /// `succeeded`, `failed` or `cancelled`, one per configuration, in order.
     results: Vec<&'static str>,
+    /// `wl_output` globals announced and withdrawn after the client connected, in order.
+    outputs: Vec<OutputGlobal>,
+    /// Commands the compositor answered without an error.
+    answered: usize,
+    /// The compositor disconnected the client with a protocol error.
+    disconnected: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OutputGlobal {
+    Added(u32),
+    Removed(u32),
 }
 
 impl Seen {
@@ -154,6 +171,7 @@ impl Seen {
 
 struct ClientState {
     manager: ZwlrOutputManagerV1,
+    registry: wl_registry::WlRegistry,
     /// Head objects, at the same index as their `Seen::heads` entry.
     heads: Vec<ZwlrOutputHeadV1>,
     /// Mode objects and their pixel sizes.
@@ -172,10 +190,36 @@ impl ClientState {
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for ClientState {
     fn event(
-        _: &mut Self,
+        state: &mut Self,
         _: &wl_registry::WlRegistry,
-        _: wl_registry::Event,
+        event: wl_registry::Event,
         _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let mut seen = state.seen.lock().unwrap();
+        match event {
+            wl_registry::Event::Global {
+                name, interface, ..
+            } if interface == WlOutput::interface().name => {
+                seen.outputs.push(OutputGlobal::Added(name))
+            }
+            wl_registry::Event::GlobalRemove { name }
+                if seen.outputs.contains(&OutputGlobal::Added(name)) =>
+            {
+                seen.outputs.push(OutputGlobal::Removed(name))
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WlOutput, ()> for ClientState {
+    fn event(
+        _: &mut Self,
+        _: &WlOutput,
+        _: wl_output::Event,
+        _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
@@ -345,17 +389,22 @@ impl Client {
             let manager: ZwlrOutputManagerV1 = globals.bind(&qh, 4..=4, ()).unwrap();
             let mut client = ClientState {
                 manager,
+                registry: globals.registry().clone(),
                 heads: Vec::new(),
                 modes: Vec::new(),
                 seen: seen2,
             };
             while !stop2.load(Ordering::SeqCst) {
+                let mut sent = 0;
                 while let Ok(command) = received.try_recv() {
                     command(&mut client, &qh);
+                    sent += 1;
                 }
                 if queue.roundtrip(&mut client).is_err() {
+                    client.seen.lock().unwrap().disconnected = true;
                     break;
                 }
+                client.seen.lock().unwrap().answered += sent;
                 std::thread::sleep(Duration::from_millis(5));
             }
         });
@@ -402,6 +451,15 @@ impl Client {
                 } else {
                     config.apply();
                 }
+            }))
+            .expect("the client thread runs");
+    }
+
+    /// Bind the `wl_output` global `name`, whether or not the client was told that it went away.
+    fn bind_output(&self, name: u32) {
+        self.commands
+            .send(Box::new(move |client, qh| {
+                client.registry.bind::<WlOutput, _, _>(name, 4, qh, ());
             }))
             .expect("the client thread runs");
     }
@@ -708,15 +766,23 @@ fn a_display_plugged_in_gets_its_stored_arrangement_back() {
     std::fs::remove_file(path).unwrap();
 }
 
-#[test]
-fn a_display_that_cannot_show_its_mode_falls_back_and_keeps_its_own_stored() {
-    use cupertino_server::backend::Backend;
-    use cupertino_server::displays::HeadMode;
-    let mode = |width, height, refresh_mhz| HeadMode {
+fn mode(width: i32, height: i32, refresh_mhz: i32) -> HeadMode {
+    HeadMode {
         width,
         height,
         refresh_mhz,
-    };
+    }
+}
+
+/// Make the offscreen displays fail to turn on in `modes` with an error of `kind`.
+fn refuse(state: &mut Cupertino, kind: ErrorKind, modes: &[HeadMode]) {
+    if let Some(Backend::Headless(b)) = state.backend.as_mut() {
+        b.refused = modes.iter().map(|m| (*m, kind)).collect();
+    }
+}
+
+#[test]
+fn a_display_that_cannot_show_its_mode_falls_back_and_keeps_its_own_stored() {
     let Some(mut h) = Harness::new() else { return };
     let path = std::env::temp_dir().join(format!(
         "cupertino-test-{}-fallback-displays.conf",
@@ -726,15 +792,14 @@ fn a_display_that_cannot_show_its_mode_falls_back_and_keeps_its_own_stored() {
     h.state.displays.use_store(path.clone()).unwrap();
     let client = Client::connect(h.socket_path());
     h.wait_until(&client, "both heads", |_, seen| listed(seen));
-    let set_unshowable = |state: &mut Cupertino, modes: Vec<HeadMode>| {
-        if let Some(Backend::Headless(b)) = state.backend.as_mut() {
-            b.unshowable = modes;
-        }
-    };
     let offered = [mode(640, 480, 30_000), mode(320, 240, 60_000)];
 
     // the link cannot carry 640x480 at 60 Hz: the same size at 30 Hz is shown
-    set_unshowable(&mut h.state, vec![mode(640, 480, 60_000)]);
+    refuse(
+        &mut h.state,
+        ErrorKind::InvalidInput,
+        &[mode(640, 480, 60_000)],
+    );
     let third = headless::add_display_with_modes(
         &mut h.state,
         &display_of("headless-3", (640, 480)),
@@ -773,7 +838,7 @@ fn a_display_that_cannot_show_its_mode_falls_back_and_keeps_its_own_stored() {
 
     // plugged in again where the link can carry it, the display shows its own mode
     headless::remove_display(&mut h.state, third).unwrap();
-    set_unshowable(&mut h.state, Vec::new());
+    refuse(&mut h.state, ErrorKind::InvalidInput, &[]);
     let third = headless::add_display_with_modes(
         &mut h.state,
         &display_of("headless-3", (640, 480)),
@@ -788,9 +853,10 @@ fn a_display_that_cannot_show_its_mode_falls_back_and_keeps_its_own_stored() {
 
     // a display that can show none of its modes is announced but stays off
     headless::remove_display(&mut h.state, third).unwrap();
-    set_unshowable(
+    refuse(
         &mut h.state,
-        vec![
+        ErrorKind::InvalidInput,
+        &[
             mode(640, 480, 60_000),
             mode(640, 480, 30_000),
             mode(320, 240, 60_000),
@@ -804,4 +870,101 @@ fn a_display_that_cannot_show_its_mode_falls_back_and_keeps_its_own_stored() {
     )
     .is_err());
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn a_client_binding_an_output_as_it_goes_away_stays_connected_until_the_global_is_gone() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = Client::connect(h.socket_path());
+    h.wait_until(&client, "both heads", |_, seen| listed(seen));
+    let third = headless::add_display(
+        &mut h.state,
+        &display_of("headless-3", (640, 480)),
+        Some(1.0),
+    )
+    .unwrap();
+    h.wait_until(&client, "headless-3's output", |_, seen| {
+        !seen.outputs.is_empty()
+    });
+    let outputs = client.seen.lock().unwrap().outputs.clone();
+    let [OutputGlobal::Added(name)] = outputs[..] else {
+        panic!("one output global was announced: {outputs:?}");
+    };
+
+    // the client binds the output after the compositor took it away
+    headless::remove_display(&mut h.state, third).unwrap();
+    let gone = Instant::now();
+    client.bind_output(name);
+    h.wait_until(&client, "the bind answered", |_, seen| {
+        seen.answered == 1 || seen.disconnected
+    });
+    assert!(!client.seen.lock().unwrap().disconnected);
+
+    // later the global is destroyed: binding it is a protocol error
+    h.wait_until(&client, "the global's lifetime", |_, _| {
+        gone.elapsed() > RETIRED_GLOBAL_LIFETIME + Duration::from_millis(100)
+    });
+    let late = Client::connect(h.socket_path());
+    h.wait_until(&late, "both heads", |_, seen| listed(seen));
+    late.bind_output(name);
+    h.wait_until(&late, "the late bind refused", |_, seen| seen.disconnected);
+}
+
+#[test]
+fn a_display_that_cannot_show_its_mode_announces_only_the_output_it_falls_back_to() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = Client::connect(h.socket_path());
+    h.wait_until(&client, "both heads", |_, seen| listed(seen));
+    refuse(
+        &mut h.state,
+        ErrorKind::InvalidInput,
+        &[mode(640, 480, 60_000)],
+    );
+    headless::add_display_with_modes(
+        &mut h.state,
+        &display_of("headless-3", (640, 480)),
+        &[mode(640, 480, 30_000)],
+        Some(1.0),
+    )
+    .unwrap();
+    h.wait_until(&client, "headless-3", |_, seen| {
+        seen.head("headless-3").is_some_and(|h| h.enabled)
+    });
+    let outputs = client.seen.lock().unwrap().outputs.clone();
+    assert!(
+        matches!(outputs[..], [OutputGlobal::Added(_)]),
+        "{outputs:?}"
+    );
+}
+
+#[test]
+fn a_busy_display_is_not_tried_in_other_modes() {
+    let Some(mut h) = Harness::new() else { return };
+    refuse(
+        &mut h.state,
+        ErrorKind::ResourceBusy,
+        &[mode(640, 480, 60_000)],
+    );
+    let error = headless::add_display_with_modes(
+        &mut h.state,
+        &display_of("headless-3", (640, 480)),
+        &[mode(640, 480, 30_000)],
+        Some(1.0),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.root_cause().to_string(),
+        std::io::Error::from(ErrorKind::ResourceBusy).to_string()
+    );
+    let head = h
+        .state
+        .displays
+        .heads
+        .iter()
+        .find(|h| h.info.connector == "headless-3")
+        .expect("the display is listed");
+    assert_eq!(
+        (head.output, head.state.mode),
+        (None, mode(640, 480, 60_000))
+    );
 }

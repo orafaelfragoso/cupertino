@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use cupertino_render_api::{Completion as _, RenderStatus, Renderer};
 use cupertino_wm::OutputId;
 use smithay::backend::allocator::gbm::GbmDevice;
@@ -40,6 +40,8 @@ pub struct HeadlessTarget {
 pub struct HeadlessBackend {
     pub renderer: GlesRenderer,
     pub targets: Vec<HeadlessTarget>,
+    /// Modes no display can show, as over a link too slow for them: enabling a head in one fails.
+    pub unshowable: Vec<HeadMode>,
 }
 
 /// An offscreen display to plug in: its connector name, pixel size and physical size in
@@ -133,6 +135,7 @@ pub fn init_displays(
     state.backend = Some(Backend::Headless(Box::new(HeadlessBackend {
         renderer,
         targets: Vec::new(),
+        unshowable: Vec::new(),
     })));
     for display in displays {
         add_display(state, display, scale)?;
@@ -147,17 +150,29 @@ pub fn add_display(
     display: &HeadlessDisplay,
     scale: Option<f64>,
 ) -> Result<HeadId> {
+    add_display_with_modes(state, display, &[], scale)
+}
+
+/// [`add_display`] for a display that offers `more` modes after its own size at 60 Hz.
+pub fn add_display_with_modes(
+    state: &mut Cupertino,
+    display: &HeadlessDisplay,
+    more: &[HeadMode],
+    scale: Option<f64>,
+) -> Result<HeadId> {
+    let mut modes = vec![HeadMode {
+        width: display.size.0,
+        height: display.size.1,
+        refresh_mhz: 60_000,
+    }];
+    modes.extend_from_slice(more);
     let info = HeadInfo {
         connector: display.name.clone(),
         make: "Cupertino".into(),
         model: display.name.clone(),
         serial: None,
         physical_mm: display.physical_mm,
-        modes: vec![HeadMode {
-            width: display.size.0,
-            height: display.size.1,
-            refresh_mhz: 60_000,
-        }],
+        modes,
         caps: HeadCaps {
             can_disable: true,
             custom_modes: true,
@@ -167,7 +182,7 @@ pub fn add_display(
     };
     let (head, initial) = state.connect_head(info, scale);
     if initial.enabled {
-        state.head_op(head, HeadOp::Enable)?;
+        state.enable_head(head)?;
         state.heads_changed();
     }
     Ok(head)
@@ -209,6 +224,9 @@ pub(crate) fn head_op(
                 .context("the head being enabled")?
                 .state
                 .mode;
+            if h.unshowable.contains(&mode) {
+                bail!("the display cannot show {mode:?}");
+            }
             let texture = target_texture(&mut h.renderer, mode)?;
             let output = state.create_head_output(head);
             h.targets.push(HeadlessTarget {

@@ -14,7 +14,7 @@ pub mod power;
 
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use cupertino_defaults::displays::{
     display_key, DisplaySettings, DisplaysConfig, ModeSetting, Transform as StoredTransform,
 };
@@ -99,6 +99,9 @@ pub struct Head {
     pub output: Option<OutputId>,
     /// Powered on (output power management); a powered-off output is not drawn.
     pub powered: bool,
+    /// The mode the head was to show when the display could not show it and fell back to `state.mode`: it is what
+    /// stays stored, so the fallback is never taken for the person's choice.
+    pub wanted_mode: Option<HeadMode>,
     /// The state and modes output-management clients were last told, `None` before the first time.
     advertised: Option<(HeadState, Vec<HeadMode>)>,
 }
@@ -253,18 +256,40 @@ fn from_stored_transform(t: StoredTransform) -> Transform {
     }
 }
 
-fn stored_settings(state: &HeadState) -> DisplaySettings {
+fn stored_settings(head: &Head) -> DisplaySettings {
+    let (state, mode) = (&head.state, head.wanted_mode.unwrap_or(head.state.mode));
     DisplaySettings {
         enabled: state.enabled,
         mode: ModeSetting {
-            width: state.mode.width as u32,
-            height: state.mode.height as u32,
-            refresh_mhz: state.mode.refresh_mhz as u32,
+            width: mode.width as u32,
+            height: mode.height as u32,
+            refresh_mhz: mode.refresh_mhz as u32,
         },
         position: state.position,
         scale: state.scale,
         transform: stored_transform(state.transform),
     }
+}
+
+/// The modes to try, in order, when a display cannot show `wanted`: its size at lower refresh rates, then smaller sizes,
+/// each from its highest refresh rate. Nothing larger than `wanted` and nothing faster at its size.
+pub fn fallback_modes(wanted: HeadMode, modes: &[HeadMode]) -> Vec<HeadMode> {
+    let area = |m: &HeadMode| i64::from(m.width) * i64::from(m.height);
+    let same_size = |m: &HeadMode| m.width == wanted.width && m.height == wanted.height;
+    let mut fallbacks: Vec<HeadMode> = modes
+        .iter()
+        .copied()
+        .filter(|m| {
+            if same_size(m) {
+                m.refresh_mhz < wanted.refresh_mhz
+            } else {
+                m.width <= wanted.width && m.height <= wanted.height && area(m) < area(&wanted)
+            }
+        })
+        .collect();
+    fallbacks.sort_by_key(|m| (std::cmp::Reverse(area(m)), std::cmp::Reverse(m.refresh_mhz)));
+    fallbacks.dedup();
+    fallbacks
 }
 
 /// Why `wanted` cannot be applied to `head`, if it cannot.
@@ -373,6 +398,7 @@ impl Cupertino {
             state,
             output: None,
             powered: true,
+            wanted_mode: None,
             advertised: None,
         });
         self.heads_changed();
@@ -420,6 +446,34 @@ impl Cupertino {
         };
         self.backend = Some(backend);
         result
+    }
+
+    /// Turn on a head the backend found, in its state, or else in the first of its [`fallback_modes`] the display can
+    /// show. A fallback is shown and announced but not stored. Fails, with the error for its own mode, when none works.
+    pub fn enable_head(&mut self, id: HeadId) -> Result<()> {
+        let Err(first) = self.head_op(id, HeadOp::Enable) else {
+            return Ok(());
+        };
+        let head = self.displays.head(id).context("the head being enabled")?;
+        let wanted = head.state.mode;
+        tracing::warn!(connector = %head.info.connector, ?wanted, error = %format!("{first:#}"), "the display cannot show its mode; trying smaller ones");
+        for mode in fallback_modes(wanted, &head.info.modes.clone()) {
+            self.displays.head_mut(id).expect("checked").state.mode = mode;
+            match self.head_op(id, HeadOp::Enable) {
+                Ok(()) => {
+                    let head = self.displays.head_mut(id).expect("checked");
+                    head.wanted_mode = Some(wanted);
+                    tracing::warn!(connector = %head.info.connector, ?mode, "the display shows a fallback mode");
+                    self.heads_changed();
+                    return Ok(());
+                }
+                Err(e) => {
+                    tracing::info!(?mode, error = %format!("{e:#}"), "the fallback mode failed too")
+                }
+            }
+        }
+        self.displays.head_mut(id).expect("checked").state.mode = wanted;
+        Err(first)
     }
 
     /// Create the output of an enabled head in its state. Backends call this for [`HeadOp::Enable`].
@@ -517,6 +571,15 @@ impl Cupertino {
                 tracing::error!(error = %e, "restoring the previous display configuration failed");
             }
         } else {
+            // a head the person gave another mode shows what they chose; one left in its fallback still wants its own
+            for (id, state) in wanted {
+                let was = before.iter().find(|(h, _)| h == id).map(|(_, s)| s.mode);
+                if let Some(head) = self.displays.head_mut(*id) {
+                    if was != Some(state.mode) {
+                        head.wanted_mode = None;
+                    }
+                }
+            }
             self.store_displays();
         }
         result
@@ -601,9 +664,7 @@ impl Cupertino {
     /// Write every connected head's state to the store, keeping the entries of absent displays.
     fn store_displays(&mut self) {
         for head in &self.displays.heads {
-            self.displays
-                .saved
-                .set(&head.key, stored_settings(&head.state));
+            self.displays.saved.set(&head.key, stored_settings(head));
         }
         let Some(path) = &self.displays.store else {
             return;
@@ -668,6 +729,37 @@ impl Cupertino {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_fallback_keeps_the_size_at_lower_refresh_then_shrinks_and_never_grows() {
+        let m = |width, height, hz: i32| HeadMode {
+            width,
+            height,
+            refresh_mhz: hz * 1000,
+        };
+        let offered = [
+            m(5120, 1440, 60),
+            m(3840, 2160, 144),
+            m(3840, 2160, 60),
+            m(3840, 2160, 240),
+            m(3840, 2160, 120),
+            m(2560, 1440, 60),
+            m(2560, 1440, 165),
+            m(1920, 1080, 60),
+            m(4096, 2160, 30),
+        ];
+        assert_eq!(
+            fallback_modes(m(3840, 2160, 144), &offered),
+            [
+                m(3840, 2160, 120),
+                m(3840, 2160, 60),
+                m(2560, 1440, 165),
+                m(2560, 1440, 60),
+                m(1920, 1080, 60),
+            ]
+        );
+        assert_eq!(fallback_modes(m(1920, 1080, 60), &offered), []);
+    }
+
     fn head(caps: HeadCaps) -> Head {
         let mode = HeadMode {
             width: 1920,
@@ -698,6 +790,7 @@ mod tests {
             state,
             output: None,
             powered: true,
+            wanted_mode: None,
             advertised: None,
         }
     }

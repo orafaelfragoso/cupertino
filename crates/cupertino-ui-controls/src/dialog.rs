@@ -37,7 +37,10 @@ fn no_measure() -> Measured {
 
 impl<M: Clone + 'static> From<Modal<M>> for Element<M> {
     fn from(modal: Modal<M>) -> Self {
-        let mut children = vec![modal.content];
+        let mut children = vec![Element::new(Behind {
+            hidden: modal.dialog.is_some(),
+            children: vec![modal.content],
+        })];
         if let Some(dialog) = modal.dialog {
             children.push(Element::new(Scrim));
             children.push(sheet(dialog));
@@ -71,23 +74,35 @@ fn sheet<M: Clone + 'static>(dialog: Dialog<M>) -> Element<M> {
         children.push(label(&dialog.message, TextRole::Body, true));
     }
     children.extend(dialog.body);
+    // the least destructive answer takes the focus, so a stray Space does no harm
+    let initial = [
+        DialogAction::Cancel,
+        DialogAction::Default,
+        DialogAction::Other,
+    ]
+    .into_iter()
+    .find_map(|action| dialog.buttons.iter().position(|b| b.action == action));
     let buttons = dialog
         .buttons
         .into_iter()
-        .map(|b| {
+        .enumerate()
+        .map(|(i, b)| {
             let role = match b.action {
                 DialogAction::Default => ButtonRole::Default,
                 DialogAction::Destructive => ButtonRole::Destructive,
                 DialogAction::Cancel | DialogAction::Other => ButtonRole::Normal,
             };
-            Element::new(SheetButton(Button {
-                label: b.label,
-                role,
-                style: ButtonStyle::Bordered,
-                enabled: true,
-                busy: false,
-                on_press: Some(b.on_press),
-            }))
+            Element::new(SheetButton {
+                button: Button {
+                    label: b.label,
+                    role,
+                    style: ButtonStyle::Bordered,
+                    enabled: true,
+                    busy: false,
+                    on_press: Some(b.on_press),
+                },
+                initial: initial == Some(i),
+            })
         })
         .collect();
     children.push(Element::new(Buttons { children: buttons }));
@@ -139,6 +154,50 @@ impl<M: 'static> Widget<M> for Frame<M> {
     fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// The content, hidden from assistive technology and the Tab order while a dialog is up.
+struct Behind<M> {
+    hidden: bool,
+    children: Vec<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for Behind<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Overlay)
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.hidden != old.hidden {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        if self.hidden {
+            cx.hidden();
+        }
+    }
 }
 
 /// Dims the content and takes every press and movement meant for it.

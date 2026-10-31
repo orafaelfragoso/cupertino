@@ -127,6 +127,7 @@ impl Application for Cells {
             shortcuts: CommandRegistry::new(),
             on_close: None,
             background: WindowBackground::Theme,
+            popup: None,
             content: Element::new(Stack {
                 axis: Axis::Vertical,
                 padding: Insets::uniform(12.0),

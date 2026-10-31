@@ -84,6 +84,7 @@ impl Application for Files {
             shortcuts: cupertino_kit::core::CommandRegistry::new(),
             on_close: None,
             background: WindowBackground::Theme,
+            popup: None,
             content: Element::from(TableView {
                 label: "Files".into(),
                 columns: vec![Column {

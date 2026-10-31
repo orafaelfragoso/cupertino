@@ -6,6 +6,7 @@
 pub mod about;
 #[cfg(feature = "app")]
 pub mod agent;
+pub mod clipboard;
 pub mod controls;
 pub mod form;
 pub mod geom;

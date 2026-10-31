@@ -85,6 +85,15 @@ impl Entry {
         })
     }
 
+    /// Whether the entry allows the program file `file` (its metadata, links followed): a pinned entry while `file` is
+    /// still the file it was pinned as, an unpinned one while only root can change its program.
+    pub fn allows_file(&self, file: &std::fs::Metadata) -> bool {
+        match self.pin {
+            Some(pin) => pin == Pin::of(file),
+            None => crate::system::only_root_can_change(&self.program),
+        }
+    }
+
     fn parse(value: &str) -> Result<Self, String> {
         let (pin, program) = match value.split_once(' ') {
             Some((pin, program)) if !pin.starts_with('/') => {
@@ -103,7 +112,7 @@ impl Entry {
         Ok(Self { program, pin })
     }
 
-    fn text(&self) -> String {
+    pub fn text(&self) -> String {
         match self.pin {
             Some(p) => format!(
                 "{}:{}:{}:{} {}",
@@ -116,6 +125,13 @@ impl Entry {
             None => self.program.display().to_string(),
         }
     }
+}
+
+/// A line of `data-control.conf` that allows nothing: its text as written, trimmed, and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unusable {
+    pub text: String,
+    pub message: String,
 }
 
 /// The programs `data-control.conf` allows.
@@ -159,7 +175,28 @@ impl DataControlConf {
         Self::load_as(path, unsafe { libc::geteuid() })
     }
 
+    /// [`Self::load`] with the lines that allow nothing as written, for a person to see and remove.
+    pub fn load_unusable(path: &Path) -> io::Result<(Self, Vec<Unusable>)> {
+        // Safety: geteuid has no preconditions.
+        let text = Self::read_as(path, unsafe { libc::geteuid() })?;
+        let (conf, problems) = Self::parse(&text);
+        let lines: Vec<&str> = text.lines().collect();
+        let unusable = problems
+            .into_iter()
+            .map(|p| Unusable {
+                text: lines.get(p.line - 1).map_or("", |l| l.trim()).to_owned(),
+                message: p.message,
+            })
+            .collect();
+        Ok((conf, unusable))
+    }
+
     fn load_as(path: &Path, user: u32) -> io::Result<(Self, Vec<Problem>)> {
+        Ok(Self::parse(&Self::read_as(path, user)?))
+    }
+
+    /// The text of the file at `path`, empty when there is none.
+    fn read_as(path: &Path, user: u32) -> io::Result<String> {
         let mut file = match std::fs::OpenOptions::new()
             .read(true)
             // without O_NONBLOCK a FIFO put at the path would block the open before the check refuses it
@@ -167,7 +204,7 @@ impl DataControlConf {
             .open(path)
         {
             Ok(file) => file,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Default::default()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(String::new()),
             Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
                 return Err(refused("the file is a link"))
             }
@@ -177,12 +214,26 @@ impl DataControlConf {
         check_owned(&file.metadata()?, &dir, user)?;
         let mut text = String::new();
         file.read_to_string(&mut text)?;
-        Ok(Self::parse(&text))
+        Ok(text)
     }
 
     /// Write the entries into `path` atomically with mode `0600`, replacing the file. An entry whose program could not be
     /// read back as itself, or can never be allowed, is an error and nothing is written.
     pub fn store(&self, path: &Path) -> io::Result<()> {
+        self.store_keeping(path, &[])
+    }
+
+    /// [`Self::store`], with the lines of `unusable` written after the entries as they are. A line that would allow a
+    /// program or is not a single line is an error and nothing is written.
+    pub fn store_keeping(&self, path: &Path, unusable: &[Unusable]) -> io::Result<()> {
+        for line in unusable {
+            if line.text.contains('\n') || !Self::parse(&line.text).0.allowed.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{:?} is not a line that allows nothing", line.text),
+                ));
+            }
+        }
         for entry in &self.allowed {
             writable(&entry.program).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         }
@@ -190,6 +241,7 @@ impl DataControlConf {
             .allowed
             .iter()
             .map(|e| format!("allow = {}\n", e.text()))
+            .chain(unusable.iter().map(|l| format!("{}\n", l.text)))
             .collect();
         crate::atomic::write_atomic_private(path, text.as_bytes())
     }
@@ -250,6 +302,9 @@ const PROXIES: &[&str] = &[
     "cupertino-server",
 ];
 
+/// What [`refusal`] says of an interpreter or a loader.
+pub const RUNS_SCRIPTS: &str = "an interpreter runs any script: allowing it would allow every one";
+
 /// Why `program` can never be allowed, by its file name: an interpreter or a dynamic loader runs whatever it is given,
 /// and a Wayland proxy or server carries other clients, so allowing one would allow all of them.
 pub fn refusal(program: &Path) -> Option<&'static str> {
@@ -262,7 +317,7 @@ pub fn refusal(program: &Path) -> Option<&'static str> {
         || EXACT.contains(&name)
         || LOADERS.iter().any(|l| name.starts_with(l))
     {
-        Some("an interpreter runs any script: allowing it would allow every one")
+        Some(RUNS_SCRIPTS)
     } else if PROXIES.iter().any(|p| name.eq_ignore_ascii_case(p)) {
         Some("a Wayland proxy carries other clients: allowing it would allow every one")
     } else {
@@ -334,6 +389,68 @@ mod tests {
         );
         conf.store(&path).unwrap();
         assert_eq!(DataControlConf::load(&path).unwrap(), (conf, vec![]));
+    }
+
+    #[test]
+    fn the_lines_that_allow_nothing_are_kept_as_written_and_never_one_that_allows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_CONTROL_FILE);
+        std::fs::write(
+            &path,
+            "allow = /usr/bin/ls\n  allow = python3  \nsize = 4\n",
+        )
+        .unwrap();
+        let (conf, unusable) = DataControlConf::load_unusable(&path).unwrap();
+        let texts: Vec<&str> = unusable.iter().map(|u| u.text.as_str()).collect();
+        assert_eq!(texts, ["allow = python3", "size = 4"]);
+        assert_eq!(unusable[1].message, "unknown setting \"size\"");
+
+        conf.store_keeping(&path, &unusable[1..]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "allow = /usr/bin/ls\nsize = 4\n"
+        );
+
+        let allowing = Unusable {
+            text: "allow = /usr/bin/cat".into(),
+            message: String::new(),
+        };
+        assert_eq!(
+            conf.store_keeping(&path, &[allowing]).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "allow = /usr/bin/ls\nsize = 4\n",
+            "nothing is written"
+        );
+    }
+
+    #[test]
+    fn a_pinned_entry_allows_its_file_until_it_changes_and_a_path_while_only_root_can_change_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("clipd");
+        std::fs::write(&program, "one").unwrap();
+        let pinned = Entry::for_program(&program).unwrap();
+        let meta = || std::fs::metadata(&program).unwrap();
+        assert!(pinned.allows_file(&meta()));
+        std::fs::write(&program, "two, longer").unwrap();
+        assert!(
+            !pinned.allows_file(&meta()),
+            "a changed file is not allowed"
+        );
+
+        let system = Path::new("/usr/bin/ls");
+        let by_path = Entry::for_program(system).unwrap();
+        assert!(by_path.allows_file(&std::fs::metadata(system).unwrap()));
+        let user_owned = Entry {
+            program: program.clone(),
+            pin: None,
+        };
+        assert!(
+            !user_owned.allows_file(&meta()),
+            "a path-only entry of a file the user can change is not allowed"
+        );
     }
 
     #[test]

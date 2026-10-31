@@ -64,6 +64,7 @@
 "symbol.music" = ["folder-music-symbolic", "audio-x-generic-symbolic", "multimedia-player-symbolic"]
 "symbol.network" = ["network-wired-symbolic", "network-workgroup-symbolic", "preferences-system-network-symbolic"]
 "symbol.photo" = ["image-x-generic-symbolic", "camera-photo-symbolic"]
+"symbol.privacy" = ["preferences-system-privacy-symbolic", "security-high-symbolic"]
 "symbol.recents" = ["document-open-recent-symbolic", "document-open-recent"]
 "symbol.screen-mirroring" = ["video-display-symbolic", "display-symbolic", "video-joined-displays-symbolic"]
 "symbol.search" = ["edit-find-symbolic", "system-search-symbolic"]

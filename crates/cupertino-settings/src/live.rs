@@ -227,6 +227,8 @@ pub struct Live {
     pub bluetooth: Reading<Bluetooth>,
     /// Shown only after `CanSetSystemAccessibility` said yes at this opening of the Accessibility pane.
     pub login_screen: Option<LoginScreen>,
+    /// The installed applications, read when the Privacy pane shows.
+    pub apps: Vec<crate::clipboard::Installed>,
 }
 
 impl Default for Live {
@@ -241,6 +243,7 @@ impl Default for Live {
             wifi: Reading::Unknown,
             bluetooth: Reading::Unknown,
             login_screen: None,
+            apps: Vec::new(),
         }
     }
 }

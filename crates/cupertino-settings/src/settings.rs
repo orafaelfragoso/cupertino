@@ -11,13 +11,14 @@ use cupertino_defaults::accessibility::{
 };
 use cupertino_defaults::compositor::{CompositorSettings, MinimizeEffectName};
 use cupertino_defaults::conf::Problem;
+use cupertino_defaults::data_control::DataControlConf;
 use cupertino_defaults::dock::{sanitize_large_size, sanitize_tile_size, DockSettings, Position};
 use cupertino_defaults::keyboard::KeyboardSettings;
 use cupertino_defaults::menubar::{ClockSettings, MenuBarSettings};
 use cupertino_defaults::power::PowerSettings;
 use cupertino_defaults::system::read_root_file;
 
-use crate::mapping;
+use crate::{clipboard, mapping};
 
 /// A settings file the panes write.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -32,22 +33,27 @@ pub enum File {
     Keyboard,
     /// `power.conf`, read by the server.
     Power,
+    /// `data-control.conf`, read by the server: the applications allowed to use the clipboard.
+    DataControl,
 }
 
 impl File {
-    pub const ALL: [File; 5] = [
+    pub const ALL: [File; 6] = [
         File::Dock,
         File::Compositor,
         File::MenuBar,
         File::Keyboard,
         File::Power,
+        File::DataControl,
     ];
 
     /// The process that applies the file.
     pub fn owner(self) -> &'static str {
         match self {
             File::Dock => "the dock",
-            File::Compositor | File::Keyboard | File::Power => "the window server",
+            File::Compositor | File::Keyboard | File::Power | File::DataControl => {
+                "the window server"
+            }
             File::MenuBar => "the menu bar",
         }
     }
@@ -72,6 +78,7 @@ pub struct Paths {
     pub accessibility: Option<PathBuf>,
     /// The machine's accessibility defaults (`SYSTEM_ACCESSIBILITY`), under every key `accessibility.conf` does not record.
     pub system_accessibility: Option<PathBuf>,
+    pub data_control: Option<PathBuf>,
 }
 
 impl Paths {
@@ -84,6 +91,7 @@ impl Paths {
             power: PowerSettings::path(),
             accessibility: cupertino_defaults::config_file(ACCESSIBILITY_ENV, ACCESSIBILITY_FILE),
             system_accessibility: Some(PathBuf::from(SYSTEM_ACCESSIBILITY)),
+            data_control: DataControlConf::path(),
         }
     }
 
@@ -94,6 +102,7 @@ impl Paths {
             File::MenuBar => self.menubar.as_ref(),
             File::Keyboard => self.keyboard.as_ref(),
             File::Power => self.power.as_ref(),
+            File::DataControl => self.data_control.as_ref(),
         }
     }
 }
@@ -107,6 +116,8 @@ pub struct Settings {
     pub keyboard: KeyboardSettings,
     pub power: PowerSettings,
     pub accessibility: AccessibilitySettings,
+    /// `data-control.conf`, empty without a path.
+    pub clipboard: clipboard::List,
     /// The height of the output the dock sits on: its default tile size depends on it (`default_tile_size`).
     pub display_height: f64,
 }
@@ -217,6 +228,11 @@ impl Settings {
             })?,
             None => system,
         };
+        let clipboard = paths
+            .data_control
+            .as_deref()
+            .map(clipboard::List::load)
+            .unwrap_or_default();
         Ok(Settings {
             dock,
             compositor,
@@ -224,6 +240,7 @@ impl Settings {
             keyboard,
             power,
             accessibility,
+            clipboard,
             display_height,
         })
     }
@@ -297,6 +314,50 @@ impl Settings {
         })
     }
 
+    /// Read `data-control.conf` again (when the Privacy pane shows and after each write).
+    pub fn reload_clipboard(&mut self, paths: &Paths) {
+        self.clipboard = paths
+            .data_control
+            .as_deref()
+            .map(clipboard::List::load)
+            .unwrap_or_default();
+    }
+
+    /// Let `program` use the clipboard: its entry ([`clipboard::entry_for`], so a link becomes its file) is added and
+    /// the file written. `Err` is the sentence the chooser shows; nothing changed.
+    pub fn allow_clipboard(
+        &mut self,
+        paths: &Paths,
+        program: &std::path::Path,
+    ) -> Result<(), String> {
+        let entry = clipboard::entry_for(program)?;
+        let mut list = self.clipboard.clone();
+        list.conf.allowed.retain(|e| e.program != entry.program);
+        list.conf.allowed.push(entry);
+        self.store_clipboard(paths, list)
+    }
+
+    /// Take `program` off Clipboard Access and write the file.
+    pub fn unallow_clipboard(
+        &mut self,
+        paths: &Paths,
+        program: &std::path::Path,
+    ) -> Result<(), String> {
+        let mut list = self.clipboard.clone();
+        list.conf.allowed.retain(|e| e.program != program);
+        self.store_clipboard(paths, list)
+    }
+
+    fn store_clipboard(&mut self, paths: &Paths, list: clipboard::List) -> Result<(), String> {
+        let path = paths
+            .data_control
+            .as_deref()
+            .ok_or_else(|| StoreError::NoPath(File::DataControl).to_string())?;
+        list.store(path).map_err(|e| e.to_string())?;
+        self.reload_clipboard(paths);
+        Ok(())
+    }
+
     /// Show the picture `picture` on the desktop in both appearances.
     pub fn set_wallpaper(
         &mut self,
@@ -323,6 +384,7 @@ impl Settings {
             File::MenuBar => self.menubar.store(path).map(drop),
             File::Keyboard => self.keyboard.store(path).map(drop),
             File::Power => self.power.store(path).map(drop),
+            File::DataControl => self.clipboard.store(path),
         };
         stored.map_err(|e| {
             eprintln!("cupertino-settings: the {file:?} settings could not be saved: {e}");

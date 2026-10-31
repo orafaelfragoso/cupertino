@@ -11,6 +11,8 @@ pub enum Mode {
     Folder,
     /// A picture: folders, and the PNG and JPEG files in them.
     Photo,
+    /// A program: folders, and the files in them that may be executed.
+    Program,
 }
 
 /// One row of the open folder.
@@ -68,6 +70,11 @@ pub struct Listing {
     result: Option<(PathBuf, Vec<Entry>)>,
 }
 
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
 /// The entries of `dir` for `mode`, in the chooser's order; `None` when it cannot be read.
 fn read_entries(dir: &Path, mode: Mode, hidden: bool) -> Option<Vec<Entry>> {
     let mut entries: Vec<Entry> = std::fs::read_dir(dir)
@@ -77,7 +84,12 @@ fn read_entries(dir: &Path, mode: Mode, hidden: bool) -> Option<Vec<Entry>> {
             let name = e.file_name().to_str()?.to_string();
             let is_dir = e.path().is_dir();
             let listed = (hidden || !name.starts_with('.'))
-                && (is_dir || (mode == Mode::Photo && is_picture(&name)));
+                && (is_dir
+                    || match mode {
+                        Mode::Folder => false,
+                        Mode::Photo => is_picture(&name),
+                        Mode::Program => is_executable(&e.path()),
+                    });
             listed.then(|| Entry {
                 name,
                 path: e.path(),
@@ -315,8 +327,8 @@ impl Picker {
         match (self.mode, highlighted) {
             (Mode::Folder, Some(entry)) => Some(entry.path.clone()),
             (Mode::Folder, None) => Some(self.dir.clone()),
-            (Mode::Photo, Some(entry)) if !entry.is_dir => Some(entry.path.clone()),
-            (Mode::Photo, _) => None,
+            (Mode::Photo | Mode::Program, Some(entry)) if !entry.is_dir => Some(entry.path.clone()),
+            (Mode::Photo | Mode::Program, _) => None,
         }
     }
 
@@ -396,6 +408,21 @@ mod tests {
             names(&shown),
             [".secret", "art", "Beach", ".hidden.png", "a.jpg", "b.PNG"]
         );
+    }
+
+    #[test]
+    fn a_program_chooser_lists_folders_then_the_files_that_may_be_executed() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tree();
+        let tool = d.path().join("tool");
+        fs::write(&tool, b"x").unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut p = Picker::open(d.path(), Mode::Program);
+        assert_eq!(names(&p), ["art", "Beach", "tool"]);
+        p.key(Key::End, 0.0);
+        assert_eq!(p.choice(), Some(tool));
+        p.key(Key::Home, 0.0);
+        assert_eq!(p.choice(), None, "a folder is opened, not chosen");
     }
 
     #[test]

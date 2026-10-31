@@ -18,4 +18,5 @@ unicode-segmentation = "1.13"
 harfrust = "0.15"
 icu_segmenter = "2.4"
 unicode-bidi = "0.3.18"
+fontconfig = { version = "0.11", features = ["dlopen"] }
 zeroize = { version = "1.9", features = ["derive"] }

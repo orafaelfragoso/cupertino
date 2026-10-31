@@ -1,8 +1,8 @@
 use crate::bidi;
 use crate::paragraph::Item;
 use crate::{
-    AttributedText, Direction, FaceId, FontId, FontIndex, FontMetrics, FontStyle, FontWeight,
-    Paragraph, ParagraphStyle, ShapeRequest, ShapedRun, TextError, TextStyle,
+    AttributedText, Direction, FaceId, FontId, FontIndex, FontMetrics, FontStyle, Paragraph,
+    ParagraphStyle, ShapeRequest, ShapedRun, TextError, TextStyle,
 };
 use cupertino_geometry::Size;
 use std::collections::HashMap;
@@ -159,6 +159,7 @@ fn resolve(
     let family = style.family.as_deref().unwrap_or(theme_family);
     let face = fonts
         .match_face(family, style.weight, style.style)
+        .or_else(|| fonts.system_family(family, style.weight, style.style))
         .or_else(|| (fonts.face_count() > 0).then_some(FaceId(0)))
         .ok_or(TextError::NoFont)?;
     fonts.instance(face, style.weight, &style.variations)
@@ -191,7 +192,7 @@ fn shape_paragraph(
                 let runs = if piece.is_empty() {
                     vec![(piece, primary)]
                 } else {
-                    font_runs(fonts, &text.text, piece, primary, style.weight)?
+                    font_runs(fonts, &text.text, piece, primary, style)?
                 };
                 for (range, font) in runs {
                     let metrics = fonts.metrics(font)?;
@@ -268,15 +269,17 @@ fn level_runs(
 }
 
 /// `range` of `text` cut where the font drawing it changes. Each grapheme cluster takes the first font that has every
-/// character of it, `primary` first and then the other faces in load order; a cluster no font has stays in `primary`,
-/// and a cluster of white space stays in the font before it, so a gap between words does not split a run.
+/// character of it, `primary` first, then the other faces in load order, then an installed face the system picks for
+/// its first character and the style's language; a cluster no font has stays in `primary`, and a cluster of white
+/// space stays in the font before it, so a gap between words does not split a run.
 fn font_runs(
     fonts: &mut FontIndex,
     text: &str,
     range: Range<usize>,
     primary: FontId,
-    weight: FontWeight,
+    style: &TextStyle,
 ) -> Result<Vec<(Range<usize>, FontId)>, TextError> {
+    let weight = style.weight;
     let mut fallbacks: Option<Arc<[FontId]>> = None;
     let mut runs: Vec<(Range<usize>, FontId)> = Vec::new();
     for (offset, cluster) in text[range.clone()].grapheme_indices(true) {
@@ -313,6 +316,12 @@ fn font_runs(
                     }
                 }
             }
+            if found.is_none() {
+                found = installed(fonts, cluster, style)?;
+                if found.is_some() {
+                    fallbacks = None;
+                }
+            }
             found.unwrap_or(primary)
         };
         match runs.last_mut() {
@@ -323,11 +332,30 @@ fn font_runs(
     Ok(runs)
 }
 
+/// An installed face that has every character of `cluster`, loaded for its first character that draws.
+fn installed(
+    fonts: &mut FontIndex,
+    cluster: &str,
+    style: &TextStyle,
+) -> Result<Option<FontId>, TextError> {
+    let Some(ch) = cluster.chars().find(|ch| draws(*ch)) else {
+        return Ok(None);
+    };
+    let Some(face) = fonts.system_covering(ch, style.lang.as_deref(), style.weight, style.style)
+    else {
+        return Ok(None);
+    };
+    let font = fonts.instance(face, style.weight, &[])?;
+    Ok(covers(fonts, font, cluster)?.then_some(font))
+}
+
+fn draws(ch: char) -> bool {
+    !matches!(ch, '\u{200C}' | '\u{200D}' | '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
+}
+
 /// Whether `font` has every character of `cluster` that draws: joiners and variation selectors only steer the shaping.
 fn covers(fonts: &FontIndex, font: FontId, cluster: &str) -> Result<bool, TextError> {
-    for ch in cluster.chars().filter(|ch| {
-        !matches!(ch, '\u{200C}' | '\u{200D}' | '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
-    }) {
+    for ch in cluster.chars().filter(|ch| draws(*ch)) {
         if !fonts.has_glyph(font, ch)? {
             return Ok(false);
         }
@@ -466,6 +494,7 @@ impl AttributedText {
 mod tests {
     use super::*;
     use crate::font::GLYPH_LOOKUPS;
+    use crate::FontWeight;
 
     const INTER: &[u8] = include_bytes!("../../cupertino-assets/fonts/InterVariable-subset.ttf");
     const BOXES: &[u8] = include_bytes!("../tests/fixtures/fallback-test.ttf");

@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from guest import ROOT, Guest  # noqa: E402
 
 SERVER_LOG = "/home/qa/.local/state/cupertino/server.log"
+SESSION_LOG = "/home/qa/session.log"
 SHOTS = "/home/qa/shots"
 EVENTS = r"display (dis)?connected|output initialised|session (paused|resumed)|cannot show its mode|fallback mode|CRTC"
 
@@ -29,12 +30,19 @@ EVENTS = r"display (dis)?connected|output initialised|session (paused|resumed)|c
 class Run:
     def __init__(self, guest: Guest, out: Path):
         self.guest, self.out, self.results = guest, out, []
+        self.step_start = 0
 
     def events(self) -> list[str]:
         status, text = self.guest.sh(f"[ ! -e {SERVER_LOG} ] || cat {SERVER_LOG}")
         if status != 0:
             raise RuntimeError(f"reading the server log: {text}")
         return [line for line in text.splitlines() if re.search(EVENTS, line)]
+
+    def flip_failures(self) -> list[str]:
+        """The outputs of the server's flip failures, one per failure, from its warnings on standard error."""
+        _, text = self.guest.sh(f"[ ! -e {SESSION_LOG} ] || cat {SESSION_LOG}")
+        text = re.sub(r"\x1b\[[0-9;]*m", "", text)
+        return re.findall(r"queueing the frame failed.* output=(\S+)", text)
 
     def outputs(self) -> set[str]:
         """The connectors the server has connected and not disconnected, by its log."""
@@ -67,11 +75,14 @@ class Run:
         server, clients = self.settle(self.processes, (1, 3))
         _, cards = self.guest.sh("ls -d /sys/class/drm/card[0-9]")
         shots = self.screenshots(step)
+        failures = self.flip_failures()
+        flips = sorted(set(failures[self.step_start:]))
+        self.step_start = len(failures)
         passed = (connected == heads and outputs == heads and server == 1 and clients == 3 and len(shots) == len(heads)
-                  and len(cards.split()) == self.guest.gpus)
+                  and len(cards.split()) == self.guest.gpus and not flips)
         result = {"step": step, "passed": passed, "expected": sorted(heads), "guest_connected": sorted(connected),
                   "server_outputs": sorted(outputs), "servers": server, "clients": clients,
-                  "cards": len(cards.split()), "screenshots": shots}
+                  "cards": len(cards.split()), "flip_failures": flips, "screenshots": shots}
         self.results.append(result)
         print(json.dumps(result), flush=True)
         return passed
@@ -104,6 +115,8 @@ def main() -> int:
     parser.add_argument("--binaries", type=Path, required=True, help="directory with cupertino-server, "
                         "cupertino-testclient and cupertino-screenshot")
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--fail-flip", metavar="OUTPUT", help="write a flip failure of OUTPUT among the server's "
+                        "warnings during step 2, which must then fail")
     parser.add_argument("--gpus", type=int, default=1, help="virtio-gpu devices; the steps use the first, the others have no head connected")
     args = parser.parse_args()
     config = Path(__file__).resolve().parent
@@ -134,6 +147,9 @@ def main() -> int:
                 run.check("1-three-heads", all_heads)
 
                 guest.set_head(0, 1, False)
+                if args.fail_flip:
+                    guest.sh(f"echo '{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}  WARN cupertino_server::backend::"
+                             f"udev: queueing the frame failed output={args.fail_flip} error=--fail-flip' >>{SESSION_LOG}")
                 run.check("2-unplugged", all_heads - {"Virtual-2"})
                 guest.set_head(0, 1, True)
                 run.check("3-replugged", all_heads)
@@ -174,7 +190,7 @@ def main() -> int:
                 resets = [event for event in guest.events if event["event"] in ["RESET", "SHUTDOWN", "GUEST_PANICKED"]]
                 if resets:
                     run.results.append({"step": "guest", "passed": False, "error": "the guest reset", "events": resets})
-                for name, path in [("session.log", "/home/qa/session.log"), ("server.log", SERVER_LOG)]:
+                for name, path in [("session.log", SESSION_LOG), ("server.log", SERVER_LOG)]:
                     try:
                         guest.fetch(path, args.out / name)
                     except (OSError, RuntimeError, TimeoutError) as error:

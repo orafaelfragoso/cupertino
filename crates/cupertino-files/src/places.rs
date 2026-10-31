@@ -52,6 +52,19 @@ pub enum PlaceKind {
     Applications,
     Computer,
     Trash,
+    /// A file system of a removable drive (`crate::udisks`), in this state.
+    Removable(Volume),
+}
+
+/// The state of a removable file system's row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Volume {
+    /// Not mounted: a click mounts it.
+    Unmounted,
+    /// Mounted: the row goes to the mount point and has the eject button.
+    Mounted,
+    /// A mount or an eject is running: the row takes no other.
+    Busy,
 }
 
 impl PlaceKind {
@@ -69,6 +82,7 @@ impl PlaceKind {
             PlaceKind::Applications => "symbol.applications",
             PlaceKind::Computer => "symbol.computer",
             PlaceKind::Trash => "symbol.trash",
+            PlaceKind::Removable(_) => "symbol.externaldrive",
         }
     }
 
@@ -85,7 +99,7 @@ impl PlaceKind {
             PlaceKind::Videos => Some("folder.movies"),
             PlaceKind::Applications => Some("folder.applications"),
             PlaceKind::Computer => Some("computer"),
-            PlaceKind::Recents | PlaceKind::Trash => None,
+            PlaceKind::Recents | PlaceKind::Trash | PlaceKind::Removable(_) => None,
         }
     }
 }
@@ -94,9 +108,48 @@ impl PlaceKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Place {
     pub name: String,
+    /// The folder; empty for a removable file system that is not mounted.
     pub path: PathBuf,
     pub group: PlaceGroup,
     pub kind: PlaceKind,
+}
+
+impl Place {
+    /// The row of a removable file system named `name`, mounted at `mount`.
+    pub fn removable(name: &str, mount: Option<&Path>, busy: bool) -> Place {
+        let volume = match (busy, mount) {
+            (true, _) => Volume::Busy,
+            (false, Some(_)) => Volume::Mounted,
+            (false, None) => Volume::Unmounted,
+        };
+        Place {
+            name: name.into(),
+            path: mount.map(Path::to_path_buf).unwrap_or_default(),
+            group: PlaceGroup::Locations,
+            kind: PlaceKind::Removable(volume),
+        }
+    }
+
+    /// The folder a drop or a click goes to: none for a removable file system that is not mounted.
+    pub fn folder(&self) -> Option<&Path> {
+        (!self.path.as_os_str().is_empty()).then_some(self.path.as_path())
+    }
+
+    /// Whether the row shows the eject button: a mounted removable file system.
+    pub fn ejectable(&self) -> bool {
+        self.kind == PlaceKind::Removable(Volume::Mounted)
+    }
+}
+
+/// The removable place of `places` whose mount holds `dir`, the innermost when mounts nest.
+pub fn removable_holding(dir: &Path, places: &[Place]) -> Option<usize> {
+    places
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| matches!(p.kind, PlaceKind::Removable(_)))
+        .filter(|(_, p)| p.folder().is_some_and(|m| dir.starts_with(m)))
+        .max_by_key(|(_, p)| p.path.components().count())
+        .map(|(i, _)| i)
 }
 
 /// The user directories listed, in sidebar order: the `user-dirs.dirs` key, the row name and the kind.
@@ -412,6 +465,56 @@ mod tests {
         assert_eq!(
             places.last().map(|p| (p.name.as_str(), p.path.as_path())),
             Some(("Trash", trash.as_path()))
+        );
+    }
+
+    #[test]
+    fn a_folder_is_on_the_innermost_mounted_removable_file_system_holding_it() {
+        let mut places = standard_places(
+            Path::new("/home/ada"),
+            &[],
+            Path::new("/nonexistent"),
+            None,
+            "box",
+        );
+        places.push(Place::removable(
+            "Card",
+            Some(Path::new("/run/media/ada/CARD")),
+            false,
+        ));
+        places.push(Place::removable("Stick", None, false));
+        places.push(Place::removable(
+            "Inner",
+            Some(Path::new("/run/media/ada/CARD/inner")),
+            false,
+        ));
+        let first = places.len() - 3;
+        assert_eq!(places[first].kind, PlaceKind::Removable(Volume::Mounted));
+        assert_eq!(
+            places[first + 1].folder(),
+            None,
+            "not mounted: nowhere to go or drop"
+        );
+        assert_eq!(
+            removable_holding(Path::new("/run/media/ada/CARD/DCIM"), &places),
+            Some(first)
+        );
+        assert_eq!(
+            removable_holding(Path::new("/run/media/ada/CARD/inner/x"), &places),
+            Some(first + 2)
+        );
+        assert_eq!(
+            removable_holding(Path::new("/run/media/ada/CARDS"), &places),
+            None
+        );
+        assert_eq!(
+            removable_holding(Path::new("/home/ada"), &places),
+            None,
+            "the computer is not removable"
+        );
+        assert_eq!(
+            Place::removable("Card", Some(Path::new("/run/media/ada/CARD")), true).kind,
+            PlaceKind::Removable(Volume::Busy)
         );
     }
 

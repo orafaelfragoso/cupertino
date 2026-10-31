@@ -482,9 +482,9 @@ pub fn available_size(bytes: u64) -> String {
     }
 }
 
-/// Every template symbol the window draws (toolbar items, sidebar places and the path bar), which the renderer
+/// Every template symbol the window draws (toolbar items, sidebar places and their eject button, and the path bar), which the renderer
 /// requires of the asset directory when it is made.
-pub const SYMBOL_NAMES: [&str; 21] = [
+pub const SYMBOL_NAMES: [&str; 23] = [
     "symbol.columns",
     "symbol.gallery",
     "symbol.chevron.left",
@@ -500,6 +500,8 @@ pub const SYMBOL_NAMES: [&str; 21] = [
     "symbol.film",
     "symbol.computer",
     "symbol.trash",
+    "symbol.externaldrive",
+    "symbol.eject",
     "symbol.recents",
     "symbol.applications",
     "symbol.chevron.up.down",
@@ -1642,6 +1644,7 @@ mod tests {
     #[test]
     fn every_symbol_a_place_shows_is_required() {
         use crate::places::PlaceKind::*;
+        use crate::places::Volume;
         for kind in [
             Home,
             Desktop,
@@ -1654,6 +1657,7 @@ mod tests {
             Applications,
             Computer,
             Trash,
+            Removable(Volume::Mounted),
         ] {
             assert!(SYMBOL_NAMES.contains(&kind.symbol()), "{}", kind.symbol());
         }

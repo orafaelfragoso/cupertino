@@ -3,6 +3,7 @@ use crate::route::Placement;
 use crate::widget::Change;
 use crate::{Environment, Key, NodeId, Phase};
 use cupertino_geometry::{Point, Rect, Size};
+use cupertino_ui_layout::LayoutDirection;
 use cupertino_ui_platform::{CursorShape, Timestamp};
 use cupertino_ui_render::{
     Effect, Group, ImageResource, PaintOp, ResourceId, ResourceRef, Sampling,
@@ -328,17 +329,29 @@ pub(crate) struct Semantics {
     pub(crate) roving_group: bool,
     pub(crate) roving_item: bool,
     pub(crate) focus_fallback: bool,
+    pub(crate) bounds: Option<Rect>,
 }
 
 /// A node without a role is left out of the accessibility tree and its children take its place.
 pub struct SemanticsCx<'a> {
     pub(crate) node: NodeId,
+    pub(crate) size: Size,
+    pub(crate) direction: LayoutDirection,
     pub(crate) semantics: &'a mut Semantics,
 }
 
 impl SemanticsCx<'_> {
     pub fn node(&self) -> NodeId {
         self.node
+    }
+
+    /// The node's laid-out size; zero before its first layout.
+    pub fn size(&self) -> Size {
+        self.size
+    }
+
+    pub fn direction(&self) -> LayoutDirection {
+        self.direction
     }
 
     pub fn role(&mut self, role: Role) {
@@ -424,5 +437,10 @@ impl SemanticsCx<'_> {
     /// Makes the node a Tab stop only when no node under it is one, such as a scroll view around long text.
     pub fn focus_fallback(&mut self) {
         self.semantics.focus_fallback = true;
+    }
+
+    /// The part of the node assistive technology shows as the node, in node coordinates; the whole node by default.
+    pub fn bounds(&mut self, bounds: Rect) {
+        self.semantics.bounds = Some(bounds);
     }
 }

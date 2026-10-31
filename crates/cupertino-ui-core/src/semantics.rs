@@ -8,7 +8,8 @@ use crate::cx::{Semantics, SemanticsCx};
 use crate::route::Geometry;
 use crate::tree::Tree;
 use crate::NodeId;
-use cupertino_geometry::Rect;
+use cupertino_geometry::{Rect, Size};
+use cupertino_ui_layout::LayoutDirection;
 use std::collections::BTreeMap;
 
 pub(crate) struct SemanticsPass {
@@ -32,6 +33,8 @@ pub(crate) fn protected<M: 'static>(tree: &Tree<M>, id: NodeId) -> bool {
         &*node.state,
         &mut SemanticsCx {
             node: id,
+            size: Size::ZERO,
+            direction: LayoutDirection::Ltr,
             semantics: &mut semantics,
         },
     );
@@ -43,6 +46,7 @@ pub(crate) fn build<M: 'static>(
     root: NodeId,
     geometry: &Geometry,
     focus: Option<NodeId>,
+    direction: LayoutDirection,
 ) -> SemanticsPass {
     let mut pass = SemanticsPass {
         nodes: BTreeMap::new(),
@@ -58,10 +62,13 @@ pub(crate) fn build<M: 'static>(
     while let Some((id, owner)) = stack.pop() {
         let Some(node) = tree.get(id) else { continue };
         let mut semantics = Semantics::default();
+        let rect = geometry.get(&id).map_or(Rect::default(), |p| p.rect);
         node.widget.semantics(
             &*node.state,
             &mut SemanticsCx {
                 node: id,
+                size: rect.size,
+                direction,
                 semantics: &mut semantics,
             },
         );
@@ -102,7 +109,14 @@ pub(crate) fn build<M: 'static>(
                         description: semantics.description,
                         value,
                         states,
-                        bounds: geometry.get(&id).map_or(Rect::default(), |p| p.rect),
+                        bounds: semantics.bounds.map_or(rect, |b| {
+                            Rect::new(
+                                rect.origin.x + b.origin.x,
+                                rect.origin.y + b.origin.y,
+                                b.size.width,
+                                b.size.height,
+                            )
+                        }),
                         actions: semantics.actions,
                         relations: semantics.relations,
                         children: Vec::new(),

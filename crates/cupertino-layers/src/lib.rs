@@ -222,6 +222,15 @@ pub const DENIED_CRATES: &[(&str, &[&str])] = &[
             "cupertino-protocols",
             "cupertino-shell-client",
             "cupertino-text-field",
+            "cupertino-ui-wayland",
+            "cupertino-wayland-client",
+            "cupertino-server",
+            "smithay",
+            "wayland-client",
+            "wayland-backend",
+            "wayland-protocols",
+            "wayland-server",
+            "pipewire",
         ],
     ),
     (
@@ -763,6 +772,29 @@ mod tests {
             ] {
                 assert!(denied.contains(&forbidden), "{krate} may reach {forbidden}");
             }
+        }
+    }
+
+    #[test]
+    fn the_toolkit_renderer_cannot_reach_a_window_system_to_read_the_screen_back() {
+        let denied = DENIED_CRATES
+            .iter()
+            .find(|(c, _)| *c == "cupertino-ui-render")
+            .expect("cupertino-ui-render has denied crates")
+            .1;
+        for forbidden in [
+            "cupertino-ui-wayland",
+            "cupertino-wayland-client",
+            "cupertino-server",
+            "smithay",
+            "wayland-client",
+            "wayland-server",
+            "pipewire",
+        ] {
+            assert!(
+                denied.contains(&forbidden),
+                "cupertino-ui-render may reach {forbidden}"
+            );
         }
     }
 }

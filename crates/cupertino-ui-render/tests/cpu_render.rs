@@ -1092,7 +1092,7 @@ fn glyphs_are_rasterized_at_each_scales_device_size_and_kept_for_both() {
         .unwrap();
         r.stats().glyph_rasterize.count
     };
-    assert_eq!((frame(1.0), frame(2.0)), (4, 4));
+    assert_eq!((frame(1.0), frame(1.0), frame(2.0)), (4, 0, 4));
     assert_eq!(
         (frame(1.0), frame(2.0)),
         (0, 0),
@@ -1226,13 +1226,19 @@ fn a_blur_reads_only_its_own_layer_never_what_is_drawn_under_it() {
         &DamageRegion::Full,
     )
     .unwrap();
+    // the blurred square's reach: three box passes of 3 px, 9 px around it
+    let reach = rect(67.0, 15.0, 28.0, 28.0);
     for y in 0..64 {
-        let row = |f: &[u8]| f[(y * 96 + 40) * 4..(y * 96 + 56) * 4].to_vec();
-        assert_eq!(
-            row(&both),
-            row(&alone),
-            "row {y}: the red edge under the blurred layer stays sharp"
-        );
+        for x in 0..96 {
+            let at = (y * 96 + x) * 4;
+            if !reach.contains(Point::new(x as f64 + 0.5, y as f64 + 0.5)) {
+                assert_eq!(
+                    both[at..at + 4],
+                    alone[at..at + 4],
+                    "({x}, {y}): outside the blurred square nothing changes, the red edge stays sharp"
+                );
+            }
+        }
     }
     let blue = (29 * 96 + 72) * 4;
     assert!(

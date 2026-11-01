@@ -33,6 +33,12 @@ mkdir -p "$work/pkgs"
 rm -rf "$work/pkgs/rev-"* "$work/pkgs"/*.log "$work/pkgs"/*.info "$work/pkgs"/*.contents "$work/pkgs/PKGBUILD"
 
 cp -a "$root/packaging/iso" "$work/profile"
+# Symlinks cannot live in the source tree (ci/gate.py); airootfs-links lists them as "path target" lines.
+while read -r link target; do
+    mkdir -p "$work/profile/airootfs/$(dirname "$link")"
+    ln -sfn "$target" "$work/profile/airootfs/$link"
+done <"$work/profile/airootfs-links"
+rm "$work/profile/airootfs-links"
 mkdir -p "$work/profile/airootfs/opt/cupertino-repo"
 cp "$work/pkgs"/*.pkg.tar.zst "$work/profile/airootfs/opt/cupertino-repo/"
 

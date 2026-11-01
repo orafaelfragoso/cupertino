@@ -5,8 +5,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use zbus::message::Header;
@@ -16,7 +15,9 @@ use zbus::{interface, Connection};
 use crate::request::{from_frontend, Exported, PortalError, Response};
 
 /// At most this many dialogs wait at once; another call is refused.
-pub const MAX_PENDING: usize = 4;
+pub const MAX_PENDING: usize = 16;
+/// At most this many of them for one app id, so one app cannot use up the others' dialogs.
+pub const MAX_PENDING_PER_APP: usize = 4;
 /// Bytes of a title, a label, a name or a pattern.
 pub const MAX_TEXT: usize = 1024;
 /// Bytes of a path.
@@ -122,14 +123,14 @@ pub enum Event {
 /// The object on the bus.
 pub struct FileChooser {
     events: Box<dyn Fn(Event) + Send + Sync>,
-    pending: Arc<AtomicUsize>,
+    pending: Arc<Mutex<HashMap<String, usize>>>,
 }
 
 impl FileChooser {
     pub fn new(events: impl Fn(Event) + Send + Sync + 'static) -> Self {
         Self {
             events: Box::new(events),
-            pending: Arc::new(AtomicUsize::new(0)),
+            pending: Arc::default(),
         }
     }
 
@@ -139,7 +140,7 @@ impl FileChooser {
         handle: OwnedObjectPath,
         ask: Ask,
     ) -> Result<(u32, HashMap<String, OwnedValue>), PortalError> {
-        let _pending = Pending::take(&self.pending).ok_or_else(|| {
+        let _pending = Pending::take(&self.pending, &ask.app_id).ok_or_else(|| {
             PortalError::LimitsExceeded("too many file choosers are open".to_owned())
         })?;
         let request = Exported::at(connection, handle.as_ref()).await?;
@@ -175,23 +176,36 @@ impl FileChooser {
     }
 }
 
-/// Counts one open dialog for as long as it lives.
-struct Pending(Arc<AtomicUsize>);
+/// Counts one open dialog of an app id for as long as it lives.
+struct Pending {
+    counts: Arc<Mutex<HashMap<String, usize>>>,
+    app_id: String,
+}
 
 impl Pending {
-    fn take(count: &Arc<AtomicUsize>) -> Option<Pending> {
-        count
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                (n < MAX_PENDING).then_some(n + 1)
-            })
-            .ok()
-            .map(|_| Pending(Arc::clone(count)))
+    fn take(counts: &Arc<Mutex<HashMap<String, usize>>>, app_id: &str) -> Option<Pending> {
+        let mut open = counts.lock().unwrap_or_else(|e| e.into_inner());
+        let mine = open.get(app_id).copied().unwrap_or(0);
+        if open.values().sum::<usize>() >= MAX_PENDING || mine >= MAX_PENDING_PER_APP {
+            return None;
+        }
+        open.insert(app_id.to_owned(), mine + 1);
+        Some(Pending {
+            counts: Arc::clone(counts),
+            app_id: app_id.to_owned(),
+        })
     }
 }
 
 impl Drop for Pending {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::AcqRel);
+        let mut open = self.counts.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = open.get_mut(&self.app_id) {
+            *n -= 1;
+            if *n == 0 {
+                open.remove(&self.app_id);
+            }
+        }
     }
 }
 
@@ -514,6 +528,35 @@ fn results(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_app_holds_at_most_its_share_of_the_open_dialogs() {
+        let counts = Arc::default();
+        let editor: Vec<Pending> = (0..MAX_PENDING_PER_APP)
+            .map(|_| Pending::take(&counts, "org.example.Editor").unwrap())
+            .collect();
+        assert!(Pending::take(&counts, "org.example.Editor").is_none());
+        let others: Vec<Pending> = (0..MAX_PENDING - MAX_PENDING_PER_APP)
+            .map(|i| {
+                Pending::take(
+                    &counts,
+                    &format!("org.example.App{}", i / MAX_PENDING_PER_APP),
+                )
+                .unwrap()
+            })
+            .collect();
+        assert!(
+            Pending::take(&counts, "org.example.Viewer").is_none(),
+            "the process-wide cap holds"
+        );
+        drop(editor);
+        assert!(Pending::take(&counts, "org.example.Viewer").is_some());
+        drop(others);
+        assert!(
+            counts.lock().unwrap().is_empty(),
+            "every count is given back"
+        );
+    }
 
     #[test]
     fn shown_app_text_loses_control_and_direction_override_characters() {

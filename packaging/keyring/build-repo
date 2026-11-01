@@ -1,0 +1,108 @@
+#!/bin/sh
+# Build the signed Cupertino package repository as a directory tree, ready for any static host:
+#
+#   build-repo --packages DIR --key FINGERPRINT --url BASE_URL --out DIR [--archive-from DIR] [--keep N]
+#
+# DIR holds the built, unsigned *.pkg.tar.zst files of one release. Each package is signed with the key (a detached .sig),
+# `repo-add --sign` makes the signed database, and the tree has
+#
+#   OUT/repo/      the packages of this release with their .sig, cupertino.db and cupertino.files with their .sig
+#   OUT/archive/   the releases kept for cupertino-rollback: --archive-from's packages plus this release, pruned to N (5)
+#   OUT/cupertino.conf          the [cupertino] section for pacman.conf, Server = BASE_URL/repo
+#   OUT/cupertino-rollback.conf the archive=BASE_URL/archive line for /etc/cupertino-rollback.conf
+#   OUT/SHA256SUMS              every file of the tree
+#
+# There is no upload. Upload the packages and their .sig first and the database files last, so that a client never sees a
+# database that names a missing file. The key comes from GNUPGHOME (or --gnupghome DIR); the release job loads the signing
+# subkey into a temporary GNUPGHOME and never holds the master key. BASE_URL is https://, or http://127.0.0.1 for tests.
+set -eu
+
+here=$(cd "$(dirname "$0")" && pwd)
+die() {
+    echo "build-repo: $*" >&2
+    exit 1
+}
+usage() {
+    die 'usage: build-repo --packages DIR --key FINGERPRINT --url BASE_URL --out DIR [--archive-from DIR] [--keep N] [--gnupghome DIR]'
+}
+
+packages= key= url= out= archive_from= keep=5
+while [ "$#" -gt 0 ]; do
+    [ "$#" -ge 2 ] || usage
+    case $1 in
+    --packages) packages=$2 ;;
+    --key) key=$2 ;;
+    --url) url=$2 ;;
+    --out) out=$2 ;;
+    --archive-from) archive_from=$2 ;;
+    --keep) keep=$2 ;;
+    --gnupghome) GNUPGHOME=$2; export GNUPGHOME ;;
+    *) usage ;;
+    esac
+    shift 2
+done
+[ -n "$packages" ] && [ -n "$key" ] && [ -n "$url" ] && [ -n "$out" ] || usage
+
+case $key in
+*[!0-9A-Fa-f]*) die 'the key is a fingerprint of hexadecimal digits' ;;
+esac
+[ "${#key}" -ge 16 ] || die 'the key is a fingerprint or long key id, not a short one'
+case $keep in '' | *[!0-9]* | 0) die 'N is a positive whole number' ;; esac
+case $url in
+https://?* | http://127.0.0.1 | http://127.0.0.1[:/]*) ;;
+*) die 'the URL is https://HOST/PATH (http://127.0.0.1 only for tests)' ;;
+esac
+case $url in *[[:space:]\'\"\\]*) die 'the URL has a space or a quote' ;; esac
+url=${url%/}
+
+set -- "$packages"/*.pkg.tar.zst
+[ -e "$1" ] || die "no *.pkg.tar.zst in $packages"
+for p in "$@"; do
+    case $(basename "$p") in
+    *[!A-Za-z0-9@._+:-]*) die "unexpected characters in the package file name $p" ;;
+    esac
+done
+gpg --batch --list-secret-keys "$key" >/dev/null 2>&1 || die "no secret key $key in the keyring"
+if [ -e "$out" ] && [ -n "$(ls -A "$out")" ]; then
+    die "$out is not empty; a release tree is built into a new directory"
+fi
+mkdir -p "$out/repo" "$out/archive"
+
+if [ -n "$archive_from" ]; then
+    [ -d "$archive_from" ] || die "$archive_from is not a directory"
+    for f in "$archive_from"/*.pkg.tar.zst "$archive_from"/*.pkg.tar.zst.sig; do
+        [ -e "$f" ] && cp "$f" "$out/archive/"
+    done
+fi
+
+for p in "$@"; do
+    name=$(basename "$p")
+    cp "$p" "$out/repo/$name"
+    gpg --batch --yes --detach-sign -u "$key!" -o "$out/repo/$name.sig" "$out/repo/$name" || die "signing $name failed"
+    gpg --batch --verify "$out/repo/$name.sig" "$out/repo/$name" >/dev/null 2>&1 || die "$name: the new signature does not verify"
+    cp "$out/repo/$name" "$out/repo/$name.sig" "$out/archive/"
+done
+
+(
+    cd "$out/repo"
+    repo-add --quiet --sign --key "$key" cupertino.db.tar.zst ./*.pkg.tar.zst
+    # repo-add makes cupertino.db a symlink to the archive; a static host serves the files, so make them files
+    for f in cupertino.db cupertino.db.sig cupertino.files cupertino.files.sig; do
+        if [ -L "$f" ]; then
+            cp --remove-destination "$(readlink -f "$f")" "$f"
+        fi
+    done
+)
+[ -f "$out/repo/cupertino.db.tar.zst.sig" ] || die 'repo-add wrote no database signature'
+gpg --batch --verify "$out/repo/cupertino.db.tar.zst.sig" "$out/repo/cupertino.db.tar.zst" >/dev/null 2>&1 || die 'the database signature does not verify'
+
+sh "$here/archive-prune" "$out/archive" "$keep"
+
+cat >"$out/cupertino.conf" <<CONF
+[cupertino]
+SigLevel = Required DatabaseRequired TrustedOnly
+Server = $url/repo
+CONF
+printf 'archive=%s/archive\n' "$url" >"$out/cupertino-rollback.conf"
+(cd "$out" && find . -type f ! -name SHA256SUMS | sort | xargs sha256sum >SHA256SUMS)
+echo "build-repo: $(ls "$out/repo" | grep -c '\.pkg\.tar\.zst$') packages in $out/repo, $(ls "$out/archive" | grep -c '\.pkg\.tar\.zst$') in $out/archive"

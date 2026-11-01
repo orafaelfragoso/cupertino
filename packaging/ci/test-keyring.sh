@@ -17,70 +17,25 @@ image=docker.io/library/archlinux@sha256:3cbf69d2d5958d6a294f3722c5668e6187c4df8
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
 work=$(mktemp -d "$out/work.XXXXXX")
-trap 'docker run --rm -v "$work:/w" "$image" rm -rf /w/build /w/repo /w/archive /w/prune /w/previous-good /w/v2 /w/extra >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
-git -C "$root" archive --format=tar --prefix=src/ HEAD packaging/keyring | tar -x -C "$work"
+trap 'docker run --rm -v "$work:/w" "$image" rm -rf /w/build /w/repo /w/archive /w/prune /w/previous-good /w/v2 /w/extra /w/prune-rx >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
+git -C "$root" archive --format=tar --prefix=src/ HEAD packaging/keyring packaging/ci/keyring-test-lib.sh | tar -x -C "$work"
 
 test_script=$(
     cat <<'INNER'
 set -euo pipefail
-pass=0
-ok() { pass=$((pass + 1)); echo "ok   $*"; }
-fail() { echo "FAIL $*"; exit 1; }
-# refused NAME CMD...: the command must fail even when its prompt is answered yes
-refused() {
-    local name=$1
-    shift
-    if printf 'y\n' | "$@" >/tmp/refused.out 2>&1; then
-        cat /tmp/refused.out
-        fail "$name was accepted"
-    fi
-    ok "$name is refused: $(tail -n 1 /tmp/refused.out)"
-}
-installed() { pacman -Q "$1" | cut -d ' ' -f 2; }
+. /work/src/packaging/ci/keyring-test-lib.sh
+prepare
+install -d -o builder /work/repo /work/archive /work/v2 /work/extra
 
-pacman -Syu --noconfirm --needed -q gnupg python libarchive curl >/dev/null
-useradd -m builder
-install -d -o builder /work/repo /work/archive /work/build /work/v2
-cp -r /work/src/packaging/keyring /work/build/keyring
-chown -R builder /work/build
-
-as_builder() { su builder -c "export GNUPGHOME=/home/builder/gnupg; $*"; }
-as_builder 'mkdir -p $GNUPGHOME && chmod 700 $GNUPGHOME'
-gen='gpg --batch --pinentry-mode loopback --passphrase ""'
-as_builder "$gen --quick-gen-key 'Cupertino Test Master <t@example.invalid>' ed25519 cert 1y"
-MASTER=$(as_builder "gpg --batch --with-colons --list-keys 'Cupertino Test Master' | awk -F: '\$1==\"fpr\"{print \$10; exit}'")
-as_builder "$gen --quick-add-key $MASTER ed25519 sign 1y"
-SUB=$(as_builder "gpg --batch --with-colons --list-keys $MASTER | awk -F: '\$1==\"sub\"{s=1} s&&\$1==\"fpr\"{print \$10; exit}'")
-as_builder "$gen --quick-gen-key 'Other Packager <o@example.invalid>' ed25519 cert,sign 1y"
-OTHER=$(as_builder "gpg --batch --with-colons --list-keys 'Other Packager' | awk -F: '\$1==\"fpr\"{print \$10; exit}'")
-as_builder "gpg --batch --armor --export $MASTER > /work/build/cupertino-public.asc"
-as_builder "gpg --batch --armor --export $OTHER > /work/build/other-public.asc"
-sign() { as_builder "$gen --detach-sign -u '$2!' -o '$1.sig' '$1'"; }
-
-# stand-in packages: one empty file named after the package and version
-mk() { # name version
-    local dir=/work/build/pkg-$1-$2
-    install -d -o builder "$dir"
-    printf '%s\n' "pkgname=$1" "pkgver=${2%-*}" "pkgrel=${2#*-}" "pkgdesc='stand-in'" "arch=('x86_64')" \
-        "license=('GPL-3.0-or-later')" \
-        "package() { install -Dm644 /dev/null \"\$pkgdir/usr/share/cupertino-test/$1-\$pkgver\"; }" >"$dir/PKGBUILD"
-    chown builder "$dir/PKGBUILD"
-    su builder -c "cd $dir && makepkg -f --nodeps >/dev/null 2>&1"
-    mv "$dir/$1-$2-x86_64.pkg.tar.zst" /work/repo/
-}
 publish() {
     rm -f /work/repo/cupertino.db* /work/repo/cupertino.files*
     as_builder "cd /work/repo && repo-add -q --sign --key $SUB cupertino.db.tar.zst *.pkg.tar.zst"
 }
 
-su builder -c "cd /work/build/keyring && CUPERTINO_KEYRING_KEY=/work/build/cupertino-public.asc makepkg -f --nodeps >/dev/null 2>&1"
-mv /work/build/keyring/cupertino-keyring-1-1-any.pkg.tar.zst /work/repo/
-for p in cupertino cupertino-data; do mk "$p" 1.0-1; mk "$p" 2.0-1; done
-mk cupertino-extra 1.0-1
-mkdir -p /work/extra && mv /work/repo/cupertino-extra-1.0-1-x86_64.pkg.tar.zst /work/extra/ && chown builder /work/extra
-sign /work/extra/cupertino-extra-1.0-1-x86_64.pkg.tar.zst "$SUB"
-mv /work/repo/*2.0-1* /work/v2/
-for f in /work/repo/*.pkg.tar.zst /work/v2/*.pkg.tar.zst; do sign "$f" "$SUB"; done
+mk_keyring /work/repo
+for p in cupertino cupertino-data; do mk "$p" 1.0-1 /work/repo; mk "$p" 2.0-1 /work/v2; done
+mk cupertino-extra 1.0-1 /work/extra
+for f in /work/repo/*.pkg.tar.zst /work/v2/*.pkg.tar.zst /work/extra/*.pkg.tar.zst; do sign "$f" "$SUB"; done
 publish
 
 cat >>/etc/pacman.conf <<CONF
@@ -96,8 +51,7 @@ for _ in $(seq 20); do curl -fsS http://127.0.0.1:8000/repo/cupertino.db >/dev/n
 
 # 1. bootstrap order: nothing from the repository is accepted before the key is trusted
 pacman-key --init >/dev/null 2>&1
-# no key server: an unknown key must be refused, not looked up
-echo 'keyserver hkps://127.0.0.1:9' >>/etc/pacman.d/gnupg/gpg.conf
+no_keyserver
 pacman-key --populate archlinux >/dev/null 2>&1
 refused 'the repository before its key is trusted' pacman -Sy --noconfirm cupertino-keyring
 pacman-key --add /work/build/cupertino-public.asc >/dev/null 2>&1
@@ -195,6 +149,13 @@ left=$(find $prune -name 'cupertino-[0-9]*.pkg.tar.zst' | wc -l)
 [ -f "$prune/cupertino-0.10.0-1-x86_64.pkg.tar.zst" ] || fail '0.10.0 is newer than 0.9.0 and stays'
 [ ! -f "$prune/cupertino-0.1.0-1-x86_64.pkg.tar.zst.sig" ] && [ ! -f "$prune/cupertino-data-0.1.0-2-x86_64.pkg.tar.zst" ] || fail 'the oldest releases and their signatures should be gone'
 ok 'archive-prune keeps the newest five releases of each package, epoch and 0.10 versus 0.9 included'
+# a name with a character that is special in a regular expression is not another package's prefix
+rx=/work/prune-rx
+mkdir -p $rx
+for f in a.b-1-1 a.b-0-1 aXb-5-1; do : >"$rx/$f-x86_64.pkg.tar.zst"; : >"$rx/$f-x86_64.pkg.tar.zst.sig"; done
+sh /work/src/packaging/keyring/archive-prune "$rx" 1
+[ -f "$rx/a.b-1-1-x86_64.pkg.tar.zst" ] && [ ! -f "$rx/a.b-0-1-x86_64.pkg.tar.zst" ] && [ -f "$rx/aXb-5-1-x86_64.pkg.tar.zst" ] || fail 'a.b and aXb must be pruned apart'
+ok 'archive-prune treats a package name literally, not as a regular expression'
 echo "keyring test: $pass checks passed"
 INNER
 )

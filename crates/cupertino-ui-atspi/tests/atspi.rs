@@ -65,6 +65,7 @@ fn node(
         level: None,
         item_index: None,
         column_index: None,
+        sort: None,
     }
 }
 

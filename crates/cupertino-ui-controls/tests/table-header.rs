@@ -1,5 +1,6 @@
 //! A table's sorting headers by keyboard: Tab reaches each column's header before the rows, and Space or Return sorts
-//! by that column, flipping the order of the column already sorted.
+//! by that column, flipping the order of the column already sorted. The sorting header tells assistive technology its
+//! order.
 
 mod support;
 
@@ -97,6 +98,19 @@ fn header(h: &Harness<Sorted>, column: usize) -> NodeId {
         .0
 }
 
+/// Each header's sort order, by column.
+fn sorts(h: &Harness<Sorted>) -> Vec<Option<SortOrder>> {
+    let mut headers: Vec<_> = h
+        .snapshot()
+        .accessibility
+        .into_iter()
+        .filter(|(_, n)| n.role == Role::ColumnHeader)
+        .map(|(_, n)| (n.column_index, n.sort))
+        .collect();
+    headers.sort_by_key(|&(column, _)| column);
+    headers.into_iter().map(|(_, sort)| sort).collect()
+}
+
 #[test]
 fn each_header_is_named_by_its_column_title() {
     let h = Harness::<Sorted>::new();
@@ -113,6 +127,18 @@ fn each_header_is_named_by_its_column_title() {
         })
         .collect();
     assert_eq!(names, [Some("Name".to_owned()), Some("Size".to_owned())]);
+}
+
+#[test]
+fn only_the_sorting_header_tells_its_order_which_follows_each_sort() {
+    let mut h = Harness::<Sorted>::new();
+    assert_eq!(sorts(&h), [Some(SortOrder::Ascending), None]);
+    h.tap(TAB);
+    h.tap(SPACE);
+    assert_eq!(sorts(&h), [Some(SortOrder::Descending), None]);
+    h.tap(TAB);
+    h.tap(RETURN);
+    assert_eq!(sorts(&h), [None, Some(SortOrder::Ascending)]);
 }
 
 #[test]

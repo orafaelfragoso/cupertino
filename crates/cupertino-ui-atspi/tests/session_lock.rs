@@ -54,6 +54,7 @@ fn text(name: &str, live: Option<Live>) -> AccessibilityNode {
         level: None,
         item_index: None,
         column_index: None,
+        sort: None,
     }
 }
 

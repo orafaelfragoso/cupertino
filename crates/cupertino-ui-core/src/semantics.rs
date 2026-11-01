@@ -163,6 +163,7 @@ pub(crate) fn build<M: 'static>(
                         level: semantics.level,
                         item_index: semantics.item_index,
                         column_index: semantics.column_index,
+                        sort: semantics.sort,
                     },
                 );
                 if let Some(owner) = owner {

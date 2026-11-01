@@ -18,7 +18,7 @@ use crate::layout::{self, CORNER_RADIUS, GLYPH_SIZE, GLYPH_TOP, WINDOW_SIZE};
 use crate::model::{segments, Fill, Kind, Overlay, View};
 
 /// The `app_id` of the overlay's window, which gives it its layer surface.
-pub const APP_ID: &str = "org.cupertino.Osd";
+pub const APP_ID: &str = "cupertino-osd";
 
 /// The colours of the meter in the session's appearance.
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -4,9 +4,9 @@
 #   scripts/build-iso.sh [OUT_DIR]        OUT_DIR defaults to ~/.cache/cupertino-iso
 #
 # Packages come from packaging/ci/build-in-container.sh arch (pinned Arch image), go into a local pacman repository, and
-# mkarchiso (pinned Arch image, privileged) assembles packaging/iso around it. The same HEAD and the same pinned image
-# give the same package set; SOURCE_DATE_EPOCH is the HEAD commit time. The output holds the ISO, its sha256 and the
-# package list. Needs docker and git; refuses to start below the build-root disk floor.
+# mkarchiso (pinned Arch image, privileged) assembles packaging/iso around it. The Cupertino packages follow from the HEAD
+# and the pinned image; the rest comes from the current Arch mirrors, so the manifest records every installed package
+# version. SOURCE_DATE_EPOCH is the HEAD commit time. The output holds the ISO, its sha256 and the manifest. Needs docker and git; refuses to start below the build-root disk floor.
 set -euo pipefail
 
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
@@ -40,6 +40,7 @@ while read -r link target; do
 done <"$work/profile/airootfs-links"
 rm "$work/profile/airootfs-links"
 mkdir -p "$work/profile/airootfs/home/live"
+cp "$work/profile/pacman.conf" "$work/profile/airootfs/etc/pacman.conf"
 mkdir -p "$work/profile/airootfs/opt/cupertino-repo"
 cp "$work/pkgs"/*.pkg.tar.zst "$work/profile/airootfs/opt/cupertino-repo/"
 
@@ -65,5 +66,7 @@ mv "$iso" "$out/$name"
     echo "source-date-epoch $epoch"
     cat "$work/archiso-version"
     ls "$work/pkgs"
+    echo "installed packages:"
+    cat "$work/iso-work/iso/arch/pkglist.x86_64.txt"
 } >"$out/$name.manifest"
 echo "$out/$name"

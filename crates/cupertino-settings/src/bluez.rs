@@ -13,7 +13,7 @@ use zbus::proxy::CacheProperties;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
 
 use crate::agent::{from_owner, Agent, AgentEvent, AGENT_PATH};
-use crate::live::{Bluetooth, BtDevice};
+use crate::live::{display_name, Bluetooth, BtDevice};
 use crate::sheet::{Answer, Prompt};
 
 pub const NAME: &str = "org.bluez";
@@ -83,7 +83,7 @@ pub fn bluetooth(connection: &Connection, pairing: &HashSet<String>) -> zbus::Re
             Some(BtDevice {
                 id: path.to_string(),
                 address: text(d, "Address")?,
-                name: text(d, "Name"),
+                name: text(d, "Name").map(|n| display_name(&n)),
                 icon: text(d, "Icon").unwrap_or_default(),
                 paired: flag(d, "Paired")?,
                 connected: flag(d, "Connected")?,
@@ -255,6 +255,7 @@ async fn title(connection: &zbus::Connection, device: &ObjectPath<'_>) -> String
     };
     alias
         .await
+        .map(|a| display_name(&a))
         .unwrap_or_else(|_: zbus::Error| "Unknown device".to_string())
 }
 

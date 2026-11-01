@@ -21,8 +21,8 @@ use crate::nm;
 use crate::pane::PaneId;
 
 use crate::live::{
-    Battery, BatteryState, Bluetooth, BtDevice, Device, Focus, Mouse, Network, Reading, Volume,
-    Wifi,
+    display_name, Battery, BatteryState, Bluetooth, BtDevice, Device, Focus, Mouse, Network,
+    Reading, Volume, Wifi,
 };
 use crate::panes::Call;
 
@@ -533,7 +533,7 @@ impl Services {
                                 name,
                                 kind,
                                 state,
-                                ssid,
+                                ssid: display_name(&ssid),
                                 failure,
                                 address,
                             },
@@ -543,6 +543,7 @@ impl Services {
                     networks: networks
                         .into_iter()
                         .map(|(ssid, signal, security, saved, connected)| Network {
+                            name: display_name(&ssid),
                             ssid,
                             signal,
                             security,
@@ -934,7 +935,7 @@ fn bt_device(d: &HashMap<String, OwnedValue>) -> Option<BtDevice> {
     Some(BtDevice {
         id: text("Id")?,
         address: text("Address")?,
-        name: text("Name"),
+        name: text("Name").map(|n| display_name(&n)),
         icon: text("Icon")?,
         paired: flag("Paired")?,
         connected: flag("Connected")?,

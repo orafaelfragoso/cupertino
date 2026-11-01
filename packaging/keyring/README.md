@@ -1,7 +1,12 @@
 # cupertino-keyring
 
 The Cupertino package signing key and the tools for updating and rolling back from a signed repository. Arch only. Nothing here publishes a repository:
-`build-repo` writes the tree and the upload waits for the host and key decisions.
+`build-repo` writes the tree and the upload waits for the host and key decisions. The release workflow's `sign` job runs
+`packaging/ci/sign-release.sh` (build-repo in the pinned Arch image, no network, the key on stdin) with the secret
+`CUPERTINO_SIGNING_KEY` (an armored export of the signing subkey only; a key that holds the master is refused) and the
+variable `CUPERTINO_REPO_URL`, and attaches the packages, their `.sig`, the database files and `SHA256SUMS.repo` (with `.sig`) to
+the draft release. Without the secret the job fails and no draft is made. The archive of earlier releases and `cupertino-keyring`
+are not part of that job yet.
 
 | File | Installed as | What it does |
 |---|---|---|
@@ -31,6 +36,10 @@ Trust the key before installing the keyring, because the keyring is signed by th
 then add the `[cupertino]` section (`SigLevel = Required DatabaseRequired TrustedOnly`) and `pacman -Sy cupertino-keyring`.
 
 ## Tests
+
+`packaging/ci/test-sign-release.sh` (docker, a throwaway key, 5 checks) runs the release signing step without GitHub: no key,
+a key with the master secret, an empty URL and a non-key each sign nothing; a signing subkey alone signs the packages, the
+database and `SHA256SUMS` under the master.
 
 Both need docker, use the pinned Arch image and throwaway keys, and take about two minutes.
 

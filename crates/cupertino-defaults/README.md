@@ -64,8 +64,9 @@ is reported and changes nothing. `PersonalAccessibility` is a person's `accessib
 keys they changed (`record`), each kept once changed even when set back to the machine's value, and `over` lays them on the
 machine's settings. A file with every key, as earlier versions wrote it, stays valid and sets them all. A key joins `SYSTEM_KEYS` only after a security review. `system::read_root_file` reads such a file only when it is a regular file of root's that no one else can write (no link followed); the compositor and `cupertino-sessiond` read the machine's files with it, and `SystemAccessibility::to_text` writes the machine's file.
 
-**Power defaults.** Display sleep is 600 s on mains and 120 s on battery, system sleep is 600 s on both, and dim is on (the
-reference's built-in power table, no model overrides them). The session locks 300 s after the
+**Power defaults.** Display sleep is 600 s on mains and 120 s on battery, and dim is on (the
+reference's built-in power table, no model overrides them). System sleep is never on mains, because a build, a download or a
+remote session takes no sleep inhibitor and nothing else says the machine is busy, and 600 s on battery. The session locks 300 s after the
 display sleeps (the new-user template), and the display sleeps after 30 s on the lock screen. Values are in seconds, where the design uses minutes, so tests can use short timers. `never` switches a timer
 off.
 

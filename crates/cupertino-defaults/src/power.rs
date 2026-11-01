@@ -4,14 +4,15 @@
 //! | Key | Value | Default |
 //! |---|---|---|
 //! | `display_sleep_ac`, `display_sleep_battery` | seconds of no input, or `never` | 600 and 120 |
-//! | `system_sleep_ac`, `system_sleep_battery` | seconds of no input, or `never` | 600 and 600 |
+//! | `system_sleep_ac`, `system_sleep_battery` | seconds of no input, or `never` | `never` and 600 |
 //! | `dim_before_display_sleep` | `on` or `off` | on |
 //! | `require_password_after` | seconds after the display sleeps, `0` for at once, or `never` | 300 |
 //! | `lock_screen_display_sleep` | seconds of no input on the lock screen | 30 |
 //!
 //! The design stores the timers in minutes and its settings pane offers 1 to 180 minutes; seconds here let a test use
-//! short timers. Defaults: display sleep 10 min on mains and 2 min on battery, system sleep 10 min on both, dim on (the
-//! built-in power table, unchanged per model); the password 300 s after the display sleeps
+//! short timers. Defaults: display sleep 10 min on mains and 2 min on battery, dim on (the built-in power table, unchanged
+//! per model); system sleep never on mains and 10 min on battery, because a build, a download or a remote session takes
+//! no sleep inhibitor and nothing else says the machine is busy; the password 300 s after the display sleeps
 //! (the new-user template's); the lock screen's own display timeout 30 s.
 
 use std::fmt;
@@ -75,7 +76,7 @@ impl Default for PowerSettings {
         Self {
             ac: SourceTimers {
                 display_sleep: minutes(10),
-                system_sleep: minutes(10),
+                system_sleep: Timer::Never,
             },
             battery: SourceTimers {
                 display_sleep: minutes(2),
@@ -229,7 +230,11 @@ mod tests {
             s.timers(true).display_sleep,
             Timer::After(Duration::from_secs(120))
         );
-        assert_eq!(s.timers(false).system_sleep, s.timers(true).system_sleep);
+        assert_eq!(s.timers(false).system_sleep, Timer::Never);
+        assert_eq!(
+            s.timers(true).system_sleep,
+            Timer::After(Duration::from_secs(600))
+        );
         assert!(s.dim_before_display_sleep);
         assert_eq!(
             s.require_password_after,

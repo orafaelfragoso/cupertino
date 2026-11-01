@@ -3,7 +3,9 @@
 //! check can tell which window has the keyboard focus. With `--frames FILE` it draws a new frame at every frame callback
 //! and writes how many it presented to FILE, so a check can tell that the server keeps releasing its buffers. With
 //! `--intervals FILE` it animates the same way and writes the time between consecutive presented frames, in
-//! microseconds, one line each, so a soak can follow frame pacing. It is not part of the desktop.
+//! microseconds, one line each, so a soak can follow frame pacing. With `--copy TEXT` its first key press sets the
+//! clipboard to TEXT, and with `--clipboard FILE` it writes every text selection it is offered to FILE, so a check can
+//! copy and paste between it and other programs. It is not part of the desktop.
 
 use std::error::Error;
 use std::fs::File;
@@ -18,7 +20,7 @@ use cupertino_wayland_client::{
 
 const USAGE: &str =
     "usage: cupertino-testclient --app-id ID --title TITLE --output FILE [--frames FILE] \
-                     [--intervals FILE]";
+                     [--intervals FILE] [--copy TEXT] [--clipboard FILE]";
 
 /// Logical size of the window when the server leaves it to the client; the test checks never depend on it.
 const WINDOW_SIZE: (u32, u32) = (480, 320);
@@ -26,6 +28,8 @@ const WINDOW_SIZE: (u32, u32) = (480, 320);
 const FILL_GREY: u8 = 236;
 /// How long an animating window waits for the server to release a buffer before it tries again.
 const RETRY: Duration = Duration::from_millis(16);
+/// The text types a selection is offered and read in, the preferred first.
+const TEXT_TYPES: [&str; 3] = ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
 /// Evdev code of the Return key.
 const KEY_ENTER: u32 = 28;
 
@@ -35,12 +39,14 @@ struct Options {
     output: String,
     frames: Option<String>,
     intervals: Option<String>,
+    copy: Option<String>,
+    clipboard: Option<String>,
 }
 
 impl Options {
     fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
-        let (mut app_id, mut title, mut output, mut frames, mut intervals) =
-            (None, None, None, None, None);
+        let (mut app_id, mut title, mut output, mut frames, mut intervals, mut copy, mut clipboard) =
+            Default::default();
         let mut args = args;
         while let Some(flag) = args.next() {
             let slot = match flag.as_str() {
@@ -49,6 +55,8 @@ impl Options {
                 "--output" => &mut output,
                 "--frames" => &mut frames,
                 "--intervals" => &mut intervals,
+                "--copy" => &mut copy,
+                "--clipboard" => &mut clipboard,
                 other => return Err(format!("unknown argument {other}")),
             };
             *slot = Some(args.next().ok_or_else(|| format!("{flag} needs a value"))?);
@@ -59,6 +67,8 @@ impl Options {
             output: output.ok_or("--output is required")?,
             frames,
             intervals,
+            copy,
+            clipboard,
         })
     }
 }
@@ -105,6 +115,7 @@ fn run(options: &Options) -> Result<(), Box<dyn Error>> {
         None => None,
     };
     let mut last_presented: Option<u64> = None;
+    let mut copy = options.copy.clone();
     loop {
         for event in conn.wait(blocked.then_some(RETRY))? {
             match event {
@@ -122,6 +133,22 @@ fn run(options: &Options) -> Result<(), Box<dyn Error>> {
                 } => {
                     if let (Some(file), Some(c)) = (output.as_mut(), typed_text(code, character)) {
                         write!(file, "{c}")?;
+                    }
+                    if let Some(text) = copy.take() {
+                        conn.set_selection(
+                            TEXT_TYPES
+                                .iter()
+                                .map(|mime| (mime.to_string(), text.clone().into_bytes()))
+                                .collect(),
+                        )?;
+                    }
+                }
+                Event::Selection(Some(offer)) => {
+                    let mime = TEXT_TYPES
+                        .iter()
+                        .find(|mime| offer.mime_types().iter().any(|m| m == *mime));
+                    if let (Some(path), Some(mime)) = (&options.clipboard, mime) {
+                        std::fs::write(path, conn.receive(&offer, mime)?)?;
                     }
                 }
                 Event::Frame(_) if animating => dirty = true,
@@ -203,6 +230,7 @@ mod tests {
             ("one", "Two", "/tmp/x")
         );
         assert_eq!((parsed.frames, parsed.intervals), (None, None));
+        assert_eq!((parsed.copy, parsed.clipboard), (None, None));
         let animating = Options::parse(args(
             "--app-id one --title Two --output /tmp/x --frames /tmp/f",
         ))
@@ -215,6 +243,14 @@ mod tests {
         assert_eq!(
             (pacing.frames.as_deref(), pacing.intervals.as_deref()),
             (None, Some("/tmp/i"))
+        );
+        let clipboard = Options::parse(args(
+            "--app-id one --title Two --output /tmp/x --copy hello --clipboard /tmp/c",
+        ))
+        .unwrap();
+        assert_eq!(
+            (clipboard.copy.as_deref(), clipboard.clipboard.as_deref()),
+            (Some("hello"), Some("/tmp/c"))
         );
         assert_eq!(
             Options::parse(args("--app-id one --title Two"))

@@ -351,6 +351,7 @@ pub(crate) struct Semantics {
     pub(crate) roving_item: bool,
     pub(crate) focus_fallback: bool,
     pub(crate) bounds: Option<Rect>,
+    pub(crate) content_description: Option<String>,
 }
 
 /// A node without a role is left out of the accessibility tree and its children take its place.
@@ -463,6 +464,12 @@ impl SemanticsCx<'_> {
     /// Makes the node a Tab stop only when no node under it is one, such as a scroll view around long text.
     pub fn focus_fallback(&mut self) {
         self.semantics.focus_fallback = true;
+    }
+
+    /// Describes the first node with a role under this one, in reading order, after that node's own description: a
+    /// tooltip's text for its anchor.
+    pub fn describe_content(&mut self, description: impl Into<String>) {
+        self.semantics.content_description = Some(description.into());
     }
 
     /// The part of the node assistive technology shows as the node, in node coordinates; the whole node by default.

@@ -1673,15 +1673,21 @@ fn route<'a, M: 'static>(
 /// refuses leaves the window on its opaque fill.
 fn sync_backdrop<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>) {
     let wanted = match w.background {
-        WindowBackground::Surface { surface, radius } if system.capabilities().app_effects => w
-            .env
-            .theme
-            .surface(surface)
-            .material
-            .map(|material| Backdrop {
-                material: material.to_owned(),
-                radius,
-            }),
+        WindowBackground::Surface {
+            surface,
+            radius,
+            alpha,
+        } if system.capabilities().app_effects => {
+            w.env
+                .theme
+                .surface(surface)
+                .material
+                .map(|material| Backdrop {
+                    material: material.to_owned(),
+                    radius,
+                    alpha: crate::surface_alpha(alpha),
+                })
+        }
         _ => None,
     };
     if wanted == w.backdrop {

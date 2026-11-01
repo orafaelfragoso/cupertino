@@ -1,7 +1,7 @@
 //! The `cupertino-testclient` process: a first-party application window for the QEMU harness.
 //! It maps one window with the given application id and title, and appends what is typed into it to a file, so a
 //! check can tell which window has the keyboard focus. With `--frames FILE` it draws a new frame at every frame callback
-//! and writes how many it presented to FILE, so a check can tell that the server keeps releasing its buffers. With
+//! and replaces FILE with how many it presented (never seen empty), so a check can tell that the server keeps releasing its buffers. With
 //! `--intervals FILE` it animates the same way and writes the time between consecutive presented frames, in
 //! microseconds, one line each, so a soak can follow frame pacing. With `--copy TEXT` its first key press sets the
 //! clipboard to TEXT, and with `--clipboard FILE` it writes every text selection it is offered to FILE, so a check can
@@ -176,7 +176,10 @@ fn run(options: &Options) -> Result<(), Box<dyn Error>> {
                     output = Some(File::create(&options.output)?);
                 }
                 if let Some(frames) = &options.frames {
-                    std::fs::write(frames, presented.to_string())?;
+                    // a reader between the truncate and the write of the file itself would read no count
+                    let partial = format!("{frames}.partial");
+                    std::fs::write(&partial, presented.to_string())?;
+                    std::fs::rename(&partial, frames)?;
                 }
             }
         }

@@ -25,8 +25,9 @@ use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutOptions, LayoutStats};
 use cupertino_ui_platform::{
     Backdrop, ClipboardData, ClipboardKind, ConfigureId, ConstraintAdjust, KeyEvent, Keysym,
-    PlatformError, PlatformEvent, PopupEdge, PopupSpec, PresentOutcome, SystemAppearance,
-    Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
+    PlatformError, PlatformEvent, PointerEvent, PopupEdge, PopupSpec, PresentOutcome,
+    SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec,
+    WindowSystem,
 };
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, DisplayList, PaintResources, RenderRequest, UiRenderer,
@@ -175,6 +176,8 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     view_dirty: bool,
     /// Parents whose popups wait for their first layout to find the anchor.
     awaiting_layout: Vec<WindowKey>,
+    /// Whether the last press was a key: a popup opened by it shows its focus.
+    keyboard: bool,
     exit: bool,
     theme_for: Option<ThemeForAppearance>,
 }
@@ -194,6 +197,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             events: Vec::new(),
             view_dirty: true,
             awaiting_layout: Vec::new(),
+            keyboard: false,
             exit: false,
             theme_for: None,
         };
@@ -618,6 +622,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
         };
         let mut w = self.new_window(key, id, spec);
+        w.focus = Focus::shown(self.keyboard);
         w.env = env;
         w.size = size;
         w.popup = Some(PopupState {
@@ -655,6 +660,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let Some(i) = self.windows.iter().position(|w| w.id == window) else {
             return Ok(());
         };
+        match &event {
+            WindowEvent::Key(key, _) if key.pressed => self.keyboard = true,
+            WindowEvent::Pointer(PointerEvent::Button { pressed: true, .. }, _)
+            | WindowEvent::Touch(TouchEvent::Down { .. }, _) => self.keyboard = false,
+            _ => {}
+        }
         let now = self.options.clock.now();
         let w = &mut self.windows[i];
         let mut effects = Effects::default();
@@ -1442,27 +1453,51 @@ fn place<M: 'static>(
     grab: bool,
     size: Size,
 ) -> Option<PopupSpec> {
-    let (anchor_rect, edge, offset) = match anchor {
-        PopupAnchor::Below { key, gap } => {
-            let node = tree
-                .preorder(parent.root?)
-                .into_iter()
-                .find(|&n| tree.get(n).is_some_and(|n| n.key.as_ref() == Some(key)))?;
-            let rect = parent.geometry.get(&node)?.rect;
-            (rect, PopupEdge::Bottom, Point::new(0.0, *gap))
-        }
+    let rect_of = |key: &Key| {
+        let node = tree
+            .preorder(parent.root?)
+            .into_iter()
+            .find(|&n| tree.get(n).is_some_and(|n| n.key.as_ref() == Some(key)))?;
+        Some(parent.geometry.get(&node)?.rect)
+    };
+    let rtl = parent.env.direction == LayoutDirection::Rtl;
+    let (anchor_rect, edge, gravity, offset) = match anchor {
+        PopupAnchor::Below { key, gap } => (
+            rect_of(key)?,
+            PopupEdge::Bottom,
+            PopupEdge::Bottom,
+            Point::new(0.0, *gap),
+        ),
         PopupAnchor::At(point) => {
-            let edge = match parent.env.direction {
-                LayoutDirection::Ltr => PopupEdge::BottomRight,
-                LayoutDirection::Rtl => PopupEdge::BottomLeft,
+            let edge = if rtl {
+                PopupEdge::BottomLeft
+            } else {
+                PopupEdge::BottomRight
             };
-            (Rect::new(point.x, point.y, 1.0, 1.0), edge, Point::ZERO)
+            (
+                Rect::new(point.x, point.y, 1.0, 1.0),
+                edge,
+                edge,
+                Point::ZERO,
+            )
         }
+        PopupAnchor::Beside { key, offset } if rtl => (
+            rect_of(key)?,
+            PopupEdge::TopLeft,
+            PopupEdge::BottomLeft,
+            Point::new(-offset.x, offset.y),
+        ),
+        PopupAnchor::Beside { key, offset } => (
+            rect_of(key)?,
+            PopupEdge::TopRight,
+            PopupEdge::BottomRight,
+            *offset,
+        ),
     };
     Some(PopupSpec {
         anchor_rect,
         anchor: edge,
-        gravity: edge,
+        gravity,
         offset,
         size,
         constraint: ConstraintAdjust {

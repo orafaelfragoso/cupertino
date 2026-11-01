@@ -12,11 +12,11 @@ mod support;
 
 use cupertino_kit::controls::Tabs;
 use cupertino_kit::controls::{
-    Badge, Button, ButtonRole, ButtonStyle, CheckBox, Column, ColumnWidth, DisclosureButton,
-    DisclosureStyle, Icon, IconDirection, ListView, NavigationStack, PageDots, Progress,
-    RadioGroup, ScrollView, Scroller, SecureField, SegmentedControl, Selection, Separator, Slider,
-    SliderStyle, SortOrder, SplitLayout, SplitView, Stack, Stepper, TableView, Text, TextField,
-    TextRole, Toggle,
+    Badge, Button, ButtonRole, ButtonStyle, CheckBox, Column, ColumnWidth, Dialog, DialogAction,
+    DialogButton, DialogKind, DisclosureButton, DisclosureStyle, Icon, IconDirection, ListView,
+    Modal, NavigationStack, PageDots, Progress, RadioGroup, ScrollView, Scroller, SecureField,
+    SegmentedControl, Selection, Separator, Slider, SliderStyle, SortOrder, SplitLayout, SplitView,
+    Stack, Stepper, TableView, Text, TextField, TextRole, Toggle,
 };
 use cupertino_kit::controls::{Sidebar, SidebarItem, SidebarSection};
 use cupertino_kit::core::{
@@ -338,6 +338,15 @@ const CONTROL: Size = Size::new(180.0, 48.0);
 const WIDE: Size = Size::new(240.0, 56.0);
 const TALL: Size = Size::new(200.0, 112.0);
 const SIDEBAR: Size = Size::new(200.0, 220.0);
+const SHEET: Size = Size::new(400.0, 220.0);
+
+fn choice(label: &str, action: DialogAction) -> DialogButton<Message> {
+    DialogButton {
+        label: label.into(),
+        action,
+        on_press: Message::Nothing,
+    }
+}
 
 macro_rules! fixtures {
     ($($test:ident: $name:literal, $size:expr, $states:expr, $build:expr;)*) => {
@@ -673,5 +682,38 @@ fixtures! {
         can_go_back: look.enabled,
         can_go_forward: false,
         on_navigate: Some(Box::new(|_| Message::Nothing)),
+    }.into();
+    dialog: "dialog", SHEET, &[State::Normal, State::Hover, State::Pressed, State::Focused], |_| Modal {
+        content: body("Document"),
+        dialog: Some(Dialog {
+            kind: DialogKind::Dialog,
+            title: "Rename".into(),
+            message: String::new(),
+            body: Some(Element::new(TextField {
+                label: "Name".into(),
+                placeholder: String::new(),
+                value: "Report".into(),
+                revision: 0,
+                purpose: ContentPurpose::Normal,
+                enabled: true,
+                on_change: None,
+                on_submit: None,
+            })),
+            buttons: vec![choice("Cancel", DialogAction::Cancel), choice("Rename", DialogAction::Default)],
+        }),
+    }.into();
+    alert: "alert", SHEET, &[State::Normal, State::Hover, State::Pressed, State::Focused], |_| Modal {
+        content: body("Document"),
+        dialog: Some(Dialog {
+            kind: DialogKind::Alert,
+            title: "Save changes?".into(),
+            message: "Your changes are lost if you don't save them.".into(),
+            body: None,
+            buttons: vec![
+                choice("Don't Save", DialogAction::Destructive),
+                choice("Cancel", DialogAction::Cancel),
+                choice("Save", DialogAction::Default),
+            ],
+        }),
     }.into();
 }

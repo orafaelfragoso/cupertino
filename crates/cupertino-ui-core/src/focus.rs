@@ -2,6 +2,7 @@
 //! menu) keeps Tab inside itself while it is the innermost open scope, and hands the focus back when it unmounts:
 //! to the node focused before it opened or, if that node is gone, its nearest surviving ancestor.
 
+use crate::semantics::initial_focus;
 use crate::tree::Tree;
 use crate::NodeId;
 
@@ -71,8 +72,8 @@ impl Focus {
     }
 
     /// Brings focus up to date after a frame: closed scopes give the focus back, a focus whose node unmounted moves
-    /// to its nearest surviving ancestor, and a newly open scope takes the focus to its first focusable node.
-    /// `scopes` and `focusable` are in reading order.
+    /// to its nearest surviving ancestor, and a newly open scope takes the focus to its first Tab stop at or under an
+    /// initial-focus node, or else its first focusable one. `scopes` and `focusable` are in reading order.
     pub(crate) fn sync<M: 'static>(
         &mut self,
         tree: &Tree<M>,
@@ -109,10 +110,21 @@ impl Focus {
                 restore,
             });
             if !target.is_some_and(|n| tree.path(n).contains(&scope)) {
-                target = focusable
+                let inside: Vec<NodeId> = focusable
                     .iter()
                     .copied()
-                    .find(|&n| n != scope && tree.path(n).contains(&scope))
+                    .filter(|&n| n != scope && tree.path(n).contains(&scope))
+                    .collect();
+                target = inside
+                    .iter()
+                    .copied()
+                    .find(|&n| {
+                        tree.path(n)
+                            .into_iter()
+                            .skip_while(|&p| p != scope)
+                            .any(|p| initial_focus(tree, p))
+                    })
+                    .or(inside.first().copied())
                     .or(Some(scope));
                 moved = true;
             }

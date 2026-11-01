@@ -570,3 +570,67 @@ fn the_dismissible_and_composing_nodes_are_read_as_they_declare_now() {
     assert!(composing(&tree, children[1]));
     assert!(!composing(&tree, children[0]));
 }
+
+/// The content behind a modal sheet: there, but not to assistive technology or the keyboard.
+struct Hidden(Vec<Element<M>>);
+
+impl Widget<M> for Hidden {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Overlay)
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.0)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::Group);
+        cx.hidden();
+    }
+}
+
+#[test]
+fn a_hidden_subtree_is_gone_from_the_tree_and_the_tab_order() {
+    let (tree, root, pass) = pass(Element::new(group(vec![
+        Element::new(Hidden(vec![
+            Element::new(leaf("a")).key("a"),
+            Element::new(Fallback(Vec::new())).key("empty"),
+        ]))
+        .key("hidden"),
+        Element::new(leaf("b")).key("b"),
+    ])));
+    let id = |key: &'static str| {
+        tree.preorder(root)
+            .into_iter()
+            .find(|&n| tree.get(n).unwrap().key == Some(key.into()))
+            .unwrap()
+    };
+    assert_eq!(pass.focusable, [id("b")]);
+    let mut nodes: Vec<NodeId> = pass.nodes.keys().copied().collect();
+    nodes.sort();
+    let mut expected = vec![root, id("b")];
+    expected.sort();
+    assert_eq!(nodes, expected);
+    assert_eq!(pass.nodes[&root].children, [id("b")]);
+}

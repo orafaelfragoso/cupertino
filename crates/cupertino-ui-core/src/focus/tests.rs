@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_support::{group, leaf, Group};
+use crate::test_support::{group, leaf, Group, Leaf};
 use crate::Element;
 
 type M = String;
@@ -111,6 +111,33 @@ fn a_dialog_takes_the_focus_keeps_tab_inside_and_gives_it_back_when_it_closes() 
     let change = f.sync(&mut focus).unwrap();
     assert_eq!(change.to, Some(f.id("b")));
     assert!(focus.visible());
+}
+
+#[test]
+fn a_dialog_gives_the_focus_to_its_initial_focus_node_rather_than_its_first_tab_stop() {
+    let mut f = Fixture::new();
+    let mut focus = Focus::default();
+    let initial = Element::new(group(vec![
+        Element::new(leaf("a")).key("a"),
+        Element::new(Group {
+            children: vec![
+                Element::new(leaf("d1")).key("d1"),
+                Element::new(Leaf {
+                    initial: true,
+                    ..leaf("d2")
+                })
+                .key("d2"),
+            ],
+            scope: true,
+            row: false,
+            roving: false,
+        })
+        .key("dialog"),
+    ]));
+    f.tree.reconcile(Some(f.root), initial).unwrap();
+
+    let change = f.sync(&mut focus).unwrap();
+    assert_eq!(change.to, Some(f.id("d2")));
 }
 
 #[test]

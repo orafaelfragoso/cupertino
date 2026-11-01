@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn the_command_key_with_a_period_cancels_whichever_key_that_is() {
         use cupertino_modifiers::Profile;
-        use cupertino_text_field::Keymap;
+        use cupertino_ui_text::Keymap;
         let it = items();
         let cancels_with = |profile: Profile, ctrl: bool, logo: bool| {
             let keymap = Keymap::standard_for(profile);

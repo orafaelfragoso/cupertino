@@ -19,7 +19,7 @@ use crate::layout::{
     SlotKey, TextMeasure,
 };
 use crate::search::{self, Match};
-use cupertino_text_field::{KeyInput, Keymap, Response, TextField, TextFieldKeys};
+use cupertino_ui_text::{KeyInput, Keymap, Response, TextBuffer, TextFieldKeys};
 use std::time::Instant;
 
 /// Identifier of the synthetic root item of the app menu.
@@ -173,7 +173,7 @@ pub struct MenuController {
     pending: Option<Pending>,
     keyboard_origin: bool,
     /// The Help menu's search field and what its text finds.
-    search: TextField,
+    search: TextBuffer,
     hits: Vec<Match>,
     /// The Help search shortcut focused the Help title and asked for the keyboard: the Help menu opens with its field
     /// focused once the keyboard is the bar's ([`MenuController::keyboard_arrived`]).
@@ -208,7 +208,7 @@ impl MenuController {
             type_ahead_at: 0.0,
             pending: None,
             keyboard_origin: false,
-            search: TextField::new(),
+            search: TextBuffer::new(),
             hits: Vec::new(),
             help_awaits_keyboard: false,
             alt: false,
@@ -249,7 +249,7 @@ impl MenuController {
     }
 
     /// The Help menu's search field while the Help menu is open.
-    pub fn search_field(&self) -> Option<&TextField> {
+    pub fn search_field(&self) -> Option<&TextBuffer> {
         self.searching().then_some(&self.search)
     }
 
@@ -1115,7 +1115,7 @@ impl MenuController {
     }
 
     fn clear_search(&mut self) {
-        self.search = TextField::new();
+        self.search = TextBuffer::new();
         self.hits.clear();
     }
 

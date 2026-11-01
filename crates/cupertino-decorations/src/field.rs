@@ -1,5 +1,5 @@
 //! The inside of a single-line text field: the selection band, the text, the composition underline and the caret,
-//! clipped to the field and scrolled horizontally. The field's model (`cupertino-text-field`) gives the ranges, the
+//! clipped to the field and scrolled horizontally. The field's model (`cupertino-ui-text`'s `TextBuffer`) gives the ranges, the
 //! caret positions and the scroll; [`caret_offsets`] measures where its caret positions are.
 
 use std::ops::Range;

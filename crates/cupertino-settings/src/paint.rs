@@ -11,8 +11,8 @@ use cupertino_decorations::shape::rounded_path;
 use cupertino_decorations::text::TextRenderer;
 use cupertino_geometry::{CornerStyle, Radii, Rect as GeoRect};
 use cupertino_icons::{SystemIcons, ThemeIcons};
-use cupertino_text_field::TextField;
 use cupertino_theme::{Appearance, SemanticColor, Theme};
+use cupertino_ui_text::TextBuffer;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -832,8 +832,8 @@ impl Painter {
         );
     }
 
-    /// The x in points of each caret position of the search field's text ([`TextField::boundaries`]) at scale `s`.
-    pub fn search_offsets(&mut self, field: &TextField, s: f32, pal: &Palette) -> Vec<f64> {
+    /// The x in points of each caret position of the search field's text ([`TextBuffer::boundaries`]) at scale `s`.
+    pub fn search_offsets(&mut self, field: &TextBuffer, s: f32, pal: &Palette) -> Vec<f64> {
         self.text.set_scale(s);
         caret_offsets(
             &mut self.text,
@@ -1941,7 +1941,7 @@ mod tests {
                     .count()
             };
             let plain = row(&paint_field(&mut painter, &layout, &search, false, &pal));
-            search.edit(TextField::select_all);
+            search.edit(TextBuffer::select_all);
             let selected = row(&paint_field(&mut painter, &layout, &search, false, &pal));
             assert_eq!(
                 bluish(&plain),

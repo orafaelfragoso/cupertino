@@ -1137,7 +1137,7 @@ impl PanelRenderer {
         )
     }
 
-    /// The x in points of each caret position of the query ([`TextField::boundaries`]) at `scale`.
+    /// The x in points of each caret position of the query ([`TextBuffer::boundaries`]) at `scale`.
     pub fn field_offsets(&mut self, panel: &Panel, scale: f32) -> Vec<f64> {
         let style = self.field_style();
         let field = panel.field();
@@ -1169,7 +1169,7 @@ mod tests {
     use super::*;
     use crate::engine::tests_support::test_launcher;
     use crate::panel::{Key, Mods, Now};
-    use cupertino_text_field::TextField;
+    use cupertino_ui_text::TextBuffer;
 
     /// Uses the built-in assets only, so the result does not depend on the packs installed on the machine.
     fn renderer() -> PanelRenderer {
@@ -1461,7 +1461,7 @@ mod tests {
             )
         };
         let plain = draw(&mut r, &p);
-        p.edit(&l, now, TextField::select_all);
+        p.edit(&l, now, TextBuffer::select_all);
         let selected = draw(&mut r, &p);
         let (ox, oy) = selected.panel_origin();
         let size = f64::from(r.style.px(r.style.input_font_size));

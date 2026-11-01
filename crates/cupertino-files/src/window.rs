@@ -35,7 +35,7 @@ use cupertino_decorations::field::{
 };
 use cupertino_decorations::palette::Rgba;
 use cupertino_geometry::Rect as GeoRect;
-use cupertino_text_field::TextField;
+use cupertino_ui_text::TextBuffer;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tiny_skia::{PathBuilder, Pixmap, Stroke, Transform};
@@ -883,7 +883,7 @@ pub struct WindowState<'a> {
     /// The window has the focus: selections use the accent colour.
     pub active: bool,
     /// The search field, and whether it has the keyboard.
-    pub search: &'a TextField,
+    pub search: &'a TextBuffer,
     pub search_focused: bool,
     /// The search field's caret shows now (it has the keyboard, nothing is selected, the blink is on).
     pub search_caret: bool,
@@ -940,13 +940,13 @@ impl WindowPainter {
     }
 
     /// The caret position of the search `field` under `at` as last drawn, `None` before it was drawn.
-    pub fn search_index(&self, field: &TextField, at: Point) -> Option<usize> {
+    pub fn search_index(&self, field: &TextBuffer, at: Point) -> Option<usize> {
         let (area, offsets, scroll) = self.search_text.as_ref()?;
         Some(field.index_at(offsets, at.x - area.x + scroll))
     }
 
     /// Scroll the search `field` as it was last drawn, which keeps its caret in view.
-    pub fn follow_search_caret(&self, field: &mut TextField) {
+    pub fn follow_search_caret(&self, field: &mut TextBuffer) {
         let Some((area, offsets, _)) = &self.search_text else {
             return;
         };
@@ -961,7 +961,7 @@ impl WindowPainter {
     }
 
     /// The caret position of the name editor's `field` under `at` as last drawn, `None` outside its text area.
-    pub fn editor_index(&self, field: &TextField, at: Point) -> Option<usize> {
+    pub fn editor_index(&self, field: &TextBuffer, at: Point) -> Option<usize> {
         let (area, offsets) = self.editor_text.as_ref()?;
         let row = Rect::new(
             area.x - EDITOR_PADDING,
@@ -2301,7 +2301,7 @@ mod tests {
             places: &places,
             mode: ViewMode::Icons,
             active: true,
-            search: &TextField::new(),
+            search: &TextBuffer::new(),
             search_focused: false,
             search_caret: false,
             title: "Here",
@@ -2524,7 +2524,7 @@ mod tests {
             places: &places,
             mode: ViewMode::Icons,
             active: true,
-            search: &TextField::new(),
+            search: &TextBuffer::new(),
             search_focused: false,
             search_caret: false,
             title: "Here",
@@ -2556,7 +2556,7 @@ mod tests {
             places: &places,
             mode: ViewMode::List,
             active: true,
-            search: &TextField::new(),
+            search: &TextBuffer::new(),
             search_focused: false,
             search_caret: false,
             title: "Here",
@@ -2943,7 +2943,7 @@ mod tests {
             1.0,
         );
         let mut pm = Pixmap::new(920, 436).unwrap();
-        let mut search = TextField::new();
+        let mut search = TextBuffer::new();
         search.insert("ed");
         let state = WindowState {
             browser: &browser,
@@ -3012,7 +3012,7 @@ mod tests {
         frame: &Frame,
         browser: &Browser,
         places: &[Place],
-        search: &TextField,
+        search: &TextBuffer,
         scale: f32,
     ) -> Pixmap {
         let mut pm = Pixmap::new((920.0 * scale) as u32, (436.0 * scale) as u32).unwrap();
@@ -3042,7 +3042,7 @@ mod tests {
     fn the_search_selection_lies_on_the_token_and_a_press_lands_on_the_caret_drawn_there() {
         let scale = 1.5;
         let (_d, browser, places, mut painter, frame) = search_window(scale);
-        let mut search = TextField::with_max_len(SEARCH_MAX_LEN);
+        let mut search = TextBuffer::with_max_len(SEARCH_MAX_LEN);
         search.insert("notes editor");
         search.select(0..5);
         let pm = paint_search(&mut painter, &frame, &browser, &places, &search, scale);
@@ -3069,7 +3069,7 @@ mod tests {
     fn a_long_paste_is_cut_to_the_search_cap_and_drawn_in_time_at_any_length() {
         let (_d, browser, places, mut painter, frame) = search_window(1.0);
         for n in [1_000, 2_000, 4_000, 10_000] {
-            let mut search = TextField::with_max_len(SEARCH_MAX_LEN);
+            let mut search = TextBuffer::with_max_len(SEARCH_MAX_LEN);
             let start = std::time::Instant::now();
             search.paste(&"word ".repeat(n / 5));
             paint_search(&mut painter, &frame, &browser, &places, &search, 1.0);
@@ -3122,7 +3122,7 @@ mod tests {
                 places: &places,
                 mode,
                 active,
-                search: &TextField::new(),
+                search: &TextBuffer::new(),
                 search_focused: false,
                 search_caret: false,
                 title: "Here",
@@ -3204,7 +3204,7 @@ mod tests {
                             places: &places,
                             mode,
                             active: true,
-                            search: &TextField::new(),
+                            search: &TextBuffer::new(),
                             search_focused: false,
                             search_caret: false,
                             title: "Here",
@@ -3317,7 +3317,7 @@ mod tests {
     fn a_search_without_a_match_draws_no_results_in_the_middle_of_the_content_and_a_match_does_not()
     {
         let (_d, mut browser, places, mut painter, frame) = search_window(1.0);
-        let mut search = TextField::with_max_len(SEARCH_MAX_LEN);
+        let mut search = TextBuffer::with_max_len(SEARCH_MAX_LEN);
         search.insert("zzz-nothing");
         let content = frame.window.content;
         let centre = |pm: &Pixmap| {
@@ -3368,7 +3368,7 @@ mod tests {
         let (_d, mut browser, places, mut painter, _frame) = search_window(1.0);
         browser.set_filter("zzz-nothing");
         assert!(browser.no_results());
-        let mut search = TextField::with_max_len(SEARCH_MAX_LEN);
+        let mut search = TextBuffer::with_max_len(SEARCH_MAX_LEN);
         search.insert("zzz-nothing");
         let mut work = Vec::new();
         let mut written = Vec::new();
@@ -3515,7 +3515,7 @@ mod tests {
     fn a_caret_blink_changes_pixels_only_inside_the_areas_it_reports() {
         for scale in [1.0, 1.5] {
             let (_d, browser, places, mut painter, frame) = search_window(scale);
-            let mut search = TextField::with_max_len(SEARCH_MAX_LEN);
+            let mut search = TextBuffer::with_max_len(SEARCH_MAX_LEN);
             search.insert("notes");
             let mut paint = |edit: Option<&NameEdit>, search_caret: bool, edit_caret: bool| {
                 let mut pm = Pixmap::new((920.0 * scale) as u32, (436.0 * scale) as u32).unwrap();
@@ -3604,7 +3604,7 @@ mod tests {
     fn painting_the_damaged_rows_gives_their_pixels_for_less_work() {
         for scale in [1.0, 1.5] {
             let (_d, browser, places, mut painter, frame) = search_window(scale);
-            let mut search = TextField::with_max_len(SEARCH_MAX_LEN);
+            let mut search = TextBuffer::with_max_len(SEARCH_MAX_LEN);
             search.insert("notes");
             let edit = NameEdit::new(0, "editor.txt", false);
             for (edit, areas) in [
@@ -3740,7 +3740,7 @@ mod tests {
             places,
             mode: ViewMode::List,
             active: true,
-            search: &TextField::new(),
+            search: &TextBuffer::new(),
             search_focused: false,
             search_caret: false,
             title: "Here",
@@ -3936,7 +3936,7 @@ mod tests {
                         places: &places,
                         mode: ViewMode::List,
                         active: true,
-                        search: &TextField::new(),
+                        search: &TextBuffer::new(),
                         search_focused: false,
                         search_caret: false,
                         title: "Here",
@@ -3989,7 +3989,7 @@ mod tests {
                 places: &places,
                 mode: ViewMode::List,
                 active,
-                search: &TextField::new(),
+                search: &TextBuffer::new(),
                 search_focused: false,
                 search_caret: false,
                 title: "Here",

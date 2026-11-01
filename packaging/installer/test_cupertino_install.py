@@ -128,6 +128,35 @@ class PacmanConfTest(unittest.TestCase):
         self.assertEqual(ci.without_repository(conf), "[options]\nHoldPkg = pacman\n\n[core]\nInclude = /etc/pacman.d/mirrorlist\n")
 
 
+class LiveLeftoversTest(unittest.TestCase):
+    def target(self, pacman_conf, sudoers, shadow, passwd):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "etc/sudoers.d").mkdir(parents=True)
+        (root / "etc/pacman.conf").write_text(pacman_conf)
+        (root / "etc/sudoers").write_text("root ALL=(ALL:ALL) ALL\n@includedir /etc/sudoers.d\n")
+        for name, text in sudoers.items():
+            (root / "etc/sudoers.d" / name).write_text(text)
+        (root / "etc/shadow").write_text(shadow)
+        (root / "etc/passwd").write_text(passwd)
+        return root
+
+    def test_an_installed_system_has_none(self):
+        root = self.target("[options]\n[core]\nInclude = /etc/pacman.d/mirrorlist\n", {"00_rafael": "rafael ALL=(ALL) ALL\n"},
+                           "root:*:14871::::::\nrafael:$6$x:20000::::::\n",
+                           "root:x:0:0::/root:/bin/bash\nnobody:x:65534:65534::/:/usr/bin/nologin\nrafael:x:1000:1000::/home/rafael:/bin/bash\n")
+        self.assertEqual(ci.live_leftovers(root, "rafael"), [])
+
+    def test_the_live_systems_settings_are_found(self):
+        root = self.target("[options]\n[cupertino]\nSigLevel = Optional TrustAll\nServer = file:///opt/cupertino-repo\n",
+                           {"wheel": "%wheel ALL=(ALL) NOPASSWD: ALL\n"}, "root::14871::::::\n",
+                           "root:x:0:0::/root:/bin/bash\nrafael:x:1000:1000::/home/rafael:/bin/bash\nlive:x:1001:1001::/home/live:/bin/bash\n")
+        self.assertEqual(ci.live_leftovers(root, "rafael"), [
+            "pacman.conf still has [cupertino] or TrustAll", "etc/sudoers.d/wheel has NOPASSWD", "root has a password",
+            "account live is not rafael"])
+
+
 class AnswersTest(unittest.TestCase):
     def setUp(self):
         self.zoneinfo = tempfile.TemporaryDirectory()

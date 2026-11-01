@@ -11,7 +11,7 @@ sudo cupertino-install
 It asks for:
 
 1. the disk, and then its path typed again, before anything is erased;
-2. the account name and password (an administrator, in `wheel`; root stays locked);
+2. the account name and password (an administrator through `sudo` with the password; root stays locked);
 3. the time zone.
 
 archinstall 4.5 does the install from a configuration the script writes (`--config`, `--creds`, `--silent`). The
@@ -27,6 +27,11 @@ installer refuses any other archinstall version, because the configuration forma
 | System | PipeWire, `foot`, `xwayland-satellite` |
 | Apps | Chromium (native Wayland: `~/.config/chromium-flags.conf` holds `--ozone-platform=wayland`), `git`, `base-devel`, `rustup`, `github-cli` |
 | Cupertino | `cupertino` and `cupertino-data` from the USB's `[cupertino]` repository, which is then taken out of the new `pacman.conf` |
+
+Before it unmounts the disk, the installer fails if the new system still has anything of the live USB: the `[cupertino]`
+repository or `TrustAll` in `pacman.conf`, `NOPASSWD` in a sudoers file, a root password, or an account other than the
+one asked for. A QEMU answers file's `extra_packages` and `kernel_args` (such as `qemu-guest-agent` and
+`console=ttyS0`) are installed as asked; the questions never add them.
 
 ## When the Cupertino session does not start
 

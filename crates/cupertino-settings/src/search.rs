@@ -118,16 +118,20 @@ fn matches(pane: &Pane, query: &[String], joined: &str) -> Vec<Hit> {
     out
 }
 
-/// The results of `query`, best first; empty for an empty query.
-pub fn search(query: &str) -> Vec<Hit> {
+/// The results of `query` without the `hidden` panes, best first; empty for an empty query.
+pub fn search(query: &str, hidden: &[PaneId]) -> Vec<Hit> {
     let q = words(query);
     if q.is_empty() {
         return Vec::new();
     }
     // the typed words as typed (a hyphenated one only once), to tell an exact title
     let joined = fold(&query.split_whitespace().collect::<Vec<_>>().join(" "));
-    let order = sidebar::rows();
-    let mut hits: Vec<Hit> = PANES.iter().flat_map(|p| matches(p, &q, &joined)).collect();
+    let order = sidebar::rows(hidden);
+    let mut hits: Vec<Hit> = PANES
+        .iter()
+        .filter(|p| !hidden.contains(&p.id))
+        .flat_map(|p| matches(p, &q, &joined))
+        .collect();
     hits.sort_by_key(|h| (h.rank, order.iter().position(|p| *p == h.pane), h.section));
     hits
 }
@@ -141,6 +145,8 @@ pub struct SearchField {
     field: TextField,
     results: Vec<Hit>,
     highlighted: Option<usize>,
+    /// The panes left out of the sidebar, and so of the results.
+    hidden: Vec<PaneId>,
 }
 
 impl Default for SearchField {
@@ -149,6 +155,7 @@ impl Default for SearchField {
             field: TextField::with_max_len(MAX_LEN),
             results: Vec::new(),
             highlighted: None,
+            hidden: Vec::new(),
         }
     }
 }
@@ -180,15 +187,23 @@ impl SearchField {
         let before = self.field.text().to_string();
         let r = f(&mut self.field);
         if self.field.text() != before {
-            self.results = search(self.field.text());
+            self.results = search(self.field.text(), &self.hidden);
             self.highlighted = (!self.results.is_empty()).then_some(0);
         }
         r
     }
 
+    /// Leave `hidden` out of the results from the next search on.
+    pub fn set_hidden(&mut self, hidden: &[PaneId]) {
+        self.hidden = hidden.to_vec();
+    }
+
     /// Empty the field and close the popup.
     pub fn clear(&mut self) {
-        *self = SearchField::default();
+        *self = SearchField {
+            hidden: std::mem::take(&mut self.hidden),
+            ..SearchField::default()
+        };
     }
 
     /// Move the highlight by `step` rows, staying on the results.
@@ -310,7 +325,7 @@ mod tests {
     use super::*;
 
     fn panes(query: &str) -> Vec<(PaneId, Option<&'static str>, Rank)> {
-        search(query)
+        search(query, &[])
             .iter()
             .map(|h| (h.pane, h.subtitle(), h.rank))
             .collect()
@@ -377,7 +392,7 @@ mod tests {
             (PaneId::DesktopDock, None, Rank::TitlePrefix),
             "every word, in any order"
         );
-        assert!(search("").is_empty() && search("   ").is_empty());
+        assert!(search("", &[]).is_empty() && search("   ", &[]).is_empty());
     }
 
     #[test]
@@ -405,7 +420,7 @@ mod tests {
     fn every_section_of_every_pane_is_found_by_its_title() {
         for p in &PANES {
             for (i, section) in p.sections.iter().enumerate() {
-                let hits = search(section);
+                let hits = search(section, &[]);
                 assert!(
                     hits.iter()
                         .any(|h| h.pane == p.id

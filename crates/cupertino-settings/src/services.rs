@@ -1,11 +1,13 @@
-//! The live services (feature `app`): `org.cupertino.Network1`, `org.cupertino.Bluetooth1`, `org.cupertino.Power1` and
-//! `org.cupertino.LoginManager1` with UPower's display device on the system bus, `org.cupertino.NotificationCenter1` on
+//! The live services (feature `app`): `org.cupertino.Network1` (else NetworkManager, [`nm`]),
+//! `org.cupertino.Bluetooth1` (else BlueZ, [`bluez`]), `org.cupertino.Power1` and `org.cupertino.LoginManager1` with
+//! UPower's display device on the system bus, `org.cupertino.NotificationCenter1` on
 //! the session bus, and the default PipeWire sink through `cupertino-pipewire`, else the mixer's master through
 //! `cupertino-alsa` (in-process, as the control panel does, §1). Each connection is made on first use and
 //! again after a failure, so a daemon that starts later is picked up; properties are read every time, never cached.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use cupertino_pipewire::{Target, Wpctl};
 use zbus::blocking::proxy::Builder;
@@ -14,6 +16,9 @@ use zbus::proxy::CacheProperties;
 use zbus::zvariant::{ObjectPath, OwnedValue};
 
 use crate::agent::{Agent, AGENT_PATH};
+use crate::bluez::{self, BluezAgent};
+use crate::nm;
+use crate::pane::PaneId;
 
 use crate::live::{
     Battery, BatteryState, Bluetooth, BtDevice, Device, Focus, Mouse, Network, Reading, Volume,
@@ -261,6 +266,41 @@ fn reading<T>(result: zbus::Result<T>, missing: &str) -> Reading<T> {
     }
 }
 
+/// What serves the Wi-Fi and Network panes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NetworkBackend {
+    Cupertino,
+    NetworkManager,
+}
+
+/// What serves the Bluetooth pane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BluetoothBackend {
+    Cupertino,
+    BlueZ,
+}
+
+/// The services on the system bus that the network and Bluetooth panes can use; a pane without one is hidden.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Backends {
+    pub network: Option<NetworkBackend>,
+    pub bluetooth: Option<BluetoothBackend>,
+}
+
+impl Backends {
+    /// The panes no service backs.
+    pub fn hidden(&self) -> Vec<PaneId> {
+        let mut hidden = Vec::new();
+        if self.network.is_none() {
+            hidden.extend([PaneId::Wifi, PaneId::Network]);
+        }
+        if self.bluetooth.is_none() {
+            hidden.push(PaneId::Bluetooth);
+        }
+        hidden
+    }
+}
+
 /// A row of `Network1.Devices`.
 type DeviceRecord = (u32, String, String, String, String, String, String);
 /// A row of `Network1.GetNetworks`.
@@ -274,6 +314,9 @@ pub struct Services {
     alsa_dir: PathBuf,
     wpctl: Wpctl,
     pipewire: bool,
+    backends: Backends,
+    /// The BlueZ devices whose `Pair` has not returned (the Cupertino daemon reports its own).
+    pairing: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Services {
@@ -285,6 +328,8 @@ impl Services {
             alsa_dir: PathBuf::from(cupertino_alsa::DEVICE_DIR),
             wpctl: Wpctl::default(),
             pipewire: true,
+            backends: Backends::default(),
+            pairing: Arc::default(),
         }
     }
 
@@ -297,6 +342,8 @@ impl Services {
             alsa_dir: PathBuf::from(cupertino_alsa::DEVICE_DIR),
             wpctl: Wpctl::default(),
             pipewire: true,
+            backends: Backends::default(),
+            pairing: Arc::default(),
         }
     }
 
@@ -310,6 +357,52 @@ impl Services {
     }
 
     // ---- reading ---------------------------------------------------------------------------------------------------
+
+    /// Look up which services are on the system bus, running or activatable. `org.cupertino.Network1` comes before
+    /// NetworkManager, whose name the network daemon also claims. When the bus does not answer the last answer stays.
+    pub fn detect(&mut self) -> Backends {
+        let result = self.system.connection().and_then(|c| {
+            let bus = zbus::blocking::fdo::DBusProxy::new(c)?;
+            let mut names = bus.list_names()?;
+            names.extend(bus.list_activatable_names()?);
+            let has = |name: &str| names.iter().any(|n| n.as_str() == name);
+            Ok(Backends {
+                network: if has(NETWORK_NAME) {
+                    Some(NetworkBackend::Cupertino)
+                } else if has(nm::NAME) {
+                    Some(NetworkBackend::NetworkManager)
+                } else {
+                    None
+                },
+                bluetooth: if has(BLUETOOTH_NAME) {
+                    Some(BluetoothBackend::Cupertino)
+                } else if has(bluez::NAME) {
+                    Some(BluetoothBackend::BlueZ)
+                } else {
+                    None
+                },
+            })
+        });
+        match self.system.checked(result) {
+            Ok(backends) => self.backends = backends,
+            Err(e) => log_once(&format!("cannot list the services of the system bus: {e}")),
+        }
+        self.backends
+    }
+
+    fn network_manager(&self) -> bool {
+        self.backends.network == Some(NetworkBackend::NetworkManager)
+    }
+
+    fn bluez(&self) -> bool {
+        self.backends.bluetooth == Some(BluetoothBackend::BlueZ)
+    }
+
+    /// `f` on the system bus's connection, the error text for the row when it fails.
+    fn on_system(&mut self, f: impl FnOnce(&Connection) -> zbus::Result<()>) -> Result<(), String> {
+        let result = self.system.connection().and_then(f);
+        self.system.checked(result).map_err(|e| failure(&e))
+    }
 
     /// Every key of `accessibility.conf` as the server holds it (`org.cupertino.Session1.Accessibility`).
     pub fn accessibility(&mut self) -> Reading<HashMap<String, String>> {
@@ -398,8 +491,34 @@ impl Services {
     }
 
     pub fn wifi(&mut self, keep: Option<&Wifi>) -> Reading<Wifi> {
-        let result = self
-            .system
+        let result = if self.network_manager() {
+            self.system.connection().and_then(nm::wifi)
+        } else {
+            self.wifi_daemon()
+        };
+        match reading(self.system.checked(result), "Wi-Fi is not available") {
+            Reading::Ready(mut w) => {
+                // a Join in progress ends when its network is connected or a device reports a failure
+                if let Some(previous) = keep {
+                    w.joining = previous.joining.clone().filter(|ssid| {
+                        !w.networks.iter().any(|n| &n.ssid == ssid && n.connected)
+                            && w.devices.iter().all(|d| d.failure.is_empty())
+                    });
+                    w.failure = previous.failure.clone().or_else(|| {
+                        w.devices
+                            .iter()
+                            .find(|d| !d.failure.is_empty() && previous.joining.is_some())
+                            .map(|d| d.failure.clone())
+                    });
+                }
+                Reading::Ready(w)
+            }
+            other => other,
+        }
+    }
+
+    fn wifi_daemon(&mut self) -> zbus::Result<Wifi> {
+        self.system
             .proxy(NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
             .and_then(|p| {
                 let devices: Vec<DeviceRecord> = p.get_property("Devices")?;
@@ -434,44 +553,39 @@ impl Services {
                     joining: None,
                     failure: None,
                 })
-            });
-        match reading(self.system.checked(result), "Wi-Fi is not available") {
-            Reading::Ready(mut w) => {
-                // a Join in progress ends when its network is connected or a device reports a failure
-                if let Some(previous) = keep {
-                    w.joining = previous.joining.clone().filter(|ssid| {
-                        !w.networks.iter().any(|n| &n.ssid == ssid && n.connected)
-                            && w.devices.iter().all(|d| d.failure.is_empty())
-                    });
-                    w.failure = previous.failure.clone().or_else(|| {
-                        w.devices
-                            .iter()
-                            .find(|d| !d.failure.is_empty() && previous.joining.is_some())
-                            .map(|d| d.failure.clone())
-                    });
-                }
-                Reading::Ready(w)
-            }
-            other => other,
-        }
+            })
     }
 
     pub fn bluetooth(&mut self, keep: Option<&Bluetooth>) -> Reading<Bluetooth> {
-        let result = self
-            .system
-            .proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
-            .and_then(|p| {
-                let devices: Vec<HashMap<String, OwnedValue>> = p.get_property("Devices")?;
-                Ok(Bluetooth {
-                    available: p.get_property("Available")?,
-                    powered: p.get_property("Powered")?,
-                    discovering: p.get_property("Discovering")?,
-                    devices: devices.iter().filter_map(bt_device).collect(),
-                    agent_elsewhere: keep.is_some_and(|b| b.agent_elsewhere),
-                    failure: keep.and_then(|b| b.failure.clone()),
+        let result = if self.bluez() {
+            let pairing = self
+                .pairing
+                .lock()
+                .expect("no thread panics while pairing")
+                .clone();
+            self.system
+                .connection()
+                .and_then(|c| bluez::bluetooth(c, &pairing))
+        } else {
+            self.system
+                .proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
+                .and_then(|p| {
+                    let devices: Vec<HashMap<String, OwnedValue>> = p.get_property("Devices")?;
+                    Ok(Bluetooth {
+                        available: p.get_property("Available")?,
+                        powered: p.get_property("Powered")?,
+                        discovering: p.get_property("Discovering")?,
+                        devices: devices.iter().filter_map(bt_device).collect(),
+                        agent_elsewhere: false,
+                        failure: None,
+                    })
                 })
-            });
-        reading(self.system.checked(result), "Bluetooth is not available")
+        };
+        reading(self.system.checked(result), "Bluetooth is not available").map(|b| Bluetooth {
+            agent_elsewhere: keep.is_some_and(|k| k.agent_elsewhere),
+            failure: keep.and_then(|k| k.failure.clone()),
+            ..b
+        })
     }
 
     /// The default PipeWire sink; when no PipeWire daemon answers, the mixer's master, which the changes after this
@@ -527,6 +641,16 @@ impl Services {
                 s.system.checked(result).map_err(|e| failure(&e))
             };
         match call {
+            Call::SetWirelessEnabled(on) if self.network_manager() => self.on_system(|c| nm::set_wireless_enabled(c, *on)),
+            Call::Join { ssid, passphrase } if self.network_manager() => self.on_system(|c| nm::join(c, ssid, passphrase.as_ref().map_or("", |p| p.as_str()))),
+            Call::Disconnect if self.network_manager() => self.on_system(nm::disconnect),
+            Call::SetBluetoothPowered(on) if self.bluez() => self.on_system(|c| bluez::set_powered(c, *on)),
+            Call::Connect(id) if self.bluez() => self.on_system(|c| bluez::connect(c, id)),
+            Call::DisconnectDevice(id) if self.bluez() => self.on_system(|c| bluez::disconnect(c, id)),
+            Call::Remove { id, confirmed } if self.bluez() => {
+                assert!(*confirmed, "a device is removed only after its confirmation");
+                self.on_system(|c| bluez::remove(c, id))
+            }
             Call::SetDoNotDisturb(on) => {
                 let result = self.session.proxy(CENTRE_NAME, CENTRE_PATH, CENTRE_NAME).and_then(|p| p.call::<_, _, ()>("SetDoNotDisturb", &(*on,)));
                 self.session.checked(result).map_err(|e| failure(&e))
@@ -576,6 +700,9 @@ impl Services {
 
     /// Ask the Wi-Fi device to scan (the pane open and every 10 s while the radio is on, approximate).
     pub fn scan(&mut self) -> Result<(), String> {
+        if self.network_manager() {
+            return self.on_system(nm::scan);
+        }
         let result = self
             .system
             .proxy(NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
@@ -587,6 +714,24 @@ impl Services {
     /// another client's agent is registered (`AgentExists`), so pairing questions go to its dialog.
     pub fn register_agent(&mut self, agent: Agent) -> Result<bool, String> {
         let connection = self.system.connection().map_err(|e| failure(&e))?.clone();
+        if self.bluez() {
+            connection
+                .object_server()
+                .at(AGENT_PATH, BluezAgent::new(agent))
+                .map_err(|e| failure(&e))?;
+            let result = bluez::register_agent(&connection);
+            if result.is_err() {
+                connection
+                    .object_server()
+                    .remove::<BluezAgent, _>(AGENT_PATH)
+                    .map_err(|e| failure(&e))?;
+            }
+            return self
+                .system
+                .checked(result)
+                .map(|()| true)
+                .map_err(|e| failure(&e));
+        }
         connection
             .object_server()
             .at(AGENT_PATH, agent)
@@ -615,6 +760,15 @@ impl Services {
 
     /// Unregister the agent and stop serving it (the pane left or the window closed).
     pub fn unregister_agent(&mut self) -> Result<(), String> {
+        if self.bluez() {
+            let unregistered = self.on_system(bluez::unregister_agent);
+            let connection = self.system.connection().map_err(|e| failure(&e))?;
+            connection
+                .object_server()
+                .remove::<BluezAgent, _>(AGENT_PATH)
+                .map_err(|e| failure(&e))?;
+            return unregistered;
+        }
         let result = self
             .system
             .proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
@@ -635,6 +789,36 @@ impl Services {
         id: &str,
         done: impl FnOnce(Result<(), String>) + Send + 'static,
     ) -> Result<(), String> {
+        if self.bluez() {
+            let device = self.system.connection().and_then(|c| bluez::pairing(c, id));
+            let device = self.system.checked(device).map_err(|e| failure(&e))?;
+            let pairing = self.pairing.clone();
+            let id = id.to_string();
+            pairing
+                .lock()
+                .expect("no thread panics while pairing")
+                .insert(id.clone());
+            let (shared, key) = (pairing.clone(), id.clone());
+            return std::thread::Builder::new()
+                .name("bluetooth-pair".into())
+                .spawn(move || {
+                    let result = bluez::pair(&device).map_err(|e| failure(&e));
+                    shared
+                        .lock()
+                        .expect("no thread panics while pairing")
+                        .remove(&key);
+                    done(result)
+                })
+                .map(drop)
+                .map_err(|e| {
+                    pairing
+                        .lock()
+                        .expect("no thread panics while pairing")
+                        .remove(&id);
+                    log_once(&format!("cannot start the pairing: {e}"));
+                    "The pairing could not be started.".to_string()
+                });
+        }
         let proxy = self
             .system
             .proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME);
@@ -658,6 +842,9 @@ impl Services {
 
     /// Start or stop Bluetooth discovery (the pane open, §6.4).
     pub fn discovery(&mut self, on: bool) -> Result<(), String> {
+        if self.bluez() {
+            return self.on_system(|c| bluez::discovery(c, on));
+        }
         let method = if on {
             "StartDiscovery"
         } else {

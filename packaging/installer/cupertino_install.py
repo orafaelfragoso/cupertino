@@ -273,14 +273,18 @@ def without_repository(pacman_conf: str, name: str = REPOSITORY) -> str:
     return "".join(kept)
 
 
+def effective(path: Path) -> str:
+    return "".join(line for line in path.read_text().splitlines(keepends=True) if not line.lstrip().startswith("#"))
+
+
 def live_leftovers(target: Path, user: str) -> list[str]:
     """What the live USB must not pass on to the installed system: its repository, passwordless sudo, a root
     password and other accounts."""
     found = []
-    if re.search(rf"^\s*\[{REPOSITORY}\]|TrustAll", (target / "etc/pacman.conf").read_text(), re.MULTILINE):
+    if re.search(rf"^\s*\[{REPOSITORY}\]|TrustAll", effective(target / "etc/pacman.conf"), re.MULTILINE):
         found.append(f"pacman.conf still has [{REPOSITORY}] or TrustAll")
     sudoers = [target / "etc/sudoers", *sorted((target / "etc/sudoers.d").glob("*"))]
-    found += [f"{f.relative_to(target)} has NOPASSWD" for f in sudoers if f.is_file() and "NOPASSWD" in f.read_text()]
+    found += [f"{f.relative_to(target)} has NOPASSWD" for f in sudoers if f.is_file() and "NOPASSWD" in effective(f)]
     for line in (target / "etc/shadow").read_text().splitlines():
         name, password = line.split(":")[:2]
         if name == "root" and not password.startswith(("*", "!")):
@@ -465,6 +469,7 @@ def finish(plan: Plan) -> None:
         nvidia(plan.graphics.only_nvidia)
     pacman_conf = TARGET / "etc/pacman.conf"
     pacman_conf.write_text(without_repository(pacman_conf.read_text()))
+    (TARGET / "var/log/archinstall/user_credentials.json").unlink(missing_ok=True)
     if leftovers := live_leftovers(TARGET, plan.answers.user):
         raise Failed(5, "live leftovers", "; ".join(leftovers))
     config = TARGET / "home" / plan.answers.user / ".config"

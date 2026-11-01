@@ -138,7 +138,6 @@ impl<M: Clone + 'static> Widget<M> for Item<M> {
 
     fn measure(&self, _: &Press, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
         let env = cx.env();
-        let target = env.theme.metrics.min_target;
         let size = match self.look {
             Look::Radio => {
                 let side = look::metric(Control::CheckBoxRadio, &env.theme);
@@ -154,9 +153,13 @@ impl<M: Clone + 'static> Widget<M> for Item<M> {
             ),
         };
         Measured {
-            size: Size::new(size.width.max(target.width), size.height.max(target.height)),
+            size,
             baseline: None,
         }
+    }
+
+    fn target(&self, _: &Press, env: &Environment) -> Size {
+        env.theme.metrics.min_target
     }
 
     fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {

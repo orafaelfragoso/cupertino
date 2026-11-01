@@ -6,8 +6,9 @@ use crate::press::{Keys, Outcome, Press};
 use crate::PageDots;
 use cupertino_geometry::{Rect, Size};
 use cupertino_ui_core::{
-    AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Element, Event,
-    EventCx, FocusTarget, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
+    AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Element,
+    Environment, Event, EventCx, FocusTarget, MeasureCx, PaintCx, Propagation, Role, SemanticsCx,
+    Widget,
 };
 use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
@@ -86,11 +87,15 @@ impl<M: Clone + 'static> Widget<M> for Dot<M> {
         }
     }
 
-    fn measure(&self, _: &Press, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
+    fn measure(&self, _: &Press, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         Measured {
-            size: Size::new(PITCH, cx.env().theme.metrics.min_target.height),
+            size: Size::new(PITCH, PITCH),
             baseline: None,
         }
+    }
+
+    fn target(&self, _: &Press, env: &Environment) -> Size {
+        env.theme.metrics.min_target
     }
 
     fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {

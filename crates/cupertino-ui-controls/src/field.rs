@@ -298,10 +298,7 @@ fn layout() -> LayoutSpec {
 fn measure(constraints: Constraints, cx: &MeasureCx<'_>) -> Measured {
     let metrics = cx.env().theme.metrics;
     Measured {
-        size: Size::new(
-            constraints.width.ideal(),
-            metrics.field_height.max(metrics.min_target.height),
-        ),
+        size: Size::new(constraints.width.ideal(), metrics.field_height),
         baseline: None,
     }
 }
@@ -728,6 +725,10 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
         measure(constraints, cx)
     }
 
+    fn target(&self, _: &FieldState, env: &Environment) -> Size {
+        env.theme.metrics.min_target
+    }
+
     fn event(&self, state: &mut FieldState, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         state.buffer.set_direction(Some(look::direction(cx.env())));
         let propagation = self.handle(state, event, cx);
@@ -907,6 +908,10 @@ impl<M: 'static> Widget<M> for SecureField<M> {
         cx: &mut MeasureCx<'_>,
     ) -> Measured {
         measure(constraints, cx)
+    }
+
+    fn target(&self, _: &SecureState, env: &Environment) -> Size {
+        env.theme.metrics.min_target
     }
 
     fn event(

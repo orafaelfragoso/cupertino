@@ -6,7 +6,7 @@ use cupertino_ui_core::{AccessibleValue, Application, Checked, Command, Element,
 use cupertino_ui_layout::{Align, Axis};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_theme::{Color, ColorRole, InteractionVariant};
-use support::{color, label_width, window, Harness, SPACE, TAB};
+use support::{color, label_size, window, Harness, SPACE, TAB};
 
 struct Boxes<const ENABLED: bool>;
 
@@ -68,11 +68,13 @@ fn fill<A: Application>(h: &Harness<A>, key: &'static str) -> Option<Color> {
 }
 
 #[test]
-fn the_box_and_its_label_make_the_target() {
+fn the_box_and_its_label_make_the_chrome() {
     let h = Harness::<App>::new();
+    let label = label_size("off");
+    assert!(label.height > 14.0);
     assert_eq!(
         h.rect("off").size,
-        Size::new(14.0 + 6.0 + label_width("off"), 24.0)
+        Size::new(14.0 + 6.0 + label.width, label.height)
     );
 }
 

@@ -478,7 +478,15 @@ impl ForeignToplevelListHandler for Cupertino {
 }
 delegate_foreign_toplevel_list!(Cupertino);
 
-impl XdgToplevelIconHandler for Cupertino {}
+impl XdgToplevelIconHandler for Cupertino {
+    fn set_icon(
+        &mut self,
+        _: smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::XdgToplevel,
+        wl_surface: WlSurface,
+    ) {
+        crate::toplevel_icon::icon_set(&wl_surface);
+    }
+}
 delegate_xdg_toplevel_icon!(Cupertino);
 
 /// What the server decided about an activation token when it was made: its creation time on the

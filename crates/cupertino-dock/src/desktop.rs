@@ -183,12 +183,11 @@ impl DesktopIndex {
             .or_else(|| by(&|e| e.id.to_lowercase().rsplit('.').next() == Some(id.as_str())))
     }
 
-    /// Icon name of an application identity: the desktop entry's `Icon`, else the identity itself.
-    pub fn icon_name(&self, identity: &str) -> String {
-        match self.find(identity) {
-            Some(e) if !e.icon.is_empty() => e.icon.clone(),
-            _ => identity.to_string(),
-        }
+    /// The `Icon` of an application identity's desktop entry, when it names one.
+    pub fn entry_icon(&self, identity: &str) -> Option<&str> {
+        self.find(identity)
+            .map(|e| e.icon.as_str())
+            .filter(|i| !i.is_empty())
     }
 }
 
@@ -266,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn icons_come_from_the_entry_else_the_identity() {
+    fn the_entry_icon_is_the_icon_the_desktop_entry_names() {
         let idx = DesktopIndex {
             entries: vec![
                 entry(
@@ -276,9 +275,9 @@ mod tests {
                 entry("bare", "[Desktop Entry]\nName=Bare\nExec=bare\n"),
             ],
         };
-        assert_eq!(idx.icon_name("foot"), "utilities-terminal");
-        assert_eq!(idx.icon_name("bare"), "bare");
-        assert_eq!(idx.icon_name("user-trash"), "user-trash");
+        assert_eq!(idx.entry_icon("foot"), Some("utilities-terminal"));
+        assert_eq!(idx.entry_icon("bare"), None);
+        assert_eq!(idx.entry_icon("user-trash"), None);
     }
 
     #[test]

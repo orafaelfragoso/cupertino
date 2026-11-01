@@ -62,6 +62,7 @@ pub mod shell_v1;
 pub mod shortcut_inhibit;
 pub mod state;
 pub mod supervisor;
+pub mod toplevel_icon;
 pub mod window_manager;
 pub mod xwayland;
 

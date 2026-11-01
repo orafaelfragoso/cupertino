@@ -156,6 +156,9 @@ pub struct ParagraphStyle {
     pub direction: Option<Direction>,
     pub max_lines: Option<u32>,
     pub wrap: Wrap,
+    /// Text that does not fit, past `max_lines` or wider than the width a line is laid out at, ends its last line in an
+    /// ellipsis at the end edge, in place of the characters it hides.
+    pub ellipsis: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

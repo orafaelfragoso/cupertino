@@ -15,6 +15,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 /// Paragraphs shaped before the cache starts a new generation.
 const CACHE_LIMIT: usize = 512;
+const ELLIPSIS: &str = "\u{2026}";
 
 type CacheEntry = (AttributedText, ParagraphStyle, Paragraph);
 
@@ -224,11 +225,40 @@ fn shape_paragraph(
                     for glyph in &mut run.glyphs {
                         glyph.cluster += range.start;
                     }
+                    let ellipsis = if paragraph_style.ellipsis {
+                        let mark = if covers(fonts, font, ELLIPSIS)? {
+                            ELLIPSIS
+                        } else {
+                            "..."
+                        };
+                        let mut ellipsis = fonts.shape(
+                            mark,
+                            &ShapeRequest {
+                                font,
+                                size: style.size,
+                                direction: if base.is_rtl() {
+                                    Direction::Rtl
+                                } else {
+                                    Direction::Ltr
+                                },
+                                features: &style.features,
+                                lang: style.lang.as_deref(),
+                                letter_spacing: style.letter_spacing,
+                            },
+                        )?;
+                        for glyph in &mut ellipsis.glyphs {
+                            glyph.cluster = range.end;
+                        }
+                        Some(ellipsis)
+                    } else {
+                        None
+                    };
                     items.push(Item {
                         range,
                         level,
                         base,
                         run,
+                        ellipsis,
                         ascent: metrics.ascent * style.size,
                         descent: metrics.descent * style.size,
                         line_gap: metrics.line_gap * style.size,
@@ -468,6 +498,7 @@ fn cache_key(text: &AttributedText, style: &ParagraphStyle) -> u64 {
     style.direction.hash(&mut hasher);
     style.max_lines.hash(&mut hasher);
     style.wrap.hash(&mut hasher);
+    style.ellipsis.hash(&mut hasher);
     hasher.finish()
 }
 

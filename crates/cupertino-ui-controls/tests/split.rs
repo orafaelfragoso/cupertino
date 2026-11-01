@@ -1,6 +1,6 @@
 mod support;
 
-use cupertino_geometry::{Point, Rect};
+use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_controls::{Button, ButtonRole, ButtonStyle, SplitLayout, SplitPane, SplitView};
 use cupertino_ui_core::{AccessibleValue, Application, Command, Element, Role, Window};
 use cupertino_ui_layout::{Axis, LayoutDirection};
@@ -68,7 +68,7 @@ fn divider(h: &Harness<Panes>) -> cupertino_ui_core::AccessibilityNode {
         .1
 }
 
-fn shown(h: &Harness<Panes>, label: &str) -> bool {
+fn shown<A: Application>(h: &Harness<A>, label: &str) -> bool {
     h.snapshot()
         .accessibility
         .iter()
@@ -206,4 +206,140 @@ fn a_collapsed_pane_puts_the_value_at_an_end_of_its_range() {
     h.button(Point::new(195.0, 50.0), false);
     assert_eq!(h.model().collapsed, Some(SplitPane::Trailing));
     assert_eq!(value(&h), (199.0, 0.0, 199.0));
+}
+
+/// A 128 pt sidebar at 200 pt beside content of at least 128 pt, each pane holding a button the focus can take; the
+/// model counts what it is told.
+struct Sidebar;
+
+struct Told {
+    layout: SplitLayout,
+    changes: usize,
+}
+
+impl Application for Sidebar {
+    type Model = Told;
+    type Message = SplitLayout;
+
+    fn init() -> (Told, Vec<Command<SplitLayout>>) {
+        let layout = SplitLayout {
+            position: 200.0,
+            collapsed: None,
+        };
+        (Told { layout, changes: 0 }, Vec::new())
+    }
+
+    fn update(told: &mut Told, new: SplitLayout) -> Vec<Command<SplitLayout>> {
+        told.layout = new;
+        told.changes += 1;
+        Vec::new()
+    }
+
+    fn view(told: &Told) -> Vec<Window<SplitLayout>> {
+        let button = |label: &str| {
+            Element::new(Button {
+                label: label.into(),
+                role: ButtonRole::Normal,
+                style: ButtonStyle::Bordered,
+                enabled: true,
+                busy: false,
+                on_press: None,
+            })
+            .key(label.to_lowercase())
+        };
+        window(Element::from(SplitView {
+            label: "Sidebar".into(),
+            axis: Axis::Horizontal,
+            leading: button("Leading"),
+            trailing: button("Trailing"),
+            layout: told.layout,
+            min_leading: 128.0,
+            min_trailing: 128.0,
+            on_change: Some(Box::new(|l| l)),
+        }))
+    }
+}
+
+fn focused(h: &Harness<Sidebar>) -> Option<String> {
+    h.snapshot()
+        .accessibility
+        .into_iter()
+        .find(|(_, n)| n.states.focused)
+        .and_then(|(_, n)| n.name)
+}
+
+fn at(h: &mut Harness<Sidebar>, width: f64) {
+    h.resize(Size::new(width, 100.0));
+    h.settle();
+}
+
+#[test]
+fn a_window_too_narrow_for_both_minimums_hides_the_sidebar_and_widening_brings_it_back() {
+    let mut h = Harness::<Sidebar>::new();
+    let value = |h: &Harness<Sidebar>| match h
+        .snapshot()
+        .accessibility
+        .into_iter()
+        .find(|(_, n)| n.role == Role::Splitter)
+        .and_then(|(_, n)| n.value)
+    {
+        Some(AccessibleValue::Number { value, .. }) => value,
+        other => panic!("{other:?}"),
+    };
+    at(&mut h, 400.0);
+    assert_eq!(h.rect("leading").max_x(), 200.0);
+
+    at(&mut h, 300.0);
+    assert_eq!(
+        h.rect("trailing").max_x() - h.rect("trailing").min_x(),
+        128.0
+    );
+    assert_eq!(value(&h), 171.0, "the sidebar gives way first");
+
+    at(&mut h, 250.0);
+    assert!(!shown(&h, "Leading"));
+    assert!(!shown(&h, "Sidebar"), "the divider goes with the pane");
+
+    at(&mut h, 400.0);
+    assert_eq!(h.rect("leading").max_x(), 200.0);
+    assert_eq!(value(&h), 200.0);
+    assert_eq!(h.model().changes, 0, "a resize tells the model nothing");
+    assert_eq!(h.model().layout.position, 200.0);
+}
+
+#[test]
+fn the_focus_in_a_sidebar_that_hides_moves_to_the_content() {
+    let mut h = Harness::<Sidebar>::new();
+    at(&mut h, 400.0);
+    h.tap(TAB);
+    assert_eq!(focused(&h).as_deref(), Some("Leading"));
+    at(&mut h, 250.0);
+    assert_eq!(focused(&h).as_deref(), Some("Trailing"));
+
+    at(&mut h, 400.0);
+    h.tap(TAB);
+    assert_eq!(focused(&h).as_deref(), Some("Sidebar"));
+    at(&mut h, 250.0);
+    assert_eq!(
+        focused(&h).as_deref(),
+        Some("Trailing"),
+        "the divider hides too"
+    );
+}
+
+#[test]
+fn a_collapsed_sidebar_stays_collapsed_whatever_the_width() {
+    let mut h = Harness::<Sidebar>::new();
+    at(&mut h, 400.0);
+    for _ in 0..3 {
+        h.tap(TAB);
+    }
+    assert_eq!(focused(&h).as_deref(), Some("Sidebar"));
+    h.tap(RETURN);
+    for width in [250.0, 600.0] {
+        at(&mut h, width);
+        assert_eq!(h.model().layout.collapsed, Some(SplitPane::Leading));
+        assert!(!shown(&h, "Leading"));
+    }
+    assert_eq!(h.model().changes, 1);
 }

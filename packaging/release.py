@@ -52,6 +52,7 @@ BINARIES = (
     'cupertino-server',
     'cupertino-dock', 'cupertino-menubar', 'cupertino-launcher', 'cupertino-notifications', 'cupertino-controlcenter',
     'cupertino-osd', 'cupertino-screenshot', 'cupertino-windowmanager', 'cupertino-login', 'cupertino-polkit-agent',
+    'cupertino-portal',
     *APPS,
     'cupertino-sessiond', 'cupertino-netd', 'cupertino-btd', 'cupertino-powerd',
 )
@@ -126,6 +127,8 @@ def runtime(fmt):
         apps = applications(ROOT, APPS)
     except ValueError as e:
         fail(f'crates/*/data/applications:\n  {e}')
+    files.append(('usr/share/xdg-desktop-portal/portals/cupertino.portal', 'crates/cupertino-portal/data/cupertino.portal', 0o644,
+                  False))
     files += [(f'usr/share/applications/{a.name}', a.relative_to(ROOT).as_posix(), 0o644, False) for a in apps]
     files += [(f'usr/lib/systemd/system/{u}.service', f'{f}/usr/lib/systemd/system/{u}.service', 0o644, False)
               for u in UNITS]

@@ -13,6 +13,7 @@ RUN sed -i \
  && apt-get -o Acquire::Check-Valid-Until=false update \
  && apt-get install -y --no-install-recommends \
       build-essential pkg-config libgbm-dev libpam0g-dev dbus libgl1-mesa-dri libegl1 libegl-mesa0 xkb-data \
+      clang libclang-dev libpipewire-0.3-dev \
  && rm -rf /var/lib/apt/lists/* \
  && test -f /usr/share/glvnd/egl_vendor.d/50_mesa.json
 

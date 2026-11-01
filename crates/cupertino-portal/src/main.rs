@@ -4,6 +4,7 @@ use std::process::ExitCode;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use cupertino_portal::app_chooser::AppChooser;
 use cupertino_portal::capture::Capture;
 use cupertino_portal::dialog::{inbox, Dialogs};
 use cupertino_portal::file_chooser::FileChooser;
@@ -36,7 +37,7 @@ fn fold(mut appearance: Appearance, events: &[Event]) -> Appearance {
     appearance
 }
 
-/// The file-chooser and screen-sharing windows; a dialog that cannot be shown ends the process.
+/// The file-chooser, app-chooser and screen-sharing windows; a dialog that cannot be shown ends the process.
 fn dialogs() {
     if let Err(e) = cupertino_kit::app::run::<Dialogs>() {
         eprintln!("cupertino-portal: {e}");
@@ -64,6 +65,12 @@ fn run() -> Result<()> {
     let settings = Service::serve(&bus, appearance)?;
     bus.object_server()
         .at(PORTAL_PATH, FileChooser::new(|event| inbox().push(event)))?;
+    bus.object_server().at(
+        PORTAL_PATH,
+        AppChooser::new(cupertino_apps::entry::xdg_application_dirs(), |event| {
+            inbox().push(event)
+        }),
+    )?;
     if let Some(capture) = &capture {
         let sources = capture.sources();
         let waker = conn.waker();

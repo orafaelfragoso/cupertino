@@ -3,7 +3,7 @@ name = "cupertino-portal"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "xdg-desktop-portal backend of the session: the appearance settings, the file chooser and screen sharing applications reach through the portal"
+description = "xdg-desktop-portal backend of the session: the appearance settings, the file chooser, the app chooser and screen sharing applications reach through the portal"
 
 [package.metadata.cupertino]
 layer = "shell"
@@ -15,6 +15,7 @@ app = ["dep:cupertino-kit", "dep:cupertino-protocol-app", "dep:cupertino-screenc
 
 [dependencies]
 async-channel = "2"
+cupertino-apps = { path = "../cupertino-apps" }
 cupertino-filepicker = { path = "../cupertino-filepicker" }
 cupertino-kit = { path = "../cupertino-kit", optional = true }
 cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }

@@ -39,6 +39,7 @@ impl Application for Row {
                     on_change: None,
                     on_submit: None,
                     selection: None,
+                    initial: false,
                 })
                 .key("name")
                 .width(260.0),

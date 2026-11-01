@@ -570,6 +570,7 @@ fn save_as(d: &Dialog) -> Element<Message> {
                 on_change: Some(Box::new(move |c| Message::Name(id, c))),
                 on_submit: Some(Message::Accept(id)),
                 selection: Some(0..Chooser::stem_len(d.chooser.name())),
+                initial: true,
             })
             .key("name")
             .width(SAVE_AS_WIDTH),
@@ -923,6 +924,12 @@ mod tests {
         let (mut driver, window) = start();
         let spec = driver.window_system_mut().spec(window).unwrap().clone();
         assert_eq!(spec.title, "Export");
+        let runtime = driver.runtime();
+        assert_eq!(
+            runtime.snapshot(window).unwrap().focus,
+            Some(runtime.find(window, &Key::from("name")).unwrap()),
+            "Save As opens with its name field focused"
+        );
         click(&mut driver, window, "accept");
         assert_eq!(
             answer.try_recv().unwrap(),

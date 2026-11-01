@@ -22,6 +22,7 @@ const ACCEPTED: &[&str] = &[
 const REQUIRED_ROOTS: &[&str] = &[
     "cupertino-wayland-client",
     "cupertino-kit",
+    "cupertino-ui-abi",
     "cupertino-ui-menus",
     "cupertino-ui-wayland",
     "cupertino-ui-controls",

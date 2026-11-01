@@ -1626,6 +1626,7 @@ dependencies = [
  "cupertino-protocols",
  "cupertino-render-api",
  "cupertino-scene",
+ "cupertino-screencast",
  "cupertino-seat",
  "cupertino-stage",
  "cupertino-test-bus",

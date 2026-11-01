@@ -1,0 +1,160 @@
+Light Ltr Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1), NodeId(4v1), NodeId(5v1), NodeId(6v1), NodeId(7v1), NodeId(8v1)]
+  NodeId(2v1) role=StaticText name=Some("Name") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=StaticText name=Some("Ada") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[56.4716796875,12 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(4v1) role=StaticText name=Some("Kind") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,31.7294921875 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(5v1) role=StaticText name=Some("Folder") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[56.4716796875,31.7294921875 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(6v1) role=StaticText name=Some("Shared folder") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,51.458984375 83.00830078125x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(7v1) role=StaticText name=Some("Size") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,71.1884765625 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(8v1) role=StaticText name=Some("12 KB") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[56.4716796875,71.1884765625 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+Light Ltr Hover
+  n/a
+Light Ltr Pressed
+  n/a
+Light Ltr Disabled
+  n/a
+Light Ltr Focused
+  n/a
+Light Ltr Selected
+  n/a
+Light Rtl Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1), NodeId(4v1), NodeId(5v1), NodeId(6v1), NodeId(7v1), NodeId(8v1)]
+  NodeId(2v1) role=StaticText name=Some("Name") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[151.5283203125,12 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=StaticText name=Some("Ada") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.99169921875,12 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(4v1) role=StaticText name=Some("Kind") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[151.5283203125,31.7294921875 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(5v1) role=StaticText name=Some("Folder") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.99169921875,31.7294921875 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(6v1) role=StaticText name=Some("Shared folder") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.99169921875,51.458984375 83.00830078125x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(7v1) role=StaticText name=Some("Size") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[151.5283203125,71.1884765625 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(8v1) role=StaticText name=Some("12 KB") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.99169921875,71.1884765625 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+Light Rtl Hover
+  n/a
+Light Rtl Pressed
+  n/a
+Light Rtl Disabled
+  n/a
+Light Rtl Focused
+  n/a
+Light Rtl Selected
+  n/a
+Dark Ltr Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1), NodeId(4v1), NodeId(5v1), NodeId(6v1), NodeId(7v1), NodeId(8v1)]
+  NodeId(2v1) role=StaticText name=Some("Name") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=StaticText name=Some("Ada") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[56.4716796875,12 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(4v1) role=StaticText name=Some("Kind") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,31.7294921875 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(5v1) role=StaticText name=Some("Folder") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[56.4716796875,31.7294921875 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(6v1) role=StaticText name=Some("Shared folder") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,51.458984375 83.00830078125x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(7v1) role=StaticText name=Some("Size") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,71.1884765625 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(8v1) role=StaticText name=Some("12 KB") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[56.4716796875,71.1884765625 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+Dark Ltr Hover
+  n/a
+Dark Ltr Pressed
+  n/a
+Dark Ltr Disabled
+  n/a
+Dark Ltr Focused
+  n/a
+Dark Ltr Selected
+  n/a
+Dark Rtl Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1), NodeId(4v1), NodeId(5v1), NodeId(6v1), NodeId(7v1), NodeId(8v1)]
+  NodeId(2v1) role=StaticText name=Some("Name") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[151.5283203125,12 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=StaticText name=Some("Ada") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.99169921875,12 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(4v1) role=StaticText name=Some("Kind") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[151.5283203125,31.7294921875 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(5v1) role=StaticText name=Some("Folder") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.99169921875,31.7294921875 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(6v1) role=StaticText name=Some("Shared folder") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.99169921875,51.458984375 83.00830078125x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(7v1) role=StaticText name=Some("Size") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[151.5283203125,71.1884765625 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(8v1) role=StaticText name=Some("12 KB") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.99169921875,71.1884765625 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+Dark Rtl Hover
+  n/a
+Dark Rtl Pressed
+  n/a
+Dark Rtl Disabled
+  n/a
+Dark Rtl Focused
+  n/a
+Dark Rtl Selected
+  n/a
+LightHighContrast Ltr Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1), NodeId(4v1), NodeId(5v1), NodeId(6v1), NodeId(7v1), NodeId(8v1)]
+  NodeId(2v1) role=StaticText name=Some("Name") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=StaticText name=Some("Ada") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[56.4716796875,12 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(4v1) role=StaticText name=Some("Kind") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,31.7294921875 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(5v1) role=StaticText name=Some("Folder") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[56.4716796875,31.7294921875 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(6v1) role=StaticText name=Some("Shared folder") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,51.458984375 83.00830078125x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(7v1) role=StaticText name=Some("Size") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,71.1884765625 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(8v1) role=StaticText name=Some("12 KB") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[56.4716796875,71.1884765625 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+LightHighContrast Ltr Hover
+  n/a
+LightHighContrast Ltr Pressed
+  n/a
+LightHighContrast Ltr Disabled
+  n/a
+LightHighContrast Ltr Focused
+  n/a
+LightHighContrast Ltr Selected
+  n/a
+LightHighContrast Rtl Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1), NodeId(4v1), NodeId(5v1), NodeId(6v1), NodeId(7v1), NodeId(8v1)]
+  NodeId(2v1) role=StaticText name=Some("Name") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[151.5283203125,12 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=StaticText name=Some("Ada") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.99169921875,12 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(4v1) role=StaticText name=Some("Kind") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[151.5283203125,31.7294921875 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(5v1) role=StaticText name=Some("Folder") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.99169921875,31.7294921875 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(6v1) role=StaticText name=Some("Shared folder") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.99169921875,51.458984375 83.00830078125x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(7v1) role=StaticText name=Some("Size") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[151.5283203125,71.1884765625 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(8v1) role=StaticText name=Some("12 KB") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.99169921875,71.1884765625 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+LightHighContrast Rtl Hover
+  n/a
+LightHighContrast Rtl Pressed
+  n/a
+LightHighContrast Rtl Disabled
+  n/a
+LightHighContrast Rtl Focused
+  n/a
+LightHighContrast Rtl Selected
+  n/a
+DarkHighContrast Ltr Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1), NodeId(4v1), NodeId(5v1), NodeId(6v1), NodeId(7v1), NodeId(8v1)]
+  NodeId(2v1) role=StaticText name=Some("Name") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=StaticText name=Some("Ada") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[56.4716796875,12 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(4v1) role=StaticText name=Some("Kind") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,31.7294921875 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(5v1) role=StaticText name=Some("Folder") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[56.4716796875,31.7294921875 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(6v1) role=StaticText name=Some("Shared folder") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,51.458984375 83.00830078125x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(7v1) role=StaticText name=Some("Size") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,71.1884765625 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(8v1) role=StaticText name=Some("12 KB") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[56.4716796875,71.1884765625 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+DarkHighContrast Ltr Hover
+  n/a
+DarkHighContrast Ltr Pressed
+  n/a
+DarkHighContrast Ltr Disabled
+  n/a
+DarkHighContrast Ltr Focused
+  n/a
+DarkHighContrast Ltr Selected
+  n/a
+DarkHighContrast Rtl Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1), NodeId(4v1), NodeId(5v1), NodeId(6v1), NodeId(7v1), NodeId(8v1)]
+  NodeId(2v1) role=StaticText name=Some("Name") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[151.5283203125,12 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=StaticText name=Some("Ada") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.99169921875,12 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(4v1) role=StaticText name=Some("Kind") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[151.5283203125,31.7294921875 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(5v1) role=StaticText name=Some("Folder") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.99169921875,31.7294921875 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(6v1) role=StaticText name=Some("Shared folder") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.99169921875,51.458984375 83.00830078125x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(7v1) role=StaticText name=Some("Size") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[151.5283203125,71.1884765625 36.4716796875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(8v1) role=StaticText name=Some("12 KB") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.99169921875,71.1884765625 38.53662109375x15.7294921875] actions=[] relations=[] children=[]
+DarkHighContrast Rtl Hover
+  n/a
+DarkHighContrast Rtl Pressed
+  n/a
+DarkHighContrast Rtl Disabled
+  n/a
+DarkHighContrast Rtl Focused
+  n/a
+DarkHighContrast Rtl Selected
+  n/a

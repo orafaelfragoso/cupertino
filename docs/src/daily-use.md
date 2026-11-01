@@ -52,7 +52,7 @@ Files go to the Desktop folder unless `~/.config/cupertino/screenshot.conf` sets
 
 | File | Holds |
 |---|---|
-| `~/.local/state/cupertino/session.log` | one line per session start and end: a normal end, the exit status, the signal that ended the compositor, or the watchdog. When the compositor ends with an error, the end line also has the reason: a panic on its main thread or a lost rendering context. A crash in native code (a signal) leaves no reason; the line names the signal. |
+| `~/.local/state/cupertino/session.log` | one line per session start and end: a normal end, the exit status, the signal that ended the compositor, or the watchdog. When the compositor ends with an error, the end line also has the reason: a panic on its main thread or a lost rendering context. An abort or a fault (SIGABRT, SIGSEGV) is named as the reason, and `server.log` has its backtrace, as it has a panic's. Other signals leave no reason; the line names the signal. |
 | `~/.local/state/cupertino/server.log` | everything the compositor logs, including the GPU, the driver, the kernel and any panic. The previous run is `server.log.1`. An error that stops the start is its last line, `the server stopped: ...`. |
 | `~/cupertino-tty.log` | what the processes print when started with `run-cupertino.sh`, including a start that fails before `server.log` opens. |
 
@@ -63,7 +63,7 @@ Files go to the Desktop folder unless `~/.config/cupertino/screenshot.conf` sets
 - **One application does not answer.** The compositor pings every application window once a second. With no answer 2 s after a ping, the pointer over its window shows the busy cursor and the dock marks it Not Responding. Press `Super+Alt+Escape`, or use Force Quit in the menu bar. An application that does not answer is killed at once; any other gets a close request first and is killed 3 s later if it is still there.
 - **A shell process fails** (dock, menu bar, launcher and so on). The compositor starts it again, at most once per second. A process that exits successfully stays stopped.
 - **The compositor hangs.** `Ctrl+Alt+Backspace` and `Ctrl+Alt+F<n>` need a live compositor. From another console or over ssh, `pkill cupertino-server` ends it. As a last resort, with `sudo sysctl kernel.sysrq=1` set beforehand, `Alt+SysRq+R`, `E`, `I` returns the keyboard to the kernel and ends all processes. Save your work in other sessions first.
-- **After a panic or a lost rendering context.** GDM's login screen comes back within seconds. `session.log` has the reason.
+- **After a panic, an abort, a fault or a lost rendering context.** The login screen comes back within seconds. `session.log` has the reason and `server.log.1` (after the next login) the backtrace.
 
 ## Known limits
 

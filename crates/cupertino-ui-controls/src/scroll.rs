@@ -587,7 +587,9 @@ impl<M: 'static> Widget<M> for Viewport<M> {
 
     fn semantics(&self, _: &ViewportState, cx: &mut SemanticsCx<'_>) {
         cx.role(Role::ScrollView);
-        cx.focus_fallback();
+        if cx.can_scroll() {
+            cx.focus_fallback();
+        }
     }
 
     fn scroll_offset(&self, _: &ViewportState) -> Point {

@@ -1,13 +1,16 @@
 mod support;
 
 use cupertino_geometry::{Insets, Point, Size};
-use cupertino_ui_controls::{Button, ButtonRole, ButtonStyle, Popover, Spacer, Stack};
+use cupertino_ui_controls::{
+    Button, ButtonRole, ButtonStyle, Popover, Spacer, Stack, Text, TextRole,
+};
 use cupertino_ui_core::{Application, Command, Element, Role, Window, WindowKey};
 use cupertino_ui_layout::{Align, Axis, ScrollState};
 use cupertino_ui_platform::{
     PointerEvent, PopupEdge, ScrollSource, WindowEvent, WindowId, WindowRequest, WindowStates,
 };
 use cupertino_ui_render::{Paint, PaintOp, Shape};
+use cupertino_ui_text::{AttributedText, TextStyle};
 use std::cell::Cell;
 use support::{window, Harness, SPACE, TAB};
 
@@ -18,6 +21,8 @@ thread_local! {
     static POPOVER_FIRST: Cell<bool> = const { Cell::new(false) };
     /// A 1000 pt space below the buttons makes the content taller than the popover's bound.
     static TALL: Cell<bool> = const { Cell::new(false) };
+    /// A line of text instead of the buttons, with the space below it when `TALL`.
+    static TEXT_ONLY: Cell<bool> = const { Cell::new(false) };
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -106,10 +111,23 @@ impl Application for Options {
                         padding: Insets::uniform(0.0),
                         spacing: 6.0,
                         align: Align::Start,
-                        children: [
-                            button("First", Message::Choose),
-                            button("Second", Message::Shift),
-                        ]
+                        children: if TEXT_ONLY.get() {
+                            vec![Element::new(Text {
+                                content: AttributedText::plain(
+                                    "Shared with 3 people",
+                                    TextStyle::new(13.0),
+                                ),
+                                role: TextRole::Body,
+                                wrap: false,
+                                secondary: false,
+                                selected: false,
+                            })]
+                        } else {
+                            vec![
+                                button("First", Message::Choose),
+                                button("Second", Message::Shift),
+                            ]
+                        }
                         .into_iter()
                         .chain(TALL.get().then(|| Element::new(Spacer { min: 1000.0 })))
                         .collect(),
@@ -315,4 +333,50 @@ fn content_taller_than_its_bound_scrolls_inside_the_padding() {
         content.height() - 576.0,
         "it stops at the end"
     );
+}
+
+fn focused_role(h: &Harness<Options>) -> Option<Role> {
+    let snapshot = h.snapshot();
+    let focus = snapshot.focus?;
+    snapshot
+        .accessibility
+        .iter()
+        .find(|(id, _)| *id == focus)
+        .map(|(_, n)| n.role)
+}
+
+fn scroll_view_is_a_stop(h: &Harness<Options>) -> bool {
+    h.snapshot()
+        .accessibility
+        .iter()
+        .any(|(_, n)| n.role == Role::ScrollView && n.states.focusable)
+}
+
+#[test]
+fn with_no_control_and_content_that_fits_the_keyboard_rests_on_the_dialog_not_its_scroll_view() {
+    TEXT_ONLY.set(true);
+    let mut h = harness(false);
+    h.tap(TAB);
+    h.tap(SPACE);
+    enter(&mut h);
+    assert!(!scroll_view_is_a_stop(&h));
+    assert_eq!(focused_role(&h), Some(Role::Dialog));
+    h.tap(TAB);
+    assert_eq!(
+        focused_role(&h),
+        Some(Role::Dialog),
+        "Tab stays on the dialog"
+    );
+}
+
+#[test]
+fn with_no_control_and_content_past_its_bound_the_scroll_view_takes_the_keyboard() {
+    TEXT_ONLY.set(true);
+    TALL.set(true);
+    let mut h = harness(false);
+    h.tap(TAB);
+    h.tap(SPACE);
+    enter(&mut h);
+    assert!(scroll_view_is_a_stop(&h));
+    assert_eq!(focused_role(&h), Some(Role::ScrollView));
 }

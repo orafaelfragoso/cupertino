@@ -36,7 +36,7 @@ fn main() {
             Size { w, h },
             1.0,
             RowSize::Medium,
-            &sidebar::groups(),
+            &sidebar::groups(&[]),
             false,
         );
         let state = WindowState {

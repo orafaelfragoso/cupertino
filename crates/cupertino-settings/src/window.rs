@@ -253,7 +253,7 @@ mod tests {
             default_size(1.0),
             1.0,
             RowSize::Medium,
-            &sidebar::groups(),
+            &sidebar::groups(&[]),
             false,
         );
         assert_eq!(
@@ -270,7 +270,7 @@ mod tests {
             default_size(1.0),
             1.0,
             RowSize::Medium,
-            &sidebar::groups(),
+            &sidebar::groups(&[]),
             false,
         );
         assert_eq!(
@@ -297,7 +297,7 @@ mod tests {
             default_size(1.0),
             1.0,
             RowSize::Small,
-            &sidebar::groups(),
+            &sidebar::groups(&[]),
             false,
         );
         assert_eq!(small.row(PaneId::Bluetooth).unwrap().h, 24.0);
@@ -309,7 +309,7 @@ mod tests {
             default_size(1.0),
             1.0,
             RowSize::Medium,
-            &sidebar::groups(),
+            &sidebar::groups(&[]),
             true,
         );
         assert_eq!(l.hit(l.back.unwrap().center()), Hit::Back);
@@ -337,7 +337,7 @@ mod tests {
             default_size(1.0),
             1.0,
             RowSize::Medium,
-            &sidebar::groups(),
+            &sidebar::groups(&[]),
             false,
         );
         assert_eq!((first.back, first.forward), (None, None));
@@ -358,7 +358,7 @@ mod tests {
             default_size(1.0),
             1.0,
             RowSize::Medium,
-            &sidebar::groups(),
+            &sidebar::groups(&[]),
             true,
         );
         assert_eq!(later.title.x, 216.0 + 8.0 + 53.0 + 12.0);

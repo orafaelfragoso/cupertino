@@ -23,7 +23,6 @@ use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::backend::{
     ClientData, ClientId, DisconnectReason, GlobalId,
 };
-use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::BindError;
 use smithay::reexports::wayland_server::Resource;
@@ -52,7 +51,7 @@ use smithay::wayland::single_pixel_buffer::SinglePixelBufferState;
 use smithay::wayland::socket::ListeningSocketSource;
 use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::xdg_activation::XdgActivationState;
-use smithay::wayland::xdg_toplevel_icon::{ToplevelIconCachedState, XdgToplevelIconManager};
+use smithay::wayland::xdg_toplevel_icon::XdgToplevelIconManager;
 
 use crate::app_effects_v1::AppEffectsV1Global;
 use crate::authorization::{ClientCapabilitySet, Holder};
@@ -77,6 +76,7 @@ use crate::session_v1::SessionObservers;
 use crate::shell::{self, Shell};
 use crate::shell_v1::ShellV1Global;
 use crate::supervisor::Supervisor;
+use crate::toplevel_icon::WindowIcon;
 use crate::window_manager::WindowManagers;
 use cupertino_assets::Assets;
 
@@ -222,26 +222,9 @@ impl WindowEntry {
         self.toplevel.wl_surface()
     }
 
-    /// The icon theme name the client set with `xdg_toplevel_icon_v1`, as of its last commit.
-    pub fn icon_name(&self) -> Option<String> {
-        with_states(self.surface(), |s| {
-            s.cached_state
-                .get::<ToplevelIconCachedState>()
-                .current()
-                .icon_name()
-                .map(str::to_owned)
-        })
-    }
-
-    /// The square `wl_shm` icon buffers the client set with `xdg_toplevel_icon_v1`, each with its scale.
-    pub fn icon_buffers(&self) -> Vec<(WlBuffer, i32)> {
-        with_states(self.surface(), |s| {
-            s.cached_state
-                .get::<ToplevelIconCachedState>()
-                .current()
-                .buffers()
-                .to_vec()
-        })
+    /// The icon the client set with `xdg_toplevel_icon_v1`, as the server copied it at the commit that applied it.
+    pub fn icon(&self) -> Arc<WindowIcon> {
+        crate::toplevel_icon::window_icon(self.surface())
     }
 
     /// The content type the client set with `wp_content_type_v1`, as of its last commit.
@@ -1083,6 +1066,9 @@ impl Cupertino {
         let Some(idx) = self.windows.iter().position(|w| w.has_surface(surface)) else {
             return;
         };
+        if crate::toplevel_icon::icon_committed(surface) && self.windows[idx].mapped {
+            self.refresh_docks();
+        }
         let initial_sent = with_states(surface, |s| {
             s.data_map
                 .get::<XdgToplevelSurfaceData>()

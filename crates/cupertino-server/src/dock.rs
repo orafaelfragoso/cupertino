@@ -19,6 +19,9 @@
 //! detects go to the dock to be mapped ([`Docks::hot_corner`], [`Docks::gesture`]).
 
 use std::collections::BTreeMap;
+use std::io::{Seek, Write};
+use std::os::fd::AsFd;
+use std::sync::Arc;
 
 use cupertino_overview::OverviewMode;
 use cupertino_protocols::server::cupertino_dock_v1::{
@@ -41,6 +44,7 @@ use crate::app_effects_v1::surface_backdrops;
 use crate::authorization::{authorized, refuse, require, role, Permit, ShellRole};
 use crate::menu_bar::cut_text;
 use crate::state::Cupertino;
+use crate::toplevel_icon::WindowIcon;
 
 /// Where a minimizing window lands: the dock's `set_minimize_target`, in surface-local logical
 /// coordinates, double-buffered with the dock surface.
@@ -60,12 +64,23 @@ impl Cacheable for DockState {
 }
 
 /// What a dock was told about one window.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 struct WindowInfo {
     app_id: String,
     title: String,
     state: WindowState,
+    /// The window's copied icon: the same `Arc` until the window commits another.
+    icon: Arc<WindowIcon>,
 }
+
+impl WindowInfo {
+    fn same_window_event(&self, other: &WindowInfo) -> bool {
+        (&self.app_id, &self.title, self.state) == (&other.app_id, &other.title, other.state)
+    }
+}
+
+/// Shell version of `cupertino_dock_v1.window_icon`.
+const WINDOW_ICON_SINCE: u32 = 17;
 
 /// Layer-shell namespace of the dock's switcher panel: a press there is the dock's, a press
 /// anywhere else cancels the switch.
@@ -246,6 +261,40 @@ fn send_overview(resource: &CupertinoDockV1, g: &OverviewGroup) {
         a.h.round() as i32,
     );
     resource.done();
+}
+
+/// `window_icon` for window `id`, its pixels in a sealed memfd; nothing when the file cannot be made.
+fn send_window_icon(resource: &CupertinoDockV1, id: u32, icon: &WindowIcon) {
+    let (size, argb) = icon
+        .image
+        .as_ref()
+        .map_or((0, &[][..]), |i| (i.size, i.argb.as_slice()));
+    match sealed_file(argb) {
+        Ok(file) => resource.window_icon(
+            id,
+            icon.name.clone().unwrap_or_default(),
+            size,
+            file.as_fd(),
+        ),
+        Err(e) => tracing::warn!(error = %e, "making the file of a window icon failed"),
+    }
+}
+
+/// A memfd holding `bytes`, sealed against writes and resizing.
+fn sealed_file(bytes: &[u8]) -> std::io::Result<std::fs::File> {
+    use rustix::fs::{fcntl_add_seals, memfd_create, MemfdFlags, SealFlags};
+    let fd = memfd_create(
+        "cupertino-window-icon",
+        MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
+    )?;
+    let mut file = std::fs::File::from(fd);
+    file.write_all(bytes)?;
+    file.rewind()?;
+    fcntl_add_seals(
+        &file,
+        SealFlags::SHRINK | SealFlags::GROW | SealFlags::WRITE | SealFlags::SEAL,
+    )?;
+    Ok(file)
 }
 
 /// One group: the panel's output, the switcher's list and its selection.
@@ -529,6 +578,7 @@ impl Cupertino {
                         app_id: cut_text(&app_id).to_owned(),
                         title: cut_text(&w.title).to_owned(),
                         state,
+                        icon: self.entry(w.id).map(|e| e.icon()).unwrap_or_default(),
                     },
                 )
             })
@@ -545,10 +595,19 @@ impl Cupertino {
         for dock in &mut self.docks.docks {
             let mut changed = dock.sent.is_none();
             let known = dock.sent.take().unwrap_or_default();
+            let icons = dock.resource.version() >= WINDOW_ICON_SINCE;
             for (id, info) in &feed {
-                if known.get(id) != Some(info) {
+                let old = known.get(id);
+                if !old.is_some_and(|o| o.same_window_event(info)) {
                     dock.resource
                         .window(*id, info.app_id.clone(), info.title.clone(), info.state);
+                    changed = true;
+                }
+                let new_icon = old.map_or(!info.icon.is_empty(), |o| {
+                    !Arc::ptr_eq(&o.icon, &info.icon) && o.icon != info.icon
+                });
+                if icons && new_icon {
+                    send_window_icon(&dock.resource, *id, &info.icon);
                     changed = true;
                 }
             }

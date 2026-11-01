@@ -42,6 +42,9 @@ use wayland_client::WEnum;
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1;
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
+use wayland_protocols::xdg::toplevel_icon::v1::client::{
+    xdg_toplevel_icon_manager_v1::XdgToplevelIconManagerV1, xdg_toplevel_icon_v1::XdgToplevelIconV1,
+};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 const OUTPUT: (i32, i32) = (1000, 700);
@@ -195,6 +198,13 @@ enum DockEvent {
         minimized: bool,
         active: bool,
     },
+    /// `window_icon`: the name (empty for none), the side and the pixels the file held.
+    WindowIcon {
+        id: u32,
+        name: String,
+        size: u32,
+        pixels: Vec<u8>,
+    },
     Closed(u32),
     Launching(String),
     ToggleAutoHide,
@@ -302,7 +312,9 @@ ignore_events!(
     CupertinoBackdropV1,
     xdg_activation_v1::XdgActivationV1,
     gtk_shell::gtk_shell1::GtkShell1,
-    gtk_shell::gtk_surface1::GtkSurface1
+    gtk_shell::gtk_surface1::GtkSurface1,
+    XdgToplevelIconManagerV1,
+    XdgToplevelIconV1
 );
 
 impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for ClientState {
@@ -348,6 +360,21 @@ impl Dispatch<CupertinoDockV1, ()> for ClientState {
                     title,
                     minimized: bits.contains(WindowState::Minimized),
                     active: bits.contains(WindowState::Active),
+                }
+            }
+            E::WindowIcon {
+                id,
+                name,
+                size,
+                pixels,
+            } => {
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(&mut std::fs::File::from(pixels), &mut bytes).unwrap();
+                DockEvent::WindowIcon {
+                    id,
+                    name,
+                    size,
+                    pixels: bytes,
                 }
             }
             E::WindowClosed { id } => DockEvent::Closed(id),
@@ -477,6 +504,8 @@ enum Cmd {
     GtkPresent,
     /// An application window calls `gtk_surface1.request_focus` with the given startup id.
     GtkRequestFocus(Option<String>),
+    /// An application window sets an icon of this name and one [`ICON_SIDE`] buffer of [`ICON_PIXEL`]s, and commits.
+    SetIcon(&'static str),
     /// Drop the connection: the dock process died.
     Quit,
 }
@@ -549,10 +578,15 @@ impl DockClient {
 
     /// The dock of the `index`th output the server announces.
     fn spawn_on(stream: UnixStream, layer: bool, index: usize) -> DockClient {
+        Self::spawn_at(stream, layer, index, 9)
+    }
+
+    /// The dock of a shell global bound at `version`.
+    fn spawn_at(stream: UnixStream, layer: bool, index: usize, version: u32) -> DockClient {
         DockClient(run_client(stream, move |globals, qh, status| {
             let compositor: wl_compositor::WlCompositor = globals.bind(qh, 4..=6, ()).unwrap();
             let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
-            let shell: CupertinoShellV1 = globals.bind(qh, 9..=9, ()).unwrap();
+            let shell: CupertinoShellV1 = globals.bind(qh, version..=version, ()).unwrap();
             let effects: CupertinoAppEffectsV1 = globals.bind(qh, 1..=1, ()).unwrap();
             let global = globals
                 .contents()
@@ -621,7 +655,7 @@ impl DockClient {
                 Cmd::RunAction(name) => dock.run_action(name.to_string()),
                 Cmd::ForceQuitApp(app_id) => dock.force_quit_app(app_id.to_string()),
                 Cmd::AppCommand(app_id, command) => dock.app_command(app_id.to_string(), command),
-                Cmd::Activate(_) | Cmd::GtkPresent | Cmd::GtkRequestFocus(_) => {
+                Cmd::Activate(_) | Cmd::GtkPresent | Cmd::GtkRequestFocus(_) | Cmd::SetIcon(_) => {
                     panic!("the dock does not act as an application window")
                 }
                 Cmd::Quit => unreachable!("handled by the client loop"),
@@ -654,6 +688,29 @@ impl DockClient {
     }
 }
 
+const ICON_SIDE: i32 = 4;
+/// One ARGB8888 pixel, little-endian: half-transparent premultiplied blue.
+const ICON_PIXEL: [u8; 4] = [0x80, 0x00, 0x00, 0x80];
+
+fn icon_buffer(shm: &wl_shm::WlShm, qh: &QueueHandle<ClientState>) -> wl_buffer::WlBuffer {
+    let len = ICON_SIDE * ICON_SIDE * 4;
+    let mut file = tempfile_like(len as usize);
+    file.write_all(&ICON_PIXEL.repeat((ICON_SIDE * ICON_SIDE) as usize))
+        .unwrap();
+    let pool = shm.create_pool(file.as_fd(), len, qh, ());
+    let buffer = pool.create_buffer(
+        0,
+        ICON_SIDE,
+        ICON_SIDE,
+        ICON_SIDE * 4,
+        wl_shm::Format::Argb8888,
+        qh,
+        (),
+    );
+    pool.destroy();
+    buffer
+}
+
 /// An application with one 300x200 toplevel.
 fn spawn_app(socket: PathBuf, app_id: &'static str) -> TestClient {
     let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
@@ -671,6 +728,10 @@ fn spawn_app(socket: PathBuf, app_id: &'static str) -> TestClient {
         let window = surface.clone();
         let gtk: gtk_shell::gtk_shell1::GtkShell1 = globals.bind(qh, 1..=7, ()).unwrap();
         let gtk_surface = gtk.get_gtk_surface(&surface, qh, ());
+        let icons: XdgToplevelIconManagerV1 = globals.bind(qh, 1..=1, ()).unwrap();
+        let icon_shm = shm.clone();
+        let qh = qh.clone();
+        let mut kept = Vec::new();
         let state = ClientState {
             status: status.clone(),
             shm,
@@ -682,6 +743,15 @@ fn spawn_app(socket: PathBuf, app_id: &'static str) -> TestClient {
             Cmd::Activate(token) => activation.activate(token, &window),
             Cmd::GtkPresent => gtk_surface.present(0),
             Cmd::GtkRequestFocus(startup_id) => gtk_surface.request_focus(startup_id),
+            Cmd::SetIcon(name) => {
+                let icon = icons.create_icon(&qh, ());
+                let buffer = icon_buffer(&icon_shm, &qh);
+                icon.set_name(name.into());
+                icon.add_buffer(&buffer, 1);
+                icons.set_icon(&toplevel, Some(&icon));
+                window.commit();
+                kept.push((icon, buffer));
+            }
             _ => panic!("an application window takes no dock request"),
         });
         (state, apply)
@@ -779,6 +849,65 @@ fn the_first_group_lists_the_windows_and_the_bar_backdrop_is_the_docks_rectangle
     );
     assert_eq!(h.state.usable_area(out), Rect::new(0.0, 0.0, 1000.0, 600.0));
     assert_eq!(dock.error(), None);
+}
+
+#[test]
+fn a_window_icon_follows_its_window_event_from_shell_version_17_only() {
+    let Some(mut h) = Harness::new() else { return };
+    let app = spawn_app(h.socket_path(), "org.example.painter");
+    let id = h.mapped_window(1).0 as u32;
+    let out = h.state.outputs[0].id;
+    let quit = |h: &mut Harness, dock: DockClient| {
+        h.wait_until("the dock surface to be placed", |s| {
+            s.dock_rect(out).is_some()
+        });
+        dock.send(Cmd::Quit);
+        h.wait_until("the dock to go", |s| s.dock_rect(out).is_none());
+    };
+
+    let dock = DockClient::spawn_at(h.shell_stream(), true, 0, 17);
+    h.wait_for_groups(&dock, 1);
+    app.commands
+        .send(Cmd::SetIcon("org.example.painter"))
+        .unwrap();
+    h.wait_for_groups(&dock, 2);
+    let icon = DockEvent::WindowIcon {
+        id,
+        name: "org.example.painter".into(),
+        size: ICON_SIDE as u32,
+        pixels: ICON_PIXEL.repeat((ICON_SIDE * ICON_SIDE) as usize),
+    };
+    assert_eq!(dock.groups()[1], vec![icon.clone(), DockEvent::Done]);
+
+    // a name that could be a path is not sent; the image still is
+    app.commands.send(Cmd::SetIcon("../icons/x")).unwrap();
+    h.wait_for_groups(&dock, 3);
+    assert!(matches!(
+        &dock.groups()[2][..],
+        [DockEvent::WindowIcon { name, size: 4, .. }, DockEvent::Done] if name.is_empty()
+    ));
+    assert_eq!(dock.error(), None);
+    quit(&mut h, dock);
+
+    // a dock that binds later gets the icon in its first group, after the window
+    let late = DockClient::spawn_at(h.shell_stream(), true, 0, 17);
+    h.wait_for_groups(&late, 1);
+    let first = &late.groups()[0];
+    assert!(matches!(first[0], DockEvent::Window { id: w, .. } if w == id));
+    assert!(
+        matches!(&first[1..], [DockEvent::WindowIcon { id: w, .. }, DockEvent::Done] if *w == id)
+    );
+    quit(&mut h, late);
+
+    let old = DockClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&old, 1);
+    assert!(
+        matches!(
+            &old.groups()[0][..],
+            [DockEvent::Window { .. }, DockEvent::Done]
+        ),
+        "a version 9 dock is sent no icon"
+    );
 }
 
 #[test]

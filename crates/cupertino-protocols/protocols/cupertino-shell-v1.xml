@@ -10,7 +10,7 @@
      ends: interfaces may change without a version bump until then.
   </description>
 
-  <interface name="cupertino_shell_v1" version="16">
+  <interface name="cupertino_shell_v1" version="17">
     <description summary="shell services of the server">
       Global singleton, offered only to the processes the server started for a shell role, on a
       connection of their own. Each request needs the role it creates: a connection that holds
@@ -20,7 +20,7 @@
       cupertino_app_effects_v1 protocol, which any client may use, and removes their requests here. Version 6 adds the
       session_action request of the menu bar object, version 7 the lock_requested event of the session object, version 8 the session_agent event of the menu bar
       object, version 9 the log_out_requested event of the session object, version 10 the window list, the shortcuts and the further
-      window commands of the menu bar object, version 11 its edit request, version 12 its engage_help event, version 13 its force_quit_app request, version 14 its backdrop_luminance event, version 15 its window_controls event, version 16 its window_full_screen event. An object this global
+      window commands of the menu bar object, version 11 its edit request, version 12 its engage_help event, version 13 its force_quit_app request, version 14 its backdrop_luminance event, version 15 its window_controls event, version 16 its window_full_screen event, version 17 the window_icon event of the dock object. An object this global
       creates has the version the global was bound at, so the since of each message of those
       objects is the shell version that added it.
     </description>
@@ -618,7 +618,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_dock_v1" version="4">
+  <interface name="cupertino_dock_v1" version="17">
     <description summary="the dock of one output">
       Events describe the windows of the session and the application switcher. They come in
       groups ended by a done event; the client applies a group at once. The first group, sent
@@ -842,6 +842,28 @@
         the unresponsive ones marked, or closes it when it is open. Quitting is force_quit_app,
         sent only after the person confirmed.
       </description>
+    </event>
+
+    <event name="window_icon" since="17">
+      <description summary="the icon a window set for itself">
+        The icon the window set with xdg_toplevel_icon_v1, as the server copied it when the
+        window committed it. Sent after the window's window event in the same group when the
+        window has an icon as it maps, and again whenever the window commits a different one,
+        also when it removes its icon. The dock shows it for an application whose desktop entry
+        names no icon.
+
+        name is a key into the icon theme, empty for none. It is at most 255 bytes and never
+        holds a slash, two dots in a row or a NUL; the dock never opens it as a path.
+
+        size is the side of the square image in pixels, 0 for none. pixels is a sealed file
+        of exactly size * size * 4 bytes: wl_shm argb8888 (premultiplied alpha, little-endian),
+        rows packed. The server copies the largest square image of at most 512 pixels a side.
+        When size is 0 the file is empty.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="name" type="string"/>
+      <arg name="size" type="uint"/>
+      <arg name="pixels" type="fd"/>
     </event>
 
     <event name="done">

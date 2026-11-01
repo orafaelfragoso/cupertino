@@ -1,11 +1,13 @@
 //! A window that sets its own icon with `xdg_toplevel_icon_v1` (a theme name and a square `wl_shm` buffer) has
-//! that icon on its window entry once it commits, against a headless compositor. Tests skip (pass) when no EGL
-//! device is available.
+//! a copy of that icon on its window entry once it commits: a name that could be a path and a buffer over the size
+//! cap are refused, and the copy outlives the client's buffer. Against a headless compositor; tests skip (pass)
+//! when no EGL device is available.
 
 mod common;
 
 use std::io::Write;
 use std::os::fd::AsFd;
+use std::os::unix::fs::FileExt;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
+use cupertino_server::toplevel_icon::{WindowIcon, MAX_ICON_BUFFERS, MAX_ICON_PIXELS};
 use cupertino_server::Cupertino;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
@@ -30,6 +33,8 @@ use wayland_protocols::xdg::toplevel_icon::v1::client::{
 const OUTPUT: (i32, i32) = (1000, 700);
 const ICON_NAME: &str = "org.example.painter";
 const ICON_SIZE: i32 = 32;
+/// One ARGB8888 pixel, little-endian: opaque red.
+const PIXEL: [u8; 4] = [0x00, 0x00, 0xff, 0xff];
 
 struct Harness {
     state: Cupertino,
@@ -84,8 +89,6 @@ impl Harness {
 struct Window {
     surface: wl_surface::WlSurface,
     buffer: wl_buffer::WlBuffer,
-    _icon: XdgToplevelIconV1,
-    _icon_buffer: wl_buffer::WlBuffer,
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Window {
@@ -150,24 +153,30 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for Window {
     }
 }
 
-fn shm_buffer(shm: &wl_shm::WlShm, side: i32, qh: &QueueHandle<Window>) -> wl_buffer::WlBuffer {
+/// A `side` × `side` buffer of [`PIXEL`]s and the file behind it.
+fn shm_buffer(
+    shm: &wl_shm::WlShm,
+    side: i32,
+    qh: &QueueHandle<Window>,
+) -> (wl_buffer::WlBuffer, std::fs::File) {
     let fd = rustix::fs::memfd_create("cupertino-test", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
     let mut file = std::fs::File::from(fd);
-    file.write_all(&vec![0xff; (side * side * 4) as usize])
+    file.write_all(&PIXEL.repeat((side * side) as usize))
         .unwrap();
     let pool = shm.create_pool(file.as_fd(), side * side * 4, qh, ());
     let buffer = pool.create_buffer(0, side, side, side * 4, wl_shm::Format::Argb8888, qh, ());
     pool.destroy();
-    buffer
+    (buffer, file)
 }
 
-/// A client whose window sets an icon with a theme name and one `ICON_SIZE` buffer before its first commit.
+/// A client whose window sets an icon with a theme name and one buffer per side of `sides` before its first
+/// commit; with `overwrite` it clears the icon buffers' memory once the server has handled that commit.
 struct App {
     stop: Arc<AtomicBool>,
 }
 
 impl App {
-    fn spawn(socket: PathBuf) -> App {
+    fn spawn(socket: PathBuf, name: &'static str, sides: &'static [i32], overwrite: bool) -> App {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         std::thread::spawn(move || {
@@ -189,17 +198,24 @@ impl App {
             toplevel.set_app_id("org.example.painter".into());
             toplevel.set_title("Painter".into());
             let icon = icons.create_icon(&qh, ());
-            let icon_buffer = shm_buffer(&shm, ICON_SIZE, &qh);
-            icon.set_name(ICON_NAME.into());
-            icon.add_buffer(&icon_buffer, 1);
+            let icon_buffers: Vec<_> = sides.iter().map(|s| shm_buffer(&shm, *s, &qh)).collect();
+            icon.set_name(name.into());
+            for (b, _) in &icon_buffers {
+                icon.add_buffer(b, 1);
+            }
             icons.set_icon(&toplevel, Some(&icon));
             surface.commit();
             let mut client = Window {
-                buffer: shm_buffer(&shm, 200, &qh),
+                buffer: shm_buffer(&shm, 200, &qh).0,
                 surface,
-                _icon: icon,
-                _icon_buffer: icon_buffer,
             };
+            if overwrite {
+                queue.roundtrip(&mut client).unwrap();
+                for (_, file) in &icon_buffers {
+                    file.write_all_at(&vec![0; file.metadata().unwrap().len() as usize], 0)
+                        .unwrap();
+                }
+            }
             while !flag.load(Ordering::SeqCst) {
                 if queue.roundtrip(&mut client).is_err() {
                     break;
@@ -217,23 +233,88 @@ impl Drop for App {
     }
 }
 
-#[test]
-fn a_window_keeps_the_icon_it_sets_for_itself() {
-    let Some(mut h) = Harness::new() else { return };
-    let _app = App::spawn(h.socket_path());
+fn mapped_icon(h: &mut Harness) -> Arc<WindowIcon> {
     h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
+    h.state
+        .windows
+        .iter()
+        .find(|w| w.mapped)
+        .expect("a mapped window")
+        .icon()
+}
+
+#[test]
+fn a_window_keeps_a_copy_of_the_icon_it_sets_for_itself() {
+    let Some(mut h) = Harness::new() else { return };
+    let _app = App::spawn(h.socket_path(), ICON_NAME, &[16, ICON_SIZE], false);
+    let icon = mapped_icon(&mut h);
+    assert_eq!(icon.name.as_deref(), Some(ICON_NAME));
+    let image = icon.image.as_ref().expect("the largest buffer is copied");
+    assert_eq!(image.size, ICON_SIZE as u32);
+    assert_eq!(image.argb, PIXEL.repeat((ICON_SIZE * ICON_SIZE) as usize));
+}
+
+#[test]
+fn the_copy_does_not_follow_the_client_memory_after_the_commit() {
+    let Some(mut h) = Harness::new() else { return };
+    let _app = App::spawn(h.socket_path(), ICON_NAME, &[ICON_SIZE], true);
+    let icon = mapped_icon(&mut h);
+    for _ in 0..20 {
+        headless::step(&mut h.state, &mut h.event_loop, Duration::from_millis(5)).unwrap();
+    }
     let window = h
         .state
         .windows
         .iter()
         .find(|w| w.mapped)
-        .expect("a mapped window");
-    assert_eq!(window.icon_name().as_deref(), Some(ICON_NAME));
-    let buffers = window.icon_buffers();
-    assert_eq!(buffers.len(), 1, "the one icon buffer");
-    let (buffer, scale) = &buffers[0];
-    let size =
-        smithay::wayland::shm::with_buffer_contents(buffer, |_, _, data| (data.width, data.height))
-            .expect("an shm buffer");
-    assert_eq!((size, *scale), ((ICON_SIZE, ICON_SIZE), 1));
+        .expect("the window stays");
+    assert!(Arc::ptr_eq(&window.icon(), &icon));
+    assert_eq!(
+        icon.image.as_ref().map(|i| i.argb.len()),
+        Some((ICON_SIZE * ICON_SIZE * 4) as usize)
+    );
+}
+
+#[test]
+fn a_name_that_could_be_a_path_is_refused() {
+    let Some(mut h) = Harness::new() else { return };
+    let _app = App::spawn(h.socket_path(), "../../etc/passwd", &[ICON_SIZE], false);
+    let icon = mapped_icon(&mut h);
+    assert_eq!(icon.name, None);
+    assert!(icon.image.is_some(), "the image is kept");
+}
+
+/// One more buffer than the server looks at, of sides 1 to 33, the largest last.
+const MANY: [i32; MAX_ICON_BUFFERS + 1] = {
+    let mut sides = [0; MAX_ICON_BUFFERS + 1];
+    let mut i = 0;
+    while i < sides.len() {
+        sides[i] = i as i32 + 1;
+        i += 1;
+    }
+    sides
+};
+
+#[test]
+fn only_the_first_buffers_are_looked_at_and_only_the_largest_of_them_is_copied() {
+    let Some(mut h) = Harness::new() else { return };
+    let _app = App::spawn(h.socket_path(), ICON_NAME, &MANY, false);
+    let icon = mapped_icon(&mut h);
+    let image = icon.image.as_ref().expect("an icon image is kept");
+    assert_eq!(image.size, MAX_ICON_BUFFERS as u32);
+}
+
+#[test]
+fn a_buffer_over_the_size_cap_is_refused() {
+    let Some(mut h) = Harness::new() else { return };
+    let over = MAX_ICON_PIXELS + 1;
+    let sides: &'static [i32] = Box::leak(Box::new([ICON_SIZE, over]));
+    let _app = App::spawn(h.socket_path(), ICON_NAME, sides, false);
+    let icon = mapped_icon(&mut h);
+    assert_eq!(icon.image.as_ref().map(|i| i.size), Some(ICON_SIZE as u32));
+
+    let Some(mut h) = Harness::new() else { return };
+    let only_over: &'static [i32] = Box::leak(Box::new([over]));
+    let _app = App::spawn(h.socket_path(), ICON_NAME, only_over, false);
+    assert_eq!(mapped_icon(&mut h).image, None);
 }

@@ -1,9 +1,11 @@
 //! Pointer and keyboard input: the raw `wl_pointer` and `wl_keyboard` streams turned into typed events. The
 //! compositor describes the layout with an xkb keymap; the client translates and repeats keys itself.
 
+use crate::compose::{ComposeEnv, ComposeState, ComposeTable, Composed};
 use crate::{Error, SurfaceId};
 use cupertino_geometry::Point;
 use std::os::fd::OwnedFd;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use wayland_client::protocol::wl_pointer::AxisSource;
 use xkbcommon::xkb;
@@ -256,10 +258,20 @@ pub(crate) struct Translation {
     pub mods: Modifiers,
 }
 
-/// The compositor's keymap and the modifier state it reported.
+/// The compositor's keymap and the modifier state it reported, and the compose sequence being typed.
 pub(crate) struct Translator {
     keymap: xkb::Keymap,
     state: xkb::State,
+    compose_table: Option<&'static ComposeTable>,
+    compose: ComposeState,
+}
+
+/// The compose table of the process's locale, read on first use.
+fn compose_table() -> Option<&'static ComposeTable> {
+    static TABLE: OnceLock<Option<ComposeTable>> = OnceLock::new();
+    TABLE
+        .get_or_init(|| ComposeTable::load(&ComposeEnv::from_process()))
+        .as_ref()
 }
 
 impl Translator {
@@ -283,8 +295,17 @@ impl Translator {
     }
 
     fn new(keymap: xkb::Keymap) -> Self {
+        Self::with_compose(keymap, compose_table())
+    }
+
+    fn with_compose(keymap: xkb::Keymap, compose_table: Option<&'static ComposeTable>) -> Self {
         let state = xkb::State::new(&keymap);
-        Self { keymap, state }
+        Self {
+            keymap,
+            state,
+            compose_table,
+            compose: ComposeState::default(),
+        }
     }
 
     /// Apply a `wl_keyboard.modifiers` event.
@@ -317,6 +338,25 @@ impl Translator {
             logo: active(xkb::MOD_NAME_LOGO),
             caps_lock: active(xkb::MOD_NAME_CAPS),
         }
+    }
+
+    /// [`Self::translate`] for a press, which also goes on with a compose sequence: a key inside one types nothing,
+    /// the key that ends one types its character.
+    pub(crate) fn press(&mut self, code: u32) -> Translation {
+        let mut translation = self.translate(code);
+        if let Some(table) = self.compose_table {
+            match self.compose.feed(table, translation.keysym) {
+                Composed::Passed => {}
+                Composed::Composing | Composed::Cancelled => translation.character = None,
+                Composed::Done(c) => translation.character = Some(c),
+            }
+        }
+        translation
+    }
+
+    /// Forget a compose sequence, when the keyboard focus leaves.
+    pub(crate) fn reset_compose(&mut self) {
+        self.compose.reset();
     }
 
     /// The symbol, character and modifiers of the evdev key `code` now.
@@ -405,19 +445,54 @@ mod tests {
     const KEY_ENTER: u32 = 28;
     const KEY_LEFT_SHIFT: u32 = 42;
 
-    fn us_layout() -> Translator {
+    fn keymap(layout: &str, variant: &str) -> xkb::Keymap {
         let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
-        let keymap = xkb::Keymap::new_from_names(
+        xkb::Keymap::new_from_names(
             &context,
             "",
             "",
-            "us",
-            "",
+            layout,
+            variant,
             None,
             xkb::KEYMAP_COMPILE_NO_FLAGS,
         )
-        .expect("the us layout compiles");
-        Translator::new(keymap)
+        .expect("the layout compiles")
+    }
+
+    fn us_layout() -> Translator {
+        Translator::with_compose(keymap("us", ""), None)
+    }
+
+    #[test]
+    fn the_dead_keys_of_us_intl_compose_with_the_next_letter() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("Compose");
+        std::fs::write(
+            &file,
+            "<dead_acute> <c> : \"\u{e7}\"\n<dead_tilde> <a> : \"\u{e3}\"\n",
+        )
+        .unwrap();
+        let env = ComposeEnv {
+            compose_file: Some(file),
+            ..ComposeEnv::default()
+        };
+        let table: &'static ComposeTable = Box::leak(Box::new(ComposeTable::load(&env).unwrap()));
+        let mut t = Translator::with_compose(keymap("us", "intl"), Some(table));
+        const KEY_APOSTROPHE: u32 = 40;
+        const KEY_GRAVE: u32 = 41;
+        const KEY_C: u32 = 46;
+        const KEY_X: u32 = 45;
+        let mut typed = vec![t.press(KEY_APOSTROPHE).character, t.press(KEY_C).character];
+        t.update_modifiers(1, 0, 0, 0);
+        typed.push(t.press(KEY_GRAVE).character);
+        t.update_modifiers(0, 0, 0, 0);
+        typed.push(t.press(KEY_A).character);
+        typed.extend([KEY_APOSTROPHE, KEY_X, KEY_X].map(|key| t.press(key).character));
+        assert_eq!(
+            typed,
+            [None, Some('ç'), None, Some('ã'), None, None, Some('x')],
+            "a dead key before a letter it has no sequence with types nothing, and the next key types"
+        );
     }
 
     #[test]

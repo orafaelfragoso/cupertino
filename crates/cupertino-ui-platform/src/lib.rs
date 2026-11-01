@@ -123,6 +123,17 @@ pub enum WindowRequest {
     Activate(Option<String>),
     /// Moves an open popup.
     Reposition(PopupSpec),
+    /// Puts a compositor material under the whole window, or takes it away with `None`. Needs
+    /// [`Capabilities::app_effects`].
+    Backdrop(Option<Backdrop>),
+}
+
+/// A material of the theme data (`materials.json`) the compositor draws under a window, the window's size with its
+/// corners rounded by `radius` points.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Backdrop {
+    pub material: String,
+    pub radius: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

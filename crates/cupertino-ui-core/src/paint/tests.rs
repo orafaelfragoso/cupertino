@@ -106,6 +106,7 @@ impl Fixture {
                 focus_visible: true,
                 window_active: true,
                 background: WindowBackground::Theme,
+                backdrop: false,
                 now: Timestamp(0),
             },
         );
@@ -204,6 +205,7 @@ fn a_node_carries_the_clip_it_puts_on_its_children_and_bounds_that_cover_its_sub
             focus_visible: false,
             window_active: true,
             background: WindowBackground::Theme,
+            backdrop: false,
             now: Timestamp(0),
         },
     );
@@ -348,6 +350,7 @@ fn a_group_reaches_the_renderer_and_its_effects_widen_the_subtree_bounds() {
             focus_visible: false,
             window_active: true,
             background: WindowBackground::Theme,
+            backdrop: false,
             now: Timestamp(0),
         },
     );
@@ -444,6 +447,7 @@ fn an_image_a_node_draws_travels_with_the_list_and_stays_when_the_node_is_reused
                 focus_visible: false,
                 window_active: true,
                 background: WindowBackground::Theme,
+                backdrop: false,
                 now: Timestamp(0),
             },
         )

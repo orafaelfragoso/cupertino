@@ -44,7 +44,7 @@ use cupertino_ui_platform::{
 };
 use cupertino_ui_render::{DisplayList, RenderError};
 use cupertino_ui_text::{ImeEvent, TextSystem};
-use cupertino_ui_theme::ThemeTokens;
+use cupertino_ui_theme::{Surface, ThemeTokens};
 use std::borrow::Cow;
 use std::fmt;
 use std::future::Future;
@@ -125,13 +125,17 @@ pub enum PopupAnchor {
 }
 
 /// What a window paints under its content.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum WindowBackground {
     /// The theme's window background, full size and opaque: an ordinary window.
     #[default]
     Theme,
-    /// Nothing: the content paints its own surface, shaped or translucent, as a menu or popover panel does.
+    /// Nothing: the content paints its own surface, shaped or translucent.
     None,
+    /// The compositor material of `surface` under the whole window, its corners rounded by `radius` points, where the
+    /// desktop's effects offer it and the theme asks for one ([`ThemeTokens::surface`]); otherwise the theme's opaque
+    /// fill for the surface in the same shape.
+    Surface { surface: Surface, radius: f64 },
 }
 
 /// A node of the retained tree: a 32-bit slot index and the slot's 32-bit generation, so a stale id never matches

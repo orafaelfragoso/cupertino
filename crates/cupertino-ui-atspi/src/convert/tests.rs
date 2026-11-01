@@ -1,5 +1,7 @@
 use super::*;
 use cupertino_geometry::Rect;
+use std::ops::Range;
+
 use cupertino_ui_core::{AccessibleStates, TextSemantics};
 
 fn id(index: u32) -> NodeId {
@@ -207,6 +209,11 @@ fn a_selection_is_not_offered_without_text_runs() {
     assert!(!node(&field).supports_action(accesskit::Action::SetTextSelection));
 }
 
+/// A request of a node sent without text runs.
+fn request(request: &accesskit::ActionRequest) -> Option<ActionRequest> {
+    super::request(request, |_| None)
+}
+
 fn request_for(
     action: accesskit::Action,
     data: Option<accesskit::ActionData>,
@@ -255,4 +262,134 @@ fn requests_core_has_no_action_for_are_dropped() {
     let mut foreign = request_for(accesskit::Action::Click, None);
     foreign.target_node = accesskit::NodeId(1);
     assert_eq!(request(&foreign), None);
+}
+
+fn editable(value: &str, caret: usize, selection: Range<usize>) -> AccessibilityNode {
+    let mut field = base(Role::MultilineTextInput);
+    field.value = Some(AccessibleValue::Text {
+        value: value.into(),
+        editing: Some(TextSemantics { caret, selection }),
+    });
+    field.actions = vec![Action::Focus, Action::SetValue, Action::SetSelection];
+    field
+}
+
+/// `node`'s text runs, numbered from 1000, and the node they are children of.
+fn runs_of(node: &AccessibilityNode) -> (accesskit::Node, Vec<Run>) {
+    let mut out = super::node(node);
+    let runs = text_runs(node, &mut out, |i| accesskit::NodeId(1000 + i as u64));
+    (out, runs)
+}
+
+fn at(run: u64, character_index: usize) -> accesskit::TextPosition {
+    accesskit::TextPosition {
+        node: accesskit::NodeId(1000 + run),
+        character_index,
+    }
+}
+
+#[test]
+fn an_editable_value_is_a_text_run_per_line_with_its_caret_and_selection() {
+    // "e\u{301}" is one character of two scalar values; the selection runs from after "a" back to the caret before "b"
+    let value = "a e\u{301}!\nb";
+    let (out, runs) = runs_of(&editable(value, 7, 1..7));
+    let texts: Vec<_> = runs.iter().map(|r| r.node.value().unwrap()).collect();
+    assert_eq!(texts, ["a e\u{301}!\n", "b"]);
+    assert_eq!(runs[0].node.character_lengths(), [1, 1, 3, 1, 1]);
+    assert_eq!(runs[0].node.word_starts(), [0, 2, 3]);
+    assert_eq!(runs[1].node.role(), accesskit::Role::TextRun);
+    assert_eq!(
+        out.children(),
+        [accesskit::NodeId(1000), accesskit::NodeId(1001)]
+    );
+    assert_eq!(
+        out.text_selection().copied(),
+        Some(accesskit::TextSelection {
+            anchor: at(0, 1),
+            focus: at(1, 0),
+        })
+    );
+    assert!(out.supports_action(accesskit::Action::SetTextSelection));
+}
+
+#[test]
+fn a_caret_at_the_end_of_a_line_is_on_its_line_break_and_after_a_last_one_on_an_empty_line() {
+    let (out, runs) = runs_of(&editable("ab\n", 2, 2..2));
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[1].node.value(), Some(""));
+    assert_eq!(out.text_selection().unwrap().focus, at(0, 2));
+    let (out, _) = runs_of(&editable("ab\n", 3, 3..3));
+    assert_eq!(out.text_selection().unwrap().focus, at(1, 0));
+    let (out, runs) = runs_of(&editable("", 0, 0..0));
+    assert_eq!(runs.len(), 1);
+    assert_eq!(out.text_selection().unwrap().focus, at(0, 0));
+}
+
+#[test]
+fn a_line_longer_than_a_run_holds_is_runs_on_one_line() {
+    let line = "word ".repeat(60);
+    let (out, runs) = runs_of(&editable(&line, 300, 300..300));
+    let lengths: Vec<_> = runs
+        .iter()
+        .map(|r| r.node.character_lengths().len())
+        .collect();
+    assert_eq!(lengths, [255, 45]);
+    assert_eq!(runs[0].node.next_on_line(), Some(accesskit::NodeId(1001)));
+    assert_eq!(
+        runs[1].node.previous_on_line(),
+        Some(accesskit::NodeId(1000))
+    );
+    assert_eq!(runs[1].node.word_starts()[0], 0);
+    assert_eq!(out.text_selection().unwrap().focus, at(1, 45));
+}
+
+#[test]
+fn a_selection_from_assistive_technology_comes_back_in_bytes_of_the_value() {
+    let (_, runs) = runs_of(&editable("a e\u{301}!\nb", 0, 0..0));
+    let select = |anchor, focus| {
+        let mut request = request_for(
+            accesskit::Action::SetTextSelection,
+            Some(accesskit::ActionData::SetTextSelection(
+                accesskit::TextSelection { anchor, focus },
+            )),
+        );
+        request.target_node = node_id(id(9));
+        super::request(&request, |target| {
+            (target == id(9)).then_some(runs.as_slice())
+        })
+    };
+    let back = select(at(1, 1), at(0, 2)).unwrap();
+    assert_eq!(
+        (back.target, back.action, back.data),
+        (
+            id(9),
+            Action::SetSelection,
+            Some(ActionData::Selection(2..8))
+        )
+    );
+    assert_eq!(select(at(0, 6), at(0, 0)), None, "past the end of its run");
+    assert_eq!(
+        select(
+            accesskit::TextPosition {
+                node: accesskit::NodeId(7),
+                character_index: 0
+            },
+            at(0, 0)
+        ),
+        None,
+        "in a run of no node"
+    );
+}
+
+#[test]
+fn a_secret_has_no_text_runs_nor_a_selection() {
+    let mut field = editable("hunter2", 7, 0..7);
+    field.role = Role::PasswordInput;
+    let (out, runs) = runs_of(&field);
+    assert!(runs.is_empty());
+    assert_eq!(out.text_selection(), None);
+    assert!(!out.supports_action(accesskit::Action::SetTextSelection));
+    let mut field = editable("hunter2", 7, 0..7);
+    field.value = Some(AccessibleValue::Protected);
+    assert!(runs_of(&field).1.is_empty());
 }

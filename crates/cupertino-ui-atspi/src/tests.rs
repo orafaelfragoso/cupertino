@@ -63,6 +63,7 @@ fn publish(h: &Handlers, role: Role, value: Option<AccessibleValue>, actions: Ve
             node: convert::node(&node),
             actions: node.actions.clone(),
             protected: convert::protected(&node),
+            runs: Vec::new(),
         },
     );
 }

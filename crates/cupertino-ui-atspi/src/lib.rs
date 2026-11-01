@@ -57,12 +57,23 @@ struct Mirror {
     active: bool,
     /// AccessKit holds the whole tree, so updates may send only what changed.
     initialized: bool,
+    /// The id of the last text run given out; ids below 2^32 are never a node's.
+    last_run: u64,
 }
 
 struct Published {
     node: accesskit::Node,
     actions: Vec<Action>,
     protected: bool,
+    runs: Vec<convert::Run>,
+}
+
+impl Published {
+    /// The node and its text runs, as AccessKit takes them.
+    fn sent(&self, id: NodeId) -> impl Iterator<Item = (accesskit::NodeId, accesskit::Node)> + '_ {
+        std::iter::once((convert::node_id(id), self.node.clone()))
+            .chain(self.runs.iter().map(|r| (r.id, r.node.clone())))
+    }
 }
 
 impl Mirror {
@@ -71,11 +82,7 @@ impl Mirror {
         tree.toolkit_name = Some("CupertinoKit".into());
         tree.toolkit_version = Some(env!("CARGO_PKG_VERSION").into());
         TreeUpdate {
-            nodes: self
-                .nodes
-                .iter()
-                .map(|(id, p)| (convert::node_id(*id), p.node.clone()))
-                .collect(),
+            nodes: self.nodes.iter().flat_map(|(id, p)| p.sent(*id)).collect(),
             tree: Some(tree),
             tree_id: accesskit::TreeId::ROOT,
             focus: convert::node_id(self.focus.unwrap_or(root)),
@@ -163,10 +170,24 @@ impl AccessibilityAdapter for AtspiAdapter {
                 if muted {
                     converted.clear_live();
                 }
+                // a node keeps the ids of its runs, so AccessKit sees its text change rather than replaced
+                let kept: Vec<accesskit::NodeId> = m
+                    .nodes
+                    .get(id)
+                    .map(|p| p.runs.iter().map(|r| r.id).collect())
+                    .unwrap_or_default();
+                let last_run = &mut m.last_run;
+                let runs = convert::text_runs(node, &mut converted, |i| {
+                    kept.get(i).copied().unwrap_or_else(|| {
+                        *last_run += 1;
+                        accesskit::NodeId(*last_run)
+                    })
+                });
                 let published = Published {
                     node: converted,
                     actions: node.actions.clone(),
                     protected: convert::protected(node),
+                    runs,
                 };
                 m.nodes.insert(*id, published);
             }
@@ -176,7 +197,7 @@ impl AccessibilityAdapter for AtspiAdapter {
                 nodes: update
                     .nodes
                     .iter()
-                    .map(|(id, _)| (convert::node_id(*id), m.nodes[id].node.clone()))
+                    .flat_map(|(id, _)| m.nodes[id].sent(*id))
                     .collect(),
                 tree: None,
                 tree_id: accesskit::TreeId::ROOT,
@@ -250,12 +271,16 @@ impl DeactivationHandler for Handlers {
 
 impl ActionHandler for Handlers {
     fn do_action(&mut self, request: accesskit::ActionRequest) {
-        let Some(request) = convert::request(&request) else {
+        let m = lock(&self.mirror);
+        let Some(request) =
+            convert::request(&request, |id| m.nodes.get(&id).map(|p| p.runs.as_slice()))
+        else {
             return;
         };
-        if !lock(&self.mirror).allows(&request) {
+        if !m.allows(&request) {
             return;
         }
+        drop(m);
         let mut queued = lock(&self.shared.actions);
         if queued.len() < MAX_QUEUED {
             queued.push(request);

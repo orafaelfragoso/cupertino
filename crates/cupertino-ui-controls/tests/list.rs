@@ -4,7 +4,9 @@ use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_controls::{
     Column, ColumnWidth, ListView, Selection, SortOrder, TableView, Text, TextRole,
 };
-use cupertino_ui_core::{Application, Command, Element, Key, NodeId, Role, Window};
+use cupertino_ui_core::{
+    AccessibilityNode, Action, Application, Command, Element, Key, NodeId, Role, Window,
+};
 use cupertino_ui_layout::ScrollState;
 use cupertino_ui_platform::Mods;
 use cupertino_ui_render::{Paint, PaintNodeId, PaintOp, Shape};
@@ -145,6 +147,7 @@ impl Application for Listed {
             selection: model.selection.clone(),
             multiple: setup.multiple,
             row: Box::new(|i, selected| text(name(i), selected)),
+            key: None,
             type_select,
             on_scroll: Box::new(Message::Scroll),
             on_select: Some(Box::new(Message::Select)),
@@ -545,4 +548,95 @@ fn extending_replaces_only_the_anchors_range_and_clamp_drops_rows_past_the_end()
     );
     s.clamp(3);
     assert_eq!((pairs(&s), s.cursor()), (vec![(1, 3)], None));
+}
+
+/// The fruit, each row keyed by its name, where Return on a row puts an avocado at the top and keeps the same fruit
+/// selected, as a list whose items come and go does.
+struct Grocer;
+
+impl Application for Grocer {
+    type Model = (Model, Vec<&'static str>);
+    type Message = Message;
+
+    fn init() -> ((Model, Vec<&'static str>), Vec<Command<Message>>) {
+        ((Listed::init().0, FRUITS.to_vec()), Vec::new())
+    }
+
+    fn update(
+        (model, fruit): &mut (Model, Vec<&'static str>),
+        message: Message,
+    ) -> Vec<Command<Message>> {
+        if let Message::Activate(i) = message {
+            fruit.insert(0, "avocado");
+            model.selection.select_only(i + 1);
+        }
+        Listed::update(model, message)
+    }
+
+    fn view((model, fruit): &(Model, Vec<&'static str>)) -> Vec<Window<Message>> {
+        let names = fruit.clone();
+        let keys = fruit.clone();
+        window(Element::from(ListView {
+            label: "Fruit".into(),
+            count: fruit.len(),
+            row_height: ROW,
+            scroll: model.scroll,
+            selection: model.selection.clone(),
+            multiple: false,
+            row: Box::new(move |i, selected| text(names[i].into(), selected)),
+            key: Some(Box::new(move |i| Key::from(keys[i]))),
+            type_select: None,
+            on_scroll: Box::new(Message::Scroll),
+            on_select: Some(Box::new(Message::Select)),
+            on_activate: Some(Box::new(Message::Activate)),
+        }))
+    }
+}
+
+/// `id`'s place in the list and whether it is selected, as assistive technology reads them.
+fn read(h: &Harness<Grocer>, id: NodeId) -> (Option<usize>, bool) {
+    let nodes: HashMap<NodeId, AccessibilityNode> =
+        h.snapshot().accessibility.into_iter().collect();
+    (nodes[&id].item_index, nodes[&id].states.selected)
+}
+
+#[test]
+fn the_focus_and_the_accessible_row_stay_on_their_item_when_a_row_is_inserted_above() {
+    let mut h = Harness::<Grocer>::new();
+    h.tap(TAB);
+    h.tap(HOME);
+    for _ in 0..3 {
+        h.tap(DOWN);
+    }
+    let cherry = h.snapshot().focus.unwrap();
+    assert_eq!(read(&h, cherry), (Some(3), true));
+    h.tap(RETURN);
+    assert_eq!(
+        h.snapshot().focus,
+        Some(cherry),
+        "the focus stays on cherry"
+    );
+    assert_eq!(read(&h, cherry), (Some(4), true));
+}
+
+#[test]
+fn an_assistive_click_after_an_insert_selects_the_row_it_was_asked_of() {
+    let mut h = Harness::<Grocer>::assistive();
+    h.tap(TAB);
+    h.tap(HOME);
+    for _ in 0..4 {
+        h.tap(DOWN);
+    }
+    let date = h.snapshot().focus.unwrap();
+    h.tap(UP);
+    h.tap(RETURN);
+    h.ask_node(date, Action::Click);
+    assert_eq!(selected_in(&h), [(5, 6)], "date, now under the avocado");
+    assert_eq!(read(&h, date), (Some(5), true));
+    h.ask_node(date, Action::Click);
+    assert_eq!(selected_in(&h), [(5, 6)]);
+}
+
+fn selected_in(h: &Harness<Grocer>) -> Vec<(usize, usize)> {
+    pairs(&h.model().0.selection)
 }

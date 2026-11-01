@@ -10,7 +10,7 @@ use cupertino_filepicker::{Listing, Request};
 use cupertino_kit::controls::{
     CheckBox, ListView, SegmentedControl, Selection, SplitLayout, SplitView, TextRole,
 };
-use cupertino_kit::core::{Checked, CommandRegistry};
+use cupertino_kit::core::{Checked, CommandRegistry, Key};
 use cupertino_kit::geometry::{Insets, Point, Size};
 use cupertino_kit::layout::ScrollState;
 use cupertino_kit::platform::DecorationMode;
@@ -450,6 +450,7 @@ fn sidebar(d: &Dialog, places: &[Place]) -> Element<Message> {
         .map(|p| (p.symbol, p.name.to_owned()))
         .collect();
     let names: Vec<String> = rows.iter().map(|(_, n)| n.clone()).collect();
+    let keys: Vec<&'static str> = places.iter().map(|p| p.name).collect();
     Element::from(ListView {
         label: "Places".into(),
         count: rows.len(),
@@ -458,6 +459,7 @@ fn sidebar(d: &Dialog, places: &[Place]) -> Element<Message> {
         selection,
         multiple: false,
         row: Box::new(move |i, selected| row(rows[i].0, rows[i].1.clone(), selected)),
+        key: Some(Box::new(move |i| Key::from(keys[i]))),
         type_select: Some(Box::new(move |i| names[i].clone())),
         on_scroll: Box::new(move |s| Message::PlacesScroll(id, s)),
         on_select: Some(Box::new(move |s: Selection| {
@@ -478,6 +480,7 @@ fn files(d: &Dialog) -> Element<Message> {
         .map(|e| (e.is_dir, e.name.clone()))
         .collect();
     let names: Vec<String> = rows.iter().map(|(_, n)| n.clone()).collect();
+    let keys = names.clone();
     let label = d
         .chooser
         .picker()
@@ -503,6 +506,7 @@ fn files(d: &Dialog) -> Element<Message> {
                 selected,
             )
         }),
+        key: Some(Box::new(move |i| Key::from(keys[i].clone()))),
         type_select: Some(Box::new(move |i| names[i].clone())),
         on_scroll: Box::new(move |s| Message::Scroll(id, s)),
         on_select: Some(Box::new(move |s| Message::Select(id, s))),

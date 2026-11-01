@@ -1,7 +1,8 @@
 # cupertino-ui-test
 
 CupertinoKit test harness: `TestDriver<Application>`, `HeadlessWindowSystem`, event `Trace` record and replay,
-and the `Inspector`'s deterministic dumps. MPL-2.0; no display or session bus is needed.
+the `Inspector`'s deterministic dumps, and `semantic_gaps`, which lists every node of an accessibility tree a screen
+reader could not announce (no name, or a child the tree does not hold). MPL-2.0; no display or session bus is needed.
 
 `TestDriver::new` owns the production runtime and uses the supplied `ManualClock` for both runtime work and trace
 receipt timestamps, replacing `RuntimeOptions::clock`. Use `runtime()` to inspect the model, windows, focus and

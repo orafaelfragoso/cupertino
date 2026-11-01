@@ -6,12 +6,14 @@ mod clock;
 mod driver;
 mod headless;
 mod inspector;
+mod semantics;
 mod trace;
 
 pub use clock::{ManualClock, TimeWentBackwards};
 pub use driver::{DriverError, TestDriver};
 pub use headless::{HeadlessWindowSystem, PresentedFrame};
 pub use inspector::Inspector;
+pub use semantics::semantic_gaps;
 pub use trace::{
     ProtectedInput, RecordedInput, SecureInputs, Trace, TraceError, TraceEvent, TRACE_VERSION,
 };

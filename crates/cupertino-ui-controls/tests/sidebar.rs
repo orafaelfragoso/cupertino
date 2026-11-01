@@ -1,7 +1,7 @@
 mod support;
 
 use cupertino_geometry::{Point, Rect, Size};
-use cupertino_ui_controls::{Sidebar, SidebarItem, SidebarSection};
+use cupertino_ui_controls::{Sidebar, SidebarAccessory, SidebarItem, SidebarSection};
 use cupertino_ui_core::{
     AccessibilityNode, Action, Application, Command, Element, Key, NodeId, Role, Window,
 };
@@ -33,6 +33,9 @@ fn item(label: &str) -> SidebarItem {
         key: Key::from(label.to_owned()),
         label: label.into(),
         icon: Some("symbol.folder".into()),
+        description: None,
+        accessory: None,
+        busy: false,
     }
 }
 
@@ -99,6 +102,7 @@ fn places(names: &[&str], model: &Model) -> Vec<Window<Message>> {
         scroll: model.scroll,
         on_scroll: Box::new(Message::Scroll),
         on_select: Some(Box::new(Message::Select)),
+        on_accessory: None,
     }))
 }
 
@@ -288,4 +292,134 @@ fn the_focus_and_the_accessible_row_stay_on_their_item_when_a_row_is_inserted_ab
         "the focus stays on Network"
     );
     assert!(named(&h, "Disk").is_some_and(|(id, _, _)| id != network));
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Device {
+    Scroll(ScrollState),
+    Select(usize),
+    Eject(Key),
+}
+
+/// Three devices: Backup is mounted and can be ejected, Card is mid-eject, and Stick is not mounted.
+struct Devices;
+
+impl Application for Devices {
+    type Model = (ScrollState, Vec<Device>);
+    type Message = Device;
+
+    fn init() -> ((ScrollState, Vec<Device>), Vec<Command<Device>>) {
+        ((Places::init().0.scroll, Vec::new()), Vec::new())
+    }
+
+    fn update(
+        (scroll, reported): &mut (ScrollState, Vec<Device>),
+        message: Device,
+    ) -> Vec<Command<Device>> {
+        match message {
+            Device::Scroll(new) => *scroll = new,
+            other => reported.push(other),
+        }
+        Vec::new()
+    }
+
+    fn view((scroll, _): &(ScrollState, Vec<Device>)) -> Vec<Window<Device>> {
+        let device = |name: &str, ejectable: bool, busy: bool| SidebarItem {
+            description: Some("Removable".into()),
+            accessory: ejectable.then(|| SidebarAccessory {
+                symbol: "symbol.eject".into(),
+                label: format!("Eject {name}"),
+            }),
+            busy,
+            ..item(name)
+        };
+        window(Element::from(Sidebar {
+            label: "Places".into(),
+            sections: vec![SidebarSection {
+                title: Some("Locations".into()),
+                items: vec![
+                    device("Backup", true, false),
+                    device("Card", true, true),
+                    device("Stick", false, false),
+                ],
+            }],
+            selected: None,
+            scroll: *scroll,
+            on_scroll: Box::new(Device::Scroll),
+            on_select: Some(Box::new(Device::Select)),
+            on_accessory: Some(Box::new(Device::Eject)),
+        }))
+    }
+}
+
+fn named(h: &Harness<Devices>, name: &str) -> Option<AccessibilityNode> {
+    h.snapshot()
+        .accessibility
+        .into_iter()
+        .map(|(_, n)| n)
+        .find(|n| n.name.as_deref() == Some(name))
+}
+
+fn device_rect(h: &Harness<Devices>, name: &str) -> Rect {
+    let id = row(h, name);
+    h.snapshot()
+        .nodes
+        .into_iter()
+        .find(|n| n.id == id)
+        .unwrap()
+        .rect
+}
+
+#[test]
+fn a_press_at_the_trailing_edge_ejects_without_selecting_and_a_press_on_the_name_selects() {
+    let mut h = Harness::<Devices>::new();
+    let r = device_rect(&h, "Backup");
+    let y = r.min_y() + r.height() / 2.0;
+    h.click(Point::new(r.max_x() - 11.0, y));
+    h.click(Point::new(r.max_x() - 30.0, y));
+    h.click(Point::new(r.min_x() + 40.0, y));
+    assert_eq!(
+        h.model().1,
+        [
+            Device::Eject(Key::from("Backup")),
+            Device::Eject(Key::from("Backup")),
+            Device::Select(0)
+        ],
+        "the slot and the inset after it eject; the name selects"
+    );
+}
+
+#[test]
+fn a_busy_row_has_no_eject_button_and_says_it_is_busy() {
+    let mut h = Harness::<Devices>::new();
+    let r = device_rect(&h, "Card");
+    h.click(Point::new(r.max_x() - 11.0, r.min_y() + r.height() / 2.0));
+    assert_eq!(h.model().1, [Device::Select(1)]);
+    assert!(named(&h, "Eject Card").is_none());
+    assert!(named(&h, "Card").unwrap().states.busy);
+}
+
+#[test]
+fn assistive_technology_reads_the_description_and_clicks_the_eject_button() {
+    let mut h = Harness::<Devices>::assistive();
+    let backup = named(&h, "Backup").unwrap();
+    assert_eq!(backup.description.as_deref(), Some("Removable"));
+    let eject = named(&h, "Eject Backup").unwrap();
+    assert_eq!(eject.role, Role::Button);
+    assert_eq!(eject.actions, [Action::Click]);
+    assert!(
+        !eject.states.focusable,
+        "the sidebar keeps its one Tab stop"
+    );
+    assert!(named(&h, "Eject Stick").is_none());
+
+    let id = h
+        .snapshot()
+        .accessibility
+        .into_iter()
+        .find(|(_, n)| n.name.as_deref() == Some("Eject Backup"))
+        .map(|(id, _)| id)
+        .unwrap();
+    h.ask_node(id, Action::Click);
+    assert_eq!(h.model().1, [Device::Eject(Key::from("Backup"))]);
 }

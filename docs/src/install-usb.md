@@ -60,7 +60,7 @@ sudo cmp -n "$(stat -c %s cupertino-*.iso)" cupertino-*.iso /dev/sdX
 2. Open the firmware's boot menu (the key depends on the maker) and pick the stick.
 3. The boot menu has one entry, "Cupertino live (x86_64, UEFI)", and starts it after 3 seconds. The kernel command line sets `nvidia-drm.modeset=1` and `nvidia-drm.fbdev=1`, and the image ships `nvidia-open`.
 
-The live session starts straight into Cupertino as the user `live`, with no password and no login screen. `Ctrl+Alt+F2` gives a text login for the same user. The network comes from `systemd-networkd`; for Wi-Fi from a text login, use `iwctl`.
+The live session starts straight into Cupertino as the user `live`, with no password and no login screen. `Ctrl+Alt+F2` gives a text login on tty2: log in as `root` with no password (the `live` account is locked). The network comes from `systemd-networkd`; for Wi-Fi from a text login, use `iwctl`.
 
 ## Install
 
@@ -102,7 +102,7 @@ Boot from the disk, not the stick. The default entry, "Cupertino", starts `cuper
 
 | Problem | What to do |
 |---|---|
-| The session fails repeatedly | After 5 failures in 30 seconds, `cupertino-sessiond` stops restarting it. `Ctrl+Alt+F2` to `Ctrl+Alt+F6` give a text login. |
+| The login screen fails repeatedly | After 5 failures in 30 seconds, `cupertino-sessiond` stops restarting the login screen. `Ctrl+Alt+F2` to `Ctrl+Alt+F6` give a text login. |
 | The login screen is broken | At the boot menu, pick "Cupertino (recovery: text login)". tty1 shows a text login. |
 | No network in a text login | Run `nmtui`. |
 | A bad package update | `sudo pacman -U /var/cache/pacman/pkg/NAME-OLDVERSION-*.pkg.tar.zst` |

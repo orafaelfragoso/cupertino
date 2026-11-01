@@ -82,15 +82,17 @@ Changes on `main` since `v0.1.0-rc4`.
 - When every `wayland-N` socket name is taken, the server uses a name of its own.
 
 - The authentication prompt: `cupertino-polkit-agent` shows a password panel over the session, starts its helper when nothing answers on polkit's socket, and tells assistive technology what it shows. It stays out of screen captures and keeps the keyboard under the lock.
-- `cupertino-portal` is the xdg-desktop-portal backend, with the appearance settings and a file chooser drawn with CupertinoKit. A portal request opens as a child of the window it names, Save As opens with its name field focused, and a filter pattern, the number of open dialogs and app text are bounded. A `portals.conf` routes the other portals.
+- `cupertino-portal` is the xdg-desktop-portal backend, with the appearance settings and a file chooser drawn with CupertinoKit. A portal request opens as a child of the window it names, Save As opens with its name field focused, and a filter pattern, the number of open dialogs and app text are bounded. Screen sharing works through the portal's ScreenCast: an application shares one display or one window as a PipeWire video stream after you pick the source in a chooser (shared memory only, with no restore tokens, no audio and no region source). A `portals.conf` sends ScreenCast to Cupertino and every other portal interface to the GTK backend.
 - The session starts the user's default terminal, and the portal and the polkit agent start as built-in processes with one role each. Before every start of a built-in program, the session checks the file and refuses links and a shared bin directory.
 - A bad line in `login.conf` no longer stops the login manager, and `cupertino-sessiond --check-config` names ignored keys and unreadable files.
 - The volume overlay, the control panel and the Sound pane set the volume of the default PipeWire sink. The microphone mute key toggles the default source and shows the microphone overlay.
 - The displays of every DRM card are shown, and the frames of the render GPU are copied to the other cards. A display that cannot show its mode falls back, and an output is announced only once its backend shows it.
+- A crash or an abort in the server leaves its reason and a backtrace in the log, a crash in the teardown keeps the first reason, and the login screen comes back when the compositor ends.
+- The server supports `wp_content_type_manager_v1`, which keeps the content type a window sets for itself.
 - A pinned desktops strip in the overview reserves its expanded height, so windows clear it.
 - Data control is offered only to the clipboard role and to applications the person allows.
 - The server supports `xdg-foreign-unstable-v2`, `xdg_toplevel_icon_manager_v1` and `wp_single_pixel_buffer_manager_v1`. A frame holds the client buffers it was drawn from until its flip is done, and renderers create no GL fences.
-- The lock screen publishes its tree to assistive technology, with the answer to an attempt announced, and a typed password is never sent as keys. The appearance observer (`cupertino_app_effects_v1` version 5) tells whether the session is locked.
+- The lock screen publishes its tree to assistive technology, with the answer to an attempt announced. The password field is protected: assistive technology gets neither its text nor its length and can't type into it. The appearance observer (`cupertino_app_effects_v1` version 5) tells whether the session is locked.
 
 ### Security
 
@@ -128,6 +130,7 @@ Changes on `main` since `v0.1.0-rc4`.
 
 - More controls: Selection, ListView and TableView (virtualised rows, keyboard and click selection, type-select, sortable and keyboard-focusable column headers), TreeView, ScrollView with overlay and always-shown scroll bars, SplitView and NavigationStack, Stepper, DisclosureButton, Badge, PageDots, Tabs, Sidebar, Tooltip, Menu, MenuItem, ContextMenu and PopUpButton, Modal, Dialog and Alert, TextBox, a multi-line TextEditor, Popover and popup windows, and WindowGroup (one window per instance).
 - Assistive technology sees list and table sizes and each row's place, a table's header and body as one table, tree levels, and the actions of its nodes. A tab controls its panel, and a tooltip describes its anchor.
+- Controls lay out on their visible chrome, and a widget's hit target can reach past its rect (the minimum target is hit-only). On a selected row, the focus ring and a tree's disclosure triangle take the selected text colour, and a list row's focus ring stays inside the row.
 - Focus: an inactive window shows no focus ring, a focus left in a hidden subtree moves to the next Tab stop, and `Escape` goes to dismissible nodes first. A sheet hides the content behind it and focuses its least destructive button.
 - Right-to-left text and password fields keep their text and caret at the leading edge, and a text field takes the environment's direction.
 - Applications start on the neutral theme without the desktop's theme data. The Editor example runs on Cupertino and on a second compositor.

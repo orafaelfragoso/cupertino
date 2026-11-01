@@ -2,7 +2,8 @@
 //!
 //! * [`model`]: the overlay kinds, the 16-segment fill rule and the show / hold / fade lifetime (`Hud`).
 //! * [`sender`]: the design sender's level steps and hold times (one place) and the display floor deviation.
-//! * [`backend`]: the output volume (through `cupertino-alsa`) and the backlights, behind traits, with in-memory stand-ins.
+//! * [`backend`]: the output volume (the default PipeWire sink through `cupertino-pipewire`, else the ALSA master) and
+//!   the backlights, behind traits, with in-memory stand-ins.
 //! * [`controller`]: carries out a `Command` on the backends and shows the result.
 //! * [`layout`], [`render`]: the geometry of the 200 x 200 window and the CPU drawing of its content.
 //! * feature `dbus`: [`control`] (the `org.cupertino.Osd1` bus interface) and [`system`] (the display and keyboard
@@ -25,7 +26,8 @@ pub mod sender;
 pub mod system;
 
 pub use backend::{
-    AlsaVolume, BackendError, Backlight, MemoryBacklight, MemoryVolume, Volume, VolumeState,
+    AlsaVolume, BackendError, Backlight, MemoryBacklight, MemoryVolume, SessionMicrophone,
+    SessionVolume, Volume, VolumeState,
 };
 pub use controller::{Command, Controller, EffectError};
 pub use model::{segments, Fill, Hud, Kind, Overlay, Phase, View};

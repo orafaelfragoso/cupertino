@@ -353,6 +353,9 @@ const APPS_DRAW: &str =
     "apps paint fields, shapes, text and system icons with desktop render crates until they draw \
                          through the toolkit (WP-10)";
 
+const SOUND_PANE: &str =
+    "the sound pane drives the default sink and the mixer itself until audio goes through a service";
+
 /// Edges that exist today and that [`RULES`] forbid. Stale entries are errors, so the list only shrinks.
 pub const EXCEPTIONS: &[Exception] = &[
     Exception {
@@ -369,7 +372,23 @@ pub const EXCEPTIONS: &[Exception] = &[
         kind: Kind::Normal,
         tracking: Tracking::Issue(21),
         area: Area::Services,
-        reason: "the sound pane drives the mixer itself until audio goes through a service",
+        reason: SOUND_PANE,
+    },
+    Exception {
+        from: "cupertino-settings",
+        to: "cupertino-pipewire",
+        kind: Kind::Normal,
+        tracking: Tracking::Issue(21),
+        area: Area::Services,
+        reason: SOUND_PANE,
+    },
+    Exception {
+        from: "cupertino-settings",
+        to: "cupertino-pipewire",
+        kind: Kind::Dev,
+        tracking: Tracking::Issue(21),
+        area: Area::Services,
+        reason: SOUND_PANE,
     },
     Exception {
         from: "cupertino-settings",

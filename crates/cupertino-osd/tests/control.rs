@@ -28,6 +28,7 @@ fn serve_fakes(bus: &PrivateBus) -> (Connection, mpsc::Receiver<Shown>) {
     std::thread::spawn(move || {
         let mut controller = Controller::new(
             Box::new(MemoryVolume::new(0.5, false)),
+            Box::new(MemoryVolume::new(0.75, false)),
             Box::new(MemoryBacklight::new(0.5)),
             Box::new(MemoryBacklight::new(0.5)),
         );
@@ -92,6 +93,8 @@ fn the_other_methods_reach_their_effects() {
 
     call(&caller, "ToggleMute", &()).expect("ToggleMute");
     assert_eq!(next(&shown), Some((Kind::Mute, 0.0)));
+    call(&caller, "ToggleMicrophoneMute", &()).expect("ToggleMicrophoneMute");
+    assert_eq!(next(&shown), Some((Kind::MicrophoneMute, 0.0)));
     call(&caller, "BrightnessStep", &(-1, false)).expect("BrightnessStep");
     assert_eq!(next(&shown), Some((Kind::Brightness, 0.4375)));
     call(&caller, "KeyboardBrightnessStep", &(1, false)).expect("KeyboardBrightnessStep");
@@ -169,6 +172,7 @@ fn a_host_process_that_is_not_the_server_cannot_step_a_level() {
     for (member, arguments) in [
         ("VolumeStep", vec!["int32:1", "boolean:false"]),
         ("ToggleMute", vec![]),
+        ("ToggleMicrophoneMute", vec![]),
         ("BrightnessStep", vec!["int32:-1", "boolean:false"]),
         ("KeyboardBrightnessStep", vec!["int32:1", "boolean:true"]),
     ] {

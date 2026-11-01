@@ -3,13 +3,16 @@
 
 use cupertino_alsa::DEVICE_DIR;
 use cupertino_assets::Assets;
-use cupertino_osd::backend::{AlsaVolume, Backlight, MemoryBacklight, MemoryVolume, Volume};
+use cupertino_osd::backend::{
+    AlsaVolume, MemoryBacklight, MemoryVolume, SessionMicrophone, SessionVolume, Volume,
+};
 use cupertino_osd::control;
 use cupertino_osd::controller::{Command, Controller};
 use cupertino_osd::layout::{self, BOTTOM_MARGIN, CORNER_RADIUS, WINDOW_SIZE};
 use cupertino_osd::model::{Phase, View};
 use cupertino_osd::render::{Palette, Renderer, MATERIAL};
 use cupertino_osd::system::{DisplayBacklight, KeyboardBacklight};
+use cupertino_pipewire::Wpctl;
 use cupertino_protocol_app::{AppEffects, Backdrop};
 use cupertino_shell_client::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
@@ -37,7 +40,7 @@ const FAKE_LEVEL: f64 = 0.5;
 pub struct Options {
     /// Change in-memory levels instead of the machine's volume and backlights.
     pub fake_backends: bool,
-    /// Sound card whose master volume is used; the best master of all cards when absent.
+    /// Sound card whose master volume is used instead of the default PipeWire sink.
     pub alsa_card: Option<u32>,
 }
 
@@ -97,24 +100,25 @@ fn first_output(conn: &Connection) -> Result<OutputId> {
 }
 
 fn controller(options: &Options) -> Controller {
-    let (volume, display, keyboard): (Box<dyn Volume>, Box<dyn Backlight>, Box<dyn Backlight>) =
-        if options.fake_backends {
-            (
-                Box::new(MemoryVolume::new(FAKE_LEVEL, false)),
-                Box::new(MemoryBacklight::new(FAKE_LEVEL)),
-                Box::new(MemoryBacklight::new(FAKE_LEVEL)),
-            )
-        } else {
-            (
-                Box::new(AlsaVolume::new(
-                    PathBuf::from(DEVICE_DIR),
-                    options.alsa_card,
-                )),
-                Box::new(DisplayBacklight::new()),
-                Box::new(KeyboardBacklight::new()),
-            )
-        };
-    Controller::new(volume, display, keyboard)
+    if options.fake_backends {
+        return Controller::new(
+            Box::new(MemoryVolume::new(FAKE_LEVEL, false)),
+            Box::new(MemoryVolume::new(FAKE_LEVEL, false)),
+            Box::new(MemoryBacklight::new(FAKE_LEVEL)),
+            Box::new(MemoryBacklight::new(FAKE_LEVEL)),
+        );
+    }
+    let alsa = AlsaVolume::new(PathBuf::from(DEVICE_DIR), options.alsa_card);
+    let volume: Box<dyn Volume> = match options.alsa_card {
+        Some(_) => Box::new(alsa),
+        None => Box::new(SessionVolume::new(Wpctl::default(), alsa)),
+    };
+    Controller::new(
+        volume,
+        Box::new(SessionMicrophone::new(Wpctl::default())),
+        Box::new(DisplayBacklight::new()),
+        Box::new(KeyboardBacklight::new()),
+    )
 }
 
 /// The renderer for the session's appearance and display options.

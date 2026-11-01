@@ -941,12 +941,14 @@ dependencies = [
  "cupertino-decorations",
  "cupertino-geometry",
  "cupertino-icons",
+ "cupertino-pipewire",
  "cupertino-protocol-app",
  "cupertino-shell-client",
  "cupertino-test-bus",
  "cupertino-theme",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
+ "tempfile",
  "tiny-skia",
  "zbus",
 ]
@@ -1339,6 +1341,7 @@ dependencies = [
  "cupertino-geometry",
  "cupertino-icons",
  "cupertino-peer",
+ "cupertino-pipewire",
  "cupertino-protocol-app",
  "cupertino-shell-client",
  "cupertino-test-bus",
@@ -1346,6 +1349,7 @@ dependencies = [
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "serde",
+ "tempfile",
  "tiny-skia",
  "zbus",
 ]
@@ -1367,6 +1371,13 @@ dependencies = [
  "tempfile",
  "tracing",
  "zbus",
+]
+
+[[package]]
+name = "cupertino-pipewire"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
 ]
 
 [[package]]
@@ -1587,6 +1598,7 @@ dependencies = [
  "cupertino-keyboard",
  "cupertino-menu-model",
  "cupertino-modifiers",
+ "cupertino-pipewire",
  "cupertino-protocol-app",
  "cupertino-test-bus",
  "cupertino-text-field",

@@ -632,6 +632,7 @@ fn sidebar(d: &Dialog, places: &[Place]) -> Element<Message> {
         scroll: d.places_scroll,
         selection,
         multiple: false,
+        initial_focus: false,
         row: Box::new(move |i, selected| row(rows[i].0, rows[i].1.clone(), selected)),
         key: Some(Box::new(move |i| Key::from(keys[i]))),
         type_select: Some(Box::new(move |i| names[i].clone())),
@@ -668,6 +669,7 @@ fn files(d: &Dialog) -> Element<Message> {
         scroll: d.scroll,
         selection: d.rows.clone(),
         multiple: d.chooser.ask().multiple,
+        initial_focus: false,
         row: Box::new(move |i, selected| {
             let (is_dir, name) = &rows[i];
             row(
@@ -966,6 +968,7 @@ fn picker_window(p: &Picker) -> Window<Message> {
         scroll: p.scroll,
         selection: p.rows.clone(),
         multiple: false,
+        initial_focus: false,
         row: Box::new(move |i, selected| row(rows[i].0, rows[i].1.clone(), selected)),
         key: Some(Box::new(|i| Key::Int(i as u64))),
         type_select: Some(Box::new(move |i| names[i].clone())),
@@ -980,11 +983,18 @@ fn picker_window(p: &Picker) -> Window<Message> {
         "Choose a display or a window to share.".to_owned()
     };
     let header = Element::new(Stack {
-        axis: Axis::Horizontal,
+        axis: Axis::Vertical,
         padding: BAR_INSETS,
         spacing: GAP,
-        align: Align::Center,
-        children: vec![text(prompt, TextRole::Body, false, false).key("prompt")],
+        align: Align::Stretch,
+        children: vec![Element::new(Text {
+            content: AttributedText::plain(prompt, TextStyle::new(13.0)),
+            role: TextRole::Body,
+            wrap: true,
+            secondary: false,
+            selected: false,
+        })
+        .key("prompt")],
     });
     let bar = bar_row(
         Vec::new(),
@@ -1075,6 +1085,7 @@ fn app_window(a: &AppPicker) -> Window<Message> {
         scroll: a.scroll,
         selection: a.rows.clone(),
         multiple: false,
+        initial_focus: true,
         row: Box::new(move |i, selected| row("symbol.applications", shown[i].clone(), selected)),
         key: Some(Box::new(|i| Key::Int(i as u64))),
         type_select: Some(Box::new(move |i| names[i].clone())),
@@ -1091,11 +1102,18 @@ fn app_window(a: &AppPicker) -> Window<Message> {
         (None, true) => "There is no app to open it with.".to_owned(),
     };
     let header = Element::new(Stack {
-        axis: Axis::Horizontal,
+        axis: Axis::Vertical,
         padding: BAR_INSETS,
         spacing: GAP,
-        align: Align::Center,
-        children: vec![text(prompt, TextRole::Body, false, false).key("prompt")],
+        align: Align::Stretch,
+        children: vec![Element::new(Text {
+            content: AttributedText::plain(prompt, TextStyle::new(13.0)),
+            role: TextRole::Body,
+            wrap: true,
+            secondary: false,
+            selected: false,
+        })
+        .key("prompt")],
     });
     let bar = bar_row(
         Vec::new(),
@@ -1484,11 +1502,12 @@ mod tests {
         for shown in ["Open “report.pdf” with:", "Document Viewer", "Drawing"] {
             assert!(names.contains(&shown), "{shown:?} in {names:?}");
         }
+        type_key(&mut driver, window, Keysym(0xff52), None);
         type_key(&mut driver, window, RETURN, None);
         assert_eq!(
             answer.try_recv().unwrap(),
-            app_chooser::Answer::Chosen("org.example.Draw".to_owned()),
-            "the last choice opens selected and Return opens it"
+            app_chooser::Answer::Chosen("org.example.Viewer".to_owned()),
+            "the last choice opens selected with the focus in the list, so Up moves to the app above it"
         );
         assert!(driver.runtime().windows().is_empty());
 

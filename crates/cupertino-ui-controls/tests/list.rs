@@ -29,6 +29,7 @@ struct Setup {
     count: usize,
     multiple: bool,
     table: bool,
+    initial: bool,
 }
 
 thread_local! {
@@ -37,6 +38,7 @@ thread_local! {
             count: 1000,
             multiple: true,
             table: false,
+            initial: false,
         })
     };
 }
@@ -146,6 +148,7 @@ impl Application for Listed {
             scroll: model.scroll,
             selection: model.selection.clone(),
             multiple: setup.multiple,
+            initial_focus: setup.initial,
             row: Box::new(|i, selected| text(name(i), selected)),
             key: None,
             type_select,
@@ -161,6 +164,7 @@ fn harness(count: usize, multiple: bool, table: bool) -> Harness<Listed> {
         count,
         multiple,
         table,
+        initial: false,
     });
     Harness::new()
 }
@@ -321,6 +325,21 @@ fn typing_selects_the_next_row_that_starts_with_it_and_return_activates_the_curs
     );
     h.tap(RETURN);
     assert_eq!(h.model().activated, [1]);
+}
+
+#[test]
+fn a_list_with_the_initial_focus_has_it_when_its_window_opens_so_the_arrows_work_at_once() {
+    assert_eq!(focused_row(&harness(1000, false, false)), None);
+    SETUP.set(Setup {
+        count: 1000,
+        multiple: false,
+        table: false,
+        initial: true,
+    });
+    let mut h = Harness::<Listed>::new();
+    assert_eq!(focused_row(&h), Some(0));
+    chord(&mut h, DOWN, Mods::NONE);
+    assert_eq!(selected(&h), vec![(0, 1)]);
 }
 
 #[test]
@@ -583,6 +602,7 @@ impl Application for Grocer {
             scroll: model.scroll,
             selection: model.selection.clone(),
             multiple: false,
+            initial_focus: false,
             row: Box::new(move |i, selected| text(names[i].into(), selected)),
             key: Some(Box::new(move |i| Key::from(keys[i]))),
             type_select: None,

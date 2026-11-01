@@ -32,6 +32,8 @@ pub mod search;
 pub mod services;
 pub mod settings;
 pub mod sheet;
+#[cfg(feature = "app")]
+pub mod shell;
 pub mod sidebar;
 pub mod window;
 

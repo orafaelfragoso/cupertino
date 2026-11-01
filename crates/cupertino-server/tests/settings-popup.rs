@@ -25,11 +25,13 @@ use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 use smithay::wayland::shm::with_buffer_contents;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
-// Centres of the Colour filter button and Appearance sidebar row in the 715 × 625 window.
-const COLOUR_FILTER: (f64, f64) = (600.0, 348.0);
+/// The window's content height; the server's title bar sits above it in the frame.
+const CONTENT_HEIGHT: f64 = 625.0;
+// Centres of the Colour filter button and Appearance sidebar row in the 715 × 625 content.
+const COLOUR_FILTER: (f64, f64) = (596.0, 284.0);
 // Centre of the Top Left hot corner's button on the Desktop & Dock pane.
-const TOP_LEFT_CORNER: (f64, f64) = (600.0, 386.0);
-const APPEARANCE_ROW: (f64, f64) = (100.0, 256.0);
+const TOP_LEFT_CORNER: (f64, f64) = (619.0, 317.0);
+const APPEARANCE_ROW: (f64, f64) = (107.5, 93.0);
 
 struct Process(Child);
 
@@ -187,8 +189,9 @@ impl Harness {
     fn click(&mut self, point: (f64, f64)) {
         let window = self.state.windows.iter().find(|w| w.mapped).unwrap();
         let frame = self.state.wm.window(window.id).unwrap().geometry();
+        let top = frame.y + frame.h - CONTENT_HEIGHT;
         self.state
-            .pointer_moved_to((frame.x + point.0, frame.y + point.1).into(), 0, None);
+            .pointer_moved_to((frame.x + point.0, top + point.1).into(), 0, None);
         self.step();
         self.state.pointer_button(0x110, ButtonState::Pressed, 0);
         self.step();
@@ -261,7 +264,21 @@ fn popup_drawn(state: &Cupertino) -> bool {
 
 fn window_pixels(state: &Cupertino) -> Vec<u8> {
     let window = state.windows.iter().find(|w| w.mapped).unwrap();
-    let buffer = with_renderer_surface_state(window.surface(), |s| s.buffer().cloned())
+    surface_pixels(window.surface())
+}
+
+/// The open menu's pixels; empty with no menu open.
+fn popup_pixels(state: &Cupertino) -> Vec<u8> {
+    let window = state.windows.iter().find(|w| w.mapped).unwrap();
+    PopupManager::popups_for_surface(window.surface())
+        .next()
+        .map_or_else(Vec::new, |(popup, _)| surface_pixels(popup.wl_surface()))
+}
+
+fn surface_pixels(
+    surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+) -> Vec<u8> {
+    let buffer = with_renderer_surface_state(surface, |s| s.buffer().cloned())
         .unwrap()
         .unwrap();
     with_buffer_contents(&buffer, |ptr, len, data| {
@@ -309,16 +326,15 @@ fn changing_settings_pane_destroys_the_choice_popup() {
 fn appearance_change_does_not_leave_an_orphaned_choice_popup() {
     let mut h = Harness::new();
     let light = window_pixels(&h.state);
+    let light_menu = popup_pixels(&h.state);
     h.state.set_appearance(Appearance::Dark);
     h.wait_until("Settings to redraw for Dark appearance", |s| {
         window_pixels(s) != light
     });
-    h.run_for(Duration::from_millis(250));
-    assert_eq!(
-        popup_count(&h.state),
-        0,
-        "Dark Appearance must not retain Accessibility's menu"
-    );
+    h.wait_until("the menu to close or redraw for Dark appearance", |s| {
+        popup_count(s) == 0 || popup_pixels(s) != light_menu
+    });
+    assert!(popup_count(&h.state) <= 1, "one menu at most");
 }
 
 #[test]

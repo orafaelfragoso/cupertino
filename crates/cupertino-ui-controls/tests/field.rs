@@ -28,6 +28,7 @@ struct Model {
     changes: usize,
     submitted: Vec<String>,
     password: Option<usize>,
+    typed: Vec<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -35,6 +36,7 @@ enum Message {
     Changed(TextChange),
     Submit,
     Login(usize),
+    Typed(usize),
 }
 
 impl<const ENABLED: bool> Application for Form<ENABLED> {
@@ -57,6 +59,7 @@ impl<const ENABLED: bool> Application for Form<ENABLED> {
                 model.revision += 1;
             }
             Message::Login(len) => model.password = Some(len),
+            Message::Typed(len) => model.typed.push(len),
         }
         Vec::new()
     }
@@ -85,6 +88,9 @@ impl<const ENABLED: bool> Application for Form<ENABLED> {
                     label: "Password".into(),
                     placeholder: "Required".into(),
                     enabled: ENABLED,
+                    on_change: Some(Box::new(|secret| {
+                        Message::Typed(secret.with_secret(|s| s.chars().count()))
+                    })),
                     on_submit: Some(Box::new(|secret| {
                         Message::Login(secret.with_secret(|s| s.chars().count()))
                     })),
@@ -279,7 +285,7 @@ fn escape_and_a_stale_batch_cancel_the_composition() {
 }
 
 #[test]
-fn a_password_reaches_only_the_submit_handler() {
+fn a_password_reaches_only_its_handlers() {
     let mut h = Harness::<App>::new();
     h.tap(TAB);
     h.tap(TAB);
@@ -294,6 +300,7 @@ fn a_password_reaches_only_the_submit_handler() {
     assert_eq!(state.purpose, ContentPurpose::Password);
 
     h.type_text("hunter2");
+    assert_eq!(h.model().typed, [1, 2, 3, 4, 5, 6, 7]);
     h.press_key(A, 'a' as u32, true, false, Mods::PRIMARY);
     h.press_key(C, 'c' as u32, true, false, Mods::PRIMARY);
     h.press_key(X, 'x' as u32, true, false, Mods::PRIMARY);
@@ -314,6 +321,11 @@ fn a_password_reaches_only_the_submit_handler() {
         h.model().password,
         Some(1),
         "the committed \"!\" replaced the selected \"hunter2\"; the preedit was never held"
+    );
+    assert_eq!(
+        h.model().typed,
+        [1, 2, 3, 4, 5, 6, 7, 1],
+        "selecting, copying, cutting and composing change nothing"
     );
 }
 

@@ -10,12 +10,13 @@
 
 mod support;
 
+use cupertino_kit::controls::Tabs;
 use cupertino_kit::controls::{
     Badge, Button, ButtonRole, ButtonStyle, CheckBox, Column, ColumnWidth, DisclosureButton,
     DisclosureStyle, Icon, IconDirection, ListView, NavigationStack, PageDots, Progress,
     RadioGroup, ScrollView, Scroller, SecureField, SegmentedControl, Selection, Separator, Slider,
-    SliderStyle, SortOrder, SplitLayout, SplitView, Stack, Stepper, TableView, Tabs, Text,
-    TextField, TextRole, Toggle,
+    SliderStyle, SortOrder, SplitLayout, SplitView, Stack, Stepper, TableView, Text, TextField,
+    TextRole, Toggle,
 };
 use cupertino_kit::core::{
     Application, Checked, Command, CommandRegistry, Element, Window, WindowBackground, WindowKey,

@@ -501,6 +501,7 @@ impl WindowSystem for WaylandWindowSystem {
                 min_size: spec.min_size.map(convert::whole),
                 max_size: spec.max_size.map(convert::whole),
                 decorations: convert::decorations(spec.decorations),
+                foreign_parent: spec.foreign_parent.clone(),
             })
             .map_err(platform_error)?;
         let id = self.add(

@@ -706,6 +706,7 @@ impl App {
                 min_size: None,
                 max_size: None,
                 decorations: Decorations::Client,
+                foreign_parent: None,
             })
             .unwrap();
         App {
@@ -1197,6 +1198,7 @@ mod window_system {
                 min_size: None,
                 max_size: None,
                 decorations: DecorationMode::Client,
+                foreign_parent: None,
             })
             .unwrap();
         let kit = Kit {

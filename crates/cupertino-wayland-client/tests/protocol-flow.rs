@@ -1593,6 +1593,7 @@ fn window(conn: &mut Connection, decorations: Decorations) -> Toplevel {
         min_size: None,
         max_size: None,
         decorations,
+        foreign_parent: None,
     })
     .unwrap()
 }

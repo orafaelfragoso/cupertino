@@ -80,6 +80,7 @@ impl Application for Files {
                 min_size: None,
                 max_size: None,
                 decorations: cupertino_kit::platform::DecorationMode::Preferred,
+                foreign_parent: None,
             },
             shortcuts: cupertino_kit::core::CommandRegistry::new(),
             on_close: None,

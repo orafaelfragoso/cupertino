@@ -32,6 +32,7 @@ impl<M: Clone + 'static> Popover<M> {
                 min_size: None,
                 max_size: None,
                 decorations: DecorationMode::None,
+                foreign_parent: None,
             },
             shortcuts: CommandRegistry::new(),
             on_close: None,

@@ -72,6 +72,7 @@ fn run(frames: Option<u32>) -> Result<(), Error> {
         min_size: Some(MIN_SIZE),
         max_size: None,
         decorations: Decorations::Server,
+        foreign_parent: None,
     })?;
     let mut w = Window {
         toplevel,

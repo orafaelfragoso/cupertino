@@ -48,6 +48,8 @@ use wayland_protocols::xdg::decoration::zv1::client::zxdg_decoration_manager_v1:
 use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1::{
     self, ZxdgToplevelDecorationV1,
 };
+use wayland_protocols::xdg::foreign::zv2::client::zxdg_imported_v2::{self, ZxdgImportedV2};
+use wayland_protocols::xdg::foreign::zv2::client::zxdg_importer_v2::ZxdgImporterV2;
 use wayland_protocols::xdg::shell::client::xdg_popup::{self, XdgPopup};
 use wayland_protocols::xdg::shell::client::xdg_positioner::{
     Anchor, ConstraintAdjustment, Gravity, XdgPositioner,
@@ -111,6 +113,10 @@ pub struct ToplevelConfig {
     /// Who should draw the frame. A compositor without the decoration protocol, or one that answers otherwise,
     /// decides; the outcome is in [`WindowConfigure::decorations`].
     pub decorations: Decorations,
+    /// The handle another client exported its toplevel under (xdg-foreign-unstable-v2), which the window opens as a
+    /// child of, as a dialog of that client's window. A compositor without the protocol, or one that does not know the
+    /// handle, leaves the window without a parent.
+    pub foreign_parent: Option<String>,
 }
 
 /// Where a popup goes, relative to its parent's surface (`xdg_positioner`).
@@ -305,6 +311,8 @@ enum Role {
         toplevel: XdgToplevel,
         decoration: Option<ZxdgToplevelDecorationV1>,
         decorations: Decorations,
+        /// The other client's toplevel this one is a child of, until the compositor ends the import.
+        imported: Option<ZxdgImportedV2>,
         pending: PendingToplevel,
         current: Option<WindowConfigure>,
     },
@@ -371,6 +379,7 @@ pub struct State {
     wm_base: XdgWmBase,
     seat: Option<WlSeat>,
     decoration_manager: Option<ZxdgDecorationManagerV1>,
+    importer: Option<ZxdgImporterV2>,
     scaling: Option<(WpFractionalScaleManagerV1, WpViewporter)>,
     activation: Option<XdgActivationV1>,
     cursor_shape: Option<WpCursorShapeManagerV1>,
@@ -486,6 +495,7 @@ impl Connection {
             wm_base: required(bind(&globals, &qh, 1..=6), "xdg_wm_base")?,
             seat,
             decoration_manager: bind(&globals, &qh, 1..=1),
+            importer: bind(&globals, &qh, 1..=1),
             scaling: bind(&globals, &qh, 1..=1).zip(bind(&globals, &qh, 1..=1)),
             activation: bind(&globals, &qh, 1..=1),
             cursor_shape: bind(&globals, &qh, 1..=1),
@@ -592,6 +602,16 @@ impl Connection {
             d.set_mode(decoration_mode(config.decorations));
             d
         });
+        let imported =
+            config
+                .foreign_parent
+                .as_ref()
+                .zip(s.importer.as_ref())
+                .map(|(handle, importer)| {
+                    let imported = importer.import_toplevel(handle.clone(), &qh, id);
+                    imported.set_parent_of(&wl);
+                    imported
+                });
         s.add_surface(
             id,
             wl,
@@ -600,6 +620,7 @@ impl Connection {
                 toplevel,
                 decoration,
                 decorations: Decorations::Client,
+                imported,
                 pending: PendingToplevel::default(),
                 current: None,
             },
@@ -713,10 +734,14 @@ impl Connection {
                 xdg,
                 toplevel,
                 decoration,
+                imported,
                 ..
             } => {
                 if let Some(d) = decoration {
                     d.destroy();
+                }
+                if let Some(i) = imported {
+                    i.destroy();
                 }
                 toplevel.destroy();
                 xdg.destroy();
@@ -1754,6 +1779,7 @@ delegate_noop!(State: WpFractionalScaleManagerV1);
 delegate_noop!(State: WpViewporter);
 delegate_noop!(State: WpViewport);
 delegate_noop!(State: ZxdgDecorationManagerV1);
+delegate_noop!(State: ZxdgImporterV2);
 delegate_noop!(State: XdgActivationV1);
 delegate_noop!(State: WpCursorShapeManagerV1);
 delegate_noop!(State: WpCursorShapeDeviceV1);
@@ -2128,6 +2154,32 @@ impl Dispatch<ZxdgToplevelDecorationV1, SurfaceId> for State {
                 WEnum::Value(zxdg_toplevel_decoration_v1::Mode::ServerSide) => Decorations::Server,
                 _ => Decorations::Client,
             };
+        }
+    }
+}
+
+/// The compositor ended an import: the handle is unknown or no longer exported, or the exported window is gone. The
+/// window stays, without the parent.
+impl Dispatch<ZxdgImportedV2, SurfaceId> for State {
+    fn event(
+        state: &mut Self,
+        _: &ZxdgImportedV2,
+        event: zxdg_imported_v2::Event,
+        id: &SurfaceId,
+        _: &WlConnection,
+        _: &QueueHandle<Self>,
+    ) {
+        let zxdg_imported_v2::Event::Destroyed = event else {
+            return;
+        };
+        if let Ok(Surface {
+            role: Role::Toplevel { imported, .. },
+            ..
+        }) = state.surface_mut(*id)
+        {
+            if let Some(i) = imported.take() {
+                i.destroy();
+            }
         }
     }
 }

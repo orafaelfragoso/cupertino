@@ -19,10 +19,8 @@ cryptsetup
 efibootmgr
 nvme-cli
 iwd
-openssh
 less
 nano
-vim
 qemu-guest-agent
 mesa
 vulkan-icd-loader

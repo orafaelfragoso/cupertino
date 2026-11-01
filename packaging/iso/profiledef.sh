@@ -13,6 +13,6 @@ airootfs_image_type="squashfs"
 airootfs_image_tool_options=('-comp' 'zstd' '-Xcompression-level' '15' '-b' '1M')
 file_permissions=(
   ["/etc/shadow"]="0:0:400"
-  ["/etc/sudoers.d/live"]="0:0:440"
+  ["/etc/sudoers.d/wheel"]="0:0:440"
   ["/home/live"]="1000:1000:750"
 )

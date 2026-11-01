@@ -65,8 +65,8 @@ struct WindowIcon {
     apps: [String; 2],
     name: Option<String>,
     image: Option<Pixmap>,
-    /// The image resampled to the size it was last drawn at, when that is smaller.
-    scaled: Option<(u32, Pixmap)>,
+    /// The image resampled to each smaller size it is drawn at.
+    scaled: BTreeMap<u32, Pixmap>,
 }
 
 impl WindowIcon {
@@ -76,10 +76,9 @@ impl WindowIcon {
         if image.width() <= px {
             return image;
         }
-        if self.scaled.as_ref().is_none_or(|(at, _)| *at != px) {
-            self.scaled = Some((px, resampled(image, px)));
-        }
-        &self.scaled.as_ref().expect("resampled above").1
+        self.scaled
+            .entry(px)
+            .or_insert_with(|| resampled(image, px))
     }
 }
 
@@ -176,7 +175,7 @@ impl Icons {
                     apps,
                     name: icon.name,
                     image,
-                    scaled: None,
+                    scaled: BTreeMap::new(),
                 },
             );
         }
@@ -407,7 +406,11 @@ fn draw_icon_of(
     opacity: f32,
 ) {
     let cfg = &session.dock.cfg;
-    let icon_px = (cfg.large_size.max(cfg.tile_size) * f64::from(scale)).ceil() as u32;
+    let drawn = (rect.w.max(rect.h) * f64::from(scale)).ceil().max(1.0) as u32;
+    let mut icon_px = (cfg.large_size.max(cfg.tile_size) * f64::from(scale)).ceil() as u32;
+    while icon_px > 2 * drawn {
+        icon_px = icon_px.div_ceil(2);
+    }
     let icon = if kind == TileKind::Trash {
         icons.trash(icon_px)
     } else {
@@ -2086,13 +2089,18 @@ mod tests {
         assert_eq!(tile(&mut icons), GENERIC_APPLICATION_PIXEL);
     }
 
+    /// A 512 px checkerboard of 4 px squares: still one pixel squares at the 128 px a large tile draws at.
     #[test]
     fn a_large_window_image_is_averaged_down_to_the_tile_not_sampled() {
         let session = first_running();
         let layout = session.dock.layout(SCREEN, 10.0);
         let mut icons = bare_icons();
         let checker = (0..512 * 512)
-            .flat_map(|i| [(i % 512 + i / 512) % 2 * 255; 3].into_iter().chain([255]))
+            .flat_map(|i| {
+                [(i % 512 / 4 + i / 512 / 4) % 2 * 255; 3]
+                    .into_iter()
+                    .chain([255])
+            })
             .map(|v| v as u8)
             .collect();
         icons.window_icon(

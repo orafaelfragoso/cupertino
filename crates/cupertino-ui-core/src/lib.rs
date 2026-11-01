@@ -179,6 +179,12 @@ pub enum Event {
         gained: bool,
         visible: bool,
     },
+    /// The focus came into (`gained`) or left this node's subtree, below the node itself; it is sent when the focus
+    /// moves, not when the ring of the same focused node shows or hides.
+    FocusWithin {
+        gained: bool,
+        visible: bool,
+    },
     Action(ActionRequest),
     /// The frame a node asked for with [`EventCx::request_animation_frame`] is being prepared.
     AnimationFrame(Timestamp),

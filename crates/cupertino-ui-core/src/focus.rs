@@ -12,11 +12,15 @@ struct Scope {
 }
 
 /// A focus move the runtime reports to the nodes involved.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FocusChange {
     pub(crate) from: Option<NodeId>,
     pub(crate) to: Option<NodeId>,
     pub(crate) visible: bool,
+    /// Strict ancestors of the old focus that are no longer ones of the new focus, innermost first.
+    pub(crate) left: Vec<NodeId>,
+    /// Strict ancestors of the new focus that were not ones of the old focus, outermost first.
+    pub(crate) entered: Vec<NodeId>,
 }
 
 #[derive(Default)]
@@ -49,11 +53,20 @@ impl Focus {
         let from = self.node.filter(|&n| tree.contains(n));
         self.node = to;
         self.visible = to.is_some() && visible;
-        self.path = to.map(|n| tree.path(n)).unwrap_or_default();
+        let old = std::mem::replace(&mut self.path, to.map(|n| tree.path(n)).unwrap_or_default());
+        let (old, new) = (ancestors(&old), ancestors(&self.path));
+        let common = old.iter().zip(new).take_while(|(a, b)| a == b).count();
         Some(FocusChange {
             from,
             to,
             visible: self.visible,
+            left: old[common..]
+                .iter()
+                .rev()
+                .copied()
+                .filter(|&n| tree.contains(n))
+                .collect(),
+            entered: new[common..].to_vec(),
         })
     }
 
@@ -145,6 +158,11 @@ impl Focus {
         };
         Some(candidates[next])
     }
+}
+
+/// The nodes above the last of `path`.
+fn ancestors(path: &[NodeId]) -> &[NodeId] {
+    path.split_last().map_or(&[], |(_, above)| above)
 }
 
 fn deepest_alive<M: 'static>(tree: &Tree<M>, path: &[NodeId]) -> Option<NodeId> {

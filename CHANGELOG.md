@@ -13,10 +13,18 @@ Changes on `main` since `v0.1.0-rc4`.
 - Two modifier profiles, Cupertino and classic PC. System shortcuts match the physical key, with a table for each profile.
 - Under the classic PC profile, tapping `Super` alone opens the launcher (a gesture or a mouse-keys key cancels the tap), `Super+Down` restores a tiled or zoomed window before it minimizes, `Ctrl+Tab` moves between key views in text views, the menu bar shows PC key names, and `Ctrl` is the command key in Settings and in text fields.
 
+- Dead keys and the compose key type their characters, and key repeat skips a key that typed inside a compose sequence. The keyboard layout comes from the one localed holds at login, and a compose key can be set in `keyboard.conf`.
+- Touch input from `wl_touch` reaches the window the touch went down on.
+- Natural scrolling can be set per device, and the mouse wheel has its own setting. A pointer button carries the modifiers held at the press.
+
 ### Text
 
 - A character the first font lacks is drawn from another loaded font, one character at a time.
 - Emoji written with the emoji presentation selector are drawn from a colour font, and colour glyphs are cached once per size.
+
+- Mixed-direction lines are laid out in UAX 9 order, each hard line of a paragraph takes its own base direction, and the arrows and `Option+Left` and `Option+Right` move through text as it is drawn.
+- A line that is cut can end in an ellipsis, and an installed font answers only with a face that has the character or family asked for.
+- Caret and word moves lay out only the caret's line and its neighbours.
 
 ### Menus
 
@@ -30,6 +38,8 @@ Changes on `main` since `v0.1.0-rc4`.
 - Menu shortcuts are drawn as symbols the embedded font has, Escape included.
 - The menu bar text stays readable over the wallpaper under it, the built-in procedural wallpaper included.
 
+- The menu bar draws a scrim under its text that brings it to 4.5:1 over mid-tone wallpapers, and the wallpaper worker measures the strip under the bar.
+
 ### Settings, Files and theme
 
 - An About This Computer window in Settings. Long values wrap, and each display shows its name, diagonal, mode and scale.
@@ -41,6 +51,9 @@ Changes on `main` since `v0.1.0-rc4`.
 - Reduce Transparency uses the opaque neutral palette.
 - Choosing the theme that is already set changes nothing.
 - Cupertino no longer writes GTK and Qt themes or reads the GTK icon-theme setting.
+
+- Settings has Wi-Fi, Network and Bluetooth panes on NetworkManager and BlueZ, hidden when the service is missing. The Sound pane picks the output device among the PipeWire sinks, and a Privacy & Security pane has Clipboard Access.
+- Files lists removable media in the sidebar through udisks2. The sidebar works from the keyboard (`Ctrl+Tab`, the arrows, `Return` and `Primary+E`) and shows its places and eject buttons to assistive technology. Failures show as notifications, and the Trash place is followed.
 
 ### Shell and session
 
@@ -67,6 +80,19 @@ Changes on `main` since `v0.1.0-rc4`.
 - Screenshots are written in one step and never replace an existing file, and a failed write, for example on a full disk, leaves no partial file.
 - The network daemon starts without rfkill access and reports the real error. The Bluetooth daemon keeps running on a machine without Bluetooth.
 - When every `wayland-N` socket name is taken, the server uses a name of its own.
+
+- The authentication prompt: `cupertino-polkit-agent` shows a password panel over the session, starts its helper when nothing answers on polkit's socket, and tells assistive technology what it shows. It stays out of screen captures and keeps the keyboard under the lock.
+- `cupertino-portal` is the xdg-desktop-portal backend, with the appearance settings and a file chooser drawn with CupertinoKit. A portal request opens as a child of the window it names, Save As opens with its name field focused, and a filter pattern, the number of open dialogs and app text are bounded. Screen sharing works through the portal's ScreenCast: an application shares one display or one window as a PipeWire video stream after you pick the source in a chooser (shared memory only, with no restore tokens, no audio and no region source). A `portals.conf` sends ScreenCast to Cupertino and every other portal interface to the GTK backend.
+- The session starts the user's default terminal, and the portal and the polkit agent start as built-in processes with one role each. Before every start of a built-in program, the session checks the file and refuses links and a shared bin directory.
+- A bad line in `login.conf` no longer stops the login manager, and `cupertino-sessiond --check-config` names ignored keys and unreadable files.
+- The volume overlay, the control panel and the Sound pane set the volume of the default PipeWire sink. The microphone mute key toggles the default source and shows the microphone overlay.
+- The displays of every DRM card are shown, and the frames of the render GPU are copied to the other cards. A display that cannot show its mode falls back, and an output is announced only once its backend shows it.
+- A crash or an abort in the server leaves its reason and a backtrace in the log, a crash in the teardown keeps the first reason, and the login screen comes back when the compositor ends.
+- The server supports `wp_content_type_manager_v1`, which keeps the content type a window sets for itself.
+- A pinned desktops strip in the overview reserves its expanded height, so windows clear it.
+- Data control is offered only to the clipboard role and to applications the person allows.
+- The server supports `xdg-foreign-unstable-v2`, `xdg_toplevel_icon_manager_v1` and `wp_single_pixel_buffer_manager_v1`. A frame holds the client buffers it was drawn from until its flip is done, and renderers create no GL fences.
+- The lock screen publishes its tree to assistive technology, with the answer to an attempt announced. The password field is protected: assistive technology gets neither its text nor its length and can't type into it. The appearance observer (`cupertino_app_effects_v1` version 5) tells whether the session is locked.
 
 ### Security
 
@@ -102,6 +128,13 @@ Changes on `main` since `v0.1.0-rc4`.
 - A window can leave out its plain background, so a menu or popover can paint its own shape.
 - A headless test window system that records and replays input, with protected text left out.
 
+- More controls: Selection, ListView and TableView (virtualised rows, keyboard and click selection, type-select, sortable and keyboard-focusable column headers), TreeView, ScrollView with overlay and always-shown scroll bars, SplitView and NavigationStack, Stepper, DisclosureButton, Badge, PageDots, Tabs, Sidebar, Tooltip, Menu, MenuItem, ContextMenu and PopUpButton, Modal, Dialog and Alert, TextBox, a multi-line TextEditor, Popover and popup windows, and WindowGroup (one window per instance).
+- Assistive technology sees list and table sizes and each row's place, a table's header and body as one table, tree levels, and the actions of its nodes. A tab controls its panel, and a tooltip describes its anchor.
+- Controls lay out on their visible chrome, and a widget's hit target can reach past its rect (the minimum target is hit-only). On a selected row, the focus ring and a tree's disclosure triangle take the selected text colour, and a list row's focus ring stays inside the row.
+- Focus: an inactive window shows no focus ring, a focus left in a hidden subtree moves to the next Tab stop, and `Escape` goes to dismissible nodes first. A sheet hides the content behind it and focuses its least destructive button.
+- Right-to-left text and password fields keep their text and caret at the leading edge, and a text field takes the environment's direction.
+- Applications start on the neutral theme without the desktop's theme data. The Editor example runs on Cupertino and on a second compositor.
+
 ### Packaging and release
 
 - The Adwaita icon theme is a required dependency.
@@ -110,6 +143,12 @@ Changes on `main` since `v0.1.0-rc4`.
 - Debian packages ship stripped binaries.
 - An upgrade test installs one version and then the next for deb and rpm.
 - All three formats recommend xwayland-satellite and Xwayland. Debian does not package xwayland-satellite.
+
+### Install image
+
+- `cupertino-install` is the installer on the live USB. It erases one disk you confirm by typing its path, installs Arch Linux with the Cupertino session started by `cupertino-login`, and uses ext4 without encryption. It installs NVIDIA drivers on Turing and newer cards, Chromium, `git`, `base-devel`, `rustup` and `gh`. It fails if the new system keeps anything of the live USB.
+- An archiso profile and `scripts/build-iso.sh` build the live and install medium.
+- The boot menu has "Cupertino" and "Cupertino (recovery: text login)", and tty2 to tty6 give text logins.
 
 ### Tests and CI
 
@@ -123,6 +162,7 @@ Changes on `main` since `v0.1.0-rc4`.
 - A render timing matrix covers the window switcher and window resizing.
 - Timing-sensitive tests count work instead of measuring time.
 - A debug-only test clock for the time shown in the login screen, dock and launcher.
+- `ci/capture.sh` draws Settings, Files and Kit surfaces headless for look checks, and `ci/demo-video.sh` records a scripted desktop at 60 frames per second.
 - The vendored xkbcommon-rs tests build again.
 
 ### Documentation

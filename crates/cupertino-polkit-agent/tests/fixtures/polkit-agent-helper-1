@@ -1,0 +1,6 @@
+#!/bin/sh
+read cookie
+echo "PAM_TEXT_INFO user=$1 args=$# cookie=$cookie home=${HOME:-none}"
+echo 'PAM_PROMPT_ECHO_OFF Password: '
+read password
+if [ "$password" = right ]; then echo SUCCESS; else echo FAILURE; fi

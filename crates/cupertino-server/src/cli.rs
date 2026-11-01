@@ -722,6 +722,7 @@ fn start_dbus(state: &mut Cupertino) {
     }
     state.watch_menu_reader();
     crate::power::start_power_bus(state);
+    crate::localed::start(state);
     crate::quit::start_session_service(state);
 }
 

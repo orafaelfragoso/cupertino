@@ -705,6 +705,23 @@ impl Browser {
         self.selection.select_all(self.entries().len());
     }
 
+    /// Select the items at `indices` as a list view chose them; indexes past the listing are dropped.
+    pub fn select(
+        &mut self,
+        indices: impl IntoIterator<Item = usize>,
+        anchor: Option<usize>,
+        focus: Option<usize>,
+    ) {
+        let len = self.entries().len();
+        let within = |i: &usize| *i < len;
+        self.awaited = None;
+        self.selection.restore(
+            indices.into_iter().filter(within),
+            anchor.filter(within),
+            focus.filter(within),
+        );
+    }
+
     /// Typed text at `now` (seconds on a monotonic clock): selects the first item whose name starts with
     /// what was typed recently. `true` when the selection changed.
     pub fn type_text(&mut self, text: &str, now: f64) -> bool {

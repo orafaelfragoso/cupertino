@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
-use cupertino_server::toplevel_icon::{WindowIcon, MAX_ICON_PIXELS};
+use cupertino_server::toplevel_icon::{WindowIcon, MAX_ICON_BUFFERS, MAX_ICON_PIXELS};
 use cupertino_server::Cupertino;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
@@ -282,6 +282,26 @@ fn a_name_that_could_be_a_path_is_refused() {
     let icon = mapped_icon(&mut h);
     assert_eq!(icon.name, None);
     assert!(icon.image.is_some(), "the image is kept");
+}
+
+/// One more buffer than the server looks at, of sides 1 to 33, the largest last.
+const MANY: [i32; MAX_ICON_BUFFERS + 1] = {
+    let mut sides = [0; MAX_ICON_BUFFERS + 1];
+    let mut i = 0;
+    while i < sides.len() {
+        sides[i] = i as i32 + 1;
+        i += 1;
+    }
+    sides
+};
+
+#[test]
+fn only_the_first_buffers_are_looked_at_and_only_the_largest_of_them_is_copied() {
+    let Some(mut h) = Harness::new() else { return };
+    let _app = App::spawn(h.socket_path(), ICON_NAME, &MANY, false);
+    let icon = mapped_icon(&mut h);
+    let image = icon.image.as_ref().expect("an icon image is kept");
+    assert_eq!(image.size, MAX_ICON_BUFFERS as u32);
 }
 
 #[test]

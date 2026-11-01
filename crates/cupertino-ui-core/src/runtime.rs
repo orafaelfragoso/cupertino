@@ -721,8 +721,20 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     w.pointer = pointer;
                 }
                 if let Some(node) = w.focus.node().filter(|_| changed) {
-                    let event = Event::WindowActive(focused);
-                    route(&mut self.tree, w, now, &mut effects).notify(node, &event);
+                    let mut ancestors = self.tree.path(node);
+                    ancestors.pop();
+                    if !focused {
+                        ancestors.reverse();
+                    }
+                    let within = Event::FocusWithin {
+                        gained: focused,
+                        visible: focused && w.focus.visible(),
+                    };
+                    let mut route = route(&mut self.tree, w, now, &mut effects);
+                    route.notify(node, &Event::WindowActive(focused));
+                    for ancestor in ancestors {
+                        route.notify(ancestor, &within);
+                    }
                 }
                 if let Some(adapter) = &mut self.options.accessibility {
                     adapter.window_focus(w.id, focused);
@@ -969,6 +981,24 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 &Event::Focus {
                     gained: false,
                     visible: false,
+                },
+            );
+        }
+        for &node in &change.left {
+            route.notify(
+                node,
+                &Event::FocusWithin {
+                    gained: false,
+                    visible: false,
+                },
+            );
+        }
+        for &node in &change.entered {
+            route.notify(
+                node,
+                &Event::FocusWithin {
+                    gained: true,
+                    visible: change.visible,
                 },
             );
         }

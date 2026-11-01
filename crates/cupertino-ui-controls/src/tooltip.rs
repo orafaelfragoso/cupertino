@@ -70,13 +70,16 @@ impl<M: Clone + 'static> From<Tooltip<M>> for Element<M> {
     }
 }
 
-/// Whether the pointer is resting on the anchor, waiting out the delay.
+/// Whether the pointer is on the anchor or the keyboard focus is in it, and whether the delay is being waited out.
 #[derive(Default)]
 struct Rest {
     waiting: bool,
+    hovered: bool,
+    focused: bool,
 }
 
-/// Around the anchor: it times the pointer's rest and hears the presses and keys that dismiss the tip.
+/// Around the anchor: it times the pointer's rest or the keyboard focus, and hears the presses and keys that dismiss
+/// the tip.
 struct Anchor<M> {
     text: String,
     shown: bool,
@@ -85,13 +88,23 @@ struct Anchor<M> {
     children: Vec<Element<M>>,
 }
 
-impl<M> Anchor<M> {
-    fn hide(&self, cx: &mut EventCx<'_, M>)
-    where
-        M: Clone,
-    {
+impl<M: Clone> Anchor<M> {
+    fn hide(&self, cx: &mut EventCx<'_, M>) {
         if self.shown {
             cx.emit(self.on_hide.clone());
+        }
+    }
+
+    fn wait(rest: &mut Rest, cx: &mut EventCx<'_, M>) {
+        rest.waiting = true;
+        cx.wake_at(Timestamp(cx.now().0 + DELAY));
+    }
+
+    /// Hides the tip once neither the pointer nor the keyboard focus is on the anchor.
+    fn release(&self, rest: &mut Rest, cx: &mut EventCx<'_, M>) {
+        if !rest.hovered && !rest.focused {
+            rest.waiting = false;
+            self.hide(cx);
         }
     }
 }
@@ -127,12 +140,24 @@ impl<M: Clone + 'static> Widget<M> for Anchor<M> {
         let own = cx.node() == cx.target();
         match *event {
             Event::Pointer(PointerEvent::Enter { .. }, _) if own => {
-                rest.waiting = true;
-                cx.wake_at(Timestamp(cx.now().0 + DELAY));
+                rest.hovered = true;
+                Self::wait(rest, cx);
             }
             Event::Pointer(PointerEvent::Leave, _) if own => {
-                rest.waiting = false;
-                self.hide(cx);
+                rest.hovered = false;
+                self.release(rest, cx);
+            }
+            // a focus from the pointer shows no ring and no tip
+            Event::FocusWithin {
+                gained: true,
+                visible: true,
+            } => {
+                rest.focused = true;
+                Self::wait(rest, cx);
+            }
+            Event::FocusWithin { gained: false, .. } => {
+                rest.focused = false;
+                self.release(rest, cx);
             }
             Event::Wake(_) if own => {
                 if rest.waiting && !self.shown {
@@ -150,11 +175,13 @@ impl<M: Clone + 'static> Widget<M> for Anchor<M> {
                 if cx.phase() == Phase::Capture
                     && key.pressed
                     && key.keysym == ESCAPE
-                    && key.mods.is_empty()
-                    && self.shown =>
+                    && key.mods.is_empty() =>
             {
-                cx.emit(self.on_hide.clone());
-                return Propagation::Stop;
+                rest.waiting = false;
+                if self.shown {
+                    cx.emit(self.on_hide.clone());
+                    return Propagation::Stop;
+                }
             }
             _ => {}
         }

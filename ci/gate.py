@@ -156,6 +156,19 @@ def metadata_problems(root: Path) -> list[str]:
     return [f"packaging: check-metadata: {line}" for line in lines]
 
 
+def contracts_problems(root: Path) -> list[str]:
+    checker = root / "ci" / "contracts.py"
+    if not checker.is_file():
+        return []
+    result = subprocess.run([sys.executable, "-I", str(checker), str(root)], cwd=root, capture_output=True, text=True, timeout=300)
+    if result.returncode == 0:
+        return []
+    lines = [line for line in (result.stderr or result.stdout).splitlines() if line.strip()]
+    if not lines:
+        return [f"contracts: exit {result.returncode} with no output"]
+    return [f"contracts: {line}" for line in lines]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
@@ -165,6 +178,7 @@ def main() -> int:
         parser.error("root must be a directory")
     hits, problems = gate(root)
     problems += metadata_problems(root)
+    problems += contracts_problems(root)
     for problem in problems:
         print(problem, file=sys.stderr)
     print(f"gate: {len(problems)} problems ({dict(hits)})")

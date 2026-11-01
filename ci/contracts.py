@@ -29,7 +29,7 @@ OPTIONAL = {"note", "version_without_render_node", "visible_to"}
 ATTRIBUTE = re.compile(r'^[ \t]*#\[[^\]"]*?\binterface\b(?!\s*=)(.*?)\]', re.M | re.S)
 LITERAL_NAME = re.compile(r'\(\s*name\s*=\s*"([^"]+)"\s*[,)]')
 # Entries without a test file. It only goes down: give an entry a test_owner and lower this number.
-UNKNOWN_TEST_OWNERS = 16
+UNKNOWN_TEST_OWNERS = 15
 UNKNOWN_SCOPES = 1
 # Kinds whose test_owner must name the entry: a socket path or binary name is a string its tests use. Wayland globals
 # need not, since crates/cupertino-server/tests/contracts.rs compares them with the registry at run time; D-Bus
@@ -37,6 +37,8 @@ UNKNOWN_SCOPES = 1
 # one (cupertino-dock in cupertino-dock-helper), also passes.
 NAMED_BY_TEST = {"socket-protocol", "binary"}
 NAME = re.compile(r'"(org\.cupertino\.[A-Za-z0-9.]+)"')
+# A window's `app_id` is a desktop entry name, not a bus name.
+APP_ID = re.compile(r'\bapp_id\b')
 
 
 def parse(text):
@@ -155,6 +157,8 @@ def check_dbus(entries, root):
             elif entry["source"] != path:
                 problems.append(f"{path}:{number}: {name} is registered in {entry['source']}")
         for number, line in enumerate(text.splitlines(), 1):
+            if APP_ID.search(line):
+                continue
             for name in NAME.findall(line):
                 name = re.sub(r"\.Error.*", "", name)
                 if name != "org.cupertino" and not any(name == n or name.startswith(n + ".") for n in names):

@@ -228,16 +228,13 @@ impl Model {
                 Event::ScreenCast(screen_cast::Event::Ask { handle, ask, reply }) => {
                     let id = self.next;
                     self.next += 1;
-                    let mut rows = Selection::default();
-                    if !ask.sources.is_empty() {
-                        rows.select_only(0);
-                    }
+                    // nothing is chosen until the person picks a row, so keys meant for the app cannot share
                     self.pickers.push(Picker {
                         id,
                         handle,
                         reply,
                         ask: *ask,
-                        rows,
+                        rows: Selection::default(),
                         scroll: NO_SCROLL,
                     });
                 }
@@ -925,7 +922,7 @@ fn picker_window(p: &Picker) -> Window<Message> {
             decorations: DecorationMode::Preferred,
             foreign_parent: crate::wayland_parent(&p.ask.parent_window).map(str::to_owned),
         },
-        // Return is the default button and Escape cancels, wherever the focus is
+        // Return is the default button once a row is picked, and Escape cancels, wherever the focus is
         shortcuts: CommandRegistry::new()
             .with(
                 Shortcut {
@@ -974,7 +971,7 @@ mod tests {
     use cupertino_kit::geometry::Point;
     use cupertino_kit::layout::LayoutDirection;
     use cupertino_kit::platform::{
-        Capabilities, Mods, MouseButton, PointerEvent, Timestamp, WindowEvent, WindowId,
+        Capabilities, KeyEvent, Mods, MouseButton, PointerEvent, Timestamp, WindowEvent, WindowId,
         WindowStates,
     };
     use cupertino_kit::render::{CpuConfig, CpuRenderer};
@@ -1102,9 +1099,30 @@ mod tests {
         settle(driver, window);
     }
 
+    fn type_key(
+        driver: &mut TestDriver<Dialogs>,
+        window: WindowId,
+        keysym: Keysym,
+        text: Option<char>,
+    ) {
+        let event = KeyEvent {
+            code: 0,
+            keysym,
+            text,
+            pressed: true,
+            repeat: false,
+            mods: Mods::NONE,
+        };
+        send(driver, window, WindowEvent::Key(event, Timestamp(0)));
+    }
+
     fn click(driver: &mut TestDriver<Dialogs>, window: WindowId, key: &'static str) {
+        click_at(driver, window, Key::from(key));
+    }
+
+    fn click_at(driver: &mut TestDriver<Dialogs>, window: WindowId, key: Key) {
         let runtime = driver.runtime();
-        let id = runtime.find(window, &Key::from(key)).unwrap();
+        let id = runtime.find(window, &key).unwrap();
         let rect = runtime
             .snapshot(window)
             .unwrap()
@@ -1203,7 +1221,15 @@ mod tests {
         let window = show(&mut driver);
         let spec = driver.window_system_mut().spec(window).unwrap().clone();
         assert_eq!(spec.title, "Share Screen");
+        type_key(&mut driver, window, Keysym('n' as u32), Some('n'));
+        type_key(&mut driver, window, RETURN, None);
         click(&mut driver, window, "share");
+        assert!(
+            answer.try_recv().is_err(),
+            "keys typed for the app and Share with no row picked share nothing"
+        );
+        click_at(&mut driver, window, Key::Int(0));
+        type_key(&mut driver, window, RETURN, None);
         assert_eq!(
             answer.try_recv().unwrap(),
             screen_cast::Answer::Chosen(display.clone())

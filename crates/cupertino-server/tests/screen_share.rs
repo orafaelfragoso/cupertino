@@ -29,6 +29,8 @@ use zbus::zvariant::{ObjectPath, OwnedValue, Value};
 const OUTPUT: (i32, i32) = (640, 400);
 const TIMEOUT: Duration = Duration::from_secs(30);
 /// Evdev code of Return plus the xkb offset of 8.
+const TAB: u32 = 15 + 8;
+const DOWN: u32 = 108 + 8;
 const RETURN: u32 = 28 + 8;
 const BACKEND: &str = "org.freedesktop.impl.portal.desktop.cupertino";
 const FRONTEND: &str = "org.freedesktop.portal.Desktop";
@@ -231,12 +233,17 @@ fn the_portal_shares_the_chosen_display_as_a_stream_of_its_frames() {
     });
 
     server.wait_for("the chooser", |s| titled(s, "Share Screen").then_some(()));
-    server.key(RETURN);
+    for key in [TAB, DOWN, RETURN] {
+        server.key(key);
+    }
     server.wait_for("the chooser to close", |s| {
         (!titled(s, "Share Screen")).then_some(())
     });
     let (response, results) = server.wait_for("the answer to Start", |_| started.try_recv().ok());
-    assert_eq!(response, 0, "Return chooses the selected display");
+    assert_eq!(
+        response, 0,
+        "Return shares the display picked with the keyboard"
+    );
     let streams: Vec<(u32, Results)> = results["streams"].try_clone().unwrap().try_into().unwrap();
     assert_eq!(streams.len(), 1);
     let (node, properties) = &streams[0];

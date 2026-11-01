@@ -5,13 +5,12 @@ Usage:
   cupertino-install
   cupertino-install --answers FILE --disk DISK --yes-erase DISK
 
-Asked: the disk (then its path typed again), encryption, the account and its password, the time zone. archinstall 4.5
+Asked: the disk (then its path typed again), the account and its password, the time zone. archinstall 4.5
 does the install from a configuration written here (--config, --creds, --silent); the Cupertino steps follow on the
-mounted system: the boot entries "Cupertino", "Cupertino (LTS kernel)" and "Cupertino (recovery: text login)", the
-NVIDIA driver options, Cupertino as the account's session at GDM, and the live USB's package repository taken out of
-pacman.conf.
+mounted system: the boot entries "Cupertino" and "Cupertino (recovery: text login)", the NVIDIA driver options,
+cupertino-powerd as the UPower service, and the live USB's package repository taken out of pacman.conf.
 
---answers reads the answers from a JSON file instead (for the QEMU test): user, password, luks (false or a passphrase),
+--answers reads the answers from a JSON file instead (for the QEMU test): user, password,
 timezone, and optionally hostname, keyboard, extra_packages and kernel_args. The disk is never in the file: --disk and
 --yes-erase must both name it.
 
@@ -41,21 +40,20 @@ TARGET = Path("/mnt")
 LIVE = Path("/run/archiso")
 ARCHINSTALL_LOG = Path("/var/log/archinstall/install.log")
 RECOVERY_ENTRY = "cupertino-recovery.conf"
-SESSION = "cupertino"
-BTRFS_SUBVOLUMES = (("@", "/"), ("@home", "/home"), ("@log", "/var/log"), ("@pkg", "/var/cache/pacman/pkg"))
-# GNOME as the second session at GDM, for when the Cupertino session fails
-GNOME_PACKAGES = ("gdm", "gnome-shell", "gnome-session", "gnome-control-center", "gnome-keyring", "gnome-terminal",
-                  "nautilus", "xdg-desktop-portal-gnome")
 REPOSITORY = "cupertino"
 ZONEINFO = Path("/usr/share/zoneinfo")
-
 BASE_PACKAGES = (
     "base-devel", "bluez-utils", "chromium", "foot", "git", "github-cli", "nano", "pipewire-pulse", "rustup", "sudo",
-    "snap-pac", "wireplumber", "xorg-xwayland", "xwayland-satellite", "cupertino", "cupertino-data",
+    "wireplumber", "xorg-xwayland", "xwayland-satellite", "cupertino", "cupertino-data",
 )
 CHROMIUM_FLAGS = "--ozone-platform=wayland\n"
-KERNELS = ("linux", "linux-lts")
-NVIDIA_PACKAGES = ("nvidia-open", "nvidia-open-lts", "nvidia-utils", "libva-nvidia-driver")
+KERNEL = "linux"
+NVIDIA_PACKAGES = ("nvidia-open", "nvidia-utils", "libva-nvidia-driver")
+# one owner per system service: NetworkManager and BlueZ (Settings talks to both; cupertino-netd serves a subset of
+# NetworkManager's name and cupertino-btd shares the kernel's Bluetooth management socket with bluetoothd), and
+# cupertino-powerd as UPower (upower is not installed)
+ENABLED = ("NetworkManager.service", "bluetooth.service", "cupertino-login.service", "cupertino-powerd.service")
+NOT_ENABLED = ("cupertino-netd.service", "cupertino-btd.service")
 # the working state of the RTX 3060 this installer is first used on: its modprobe.d, its driver parameters and its early KMS
 NVIDIA_OPTIONS = (
     "options nvidia_drm modeset=1 fbdev=1\n"
@@ -97,7 +95,6 @@ class Disk:
 class Answers:
     user: str
     password: str
-    luks: str | None
     timezone: str
     hostname: str = "cupertino"
     keyboard: str = "us"
@@ -196,9 +193,8 @@ def size(value: int, sector: int) -> dict[str, object]:
 
 
 def configuration(plan: Plan) -> dict[str, object]:
-    """archinstall 4.5's user_configuration.json: its default layout (a 1 GiB ESP at /boot, the rest btrfs with its
-    default subvolumes and snapper, the root partition in LUKS when asked), linux and linux-lts, systemd-boot,
-    NetworkManager, PipeWire, Bluetooth, zram and GDM."""
+    """archinstall 4.5's user_configuration.json: its default layout (a 1 GiB ESP at /boot, the rest ext4 at /),
+    systemd-boot, NetworkManager, PipeWire, Bluetooth, zram and Cupertino's login manager as the display manager."""
     disk, answers = plan.disk, plan.answers
     # archinstall's default layout: the last partition ends 1 MiB before the disk's end (the backup GPT), MiB-aligned
     root_start = 1 + 1024
@@ -213,26 +209,21 @@ def configuration(plan: Plan) -> dict[str, object]:
                 {**partition, "obj_id": plan.ids["esp"], "start": size(1, disk.sector), "size": size(1024, disk.sector),
                  "fs_type": "fat32", "mountpoint": "/boot", "flags": ["boot", "esp"]},
                 {**partition, "obj_id": plan.ids["root"], "start": size(root_start, disk.sector),
-                 "size": size(root_length, disk.sector), "fs_type": "btrfs", "mountpoint": None, "flags": [],
-                 "mount_options": ["compress=zstd"],
-                 "btrfs": [{"name": name, "mountpoint": mountpoint} for name, mountpoint in BTRFS_SUBVOLUMES]},
+                 "size": size(root_length, disk.sector), "fs_type": "ext4", "mountpoint": "/", "flags": []},
             ],
         }],
-        "btrfs_options": {"snapshot_config": {"type": "Snapper"}},
     }
-    if answers.luks is not None:
-        disk_config["disk_encryption"] = {"encryption_type": "luks", "partitions": [plan.ids["root"]], "lvm_volumes": []}
     return {
         "app_config": {"audio_config": {"audio": "pipewire"}, "bluetooth_config": {"enabled": True}},
         "bootloader_config": {"bootloader": "Systemd-boot", "uki": False, "removable": True},
         "disk_config": disk_config,
         "hostname": answers.hostname,
-        "kernels": list(KERNELS),
+        "kernels": [KERNEL],
         "locale_config": {"kb_layout": answers.keyboard, "sys_enc": "UTF-8", "sys_lang": "en_US.UTF-8"},
         "network_config": {"type": "nm"},
         "ntp": True,
-        "packages": list(dict.fromkeys([*BASE_PACKAGES, *GNOME_PACKAGES, *plan.graphics.packages, *answers.extra_packages])),
-        "services": ["gdm"],
+        "packages": list(dict.fromkeys([*BASE_PACKAGES, *plan.graphics.packages, *answers.extra_packages])),
+        "services": ["cupertino-login"],
         "swap": {"enabled": True, "algorithm": "zstd"},
         "timezone": answers.timezone,
     }
@@ -240,8 +231,6 @@ def configuration(plan: Plan) -> dict[str, object]:
 
 def credentials(answers: Answers) -> dict[str, object]:
     creds: dict[str, object] = {"users": [{"username": answers.user, "!password": answers.password, "sudo": True, "groups": []}]}
-    if answers.luks is not None:
-        creds["encryption_password"] = answers.luks
     return creds
 
 
@@ -260,14 +249,10 @@ def retitled(lines: list[str], title: str, extra: str) -> list[str]:
 
 
 def boot_entries(entries: Path, kernel_args: tuple[str, ...]) -> None:
-    """Retitles archinstall's entries "Cupertino" and "Cupertino (LTS kernel)", and writes the recovery entry beside
-    them: the main system started to multi-user.target, which does not pull in display-manager.service, so tty1 shows a
-    text login."""
-    extra = "".join(f" {arg}" for arg in kernel_args)
-    lts, lts_lines = entry(entries, "linux-lts")
-    found, lines = entry(entries, "linux")
-    main = retitled(lines, "Cupertino", extra)
-    lts.write_text("\n".join(retitled(lts_lines, "Cupertino (LTS kernel)", extra)) + "\n")
+    """Retitles archinstall's entry "Cupertino" and writes the recovery entry beside it: the same system started to
+    multi-user.target, which does not pull in display-manager.service, so tty1 shows a text login."""
+    found, lines = entry(entries, KERNEL)
+    main = retitled(lines, "Cupertino", "".join(f" {arg}" for arg in kernel_args))
     recovery = [
         "title\tCupertino (recovery: text login)" if line.startswith("title")
         else line + " systemd.unit=multi-user.target" if line.startswith("options") else line
@@ -292,15 +277,12 @@ def without_repository(pacman_conf: str, name: str = REPOSITORY) -> str:
 def parse_answers(data: object) -> Answers:
     if not isinstance(data, dict):
         raise Failed(2, "answers", "the file is not a JSON object")
-    known = {"user", "password", "luks", "timezone", "hostname", "keyboard", "extra_packages", "kernel_args"}
+    known = {"user", "password", "timezone", "hostname", "keyboard", "extra_packages", "kernel_args"}
     if unknown := sorted(set(data) - known):
         raise Failed(2, "answers", f"unknown keys {', '.join(unknown)}")
     for key in ("user", "password", "timezone"):
         if not isinstance(data.get(key), str) or not data[key]:
             raise Failed(2, "answers", f"{key} must be a non-empty string")
-    luks = data.get("luks", False)
-    if luks is not False and (not isinstance(luks, str) or not luks):
-        raise Failed(2, "answers", "luks must be false or a non-empty passphrase")
     lists = {}
     for key in ("extra_packages", "kernel_args"):
         value = data.get(key, [])
@@ -308,7 +290,7 @@ def parse_answers(data: object) -> Answers:
             raise Failed(2, "answers", f"{key} must be a list of strings without spaces")
         lists[key] = tuple(value)
     answers = Answers(
-        data["user"], data["password"], luks or None, data["timezone"], data.get("hostname", "cupertino"),
+        data["user"], data["password"], data["timezone"], data.get("hostname", "cupertino"),
         data.get("keyboard", "us"), lists["extra_packages"], lists["kernel_args"],
     )
     check(answers)
@@ -394,11 +376,6 @@ def choose_disk() -> Disk:
 
 
 def interactive_answers(live_timezone: str) -> Answers:
-    luks: str | None = None
-    if ask("Encrypt the disk (a passphrase is asked at every start)? yes/no", "yes").lower() in ("y", "yes"):
-        luks = ask_secret("Encryption passphrase")
-    elif ask("Without encryption, anyone with the disk can read it. Type yes to continue without it").lower() != "yes":
-        luks = ask_secret("Encryption passphrase")
     while True:
         user = ask("Account name (lower case, for example rafael)")
         if ACCOUNT.fullmatch(user) and user != "root":
@@ -406,7 +383,7 @@ def interactive_answers(live_timezone: str) -> Answers:
         print("Use lower-case letters, digits, - and _, starting with a letter.")
     password = ask_secret(f"Password for {user}")
     while True:
-        answers = Answers(user, password, luks, ask("Time zone", live_timezone))
+        answers = Answers(user, password, ask("Time zone", live_timezone))
         try:
             check(answers)
             return answers
@@ -428,18 +405,13 @@ def install(plan: Plan, workdir: Path) -> None:
     missing = [p for p in ("usr/bin/cupertino-sessiond", "boot/loader/loader.conf") if not (TARGET / p).exists()]
     # an absolute symlink: read it, do not follow it into the live system
     display_manager = TARGET / "etc/systemd/system/display-manager.service"
-    if not display_manager.is_symlink() or Path(os.readlink(display_manager)).name != "gdm.service":
-        missing.append("display-manager.service -> gdm.service")
+    if not display_manager.is_symlink() or Path(os.readlink(display_manager)).name != "cupertino-login.service":
+        missing.append("display-manager.service -> cupertino-login.service")
     if result.returncode != 0 or missing:
         if ARCHINSTALL_LOG.exists():
             shutil.copy(ARCHINSTALL_LOG, workdir / "archinstall.log")
         raise Failed(4, "archinstall", f"exit status {result.returncode}" + (f", missing {', '.join(missing)}" if missing else "")
                      + f"; its log: {workdir / 'archinstall.log'}")
-    if plan.answers.luks is not None:
-        root = run("findmnt", "-n", "--nofsroot", "-o", "SOURCE", str(TARGET), step="encryption", status=4, capture=True).strip()
-        kind = run("lsblk", "-n", "-o", "TYPE", root, step="encryption", status=4, capture=True).split()
-        if kind[:1] != ["crypt"]:
-            raise Failed(4, "encryption", f"{root} is not an encrypted volume; archinstall did not encrypt the disk")
 
 
 def without_kms_hook(mkinitcpio_conf: str) -> str:
@@ -450,13 +422,12 @@ def without_kms_hook(mkinitcpio_conf: str) -> str:
 
 
 def nvidia(only_nvidia: bool) -> None:
-    # nvidia-open and nvidia-open-lts are built for one kernel release each: a module for each installed kernel proves the match
-    for kernel in KERNELS:
-        modules = [p.name for p in (TARGET / "usr/lib/modules").iterdir() if (p / "pkgbase").is_file()
-                   and (p / "pkgbase").read_text().strip() == kernel]
-        if len(modules) != 1:
-            raise Failed(5, "nvidia", f"expected one module directory for {kernel}, found {modules}")
-        run("arch-chroot", str(TARGET), "modinfo", "-k", modules[0], "-F", "version", "nvidia", step="nvidia", status=5, capture=True)
+    # nvidia-open is built for one kernel release: its module in the kernel's directory proves the match
+    modules = [p.name for p in (TARGET / "usr/lib/modules").iterdir() if (p / "pkgbase").is_file()
+               and (p / "pkgbase").read_text().strip() == KERNEL]
+    if len(modules) != 1:
+        raise Failed(5, "nvidia", f"expected one module directory for {KERNEL}, found {modules}")
+    run("arch-chroot", str(TARGET), "modinfo", "-k", modules[0], "-F", "version", "nvidia", step="nvidia", status=5, capture=True)
     (TARGET / "etc/modprobe.d").mkdir(parents=True, exist_ok=True)
     (TARGET / "etc/modprobe.d/nvidia.conf").write_text(NVIDIA_OPTIONS)
     (TARGET / "etc/mkinitcpio.conf.d").mkdir(parents=True, exist_ok=True)
@@ -481,19 +452,19 @@ def finish(plan: Plan) -> None:
     (config / "chromium-flags.conf").write_text(CHROMIUM_FLAGS)
     run("arch-chroot", str(TARGET), "chown", "-R", f"{plan.answers.user}:{plan.answers.user}", f"/home/{plan.answers.user}/.config",
         step="chromium", status=5)
-    if not (TARGET / f"usr/share/wayland-sessions/{SESSION}.desktop").is_file():
-        raise Failed(5, "session", f"/usr/share/wayland-sessions/{SESSION}.desktop is missing")
-    users = TARGET / "var/lib/AccountsService/users"
-    users.mkdir(mode=0o700, parents=True, exist_ok=True)
-    # GDM preselects the session AccountsService records for the account
-    (users / plan.answers.user).write_text(f"[User]\nSession={SESSION}\nSystemAccount=false\n")
-    (users / plan.answers.user).chmod(0o600)
-    for unit, wanted in (("NetworkManager.service", "enabled"), ("bluetooth.service", "enabled"), ("gdm.service", "enabled"),
-                         *((u, "not enabled") for u in ("cupertino-login.service", "cupertino-netd.service",
-                                                       "cupertino-btd.service", "cupertino-powerd.service"))):
+    if subprocess.run(["arch-chroot", str(TARGET), "pacman", "-Q", "upower"], capture_output=True).returncode == 0:
+        raise Failed(5, "services", "upower is installed: it and cupertino-powerd would both claim org.freedesktop.UPower")
+    # the unit has no [Install] section: it is wanted by multi-user.target directly
+    run("arch-chroot", str(TARGET), "systemctl", "add-wants", "multi-user.target", "cupertino-powerd.service", step="services", status=5)
+    wants = TARGET / "etc/systemd/system/multi-user.target.wants"
+    for unit in ENABLED:
         state = subprocess.run(["arch-chroot", str(TARGET), "systemctl", "is-enabled", unit], text=True, capture_output=True).stdout.strip()
-        if (state == "enabled") != (wanted == "enabled"):
-            raise Failed(5, "services", f"{unit} is {state or 'missing'}, it should be {wanted}")
+        if state != "enabled" and not (wants / unit).is_symlink():
+            raise Failed(5, "services", f"{unit} is {state or 'missing'}, it should be enabled")
+    for unit in NOT_ENABLED:
+        state = subprocess.run(["arch-chroot", str(TARGET), "systemctl", "is-enabled", unit], text=True, capture_output=True).stdout.strip()
+        if state == "enabled" or (wants / unit).is_symlink():
+            raise Failed(5, "services", f"{unit} is enabled; NetworkManager and BlueZ own the network and Bluetooth")
     for package in plan.answers.extra_packages:
         unit = TARGET / f"usr/lib/systemd/system/{package}.service"
         if unit.exists() and "[Install]" in unit.read_text():
@@ -505,11 +476,8 @@ def finish(plan: Plan) -> None:
         print((check_hardware.stdout + check_hardware.stderr).strip() or f"exit status {check_hardware.returncode}")
     except subprocess.TimeoutExpired:
         print("no answer within 60 s")
-    root = run("findmnt", "-n", "--nofsroot", "-o", "SOURCE", str(TARGET), step="unmount", status=5, capture=True).strip()
     subprocess.run(["sync"])
     run("umount", "-R", str(TARGET), step="unmount", status=5)
-    if plan.answers.luks is not None:
-        run("cryptsetup", "close", Path(root).name, step="unmount", status=5)
 
 
 def say(line: str) -> None:
@@ -549,7 +517,7 @@ def main(argv: list[str]) -> int:
             answers = interactive_answers(live_timezone or "UTC")
             workdir = Path(tempfile.mkdtemp(prefix="cupertino-install-", dir="/run"))
         plan = Plan(disk, answers, graphics(pci_devices()))
-        print(f"\nDisk: {disk.path} ({size_text(disk.size)}), erased whole\nEncryption: {'yes' if answers.luks else 'no'}\n"
+        print(f"\nDisk: {disk.path} ({size_text(disk.size)}), erased whole\n"
               f"Account: {answers.user} (administrator)\nGraphics: {plan.graphics.summary}\nTime zone: {answers.timezone}\n"
               f"Computer name: {answers.hostname}, keyboard: {answers.keyboard}")
         if args.answers is None and ask("Start? yes/no", "no").lower() not in ("y", "yes"):

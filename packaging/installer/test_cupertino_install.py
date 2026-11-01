@@ -23,7 +23,7 @@ def disk(path, size, model="", ro=False, children=None, sector=512):
             "mountpoints": [None], "children": children or []}
 
 
-ANSWERS = ci.Answers("rafael", "secret", "phrase", "Europe/Lisbon")
+ANSWERS = ci.Answers("rafael", "secret", "Europe/Lisbon")
 
 
 class DisksTest(unittest.TestCase):
@@ -56,7 +56,7 @@ class GraphicsTest(unittest.TestCase):
     def test_turing_and_newer_nvidia_cards_get_the_open_module(self):
         # Rafael's RTX 3060 (GA106)
         found = ci.graphics([(0x030000, 0x10DE, 0x2504), (0x040300, 0x10DE, 0x228E)])
-        self.assertEqual(found.packages, ("mesa", "nvidia-open", "nvidia-open-lts", "nvidia-utils", "libva-nvidia-driver"))
+        self.assertEqual(found.packages, ("mesa", "nvidia-open", "nvidia-utils", "libva-nvidia-driver"))
         self.assertEqual((found.nvidia, found.only_nvidia), (True, True))
 
     def test_cards_older_than_turing_stay_on_nouveau(self):
@@ -66,7 +66,7 @@ class GraphicsTest(unittest.TestCase):
 
     def test_a_hybrid_laptop_gets_both_drivers(self):
         found = ci.graphics([(0x030000, 0x1002, 0x1638), (0x030200, 0x10DE, 0x25A2)])
-        self.assertEqual(found.packages, ("mesa", "vulkan-radeon", "nvidia-open", "nvidia-open-lts", "nvidia-utils", "libva-nvidia-driver"))
+        self.assertEqual(found.packages, ("mesa", "vulkan-radeon", "nvidia-open", "nvidia-utils", "libva-nvidia-driver"))
         self.assertEqual((found.nvidia, found.only_nvidia), (True, False))
 
 
@@ -86,28 +86,17 @@ class ConfigurationTest(unittest.TestCase):
         config = ci.configuration(self.plan(sector=4096))
         esp, root = config["disk_config"]["device_modifications"][0]["partitions"]
         self.assertEqual((esp["start"]["value"], esp["size"]["value"], esp["mountpoint"], esp["flags"]), (1, 1024, "/boot", ["boot", "esp"]))
-        self.assertEqual((root["start"]["value"], root["size"]["value"], root["fs_type"], root["mountpoint"]), (1025, 952843, "btrfs", None))
-        self.assertEqual(root["btrfs"], [{"name": "@", "mountpoint": "/"}, {"name": "@home", "mountpoint": "/home"},
-                                         {"name": "@log", "mountpoint": "/var/log"}, {"name": "@pkg", "mountpoint": "/var/cache/pacman/pkg"}])
-        self.assertEqual(config["disk_config"]["btrfs_options"], {"snapshot_config": {"type": "Snapper"}})
+        self.assertEqual((root["start"]["value"], root["size"]["value"], root["fs_type"], root["mountpoint"]), (1025, 952843, "ext4", "/"))
         self.assertLessEqual((root["start"]["value"] + root["size"]["value"]) * ci.MIB, TB - ci.MIB)
         self.assertEqual(root["size"]["sector_size"], {"value": 4096, "unit": "B"})
 
-    def test_encryption_covers_the_root_partition_only_when_asked(self):
-        self.assertEqual(ci.configuration(self.plan())["disk_config"]["disk_encryption"],
-                         {"encryption_type": "luks", "partitions": ["root-id"], "lvm_volumes": []})
-        self.assertEqual(ci.credentials(ANSWERS)["encryption_password"], "phrase")
-        plain = ci.Answers("rafael", "secret", None, "UTC")
-        self.assertNotIn("disk_encryption", ci.configuration(self.plan(plain))["disk_config"])
-        self.assertNotIn("encryption_password", ci.credentials(plain))
-
-    def test_gdm_is_the_display_manager_with_both_kernels_and_drivers(self):
-        config = ci.configuration(self.plan(ci.Answers("rafael", "secret", None, "UTC", extra_packages=("qemu-guest-agent",))))
-        self.assertEqual(config["services"], ["gdm"])
-        self.assertEqual(config["kernels"], ["linux", "linux-lts"])
+    def test_cupertino_login_is_the_display_manager_with_the_drivers(self):
+        config = ci.configuration(self.plan(ci.Answers("rafael", "secret", "UTC", extra_packages=("qemu-guest-agent",))))
+        self.assertEqual(config["services"], ["cupertino-login"])
+        self.assertEqual(config["kernels"], ["linux"])
+        self.assertNotIn("disk_encryption", config["disk_config"])
         self.assertEqual(config["bootloader_config"], {"bootloader": "Systemd-boot", "uki": False, "removable": True})
-        for package in ("cupertino", "cupertino-data", "nvidia-open", "nvidia-open-lts", "gnome-shell", "gnome-terminal", "snap-pac",
-                        "chromium", "rustup", "github-cli", "qemu-guest-agent"):
+        for package in ("cupertino", "cupertino-data", "nvidia-open", "chromium", "rustup", "github-cli", "qemu-guest-agent"):
             self.assertIn(package, config["packages"])
 
 
@@ -117,20 +106,14 @@ class BootEntriesTest(unittest.TestCase):
             entries = Path(tmp)
             (entries / "2026-11-01_20-00-00_linux.conf").write_text(
                 "# Created by: archinstall\ntitle\tArch Linux (linux)\nlinux\t/vmlinuz-linux\ninitrd\t/initramfs-linux.img\n"
-                "options cryptdevice=PARTUUID=abc:root root=/dev/mapper/root rw rootfstype=ext4\n")
-            (entries / "2026-11-01_20-00-00_linux-lts.conf").write_text(
-                "# Created by: archinstall\ntitle\tArch Linux (linux-lts)\nlinux\t/vmlinuz-linux-lts\ninitrd\t/initramfs-linux-lts.img\n"
-                "options root=/dev/mapper/root rw\n")
+                "options root=PARTUUID=abc rw rootfstype=ext4\n")
             ci.boot_entries(entries, ("console=ttyS0,115200",))
-            self.assertEqual((entries / "2026-11-01_20-00-00_linux-lts.conf").read_text().splitlines()[1:], [
-                "title\tCupertino (LTS kernel)", "linux\t/vmlinuz-linux-lts", "initrd\t/initramfs-linux-lts.img",
-                "options root=/dev/mapper/root rw console=ttyS0,115200"])
             self.assertEqual((entries / "2026-11-01_20-00-00_linux.conf").read_text().splitlines()[1:], [
                 "title\tCupertino", "linux\t/vmlinuz-linux", "initrd\t/initramfs-linux.img",
-                "options cryptdevice=PARTUUID=abc:root root=/dev/mapper/root rw rootfstype=ext4 console=ttyS0,115200"])
+                "options root=PARTUUID=abc rw rootfstype=ext4 console=ttyS0,115200"])
             self.assertEqual((entries / ci.RECOVERY_ENTRY).read_text().splitlines()[1:], [
                 "title\tCupertino (recovery: text login)", "linux\t/vmlinuz-linux", "initrd\t/initramfs-linux.img",
-                "options cryptdevice=PARTUUID=abc:root root=/dev/mapper/root rw rootfstype=ext4 console=ttyS0,115200"
+                "options root=PARTUUID=abc rw rootfstype=ext4 console=ttyS0,115200"
                 " systemd.unit=multi-user.target"])
 
     def test_no_archinstall_entry_is_a_failure(self):
@@ -161,9 +144,9 @@ class AnswersTest(unittest.TestCase):
         return failed.exception.status, failed.exception.reason
 
     def test_a_complete_file_is_read(self):
-        answers = ci.parse_answers({"user": "rafael", "password": "pw", "luks": False, "timezone": "Europe/Lisbon",
+        answers = ci.parse_answers({"user": "rafael", "password": "pw", "timezone": "Europe/Lisbon",
                                     "extra_packages": ["qemu-guest-agent"], "kernel_args": ["console=ttyS0,115200"]})
-        self.assertEqual(answers, ci.Answers("rafael", "pw", None, "Europe/Lisbon", "cupertino", "us", ("qemu-guest-agent",), ("console=ttyS0,115200",)))
+        self.assertEqual(answers, ci.Answers("rafael", "pw", "Europe/Lisbon", "cupertino", "us", ("qemu-guest-agent",), ("console=ttyS0,115200",)))
 
     def test_the_disk_cannot_come_from_the_file(self):
         self.assertEqual(self.failure({"user": "rafael", "password": "pw", "timezone": "UTC", "disk": "/dev/vda"}),
@@ -173,7 +156,7 @@ class AnswersTest(unittest.TestCase):
         base = {"user": "rafael", "password": "pw", "timezone": "Europe/Lisbon"}
         self.assertEqual(self.failure({**base, "user": "Root"})[0], 2)
         self.assertEqual(self.failure({**base, "timezone": "/etc/passwd"}), (2, "'/etc/passwd' is not a time zone"))
-        self.assertEqual(self.failure({**base, "luks": ""}), (2, "luks must be false or a non-empty passphrase"))
+        self.assertEqual(self.failure({**base, "luks": False}), (2, "unknown keys luks"))
         self.assertEqual(self.failure({**base, "kernel_args": ["a b"]}), (2, "kernel_args must be a list of strings without spaces"))
 
 

@@ -36,7 +36,7 @@ pub fn gpus(sysfs_root: &Path) -> Result<Vec<Gpu>> {
         .into_iter()
         .map(|device| {
             let boot_vga = boot_vga(device.syspath(), &devices_dir)?;
-            let render_node = render_node(device.syspath())?;
+            let render_node = render_node(device.syspath());
             Ok(Gpu {
                 device,
                 boot_vga,
@@ -76,34 +76,29 @@ pub fn select_render(gpus: Vec<Gpu>, wanted: Option<&Path>) -> Option<(Gpu, Rend
     }
 }
 
-/// The `/dev` node of the `renderD*` device next to the card, in the same `drm/` directory.
-fn render_node(card_syspath: &Path) -> Result<Option<PathBuf>> {
-    let Some(drm_dir) = card_syspath.parent() else {
-        return Ok(None);
-    };
-    let io = |source| Error::Io {
-        path: drm_dir.to_owned(),
-        source,
-    };
-    let mut nodes = Vec::new();
-    for entry in std::fs::read_dir(drm_dir).map_err(io)? {
-        let entry = entry.map_err(io)?;
-        let name = entry.file_name();
-        if let Some(number) = name
-            .to_str()
-            .and_then(|n| n.strip_prefix("renderD"))
-            .and_then(|n| n.parse::<u32>().ok())
-        {
-            nodes.push((number, entry.path()));
-        }
-    }
+/// The `/dev` node of the first readable `renderD*` device next to the card, in the same `drm/` directory. Only the
+/// override reads it, so a directory or device that cannot be read leaves it `None` instead of failing the listing.
+fn render_node(card_syspath: &Path) -> Option<PathBuf> {
+    let mut nodes: Vec<(u32, PathBuf)> = std::fs::read_dir(card_syspath.parent()?)
+        .ok()?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let number = entry
+                .file_name()
+                .to_str()?
+                .strip_prefix("renderD")?
+                .parse()
+                .ok()?;
+            Some((number, entry.path()))
+        })
+        .collect();
     nodes.sort();
-    match nodes.into_iter().next() {
-        Some((_, syspath)) => Ok(Device::from_syspath(&syspath)?
+    nodes.into_iter().find_map(|(_, syspath)| {
+        Device::from_syspath(&syspath)
+            .ok()?
             .devnode()
-            .map(Path::to_owned)),
-        None => Ok(None),
-    }
+            .map(Path::to_owned)
+    })
 }
 
 /// Reads `boot_vga` from the nearest ancestor of the card that has it.

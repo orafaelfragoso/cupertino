@@ -13,11 +13,9 @@ use cupertino_settings::paint::{Painter, Palette};
 use cupertino_theme::{Appearance, Theme};
 use cupertino_ui_wayland::{Ready, ShmPresenter};
 use cupertino_wayland_client::{
-    key, Button, Connection, Decorations, Event, KeyboardEvent, PointerEvent, SurfaceId,
-    TokenRequest, ToplevelConfig,
+    key, Button, Capability, Connection, Decorations, Event, KeyboardEvent, PointerEvent,
+    SurfaceId, TokenRequest, ToplevelConfig,
 };
-
-use crate::app::unless_unsupported;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -267,6 +265,18 @@ fn more_info(token: &str, ended: impl FnOnce() + Send + 'static) -> Result<()> {
     Ok(())
 }
 
+/// The outcome of an activation request, `None` when the compositor has no activation protocol: the window then shows
+/// without being raised.
+fn unless_unsupported<T>(
+    result: std::result::Result<T, cupertino_wayland_client::Error>,
+) -> std::result::Result<Option<T>, cupertino_wayland_client::Error> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(cupertino_wayland_client::Error::Unsupported(Capability::Activation)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,5 +291,23 @@ mod tests {
         std::fs::write(&path, "modifier_profile = invalid\n").unwrap();
         assert!(!primary_is_ctrl(Some(&path)));
         assert!(!primary_is_ctrl(None));
+    }
+
+    #[test]
+    fn only_a_missing_activation_protocol_skips_the_raise() {
+        use cupertino_wayland_client::Error;
+        assert!(matches!(unless_unsupported(Ok(7)), Ok(Some(7))));
+        assert!(matches!(
+            unless_unsupported::<()>(Err(Error::Unsupported(Capability::Activation))),
+            Ok(None)
+        ));
+        assert!(matches!(
+            unless_unsupported::<()>(Err(Error::Unsupported(Capability::Clipboard))),
+            Err(Error::Unsupported(Capability::Clipboard))
+        ));
+        assert!(matches!(
+            unless_unsupported::<()>(Err(Error::Protocol("bad token"))),
+            Err(Error::Protocol(_))
+        ));
     }
 }

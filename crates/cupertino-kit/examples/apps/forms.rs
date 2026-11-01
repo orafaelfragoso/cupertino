@@ -100,6 +100,7 @@ impl Application for Forms {
                     label: "Password".into(),
                     placeholder: "Required".into(),
                     enabled: true,
+                    on_change: None,
                     on_submit: Some(Box::new(|secret| {
                         Message::SignIn(secret.with_secret(|s| s.chars().count()))
                     })),

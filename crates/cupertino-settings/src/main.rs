@@ -2,11 +2,10 @@
 //! pane `--pane` names. It exits when the window is closed. See the README.
 
 mod about_app;
-mod app;
 
 use std::process::ExitCode;
 
-use cupertino_settings::{sidebar, PaneId};
+use cupertino_settings::{shell, sidebar, PaneId};
 
 const USAGE: &str = "usage: cupertino-settings [--pane PANE-ID | --about]";
 
@@ -58,7 +57,7 @@ fn main() -> ExitCode {
     };
     let result = match pane {
         Launch::About => about_app::run(token),
-        Launch::Pane(pane) => app::run(pane, token),
+        Launch::Pane(pane) => shell::run(pane, token),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

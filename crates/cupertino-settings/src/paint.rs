@@ -227,6 +227,11 @@ pub fn required_symbols() -> Vec<&'static str> {
 
 /// The icon of an application whose icon theme has none.
 const GENERIC_APPLICATION_ICON: &str = "application.generic";
+
+/// The icons the window draws; the ones no asset pack provides are reported once on stderr.
+pub fn required_icons(assets: &Assets) -> SystemIcons {
+    SystemIcons::required(assets, &[GENERIC_APPLICATION_ICON], &required_symbols())
+}
 /// The accent colour's token.
 const ACCENT: &str = "control-accent-blue";
 const WHITE: Rgba = [1.0, 1.0, 1.0, 1.0];
@@ -535,11 +540,7 @@ impl Painter {
         text.set_declarative(true);
         Ok(Painter {
             text,
-            symbols: SystemIcons::required(
-                assets,
-                &[GENERIC_APPLICATION_ICON],
-                &required_symbols(),
-            ),
+            symbols: required_icons(assets),
             apps: ThemeIcons::new(assets),
             app_icons: HashMap::new(),
             thumbnails: HashMap::new(),

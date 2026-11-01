@@ -458,11 +458,13 @@ pub struct TextBox<M> {
     pub on_scroll: Handler<ScrollState, M>,
 }
 
-/// A password field. Its text stays in the field's own buffer and reaches the application only on submit.
+/// A password field. Its text stays in the field's own buffer and reaches the application only through its handlers:
+/// `on_change` after each edit, for a form whose button submits it, and `on_submit` on Return.
 pub struct SecureField<M> {
     pub label: String,
     pub placeholder: String,
     pub enabled: bool,
+    pub on_change: Option<SecureHandler<M>>,
     pub on_submit: Option<SecureHandler<M>>,
 }
 

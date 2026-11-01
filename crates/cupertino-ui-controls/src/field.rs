@@ -825,11 +825,18 @@ impl<M: 'static> SecureField<M> {
             Event::Ime(ImeEvent::Done(batch)) if self.enabled && state.session.accepts(batch) => {
                 if let Some(commit) = &batch.commit {
                     state.buffer.insert(commit);
+                    self.changed(&state.buffer, cx);
                     cx.request_paint();
                 }
                 Propagation::Stop
             }
             _ => Propagation::Continue,
+        }
+    }
+
+    fn changed(&self, buffer: &SecureBuffer, cx: &mut EventCx<'_, M>) {
+        if let Some(on_change) = &self.on_change {
+            cx.emit(on_change(buffer));
         }
     }
 
@@ -851,22 +858,55 @@ impl<M: 'static> SecureField<M> {
             ESCAPE => return Propagation::Continue,
             _ => {}
         }
-        match key.keysym.0 {
-            0xff08 => buffer.delete_backward(),
-            0xffff => buffer.delete_forward(),
-            0xff51 if command => buffer.move_to_start(extend),
-            0xff53 if command => buffer.move_to_end(extend),
-            0xff51 => buffer.move_char(false, extend),
-            0xff53 => buffer.move_char(true, extend),
-            0xff50 => buffer.move_to_start(extend),
-            0xff57 => buffer.move_to_end(extend),
-            _ if command && key.text == Some('a') => buffer.select_all(),
+        let edited = match key.keysym.0 {
+            0xff08 => {
+                buffer.delete_backward();
+                true
+            }
+            0xffff => {
+                buffer.delete_forward();
+                true
+            }
+            0xff51 if command => {
+                buffer.move_to_start(extend);
+                false
+            }
+            0xff53 if command => {
+                buffer.move_to_end(extend);
+                false
+            }
+            0xff51 => {
+                buffer.move_char(false, extend);
+                false
+            }
+            0xff53 => {
+                buffer.move_char(true, extend);
+                false
+            }
+            0xff50 => {
+                buffer.move_to_start(extend);
+                false
+            }
+            0xff57 => {
+                buffer.move_to_end(extend);
+                false
+            }
+            _ if command && key.text == Some('a') => {
+                buffer.select_all();
+                false
+            }
             // copy, cut and every other command chord do nothing in a password field, and nothing reaches the window
-            _ if command || key.mods.contains(Mods::CTRL) => {}
+            _ if command || key.mods.contains(Mods::CTRL) => false,
             _ => match key.text {
-                Some(c) if !c.is_control() => buffer.insert(c.encode_utf8(&mut [0; 4])),
+                Some(c) if !c.is_control() => {
+                    buffer.insert(c.encode_utf8(&mut [0; 4]));
+                    true
+                }
                 _ => return Propagation::Continue,
             },
+        };
+        if edited {
+            self.changed(buffer, cx);
         }
         cx.request_paint();
         Propagation::Stop

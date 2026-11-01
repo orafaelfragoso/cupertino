@@ -33,41 +33,41 @@ text_input None
 layout
   NodeId(0v1) cupertino_ui_controls::Stack<examples::forms::Message> key=None parent=None children=[NodeId(1v1), NodeId(2v1)] rect=[0,0 280x180] clip=[none]
   NodeId(1v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(0v1)) children=[] rect=[20,20 240x14.51953125] clip=[none]
-  NodeId(2v1) cupertino_ui_controls::Stack<examples::forms::Message> key=None parent=Some(NodeId(0v1)) children=[NodeId(3v1), NodeId(4v1), NodeId(5v1)] rect=[20,46.51953125 240x88] clip=[none]
-  NodeId(3v1) cupertino_ui_controls::TextField<examples::forms::Message> key=Some(Str("name")) parent=Some(NodeId(2v1)) children=[] rect=[20,46.51953125 240x24] clip=[none]
-  NodeId(4v1) cupertino_ui_controls::SecureField<examples::forms::Message> key=Some(Str("password")) parent=Some(NodeId(2v1)) children=[] rect=[20,78.51953125 240x24] clip=[none]
-  NodeId(5v1) cupertino_ui_controls::Stack<examples::forms::Message> key=None parent=Some(NodeId(2v1)) children=[NodeId(6v1), NodeId(7v1)] rect=[20,110.51953125 240x24] clip=[none]
-  NodeId(6v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(5v1)) children=[] rect=[20,114.65478515625 89.16552734375x15.7294921875] clip=[none]
-  NodeId(7v1) cupertino_ui_controls::Toggle<examples::forms::Message> key=Some(Str("remember")) parent=Some(NodeId(5v1)) children=[] rect=[117.16552734375,110.51953125 38x24] clip=[none]
+  NodeId(2v1) cupertino_ui_controls::Stack<examples::forms::Message> key=None parent=Some(NodeId(0v1)) children=[NodeId(3v1), NodeId(4v1), NodeId(5v1)] rect=[20,46.51953125 240x78] clip=[none]
+  NodeId(3v1) cupertino_ui_controls::TextField<examples::forms::Message> key=Some(Str("name")) parent=Some(NodeId(2v1)) children=[] rect=[20,46.51953125 240x20] clip=[none]
+  NodeId(4v1) cupertino_ui_controls::SecureField<examples::forms::Message> key=Some(Str("password")) parent=Some(NodeId(2v1)) children=[] rect=[20,74.51953125 240x20] clip=[none]
+  NodeId(5v1) cupertino_ui_controls::Stack<examples::forms::Message> key=None parent=Some(NodeId(2v1)) children=[NodeId(6v1), NodeId(7v1)] rect=[20,102.51953125 240x22] clip=[none]
+  NodeId(6v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(5v1)) children=[] rect=[20,105.65478515625 89.16552734375x15.7294921875] clip=[none]
+  NodeId(7v1) cupertino_ui_controls::Toggle<examples::forms::Message> key=Some(Str("remember")) parent=Some(NodeId(5v1)) children=[] rect=[117.16552734375,102.51953125 38x22] clip=[none]
 semantics
   NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 280x180] actions=[] relations=[] children=[NodeId(1v1), NodeId(3v1), NodeId(4v1), NodeId(6v1), NodeId(7v1)]
   NodeId(1v1) role=StaticText name=Some("Sign In") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[20,20 240x14.51953125] actions=[] relations=[] children=[]
-  NodeId(3v1) role=TextInput name=Some("Name") description=None value=Text { value: "Ada", editing: Some(TextSemantics { caret: 3, selection: 3..3 }) } states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[20,46.51953125 240x24] actions=[Focus, SetValue, SetSelection] relations=[] children=[]
-  NodeId(4v1) role=PasswordInput name=Some("Password") description=None value=<protected> states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[20,78.51953125 240x24] actions=[Focus] relations=[] children=[]
-  NodeId(6v1) role=StaticText name=Some("Remember me") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[20,114.65478515625 89.16552734375x15.7294921875] actions=[] relations=[] children=[]
-  NodeId(7v1) role=Switch name=Some("Remember me") description=None value=Toggle(True) states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[117.16552734375,110.51953125 38x24] actions=[Click] relations=[] children=[]
+  NodeId(3v1) role=TextInput name=Some("Name") description=None value=Text { value: "Ada", editing: Some(TextSemantics { caret: 3, selection: 3..3 }) } states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[20,46.51953125 240x20] actions=[Focus, SetValue, SetSelection] relations=[] children=[]
+  NodeId(4v1) role=PasswordInput name=Some("Password") description=None value=<protected> states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[20,74.51953125 240x20] actions=[Focus] relations=[] children=[]
+  NodeId(6v1) role=StaticText name=Some("Remember me") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[20,105.65478515625 89.16552734375x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(7v1) role=Switch name=Some("Remember me") description=None value=Toggle(True) states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[117.16552734375,102.51953125 38x22] actions=[Click] relations=[] children=[]
 display
   paint 4294967296 parent=None revision=1 bounds=[0,0 280x180] hit=[0,0 280x180] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
     Fill { shape: Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 280.0, height: 180.0 } }), paint: Solid(Color { r: 0.9254902, g: 0.9254902, b: 0.9254902, a: 1.0 }) }
   paint 4294967297 parent=Some(4294967296) revision=2 bounds=[8,13.625 252x30] hit=[20,20 240x14.51953125] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 20.0]
     Glyphs origin=0,11.625 font=FontId(0) size=12 count=7 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
-  paint 4294967298 parent=Some(4294967296) revision=3 bounds=[7,43.69953125 253x96.54900390625] hit=[20,46.51953125 240x88] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 46.51953125]
-  paint 4294967299 parent=Some(4294967298) revision=17 bounds=[13,43.69953125 247x32.50000000000001] hit=[20,46.51953125 240x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 46.51953125]
-    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 2.0 }, size: Size { width: 240.0, height: 20.0 } }, radius: 5.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
-    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.5, y: 2.5 }, size: Size { width: 239.0, height: 19.0 } }, radius: 4.5 }, width: 1.0, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.24705882 }) }
-    PushClip(Rect(Rect { origin: Point { x: 6.0, y: 2.0 }, size: Size { width: 228.0, height: 20.0 } }))
-    Glyphs origin=6,16.68 font=FontId(1) size=13 count=3 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
+  paint 4294967298 parent=Some(4294967296) revision=3 bounds=[7,41.69953125 253x89.54900390625] hit=[20,46.51953125 240x78] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 46.51953125]
+  paint 4294967299 parent=Some(4294967298) revision=17 bounds=[13,41.69953125 247x32.50000000000001] hit=[20,44.51953125 240x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 46.51953125]
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 240.0, height: 20.0 } }, radius: 5.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
+    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.5, y: 0.5 }, size: Size { width: 239.0, height: 19.0 } }, radius: 4.5 }, width: 1.0, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.24705882 }) }
+    PushClip(Rect(Rect { origin: Point { x: 6.0, y: 0.0 }, size: Size { width: 228.0, height: 20.0 } }))
+    Glyphs origin=6,14.68 font=FontId(1) size=13 count=3 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
     PopClip
-  paint 4294967300 parent=Some(4294967298) revision=36 bounds=[13,75.69953125 247x32.5] hit=[20,78.51953125 240x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 78.51953125]
-    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 2.0 }, size: Size { width: 240.0, height: 20.0 } }, radius: 5.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
-    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.5, y: 2.5 }, size: Size { width: 239.0, height: 19.0 } }, radius: 4.5 }, width: 1.0, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.24705882 }) }
-    PushClip(Rect(Rect { origin: Point { x: 6.0, y: 2.0 }, size: Size { width: 228.0, height: 20.0 } }))
-    Glyphs origin=6,16.68 font=FontId(1) size=13 count=7 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
+  paint 4294967300 parent=Some(4294967298) revision=36 bounds=[13,69.69953125 247x32.5] hit=[20,72.51953125 240x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 74.51953125]
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 240.0, height: 20.0 } }, radius: 5.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
+    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.5, y: 0.5 }, size: Size { width: 239.0, height: 19.0 } }, radius: 4.5 }, width: 1.0, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.24705882 }) }
+    PushClip(Rect(Rect { origin: Point { x: 6.0, y: 0.0 }, size: Size { width: 228.0, height: 20.0 } }))
+    Glyphs origin=6,14.68 font=FontId(1) size=13 count=7 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
     PopClip
-  paint 4294967301 parent=Some(4294967298) revision=6 bounds=[7,107.51953125 253x32.72900390625] hit=[20,110.51953125 240x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 110.51953125]
-  paint 4294967302 parent=Some(4294967301) revision=7 bounds=[7,107.74853515625 120.58642578125x32.5] hit=[20,114.65478515625 89.16552734375x15.7294921875] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 114.65478515625]
+  paint 4294967301 parent=Some(4294967298) revision=6 bounds=[7,98.51953125 253x32.72900390625] hit=[20,102.51953125 240x22] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 102.51953125]
+  paint 4294967302 parent=Some(4294967301) revision=7 bounds=[7,98.74853515625 120.58642578125x32.5] hit=[20,105.65478515625 89.16552734375x15.7294921875] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 105.65478515625]
     Glyphs origin=0,12.59375 font=FontId(1) size=13 count=11 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
-  paint 4294967303 parent=Some(4294967301) revision=39 bounds=[113.16552734375,107.51953125 46x30] hit=[117.16552734375,110.51953125 38x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 117.16552734375, 110.51953125]
-    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 1.0 }, size: Size { width: 38.0, height: 22.0 } }, radius: 11.0 }, paint: Solid(Color { r: 0.0, g: 0.47843137, b: 1.0, a: 1.0 }) }
-    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 18.0, y: 3.0 }, size: Size { width: 18.0, height: 18.0 } }, radius: 9.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
-    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: -3.0, y: -2.0 }, size: Size { width: 44.0, height: 28.0 } }, radius: 14.0 }, width: 2.0, paint: Solid(Color { r: 0.23137255, g: 0.6, b: 0.9882353, a: 1.0 }) }
+  paint 4294967303 parent=Some(4294967301) revision=39 bounds=[113.16552734375,98.51953125 46x30] hit=[117.16552734375,101.51953125 38x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 117.16552734375, 102.51953125]
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 38.0, height: 22.0 } }, radius: 11.0 }, paint: Solid(Color { r: 0.0, g: 0.47843137, b: 1.0, a: 1.0 }) }
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 18.0, y: 2.0 }, size: Size { width: 18.0, height: 18.0 } }, radius: 9.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
+    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: -3.0, y: -3.0 }, size: Size { width: 44.0, height: 28.0 } }, radius: 14.0 }, width: 2.0, paint: Solid(Color { r: 0.23137255, g: 0.6, b: 0.9882353, a: 1.0 }) }

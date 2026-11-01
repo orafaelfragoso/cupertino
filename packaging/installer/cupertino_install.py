@@ -40,15 +40,21 @@ TARGET = Path("/mnt")
 LIVE = Path("/run/archiso")
 ARCHINSTALL_LOG = Path("/var/log/archinstall/install.log")
 RECOVERY_ENTRY = "cupertino-recovery.conf"
+SESSION = "cupertino"
+BTRFS_SUBVOLUMES = (("@", "/"), ("@home", "/home"), ("@log", "/var/log"), ("@pkg", "/var/cache/pacman/pkg"))
+# GNOME as the second session at GDM, for when the Cupertino session fails
+GNOME_PACKAGES = ("gdm", "gnome-shell", "gnome-session", "gnome-control-center", "gnome-keyring", "gnome-terminal",
+                  "nautilus", "xdg-desktop-portal-gnome")
 REPOSITORY = "cupertino"
 ZONEINFO = Path("/usr/share/zoneinfo")
 
 BASE_PACKAGES = (
     "base-devel", "bluez-utils", "chromium", "foot", "git", "github-cli", "nano", "pipewire-pulse", "rustup", "sudo",
-    "wireplumber", "xorg-xwayland", "xwayland-satellite", "cupertino", "cupertino-data",
+    "snap-pac", "wireplumber", "xorg-xwayland", "xwayland-satellite", "cupertino", "cupertino-data",
 )
 CHROMIUM_FLAGS = "--ozone-platform=wayland\n"
-NVIDIA_PACKAGES = ("nvidia-open", "nvidia-utils", "libva-nvidia-driver")
+KERNELS = ("linux", "linux-lts")
+NVIDIA_PACKAGES = ("nvidia-open", "nvidia-open-lts", "nvidia-utils", "libva-nvidia-driver")
 # the working state of the RTX 3060 this installer is first used on: its modprobe.d, its driver parameters and its early KMS
 NVIDIA_OPTIONS = (
     "options nvidia_drm modeset=1 fbdev=1\n"
@@ -189,9 +195,9 @@ def size(value: int, sector: int) -> dict[str, object]:
 
 
 def configuration(plan: Plan) -> dict[str, object]:
-    """archinstall 4.5's user_configuration.json: its default layout (a 1 GiB ESP at /boot, the rest ext4 at /, the
-    root partition in LUKS when asked), systemd-boot, NetworkManager, PipeWire, Bluetooth, zram and Cupertino's login
-    manager as the display manager."""
+    """archinstall 4.5's user_configuration.json: its default layout (a 1 GiB ESP at /boot, the rest btrfs with its
+    default subvolumes and snapper, the root partition in LUKS when asked), linux and linux-lts, systemd-boot,
+    NetworkManager, PipeWire, Bluetooth, zram and GDM."""
     disk, answers = plan.disk, plan.answers
     # archinstall's default layout: the last partition ends 1 MiB before the disk's end (the backup GPT), MiB-aligned
     root_start = 1 + 1024
@@ -206,9 +212,12 @@ def configuration(plan: Plan) -> dict[str, object]:
                 {**partition, "obj_id": plan.ids["esp"], "start": size(1, disk.sector), "size": size(1024, disk.sector),
                  "fs_type": "fat32", "mountpoint": "/boot", "flags": ["boot", "esp"]},
                 {**partition, "obj_id": plan.ids["root"], "start": size(root_start, disk.sector),
-                 "size": size(root_length, disk.sector), "fs_type": "ext4", "mountpoint": "/", "flags": []},
+                 "size": size(root_length, disk.sector), "fs_type": "btrfs", "mountpoint": None, "flags": [],
+                 "mount_options": ["compress=zstd"],
+                 "btrfs": [{"name": name, "mountpoint": mountpoint} for name, mountpoint in BTRFS_SUBVOLUMES]},
             ],
         }],
+        "btrfs_options": {"snapshot_config": {"type": "Snapper"}},
     }
     if answers.luks is not None:
         disk_config["disk_encryption"] = {"encryption_type": "luks", "partitions": [plan.ids["root"]], "lvm_volumes": []}
@@ -217,12 +226,12 @@ def configuration(plan: Plan) -> dict[str, object]:
         "bootloader_config": {"bootloader": "Systemd-boot", "uki": False, "removable": True},
         "disk_config": disk_config,
         "hostname": answers.hostname,
-        "kernels": ["linux"],
+        "kernels": list(KERNELS),
         "locale_config": {"kb_layout": answers.keyboard, "sys_enc": "UTF-8", "sys_lang": "en_US.UTF-8"},
         "network_config": {"type": "nm"},
         "ntp": True,
-        "packages": list(dict.fromkeys([*BASE_PACKAGES, *plan.graphics.packages, *answers.extra_packages])),
-        "services": ["cupertino-login"],
+        "packages": list(dict.fromkeys([*BASE_PACKAGES, *GNOME_PACKAGES, *plan.graphics.packages, *answers.extra_packages])),
+        "services": ["gdm"],
         "swap": {"enabled": True, "algorithm": "zstd"},
         "timezone": answers.timezone,
     }
@@ -235,23 +244,35 @@ def credentials(answers: Answers) -> dict[str, object]:
     return creds
 
 
-def boot_entries(entries: Path, kernel_args: tuple[str, ...]) -> None:
-    """Renames archinstall's entry "Cupertino" and writes the recovery entry beside it: the same system started to
-    multi-user.target, which does not pull in display-manager.service, so tty1 shows a text login."""
-    found = sorted(e for e in entries.glob("*_linux.conf"))
+def entry(entries: Path, kernel: str) -> tuple[Path, list[str]]:
+    found = sorted(entries.glob(f"*_{kernel}.conf"))
     if len(found) != 1:
-        raise Failed(5, "boot entries", f"expected one archinstall entry in {entries}, found {len(found)}")
+        raise Failed(5, "boot entries", f"expected one archinstall entry for {kernel} in {entries}, found {len(found)}")
     lines = found[0].read_text().splitlines()
     if not any(line.startswith("options") for line in lines):
         raise Failed(5, "boot entries", f"{found[0].name} has no options line")
+    return found[0], lines
+
+
+def retitled(lines: list[str], title: str, extra: str) -> list[str]:
+    return [f"title\t{title}" if line.startswith("title") else line + extra if line.startswith("options") else line for line in lines]
+
+
+def boot_entries(entries: Path, kernel_args: tuple[str, ...]) -> None:
+    """Retitles archinstall's entries "Cupertino" and "Cupertino (LTS kernel)", and writes the recovery entry beside
+    them: the main system started to multi-user.target, which does not pull in display-manager.service, so tty1 shows a
+    text login."""
     extra = "".join(f" {arg}" for arg in kernel_args)
-    main = [("title\tCupertino" if line.startswith("title") else line + extra if line.startswith("options") else line) for line in lines]
+    lts, lts_lines = entry(entries, "linux-lts")
+    found, lines = entry(entries, "linux")
+    main = retitled(lines, "Cupertino", extra)
+    lts.write_text("\n".join(retitled(lts_lines, "Cupertino (LTS kernel)", extra)) + "\n")
     recovery = [
         "title\tCupertino (recovery: text login)" if line.startswith("title")
         else line + " systemd.unit=multi-user.target" if line.startswith("options") else line
         for line in main
     ]
-    found[0].write_text("\n".join(main) + "\n")
+    found.write_text("\n".join(main) + "\n")
     (entries / RECOVERY_ENTRY).write_text("\n".join(recovery) + "\n")
 
 
@@ -406,15 +427,15 @@ def install(plan: Plan, workdir: Path) -> None:
     missing = [p for p in ("usr/bin/cupertino-sessiond", "boot/loader/loader.conf") if not (TARGET / p).exists()]
     # an absolute symlink: read it, do not follow it into the live system
     display_manager = TARGET / "etc/systemd/system/display-manager.service"
-    if not display_manager.is_symlink() or Path(os.readlink(display_manager)).name != "cupertino-login.service":
-        missing.append("display-manager.service -> cupertino-login.service")
+    if not display_manager.is_symlink() or Path(os.readlink(display_manager)).name != "gdm.service":
+        missing.append("display-manager.service -> gdm.service")
     if result.returncode != 0 or missing:
         if ARCHINSTALL_LOG.exists():
             shutil.copy(ARCHINSTALL_LOG, workdir / "archinstall.log")
         raise Failed(4, "archinstall", f"exit status {result.returncode}" + (f", missing {', '.join(missing)}" if missing else "")
                      + f"; its log: {workdir / 'archinstall.log'}")
     if plan.answers.luks is not None:
-        root = run("findmnt", "-n", "-o", "SOURCE", str(TARGET), step="encryption", status=4, capture=True).strip()
+        root = run("findmnt", "-n", "--nofsroot", "-o", "SOURCE", str(TARGET), step="encryption", status=4, capture=True).strip()
         kind = run("lsblk", "-n", "-o", "TYPE", root, step="encryption", status=4, capture=True).split()
         if kind[:1] != ["crypt"]:
             raise Failed(4, "encryption", f"{root} is not an encrypted volume; archinstall did not encrypt the disk")
@@ -428,12 +449,13 @@ def without_kms_hook(mkinitcpio_conf: str) -> str:
 
 
 def nvidia(only_nvidia: bool) -> None:
-    kernel = run("arch-chroot", str(TARGET), "pacman", "-Q", "linux", step="nvidia", status=5, capture=True).split()[1]
-    modules = [p.name for p in (TARGET / "usr/lib/modules").iterdir() if (p / "pkgbase").is_file()
-               and (p / "pkgbase").read_text().strip() == "linux"]
-    if len(modules) != 1:
-        raise Failed(5, "nvidia", f"expected one module directory for linux {kernel}, found {modules}")
-    run("arch-chroot", str(TARGET), "modinfo", "-k", modules[0], "-F", "version", "nvidia", step="nvidia", status=5, capture=True)
+    # nvidia-open and nvidia-open-lts are built for one kernel release each: a module for each installed kernel proves the match
+    for kernel in KERNELS:
+        modules = [p.name for p in (TARGET / "usr/lib/modules").iterdir() if (p / "pkgbase").is_file()
+                   and (p / "pkgbase").read_text().strip() == kernel]
+        if len(modules) != 1:
+            raise Failed(5, "nvidia", f"expected one module directory for {kernel}, found {modules}")
+        run("arch-chroot", str(TARGET), "modinfo", "-k", modules[0], "-F", "version", "nvidia", step="nvidia", status=5, capture=True)
     (TARGET / "etc/modprobe.d").mkdir(parents=True, exist_ok=True)
     (TARGET / "etc/modprobe.d/nvidia.conf").write_text(NVIDIA_OPTIONS)
     (TARGET / "etc/mkinitcpio.conf.d").mkdir(parents=True, exist_ok=True)
@@ -441,7 +463,9 @@ def nvidia(only_nvidia: bool) -> None:
     if only_nvidia:
         conf = TARGET / "etc/mkinitcpio.conf"
         conf.write_text(without_kms_hook(conf.read_text()))
-    run("arch-chroot", str(TARGET), "systemctl", "disable", "--quiet", *NVIDIA_SLEEP_UNITS, step="nvidia", status=5)
+    units = [u for u in NVIDIA_SLEEP_UNITS if (TARGET / "usr/lib/systemd/system" / u).exists()]
+    if units:
+        run("arch-chroot", str(TARGET), "systemctl", "disable", "--quiet", *units, step="nvidia", status=5)
     run("arch-chroot", str(TARGET), "mkinitcpio", "-P", step="nvidia", status=5)
 
 
@@ -456,9 +480,19 @@ def finish(plan: Plan) -> None:
     (config / "chromium-flags.conf").write_text(CHROMIUM_FLAGS)
     run("arch-chroot", str(TARGET), "chown", "-R", f"{plan.answers.user}:{plan.answers.user}", f"/home/{plan.answers.user}/.config",
         step="chromium", status=5)
-    for unit in ("NetworkManager.service", "cupertino-login.service"):
-        if run("arch-chroot", str(TARGET), "systemctl", "is-enabled", unit, step="services", status=5, capture=True).strip() != "enabled":
-            raise Failed(5, "services", f"{unit} is not enabled")
+    if not (TARGET / f"usr/share/wayland-sessions/{SESSION}.desktop").is_file():
+        raise Failed(5, "session", f"/usr/share/wayland-sessions/{SESSION}.desktop is missing")
+    users = TARGET / "var/lib/AccountsService/users"
+    users.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # GDM preselects the session AccountsService records for the account
+    (users / plan.answers.user).write_text(f"[User]\nSession={SESSION}\nSystemAccount=false\n")
+    (users / plan.answers.user).chmod(0o600)
+    for unit, wanted in (("NetworkManager.service", "enabled"), ("bluetooth.service", "enabled"), ("gdm.service", "enabled"),
+                         *((u, "not enabled") for u in ("cupertino-login.service", "cupertino-netd.service",
+                                                       "cupertino-btd.service", "cupertino-powerd.service"))):
+        state = subprocess.run(["arch-chroot", str(TARGET), "systemctl", "is-enabled", unit], text=True, capture_output=True).stdout.strip()
+        if (state == "enabled") != (wanted == "enabled"):
+            raise Failed(5, "services", f"{unit} is {state or 'missing'}, it should be {wanted}")
     for package in plan.answers.extra_packages:
         unit = TARGET / f"usr/lib/systemd/system/{package}.service"
         if unit.exists() and "[Install]" in unit.read_text():
@@ -470,11 +504,11 @@ def finish(plan: Plan) -> None:
         print((check_hardware.stdout + check_hardware.stderr).strip() or f"exit status {check_hardware.returncode}")
     except subprocess.TimeoutExpired:
         print("no answer within 60 s")
-    root = run("findmnt", "-n", "-o", "SOURCE", str(TARGET), step="unmount", status=5, capture=True).strip()
+    root = run("findmnt", "-n", "--nofsroot", "-o", "SOURCE", str(TARGET), step="unmount", status=5, capture=True).strip()
     subprocess.run(["sync"])
     run("umount", "-R", str(TARGET), step="unmount", status=5)
     if plan.answers.luks is not None:
-        run("cryptsetup", "close", root, step="unmount", status=5)
+        run("cryptsetup", "close", Path(root).name, step="unmount", status=5)
 
 
 def say(line: str) -> None:

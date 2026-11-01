@@ -399,6 +399,16 @@ fixtures! {
         enabled: look.enabled,
         on_toggle: Some(Box::new(|_| Message::Nothing)),
     });
+    // the tip's popup content, drawn in a cell of its own
+    tooltip: "tooltip", CONTROL, &[State::Normal], |_| cupertino_kit::controls::Tooltip {
+        text: "Move to the bin".into(),
+        anchor: body("Trash"),
+        shown: true,
+        on_show: Message::Nothing,
+        on_hide: Message::Nothing,
+    }
+    .window(WindowKey("tip".into()), WindowKey("fixture".into()), "control".into())
+    .content;
     slider: "slider", WIDE, INTERACTIVE, |look| Element::new(Slider {
         label: "Volume".into(),
         value: 0.4,

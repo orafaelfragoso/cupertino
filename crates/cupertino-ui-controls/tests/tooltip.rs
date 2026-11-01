@@ -1,0 +1,221 @@
+mod support;
+
+use cupertino_geometry::{Insets, Point};
+use cupertino_ui_controls::{Button, ButtonRole, ButtonStyle, Stack, Tooltip};
+use cupertino_ui_core::{Application, Command, Element, Role, Window, WindowKey};
+use cupertino_ui_layout::{Align, Axis};
+use cupertino_ui_platform::{PointerEvent, PopupEdge, Timestamp, WindowId};
+use support::{window, Harness, TAB};
+
+const ESCAPE: u32 = 0xff1b;
+const MS: u64 = 1_000_000;
+
+#[derive(Clone, Debug, PartialEq)]
+enum Message {
+    Show,
+    Hide,
+    Trash,
+    Other,
+}
+
+#[derive(Default)]
+struct Model {
+    shown: bool,
+    said: Vec<Message>,
+}
+
+/// A trash button with the tip "Move to the bin", and another button beside it.
+struct Page;
+
+fn button(label: &'static str, on_press: Message) -> Element<Message> {
+    Element::new(Button {
+        label: label.into(),
+        role: ButtonRole::Normal,
+        style: ButtonStyle::Bordered,
+        enabled: true,
+        busy: false,
+        on_press: Some(on_press),
+    })
+    .key(label)
+}
+
+fn tip(shown: bool) -> Tooltip<Message> {
+    Tooltip {
+        text: "Move to the bin".into(),
+        anchor: button("Trash", Message::Trash),
+        shown,
+        on_show: Message::Show,
+        on_hide: Message::Hide,
+    }
+}
+
+impl Application for Page {
+    type Model = Model;
+    type Message = Message;
+
+    fn init() -> (Model, Vec<Command<Message>>) {
+        (Model::default(), Vec::new())
+    }
+
+    fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
+        match message {
+            Message::Show => model.shown = true,
+            Message::Hide => model.shown = false,
+            Message::Trash | Message::Other => {}
+        }
+        model.said.push(message);
+        Vec::new()
+    }
+
+    fn view(model: &Model) -> Vec<Window<Message>> {
+        let mut windows = window(Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets::uniform(10.0),
+            spacing: 8.0,
+            align: Align::Start,
+            children: vec![
+                Element::from(tip(model.shown)).key("tip"),
+                button("Other", Message::Other),
+            ],
+        }));
+        if model.shown {
+            windows.push(tip(true).window(
+                WindowKey("tooltip".into()),
+                WindowKey("test".into()),
+                "tip".into(),
+            ));
+        }
+        windows
+    }
+}
+
+fn tooltip(h: &Harness<Page>) -> Option<WindowId> {
+    h.rt.windows()
+        .into_iter()
+        .find(|(key, _)| *key == WindowKey("tooltip".into()))
+        .map(|(_, id)| id)
+}
+
+fn at(h: &mut Harness<Page>, ms: u64) {
+    h.clock().advance_to(Timestamp(ms * MS)).unwrap();
+    h.settle();
+}
+
+fn hover(h: &mut Harness<Page>, key: &'static str) {
+    let position = h.center(key);
+    h.pointer(PointerEvent::Motion { position });
+}
+
+fn rested() -> Harness<Page> {
+    let mut h = Harness::<Page>::new();
+    hover(&mut h, "Trash");
+    at(&mut h, 600);
+    assert!(h.model().shown);
+    h
+}
+
+#[test]
+fn the_tip_shows_once_the_pointer_has_rested_on_the_anchor_for_the_delay() {
+    let mut h = Harness::<Page>::new();
+    hover(&mut h, "Trash");
+    at(&mut h, 599);
+    assert!(!h.model().shown);
+    assert!(tooltip(&h).is_none());
+    at(&mut h, 600);
+    assert_eq!(h.model().said, [Message::Show]);
+    let id = tooltip(&h).expect("the tip opens");
+    let system = h.rt.window_system();
+    assert_eq!(system.parent(id).unwrap(), Some(h.window));
+    let placed = system.placement(id).unwrap().expect("a popup").clone();
+    assert_eq!(placed.anchor_rect, h.rect("tip"));
+    assert_eq!(
+        (placed.anchor, placed.gravity),
+        (PopupEdge::Bottom, PopupEdge::Bottom)
+    );
+    assert_eq!(placed.offset, Point::new(0.0, 4.0));
+    assert!(!placed.grab, "a tip never takes the keyboard");
+}
+
+#[test]
+fn leaving_before_the_delay_asks_for_nothing() {
+    let mut h = Harness::<Page>::new();
+    hover(&mut h, "Trash");
+    at(&mut h, 300);
+    hover(&mut h, "Other");
+    at(&mut h, 900);
+    assert!(h.model().said.is_empty());
+}
+
+#[test]
+fn leaving_the_anchor_hides_the_tip() {
+    let mut h = rested();
+    hover(&mut h, "Other");
+    assert!(!h.model().shown);
+    assert!(tooltip(&h).is_none());
+}
+
+#[test]
+fn a_press_hides_the_tip_and_still_reaches_the_anchor() {
+    let mut h = rested();
+    h.click(h.center("Trash"));
+    assert_eq!(
+        h.model().said,
+        [Message::Show, Message::Hide, Message::Trash]
+    );
+    assert!(tooltip(&h).is_none());
+}
+
+#[test]
+fn escape_hides_the_tip_and_goes_no_further() {
+    let mut h = Harness::<Page>::new();
+    h.tap(TAB);
+    assert!(h.focused("Trash"));
+    hover(&mut h, "Trash");
+    at(&mut h, 600);
+    h.tap(ESCAPE);
+    assert_eq!(h.model().said, [Message::Show, Message::Hide]);
+    h.tap(ESCAPE);
+    assert_eq!(
+        h.model().said.len(),
+        2,
+        "with the tip gone Escape is not its"
+    );
+}
+
+#[test]
+fn the_tip_never_takes_the_focus() {
+    let mut h = Harness::<Page>::new();
+    h.tap(TAB);
+    h.tap(TAB);
+    assert!(h.focused("Other"));
+    hover(&mut h, "Trash");
+    at(&mut h, 600);
+    assert!(tooltip(&h).is_some());
+    assert!(h.focused("Other"));
+    h.tap(TAB);
+    assert!(h.focused("Trash"), "Tab goes on as before");
+}
+
+#[test]
+fn the_text_describes_the_anchor_and_the_tip_is_a_tooltip() {
+    let h = Harness::<Page>::new();
+    let trash = h.accessible("Trash");
+    assert_eq!(trash.role, Role::Button);
+    assert_eq!(trash.description.as_deref(), Some("Move to the bin"));
+    assert_eq!(h.accessible("Other").description, None);
+
+    let mut h = rested();
+    let id = tooltip(&h).unwrap();
+    h.window = id;
+    h.settle();
+    let tips: Vec<_> = h
+        .snapshot()
+        .accessibility
+        .into_iter()
+        .map(|(_, n)| n)
+        .filter(|n| n.role == Role::Tooltip)
+        .collect();
+    assert_eq!(tips.len(), 1);
+    assert_eq!(tips[0].name.as_deref(), Some("Move to the bin"));
+    assert!(!tips[0].states.focusable);
+}

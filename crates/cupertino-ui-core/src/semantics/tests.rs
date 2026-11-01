@@ -292,3 +292,66 @@ fn a_fallback_is_a_tab_stop_only_when_no_node_under_it_is() {
     assert!(pass.nodes[&id("empty")].states.focusable);
     assert!(!pass.nodes[&id("around a")].states.focusable);
 }
+
+/// A tooltip's stand-in: no node of its own, only words for the first node under it.
+struct Tip(&'static str, Vec<Element<M>>);
+
+impl Widget<M> for Tip {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Overlay)
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.1)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.describe_content(self.0);
+    }
+}
+
+#[test]
+fn a_content_description_goes_to_the_first_node_with_a_role_under_its_giver() {
+    let (tree, root, pass) = pass(Element::new(group(vec![
+        Element::new(Tip(
+            "Deletes the file",
+            vec![
+                Element::new(group(vec![Element::new(leaf("a")).key("a")])),
+                Element::new(leaf("b")).key("b"),
+            ],
+        )),
+        Element::new(leaf("c")).key("c"),
+    ])));
+    let id = |key: &'static str| {
+        tree.preorder(root)
+            .into_iter()
+            .find(|&n| tree.get(n).unwrap().key == Some(key.into()))
+            .unwrap()
+    };
+    let description = |key| pass.nodes[&id(key)].description.clone();
+    assert_eq!(description("a").as_deref(), Some("Deletes the file"));
+    assert_eq!(description("b"), None, "only the first node takes it");
+    assert_eq!(description("c"), None, "nothing outside the giver takes it");
+    assert_eq!(pass.nodes[&root].description, None);
+}

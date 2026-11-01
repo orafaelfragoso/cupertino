@@ -57,6 +57,8 @@ pub(crate) fn build<M: 'static>(
     };
     // Each fallback and where it would stand among the Tab stops, in reading order.
     let mut fallbacks = Vec::new();
+    // Descriptions for the first node with a role under each node that gave one.
+    let mut pending: Vec<(NodeId, String)> = Vec::new();
     // Each entry is a node and its nearest ancestor in the accessibility tree.
     let mut stack = vec![(root, None::<NodeId>)];
     while let Some((id, owner)) = stack.pop() {
@@ -101,12 +103,23 @@ pub(crate) fn build<M: 'static>(
                 let mut states = semantics.states;
                 states.focusable |= semantics.focusable;
                 states.focused = focus == Some(id);
+                let mut description = semantics.description;
+                if !pending.is_empty() {
+                    let path = tree.path(id);
+                    let (taken, waiting) = pending
+                        .drain(..)
+                        .partition::<Vec<_>, _>(|(giver, _)| path.contains(giver));
+                    pending = waiting;
+                    for (_, text) in taken {
+                        description = Some(join(description, text));
+                    }
+                }
                 pass.nodes.insert(
                     id,
                     AccessibilityNode {
                         role,
                         name: semantics.name,
-                        description: semantics.description,
+                        description,
                         value,
                         states,
                         bounds: semantics.bounds.map_or(rect, |b| {
@@ -142,14 +155,14 @@ pub(crate) fn build<M: 'static>(
                         .nodes
                         .get_mut(&owner)
                         .expect("an owner is inserted before its descendants");
-                    owner.description = Some(match owner.description.take() {
-                        Some(own) => format!("{own}, {description}"),
-                        None => description,
-                    });
+                    owner.description = Some(join(owner.description.take(), description));
                 }
                 owner
             }
         };
+        if let Some(text) = semantics.content_description {
+            pending.push((id, text));
+        }
         stack.extend(node.children.iter().rev().map(|&c| (c, next_owner)));
     }
     // The last first, so an inner fallback that becomes a stop keeps its outer one from becoming one, and the
@@ -166,6 +179,14 @@ pub(crate) fn build<M: 'static>(
         }
     }
     pass
+}
+
+/// A node's own description, then one it was given.
+fn join(own: Option<String>, given: String) -> String {
+    match own {
+        Some(own) => format!("{own}, {given}"),
+        None => given,
+    }
 }
 
 /// The nodes that are new or changed in `next`, and those gone since `prev`.

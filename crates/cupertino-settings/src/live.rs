@@ -5,6 +5,24 @@
 
 use cupertino_defaults::accessibility::AccessibilitySettings;
 
+/// The longest name a row or a prompt shows, in characters.
+pub const MAX_NAME: usize = 128;
+
+/// A name a device or a radio supplies, as a label: without control characters and the bidirectional marks, embeddings,
+/// overrides and isolates (which could reorder the text around it), the ends trimmed, cut to [`MAX_NAME`] characters.
+pub fn display_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(MAX_NAME)
+        .collect()
+}
+
 /// One service's state.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Reading<T> {
@@ -136,7 +154,10 @@ pub struct Device {
 /// A row of `Network1.GetNetworks`: SSID, signal (dBm, `i32::MIN` unknown), security, saved, connected.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Network {
+    /// The network's key for the service, which a Join names: the SSID as the service gives it.
     pub ssid: String,
+    /// The SSID as a label ([`display_name`]).
+    pub name: String,
     pub signal: i32,
     pub security: String,
     pub saved: bool,
@@ -297,6 +318,7 @@ mod tests {
         assert_eq!(live.has_battery(), Some(false));
         let open = Network {
             ssid: "cafe".into(),
+            name: "cafe".into(),
             signal: -50,
             security: "open".into(),
             saved: false,
@@ -314,5 +336,21 @@ mod tests {
             ..open
         }
         .needs_passphrase());
+    }
+
+    #[test]
+    fn a_supplied_name_loses_control_and_bidi_characters_and_is_cut() {
+        assert_eq!(
+            display_name(" Office\n\u{1b}[31m Wi-Fi\t"),
+            "Office[31m Wi-Fi"
+        );
+        assert_eq!(display_name("evil\u{202e}gpj.exe"), "evilgpj.exe");
+        assert_eq!(
+            display_name("\u{2066}a\u{2069}\u{200f}b\u{061c}\u{202a}c\u{202c}"),
+            "abc"
+        );
+        assert_eq!(display_name("café 日本"), "café 日本");
+        let long = "é".repeat(MAX_NAME + 40);
+        assert_eq!(display_name(&long).chars().count(), MAX_NAME);
     }
 }

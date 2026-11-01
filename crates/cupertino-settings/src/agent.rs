@@ -8,6 +8,7 @@ use zbus::message::Header;
 use zbus::zvariant::OwnedValue;
 use zbus::{fdo, Connection};
 
+use crate::live::display_name;
 use crate::sheet::{Answer, Prompt};
 
 /// The daemon whose questions the agent answers.
@@ -53,6 +54,7 @@ fn device_title(device: &HashMap<String, OwnedValue>) -> String {
     };
     text("Name")
         .or_else(|| text("Address"))
+        .map(|t| display_name(&t))
         .unwrap_or_else(|| "Unknown device".to_string())
 }
 

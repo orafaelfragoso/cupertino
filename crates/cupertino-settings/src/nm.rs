@@ -8,7 +8,7 @@ use zbus::blocking::{Connection, Proxy};
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
-use crate::live::{Device, Network, Wifi};
+use crate::live::{display_name, Device, Network, Wifi};
 
 pub const NAME: &str = "org.freedesktop.NetworkManager";
 pub const PATH: &str = "/org/freedesktop/NetworkManager";
@@ -91,18 +91,42 @@ pub fn dbm(strength: u8) -> i32 {
     i32::from(strength.min(100)) / 2 - 100
 }
 
+/// The key of an SSID in [`Network::ssid`]: its text when it is UTF-8, else a NUL then its bytes in hex, so two SSIDs
+/// that differ only in bytes that are not text stay apart and a Join reaches the one chosen.
+pub fn ssid_key(ssid: &[u8]) -> String {
+    match std::str::from_utf8(ssid) {
+        Ok(text) if !text.starts_with('\0') => text.to_string(),
+        _ => std::iter::once('\0')
+            .chain(ssid.iter().flat_map(|b| {
+                [b >> 4, b & 0xf].map(|n| char::from_digit(u32::from(n), 16).expect("a nibble"))
+            }))
+            .collect(),
+    }
+}
+
+/// The SSID bytes of a key of [`ssid_key`].
+fn ssid_bytes(key: &str) -> Vec<u8> {
+    match key.strip_prefix('\0') {
+        Some(hex) => hex
+            .as_bytes()
+            .chunks(2)
+            .filter_map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
+            .collect(),
+        None => key.as_bytes().to_vec(),
+    }
+}
+
 struct AccessPoint {
     path: OwnedObjectPath,
-    ssid: String,
+    ssid: Vec<u8>,
     strength: u8,
     security: &'static str,
 }
 
 fn access_point(connection: &Connection, path: OwnedObjectPath) -> zbus::Result<AccessPoint> {
     let p = proxy(connection, path.as_str(), ACCESS_POINT)?;
-    let ssid: Vec<u8> = p.get_property("Ssid")?;
     Ok(AccessPoint {
-        ssid: String::from_utf8_lossy(&ssid).into_owned(),
+        ssid: p.get_property("Ssid")?,
         strength: p.get_property("Strength")?,
         security: security(
             p.get_property("Flags")?,
@@ -147,7 +171,7 @@ fn devices(connection: &Connection) -> zbus::Result<(Vec<Device>, Vec<WifiDevice
                 .iter()
                 .find(|ap| Some(&ap.path) == active.as_ref())
             {
-                ssid = ap.ssid.clone();
+                ssid = display_name(&String::from_utf8_lossy(&ap.ssid));
             }
             wifi.push(WifiDevice {
                 path,
@@ -173,7 +197,7 @@ fn devices(connection: &Connection) -> zbus::Result<(Vec<Device>, Vec<WifiDevice
 }
 
 /// The SSIDs of the saved Wi-Fi connections, with the connection of each.
-fn saved(connection: &Connection) -> zbus::Result<Vec<(String, OwnedObjectPath)>> {
+fn saved(connection: &Connection) -> zbus::Result<Vec<(Vec<u8>, OwnedObjectPath)>> {
     let paths: Vec<OwnedObjectPath> =
         proxy(connection, SETTINGS_PATH, SETTINGS)?.call("ListConnections", &())?;
     Ok(paths
@@ -186,8 +210,7 @@ fn saved(connection: &Connection) -> zbus::Result<Vec<(String, OwnedObjectPath)>
                     .call("GetSettings", &())
                     .ok()?;
             let ssid = settings.get("802-11-wireless")?.get("ssid")?;
-            let ssid: Vec<u8> = ssid.try_clone().ok()?.try_into().ok()?;
-            Some((String::from_utf8_lossy(&ssid).into_owned(), path))
+            Some((ssid.try_clone().ok()?.try_into().ok()?, path))
         })
         .collect())
 }
@@ -205,13 +228,15 @@ pub fn wifi(connection: &Connection) -> zbus::Result<Wifi> {
             }
             let connected = Some(&ap.path) == radio.active.as_ref();
             let signal = dbm(ap.strength);
-            match networks.iter_mut().find(|n| n.ssid == ap.ssid) {
+            let key = ssid_key(&ap.ssid);
+            match networks.iter_mut().find(|n| n.ssid == key) {
                 Some(n) => {
                     n.signal = n.signal.max(signal);
                     n.connected |= connected;
                 }
                 None => networks.push(Network {
-                    ssid: ap.ssid.clone(),
+                    name: display_name(&String::from_utf8_lossy(&ap.ssid)),
+                    ssid: key,
                     signal,
                     security: ap.security.to_string(),
                     saved: saved.iter().any(|(s, _)| *s == ap.ssid),
@@ -239,7 +264,7 @@ pub fn set_wireless_enabled(connection: &Connection, on: bool) -> zbus::Result<(
 }
 
 /// The Wi-Fi device to join with and the strongest access point named `ssid` it sees.
-fn strongest(connection: &Connection, ssid: &str) -> zbus::Result<(OwnedObjectPath, AccessPoint)> {
+fn strongest(connection: &Connection, ssid: &[u8]) -> zbus::Result<(OwnedObjectPath, AccessPoint)> {
     let (_, radios) = devices(connection)?;
     radios
         .into_iter()
@@ -251,14 +276,19 @@ fn strongest(connection: &Connection, ssid: &str) -> zbus::Result<(OwnedObjectPa
                 .map(move |ap| (device.clone(), ap))
         })
         .max_by_key(|(_, ap)| ap.strength)
-        .ok_or_else(|| zbus::fdo::Error::Failed(format!("“{ssid}” is out of range.")).into())
+        .ok_or_else(|| {
+            let name = display_name(&String::from_utf8_lossy(ssid));
+            zbus::fdo::Error::Failed(format!("“{name}” is out of range.")).into()
+        })
 }
 
-/// Join `ssid`: its saved connection, else a new one with `passphrase` for a WPA personal network.
+/// Join the network of key `ssid` ([`ssid_key`]): its saved connection, else a new one with `passphrase` for a WPA
+/// personal network.
 pub fn join(connection: &Connection, ssid: &str, passphrase: &str) -> zbus::Result<()> {
     let nm = proxy(connection, PATH, NAME)?;
-    let (device, ap) = strongest(connection, ssid)?;
-    if let Some((_, saved)) = saved(connection)?.into_iter().find(|(s, _)| s == ssid) {
+    let ssid = ssid_bytes(ssid);
+    let (device, ap) = strongest(connection, &ssid)?;
+    if let Some((_, saved)) = saved(connection)?.into_iter().find(|(s, _)| *s == ssid) {
         return nm
             .call::<_, _, OwnedObjectPath>("ActivateConnection", &(saved, &device, &ap.path))
             .map(drop);
@@ -329,5 +359,23 @@ mod tests {
         assert_eq!(security(PRIVACY, 0, KEY_MGMT_802_1X), "enterprise");
         assert_eq!(security(0, 0, KEY_MGMT_OWE), "owe");
         assert_eq!((dbm(0), dbm(100), dbm(255)), (-100, -50, -50));
+    }
+
+    #[test]
+    fn ssids_that_differ_only_in_bytes_that_are_not_text_keep_their_own_keys() {
+        let (a, b) = (b"caf\xe9".as_slice(), b"caf\xe8".as_slice());
+        assert_eq!(String::from_utf8_lossy(a), String::from_utf8_lossy(b));
+        assert_ne!(ssid_key(a), ssid_key(b));
+        for ssid in [
+            a,
+            b,
+            b"home".as_slice(),
+            "café".as_bytes(),
+            b"\0x".as_slice(),
+            b"".as_slice(),
+        ] {
+            assert_eq!(ssid_bytes(&ssid_key(ssid)), ssid, "{ssid:?}");
+        }
+        assert_eq!(ssid_key(b"home"), "home");
     }
 }

@@ -4,7 +4,7 @@ A short guide for the first days on a machine that uses Cupertino as its session
 
 ## Starting and leaving a session
 
-- **Start.** On a machine installed from the USB image, `cupertino-login` starts the session on tty1: log in there. On other machines, the package installs the session entry `cupertino.desktop`, so GDM lists **Cupertino** in its session chooser; choose it, then log in. Do not turn on automatic login for this session while it is new: when the compositor ends for any reason, the session script ends and GDM shows its login screen again, and automatic login would start the session again at once.
+- **Start.** On a machine installed from the USB image (see [Install from a USB stick](install-usb.md)), `cupertino-login` starts the session on tty1: log in there. On other machines, the package installs the session entry `cupertino.desktop`, so GDM lists **Cupertino** in its session chooser; choose it, then log in. Do not turn on automatic login for this session while it is new: when the compositor ends for any reason, the session script ends and GDM shows its login screen again, and automatic login would start the session again at once.
 - **Leave normally.** Log out from the menu bar's system menu or with `Super+Shift+Q`. Applications are asked to quit first, and a confirmation panel appears. While the login process is restarting after a crash, `Super+Shift+Q` ends the session without asking.
 - **Lock.** `Super+Ctrl+Q`.
 - **Leave at once.** `Ctrl+Alt+Backspace` ends the compositor. `Ctrl+Alt+F1` to `F12` switch to a text console. Both are reserved: no application can take them over.

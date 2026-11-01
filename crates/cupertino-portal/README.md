@@ -42,7 +42,9 @@ filters, the choices, Cancel and the action button. A save adds a Save As field 
 - Only the owner of `org.freedesktop.portal.Desktop` may call it or close a request; any other caller gets
   `AccessDenied`. Options are checked before a window shows: a wrong type, a relative folder, a `current_name` with a
   `/`, an unknown filter kind or a string or list over its bound is `InvalidArgs`. At most 4 dialogs are open at once.
-- Glob filters match without regard to case; MIME filters match by extension. Folders always show.
+- Glob filters match without regard to case, in at most pattern × name steps; MIME filters match by extension. Folders
+  always show. The filter runs once for each listing, not on each redraw.
+- The title, the action label, filter names and choice labels lose control and bidirectional-override characters.
 - The answer is `0` with `uris` (`file://`, escaped), `choices` and `current_filter`; Cancel or closing the window is
   `1`; `Close` on the request takes the window down and answers `2`.
 - `parent_window` is not followed yet: the dialog is a window of its own, centred.

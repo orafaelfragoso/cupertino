@@ -70,12 +70,10 @@ Files go to the Desktop folder unless `~/.config/cupertino/screenshot.conf` sets
 The server's README has the full list under "Daily-driver known limits". The ones to expect in a first week:
 
 - A real session on the NVIDIA driver with GDM has not been run yet, and explicit sync has not run on NVIDIA.
-- Portals are not provided: browser file choosers, screen sharing and the dark-mode setting for apps do not go through Cupertino.
-- Volume and mute keys change the ALSA mixer, not the PipeWire output that is playing, and the microphone mute key is unbound.
-- The Network and Bluetooth panes work with `cupertino-netd` and `cupertino-btd`, not with NetworkManager or BlueZ.
-- X11 apps run through `xwayland-satellite`; their scale on a 4K monitor is not handled.
+- The portal backend serves the appearance settings and the file chooser. It has no screen sharing or screenshot interface, so screen sharing in video calls does not go through Cupertino.
+- The volume and mute keys change the default PipeWire output and the microphone mute key toggles the default input. With no PipeWire daemon, volume and mute fall back to the ALSA master mixer.
+- X11 apps run through `xwayland-satellite`. Scale 2 and the clipboard were checked in a virtual machine only. With monitors of different scales, every X11 window gets the smallest scale.
 - No terminal is shipped; the launcher falls back to `xterm`.
-- On mains power the system sleeps after 10 minutes, which can suspend a desktop during a long build.
 - A server crash ends the session; windows are not reopened.
 
 To report a bug, see [Trying Cupertino](trying.md).

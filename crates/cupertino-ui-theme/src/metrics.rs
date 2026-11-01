@@ -306,6 +306,13 @@ mod tests {
             look(Appearance::Light, true, Surface::Sidebar).material,
             None
         );
+        assert_eq!(
+            look(Appearance::Dark, false, Surface::Hud),
+            SurfaceLook {
+                material: Some("LoginWindowControl"),
+                fill: window(Appearance::Dark)
+            }
+        );
         let high_contrast = look(Appearance::DarkHighContrast, false, Surface::Popover);
         assert_eq!(high_contrast.material, None);
         assert_eq!(high_contrast.fill, window(Appearance::DarkHighContrast));

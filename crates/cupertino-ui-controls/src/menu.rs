@@ -155,6 +155,7 @@ impl<M: Clone + 'static> Menu<M> {
                 background: WindowBackground::Surface {
                     surface: Surface::Menu,
                     radius: PANEL_RADIUS,
+                    alpha: 1.0,
                 },
                 content: Element::new(panel),
                 popup: Some(Popup {

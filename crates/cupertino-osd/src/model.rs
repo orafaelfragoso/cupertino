@@ -129,7 +129,7 @@ impl Overlay {
     }
 }
 
-/// Every symbol [`Overlay::icon_name`] can return, which the renderer requires of the asset directory at startup.
+/// Every symbol [`Overlay::icon_name`] can return, which the asset directory must provide.
 pub const ICON_NAMES: [&str; 9] = [
     "symbol.speaker.slash",
     "symbol.speaker.low",

@@ -27,23 +27,11 @@ const SEGMENT_PITCH: f64 = 10.0;
 const SEGMENT_INSET: f64 = 1.0;
 const SEGMENT_HEIGHT: f64 = 6.0;
 
-/// Frame of the label (26 x 18), centred horizontally.
-pub const LABEL_WIDTH: f64 = 26.0;
-pub const LABEL_HEIGHT: f64 = 18.0;
-
-/// Top of the label frame, below the glyph (approximate: the design only says "under the glyph").
-pub const LABEL_TOP: f64 = 132.0;
-
 /// Side of the glyph (approximate: the glyph artwork and size is not known).
 pub const GLYPH_SIZE: f64 = 96.0;
 
 /// Top of the glyph (approximate).
 pub const GLYPH_TOP: f64 = 28.0;
-
-/// The window's backdrop shape: the whole surface with [`CORNER_RADIUS`].
-pub fn window() -> Rect {
-    Rect::new(0.0, 0.0, f64::from(WINDOW_SIZE), f64::from(WINDOW_SIZE))
-}
 
 /// The meter container.
 pub fn meter() -> Rect {

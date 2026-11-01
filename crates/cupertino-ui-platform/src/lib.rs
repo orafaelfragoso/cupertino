@@ -142,11 +142,12 @@ pub struct MenuDescription {
 }
 
 /// A material of the theme data (`materials.json`) the compositor draws under a window, the window's size with its
-/// corners rounded by `radius` points.
+/// corners rounded by `radius` points, at `alpha` from 0 (hidden) to 1 (opaque).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Backdrop {
     pub material: String,
     pub radius: f64,
+    pub alpha: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

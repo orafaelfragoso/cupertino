@@ -21,6 +21,7 @@ use cupertino_server::render::motion::WorkspaceTransition;
 use cupertino_server::render::CupertinoElement;
 use cupertino_server::Cupertino;
 use cupertino_wm::{Command, LifecycleState, Rect};
+use smithay::backend::renderer::gles::Capability;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
@@ -441,6 +442,13 @@ fn luma(p: &image::Rgba<u8>) -> f64 {
 }
 
 // ---- tests ---------------------------------------------------------------------------------
+
+#[test]
+fn the_renderer_creates_no_gl_fences() {
+    let Some(mut h) = Harness::new() else { return };
+    let renderer = h.state.backend.as_mut().expect("a backend").renderer();
+    assert!(!renderer.capabilities().contains(&Capability::Fencing));
+}
 
 #[test]
 fn client_window_is_mapped_styled_and_closed() {

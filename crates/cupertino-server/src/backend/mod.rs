@@ -2,8 +2,8 @@
 //! offscreen EGL device (headless tests and screenshots).
 
 use smithay::backend::drm::DrmNode;
-use smithay::backend::egl::EGLDevice;
-use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::egl::{EGLContext, EGLDevice};
+use smithay::backend::renderer::gles::{Capability, GlesError, GlesRenderer};
 use smithay::backend::renderer::{ImportDma, ImportMemWl};
 use smithay::wayland::dmabuf::DmabufFeedbackBuilder;
 
@@ -58,6 +58,22 @@ impl Backend {
             Backend::Udev(_) => "udev",
         }
     }
+}
+
+/// A GLES renderer on `context` without GL fences.
+///
+/// Fences only order work between shared contexts, and every backend owns one unshared context,
+/// so they add nothing. Some drivers also keep memory for every fence ever created, even after it
+/// is deleted, so a fence per texture upload and per draw grows the server without bound.
+///
+/// # Safety
+///
+/// `context` must be used by this renderer alone, as for [`GlesRenderer::new`].
+pub unsafe fn gles_renderer(context: EGLContext) -> Result<GlesRenderer, GlesError> {
+    let capabilities = unsafe { GlesRenderer::supported_capabilities(&context) }?
+        .into_iter()
+        .filter(|c| *c != Capability::Fencing);
+    unsafe { GlesRenderer::with_capabilities(context, capabilities) }
 }
 
 /// The render node of the EGL display `renderer` draws on, if it has one.

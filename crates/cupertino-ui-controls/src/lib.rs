@@ -26,6 +26,7 @@ mod stack;
 mod stepper;
 mod tabs;
 mod text;
+mod text_box;
 mod toggle;
 mod tooltip;
 
@@ -37,6 +38,7 @@ pub use scroll::{BarState, ViewportState};
 pub use slider::SliderState;
 pub use split::DividerState;
 pub use stepper::StepperState;
+pub use text_box::TextBoxState;
 pub use tooltip::{TooltipChange, TooltipState};
 
 use cupertino_geometry::{Insets, Point};
@@ -316,6 +318,14 @@ pub struct TextEditor<M> {
     pub revision: u64,
     pub enabled: bool,
     pub on_change: Option<Handler<TextChange, M>>,
+}
+
+/// A text field's chrome (background, border and focus ring) around a scrolling multi-line editor:
+/// `TextBox { content: ScrollView { content: TextEditor } }`. The ring shows while the focus inside it came from the
+/// keyboard.
+pub struct TextBox<M> {
+    pub content: Element<M>,
+    pub enabled: bool,
 }
 
 /// A password field. Its text stays in the field's own buffer and reaches the application only on submit.

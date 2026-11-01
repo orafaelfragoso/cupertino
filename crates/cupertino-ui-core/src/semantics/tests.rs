@@ -355,3 +355,58 @@ fn a_content_description_goes_to_the_first_node_with_a_role_under_its_giver() {
     assert_eq!(description("c"), None, "nothing outside the giver takes it");
     assert_eq!(pass.nodes[&root].description, None);
 }
+
+/// A button that already describes itself.
+struct Described;
+
+impl Widget<M> for Described {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::Button);
+        cx.name("Trash");
+        cx.description("3 items");
+    }
+}
+
+#[test]
+fn a_content_description_survives_nested_wrappers_and_follows_the_nodes_own() {
+    let (tree, root, pass) = pass(Element::new(group(vec![Element::new(Tip(
+        "Deletes the file",
+        vec![Element::new(group(vec![Element::new(group(vec![
+            Element::new(Described).key("trash"),
+        ]))]))],
+    ))])));
+    let trash = tree
+        .preorder(root)
+        .into_iter()
+        .find(|&n| tree.get(n).unwrap().key == Some("trash".into()))
+        .unwrap();
+    assert_eq!(
+        pass.nodes[&trash].description.as_deref(),
+        Some("3 items, Deletes the file")
+    );
+}

@@ -477,3 +477,13 @@ fn the_virtual_list_example_maps_at_its_size_and_exits_on_close() {
         (480, 600),
     );
 }
+
+#[test]
+fn the_editor_example_maps_at_its_size_and_exits_on_close() {
+    kit_example_maps_at_its_size_and_exits_on_close(
+        "editor",
+        "org.cupertino.examples.Editor",
+        "Untitled",
+        (480, 320),
+    );
+}

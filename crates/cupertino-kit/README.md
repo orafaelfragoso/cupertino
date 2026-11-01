@@ -16,14 +16,15 @@ is checked by its golden: the trace of inputs, messages and models, then the Ins
 | Counter | `org.cupertino.examples.Counter` | 200×64 | `the_counter_example_maps_at_its_size_and_exits_on_close` | `the_counter_example_presents_frames_on_mutter` | `tests/goldens/counter.txt` |
 | Forms | `org.cupertino.examples.Forms` | 280×180 | `the_forms_example_maps_at_its_size_and_exits_on_close` | `the_forms_example_presents_frames_on_mutter` | `tests/goldens/forms.txt` |
 | Virtual List | `org.cupertino.examples.VirtualList` | 480×600 | `the_virtual_list_example_maps_at_its_size_and_exits_on_close` | `the_virtual_list_example_presents_frames_on_mutter` | `tests/goldens/virtual-list.txt` |
+| Editor | `org.cupertino.examples.Editor` | 480×320 | `the_editor_example_maps_at_its_size_and_exits_on_close` | `the_editor_example_presents_frames_on_mutter` | `tests/goldens/editor.txt` |
 
 The Cupertino tests are in `crates/cupertino-server/tests/standard-clients.rs`, the Mutter tests in
 `crates/cupertino-wayland-client/tests/mutter.rs` (they skip when `mutter` is not installed), and the goldens in this
 crate's `tests/examples.rs`.
 
 `ci/capture.sh kit/controls` and `kit/icons` draw the row 167a controls sheet and a grid of system symbols (`--direction rtl` mirrors them)
-headless, in light and dark at any scale (`examples/kit_capture.rs`, `crates/cupertino-capture`). `kit/counter`, `kit/forms`
-and `kit/virtual-list` draw the examples' windows as they open.
+headless, in light and dark at any scale (`examples/kit_capture.rs`, `crates/cupertino-capture`). `kit/counter`, `kit/forms`,
+`kit/virtual-list` and `kit/editor` draw the examples' windows as they open.
 
 The `control-fixtures` test renders every control in each state it has (normal, hover, pressed, disabled, focused,
 selected) in Light, Dark and both high-contrast appearances, left to right and right to left, through the CPU renderer,

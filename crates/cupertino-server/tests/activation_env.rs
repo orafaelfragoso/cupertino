@@ -3,10 +3,11 @@
 //! A server that supervises the portal publishes them once the portal owns its bus name, or after a timeout.
 #![cfg(feature = "dbus")]
 
+use std::os::unix::net::UnixListener;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use cupertino_server::activation_env::{publish, Outcome, SESSION_TARGET};
+use cupertino_server::activation_env::{publish, publish_in, Outcome, SESSION_TARGET};
 use cupertino_server::backend::headless;
 use cupertino_server::cli::{
     publish_session_when_ready, start_shell_supervision, PORTAL_READY_TIMEOUT,
@@ -461,4 +462,82 @@ fn the_session_is_published_after_the_timeout_when_the_portal_never_owns_its_bus
         waited >= PORTAL_READY_TIMEOUT && waited < 2 * PORTAL_READY_TIMEOUT,
         "{waited:?}"
     );
+}
+
+/// A manager environment whose `WAYLAND_DISPLAY` is `display`, with our session target active.
+async fn session_with_our_target_on(
+    bus: &PrivateBus,
+    display: &str,
+) -> (zbus::Connection, zbus::Connection, Arc<Mutex<Calls>>) {
+    let environment = Some(vec![
+        "QT_QPA_PLATFORM=xcb".into(),
+        format!("WAYLAND_DISPLAY={display}"),
+    ]);
+    session_with_manager_environment(bus, Some("active"), Some("active"), environment).await
+}
+
+#[test]
+fn a_target_of_ours_whose_display_still_answers_is_a_live_session_and_left_alone() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let runtime_dir = tempfile::tempdir().unwrap();
+    let _compositor = UnixListener::bind(runtime_dir.path().join("wayland-live")).unwrap();
+    block_on(async {
+        let (session, _systemd, calls) = session_with_our_target_on(&bus, "wayland-live").await;
+        assert_eq!(
+            publish_in(&session, &VARIABLES, &[], runtime_dir.path())
+                .await
+                .unwrap(),
+            Outcome::AnotherSession
+        );
+        let calls = calls.lock().unwrap();
+        assert!(
+            calls.stopped.is_empty() && calls.started.is_empty() && calls.environment.is_empty()
+        );
+    });
+}
+
+#[test]
+fn a_target_of_ours_whose_display_socket_has_no_listener_is_a_leftover() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let runtime_dir = tempfile::tempdir().unwrap();
+    // the socket file of a compositor that exited stays behind
+    drop(UnixListener::bind(runtime_dir.path().join("wayland-dead")).unwrap());
+    block_on(async {
+        let (session, _systemd, calls) = session_with_our_target_on(&bus, "wayland-dead").await;
+        assert_eq!(
+            publish_in(&session, &VARIABLES, &[], runtime_dir.path())
+                .await
+                .unwrap(),
+            Outcome::Applied { defaults: vec![] }
+        );
+        assert_eq!(calls.lock().unwrap().stopped, [SESSION_TARGET]);
+    });
+}
+
+#[test]
+fn a_target_of_ours_on_the_display_name_this_session_took_over_is_a_leftover() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let runtime_dir = tempfile::tempdir().unwrap();
+    // this session's compositor listens on the name the killed session left in the manager
+    let _compositor = UnixListener::bind(runtime_dir.path().join("wayland-cupertino")).unwrap();
+    block_on(async {
+        let (session, _systemd, calls) =
+            session_with_our_target_on(&bus, "wayland-cupertino").await;
+        assert_eq!(
+            publish_in(&session, &VARIABLES, &[], runtime_dir.path())
+                .await
+                .unwrap(),
+            Outcome::Applied { defaults: vec![] }
+        );
+        assert_eq!(calls.lock().unwrap().stopped, [SESSION_TARGET]);
+    });
 }

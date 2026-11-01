@@ -62,6 +62,13 @@ impl Application for Counter {
                     alpha: 0.5,
                 }
             }
+            "nan" => {
+                model.background = WindowBackground::Surface {
+                    surface: Surface::Menu,
+                    radius: 8.0,
+                    alpha: f64::NAN,
+                }
+            }
             "close" => return vec![Command::CloseWindow(WindowKey("main".into()))],
             "wait" => return vec![Command::Perform(Box::pin(async { "done 7".to_string() }))],
             "launch" | "launch from gone" => {
@@ -1305,8 +1312,17 @@ fn a_menu_window_shows_the_menu_material_where_the_desktop_draws_it_and_the_opaq
     frame(&mut rt, Some("half"));
     assert_eq!(
         backdrops(&rt).last(),
-        Some(&Some(Backdrop { alpha: 0.5, ..menu })),
+        Some(&Some(Backdrop {
+            alpha: 0.5,
+            ..menu.clone()
+        })),
         "the material fades with the background"
+    );
+    frame(&mut rt, Some("nan"));
+    assert_eq!(
+        backdrops(&rt).last(),
+        Some(&Some(menu.clone())),
+        "an alpha that is not finite is opaque"
     );
     rt.messages.push_back("menu".into());
 

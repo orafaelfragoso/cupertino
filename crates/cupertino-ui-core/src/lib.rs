@@ -157,12 +157,21 @@ pub enum WindowBackground {
     /// The compositor material of `surface` under the whole window, its corners rounded by `radius` points, where the
     /// desktop's effects offer it and the theme asks for one ([`ThemeTokens::surface`]); otherwise the theme's opaque
     /// fill for the surface in the same shape. Either shows at `alpha`, from 0 (hidden) to 1 (opaque), so a window can
-    /// fade its background with its content.
+    /// fade its background with its content; an alpha that is not finite shows opaque.
     Surface {
         surface: Surface,
         radius: f64,
         alpha: f64,
     },
+}
+
+/// The opacity [`WindowBackground::Surface`] shows at `alpha`.
+pub(crate) fn surface_alpha(alpha: f64) -> f64 {
+    if !alpha.is_finite() {
+        1.0
+    } else {
+        alpha.clamp(0.0, 1.0)
+    }
 }
 
 /// A node of the retained tree: a 32-bit slot index and the slot's 32-bit generation, so a stale id never matches

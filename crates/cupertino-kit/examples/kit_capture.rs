@@ -2,8 +2,8 @@
 //! `kit/controls`, the sheet of the choice and value controls of Kit's row 167a capture (check boxes off, on, mixed and
 //! disabled, radio buttons, a segmented control, the regular, ticked, level and disabled sliders, and progress), and
 //! `kit/icons`, a grid of system symbols at the toolkit's sizes and tints with the chevrons along the reading direction
-//! and the placeholder of a missing symbol. `kit/counter`, `kit/forms` and `kit/virtual-list` are the examples' windows
-//! at their own sizes, as they open. `--direction ltr|rtl` (default ltr) lays a surface out in that direction; the sheet
+//! and the placeholder of a missing symbol. `kit/counter`, `kit/forms`, `kit/virtual-list` and `kit/editor` are the
+//! examples' windows at their own sizes, as they open (the Editor with a short document typed in). `--direction ltr|rtl` (default ltr) lays a surface out in that direction; the sheet
 //! shows both.
 //!
 //! `ci/capture.sh kit/controls --scale 2` (the flags are `cupertino-capture`'s)
@@ -13,6 +13,8 @@
 
 #[path = "apps/counter.rs"]
 mod counter;
+#[path = "apps/editor.rs"]
+mod editor;
 #[path = "apps/forms.rs"]
 mod forms;
 #[path = "apps/virtual-list.rs"]
@@ -326,6 +328,38 @@ fn draw<A: Application>(
     Pixmap::from_vec(pixels, size).ok_or_else(|| "the frame's pixels do not fill it".to_string())
 }
 
+/// The Editor example with a short document typed into it, since it opens empty.
+struct SampleEditor;
+
+impl Application for SampleEditor {
+    type Model = editor::Document;
+    type Message = editor::Message;
+
+    fn init() -> (editor::Document, Vec<Command<editor::Message>>) {
+        let (mut document, commands) = editor::Editor::init();
+        let text = "Meeting notes\n\nThe editor scrolls, selects, copies and undoes.\nThis line was typed second.";
+        editor::Editor::update(
+            &mut document,
+            editor::Message::Edited(TextChange {
+                text: text.into(),
+                revision: 1,
+            }),
+        );
+        (document, commands)
+    }
+
+    fn update(
+        document: &mut editor::Document,
+        message: editor::Message,
+    ) -> Vec<Command<editor::Message>> {
+        editor::Editor::update(document, message)
+    }
+
+    fn view(document: &editor::Document) -> Vec<Window<editor::Message>> {
+        editor::Editor::view(document)
+    }
+}
+
 struct Capture;
 
 impl App for Capture {
@@ -333,9 +367,16 @@ impl App for Capture {
     const STATE_FLAGS: &'static [&'static str] = &["direction"];
 
     fn surfaces(&self) -> Vec<String> {
-        ["controls", "icons", "counter", "forms", "virtual-list"]
-            .map(String::from)
-            .to_vec()
+        [
+            "controls",
+            "icons",
+            "counter",
+            "forms",
+            "virtual-list",
+            "editor",
+        ]
+        .map(String::from)
+        .to_vec()
     }
 
     fn sheet_states(&self, _: &str) -> Vec<State> {
@@ -362,6 +403,7 @@ impl App for Capture {
             "virtual-list" => {
                 draw::<virtual_list::VirtualList<50_000>>(r.look, r.scale, direction, size)
             }
+            "editor" => draw::<SampleEditor>(r.look, r.scale, direction, size),
             _ => draw::<Icons>(r.look, r.scale, direction, size),
         }
     }

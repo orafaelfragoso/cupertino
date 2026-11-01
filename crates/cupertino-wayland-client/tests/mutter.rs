@@ -491,6 +491,16 @@ fn the_virtual_list_example_presents_frames_on_mutter() {
     );
 }
 
+#[test]
+fn the_editor_example_presents_frames_on_mutter() {
+    kit_example_presents_frames_on_mutter(
+        "editor",
+        "org.cupertino.examples.Editor",
+        "Untitled",
+        (480, 320),
+    );
+}
+
 /// The trace check follows the window's own toplevel, xdg_surface and wl_surface by id and names what is missing, in
 /// libwayland's and the Rust backend's format.
 #[test]

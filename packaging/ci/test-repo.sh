@@ -69,7 +69,7 @@ for n in tampered unsigned foreign; do
     case $n in
         tampered) tamper $f ;;
         unsigned) rm -f $f.sig ;;
-        foreign) sign $f "$OTHER" ;;
+        foreign) rm -f $f.sig; sign $f "$OTHER" ;;
     esac
     refused "an archive package that is $n" as_builder "$BUILD --packages /work/pkgs2 --key $SUB --url $URL --out /work/stage-$n --archive-from /work/arch-$n"
     [ ! -e /work/stage-$n ] || fail "$n archive package: build-repo wrote the output directory"

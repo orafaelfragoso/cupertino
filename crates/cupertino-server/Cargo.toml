@@ -132,6 +132,7 @@ assets = [
   ["target/release/cupertino-btd", "usr/bin/cupertino-btd", "755"],
   ["target/release/cupertino-powerd", "usr/bin/cupertino-powerd", "755"],
   ["target/release/cupertino-polkit-agent", "usr/bin/cupertino-polkit-agent", "755"],
+  ["target/release/cupertino-portal", "usr/bin/cupertino-portal", "755"],
   ["../../packaging/files/usr/bin/cupertino-session", "usr/bin/cupertino-session", "755"],
   ["../../packaging/files/usr/lib/cupertino/greeter", "usr/lib/cupertino/greeter", "755"],
   ["../../packaging/files/usr/share/wayland-sessions/cupertino.desktop", "usr/share/wayland-sessions/cupertino.desktop", "644"],
@@ -142,6 +143,7 @@ assets = [
   ["../../packaging/files/usr/lib/sysusers.d/cupertino-greeter.conf", "usr/lib/sysusers.d/cupertino-greeter.conf", "644"],
   ["../../packaging/files/usr/share/dbus-1/system.d/org.cupertino.conf", "usr/share/dbus-1/system.d/org.cupertino.conf", "644"],
   ["../../packaging/files/usr/share/xdg-desktop-portal/cupertino-portals.conf", "usr/share/xdg-desktop-portal/cupertino-portals.conf", "644"],
+  ["../../crates/cupertino-portal/data/cupertino.portal", "usr/share/xdg-desktop-portal/portals/cupertino.portal", "644"],
   ["../../packaging/files/etc/cupertino/login.conf", "etc/cupertino/login.conf", "644"],
   ["../../packaging/files/etc/cupertino/greeter.json", "etc/cupertino/greeter.json", "644"],
   ["../../packaging/files/etc/cupertino/compositor.json", "etc/cupertino/compositor.json", "644"],
@@ -185,6 +187,7 @@ assets = [
   { source = "target/release/cupertino-btd", dest = "/usr/bin/cupertino-btd", mode = "755" },
   { source = "target/release/cupertino-powerd", dest = "/usr/bin/cupertino-powerd", mode = "755" },
   { source = "target/release/cupertino-polkit-agent", dest = "/usr/bin/cupertino-polkit-agent", mode = "755" },
+  { source = "target/release/cupertino-portal", dest = "/usr/bin/cupertino-portal", mode = "755" },
   { source = "packaging/files/usr/bin/cupertino-session", dest = "/usr/bin/cupertino-session", mode = "755" },
   { source = "packaging/files/usr/lib/cupertino/greeter", dest = "/usr/lib/cupertino/greeter", mode = "755" },
   { source = "packaging/files/usr/share/wayland-sessions/cupertino.desktop", dest = "/usr/share/wayland-sessions/cupertino.desktop", mode = "644" },
@@ -195,6 +198,7 @@ assets = [
   { source = "packaging/files/usr/lib/sysusers.d/cupertino-greeter.conf", dest = "/usr/lib/sysusers.d/cupertino-greeter.conf", mode = "644" },
   { source = "packaging/files/usr/share/dbus-1/system.d/org.cupertino.conf", dest = "/usr/share/dbus-1/system.d/org.cupertino.conf", mode = "644" },
   { source = "packaging/files/usr/share/xdg-desktop-portal/cupertino-portals.conf", dest = "/usr/share/xdg-desktop-portal/cupertino-portals.conf", mode = "644" },
+  { source = "crates/cupertino-portal/data/cupertino.portal", dest = "/usr/share/xdg-desktop-portal/portals/cupertino.portal", mode = "644" },
   { source = "packaging/files/etc/cupertino/login.conf", dest = "/etc/cupertino/login.conf", mode = "644", config = "noreplace" },
   { source = "packaging/files/etc/cupertino/greeter.json", dest = "/etc/cupertino/greeter.json", mode = "644", config = "noreplace" },
   { source = "packaging/files/etc/cupertino/compositor.json", dest = "/etc/cupertino/compositor.json", mode = "644", config = "noreplace" },
@@ -223,6 +227,7 @@ dbus = "*"
 systemd = "*"
 polkit = "*"
 xdg-desktop-portal = "*"
+pipewire-libs = "*"
 xkeyboard-config = "*"
 shared-mime-info = "*"
 adwaita-icon-theme = "*"

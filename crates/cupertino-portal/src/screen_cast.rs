@@ -574,10 +574,11 @@ impl ScreenCast {
         let Phase::Selected { types, cursor } = self.phase(&session_handle, &app_id)? else {
             return Err(invalid("Start comes once, after SelectSources"));
         };
+        let parent_window = text("parent_window", parent_window)?;
         self.set_phase(&session_handle, Phase::Starting);
         let ask = Ask {
             app_id,
-            parent_window: text("parent_window", parent_window)?,
+            parent_window,
             sources: (self.sources)()
                 .into_iter()
                 .filter(|s| types.contains(s.source_type()))

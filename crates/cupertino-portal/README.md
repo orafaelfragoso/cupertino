@@ -83,3 +83,7 @@ only (no dmabuf), and no audio.
 - `data/cupertino-portals.conf` to `/usr/share/xdg-desktop-portal/`: Settings and FileChooser from this backend
   first, then the GTK backend for what it does not serve; ScreenCast from this backend; every other interface from the
   GTK backend
+
+The packages ship the binary and `cupertino.portal`, with `packaging/files/usr/share/xdg-desktop-portal/cupertino-portals.conf`
+in place of the one above: ScreenCast from this backend and every other interface from the GTK backend, until the
+Settings and FileChooser backends are routed here too.

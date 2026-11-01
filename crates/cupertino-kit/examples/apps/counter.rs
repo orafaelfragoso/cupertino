@@ -72,6 +72,7 @@ impl Application for Counter {
                     button("more", "+", ButtonRole::Default, 1),
                 ],
             }),
+            menus: None,
         }]
     }
 }

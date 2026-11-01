@@ -62,6 +62,7 @@ impl Application for Fields {
                     .key("plain"),
                 ],
             }),
+            menus: None,
         }]
     }
 }

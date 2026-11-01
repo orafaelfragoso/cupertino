@@ -4,6 +4,9 @@
 use cupertino_app_protocols::server::app_effects::cupertino_app_effects_v1::{
     self, CupertinoAppEffectsV1,
 };
+use cupertino_app_protocols::server::app_effects::cupertino_app_menu_v1::{
+    self, CupertinoAppMenuV1,
+};
 use cupertino_app_protocols::server::app_effects::cupertino_appearance_v1::{
     CupertinoAppearanceV1, DisplayOption,
 };
@@ -93,15 +96,26 @@ enum Control {
     Shown(Duration),
     /// Tell the oldest presentation feedback its frame was discarded.
     Discard,
+    /// Name the bus connection that reads the window's menus.
+    MenuReader(String),
 }
 
 /// A request the server saw that the commit record does not cover.
 #[derive(Debug, PartialEq)]
 enum Seen {
     /// The client set the selection with this serial, offering these types.
-    Selection { serial: u32, types: Vec<String> },
+    Selection {
+        serial: u32,
+        types: Vec<String>,
+    },
     /// What the client wrote when the server asked its selection for the first type (a paste elsewhere).
     Served(String),
+    /// The window announced its menus on this bus connection, the menu bar at this path.
+    MenuAddress {
+        bus_name: String,
+        menubar: String,
+    },
+    MenuWithdrawn,
 }
 
 #[derive(Default)]
@@ -148,6 +162,7 @@ struct Mock {
     pasting: Option<(std::io::PipeReader, Vec<u8>)>,
     /// Presentation feedback not yet answered, oldest first.
     feedbacks: VecDeque<WpPresentationFeedback>,
+    menu: Option<CupertinoAppMenuV1>,
 }
 
 struct Data;
@@ -173,10 +188,11 @@ plain_global!(
     CupertinoAppEffectsV1
 );
 
-/// The session is locked: an observer that can tell (version 5) is told so at once.
+/// The session is locked: an observer that can tell (version 5) is told so at once. The menu bar shows a window's
+/// menus.
 impl Dispatch<CupertinoAppEffectsV1, ()> for Mock {
     fn request(
-        _: &mut Self,
+        state: &mut Self,
         _: &ServerClient,
         _: &CupertinoAppEffectsV1,
         request: cupertino_app_effects_v1::Request,
@@ -184,14 +200,48 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Mock {
         _: &DisplayHandle,
         init: &mut DataInit<'_, Self>,
     ) {
-        if let cupertino_app_effects_v1::Request::GetAppearance { id } = request {
-            let observer = init.init(id, ());
-            observer.appearance(0);
-            observer.display_options(DisplayOption::empty());
-            if observer.version() >= 5 {
-                observer.session_lock(1);
+        match request {
+            cupertino_app_effects_v1::Request::GetAppearance { id } => {
+                let observer = init.init(id, ());
+                observer.appearance(0);
+                observer.display_options(DisplayOption::empty());
+                if observer.version() >= 5 {
+                    observer.session_lock(1);
+                }
             }
+            cupertino_app_effects_v1::Request::GetMenu { id, .. } => {
+                let menu = init.init(id, ());
+                menu.menu_bar(1);
+                state.menu = Some(menu);
+            }
+            _ => {}
         }
+    }
+}
+
+impl Dispatch<CupertinoAppMenuV1, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &CupertinoAppMenuV1,
+        request: cupertino_app_menu_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        let seen = match request {
+            cupertino_app_menu_v1::Request::SetAddress {
+                bus_name,
+                menubar_object_path,
+                ..
+            } => Seen::MenuAddress {
+                bus_name,
+                menubar: menubar_object_path,
+            },
+            cupertino_app_menu_v1::Request::Destroy => Seen::MenuWithdrawn,
+            _ => return,
+        };
+        state.seen.send(seen).unwrap();
     }
 }
 
@@ -608,6 +658,7 @@ fn spawn_server_with(
             data_device: None,
             pasting: None,
             feedbacks: VecDeque::new(),
+            menu: None,
         };
         let mut display_handle = display.handle();
         display_handle
@@ -638,6 +689,7 @@ fn spawn_server_with(
                     );
                 }
                 Ok(Control::Discard) => mock.feedbacks.pop_front().unwrap().discarded(),
+                Ok(Control::MenuReader(name)) => mock.menu.as_ref().unwrap().menu_reader(name),
                 Ok(Control::PointerPress) => {
                     let (pointer, t) = (
                         mock.pointer.as_ref().unwrap(),
@@ -1112,11 +1164,13 @@ mod window_system {
     use cupertino_geometry::{Point, Size};
     use cupertino_modifiers::Profile;
     use cupertino_ui_platform::{
-        ClipboardKind, DecorationMode, MouseButton, PlatformEvent, PointerEvent, PresentOutcome,
-        TouchEvent, WindowEvent, WindowId, WindowSpec, WindowSystem,
+        ClipboardKind, DecorationMode, MenuDescription, MouseButton, PlatformEvent, PointerEvent,
+        PresentOutcome, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
     };
     use cupertino_ui_render::{CpuFrame, PixelFormat, PixelRect, RenderFrameId};
     use cupertino_ui_wayland::WaylandWindowSystem;
+    use std::collections::HashMap;
+    use zbus::zvariant::{OwnedValue, Value};
 
     struct Kit {
         ws: WaylandWindowSystem,
@@ -1258,6 +1312,118 @@ mod window_system {
             width,
             height,
         }
+    }
+
+    fn notes_menus(disabled: &[&str]) -> WindowRequest {
+        use cupertino_menu_model::{ActionName, Entry, Item, Menu, MenuBar, Scope};
+        let item = |label: &str| {
+            let action = ActionName::new(Scope::Win, &label.to_lowercase()).unwrap();
+            Entry::Item(Item::new(label, action, None))
+        };
+        WindowRequest::Menus(Some(MenuDescription {
+            bar: MenuBar {
+                app: Menu::new("Test", Vec::new()),
+                menus: vec![Menu::new("File", vec![vec![item("Save"), item("Zoom")]])],
+            },
+            disabled: disabled
+                .iter()
+                .map(|d| ActionName::new(Scope::Win, d).unwrap())
+                .collect(),
+        }))
+    }
+
+    fn seen_menu(seen: &Receiver<Seen>) -> Seen {
+        loop {
+            match seen.recv_timeout(Duration::from_secs(5)).unwrap() {
+                s @ (Seen::MenuAddress { .. } | Seen::MenuWithdrawn) => return s,
+                _ => {}
+            }
+        }
+    }
+
+    /// The window's actions and whether each is enabled, as the menu bar reads them once the compositor has named it.
+    fn described(
+        kit: &mut Kit,
+        reader: &zbus::blocking::Connection,
+        bus_name: &str,
+    ) -> Vec<(String, bool)> {
+        type Described = HashMap<String, (bool, zbus::zvariant::Signature, Vec<OwnedValue>)>;
+        let actions = zbus::blocking::Proxy::new(
+            reader,
+            bus_name.to_owned(),
+            "/org/example/Test/window/1",
+            "org.gtk.Actions",
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let all: Described = loop {
+            kit.pump();
+            match actions.call("DescribeAll", &()) {
+                Ok(all) => break all,
+                Err(e) => assert!(Instant::now() < deadline, "the reader was never named: {e}"),
+            }
+        };
+        let mut all: Vec<(String, bool)> = all.into_iter().map(|(k, (e, _, _))| (k, e)).collect();
+        all.sort();
+        all
+    }
+
+    #[test]
+    fn a_window_publishes_its_menus_once_configured_and_a_chosen_item_comes_back_as_its_action() {
+        let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+            eprintln!("skipping: dbus-daemon is not available");
+            return;
+        };
+        std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
+        let (mut kit, control, _committed, seen) = created_with(Some(3));
+        let w = kit.window;
+        kit.ws.request(w, notes_menus(&["save"])).unwrap();
+        kit.window_event(|e| matches!(e, WindowEvent::Configure(_)).then_some(()));
+        kit.pump();
+        let Seen::MenuAddress { bus_name, menubar } = seen_menu(&seen) else {
+            panic!("the menus were withdrawn before they were announced");
+        };
+        assert_eq!(menubar, "/org/example/Test/window/1/menus/menubar");
+
+        let reader = bus.connect();
+        control
+            .send(Control::MenuReader(
+                reader.unique_name().unwrap().to_string(),
+            ))
+            .unwrap();
+        assert_eq!(
+            described(&mut kit, &reader, &bus_name),
+            [("save".to_string(), false), ("zoom".to_string(), true)]
+        );
+
+        let platform_data: HashMap<&str, Value<'_>> = HashMap::new();
+        zbus::blocking::Proxy::new(
+            &reader,
+            bus_name.clone(),
+            "/org/example/Test/window/1",
+            "org.gtk.Actions",
+        )
+        .unwrap()
+        .call::<_, _, ()>(
+            "Activate",
+            &("zoom", Vec::<Value<'_>>::new(), platform_data),
+        )
+        .unwrap();
+        let chosen = kit.window_event(|e| match e {
+            WindowEvent::MenuActivated(action) => Some(action.full()),
+            _ => None,
+        });
+        assert_eq!(chosen, "win.zoom");
+
+        kit.ws.request(w, notes_menus(&["zoom"])).unwrap();
+        assert_eq!(
+            described(&mut kit, &reader, &bus_name),
+            [("save".to_string(), true), ("zoom".to_string(), false)]
+        );
+
+        kit.ws.request(w, WindowRequest::Menus(None)).unwrap();
+        kit.pump();
+        assert_eq!(seen_menu(&seen), Seen::MenuWithdrawn);
     }
 
     /// A compositor without app effects, or with them below version 5, can't tell the session is locked: the first

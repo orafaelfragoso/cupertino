@@ -222,6 +222,7 @@ pub fn window<M: Clone>(content: Element<M>) -> Vec<Window<M>> {
         background: WindowBackground::Theme,
         popup: None,
         content,
+        menus: None,
     }]
 }
 

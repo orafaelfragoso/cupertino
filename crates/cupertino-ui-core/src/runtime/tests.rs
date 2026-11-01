@@ -92,6 +92,7 @@ impl Application for Counter {
                 })
                 .key("minus"),
             ])),
+            menus: None,
         }]
     }
 }
@@ -680,6 +681,7 @@ impl Application for Holder {
                 stop: true,
                 ..leaf("hold")
             }),
+            menus: None,
         }]
     }
 }
@@ -770,6 +772,7 @@ impl Application for Dismisser {
                 }),
                 Element::new(leaf("field")),
             ])),
+            menus: None,
         }]
     }
 }
@@ -962,6 +965,7 @@ impl Application for Sleeper {
             background: WindowBackground::Theme,
             popup: None,
             content: Element::new(content),
+            menus: None,
         }]
     }
 }
@@ -1342,6 +1346,7 @@ impl Application for Choices {
                     ..row(choices)
                 }),
             ])),
+            menus: None,
         }]
     }
 }
@@ -1675,6 +1680,7 @@ impl Application for Scrolling {
                 offset: model.outer,
                 content: Some(content),
             }),
+            menus: None,
         }]
     }
 }
@@ -1830,6 +1836,7 @@ impl Application for NestedPanes {
                 content: Some(column(vec![inner, block(200.0, false)])),
             })
             .key("outer"),
+            menus: None,
         }]
     }
 }
@@ -1860,4 +1867,133 @@ fn an_inner_pane_that_became_a_tab_stop_keeps_the_outer_pane_from_being_one() {
         rt.step(steps()).unwrap();
         assert_eq!(rt.snapshot(window).unwrap().focus, inner);
     }
+}
+
+/// A window whose File menu has Save, disabled until there is an edit; the bar gains a View menu, or goes.
+struct Menued;
+
+#[derive(Default)]
+struct Edits {
+    edited: bool,
+    view: bool,
+    hidden: bool,
+    chosen: Vec<String>,
+}
+
+fn action(name: &str) -> ActionName {
+    ActionName::new(cupertino_menu_model::Scope::Win, name).unwrap()
+}
+
+fn menu(title: &str, item: &str) -> cupertino_menu_model::Menu {
+    use cupertino_menu_model::{Entry, Item, Menu};
+    let entry = Entry::Item(Item::new(item, action(&item.to_lowercase()), None));
+    Menu::new(title, vec![vec![entry]])
+}
+
+impl Application for Menued {
+    type Model = Edits;
+    type Message = String;
+
+    fn init() -> (Edits, Vec<Command<String>>) {
+        (Edits::default(), Vec::new())
+    }
+
+    fn update(edits: &mut Edits, message: String) -> Vec<Command<String>> {
+        match message.as_str() {
+            "edit" => edits.edited = true,
+            "view" => edits.view = true,
+            "hide" => edits.hidden = true,
+            "again" => {}
+            _ => edits.chosen.push(message),
+        }
+        Vec::new()
+    }
+
+    fn view(edits: &Edits) -> Vec<Window<String>> {
+        let mut menus = vec![menu("File", "Save")];
+        if edits.view {
+            menus.push(menu("View", "Zoom"));
+        }
+        let menus = Menus {
+            bar: cupertino_menu_model::MenuBar {
+                app: cupertino_menu_model::Menu::new("Notes", Vec::new()),
+                menus,
+            },
+            disabled: (!edits.edited)
+                .then(|| action("save"))
+                .into_iter()
+                .collect(),
+            on_activate: Box::new(|a: ActionName| a.full()),
+        };
+        vec![Window {
+            key: WindowKey("main".into()),
+            spec: WindowSpec {
+                title: "Notes".into(),
+                app_id: "test.notes".into(),
+                size: Size::new(200.0, 100.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Preferred,
+                foreign_parent: None,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            background: WindowBackground::Theme,
+            content: Element::new(leaf("body")),
+            popup: None,
+            menus: (!edits.hidden).then_some(menus),
+        }]
+    }
+}
+
+#[test]
+fn a_toplevel_asks_for_its_menus_only_when_they_change_and_a_chosen_item_sends_its_message() {
+    let mut rt = Runtime::<Menued, FakeSystem>::new(FakeSystem::default(), options(&Rc::default()));
+    let step = |rt: &mut Runtime<Menued, FakeSystem>, message: &str| {
+        rt.messages.push_back(message.into());
+        rt.step(steps()).unwrap();
+    };
+    let asked = |rt: &Runtime<Menued, FakeSystem>| -> Vec<Option<(Vec<String>, Vec<String>)>> {
+        rt.window_system()
+            .requests
+            .iter()
+            .filter_map(|(_, r)| match r {
+                WindowRequest::Menus(menus) => Some(menus.as_ref().map(|m| {
+                    let titles = m.bar.menus.iter().map(|m| m.title.clone()).collect();
+                    (titles, m.disabled.iter().map(ActionName::full).collect())
+                })),
+                _ => None,
+            })
+            .collect()
+    };
+    let menus = |titles: &[&str], disabled: &[&str]| {
+        Some((
+            titles.iter().map(|t| t.to_string()).collect(),
+            disabled.iter().map(|d| d.to_string()).collect(),
+        ))
+    };
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    assert_eq!(asked(&rt), [menus(&["File"], &["win.save"])]);
+
+    step(&mut rt, "again");
+    assert_eq!(
+        asked(&rt).len(),
+        1,
+        "the same menus are not asked for again"
+    );
+    step(&mut rt, "edit");
+    step(&mut rt, "view");
+    assert_eq!(
+        asked(&rt)[1..],
+        [menus(&["File"], &[]), menus(&["File", "View"], &[])]
+    );
+
+    rt.window_system_mut()
+        .send(window, WindowEvent::MenuActivated(action("zoom")));
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.model().chosen, ["win.zoom"]);
+
+    step(&mut rt, "hide");
+    assert_eq!(asked(&rt).last(), Some(&None));
 }

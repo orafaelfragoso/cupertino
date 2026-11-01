@@ -84,6 +84,7 @@ impl Application for Editor {
                 scroller: Scroller::Overlay,
                 on_scroll: Box::new(Message::Scrolled),
             }),
+            menus: None,
         }]
     }
 }

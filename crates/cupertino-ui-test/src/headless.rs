@@ -1,8 +1,9 @@
 use cupertino_geometry::Size;
 use cupertino_ui_platform::{
     ActivationRequest, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, Configure,
-    ConfigureId, CursorShape, PlatformError, PlatformEvent, PopupSpec, PresentOutcome, Timestamp,
-    WindowEvent, WindowId, WindowRequest, WindowSpec, WindowStates, WindowSystem, WmCapabilities,
+    ConfigureId, CursorShape, MenuDescription, PlatformError, PlatformEvent, PopupSpec,
+    PresentOutcome, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowStates,
+    WindowSystem, WmCapabilities,
 };
 use cupertino_ui_render::{CpuFrame, PixelFormat, PixelRect, RenderFrameId};
 use cupertino_ui_text::TextInputState;
@@ -216,6 +217,21 @@ impl HeadlessWindowSystem {
 
     pub fn requests(&self, window: WindowId) -> Result<&[WindowRequest], PlatformError> {
         Ok(&self.window(window)?.requests)
+    }
+
+    /// The menus the window publishes to the desktop's menu bar now; an item is chosen with
+    /// [`WindowEvent::MenuActivated`].
+    pub fn menus(&self, window: WindowId) -> Result<Option<&MenuDescription>, PlatformError> {
+        let last = self
+            .window(window)?
+            .requests
+            .iter()
+            .rev()
+            .find_map(|r| match r {
+                WindowRequest::Menus(menus) => Some(menus.as_ref()),
+                _ => None,
+            });
+        Ok(last.flatten())
     }
 
     pub fn cursor(&self, window: WindowId) -> Result<Option<CursorShape>, PlatformError> {

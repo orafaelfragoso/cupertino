@@ -143,6 +143,7 @@ impl Application for Cells {
                 align: Align::Start,
                 children: vec![(fixture.build)(look).key("control")],
             }),
+            menus: None,
         }]
     }
 }

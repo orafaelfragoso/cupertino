@@ -163,6 +163,7 @@ impl<M: Clone + 'static> Menu<M> {
                     grab: true,
                     on_dismiss: on_close.clone(),
                 }),
+                menus: None,
             });
             let (Some(index), Some((sub_label, sub_items))) = (next, submenu) else {
                 break;

@@ -94,7 +94,7 @@ class ConfigurationTest(unittest.TestCase):
         config = ci.configuration(self.plan(ci.Answers("rafael", "secret", None, "UTC", extra_packages=("qemu-guest-agent",))))
         self.assertEqual(config["services"], ["cupertino-login"])
         self.assertEqual(config["bootloader_config"], {"bootloader": "Systemd-boot", "uki": False, "removable": True})
-        for package in ("cupertino", "cupertino-data", "nvidia-open", "qemu-guest-agent"):
+        for package in ("cupertino", "cupertino-data", "nvidia-open", "chromium", "rustup", "github-cli", "qemu-guest-agent"):
             self.assertIn(package, config["packages"])
 
 

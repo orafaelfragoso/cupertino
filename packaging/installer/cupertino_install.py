@@ -44,9 +44,10 @@ REPOSITORY = "cupertino"
 ZONEINFO = Path("/usr/share/zoneinfo")
 
 BASE_PACKAGES = (
-    "base-devel", "bluez-utils", "foot", "git", "nano", "pipewire-pulse", "sudo", "wireplumber",
-    "xorg-xwayland", "xwayland-satellite", "cupertino", "cupertino-data",
+    "base-devel", "bluez-utils", "chromium", "foot", "git", "github-cli", "nano", "pipewire-pulse", "rustup", "sudo",
+    "wireplumber", "xorg-xwayland", "xwayland-satellite", "cupertino", "cupertino-data",
 )
+CHROMIUM_FLAGS = "--ozone-platform=wayland\n"
 NVIDIA_PACKAGES = ("nvidia-open", "nvidia-utils", "libva-nvidia-driver")
 NVIDIA_OPTIONS = "options nvidia_drm modeset=1\n"
 NVIDIA = 0x10DE
@@ -413,6 +414,14 @@ def finish(plan: Plan) -> None:
         (TARGET / "etc/modprobe.d/nvidia.conf").write_text(NVIDIA_OPTIONS)
     pacman_conf = TARGET / "etc/pacman.conf"
     pacman_conf.write_text(without_repository(pacman_conf.read_text()))
+    config = TARGET / "home" / plan.answers.user / ".config"
+    config.mkdir(exist_ok=True)
+    (config / "chromium-flags.conf").write_text(CHROMIUM_FLAGS)
+    run("arch-chroot", str(TARGET), "chown", "-R", f"{plan.answers.user}:{plan.answers.user}", f"/home/{plan.answers.user}/.config",
+        step="chromium", status=5)
+    for unit in ("NetworkManager.service", "cupertino-login.service"):
+        if run("arch-chroot", str(TARGET), "systemctl", "is-enabled", unit, step="services", status=5, capture=True).strip() != "enabled":
+            raise Failed(5, "services", f"{unit} is not enabled")
     for package in plan.answers.extra_packages:
         unit = TARGET / f"usr/lib/systemd/system/{package}.service"
         if unit.exists() and "[Install]" in unit.read_text():

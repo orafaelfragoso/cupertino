@@ -208,91 +208,6 @@ fn a_description_without_a_role_joins_its_nearest_ancestor_with_one() {
     assert!(!pass.nodes.contains_key(&middle));
 }
 
-#[test]
-fn a_diff_carries_changed_and_new_nodes_and_names_the_removed_ones() {
-    let (tree, root, before) = pass(Element::new(group(vec![
-        Element::new(leaf("a")).key(1u64),
-        Element::new(leaf("b")).key(2u64),
-    ])));
-    let [a, b] = tree.get(root).unwrap().children[..] else {
-        unreachable!()
-    };
-    let mut after = before.nodes.clone();
-    after.remove(&b);
-    after.get_mut(&a).unwrap().name = Some("renamed".into());
-    after.get_mut(&root).unwrap().children = vec![a];
-
-    let (changed, removed) = diff(&before.nodes, &after);
-    let mut expected = vec![root, a];
-    expected.sort();
-    assert_eq!(
-        changed.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
-        expected
-    );
-    assert_eq!(removed, vec![b]);
-    assert!(diff(&after, &after).0.is_empty());
-}
-
-/// A scroll view's stand-in: a Tab stop only when nothing under it is one.
-struct Fallback(Vec<Element<M>>);
-
-impl Widget<M> for Fallback {
-    type State = ();
-
-    fn layout(&self) -> LayoutSpec {
-        spec(ContainerKind::Overlay)
-    }
-
-    fn take_children(&mut self) -> Vec<Element<M>> {
-        std::mem::take(&mut self.0)
-    }
-
-    fn state(&self) {}
-
-    fn update(&self, _: &Self, _: &mut ()) -> Change {
-        Change::None
-    }
-
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
-        Measured {
-            size: Size::new(0.0, 0.0),
-            baseline: None,
-        }
-    }
-
-    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
-        Propagation::Continue
-    }
-
-    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
-
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
-        cx.role(Role::ScrollView);
-        cx.focus_fallback();
-    }
-}
-
-#[test]
-fn a_fallback_is_a_tab_stop_only_when_no_node_under_it_is() {
-    let (tree, root, pass) = pass(Element::new(group(vec![
-        Element::new(Fallback(vec![Element::new(leaf("a")).key("a")])).key("around a"),
-        Element::new(Fallback(vec![
-            Element::new(Fallback(Vec::new())).key("empty")
-        ]))
-        .key("around empty"),
-        Element::new(leaf("b")).key("b"),
-    ])));
-    let id = |key: &'static str| {
-        tree.preorder(root)
-            .into_iter()
-            .find(|&n| tree.get(n).unwrap().key == Some(key.into()))
-            .unwrap()
-    };
-    assert_eq!(pass.focusable, [id("a"), id("empty"), id("b")]);
-    assert!(pass.nodes[&id("empty")].states.focusable);
-    assert!(!pass.nodes[&id("around a")].states.focusable);
-}
-
 /// A tooltip's stand-in: no node of its own, only words for the first node under it.
 struct Tip(&'static str, Vec<Element<M>>);
 
@@ -409,4 +324,89 @@ fn a_content_description_survives_nested_wrappers_and_follows_the_nodes_own() {
         pass.nodes[&trash].description.as_deref(),
         Some("3 items, Deletes the file")
     );
+}
+
+#[test]
+fn a_diff_carries_changed_and_new_nodes_and_names_the_removed_ones() {
+    let (tree, root, before) = pass(Element::new(group(vec![
+        Element::new(leaf("a")).key(1u64),
+        Element::new(leaf("b")).key(2u64),
+    ])));
+    let [a, b] = tree.get(root).unwrap().children[..] else {
+        unreachable!()
+    };
+    let mut after = before.nodes.clone();
+    after.remove(&b);
+    after.get_mut(&a).unwrap().name = Some("renamed".into());
+    after.get_mut(&root).unwrap().children = vec![a];
+
+    let (changed, removed) = diff(&before.nodes, &after);
+    let mut expected = vec![root, a];
+    expected.sort();
+    assert_eq!(
+        changed.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        expected
+    );
+    assert_eq!(removed, vec![b]);
+    assert!(diff(&after, &after).0.is_empty());
+}
+
+/// A scroll view's stand-in: a Tab stop only when nothing under it is one.
+struct Fallback(Vec<Element<M>>);
+
+impl Widget<M> for Fallback {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Overlay)
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.0)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::ScrollView);
+        cx.focus_fallback();
+    }
+}
+
+#[test]
+fn a_fallback_is_a_tab_stop_only_when_no_node_under_it_is() {
+    let (tree, root, pass) = pass(Element::new(group(vec![
+        Element::new(Fallback(vec![Element::new(leaf("a")).key("a")])).key("around a"),
+        Element::new(Fallback(vec![
+            Element::new(Fallback(Vec::new())).key("empty")
+        ]))
+        .key("around empty"),
+        Element::new(leaf("b")).key("b"),
+    ])));
+    let id = |key: &'static str| {
+        tree.preorder(root)
+            .into_iter()
+            .find(|&n| tree.get(n).unwrap().key == Some(key.into()))
+            .unwrap()
+    };
+    assert_eq!(pass.focusable, [id("a"), id("empty"), id("b")]);
+    assert!(pass.nodes[&id("empty")].states.focusable);
+    assert!(!pass.nodes[&id("around a")].states.focusable);
 }

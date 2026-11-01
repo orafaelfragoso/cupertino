@@ -31,7 +31,8 @@ uses it. Layer: `platform`.
 - The owner asks for a buffer with `dequeue`, writes the frame at offset 0 and the format's stride, and hands it back
   with `queue`. The damage is cut to the frame; more rectangles than fit become the whole frame. Each queue triggers one
   cycle of the graph.
-- `resize` drops the buffers, offers the new size and waits for the consumer to fix a format again.
+- `resize` drops the buffers, offers the new size and waits for the consumer to fix a format again. Buffers that
+  PipeWire still adds for the old format get memfds of that format.
 - PipeWire going away reports every stream `Closed` and ends the thread.
 
 ## Known limitations
@@ -50,6 +51,7 @@ cargo test -p cupertino-screencast --features fake
 
 The format tests run anywhere. `tests/stream.rs` (feature `fake`) starts a private `pipewire` daemon in a temporary
 runtime directory, never the user's, links a consumer stream to a shared stream, and checks the negotiated format, one
-frame with its pixels, damage and timestamp, and a resize. It is skipped when `pipewire` is not installed.
+frame with its pixels, damage and timestamp, and a resize. `tests/resize.rs` resizes as soon as the format is fixed,
+before PipeWire adds its buffers. Both are skipped when `pipewire` is not installed.
 `cupertino-server`'s `tests/screen_share.rs` runs the whole path: the portal binary against the headless server, a
 private bus, and a consumer that reads frames of the output.

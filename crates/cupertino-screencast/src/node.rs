@@ -32,6 +32,8 @@ struct Share {
     id: StreamId,
     offer: Offer,
     format: Option<Format>,
+    /// The format of the buffers last asked for, which a resize leaves until the buffers of the new size are asked for.
+    allocated: Option<Format>,
     /// Whether PipeWire runs the stream: a consumer takes frames.
     running: bool,
     /// The state last told to the owner.
@@ -190,6 +192,7 @@ impl Thread {
             id,
             offer,
             format: None,
+            allocated: None,
             running: false,
             told: State::Connecting,
             node_known: false,
@@ -311,6 +314,7 @@ impl Thread {
             let negotiated =
                 Fixed::parse(param).and_then(|fixed| format::negotiate(&s.offer, fixed).ok());
             s.format = negotiated;
+            s.allocated = negotiated.or(s.allocated);
             (s.id, negotiated, s.news())
         };
         // the owner knows the format before the buffers of it arrive, which updating the params may add at once
@@ -338,7 +342,7 @@ impl Thread {
 
     fn add_buffer(&self, share: &Rc<RefCell<Share>>, raw: *mut pw::sys::pw_buffer) {
         let mut s = share.borrow_mut();
-        let Some(format) = s.format else {
+        let Some(format) = s.allocated else {
             return;
         };
         let memory = match frame_memory(&format) {

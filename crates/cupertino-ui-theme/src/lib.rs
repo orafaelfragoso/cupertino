@@ -53,10 +53,14 @@ pub enum ColorRole {
     Link,
     /// A page indicator dot for a page that is not shown; the shown page's dot is `Text`.
     PageDot,
+    /// The fill of a group of controls set off from the window, as a module of a panel.
+    GroupFill,
+    /// A symbol drawn on the switch thumb's colour, as on a panel's level slider.
+    SwitchThumbGlyph,
 }
 
 impl ColorRole {
-    pub const ALL: [ColorRole; 33] = {
+    pub const ALL: [ColorRole; 35] = {
         use ColorRole::*;
         [
             WindowBackground,
@@ -92,6 +96,8 @@ impl ColorRole {
             DialogScrim,
             Link,
             PageDot,
+            GroupFill,
+            SwitchThumbGlyph,
         ]
     };
 }

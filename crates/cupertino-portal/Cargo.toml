@@ -3,7 +3,7 @@ name = "cupertino-portal"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "xdg-desktop-portal backend of the session: the appearance settings and the file chooser applications reach through the portal"
+description = "xdg-desktop-portal backend of the session: the appearance settings, the file chooser and screen sharing applications reach through the portal"
 
 [package.metadata.cupertino]
 layer = "shell"
@@ -11,17 +11,21 @@ layer = "shell"
 [features]
 default = []
 # the `cupertino-portal` process
-app = ["dep:cupertino-kit", "dep:cupertino-protocol-app", "dep:cupertino-wayland-client"]
+app = ["dep:cupertino-kit", "dep:cupertino-protocol-app", "dep:cupertino-screencast", "dep:cupertino-wayland-client", "dep:rustix", "dep:wayland-client", "dep:wayland-protocols"]
 
 [dependencies]
 async-channel = "2"
 cupertino-filepicker = { path = "../cupertino-filepicker" }
 cupertino-kit = { path = "../cupertino-kit", optional = true }
 cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
+cupertino-screencast = { path = "../cupertino-screencast", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 futures-lite = "2"
 mime_guess = "2"
 percent-encoding = "2"
+rustix = { version = "1", features = ["time"], optional = true }
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols = { version = "0.32", features = ["client", "staging"], optional = true }
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 [dev-dependencies]

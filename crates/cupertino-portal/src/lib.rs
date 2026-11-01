@@ -1,5 +1,7 @@
 //! The session's xdg-desktop-portal backend. See the README.
 
+#[cfg(feature = "app")]
+pub mod capture;
 pub mod chooser;
 #[cfg(feature = "app")]
 pub mod dialog;

@@ -1484,6 +1484,7 @@ dependencies = [
  "cupertino-filepicker",
  "cupertino-kit",
  "cupertino-protocol-app",
+ "cupertino-screencast",
  "cupertino-test-bus",
  "cupertino-theme",
  "cupertino-ui-test",
@@ -1491,7 +1492,10 @@ dependencies = [
  "futures-lite",
  "mime_guess",
  "percent-encoding",
+ "rustix 1.1.5",
  "tempfile",
+ "wayland-client",
+ "wayland-protocols",
  "zbus",
 ]
 

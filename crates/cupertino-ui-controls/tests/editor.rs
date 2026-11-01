@@ -268,3 +268,26 @@ fn a_one_character_edit_shapes_and_lays_out_as_much_in_10_000_lines_as_in_1_000(
         "an edit lays out only its paragraph: {small:?}"
     );
 }
+
+#[test]
+fn a_new_width_breaks_the_lines_again_without_shaping_them_again() {
+    let mut h = focused::<10_000>();
+    let height = h.rect("editor").height();
+    let before = TextWork::current();
+    h.resize(Size::new(60.0, 400.0));
+    let after = TextWork::current();
+    assert_eq!(
+        after.shaped - before.shaped,
+        0,
+        "the paragraphs keep their shaping"
+    );
+    assert_eq!(
+        after.laid_out - before.laid_out,
+        10_001,
+        "each paragraph breaks once, and the field below"
+    );
+    assert!(
+        h.rect("editor").height() > height,
+        "the lines wrap at the new width"
+    );
+}

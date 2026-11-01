@@ -6,7 +6,7 @@ use std::error::Error;
 use std::path::PathBuf;
 
 use crate::agent::{Agent, AgentEvent};
-use crate::controls::{LevelWriter, Value};
+use crate::controls::{Control, LevelWriter, Value};
 use crate::history::History;
 use crate::inflight::Reads;
 use crate::live::{display_name, Live, LoginScreen, Pictures, Reading};
@@ -94,6 +94,14 @@ pub(crate) fn background_channel(
 /// The Wi-Fi pane scans this often while it is shown and the radio is on (approximate, §6.4).
 const SCAN: f64 = 10.0;
 
+/// The level slider being dragged: its control, its writer, when it last moved and where its knob is.
+pub(crate) struct LevelDrag {
+    id: ControlId,
+    writer: LevelWriter,
+    moved: f64,
+    value: f64,
+}
+
 pub struct State {
     pub(crate) paths: Paths,
     pub(crate) settings: Settings,
@@ -112,8 +120,7 @@ pub struct State {
     pub(crate) display: DisplayOptions,
     pub(crate) bus: Option<zbus::blocking::Connection>,
     pub(crate) sheet: Option<Sheet>,
-    /// The level slider being dragged: its control, its writer and when it last moved.
-    pub(crate) level: Option<(ControlId, LevelWriter, f64)>,
+    pub(crate) level: Option<LevelDrag>,
     pub(crate) start: std::time::Instant,
     pub(crate) refreshed: f64,
     pub(crate) scanned: f64,
@@ -382,6 +389,11 @@ impl State {
         for row in sections.iter_mut().flat_map(|s| &mut s.rows) {
             if let Some((_, e)) = self.errors.iter().find(|(id, _)| *id == row.id) {
                 row.error = Some(e.clone());
+            }
+            if let (Some(drag), Control::Level { value }) = (&self.level, &mut row.control) {
+                if drag.id == row.id {
+                    *value = drag.value;
+                }
             }
         }
         sections
@@ -852,18 +864,26 @@ impl State {
 
     /// The level slider `id` moved to `value` at `now`: the value to write now, if any.
     pub(crate) fn level_moved(&mut self, id: ControlId, value: f64, now: f64) -> Option<f64> {
-        let (_, writer, moved) = match &mut self.level {
-            Some(level) if level.0 == id => level,
-            level => level.insert((id, LevelWriter::default(), now)),
+        let drag = match &mut self.level {
+            Some(drag) if drag.id == id => drag,
+            level => level.insert(LevelDrag {
+                id,
+                writer: LevelWriter::default(),
+                moved: now,
+                value,
+            }),
         };
-        *moved = now;
-        writer.moved(value, now)
+        drag.moved = now;
+        drag.value = value;
+        drag.writer.moved(value, now)
     }
 
     /// The level slider's timer at `now`: its control, the waiting value to write if it is due, and whether the drag
     /// goes on. A slider still for [`LEVEL_SETTLE`] with nothing waiting ends its drag.
     pub(crate) fn level_tick(&mut self, now: f64) -> Option<(ControlId, Option<f64>, bool)> {
-        let (id, writer, moved) = self.level.as_mut()?;
+        let LevelDrag {
+            id, writer, moved, ..
+        } = self.level.as_mut()?;
         let id = *id;
         let write = writer
             .due()

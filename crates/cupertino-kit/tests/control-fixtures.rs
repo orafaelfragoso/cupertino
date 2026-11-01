@@ -645,6 +645,7 @@ fixtures! {
         label: "Password".into(),
         placeholder: "Required".into(),
         enabled: look.enabled,
+        on_change: None,
         on_submit: None,
     });
     scroll_view: "scroll-view", TALL, &[State::Normal, State::Hover, State::Focused], |look| ScrollView {

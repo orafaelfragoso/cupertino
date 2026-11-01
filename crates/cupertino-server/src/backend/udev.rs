@@ -317,7 +317,7 @@ fn open_card(session: &LogindSession, path: &Path) -> Result<Opened> {
     let context = EGLContext::new_with_priority(&display, ContextPriority::High)
         .map_err(|e| anyhow!("EGL context: {e}"))?;
     let renderer =
-        unsafe { GlesRenderer::new(context) }.map_err(|e| anyhow!("GLES renderer: {e}"))?;
+        unsafe { super::gles_renderer(context) }.map_err(|e| anyhow!("GLES renderer: {e}"))?;
     Ok(Opened {
         drm,
         notifier,

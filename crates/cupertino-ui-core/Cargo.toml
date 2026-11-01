@@ -17,6 +17,7 @@ cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-ui-theme = { path = "../cupertino-ui-theme" }
 rustix = { version = "1", features = ["time"] }
+tracing = "0.1"
 
 [dev-dependencies]
 proptest = "1.12"

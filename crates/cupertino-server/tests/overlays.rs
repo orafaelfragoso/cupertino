@@ -12,12 +12,16 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use cupertino_defaults::keyboard::ComposeKey;
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
 use cupertino_server::input::Mods;
 use cupertino_server::kbd::SourceSpec;
+use cupertino_server::localed::SystemLayout;
 use cupertino_server::Cupertino;
+use cupertino_test_bus::PrivateBus;
 use smithay::backend::input::{ButtonState, KeyState};
+use smithay::input::keyboard::keysyms;
 use smithay::input::keyboard::{Keycode, ModifiersState};
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
@@ -497,6 +501,95 @@ fn input_source_hud_switches_the_xkb_group_when_the_modifiers_are_released() {
     assert!(h.state.overlays.inputs.hud.is_some());
     h.at(5.4);
     assert!(h.state.overlays.inputs.hud.is_none());
+}
+
+struct FakeLocaled {
+    layout: &'static str,
+    variant: &'static str,
+    options: &'static str,
+}
+
+#[zbus::interface(name = "org.freedesktop.locale1")]
+impl FakeLocaled {
+    #[zbus(property, name = "X11Layout")]
+    fn x11_layout(&self) -> String {
+        self.layout.into()
+    }
+
+    #[zbus(property, name = "X11Variant")]
+    fn x11_variant(&self) -> String {
+        self.variant.into()
+    }
+
+    #[zbus(property, name = "X11Options")]
+    fn x11_options(&self) -> String {
+        self.options.into()
+    }
+}
+
+#[test]
+fn the_system_layouts_become_the_input_sources_with_their_options_and_the_set_compose_key() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let localed = FakeLocaled {
+        layout: "us,br",
+        variant: ",abnt2",
+        options: "grp:alt_shift_toggle,compose:menu,grp_led:scroll",
+    };
+    let _localed = zbus::blocking::connection::Builder::address(bus.address.as_str())
+        .unwrap()
+        .name("org.freedesktop.locale1")
+        .unwrap()
+        .serve_at("/org/freedesktop/locale1", localed)
+        .unwrap()
+        .build()
+        .unwrap();
+    let system = SystemLayout::read(Some(&bus.address)).unwrap();
+    let Some(mut h) = Harness::with_config(|c| c.keyboard.compose = Some(ComposeKey::RightAlt))
+    else {
+        return;
+    };
+    h.state.apply_system_layout(system);
+    let sources: Vec<&str> = h
+        .state
+        .config
+        .keyboard
+        .sources
+        .iter()
+        .map(|s| s.id.as_str())
+        .collect();
+    assert_eq!(sources, ["us", "br(abnt2)"]);
+    assert_eq!(
+        h.state.config.keyboard.xkb_options(),
+        "grp_led:scroll,compose:ralt"
+    );
+    const KEY_RIGHTALT: u32 = 100;
+    const KEY_COMPOSE: u32 = 127;
+    assert_eq!(
+        h.state.xkb_first_keysym(KEY_RIGHTALT, 0),
+        Some(keysyms::KEY_Multi_key)
+    );
+    assert_ne!(
+        h.state.xkb_first_keysym(KEY_COMPOSE, 0),
+        Some(keysyms::KEY_Multi_key),
+        "the set compose key replaces the system's"
+    );
+    let kb = h.state.seat.get_keyboard().unwrap();
+    kb.set_modifier_state(ModifiersState {
+        ctrl: true,
+        ..Default::default()
+    });
+    h.at(5.0);
+    h.state.scripted_key("Ctrl+space").unwrap();
+    kb.set_modifier_state(ModifiersState::default());
+    h.state.input_sources_modifiers(Mods::NONE);
+    assert_eq!(
+        h.state.active_xkb_group(),
+        1,
+        "Ctrl+Space switches to br(abnt2)"
+    );
 }
 
 #[test]

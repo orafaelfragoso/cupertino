@@ -21,7 +21,8 @@
 //! repeat_delay = 500 # ms before the first repeat; 0 switches key repeat off (default)
 //! repeat_interval = 83 # ms between repeats (default)
 //! modifier_profile = cupertino # or classic-pc
-//! input_sources = us, de, fr(nodeadkeys) # xkb layout[(variant)], menu order; two or more enable the switcher
+//! input_sources = us, de, fr(nodeadkeys) # xkb layout[(variant)], menu order; two or more enable the switcher;
+//!   # unset, the layouts localed holds (X11Layout, X11Variant), read at login
 //! caps_lock_delay = 75 # ms the caps-lock key must be held; 0 = off (default)
 //! accent_picker = on # hold a letter key to pick an accented variant
 //! accent_table = ~/.config/cupertino/accents.json # JSON of `cupertino_keyboard::AccentTable::from_json`
@@ -32,6 +33,9 @@
 //! caps_lock_hold = 500 # ms a caps-lock press must last to count as a hold, 1 to 1500 (default)
 //! layout_keyboard = ansi # physical key arrangement of `decoded: input sources: ansi, iso, jis
 //! layout_level3 = right-alt # keys that select the alternate symbols of `decoded: sources: both-alt, right-alt, none
+//! compose_key = right-alt # the compose key of the system layouts: off, right-alt, right-ctrl, menu, caps-lock,
+//!   # scroll-lock; unset keeps the compose option of localed's X11Options, which apply except its layout
+//!   # switching keys (grp:*: the input sources switch the layouts); right-alt takes AltGr from layouts that use it
 //! slow_keys = off # a key counts only once it is held for the delay
 //! slow_keys_delay = 250 # ms (default)
 //! sticky_keys = off # modifiers latch for the next key, a second press locks them
@@ -50,7 +54,7 @@
 use std::path::PathBuf;
 
 use cupertino_defaults::keyboard::{
-    expand_home, FnKey, KeyboardSettings as KeyboardConf, LayoutKeyboard, Level3,
+    expand_home, ComposeKey, FnKey, KeyboardSettings as KeyboardConf, LayoutKeyboard, Level3,
 };
 use cupertino_input::{Action as InputAction, KeyCombo, Modifiers, ScreenshotRequest, ShortcutMap};
 use cupertino_keyboard::keys::{Key, NamedKey};
@@ -142,6 +146,10 @@ pub struct KeyboardSettings {
     pub layout_keyboard: Keyboard,
     /// Keys that select the alternate symbol tables of decoded layouts.
     pub layout_level3: Level3Keys,
+    /// The compose key of the system layouts; `None` keeps the one the system's xkb options set.
+    pub compose: Option<ComposeKey>,
+    /// The layout localed holds: its layouts are the sources when `keyboard.conf` sets none, its options apply.
+    pub system: crate::localed::SystemLayout,
     /// Rewrite Super and Alt chords for third-party clients under the `cupertino` profile
     /// (§10). On by default (approximate).
     pub client_rewrite: bool,
@@ -179,6 +187,8 @@ impl Default for KeyboardSettings {
             fn_usage: None,
             layout_keyboard: Keyboard::Ansi,
             layout_level3: Level3Keys::RightAlt,
+            compose: None,
+            system: crate::localed::SystemLayout::default(),
             client_rewrite: true,
             rewrite_terminals: DEFAULT_REWRITE_TERMINALS
                 .iter()
@@ -254,6 +264,9 @@ impl KeyboardSettings {
                 LayoutKeyboard::Iso => Keyboard::Iso,
                 LayoutKeyboard::Jis => Keyboard::Jis,
             };
+        }
+        if let Some(k) = f.compose_key {
+            self.compose = Some(k);
         }
         if let Some(l) = f.layout_level3 {
             self.layout_level3 = match l {
@@ -397,6 +410,39 @@ impl KeyboardSettings {
             shift: m.shift,
             logo: m.logo,
         }
+    }
+
+    /// Take the system's layouts as the input sources when there are none.
+    pub fn use_system_layout(&mut self) {
+        if self.sources.is_empty() {
+            self.sources = self.system.sources();
+        }
+    }
+
+    /// The comma separated xkb options of the system layouts: the system's, with `compose` in place of its compose
+    /// option when set, and without its layout switching keys (`grp:`), since the input sources switch the layouts
+    /// (a switch inside xkb would leave the menu, the HUD and the per-application source behind).
+    pub fn xkb_options(&self) -> String {
+        let compose = self.compose.map(|key| match key {
+            ComposeKey::Off => None,
+            ComposeKey::RightAlt => Some("compose:ralt"),
+            ComposeKey::RightCtrl => Some("compose:rctrl"),
+            ComposeKey::Menu => Some("compose:menu"),
+            ComposeKey::CapsLock => Some("compose:caps"),
+            ComposeKey::ScrollLock => Some("compose:sclk"),
+        });
+        self.system
+            .options
+            .split(',')
+            .map(str::trim)
+            .filter(|option| {
+                !option.is_empty()
+                    && !option.starts_with("grp:")
+                    && !(compose.is_some() && option.starts_with("compose:"))
+            })
+            .chain(compose.flatten())
+            .collect::<Vec<_>>()
+            .join(",")
     }
 
     /// Comma separated xkb layout and variant lists for `XkbConfig` of the system layouts among the sources (empty
@@ -867,6 +913,15 @@ mod tests {
         let (file, problems) = KeyboardConf::parse(text, None);
         s.apply_file(&file);
         problems.iter().map(|p| p.line).collect()
+    }
+
+    #[test]
+    fn the_system_options_keep_their_compose_key_and_lose_their_layout_switching_keys() {
+        let mut s = KeyboardSettings::default();
+        s.system.options = "grp:alt_shift_toggle, grp_led:scroll,compose:menu".into();
+        assert_eq!(s.xkb_options(), "grp_led:scroll,compose:menu");
+        s.compose = Some(ComposeKey::Off);
+        assert_eq!(s.xkb_options(), "grp_led:scroll");
     }
 
     #[test]

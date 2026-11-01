@@ -381,17 +381,52 @@ impl Cupertino {
             return;
         };
         let (layout, variant) = self.config.keyboard.xkb_names();
-        if layout.is_empty() {
+        let options = self.config.keyboard.xkb_options();
+        if layout.is_empty() && options.is_empty() {
             return;
         }
         let cfg = XkbConfig {
             layout: &layout,
             variant: &variant,
+            options: (!options.is_empty()).then(|| options.clone()),
             ..XkbConfig::default()
         };
         if let Err(e) = keyboard.set_xkb_config(self, cfg) {
-            tracing::warn!(error = ?e, layout, variant, "the configured input sources do not form a keymap");
+            tracing::warn!(error = ?e, layout, variant, options, "the configured input sources do not form a keymap");
         }
+    }
+
+    /// Take the layout localed holds: its layouts become the input sources unless `keyboard.conf` sets some, and its
+    /// xkb options apply.
+    pub fn apply_system_layout(&mut self, system: crate::localed::SystemLayout) {
+        tracing::info!(
+            layout = system.layout,
+            variant = system.variant,
+            options = system.options,
+            "system keyboard layout"
+        );
+        if system
+            .options
+            .split(',')
+            .any(|o| o.trim().starts_with("grp:"))
+        {
+            tracing::info!(
+                options = system.options,
+                "the system's layout switching keys (grp:) are left out: the input sources switch the layouts"
+            );
+        }
+        let keyboard = &mut self.config.keyboard;
+        keyboard.system = system;
+        if self.live.files.keyboard.input_sources.is_none() {
+            keyboard.sources.clear();
+        }
+        keyboard.use_system_layout();
+        self.overlays.inputs = crate::kbd::InputSources::new(self.config.keyboard.sources.clone());
+        self.caps = crate::kbd::CapsDebounce::new(
+            self.config.keyboard.caps,
+            self.config.keyboard.caps_switch_hold(),
+        );
+        self.apply_keyboard_settings();
     }
 
     // ---- input sources -----------------------------------------------------------------------
@@ -524,6 +559,18 @@ impl Cupertino {
             return 0;
         };
         keyboard.with_xkb_state(self, |ctx| ctx.xkb().lock().unwrap().active_layout().0)
+    }
+
+    /// The first-level keysym of the evdev key `evdev` in the layout `layout` of the seat keymap.
+    pub fn xkb_first_keysym(&mut self, evdev: u32, layout: u32) -> Option<u32> {
+        let keyboard = self.seat.get_keyboard()?;
+        // SAFETY: the keymap reference only lives for this lookup, inside the lock
+        keyboard.with_xkb_state(self, |ctx| {
+            unsafe { ctx.xkb().lock().unwrap().keymap() }
+                .key_get_syms_by_level(Keycode::new(evdev + 8), layout, 0)
+                .first()
+                .map(|sym| sym.raw())
+        })
     }
 
     // ---- caps lock ---------------------------------------------------------------------------

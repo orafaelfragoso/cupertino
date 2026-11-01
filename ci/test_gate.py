@@ -140,6 +140,18 @@ class IgnoredOutputTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(gate.metadata_problems(Path(tmp).resolve()), [])
 
+    def test_a_failing_contracts_check_is_a_problem(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "ci").mkdir()
+            (root / "ci" / "contracts.py").write_text("import sys\nprint('no entry', file=sys.stderr)\nsys.exit(1)\n")
+            problems = gate.contracts_problems(root.resolve())
+        self.assertEqual(problems, ["contracts: no entry"])
+
+    def test_a_tree_without_a_contracts_check_has_no_contracts_problems(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(gate.contracts_problems(Path(tmp).resolve()), [])
+
 
 if __name__ == "__main__":
     unittest.main()

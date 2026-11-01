@@ -1,0 +1,24 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Soak</title>
+<style>
+  body { margin: 0; font: 16px sans-serif; }
+  video { position: sticky; top: 0; width: 640px; display: block; }
+  p { margin: 0; padding: 12px 16px; border-bottom: 1px solid #ccc; }
+</style>
+<video src="video.webm" autoplay muted loop></video>
+<main></main>
+<script>
+  const main = document.querySelector("main");
+  for (let i = 0; i < 2000; i++) {
+    const p = document.createElement("p");
+    p.textContent = `Line ${i}: the soak page scrolls by itself while the video plays.`;
+    main.append(p);
+  }
+  let down = true;
+  setInterval(() => {
+    window.scrollBy(0, down ? 40 : -40);
+    if (window.scrollY + window.innerHeight >= document.body.scrollHeight - 1) down = false;
+    else if (window.scrollY === 0) down = true;
+  }, 16);
+</script>

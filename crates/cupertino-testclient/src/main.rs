@@ -1,22 +1,24 @@
 //! The `cupertino-testclient` process: a first-party application window for the QEMU harness.
 //! It maps one window with the given application id and title, and appends what is typed into it to a file, so a
 //! check can tell which window has the keyboard focus. With `--frames FILE` it draws a new frame at every frame callback
-//! and writes how many it presented to FILE, so a check can tell that the server keeps releasing its buffers. It is not
-//! part of the desktop.
+//! and writes how many it presented to FILE, so a check can tell that the server keeps releasing its buffers. With
+//! `--intervals FILE` it animates the same way and writes the time between consecutive presented frames, in
+//! microseconds, one line each, so a soak can follow frame pacing. It is not part of the desktop.
 
 use std::error::Error;
 use std::fs::File;
-use std::io::Write;
+use std::io::{LineWriter, Write};
 use std::process::ExitCode;
 use std::time::Duration;
 
 use cupertino_wayland_client::{
-    BufferFormat, Connection, Decorations, Error as TransportError, Event, KeyboardEvent, Toplevel,
-    ToplevelConfig,
+    BufferFormat, Connection, Decorations, Error as TransportError, Event, KeyboardEvent,
+    Presented, Toplevel, ToplevelConfig,
 };
 
 const USAGE: &str =
-    "usage: cupertino-testclient --app-id ID --title TITLE --output FILE [--frames FILE]";
+    "usage: cupertino-testclient --app-id ID --title TITLE --output FILE [--frames FILE] \
+                     [--intervals FILE]";
 
 /// Logical size of the window when the server leaves it to the client; the test checks never depend on it.
 const WINDOW_SIZE: (u32, u32) = (480, 320);
@@ -32,11 +34,13 @@ struct Options {
     title: String,
     output: String,
     frames: Option<String>,
+    intervals: Option<String>,
 }
 
 impl Options {
     fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
-        let (mut app_id, mut title, mut output, mut frames) = (None, None, None, None);
+        let (mut app_id, mut title, mut output, mut frames, mut intervals) =
+            (None, None, None, None, None);
         let mut args = args;
         while let Some(flag) = args.next() {
             let slot = match flag.as_str() {
@@ -44,6 +48,7 @@ impl Options {
                 "--title" => &mut title,
                 "--output" => &mut output,
                 "--frames" => &mut frames,
+                "--intervals" => &mut intervals,
                 other => return Err(format!("unknown argument {other}")),
             };
             *slot = Some(args.next().ok_or_else(|| format!("{flag} needs a value"))?);
@@ -53,6 +58,7 @@ impl Options {
             title: title.ok_or("--title is required")?,
             output: output.ok_or("--output is required")?,
             frames,
+            intervals,
         })
     }
 }
@@ -93,6 +99,12 @@ fn run(options: &Options) -> Result<(), Box<dyn Error>> {
     let mut output: Option<File> = None;
     let (mut configured, mut dirty, mut blocked) = (false, false, false);
     let mut presented: u64 = 0;
+    let animating = options.frames.is_some() || options.intervals.is_some();
+    let mut intervals = match &options.intervals {
+        Some(path) => Some(LineWriter::new(File::create(path)?)),
+        None => None,
+    };
+    let mut last_presented: Option<u64> = None;
     loop {
         for event in conn.wait(blocked.then_some(RETRY))? {
             match event {
@@ -112,15 +124,22 @@ fn run(options: &Options) -> Result<(), Box<dyn Error>> {
                         write!(file, "{c}")?;
                     }
                 }
-                Event::Frame(_) if options.frames.is_some() => dirty = true,
+                Event::Frame(_) if animating => dirty = true,
+                Event::Presented(Presented { time_ns, .. }) => {
+                    if let (Some(file), Some(last)) = (intervals.as_mut(), last_presented) {
+                        writeln!(file, "{}", time_ns.saturating_sub(last) / 1000)?;
+                    }
+                    last_presented = Some(time_ns);
+                }
                 Event::Close(_) => return Ok(()),
                 _ => {}
             }
         }
         if configured && dirty {
-            let grey = match options.frames {
-                Some(_) => FILL_GREY - (presented % 16) as u8,
-                None => FILL_GREY,
+            let grey = if animating {
+                FILL_GREY - (presented % 16) as u8
+            } else {
+                FILL_GREY
             };
             blocked = !draw(&mut conn, toplevel, grey)?;
             if !blocked {
@@ -183,12 +202,20 @@ mod tests {
             ),
             ("one", "Two", "/tmp/x")
         );
-        assert_eq!(parsed.frames, None);
+        assert_eq!((parsed.frames, parsed.intervals), (None, None));
         let animating = Options::parse(args(
             "--app-id one --title Two --output /tmp/x --frames /tmp/f",
         ))
         .unwrap();
         assert_eq!(animating.frames.as_deref(), Some("/tmp/f"));
+        let pacing = Options::parse(args(
+            "--app-id one --title Two --output /tmp/x --intervals /tmp/i",
+        ))
+        .unwrap();
+        assert_eq!(
+            (pacing.frames.as_deref(), pacing.intervals.as_deref()),
+            (None, Some("/tmp/i"))
+        );
         assert_eq!(
             Options::parse(args("--app-id one --title Two"))
                 .err()

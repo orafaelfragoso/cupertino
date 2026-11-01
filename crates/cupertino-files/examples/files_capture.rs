@@ -266,6 +266,7 @@ impl App for Capture {
             increase_contrast: r.look.increase_contrast,
             marquee: None,
             status: "",
+            sidebar_focus: None,
         };
         let scale = f64::from(r.scale);
         let mut pm = Pixmap::new((w * scale).ceil() as u32, (h * scale).ceil() as u32)

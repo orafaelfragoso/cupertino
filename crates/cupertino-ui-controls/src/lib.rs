@@ -486,7 +486,7 @@ pub enum Scroller {
 }
 
 /// Content larger than its frame, clipped and moved by `state.offset`, which the model keeps: the view reports its
-/// size and every move through `on_scroll`. It is a Tab stop only when nothing in it is; keys from a focused child
+/// size and every move through `on_scroll`. It is a Tab stop only when its content passes its frame and nothing in it is a stop; keys from a focused child
 /// that the child does not use scroll it. Build its element with `Element::from`.
 pub struct ScrollView<M> {
     pub content: Element<M>,
@@ -571,7 +571,7 @@ pub struct GroupWindow<M> {
 }
 
 /// A panel below a control of another window: a non-modal dialog that takes the keyboard while open, moves the focus
-/// to its first focusable item, keeps Tab inside, and closes on Escape or a press outside. Closing gives the focus
+/// to its first focusable item, or to the dialog when it has none, keeps Tab inside, and closes on Escape or a press outside. Closing gives the focus
 /// back to the anchor. It is as large as its content up to 400 by 600 pt; taller content scrolls vertically inside
 /// the padding, by `scroll`, which the model keeps like a [`ScrollView`]'s. Declare [`Popover::window`] with the
 /// other windows while it is open.

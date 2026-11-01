@@ -6,6 +6,7 @@
 use crate::accessibility::{AccessibilityNode, AccessibleValue, Role};
 use crate::cx::{Semantics, SemanticsCx};
 use crate::route::Geometry;
+use crate::scroll::can_scroll;
 use crate::tree::Tree;
 use crate::NodeId;
 use cupertino_geometry::{Rect, Size};
@@ -35,6 +36,7 @@ fn declared<M: 'static>(tree: &Tree<M>, id: NodeId) -> Option<Semantics> {
             node: id,
             size: Size::ZERO,
             direction: LayoutDirection::Ltr,
+            can_scroll: false,
             semantics: &mut semantics,
         },
     );
@@ -89,6 +91,7 @@ pub(crate) fn build<M: 'static>(
                 node: id,
                 size: rect.size,
                 direction,
+                can_scroll: can_scroll(tree, geometry, id, direction),
                 semantics: &mut semantics,
             },
         );

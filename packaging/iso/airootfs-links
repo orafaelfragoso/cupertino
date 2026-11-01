@@ -1,0 +1,17 @@
+etc/localtime /usr/share/zoneinfo/UTC
+etc/resolv.conf /run/systemd/resolve/stub-resolv.conf
+etc/systemd/system/dbus-org.freedesktop.network1.service /usr/lib/systemd/system/systemd-networkd.service
+etc/systemd/system/dbus-org.freedesktop.resolve1.service /usr/lib/systemd/system/systemd-resolved.service
+etc/systemd/system/dbus-org.freedesktop.timesync1.service /usr/lib/systemd/system/systemd-timesyncd.service
+etc/systemd/system-generators/systemd-gpt-auto-generator /dev/null
+etc/systemd/system/getty.target.wants/getty@tty2.service /usr/lib/systemd/system/getty@.service
+etc/systemd/system/multi-user.target.wants/cupertino-live.service ../cupertino-live.service
+etc/systemd/system/multi-user.target.wants/iwd.service /usr/lib/systemd/system/iwd.service
+etc/systemd/system/multi-user.target.wants/pacman-init.service ../pacman-init.service
+etc/systemd/system/multi-user.target.wants/qemu-guest-agent.service /usr/lib/systemd/system/qemu-guest-agent.service
+etc/systemd/system/multi-user.target.wants/systemd-networkd.service /usr/lib/systemd/system/systemd-networkd.service
+etc/systemd/system/multi-user.target.wants/systemd-resolved.service /usr/lib/systemd/system/systemd-resolved.service
+etc/systemd/system/network-online.target.wants/systemd-networkd-wait-online.service /usr/lib/systemd/system/systemd-networkd-wait-online.service
+etc/systemd/system/sockets.target.wants/systemd-networkd.socket /usr/lib/systemd/system/systemd-networkd.socket
+etc/systemd/system/sysinit.target.wants/systemd-timesyncd.service /usr/lib/systemd/system/systemd-timesyncd.service
+etc/systemd/system/sysinit.target.wants/systemd-time-wait-sync.service /usr/lib/systemd/system/systemd-time-wait-sync.service

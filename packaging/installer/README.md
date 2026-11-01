@@ -23,7 +23,8 @@ installer refuses any other archinstall version, because the configuration forma
 | Disk | GPT: a 1 GiB FAT32 ESP at `/boot`, then ext4 at `/` filling the disk (in LUKS2 when encrypted); zram swap |
 | Boot | systemd-boot with the entries "Cupertino" (the default) and "Cupertino (recovery: text login)"; a 3 s menu |
 | Graphics | `mesa`; on an NVIDIA card from Turing (PCI device `10de:1e00`) on: `nvidia-open`, `nvidia-utils`, `libva-nvidia-driver` and `nvidia_drm modeset=1`; older NVIDIA cards stay on nouveau |
-| System | NetworkManager, PipeWire, Bluetooth, `foot`, `xwayland-satellite`, `base-devel`, `git` |
+| System | NetworkManager (enabled, so a text login has a network: `nmtui`), PipeWire, Bluetooth, `foot`, `xwayland-satellite` |
+| Apps | Chromium (native Wayland: `~/.config/chromium-flags.conf` holds `--ozone-platform=wayland`), `git`, `base-devel`, `rustup`, `github-cli` |
 | Cupertino | `cupertino` and `cupertino-data` from the USB's `[cupertino]` repository, which is then taken out of the new `pacman.conf` |
 
 ## When the Cupertino session does not start

@@ -562,6 +562,7 @@ fixtures! {
                 secondary: false,
                 selected,
             })),
+            key: None,
             type_select: None,
             on_scroll: Box::new(Message::Scroll),
             on_select: Some(Box::new(|_| Message::Nothing)),

@@ -845,6 +845,90 @@
   source: crates/cupertino-ui-menus/src/objects.rs
   source_match: "org.gtk.Actions"
   note: only the menu bar connection the compositor names (cupertino_app_menu_v1.menu_reader) may list or activate actions; any other peer is AccessDenied
+- name: org.freedesktop.impl.portal.Settings
+  kind: dbus-interface
+  version: n/a
+  bus: session
+  bus_name: org.freedesktop.impl.portal.desktop.cupertino
+  owner_crate: cupertino-portal
+  owner_area: services
+  scope: shell-private
+  test_owner: crates/cupertino-portal/tests/settings.rs
+  source: crates/cupertino-portal/src/settings.rs
+  source_match: "org.freedesktop.impl.portal.Settings"
+  note: only the xdg-desktop-portal frontend calls
+- name: org.freedesktop.impl.portal.FileChooser
+  kind: dbus-interface
+  version: n/a
+  bus: session
+  bus_name: org.freedesktop.impl.portal.desktop.cupertino
+  owner_crate: cupertino-portal
+  owner_area: services
+  scope: shell-private
+  test_owner: crates/cupertino-portal/tests/file_chooser.rs
+  source: crates/cupertino-portal/src/file_chooser.rs
+  source_match: "org.freedesktop.impl.portal.FileChooser"
+  note: only the xdg-desktop-portal frontend calls
+- name: org.freedesktop.impl.portal.Request
+  kind: dbus-interface
+  version: n/a
+  bus: session
+  bus_name: org.freedesktop.impl.portal.desktop.cupertino
+  owner_crate: cupertino-portal
+  owner_area: services
+  scope: shell-private
+  test_owner: crates/cupertino-portal/tests/file_chooser.rs
+  source: crates/cupertino-portal/src/request.rs
+  source_match: "org.freedesktop.impl.portal.Request"
+  note: one object for each open request; only the frontend calls
+- name: org.freedesktop.impl.portal.ScreenCast
+  kind: dbus-interface
+  version: n/a
+  bus: session
+  bus_name: org.freedesktop.impl.portal.desktop.cupertino
+  owner_crate: cupertino-portal
+  owner_area: services
+  scope: shell-private
+  test_owner: crates/cupertino-portal/tests/screen_cast.rs
+  source: crates/cupertino-portal/src/screen_cast.rs
+  source_match: "org.freedesktop.impl.portal.ScreenCast"
+  note: only the xdg-desktop-portal frontend calls
+- name: org.freedesktop.impl.portal.Session
+  kind: dbus-interface
+  version: n/a
+  bus: session
+  bus_name: org.freedesktop.impl.portal.desktop.cupertino
+  owner_crate: cupertino-portal
+  owner_area: services
+  scope: shell-private
+  test_owner: crates/cupertino-portal/tests/screen_cast.rs
+  source: crates/cupertino-portal/src/screen_cast.rs
+  source_match: "org.freedesktop.impl.portal.Session"
+  note: one object for each screen cast session; only the frontend calls
+- name: org.freedesktop.PolicyKit1.AuthenticationAgent
+  kind: dbus-interface
+  version: n/a
+  bus: system
+  bus_name: none
+  owner_crate: cupertino-polkit-agent
+  owner_area: services
+  scope: system
+  test_owner: crates/cupertino-polkit-agent/tests/agent.rs
+  source: crates/cupertino-polkit-agent/src/agent.rs
+  source_match: "org.freedesktop.PolicyKit1.AuthenticationAgent"
+  note: registered with polkitd for the session; only polkitd calls
+- name: org.bluez.Agent1
+  kind: dbus-interface
+  version: n/a
+  bus: system
+  bus_name: none
+  owner_crate: cupertino-settings
+  owner_area: services
+  scope: system
+  test_owner: crates/cupertino-settings/tests/fallback-services.rs
+  source: crates/cupertino-settings/src/bluez.rs
+  source_match: "org.bluez.Agent1"
+  note: the pairing agent Settings registers with BlueZ; only bluetoothd calls
 - name: cupertino-assets
   kind: binary
   version: 0.1.0
@@ -881,6 +965,15 @@
   scope: public
   test_owner: unknown
   source: crates/cupertino-cursor/src/bin/cupertino-cursor.rs
+- name: cupertino-diagnose
+  kind: binary
+  version: 0.1.0
+  shipped: yes
+  owner_crate: cupertino-diagnostics
+  owner_area: services
+  scope: public
+  test_owner: unknown
+  source: crates/cupertino-diagnostics/src/bin/cupertino-diagnose.rs
 - name: cupertino-dock
   kind: binary
   version: 0.1.0
@@ -962,6 +1055,24 @@
   scope: shell-private
   test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-osd/src/main.rs
+- name: cupertino-polkit-agent
+  kind: binary
+  version: 0.1.0
+  shipped: yes
+  owner_crate: cupertino-polkit-agent
+  owner_area: services
+  scope: shell-private
+  test_owner: crates/cupertino-server/tests/shell_processes.rs
+  source: crates/cupertino-polkit-agent/src/main.rs
+- name: cupertino-portal
+  kind: binary
+  version: 0.1.0
+  shipped: yes
+  owner_crate: cupertino-portal
+  owner_area: services
+  scope: shell-private
+  test_owner: crates/cupertino-server/tests/shell_processes.rs
+  source: crates/cupertino-portal/src/main.rs
 - name: cupertino-powerd
   kind: binary
   version: 0.1.0

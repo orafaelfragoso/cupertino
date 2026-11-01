@@ -111,6 +111,7 @@ fn mice(list: &[(&str, &str, u32, bool)]) -> Reading<Vec<Mouse>> {
 fn live(painter: &mut Painter, scratch: &std::path::Path) -> Live {
     let network = |ssid: &str, signal, security: &str, saved, connected| Network {
         ssid: ssid.into(),
+        name: ssid.into(),
         signal,
         security: security.into(),
         saved,

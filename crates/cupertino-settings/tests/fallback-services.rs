@@ -172,6 +172,7 @@ impl FakeDevice {
 }
 
 struct FakeWireless {
+    access_points: usize,
     log: Log,
 }
 
@@ -183,7 +184,7 @@ impl FakeWireless {
     }
 
     fn get_all_access_points(&self) -> Vec<OwnedObjectPath> {
-        (1..=5)
+        (1..=self.access_points)
             .map(|i| path(&format!("/org/freedesktop/NetworkManager/AccessPoint/{i}")))
             .collect()
     }
@@ -194,7 +195,7 @@ impl FakeWireless {
 }
 
 struct FakeAccessPoint {
-    ssid: &'static str,
+    ssid: &'static [u8],
     strength: u8,
     /// Privacy, WPA and RSN flags.
     flags: (u32, u32, u32),
@@ -204,7 +205,7 @@ struct FakeAccessPoint {
 impl FakeAccessPoint {
     #[zbus(property)]
     fn ssid(&self) -> Vec<u8> {
-        self.ssid.as_bytes().to_vec()
+        self.ssid.to_vec()
     }
 
     #[zbus(property)]
@@ -264,7 +265,26 @@ impl FakeConnection {
 const PSK: u32 = 0x100;
 const SAE: u32 = 0x400;
 
+/// SSID, strength and flags of an access point.
+type AccessPointRecord = (&'static [u8], u8, (u32, u32, u32));
+
+const ACCESS_POINTS: [AccessPointRecord; 5] = [
+    (b"home", 80, (1, 0, PSK)),
+    (b"office", 60, (1, 0, PSK)),
+    (b"cafe", 90, (0, 0, 0)),
+    (b"lab", 50, (1, 0, SAE)),
+    // a second radio of the office network, weaker: one row with the stronger signal
+    (b"office", 30, (1, 0, PSK)),
+];
+
 fn serve_nm(bus: &common::PrivateBus) -> (zbus::blocking::Connection, Log) {
+    serve_nm_with(bus, &ACCESS_POINTS)
+}
+
+fn serve_nm_with(
+    bus: &common::PrivateBus,
+    access_points: &[AccessPointRecord],
+) -> (zbus::blocking::Connection, Log) {
     let log = Log::default();
     let mut c = bus
         .blocking_builder()
@@ -287,7 +307,13 @@ fn serve_nm(bus: &common::PrivateBus) -> (zbus::blocking::Connection, Log) {
             },
         )
         .unwrap()
-        .serve_at(WLAN, FakeWireless { log: log.clone() })
+        .serve_at(
+            WLAN,
+            FakeWireless {
+                access_points: access_points.len(),
+                log: log.clone(),
+            },
+        )
         .unwrap()
         .serve_at(
             ETH,
@@ -310,15 +336,7 @@ fn serve_nm(bus: &common::PrivateBus) -> (zbus::blocking::Connection, Log) {
             )
             .unwrap();
     }
-    let access_points = [
-        ("home", 80, (1, 0, PSK)),
-        ("office", 60, (1, 0, PSK)),
-        ("cafe", 90, (0, 0, 0)),
-        ("lab", 50, (1, 0, SAE)),
-        // a second radio of the office network, weaker: one row with the stronger signal
-        ("office", 30, (1, 0, PSK)),
-    ];
-    for (i, (ssid, strength, flags)) in access_points.into_iter().enumerate() {
+    for (i, &(ssid, strength, flags)) in access_points.iter().enumerate() {
         c = c
             .serve_at(
                 format!("/org/freedesktop/NetworkManager/AccessPoint/{}", i + 1),
@@ -442,6 +460,51 @@ fn the_wifi_and_network_panes_read_and_change_networkmanager() {
     );
 }
 
+#[test]
+fn ssids_that_differ_only_in_bytes_that_are_not_text_stay_two_networks_and_names_are_cleaned() {
+    let Some(bus) = common::bus() else { return };
+    let (_nm, log) = serve_nm_with(
+        &bus,
+        &[
+            (b"caf\xe9", 90, (0, 0, 0)),
+            (b"caf\xe8", 40, (0, 0, 0)),
+            (b"\xe2\x80\xaeLobby\x1b[2J\n", 60, (0, 0, 0)),
+        ],
+    );
+    let mut services = services(&bus);
+    services.detect();
+    let wifi = services.wifi(None);
+    let wifi = wifi.ready().expect("NetworkManager is read");
+    assert_eq!(
+        wifi.networks
+            .iter()
+            .map(|n| (n.name.as_str(), n.signal))
+            .collect::<Vec<_>>(),
+        [
+            ("caf\u{fffd}", -55),
+            ("Lobby[2J", -70),
+            ("caf\u{fffd}", -80)
+        ],
+        "two rows for the two networks, and a clean name for the third"
+    );
+    assert_eq!(wifi.devices[0].ssid, "caf\u{fffd}");
+    assert_ne!(wifi.networks[0].ssid, wifi.networks[2].ssid);
+    services
+        .call(&Call::Join {
+            ssid: wifi.networks[2].ssid.clone(),
+            passphrase: Some(Secret::new()),
+        })
+        .unwrap();
+    assert_eq!(
+        *log.lock().unwrap(),
+        [
+            "AddAndActivateConnection(None,/org/freedesktop/NetworkManager/Devices/1,\
+          /org/freedesktop/NetworkManager/AccessPoint/2)"
+        ],
+        "the weaker network's Join reaches its own access point"
+    );
+}
+
 // ---- BlueZ -------------------------------------------------------------------------------------------------------
 
 const HCI0: &str = "/org/bluez/hci0";
@@ -550,15 +613,15 @@ impl FakeBtDevice {
 
     #[zbus(property)]
     fn set_trusted(&mut self, on: bool) {
-        push(&self.log, format!("Trusted({})={on}", self.name));
+        push(&self.log, format!("Trusted({})={on}", self.address));
     }
 
     fn connect(&self) {
-        push(&self.log, format!("Connect({})", self.name));
+        push(&self.log, format!("Connect({})", self.address));
     }
 
     fn disconnect(&self) {
-        push(&self.log, format!("Disconnect({})", self.name));
+        push(&self.log, format!("Disconnect({})", self.address));
     }
 
     /// Pair by asking the default agent to confirm 123456, as bluetoothd does.
@@ -652,7 +715,11 @@ fn serve_bluez(bus: &common::PrivateBus) -> (zbus::blocking::Connection, Log) {
         .unwrap()
         .serve_at(HEADPHONES, device("Headphones", "AA:00:00:00:00:01", true))
         .unwrap()
-        .serve_at(KEYBOARD, device("Keyboard", "AA:00:00:00:00:02", false))
+        // the radio's name carries a right-to-left override, a bell and a newline; the rows and the prompt show neither
+        .serve_at(
+            KEYBOARD,
+            device("Key\u{202e}board\u{7}\n", "AA:00:00:00:00:02", false),
+        )
         .unwrap()
         .name("org.bluez")
         .unwrap()
@@ -786,9 +853,9 @@ fn the_bluetooth_pane_reads_bluez_pairs_through_its_agent_and_trusts_what_it_pai
             "RegisterAgent(/org/cupertino/Settings1/Agent,KeyboardDisplay)",
             "RequestDefaultAgent(/org/cupertino/Settings1/Agent)",
             "StartDiscovery",
-            "Trusted(Keyboard)=true",
-            "Connect(Headphones)",
-            "Disconnect(Headphones)",
+            "Trusted(AA:00:00:00:00:02)=true",
+            "Connect(AA:00:00:00:00:01)",
+            "Disconnect(AA:00:00:00:00:01)",
             &format!("RemoveDevice({HEADPHONES})"),
             "Powered=false",
             "StopDiscovery",

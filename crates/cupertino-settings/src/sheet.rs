@@ -112,6 +112,8 @@ pub enum Kind {
     /// The passphrase of a secured network that is not saved. The passphrase is never stored by the application.
     Passphrase {
         ssid: String,
+        /// The network as a label.
+        name: String,
         text: Secret,
         failure: Option<String>,
     },
@@ -234,10 +236,12 @@ pub struct SheetLayout {
 }
 
 impl Sheet {
-    pub fn passphrase(ssid: &str) -> Self {
+    /// The passphrase of network `ssid` (the service's key), shown as `name`.
+    pub fn passphrase(ssid: &str, name: &str) -> Self {
         Sheet {
             kind: Kind::Passphrase {
                 ssid: ssid.to_string(),
+                name: name.to_string(),
                 text: Secret::new(),
                 failure: None,
             },
@@ -354,8 +358,8 @@ impl Sheet {
 
     pub fn title(&self) -> String {
         match &self.kind {
-            Kind::Passphrase { ssid, .. } => {
-                format!("Enter the password for \u{201c}{ssid}\u{201d}")
+            Kind::Passphrase { name, .. } => {
+                format!("Enter the password for \u{201c}{name}\u{201d}")
             }
             Kind::Forget {
                 what: Forget::Device(_),
@@ -970,7 +974,7 @@ mod tests {
 
     #[test]
     fn no_debug_output_shows_a_typed_secret() {
-        let mut s = Sheet::passphrase("office");
+        let mut s = Sheet::passphrase("office", "office");
         for c in "hunter22".chars() {
             s.key(SheetKey::Type(c));
         }
@@ -1001,7 +1005,7 @@ mod tests {
 
     #[test]
     fn the_passphrase_sheet_joins_with_what_was_typed_and_stays_up_on_a_refusal() {
-        let mut s = Sheet::passphrase("office");
+        let mut s = Sheet::passphrase("office", "office");
         assert_eq!(s.key(SheetKey::Return), Outcome::Stay, "nothing typed yet");
         for c in "secret".chars() {
             s.key(SheetKey::Type(c));

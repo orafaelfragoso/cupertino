@@ -20,7 +20,7 @@ use crate::clipboard::{self, State};
 use crate::controls::{Control, Tile, Value, MUTE_BELOW};
 use crate::form::RowSpec;
 use crate::live::{
-    duration_text, BatteryState, Bluetooth, Live, LoginScreen, Mouse, Reading, Wifi,
+    display_name, duration_text, BatteryState, Bluetooth, Live, LoginScreen, Mouse, Reading, Wifi,
 };
 use crate::mapping;
 use crate::pane::PaneId;
@@ -614,17 +614,8 @@ fn resolution_control(mouse: &Mouse) -> Control {
     Control::Popup { choices, selected }
 }
 
-/// The most mice the pane lists, and the longest name of one it shows (characters).
+/// The most mice the pane lists.
 const MAX_MICE: usize = 32;
-const MAX_NAME: usize = 128;
-
-/// A device name as a label: without control characters, cut to [`MAX_NAME`] characters.
-fn display_name(name: &str) -> String {
-    name.chars()
-        .filter(|c| !c.is_control())
-        .take(MAX_NAME)
-        .collect()
-}
 
 /// The resolution rows of the connected mice: one row "Mouse resolution" for one mouse, else a section header and a
 /// row named after each mouse (a name another mouse has too gets its number).
@@ -1597,9 +1588,9 @@ fn wifi_sections(wifi: &Reading<Wifi>) -> Vec<Section> {
             }
         };
         let label = if n.security == "open" {
-            n.ssid.clone()
+            n.name.clone()
         } else {
-            format!("{} (secured)", n.ssid)
+            format!("{} (secured)", n.name)
         };
         row(
             ControlId::WifiNetwork(i),
@@ -2291,6 +2282,7 @@ mod tests {
         use crate::live::{Bluetooth, BtDevice, Focus, Network, Reading, Volume, Wifi};
         let network = |ssid: &str, security: &str, saved, connected| Network {
             ssid: ssid.into(),
+            name: ssid.into(),
             signal: -50,
             security: security.into(),
             saved,
@@ -2980,6 +2972,7 @@ mod tests {
     fn wifi_lists_known_and_other_networks_and_joins_a_saved_one_without_a_passphrase() {
         let net = |ssid: &str, security: &str, saved: bool, connected: bool| crate::live::Network {
             ssid: ssid.into(),
+            name: ssid.into(),
             signal: -40,
             security: security.into(),
             saved,
@@ -3195,7 +3188,9 @@ mod tests {
         let rows = &sections[1].rows;
         assert_eq!(rows.len(), 32);
         assert!(rows.iter().all(|r| !r.label.chars().any(char::is_control)));
-        assert!(rows.iter().all(|r| r.label.chars().count() <= MAX_NAME + 5));
+        assert!(rows
+            .iter()
+            .all(|r| r.label.chars().count() <= crate::live::MAX_NAME + 5));
     }
 
     fn picture(name: &str, dark: bool) -> WallpaperFile {

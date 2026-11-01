@@ -36,11 +36,15 @@ pub(crate) fn base_level(direction: Direction) -> Level {
 /// `ParagraphLayout` places them: downstream at the start edge of the grapheme after it (the end edge of the last at the
 /// end), upstream at the end edge of the grapheme before it where that is another edge.
 pub(crate) fn caret_edges(text: &str, direction: Option<Direction>) -> Vec<(TextPosition, usize)> {
+    edges_of(&drawn(text, direction), text.len())
+}
+
+fn edges_of(drawn: &Drawn, len: usize) -> Vec<(TextPosition, usize)> {
     let Drawn {
         graphemes,
         levels,
         place,
-    } = drawn(text, direction);
+    } = drawn;
     let Some(last) = graphemes.len().checked_sub(1) else {
         return vec![(TextPosition::default(), 0)];
     };
@@ -54,7 +58,7 @@ pub(crate) fn caret_edges(text: &str, direction: Option<Direction>) -> Vec<(Text
         }
         edges.push((downstream_at(*start), downstream));
     }
-    edges.push((downstream_at(text.len()), end_edge(last)));
+    edges.push((downstream_at(len), end_edge(last)));
     edges
 }
 
@@ -106,13 +110,15 @@ pub(crate) fn visual_word_neighbour(
     at: TextPosition,
     rightward: bool,
 ) -> Option<TextPosition> {
-    let edges = caret_edges(text, direction);
+    let drawn = drawn(text, direction);
+    let edges = edges_of(&drawn, text.len());
     let Drawn {
         graphemes, place, ..
-    } = drawn(text, direction);
+    } = drawn;
     let mut word_at_place = vec![None; graphemes.len()];
     for (index, (start, _)) in graphemes.iter().enumerate() {
-        word_at_place[place[index]] = words.iter().position(|word| word.contains(start));
+        let word = words.partition_point(|word| word.end <= *start);
+        word_at_place[place[index]] = words.get(word).filter(|w| w.start <= *start).map(|_| word);
     }
     let beside = |edge: usize| {
         if rightward {
@@ -169,37 +175,66 @@ pub(crate) struct CaretLine {
     edges: Vec<(TextPosition, usize)>,
 }
 
-/// The hard lines of `text`, each laid out in its own direction as `ParagraphLayout` does (`line_direction`).
-pub(crate) fn caret_lines(text: &str, direction: Option<Direction>) -> Vec<CaretLine> {
+/// The hard line `at` is on and the lines on either side of it, each laid out in its own direction as
+/// `ParagraphLayout` does (`line_direction`).
+pub(crate) fn caret_lines_around(
+    text: &str,
+    direction: Option<Direction>,
+    at: usize,
+) -> Vec<CaretLine> {
     let text_direction = base_direction(text, direction);
-    let mut lines = Vec::new();
-    let mut start = 0;
+    let (line, separator) = line_start(text, at);
+    let mut start = separator.map_or(line, |separator| line_start(text, separator).0);
+    let mut lines = Vec::with_capacity(3);
     loop {
         let (end, next) = crate::system::next_line(text, start);
-        let line = &text[start..end];
-        let line_direction = line_direction(line, direction, text_direction);
-        let edges = caret_edges(line, Some(line_direction))
-            .into_iter()
-            .map(|(position, edge)| {
-                (
-                    TextPosition {
-                        byte: start + position.byte,
-                        ..position
-                    },
-                    edge,
-                )
-            })
-            .collect();
-        lines.push(CaretLine {
-            start,
-            end,
-            rtl: line_direction == Direction::Rtl,
-            edges,
-        });
+        lines.push(caret_line(text, start..end, direction, text_direction));
         match next {
-            Some(next) => start = next,
-            None => return lines,
+            Some(next) if start <= line => start = next,
+            _ => return lines,
         }
+    }
+}
+
+/// The start of the hard line `at` is on, and where the separator before it starts.
+fn line_start(text: &str, at: usize) -> (usize, Option<usize>) {
+    let Some(last) = text[..at].rfind(crate::system::LINE_SEPARATORS) else {
+        return (0, None);
+    };
+    let separator = if text[..last].ends_with('\r') && text[last..].starts_with('\n') {
+        last - 1
+    } else {
+        last
+    };
+    let start = last + text[last..].chars().next().map_or(0, char::len_utf8);
+    (start, Some(separator))
+}
+
+fn caret_line(
+    text: &str,
+    bytes: Range<usize>,
+    direction: Option<Direction>,
+    text_direction: Direction,
+) -> CaretLine {
+    let line = &text[bytes.clone()];
+    let line_direction = line_direction(line, direction, text_direction);
+    let edges = caret_edges(line, Some(line_direction))
+        .into_iter()
+        .map(|(position, edge)| {
+            (
+                TextPosition {
+                    byte: bytes.start + position.byte,
+                    ..position
+                },
+                edge,
+            )
+        })
+        .collect();
+    CaretLine {
+        start: bytes.start,
+        end: bytes.end,
+        rtl: line_direction == Direction::Rtl,
+        edges,
     }
 }
 
@@ -224,22 +259,18 @@ pub(crate) fn visual_neighbour_in(
         .or_else(|| past_line(lines, index, rightward))
 }
 
-/// [`visual_word_neighbour`] within the hard line of `at`, in that line's direction; past that edge of the line it goes
-/// on as [`visual_neighbour_in`] does.
+/// [`visual_word_neighbour`] within the hard line of `at`, in that line's direction, with the `words` of that line;
+/// past that edge of the line it goes on as [`visual_neighbour_in`] does.
 pub(crate) fn visual_word_neighbour_in(
     text: &str,
     lines: &[CaretLine],
-    words: &[Range<usize>],
+    words: impl FnOnce(&str) -> Vec<Range<usize>>,
     at: TextPosition,
     rightward: bool,
 ) -> Option<TextPosition> {
     let index = line_at(lines, at.byte);
     let line = &lines[index];
-    let words: Vec<Range<usize>> = words
-        .iter()
-        .filter(|word| line.start <= word.start && word.end <= line.end)
-        .map(|word| word.start - line.start..word.end - line.start)
-        .collect();
+    let words = words(&text[line.start..line.end]);
     let direction = if line.rtl {
         Direction::Rtl
     } else {
@@ -275,10 +306,16 @@ fn past_line(lines: &[CaretLine], index: usize, rightward: bool) -> Option<TextP
     }
 }
 
-/// The line and the edge of the caret at `at`, for ordering carets on screen.
-pub(crate) fn place_of(lines: &[CaretLine], at: TextPosition) -> (usize, usize) {
-    let index = line_at(lines, at.byte);
-    (index, edge_at(&lines[index].edges, at))
+/// The start of the hard line of `at` and the edge of its caret there, for ordering carets on screen.
+pub(crate) fn place_of(
+    text: &str,
+    direction: Option<Direction>,
+    at: TextPosition,
+) -> (usize, usize) {
+    let (start, _) = line_start(text, at.byte);
+    let (end, _) = crate::system::next_line(text, start);
+    let line = caret_line(text, start..end, direction, base_direction(text, direction));
+    (start, edge_at(&line.edges, at))
 }
 
 /// The position whose caret is the nearest one right (or left) of the caret at `at`; `None` at that edge of the line.
@@ -311,4 +348,24 @@ pub(crate) fn edge_at(edges: &[(TextPosition, usize)], at: TextPosition) -> usiz
         .or_else(|| edges.iter().find(|(position, _)| position.byte >= at.byte))
         .or(edges.last())
         .map_or(0, |(_, edge)| *edge)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_lines_around_a_caret_are_its_own_and_the_ones_on_either_side() {
+        let text = "ab\r\ncd\u{2028}ef\ngh";
+        let around = |at| {
+            caret_lines_around(text, None, at)
+                .iter()
+                .map(|line| line.start..line.end)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(around(4), [0..2, 4..6, 9..11]);
+        assert_eq!(around(9), [4..6, 9..11, 12..14]);
+        assert_eq!(around(0), [0..2, 4..6]);
+        assert_eq!(around(14), [9..11, 12..14]);
+    }
 }

@@ -402,10 +402,13 @@ fn style_segments(text: &AttributedText) -> Result<Vec<(Range<usize>, &TextStyle
     Ok(segments)
 }
 
+/// The characters that end a hard line; `\r\n` is one separator.
+pub(crate) const LINE_SEPARATORS: [char; 4] = ['\n', '\r', '\u{2028}', '\u{2029}'];
+
 /// The end of the hard line starting at `start`, and where the next one starts (`None` after the last).
 pub(crate) fn next_line(text: &str, start: usize) -> (usize, Option<usize>) {
     let rest = &text[start..];
-    match rest.find(['\n', '\r', '\u{2028}', '\u{2029}']) {
+    match rest.find(LINE_SEPARATORS) {
         None => (text.len(), None),
         Some(offset) => {
             let end = start + offset;

@@ -417,7 +417,6 @@ impl TextBuffer {
     /// Move by a word in the direction the text is drawn: rightward ends right of the next word on screen, whichever
     /// way that word reads. A plain move starts from the selection's edge on that side.
     pub fn move_word_visual(&mut self, rightward: bool, extend: bool) {
-        let lines = bidi::caret_lines(&self.text, self.direction);
         let selection = self.selection();
         let from = if extend || selection.is_empty() {
             self.caret_position()
@@ -426,16 +425,23 @@ impl TextBuffer {
                 byte,
                 affinity: Affinity::Downstream,
             });
-            let start_is_right = bidi::place_of(&lines, start) > bidi::place_of(&lines, end);
+            let place = |at| bidi::place_of(&self.text, self.direction, at);
+            let start_is_right = place(start) > place(end);
             if start_is_right == rightward {
                 start
             } else {
                 end
             }
         };
-        let words: Vec<Range<usize>> = self.words().collect();
-        let to = bidi::visual_word_neighbour_in(&self.text, &lines, &words, from, rightward)
-            .unwrap_or(from);
+        let lines = bidi::caret_lines_around(&self.text, self.direction, from.byte);
+        let to = bidi::visual_word_neighbour_in(
+            &self.text,
+            &lines,
+            |line| words_in(line).collect(),
+            from,
+            rightward,
+        )
+        .unwrap_or(from);
         self.move_to(to.byte, extend);
         self.upstream = (to.affinity == Affinity::Upstream).then_some(to.byte);
     }
@@ -589,9 +595,9 @@ impl TextBuffer {
     /// One caret stop left or right on screen, through text of either direction; without `extend` a selection
     /// collapses to its side in that direction instead.
     pub fn move_visual(&mut self, rightward: bool, extend: bool) {
-        let lines = bidi::caret_lines(&self.text, self.direction);
         let selection = self.selection();
         if extend || selection.is_empty() {
+            let lines = bidi::caret_lines_around(&self.text, self.direction, self.caret);
             let to = bidi::visual_neighbour_in(&lines, self.caret_position(), rightward)
                 .unwrap_or_else(|| self.caret_position());
             self.move_to(to.byte, extend);
@@ -599,7 +605,8 @@ impl TextBuffer {
         } else {
             let place = |byte| {
                 bidi::place_of(
-                    &lines,
+                    &self.text,
+                    self.direction,
                     TextPosition {
                         byte,
                         affinity: Affinity::Downstream,
@@ -757,10 +764,7 @@ impl TextBuffer {
 
     /// The word segments of the text (runs that contain a letter or a digit).
     fn words(&self) -> impl Iterator<Item = Range<usize>> + '_ {
-        self.text
-            .split_word_bound_indices()
-            .filter(|(_, w)| w.chars().any(char::is_alphanumeric))
-            .map(|(i, w)| i..i + w.len())
+        words_in(&self.text)
     }
 
     /// The start of the word before `at` (or of the word `at` is inside).
@@ -826,6 +830,13 @@ fn single_line(s: &str) -> String {
             c => Some(c),
         })
         .collect()
+}
+
+/// The byte ranges of the words of `text`, in order.
+fn words_in(text: &str) -> impl Iterator<Item = Range<usize>> + '_ {
+    text.split_word_bound_indices()
+        .filter(|(_, w)| w.chars().any(char::is_alphanumeric))
+        .map(|(i, w)| i..i + w.len())
 }
 
 #[cfg(test)]
@@ -924,5 +935,47 @@ mod tests {
         assert_eq!(b.text(), "one\nfour", "at a line's end the line break goes");
         b.move_to_line_end(true);
         assert_eq!(b.selected_text(), "four");
+    }
+
+    /// Run with `cargo test --release -p cupertino-ui-text -- --ignored --nocapture timing`.
+    #[test]
+    #[ignore = "timing, run by hand in release"]
+    fn timing_of_arrow_and_word_moves() {
+        use std::time::Instant;
+        let median = |mut samples: Vec<f64>| {
+            samples.sort_by(f64::total_cmp);
+            samples[samples.len() / 2]
+        };
+        let lines = "The quick brown fox \u{5D0}\u{5D1}\u{5D2} \u{5D3}\u{5D4} jumps over it.\n"
+            .repeat(10_000);
+        let minified = "var a=b+c;if(a){f(a,b)}".repeat(4_000);
+        for (name, text) in [
+            ("10k lines", lines.as_str()),
+            ("one 92k-char line", minified.as_str()),
+        ] {
+            let mut b = TextBuffer::multiline();
+            b.set_text(text);
+            let middle = (0..=text.len() / 2)
+                .rev()
+                .find(|&at| text.is_char_boundary(at))
+                .unwrap();
+            let time = |b: &mut TextBuffer, step: fn(&mut TextBuffer)| {
+                (0..15)
+                    .map(|_| {
+                        b.select(middle..middle);
+                        let start = Instant::now();
+                        step(b);
+                        start.elapsed().as_secs_f64() * 1e6
+                    })
+                    .collect::<Vec<f64>>()
+            };
+            let arrow = time(&mut b, |b| b.move_visual(true, false));
+            let word = time(&mut b, |b| b.move_word_visual(true, false));
+            println!(
+                "{name}: arrow {:.0} us, word {:.0} us (medians of 15)",
+                median(arrow),
+                median(word)
+            );
+        }
     }
 }

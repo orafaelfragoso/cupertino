@@ -120,6 +120,15 @@ pub(crate) fn pointer(
     }
 }
 
+pub(crate) fn touch(event: wl::TouchEvent) -> platform::TouchEvent {
+    match event {
+        wl::TouchEvent::Down { id, position } => platform::TouchEvent::Down { id, position },
+        wl::TouchEvent::Motion { id, position } => platform::TouchEvent::Motion { id, position },
+        wl::TouchEvent::Up { id } => platform::TouchEvent::Up { id },
+        wl::TouchEvent::Cancel => platform::TouchEvent::Cancel,
+    }
+}
+
 pub(crate) fn states(s: wl::WindowStates) -> platform::WindowStates {
     platform::WindowStates {
         activated: s.activated,

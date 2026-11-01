@@ -198,6 +198,17 @@
   test_owner: crates/cupertino-wayland-client/tests/protocol-flow.rs
   source: crates/cupertino-server/src/state.rs
   source_match: ViewporterState::new
+- name: wp_single_pixel_buffer_manager_v1
+  kind: wayland-global
+  version: 1
+  owner_crate: cupertino-server
+  owner_area: compositor
+  scope: public
+  role: none
+  advertised: always
+  test_owner: crates/cupertino-server/tests/single_pixel_buffer.rs
+  source: crates/cupertino-server/src/state.rs
+  source_match: SinglePixelBufferState::new
 - name: wp_fractional_scale_manager_v1
   kind: wayland-global
   version: 1

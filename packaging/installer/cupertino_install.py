@@ -7,8 +7,9 @@ Usage:
 
 Asked: the disk (then its path typed again), encryption, the account and its password, the time zone. archinstall 4.5
 does the install from a configuration written here (--config, --creds, --silent); the Cupertino steps follow on the
-mounted system: the boot entries "Cupertino" and "Cupertino (recovery: text login)", the NVIDIA driver options, and
-the live USB's package repository taken out of pacman.conf.
+mounted system: the boot entries "Cupertino", "Cupertino (LTS kernel)" and "Cupertino (recovery: text login)", the
+NVIDIA driver options, Cupertino as the account's session at GDM, and the live USB's package repository taken out of
+pacman.conf.
 
 --answers reads the answers from a JSON file instead (for the QEMU test): user, password, luks (false or a passphrase),
 timezone, and optionally hostname, keyboard, extra_packages and kernel_args. The disk is never in the file: --disk and

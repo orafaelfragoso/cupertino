@@ -799,6 +799,7 @@ fixtures! {
     }.into();
     navigation: "navigation", TALL, INTERACTIVE, |look| NavigationStack {
         content: body("Page"),
+        toolbar: Vec::new(),
         can_go_back: look.enabled,
         can_go_forward: false,
         on_navigate: Some(Box::new(|_| Message::Nothing)),

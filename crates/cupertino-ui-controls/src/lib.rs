@@ -459,11 +459,14 @@ pub enum Navigation {
     Forward,
 }
 
-/// A page under a back and forward button group, which the model's history enables. Primary+[ and Primary+] go back
-/// and forward from anywhere in the page; Escape does not go back. The page changes at once, without a transition.
-/// Build its element with `Element::from`.
+/// A page under a 52 pt toolbar row that starts with a back and forward button group, which the model's history enables.
+/// The page takes the height the row leaves. Primary+[ and Primary+] go back and forward from anywhere in the page;
+/// Escape does not go back. The page changes at once, without a transition. Build its element with `Element::from`.
 pub struct NavigationStack<M> {
     pub content: Element<M>,
+    /// Items after the button group in the toolbar row, in reading order; a [`Spacer`] pushes the ones after it to
+    /// the row's end.
+    pub toolbar: Vec<Element<M>>,
     pub can_go_back: bool,
     pub can_go_forward: bool,
     pub on_navigate: Option<Handler<Navigation, M>>,
@@ -486,7 +489,8 @@ pub struct SplitLayout {
 
 /// Two panes along `axis` with a divider between them, which a drag or the keyboard moves. Dragging a pane below half
 /// its minimum collapses it; Return collapses the leading pane or restores a collapsed one. The divider is one Tab
-/// stop; a collapsed pane's content is not built. Build its element with `Element::from`.
+/// stop; a collapsed pane's content is not built. Each pane's content fills the pane. Build its element with
+/// `Element::from`.
 pub struct SplitView<M> {
     /// The divider's accessible name.
     pub label: String,

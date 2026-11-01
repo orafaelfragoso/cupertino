@@ -686,8 +686,8 @@ pub struct ListView<M> {
     pub selection: Selection,
     /// More than one row can be selected: Shift extends, Primary-click toggles, Primary+A selects all.
     pub multiple: bool,
-    /// The list takes the focus when its window opens, on its cursor row.
-    pub initial_focus: bool,
+    /// Takes the focus when its window or dialog opens, on its cursor row.
+    pub initial: bool,
     /// Row `index`'s content; `selected` asks for the selected text colours ([`Text::selected`]).
     pub row: Box<dyn Fn(usize, bool) -> Element<M>>,
     /// Row `index`'s item's identity, unique in the list: its focus and accessible object follow the item while rows

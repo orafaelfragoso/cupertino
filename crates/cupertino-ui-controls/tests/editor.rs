@@ -204,6 +204,11 @@ fn down_moves_by_visual_line_inside_a_wrapped_paragraph() {
 #[test]
 fn tab_moves_the_focus_on_instead_of_typing_a_tab() {
     let mut h = focused::<0>();
+    assert_eq!(
+        h.rect("editor").height(),
+        h.rect("scroll").height(),
+        "a short text still fills its scroll view, so a press below it focuses the editor"
+    );
     h.type_text("a");
     press(&mut h, TAB_KEY, Mods::NONE);
     assert!(h.focused("after"));

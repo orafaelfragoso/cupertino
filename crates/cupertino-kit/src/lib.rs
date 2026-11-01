@@ -16,7 +16,7 @@ pub use cupertino_ui_theme as theme;
 pub mod prelude {
     pub use cupertino_ui_controls::{
         Button, ButtonRole, ButtonStyle, Icon, SecureField, Separator, Spacer, Stack, Text,
-        TextChange, TextField, Toggle,
+        TextChange, TextEditor, TextField, Toggle,
     };
     pub use cupertino_ui_core::{
         Application, Command, Element, Key, Window, WindowBackground, WindowKey,

@@ -3,7 +3,7 @@ name = "cupertino-osd"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Volume, brightness and keyboard-backlight overlay for the Cupertino compositor: show/hold/fade model, segmented meter, ALSA and backlight effects, org.cupertino.Osd1 and CPU rendering"
+description = "Volume, brightness and keyboard-backlight overlay for the Cupertino compositor: show/hold/fade model, segmented meter, ALSA and backlight effects, org.cupertino.Osd1 and the overlay window on CupertinoKit"
 
 [package.metadata.cupertino]
 layer = "shell"
@@ -14,29 +14,33 @@ dbus = ["dep:zbus"]
 # the `cupertino-osd` process: the overlay on a layer surface as a client of the server
 app = [
     "dbus",
-    "dep:cupertino-protocol-app",
+    "dep:async-channel",
+    "dep:async-io",
+    "dep:cupertino-kit",
+    "dep:cupertino-modifiers",
     "dep:cupertino-shell-client",
     "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
 ]
 
 [dependencies]
-cupertino-assets = { path = "../cupertino-assets" }
+async-channel = { version = "2", optional = true }
+async-io = { version = "2", optional = true }
 cupertino-alsa = { path = "../cupertino-alsa" }
-cupertino-icons = { path = "../cupertino-icons" }
 cupertino-peer = { path = "../cupertino-peer" }
 cupertino-pipewire = { path = "../cupertino-pipewire" }
-cupertino-theme = { path = "../cupertino-theme" }
 cupertino-geometry = { path = "../cupertino-geometry" }
-cupertino-decorations = { path = "../cupertino-decorations" }
-cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
+cupertino-kit = { path = "../cupertino-kit", optional = true }
+cupertino-modifiers = { path = "../cupertino-modifiers", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
-tiny-skia = "0.11"
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"], optional = true }
 
 [dev-dependencies]
+cupertino-assets = { path = "../cupertino-assets" }
+cupertino-theme = { path = "../cupertino-theme" }
+cupertino-ui-test = { path = "../cupertino-ui-test" }
 cupertino-pipewire = { path = "../cupertino-pipewire", features = ["fake"] }
 cupertino-test-bus = { path = "../cupertino-test-bus" }
 serde = "1"

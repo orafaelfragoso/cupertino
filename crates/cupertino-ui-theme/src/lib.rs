@@ -256,6 +256,8 @@ pub enum Surface {
     Sidebar,
     Menu,
     Popover,
+    /// A heads-up display over everything, such as the volume and brightness overlay.
+    Hud,
 }
 
 /// How a surface paints: the compositor material to ask for, if any, and the opaque fill to paint where there is none.
@@ -286,6 +288,7 @@ impl ThemeTokens {
         let material = match surface {
             Surface::Sidebar => "Sidebar",
             Surface::Menu | Surface::Popover => "Menu",
+            Surface::Hud => "LoginWindowControl",
         };
         SurfaceLook {
             material: (!opaque).then_some(material),

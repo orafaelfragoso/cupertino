@@ -52,6 +52,21 @@ impl Application for Counter {
                 model.background = WindowBackground::Surface {
                     surface: Surface::Menu,
                     radius: 8.0,
+                    alpha: 1.0,
+                }
+            }
+            "half" => {
+                model.background = WindowBackground::Surface {
+                    surface: Surface::Menu,
+                    radius: 8.0,
+                    alpha: 0.5,
+                }
+            }
+            "nan" => {
+                model.background = WindowBackground::Surface {
+                    surface: Surface::Menu,
+                    radius: 8.0,
+                    alpha: f64::NAN,
                 }
             }
             "close" => return vec![Command::CloseWindow(WindowKey("main".into()))],
@@ -1264,6 +1279,21 @@ fn a_menu_window_shows_the_menu_material_where_the_desktop_draws_it_and_the_opaq
         "without the desktop's effects"
     );
     assert_eq!(backdrops(&rt), Vec::new());
+    assert_eq!(
+        frame(&mut rt, Some("half")),
+        Some(PaintOp::Fill {
+            shape: Shape::RoundedRect {
+                rect: cupertino_geometry::Rect::new(0.0, 0.0, 200.0, 100.0),
+                radius: 8.0,
+            },
+            paint: Paint::Solid(Color {
+                a: 0.5,
+                ..background
+            }),
+        }),
+        "the fill fades with the background"
+    );
+    rt.messages.push_back("menu".into());
 
     rt.window_system_mut().effects = true;
     rt.messages.push_back("panel".into());
@@ -1276,8 +1306,25 @@ fn a_menu_window_shows_the_menu_material_where_the_desktop_draws_it_and_the_opaq
     let menu = Backdrop {
         material: "Menu".into(),
         radius: 8.0,
+        alpha: 1.0,
     };
-    assert_eq!(backdrops(&rt), vec![Some(menu)]);
+    assert_eq!(backdrops(&rt), vec![Some(menu.clone())]);
+    frame(&mut rt, Some("half"));
+    assert_eq!(
+        backdrops(&rt).last(),
+        Some(&Some(Backdrop {
+            alpha: 0.5,
+            ..menu.clone()
+        })),
+        "the material fades with the background"
+    );
+    frame(&mut rt, Some("nan"));
+    assert_eq!(
+        backdrops(&rt).last(),
+        Some(&Some(menu.clone())),
+        "an alpha that is not finite is opaque"
+    );
+    rt.messages.push_back("menu".into());
 
     let mut reduced = (*rt.options.theme).clone();
     reduced.preferences.reduce_transparency = true;

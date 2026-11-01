@@ -1,0 +1,71 @@
+# cupertino-diagnostics
+
+Typed diagnostics of a Cupertino installation and the session it runs in, as text for a person or JSON for a script.
+`cupertino-diagnose` is its command. Layer: `tools`.
+
+```
+cupertino-diagnose                       # every check, as text
+cupertino-diagnose --json                # the same as JSON
+cupertino-diagnose --area gpu --area crash
+```
+
+It exits 1 when a check fails, 2 on a wrong argument, else 0. Nothing is changed and no device is opened: the checks
+read sysfs, installed files, `/run/systemd/sessions`, the session's logs, and ask systemd for unit states
+(`systemctl show`). It runs as the user, from the session or from a text console; checks that need a session are skipped
+outside one.
+
+## Checks
+
+| Id | Status |
+|---|---|
+| `gpu.driver` | the primary GPU's driver, and what it needs before a compositor takes the display (`cupertino_devices::preflight`): `fail` for a problem (nvidia-drm without `modeset=1`, no GPU), `warn` for a warning (no nvidia GBM backend, no driver bound) |
+| `session.logind` | logind's record of `XDG_SESSION_ID`: `ok` for an active wayland session; facts: class, PAM service, VT, seat |
+| `session.desktop` | `XDG_CURRENT_DESKTOP` names Cupertino; `skip` otherwise |
+| `session.wayland` | the compositor answers on `WAYLAND_DISPLAY` (a connect to the socket); `fail` when nothing does |
+| `portals.backend` | `cupertino.portal` is installed and lists ScreenCast |
+| `portals.conf` | the first `cupertino-portals.conf` xdg-desktop-portal reads (user, `/etc`, `/usr/share`) sends ScreenCast to `cupertino` |
+| `portals.service` | `xdg-desktop-portal.service` (user) is active; in a session only |
+| `services.login`, `services.network`, `services.power`, `services.bluetooth` | `cupertino-login`, `cupertino-netd`, `cupertino-powerd`, `cupertino-btd` (system): `ok` active, `fail` failed, `warn` inactive or not installed, `skip` when systemd cannot be asked |
+| `services.session_target`, `services.pipewire` | `cupertino-session.target` and `pipewire.service` (user); in a session only |
+| `crash.last` | the last end in `session.log`: `warn` when it was not a normal end or a stop by the session; facts: how many ended badly, the last bad end, and the first panic or fatal-signal line of `server.log` and `server.log.1` |
+| `logs.paths` | where `session.log`, `server.log` and `server.log.1` are, with their sizes, and the journal unit |
+
+## JSON
+
+```json
+{
+  "schema": 1,
+  "checks": [
+    {
+      "id": "gpu.driver",
+      "area": "gpu",
+      "status": "ok",
+      "summary": "the primary GPU uses the nvidia driver",
+      "facts": [{ "key": "driver", "value": "nvidia" }],
+      "fix": "..."
+    }
+  ]
+}
+```
+
+`schema` changes when a field is removed or changes meaning. Ids and fact keys are stable; `facts` and `fix` are left out
+when empty. `status` is `skip`, `ok`, `warn` or `fail`; `area` is `gpu`, `session`, `portals`, `services`, `crash` or
+`logs`.
+
+## Library
+
+`run(&Sources, &[Area]) -> Report`. `Sources` holds the sysfs root, the file system root, the environment and a function
+that names a unit's state, so `tests/diagnose.rs` runs every area against a fixture tree. `Sources::system()` is this
+machine.
+
+## Known limitations
+
+- The portal checks read the installed files and the user service; they do not call the backend on the bus.
+- `crash.last` reads the logs of the user running it; another user's sessions are not seen.
+- No GPU check of the second GPU of a hybrid machine, only the primary one.
+
+## Tests
+
+```
+cargo test -p cupertino-diagnostics
+```

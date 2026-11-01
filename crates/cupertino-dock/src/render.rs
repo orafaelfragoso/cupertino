@@ -65,6 +65,22 @@ struct WindowIcon {
     apps: [String; 2],
     name: Option<String>,
     image: Option<Pixmap>,
+    /// The image resampled to the size it was last drawn at, when that is smaller.
+    scaled: Option<(u32, Pixmap)>,
+}
+
+impl WindowIcon {
+    /// The image at `px`: resampled once when it is larger, as it is when not.
+    fn at(&mut self, px: u32) -> &Pixmap {
+        let image = self.image.as_ref().expect("has an image");
+        if image.width() <= px {
+            return image;
+        }
+        if self.scaled.as_ref().is_none_or(|(at, _)| *at != px) {
+            self.scaled = Some((px, resampled(image, px)));
+        }
+        &self.scaled.as_ref().expect("resampled above").1
+    }
 }
 
 /// Where an application's icon comes from.
@@ -84,6 +100,50 @@ fn window_pixmap(image: &WindowIconImage) -> Option<Pixmap> {
         .flat_map(|&[b, g, r, a]| [r.min(a), g.min(a), b.min(a), a])
         .collect();
     Pixmap::from_vec(rgba, tiny_skia::IntSize::from_wh(image.size, image.size)?)
+}
+
+/// A square pixmap at half its side, each pixel the mean of the (up to) four it covers.
+fn halved(image: &Pixmap) -> Pixmap {
+    let side = image.width();
+    let half = side.div_ceil(2);
+    let src = image.data();
+    let mut out = Pixmap::new(half, half).expect("a non-empty side");
+    let at = |x: u32, y: u32| (y.min(side - 1) * side + x.min(side - 1)) as usize * 4;
+    for (i, px) in out.data_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        let (x, y) = (2 * (i as u32 % half), 2 * (i as u32 / half));
+        let corners = [at(x, y), at(x + 1, y), at(x, y + 1), at(x + 1, y + 1)];
+        for (c, v) in px.iter_mut().enumerate() {
+            let sum: u32 = corners.iter().map(|&o| u32::from(src[o + c])).sum();
+            *v = ((sum + 2) / 4) as u8;
+        }
+    }
+    out
+}
+
+/// A square image larger than `px` at `px` a side: halved while it is at least twice as large, then bilinear.
+fn resampled(image: &Pixmap, px: u32) -> Pixmap {
+    let px = px.max(1);
+    let mut image = image.clone();
+    while image.width() >= 2 * px {
+        image = halved(&image);
+    }
+    if image.width() == px {
+        return image;
+    }
+    let mut out = Pixmap::new(px, px).expect("a non-empty side");
+    let fit = px as f32 / image.width() as f32;
+    out.draw_pixmap(
+        0,
+        0,
+        image.as_ref(),
+        &PixmapPaint {
+            quality: FilterQuality::Bilinear,
+            ..PixmapPaint::default()
+        },
+        Transform::from_scale(fit, fit),
+        None,
+    );
+    out
 }
 
 impl Icons {
@@ -116,6 +176,7 @@ impl Icons {
                     apps,
                     name: icon.name,
                     image,
+                    scaled: None,
                 },
             );
         }
@@ -173,7 +234,7 @@ impl Icons {
     fn app(&mut self, desktop: &DesktopIndex, app_id: &str, px: u32) -> &Pixmap {
         match self.source(desktop, app_id, px) {
             IconSource::Theme(name) => self.cache[&(name, px)].as_ref().expect("loaded"),
-            IconSource::Window(id) => self.windows[&id].image.as_ref().expect("has an image"),
+            IconSource::Window(id) => self.windows.get_mut(&id).expect("listed").at(px),
             IconSource::Generic => self.system.raster(GENERIC_APPLICATION_ICON, px),
         }
     }
@@ -2023,6 +2084,42 @@ mod tests {
 
         icons.window_closed(1);
         assert_eq!(tile(&mut icons), GENERIC_APPLICATION_PIXEL);
+    }
+
+    #[test]
+    fn a_large_window_image_is_averaged_down_to_the_tile_not_sampled() {
+        let session = first_running();
+        let layout = session.dock.layout(SCREEN, 10.0);
+        let mut icons = bare_icons();
+        let checker = (0..512 * 512)
+            .flat_map(|i| [(i % 512 + i / 512) % 2 * 255; 3].into_iter().chain([255]))
+            .map(|v| v as u8)
+            .collect();
+        icons.window_icon(
+            [FIRST.into(), FIRST.into()],
+            DockWindowIcon {
+                id: 1,
+                name: None,
+                image: Some(WindowIconImage {
+                    size: 512,
+                    argb: checker,
+                }),
+            },
+        );
+        let mut pixmap = Pixmap::new(SIZE.0, SIZE.1).unwrap();
+        paint(&mut pixmap, 1.0, &session, &layout, &mut icons, false);
+        let c = first_tile_centre(&session, &layout);
+        for (dx, dy) in [(-4, -4), (0, 0), (3, -2), (5, 5)] {
+            let p = pixmap
+                .pixel((c.x as i32 + dx) as u32, (c.y as i32 + dy) as u32)
+                .unwrap();
+            assert!(
+                [p.red(), p.green(), p.blue()]
+                    .iter()
+                    .all(|v| (120..=136).contains(v)),
+                "({dx}, {dy}) is mid grey, not a sampled black or white: {p:?}"
+            );
+        }
     }
 
     /// A grid of `n` unthemed applications on a 1440 × 790 layer (the 1440 × 900 output of the

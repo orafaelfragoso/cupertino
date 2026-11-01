@@ -157,7 +157,7 @@ backend (winit | udev | headless)  ──input──▶  events.rs ─▶ input.
 | `render/mesh.rs` | textured-mesh element (raw GL, scissored to damage) and offscreen `capture` of an element list |
 | `render/material.rs` | GLES material pipeline (below) |
 | `render/{shader_rect,clip,ui,programs}.rs` | pixel-shader rectangles with stable ids, rounded-corner mask element, rounded-rect constructor, shader sources |
-| `backend/* | winit; udev (every DRM card, one `DrmOutputManager` each, the render GPU drawing every frame and `backend/copy.rs` bringing it to displays of other cards; one head per connector with EDID identity and every mode, mode fallback, connectors rescanned against the CRTC mapping; `backend/input.rs` reads evdev devices and feeds touchpads through `cupertino_input::Touchpad`); headless EGL device |
+| `backend/* | winit; udev (every DRM card, one `DrmOutputManager` each, the render GPU drawing every frame and `backend/copy.rs` bringing it to displays of other cards; one head per connector with EDID identity and every mode, mode fallback, connectors rescanned against the CRTC mapping; `backend/input.rs` reads evdev devices and feeds touchpads through `cupertino_input::Touchpad`); headless EGL device, where no vblank paces a change, so on the running clock it waits for the next refresh grid point (`schedule.rs` `pace_changes`) and a client that draws on every frame callback runs at 60 Hz, not as fast as the loop turns; on a fixed clock its owner steps the frames |
 | `config.rs`, `cli.rs`, `cursor.rs`, `frame.rs` | configuration, startup, themed cursors, frame callbacks and presentation feedback |
 
 ### Window policy

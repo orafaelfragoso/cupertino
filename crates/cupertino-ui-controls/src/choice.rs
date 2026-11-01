@@ -8,7 +8,8 @@ use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_theme::metrics::Control;
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, Change, Checked, ControlState, Element, Environment,
-    Event, EventCx, FocusTarget, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
+    Event, EventCx, FocusTarget, MeasureCx, PaintCx, Propagation, Relation, Role, SemanticsCx,
+    Widget,
 };
 use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
@@ -310,6 +311,9 @@ impl<M: Clone + 'static> Widget<M> for Item<M> {
         cx.name(self.label().to_owned());
         if self.look == Look::Tab {
             cx.role(Role::Tab);
+            if self.checked() {
+                cx.relation_to(Relation::Controls, self.index as u64);
+            }
         } else {
             cx.role(Role::RadioButton);
             cx.value(AccessibleValue::Toggle(if self.checked() {

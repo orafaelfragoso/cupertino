@@ -1,7 +1,7 @@
 mod support;
 
 use cupertino_ui_controls::{Button, ButtonRole, ButtonStyle, Tabs};
-use cupertino_ui_core::{AccessibilityNode, Application, Command, Element, Role, Window};
+use cupertino_ui_core::{AccessibilityNode, Application, Command, Element, Relation, Role, Window};
 use cupertino_ui_layout::LayoutDirection;
 use support::{window, Harness, RETURN, SPACE, TAB};
 
@@ -190,4 +190,30 @@ fn assistive_technology_sees_a_tab_list_its_tabs_and_the_selected_panel() {
     assert_eq!(panel.len(), 1);
     assert_eq!(panel[0].name.as_deref(), Some("Advanced"));
     assert!(nodes(&h, Role::Tab)[2].states.selected);
+}
+
+#[test]
+fn the_selected_tab_controls_the_panel() {
+    let mut h = Harness::<App>::new();
+    let controls = |h: &Harness<App>| {
+        let tree = h.snapshot().accessibility;
+        let panel = tree
+            .iter()
+            .find(|(_, n)| n.role == Role::TabPanel)
+            .map(|&(id, _)| id)
+            .unwrap();
+        let tabs: Vec<_> = tree
+            .into_iter()
+            .filter(|(_, n)| n.role == Role::Tab)
+            .map(|(_, n)| n.relations)
+            .collect();
+        (panel, tabs)
+    };
+    let (panel, tabs) = controls(&h);
+    assert_eq!(tabs, [vec![Relation::Controls(panel)], vec![], vec![]]);
+    h.tap(TAB);
+    h.tap(END);
+    let (next, tabs) = controls(&h);
+    assert_ne!(next, panel, "the new tab's panel mounts fresh");
+    assert_eq!(tabs, [vec![], vec![], vec![Relation::Controls(next)]]);
 }

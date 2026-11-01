@@ -1,5 +1,5 @@
 use super::*;
-use crate::accessibility::{Live, TextSemantics};
+use crate::accessibility::{Live, Relation, TextSemantics};
 use crate::route::Placement;
 use crate::test_support::{group, leaf, spec};
 use crate::{Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, Widget};
@@ -125,6 +125,11 @@ impl Widget<M> for Note {
 fn pass(view: Element<M>) -> (Tree<M>, NodeId, SemanticsPass) {
     let mut tree = Tree::new(20);
     let root = tree.reconcile(None, view).unwrap();
+    let pass = build_for(&tree, root);
+    (tree, root, pass)
+}
+
+fn build_for(tree: &Tree<M>, root: NodeId) -> SemanticsPass {
     let geometry: Geometry = tree
         .preorder(root)
         .into_iter()
@@ -139,8 +144,7 @@ fn pass(view: Element<M>) -> (Tree<M>, NodeId, SemanticsPass) {
             )
         })
         .collect();
-    let pass = build(&tree, root, &geometry, None, LayoutDirection::Ltr);
-    (tree, root, pass)
+    build(tree, root, &geometry, None, LayoutDirection::Ltr)
 }
 
 #[test]
@@ -409,4 +413,96 @@ fn a_fallback_is_a_tab_stop_only_when_no_node_under_it_is() {
     assert_eq!(pass.focusable, [id("a"), id("empty"), id("b")]);
     assert!(pass.nodes[&id("empty")].states.focusable);
     assert!(!pass.nodes[&id("around a")].states.focusable);
+}
+
+/// A button that controls the nearest node keyed `"panel"`.
+struct Controller;
+
+impl Widget<M> for Controller {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::Button);
+        cx.relation_to(Relation::Controls, "panel");
+    }
+}
+
+fn controller(pass: &SemanticsPass, tree: &Tree<M>) -> Vec<Relation> {
+    let (&id, _) = pass
+        .nodes
+        .iter()
+        .find(|(&id, _)| {
+            tree.get(id).unwrap().widget.widget_type() == std::any::TypeId::of::<Controller>()
+        })
+        .unwrap();
+    pass.nodes[&id].relations.clone()
+}
+
+#[test]
+fn a_keyed_relation_goes_to_the_nearest_node_of_that_key() {
+    let (tree, root, pass) = pass(Element::new(group(vec![
+        Element::new(group(vec![
+            Element::new(Controller),
+            Element::new(leaf("inner")).key("panel"),
+        ])),
+        Element::new(leaf("outer")).key("panel"),
+    ])));
+    let inner = tree
+        .get(tree.get(root).unwrap().children[0])
+        .unwrap()
+        .children[1];
+
+    assert_eq!(controller(&pass, &tree), [Relation::Controls(inner)]);
+}
+
+#[test]
+fn a_keyed_relation_with_no_node_in_the_tree_adds_nothing() {
+    for target in [
+        Element::new(leaf("other")).key("tab"),
+        Element::new(group(vec![])).key("panel"),
+    ] {
+        let (tree, _, pass) = pass(Element::new(group(vec![Element::new(Controller), target])));
+        assert_eq!(controller(&pass, &tree), []);
+    }
+}
+
+#[test]
+fn a_keyed_relation_among_siblings_sharing_the_key_goes_to_the_surviving_one() {
+    let view = || {
+        Element::new(group(vec![
+            Element::new(Controller),
+            Element::new(leaf("first")).key("panel"),
+            Element::new(leaf("second")).key("panel"),
+        ]))
+    };
+    let mut tree = Tree::new(20);
+    let root = tree.reconcile(None, view()).unwrap();
+    let first = tree.get(root).unwrap().children[1];
+    tree.reconcile(Some(root), view()).unwrap();
+    let pass = build_for(&tree, root);
+
+    assert_eq!(controller(&pass, &tree), [Relation::Controls(first)]);
 }

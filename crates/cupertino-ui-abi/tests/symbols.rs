@@ -9,13 +9,22 @@ use object::read::elf::ElfFile64;
 use object::{Object, ObjectSection, ObjectSymbol};
 
 /// Builds `target/<profile>/libcupertinokit.so`, next to the `deps` directory this test runs from: a test build links
-/// the rlib and leaves the cdylib as it was.
+/// the rlib and leaves the cdylib as it was. It builds with `--locked --all-features`, as the gate does; it may still
+/// build some dependencies again, so `.config/nextest.toml` gives it a longer limit.
 fn library() -> PathBuf {
     let exe = std::env::current_exe().unwrap();
     let profile_dir = exe.parent().and_then(Path::parent).unwrap();
     let mut cargo = Command::new(std::env::var_os("CARGO").expect("CARGO is set by `cargo test`"));
     cargo
-        .args(["build", "-p", "cupertino-ui-abi", "--lib", "--target-dir"])
+        .args([
+            "build",
+            "--locked",
+            "--all-features",
+            "-p",
+            "cupertino-ui-abi",
+            "--lib",
+        ])
+        .arg("--target-dir")
         .arg(profile_dir.parent().unwrap());
     if profile_dir.file_name().unwrap() == "release" {
         cargo.arg("--release");

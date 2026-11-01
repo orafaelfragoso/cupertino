@@ -167,9 +167,9 @@ pub unsafe extern "C" fn ck_last_error_message(
     cap: usize,
     len: *mut usize,
 ) -> ck_status {
-    let message = ffi::last_error();
     guard(0, || {
         hook("ck_last_error_message");
+        let message = ffi::last_error();
         let len = Out::new(len, "len")?;
         if cap > 0 {
             if buf.is_null() {

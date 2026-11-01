@@ -29,6 +29,16 @@ from the application's model and reports changes as messages.
   with it while rows come and go around it.
 - **Truncation.** A `Text` that does not wrap, and a tooltip's tip past its 300 pt text width, end in an ellipsis
   where they are cut; the accessible name keeps the whole text.
+- **Rich text.** `RichText` draws its links in the link colour over a 1 px underline 1.5 pt below the baseline. Each
+  link is a tab stop in text order that Return, a click on its text or assistive technology opens; it reads as a link
+  named by its text, with its URL as the description.
+- **Images.** `Image` fits its picture whole (`Contain`, the default) or fills its box and crops (`Cover`), rounded only
+  when given a radius, and draws the smallest rendition that covers its device pixels, else the largest. Without a
+  label it is decorative and hidden from assistive technology.
+- **Canvas and grid.** `Canvas` draws through the application's closure, fills the room offered unless it has a size,
+  and reads as a group whose interactive parts are its children, layered over the drawing. `Grid` lays out fixed,
+  auto and fraction tracks row by row; `Element::span` covers several cells, and rows past the declared ones fit
+  their content.
 
 ## Not yet
 

@@ -215,6 +215,8 @@ struct App {
     palette: Palette,
     painter: Painter,
     groups: Vec<Vec<PaneId>>,
+    /// The panes no service backs, left out of the sidebar and the search.
+    hidden: Vec<PaneId>,
     history: History<PaneId>,
     search: SearchField,
     /// The user's modifier profile and editing chords, for the search field.
@@ -405,6 +407,13 @@ pub fn run(pane: PaneId, activation_token: String) -> Result<()> {
     else {
         return Ok(());
     };
+    let mut services = Services::new();
+    let hidden = services.detect().hidden();
+    let pane = if hidden.contains(&pane) {
+        sidebar::rows(&hidden)[0]
+    } else {
+        pane
+    };
     let assets = Assets::discover();
     let theme = Theme::load()?;
     let painter = Painter::new(&assets)?;
@@ -486,9 +495,14 @@ pub fn run(pane: PaneId, activation_token: String) -> Result<()> {
         sidebar,
         theme,
         painter,
-        groups: sidebar::groups(),
+        groups: sidebar::groups(&hidden),
         history: History::new(pane),
-        search: SearchField::default(),
+        search: {
+            let mut search = SearchField::default();
+            search.set_hidden(&hidden);
+            search
+        },
+        hidden,
         keymap: Keymap::new(
             cupertino_keyboard::binding::user_profile(),
             cupertino_keyboard::binding::load_default().0,
@@ -513,7 +527,7 @@ pub fn run(pane: PaneId, activation_token: String) -> Result<()> {
         menu: None,
         dark,
         bus: None,
-        services: Services::new(),
+        services,
         live: Live::default(),
         sheet: None,
         level: None,
@@ -743,6 +757,16 @@ impl App {
     /// first refresh too, whatever the pane: whether there is one names the Battery row.
     fn refresh(&mut self, now: f64) -> Result<()> {
         self.refreshed = now;
+        let hidden = self.services.detect().hidden();
+        if hidden != self.hidden {
+            self.groups = sidebar::groups(&hidden);
+            self.search.set_hidden(&hidden);
+            self.hidden = hidden;
+            self.window.redraw();
+        }
+        if self.hidden.contains(&self.history.current()) {
+            return self.go(self.rows()[0]);
+        }
         let before = self.live.clone();
         if self.content_pane == PaneId::Battery
             || self.live.battery == cupertino_settings::live::Reading::Unknown
@@ -1015,8 +1039,14 @@ impl App {
         Ok(())
     }
 
-    /// Show `pane`: select its row, push it on the history and name the window after it.
+    /// Show `pane`: select its row, push it on the history and name the window after it. A hidden pane shows the first
+    /// row instead.
     fn go(&mut self, pane: PaneId) -> Result<()> {
+        let pane = if self.hidden.contains(&pane) {
+            self.rows()[0]
+        } else {
+            pane
+        };
         self.history.push(pane);
         self.show_current()
     }
@@ -1317,11 +1347,11 @@ impl App {
                 }
             }
             Action::FocusSearch => self.set_focus(Focus::Search)?,
-            Action::ShowAll => self.go(sidebar::rows()[0])?,
+            Action::ShowAll => self.go(self.rows()[0])?,
             Action::Previous => self.step_row(-1)?,
             Action::Next => self.step_row(1)?,
-            Action::First => self.go(sidebar::rows()[0])?,
-            Action::Last => self.go(*sidebar::rows().last().expect("the sidebar has rows"))?,
+            Action::First => self.go(self.rows()[0])?,
+            Action::Last => self.go(*self.rows().last().expect("the sidebar has rows"))?,
             Action::FocusNext => self.set_focus(keys::cycle(self.focus, true))?,
             Action::FocusPrevious => self.set_focus(keys::cycle(self.focus, false))?,
             Action::FocusSidebar => self.set_focus(Focus::Sidebar)?,
@@ -1341,9 +1371,14 @@ impl App {
         Ok(())
     }
 
+    /// The sidebar's rows, top to bottom.
+    fn rows(&self) -> Vec<PaneId> {
+        self.groups.iter().flatten().copied().collect()
+    }
+
     /// The row `step` rows from the current one, within the sidebar.
     fn step_row(&mut self, step: isize) -> Result<()> {
-        let rows = sidebar::rows();
+        let rows = self.rows();
         let i = rows
             .iter()
             .position(|p| *p == self.history.current())

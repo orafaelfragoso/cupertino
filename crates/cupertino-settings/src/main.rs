@@ -33,7 +33,7 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Launch, String> {
     match (about, pane) {
         (true, Some(_)) => Err("--about and --pane cannot be combined".into()),
         (true, None) => Ok(Launch::About),
-        (false, pane) => Ok(Launch::Pane(pane.unwrap_or(sidebar::rows()[0]))),
+        (false, pane) => Ok(Launch::Pane(pane.unwrap_or(sidebar::rows(&[])[0]))),
     }
 }
 

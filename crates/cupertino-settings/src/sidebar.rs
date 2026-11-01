@@ -162,14 +162,23 @@ pub fn ordered<T: Copy>(
         .collect()
 }
 
-/// The sidebar groups of the minimum set in display order.
-pub fn groups() -> Vec<Vec<PaneId>> {
+/// The sidebar groups of the minimum set in display order, without the `hidden` panes (those no service backs); a group
+/// left empty goes.
+pub fn groups(hidden: &[PaneId]) -> Vec<Vec<PaneId>> {
     ordered(&GROUPS, SORTED_GROUP, |p| p.pane().title.to_string())
+        .into_iter()
+        .map(|g| {
+            g.into_iter()
+                .filter(|p| !hidden.contains(p))
+                .collect::<Vec<_>>()
+        })
+        .filter(|g| !g.is_empty())
+        .collect()
 }
 
 /// Every row of the sidebar, top to bottom.
-pub fn rows() -> Vec<PaneId> {
-    groups().into_iter().flatten().collect()
+pub fn rows(hidden: &[PaneId]) -> Vec<PaneId> {
+    groups(hidden).into_iter().flatten().collect()
 }
 
 #[cfg(test)]
@@ -178,7 +187,7 @@ mod tests {
 
     #[test]
     fn the_minimum_set_shows_in_the_reference_order() {
-        let titles: Vec<Vec<&str>> = groups()
+        let titles: Vec<Vec<&str>> = groups(&[])
             .iter()
             .map(|g| g.iter().map(|p| p.pane().title).collect())
             .collect();

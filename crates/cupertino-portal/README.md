@@ -1,7 +1,7 @@
 # cupertino-portal
 
 The session's xdg-desktop-portal backend. Applications ask xdg-desktop-portal, and xdg-desktop-portal asks this
-backend for the interfaces `data/cupertino.portal` lists: Settings, FileChooser, ScreenCast and AppChooser. The server sets `XDG_CURRENT_DESKTOP=Cupertino`, so
+backend for the interfaces `data/cupertino.portal` lists: Settings, FileChooser, ScreenCast, AppChooser and Screenshot. The server sets `XDG_CURRENT_DESKTOP=Cupertino`, so
 xdg-desktop-portal reads `cupertino-portals.conf` to pick the backend for each interface.
 
 ## Running
@@ -99,12 +99,42 @@ OpenURI needs the person to pick or confirm one. The window is the consent: noth
 Known limitations: rows show the applications symbol rather than each app's own icon, and no new activation token is
 made for the chosen app.
 
+## Screenshot
+
+`org.freedesktop.impl.portal.Screenshot` version 3 takes a screenshot of every display for an application. It is served
+with screen cast, only when the server offers the image capture globals. The window is the consent: nothing is
+captured unless the person agrees.
+
+- `Screenshot` shows a window, "Screenshot", that says "“<app>” wants to take a screenshot of your screen.", the app
+  named by its desktop entry (`<app id>.desktop` in `$XDG_DATA_HOME/applications` and each `XDG_DATA_DIRS` entry), else
+  by its id; an empty id shows as "An application". Nothing is preselected and Take Screenshot has no key, so a key
+  typed for the app cannot consent; Escape cancels.
+- `modal`, `interactive` and `permission_store_checked` are read but change nothing: the same window shows every time,
+  even when the frontend checked the permission store. `AvailableTargets` is `1` (the whole screen); a `target` other
+  than `1` is `InvalidArgs`.
+- Once the window has had 300 ms to leave the screen, one frame of each display is copied with an image copy session
+  into a memfd, without the pointer. The displays are joined as they sit, at the largest scale among them; what no
+  display covers is transparent.
+- The PNG goes to `XDG_PICTURES_DIR` of `user-dirs.dirs`, else `~/Pictures`, created when missing, as
+  `Screenshot <date> at <time>.png` like the screenshot tool names it, then ` (2)`, ` (3)`, … when the name is taken. It
+  is created new (never replacing a file) and readable by its owner only (`0600`).
+- The answer is `0` with `uri` (`file://`, escaped); Cancel or closing the window is `1`; `Close` on the request takes
+  the window down and answers `2`, and so does a capture or a write that fails.
+- `PickColor` answers `2` without a window: picking a pixel needs a pointer over every display, which the portal has no
+  surface for.
+- The same callers and bounds as the file chooser apply: only the frontend calls, at most 16 screenshots and 4 for one
+  app id are pending, the app id and the parent window are at most 1024 bytes, and the app's name loses control and
+  bidirectional-override characters.
+
+Known limitations: no window or area target, no pointer in the image, no colour picking, and a display's rotation is
+not undone.
+
 ## Installing
 
 - `bin/cupertino-portal`
 - `data/cupertino.portal` to `/usr/share/xdg-desktop-portal/portals/`
 - `data/cupertino-portals.conf` to `/usr/share/xdg-desktop-portal/`: Settings and FileChooser from this backend
-  first, then the GTK backend for what it does not serve; ScreenCast and AppChooser from this backend; every other interface from the
+  first, then the GTK backend for what it does not serve; ScreenCast, AppChooser and Screenshot from this backend; every other interface from the
   GTK backend
 
 The packages ship the binary and `cupertino.portal`, with `packaging/files/usr/share/xdg-desktop-portal/cupertino-portals.conf`

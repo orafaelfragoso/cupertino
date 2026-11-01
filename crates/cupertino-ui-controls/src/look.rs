@@ -81,10 +81,9 @@ pub(crate) fn label(env: &Environment, text: &str) -> Option<ParagraphLayout> {
     if text.is_empty() {
         return None;
     }
-    paragraph(env, text)
+    paragraph(env, text, None)
 }
 
-/// `text` laid out on one line in the theme's body type, empty text included; `None` if the fonts cannot shape it.
 /// The base direction text takes in `env`.
 pub(crate) fn direction(env: &Environment) -> Direction {
     match env.direction {
@@ -93,7 +92,13 @@ pub(crate) fn direction(env: &Environment) -> Direction {
     }
 }
 
-pub(crate) fn paragraph(env: &Environment, text: &str) -> Option<ParagraphLayout> {
+/// `text` laid out on one line in the theme's body type, empty text included, in `direction` or the one its first
+/// strong character gives; `None` if the fonts cannot shape it.
+pub(crate) fn paragraph(
+    env: &Environment,
+    text: &str,
+    direction: Option<Direction>,
+) -> Option<ParagraphLayout> {
     let body = env.theme.type_scale.body;
     let style = TextStyle {
         weight: FontWeight(body.weight),
@@ -104,7 +109,7 @@ pub(crate) fn paragraph(env: &Environment, text: &str) -> Option<ParagraphLayout
         .paragraph(
             &AttributedText::plain(text, style),
             &ParagraphStyle {
-                direction: Some(direction(env)),
+                direction,
                 ..ParagraphStyle::default()
             },
         )

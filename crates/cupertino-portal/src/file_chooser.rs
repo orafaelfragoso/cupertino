@@ -22,6 +22,8 @@ pub const MAX_PENDING_PER_APP: usize = 4;
 pub const MAX_TEXT: usize = 1024;
 /// Bytes of a path.
 pub const MAX_PATH: usize = 4096;
+/// Bytes of one filter pattern: matching costs pattern × name steps for each file, on the dialog thread.
+pub const MAX_PATTERN: usize = 256;
 /// Filters, patterns of one filter, choices, options of one choice and files of `SaveFiles`.
 pub const MAX_FILTERS: usize = 64;
 pub const MAX_PATTERNS: usize = 64;
@@ -337,7 +339,11 @@ fn filter((name, patterns): WireFilter) -> Result<Filter, PortalError> {
         patterns: patterns
             .into_iter()
             .map(|(kind, pattern)| {
-                let pattern = text("a filter pattern", pattern)?;
+                if pattern.len() > MAX_PATTERN {
+                    return Err(invalid(format!(
+                        "a filter pattern is longer than {MAX_PATTERN} bytes"
+                    )));
+                }
                 match kind {
                     0 => Ok(Pattern::Glob(pattern)),
                     1 => Ok(Pattern::Mime(pattern)),

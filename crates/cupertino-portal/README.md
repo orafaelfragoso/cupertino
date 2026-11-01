@@ -41,8 +41,8 @@ filters, the choices, Cancel and the action button. A save adds a Save As field 
 
 - Only the owner of `org.freedesktop.portal.Desktop` may call it or close a request; any other caller gets
   `AccessDenied`. Options are checked before a window shows: a wrong type, a relative folder, a `current_name` with a
-  `/`, an unknown filter kind or a string or list over its bound is `InvalidArgs`. At most 16 dialogs are open at once,
-  4 for one app id.
+  `/`, an unknown filter kind, a filter pattern over 256 bytes or a string or list over its bound is `InvalidArgs`. At
+  most 16 dialogs are open at once, 4 for one app id.
 - Glob filters match without regard to case, in at most pattern × name steps; MIME filters match by extension. Folders
   always show. The filter runs once for each listing, not on each redraw.
 - The title, the action label, filter names and choice labels lose control and bidirectional-override characters.

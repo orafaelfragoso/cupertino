@@ -249,6 +249,10 @@ fn only_the_frontend_may_ask_and_bad_options_are_refused_before_a_dialog() {
             "filters",
             owned(Value::from(vec![("Odd", vec![(7u32, "*")])])),
         ),
+        (
+            "filters",
+            owned(Value::from(vec![("Long", vec![(0u32, "*?".repeat(129))])])),
+        ),
         ("current_folder", bytes("relative/folder")),
         ("multiple", owned(Value::from("yes"))),
     ] {

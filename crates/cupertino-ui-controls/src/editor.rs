@@ -13,8 +13,8 @@ use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured, Size
 use cupertino_ui_platform::{KeyEvent, Keysym, MouseButton, PointerEvent};
 use cupertino_ui_text::{
     AttributedText, ChangeCause, ContentPurpose, FontWeight, ImeEvent, Keymap, LineLayout,
-    ParagraphLayout, ParagraphStyle, Response, TextBuffer, TextEditorKeys, TextInputSession,
-    TextPosition, TextStyle, TextSystem, CARET_WIDTH,
+    Paragraph, ParagraphLayout, ParagraphStyle, Response, TextBuffer, TextEditorKeys,
+    TextInputSession, TextPosition, TextStyle, TextSystem, CARET_WIDTH,
 };
 use cupertino_ui_theme::ColorRole;
 use std::cell::RefCell;
@@ -33,10 +33,12 @@ struct Laid {
     top: f64,
     /// The index of its first visual line among all the editor's.
     first_line: usize,
+    /// Its shaping, kept so that a new width breaks its lines again without shaping it again.
+    paragraph: Paragraph,
     layout: ParagraphLayout,
 }
 
-/// What the paragraphs were laid out for; a change lays them all out again.
+/// What the paragraphs were laid out for; a new width breaks them all again, anything else shapes them again.
 struct Basis {
     text: Arc<TextSystem>,
     style: TextStyle,
@@ -56,13 +58,11 @@ impl Basis {
         }
     }
 
-    fn same(&self, other: &Basis) -> bool {
-        Arc::ptr_eq(&self.text, &other.text)
-            && self.style == other.style
-            && self.width == other.width
+    fn same_shaping(&self, other: &Basis) -> bool {
+        Arc::ptr_eq(&self.text, &other.text) && self.style == other.style
     }
 
-    fn lay_out(&self, text: &str) -> Option<ParagraphLayout> {
+    fn lay_out(&self, text: &str) -> Option<(Paragraph, ParagraphLayout)> {
         let paragraph = self
             .text
             .paragraph(
@@ -70,7 +70,8 @@ impl Basis {
                 &ParagraphStyle::default(),
             )
             .ok()?;
-        Some(paragraph.layout(self.width))
+        let layout = paragraph.layout(self.width);
+        Some((paragraph, layout))
     }
 }
 
@@ -88,9 +89,17 @@ impl Lines {
     /// Lays `text` out at `width`: after an edit, only the paragraphs it touched. Empty when the fonts cannot shape it.
     fn sync(&mut self, env: &Environment, text: &str, width: Option<f32>) {
         let basis = Basis::of(env, width);
-        if !self.basis.as_ref().is_some_and(|b| b.same(&basis)) {
-            self.basis = Some(basis);
-            self.paragraphs.clear();
+        match &self.basis {
+            Some(old) if old.same_shaping(&basis) => {
+                if old.width != width {
+                    self.reflow(width);
+                }
+                self.basis = Some(basis);
+            }
+            _ => {
+                self.basis = Some(basis);
+                self.paragraphs.clear();
+            }
         }
         if self.paragraphs.is_empty() {
             self.splice(0..0, text, 0);
@@ -115,6 +124,19 @@ impl Lines {
         self.text.push_str(text);
     }
 
+    /// Breaks every paragraph's lines again at `width`, from the shaping it keeps.
+    fn reflow(&mut self, width: Option<f32>) {
+        let mut top = 0.0;
+        let mut line = 0;
+        for p in &mut self.paragraphs {
+            p.layout = p.paragraph.layout(width);
+            p.top = top;
+            p.first_line = line;
+            top += p.layout.size().height;
+            line += p.layout.lines().len();
+        }
+    }
+
     /// Replaces the paragraphs `replaced` with `text`'s, laid out, starting at byte `from`; moves the ones after.
     fn splice(&mut self, replaced: Range<usize>, text: &str, from: usize) {
         let Some(basis) = &self.basis else {
@@ -123,7 +145,7 @@ impl Lines {
         let mut laid = Vec::new();
         let mut start = from;
         for paragraph in text.split('\n') {
-            let Some(layout) = basis.lay_out(paragraph) else {
+            let Some((shaped, layout)) = basis.lay_out(paragraph) else {
                 self.paragraphs.clear();
                 return;
             };
@@ -132,6 +154,7 @@ impl Lines {
                 len: paragraph.len(),
                 top: 0.0,
                 first_line: 0,
+                paragraph: shaped,
                 layout,
             });
             start += paragraph.len() + 1;

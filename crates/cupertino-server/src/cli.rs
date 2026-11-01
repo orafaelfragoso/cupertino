@@ -582,7 +582,7 @@ fn count_streak(path: &std::path::Path, lost: bool) -> Option<u32> {
 /// Start the compositor with the given options and run until it exits.
 #[cfg(feature = "udev")]
 fn check_hardware() -> Result<()> {
-    let report = crate::backend::preflight::run(std::path::Path::new("/sys"))?;
+    let report = crate::backend::udev::preflight()?;
     print!("{report}");
     if report.is_ok() {
         println!("ok: nothing blocks the TTY backend");

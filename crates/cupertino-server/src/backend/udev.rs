@@ -499,6 +499,13 @@ fn drm_uevent(state: &mut Cupertino, event: &DeviceEvent) {
 }
 
 /// Start the TTY backend and run until the compositor stops.
+/// What the primary GPU's driver needs before the TTY backend takes the display.
+pub fn preflight() -> Result<cupertino_devices::preflight::Report> {
+    cupertino_devices::preflight::run(Path::new("/sys"))
+        .map_err(|e| anyhow!("listing GPUs: {e}"))?
+        .context("no GPU found: /sys/class/drm lists no card")
+}
+
 pub fn run(
     state: &mut Cupertino,
     event_loop: &mut EventLoop<'static, Cupertino>,
@@ -514,7 +521,7 @@ pub fn run(
         vt = std::env::var("XDG_VTNR").unwrap_or_default(),
         "starting the TTY backend"
     );
-    let report = super::preflight::run(Path::new("/sys"))?;
+    let report = preflight()?;
     for note in &report.notes {
         tracing::info!("{note}");
     }

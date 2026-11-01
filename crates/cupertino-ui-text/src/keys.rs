@@ -152,14 +152,14 @@ fn apply(buffer: &mut TextBuffer, action: TextAction) -> bool {
         A::MoveBackwardAndModifySelection => buffer.move_char(false, true),
         A::MoveRightAndModifySelection => buffer.move_visual(true, true),
         A::MoveForwardAndModifySelection => buffer.move_char(true, true),
-        A::MoveWordLeft | A::MoveWordBackward => buffer.move_word(false, false),
-        A::MoveWordRight | A::MoveWordForward => buffer.move_word(true, false),
-        A::MoveWordLeftAndModifySelection | A::MoveWordBackwardAndModifySelection => {
-            buffer.move_word(false, true)
-        }
-        A::MoveWordRightAndModifySelection | A::MoveWordForwardAndModifySelection => {
-            buffer.move_word(true, true)
-        }
+        A::MoveWordLeft => buffer.move_word_visual(false, false),
+        A::MoveWordBackward => buffer.move_word(false, false),
+        A::MoveWordRight => buffer.move_word_visual(true, false),
+        A::MoveWordForward => buffer.move_word(true, false),
+        A::MoveWordLeftAndModifySelection => buffer.move_word_visual(false, true),
+        A::MoveWordBackwardAndModifySelection => buffer.move_word(false, true),
+        A::MoveWordRightAndModifySelection => buffer.move_word_visual(true, true),
+        A::MoveWordForwardAndModifySelection => buffer.move_word(true, true),
         A::MoveToLeftEndOfLine
         | A::MoveToBeginningOfParagraph
         | A::MoveToBeginningOfDocument

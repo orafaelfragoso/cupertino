@@ -403,7 +403,9 @@ pub struct SplitView<M> {
 
 /// A panel below a control of another window: a non-modal dialog that takes the keyboard while open, moves the focus
 /// to its first focusable item, keeps Tab inside, and closes on Escape or a press outside. Closing gives the focus
-/// back to the anchor. Declare [`Popover::window`] with the other windows while it is open.
+/// back to the anchor. It is as large as its content up to 400 by 600 pt; taller content scrolls vertically inside
+/// the padding, by `scroll`, which the model keeps like a [`ScrollView`]'s. Declare [`Popover::window`] with the
+/// other windows while it is open.
 pub struct Popover<M> {
     /// The window the anchor is in.
     pub parent: WindowKey,
@@ -412,6 +414,8 @@ pub struct Popover<M> {
     /// What assistive technology calls it, usually the anchor's label.
     pub label: String,
     pub content: Element<M>,
+    pub scroll: ScrollState,
+    pub on_scroll: Handler<ScrollState, M>,
     /// Sent on Escape or a press outside; the application then stops declaring the popover.
     pub on_close: M,
 }

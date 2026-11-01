@@ -18,6 +18,7 @@ use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Scale as O
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Interest, LoopHandle, LoopSignal, Mode, PostAction};
+use smithay::reexports::wayland_protocols::wp::content_type::v1::server::wp_content_type_v1;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::backend::{
     ClientData, ClientId, DisconnectReason, GlobalId,
@@ -31,6 +32,7 @@ use smithay::utils::{
     Clock, Logical, Monotonic, Point, Rectangle, Serial, Size as SmSize, Transform, SERIAL_COUNTER,
 };
 use smithay::wayland::compositor::{with_states, CompositorClientState, CompositorState};
+use smithay::wayland::content_type::{ContentTypeState, ContentTypeSurfaceCachedState};
 use smithay::wayland::cursor_shape::CursorShapeManagerState;
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufState};
 use smithay::wayland::foreign_toplevel_list::{ForeignToplevelHandle, ForeignToplevelListState};
@@ -242,6 +244,16 @@ impl WindowEntry {
         })
     }
 
+    /// The content type the client set with `wp_content_type_v1`, as of its last commit.
+    pub fn content_type(&self) -> wp_content_type_v1::Type {
+        with_states(self.surface(), |s| {
+            *s.cached_state
+                .get::<ContentTypeSurfaceCachedState>()
+                .current()
+                .content_type()
+        })
+    }
+
     pub fn has_surface(&self, surface: &WlSurface) -> bool {
         self.toplevel.wl_surface() == surface
     }
@@ -377,6 +389,8 @@ pub struct Cupertino {
     pub single_pixel_buffer_state: SinglePixelBufferState,
     pub fractional_scale_state: FractionalScaleManagerState,
     pub presentation_state: PresentationState,
+    /// `wp_content_type_manager_v1`: the kind of content a window says it shows (`WindowEntry::content_type`).
+    pub content_type_state: ContentTypeState,
     pub xdg_activation_state: XdgActivationState,
     /// `zxdg_exporter_v2` and `zxdg_importer_v2`: a toplevel of one client made the parent of another's (a portal
     /// dialog over the window that asked for it).
@@ -625,6 +639,7 @@ impl Cupertino {
         let single_pixel_buffer_state = SinglePixelBufferState::new::<Self>(&dh);
         let fractional_scale_state = FractionalScaleManagerState::new::<Self>(&dh);
         let presentation_state = PresentationState::new::<Self>(&dh, clock.id() as u32);
+        let content_type_state = ContentTypeState::new::<Self>(&dh);
         let xdg_activation_state = XdgActivationState::new::<Self>(&dh);
         let xdg_foreign_state = smithay::wayland::xdg_foreign::XdgForeignState::new::<Self>(&dh);
         let shortcut_inhibit = crate::shortcut_inhibit::ShortcutInhibit::new(
@@ -718,6 +733,7 @@ impl Cupertino {
             single_pixel_buffer_state,
             fractional_scale_state,
             presentation_state,
+            content_type_state,
             xdg_activation_state,
             xdg_foreign_state,
             shortcut_inhibit,

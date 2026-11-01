@@ -97,8 +97,11 @@ pub(crate) fn drop_or_leak<T>(value: T) {
     }
 }
 
+/// The thread's last error; empty while the thread's thread-locals are being destroyed.
 pub(crate) fn last_error() -> String {
-    LAST_ERROR.with(|last| last.borrow().clone())
+    LAST_ERROR
+        .try_with(|last| last.borrow().clone())
+        .unwrap_or_default()
 }
 
 /// A test makes the function named `at` panic.

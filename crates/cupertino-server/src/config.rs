@@ -364,7 +364,7 @@ pub struct Config {
     /// maps a corner to its action), `size` and `dwell` from the file.: the dwell
     /// defaults to 0.0 s.
     pub hot_corners: cupertino_input::HotCornerConfig,
-    /// Terminal candidates tried in order for the spawn action.
+    /// Terminal candidates tried in order for the spawn action ([`cupertino_defaults::terminal`]).
     pub terminals: Vec<String>,
     /// Program and leading arguments of the screenshot process (`screenshot` in the JSON file), started by the
     /// screenshot shortcuts with the mode appended ([`crate::capture::launch`]); never empty.
@@ -512,7 +512,7 @@ impl Default for Config {
             ),
             effects: crate::fx::EffectsConfig::default(),
             hot_corners: default_hot_corners(),
-            terminals: ["foot", "alacritty", "kitty", "wezterm", "xterm"]
+            terminals: cupertino_defaults::terminal::DEFAULT_TERMINALS
                 .map(String::from)
                 .to_vec(),
             screenshot_command: vec![INSTALLED_SCREENSHOT.to_string()],

@@ -3,6 +3,7 @@
 //! translation lives in `cupertino_launcher::surface`.
 
 use cupertino_assets::{AssetError, Assets};
+use cupertino_defaults::terminal::DEFAULT_TERMINALS;
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_launcher::control;
 use cupertino_launcher::exec::CommandSpec;
@@ -206,8 +207,12 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let mut panel = Panel::new();
     panel.max_rows = renderer.style.max_rows;
     let mut config = LauncherConfig::default();
-    if let Some(terminal) = &options.terminal {
-        config.terminal_command = vec![terminal.clone(), "-e".into()];
+    let terminal = options.terminal.clone().or_else(|| {
+        let entries = DEFAULT_TERMINALS.map(String::from);
+        cupertino_defaults::terminal::resolve_installed(&entries)
+    });
+    if let Some(terminal) = terminal {
+        config.terminal_command = cupertino_defaults::terminal::command_prefix(&terminal);
     }
     let files = if options.files {
         Some(

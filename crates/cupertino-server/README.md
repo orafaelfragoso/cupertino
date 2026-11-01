@@ -18,7 +18,7 @@ The server and every process that draws text or icons read the asset packs of `c
 
 The server's text (title bars through `Decorations`, the input-source HUD and the accent popup through `OverlayText`) is drawn with the optical size of the output's scale: both set it from the scale they draw at.
 
-The compositor prints `WAYLAND_DISPLAY=<socket>` once it listens. The socket is the first free `wayland-N` of `XDG_RUNTIME_DIR`; when all 32 are taken (other sessions, or other servers started by tests running at the same time) it is `wayland-cupertino-<pid>-<n>`, so a server always finds one. `tests/socket_names.rs` starts 40 at once. Start clients with that variable. `Super+Return` starts a terminal (`foot`, `alacritty`, `kitty`, `wezterm` or `xterm`, whichever exists first; configurable with `terminals`).
+The compositor prints `WAYLAND_DISPLAY=<socket>` once it listens. The socket is the first free `wayland-N` of `XDG_RUNTIME_DIR`; when all 32 are taken (other sessions, or other servers started by tests running at the same time) it is `wayland-cupertino-<pid>-<n>`, so a server always finds one. `tests/socket_names.rs` starts 40 at once. Start clients with that variable. `Super+Return` starts a terminal (`xdg-terminal-exec` for the user's default terminal, `$TERMINAL`, then `foot`, `alacritty`, `kitty`, `wezterm` or `xterm`, whichever exists first; configurable with `terminals`, where `$NAME` stands for the program an environment variable names).
 
 ## Run on hardware
 
@@ -396,7 +396,7 @@ Shortcuts are the `cupertino-input` `ShortcutMap` (defaults approximate, `Super`
 |---|---|---|---|
 | `keybindings` | object | `{} | chord to action name, for example `{"Super+t": "spawn-terminal"} |
 | `appearance` | `"light"` / `"dark" | `light` | appearance (`--appearance` beats it) |
-| `terminals` | string array | `["foot", "alacritty", "kitty", "wezterm", "xterm"] | candidates for `Super+Return`, first existing wins |
+| `terminals` | string array | `["xdg-terminal-exec", "$TERMINAL", "foot", "alacritty", "kitty", "wezterm", "xterm"]` | candidates for `Super+Return`, first existing wins; `$NAME` is the program the environment variable `NAME` names (skipped when unset) |
 | `corner_radius` | number (pt) | `12` | window corner radius |
 | `decorations` | bool | `true` | server-side decorations |
 | `menu_bar_height` | number (pt) | `cupertino-theme` menu bar height | height reserved in the usable area |

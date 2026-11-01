@@ -23,6 +23,7 @@ app = [
 [dependencies]
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-apps = { path = "../cupertino-apps" }
+cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-icons = { path = "../cupertino-icons" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-animation = { path = "../cupertino-animation" }

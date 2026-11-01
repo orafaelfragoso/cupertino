@@ -1,9 +1,11 @@
 """Tests of the application files and the release tags of the runtime package: `python3 -I packaging/test_release.py`."""
+import configparser
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from argparse import Namespace
 from pathlib import Path
@@ -48,6 +50,35 @@ class ApplicationsTest(unittest.TestCase):
     def test_one_file_name_from_two_crates_fails(self):
         with self.assertRaisesRegex(ValueError, 'cupertino-mimeapps.list also comes from crates/cupertino-files'):
             check(SHIPPED + ['crates/cupertino-settings/data/applications/cupertino-mimeapps.list'])
+
+
+class PortalsConfTest(unittest.TestCase):
+    CONF = 'usr/share/xdg-desktop-portal/cupertino-portals.conf'
+
+    def backends(self):
+        conf = configparser.ConfigParser()
+        conf.read(release.ROOT / 'packaging/files' / self.CONF)
+        return [b for b in conf['preferred']['default'].split(';') if b]
+
+    def test_the_conf_is_in_the_runtime_package_of_every_format(self):
+        for fmt in ('deb', 'rpm', 'arch'):
+            with self.subTest(fmt):
+                self.assertIn(self.CONF, [rel for rel, _src, _mode, _conf in release.runtime(fmt)])
+
+    def test_every_backend_it_prefers_is_installed_with_the_package(self):
+        meta = tomllib.loads((release.ROOT / 'crates/cupertino-server/Cargo.toml').read_text())['package']['metadata']
+        recommends = {
+            'deb': [r.strip() for r in meta['deb']['recommends'].split(',')],
+            'rpm': list(meta['generate-rpm']['recommends']),
+            'arch': re.findall(r"'([\w-]+)'", re.search(r'depends=\((.*?)\)', (
+                release.ROOT / 'packaging/arch/cupertino/PKGBUILD').read_text().split('package_cupertino()')[1], re.S)[1]),
+        }
+        backends = self.backends()
+        self.assertEqual(backends, ['gtk'])
+        for fmt, packages in recommends.items():
+            for backend in backends:
+                with self.subTest(fmt, backend=backend):
+                    self.assertIn(f'xdg-desktop-portal-{backend}', packages)
 
 
 class TagTest(unittest.TestCase):

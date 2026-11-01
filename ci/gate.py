@@ -143,6 +143,32 @@ def gate(root: Path) -> tuple[Counter, list[str]]:
     return hits, problems
 
 
+SCANNER_XML = re.compile(r'\bgenerate_(?:interfaces|client_code|server_code)!\s*\(\s*"([^"]+)"')
+INCLUDED = re.compile(r'\binclude_bytes!\s*\(\s*"([^"]+)"')
+
+
+def protocol_xml_problems(root: Path) -> list[str]:
+    """Library sources whose wayland-scanner XML is not also `include_bytes!`-ed in the crate: the macros read it
+    without telling rustc, so a build cache keyed on rustc's dep-info would keep stale bindings after an edit."""
+    problems: list[str] = []
+    for crate in sorted(path.parent for path in root.glob("crates/*/Cargo.toml")):
+        src = crate / "src"
+        sources = [path for path in sorted(src.rglob("*.rs")) if path != src / "main.rs" and src / "bin" not in path.parents]
+        named: list[tuple[Path, int, str]] = []
+        included: set[str] = set()
+        for path in sources:
+            text = path.read_text(encoding="utf-8")
+            for match in SCANNER_XML.finditer(text):
+                named.append((path, text.count("\n", 0, match.start()) + 1, os.path.normpath(match.group(1))))
+            for match in INCLUDED.finditer(text):
+                included.add(os.path.relpath(os.path.normpath(path.parent / match.group(1)), crate))
+        for path, line, xml in named:
+            if xml not in included:
+                rel = path.relative_to(root).as_posix()
+                problems.append(f"{rel}:{line}: protocol XML read by wayland-scanner is not include_bytes!-ed in its crate: {xml}")
+    return problems
+
+
 def metadata_problems(root: Path) -> list[str]:
     release = root / "packaging" / "release.py"
     if not release.is_file():
@@ -177,6 +203,7 @@ def main() -> int:
     if not root.is_dir():
         parser.error("root must be a directory")
     hits, problems = gate(root)
+    problems += protocol_xml_problems(root)
     problems += metadata_problems(root)
     problems += contracts_problems(root)
     for problem in problems:

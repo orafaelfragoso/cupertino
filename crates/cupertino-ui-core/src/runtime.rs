@@ -1685,7 +1685,7 @@ fn sync_backdrop<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>) {
                 .map(|material| Backdrop {
                     material: material.to_owned(),
                     radius,
-                    alpha: alpha.clamp(0.0, 1.0),
+                    alpha: crate::surface_alpha(alpha),
                 })
         }
         _ => None,

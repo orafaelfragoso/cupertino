@@ -250,7 +250,7 @@ impl Painter {
                                 radius,
                             },
                             input.env.theme.surface(surface).fill.map(|fill| Color {
-                                a: fill.a * alpha.clamp(0.0, 1.0) as f32,
+                                a: fill.a * crate::surface_alpha(alpha) as f32,
                                 ..fill
                             }),
                         ),

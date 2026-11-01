@@ -1912,7 +1912,7 @@ mod tests {
             crate::window::default_size(1.0),
             1.0,
             RowSize::Medium,
-            &crate::sidebar::groups(),
+            &crate::sidebar::groups(&[]),
             false,
         );
         let f = layout.search;
@@ -1973,7 +1973,7 @@ mod tests {
             crate::window::default_size(1.0),
             1.0,
             RowSize::Medium,
-            &crate::sidebar::groups(),
+            &crate::sidebar::groups(&[]),
             false,
         );
         let mut search = SearchField::default();
@@ -2003,7 +2003,7 @@ mod tests {
             size,
             1.0,
             RowSize::default(),
-            &crate::sidebar::groups(),
+            &crate::sidebar::groups(&[]),
             false,
         );
         let history = History::new(PaneId::Wifi);
@@ -2052,7 +2052,7 @@ mod tests {
                 size,
                 f64::from(scale),
                 RowSize::default(),
-                &crate::sidebar::groups(),
+                &crate::sidebar::groups(&[]),
                 false,
             );
             let history = History::new(PaneId::Wifi);
@@ -2157,7 +2157,7 @@ mod tests {
             size,
             f64::from(scale),
             RowSize::default(),
-            &crate::sidebar::groups(),
+            &crate::sidebar::groups(&[]),
             false,
         );
         let specs: Vec<SectionSpec<'_>> = sections

@@ -364,7 +364,7 @@ impl Capture {
             size,
             WIDTH_FACTOR,
             RowSize::default(),
-            &sidebar::groups(),
+            &sidebar::groups(&[]),
             false,
         );
         let mut sections = panes::sections(pane, &self.settings, session, live);

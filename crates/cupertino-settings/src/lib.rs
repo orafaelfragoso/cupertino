@@ -6,6 +6,8 @@
 pub mod about;
 #[cfg(feature = "app")]
 pub mod agent;
+#[cfg(feature = "app")]
+pub mod bluez;
 pub mod clipboard;
 pub mod controls;
 pub mod form;
@@ -20,6 +22,8 @@ pub mod live;
 pub mod mapping;
 pub mod menu;
 pub mod menu_bar;
+#[cfg(feature = "app")]
+pub mod nm;
 pub mod paint;
 pub mod pane;
 pub mod panes;

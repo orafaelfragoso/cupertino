@@ -56,36 +56,41 @@ fn device_title(device: &HashMap<String, OwnedValue>) -> String {
         .unwrap_or_else(|| "Unknown device".to_string())
 }
 
-/// Accept a call only from the current owner of `org.cupertino.Bluetooth1`: any client of the bus can call the agent's
+/// Accept a call only from the current owner of `name`, the Bluetooth daemon: any client of the bus can call the agent's
 /// object, and a forged question would put a pairing prompt (and the user's answer) in another client's hands. The owner
-/// is looked up per call, so a restarted daemon is followed; calls are rare (one per pairing step).
-async fn from_daemon(header: &Header<'_>, connection: &Connection) -> Result<(), AgentError> {
-    let sender = header
-        .sender()
-        .ok_or_else(|| AgentError::Rejected("the call has no sender".into()))?;
+/// is looked up per call, so a restarted daemon is followed; calls are rare (one per pairing step). The refusal's text.
+pub(crate) async fn from_owner(
+    header: &Header<'_>,
+    connection: &Connection,
+    name: &'static str,
+) -> Result<(), String> {
+    let sender = header.sender().ok_or("the call has no sender")?;
     let owner = fdo::DBusProxy::new(connection)
-        .await?
-        .get_name_owner(BLUETOOTH_NAME.try_into().expect("a valid bus name"))
         .await
-        .map_err(|e| {
-            AgentError::Rejected(format!("the Bluetooth daemon is not on the bus: {e}"))
-        })?;
+        .map_err(|e| e.to_string())?
+        .get_name_owner(name.try_into().expect("a valid bus name"))
+        .await
+        .map_err(|e| format!("the Bluetooth daemon is not on the bus: {e}"))?;
     if owner.as_str() == sender.as_str() {
         Ok(())
     } else {
-        Err(AgentError::Rejected(format!(
-            "{sender} is not the Bluetooth daemon"
-        )))
+        Err(format!("{sender} is not the Bluetooth daemon"))
     }
 }
 
+async fn from_daemon(header: &Header<'_>, connection: &Connection) -> Result<(), AgentError> {
+    from_owner(header, connection, BLUETOOTH_NAME)
+        .await
+        .map_err(AgentError::Rejected)
+}
+
 impl Agent {
-    /// Ask the user `prompt` and wait for the answer; a closed sheet refuses.
-    async fn ask(&self, id: u64, device: &HashMap<String, OwnedValue>, prompt: Prompt) -> Answer {
+    /// Ask the user `prompt` about `device` and wait for the answer; a closed sheet refuses.
+    pub(crate) async fn ask(&self, id: u64, device: String, prompt: Prompt) -> Answer {
         let (answer, reply) = async_channel::bounded(1);
         (self.on_event)(AgentEvent::Prompt {
             id,
-            device: device_title(device),
+            device,
             prompt,
             answer: Some(answer),
         });
@@ -109,7 +114,7 @@ impl Agent {
         match self
             .ask(
                 id,
-                &device,
+                device_title(&device),
                 Prompt::Confirm {
                     passkey: (!just_works).then_some(passkey),
                 },
@@ -132,7 +137,7 @@ impl Agent {
         device: HashMap<String, OwnedValue>,
     ) -> Result<u32, AgentError> {
         from_daemon(&header, connection).await?;
-        match self.ask(id, &device, Prompt::Request).await {
+        match self.ask(id, device_title(&device), Prompt::Request).await {
             Answer::Passkey(p) => Ok(p),
             Answer::Reject | Answer::Confirm => {
                 Err(AgentError::Rejected("the user refused the pairing".into()))

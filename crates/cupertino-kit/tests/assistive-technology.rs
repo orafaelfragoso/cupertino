@@ -77,6 +77,7 @@ impl Application for Form {
                     on_change: Some(Box::new(Message::Name)),
                     on_submit: None,
                     selection: None,
+                    initial: false,
                 })
                 .key("name"),
                 Element::new(Button {

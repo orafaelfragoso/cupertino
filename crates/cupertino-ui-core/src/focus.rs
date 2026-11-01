@@ -30,6 +30,7 @@ pub(crate) struct Focus {
     visible: bool,
     path: Vec<NodeId>,
     scopes: Vec<Scope>,
+    opened: bool,
 }
 
 impl Focus {
@@ -73,7 +74,9 @@ impl Focus {
 
     /// Brings focus up to date after a frame: closed scopes give the focus back, a focus whose node unmounted moves
     /// to its nearest surviving ancestor, and a newly open scope takes the focus to its first Tab stop at or under an
-    /// initial-focus node, or else its first focusable one. `scopes` and `focusable` are in reading order.
+    /// initial-focus node, or else its first focusable one. On the window's first frame an unfocused window takes the
+    /// focus to its first Tab stop at or under an initial-focus node, if it has one. `scopes` and `focusable` are in
+    /// reading order.
     pub(crate) fn sync<M: 'static>(
         &mut self,
         tree: &Tree<M>,
@@ -98,6 +101,14 @@ impl Focus {
         if !moved && target.is_some_and(|n| !tree.contains(n)) {
             target = deepest_alive(tree, &self.path);
             moved = true;
+        }
+
+        if !std::mem::replace(&mut self.opened, true) && target.is_none() {
+            target = focusable
+                .iter()
+                .copied()
+                .find(|&n| tree.path(n).into_iter().any(|p| initial_focus(tree, p)));
+            moved |= target.is_some();
         }
 
         for &scope in scopes {

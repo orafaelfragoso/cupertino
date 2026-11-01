@@ -382,6 +382,7 @@ impl Application for FieldPage {
                         on_change: None,
                         on_submit: None,
                         selection: None,
+                        initial: false,
                     })
                     .key("Name"),
                     state: model.tip,
@@ -435,6 +436,7 @@ impl Application for Form {
                     on_change: Some(Box::new(|_: TextChange| Message::Other)),
                     on_submit: None,
                     selection: None,
+                    initial: false,
                 })
                 .key("Name"),
                 Element::from(tip(model.tip)).key("tip"),

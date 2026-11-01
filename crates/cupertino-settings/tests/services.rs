@@ -981,12 +981,26 @@ fn the_sound_pane_reads_and_sets_the_default_pipewire_sink() {
     );
     assert_eq!(fake.volume(Target::DefaultSource), half);
 
+    fake.set_sinks(&[(52, "Speakers"), (53, "Headphones")], 52);
+    assert_eq!(
+        services
+            .outputs()
+            .iter()
+            .map(|o| (o.id, o.name.as_str(), o.default))
+            .collect::<Vec<_>>(),
+        [(52, "Speakers", true), (53, "Headphones", false)]
+    );
+    services.call(&Call::SetOutput(53)).unwrap();
+    assert_eq!(fake.default_sink(), 53);
+    assert!(services.outputs()[1].default);
+
     fake.set_running(false);
     assert_eq!(
         services.volume(),
         Reading::Unavailable("No sound output is available".into()),
         "without PipeWire the mixer is read, and there is no card"
     );
+    assert_eq!(services.outputs(), [], "and no output is listed");
 }
 
 // ---- Plain failure texts -----------------------------------------------------------------------------------------

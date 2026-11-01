@@ -45,6 +45,10 @@ all on one thread.
   whose current value is what fails (a blur animating down from over the renderer's limit, say) therefore stays at
   that value until the application changes something or the compositor configures. Other windows go on, and only a
   lost connection ends `step`.
+- **Window materials.** A window whose background is `WindowBackground::Surface` asks the window system for the
+  surface's material (`WindowRequest::Backdrop`) when it reports `app_effects` and the theme asks for one; otherwise,
+  or when the request fails, core paints the surface's opaque fill in the window's rounded shape. A theme change
+  (Reduce Transparency, high contrast) takes the material away or asks for it again.
 - **Scrolling.** A scroll container's offset is model state, counted from the start edge; core moves the content
   by it when placing nodes, so painting and hit-testing agree. In right-to-left layout, where layout mirrors the
   content, a horizontal offset moves the content right.

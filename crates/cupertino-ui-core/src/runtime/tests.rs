@@ -14,7 +14,7 @@ use cupertino_ui_platform::{
     Configure, DecorationMode, Mods, MouseButton, PointerEvent, WindowStates, WmCapabilities,
 };
 use cupertino_ui_render::{Paint, PaintOp, Shape};
-use cupertino_ui_theme::{Color, ColorRole, ColorTokens, StateVariant};
+use cupertino_ui_theme::{Color, ColorRole, ColorTokens, StateVariant, Surface};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
@@ -26,8 +26,7 @@ struct Counter;
 struct Model {
     count: u32,
     done: Vec<u32>,
-    /// The window paints no background, as a panel that draws its own.
-    panel: bool,
+    background: WindowBackground,
 }
 
 impl Application for Counter {
@@ -42,7 +41,18 @@ impl Application for Counter {
         match message.as_str() {
             "plus:Target:press" | "plus" => model.count += 1,
             "quit" => return vec![Command::Exit],
-            "panel" => model.panel = !model.panel,
+            "panel" => {
+                model.background = match model.background {
+                    WindowBackground::Theme => WindowBackground::None,
+                    _ => WindowBackground::Theme,
+                }
+            }
+            "menu" => {
+                model.background = WindowBackground::Surface {
+                    surface: Surface::Menu,
+                    radius: 8.0,
+                }
+            }
             "close" => return vec![Command::CloseWindow(WindowKey("main".into()))],
             "wait" => return vec![Command::Perform(Box::pin(async { "done 7".to_string() }))],
             m if m.starts_with("done ") => model.done.push(m[5..].parse().unwrap()),
@@ -72,11 +82,7 @@ impl Application for Counter {
             ),
             on_close: None,
             popup: None,
-            background: if model.panel {
-                WindowBackground::None
-            } else {
-                WindowBackground::Theme
-            },
+            background: model.background,
             content: Element::new(row(vec![
                 Element::new(leaf("plus")).key("plus"),
                 Element::new(Leaf {
@@ -988,6 +994,81 @@ fn a_window_paints_the_theme_background_unless_its_content_draws_its_own() {
         fill,
         "the root repaints when the background changes back"
     );
+}
+
+#[test]
+fn a_menu_window_shows_the_menu_material_where_the_desktop_draws_it_and_the_opaque_fill_in_its_shape_elsewhere(
+) {
+    let background = Color::new(0.9, 0.9, 0.9, 1.0);
+    let (mut rt, window, _) = start_with(|o| {
+        let mut theme = (*o.theme).clone();
+        theme.colors = ColorTokens::new([(
+            (ColorRole::WindowBackground, StateVariant::NORMAL),
+            background,
+        )]);
+        o.theme = Arc::new(theme);
+    });
+    configure(&mut rt, window, 1);
+    let frame = |rt: &mut Rt, message: Option<&str>| {
+        if let Some(m) = message {
+            rt.messages.push_back(m.into());
+        }
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(1)));
+        rt.step(steps()).unwrap();
+        rt.snapshot(window).unwrap().display_list.nodes[0]
+            .ops
+            .first()
+            .cloned()
+    };
+    let backdrops = |rt: &Rt| -> Vec<Option<Backdrop>> {
+        rt.window_system()
+            .requests
+            .iter()
+            .filter_map(|(_, r)| match r {
+                WindowRequest::Backdrop(b) => Some(b.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let opaque = Some(PaintOp::Fill {
+        shape: Shape::RoundedRect {
+            rect: cupertino_geometry::Rect::new(0.0, 0.0, 200.0, 100.0),
+            radius: 8.0,
+        },
+        paint: Paint::Solid(background),
+    });
+
+    assert_eq!(
+        frame(&mut rt, Some("menu")),
+        opaque,
+        "without the desktop's effects"
+    );
+    assert_eq!(backdrops(&rt), Vec::new());
+
+    rt.window_system_mut().effects = true;
+    rt.messages.push_back("panel".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(
+        frame(&mut rt, Some("menu")),
+        None,
+        "the compositor draws the material"
+    );
+    let menu = Backdrop {
+        material: "Menu".into(),
+        radius: 8.0,
+    };
+    assert_eq!(backdrops(&rt), vec![Some(menu)]);
+
+    let mut reduced = (*rt.options.theme).clone();
+    reduced.preferences.reduce_transparency = true;
+    rt.set_theme(Arc::new(reduced));
+    assert_eq!(
+        frame(&mut rt, None),
+        opaque,
+        "Reduce Transparency is opaque"
+    );
+    assert_eq!(backdrops(&rt).last(), Some(&None));
 }
 
 /// One of four choices in a roving group; only the selected one is a Tab stop. Arrows, Home and End choose another and

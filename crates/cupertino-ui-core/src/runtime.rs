@@ -24,9 +24,9 @@ use crate::{
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutOptions, LayoutStats};
 use cupertino_ui_platform::{
-    ClipboardData, ClipboardKind, ConfigureId, ConstraintAdjust, KeyEvent, Keysym, PlatformError,
-    PlatformEvent, PopupEdge, PopupSpec, PresentOutcome, SystemAppearance, Timestamp, TouchEvent,
-    WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
+    Backdrop, ClipboardData, ClipboardKind, ConfigureId, ConstraintAdjust, KeyEvent, Keysym,
+    PlatformError, PlatformEvent, PopupEdge, PopupSpec, PresentOutcome, SystemAppearance,
+    Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, DisplayList, PaintResources, RenderRequest, UiRenderer,
@@ -99,6 +99,8 @@ struct WindowState<M> {
     shortcuts: CommandRegistry<M>,
     on_close: Option<M>,
     background: WindowBackground,
+    /// The material the window system shows under the window, as last asked for.
+    backdrop: Option<Backdrop>,
     root: Option<NodeId>,
     env: Environment,
     size: Size,
@@ -215,6 +217,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         }
         for w in &mut self.windows {
             w.env.theme = Arc::clone(&theme);
+            sync_backdrop(&mut self.system, w);
             w.invalidate();
             w.damage.invalidate();
         }
@@ -439,6 +442,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             w.shortcuts = shortcuts;
             w.on_close = on_close;
             w.background = background;
+            sync_backdrop(&mut self.system, &mut w);
             w.root = Some(self.tree.reconcile(w.root, content)?);
             w.invalidate();
             self.windows.push(w);
@@ -463,6 +467,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.shortcuts = shortcuts;
                 w.on_close = on_close;
                 w.background = background;
+                sync_backdrop(&mut self.system, &mut w);
                 w.invalidate();
                 self.windows.push(w);
             }
@@ -507,6 +512,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             shortcuts: CommandRegistry::new(),
             on_close: None,
             background: WindowBackground::Theme,
+            backdrop: None,
             root: None,
             env: Environment {
                 theme: Arc::clone(&self.options.theme),
@@ -1266,6 +1272,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 focus_visible: w.focus.visible(),
                 window_active: w.active,
                 background: w.background,
+                backdrop: w.backdrop.is_some(),
                 now,
             },
         );
@@ -1562,6 +1569,31 @@ fn route<'a, M: 'static>(
         },
         effects,
     }
+}
+
+/// Asks the window system for the material `w`'s background wants, or for none, when that changed. A platform that
+/// refuses leaves the window on its opaque fill.
+fn sync_backdrop<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>) {
+    let wanted = match w.background {
+        WindowBackground::Surface { surface, radius } if system.capabilities().app_effects => w
+            .env
+            .theme
+            .surface(surface)
+            .material
+            .map(|material| Backdrop {
+                material: material.to_owned(),
+                radius,
+            }),
+        _ => None,
+    };
+    if wanted == w.backdrop {
+        return;
+    }
+    let shown = system
+        .request(w.id, WindowRequest::Backdrop(wanted.clone()))
+        .is_ok();
+    w.backdrop = wanted.filter(|_| shown);
+    w.invalidate();
 }
 
 #[cfg(test)]

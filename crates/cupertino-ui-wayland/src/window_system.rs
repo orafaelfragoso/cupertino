@@ -7,13 +7,16 @@ use std::sync::Arc;
 use std::task::{Wake, Waker};
 use std::time::{Duration, Instant};
 
-use cupertino_geometry::Size;
+use cupertino_geometry::{Rect, Size};
 use cupertino_modifiers::Profile;
-use cupertino_protocol_app::{AppEffects, AppEvent, Appearance as AppearanceObserver};
+use cupertino_protocol_app::{
+    AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop as Material,
+};
 use cupertino_ui_platform::{
-    ActivationRequest, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, ConfigureId,
-    CursorShape, KeyEvent, Keysym, PlatformError, PlatformEvent, PopupSpec, PresentOutcome,
-    SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
+    ActivationRequest, Backdrop, Capabilities, ClipboardData, ClipboardKind, ClipboardToken,
+    ConfigureId, CursorShape, KeyEvent, Keysym, PlatformError, PlatformEvent, PopupSpec,
+    PresentOutcome, SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec,
+    WindowSystem,
 };
 use cupertino_ui_render::{CpuFrame, RenderFrameId};
 use cupertino_ui_text::TextInputState;
@@ -62,6 +65,15 @@ struct Window {
     frame_wanted: bool,
     /// Presented frames the compositor has not yet said it showed or discarded, oldest first.
     in_flight: VecDeque<RenderFrameId>,
+    backdrop: Option<ShownBackdrop>,
+}
+
+/// The material under a window, shaped to the window's size with the next present.
+struct ShownBackdrop {
+    material: Material,
+    radius: f64,
+    /// The logical size its shape was last given.
+    shaped: Option<(u32, u32)>,
 }
 
 /// Sets the flag [`WindowSystem::dispatch`] reports as [`PlatformEvent::Wake`] and wakes the connection's wait.
@@ -243,8 +255,34 @@ impl WaylandWindowSystem {
             stalled: None,
             frame_wanted: false,
             in_flight: VecDeque::new(),
+            backdrop: None,
         });
         id
+    }
+
+    fn set_backdrop(
+        &mut self,
+        window: WindowId,
+        backdrop: Option<Backdrop>,
+    ) -> Result<(), PlatformError> {
+        let surface = self.window(window)?.surface;
+        let shown = match backdrop {
+            None => None,
+            Some(Backdrop { material, radius }) => {
+                let (effects, _) = self.effects.as_ref().ok_or(PlatformError::Unsupported)?;
+                let wire = effects
+                    .backdrop(&self.conn, surface)
+                    .map_err(|e| PlatformError::Protocol(e.to_string()))?;
+                wire.set_material(&material);
+                Some(ShownBackdrop {
+                    material: wire,
+                    radius,
+                    shaped: None,
+                })
+            }
+        };
+        self.window_mut(window)?.backdrop = shown;
+        Ok(())
     }
 
     /// The window at `i` may draw again; whether the frame it asked for meanwhile is due now.
@@ -552,6 +590,7 @@ impl WindowSystem for WaylandWindowSystem {
 
     fn request(&mut self, window: WindowId, request: WindowRequest) -> Result<(), PlatformError> {
         let result = match request {
+            WindowRequest::Backdrop(backdrop) => return self.set_backdrop(window, backdrop),
             WindowRequest::SetTitle(title) => {
                 let t = self.toplevel(window)?;
                 self.conn.set_title(t, &title)
@@ -693,6 +732,12 @@ impl WindowSystem for WaylandWindowSystem {
     ) -> Result<PresentOutcome, PlatformError> {
         let w = self.window_mut(window)?;
         let (surface, size) = (w.surface, w.size);
+        if let Some(b) = w.backdrop.as_mut().filter(|b| b.shaped != Some(size)) {
+            let bounds = Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1));
+            if b.material.set_shape(&bounds, b.radius).is_ok() {
+                b.shaped = Some(size);
+            }
+        }
         let resized = w.shown != Some((frame.width, frame.height));
         let mut damage = std::mem::take(&mut w.carried);
         damage.extend(frame.damage.iter().map(|r| PixelRect {

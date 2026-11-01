@@ -20,9 +20,17 @@ pub enum Scope {
     User,
 }
 
-/// The state of a unit as systemd names it (`active`, `inactive`, `failed`, `activating`), [`NOT_FOUND`] when no such
-/// unit is installed, or `None` when the service manager cannot be asked.
-pub type UnitState = Box<dyn Fn(Scope, &str) -> Option<String>>;
+/// A unit's state, or `None` when the service manager cannot be asked.
+pub type UnitState = Box<dyn Fn(Scope, &str) -> Option<Unit>>;
+
+/// A unit's states as systemd names them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unit {
+    /// `active`, `inactive`, `failed`, `activating`, or [`NOT_FOUND`] when no such unit is installed.
+    pub active: String,
+    /// `enabled`, `disabled`, `static`, `masked`, or empty when systemd gives none.
+    pub file: String,
+}
 
 /// The state of a unit that is not installed.
 pub const NOT_FOUND: &str = "not-found";
@@ -71,7 +79,7 @@ impl Sources {
     }
 }
 
-fn systemctl_state(scope: Scope, unit: &str) -> Option<String> {
+fn systemctl_state(scope: Scope, unit: &str) -> Option<Unit> {
     let mut command = Command::new("systemctl");
     if scope == Scope::User {
         command.arg("--user");
@@ -79,7 +87,7 @@ fn systemctl_state(scope: Scope, unit: &str) -> Option<String> {
     let output = command
         .args([
             OsStr::new("show"),
-            OsStr::new("--property=LoadState,ActiveState"),
+            OsStr::new("--property=LoadState,ActiveState,UnitFileState"),
             OsStr::new(unit),
         ])
         .stdin(Stdio::null())
@@ -92,11 +100,15 @@ fn systemctl_state(scope: Scope, unit: &str) -> Option<String> {
         text.lines()
             .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
     };
-    match (field("LoadState"), field("ActiveState")) {
-        (Some("not-found"), _) => Some(NOT_FOUND.to_owned()),
-        (_, Some(active)) => Some(active.to_owned()),
-        _ => None,
-    }
+    let active = match (field("LoadState"), field("ActiveState")) {
+        (Some("not-found"), _) => NOT_FOUND,
+        (_, Some(active)) => active,
+        _ => return None,
+    };
+    Some(Unit {
+        active: active.to_owned(),
+        file: field("UnitFileState").unwrap_or_default().to_owned(),
+    })
 }
 
 /// The checks of `areas`, in the order of [`Area::ALL`]; every area when `areas` is empty.

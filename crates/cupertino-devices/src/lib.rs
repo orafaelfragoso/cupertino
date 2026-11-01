@@ -7,6 +7,8 @@
 //!   capability bitmasks, with the rules of udev's `input_id` builtin.
 //! - [`gpu`]: all GPUs and the primary one.
 //! - [`monitor`]: hotplug events from the kernel.
+//! - [`preflight`]: what the primary GPU's driver needs before a compositor takes the display, with the fix for each
+//!   setting that is wrong.
 //! - [`seat`]: seat assignment (always `seat0` without udevd).
 //! - [`udev_db`]: the properties udevd stored for a node (hardware database entries such as `MOUSE_DPI`).
 //!
@@ -20,6 +22,7 @@ pub mod error;
 pub mod gpu;
 pub mod input_id;
 pub mod monitor;
+pub mod preflight;
 pub mod seat;
 mod sysfs;
 pub mod udev_db;

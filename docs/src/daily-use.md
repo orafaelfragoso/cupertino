@@ -50,6 +50,9 @@ Files go to the Desktop folder unless `~/.config/cupertino/screenshot.conf` sets
 
 ## Logs and crash reasons
 
+`cupertino-diagnose` checks the GPU driver, the session, the portal, the services and the last crash in one go, and names
+the fix for what is wrong; `cupertino-diagnose --json` gives the same as JSON.
+
 | File | Holds |
 |---|---|
 | `~/.local/state/cupertino/session.log` | one line per session start and end: a normal end, the exit status, the signal that ended the compositor, or the watchdog. When the compositor ends with an error, the end line also has the reason: a panic on its main thread or a lost rendering context. An abort or a fault (SIGABRT, SIGSEGV) is named as the reason, and `server.log` has its backtrace, as it has a panic's. Other signals leave no reason; the line names the signal. |

@@ -185,6 +185,23 @@ pub(crate) fn popup_configure(c: &wl::PopupConfigure) -> platform::Configure {
     }
 }
 
+/// The `n`th configure of a surface with a role from [`crate::SurfaceRoles`], at `size`.
+pub(crate) fn role_configure(n: u32, size: (u32, u32)) -> platform::Configure {
+    platform::Configure {
+        id: platform::ConfigureId(n),
+        size: Some(Size::new(f64::from(size.0), f64::from(size.1))),
+        states: platform::WindowStates::default(),
+        bounds: None,
+        server_decorations: false,
+        wm_capabilities: platform::WmCapabilities {
+            window_menu: false,
+            maximize: false,
+            fullscreen: false,
+            minimize: false,
+        },
+    }
+}
+
 pub(crate) fn decorations(mode: platform::DecorationMode) -> wl::Decorations {
     match mode {
         platform::DecorationMode::Preferred => wl::Decorations::Server,

@@ -358,6 +358,23 @@ impl Application for Resident {
 }
 
 #[test]
+fn a_runtime_started_from_a_model_shows_it_and_runs_its_commands_instead_of_init() {
+    let damage = Rc::default();
+    let mut rt = Runtime::<Resident, _>::start(
+        FakeSystem::default(),
+        options(&damage),
+        (
+            false,
+            vec![Command::Perform(Box::pin(async { "open".to_owned() }))],
+        ),
+    );
+    assert!(!*rt.model());
+    rt.step(steps()).unwrap();
+    assert!(*rt.model());
+    assert_eq!(rt.windows().len(), 1);
+}
+
+#[test]
 fn a_resident_application_outlives_its_last_window_until_it_exits() {
     let damage = Rc::default();
     let mut rt = Runtime::<Resident, _>::new(FakeSystem::default(), options(&damage));

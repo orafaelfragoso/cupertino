@@ -6,7 +6,7 @@ use cupertino_modifiers::Profile;
 use cupertino_theme::Theme;
 use cupertino_ui_atspi::AtspiAdapter;
 use cupertino_ui_core::{
-    Application, MonotonicClock, Runtime, RuntimeOptions, ThemeForAppearance, UiError,
+    Application, Command, MonotonicClock, Runtime, RuntimeOptions, ThemeForAppearance, UiError,
 };
 use cupertino_ui_layout::LayoutDirection;
 use cupertino_ui_platform::{PlatformError, SystemAppearance, WindowSystem};
@@ -51,11 +51,21 @@ impl std::error::Error for AppError {}
 /// close handler is closed, or a non-[resident](Application::RESIDENT) application closes its last window.
 pub fn run<A: Application>() -> Result<(), AppError> {
     let system = WaylandWindowSystem::connect(Profile::cupertino()).map_err(AppError::Connect)?;
+    run_on::<A>(system, A::init())
+}
+
+/// [`run`] on `system`, a connection the caller set up, from `start` instead of [`Application::init`]: a desktop
+/// shell gives its surfaces their roles with [`WaylandWindowSystem::with_roles`] and starts from its options and its
+/// channels to the shell.
+pub fn run_on<A: Application>(
+    system: WaylandWindowSystem,
+    start: (A::Model, Vec<Command<A::Message>>),
+) -> Result<(), AppError> {
     // the first frame already has the session's appearance
     let (mut options, theme) = options_and_theme(start_preferences(system.appearance()))?;
     let follow = theme_for(theme, Arc::clone(&options.theme));
     options.accessibility = Some(Box::new(AtspiAdapter::muted(system.waker())));
-    Runtime::<A, _>::new(system, options)
+    Runtime::<A, _>::start(system, options, start)
         .with_theme_for(follow)
         .run()
         .map_err(AppError::Runtime)

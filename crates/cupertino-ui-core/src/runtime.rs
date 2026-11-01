@@ -188,7 +188,16 @@ pub struct Runtime<A: Application, W: WindowSystem> {
 
 impl<A: Application, W: WindowSystem> Runtime<A, W> {
     pub fn new(system: W, options: RuntimeOptions) -> Self {
-        let (model, commands) = A::init();
+        Self::start(system, options, A::init())
+    }
+
+    /// [`Runtime::new`] from `model` and the `commands` to run first, instead of [`Application::init`]'s: for an
+    /// application that starts from what its caller read, such as its options and its channels to a service.
+    pub fn start(
+        system: W,
+        options: RuntimeOptions,
+        (model, commands): (A::Model, Vec<Command<A::Message>>),
+    ) -> Self {
         let executor = Executor::new(system.waker());
         let mut runtime = Self {
             model,

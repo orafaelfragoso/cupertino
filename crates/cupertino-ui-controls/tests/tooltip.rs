@@ -4,7 +4,7 @@ use cupertino_geometry::{Insets, Point};
 use cupertino_ui_controls::{Button, ButtonRole, ButtonStyle, Stack, TextField, Tooltip};
 use cupertino_ui_core::{Application, Command, Element, Role, Window, WindowKey};
 use cupertino_ui_layout::{Align, Axis};
-use cupertino_ui_platform::{PointerEvent, PopupEdge, Timestamp, WindowId};
+use cupertino_ui_platform::{PointerEvent, PopupEdge, Timestamp, WindowEvent, WindowId};
 use cupertino_ui_text::ContentPurpose;
 use support::{window, Harness, TAB};
 
@@ -246,6 +246,32 @@ fn a_tip_shown_for_the_keyboard_focus_stays_when_the_pointer_passes() {
     assert!(h.model().shown, "the focus is still on the anchor");
     h.tap(ESCAPE);
     assert!(!h.model().shown);
+}
+
+#[test]
+fn a_tip_shown_for_the_keyboard_focus_hides_when_the_window_deactivates() {
+    let mut h = Harness::<Page>::new();
+    h.tap(TAB);
+    at(&mut h, 600);
+    h.send(WindowEvent::Focus(false));
+    assert_eq!(h.model().said, [Message::Show, Message::Hide]);
+    assert!(tooltip(&h).is_none());
+}
+
+#[test]
+fn deactivating_the_window_or_escape_during_the_delay_cancels_the_tip() {
+    let mut h = Harness::<Page>::new();
+    h.tap(TAB);
+    at(&mut h, 300);
+    h.send(WindowEvent::Focus(false));
+    at(&mut h, 900);
+    assert!(h.model().said.is_empty());
+
+    h.send(WindowEvent::Focus(true));
+    at(&mut h, 1000);
+    h.tap(ESCAPE);
+    at(&mut h, 1600);
+    assert!(h.model().said.is_empty(), "{:?}", h.model().said);
 }
 
 /// A field with a tip, beside a button: a click focuses the field.

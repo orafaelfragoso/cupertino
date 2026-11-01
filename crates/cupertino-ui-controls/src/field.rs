@@ -550,6 +550,13 @@ impl FieldState {
 }
 
 impl<M: Clone + 'static> TextField<M> {
+    fn fill(&self, buffer: &mut TextBuffer) {
+        buffer.set_text(&self.value);
+        if let Some(range) = &self.selection {
+            buffer.select(range.clone());
+        }
+    }
+
     fn handle(
         &self,
         state: &mut FieldState,
@@ -680,7 +687,7 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
 
     fn state(&self) -> FieldState {
         let mut buffer = TextBuffer::new();
-        buffer.set_text(&self.value);
+        self.fill(&mut buffer);
         FieldState {
             buffer,
             keymap: Keymap::standard(),
@@ -697,7 +704,7 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
     fn update(&self, old: &Self, state: &mut FieldState) -> Change {
         state.session.purpose = self.purpose;
         if self.revision >= state.reported && !holds(&state.buffer, &self.value) {
-            state.buffer.set_text(&self.value);
+            self.fill(&mut state.buffer);
             state.reported = self.revision;
             return Change::Paint;
         }

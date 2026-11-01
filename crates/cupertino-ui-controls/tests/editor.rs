@@ -99,6 +99,7 @@ impl<const LINES: usize> Application for Editor<LINES> {
                     enabled: true,
                     on_change: Some(Box::new(Message::Other)),
                     on_submit: None,
+                    selection: None,
                 })
                 .key("after"),
             ],

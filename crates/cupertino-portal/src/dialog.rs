@@ -569,6 +569,7 @@ fn save_as(d: &Dialog) -> Element<Message> {
                 enabled: true,
                 on_change: Some(Box::new(move |c| Message::Name(id, c))),
                 on_submit: Some(Message::Accept(id)),
+                selection: Some(0..Chooser::stem_len(d.chooser.name())),
             })
             .key("name")
             .width(SAVE_AS_WIDTH),

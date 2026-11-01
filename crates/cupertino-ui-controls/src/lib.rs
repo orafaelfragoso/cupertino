@@ -299,6 +299,9 @@ pub struct TextField<M> {
     pub enabled: bool,
     pub on_change: Option<Handler<TextChange, M>>,
     pub on_submit: Option<M>,
+    /// What the field selects each time it takes `value`, in bytes of it, such as a file name's stem; `None` leaves
+    /// the caret at the end.
+    pub selection: Option<Range<usize>>,
 }
 
 /// A multi-line text editor without chrome, as tall as its text: a vertical [`ScrollView`] around it scrolls it.

@@ -166,7 +166,7 @@ class SessionTest(unittest.TestCase):
         result = self.run_session(PATH=f"{tools}:{os.environ['PATH']}")
         self.assertEqual(result.returncode, 0)
         calls = (self.out / 'systemctl').read_text()
-        self.assertIn('--user stop cupertino-session.target', calls)
+        self.assertIn('--user --no-block stop cupertino-session.target', calls)
         self.assertIn('--user unset-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE DISPLAY XAUTHORITY', calls)
 
     def test_the_defaults_the_compositor_set_are_removed_and_nothing_else(self):

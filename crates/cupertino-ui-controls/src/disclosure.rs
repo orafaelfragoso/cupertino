@@ -4,8 +4,8 @@ use crate::{DisclosureButton, DisclosureStyle};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_theme::metrics::Control;
 use cupertino_ui_core::{
-    AccessibleStates, Action, Change, ControlState, Event, EventCx, MeasureCx, PaintCx,
-    Propagation, Role, SemanticsCx, Widget,
+    AccessibleStates, Action, Change, ControlState, Environment, Event, EventCx, MeasureCx,
+    PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured};
 use cupertino_ui_render::{Paint, PaintOp, PathVerb, Shape};
@@ -93,11 +93,14 @@ impl<M: Clone + 'static> Widget<M> for DisclosureButton<M> {
     fn measure(&self, _: &Press, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
         let theme = &cx.env().theme;
         let side = look::metric(Control::DisclosureButton, theme);
-        let target = theme.metrics.min_target;
         Measured {
-            size: Size::new(side.max(target.width), side.max(target.height)),
+            size: Size::new(side, side),
             baseline: None,
         }
+    }
+
+    fn target(&self, _: &Press, env: &Environment) -> Size {
+        env.theme.metrics.min_target
     }
 
     fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {

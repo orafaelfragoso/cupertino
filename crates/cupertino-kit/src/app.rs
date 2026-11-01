@@ -47,8 +47,8 @@ impl fmt::Display for AppError {
 impl std::error::Error for AppError {}
 
 /// Opens `A`'s windows on the session's Wayland display, publishes them to assistive technology over AT-SPI, follows
-/// the session's appearance and display options, and runs until the application exits or its last window without a
-/// close handler is closed.
+/// the session's appearance and display options, and runs until the application exits, its last window without a
+/// close handler is closed, or a non-[resident](Application::RESIDENT) application closes its last window.
 pub fn run<A: Application>() -> Result<(), AppError> {
     let system = WaylandWindowSystem::connect(Profile::cupertino()).map_err(AppError::Connect)?;
     // the first frame already has the session's appearance

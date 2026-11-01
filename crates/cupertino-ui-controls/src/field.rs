@@ -751,6 +751,9 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
     fn semantics(&self, state: &FieldState, cx: &mut SemanticsCx<'_>) {
         cx.role(Role::TextInput);
         cx.name(self.label.clone());
+        if state.buffer.composition().is_some() {
+            cx.composing();
+        }
         // what an input method is still composing stays out: the tree reaches adapters, the inspector and test dumps
         let (caret, selection) = match state.buffer.composition() {
             Some(range) => (range.start, range.start..range.start),

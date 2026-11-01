@@ -200,6 +200,9 @@ pub enum Event {
     Reveal(Point),
     /// The window of the focused node became active (`true`) or inactive; only that node hears it.
     WindowActive(bool),
+    /// Escape was pressed while this node was dismissible; returning [`Propagation::Stop`] takes the key from the focus
+    /// path.
+    Dismiss,
     /// A press, drag or composition in progress ends without effect: focus, pointer capture or the surface was lost.
     Cancel,
 }

@@ -59,6 +59,11 @@ impl<M: 'static> Route<'_, M> {
         self.deliver(node, node, Phase::Target, event);
     }
 
+    /// Delivers `event` to `node` alone, and tells whether the node took it.
+    pub(crate) fn offer(&mut self, node: NodeId, event: &Event) -> Propagation {
+        self.deliver(node, node, Phase::Target, event)
+    }
+
     fn deliver(
         &mut self,
         node: NodeId,

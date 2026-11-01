@@ -1,7 +1,7 @@
 use crate::cx::{EventCx, MeasureCx, PaintCx, SemanticsCx};
 use crate::{Environment, Event, Key};
 use cupertino_geometry::{Point, Size};
-use cupertino_ui_layout::{Constraints, LayoutSpec, Measured, SizeSpec};
+use cupertino_ui_layout::{Constraints, GridSpan, LayoutSpec, Measured, SizeSpec};
 use std::any::{type_name, Any, TypeId};
 use std::fmt;
 
@@ -65,6 +65,7 @@ pub struct Element<M> {
     pub(crate) key: Option<Key>,
     pub(crate) widget: Box<dyn AnyWidget<M>>,
     pub(crate) width: Option<f64>,
+    pub(crate) span: Option<GridSpan>,
 }
 
 impl<M: 'static> Element<M> {
@@ -73,6 +74,7 @@ impl<M: 'static> Element<M> {
             key: None,
             widget: Box::new(widget),
             width: None,
+            span: None,
         }
     }
 
@@ -87,10 +89,19 @@ impl<M: 'static> Element<M> {
         self
     }
 
+    /// Covers `columns` by `rows` tracks when its parent is a grid.
+    pub fn span(mut self, columns: usize, rows: usize) -> Self {
+        self.span = Some(GridSpan { columns, rows });
+        self
+    }
+
     pub(crate) fn layout(&self) -> LayoutSpec {
         let mut spec = self.widget.layout();
         if let Some(width) = self.width {
             spec.width = SizeSpec::Fixed(width);
+        }
+        if let Some(span) = self.span {
+            spec.span = span;
         }
         spec
     }
@@ -102,6 +113,7 @@ impl<M> fmt::Debug for Element<M> {
             .field("key", &self.key)
             .field("widget", &self.widget.type_name())
             .field("width", &self.width)
+            .field("span", &self.span)
             .finish()
     }
 }

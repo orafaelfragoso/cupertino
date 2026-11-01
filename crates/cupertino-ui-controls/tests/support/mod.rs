@@ -146,6 +146,7 @@ pub fn theme() -> ThemeTokens {
     for (role, level) in [(SelectedControlFill, 2), (SelectedControlText, 3)] {
         entries.push(((role, state(Normal, false)), gray(level)));
     }
+    entries.push(((Link, state(Normal, false)), gray(8)));
     ThemeTokens {
         preferences: ThemePreferences {
             appearance: Appearance::Light,

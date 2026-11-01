@@ -1,10 +1,10 @@
 use std::process::ExitCode;
 
-use cupertino_diagnostics::{Area, Sources, Status};
+use cupertino_diagnostics::{Area, Sources};
 
 const USAGE: &str =
     "usage: cupertino-diagnose [--json] [--area gpu|session|portals|services|crash|logs]...
-Checks this machine and session for what Cupertino needs. Exits 1 when a check fails.";
+Checks this machine and session for what Cupertino needs. Exits 0 once the checks ran, whatever they found.";
 
 fn main() -> ExitCode {
     let mut json = false;
@@ -26,21 +26,12 @@ fn main() -> ExitCode {
     }
     let report = cupertino_diagnostics::run(&Sources::system(), &areas);
     if json {
-        match serde_json::to_string_pretty(&report) {
-            Ok(text) => println!("{text}"),
-            Err(e) => {
-                eprintln!("cupertino-diagnose: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
+        let text = serde_json::to_string_pretty(&report).expect("a report is strings and numbers");
+        println!("{text}");
     } else {
         print!("{report}");
     }
-    if report.worst() == Status::Fail {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
+    ExitCode::SUCCESS
 }
 
 fn usage() -> ExitCode {

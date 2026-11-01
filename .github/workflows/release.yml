@@ -1,8 +1,12 @@
 # Release: on a v*.*.* or v*.*.*-rc* tag, test, build and install-test the packages in pinned containers (a release
 # candidate: Arch only; a final release: Arch, Debian and Fedora), write the source archive and the stable PKGBUILD,
-# and create a draft release with SHA256SUMS (a release candidate is marked as a prerelease). The `release` environment
-# only admits v* tags; it has no required reviewers (not available for a private repository on this plan). The gate is
-# that this workflow creates a draft: publishing it is a manual step in the GitHub UI.
+# sign the Arch packages and write the signed repository tree (packaging/keyring/build-repo), and create a draft release
+# with SHA256SUMS (a release candidate is marked as a prerelease). The `release` environment only admits v* tags; it has no
+# required reviewers (not available for a private repository on this plan). The gate is that this workflow creates a draft:
+# publishing it is a manual step in the GitHub UI. The `sign` job runs only after `source` has checked that the tag is on main, and holds
+# the signing subkey (secret CUPERTINO_SIGNING_KEY of the `signing` environment, v* tags only; never the master, and not in
+# `release`, so `publish` never has it) and has read-only permissions; without the secret or the variable
+# CUPERTINO_REPO_URL (the https base of the repository) it fails, and then no draft is created.
 name: Release
 on:
   push:
@@ -87,8 +91,32 @@ jobs:
           path: logs/*
           if-no-files-found: error
 
-  publish:
+  sign:
     needs: [source, packages]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: signing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: packages-arch
+          path: arch
+      - name: Sign the Arch packages and write the repository tree
+        env:
+          CUPERTINO_SIGNING_KEY: ${{ secrets.CUPERTINO_SIGNING_KEY }}
+          CUPERTINO_REPO_URL: ${{ vars.CUPERTINO_REPO_URL }}
+        run: bash packaging/ci/sign-release.sh arch "$CUPERTINO_REPO_URL" signed
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signed
+          path: signed/tree/**
+          if-no-files-found: error
+
+  publish:
+    needs: [source, packages, sign]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -104,6 +132,10 @@ jobs:
           pattern: packages-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: signed
+          path: signed
       - name: Write SHA256SUMS and create the draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -112,9 +144,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The signed Arch packages replace the unsigned ones (same bytes); the repository files and the signatures go in flat.
+          cp signed/repo/* dist/
+          mv signed/SHA256SUMS dist/SHA256SUMS.repo
+          mv signed/SHA256SUMS.sig dist/SHA256SUMS.repo.sig
           cd dist
           test -n "$(find . -maxdepth 1 -type f -print -quit)"
-          find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sums=$(mktemp)
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' | sort -z | xargs -0 sha256sum > "$sums"
+          mv "$sums" SHA256SUMS
           sha256sum --check --quiet SHA256SUMS
           prerelease=()
           if [[ "$RELEASE_TAG" == *-rc* ]]; then prerelease=(--prerelease); fi

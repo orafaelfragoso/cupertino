@@ -136,5 +136,6 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
         cx.role(Role::Dialog);
         cx.name(self.label.clone());
         cx.focus_scope();
+        cx.focus_fallback();
     }
 }

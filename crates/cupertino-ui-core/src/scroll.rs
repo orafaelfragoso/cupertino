@@ -74,6 +74,16 @@ fn scroller<M: 'static>(
     })
 }
 
+/// Whether `id` is a scroll container whose content passes its viewport along an axis it scrolls.
+pub(crate) fn can_scroll<M: 'static>(
+    tree: &Tree<M>,
+    geometry: &Geometry,
+    id: NodeId,
+    direction: LayoutDirection,
+) -> bool {
+    scroller(tree, geometry, id, direction).is_some_and(|s| s.max_offset() != Point::ZERO)
+}
+
 /// [`Event::ScrollGeometry`] for each scroll container under `root` whose viewport or content changed since `heard`,
 /// or that `heard` has not seen; `heard` is brought up to date and forgets containers that are gone.
 pub(crate) fn geometry_events<M: 'static>(

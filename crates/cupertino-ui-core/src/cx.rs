@@ -369,6 +369,7 @@ pub struct SemanticsCx<'a> {
     pub(crate) node: NodeId,
     pub(crate) size: Size,
     pub(crate) direction: LayoutDirection,
+    pub(crate) can_scroll: bool,
     pub(crate) semantics: &'a mut Semantics,
 }
 
@@ -384,6 +385,12 @@ impl SemanticsCx<'_> {
 
     pub fn direction(&self) -> LayoutDirection {
         self.direction
+    }
+
+    /// Whether the node is a scroll container whose content passes its viewport as laid out; false before its first
+    /// layout.
+    pub fn can_scroll(&self) -> bool {
+        self.can_scroll
     }
 
     pub fn role(&mut self, role: Role) {

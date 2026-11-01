@@ -83,7 +83,7 @@ struct ShownMenus {
 enum Published {
     /// The window waits for its first configure.
     Waiting,
-    Shown(WindowMenus),
+    Shown(Box<WindowMenus>),
     /// The desktop takes no menus: no app effects at version 2, or no session bus.
     Refused,
 }
@@ -342,7 +342,7 @@ impl WaylandWindowSystem {
         let published = match menus {
             Some(menus) => {
                 set_enabled(&menus, &BTreeSet::new(), description);
-                Published::Shown(menus)
+                Published::Shown(Box::new(menus))
             }
             None => Published::Refused,
         };

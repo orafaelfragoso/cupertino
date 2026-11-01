@@ -1334,9 +1334,10 @@ mod window_system {
 
     fn seen_menu(seen: &Receiver<Seen>) -> Seen {
         loop {
-            match seen.recv_timeout(Duration::from_secs(5)).unwrap() {
-                s @ (Seen::MenuAddress { .. } | Seen::MenuWithdrawn) => return s,
-                _ => {}
+            if let s @ (Seen::MenuAddress { .. } | Seen::MenuWithdrawn) =
+                seen.recv_timeout(Duration::from_secs(5)).unwrap()
+            {
+                return s;
             }
         }
     }

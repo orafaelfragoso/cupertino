@@ -140,6 +140,9 @@ pub fn theme() -> ThemeTokens {
         }
     }
     entries.push(((ToolTipText, state(Normal, false)), gray(1)));
+    for (role, level) in [(SelectedControlFill, 2), (SelectedControlText, 3)] {
+        entries.push(((role, state(Normal, false)), gray(level)));
+    }
     ThemeTokens {
         preferences: ThemePreferences {
             appearance: Appearance::Light,

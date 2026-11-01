@@ -1,4 +1,6 @@
-use crate::accessibility::{AccessibleStates, AccessibleValue, Action, Live, Relation, Role};
+use crate::accessibility::{
+    AccessibleStates, AccessibleValue, Action, Live, Relation, Role, SortOrder,
+};
 use crate::route::Placement;
 use crate::widget::Change;
 use crate::{Environment, Key, NodeId, Phase};
@@ -352,6 +354,7 @@ pub(crate) struct Semantics {
     pub(crate) level: Option<usize>,
     pub(crate) item_index: Option<usize>,
     pub(crate) column_index: Option<usize>,
+    pub(crate) sort: Option<SortOrder>,
     pub(crate) roving_group: bool,
     pub(crate) roving_item: bool,
     pub(crate) focus_fallback: bool,
@@ -484,6 +487,11 @@ impl SemanticsCx<'_> {
     /// Tells assistive technology a table cell's or column header's column, from 0.
     pub fn column_index(&mut self, index: usize) {
         self.semantics.column_index = Some(index);
+    }
+
+    /// Tells assistive technology that the table is sorted by this column header's column, and in which order.
+    pub fn sort(&mut self, order: SortOrder) {
+        self.semantics.sort = Some(order);
     }
 
     /// Makes the node a Tab stop only when no node under it is one, such as a scroll view around long text.

@@ -38,6 +38,8 @@ let runtime = Runtime::new(system, options);
   AccessKit emits `TextCaretMoved` and `TextSelectionChanged` as they change in the focused field. A node keeps its runs'
   ids from update to update. `SetSelection` from the bus becomes core's `SetSelection` with the byte range, when the
   node offers it.
+- **Sort.** A sorting column header carries its order as AccessKit's sort direction. AccessKit's AT-SPI adapter does
+  not export that, so a header without a description also says "Sorted ascending" or "Sorted descending" as one.
 - **Secrets.** A `PasswordInput` node, or any node whose value is `Protected`, carries no value and offers neither
   `SetValue` nor a selection, whatever core sent: a second defence after core's.
 - **Session lock.** While `session_locked(true)` holds, every node is sent without its live politeness, so nothing is

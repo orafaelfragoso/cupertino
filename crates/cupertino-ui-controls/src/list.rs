@@ -213,6 +213,7 @@ impl<M: 'static> From<ListView<M>> for Element<M> {
             scroll: list.scroll,
             selection: list.selection,
             multiple: list.multiple,
+            initial: list.initial,
             row: list.row,
             key: list.key,
             type_select: list.type_select,
@@ -240,6 +241,7 @@ impl<M: 'static> From<TreeView<M>> for Element<M> {
             scroll: tree.scroll,
             selection: tree.selection,
             multiple: tree.multiple,
+            initial: false,
             row: tree.row,
             key: None,
             type_select: tree.type_select,
@@ -288,6 +290,7 @@ impl<M: 'static> From<TableView<M>> for Element<M> {
             scroll: table.scroll,
             selection: table.selection,
             multiple: table.multiple,
+            initial: false,
             row,
             key: None,
             type_select: table.type_select,
@@ -339,6 +342,7 @@ struct Rows<M> {
     scroll: ScrollState,
     selection: Selection,
     multiple: bool,
+    initial: bool,
     row: Box<dyn Fn(usize, bool) -> Element<M>>,
     key: Option<Box<dyn Fn(usize) -> Key>>,
     type_select: Option<Box<dyn Fn(usize) -> String>>,
@@ -686,6 +690,9 @@ impl<M: 'static> Widget<M> for Rows<M> {
             }
         }
         cx.roving_group();
+        if self.initial {
+            cx.initial_focus();
+        }
     }
 }
 

@@ -124,6 +124,7 @@ impl<const COUNT: usize> Application for VirtualList<COUNT> {
             scroll: items.scroll,
             selection: items.selection.clone(),
             multiple: true,
+            initial: false,
             row: Box::new(move |index, selected| {
                 let item = Self::item(descending, index);
                 Element::new(Stack {

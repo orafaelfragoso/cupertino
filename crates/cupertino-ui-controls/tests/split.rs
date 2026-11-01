@@ -120,6 +120,14 @@ fn a_drag_on_the_strip_moves_the_divider_and_past_half_a_minimum_collapses_that_
 }
 
 #[test]
+fn each_panes_content_fills_the_pane() {
+    let mut h = Harness::<Panes>::new();
+    h.resize(Size::new(200.0, 120.0));
+    assert_eq!(h.rect("leading"), Rect::new(0.0, 0.0, 80.0, 120.0));
+    assert_eq!(h.rect("trailing"), Rect::new(81.0, 0.0, 119.0, 120.0));
+}
+
+#[test]
 fn a_press_beside_the_strip_reaches_the_pane_under_it() {
     let mut h = Harness::<Panes>::new();
     h.click(Point::new(77.0, 50.0));

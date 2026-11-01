@@ -341,16 +341,25 @@ impl Translator {
     }
 
     /// [`Self::translate`] for a press, which also goes on with a compose sequence: a key inside one types nothing,
-    /// the key that ends one types its character.
-    pub(crate) fn press(&mut self, code: u32) -> Translation {
+    /// the key that ends one types its character. Only a key that types outside a sequence starts `repeat`; one that
+    /// starts, goes on with or ends a sequence stops it.
+    pub(crate) fn press(&mut self, code: u32, repeat: &mut Repeat, now: Instant) -> Translation {
         let mut translation = self.translate(code);
-        if let Some(table) = self.compose_table {
-            match self.compose.feed(table, translation.keysym) {
-                Composed::Passed => {}
-                Composed::Composing | Composed::Cancelled => translation.character = None,
-                Composed::Done(c) => translation.character = Some(c),
+        let composed = match self.compose_table {
+            Some(table) => self.compose.feed(table, translation.keysym),
+            None => Composed::Passed,
+        };
+        match composed {
+            Composed::Passed => {
+                if self.repeats(code) {
+                    repeat.press(code, now);
+                }
+                return translation;
             }
+            Composed::Composing | Composed::Cancelled => translation.character = None,
+            Composed::Done(c) => translation.character = Some(c),
         }
+        repeat.clear();
         translation
     }
 
@@ -444,6 +453,12 @@ mod tests {
     const KEY_A: u32 = 30;
     const KEY_ENTER: u32 = 28;
     const KEY_LEFT_SHIFT: u32 = 42;
+    const KEY_APOSTROPHE: u32 = 40;
+    const KEY_GRAVE: u32 = 41;
+    const KEY_C: u32 = 46;
+    const KEY_X: u32 = 45;
+    const KEY_O: u32 = 24;
+    const KEY_COMPOSE: u32 = 127;
 
     fn keymap(layout: &str, variant: &str) -> xkb::Keymap {
         let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
@@ -463,31 +478,93 @@ mod tests {
         Translator::with_compose(keymap("us", ""), None)
     }
 
-    #[test]
-    fn the_dead_keys_of_us_intl_compose_with_the_next_letter() {
+    fn compose_with(options: &str, table: &str) -> Translator {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("Compose");
-        std::fs::write(
-            &file,
-            "<dead_acute> <c> : \"\u{e7}\"\n<dead_tilde> <a> : \"\u{e3}\"\n",
-        )
-        .unwrap();
+        std::fs::write(&file, table).unwrap();
         let env = ComposeEnv {
             compose_file: Some(file),
             ..ComposeEnv::default()
         };
         let table: &'static ComposeTable = Box::leak(Box::new(ComposeTable::load(&env).unwrap()));
-        let mut t = Translator::with_compose(keymap("us", "intl"), Some(table));
-        const KEY_APOSTROPHE: u32 = 40;
-        const KEY_GRAVE: u32 = 41;
-        const KEY_C: u32 = 46;
-        const KEY_X: u32 = 45;
-        let mut typed = vec![t.press(KEY_APOSTROPHE).character, t.press(KEY_C).character];
+        let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let keymap = xkb::Keymap::new_from_names(
+            &context,
+            "",
+            "",
+            "us",
+            "intl",
+            Some(options.to_string()),
+            xkb::KEYMAP_COMPILE_NO_FLAGS,
+        )
+        .expect("the layout compiles");
+        Translator::with_compose(keymap, Some(table))
+    }
+
+    fn repeating() -> Repeat {
+        let mut r = Repeat::default();
+        r.set_info(25, 100);
+        r
+    }
+
+    #[test]
+    fn the_letter_that_ends_a_dead_key_sequence_does_not_repeat() {
+        let mut t = compose_with("", "<dead_tilde> <a> : \"\u{e3}\"\n");
+        let mut r = repeating();
+        let t0 = Instant::now();
         t.update_modifiers(1, 0, 0, 0);
-        typed.push(t.press(KEY_GRAVE).character);
+        assert_eq!(t.press(KEY_GRAVE, &mut r, t0).character, None);
         t.update_modifiers(0, 0, 0, 0);
-        typed.push(t.press(KEY_A).character);
-        typed.extend([KEY_APOSTROPHE, KEY_X, KEY_X].map(|key| t.press(key).character));
+        assert_eq!(t.press(KEY_A, &mut r, t0).character, Some('\u{e3}'));
+        assert_eq!(
+            r.due(t0 + Duration::from_secs(1)),
+            None,
+            "held a after ~a types no aaaa"
+        );
+        t.press(KEY_A, &mut r, t0);
+        assert_eq!(
+            r.due(t0 + Duration::from_secs(1)),
+            Some(KEY_A),
+            "a typed on its own repeats"
+        );
+    }
+
+    #[test]
+    fn a_key_held_inside_a_compose_sequence_types_nothing_until_the_sequence_ends() {
+        let mut t = compose_with("compose:menu", "<Multi_key> <o> <o> : \"\u{b0}\"\n");
+        let mut r = repeating();
+        let t0 = Instant::now();
+        t.press(KEY_X, &mut r, t0);
+        assert_eq!(t.press(KEY_COMPOSE, &mut r, t0).character, None);
+        assert_eq!(
+            r.due(t0 + Duration::from_secs(1)),
+            None,
+            "the held x stops with the sequence"
+        );
+        assert_eq!(t.press(KEY_O, &mut r, t0).character, None);
+        assert_eq!(
+            r.due(t0 + Duration::from_secs(1)),
+            None,
+            "held o mid-sequence types no ooo"
+        );
+        assert_eq!(t.press(KEY_O, &mut r, t0).character, Some('\u{b0}'));
+        assert_eq!(r.due(t0 + Duration::from_secs(1)), None);
+    }
+
+    #[test]
+    fn the_dead_keys_of_us_intl_compose_with_the_next_letter() {
+        let mut t = compose_with(
+            "",
+            "<dead_acute> <c> : \"\u{e7}\"\n<dead_tilde> <a> : \"\u{e3}\"\n",
+        );
+        let mut r = Repeat::default();
+        let mut press = |t: &mut Translator, key| t.press(key, &mut r, Instant::now()).character;
+        let mut typed = vec![press(&mut t, KEY_APOSTROPHE), press(&mut t, KEY_C)];
+        t.update_modifiers(1, 0, 0, 0);
+        typed.push(press(&mut t, KEY_GRAVE));
+        t.update_modifiers(0, 0, 0, 0);
+        typed.push(press(&mut t, KEY_A));
+        typed.extend([KEY_APOSTROPHE, KEY_X, KEY_X].map(|key| press(&mut t, key)));
         assert_eq!(
             typed,
             [None, Some('ç'), None, Some('ã'), None, None, Some('x')],

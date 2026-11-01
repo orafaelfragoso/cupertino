@@ -11,6 +11,7 @@ use cupertino_server::menu_bar::{
     MAX_APPLICATION_ID_BYTES, MAX_BUS_NAME_BYTES, MAX_OBJECT_PATH_BYTES, MAX_TEXT_BYTES,
 };
 use cupertino_server::protocols::gtk_shell::gtk_shell1::GtkShell1;
+use cupertino_server::toplevel_icon::MAX_ICON_NAME;
 use wayland_backend::protocol::{ArgumentType, Interface};
 use wayland_protocols_plasma::appmenu::server::org_kde_kwin_appmenu_manager::OrgKdeKwinAppmenuManager;
 use wayland_server::Resource;
@@ -62,6 +63,7 @@ const CAPS: &[(&str, &str, &[usize])] = &[
     ("cupertino_dock_v1", "switcher_entry", &[MAX_TEXT_BYTES]),
     ("cupertino_dock_v1", "overview_changed", &[MAX_TEXT_BYTES]),
     ("cupertino_dock_v1", "attention", &[MAX_TEXT_BYTES]),
+    ("cupertino_dock_v1", "window_icon", &[MAX_ICON_NAME]),
     ("cupertino_dock_v1", "unresponsive", &[MAX_TEXT_BYTES]),
     (
         "cupertino_app_menu_v1",

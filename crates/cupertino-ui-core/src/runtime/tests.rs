@@ -27,6 +27,7 @@ struct Model {
     count: u32,
     done: Vec<u32>,
     background: WindowBackground,
+    tokens: Vec<Option<String>>,
 }
 
 impl Application for Counter {
@@ -55,6 +56,20 @@ impl Application for Counter {
             }
             "close" => return vec![Command::CloseWindow(WindowKey("main".into()))],
             "wait" => return vec![Command::Perform(Box::pin(async { "done 7".to_string() }))],
+            "launch" | "launch from gone" => {
+                let window = match message.as_str() {
+                    "launch" => "main",
+                    _ => "gone",
+                };
+                return vec![Command::ActivationToken {
+                    window: WindowKey(window.into()),
+                    app_id: Some("test.viewer".into()),
+                    on_token: Box::new(|token| format!("token {}", token.unwrap_or_default())),
+                }];
+            }
+            m if m.starts_with("token ") => model
+                .tokens
+                .push(Some(m[6..].to_owned()).filter(|t| !t.is_empty())),
             m if m.starts_with("done ") => model.done.push(m[5..].parse().unwrap()),
             _ => {}
         }
@@ -325,6 +340,38 @@ fn a_task_reports_back_as_a_message_and_a_close_request_ends_the_application() {
         .send(window, WindowEvent::CloseRequested);
     rt.step(steps()).unwrap();
     assert!(rt.exited());
+}
+
+#[test]
+fn an_activation_token_reaches_the_update_that_asked_and_a_gone_window_gets_none() {
+    let (mut rt, window, _) = start();
+    configure(&mut rt, window, 1);
+    rt.messages.push_back("launch".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(
+        rt.window_system_mut().activations,
+        vec![(window, Some("test.viewer".to_owned()))]
+    );
+    assert_eq!(rt.model().tokens, Vec::<Option<String>>::new());
+    rt.window_system_mut()
+        .queue
+        .push_back(PlatformEvent::ActivationToken {
+            request: ActivationRequest(1),
+            token: Some("t-1".into()),
+        });
+    rt.window_system_mut()
+        .queue
+        .push_back(PlatformEvent::ActivationToken {
+            request: ActivationRequest(9),
+            token: Some("not asked for".into()),
+        });
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.model().tokens, vec![Some("t-1".to_owned())]);
+
+    rt.messages.push_back("launch from gone".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.model().tokens, vec![Some("t-1".to_owned()), None]);
+    assert_eq!(rt.window_system_mut().activations.len(), 1);
 }
 
 /// A window while `open`; closing it only hides it.

@@ -1,5 +1,5 @@
 use crate::look::{self, paint_ring};
-use crate::TextBox;
+use crate::{scroll, TextBox};
 use cupertino_geometry::{Insets, Rect, Size};
 use cupertino_ui_core::{
     Change, ControlState, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx,
@@ -9,10 +9,11 @@ use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec,
 };
 use cupertino_ui_theme::ColorRole;
+use std::rc::Rc;
 
 const EDGE: f64 = 1.0;
 /// Keeps the content's square corners inside the rounded border.
-const CONTENT_INSET: f64 = 2.0;
+pub(crate) const CONTENT_INSET: f64 = 2.0;
 
 /// Whether the focus is inside the box, and whether it came from the keyboard.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -21,7 +22,28 @@ pub struct TextBoxState {
     pub focus_visible: bool,
 }
 
-impl<M: 'static> Widget<M> for TextBox<M> {
+impl<M: 'static> From<TextBox<M>> for Element<M> {
+    fn from(text_box: TextBox<M>) -> Self {
+        Element::new(Chrome {
+            content: Some(scroll::tracked(
+                text_box.editor,
+                text_box.state,
+                (false, true),
+                text_box.scroller,
+                Rc::new(text_box.on_scroll),
+                text_box.enabled,
+            )),
+            enabled: text_box.enabled,
+        })
+    }
+}
+
+struct Chrome<M> {
+    content: Option<Element<M>>,
+    enabled: bool,
+}
+
+impl<M: 'static> Widget<M> for Chrome<M> {
     type State = TextBoxState;
 
     fn layout(&self) -> LayoutSpec {
@@ -40,10 +62,7 @@ impl<M: 'static> Widget<M> for TextBox<M> {
     }
 
     fn take_children(&mut self) -> Vec<Element<M>> {
-        vec![std::mem::replace(
-            &mut self.content,
-            Element::new(crate::Spacer { min: 0.0 }),
-        )]
+        self.content.take().into_iter().collect()
     }
 
     fn state(&self) -> TextBoxState {

@@ -57,6 +57,7 @@ impl Application for Editor {
             value: document.text.clone(),
             revision: document.revision,
             enabled: true,
+            bordered: false,
             on_change: Some(Box::new(Message::Edited)),
         })
         .key("text");

@@ -3,6 +3,7 @@
 
 use crate::field::{self, Blink};
 use crate::look;
+use crate::text_box;
 use crate::{TextChange, TextEditor};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_core::{
@@ -305,13 +306,9 @@ impl LineLayout for Lines {
     }
 }
 
-fn inset(env: &Environment) -> f64 {
-    env.theme.metrics.field_inset
-}
-
 /// The width the text wraps at in an editor `width` wide, with room for the caret after a line's last character.
-fn wrap_width(env: &Environment, width: f64) -> Option<f32> {
-    let width = width - 2.0 * inset(env) - CARET_WIDTH;
+fn wrap_width(inset: f64, width: f64) -> Option<f32> {
+    let width = width - 2.0 * inset - CARET_WIDTH;
     width.is_finite().then_some(width.max(0.0) as f32)
 }
 
@@ -325,24 +322,37 @@ pub struct EditorState {
     hovered: bool,
     blink: Blink,
     lines: RefCell<Lines>,
+    bordered: bool,
 }
 
 impl EditorState {
+    /// The margin around the text: a field's, less what a [`crate::TextBox`] around the editor already insets it by.
+    fn inset(&self, env: &Environment) -> f64 {
+        let trim = if self.bordered {
+            text_box::CONTENT_INSET
+        } else {
+            0.0
+        };
+        env.theme.metrics.field_inset - trim
+    }
+
     /// Lays the text out at the editor's width; `false` before its first layout.
     fn sync<M>(&self, cx: &EventCx<'_, M>) -> bool {
         let Some(bounds) = cx.bounds() else {
             return false;
         };
         let env = cx.env();
-        self.lines
-            .borrow_mut()
-            .sync(env, self.buffer.text(), wrap_width(env, bounds.width()));
+        self.lines.borrow_mut().sync(
+            env,
+            self.buffer.text(),
+            wrap_width(self.inset(env), bounds.width()),
+        );
         true
     }
 
     /// The caret in node coordinates.
     fn caret_rect(&self, env: &Environment) -> Option<Rect> {
-        let inset = inset(env);
+        let inset = self.inset(env);
         self.lines
             .borrow()
             .caret_rect(self.buffer.caret_position())
@@ -352,7 +362,7 @@ impl EditorState {
     /// The text position under `point`, in window coordinates.
     fn index_at<M>(&self, point: Point, cx: &EventCx<'_, M>) -> Option<usize> {
         let bounds = cx.bounds()?;
-        let inset = inset(cx.env());
+        let inset = self.inset(cx.env());
         let local = point - bounds.origin;
         self.lines
             .borrow()
@@ -373,7 +383,7 @@ impl EditorState {
         let caret = self.caret_rect(cx.env());
         if let Some(caret) = caret {
             // with the inset around it, so the first and last lines show their margin
-            let margin = inset(cx.env());
+            let margin = self.inset(cx.env());
             cx.reveal(Rect::new(
                 caret.min_x(),
                 caret.min_y() - margin,
@@ -565,14 +575,19 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
             hovered: false,
             blink: Blink::default(),
             lines: RefCell::default(),
+            bordered: self.bordered,
         }
     }
 
     /// Takes the model's text when the application changed it itself, as a text field does.
     fn update(&self, old: &Self, state: &mut EditorState) -> Change {
+        let bordered = std::mem::replace(&mut state.bordered, self.bordered) != self.bordered;
         if self.revision >= state.reported && !field::holds(&state.buffer, &self.value) {
             state.buffer.set_text(&self.value);
             state.reported = self.revision;
+            return Change::Layout;
+        }
+        if bordered {
             return Change::Layout;
         }
         if self.enabled != old.enabled
@@ -596,7 +611,11 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
         let env = cx.env();
         let width = constraints.width.max();
         let mut lines = state.lines.borrow_mut();
-        lines.sync(env, state.buffer.text(), wrap_width(env, width));
+        lines.sync(
+            env,
+            state.buffer.text(),
+            wrap_width(state.inset(env), width),
+        );
         let width = if width.is_finite() {
             width
         } else {
@@ -605,7 +624,7 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
         Measured {
             size: Size::new(
                 width,
-                (lines.height() + 2.0 * inset(env)).max(constraints.height.ideal()),
+                (lines.height() + 2.0 * state.inset(env)).max(constraints.height.ideal()),
             ),
             baseline: None,
         }
@@ -629,9 +648,13 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
         let color = |role| look::color(&env.theme, role, &look);
         let visible = cx.visible();
         field::fill_rect(cx, visible, color(ColorRole::TextBackground));
-        let inset = inset(&env);
+        let inset = state.inset(&env);
         let mut lines = state.lines.borrow_mut();
-        lines.sync(&env, state.buffer.text(), wrap_width(&env, cx.size().width));
+        lines.sync(
+            &env,
+            state.buffer.text(),
+            wrap_width(inset, cx.size().width),
+        );
         if let Some(first) = lines.paragraphs.first() {
             let line_height = first.layout.size().height / first.layout.lines().len().max(1) as f64;
             lines.page_lines = ((visible.height() - 2.0 * inset) / line_height)

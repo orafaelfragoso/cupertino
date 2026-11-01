@@ -317,15 +317,20 @@ pub struct TextEditor<M> {
     /// The revision of `value` the model last accepted, as a [`TextField`]'s.
     pub revision: u64,
     pub enabled: bool,
+    /// Set inside a [`TextBox`], whose edge already insets the editor, so that its text starts where a field's does.
+    pub bordered: bool,
     pub on_change: Option<Handler<TextChange, M>>,
 }
 
-/// A text field's chrome (background, border and focus ring) around a scrolling multi-line editor:
-/// `TextBox { content: ScrollView { content: TextEditor } }`. The ring shows while the focus inside it came from the
-/// keyboard.
+/// A text field's chrome (background, border and focus ring) around `editor`, a [`TextEditor`] with `bordered` set,
+/// which it scrolls vertically as a [`ScrollView`] does. The ring shows while the focus inside it came from the
+/// keyboard; a disabled box's scroll bar track is disabled too.
 pub struct TextBox<M> {
-    pub content: Element<M>,
+    pub editor: Element<M>,
     pub enabled: bool,
+    pub state: ScrollState,
+    pub scroller: Scroller,
+    pub on_scroll: Handler<ScrollState, M>,
 }
 
 /// A password field. Its text stays in the field's own buffer and reaches the application only on submit.

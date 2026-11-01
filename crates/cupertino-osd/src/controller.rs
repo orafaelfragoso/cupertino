@@ -18,6 +18,8 @@ pub enum Command {
     },
     /// Mute, or unmute when muted.
     ToggleMute,
+    /// Mute the microphone, or unmute it when muted.
+    ToggleMicrophoneMute,
     /// Raise or lower the display brightness one press.
     BrightnessStep {
         /// The sign gives the direction.
@@ -41,6 +43,7 @@ impl Command {
         match self {
             Command::VolumeStep { .. } => "volume step",
             Command::ToggleMute => "mute toggle",
+            Command::ToggleMicrophoneMute => "microphone mute toggle",
             Command::BrightnessStep { .. } => "brightness step",
             Command::KeyboardBrightnessStep { .. } => "keyboard brightness step",
             Command::Show(_) => "show",
@@ -71,6 +74,7 @@ impl std::error::Error for EffectError {
 pub struct Controller {
     hud: Hud,
     volume: Box<dyn Volume>,
+    microphone: Box<dyn Volume>,
     display: Box<dyn Backlight>,
     keyboard: Box<dyn Backlight>,
 }
@@ -129,6 +133,21 @@ fn toggle_mute(volume: &mut dyn Volume) -> Result<Effect, BackendError> {
     })
 }
 
+/// The microphone mute key: a plain toggle; muted shows the slashed microphone with an empty meter.
+fn toggle_microphone(microphone: &mut dyn Volume) -> Result<Effect, BackendError> {
+    let before = microphone.state()?;
+    let muted = !before.muted;
+    microphone.set_muted(muted)?;
+    Ok(Effect {
+        overlay: if muted {
+            Overlay::new(Kind::MicrophoneMute, 0.0)?
+        } else {
+            Overlay::new(Kind::Microphone, before.level)?
+        },
+        changed: true,
+    })
+}
+
 /// One backlight key press.
 fn step_backlight(
     backlight: &mut dyn Backlight,
@@ -150,15 +169,17 @@ fn step_backlight(
 }
 
 impl Controller {
-    /// A controller over the three backends.
+    /// A controller over the four backends.
     pub fn new(
         volume: Box<dyn Volume>,
+        microphone: Box<dyn Volume>,
         display: Box<dyn Backlight>,
         keyboard: Box<dyn Backlight>,
     ) -> Self {
         Self {
             hud: Hud::new(),
             volume,
+            microphone,
             display,
             keyboard,
         }
@@ -173,6 +194,7 @@ impl Controller {
                 step_volume(self.volume.as_mut(), direction, fine)
             }
             Command::ToggleMute => toggle_mute(self.volume.as_mut()),
+            Command::ToggleMicrophoneMute => toggle_microphone(self.microphone.as_mut()),
             Command::BrightnessStep { direction, fine } => {
                 step_backlight(self.display.as_mut(), Kind::Brightness, direction, fine)
             }
@@ -231,7 +253,12 @@ mod tests {
     }
 
     fn controller_with(volume: MemoryVolume, display: MemoryBacklight) -> Controller {
-        Controller::new(Box::new(volume), Box::new(display), Box::new(Absent))
+        Controller::new(
+            Box::new(volume),
+            Box::new(MemoryVolume::new(0.75, false)),
+            Box::new(display),
+            Box::new(Absent),
+        )
     }
 
     fn controller() -> Controller {
@@ -401,6 +428,21 @@ mod tests {
             controller_with(MemoryVolume::new(0.0, false), MemoryBacklight::new(0.5));
         silent_unmuted.apply(1.0, Command::ToggleMute).unwrap();
         assert_eq!(shown(&silent_unmuted, 1.0), (Kind::Mute, 0.0));
+    }
+
+    #[test]
+    fn the_microphone_key_toggles_its_mute_and_leaves_the_output_alone() {
+        let mut controller = controller();
+        controller
+            .apply(1.0, Command::ToggleMicrophoneMute)
+            .unwrap();
+        assert_eq!(shown(&controller, 1.0), (Kind::MicrophoneMute, 0.0));
+        controller
+            .apply(2.0, Command::ToggleMicrophoneMute)
+            .unwrap();
+        assert_eq!(shown(&controller, 2.0), (Kind::Microphone, 0.75));
+        controller.apply(3.0, Command::ToggleMute).unwrap();
+        assert_eq!(shown(&controller, 3.0), (Kind::Mute, 0.0));
     }
 
     #[test]

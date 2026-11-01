@@ -6,7 +6,7 @@ use cupertino_alsa::DEVICE_DIR;
 use cupertino_assets::Assets;
 use cupertino_controlcenter::backend::{
     AlsaVolume, MemoryBattery, MemoryBluetooth, MemoryBrightness, MemoryFocusMode, MemoryVolume,
-    MemoryWifi, RecordingOverlay,
+    MemoryWifi, RecordingOverlay, SessionVolume,
 };
 use cupertino_controlcenter::control;
 use cupertino_controlcenter::controller::{Backends, Controller};
@@ -20,6 +20,7 @@ use cupertino_controlcenter::system::{
     BtdBluetooth, NetdWifi, NotificationFocusMode, PowerdBattery, PowerdBrightness, SessionOverlay,
 };
 use cupertino_geometry::{Point, Rect};
+use cupertino_pipewire::Wpctl;
 use cupertino_protocol_app::{AppEffects, Backdrop};
 use cupertino_shell_client::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
@@ -52,7 +53,7 @@ const FAKE_BATTERY_PERCENT: u8 = 80;
 pub struct Options {
     /// Use in-memory backends instead of the machine's radios, volume and backlight.
     pub fake_backends: bool,
-    /// Sound card whose master volume is used; the best master of all cards when absent.
+    /// Sound card whose master volume is used instead of the default PipeWire sink.
     pub alsa_card: Option<u32>,
 }
 
@@ -146,10 +147,13 @@ fn backends(options: &Options) -> Backends {
         bluetooth: Box::new(BtdBluetooth::new()),
         focus_mode: Box::new(NotificationFocusMode::new()),
         brightness: Box::new(PowerdBrightness::new()),
-        volume: Box::new(AlsaVolume::new(
-            PathBuf::from(DEVICE_DIR),
-            options.alsa_card,
-        )),
+        volume: match options.alsa_card {
+            Some(card) => Box::new(AlsaVolume::new(PathBuf::from(DEVICE_DIR), Some(card))),
+            None => Box::new(SessionVolume::new(
+                Wpctl::default(),
+                AlsaVolume::new(PathBuf::from(DEVICE_DIR), None),
+            )),
+        },
         battery: Box::new(PowerdBattery::new()),
         overlay: Box::new(SessionOverlay::new()),
     }

@@ -942,6 +942,53 @@ fn a_key_the_server_holds_that_this_build_does_not_know_is_named_not_applied() {
     );
 }
 
+// ---- Sound -------------------------------------------------------------------------------------------------------
+
+#[test]
+fn the_sound_pane_reads_and_sets_the_default_pipewire_sink() {
+    use cupertino_pipewire::fake::FakeWpctl;
+    use cupertino_pipewire::{Target, Volume as Node, Wpctl};
+    use cupertino_settings::live::Volume;
+
+    const NOWHERE: &str = "unix:path=/nonexistent/cupertino-test-bus";
+    let half = Node {
+        level: 0.5,
+        muted: false,
+    };
+    let fake = FakeWpctl::new(half, half);
+    let no_cards = tempfile::tempdir().unwrap();
+    let mut services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE))
+        .with_sound(Wpctl::new(fake.program()), no_cards.path().to_path_buf());
+    assert_eq!(
+        services.volume(),
+        Reading::Ready(Volume {
+            level: 0.5,
+            muted: false
+        })
+    );
+    services
+        .call(&Call::SetVolume {
+            level: 0.25,
+            muted: true,
+        })
+        .unwrap();
+    assert_eq!(
+        fake.volume(Target::DefaultSink),
+        Node {
+            level: 0.25,
+            muted: true
+        }
+    );
+    assert_eq!(fake.volume(Target::DefaultSource), half);
+
+    fake.set_running(false);
+    assert_eq!(
+        services.volume(),
+        Reading::Unavailable("No sound output is available".into()),
+        "without PipeWire the mixer is read, and there is no card"
+    );
+}
+
 // ---- Plain failure texts -----------------------------------------------------------------------------------------
 
 #[test]

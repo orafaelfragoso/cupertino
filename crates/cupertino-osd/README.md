@@ -26,7 +26,7 @@ cupertino-osd [--fake-backends] [--alsa-card N]
 | Option | Default | Effect |
 |---|---|---|
 | `--fake-backends` | off | Change in-memory levels (0.5 each) instead of the machine's volume and backlights. For trying the overlay. |
-| `--alsa-card N` | the best master of all cards (rule in `cupertino-alsa`) | Use the master volume of sound card `N`. |
+| `--alsa-card N` | the default PipeWire sink, else the best master of all cards (rule in `cupertino-alsa`) | Use the master volume of sound card `N`. |
 
 The overlay has no config file. The session's display options select the meter palette: Increase Contrast makes the light
 track opaque black and the dark segment white, Reduce Transparency makes the dark track opaque, and both
@@ -38,7 +38,7 @@ take the opaque material.
 bottom margin of 140 pt, no keyboard interactivity and an empty input region. The material (`render::MATERIAL`) is a
 server-rendered backdrop with the window's rectangle and radius, and its alpha follows the fade. The process draws the glyph
 and the meter over it. While hidden the surface stays mapped and draws nothing. Glyphs are template symbols of the asset directory
-(`symbol.speaker.slash`, `symbol.speaker.low`, `symbol.speaker`, `symbol.speaker.high`, `symbol.sun`, `symbol.keyboard-brightness` and `.off`; `model::ICON_NAMES`),
+(`symbol.speaker.slash`, `symbol.speaker.low`, `symbol.speaker`, `symbol.speaker.high`, `symbol.sun`, `symbol.keyboard-brightness` and `.off`, `symbol.mic` and `.slash`; `model::ICON_NAMES`),
 tinted with the glyph colour. `Renderer::new` fails when the directory lacks one of them, so a glyph is never left out or
 substituted while drawing. The label's optical size follows the output scale (`TextRenderer::set_scale`, set on every render).
 
@@ -46,8 +46,9 @@ substituted while drawing. The label's optical size follows the output scale (`T
 on a change the renderer is rebuilt and the overlay drawn again. The overlay takes no input and the server hides it while the
 session is locked, so `locked` needs no reaction.
 
-**Effects.** The volume and mute go through `cupertino-alsa` (the ALSA control interface, a kernel uAPI, until the audio
-decision is made, D3). The process opens the device on the first press and again after a failure. Display
+**Effects.** The volume and mute change the default PipeWire sink through `cupertino-pipewire` (`wpctl`), so the
+overlay shows the level `wpctl get-volume` reports. When no PipeWire daemon answers a press, the press goes to the ALSA
+master through `cupertino-alsa`, which the process opens on that press and again after a failure. Display
 brightness and the keyboard backlight go through `cupertino-powerd` on the system bus, connected on the first press and again
 after a failure. A failure (no sound card, no backlight, daemon absent) shows nothing and is logged on stderr with its reason.
 
@@ -63,7 +64,7 @@ after a failure. A failure (no sound card, no backlight, daemon absent) shows no
 The process owns `org.cupertino.Osd1` at `/org/cupertino/Osd1` on the session bus. A second overlay cannot take the name and
 exits with failure. The interface lives in `control` (`BUS_NAME`, `OBJECT_PATH`, `serve`).
 
-Callers: `VolumeStep`, `ToggleMute`, `BrightnessStep` and `KeyboardBrightnessStep` change hardware levels, so only the server
+Callers: `VolumeStep`, `ToggleMute`, `ToggleMicrophoneMute`, `BrightnessStep` and `KeyboardBrightnessStep` change hardware levels, so only the server
 (this process's parent) and this process itself may call them (`cupertino-peer`). An anonymous, sandboxed (Flatpak, Snap) or
 unrelated caller gets `org.cupertino.Error.AnonymousCaller`, `FlatpakCaller`, `SnapCaller` or `UntrustedCaller`, one warning
 is logged and nothing changes. `Show` only draws the overlay, so it stays open to every caller (the control panel uses it).
@@ -72,9 +73,10 @@ is logged and nothing changes. `Show` only draws the overlay, so it stays open t
 |---|---|
 | `VolumeStep(i32 direction, bool fine) | Raises (`direction` > 0) or lowers the volume one press (a level of 0 mutes, a level above 0 unmutes) and shows the level. |
 | `ToggleMute | Mutes or unmutes the output (at volume 0 the result is always muted). Shows the muted glyph with an empty meter, or the level. |
+| `ToggleMicrophoneMute` | Mutes or unmutes the default PipeWire source. Shows the slashed microphone with an empty meter, or the microphone at the input level. Without a PipeWire daemon it fails and shows nothing. |
 | `BrightnessStep(i32 direction, bool fine) | Display brightness one press, through `org.cupertino.Power1` on the system bus. |
 | `KeyboardBrightnessStep(i32 direction, bool fine) | Keyboard backlight one press, through `org.freedesktop.UPower.KbdBacklight` on the system bus. |
-| `Show(s kind, d level) | Shows `volume`, `mute`, `brightness` or `keyboard-brightness` at `level` (0 to 1) without changing anything, holding 4 s. For the control panel, which changes levels itself. |
+| `Show(s kind, d level) | Shows `volume`, `mute`, `brightness`, `keyboard-brightness`, `microphone` or `microphone-mute` at `level` (0 to 1) without changing anything, holding 4 s. For the control panel, which changes levels itself. |
 
 A direction of 0, an unknown kind or a level outside 0 to 1 is answered with `org.freedesktop.DBus.Error.InvalidArgs` and
 shows nothing.
@@ -90,6 +92,7 @@ The server calls the interface for these keys. Shift+Alt held makes the press fi
 | `XF86AudioRaiseVolume` | `VolumeStep(1, fine) |
 | `XF86AudioLowerVolume` | `VolumeStep(-1, fine) |
 | `XF86AudioMute` | `ToggleMute |
+| `XF86AudioMicMute` | `ToggleMicrophoneMute` |
 | `XF86MonBrightnessUp` | `BrightnessStep(1, fine) |
 | `XF86MonBrightnessDown` | `BrightnessStep(-1, fine) |
 | `XF86KbdBrightnessUp` | `KeyboardBrightnessStep(1, fine) |
@@ -126,7 +129,7 @@ The server calls the interface for these keys. Shift+Alt held makes the press fi
 |---|---|
 | `model` | `Kind`, `Overlay`, `segments` (the fill rule), `Hud` (show / hold / fade with injected time), `Phase`, `View` |
 | `sender` | `step_level`, `hold_seconds` and the step and hold constants; the display floor |
-| `backend` | `Volume` and `Backlight` traits (read and write a level, mute); `AlsaVolume`, `MemoryVolume`, `MemoryBacklight`; `linear_raw` |
+| `backend` | `Volume` and `Backlight` traits (read and write a level, mute); `SessionVolume` (PipeWire, else ALSA), `AlsaVolume`, `MemoryVolume`, `MemoryBacklight`; `linear_raw` |
 | `system` (feature `dbus`) | `DisplayBacklight`, `KeyboardBacklight` over the system bus |
 | `controller` | `Command`, `Controller`: applies a command (step rules, mute rules) through the backends, then shows the result with the hold of its effect; `EffectError` |
 | `control` (feature `dbus`) | the `org.cupertino.Osd1` interface (`serve`) |

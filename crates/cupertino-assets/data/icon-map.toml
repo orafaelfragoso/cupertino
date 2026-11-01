@@ -60,6 +60,8 @@
 "symbol.lock" = ["changes-prevent-symbolic", "security-high-symbolic", "system-lock-screen-symbolic"]
 "symbol.lock-screen" = ["system-lock-screen-symbolic", "changes-prevent-symbolic"]
 "symbol.magnifyingglass" = ["edit-find-symbolic", "system-search-symbolic"]
+"symbol.mic" = ["audio-input-microphone-symbolic", "microphone-sensitivity-high-symbolic"]
+"symbol.mic.slash" = ["microphone-sensitivity-muted-symbolic", "microphone-disabled-symbolic"]
 "symbol.moon" = ["weather-clear-night-symbolic", "night-light-symbolic"]
 "symbol.moon.fill" = ["weather-clear-night-symbolic", "night-light-symbolic"]
 "symbol.mouse" = ["input-mouse-symbolic", "preferences-desktop-peripherals-symbolic"]

@@ -31,6 +31,10 @@ pub enum Kind {
     Brightness,
     /// Keyboard backlight brightness.
     KeyboardBrightness,
+    /// Input level, unmuted.
+    Microphone,
+    /// Input muted.
+    MicrophoneMute,
 }
 
 impl Kind {
@@ -41,6 +45,8 @@ impl Kind {
             Kind::Mute => "mute",
             Kind::Brightness => "brightness",
             Kind::KeyboardBrightness => "keyboard-brightness",
+            Kind::Microphone => "microphone",
+            Kind::MicrophoneMute => "microphone-mute",
         }
     }
 
@@ -51,6 +57,8 @@ impl Kind {
             Kind::Mute,
             Kind::Brightness,
             Kind::KeyboardBrightness,
+            Kind::Microphone,
+            Kind::MicrophoneMute,
         ]
         .into_iter()
         .find(|kind| kind.name() == name)
@@ -115,12 +123,14 @@ impl Overlay {
             Kind::Brightness => "symbol.sun",
             Kind::KeyboardBrightness if self.level <= 0.0 => "symbol.keyboard-brightness.off",
             Kind::KeyboardBrightness => "symbol.keyboard-brightness",
+            Kind::Microphone => "symbol.mic",
+            Kind::MicrophoneMute => "symbol.mic.slash",
         }
     }
 }
 
 /// Every symbol [`Overlay::icon_name`] can return, which the renderer requires of the asset directory at startup.
-pub const ICON_NAMES: [&str; 7] = [
+pub const ICON_NAMES: [&str; 9] = [
     "symbol.speaker.slash",
     "symbol.speaker.low",
     "symbol.speaker",
@@ -128,6 +138,8 @@ pub const ICON_NAMES: [&str; 7] = [
     "symbol.sun",
     "symbol.keyboard-brightness",
     "symbol.keyboard-brightness.off",
+    "symbol.mic",
+    "symbol.mic.slash",
 ];
 
 /// How one segment of the meter is filled.
@@ -293,6 +305,8 @@ mod tests {
             Kind::Mute,
             Kind::Brightness,
             Kind::KeyboardBrightness,
+            Kind::Microphone,
+            Kind::MicrophoneMute,
         ];
         for kind in kinds {
             for level in [0.0, 0.0005, 0.2, 0.5, 0.9, 1.0] {

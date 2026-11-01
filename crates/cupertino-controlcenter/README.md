@@ -30,7 +30,7 @@ cupertino-controlcenter [--fake-backends] [--alsa-card N]
 | Option or variable | Default | Effect |
 |---|---|---|
 | `--fake-backends` | off | In-memory radios, volume, backlight and battery instead of the machine's. For trying the panel and for headless runs. |
-| `--alsa-card N` | the best master of all cards (rule in `cupertino-alsa`) | Use the master volume of sound card `N`. |
+| `--alsa-card N` | the default PipeWire sink, else the best master of all cards (rule in `cupertino-alsa`) | Use the master volume of sound card `N`. |
 
 The session's display options change the look: Increase Contrast takes the high-contrast catalog and the contrast slider track,
 gray 0.459 light / 0.612 dark, and Reduce Transparency takes the opaque material. Icons are the template
@@ -92,7 +92,7 @@ failure. Properties are read from the service every time, never from a cache.
 | Bluetooth | `system::BtdBluetooth`: `org.cupertino.Bluetooth1`, properties `Available` (false is a disabled tile) and `Powered` (read, write) | `MemoryBluetooth` |
 | Focus mode | `org.cupertino.NotificationCenter1` on the session bus (`cupertino-notifications`): the `DoNotDisturb` property and `SetDoNotDisturb(b); on, it stays on until turned off | `MemoryFocusMode` |
 | Display brightness | `system::PowerdBrightness`: `org.cupertino.Power1` (`GetBrightness`, `GetMaxBrightness`, `SetBrightness`), raw value mapped linearly onto 0 to 1, never below raw 1 | `MemoryBrightness` |
-| Volume | `backend::AlsaVolume`: `cupertino-alsa` master selection (`Master::open_default`, the same as the overlay), level and mute switch; opened on first use and again after a failure | `MemoryVolume` |
+| Volume | `backend::SessionVolume`: the default PipeWire sink through `cupertino-pipewire` (`wpctl`), the level `wpctl get-volume` reports; when no PipeWire daemon answers a read, `backend::AlsaVolume`: `cupertino-alsa` master selection (`Master::open_default`, the same as the overlay), level and mute switch; opened on first use and again after a failure | `MemoryVolume` |
 | Battery | `system::PowerdBattery`: `org.freedesktop.UPower.Device` at `DisplayDevice` (`IsPresent`, `Percentage`, `State`); no battery hides the row, it is not a failure | `MemoryBattery` |
 | Overlay | `system::SessionOverlay`: `org.cupertino.Osd1.Show(kind, level)` on the session bus, after a slider drag ends (`volume`, `mute` for a muted output, `brightness`) | `RecordingOverlay` |
 | File sharing, stage, screen mirroring, now playing | none: shown, disabled, with a reason (`Module::unsupported`) | same |
@@ -156,7 +156,7 @@ failure. Properties are read from the service every time, never from a cache.
 | `model` | `Module` (grid order), `Slider`, `Reading` (value or reason), `Controls`, `TileState`, `Battery`, `VolumeState`, `speaker_icon` |
 | `layout` | frames of the card in points, slider tracks, `Hit`, `fraction_at` |
 | `lifecycle` | `Lifecycle`, `Phase`, `FADE_SECONDS` with injected time |
-| `backend` | the traits (`Wifi`, `Bluetooth`, `FocusMode`, `Brightness`, `Volume`, `BatteryReader`, `OverlayNotifier`), `AlsaVolume`, `Unavailable` and the `Memory* stand-ins |
+| `backend` | the traits (`Wifi`, `Bluetooth`, `FocusMode`, `Brightness`, `Volume`, `BatteryReader`, `OverlayNotifier`), `SessionVolume`, `AlsaVolume`, `Unavailable` and the `Memory* stand-ins |
 | `system` (feature `dbus`) | `NetdWifi`, `BtdBluetooth`, `PowerdBrightness`, `PowerdBattery`, `SessionOverlay` |
 | `controller` | `Controller`: lifecycle, readings, presses, throttled slider writes, refresh timer; `Backends` |
 | `control` (feature `dbus`) | the `org.cupertino.ControlPanel1` interface (`serve`) |

@@ -208,6 +208,124 @@ fn a_description_without_a_role_joins_its_nearest_ancestor_with_one() {
     assert!(!pass.nodes.contains_key(&middle));
 }
 
+/// A tooltip's stand-in: no node of its own, only words for the first node under it.
+struct Tip(&'static str, Vec<Element<M>>);
+
+impl Widget<M> for Tip {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Overlay)
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.1)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.describe_content(self.0);
+    }
+}
+
+#[test]
+fn a_content_description_goes_to_the_first_node_with_a_role_under_its_giver() {
+    let (tree, root, pass) = pass(Element::new(group(vec![
+        Element::new(Tip(
+            "Deletes the file",
+            vec![
+                Element::new(group(vec![Element::new(leaf("a")).key("a")])),
+                Element::new(leaf("b")).key("b"),
+            ],
+        )),
+        Element::new(leaf("c")).key("c"),
+    ])));
+    let id = |key: &'static str| {
+        tree.preorder(root)
+            .into_iter()
+            .find(|&n| tree.get(n).unwrap().key == Some(key.into()))
+            .unwrap()
+    };
+    let description = |key| pass.nodes[&id(key)].description.clone();
+    assert_eq!(description("a").as_deref(), Some("Deletes the file"));
+    assert_eq!(description("b"), None, "only the first node takes it");
+    assert_eq!(description("c"), None, "nothing outside the giver takes it");
+    assert_eq!(pass.nodes[&root].description, None);
+}
+
+/// A button that already describes itself.
+struct Described;
+
+impl Widget<M> for Described {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::Button);
+        cx.name("Trash");
+        cx.description("3 items");
+    }
+}
+
+#[test]
+fn a_content_description_survives_nested_wrappers_and_follows_the_nodes_own() {
+    let (tree, root, pass) = pass(Element::new(group(vec![Element::new(Tip(
+        "Deletes the file",
+        vec![Element::new(group(vec![Element::new(group(vec![
+            Element::new(Described).key("trash"),
+        ]))]))],
+    ))])));
+    let trash = tree
+        .preorder(root)
+        .into_iter()
+        .find(|&n| tree.get(n).unwrap().key == Some("trash".into()))
+        .unwrap();
+    assert_eq!(
+        pass.nodes[&trash].description.as_deref(),
+        Some("3 items, Deletes the file")
+    );
+}
+
 #[test]
 fn a_diff_carries_changed_and_new_nodes_and_names_the_removed_ones() {
     let (tree, root, before) = pass(Element::new(group(vec![

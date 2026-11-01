@@ -183,6 +183,7 @@ digraph "layers" {
   "cupertino-files" -> "cupertino-ui-core";
   "cupertino-files" -> "cupertino-ui-menus";
   "cupertino-files" -> "cupertino-ui-platform";
+  "cupertino-files" -> "cupertino-ui-test" [label="dev"];
   "cupertino-files" -> "cupertino-ui-text";
   "cupertino-files" -> "cupertino-ui-wayland";
   "cupertino-files" -> "cupertino-wayland-client";

@@ -42,7 +42,7 @@ impl<M: 'static> From<SplitView<M>> for Element<M> {
         let pane = |content| {
             Element::new(Pane {
                 axis: view.axis,
-                content: Some(content),
+                content: Some(Element::fill(content)),
             })
         };
         let alone = |content| {

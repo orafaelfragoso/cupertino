@@ -1,7 +1,7 @@
 use crate::cx::{EventCx, MeasureCx, PaintCx, SemanticsCx};
 use crate::{Environment, Event, Key};
 use cupertino_geometry::{Point, Size};
-use cupertino_ui_layout::{Constraints, GridSpan, LayoutSpec, Measured, SizeSpec};
+use cupertino_ui_layout::{Constraints, Flex, GridSpan, LayoutSpec, Measured, SizeSpec};
 use std::any::{type_name, Any, TypeId};
 use std::fmt;
 
@@ -66,6 +66,7 @@ pub struct Element<M> {
     pub(crate) widget: Box<dyn AnyWidget<M>>,
     pub(crate) width: Option<f64>,
     pub(crate) span: Option<GridSpan>,
+    pub(crate) fill: bool,
 }
 
 impl<M: 'static> Element<M> {
@@ -75,6 +76,7 @@ impl<M: 'static> Element<M> {
             widget: Box::new(widget),
             width: None,
             span: None,
+            fill: false,
         }
     }
 
@@ -95,8 +97,19 @@ impl<M: 'static> Element<M> {
         self
     }
 
+    /// Takes all the room its parent gives it, and in a stack its share of what the other children leave.
+    pub fn fill(mut self) -> Self {
+        self.fill = true;
+        self
+    }
+
     pub(crate) fn layout(&self) -> LayoutSpec {
         let mut spec = self.widget.layout();
+        if self.fill {
+            spec.width = SizeSpec::Fill;
+            spec.height = SizeSpec::Fill;
+            spec.flex = Flex::grow(1.0);
+        }
         if let Some(width) = self.width {
             spec.width = SizeSpec::Fixed(width);
         }
@@ -114,6 +127,7 @@ impl<M> fmt::Debug for Element<M> {
             .field("widget", &self.widget.type_name())
             .field("width", &self.width)
             .field("span", &self.span)
+            .field("fill", &self.fill)
             .finish()
     }
 }

@@ -22,6 +22,12 @@ const GROUP: Size = Size {
     width: 53.0,
     height: 28.0,
 };
+/// The toolbar row's height, as the unified toolbar of the window above the page.
+const TOOLBAR_HEIGHT: f64 = 52.0;
+/// The toolbar row's inset from its leading and trailing edges.
+const TOOLBAR_INSET: f64 = 8.0;
+/// The space between the toolbar row's items.
+const TOOLBAR_SPACING: f64 = 12.0;
 const CHEVRON: f64 = 7.0;
 const CHEVRON_STROKE: f64 = 1.5;
 
@@ -55,15 +61,76 @@ impl<M: Clone + 'static> From<NavigationStack<M>> for Element<M> {
                 arrow(Navigation::Forward, &forward),
             ],
         });
+        let header = Element::new(Slot {
+            spec: LayoutSpec {
+                width: SizeSpec::Fill,
+                height: SizeSpec::Fixed(TOOLBAR_HEIGHT),
+                insets: Insets {
+                    top: 0.0,
+                    left: TOOLBAR_INSET,
+                    bottom: 0.0,
+                    right: TOOLBAR_INSET,
+                },
+                ..LayoutSpec::new(ContainerKind::Stack {
+                    axis: Axis::Horizontal,
+                    spacing: TOOLBAR_SPACING,
+                    align: Align::Center,
+                    justify: Justify::Start,
+                })
+            },
+            role: Some(Role::Toolbar),
+            children: std::iter::once(group).chain(stack.toolbar).collect(),
+        });
         Element::new(Navigator {
             back,
             forward,
-            children: vec![group, stack.content],
+            children: vec![header, stack.content.fill()],
         })
     }
 }
 
-/// The group over the page; it takes the shortcuts the page leaves.
+/// A container with a fixed layout and nothing of its own to show.
+struct Slot<M> {
+    spec: LayoutSpec,
+    role: Option<Role>,
+    children: Vec<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for Slot<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        self.spec.clone()
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        if let Some(role) = self.role {
+            cx.role(role);
+        }
+    }
+}
+
+/// The toolbar row over the page; it takes the shortcuts the page leaves.
 struct Navigator<M> {
     back: Option<M>,
     forward: Option<M>,
@@ -136,7 +203,6 @@ impl<M: 'static> Widget<M> for Group<M> {
         LayoutSpec {
             width: SizeSpec::Fixed(GROUP.width),
             height: SizeSpec::Fixed(GROUP.height),
-            align_self: Some(Align::Start),
             ..LayoutSpec::new(ContainerKind::Stack {
                 axis: Axis::Horizontal,
                 spacing: 0.0,
@@ -192,9 +258,7 @@ impl<M: 'static> Widget<M> for Group<M> {
         look::fill(cx, middle, 0.0, border);
     }
 
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
-        cx.role(Role::Toolbar);
-    }
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
 /// The back or the forward button; without a message it is disabled.

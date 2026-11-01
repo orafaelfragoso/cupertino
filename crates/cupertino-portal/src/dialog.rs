@@ -23,6 +23,7 @@ use crate::file_chooser::{Answer, Event, Kind, Reply};
 
 const ROW_HEIGHT: f64 = 24.0;
 const SIDEBAR_WIDTH: f64 = 180.0;
+const SAVE_AS_WIDTH: f64 = 260.0;
 const GAP: f64 = 8.0;
 /// Around the bottom bar's controls, which makes it 52 pt tall with a regular control; an approximate design value.
 const BAR_INSETS: Insets = Insets {
@@ -566,23 +567,18 @@ fn save_as(d: &Dialog) -> Element<Message> {
         children: vec![
             Element::new(Spacer { min: 0.0 }),
             text("Save As:".to_owned(), TextRole::Body, false, false),
-            Element::new(Stack {
-                axis: Axis::Horizontal,
-                padding: Insets::ZERO,
-                spacing: 0.0,
-                align: Align::Center,
-                children: vec![Element::new(TextField {
-                    label: "Save As".into(),
-                    placeholder: String::new(),
-                    value: d.chooser.name().to_owned(),
-                    revision: d.name_revision,
-                    purpose: ContentPurpose::Normal,
-                    enabled: true,
-                    on_change: Some(Box::new(move |c| Message::Name(id, c))),
-                    on_submit: Some(Message::Accept(id)),
-                })
-                .key("name")],
-            }),
+            Element::new(TextField {
+                label: "Save As".into(),
+                placeholder: String::new(),
+                value: d.chooser.name().to_owned(),
+                revision: d.name_revision,
+                purpose: ContentPurpose::Normal,
+                enabled: true,
+                on_change: Some(Box::new(move |c| Message::Name(id, c))),
+                on_submit: Some(Message::Accept(id)),
+            })
+            .key("name")
+            .width(SAVE_AS_WIDTH),
             Element::new(Spacer { min: 0.0 }),
         ],
     })

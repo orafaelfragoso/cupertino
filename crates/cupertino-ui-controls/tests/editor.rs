@@ -1,7 +1,9 @@
 mod support;
 
 use cupertino_geometry::{Insets, Point, Size};
-use cupertino_ui_controls::{ScrollView, Scroller, Stack, TextChange, TextEditor, TextField};
+use cupertino_ui_controls::{
+    ScrollView, Scroller, Stack, TextBox, TextChange, TextEditor, TextField,
+};
 use cupertino_ui_core::{AccessibleValue, Application, Command, Element, Role, Window};
 use cupertino_ui_layout::{Align, Axis, ScrollState};
 use cupertino_ui_platform::Mods;
@@ -14,7 +16,7 @@ const UP: (u32, u32) = (103, 0xff52);
 const DOWN: (u32, u32) = (108, 0xff54);
 const TAB_KEY: (u32, u32) = (15, TAB);
 
-/// A scrolled editor of `LINES` numbered lines, as a file with CRLF line ends holds them, over a text field.
+/// A bordered, scrolled editor of `LINES` numbered lines, as a file with CRLF line ends holds them, over a text field.
 struct Editor<const LINES: usize>;
 
 struct Model {
@@ -73,23 +75,27 @@ impl<const LINES: usize> Application for Editor<LINES> {
             spacing: 0.0,
             align: Align::Stretch,
             children: vec![
-                Element::from(ScrollView {
-                    content: Element::new(TextEditor {
-                        label: "Notes".into(),
-                        placeholder: String::new(),
-                        value: model.text.clone(),
-                        revision: model.revision,
-                        enabled: true,
-                        on_change: Some(Box::new(Message::Changed)),
+                Element::new(TextBox {
+                    content: Element::from(ScrollView {
+                        content: Element::new(TextEditor {
+                            label: "Notes".into(),
+                            placeholder: String::new(),
+                            value: model.text.clone(),
+                            revision: model.revision,
+                            enabled: true,
+                            on_change: Some(Box::new(Message::Changed)),
+                        })
+                        .key("editor"),
+                        state: model.scroll,
+                        horizontal: false,
+                        vertical: true,
+                        scroller: Scroller::Always,
+                        on_scroll: Box::new(Message::Scrolled),
                     })
-                    .key("editor"),
-                    state: model.scroll,
-                    horizontal: false,
-                    vertical: true,
-                    scroller: Scroller::Always,
-                    on_scroll: Box::new(Message::Scrolled),
+                    .key("scroll"),
+                    enabled: true,
                 })
-                .key("scroll"),
+                .key("box"),
                 Element::new(TextField {
                     label: "After".into(),
                     placeholder: String::new(),
@@ -214,6 +220,22 @@ fn tab_moves_the_focus_on_instead_of_typing_a_tab() {
     press(&mut h, TAB_KEY, Mods::NONE);
     assert!(h.focused("after"));
     assert_eq!(h.model().text, "a");
+}
+
+#[test]
+fn the_box_around_the_editor_shows_the_focus_ring_while_the_keyboard_focus_is_inside() {
+    let strokes = |h: &Harness<Editor<0>>| {
+        h.ops("box")
+            .iter()
+            .filter(|op| matches!(op, PaintOp::Stroke { .. }))
+            .count()
+    };
+    let mut h = focused::<0>();
+    assert!(h.focused("editor"));
+    assert_eq!(strokes(&h), 2, "the border and the ring");
+    press(&mut h, TAB_KEY, Mods::NONE);
+    assert!(h.focused("after"));
+    assert_eq!(strokes(&h), 1, "the border alone");
 }
 
 fn glyph_runs<const LINES: usize>(h: &Harness<Editor<LINES>>) -> usize {

@@ -57,7 +57,7 @@ pub struct HeadlessDisplay {
 fn renderer_from_display(display: &EGLDisplay) -> Result<GlesRenderer> {
     let context = EGLContext::new(display).map_err(|e| anyhow!("creating the EGL context: {e}"))?;
     // Safety: the context was created for this display and is only used by this renderer.
-    unsafe { GlesRenderer::new(context) }.map_err(|e| anyhow!("creating the GLES renderer: {e}"))
+    unsafe { super::gles_renderer(context) }.map_err(|e| anyhow!("creating the GLES renderer: {e}"))
 }
 
 fn from_gbm(path: &str) -> Result<GlesRenderer> {

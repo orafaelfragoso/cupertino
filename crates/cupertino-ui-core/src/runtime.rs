@@ -1198,7 +1198,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
                 _ => None,
             };
-            let change = w.focus.sync(&self.tree, &semantics.scopes, &w.focusable);
+            let change = w.focus.sync(
+                &self.tree,
+                &semantics.scopes,
+                &w.focusable,
+                &semantics.hidden,
+            );
             let refocused = requested.is_some() || change.is_some();
             focus_effects =
                 Self::focus_events(&mut self.tree, w, requested, &mut self.messages, now);

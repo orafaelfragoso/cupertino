@@ -28,6 +28,7 @@ mod tabs;
 mod text;
 mod toggle;
 mod tooltip;
+mod window_group;
 
 pub use editor::EditorState;
 pub use field::{FieldState, SecureState};
@@ -40,8 +41,9 @@ pub use stepper::StepperState;
 pub use tooltip::{TooltipChange, TooltipState};
 
 use cupertino_geometry::{Insets, Point};
-use cupertino_ui_core::{Checked, Element, Key, WindowKey};
+use cupertino_ui_core::{Checked, CommandRegistry, Element, Key, WindowBackground, WindowKey};
 use cupertino_ui_layout::{Align, Axis, ScrollState};
+use cupertino_ui_platform::WindowSpec;
 use cupertino_ui_text::{AttributedText, ContentPurpose, SecureBuffer};
 use cupertino_ui_theme::ColorRole;
 use std::ops::Range;
@@ -403,6 +405,27 @@ pub struct SplitView<M> {
     pub min_leading: f64,
     pub min_trailing: f64,
     pub on_change: Option<Handler<SplitLayout, M>>,
+}
+
+/// Windows of one kind, one per open instance (a document, a viewer): Primary+N in any of them sends `on_new`, and
+/// Primary+W or the close button sends `on_close` with the id of the window it is pressed in. Each window's key is
+/// the group's key and its id, so a window keeps its state while others open and close. New windows open at their
+/// default size, where the compositor places them. Declare [`WindowGroup::windows`] with the other windows.
+pub struct WindowGroup<M> {
+    pub key: String,
+    pub windows: Vec<GroupWindow<M>>,
+    pub on_new: M,
+    pub on_close: Handler<u64, M>,
+}
+
+/// One window of a [`WindowGroup`].
+pub struct GroupWindow<M> {
+    pub id: u64,
+    pub spec: WindowSpec,
+    /// The window's own shortcuts; Primary+N and Primary+W are the group's.
+    pub shortcuts: CommandRegistry<M>,
+    pub background: WindowBackground,
+    pub content: Element<M>,
 }
 
 /// A panel below a control of another window: a non-modal dialog that takes the keyboard while open, moves the focus

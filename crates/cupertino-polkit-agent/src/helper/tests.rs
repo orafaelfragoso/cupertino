@@ -1,5 +1,4 @@
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 
 use super::*;
@@ -93,27 +92,18 @@ fn over_the_socket_the_user_and_cookie_come_first_and_the_answer_follows_the_pro
     );
 }
 
-/// A helper binary that reports its command line and environment, then checks the password.
-fn fake_binary(dir: &Path) -> PathBuf {
-    let path = dir.join("polkit-agent-helper-1");
-    std::fs::write(
-        &path,
-        "#!/bin/sh\n\
-         read cookie\n\
-         echo \"PAM_TEXT_INFO user=$1 args=$# cookie=$cookie home=${HOME:-none}\"\n\
-         echo 'PAM_PROMPT_ECHO_OFF Password: '\n\
-         read password\n\
-         if [ \"$password\" = right ]; then echo SUCCESS; else echo FAILURE; fi\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    path
+/// A helper binary that reports its command line and environment, then checks the password. It is a committed file:
+/// one written by a test could not be started while a parallel test's child still held the write descriptor (`ETXTBSY`).
+fn fake_binary() -> PathBuf {
+    PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/polkit-agent-helper-1"
+    ))
 }
 
 #[test]
 fn a_started_helper_gets_only_the_user_on_its_command_line_and_no_environment() {
-    let dir = tempfile::tempdir().unwrap();
-    let route = Route::Binary(fake_binary(dir.path()));
+    let route = Route::Binary(fake_binary());
     let mut helper = Helper::start(std::slice::from_ref(&route), "ada", "cookie-2").unwrap();
     assert_eq!(
         helper.read_line().unwrap(),
@@ -136,8 +126,7 @@ fn a_started_helper_gets_only_the_user_on_its_command_line_and_no_environment() 
 
 #[test]
 fn an_answer_with_a_line_break_is_refused() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut helper = Helper::start(&[Route::Binary(fake_binary(dir.path()))], "ada", "c").unwrap();
+    let mut helper = Helper::start(&[Route::Binary(fake_binary())], "ada", "c").unwrap();
     assert_eq!(
         helper.answer(b"right\nSUCCESS").unwrap_err().kind(),
         io::ErrorKind::InvalidInput
@@ -150,9 +139,12 @@ fn an_overlong_line_is_an_error() {
     let path = dir.path().join("agent-helper.socket");
     let listener = UnixListener::bind(&path).unwrap();
     std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        // reads the user line first, as the helper does: closing with it unread would reset the client's write
+        let mut stream = BufReader::new(stream);
+        stream.read_line(&mut String::new()).unwrap();
         let line = format!("PAM_TEXT_INFO {}\n", "x".repeat(MAX_LINE));
-        let _ = stream.write_all(line.as_bytes());
+        let _ = stream.get_mut().write_all(line.as_bytes());
     });
     let mut helper = Helper::start(&[Route::Socket(path)], "ada", "c").unwrap();
     assert!(matches!(helper.read_line(), Err(HelperError::TooLong)));
@@ -160,8 +152,7 @@ fn an_overlong_line_is_an_error() {
 
 #[test]
 fn dropping_a_helper_stops_one_waiting_for_an_answer() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut helper = Helper::start(&[Route::Binary(fake_binary(dir.path()))], "ada", "c").unwrap();
+    let mut helper = Helper::start(&[Route::Binary(fake_binary())], "ada", "c").unwrap();
     helper.read_line().unwrap();
     helper.read_line().unwrap();
     let started = std::time::Instant::now();
@@ -193,12 +184,11 @@ fn dropping_the_answers_ends_a_read_waiting_on_a_silent_socket() {
 #[test]
 fn a_socket_nothing_listens_on_falls_back_to_the_binary() {
     let dir = tempfile::tempdir().unwrap();
+    // a regular file, not a listener that was bound and closed: a child forked by a parallel test before its exec would
+    // hold the listener open, and the connection would be accepted, then reset
     let socket = dir.path().join("agent-helper.socket");
-    drop(UnixListener::bind(&socket).unwrap());
-    let routes = [
-        Route::Socket(socket),
-        Route::Binary(fake_binary(dir.path())),
-    ];
+    std::fs::write(&socket, b"").unwrap();
+    let routes = [Route::Socket(socket), Route::Binary(fake_binary())];
     let mut helper = Helper::start(&routes, "ada", "cookie-4").unwrap();
     assert_eq!(
         helper.read_line().unwrap(),

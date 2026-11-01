@@ -37,7 +37,8 @@ use cupertino_files::notice::{self, Action, Notices};
 use cupertino_files::open::{command_with, default_app_id, open_command, open_with, OpenError};
 use cupertino_files::operations::{self, DropAction};
 use cupertino_files::places::{
-    follow_trash, removable_holding, session_places, Place, PlaceKind, SessionPlaces, Volume,
+    follow_trash, removable_holding, session_places, window_title, Place, PlaceKind, SessionPlaces,
+    Volume,
 };
 use cupertino_files::recents;
 use cupertino_files::rename::{RenameEvent, RenameTrigger};
@@ -373,19 +374,6 @@ fn palette(theme: &Theme, dark: bool) -> Palette {
 
 /// The window title for a folder: the place name of the trash folder (`<trash>/files`) and of Recents, else
 /// the folder's name, the path for the root.
-fn title(dir: &Path, places: &[Place]) -> String {
-    if let Some(place) = places
-        .iter()
-        .find(|p| matches!(p.kind, PlaceKind::Trash | PlaceKind::Recents) && p.path == dir)
-    {
-        return place.name.clone();
-    }
-    dir.file_name().map_or_else(
-        || dir.display().to_string(),
-        |n| n.to_string_lossy().into_owned(),
-    )
-}
-
 /// Connect, open the window on `folder` and serve it until it is closed; `terminal` runs the applications
 /// with `Terminal=true`.
 pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
@@ -436,7 +424,7 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
     let window = Window::open(
         &mut conn,
         &effects,
-        title(&folder, &places),
+        window_title(&folder, &places),
         (width as u32, height as u32),
         (
             metrics::WINDOW_MIN.0.ceil() as u32,
@@ -821,7 +809,7 @@ impl App {
         let keys = self.keys();
         let frame = self.frame.as_ref().expect("checked above");
         let tree = window_tree(&WindowView {
-            title: &title(self.browser.dir(), &self.places),
+            title: &window_title(self.browser.dir(), &self.places),
             layout: &frame.window,
             places: &self.places,
             keys: &keys,
@@ -1011,7 +999,7 @@ impl App {
             .as_ref()
             .and_then(|d| d.target.as_ref())
             .map(|t| t.outline);
-        let title = title(browser.dir(), places);
+        let title = window_title(browser.dir(), places);
         let status = status_text(browser.item_count(), *available);
         let state = WindowState {
             browser,
@@ -1566,7 +1554,7 @@ impl App {
         self.close_menu()?;
         self.conn.set_title(
             self.window.toplevel,
-            &title(self.browser.dir(), &self.places),
+            &window_title(self.browser.dir(), &self.places),
         )?;
         // another folder ends the search (the browser shows it whole)
         self.search.set_text("");

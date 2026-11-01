@@ -19,6 +19,9 @@
 use cupertino_apps::{launch, Locale, MimeApps, MimeDatabase, Visibility, XdgDirs};
 use cupertino_assets::Assets;
 use cupertino_defaults::accessibility::DisplayOptions;
+use cupertino_files::access::{
+    sidebar_node, window_tree, PlaceKeys, SidebarNode, WindowView, WINDOW,
+};
 use cupertino_files::browser::{Activation, Browser};
 use cupertino_files::context_menu::{
     common_apps, AppChoice, Command as MenuCommand, Key as MenuKey, Menu, MenuItem,
@@ -40,6 +43,7 @@ use cupertino_files::recents;
 use cupertino_files::rename::{RenameEvent, RenameTrigger};
 use cupertino_files::render::{Palette, Renderer};
 use cupertino_files::selection::Modifiers;
+use cupertino_files::sidebar_keys::{entry_row, sidebar_key, SidebarAction, SidebarKey};
 use cupertino_files::tags::{self, TagColor};
 use cupertino_files::trash::Trash;
 use cupertino_files::udisks::{Device, Report, Volumes};
@@ -53,6 +57,8 @@ use cupertino_icons::document::FileIcons;
 use cupertino_protocol_app::{AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop};
 use cupertino_text_field::{KeyInput, Keymap, Response, TextField, TextFieldKeys};
 use cupertino_theme::{Appearance, Theme, WindowCornerSize};
+use cupertino_ui_atspi::AtspiAdapter;
+use cupertino_ui_core::{AccessibilityAdapter, AccessibilityUpdate, Action as AccessAction};
 use cupertino_ui_menus::WindowMenus;
 use cupertino_ui_wayland::clipboard::Clipboard;
 use cupertino_ui_wayland::{copy_rects, popup, Damage, Ready, ShmPresenter};
@@ -68,6 +74,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
+use std::task::{Wake, Waker};
 use std::time::{Duration, Instant, SystemTime};
 use tiny_skia::{Color, Pixmap};
 
@@ -125,6 +132,8 @@ struct App {
     /// keyboard.
     search: TextField,
     search_focused: bool,
+    /// The sidebar row with the keyboard focus, while the sidebar has the keyboard.
+    sidebar_focus: Option<usize>,
     /// How wide the search field is now: it opens while focused or holding text.
     search_width: SearchWidth,
     /// The frame drawn last: clicks and arrow keys are resolved against it.
@@ -164,6 +173,25 @@ struct App {
     trash_files: PathBuf,
     /// Close Window was chosen.
     closing: bool,
+    /// Assistive technology's view of the window, the tree it was sent last and whether it was told the window is
+    /// focused.
+    access: AtspiAdapter,
+    place_keys: PlaceKeys,
+    access_sent: Option<AccessibilityUpdate>,
+    access_focused: Option<bool>,
+}
+
+/// Wakes the window's loop for assistive technology.
+struct WakeLoop(cupertino_wayland_client::Waker);
+
+impl Wake for WakeLoop {
+    fn wake(self: Arc<Self>) {
+        self.0.wake();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.wake();
+    }
 }
 
 /// An item waiting for its activation token and what opens it.
@@ -422,6 +450,7 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
         .and_then(|system| Volumes::watch(system, notices.clone(), Arc::new(move || waker.wake())))
         .map_err(|e| eprintln!("cupertino-files: no removable media: {e}"))
         .ok();
+    let access = AtspiAdapter::new(Waker::from(Arc::new(WakeLoop(conn.waker()))));
     let mut app = App {
         palette: palette(&theme, dark),
         conn,
@@ -446,6 +475,7 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
         available: None,
         search: TextField::with_max_len(SEARCH_MAX_LEN),
         search_focused: false,
+        sidebar_focus: None,
         search_width: SearchWidth::default(),
         frame: None,
         scroll: 0.0,
@@ -470,6 +500,10 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
         menu_state: None,
         trash_files: Trash::new().home_trash().join("files"),
         closing: false,
+        access,
+        place_keys: PlaceKeys::default(),
+        access_sent: None,
+        access_focused: None,
     };
     app.publish_menus();
     app.update_available();
@@ -487,7 +521,9 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
         app.sync_menu_mods()?;
         app.tick()?;
         app.refresh()?;
+        app.follow_access()?;
         app.present()?;
+        app.publish_access();
         events = app.conn.wait(app.timeout())?;
     }
 }
@@ -634,7 +670,15 @@ impl App {
         let standard = follow_trash(&mut self.places, self.standard_places, &self.trash_files);
         if standard != self.standard_places {
             self.standard_places = standard;
+            self.keep_sidebar_focus();
             self.window.redraw();
+        }
+    }
+
+    /// Keep the sidebar's focus on a row after the rows changed.
+    fn keep_sidebar_focus(&mut self) {
+        if let Some(focus) = &mut self.sidebar_focus {
+            *focus = (*focus).min(self.places.len().saturating_sub(1));
         }
     }
 
@@ -684,6 +728,7 @@ impl App {
             .map(|d| Place::removable(&d.name, d.mount.as_deref(), self.busy.contains(&d.object)))
             .collect();
         self.places.extend(rows);
+        self.keep_sidebar_focus();
         self.window.redraw();
         if let Some(at) = go {
             return self.go(at);
@@ -693,6 +738,99 @@ impl App {
             return self.go(self.home.clone());
         }
         Ok(())
+    }
+
+    /// Open place `index` as a click on its row does: mount it when it is an unmounted file system, else show it.
+    fn open_place(&mut self, index: usize) -> Result<()> {
+        match self.places[index].kind {
+            PlaceKind::Removable(Volume::Unmounted) => {
+                self.mount(index);
+                Ok(())
+            }
+            PlaceKind::Removable(Volume::Busy) => Ok(()),
+            _ => {
+                let path = self.places[index].path.clone();
+                self.go(path)
+            }
+        }
+    }
+
+    /// Do what assistive technology asks: a click on a row opens it as a pointer click does, a click on an eject
+    /// button ejects, and focus on a row gives the sidebar the keyboard there.
+    fn follow_access(&mut self) -> Result<()> {
+        let mut requests = Vec::new();
+        self.access.drain_actions(&mut requests);
+        for request in requests {
+            let target = sidebar_node(&self.keys(), request.target);
+            match (target, request.action) {
+                (Some(SidebarNode::Row(i)), AccessAction::Click) if i < self.places.len() => {
+                    self.open_place(i)?;
+                }
+                (Some(SidebarNode::Row(i)), AccessAction::Focus) if i < self.places.len() => {
+                    self.sidebar_focus = Some(i);
+                    self.window.redraw();
+                }
+                (Some(SidebarNode::Eject(i)), AccessAction::Click)
+                    if self
+                        .places
+                        .get(i)
+                        .is_some_and(|p| p.kind == PlaceKind::Removable(Volume::Mounted)) =>
+                {
+                    self.eject(i)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// The key of each sidebar place: a standard place by its kind and folder, a removable file system by its udisks
+    /// object.
+    fn keys(&mut self) -> Vec<u32> {
+        let standard = self.standard_places;
+        let identities: Vec<String> = self
+            .places
+            .iter()
+            .enumerate()
+            .map(
+                |(i, place)| match i.checked_sub(standard).and_then(|d| self.devices.get(d)) {
+                    Some(device) => device.object.to_string(),
+                    None => format!("{:?} {}", place.kind, place.path.display()),
+                },
+            )
+            .collect();
+        identities.iter().map(|i| self.place_keys.key(i)).collect()
+    }
+
+    /// Tell assistive technology what the window shows now, while one listens and it changed.
+    fn publish_access(&mut self) {
+        // the adapter makes the window's object on its first focus, which is how assistive technology finds it
+        let focused = self.window.activated;
+        if self.access_focused != Some(focused) {
+            self.access.window_focus(WINDOW, focused);
+            self.access_focused = Some(focused);
+        }
+        if !self.access.is_active() {
+            self.access_sent = None;
+            return;
+        }
+        if self.frame.is_none() {
+            return;
+        }
+        let keys = self.keys();
+        let frame = self.frame.as_ref().expect("checked above");
+        let tree = window_tree(&WindowView {
+            title: &title(self.browser.dir(), &self.places),
+            layout: &frame.window,
+            places: &self.places,
+            keys: &keys,
+            dir: self.browser.dir(),
+            sidebar_focus: self.sidebar_focus,
+        });
+        if self.access_sent.as_ref() != Some(&tree) {
+            self.access.update(&tree);
+            self.access_sent = Some(tree);
+        }
     }
 
     /// Mount the removable file system of place `index`.
@@ -858,6 +996,7 @@ impl App {
             available,
             search,
             search_focused,
+            sidebar_focus,
             palette,
             scroll,
             edit,
@@ -880,6 +1019,7 @@ impl App {
             active,
             search,
             search_focused: *search_focused,
+            sidebar_focus: *sidebar_focus,
             search_caret,
             title: &title,
             now: SystemTime::now(),
@@ -1023,6 +1163,9 @@ impl App {
             return Ok(());
         }
         self.drag = None;
+        if self.sidebar_focus.take().is_some() {
+            self.window.redraw();
+        }
         // nothing to hit before the first frame
         let Some(frame) = &self.frame else {
             return Ok(());
@@ -1064,17 +1207,7 @@ impl App {
                     .map(|(_, r)| *r)
                     .expect("a hit item is laid out"),
             ),
-            Hit::Place(i) => match self.places[i].kind {
-                PlaceKind::Removable(Volume::Unmounted) => {
-                    self.mount(i);
-                    Ok(())
-                }
-                PlaceKind::Removable(Volume::Busy) => Ok(()),
-                _ => {
-                    let path = self.places[i].path.clone();
-                    self.go(path)
-                }
-            },
+            Hit::Place(i) => self.open_place(i),
             Hit::Eject(i) => self.eject(i),
             Hit::PathSegment(i) => {
                 let path = frame.path[i].path.clone();
@@ -1174,6 +1307,17 @@ impl App {
             self.window.redraw();
             return Ok(());
         }
+        if code == key::TAB && mods.ctrl && !mods.logo && !mods.alt {
+            self.sidebar_focus = match self.sidebar_focus {
+                Some(_) => None,
+                None => Some(entry_row(&self.places, self.browser.dir())),
+            };
+            self.window.redraw();
+            return Ok(());
+        }
+        if self.sidebar_focus.is_some() && self.sidebar_input(code, mods, character)? {
+            return Ok(());
+        }
         let changed = if mods.logo && !mods.ctrl && !mods.alt {
             match (code, character) {
                 (key::BACKSPACE, _) => return self.trash_selection(),
@@ -1255,6 +1399,51 @@ impl App {
             self.window.redraw();
         }
         Ok(())
+    }
+
+    /// A key while the sidebar has the keyboard; `false` leaves it to the folder's items: the shortcuts, and Primary+E
+    /// on a row that is not a mounted removable file system (File › Eject of the folder shown).
+    fn sidebar_input(
+        &mut self,
+        code: u32,
+        mods: KeyModifiers,
+        character: Option<char>,
+    ) -> Result<bool> {
+        let Some(focus) = self.sidebar_focus else {
+            return Ok(false);
+        };
+        let plain = !(mods.logo || mods.ctrl || mods.alt || mods.shift);
+        let key = match code {
+            key::UP if plain => SidebarKey::Up,
+            key::DOWN if plain => SidebarKey::Down,
+            key::HOME if plain => SidebarKey::Home,
+            key::END if plain => SidebarKey::End,
+            key::ENTER | key::KEYPAD_ENTER if plain => SidebarKey::Open,
+            key::ESCAPE if plain => {
+                self.sidebar_focus = None;
+                self.window.redraw();
+                return Ok(true);
+            }
+            _ if mods.logo && !mods.ctrl && !mods.alt && character == Some('e') => {
+                SidebarKey::Eject
+            }
+            // other keys do nothing in the sidebar; shortcuts go on to the items
+            _ => return Ok(!(mods.logo || mods.ctrl || mods.alt)),
+        };
+        match sidebar_key(&self.places, focus, key) {
+            Some(SidebarAction::Focus(row)) => {
+                self.sidebar_focus = Some(row);
+                self.window.redraw();
+            }
+            Some(SidebarAction::Go(row)) => {
+                let path = self.places[row].path.clone();
+                self.go(path)?;
+            }
+            Some(SidebarAction::Mount(row)) => self.mount(row),
+            Some(SidebarAction::Eject(row)) => self.eject(row)?,
+            None => return Ok(key != SidebarKey::Eject),
+        }
+        Ok(true)
     }
 
     /// Move the focus by a key in the frame drawn last. The items it changes are drawn here, so a caller has nothing

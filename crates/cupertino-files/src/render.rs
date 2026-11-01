@@ -37,6 +37,8 @@ pub struct Palette {
     /// The background of selected text (the name editor).
     pub text_selection: Rgba,
     pub inactive_selection: Rgba,
+    /// The keyboard focus ring (`keyboard-focus-indicator`, opaque in both appearances as the toolkit draws it).
+    pub focus_ring: Rgba,
     /// and: the rubber band's border and fill, the icon bubble's fill.
     pub tertiary_label: Rgba,
     pub quaternary_label: Rgba,
@@ -103,6 +105,7 @@ impl Palette {
                 accent_text: [1.0, 1.0, 1.0, 1.0],
                 text_selection: TEXT_SELECTION,
                 inactive_selection: [1.0, 1.0, 1.0, 0.2],
+                focus_ring: c8(0x25, 0xAD, 0xFF),
                 tertiary_label: [1.0, 1.0, 1.0, 0.2471],
                 quaternary_label: [1.0, 1.0, 1.0, 0.098],
                 row_alternate: [1.0, 1.0, 1.0, 0.04],
@@ -122,6 +125,7 @@ impl Palette {
                 accent_text: [1.0, 1.0, 1.0, 1.0],
                 text_selection: TEXT_SELECTION,
                 inactive_selection: [0.0, 0.0, 0.0, 0.12],
+                focus_ring: c8(0x3B, 0x99, 0xFC),
                 tertiary_label: [0.0, 0.0, 0.0, 0.2588],
                 quaternary_label: [0.0, 0.0, 0.0, 0.098],
                 row_alternate: [0.0, 0.0, 0.0, 0.035],
@@ -144,6 +148,9 @@ impl Palette {
         p.separator = sem(SemanticColor::Grid).unwrap_or(p.separator);
         p.accent = sem(SemanticColor::SystemBlue).unwrap_or(p.accent);
         p.text_selection = sem(SemanticColor::SelectedTextBackground).unwrap_or(p.text_selection);
+        if let Some([r, g, b, _]) = sem(SemanticColor::KeyboardFocusIndicator) {
+            p.focus_ring = [r, g, b, 1.0];
+        }
         for (slot, color) in p.tag_colors.iter_mut().zip(TagColor::ALL) {
             *slot = theme
                 .tokens

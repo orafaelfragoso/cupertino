@@ -79,6 +79,11 @@ pub mod metrics {
     pub const SIDEBAR_ROW_INSET: f64 = 10.0;
     /// Corner radius of the sidebar highlight and of the selected view segment. approximate.
     pub const HIGHLIGHT_RADIUS: f64 = 5.0;
+    /// The keyboard focus ring of a sidebar row: the toolkit's ring (`cupertino-ui-theme`), a 2 pt stroke 2 pt outside
+    /// the row's highlight, its radius 3 pt larger.
+    pub const FOCUS_RING_WIDTH: f64 = 2.0;
+    pub const FOCUS_RING_OUTSET: f64 = 2.0;
+    pub const FOCUS_RING_RADIUS_EXTRA: f64 = 3.0;
     /// Smallest sidebar: its minimum thickness; overlay scrollers add nothing.
     pub const SIDEBAR_MIN: f64 = sidebar::MIN_WIDTH_BASE;
     /// Smallest browser area, its scroll-view content insets are taken as zero (approximate).
@@ -898,6 +903,8 @@ pub struct WindowState<'a> {
     pub marquee: Option<(Point, Point)>,
     /// The status bar's text ([`status_text`]), drawn when the bar is shown.
     pub status: &'a str,
+    /// The sidebar row with the keyboard focus ([`crate::sidebar_keys`]); its ring shows while the window is active.
+    pub sidebar_focus: Option<usize>,
 }
 
 /// What a drag is over, marked with the drop look.
@@ -1715,6 +1722,22 @@ impl WindowPainter {
                 },
             );
         }
+        // after every row, so the next row's highlight does not cover the ring's outer edge
+        if let Some(r) = state
+            .sidebar_focus
+            .filter(|_| state.active)
+            .and_then(|i| w.places.get(i))
+        {
+            let out = m::FOCUS_RING_OUTSET + m::FOCUS_RING_WIDTH / 2.0;
+            stroke_rounded(
+                pm,
+                &r.inset(-out, -out),
+                m::HIGHLIGHT_RADIUS + m::FOCUS_RING_RADIUS_EXTRA,
+                m::FOCUS_RING_WIDTH,
+                scale,
+                pal.focus_ring,
+            );
+        }
     }
 
     fn paint_toolbar(
@@ -2289,6 +2312,7 @@ mod tests {
             increase_contrast: false,
             marquee: None,
             status: "3 items",
+            sidebar_focus: None,
         };
         painter.paint(&mut pm, 2.0, &frame, &state, &pal);
         let px = |p: Point| pm.pixel((p.x * 2.0) as u32, (p.y * 2.0) as u32).unwrap();
@@ -2511,6 +2535,7 @@ mod tests {
             increase_contrast: false,
             marquee: Some((origin, at)),
             status: "3 items",
+            sidebar_focus: None,
         };
         painter.paint(&mut pm, 1.0, &frame, &state, &pal);
         // the list shows the band too, below its header
@@ -2542,6 +2567,7 @@ mod tests {
             increase_contrast: false,
             marquee: Some((origin, at)),
             status: "3 items",
+            sidebar_focus: None,
         };
         painter.paint(&mut lpm, 1.0, &list, &lstate, &pal);
         let (lx, ly) = (
@@ -2935,6 +2961,7 @@ mod tests {
             increase_contrast: false,
             marquee: None,
             status: "1 item",
+            sidebar_focus: None,
         };
         painter.paint(&mut pm, 1.0, &frame, &state, &pal);
         let field = frame
@@ -3005,6 +3032,7 @@ mod tests {
             increase_contrast: false,
             marquee: None,
             status: "",
+            sidebar_focus: None,
         };
         painter.paint(&mut pm, scale, frame, &state, &Palette::builtin(false));
         pm
@@ -3105,6 +3133,7 @@ mod tests {
                 increase_contrast: false,
                 marquee: None,
                 status: "",
+                sidebar_focus: None,
             };
             painter.paint(&mut pm, 1.0, &frame, &state, &pal);
             let at = |y: u32| {
@@ -3186,6 +3215,7 @@ mod tests {
                             increase_contrast: false,
                             marquee: None,
                             status: "",
+                            sidebar_focus: None,
                         };
                         painter.paint(&mut pm, scale, &frame, &state, &pal);
                         let (area, offsets) = painter.editor_text.clone().unwrap();
@@ -3378,6 +3408,7 @@ mod tests {
                 increase_contrast: false,
                 marquee: None,
                 status: "",
+                sidebar_focus: None,
             };
             // a first frame at a new size allocates its content view and fills the glyph cache; the frames after it
             // rasterize no glyph, allocate no view and draw no row: what is left is fills and copies, counted in pixels
@@ -3504,6 +3535,7 @@ mod tests {
                     increase_contrast: false,
                     marquee: None,
                     status: "",
+                    sidebar_focus: None,
                 };
                 painter.paint(&mut pm, scale, &frame, &state, &Palette::builtin(false));
                 pm
@@ -3595,6 +3627,7 @@ mod tests {
                     increase_contrast: false,
                     marquee: None,
                     status: "",
+                    sidebar_focus: None,
                 };
                 let rects = device_rects(&areas, scale);
                 let rows: Vec<(u32, u32)> = rects.iter().map(|r| (r.1, r.3)).collect();
@@ -3718,6 +3751,7 @@ mod tests {
             increase_contrast: false,
             marquee,
             status: "",
+            sidebar_focus: None,
         };
         let pal = Palette::builtin(false);
         crate::render::WRITTEN.with(|c| c.set(0));
@@ -3913,6 +3947,7 @@ mod tests {
                         increase_contrast,
                         marquee: None,
                         status: "",
+                        sidebar_focus: None,
                     };
                     painter.paint(&mut pm, scale, &frame, &state, &pal);
                     pm
@@ -3939,6 +3974,60 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_focused_sidebar_row_has_the_focus_ring_outside_its_highlight_while_the_window_is_active()
+    {
+        let scale = 2.0_f32;
+        let (_d, browser, places, mut painter, frame) = listing(scale, 12, 0.0);
+        let pal = Palette::builtin(false);
+        let mut paint = |active, sidebar_focus| {
+            let mut pm = Pixmap::new(1840, 872).unwrap();
+            let state = WindowState {
+                browser: &browser,
+                places: &places,
+                mode: ViewMode::List,
+                active,
+                search: &TextField::new(),
+                search_focused: false,
+                search_caret: false,
+                title: "Here",
+                now: SystemTime::now(),
+                edit: None,
+                edit_caret: false,
+                drop_target: None,
+                increase_contrast: false,
+                marquee: None,
+                status: "",
+                sidebar_focus,
+            };
+            painter.paint(&mut pm, scale, &frame, &state, &pal);
+            pm
+        };
+        let r = frame.window.places[1];
+        // the middle of the ring's left edge: 3 pt outside the row, the centre of the 2 pt stroke
+        let at = (
+            ((r.x - 3.0) * f64::from(scale)) as u32,
+            ((r.y + r.h / 2.0) * f64::from(scale)) as u32,
+        );
+        let pixel = |pm: &Pixmap| {
+            let p = pm.pixel(at.0, at.1).unwrap().demultiply();
+            [p.red(), p.green(), p.blue()]
+        };
+        let ring = pal.focus_ring.map(|c| (c * 255.0).round() as u8);
+        let (none, focused) = (paint(true, None), paint(true, Some(1)));
+        assert_eq!(pixel(&focused), [ring[0], ring[1], ring[2]]);
+        assert!(
+            paint(false, None).data() == paint(false, Some(1)).data(),
+            "no ring in an inactive window"
+        );
+        let out = m::FOCUS_RING_OUTSET + m::FOCUS_RING_WIDTH;
+        let ring_area = GeoRect::new(r.x - out, r.y - out, r.w + 2.0 * out, r.h + 2.0 * out);
+        assert_eq!(
+            differing_outside(&none, &focused, &[ring_area], scale),
+            vec![]
+        );
     }
 
     /// The WCAG contrast ratio of two opaque colours.

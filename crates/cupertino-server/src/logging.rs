@@ -182,11 +182,13 @@ extern "C" fn fatal_signal(signal: libc::c_int) {
         _ => b"a fatal signal",
     };
     if let Some(end) = SESSION_END.get() {
+        // a reason written already (a panic, a lost rendering context) is the real one, and a crash in the teardown it
+        // started keeps it; `cupertino-session` removes the file before the start
         // Safety: `open`, `write` and `close` are async-signal-safe; the path is a C string made before any crash.
         unsafe {
             let fd = libc::open(
                 end.c_path.as_ptr(),
-                libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_CLOEXEC,
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC,
                 0o600,
             );
             if fd >= 0 {

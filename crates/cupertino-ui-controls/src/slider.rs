@@ -1,3 +1,4 @@
+use crate::icon::symbol;
 use crate::look::{self, paint_focus_ring};
 use crate::{Slider, SliderStyle};
 use cupertino_geometry::{Insets, Rect, Size};
@@ -23,6 +24,9 @@ const END: Keysym = Keysym(0xff57);
 
 /// A level slider's track and knob.
 const LEVEL: f64 = 22.0;
+/// The symbol inside a level slider's minimum end.
+const LEVEL_SYMBOL: f64 = 14.0;
+const PANEL_TRACK_BORDER: f64 = 0.5;
 /// A tick mark: a round dot under the track at each step position.
 const TICK_DOT: f64 = 4.0;
 /// Between the track's bottom and the dots under it.
@@ -42,7 +46,7 @@ fn sizes(style: SliderStyle, theme: &ThemeTokens) -> (f64, f64) {
             look::metric(Control::SliderTrack, theme),
             look::metric(Control::SliderKnob, theme),
         ),
-        SliderStyle::Level => (LEVEL, LEVEL),
+        SliderStyle::Level | SliderStyle::PanelLevel(_) => (LEVEL, LEVEL),
     }
 }
 
@@ -279,16 +283,29 @@ impl<M: 'static> Widget<M> for Slider<M> {
         let mid = size.height / 2.0;
         let track = Rect::new(0.0, mid - track_height / 2.0, size.width, track_height);
         let radius = track_height / 2.0;
+        let track_role = match self.style {
+            SliderStyle::PanelLevel(_) => ColorRole::PanelTrack,
+            _ => ColorRole::SwitchTrack,
+        };
         look::fill(
             cx,
             track,
             radius,
-            look::color(&theme, ColorRole::SwitchTrack, &look_state),
+            look::color(&theme, track_role, &look_state),
         );
+        if let SliderStyle::PanelLevel(_) = self.style {
+            look::stroke(
+                cx,
+                track.inset(Insets::uniform(PANEL_TRACK_BORDER / 2.0)),
+                radius - PANEL_TRACK_BORDER / 2.0,
+                PANEL_TRACK_BORDER,
+                look::color(&theme, ColorRole::PanelTrackBorder, &look_state),
+            );
+        }
         let (from, to) = self.run(size.width, knob, direction);
         let centre = from + (to - from) * self.fraction();
         // the level style fills to the knob's far edge, the regular one to its centre
-        let reach = if self.style == SliderStyle::Level {
+        let reach = if self.style != SliderStyle::Regular {
             knob / 2.0
         } else {
             0.0
@@ -302,12 +319,13 @@ impl<M: 'static> Widget<M> for Slider<M> {
         };
         // a disabled track shows no fill, so it never reads lighter than the empty part; the knob shows the value
         if self.enabled {
-            look::fill(
-                cx,
-                filled,
-                radius,
-                look::color(&theme, ColorRole::ControlFill, &filled_state),
-            );
+            let fill = match self.style {
+                SliderStyle::PanelLevel(_) => {
+                    look::color(&theme, ColorRole::SwitchThumb, &look_state)
+                }
+                _ => look::color(&theme, ColorRole::ControlFill, &filled_state),
+            };
+            look::fill(cx, filled, radius, fill);
         }
         if self.ticks >= 2 && self.style == SliderStyle::Regular {
             let dot = look::color(&theme, ColorRole::SecondaryText, &look_state);
@@ -320,6 +338,22 @@ impl<M: 'static> Widget<M> for Slider<M> {
                     TICK_DOT,
                 );
                 look::fill(cx, at, TICK_DOT / 2.0, dot);
+            }
+        }
+        if let SliderStyle::PanelLevel(name) = self.style {
+            let x = match direction {
+                LayoutDirection::Ltr => 0.0,
+                LayoutDirection::Rtl => size.width - track_height,
+            };
+            let area = Rect::new(x, track.min_y(), track_height, track_height);
+            // the fill reaches past the symbol at every value
+            let role = if self.enabled {
+                ColorRole::SwitchThumbGlyph
+            } else {
+                ColorRole::DisabledControlText
+            };
+            if let Some(color) = look::color(&theme, role, &look_state) {
+                symbol(cx, name, LEVEL_SYMBOL, color, false, area);
             }
         }
         let thumb = Rect::new(centre - knob / 2.0, mid - knob / 2.0, knob, knob);

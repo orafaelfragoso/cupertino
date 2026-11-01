@@ -50,11 +50,12 @@ use smithay::wayland::shell::xdg::{
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::wayland::xdg_activation::{XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData};
+use smithay::wayland::xdg_toplevel_icon::XdgToplevelIconHandler;
 use smithay::{
     delegate_compositor, delegate_cursor_shape, delegate_data_device, delegate_dmabuf, delegate_drm_syncobj, delegate_foreign_toplevel_list,
     delegate_fractional_scale, delegate_layer_shell, delegate_output, delegate_pointer_gestures, delegate_presentation,
     delegate_primary_selection, delegate_relative_pointer, delegate_seat, delegate_shm, delegate_single_pixel_buffer, delegate_viewporter, delegate_xdg_activation,
-    delegate_xdg_decoration, delegate_xdg_dialog, delegate_xdg_shell,
+    delegate_xdg_decoration, delegate_xdg_dialog, delegate_xdg_shell, delegate_xdg_toplevel_icon,
 };
 
 use crate::acquire_waits::{self, Admission, Kind};
@@ -475,6 +476,9 @@ impl ForeignToplevelListHandler for Cupertino {
     }
 }
 delegate_foreign_toplevel_list!(Cupertino);
+
+impl XdgToplevelIconHandler for Cupertino {}
+delegate_xdg_toplevel_icon!(Cupertino);
 
 /// What the server decided about an activation token when it was made: its creation time on the
 /// model clock and whether it may activate at all (made by the server, or by a client for an input

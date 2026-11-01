@@ -41,6 +41,7 @@ impl Application for Mailboxes {
             scroll: *scroll,
             selection: Selection::default(),
             multiple: false,
+            initial: false,
             row: Box::new(|index, selected| {
                 let (key, text) = BADGES[index];
                 let badge = Badge {

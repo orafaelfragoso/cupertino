@@ -26,7 +26,7 @@ outside one.
 | `portals.backend` | `cupertino.portal` is installed and lists ScreenCast |
 | `portals.conf` | the first `cupertino-portals.conf` xdg-desktop-portal reads (user, `/etc`, `/usr/share`) sends ScreenCast to `cupertino` |
 | `portals.service` | `xdg-desktop-portal.service` (user) is active; in a session only |
-| `services.login`, `services.network`, `services.power`, `services.bluetooth` | `cupertino-login`, `cupertino-netd`, `cupertino-powerd`, `cupertino-btd` (system): `ok` active, `fail` failed, `warn` inactive or not installed, `skip` when systemd cannot be asked |
+| `services.login`, `services.network`, `services.power`, `services.bluetooth` | `cupertino-login`, `cupertino-netd`, `cupertino-powerd`, `cupertino-btd` (system): `ok` active, `fail` failed, `warn` inactive or not installed, `skip` when systemd cannot be asked. `cupertino-netd` and `cupertino-btd` are also `ok` when disabled and inactive while `NetworkManager.service` or `bluetooth.service` is active, which does their job |
 | `services.session_target`, `services.pipewire` | `cupertino-session.target` and `pipewire.service` (user); in a session only |
 | `crash.last` | the last end in `session.log`: `warn` when it was not a normal end or a stop by the session; facts: how many ended badly, the last bad end, and the first panic or fatal-signal line of `server.log` and `server.log.1` |
 | `logs.paths` | where `session.log`, `server.log` and `server.log.1` are, with their sizes, and the journal unit |

@@ -1743,6 +1743,7 @@ dependencies = [
  "cupertino-ui-theme",
  "proptest",
  "rustix 1.1.5",
+ "tracing",
 ]
 
 [[package]]

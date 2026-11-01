@@ -3,11 +3,11 @@ mod support;
 use cupertino_geometry::{Insets, Rect};
 use cupertino_ui_controls::{Stack, Text, TextRole};
 use cupertino_ui_core::{Application, Command, Element, Role, Window};
-use cupertino_ui_layout::{Align, Axis};
+use cupertino_ui_layout::{Align, Axis, LayoutDirection};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
-use cupertino_ui_text::{AttributedText, TextStyle};
+use cupertino_ui_text::{AttributedText, ParagraphStyle, TextStyle};
 use cupertino_ui_theme::{ColorRole, InteractionVariant};
-use support::{color, label_width, window, Harness};
+use support::{color, label_width, text, window, Harness};
 
 const LONG: &str = "A sentence long enough to need more than one line in a narrow window";
 
@@ -64,6 +64,43 @@ fn wrapping_text_breaks_within_the_width_it_is_offered() {
     let h = Harness::<Texts>::new();
     assert!(h.rect("wrapped").width() <= 200.0);
     assert!(h.rect("wrapped").height() > h.rect("one-line").height());
+}
+
+/// Where each line of the wrapped text starts and ends, from the left of its box.
+fn wrapped_lines(direction: LayoutDirection) -> (f64, Vec<(f64, f64)>) {
+    let h = Harness::<Texts>::with_direction(direction);
+    let width = h.rect("wrapped").width();
+    let starts = h.ops("wrapped").into_iter().filter_map(|op| match op {
+        PaintOp::Glyphs { origin, .. } => Some(origin.x),
+        _ => None,
+    });
+    let layout = text()
+        .paragraph(
+            &AttributedText::plain(LONG, TextStyle::new(13.0)),
+            &ParagraphStyle::default(),
+        )
+        .unwrap()
+        .layout(Some(width as f32));
+    let lines = layout
+        .lines()
+        .iter()
+        .zip(starts)
+        .map(|(line, x)| (x, x + label_width(LONG[line.range.0.clone()].trim_end())))
+        .collect();
+    (width, lines)
+}
+
+#[test]
+fn wrapped_text_lines_up_with_the_leading_edge_of_its_layout() {
+    let (width, ltr) = wrapped_lines(LayoutDirection::Ltr);
+    assert!(ltr.len() > 1);
+    assert!(ltr.iter().all(|&(start, _)| start == 0.0), "{ltr:?}");
+    let (_, rtl) = wrapped_lines(LayoutDirection::Rtl);
+    assert_eq!(rtl.len(), ltr.len());
+    assert!(
+        rtl.iter().all(|&(_, end)| (end - width).abs() < 1e-3),
+        "{width} {rtl:?}"
+    );
 }
 
 #[test]

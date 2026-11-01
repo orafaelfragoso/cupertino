@@ -1,0 +1,4 @@
+MAJOR=not-a-number
+MINOR=127
+DEVNAME=dri/renderD127
+DEVTYPE=drm_minor

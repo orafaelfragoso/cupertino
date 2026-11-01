@@ -123,7 +123,7 @@ fn primary_gpu_without_boot_vga_is_the_first_card() {
 }
 
 #[test]
-fn a_card_knows_its_render_node() {
+fn a_card_knows_its_render_node_past_one_it_cannot_read() {
     let nodes: Vec<Option<PathBuf>> = gpus(&sysfs())
         .unwrap()
         .into_iter()

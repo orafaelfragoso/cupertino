@@ -3,7 +3,7 @@
 #
 #   packaging/ci/test-sign-release.sh
 #
-# Checks: no key, a key with the master secret, and an empty URL each sign nothing and fail; a signing subkey alone
+# Checks: no key, a key with the master secret, a second full key next to the subkey, and an empty URL each sign nothing and fail; a signing subkey alone
 # produces a tree whose database, package and SHA256SUMS signatures verify under the throwaway master.
 set -euo pipefail
 
@@ -18,6 +18,9 @@ master=$(gpg --batch --with-colons --list-keys | awk -F: '$1 == "fpr" { print $1
 gen --quick-add-key "$master" ed25519 sign 1d
 gen --export-secret-subkeys --armor "$master" >"$work/subkey.asc"
 gen --export-secret-keys --armor "$master" >"$work/master.asc"
+gen --quick-gen-key 'Other <o@example.invalid>' ed25519 cert 1d
+other=$(gpg --batch --with-colons --list-keys Other | awk -F: '$1 == "fpr" { print $10; exit }')
+gen --export-secret-keys --armor "$other" >"$work/other.asc"
 
 pass=0
 ok() { pass=$((pass + 1)); echo "ok   $*"; }
@@ -39,6 +42,7 @@ refused() {
 
 refused 'no signing key' "$work/o1" env CUPERTINO_SIGNING_KEY= "$S" "$work/pkgs" "$url" "$work/o1"
 refused 'a key that holds the master secret' "$work/o2" env CUPERTINO_SIGNING_KEY="$(cat "$work/master.asc")" "$S" "$work/pkgs" "$url" "$work/o2"
+refused 'a second full key next to the subkey' "$work/o6" env CUPERTINO_SIGNING_KEY="$(cat "$work/subkey.asc" "$work/other.asc")" "$S" "$work/pkgs" "$url" "$work/o6"
 refused 'an empty URL' "$work/o3" env CUPERTINO_SIGNING_KEY="$(cat "$work/subkey.asc")" "$S" "$work/pkgs" '' "$work/o3"
 refused 'a key that is not a key' "$work/o4" env CUPERTINO_SIGNING_KEY=garbage "$S" "$work/pkgs" "$url" "$work/o4"
 

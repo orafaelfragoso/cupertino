@@ -3,8 +3,9 @@
 # sign the Arch packages and write the signed repository tree (packaging/keyring/build-repo), and create a draft release
 # with SHA256SUMS (a release candidate is marked as a prerelease). The `release` environment only admits v* tags; it has no
 # required reviewers (not available for a private repository on this plan). The gate is that this workflow creates a draft:
-# publishing it is a manual step in the GitHub UI. The `sign` job holds the signing subkey (secret CUPERTINO_SIGNING_KEY of the
-# `release` environment, never the master) and has read-only permissions; without the secret or the variable
+# publishing it is a manual step in the GitHub UI. The `sign` job runs only after `source` has checked that the tag is on main, and holds
+# the signing subkey (secret CUPERTINO_SIGNING_KEY of the `signing` environment, v* tags only; never the master, and not in
+# `release`, so `publish` never has it) and has read-only permissions; without the secret or the variable
 # CUPERTINO_REPO_URL (the https base of the repository) it fails, and then no draft is created.
 name: Release
 on:
@@ -91,10 +92,10 @@ jobs:
           if-no-files-found: error
 
   sign:
-    needs: packages
+    needs: [source, packages]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    environment: release
+    environment: signing
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

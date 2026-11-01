@@ -25,48 +25,108 @@ pub struct Chooser {
     ask: Ask,
     picker: Picker,
     filter: Option<usize>,
+    /// The indices of the picker's entries the filter lets through, worked out once for each listing and filter.
+    shown: Vec<usize>,
     selection: BTreeSet<PathBuf>,
     name: String,
     choices: Vec<String>,
 }
 
-/// Whether `name` matches the shell glob `pattern` (`*`, `?` and `[…]`), without regard to case.
-pub fn glob(pattern: &str, name: &str) -> bool {
-    fn at(p: &[char], n: &[char]) -> bool {
-        match p.split_first() {
-            None => n.is_empty(),
-            Some(('*', rest)) => (0..=n.len()).any(|skip| at(rest, &n[skip..])),
-            Some(('?', rest)) => !n.is_empty() && at(rest, &n[1..]),
-            Some(('[', rest)) => {
-                let Some(close) = rest.iter().skip(1).position(|&c| c == ']').map(|i| i + 1) else {
-                    return n.first() == Some(&'[') && at(rest, &n[1..]);
-                };
-                let Some((&c, after)) = n.split_first() else {
-                    return false;
-                };
-                let (negated, set) = match rest[..close].split_first() {
-                    Some(('!' | '^', set)) => (true, set),
-                    _ => (false, &rest[..close]),
-                };
-                let mut hit = false;
-                let mut i = 0;
-                while i < set.len() {
-                    if i + 2 < set.len() && set[i + 1] == '-' {
-                        hit |= (set[i]..=set[i + 2]).contains(&c);
-                        i += 3;
-                    } else {
-                        hit |= set[i] == c;
-                        i += 1;
-                    }
-                }
-                hit != negated && at(&rest[close + 1..], after)
+/// One piece of a glob: each but [`Token::Star`] matches exactly one character.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Token {
+    Star,
+    Any,
+    Char(char),
+    Set {
+        negated: bool,
+        items: Vec<(char, char)>,
+    },
+}
+
+impl Token {
+    fn takes(&self, c: char) -> bool {
+        match self {
+            Token::Star | Token::Any => true,
+            Token::Char(p) => *p == c,
+            Token::Set { negated, items } => {
+                items.iter().any(|(lo, hi)| (*lo..=*hi).contains(&c)) != *negated
             }
-            Some((&c, rest)) => n.first() == Some(&c) && at(rest, &n[1..]),
         }
     }
+}
+
+/// The tokens of `pattern`, a run of `*` as one; a `[` without its `]` is a literal.
+fn tokens(pattern: &[char]) -> Vec<Token> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < pattern.len() {
+        let token = match pattern[i] {
+            '*' => Token::Star,
+            '?' => Token::Any,
+            '[' => match pattern[i + 1..].iter().skip(1).position(|&c| c == ']') {
+                Some(close) => {
+                    let body = &pattern[i + 1..i + 2 + close];
+                    i += 2 + close;
+                    let (negated, body) = match body.split_first() {
+                        Some(('!' | '^', rest)) => (true, rest),
+                        _ => (false, body),
+                    };
+                    let mut items = Vec::new();
+                    let mut j = 0;
+                    while j < body.len() {
+                        if j + 2 < body.len() && body[j + 1] == '-' {
+                            items.push((body[j], body[j + 2]));
+                            j += 3;
+                        } else {
+                            items.push((body[j], body[j]));
+                            j += 1;
+                        }
+                    }
+                    Token::Set { negated, items }
+                }
+                None => Token::Char('['),
+            },
+            c => Token::Char(c),
+        };
+        i += 1;
+        if !(token == Token::Star && out.last() == Some(&Token::Star)) {
+            out.push(token);
+        }
+    }
+    out
+}
+
+/// Whether `name` matches the shell glob `pattern` (`*`, `?` and `[…]`), without regard to case. It takes at most
+/// pattern × name steps: a mismatch goes back only to the latest `*`, which is enough because every other token takes
+/// exactly one character.
+pub fn glob(pattern: &str, name: &str) -> bool {
     let pattern: Vec<char> = pattern.to_lowercase().chars().collect();
+    let tokens = tokens(&pattern);
     let name: Vec<char> = name.to_lowercase().chars().collect();
-    at(&pattern, &name)
+    let (mut t, mut n) = (0, 0);
+    let mut star: Option<(usize, usize)> = None;
+    while n < name.len() {
+        match tokens.get(t) {
+            Some(Token::Star) => {
+                star = Some((t, n));
+                t += 1;
+            }
+            Some(token) if token.takes(name[n]) => {
+                t += 1;
+                n += 1;
+            }
+            _ => match star {
+                Some((st, sn)) => {
+                    star = Some((st, sn + 1));
+                    t = st + 1;
+                    n = sn + 1;
+                }
+                None => return false,
+            },
+        }
+    }
+    tokens[t..].iter().all(|token| *token == Token::Star)
 }
 
 /// Whether the file `name` matches the MIME type `mime` (`image/png`, `image/*` or `*/*`) by its extension.
@@ -150,10 +210,21 @@ impl Chooser {
             picker: Picker::new(&start, mode),
             ask,
             filter,
+            shown: Vec::new(),
             selection: BTreeSet::new(),
             name,
             choices,
         }
+    }
+
+    fn refilter(&mut self) {
+        let filter = self.filter.and_then(|i| self.ask.filters.get(i));
+        self.shown = (self.picker.entries().iter().enumerate())
+            .filter(|(_, e)| e.is_dir || filter.is_none_or(|f| f.matches(&e.name)))
+            .map(|(i, _)| i)
+            .collect();
+        let shown: BTreeSet<PathBuf> = self.entries().iter().map(|e| e.path.clone()).collect();
+        self.selection.retain(|p| shown.contains(p));
     }
 
     pub fn ask(&self) -> &Ask {
@@ -167,12 +238,8 @@ impl Chooser {
 
     /// The rows shown: the folders, and the files the filter lets through.
     pub fn entries(&self) -> Vec<&Entry> {
-        let filter = self.filter.and_then(|i| self.ask.filters.get(i));
-        self.picker
-            .entries()
-            .iter()
-            .filter(|e| e.is_dir || filter.is_none_or(|f| f.matches(&e.name)))
-            .collect()
+        let entries = self.picker.entries();
+        self.shown.iter().filter_map(|&i| entries.get(i)).collect()
     }
 
     pub fn filter(&self) -> Option<usize> {
@@ -183,8 +250,7 @@ impl Chooser {
     pub fn set_filter(&mut self, index: usize) {
         if index < self.ask.filters.len() {
             self.filter = Some(index);
-            let shown: BTreeSet<PathBuf> = self.entries().iter().map(|e| e.path.clone()).collect();
-            self.selection.retain(|p| shown.contains(p));
+            self.refilter();
         }
     }
 
@@ -272,8 +338,11 @@ impl Chooser {
     /// Take a worker's listing; the selection empties when the folder changes.
     pub fn apply(&mut self, listing: Listing) {
         let before = self.picker.dir().to_path_buf();
-        if self.picker.apply(listing) == Outcome::Changed && self.picker.dir() != before {
-            self.selection.clear();
+        if self.picker.apply(listing) == Outcome::Changed {
+            if self.picker.dir() != before {
+                self.selection.clear();
+            }
+            self.refilter();
         }
     }
 
@@ -412,6 +481,16 @@ mod tests {
             Accept::Answer(Answer::Chosen { paths, .. }) => paths,
             other => panic!("expected an answer, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_glob_with_many_stars_answers_in_time() {
+        let pattern = format!("{}x", "*?".repeat(16));
+        assert!(!glob(&pattern, &"a".repeat(255)));
+        assert!(glob(&pattern, &format!("{}x", "a".repeat(254))));
+        assert!(glob("**a**b**", "xaxxbx"));
+        assert!(glob("[]x]", "]"));
+        assert!(glob("a[", "a["));
     }
 
     #[test]

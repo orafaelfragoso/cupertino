@@ -259,6 +259,21 @@ fn text(what: &str, value: String) -> Result<String, PortalError> {
     Ok(value)
 }
 
+/// App text the dialog shows, without control or bidirectional-override characters, so it cannot reorder or hide
+/// what the trusted window says around it.
+fn display_text(what: &str, value: String) -> Result<String, PortalError> {
+    Ok(text(what, value)?
+        .chars()
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(
+                    c,
+                    '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+                )
+        })
+        .collect())
+}
+
 fn option<T>(options: &Options, key: &str) -> Result<Option<T>, PortalError>
 where
     T: TryFrom<OwnedValue>,
@@ -304,7 +319,7 @@ fn filter((name, patterns): WireFilter) -> Result<Filter, PortalError> {
         )));
     }
     Ok(Filter {
-        name: text("a filter name", name)?,
+        name: display_text("a filter name", name)?,
         patterns: patterns
             .into_iter()
             .map(|(kind, pattern)| {
@@ -327,10 +342,15 @@ fn choice((id, label, options, initial): WireChoice) -> Result<Choice, PortalErr
     }
     Ok(Choice {
         id: text("a choice id", id)?,
-        label: text("a choice label", label)?,
+        label: display_text("a choice label", label)?,
         options: options
             .into_iter()
-            .map(|(id, label)| Ok((text("an option id", id)?, text("an option label", label)?)))
+            .map(|(id, label)| {
+                Ok((
+                    text("an option id", id)?,
+                    display_text("an option label", label)?,
+                ))
+            })
             .collect::<Result<_, PortalError>>()?,
         initial: text("a choice's initial value", initial)?,
     })
@@ -379,9 +399,9 @@ pub fn parse(
         kind,
         app_id: text("app_id", app_id)?,
         parent_window: text("parent_window", parent_window)?,
-        title: text("title", title)?,
+        title: display_text("title", title)?,
         accept_label: option::<String>(options, "accept_label")?
-            .map(|label| text("accept_label", label))
+            .map(|label| display_text("accept_label", label))
             .transpose()?,
         modal: option(options, "modal")?.unwrap_or(true),
         multiple: option(options, "multiple")?.unwrap_or(false) && kind == Kind::Open,
@@ -494,6 +514,19 @@ fn results(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shown_app_text_loses_control_and_direction_override_characters() {
+        assert_eq!(
+            display_text(
+                "title",
+                "Open\u{202e}txt.exe\u{2066}\n\u{7}Report".to_owned()
+            )
+            .unwrap(),
+            "Opentxt.exeReport"
+        );
+        assert!(display_text("title", "x".repeat(MAX_TEXT + 1)).is_err());
+    }
 
     #[test]
     fn a_path_becomes_a_file_uri_with_its_reserved_and_raw_bytes_escaped() {

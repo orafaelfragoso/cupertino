@@ -214,8 +214,9 @@ impl<M: 'static> From<ListView<M>> for Element<M> {
             selection: list.selection,
             multiple: list.multiple,
             row: list.row,
+            key: list.key,
             type_select: list.type_select,
-            on_select: list.on_select,
+            on_select: list.on_select.map(Rc::new),
             on_activate: list.on_activate,
             outline: None,
         };
@@ -240,8 +241,9 @@ impl<M: 'static> From<TreeView<M>> for Element<M> {
             selection: tree.selection,
             multiple: tree.multiple,
             row: tree.row,
+            key: None,
             type_select: tree.type_select,
-            on_select: tree.on_select,
+            on_select: tree.on_select.map(Rc::new),
             on_activate: tree.on_activate,
             outline: Some(Rc::new(Outline {
                 item: tree.item,
@@ -287,8 +289,9 @@ impl<M: 'static> From<TableView<M>> for Element<M> {
             selection: table.selection,
             multiple: table.multiple,
             row,
+            key: None,
             type_select: table.type_select,
-            on_select: table.on_select,
+            on_select: table.on_select.map(Rc::new),
             on_activate: table.on_activate,
             outline: None,
         };
@@ -337,11 +340,15 @@ struct Rows<M> {
     selection: Selection,
     multiple: bool,
     row: Box<dyn Fn(usize, bool) -> Element<M>>,
+    key: Option<Box<dyn Fn(usize) -> Key>>,
     type_select: Option<Box<dyn Fn(usize) -> String>>,
-    on_select: Option<Handler<Selection, M>>,
+    on_select: Option<Rc<Handler<Selection, M>>>,
     on_activate: Option<Handler<usize, M>>,
     outline: Option<Rc<Outline<M>>>,
 }
+
+/// What an assistive Click on row `index` reports: the row selected alone, unless it already is.
+type Pick<M> = Rc<dyn Fn(usize) -> Option<M>>;
 
 /// The node state of a list. Opaque.
 #[derive(Clone, Debug, Default)]
@@ -352,6 +359,22 @@ pub struct ListState {
 }
 
 impl<M: 'static> Rows<M> {
+    fn row_key(&self, index: usize) -> Key {
+        self.key
+            .as_ref()
+            .map_or(Key::Int(index as u64), |key| key(index))
+    }
+
+    fn pick(&self) -> Option<Pick<M>> {
+        let on_select = Rc::clone(self.on_select.as_ref()?);
+        let selection = self.selection.clone();
+        Some(Rc::new(move |index| {
+            let mut next = selection.clone();
+            next.select_only(index);
+            (next != selection).then(|| on_select(next))
+        }))
+    }
+
     /// The row the keyboard is on: the selection's cursor, else the first row in view.
     fn cursor(&self) -> Option<usize> {
         if self.count == 0 {
@@ -410,7 +433,7 @@ impl<M: 'static> Rows<M> {
             next.select_only(index);
         }
         self.select(next, cx);
-        cx.focus_item(FocusTarget::Key(Key::Int(index as u64)));
+        cx.focus_item(FocusTarget::Key(self.row_key(index)));
     }
 
     fn key(&self, state: &mut ListState, key: &KeyEvent, cx: &mut EventCx<'_, M>) -> Propagation {
@@ -561,6 +584,7 @@ impl<M: 'static> Widget<M> for Rows<M> {
 
     fn take_children(&mut self) -> Vec<Element<M>> {
         let cursor = self.cursor();
+        let pick = (self.kind == Kind::List).then(|| self.pick()).flatten();
         self.built()
             .into_iter()
             .map(|index| {
@@ -583,9 +607,10 @@ impl<M: 'static> Widget<M> for Rows<M> {
                     cursor: cursor == Some(index),
                     item,
                     outline: self.outline.clone(),
+                    pick: pick.clone(),
                     content,
                 })
-                .key(Key::Int(index as u64))
+                .key(self.row_key(index))
             })
             .collect()
     }
@@ -673,6 +698,8 @@ struct ListRow<M> {
     cursor: bool,
     item: Option<TreeItem>,
     outline: Option<Rc<Outline<M>>>,
+    /// A list row's assistive Click.
+    pick: Option<Pick<M>>,
     content: Vec<Element<M>>,
 }
 
@@ -720,9 +747,21 @@ impl<M: 'static> Widget<M> for ListRow<M> {
     }
 
     /// A press focuses the row without showing the ring or scrolling, then goes on to the list, which selects.
-    /// Assistive technology opens and closes a tree row with its Expand and Collapse actions.
+    /// Assistive technology selects a list row with its Click action, and opens and closes a tree row with its Expand
+    /// and Collapse actions.
     fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         match event {
+            Event::Action(request)
+                if cx.node() == cx.target() && request.action == Action::Click =>
+            {
+                let Some(pick) = &self.pick else {
+                    return Propagation::Continue;
+                };
+                if let Some(message) = pick(self.index) {
+                    cx.emit(message);
+                }
+                return Propagation::Stop;
+            }
             Event::Action(request) if cx.node() == cx.target() => {
                 let (Some(outline), Some(expanded)) =
                     (&self.outline, self.item.and_then(|i| i.expanded))
@@ -808,6 +847,9 @@ impl<M: 'static> Widget<M> for ListRow<M> {
                 }
             }
             None => cx.item_index(self.index),
+        }
+        if self.pick.is_some() {
+            cx.action(Action::Click);
         }
         cx.roving_item();
         if self.cursor {

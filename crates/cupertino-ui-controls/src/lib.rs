@@ -428,6 +428,9 @@ pub struct ListView<M> {
     pub multiple: bool,
     /// Row `index`'s content; `selected` asks for the selected text colours ([`Text::selected`]).
     pub row: Box<dyn Fn(usize, bool) -> Element<M>>,
+    /// Row `index`'s item's identity, unique in the list: its focus and accessible object follow the item while rows
+    /// come and go around it. Without it a row is known by its index.
+    pub key: Option<Box<dyn Fn(usize) -> Key>>,
     /// Row `index`'s text for typing to select; without it typing selects nothing.
     pub type_select: Option<Box<dyn Fn(usize) -> String>>,
     pub on_scroll: Handler<ScrollState, M>,

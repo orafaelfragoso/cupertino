@@ -67,6 +67,7 @@ impl Application for Mailboxes {
                     ],
                 })
             }),
+            key: None,
             type_select: None,
             on_scroll: Box::new(|s| s),
             on_select: None,

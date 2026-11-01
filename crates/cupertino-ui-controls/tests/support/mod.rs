@@ -6,7 +6,7 @@
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_core::{
     AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, Action, ActionRequest,
-    Application, CommandRegistry, Element, Environment, FrameSnapshot, Icons, Key,
+    Application, CommandRegistry, Element, Environment, FrameSnapshot, Icons, Key, NodeId,
     PlaceholderIcons, Runtime, RuntimeOptions, Window, WindowBackground, WindowKey,
 };
 use cupertino_ui_layout::LayoutDirection;
@@ -453,6 +453,11 @@ impl<A: Application> Harness<A> {
     /// Asks for `action` on the node keyed `key` as a screen reader does, and wakes the application for it.
     pub fn ask(&mut self, key: &Key, action: Action) {
         let target = self.rt.find(self.window, key).unwrap();
+        self.ask_node(target, action);
+    }
+
+    /// Asks for `action` on the object `target`, as a screen reader holding it does.
+    pub fn ask_node(&mut self, target: NodeId, action: Action) {
         self.asked
             .as_ref()
             .expect("an assistive harness")

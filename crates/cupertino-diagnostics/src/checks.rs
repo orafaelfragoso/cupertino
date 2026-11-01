@@ -399,12 +399,13 @@ fn unit(
             format!("{manager} cannot be asked about {name}"),
         );
     };
-    // an installation may leave a Cupertino daemon off and let the distribution's service do its job
+    // an installation may leave a Cupertino daemon off and let the distribution's service do its job; that service may
+    // be enabled yet stopped by a unit condition, as BlueZ is on a machine without a Bluetooth adapter
     if let Some((service, by)) = replaced_by {
         let replacement = (sources.unit_state)(scope, service);
         if unit.active == "inactive"
-            && unit.file == "disabled"
-            && replacement.is_some_and(|r| r.active == "active")
+            && matches!(unit.file.as_str(), "disabled" | "masked")
+            && replacement.is_some_and(|r| r.active == "active" || r.file == "enabled")
         {
             return Check::new(
                 id,

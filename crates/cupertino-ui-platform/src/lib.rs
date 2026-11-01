@@ -3,8 +3,10 @@
 //! the runtime checks, so a missing protocol degrades a feature instead of failing.
 
 use cupertino_geometry::{Point, Rect, Size};
+use cupertino_menu_model::{ActionName, MenuBar};
 use cupertino_ui_render::{CpuFrame, RenderFrameId};
 use cupertino_ui_text::{ImeEvent, TextInputState};
+use std::collections::BTreeSet;
 use std::task::Waker;
 use std::time::Duration;
 
@@ -126,6 +128,17 @@ pub enum WindowRequest {
     /// Puts a compositor material under the whole window, or takes it away with `None`. Needs
     /// [`Capabilities::app_effects`].
     Backdrop(Option<Backdrop>),
+    /// Publishes a toplevel's menus to the desktop's menu bar, or withdraws them with `None`. A platform without a
+    /// desktop menu bar takes the request and shows nothing.
+    Menus(Option<MenuDescription>),
+}
+
+/// A window's menus as the desktop's menu bar shows them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MenuDescription {
+    pub bar: MenuBar,
+    /// Items shown but not available now.
+    pub disabled: BTreeSet<ActionName>,
 }
 
 /// A material of the theme data (`materials.json`) the compositor draws under a window, the window's size with its
@@ -324,6 +337,8 @@ pub enum WindowEvent {
     Discarded {
         frame: RenderFrameId,
     },
+    /// The user chose an item of the window's menus in the desktop's menu bar.
+    MenuActivated(ActionName),
 }
 
 #[derive(Clone, Debug, PartialEq)]

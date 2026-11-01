@@ -36,6 +36,7 @@ impl<M: Clone + 'static> WindowGroup<M> {
                     background: window.background,
                     content: window.content,
                     popup: None,
+                    menus: None,
                 }
             })
             .collect()

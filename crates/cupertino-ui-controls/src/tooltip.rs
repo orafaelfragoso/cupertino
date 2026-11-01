@@ -116,6 +116,7 @@ impl<M: Clone + 'static> Tooltip<M> {
                 grab: false,
                 on_dismiss: hide,
             }),
+            menus: None,
         }
     }
 }

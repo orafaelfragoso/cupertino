@@ -1,22 +1,24 @@
 //! CupertinoKit's [`WindowSystem`] on the transport: one [`Connection`], its windows and popups, and the renderer's
 //! frames copied into the transport's buffers.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Wake, Waker};
 use std::time::{Duration, Instant};
 
 use cupertino_geometry::{Rect, Size};
+use cupertino_menu_model::{ActionName, Command, Entry, Menu, MenuBar};
 use cupertino_modifiers::Profile;
 use cupertino_protocol_app::{
     AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop as Material,
 };
+use cupertino_ui_menus::WindowMenus;
 use cupertino_ui_platform::{
     ActivationRequest, Backdrop, Capabilities, ClipboardData, ClipboardKind, ClipboardToken,
-    ConfigureId, CursorShape, KeyEvent, Keysym, PlatformError, PlatformEvent, PopupSpec,
-    PresentOutcome, SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec,
-    WindowSystem,
+    ConfigureId, CursorShape, KeyEvent, Keysym, MenuDescription, PlatformError, PlatformEvent,
+    PopupSpec, PresentOutcome, SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest,
+    WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{CpuFrame, RenderFrameId};
 use cupertino_ui_text::TextInputState;
@@ -66,6 +68,24 @@ struct Window {
     /// Presented frames the compositor has not yet said it showed or discarded, oldest first.
     in_flight: VecDeque<RenderFrameId>,
     backdrop: Option<ShownBackdrop>,
+    /// A toplevel's application id; empty for a popup.
+    app_id: String,
+    configured: bool,
+    menus: Option<ShownMenus>,
+}
+
+/// A toplevel's menus as the runtime asked for them, and their publication.
+struct ShownMenus {
+    description: MenuDescription,
+    published: Published,
+}
+
+enum Published {
+    /// The window waits for its first configure.
+    Waiting,
+    Shown(WindowMenus),
+    /// The desktop takes no menus: no app effects at version 2, or no session bus.
+    Refused,
 }
 
 /// The material under a window, shaped to the window's size with the next present.
@@ -256,8 +276,80 @@ impl WaylandWindowSystem {
             frame_wanted: false,
             in_flight: VecDeque::new(),
             backdrop: None,
+            app_id: String::new(),
+            configured: false,
+            menus: None,
         });
         id
+    }
+
+    fn set_menus(
+        &mut self,
+        window: WindowId,
+        description: Option<MenuDescription>,
+    ) -> Result<(), PlatformError> {
+        self.toplevel(window)?;
+        let w = self.window_mut(window)?;
+        let Some(description) = description else {
+            w.menus = None;
+            return Ok(());
+        };
+        match &mut w.menus {
+            Some(ShownMenus {
+                description: old,
+                published: Published::Shown(menus),
+            }) => {
+                if old.bar != description.bar {
+                    menus.update(&description.bar);
+                }
+                set_enabled(menus, &old.disabled, &description);
+                *old = description;
+            }
+            Some(shown) => shown.description = description,
+            None => {
+                w.menus = Some(ShownMenus {
+                    description,
+                    published: Published::Waiting,
+                })
+            }
+        }
+        self.publish_menus(window)
+    }
+
+    /// Publish the menus a configured window waits to show.
+    fn publish_menus(&mut self, window: WindowId) -> Result<(), PlatformError> {
+        let w = self.window(window)?;
+        let Some(ShownMenus {
+            description,
+            published: Published::Waiting,
+        }) = &w.menus
+        else {
+            return Ok(());
+        };
+        if !w.configured {
+            return Ok(());
+        }
+        let menus = self.effects.as_ref().and_then(|(effects, _)| {
+            WindowMenus::publish(
+                &self.conn,
+                effects,
+                w.surface,
+                &w.app_id,
+                Box::new(self.profile.clone()),
+                &description.bar,
+            )
+        });
+        let published = match menus {
+            Some(menus) => {
+                set_enabled(&menus, &BTreeSet::new(), description);
+                Published::Shown(menus)
+            }
+            None => Published::Refused,
+        };
+        if let Some(shown) = &mut self.window_mut(window)?.menus {
+            shown.published = published;
+        }
+        Ok(())
     }
 
     fn set_backdrop(
@@ -352,6 +444,9 @@ impl WaylandWindowSystem {
                 };
                 if let Some(size) = configure.size {
                     self.windows[i].size = size;
+                }
+                if !std::mem::replace(&mut self.windows[i].configured, true) {
+                    let _ = self.publish_menus(self.windows[i].id);
                 }
                 due = self.resume(i);
                 (i, WindowEvent::Configure(convert::configure(&configure)))
@@ -484,7 +579,20 @@ impl WaylandWindowSystem {
                     Some(event) if apply_appearance(&mut self.appearance, event) => {
                         out.push(PlatformEvent::Appearance(self.appearance));
                     }
-                    _ => {}
+                    Some(event) => {
+                        for w in &mut self.windows {
+                            if let Some(ShownMenus {
+                                published: Published::Shown(menus),
+                                ..
+                            }) = &mut w.menus
+                            {
+                                if menus.handle(event) {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    None => {}
                 }
                 return;
             }
@@ -561,6 +669,7 @@ impl WindowSystem for WaylandWindowSystem {
         );
         let w = self.window_mut(id)?;
         (w.min_size, w.max_size) = (spec.min_size, spec.max_size);
+        w.app_id = spec.app_id.clone();
         Ok(id)
     }
 
@@ -586,6 +695,10 @@ impl WindowSystem for WaylandWindowSystem {
         let Ok(surface) = self.window(window).map(|w| w.surface) else {
             return;
         };
+        // the announcement goes before its surface
+        if let Ok(w) = self.window_mut(window) {
+            w.menus = None;
+        }
         // the transport destroys a window's popups with it
         let _ = self.conn.destroy(surface);
         let mut gone = vec![window];
@@ -602,6 +715,7 @@ impl WindowSystem for WaylandWindowSystem {
     fn request(&mut self, window: WindowId, request: WindowRequest) -> Result<(), PlatformError> {
         let result = match request {
             WindowRequest::Backdrop(backdrop) => return self.set_backdrop(window, backdrop),
+            WindowRequest::Menus(menus) => return self.set_menus(window, menus),
             WindowRequest::SetTitle(title) => {
                 let t = self.toplevel(window)?;
                 self.conn.set_title(t, &title)
@@ -790,6 +904,18 @@ impl WindowSystem for WaylandWindowSystem {
         for event in wire {
             self.translate(event, events);
         }
+        for w in &self.windows {
+            if let Some(ShownMenus {
+                published: Published::Shown(menus),
+                ..
+            }) = &w.menus
+            {
+                events.extend(menus.activations().map(|a| PlatformEvent::Window {
+                    window: w.id,
+                    event: WindowEvent::MenuActivated(a.action),
+                }));
+            }
+        }
         for i in 0..self.windows.len() {
             let w = &self.windows[i];
             if w.stalled == Some(Stall::Buffer)
@@ -814,6 +940,35 @@ impl WindowSystem for WaylandWindowSystem {
             woken: Arc::clone(&self.woken),
         }))
     }
+}
+
+/// Bring the published items from `was` disabled to those `now` disables, leaving out what its bar does not show.
+fn set_enabled(menus: &WindowMenus, was: &BTreeSet<ActionName>, now: &MenuDescription) {
+    let shown = actions(&now.bar);
+    for action in was.union(&now.disabled).filter(|a| shown.contains(a)) {
+        menus.set_enabled(action, !now.disabled.contains(action));
+    }
+}
+
+/// The actions of the items `bar` publishes.
+fn actions(bar: &MenuBar) -> BTreeSet<ActionName> {
+    fn walk(menu: &Menu, out: &mut BTreeSet<ActionName>) {
+        for entry in menu.sections.iter().flatten() {
+            match entry {
+                Entry::Item(item) => {
+                    if let Command::Action(action) = &item.command {
+                        out.insert(action.clone());
+                    }
+                }
+                Entry::Submenu(menu) => walk(menu, out),
+            }
+        }
+    }
+    let mut out = BTreeSet::new();
+    for menu in std::iter::once(&bar.app).chain(&bar.menus) {
+        walk(menu, &mut out);
+    }
+    out
 }
 
 /// Copy `damage` of `frame`, and whatever the buffer missed (all of it when that is unknown), into a buffer of `surface`

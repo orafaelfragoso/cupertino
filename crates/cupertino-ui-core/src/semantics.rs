@@ -59,6 +59,8 @@ pub(crate) fn build<M: 'static>(
     let mut fallbacks = Vec::new();
     // Descriptions for the first node with a role under each node that gave one.
     let mut pending: Vec<(NodeId, String)> = Vec::new();
+    // Each node with relations to keyed nodes, resolved once every node is in.
+    let mut keyed = Vec::new();
     // Each entry is a node and its nearest ancestor in the accessibility tree.
     let mut stack = vec![(root, None::<NodeId>)];
     while let Some((id, owner)) = stack.pop() {
@@ -95,6 +97,9 @@ pub(crate) fn build<M: 'static>(
         };
         let next_owner = match role {
             Some(role) => {
+                if !semantics.keyed_relations.is_empty() {
+                    keyed.push((id, std::mem::take(&mut semantics.keyed_relations)));
+                }
                 let value = if semantics.protected {
                     Some(AccessibleValue::Protected)
                 } else {
@@ -164,6 +169,25 @@ pub(crate) fn build<M: 'static>(
             pending.push((id, text));
         }
         stack.extend(node.children.iter().rev().map(|&c| (c, next_owner)));
+    }
+    for (id, relations) in keyed {
+        let path = tree.path(id);
+        for (relation, key) in relations {
+            let target = path.iter().rev().skip(1).find_map(|&ancestor| {
+                tree.get(ancestor)?
+                    .children
+                    .iter()
+                    .copied()
+                    .find(|&c| tree.get(c).is_some_and(|n| n.key.as_ref() == Some(&key)))
+            });
+            if let Some(target) = target.filter(|t| pass.nodes.contains_key(t)) {
+                pass.nodes
+                    .get_mut(&id)
+                    .expect("a node with keyed relations is in the tree")
+                    .relations
+                    .push(relation(target));
+            }
+        }
     }
     // The last first, so an inner fallback that becomes a stop keeps its outer one from becoming one, and the
     // positions of the earlier ones still hold.

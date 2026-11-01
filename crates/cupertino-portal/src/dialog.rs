@@ -752,3 +752,201 @@ fn window(d: &Dialog, places: &[Place]) -> Window<Message> {
         }),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+    use std::sync::Arc;
+
+    use cupertino_assets::BUILTIN_FONT;
+    use cupertino_kit::core::{PlaceholderIcons, RuntimeOptions};
+    use cupertino_kit::geometry::Point;
+    use cupertino_kit::layout::LayoutDirection;
+    use cupertino_kit::platform::{
+        Capabilities, Mods, MouseButton, PointerEvent, Timestamp, WindowEvent, WindowId,
+        WindowStates,
+    };
+    use cupertino_kit::render::{CpuConfig, CpuRenderer};
+    use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
+    use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
+    use cupertino_theme::Theme;
+    use cupertino_ui_test::{ManualClock, TestDriver};
+
+    use super::*;
+    use crate::file_chooser::Ask;
+
+    fn ask(kind: Kind, folder: &std::path::Path) -> Ask {
+        Ask {
+            kind,
+            app_id: "org.example.Editor".to_owned(),
+            parent_window: String::new(),
+            title: "Export".to_owned(),
+            accept_label: None,
+            modal: true,
+            multiple: false,
+            directory: false,
+            filters: Vec::new(),
+            current_filter: None,
+            choices: Vec::new(),
+            current_name: Some("new.txt".to_owned()),
+            current_folder: Some(folder.to_path_buf()),
+            current_file: None,
+            files: Vec::new(),
+        }
+    }
+
+    fn handle(n: u32) -> OwnedObjectPath {
+        OwnedObjectPath::try_from(format!("/org/freedesktop/portal/desktop/request/1_7/t{n}"))
+            .unwrap()
+    }
+
+    fn post(n: u32, ask: Ask) -> async_channel::Receiver<Answer> {
+        let (sender, answer) = async_channel::bounded(1);
+        inbox().push(Event::Ask {
+            handle: handle(n),
+            ask: Box::new(ask),
+            reply: Reply(sender),
+        });
+        answer
+    }
+
+    fn budget() -> NonZeroU32 {
+        NonZeroU32::new(64).unwrap()
+    }
+
+    fn start() -> (TestDriver<Dialogs>, WindowId) {
+        let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
+        let preferences = ThemePreferences {
+            appearance: Appearance::Light,
+            reduce_transparency: false,
+            reduce_motion: false,
+        };
+        let theme = ThemeTokens::cupertino(&Theme::from_dir(data).unwrap(), preferences).unwrap();
+        let mut fonts = FontIndex::new();
+        fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
+        let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
+        let glyphs = Arc::clone(&text);
+        let options = RuntimeOptions {
+            theme: Arc::new(theme),
+            text,
+            icons: Arc::new(PlaceholderIcons::default()),
+            direction: LayoutDirection::Ltr,
+            node_limit: 4000,
+            renderers: Box::new(move || {
+                Box::new(CpuRenderer::new(
+                    CpuConfig {
+                        max_pixels: 1 << 22,
+                        glyph_cache_bytes: 1 << 20,
+                        image_cache_bytes: 1 << 20,
+                        font_smoothing: true,
+                    },
+                    GlyphRaster::new(Arc::clone(&glyphs)),
+                ))
+            }),
+            accessibility: None,
+            clock: Arc::new(ManualClock::new(Timestamp(0))),
+            on_window_error: None,
+        };
+        let mut driver = TestDriver::new(
+            Capabilities::default(),
+            options,
+            ManualClock::new(Timestamp(0)),
+        );
+        driver.run_until_idle(budget()).unwrap();
+        let window = driver.runtime().windows()[0].1;
+        let active = WindowStates {
+            activated: true,
+            ..WindowStates::default()
+        };
+        driver
+            .window_system_mut()
+            .configure(window, None, active)
+            .unwrap();
+        settle(&mut driver, window);
+        (driver, window)
+    }
+
+    fn settle(driver: &mut TestDriver<Dialogs>, window: WindowId) {
+        for _ in 0..8 {
+            driver.run_until_idle(budget()).unwrap();
+            let system = driver.window_system_mut();
+            if !system.windows().contains(&window) || !system.frame_requested(window).unwrap() {
+                return;
+            }
+            system.frame_ready(window, Timestamp(0)).unwrap();
+        }
+    }
+
+    fn send(driver: &mut TestDriver<Dialogs>, window: WindowId, event: WindowEvent) {
+        driver
+            .window_system_mut()
+            .enqueue_window(window, event)
+            .unwrap();
+        settle(driver, window);
+    }
+
+    fn click(driver: &mut TestDriver<Dialogs>, window: WindowId, key: &'static str) {
+        let runtime = driver.runtime();
+        let id = runtime.find(window, &Key::from(key)).unwrap();
+        let rect = runtime
+            .snapshot(window)
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.id == id)
+            .unwrap()
+            .rect;
+        let position = Point::new(
+            rect.origin.x + rect.size.width / 2.0,
+            rect.origin.y + rect.size.height / 2.0,
+        );
+        let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
+        send(driver, window, pointer(PointerEvent::Motion { position }));
+        for pressed in [true, false] {
+            send(
+                driver,
+                window,
+                pointer(PointerEvent::Button {
+                    position,
+                    button: MouseButton::Left,
+                    pressed,
+                    serial: 1,
+                    mods: Mods::NONE,
+                }),
+            );
+        }
+    }
+
+    // one test: the inbox is the process's
+    #[test]
+    fn a_request_opens_a_window_that_answers_it_and_the_run_ends_with_the_last_window() {
+        let folder = tempfile::tempdir().unwrap();
+
+        let answer = post(1, ask(Kind::Save, folder.path()));
+        let (mut driver, window) = start();
+        let spec = driver.window_system_mut().spec(window).unwrap().clone();
+        assert_eq!(spec.title, "Export");
+        click(&mut driver, window, "accept");
+        assert_eq!(
+            answer.try_recv().unwrap(),
+            Answer::Chosen {
+                paths: vec![folder.path().join("new.txt")],
+                filter: None,
+                choices: Vec::new(),
+            }
+        );
+        assert!(driver.runtime().exited(), "no dialog is left open");
+
+        let answer = post(2, ask(Kind::Open, folder.path()));
+        let (mut driver, window) = start();
+        send(&mut driver, window, WindowEvent::CloseRequested);
+        assert_eq!(answer.try_recv().unwrap(), Answer::Cancelled);
+
+        let answer = post(3, ask(Kind::Open, folder.path()));
+        let (mut driver, window) = start();
+        inbox().push(Event::Close { handle: handle(3) });
+        settle(&mut driver, window);
+        assert!(answer.is_closed(), "a closed request is dropped unanswered");
+        assert!(driver.runtime().exited());
+    }
+}

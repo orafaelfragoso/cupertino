@@ -14,7 +14,7 @@ from the application's model and reports changes as messages.
   ring is drawn only for a keyboard-visible focus, outside the chrome, without changing layout.
 - **Targets.** Chrome is centred in a node padded out to the theme's minimum target, so the whole padded node takes
   the press and nothing overlaps a neighbour.
-- **Fields.** `TextField` edits through `cupertino-text-field`'s chords (the binding table of
+- **Fields.** `TextField` edits through `cupertino-ui-text`'s chords (the binding table of
   `cupertino-key-bindings`, no settings or file watching) with the platform's logical modifiers. Edits report the
   committed text with a revision; the field takes the model's text only at or past its last reported revision, so a
   model that lags is not undone. An input method's composition never reaches the model, the accessible value or a

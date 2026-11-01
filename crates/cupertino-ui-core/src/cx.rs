@@ -329,6 +329,8 @@ impl PaintCx<'_> {
     }
 }
 
+pub(crate) type KeyedRelation = (fn(NodeId) -> Relation, Key);
+
 /// What a node declared about itself for accessibility and keyboard focus.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Semantics {
@@ -339,6 +341,7 @@ pub(crate) struct Semantics {
     pub(crate) states: AccessibleStates,
     pub(crate) actions: Vec<Action>,
     pub(crate) relations: Vec<Relation>,
+    pub(crate) keyed_relations: Vec<KeyedRelation>,
     pub(crate) focusable: bool,
     pub(crate) focus_scope: bool,
     pub(crate) protected: bool,
@@ -404,6 +407,12 @@ impl SemanticsCx<'_> {
 
     pub fn relation(&mut self, relation: Relation) {
         self.semantics.relations.push(relation);
+    }
+
+    /// A relation to the nearest node keyed `key`: the child of that key under the first ancestor, from the parent
+    /// up, that has one. It is dropped when no ancestor has one or that node is not in the accessibility tree.
+    pub fn relation_to(&mut self, relation: fn(NodeId) -> Relation, key: impl Into<Key>) {
+        self.semantics.keyed_relations.push((relation, key.into()));
     }
 
     /// Makes the node a Tab stop.

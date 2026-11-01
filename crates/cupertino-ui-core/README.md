@@ -1,6 +1,7 @@
 # cupertino-ui-core
 
-The CupertinoKit runtime. MPL-2.0. Depends on the other `cupertino-ui-*` type crates, `async-task` and `rustix`;
+The CupertinoKit runtime. MPL-2.0. Depends on the other `cupertino-ui-*` type crates, `cupertino-menu-model`, `async-task` and
+`rustix`;
 never on a server, shell or private-protocol crate.
 
 An `Application` keeps its state in a model, describes its windows as `Element` trees in `view`, and changes the model
@@ -49,6 +50,9 @@ all on one thread.
   surface's material (`WindowRequest::Backdrop`) when it reports `app_effects` and the theme asks for one; otherwise,
   or when the request fails, core paints the surface's opaque fill in the window's rounded shape. A theme change
   (Reduce Transparency, high contrast) takes the material away or asks for it again.
+- **Menus.** A toplevel's `menus` go to the window system as `WindowRequest::Menus` when its bar or its disabled
+  items change, and `None` withdraws them; an item chosen in the desktop's menu bar (`WindowEvent::MenuActivated`)
+  sends `on_activate`'s message. A popup's menus are ignored.
 - **Scrolling.** A scroll container's offset is model state, counted from the start edge; core moves the content
   by it when placing nodes, so painting and hit-testing agree. In right-to-left layout, where layout mirrors the
   content, a horizontal offset moves the content right.

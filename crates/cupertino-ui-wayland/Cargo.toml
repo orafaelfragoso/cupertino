@@ -10,9 +10,11 @@ layer = "ui"
 
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-menu-model = { path = "../cupertino-menu-model" }
 cupertino-modifiers = { path = "../cupertino-modifiers" }
 cupertino-protocol-app = { path = "../cupertino-protocol-app" }
 cupertino-ui-platform = { path = "../cupertino-ui-platform" }
+cupertino-ui-menus = { path = "../cupertino-ui-menus" }
 cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-wayland-client = { path = "../cupertino-wayland-client" }
@@ -23,7 +25,9 @@ tiny-skia = "0.11"
 [dev-dependencies]
 cupertino-app-protocols = { path = "../cupertino-app-protocols", features = ["server"] }
 cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-test-bus = { path = "../cupertino-test-bus" }
 memmap2 = "0.9"
 rustix = { version = "1", features = ["event"] }
 wayland-protocols = { version = "0.32", features = ["server"] }
 wayland-server = "0.31"
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }

@@ -57,6 +57,7 @@ impl<M: Clone + 'static> Popover<M> {
                 grab: true,
                 on_dismiss: self.on_close,
             }),
+            menus: None,
         }
     }
 }

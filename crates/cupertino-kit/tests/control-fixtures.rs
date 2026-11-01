@@ -10,6 +10,7 @@
 
 mod support;
 
+use cupertino_kit::controls::Tabs;
 use cupertino_kit::controls::{
     Badge, Button, ButtonRole, ButtonStyle, CheckBox, Column, ColumnWidth, DisclosureButton,
     DisclosureStyle, Icon, IconDirection, ListView, NavigationStack, PageDots, Progress,
@@ -485,6 +486,13 @@ fixtures! {
         enabled: look.enabled,
         on_select: Some(Box::new(|_| Message::Nothing)),
     });
+    tabs: "tabs", Size::new(280.0, 120.0), &[State::Normal, State::Hover, State::Pressed, State::Focused], |_| Tabs {
+        label: "Settings".into(),
+        tabs: vec!["General".into(), "Sharing".into(), "Advanced".into()],
+        selected: 0,
+        content: body("Start up in the last folder"),
+        on_select: Some(Box::new(|_| Message::Nothing)),
+    }.into();
     text_field: "text-field", WIDE, FIELD, |look| Element::new(TextField {
         label: "Name".into(),
         placeholder: "Your name".into(),

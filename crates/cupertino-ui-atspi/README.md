@@ -31,6 +31,13 @@ let runtime = Runtime::new(system, options);
 - **Nodes.** Roles, names, descriptions, states, bounds in window points, relations, children and values (text, number
   with its range and step, toggle) map one to one. `Separator` and `Splitter` are both AccessKit's splitter, ARIA's
   separator.
+- **Text.** An editable value is published as AccessKit text runs: one per line, ending with its line break, split in
+  runs of at most 255 characters on one line (AccessKit counts a run's characters in a byte). A character is a grapheme
+  cluster; a word takes the spaces after it. The caret and selection core sends in bytes become a text selection in the
+  runs, so the AT-SPI Text interface answers `CaretOffset`, `GetSelection` and `GetNSelections` in characters, and
+  AccessKit emits `TextCaretMoved` and `TextSelectionChanged` as they change in the focused field. A node keeps its runs'
+  ids from update to update. `SetSelection` from the bus becomes core's `SetSelection` with the byte range, when the
+  node offers it.
 - **Secrets.** A `PasswordInput` node, or any node whose value is `Protected`, carries no value and offers neither
   `SetValue` nor a selection, whatever core sent: a second defence after core's.
 - **Session lock.** While `session_locked(true)` holds, every node is sent without its live politeness, so nothing is
@@ -44,8 +51,10 @@ let runtime = Runtime::new(system, options);
 
 ## Limitations
 
-- **Text caret and selection.** AccessKit carries them in text runs, which the crate doesn't build yet. A text field's
-  value is read, but its caret and selection are not, and `SetSelection` is not offered.
+- **Text lines and extents.** Runs follow hard line breaks only: a line the editor wraps is one AT-SPI line. Runs carry
+  no character positions, so `GetCharacterExtents` and `GetRangeExtents` have nothing to answer with.
+- **Selection direction.** Core's `SetSelection` takes a range, so a selection set from the bus puts the caret at its
+  end whichever way it was asked.
 - **Window position.** A Wayland client doesn't know where its window is, so bounds are window-relative.
 - **Closed windows.** Core's adapter interface has no call for a closed window, so its AT-SPI object stays until the
   application exits.
@@ -56,10 +65,12 @@ let runtime = Runtime::new(system, options);
 cargo test -p cupertino-ui-atspi
 ```
 
-Unit tests cover the node and action mapping, the password and protected-value defences, the action filter, and
-activation and deactivation, including a tree from before the last deactivation never being handed out.
+Unit tests cover the node and action mapping, text runs with their caret, selection, words and long lines, the
+password and protected-value defences, the action filter, and activation and deactivation, including a tree from before the last deactivation never being handed out.
 `tests/atspi.rs` starts a private `dbus-daemon` (skipped when it is not installed) that serves a fake
 `org.a11y.Status` and AT-SPI registry. The application runs in a copy of the test binary, started with the bus
 addresses AccessKit reads from its environment. Acting as an assistive technology, the test reads the window and its
 nodes with their roles and names, checks that the password's text is empty, tries to type into it, and clicks OK: only
-the Click reaches the application. With accessibility off, the application never embeds its root.
+the Click reaches the application. In a text field it reads the caret and selection in characters, sets a selection
+that reaches the application in bytes, and hears the caret and selection events of the update that shows it; the
+password field takes no selection. With accessibility off, the application never embeds its root.

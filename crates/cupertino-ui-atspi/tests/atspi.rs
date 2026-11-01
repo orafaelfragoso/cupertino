@@ -1,12 +1,15 @@
 //! On a private bus, a test acting as the accessibility registry and as an assistive technology: it sees the
 //! application's window and nodes with their roles and names, its Click reaches the application's loop, and its attempt
 //! to type into the password field never does; a row of a list that builds only some of its rows still says its place
-//! among all of them. With accessibility off, nothing is exported. The application runs in a
+//! among all of them. A text field tells where its caret and selection are, in characters, and a selection set from
+//! the bus reaches the application in bytes and comes back as caret and selection events; a password field takes no
+//! selection. With accessibility off, nothing is exported. The application runs in a
 //! copy of this test binary, started with the bus addresses AccessKit reads from its environment.
 
 use std::collections::HashMap;
 use std::io::Read;
 use std::num::NonZeroU32;
+use std::ops::Range;
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
 use std::task::{Wake, Waker};
@@ -18,10 +21,10 @@ use cupertino_test_bus::PrivateBus;
 use cupertino_ui_atspi::AtspiAdapter;
 use cupertino_ui_core::{
     AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, AccessibleStates,
-    AccessibleValue, Action, NodeId, Role,
+    AccessibleValue, Action, ActionData, NodeId, Role, TextSemantics,
 };
 use cupertino_ui_platform::WindowId;
-use zbus::blocking::{Connection, Proxy};
+use zbus::blocking::{Connection, MessageIterator, Proxy};
 use zbus::zvariant::OwnedObjectPath;
 
 /// Set in the copy of the test binary that plays the application: `on` or `off`, as accessibility is.
@@ -385,5 +388,196 @@ fn nothing_is_exported_while_accessibility_is_off() {
     assert!(
         run(NAME, false).is_none(),
         "the application embedded its root while accessibility was off"
+    );
+}
+
+/// "Grüße Welt": 12 bytes, 10 characters.
+const GREETING: &str = "Gr\u{fc}\u{df}e Welt";
+
+/// A window with a focused text field showing [`GREETING`] with `selection` selected and the caret at its end, and a
+/// password field that, like a careless core, carries a selection.
+fn editor_tree(selection: Range<usize>, full: bool) -> AccessibilityUpdate {
+    let text = |value: &str, selection: Range<usize>| {
+        Some(AccessibleValue::Text {
+            value: value.into(),
+            editing: Some(TextSemantics {
+                caret: selection.end,
+                selection,
+            }),
+        })
+    };
+    let actions = vec![Action::Focus, Action::SetValue, Action::SetSelection];
+    AccessibilityUpdate {
+        window: WINDOW,
+        root: id(1),
+        focus: Some(id(2)),
+        nodes: vec![
+            (
+                id(1),
+                node(Role::Window, "Editor", None, Vec::new(), vec![id(2), id(3)]),
+            ),
+            (
+                id(2),
+                node(
+                    Role::TextInput,
+                    "Greeting",
+                    text(GREETING, selection),
+                    actions.clone(),
+                    Vec::new(),
+                ),
+            ),
+            (
+                id(3),
+                node(
+                    Role::PasswordInput,
+                    "Password",
+                    text("hunter2", 0..7),
+                    actions,
+                    Vec::new(),
+                ),
+            ),
+        ],
+        removed: Vec::new(),
+        full,
+    }
+}
+
+/// The editor: it sends its tree with "Grüße" selected once accessibility is active and, on the first selection asked
+/// of the text field, shows that selection, waits for the test to close its input and exits successfully. A request to
+/// the password field fails it.
+fn editor() {
+    let mut adapter = AtspiAdapter::new(Waker::from(Arc::new(Unpark(std::thread::current()))));
+    adapter.window_focus(WINDOW, true);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (mut sent, mut actions) = (false, Vec::new());
+    while Instant::now() < deadline {
+        if adapter.is_active() && !sent {
+            adapter.update(&editor_tree(0..7, true));
+            sent = true;
+        }
+        adapter.drain_actions(&mut actions);
+        for request in actions.drain(..) {
+            assert_ne!(request.target, id(3), "the password field took a request");
+            if let (Action::SetSelection, Some(ActionData::Selection(range))) =
+                (request.action, request.data)
+            {
+                adapter.update(&editor_tree(range, false));
+                std::io::stdin().read_to_end(&mut Vec::new()).unwrap();
+                return;
+            }
+        }
+        std::thread::park_timeout(Duration::from_millis(50));
+    }
+    panic!("no selection arrived");
+}
+
+#[test]
+fn a_screen_reader_follows_the_caret_and_selection_of_a_text_field() {
+    const NAME: &str = "a_screen_reader_follows_the_caret_and_selection_of_a_text_field";
+    if std::env::var_os(APPLICATION).is_some() {
+        return editor();
+    }
+    let Some(Session {
+        bus,
+        mut app,
+        peer,
+        _services,
+    }) = run(NAME, true)
+    else {
+        return;
+    };
+    let conn = bus.connect();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let window = loop {
+        if let Some(window) = children(&conn, &peer, ROOT)
+            .unwrap_or_default()
+            .into_iter()
+            .next()
+        {
+            break window;
+        }
+        assert!(Instant::now() < deadline, "the window never appeared");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let nodes: Vec<_> = children(&conn, &peer, window.1.as_str())
+        .unwrap()
+        .into_iter()
+        .map(|(_, path)| (described(&conn, &peer, &path).0, path))
+        .collect();
+    let text_of = |name: &str| {
+        let path = &nodes.iter().find(|(n, _)| n == name).unwrap().1;
+        // AccessKit signals no change of CaretOffset, so a cached one would stay stale
+        zbus::blocking::proxy::Builder::<Proxy>::new(&conn)
+            .destination(peer.clone())
+            .unwrap()
+            .path(path.as_str().to_owned())
+            .unwrap()
+            .interface("org.a11y.atspi.Text")
+            .unwrap()
+            .cache_properties(zbus::proxy::CacheProperties::No)
+            .build()
+            .unwrap()
+    };
+    let (greeting, password) = (text_of("Greeting"), text_of("Password"));
+    let caret_and_selection = || {
+        let caret: i32 = greeting.get_property("CaretOffset").unwrap();
+        let selection: (i32, i32) = greeting.call("GetSelection", &(0i32,)).unwrap();
+        (caret, selection)
+    };
+    assert_eq!(caret_and_selection(), (5, (0, 5)), "Grüße is selected");
+    let taken: zbus::Result<bool> = password.call("SetSelection", &(0i32, 0i32, 3i32));
+    assert!(
+        !taken.unwrap_or(false),
+        "the password field took a selection"
+    );
+
+    // subscribed before asking, so no event is missed
+    let rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .sender(peer.as_str())
+        .unwrap()
+        .interface("org.a11y.atspi.Event.Object")
+        .unwrap()
+        .build();
+    let events = MessageIterator::for_match_rule(rule, &conn, None).unwrap();
+    let (heard, hear) = channel();
+    std::thread::spawn(move || {
+        for message in events.flatten() {
+            let header = message.header();
+            let member = header.member().map(|m| m.to_string()).unwrap_or_default();
+            let path = header.path().map(|p| p.to_string()).unwrap_or_default();
+            type Event = (
+                String,
+                i32,
+                i32,
+                zbus::zvariant::OwnedValue,
+                HashMap<String, zbus::zvariant::OwnedValue>,
+            );
+            let detail = message.body().deserialize::<Event>().map_or(-1, |e| e.1);
+            if heard.send((member, path, detail)).is_err() {
+                return;
+            }
+        }
+    });
+    let set: bool = greeting.call("SetSelection", &(0i32, 6i32, 10i32)).unwrap();
+    assert!(set, "the text field refused a selection");
+    let field = greeting.path().to_string();
+    let (mut moved, mut selected) = (None, false);
+    while moved.is_none() || !selected {
+        let (member, path, detail) = hear
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the caret and selection events");
+        match member.as_str() {
+            "TextCaretMoved" if path == field => moved = Some(detail),
+            "TextSelectionChanged" if path == field => selected = true,
+            _ => {}
+        }
+    }
+    assert_eq!(moved, Some(10), "the caret moved to the end of Welt");
+    assert_eq!(caret_and_selection(), (10, (6, 10)), "Welt is selected");
+    drop(app.stdin.take());
+    assert!(
+        app.wait().unwrap().success(),
+        "the selection did not reach the application"
     );
 }

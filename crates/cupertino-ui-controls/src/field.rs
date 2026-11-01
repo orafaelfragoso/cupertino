@@ -105,7 +105,7 @@ fn placed(
     size: Size,
     scroll: f64,
 ) -> Option<(ParagraphLayout, Point)> {
-    let layout = look::paragraph(env, text)?;
+    let layout = look::paragraph(env, text, Some(look::direction(env)))?;
     let chrome = chrome(size, &env.theme);
     let area = interior(size, &env.theme);
     let origin = Point::new(
@@ -153,7 +153,7 @@ fn paint_text(
     let size = cx.size();
     let area = interior(size, &env.theme);
     let chrome = chrome(size, &env.theme);
-    let Some(layout) = look::paragraph(&env, shown.text) else {
+    let Some(layout) = look::paragraph(&env, shown.text, Some(look::direction(&env))) else {
         return;
     };
     let caret = layout.caret_rect(shown.caret);

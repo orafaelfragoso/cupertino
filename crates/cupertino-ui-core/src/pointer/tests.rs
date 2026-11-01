@@ -40,6 +40,7 @@ fn fixture() -> Fixture {
             id,
             Placement {
                 rect,
+                target: rect,
                 clip: None,
                 own_clip: None,
             },

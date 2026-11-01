@@ -3,8 +3,8 @@ use crate::Stepper;
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_theme::metrics::{control_metric, Control};
 use cupertino_ui_core::{
-    AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Event, EventCx,
-    MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
+    AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Environment,
+    Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 use cupertino_ui_platform::{Keysym, MouseButton, PointerEvent};
@@ -136,16 +136,15 @@ impl<M: 'static> Widget<M> for Stepper<M> {
         }
     }
 
-    fn measure(&self, _: &StepperState, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
-        let target = cx.env().theme.metrics.min_target;
-        let image = chrome(Size::ZERO).size;
+    fn measure(&self, _: &StepperState, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         Measured {
-            size: Size::new(
-                image.width.max(target.width),
-                image.height.max(target.height),
-            ),
+            size: chrome(Size::ZERO).size,
             baseline: None,
         }
+    }
+
+    fn target(&self, _: &StepperState, env: &Environment) -> Size {
+        env.theme.metrics.min_target
     }
 
     fn event(

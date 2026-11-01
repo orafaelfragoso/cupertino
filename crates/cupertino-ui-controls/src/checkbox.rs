@@ -4,8 +4,8 @@ use crate::CheckBox;
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_theme::metrics::Control;
 use cupertino_ui_core::{
-    AccessibleStates, AccessibleValue, Action, Change, Checked, ControlState, Event, EventCx,
-    MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
+    AccessibleStates, AccessibleValue, Action, Change, Checked, ControlState, Environment, Event,
+    EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured};
 use cupertino_ui_render::{Paint, PaintOp, PathVerb, Shape};
@@ -83,12 +83,13 @@ impl<M: 'static> Widget<M> for CheckBox<M> {
         let width = side + label.map_or(0.0, |l| LABEL_GAP + l.width);
         let height = label.map_or(side, |l| side.max(l.height));
         Measured {
-            size: Size::new(
-                width.max(theme.metrics.min_target.width),
-                height.max(theme.metrics.min_target.height),
-            ),
+            size: Size::new(width, height),
             baseline: None,
         }
+    }
+
+    fn target(&self, _: &Press, env: &Environment) -> Size {
+        env.theme.metrics.min_target
     }
 
     fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {

@@ -123,18 +123,74 @@ fn glyph_colors<A: Application>(h: &Harness<A>, key: &'static str) -> Vec<Color>
 }
 
 #[test]
-fn the_chrome_is_centred_in_a_target_padded_to_the_minimum() {
+fn the_button_lays_out_on_its_chrome() {
     let h = Harness::<App>::new();
-    assert_eq!(h.rect("_").size, Size::new(24.0, 24.0));
+    assert_eq!(h.rect("_").size, Size::new(20.0, 20.0));
     let blank = shapes(&h, "_");
-    assert_eq!((blank[0].1.size, blank[0].2), (Size::new(24.0, 20.0), 5.0));
+    assert_eq!((blank[0].1.size, blank[0].2), (Size::new(20.0, 20.0), 5.0));
     assert!(!blank[1].0, "a bordered button strokes its border");
     assert_eq!(shapes(&h, "delete")[0].2, 10.0, "a pill is fully rounded");
     assert_eq!(
         (shapes(&h, "round")[0].1, shapes(&h, "round")[0].2),
-        (Rect::new(2.0, 2.0, 20.0, 20.0), 10.0),
+        (Rect::new(0.0, 0.0, 20.0, 20.0), 10.0),
         "a round icon button is a circle"
     );
+}
+
+/// Two buttons whose targets overlap in the spacing between them.
+struct Pair;
+
+impl Application for Pair {
+    type Model = Model;
+    type Message = &'static str;
+
+    fn init() -> (Model, Vec<Command<&'static str>>) {
+        (Model::default(), Vec::new())
+    }
+
+    fn update(model: &mut Model, message: &'static str) -> Vec<Command<&'static str>> {
+        model.pressed.push(message);
+        Vec::new()
+    }
+
+    fn view(_: &Model) -> Vec<Window<&'static str>> {
+        let button = |key: &'static str| {
+            Element::new(Button {
+                label: key.into(),
+                role: ButtonRole::Normal,
+                style: ButtonStyle::Bordered,
+                enabled: true,
+                busy: false,
+                on_press: Some(key),
+            })
+            .key(key)
+        };
+        window(Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets::uniform(10.0),
+            spacing: 2.0,
+            align: Align::Start,
+            children: vec![button("a"), button("b")],
+        }))
+    }
+}
+
+#[test]
+fn a_stack_spaces_the_chrome_and_a_press_in_the_spacing_goes_to_the_nearer_button() {
+    let mut h = Harness::<Pair>::new();
+    let (a, b) = (h.rect("a"), h.rect("b"));
+    assert_eq!(b.min_y() - a.max_y(), 2.0);
+    assert_eq!(
+        shapes(&h, "a")[0].1.size,
+        a.size,
+        "the chrome fills the node"
+    );
+
+    h.click(point(a.center().x, a.max_y() + 0.5));
+    h.click(point(b.center().x, b.min_y() - 0.5));
+    h.click(point(a.center().x, a.min_y() - 1.5));
+    h.click(point(a.center().x, a.min_y() - 2.5));
+    assert_eq!(h.model().pressed, ["a", "b", "a"]);
 }
 
 #[test]
@@ -142,8 +198,8 @@ fn the_label_widens_the_button_between_its_insets_but_not_a_round_icon_button() 
     let h = Harness::<App>::new();
     let width = label_width("delete");
     assert!(width > 24.0);
-    assert_eq!(h.rect("delete").size, Size::new(width + 20.0, 24.0));
-    assert_eq!(h.rect("round").size, Size::new(24.0, 24.0));
+    assert_eq!(h.rect("delete").size, Size::new(width + 20.0, 20.0));
+    assert_eq!(h.rect("round").size, Size::new(20.0, 20.0));
 }
 
 #[test]
@@ -357,7 +413,7 @@ fn a_keyboard_focus_rings_the_chrome() {
         ring,
         (
             false,
-            Rect::new(-3.0, -1.0, label_width("ok") + 20.0 + 6.0, 26.0),
+            Rect::new(-3.0, -3.0, label_width("ok") + 20.0 + 6.0, 26.0),
             8.0,
             color(
                 ColorRole::KeyboardFocusIndicator,

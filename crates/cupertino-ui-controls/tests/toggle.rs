@@ -80,14 +80,14 @@ fn thumb_x(h: &Harness<App>) -> f64 {
 }
 
 #[test]
-fn the_pill_is_padded_to_the_minimum_target_and_the_thumb_moves_to_the_end_when_on() {
+fn the_pill_lays_out_on_its_track_and_the_thumb_moves_to_the_end_when_on() {
     let mut h = Harness::<App>::new();
-    assert_eq!(h.rect("toggle"), Rect::new(0.0, 0.0, 38.0, 24.0));
+    assert_eq!(h.rect("toggle"), Rect::new(0.0, 0.0, 38.0, 22.0));
     let [track, thumb] = fills(&h)[..] else {
         panic!("a track and a thumb")
     };
-    assert_eq!((track.0, track.1), (Rect::new(0.0, 1.0, 38.0, 22.0), 11.0));
-    assert_eq!((thumb.0, thumb.1), (Rect::new(2.0, 3.0, 18.0, 18.0), 9.0));
+    assert_eq!((track.0, track.1), (Rect::new(0.0, 0.0, 38.0, 22.0), 11.0));
+    assert_eq!((thumb.0, thumb.1), (Rect::new(2.0, 2.0, 18.0, 18.0), 9.0));
     assert_eq!(
         track.2,
         color(ColorRole::SwitchTrack, InteractionVariant::Normal, false)
@@ -206,7 +206,7 @@ fn a_keyboard_focus_draws_the_ring_outside_the_pill() {
     assert_eq!(
         ring,
         Some((
-            Rect::new(-3.0, -2.0, 44.0, 28.0),
+            Rect::new(-3.0, -3.0, 44.0, 28.0),
             14.0,
             2.0,
             color(

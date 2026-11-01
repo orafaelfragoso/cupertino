@@ -77,6 +77,7 @@ impl<const ENABLED: bool> Application for Form<ENABLED> {
                     enabled: ENABLED,
                     on_change: Some(Box::new(Message::Changed)),
                     on_submit: Some(Message::Submit),
+                    selection: None,
                 })
                 .key("name"),
                 Element::new(SecureField {
@@ -370,6 +371,60 @@ fn the_caret_follows_typing_and_gives_way_to_the_selection() {
     assert_eq!(selected[0].0.max_x(), end.min_x());
 }
 
+struct Rename;
+
+impl Application for Rename {
+    type Model = Model;
+    type Message = Message;
+
+    fn init() -> (Model, Vec<Command<Message>>) {
+        let model = Model {
+            text: "notes.txt".into(),
+            ..Model::default()
+        };
+        (model, Vec::new())
+    }
+
+    fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
+        App::update(model, message)
+    }
+
+    fn view(model: &Model) -> Vec<Window<Message>> {
+        window(
+            Element::new(TextField {
+                label: "Name".into(),
+                placeholder: String::new(),
+                value: model.text.clone(),
+                revision: model.revision,
+                purpose: ContentPurpose::Normal,
+                enabled: true,
+                on_change: Some(Box::new(Message::Changed)),
+                on_submit: None,
+                selection: Some(0..5),
+            })
+            .key("name"),
+        )
+    }
+}
+
+#[test]
+fn a_field_shows_its_initial_selection_and_the_next_key_replaces_only_it() {
+    let mut h = Harness::<Rename>::new();
+    h.tap(TAB);
+    let selected = h
+        .ops("name")
+        .into_iter()
+        .filter(|op| {
+            matches!(op, PaintOp::Fill { paint: Paint::Solid(c), .. }
+                if *c == normal(ColorRole::SelectedTextBackground))
+        })
+        .count();
+    assert_eq!(selected, 1, "the stem is highlighted");
+
+    h.type_text("x");
+    assert_eq!(h.model().text, "x.txt");
+}
+
 #[test]
 fn a_click_puts_the_caret_at_the_nearest_position() {
     let mut h = focused_name();
@@ -573,6 +628,7 @@ impl<const N: usize> Application for Long<N> {
             enabled: true,
             on_change: Some(Box::new(Message::Changed)),
             on_submit: None,
+            selection: None,
         }))
     }
 }

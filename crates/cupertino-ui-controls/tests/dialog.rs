@@ -113,6 +113,7 @@ impl<const FIELD: bool, const CANCEL: bool> Application for Page<FIELD, CANCEL> 
                     enabled: true,
                     on_change: Some(Box::new(Message::Edit)),
                     on_submit: Some(Message::Submit),
+                    selection: None,
                 })
                 .key("field")
             }),

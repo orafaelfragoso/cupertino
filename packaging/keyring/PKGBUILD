@@ -1,0 +1,34 @@
+# Maintainer: Rafael Fragoso <rafaelfragosom@gmail.com>
+# The Cupertino package signing key and the rollback tools. The public key is not in the repository: the release job
+# passes it as CUPERTINO_KEYRING_KEY, an ASCII-armored export of the master public key with its signing subkey.
+pkgname=cupertino-keyring
+pkgver=1
+pkgrel=1
+pkgdesc='Cupertino package signing key and rollback tools'
+arch=('any')
+url='https://github.com/orafaelfragoso/cupertino'
+license=('GPL-3.0-or-later')
+depends=('pacman' 'gnupg' 'libarchive' 'curl')
+install=cupertino-keyring.install
+source=('cupertino-rollback' 'cupertino-save-previous' 'cupertino-previous.hook')
+sha256sums=('SKIP' 'SKIP' 'SKIP')
+
+prepare() {
+  : "${CUPERTINO_KEYRING_KEY:?set CUPERTINO_KEYRING_KEY to the public key file}"
+  export GNUPGHOME="$srcdir/gnupg"
+  mkdir -p "$GNUPGHOME"
+  chmod 0700 "$GNUPGHOME"
+  gpg --batch --import "$CUPERTINO_KEYRING_KEY"
+  gpg --batch --export > "$srcdir/cupertino.gpg"
+  gpg --batch --with-colons --list-keys | awk -F: '$1 == "pub" { primary = 1 } primary && $1 == "fpr" { print $10 ":4:"; primary = 0 }' > "$srcdir/cupertino-trusted"
+  [ "$(wc -l < "$srcdir/cupertino-trusted")" -eq 1 ] || { echo 'the key file must hold exactly one primary key' >&2; return 1; }
+}
+
+package() {
+  install -Dm644 cupertino.gpg "$pkgdir/usr/share/pacman/keyrings/cupertino.gpg"
+  install -Dm644 cupertino-trusted "$pkgdir/usr/share/pacman/keyrings/cupertino-trusted"
+  install -Dm644 /dev/null "$pkgdir/usr/share/pacman/keyrings/cupertino-revoked"
+  install -Dm755 cupertino-rollback "$pkgdir/usr/bin/cupertino-rollback"
+  install -Dm755 cupertino-save-previous "$pkgdir/usr/share/libalpm/scripts/cupertino-save-previous"
+  install -Dm644 cupertino-previous.hook "$pkgdir/usr/share/libalpm/hooks/cupertino-previous.hook"
+}

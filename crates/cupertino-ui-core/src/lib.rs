@@ -179,8 +179,8 @@ pub enum Event {
         gained: bool,
         visible: bool,
     },
-    /// The focus came into (`gained`) or left this node's subtree, below the node itself; it is sent when the focus
-    /// moves, not when the ring of the same focused node shows or hides.
+    /// The focus came into (`gained`) or left this node's subtree, below the node itself, or the window holding it
+    /// became active or inactive; it is not sent when the ring of the same focused node shows or hides.
     FocusWithin {
         gained: bool,
         visible: bool,

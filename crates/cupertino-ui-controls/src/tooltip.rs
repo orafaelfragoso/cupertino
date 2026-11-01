@@ -175,11 +175,13 @@ impl<M: Clone + 'static> Widget<M> for Anchor<M> {
                 if cx.phase() == Phase::Capture
                     && key.pressed
                     && key.keysym == ESCAPE
-                    && key.mods.is_empty()
-                    && self.shown =>
+                    && key.mods.is_empty() =>
             {
-                cx.emit(self.on_hide.clone());
-                return Propagation::Stop;
+                rest.waiting = false;
+                if self.shown {
+                    cx.emit(self.on_hide.clone());
+                    return Propagation::Stop;
+                }
             }
             _ => {}
         }

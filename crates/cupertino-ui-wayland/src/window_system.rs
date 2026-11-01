@@ -30,10 +30,13 @@ use rustix::time::ClockId;
 
 use crate::convert::{self, InputTimeline};
 use crate::pixels::convert_rects;
+use crate::roles::{RoleEvent, SurfaceRoles};
 
 enum Kind {
     Toplevel(Toplevel),
     Popup(Popup),
+    /// A surface with a role from [`SurfaceRoles`].
+    External,
 }
 
 /// What a window whose present was not ready waits for before its next frame is due.
@@ -134,6 +137,9 @@ pub struct WaylandWindowSystem {
     /// The desktop's effects and the observer of the session's appearance, on a compositor that offers them.
     effects: Option<(AppEffects, AppearanceObserver)>,
     appearance: SystemAppearance,
+    roles: Option<Box<dyn SurfaceRoles>>,
+    /// Names the configures of surfaces with a role from [`SurfaceRoles`], which carry no serial of their own.
+    role_configures: u32,
 }
 
 /// Take the session's appearance or display options from `event` into `appearance`; false for any other event.
@@ -187,6 +193,8 @@ impl WaylandWindowSystem {
             woken: Arc::new(AtomicBool::new(false)),
             effects,
             appearance: SystemAppearance::default(),
+            roles: None,
+            role_configures: 0,
         };
         // the compositor answers the observer at once: learn the session's appearance before the first window draws
         if system.effects.is_some() && system.conn.roundtrip().is_ok() {
@@ -206,6 +214,12 @@ impl WaylandWindowSystem {
             system.queued.push(PlatformEvent::SessionLock(false));
         }
         system
+    }
+
+    /// Opens the windows `roles` gives a role, instead of as toplevels.
+    pub fn with_roles(mut self, roles: impl SurfaceRoles + 'static) -> WaylandWindowSystem {
+        self.roles = Some(Box::new(roles));
+        self
     }
 
     /// The session's appearance and display options as the compositor last reported them; `None` on a compositor
@@ -248,7 +262,7 @@ impl WaylandWindowSystem {
     fn toplevel(&self, id: WindowId) -> Result<Toplevel, PlatformError> {
         match self.window(id)?.kind {
             Kind::Toplevel(t) => Ok(t),
-            Kind::Popup(_) => Err(PlatformError::Unsupported),
+            Kind::Popup(_) | Kind::External => Err(PlatformError::Unsupported),
         }
     }
 
@@ -572,29 +586,51 @@ impl WaylandWindowSystem {
                 return;
             }
             Event::Extension(extension) => {
-                match extension.downcast_ref::<AppEvent>() {
-                    Some(AppEvent::SessionLock { locked }) => {
-                        out.push(PlatformEvent::SessionLock(*locked));
+                if let Some(role) = self.roles.as_mut().and_then(|r| r.event(&extension)) {
+                    let (surface, event) = match role {
+                        RoleEvent::Configure { surface, size } => {
+                            self.role_configures = self.role_configures.wrapping_add(1);
+                            let configure = convert::role_configure(self.role_configures, size);
+                            (surface, Some((size, configure)))
+                        }
+                        RoleEvent::Closed(surface) => (surface, None),
+                    };
+                    let Some(i) = on(&self.windows, surface) else {
+                        return;
+                    };
+                    match event {
+                        Some((size, configure)) => {
+                            self.windows[i].size = size;
+                            due = self.resume(i);
+                            (i, WindowEvent::Configure(configure))
+                        }
+                        None => (i, WindowEvent::CloseRequested),
                     }
-                    Some(event) if apply_appearance(&mut self.appearance, event) => {
-                        out.push(PlatformEvent::Appearance(self.appearance));
-                    }
-                    Some(event) => {
-                        for w in &mut self.windows {
-                            if let Some(ShownMenus {
-                                published: Published::Shown(menus),
-                                ..
-                            }) = &mut w.menus
-                            {
-                                if menus.handle(event) {
-                                    break;
+                } else {
+                    match extension.downcast_ref::<AppEvent>() {
+                        Some(AppEvent::SessionLock { locked }) => {
+                            out.push(PlatformEvent::SessionLock(*locked));
+                        }
+                        Some(event) if apply_appearance(&mut self.appearance, event) => {
+                            out.push(PlatformEvent::Appearance(self.appearance));
+                        }
+                        Some(event) => {
+                            for w in &mut self.windows {
+                                if let Some(ShownMenus {
+                                    published: Published::Shown(menus),
+                                    ..
+                                }) = &mut w.menus
+                                {
+                                    if menus.handle(event) {
+                                        break;
+                                    }
                                 }
                             }
                         }
+                        None => {}
                     }
-                    None => {}
+                    return;
                 }
-                return;
             }
             Event::Presented(presented) => {
                 let Some(i) = on(&self.windows, presented.surface) else {
@@ -650,6 +686,14 @@ impl WindowSystem for WaylandWindowSystem {
     }
 
     fn create_window(&mut self, spec: &WindowSpec) -> Result<WindowId, PlatformError> {
+        if let Some(surface) = self
+            .roles
+            .as_mut()
+            .and_then(|roles| roles.create(&mut self.conn, spec))
+        {
+            let surface = surface.map_err(platform_error)?;
+            return Ok(self.add(surface, Kind::External, None, convert::whole(spec.size)));
+        }
         let toplevel = self
             .conn
             .toplevel(&ToplevelConfig {
@@ -701,6 +745,9 @@ impl WindowSystem for WaylandWindowSystem {
         }
         // the transport destroys a window's popups with it
         let _ = self.conn.destroy(surface);
+        if let Some(roles) = self.roles.as_mut() {
+            roles.destroyed(surface);
+        }
         let mut gone = vec![window];
         while let Some(child) = self
             .windows

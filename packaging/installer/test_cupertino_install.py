@@ -143,7 +143,8 @@ class LiveLeftoversTest(unittest.TestCase):
         return root
 
     def test_an_installed_system_has_none(self):
-        root = self.target("[options]\n[core]\nInclude = /etc/pacman.d/mirrorlist\n", {"00_rafael": "rafael ALL=(ALL) ALL\n"},
+        root = self.target("[options]\n#SigLevel = Optional TrustAll\n[core]\nInclude = /etc/pacman.d/mirrorlist\n",
+                           {"00_rafael": "rafael ALL=(ALL) ALL\n", "10_stock": "# %wheel ALL=(ALL:ALL) NOPASSWD: ALL\n"},
                            "root:*:14871::::::\nrafael:$6$x:20000::::::\n",
                            "root:x:0:0::/root:/bin/bash\nnobody:x:65534:65534::/:/usr/bin/nologin\nrafael:x:1000:1000::/home/rafael:/bin/bash\n")
         self.assertEqual(ci.live_leftovers(root, "rafael"), [])

@@ -818,7 +818,10 @@ impl<M: 'static> Widget<M> for ListRow<M> {
             look::fill(cx, chrome, SELECTION_RADIUS, color);
         }
         if cx.is_focused() {
-            paint_focus_ring(cx, chrome, SELECTION_RADIUS);
+            let ring = cx.env().theme.focus;
+            let inner = chrome.inset(Insets::uniform(ring.outset + ring.width));
+            let radius = (SELECTION_RADIUS - ring.width / 2.0 - ring.radius_extra).max(0.0);
+            paint_focus_ring(cx, inner, radius);
         }
     }
 

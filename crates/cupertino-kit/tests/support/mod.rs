@@ -31,6 +31,7 @@ pub const SPACE: u32 = 0x20;
 pub const DOWN: u32 = 0xff54;
 pub const PAGE_UP: u32 = 0xff55;
 pub const END: u32 = 0xff57;
+pub const LEFT: u32 = 0xff51;
 
 thread_local! {
     /// The trace of this thread's [`Traced`] application, `None` while none has started.
@@ -84,7 +85,22 @@ fn key_name(keysym: u32, text: Option<char>) -> String {
         (DOWN, None) => "Down".into(),
         (PAGE_UP, None) => "Page_Up".into(),
         (END, None) => "End".into(),
+        (LEFT, None) => "Left".into(),
         _ => format!("{keysym:#x}"),
+    }
+}
+
+/// The evdev code of a named key, which the text keymap resolves keys by; 0 for a key that types a character.
+fn code(keysym: u32) -> u32 {
+    match keysym {
+        TAB => 15,
+        RETURN => 28,
+        SPACE => 57,
+        LEFT => 105,
+        DOWN => 108,
+        PAGE_UP => 104,
+        END => 107,
+        _ => 0,
     }
 }
 
@@ -219,7 +235,7 @@ impl<A: Application> Run<A> {
         for pressed in [true, false] {
             self.deliver(WindowEvent::Key(
                 KeyEvent {
-                    code: 0,
+                    code: code(keysym),
                     keysym: Keysym(keysym),
                     text: text.filter(|_| pressed),
                     pressed,

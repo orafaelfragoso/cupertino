@@ -27,8 +27,13 @@ pub(crate) fn arrange<T: LayoutTree>(
         } => (horizontal, vertical),
         _ => (false, false),
     };
+    // content may run past the viewport on a scrolled axis; the viewport is still the size it would ideally fill
     let reach = |max: f64, scrolled: bool| {
-        AxisConstraint::loose(if scrolled { f64::INFINITY } else { max })
+        if scrolled {
+            AxisConstraint::new(0.0, if max.is_finite() { max } else { 0.0 }, f64::INFINITY)
+        } else {
+            AxisConstraint::loose(max)
+        }
     };
     let natural_c = Constraints::new(
         reach(inner.width.max(), scroll_x)?,

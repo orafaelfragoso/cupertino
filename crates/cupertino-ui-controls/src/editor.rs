@@ -562,8 +562,8 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
         }
     }
 
-    /// As wide as offered and as tall as its text, at least the height offered, so a press below the text lands on
-    /// it.
+    /// As wide as offered and as tall as its text, at least the height it would ideally take (a scroll view's
+    /// viewport), so a press below the text lands on it.
     fn measure(
         &self,
         state: &EditorState,
@@ -582,7 +582,7 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
         Measured {
             size: Size::new(
                 width,
-                (lines.height() + 2.0 * inset(env)).max(constraints.height.min()),
+                (lines.height() + 2.0 * inset(env)).max(constraints.height.ideal()),
             ),
             baseline: None,
         }

@@ -66,7 +66,7 @@ export CARGO_INCREMENTAL=0 CUPERTINO_THEME_DIR=/usr/share/cupertino/theme
 upgrade=$upgrade
 case $distro in
 arch)
-    pacman -Syu --noconfirm --needed -q rust python mesa libglvnd pam dbus xkeyboard-config shared-mime-info gcc-libs systemd adwaita-icon-theme namcap >/dev/null
+    pacman -Syu --noconfirm --needed -q rust python mesa libglvnd pam dbus xkeyboard-config shared-mime-info gcc-libs systemd adwaita-icon-theme clang libpipewire pipewire namcap >/dev/null
     useradd -m builder
     chown -R builder /src/arch-build
     su builder -c 'cd /src/arch-build && makepkg --noconfirm'
@@ -92,12 +92,12 @@ arch)
     ;;
 debian)
     apt-get update -qq
-    apt-get install -y -qq --no-install-recommends pkg-config libgbm-dev libpam0g-dev dpkg-dev >/dev/null
+    apt-get install -y -qq --no-install-recommends pkg-config libgbm-dev libpam0g-dev clang libclang-dev libpipewire-0.3-dev dpkg-dev >/dev/null
     cargo install --locked --quiet --version $CARGO_DEB cargo-deb
     export CUPERTINO_ADMIN_GROUPS=sudo
     ;;
 fedora)
-    dnf install -y -q gcc pkgconf-pkg-config mesa-libgbm-devel pam-devel rustup rpm-build cpio python3 binutils >/dev/null
+    dnf install -y -q gcc pkgconf-pkg-config mesa-libgbm-devel pam-devel clang pipewire-devel rustup rpm-build cpio python3 binutils >/dev/null
     rustup-init -y -q --profile minimal --default-toolchain $RUST_TOOLCHAIN >/dev/null
     . "\$HOME/.cargo/env"
     cargo install --locked --quiet --version $CARGO_GENERATE_RPM cargo-generate-rpm

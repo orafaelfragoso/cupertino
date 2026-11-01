@@ -124,7 +124,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libgbm-dev libpam0g-dev dbus libgl1-mesa-dri libegl1 xkb-data zstd
+            build-essential pkg-config libgbm-dev libpam0g-dev dbus libgl1-mesa-dri libegl1 xkb-data zstd \
+            clang libclang-dev libpipewire-0.3-dev pipewire
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
         with:
           toolchain: stable

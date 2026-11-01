@@ -3,9 +3,10 @@
 use cupertino_geometry::{Point, Rect};
 use cupertino_theme::metrics::{alignment_height, Control};
 use cupertino_ui_core::{ControlState, Environment, PaintCx};
+use cupertino_ui_layout::LayoutDirection;
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_text::{
-    AttributedText, FontWeight, Paragraph, ParagraphLayout, ParagraphStyle, TextStyle,
+    AttributedText, Direction, FontWeight, Paragraph, ParagraphLayout, ParagraphStyle, TextStyle,
 };
 use cupertino_ui_theme::{
     Color, ColorRole, ControlSize, FocusRing, InteractionVariant, StateVariant, ThemeTokens,
@@ -84,6 +85,14 @@ pub(crate) fn label(env: &Environment, text: &str) -> Option<ParagraphLayout> {
 }
 
 /// `text` laid out on one line in the theme's body type, empty text included; `None` if the fonts cannot shape it.
+/// The base direction text takes in `env`.
+pub(crate) fn direction(env: &Environment) -> Direction {
+    match env.direction {
+        LayoutDirection::Ltr => Direction::Ltr,
+        LayoutDirection::Rtl => Direction::Rtl,
+    }
+}
+
 pub(crate) fn paragraph(env: &Environment, text: &str) -> Option<ParagraphLayout> {
     let body = env.theme.type_scale.body;
     let style = TextStyle {
@@ -94,7 +103,10 @@ pub(crate) fn paragraph(env: &Environment, text: &str) -> Option<ParagraphLayout
         .text
         .paragraph(
             &AttributedText::plain(text, style),
-            &ParagraphStyle::default(),
+            &ParagraphStyle {
+                direction: Some(direction(env)),
+                ..ParagraphStyle::default()
+            },
         )
         .ok()?;
     Some(paragraph.layout(None))

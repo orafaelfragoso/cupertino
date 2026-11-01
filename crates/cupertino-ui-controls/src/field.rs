@@ -489,11 +489,11 @@ impl FieldState {
     }
 
     /// The text position under `point`, in window coordinates.
-    fn index_at<M>(&self, point: Point, cx: &EventCx<'_, M>) -> Option<usize> {
+    fn index_at<M>(&self, point: Point, cx: &EventCx<'_, M>) -> Option<TextPosition> {
         let bounds = cx.bounds()?;
         let (layout, origin) =
             placed(cx.env(), self.buffer.text(), bounds.size, self.scroll.get())?;
-        Some(layout.index_at(point - bounds.origin - origin).byte)
+        Some(layout.index_at(point - bounds.origin - origin))
     }
 
     /// A press, a drag with the button held and its release: the caret, then a word or the whole text on a second
@@ -722,6 +722,7 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
     }
 
     fn event(&self, state: &mut FieldState, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        state.buffer.set_direction(Some(look::direction(cx.env())));
         let propagation = self.handle(state, event, cx);
         let selecting = !state.buffer.selection().is_empty();
         state.blink.follow(event, selecting, cx);

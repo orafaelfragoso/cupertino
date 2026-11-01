@@ -128,8 +128,10 @@ impl TextBuffer {
     /// Sets the base direction the field lays its text out in, the `ParagraphStyle::direction` it paints with, so Left
     /// and Right walk the carets as they are drawn.
     pub fn set_direction(&mut self, direction: Option<Direction>) {
-        self.direction = direction;
-        self.upstream = None;
+        if self.direction != direction {
+            self.direction = direction;
+            self.upstream = None;
+        }
     }
 
     /// The caret with the side of a direction change it is drawn on, for `ParagraphLayout::caret_rect`.
@@ -325,16 +327,17 @@ impl TextBuffer {
         self.step_history(false)
     }
 
-    /// The primary button went down at caret position `index` (from [`TextBuffer::index_at`]); `extend` (Shift)
-    /// extends the selection to it. A second and third press within [`MULTI_CLICK_INTERVAL`] at the same place
-    /// select the word and the whole text.
-    pub fn press(&mut self, index: usize, extend: bool, now: Instant) {
-        self.press_at(index, extend, since_origin(now));
+    /// The primary button went down at caret position `at` (from [`TextBuffer::index_at`], or a layout's `index_at`
+    /// with the side of a direction change it hit); `extend` (Shift) extends the selection to it. A second and third
+    /// press within [`MULTI_CLICK_INTERVAL`] at the same place select the word and the whole text.
+    pub fn press(&mut self, at: impl Into<TextPosition>, extend: bool, now: Instant) {
+        self.press_at(at, extend, since_origin(now));
     }
 
     /// [`TextBuffer::press`] at `now`, a time on the caller's own clock; every press of one buffer must use one clock.
-    pub fn press_at(&mut self, index: usize, extend: bool, now: Duration) {
-        let index = self.boundary_at_or_before(index.min(self.text.len()));
+    pub fn press_at(&mut self, at: impl Into<TextPosition>, extend: bool, now: Duration) {
+        let at = at.into();
+        let index = self.boundary_at_or_before(at.byte.min(self.text.len()));
         let count = match self.last_press {
             Some(p)
                 if !extend
@@ -365,15 +368,16 @@ impl TextBuffer {
             Granularity::All => 0..self.text.len(),
         };
         self.drag = Some((origin, granularity));
-        self.drag_to(index);
+        self.drag_to(TextPosition { byte: index, ..at });
     }
 
-    /// The pointer moved to caret position `index` with the button held.
-    pub fn drag_to(&mut self, index: usize) {
+    /// The pointer moved to caret position `at` with the button held.
+    pub fn drag_to(&mut self, at: impl Into<TextPosition>) {
         let Some((origin, granularity)) = self.drag.clone() else {
             return;
         };
-        let index = self.boundary_at_or_before(index.min(self.text.len()));
+        let at = at.into();
+        let index = self.boundary_at_or_before(at.byte.min(self.text.len()));
         let reach = match granularity {
             Granularity::Character => index..index,
             Granularity::Word => self.word_at(index),
@@ -385,6 +389,9 @@ impl TextBuffer {
         } else {
             self.anchor = origin.start;
             self.set_caret(reach.end.max(origin.end));
+        }
+        if self.caret == at.byte && at.affinity == Affinity::Upstream {
+            self.upstream = Some(self.caret);
         }
     }
 
@@ -837,6 +844,16 @@ fn words_in(text: &str) -> impl Iterator<Item = Range<usize>> + '_ {
     text.split_word_bound_indices()
         .filter(|(_, w)| w.chars().any(char::is_alphanumeric))
         .map(|(i, w)| i..i + w.len())
+}
+
+/// A position on the downstream side: a byte offset alone.
+impl From<usize> for TextPosition {
+    fn from(byte: usize) -> Self {
+        TextPosition {
+            byte,
+            affinity: Affinity::Downstream,
+        }
+    }
 }
 
 #[cfg(test)]

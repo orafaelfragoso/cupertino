@@ -714,3 +714,60 @@ fn a_drag_selects_from_the_press_to_the_pointer_even_past_the_field() {
     h.button(past, false);
     assert_eq!(editing(&h).1.selection, 2..11);
 }
+
+/// Where each glyph of `key` starts, in node coordinates, by the byte its cluster starts at.
+fn glyph_starts(h: &Harness<App>, key: &'static str) -> Vec<(usize, f64)> {
+    h.ops(key)
+        .into_iter()
+        .filter_map(|op| match op {
+            PaintOp::Glyphs { origin, run, .. } => Some(
+                run.glyphs
+                    .into_iter()
+                    .map(move |g| (g.cluster, origin.x + f64::from(g.x))),
+            ),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+#[test]
+fn a_right_to_left_field_lays_its_text_out_right_to_left() {
+    let mut h = Harness::<App>::with_direction(LayoutDirection::Rtl);
+    h.tap(TAB);
+    h.type_text("abc!");
+    let x = |byte| {
+        glyph_starts(&h, "name")
+            .into_iter()
+            .find(|(cluster, _)| *cluster == byte)
+            .unwrap()
+            .1
+    };
+    assert!(
+        x(3) < x(0),
+        "the trailing mark takes the paragraph's direction and sits left of the letters"
+    );
+}
+
+#[test]
+fn a_click_at_a_direction_change_puts_the_caret_at_the_edge_it_hit() {
+    let mut h = focused_name();
+    h.type_text("abc אבג");
+    let hebrew = glyph_starts(&h, "name")
+        .into_iter()
+        .filter(|(cluster, _)| *cluster >= 4)
+        .map(|(_, x)| x)
+        .fold(f64::INFINITY, f64::min);
+    let field = h.rect("name");
+    h.click(point(field.min_x() + hebrew - 1.0, field.center().y));
+    let (at, _) = rects(&h, "name")
+        .into_iter()
+        .find(|(r, _)| r.width() == CARET_WIDTH)
+        .unwrap();
+    assert!(
+        (at.min_x() - hebrew).abs() < 1.0,
+        "the caret is drawn after the space at {hebrew}, not at the far end of the Hebrew: {at:?}"
+    );
+    h.type_text("X");
+    assert_eq!(h.model().text, "abc Xאבג");
+}

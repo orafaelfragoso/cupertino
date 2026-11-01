@@ -33,6 +33,14 @@ pub(crate) struct Focus {
 }
 
 impl Focus {
+    /// No focus yet, with the ring of the focus it takes showing when `visible`.
+    pub(crate) fn shown(visible: bool) -> Self {
+        Self {
+            visible,
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn node(&self) -> Option<NodeId> {
         self.node
     }

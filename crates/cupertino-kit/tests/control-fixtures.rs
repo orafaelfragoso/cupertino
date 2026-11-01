@@ -746,6 +746,7 @@ fixtures! {
                     items: Vec::new(),
                 },
             ],
+            current: None,
             open: Vec::new(),
             on_open: Box::new(|_| Message::Nothing),
             on_close: Message::Nothing,

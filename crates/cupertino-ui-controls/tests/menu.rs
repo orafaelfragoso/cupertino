@@ -16,6 +16,7 @@ use cupertino_ui_layout::{Align, Axis, LayoutDirection};
 use cupertino_ui_platform::{
     Mods, MouseButton, PointerEvent, PopupEdge, WindowEvent, WindowId, WindowStates,
 };
+use cupertino_ui_render::{PaintNodeId, PaintOp};
 use support::{window, Harness, RETURN, SPACE, TAB};
 
 const LEFT: u32 = 0xff51;
@@ -143,6 +144,7 @@ impl Application for Editor {
                             items: vec![item("Mail", true), item("Messages", true)],
                         },
                     ],
+                    current: None,
                     open: model.submenus.clone(),
                     on_open: Box::new(Message::Open),
                     on_close: Message::Close,
@@ -199,6 +201,16 @@ fn semantic(h: &Harness<Editor>, id: NodeId) -> AccessibilityNode {
 
 fn on_row(h: &Harness<Editor>, index: u64) -> bool {
     h.snapshot().focus == Some(row(h, index))
+}
+
+fn highlighted(h: &Harness<Editor>, index: u64) -> bool {
+    let id = PaintNodeId::from(row(h, index));
+    h.snapshot()
+        .display_list
+        .nodes
+        .into_iter()
+        .find(|n| n.id == id)
+        .is_some_and(|n| n.ops.iter().any(|op| matches!(op, PaintOp::Fill { .. })))
 }
 
 fn row_rect(h: &Harness<Editor>, index: u64) -> Rect {
@@ -287,6 +299,29 @@ fn arrows_home_end_and_typed_characters_move_between_the_enabled_items() {
     assert!(on_row(&h, 1), "a disabled item is not typed to");
     h.type_text("s");
     assert!(on_row(&h, 4));
+}
+
+#[test]
+fn a_menu_opened_with_the_pointer_highlights_nothing_until_the_pointer_moves_and_from_the_keyboard_its_first_item(
+) {
+    let mut h = Harness::<Editor>::new();
+    let main = context(&mut h);
+    assert!(on_row(&h, 0));
+    assert!(!highlighted(&h, 0));
+    let copy = row_rect(&h, 1);
+    h.pointer(PointerEvent::Motion {
+        position: Point::new(copy.min_x() + 20.0, copy.min_y() + 10.0),
+    });
+    h.settle();
+    assert_eq!((highlighted(&h, 0), highlighted(&h, 1)), (false, true));
+    h.send(WindowEvent::PopupDone);
+    h.window = main;
+    h.tap(TAB);
+    h.tap(TAB);
+    h.tap(MENU);
+    enter(&mut h, "menu");
+    assert!(on_row(&h, 0));
+    assert!(highlighted(&h, 0));
 }
 
 #[test]
@@ -471,4 +506,10 @@ fn a_pop_up_button_opens_its_options_below_itself_with_the_chosen_one_checked() 
     h.send(WindowEvent::PopupDone);
     h.click(h.center("size"));
     assert_eq!(h.model().menu, Some(Open::Sizes), "and a click");
+    enter(&mut h, "sizes");
+    assert!(on_row(&h, 2), "on the chosen option");
+    assert!(
+        highlighted(&h, 2),
+        "highlighted although the pointer opened it"
+    );
 }

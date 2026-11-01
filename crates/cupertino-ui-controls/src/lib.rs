@@ -506,6 +506,9 @@ pub struct Menu<M> {
     /// What assistive technology calls it, usually the anchor's label.
     pub label: String,
     pub items: Vec<MenuItem<M>>,
+    /// The item that has the focus and the highlight when the menu opens, instead of the first: a pop-up button's
+    /// chosen option.
+    pub current: Option<usize>,
     /// The open submenus: the index of each one's item in the menu before it.
     pub open: Vec<usize>,
     /// Asks for other submenus open, as a new `open`.

@@ -43,7 +43,7 @@ const MARK_COLUMN: f64 = 18.0;
 const ARROW_COLUMN: f64 = 14.0;
 const MIN_WIDTH: f64 = 120.0;
 /// Between a highlight and the panel's sides.
-const HIGHLIGHT_INSET: f64 = 4.0;
+const HIGHLIGHT_INSET: f64 = 5.0;
 const HIGHLIGHT_RADIUS: f64 = 4.0;
 const SYMBOL: f64 = 10.0;
 /// How far a submenu overlaps the menu it opens from.
@@ -78,6 +78,7 @@ impl<M: Clone + 'static> Menu<M> {
             anchor,
             label,
             mut items,
+            current,
             open,
             on_open,
             on_close,
@@ -103,11 +104,15 @@ impl<M: Clone + 'static> Menu<M> {
             let back = (depth > 0).then(|| on_open(open[..depth - 1].to_vec()));
             let panel = Panel {
                 label: label.clone(),
+                current: current
+                    .filter(|_| depth == 0)
+                    .and_then(|i| enabled_position(&items, i)),
                 escape: back.clone().unwrap_or_else(|| on_close.clone()),
                 back,
                 children: rows(
                     &items,
                     path,
+                    current.filter(|_| depth == 0),
                     next.filter(|_| submenu.is_some()),
                     &on_open,
                     &on_close,
@@ -123,6 +128,7 @@ impl<M: Clone + 'static> Menu<M> {
                     min_size: None,
                     max_size: None,
                     decorations: DecorationMode::None,
+                    foreign_parent: None,
                 },
                 shortcuts: CommandRegistry::new(),
                 on_close: None,
@@ -150,10 +156,12 @@ impl<M: Clone + 'static> Menu<M> {
     }
 }
 
-/// The rows of the menu at `path`, keyed by their index; `open` is the item whose submenu is open.
+/// The rows of the menu at `path`, keyed by their index; `current` is the item that takes the focus when it opens,
+/// and `open` the item whose submenu is open.
 fn rows<M: Clone + 'static>(
     items: &[MenuItem<M>],
     path: &[usize],
+    current: Option<usize>,
     open: Option<usize>,
     on_open: &Handler<Vec<usize>, M>,
     on_close: &M,
@@ -216,6 +224,7 @@ fn rows<M: Clone + 'static>(
                 action,
                 labels: Rc::clone(&labels),
                 position,
+                current: current == Some(index),
             };
             if enabled {
                 position += 1;
@@ -225,9 +234,22 @@ fn rows<M: Clone + 'static>(
         .collect()
 }
 
+/// The place of item `index` among the enabled items, if it is one.
+fn enabled_position<M>(items: &[MenuItem<M>], index: usize) -> Option<usize> {
+    let enabled = |item: &MenuItem<M>| {
+        matches!(
+            item,
+            MenuItem::Item { enabled: true, .. } | MenuItem::Submenu { enabled: true, .. }
+        )
+    };
+    enabled(items.get(index)?).then(|| items[..index].iter().filter(|i| enabled(i)).count())
+}
+
 /// One level of a menu: its rows on the panel, and the messages that close it.
 struct Panel<M> {
     label: String,
+    /// The place among the enabled rows of the row that takes the focus when the menu opens.
+    current: Option<usize>,
     /// Sent on Escape: closes a submenu, or the whole menu.
     escape: M,
     /// Sent on the arrow toward the leading side in a submenu.
@@ -236,7 +258,8 @@ struct Panel<M> {
 }
 
 impl<M: Clone + 'static> Widget<M> for Panel<M> {
-    type State = ();
+    /// Whether the focus came in yet.
+    type State = bool;
 
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
@@ -254,9 +277,11 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
         std::mem::take(&mut self.children)
     }
 
-    fn state(&self) {}
+    fn state(&self) -> bool {
+        false
+    }
 
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
+    fn update(&self, old: &Self, _: &mut bool) -> Change {
         if self.label != old.label {
             Change::Paint
         } else {
@@ -264,14 +289,22 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
         }
     }
 
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+    fn measure(&self, _: &bool, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         Measured {
             size: Size::ZERO,
             baseline: None,
         }
     }
 
-    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+    fn event(&self, entered: &mut bool, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        if let Event::FocusWithin { gained: true, .. } = event {
+            if !std::mem::replace(entered, true) {
+                if let Some(index) = self.current {
+                    cx.focus_item(FocusTarget::Index(index));
+                }
+            }
+            return Propagation::Continue;
+        }
         let Event::Key(key, _) = event else {
             return Propagation::Continue;
         };
@@ -296,7 +329,7 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
         }
     }
 
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+    fn paint(&self, _: &bool, cx: &mut PaintCx<'_>) {
         let size = cx.size();
         let theme = &cx.env().theme;
         let fill = theme
@@ -314,7 +347,7 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
         );
     }
 
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+    fn semantics(&self, _: &bool, cx: &mut SemanticsCx<'_>) {
         cx.role(Role::Menu);
         cx.name(self.label.clone());
         cx.focus_scope();
@@ -337,6 +370,15 @@ struct Row<M> {
     labels: Rc<[String]>,
     /// This row's place among them, if enabled.
     position: usize,
+    /// Highlighted while it has the focus, also before the pointer or a key moves it.
+    current: bool,
+}
+
+#[derive(Default)]
+struct RowState {
+    press: Press,
+    /// The pointer moved onto the row.
+    pointed: bool,
 }
 
 impl<M> Row<M> {
@@ -422,17 +464,17 @@ fn symbol(cx: &mut PaintCx<'_>, name: &str, centre: Point, color: Option<Color>,
 }
 
 impl<M: Clone + 'static> Widget<M> for Row<M> {
-    type State = Press;
+    type State = RowState;
 
     fn layout(&self) -> LayoutSpec {
         LayoutSpec::new(ContainerKind::Leaf)
     }
 
-    fn state(&self) -> Press {
-        Press::default()
+    fn state(&self) -> RowState {
+        RowState::default()
     }
 
-    fn update(&self, old: &Self, _: &mut Press) -> Change {
+    fn update(&self, old: &Self, _: &mut RowState) -> Change {
         if self.label != old.label
             || matches!(self.action, RowAction::Open { .. })
                 != matches!(old.action, RowAction::Open { .. })
@@ -440,6 +482,7 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
             Change::Layout
         } else if self.enabled != old.enabled
             || self.checked != old.checked
+            || self.current != old.current
             || self.open() != old.open()
         {
             Change::Paint
@@ -448,7 +491,7 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
         }
     }
 
-    fn measure(&self, _: &Press, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
+    fn measure(&self, _: &RowState, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
         let label = look::label(cx.env(), &self.label).map_or(0.0, |l| l.size().width);
         let width = PADDING_X + MARK_COLUMN + label + ARROW_COLUMN + PADDING_X;
         Measured {
@@ -457,12 +500,18 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
         }
     }
 
-    fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+    fn event(&self, state: &mut RowState, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         match event {
             Event::Pointer(PointerEvent::Enter { .. }, _)
                 if self.enabled && cx.node() == cx.target() =>
             {
+                state.pointed = true;
                 cx.request_focus();
+                cx.request_paint();
+            }
+            Event::Pointer(PointerEvent::Leave, _) if cx.node() == cx.target() => {
+                state.pointed = false;
+                cx.request_paint();
             }
             Event::Focus { .. } if cx.node() == cx.target() => cx.request_paint(),
             Event::Key(key, _)
@@ -476,7 +525,10 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
             }
             _ => {}
         }
-        match press.event(event, self.enabled, Keys::SpaceAndReturn, cx) {
+        match state
+            .press
+            .event(event, self.enabled, Keys::SpaceAndReturn, cx)
+        {
             Outcome::Ignored => Propagation::Continue,
             Outcome::Changed => {
                 cx.request_paint();
@@ -490,11 +542,13 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
         }
     }
 
-    fn paint(&self, _: &Press, cx: &mut PaintCx<'_>) {
+    fn paint(&self, state: &RowState, cx: &mut PaintCx<'_>) {
         let env = cx.env().clone();
         let theme = &env.theme;
         let size = cx.size();
-        let highlighted = self.enabled && (cx.is_focused() || self.open());
+        let highlighted = self.enabled
+            && (self.open()
+                || cx.is_focused() && (cx.focus_visible() || state.pointed || self.current));
         if highlighted {
             let rect = Rect::new(
                 HIGHLIGHT_INSET,
@@ -548,7 +602,7 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
         }
     }
 
-    fn semantics(&self, _: &Press, cx: &mut SemanticsCx<'_>) {
+    fn semantics(&self, _: &RowState, cx: &mut SemanticsCx<'_>) {
         cx.role(Role::MenuItem);
         cx.name(self.label.clone());
         if self.checked {
@@ -727,6 +781,7 @@ impl<M: Clone + 'static> PopUpButton<M> {
             anchor: MenuAnchor::Below(anchor),
             label: self.label.clone(),
             items,
+            current: Some(self.selected),
             open: Vec::new(),
             on_open: Box::new(move |_| close.clone()),
             on_close,

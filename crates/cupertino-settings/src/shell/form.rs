@@ -17,11 +17,16 @@ pub const ROW_GAP: f64 = 8.0;
 /// Between a form's sections, an approximate design value.
 pub const SECTION_GAP: f64 = 20.0;
 
-pub fn text(content: &str, role: TextRole) -> Element<Message> {
+/// A line of `content`, none when it is empty: an empty text is a node a screen reader cannot announce.
+pub fn text(content: &str, role: TextRole) -> Option<Element<Message>> {
     styled(content, role, false)
 }
 
-fn styled(content: &str, role: TextRole, secondary: bool) -> Element<Message> {
+fn styled(content: &str, role: TextRole, secondary: bool) -> Option<Element<Message>> {
+    (!content.is_empty()).then(|| line(content, role, secondary))
+}
+
+fn line(content: &str, role: TextRole, secondary: bool) -> Element<Message> {
     Element::new(Text {
         content: AttributedText::plain(content, TextStyle::new(13.0)),
         role,
@@ -121,10 +126,15 @@ fn control(row: &Row, open: Option<ControlId>) -> Option<Element<Message>> {
                 .map(|(i, title)| button(title, enabled, commit(Value::Index(i))))
                 .collect(),
         }),
-        Control::Text { value } => styled(value, TextRole::Body, true),
+        Control::Text { value } => styled(value, TextRole::Body, true)?,
         Control::Preview { title, note, .. } => {
-            let mut lines = vec![text(title, TextRole::Body)];
-            lines.extend(note.as_deref().map(|n| styled(n, TextRole::Body, true)));
+            let lines = text(title, TextRole::Body)
+                .into_iter()
+                .chain(
+                    note.as_deref()
+                        .and_then(|n| styled(n, TextRole::Body, true)),
+                )
+                .collect();
             column(2.0, lines)
         }
         Control::Tiles { tiles, selected } => column(
@@ -147,13 +157,15 @@ fn control(row: &Row, open: Option<ControlId>) -> Option<Element<Message>> {
 }
 
 fn row(row: &Row, open: Option<ControlId>) -> Element<Message> {
-    let mut label = vec![text(&row.label, TextRole::Body)];
     let second = row
         .error
         .as_ref()
         .or(row.disabled.as_ref())
         .or(row.detail.as_ref());
-    label.extend(second.map(|s| styled(s, TextRole::Body, true)));
+    let label = text(&row.label, TextRole::Body)
+        .into_iter()
+        .chain(second.and_then(|s| styled(s, TextRole::Body, true)))
+        .collect();
     let mut children = vec![column(2.0, label), Element::new(Spacer::default())];
     children.extend(control(row, open));
     Element::new(Stack {
@@ -179,14 +191,14 @@ pub fn pane(sections: &[Section], open: Option<ControlId>) -> Element<Message> {
                     section
                         .header
                         .as_deref()
-                        .map(|h| text(h, TextRole::Section)),
+                        .and_then(|h| text(h, TextRole::Section)),
                 );
                 children.extend(section.rows.iter().map(|r| row(r, open)));
                 children.extend(
                     section
                         .footer
                         .as_deref()
-                        .map(|f| styled(f, TextRole::Body, true)),
+                        .and_then(|f| styled(f, TextRole::Body, true)),
                 );
                 column(ROW_GAP, children).key(i as u64)
             })
@@ -197,7 +209,7 @@ pub fn pane(sections: &[Section], open: Option<ControlId>) -> Element<Message> {
 /// The search's results, each a button to its pane.
 pub fn results(hits: &[Hit]) -> Element<Message> {
     if hits.is_empty() {
-        return styled("No Results", TextRole::Body, true);
+        return line("No Results", TextRole::Body, true);
     }
     column(
         ROW_GAP,

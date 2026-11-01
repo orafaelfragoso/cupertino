@@ -1,11 +1,10 @@
 //! A pane's sheet as a Kit dialog over the window: its title, its message, its field or list, Cancel and its action.
 
-use cupertino_kit::controls::{Dialog, DialogAction, DialogButton, DialogKind, TextRole};
+use cupertino_kit::controls::{Dialog, DialogAction, DialogButton, DialogKind};
 use cupertino_kit::geometry::Insets;
 use cupertino_kit::prelude::*;
 use cupertino_kit::text::ContentPurpose;
 
-use super::form;
 use super::state::State;
 use super::Message;
 use crate::sheet::{Kind, Outcome, Secret, Sheet};
@@ -113,9 +112,7 @@ fn body(sheet: &Sheet) -> Option<Element<Message>> {
                 .key("field"),
             )
         }
-        Kind::Forget { .. } | Kind::Picker { .. } | Kind::Apps { .. } => {
-            Some(form::text("", TextRole::Body))
-        }
+        Kind::Forget { .. } | Kind::Picker { .. } | Kind::Apps { .. } => None,
     }
 }
 

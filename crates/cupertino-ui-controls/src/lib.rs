@@ -500,6 +500,8 @@ pub enum MenuAnchor {
     Below(Key),
     /// At a point, opening down and to the trailing side: a context menu.
     At(Point),
+    /// Over the node with this key, the current item's label where the node's label is: a pop-up button's menu.
+    Over(Key),
 }
 
 /// A menu in a popup window that takes the keyboard while open. Up, Down, Home and End move between the enabled items,
@@ -530,7 +532,7 @@ pub struct ContextMenu<M> {
     pub on_open: Option<Handler<Point, M>>,
 }
 
-/// A button that shows the chosen option and opens a menu of the options below itself on a click, Space, Return, Up
+/// A button that shows the chosen option and opens a menu of the options over itself on a click, Space, Return, Up
 /// or Down. Give its element a key and declare [`PopUpButton::menu`] while `open`.
 pub struct PopUpButton<M> {
     /// The button's accessible name; its value is the chosen option.

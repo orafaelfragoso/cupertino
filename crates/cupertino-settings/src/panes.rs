@@ -92,6 +92,8 @@ pub enum ControlId {
     FocusFor(usize),
     Volume,
     Mute,
+    /// The sound output, by index of `Live::outputs`.
+    Output,
     Brightness,
     WifiPower,
     /// A network of `GetNetworks`, by index: Join or Disconnect.
@@ -189,6 +191,8 @@ pub enum Call {
         level: f64,
         muted: bool,
     },
+    /// Make the PipeWire sink with this id the output applications play to.
+    SetOutput(u32),
     SetBrightness(f64),
     SetWirelessEnabled(bool),
     /// Join a network; `None`: ask for the passphrase first (a secured network that is not saved).
@@ -1289,7 +1293,19 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                 Reading::Ready(v) => (v.level, v.muted, None),
                 other => (0.0, false, other.reason().map(str::to_string)),
             };
-            let rows = vec![
+            let mut rows = Vec::new();
+            if live.outputs.len() > 1 {
+                rows.push(row(
+                    ControlId::Output,
+                    "Output device",
+                    Control::Popup {
+                        choices: live.outputs.iter().map(|o| o.name.clone()).collect(),
+                        selected: live.outputs.iter().position(|o| o.default).unwrap_or(0),
+                    },
+                    svc,
+                ));
+            }
+            rows.extend([
                 Row {
                     disabled: reason.clone(),
                     ..row(
@@ -1303,7 +1319,7 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                     disabled: reason,
                     ..row(ControlId::Mute, "Mute", switch(muted), svc)
                 },
-            ];
+            ]);
             vec![Section {
                 header: header("Output"),
                 rows,
@@ -2113,6 +2129,10 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
                 muted: bool_of(value),
             })]
         }
+        ControlId::Output => match live.outputs.get(index_of(value)) {
+            Some(output) => vec![Effect::Service(Call::SetOutput(output.id))],
+            None => Vec::new(),
+        },
         ControlId::Brightness => vec![Effect::Service(Call::SetBrightness(fraction_of(value)))],
         ControlId::WifiPower => vec![Effect::Service(Call::SetWirelessEnabled(bool_of(value)))],
         ControlId::WifiNetwork(i) => match live.wifi.ready().and_then(|w| w.networks.get(i)) {
@@ -2308,6 +2328,7 @@ mod tests {
                 level: 0.5,
                 muted: false,
             }),
+            outputs: Vec::new(),
             brightness: Reading::Ready(0.5),
             battery: Reading::Ready(None),
             wifi: Reading::Ready(Wifi {
@@ -3147,6 +3168,46 @@ mod tests {
                 muted: true
             })]
         );
+    }
+
+    #[test]
+    fn the_sound_pane_lists_the_outputs_when_there_is_more_than_one_and_a_choice_sets_that_sink() {
+        use crate::live::Output;
+        let output = |id, name: &str, default| Output {
+            id,
+            name: name.into(),
+            default,
+        };
+        let live = Live {
+            outputs: vec![
+                output(52, "Speakers", false),
+                output(53, "Headphones", true),
+            ],
+            ..Live::default()
+        };
+        let first = &rows(PaneId::Sound, &live)[0];
+        assert_eq!(first.id, ControlId::Output);
+        assert_eq!(
+            first.control,
+            Control::Popup {
+                choices: vec!["Speakers".into(), "Headphones".into()],
+                selected: 1
+            }
+        );
+        let mut s = unset();
+        assert_eq!(
+            change(ControlId::Output, Value::Index(0), &mut s, &live),
+            [Effect::Service(Call::SetOutput(52))]
+        );
+        assert_eq!(
+            change(ControlId::Output, Value::Index(7), &mut s, &live),
+            []
+        );
+        let one = Live {
+            outputs: vec![output(52, "Speakers", true)],
+            ..Live::default()
+        };
+        assert_eq!(rows(PaneId::Sound, &one)[0].id, ControlId::Volume);
     }
 
     #[test]

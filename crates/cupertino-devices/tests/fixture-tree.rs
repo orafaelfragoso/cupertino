@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use cupertino_devices::{
     classify_device, enumerate, gpus, primary_gpu, select_primary, select_render, DevT, Device,
-    Error, InputClass, Subsystem,
+    Error, InputClass, RenderChoice, Subsystem,
 };
 
 fn sysfs() -> PathBuf {
@@ -123,14 +123,44 @@ fn primary_gpu_without_boot_vga_is_the_first_card() {
 }
 
 #[test]
+fn a_card_knows_its_render_node_past_one_it_cannot_read() {
+    let nodes: Vec<Option<PathBuf>> = gpus(&sysfs())
+        .unwrap()
+        .into_iter()
+        .map(|gpu| gpu.render_node)
+        .collect();
+    assert_eq!(nodes, [None, Some(PathBuf::from("/dev/dri/renderD128"))]);
+}
+
+#[test]
 fn the_render_gpu_is_the_named_card_else_the_primary_one() {
     let all = gpus(&sysfs()).unwrap();
     let render = |wanted: Option<&str>| {
-        select_render(all.clone(), wanted.map(Path::new)).map(|gpu| gpu.device.sysname().to_owned())
+        select_render(all.clone(), wanted.map(Path::new))
+            .map(|(gpu, choice)| (gpu.device.sysname().to_owned(), choice))
     };
-    assert_eq!(render(None).as_deref(), Some("card1"));
-    assert_eq!(render(Some("/dev/dri/card0")).as_deref(), Some("card0"));
-    assert_eq!(render(Some("/dev/dri/card7")).as_deref(), Some("card1"));
+    let chose = |card: &str, choice| Some((card.to_owned(), choice));
+    assert_eq!(render(None), chose("card1", RenderChoice::Primary));
+    assert_eq!(render(Some("")), chose("card1", RenderChoice::Primary));
+    assert_eq!(
+        render(Some("/dev/dri/card0")),
+        chose("card0", RenderChoice::Named)
+    );
+    assert_eq!(
+        render(Some("/dev/dri/renderD128")),
+        chose("card1", RenderChoice::Named)
+    );
+    assert_eq!(
+        render(Some("/dev/dri/card7")),
+        chose(
+            "card1",
+            RenderChoice::Unmatched(PathBuf::from("/dev/dri/card7"))
+        )
+    );
+    assert_eq!(
+        render(Some("card0")),
+        chose("card1", RenderChoice::Unmatched(PathBuf::from("card0")))
+    );
     assert_eq!(
         select_render(Vec::new(), Some(Path::new("/dev/dri/card0"))),
         None

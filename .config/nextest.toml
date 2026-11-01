@@ -4,3 +4,8 @@
 [profile.default]
 slow-timeout = { period = "30s", terminate-after = 4 }
 fail-fast = false
+
+# Builds the C library through cargo before it reads it, which may link part of the toolkit's graph again.
+[[profile.default.overrides]]
+filter = 'package(cupertino-ui-abi) & binary(symbols)'
+slow-timeout = { period = "60s", terminate-after = 10 }

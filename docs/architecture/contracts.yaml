@@ -5,9 +5,9 @@
 #
 # Format: a list of flat entries, one `key: value` per line, no quoting, no nesting. Both checkers read exactly this.
 #   name        interface name, or binary name
-#   kind        wayland-global | dbus-interface | binary | socket-protocol
+#   kind        wayland-global | dbus-interface | binary | socket-protocol | c-library
 #   version     advertised version (globals), interface generation (D-Bus: the number in the name, n/a if none), crate
-#               version (binaries); `unknown` where it cannot be measured
+#               version (binaries), ABI version (C libraries); `unknown` where it cannot be measured
 #   owner_crate workspace crate that defines it
 #   owner_area  compositor | rendering | design | apps | services | packaging
 #   scope       public: any client or application may use it
@@ -30,6 +30,15 @@
 #               binaries have none, their source is the file the binary target builds from. It only keeps the source
 #               pointing at the right file: entries may share one (wl_compositor and wl_subcompositor), and the
 #               globals themselves are proven at run time by crates/cupertino-server/tests/contracts.rs
+- name: libcupertinokit.so.1
+  kind: c-library
+  version: 1.0
+  owner_crate: cupertino-ui-abi
+  owner_area: design
+  scope: public
+  test_owner: crates/cupertino-ui-abi/tests/symbols.rs
+  source: crates/cupertino-ui-abi/src/lib.rs
+  note: CupertinoKit's C ABI. The exported ck_* functions, the header and the struct layouts are pinned in crates/cupertino-ui-abi/abi/.
 - name: /run/cupertino-login/greeter.sock
   kind: socket-protocol
   version: 5

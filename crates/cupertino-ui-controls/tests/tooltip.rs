@@ -539,3 +539,15 @@ fn an_overlong_tip_ends_in_an_ellipsis_within_the_text_width() {
     );
     assert!(origin.x + mark.size().width > padding + 280.0, "{origin:?}");
 }
+
+#[test]
+fn escape_during_the_delay_cancels_the_tip_wherever_the_focus_is() {
+    let mut h = Harness::<Form>::new();
+    h.click(h.center("Name"));
+    hover(&mut h, "Trash");
+    at(&mut h, 300);
+    h.tap(ESCAPE);
+    assert_eq!(escaped(&h), 1, "nothing showed, so the key goes on");
+    at(&mut h, 900);
+    assert!(!h.model().tip.shown());
+}

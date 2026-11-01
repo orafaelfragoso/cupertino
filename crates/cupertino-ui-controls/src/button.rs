@@ -3,8 +3,8 @@ use crate::press::{Keys, Outcome, Press};
 use crate::{Button, ButtonRole, ButtonStyle};
 use cupertino_geometry::{Rect, Size};
 use cupertino_ui_core::{
-    AccessibleStates, Action, Change, ControlState, Event, EventCx, MeasureCx, PaintCx,
-    Propagation, Role, SemanticsCx, Widget,
+    AccessibleStates, Action, Change, ControlState, Environment, Event, EventCx, MeasureCx,
+    PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 use cupertino_ui_theme::{ColorRole, ThemeTokens};
@@ -146,12 +146,13 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
             }
         };
         Measured {
-            size: Size::new(
-                width.max(metrics.min_target.width),
-                metrics.button_height.max(metrics.min_target.height),
-            ),
+            size: Size::new(width, metrics.button_height),
             baseline: None,
         }
+    }
+
+    fn target(&self, _: &Press, env: &Environment) -> Size {
+        env.theme.metrics.min_target
     }
 
     fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {

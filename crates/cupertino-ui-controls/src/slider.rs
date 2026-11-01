@@ -3,8 +3,8 @@ use crate::{Slider, SliderStyle};
 use cupertino_geometry::{Insets, Rect, Size};
 use cupertino_theme::metrics::Control;
 use cupertino_ui_core::{
-    AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Event, EventCx,
-    MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
+    AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Environment,
+    Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
 use cupertino_ui_layout::{
     Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
@@ -155,11 +155,15 @@ impl<M: 'static> Widget<M> for Slider<M> {
         } else {
             0.0
         };
-        let height = knob.max(ticks).max(theme.metrics.min_target.height);
+        let height = knob.max(ticks);
         Measured {
             size: Size::new(constraints.width.ideal().max(knob), height),
             baseline: None,
         }
+    }
+
+    fn target(&self, _: &SliderState, env: &Environment) -> Size {
+        env.theme.metrics.min_target
     }
 
     fn event(

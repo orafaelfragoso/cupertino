@@ -54,8 +54,8 @@ pub fn text() -> Arc<TextSystem> {
     Arc::new(TextSystem::new(fonts, "Inter"))
 }
 
-/// The one-line width of `label` in the fixture's 13 pt body type.
-pub fn label_width(label: &str) -> f64 {
+/// The one-line size of `label` in the fixture's 13 pt body type.
+pub fn label_size(label: &str) -> Size {
     text()
         .measure(
             &AttributedText::plain(label, TextStyle::new(13.0)),
@@ -63,7 +63,10 @@ pub fn label_width(label: &str) -> f64 {
             None,
         )
         .unwrap()
-        .width
+}
+
+pub fn label_width(label: &str) -> f64 {
+    label_size(label).width
 }
 
 struct NoGlyphs;

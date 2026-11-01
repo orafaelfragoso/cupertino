@@ -3,8 +3,8 @@ use crate::press::{Keys, Outcome, Press};
 use crate::Toggle;
 use cupertino_geometry::{Rect, Size};
 use cupertino_ui_core::{
-    AccessibleStates, AccessibleValue, Action, Change, Checked, ControlState, Event, EventCx,
-    MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
+    AccessibleStates, AccessibleValue, Action, Change, Checked, ControlState, Environment, Event,
+    EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured};
 use cupertino_ui_theme::{ColorRole, ControlMetrics};
@@ -80,12 +80,13 @@ impl<M: 'static> Widget<M> for Toggle<M> {
     fn measure(&self, _: &Press, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
         let metrics = cx.env().theme.metrics;
         Measured {
-            size: Size::new(
-                metrics.switch.width.max(metrics.min_target.width),
-                metrics.switch.height.max(metrics.min_target.height),
-            ),
+            size: metrics.switch,
             baseline: None,
         }
+    }
+
+    fn target(&self, _: &Press, env: &Environment) -> Size {
+        env.theme.metrics.min_target
     }
 
     fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {

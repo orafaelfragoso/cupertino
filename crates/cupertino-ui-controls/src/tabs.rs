@@ -104,14 +104,8 @@ impl<M: 'static> Widget<M> for TabView<M> {
         };
         let size = cx.size();
         let height = look::metric(Control::SegmentedControl, &theme);
-        let row = height.max(theme.metrics.min_target.height);
         let width = segment_width(&env, &self.tabs) * self.tabs.len() as f64;
-        let chrome = Rect::new(
-            (size.width - width) / 2.0,
-            (row - height) / 2.0,
-            width,
-            height,
-        );
+        let chrome = Rect::new((size.width - width) / 2.0, 0.0, width, height);
         let top = (chrome.center().y * env.scale).round() / env.scale;
         let frame = Rect::new(0.0, top, size.width, size.height - top);
         let mut verbs = rounded(Rect::new(0.0, 0.0, size.width, size.height), 0.0);

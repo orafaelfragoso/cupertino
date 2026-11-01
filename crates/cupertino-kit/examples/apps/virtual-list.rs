@@ -147,6 +147,7 @@ impl<const COUNT: usize> Application for VirtualList<COUNT> {
                     ],
                 })
             }),
+            key: None,
             type_select: Some(Box::new(move |index| {
                 format!("Item {}", grouped(Self::item(descending, index)))
             })),

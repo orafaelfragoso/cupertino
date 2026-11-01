@@ -62,4 +62,6 @@ buffer follow.
 - Timing, release, medians of 15 (`cargo test --release -p cupertino-ui-text -- --ignored --nocapture timing`; the
   shape figure is cold and includes loading the font and the break data, and the grouping of glyphs into clusters
   that every layout reuses): 200 characters shape 85-105 us, reflow 4-5 us; 5000 characters shape 940-980 us, reflow
-  87-90 us; a cache hit costs under 1 us.
+  87-90 us; a cache hit costs under 1 us. A caret move lays out only the caret's hard line and the lines on either
+  side: in a 10,000-line text an arrow costs 11-14 us and a word move 17-18 us, and on one 92,000-character line an
+  arrow costs 3.2 ms and a word move 10.5 ms.

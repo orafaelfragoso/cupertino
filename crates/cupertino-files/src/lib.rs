@@ -11,7 +11,8 @@
 //!   [`metrics`]; [`preview`]: quick-preview transition geometry;
 //! * [`render`]: CPU rendering of the icon and list views;
 //! * [`places`], [`recents`], [`history`], [`browser`]: the sidebar's standard places, the Recents folder, back / forward history and
-//!   the state of one browser window; [`window`]: its layout, hit testing and drawing;
+//!   the state of one browser window; [`window`]: its layout, hit testing and drawing; [`sidebar_keys`]: the sidebar's
+//!   keyboard navigation;
 //! * `udisks` (feature `app`): removable media on the system bus; `notice` (feature `app`): failures as notifications.
 
 pub mod browser;
@@ -39,6 +40,7 @@ pub mod rename;
 pub mod render;
 pub mod selection;
 pub mod settings;
+pub mod sidebar_keys;
 pub mod sort;
 pub mod spring;
 pub mod tags;

@@ -37,6 +37,7 @@ use cupertino_files::places::{
     follow_trash, removable_holding, session_places, Place, PlaceKind, SessionPlaces, Volume,
 };
 use cupertino_files::recents;
+use cupertino_files::sidebar_keys::{entry_row, sidebar_key, SidebarAction, SidebarKey};
 use cupertino_files::rename::{RenameEvent, RenameTrigger};
 use cupertino_files::render::{Palette, Renderer};
 use cupertino_files::selection::Modifiers;
@@ -125,6 +126,8 @@ struct App {
     /// keyboard.
     search: TextField,
     search_focused: bool,
+    /// The sidebar row with the keyboard focus, while the sidebar has the keyboard.
+    sidebar_focus: Option<usize>,
     /// How wide the search field is now: it opens while focused or holding text.
     search_width: SearchWidth,
     /// The frame drawn last: clicks and arrow keys are resolved against it.
@@ -446,6 +449,7 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
         available: None,
         search: TextField::with_max_len(SEARCH_MAX_LEN),
         search_focused: false,
+        sidebar_focus: None,
         search_width: SearchWidth::default(),
         frame: None,
         scroll: 0.0,
@@ -634,7 +638,15 @@ impl App {
         let standard = follow_trash(&mut self.places, self.standard_places, &self.trash_files);
         if standard != self.standard_places {
             self.standard_places = standard;
+            self.keep_sidebar_focus();
             self.window.redraw();
+        }
+    }
+
+    /// Keep the sidebar's focus on a row after the rows changed.
+    fn keep_sidebar_focus(&mut self) {
+        if let Some(focus) = &mut self.sidebar_focus {
+            *focus = (*focus).min(self.places.len().saturating_sub(1));
         }
     }
 
@@ -684,6 +696,7 @@ impl App {
             .map(|d| Place::removable(&d.name, d.mount.as_deref(), self.busy.contains(&d.object)))
             .collect();
         self.places.extend(rows);
+        self.keep_sidebar_focus();
         self.window.redraw();
         if let Some(at) = go {
             return self.go(at);
@@ -858,6 +871,7 @@ impl App {
             available,
             search,
             search_focused,
+            sidebar_focus,
             palette,
             scroll,
             edit,
@@ -880,6 +894,7 @@ impl App {
             active,
             search,
             search_focused: *search_focused,
+            sidebar_focus: *sidebar_focus,
             search_caret,
             title: &title,
             now: SystemTime::now(),
@@ -1023,6 +1038,9 @@ impl App {
             return Ok(());
         }
         self.drag = None;
+        if self.sidebar_focus.take().is_some() {
+            self.window.redraw();
+        }
         // nothing to hit before the first frame
         let Some(frame) = &self.frame else {
             return Ok(());
@@ -1174,6 +1192,17 @@ impl App {
             self.window.redraw();
             return Ok(());
         }
+        if code == key::TAB && mods.ctrl && !mods.logo && !mods.alt {
+            self.sidebar_focus = match self.sidebar_focus {
+                Some(_) => None,
+                None => Some(entry_row(&self.places, self.browser.dir())),
+            };
+            self.window.redraw();
+            return Ok(());
+        }
+        if self.sidebar_focus.is_some() && self.sidebar_input(code, mods, character)? {
+            return Ok(());
+        }
         let changed = if mods.logo && !mods.ctrl && !mods.alt {
             match (code, character) {
                 (key::BACKSPACE, _) => return self.trash_selection(),
@@ -1255,6 +1284,51 @@ impl App {
             self.window.redraw();
         }
         Ok(())
+    }
+
+    /// A key while the sidebar has the keyboard; `false` leaves it to the folder's items: the shortcuts, and Primary+E
+    /// on a row that is not a mounted removable file system (File › Eject of the folder shown).
+    fn sidebar_input(
+        &mut self,
+        code: u32,
+        mods: KeyModifiers,
+        character: Option<char>,
+    ) -> Result<bool> {
+        let Some(focus) = self.sidebar_focus else {
+            return Ok(false);
+        };
+        let plain = !(mods.logo || mods.ctrl || mods.alt || mods.shift);
+        let key = match code {
+            key::UP if plain => SidebarKey::Up,
+            key::DOWN if plain => SidebarKey::Down,
+            key::HOME if plain => SidebarKey::Home,
+            key::END if plain => SidebarKey::End,
+            key::ENTER | key::KEYPAD_ENTER if plain => SidebarKey::Open,
+            key::ESCAPE if plain => {
+                self.sidebar_focus = None;
+                self.window.redraw();
+                return Ok(true);
+            }
+            _ if mods.logo && !mods.ctrl && !mods.alt && character == Some('e') => {
+                SidebarKey::Eject
+            }
+            // other keys do nothing in the sidebar; shortcuts go on to the items
+            _ => return Ok(!(mods.logo || mods.ctrl || mods.alt)),
+        };
+        match sidebar_key(&self.places, focus, key) {
+            Some(SidebarAction::Focus(row)) => {
+                self.sidebar_focus = Some(row);
+                self.window.redraw();
+            }
+            Some(SidebarAction::Go(row)) => {
+                let path = self.places[row].path.clone();
+                self.go(path)?;
+            }
+            Some(SidebarAction::Mount(row)) => self.mount(row),
+            Some(SidebarAction::Eject(row)) => self.eject(row)?,
+            None => return Ok(key != SidebarKey::Eject),
+        }
+        Ok(true)
     }
 
     /// Move the focus by a key in the frame drawn last. The items it changes are drawn here, so a caller has nothing

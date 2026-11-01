@@ -12,7 +12,7 @@ use crate::paint::{PaintInput, Painter};
 use crate::pointer::Pointer;
 use crate::route::{hit_test, Geometry, Route};
 use crate::scroll::{geometry_events, reveal_events};
-use crate::semantics::{build, diff, protected};
+use crate::semantics::{build, composing, diff, dismissible, protected};
 use crate::task::Executor;
 use crate::tree::Tree;
 use crate::{
@@ -39,6 +39,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const TAB: Keysym = Keysym(0xff09);
+const ESCAPE: Keysym = Keysym(0xff1b);
 /// How many frames in a row a window holds back while its scroll containers tell the model a new geometry.
 const HELD_PAINTS: u8 = 4;
 const LEFT_TAB: Keysym = Keysym(0xfe20);
@@ -115,6 +116,8 @@ struct WindowState<M> {
     touches: HashMap<i32, Vec<NodeId>>,
     /// Each key held down and the node that took its press; it gets [`Event::Cancel`] if the window deactivates first.
     held: Vec<(HeldKey, NodeId)>,
+    /// The Escape a dismissible node took, whose release then goes to no one.
+    dismissed: Option<HeldKey>,
     animate: BTreeSet<NodeId>,
     /// When each node asked to be woken, one time per node; ordered so that nodes due together wake in a fixed order.
     wakes: BTreeMap<NodeId, Timestamp>,
@@ -522,6 +525,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             pointer: Pointer::default(),
             touches: HashMap::new(),
             held: Vec::new(),
+            dismissed: None,
             animate: BTreeSet::new(),
             wakes: BTreeMap::new(),
             text_input: None,
@@ -779,9 +783,29 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             Some(node) if self.tree.contains(node) => self.tree.path(node),
             _ => vec![root],
         };
+        let held = HeldKey::of(&key);
+        if !key.pressed && w.dismissed == Some(held) {
+            w.dismissed = None;
+            w.held.retain(|&(k, _)| k != held);
+            return;
+        }
+        let escape = key.pressed && key.keysym == ESCAPE && key.mods.is_empty();
+        if escape && !path.last().is_some_and(|&n| composing(&self.tree, n)) {
+            let nodes = dismissible(&self.tree, root);
+            let mut route = route(&mut self.tree, w, now, effects);
+            let taken = nodes
+                .into_iter()
+                .rev()
+                .find(|&node| route.offer(node, &Event::Dismiss) == Propagation::Stop);
+            if let Some(node) = taken {
+                w.held.retain(|&(k, _)| k != held);
+                w.held.push((held, node));
+                w.dismissed = Some(held);
+                return;
+            }
+        }
         let handled =
             route(&mut self.tree, w, now, effects).dispatch(&path, &Event::Key(key, time));
-        let held = HeldKey::of(&key);
         w.held.retain(|&(k, _)| k != held);
         if handled == Propagation::Stop && key.pressed {
             w.held.extend(path.last().map(|&node| (held, node)));

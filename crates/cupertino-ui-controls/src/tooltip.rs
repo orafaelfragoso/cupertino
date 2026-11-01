@@ -194,7 +194,8 @@ impl<M: 'static> Widget<M> for Anchor<M> {
         }
     }
 
-    /// Presses and Escape are heard on their way down, so the anchor's own control still gets them.
+    /// Presses are heard on their way down, so the anchor's own control still gets them. A shown tip takes Escape
+    /// wherever the focus is, as a dismissible node.
     fn event(&self, rest: &mut Rest, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         let own = cx.node() == cx.target();
         match *event {
@@ -248,6 +249,10 @@ impl<M: 'static> Widget<M> for Anchor<M> {
             {
                 self.hide(rest, cx);
             }
+            Event::Dismiss if self.state.shown => {
+                self.hide(rest, cx);
+                return Propagation::Stop;
+            }
             Event::Key(key, _)
                 if cx.phase() == Phase::Capture
                     && key.pressed
@@ -255,10 +260,6 @@ impl<M: 'static> Widget<M> for Anchor<M> {
                     && key.mods.is_empty() =>
             {
                 rest.show_at = None;
-                if self.state.shown {
-                    self.send(Step::Hide, cx);
-                    return Propagation::Stop;
-                }
             }
             _ => {}
         }
@@ -269,6 +270,9 @@ impl<M: 'static> Widget<M> for Anchor<M> {
 
     fn semantics(&self, _: &Rest, cx: &mut SemanticsCx<'_>) {
         cx.describe_content(self.text.clone());
+        if self.state.shown {
+            cx.dismissible();
+        }
     }
 }
 

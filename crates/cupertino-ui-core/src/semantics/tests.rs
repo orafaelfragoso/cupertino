@@ -506,3 +506,67 @@ fn a_keyed_relation_among_siblings_sharing_the_key_goes_to_the_surviving_one() {
 
     assert_eq!(controller(&pass, &tree), [Relation::Controls(first)]);
 }
+
+/// A popover that is dismissible while open, or a field that composes text.
+struct Closable {
+    open: bool,
+    composing: bool,
+}
+
+impl Widget<M> for Closable {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        if self.open {
+            cx.dismissible();
+        }
+        if self.composing {
+            cx.composing();
+        }
+    }
+}
+
+#[test]
+fn the_dismissible_and_composing_nodes_are_read_as_they_declare_now() {
+    let closable = |open, composing| Element::new(Closable { open, composing });
+    let mut tree = Tree::<M>::new(20);
+    let root = tree
+        .reconcile(
+            None,
+            Element::new(group(vec![
+                closable(true, false),
+                closable(false, true),
+                Element::new(group(vec![closable(true, false)])),
+            ])),
+        )
+        .unwrap();
+    let children = tree.get(root).unwrap().children.clone();
+    let inner = tree.get(children[2]).unwrap().children[0];
+
+    assert_eq!(dismissible(&tree, root), [children[0], inner]);
+    assert!(composing(&tree, children[1]));
+    assert!(!composing(&tree, children[0]));
+}

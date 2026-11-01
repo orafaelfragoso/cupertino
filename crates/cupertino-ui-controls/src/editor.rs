@@ -673,6 +673,9 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
     fn semantics(&self, state: &EditorState, cx: &mut SemanticsCx<'_>) {
         cx.role(Role::MultilineTextInput);
         cx.name(self.label.clone());
+        if state.buffer.composition().is_some() {
+            cx.composing();
+        }
         let (caret, selection) = match state.buffer.composition() {
             Some(range) => (range.start, range.start..range.start),
             None => (state.buffer.caret(), state.buffer.selection()),

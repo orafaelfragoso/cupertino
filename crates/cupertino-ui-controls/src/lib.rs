@@ -269,9 +269,9 @@ pub struct Toggle<M> {
 }
 
 /// A short tip for its anchor: shown after the pointer rests on the anchor or the keyboard focus comes to it, and
-/// dismissed by a press, Escape, the focus leaving, or the pointer leaving both anchor and tip. The text is the anchor's
-/// description to assistive technology whether the tip shows or not. Key the element, and declare
-/// [`Tooltip::window`] with the other windows while the state is shown.
+/// dismissed by a press, the focus leaving, the pointer leaving both anchor and tip, or Escape wherever the focus is
+/// unless a field there is composing text. The text is the anchor's description to assistive technology whether the
+/// tip shows or not. Key the element, and declare [`Tooltip::window`] with the other windows while the state is shown.
 pub struct Tooltip<M> {
     pub text: String,
     pub anchor: Element<M>,

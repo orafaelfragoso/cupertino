@@ -2,12 +2,17 @@ mod support;
 
 use cupertino_geometry::{Insets, Point};
 use cupertino_ui_controls::{
-    Button, ButtonRole, ButtonStyle, Stack, TextField, Tooltip, TooltipChange, TooltipState,
+    Button, ButtonRole, ButtonStyle, Stack, TextChange, TextField, Tooltip, TooltipChange,
+    TooltipState,
 };
-use cupertino_ui_core::{Application, Command, Element, Role, Window, WindowKey};
+use cupertino_ui_core::{
+    Application, Command, CommandRegistry, Element, Role, Shortcut, Window, WindowKey,
+};
 use cupertino_ui_layout::{Align, Axis};
-use cupertino_ui_platform::{PointerEvent, PopupEdge, Timestamp, WindowEvent, WindowId};
-use cupertino_ui_text::ContentPurpose;
+use cupertino_ui_platform::{
+    Keysym, Mods, PointerEvent, PopupEdge, Timestamp, WindowEvent, WindowId,
+};
+use cupertino_ui_text::{ContentPurpose, ImeBatch, ImeEvent, Preedit};
 use support::{window, Harness, TAB};
 
 const ESCAPE: u32 = 0xff1b;
@@ -19,6 +24,8 @@ enum Message {
     /// Logged when the state starts or stops showing.
     Show,
     Hide,
+    /// The window's Escape shortcut, which hears Escape only once the focus path let it through.
+    Escaped,
     Trash,
     Other,
 }
@@ -385,4 +392,99 @@ fn a_click_that_focuses_the_anchor_shows_no_tip() {
     hover(&mut h, "Other");
     at(&mut h, 900);
     assert!(h.model().said.is_empty());
+}
+
+/// A field with the focus and, beside it, the trash button with its tip; the window has an Escape shortcut.
+struct Form;
+
+impl Application for Form {
+    type Model = Model;
+    type Message = Message;
+
+    fn init() -> (Model, Vec<Command<Message>>) {
+        (Model::default(), Vec::new())
+    }
+
+    fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
+        Page::update(model, message)
+    }
+
+    fn view(model: &Model) -> Vec<Window<Message>> {
+        let mut windows = window(Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets::uniform(10.0),
+            spacing: 8.0,
+            align: Align::Start,
+            children: vec![
+                Element::new(TextField {
+                    label: "Name".into(),
+                    placeholder: String::new(),
+                    value: String::new(),
+                    revision: 0,
+                    purpose: ContentPurpose::Normal,
+                    enabled: true,
+                    on_change: Some(Box::new(|_: TextChange| Message::Other)),
+                    on_submit: None,
+                })
+                .key("Name"),
+                Element::from(tip(model.tip)).key("tip"),
+            ],
+        }));
+        windows[0].shortcuts = CommandRegistry::new().with(
+            Shortcut {
+                mods: Mods::default(),
+                keysym: Keysym(ESCAPE),
+            },
+            Message::Escaped,
+        );
+        windows
+    }
+}
+
+fn escaped(h: &Harness<Form>) -> usize {
+    h.model()
+        .said
+        .iter()
+        .filter(|m| **m == Message::Escaped)
+        .count()
+}
+
+/// The focus in the field and the trash button's tip shown by the pointer.
+fn hovered_while_typing() -> Harness<Form> {
+    let mut h = Harness::<Form>::new();
+    h.click(h.center("Name"));
+    assert!(h.focused("Name"));
+    hover(&mut h, "Trash");
+    at(&mut h, 600);
+    assert!(h.model().tip.shown());
+    h
+}
+
+#[test]
+fn escape_dismisses_a_tip_shown_by_the_pointer_while_the_focus_is_elsewhere() {
+    let mut h = hovered_while_typing();
+    h.tap(ESCAPE);
+    assert!(!h.model().tip.shown());
+    assert_eq!(escaped(&h), 0, "the focus path never heard it");
+    h.tap(ESCAPE);
+    assert_eq!(escaped(&h), 1, "with the tip gone Escape goes on as before");
+}
+
+#[test]
+fn escape_first_cancels_what_the_field_is_composing() {
+    let mut h = hovered_while_typing();
+    h.send(WindowEvent::Ime(ImeEvent::Done(ImeBatch {
+        preedit: Some(Preedit {
+            text: "\u{b4}".into(),
+            cursor: None,
+        }),
+        commit: None,
+        delete: (0, 0),
+        current: true,
+    })));
+    h.tap(ESCAPE);
+    assert!(h.model().tip.shown(), "one Escape cancels the accent");
+    assert_eq!(escaped(&h), 0);
+    h.tap(ESCAPE);
+    assert!(!h.model().tip.shown());
 }

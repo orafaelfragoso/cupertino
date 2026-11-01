@@ -347,6 +347,9 @@ impl Application for Places {
             key: Key::from(label.to_owned()),
             label: label.into(),
             icon: Some(icon.into()),
+            description: None,
+            accessory: None,
+            busy: false,
         };
         let mut windows = window("Sidebar", Size::new(220.0, 300.0), Vec::new());
         windows[0].content = Element::from(Sidebar {
@@ -370,6 +373,7 @@ impl Application for Places {
             scroll: *scroll,
             on_scroll: Box::new(|scroll| scroll),
             on_select: None,
+            on_accessory: None,
         });
         windows
     }

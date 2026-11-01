@@ -838,6 +838,19 @@ pub struct SidebarItem {
     pub label: String,
     /// A system symbol name, drawn before the label in the accent colour.
     pub icon: Option<String>,
+    /// What assistive technology reads after the label, as "Removable" for a device.
+    pub description: Option<String>,
+    /// A button at the row's trailing edge, as a device's eject; the sidebar's `on_accessory` takes its presses.
+    pub accessory: Option<SidebarAccessory>,
+    /// A call on the row's item is running: the row hides its accessory and dims its label.
+    pub busy: bool,
+}
+
+/// A row's trailing button: a symbol, and the name assistive technology reads, as "Eject Backup".
+#[derive(Clone, Debug, PartialEq)]
+pub struct SidebarAccessory {
+    pub symbol: String,
+    pub label: String,
 }
 
 /// A heading and the rows under it.
@@ -861,6 +874,8 @@ pub struct Sidebar<M> {
     pub scroll: ScrollState,
     pub on_scroll: Handler<ScrollState, M>,
     pub on_select: Option<Handler<usize, M>>,
+    /// A press on a row's accessory, with the row's key; it does not select the row.
+    pub on_accessory: Option<Handler<Key, M>>,
 }
 
 /// Flexible empty space in a stack.

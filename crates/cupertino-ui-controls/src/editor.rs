@@ -10,11 +10,13 @@ use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, Environment, Event, EventCx,
     MeasureCx, PaintCx, Propagation, Role, SemanticsCx, TextSemantics, Widget,
 };
-use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
+use cupertino_ui_layout::{
+    Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
+};
 use cupertino_ui_platform::{KeyEvent, Keysym, MouseButton, PointerEvent};
 use cupertino_ui_text::{
     AttributedText, ChangeCause, ContentPurpose, FontWeight, ImeEvent, Keymap, LineLayout,
-    Paragraph, ParagraphLayout, ParagraphStyle, Response, TextBuffer, TextEditorKeys,
+    Paragraph, ParagraphLayout, ParagraphStyle, Response, TextAlign, TextBuffer, TextEditorKeys,
     TextInputSession, TextPosition, TextStyle, TextSystem, CARET_WIDTH,
 };
 use cupertino_ui_theme::ColorRole;
@@ -43,6 +45,7 @@ struct Laid {
 struct Basis {
     text: Arc<TextSystem>,
     style: TextStyle,
+    align: TextAlign,
     width: Option<f32>,
 }
 
@@ -55,12 +58,18 @@ impl Basis {
                 weight: FontWeight(body.weight),
                 ..TextStyle::new(body.size)
             },
+            align: match env.direction {
+                LayoutDirection::Ltr => TextAlign::Left,
+                LayoutDirection::Rtl => TextAlign::Right,
+            },
             width,
         }
     }
 
     fn same_shaping(&self, other: &Basis) -> bool {
-        Arc::ptr_eq(&self.text, &other.text) && self.style == other.style
+        Arc::ptr_eq(&self.text, &other.text)
+            && self.style == other.style
+            && self.align == other.align
     }
 
     fn lay_out(&self, text: &str) -> Option<(Paragraph, ParagraphLayout)> {
@@ -68,7 +77,10 @@ impl Basis {
             .text
             .paragraph(
                 &AttributedText::plain(text, self.style.clone()),
-                &ParagraphStyle::default(),
+                &ParagraphStyle {
+                    align: self.align,
+                    ..ParagraphStyle::default()
+                },
             )
             .ok()?;
         let layout = paragraph.layout(self.width);

@@ -1,0 +1,128 @@
+Light Ltr Normal
+focus Some(NodeId(3v1))
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(1v1)]
+  NodeId(1v1) role=Dialog name=Some("Details") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 154.2919921875x39.7294921875] actions=[] relations=[] children=[NodeId(3v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[24,24 130.2919921875x15.7294921875] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("Shared with 3 people") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[24,24 130.2919921875x15.7294921875] actions=[] relations=[] children=[]
+Light Ltr Hover
+  n/a
+Light Ltr Pressed
+  n/a
+Light Ltr Disabled
+  n/a
+Light Ltr Focused
+  n/a
+Light Ltr Selected
+  n/a
+Light Rtl Normal
+focus Some(NodeId(3v1))
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(1v1)]
+  NodeId(1v1) role=Dialog name=Some("Details") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[33.7080078125,12 154.2919921875x39.7294921875] actions=[] relations=[] children=[NodeId(3v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[45.7080078125,24 130.2919921875x15.7294921875] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("Shared with 3 people") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[45.7080078125,24 130.2919921875x15.7294921875] actions=[] relations=[] children=[]
+Light Rtl Hover
+  n/a
+Light Rtl Pressed
+  n/a
+Light Rtl Disabled
+  n/a
+Light Rtl Focused
+  n/a
+Light Rtl Selected
+  n/a
+Dark Ltr Normal
+focus Some(NodeId(3v1))
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(1v1)]
+  NodeId(1v1) role=Dialog name=Some("Details") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 154.2919921875x39.7294921875] actions=[] relations=[] children=[NodeId(3v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[24,24 130.2919921875x15.7294921875] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("Shared with 3 people") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[24,24 130.2919921875x15.7294921875] actions=[] relations=[] children=[]
+Dark Ltr Hover
+  n/a
+Dark Ltr Pressed
+  n/a
+Dark Ltr Disabled
+  n/a
+Dark Ltr Focused
+  n/a
+Dark Ltr Selected
+  n/a
+Dark Rtl Normal
+focus Some(NodeId(3v1))
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(1v1)]
+  NodeId(1v1) role=Dialog name=Some("Details") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[33.7080078125,12 154.2919921875x39.7294921875] actions=[] relations=[] children=[NodeId(3v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[45.7080078125,24 130.2919921875x15.7294921875] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("Shared with 3 people") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[45.7080078125,24 130.2919921875x15.7294921875] actions=[] relations=[] children=[]
+Dark Rtl Hover
+  n/a
+Dark Rtl Pressed
+  n/a
+Dark Rtl Disabled
+  n/a
+Dark Rtl Focused
+  n/a
+Dark Rtl Selected
+  n/a
+LightHighContrast Ltr Normal
+focus Some(NodeId(3v1))
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(1v1)]
+  NodeId(1v1) role=Dialog name=Some("Details") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 154.2919921875x39.7294921875] actions=[] relations=[] children=[NodeId(3v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[24,24 130.2919921875x15.7294921875] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("Shared with 3 people") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[24,24 130.2919921875x15.7294921875] actions=[] relations=[] children=[]
+LightHighContrast Ltr Hover
+  n/a
+LightHighContrast Ltr Pressed
+  n/a
+LightHighContrast Ltr Disabled
+  n/a
+LightHighContrast Ltr Focused
+  n/a
+LightHighContrast Ltr Selected
+  n/a
+LightHighContrast Rtl Normal
+focus Some(NodeId(3v1))
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(1v1)]
+  NodeId(1v1) role=Dialog name=Some("Details") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[33.7080078125,12 154.2919921875x39.7294921875] actions=[] relations=[] children=[NodeId(3v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[45.7080078125,24 130.2919921875x15.7294921875] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("Shared with 3 people") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[45.7080078125,24 130.2919921875x15.7294921875] actions=[] relations=[] children=[]
+LightHighContrast Rtl Hover
+  n/a
+LightHighContrast Rtl Pressed
+  n/a
+LightHighContrast Rtl Disabled
+  n/a
+LightHighContrast Rtl Focused
+  n/a
+LightHighContrast Rtl Selected
+  n/a
+DarkHighContrast Ltr Normal
+focus Some(NodeId(3v1))
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(1v1)]
+  NodeId(1v1) role=Dialog name=Some("Details") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 154.2919921875x39.7294921875] actions=[] relations=[] children=[NodeId(3v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[24,24 130.2919921875x15.7294921875] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("Shared with 3 people") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[24,24 130.2919921875x15.7294921875] actions=[] relations=[] children=[]
+DarkHighContrast Ltr Hover
+  n/a
+DarkHighContrast Ltr Pressed
+  n/a
+DarkHighContrast Ltr Disabled
+  n/a
+DarkHighContrast Ltr Focused
+  n/a
+DarkHighContrast Ltr Selected
+  n/a
+DarkHighContrast Rtl Normal
+focus Some(NodeId(3v1))
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 200x112] actions=[] relations=[] children=[NodeId(1v1)]
+  NodeId(1v1) role=Dialog name=Some("Details") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[33.7080078125,12 154.2919921875x39.7294921875] actions=[] relations=[] children=[NodeId(3v1)]
+  NodeId(3v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[45.7080078125,24 130.2919921875x15.7294921875] actions=[] relations=[] children=[NodeId(4v1)]
+  NodeId(4v1) role=StaticText name=Some("Shared with 3 people") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[45.7080078125,24 130.2919921875x15.7294921875] actions=[] relations=[] children=[]
+DarkHighContrast Rtl Hover
+  n/a
+DarkHighContrast Rtl Pressed
+  n/a
+DarkHighContrast Rtl Disabled
+  n/a
+DarkHighContrast Rtl Focused
+  n/a
+DarkHighContrast Rtl Selected
+  n/a

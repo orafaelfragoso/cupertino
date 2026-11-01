@@ -1,0 +1,2 @@
+Cupertino live medium. Session on tty1; this console is tty2 (Ctrl+Alt+F2).
+Install: run `archinstall` (the `cupertino` repo is at /opt/cupertino-repo).

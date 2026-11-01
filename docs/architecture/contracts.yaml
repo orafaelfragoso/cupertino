@@ -231,6 +231,17 @@
   test_owner: unknown
   source: crates/cupertino-server/src/state.rs
   source_match: PresentationState::new
+- name: wp_content_type_manager_v1
+  kind: wayland-global
+  version: 1
+  owner_crate: cupertino-server
+  owner_area: compositor
+  scope: public
+  role: none
+  advertised: always
+  test_owner: crates/cupertino-server/tests/content_type.rs
+  source: crates/cupertino-server/src/state.rs
+  source_match: ContentTypeState::new
 - name: xdg_activation_v1
   kind: wayland-global
   version: 1

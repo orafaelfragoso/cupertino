@@ -51,6 +51,15 @@ pub struct Size {
     pub height: u32,
 }
 
+impl Size {
+    /// Whether a frame of this size, four bytes a pixel, is a buffer Wayland can share: not empty, and at most
+    /// `i32::MAX` bytes (the size of a `wl_shm` pool).
+    pub fn shareable(self) -> bool {
+        let bytes = u64::from(self.width) * 4 * u64::from(self.height);
+        bytes > 0 && bytes <= i32::MAX as u64
+    }
+}
+
 /// Frames a second, as a fraction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rate {
@@ -322,6 +331,16 @@ mod tests {
                 denom: max.1,
             },
         }
+    }
+
+    #[test]
+    fn a_frame_past_the_largest_shm_pool_or_an_empty_one_is_not_shareable() {
+        let size = |width, height| Size { width, height };
+        assert!(SIZE.shareable());
+        assert!(size(16384, 32767).shareable());
+        assert!(!size(16384, 32768).shareable());
+        assert!(!size(65536, 65536).shareable());
+        assert!(!size(0, 1080).shareable());
     }
 
     #[test]

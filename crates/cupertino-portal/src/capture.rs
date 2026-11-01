@@ -447,6 +447,15 @@ impl Capture {
                 ),
             );
         };
+        if !size.shareable() {
+            return self.end(
+                i,
+                End::Failed(format!(
+                    "a {}x{} source is larger than a frame the stream can carry",
+                    size.width, size.height
+                )),
+            );
+        }
         let Some(screencast) = &self.screencast else {
             return;
         };

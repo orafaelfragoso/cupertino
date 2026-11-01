@@ -39,6 +39,8 @@ uses it. Layer: `platform`.
 - Shared memory only: no dmabuf buffers, so every frame is copied once into the memfd.
 - No cursor metadata: the cursor is either painted into the frame or left out.
 - Video only, no audio.
+- A frame is at most `i32::MAX` bytes, the largest `wl_shm` pool (`Size::shareable`): the portal ends the share of a
+  larger source.
 
 ## Tests
 

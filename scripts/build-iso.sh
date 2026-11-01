@@ -39,6 +39,7 @@ while read -r link target; do
     ln -sfn "$target" "$work/profile/airootfs/$link"
 done <"$work/profile/airootfs-links"
 rm "$work/profile/airootfs-links"
+mkdir -p "$work/profile/airootfs/home/live"
 mkdir -p "$work/profile/airootfs/opt/cupertino-repo"
 cp "$work/pkgs"/*.pkg.tar.zst "$work/profile/airootfs/opt/cupertino-repo/"
 

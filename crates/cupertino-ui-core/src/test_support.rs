@@ -321,6 +321,8 @@ pub(crate) struct FakeSystem {
     frame_wanted: bool,
     pub(crate) text_input: Vec<Option<TextInputState>>,
     pub(crate) clipboard: Option<ClipboardData>,
+    /// Offers the desktop's effects.
+    pub(crate) effects: bool,
 }
 
 impl FakeSystem {
@@ -339,7 +341,10 @@ impl FakeSystem {
 
 impl WindowSystem for FakeSystem {
     fn capabilities(&self) -> Capabilities {
-        Capabilities::default()
+        Capabilities {
+            app_effects: self.effects,
+            ..Capabilities::default()
+        }
     }
 
     fn create_window(&mut self, spec: &WindowSpec) -> Result<WindowId, PlatformError> {

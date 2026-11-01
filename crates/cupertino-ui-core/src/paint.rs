@@ -19,6 +19,8 @@ use std::sync::Arc;
 
 struct Painted {
     source: u64,
+    /// The window background painted under the node's own ops.
+    background: Option<WindowBackground>,
     size: Size,
     revision: PaintRevision,
     ops: Vec<PaintOp>,
@@ -164,6 +166,8 @@ pub(crate) struct PaintInput<'a> {
     pub(crate) focus_visible: bool,
     pub(crate) window_active: bool,
     pub(crate) background: WindowBackground,
+    /// The window system shows the material of a [`WindowBackground::Surface`], so nothing stands in for it.
+    pub(crate) backdrop: bool,
     pub(crate) now: Timestamp,
 }
 
@@ -203,11 +207,16 @@ impl Painter {
             };
             let size = placement.rect.size;
             let focused = input.focus == Some(id);
-            let painted_background = id == root && input.background == WindowBackground::Theme;
+            let background = (id == root
+                && match input.background {
+                    WindowBackground::Theme => true,
+                    WindowBackground::Surface { .. } => !input.backdrop,
+                    WindowBackground::None => false,
+                })
+            .then_some(input.background);
             // Focus, the window's active state and its background change how a node paints, though nothing in the
             // node changed.
-            let source = node.paint_revision << 4
-                | u64::from(painted_background) << 3
+            let source = node.paint_revision << 3
                 | u64::from(input.window_active) << 2
                 | u64::from(focused) << 1
                 | u64::from(focused && input.focus_visible);
@@ -220,23 +229,38 @@ impl Painter {
                     shown.translate(-origin.x, -origin.y)
                 });
             let fresh = self.nodes.get(&id).is_some_and(|p| {
-                p.source == source && p.size == size && p.visible.is_none_or(|v| v == visible)
+                p.source == source
+                    && p.background == background
+                    && p.size == size
+                    && p.visible.is_none_or(|v| v == visible)
             });
             if !fresh {
                 let mut ops = Vec::new();
                 // the window's own background, under everything its content paints
-                if painted_background {
-                    let state = StateVariant {
-                        window_active: input.window_active,
-                        ..StateVariant::NORMAL
+                if let Some(background) = background {
+                    let bounds = Rect::new(0.0, 0.0, size.width, size.height);
+                    let (shape, color) = match background {
+                        WindowBackground::Surface { surface, radius } => (
+                            Shape::RoundedRect {
+                                rect: bounds,
+                                radius,
+                            },
+                            input.env.theme.surface(surface).fill,
+                        ),
+                        _ => {
+                            let state = StateVariant {
+                                window_active: input.window_active,
+                                ..StateVariant::NORMAL
+                            };
+                            let theme = &input.env.theme.colors;
+                            (
+                                Shape::Rect(bounds),
+                                theme.get(ColorRole::WindowBackground, state),
+                            )
+                        }
                     };
-                    let background = input
-                        .env
-                        .theme
-                        .colors
-                        .get(ColorRole::WindowBackground, state);
-                    ops.extend(background.map(|color| PaintOp::Fill {
-                        shape: Shape::Rect(Rect::new(0.0, 0.0, size.width, size.height)),
+                    ops.extend(color.map(|color| PaintOp::Fill {
+                        shape,
                         paint: Paint::Solid(color),
                     }));
                 }
@@ -270,6 +294,7 @@ impl Painter {
                     id,
                     Painted {
                         source,
+                        background,
                         size,
                         revision: PaintRevision(self.revision),
                         extent: extent(&ops),

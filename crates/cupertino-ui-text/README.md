@@ -44,7 +44,10 @@ buffer follow.
 - `Paragraph::layout(width)` re-wraps the shaped text without reshaping (UAX 14 breaks from `icu_segmenter`; a word
   wider than the width breaks between graphemes, never inside one even where shaping splits it, as in a conjunct; spaces at a soft wrap hang past the line). `ParagraphLayout` gives
   lines with glyph runs, `caret_rect`, `index_at` (always a grapheme boundary) and `selection_rects` (`max_lines` of
-  zero keeps one line, a width that is not finite means no limit). Bidi follows UAX 9 (`unicode-bidi`): the base
+  zero keeps one line, a width that is not finite means no limit). With `ParagraphStyle::ellipsis`, text past
+  `max_lines` or wider than the width ends its last line in an ellipsis (U+2026, or three full stops where the font
+  lacks it) at the end edge, in the font of the last character kept, after the characters that fit; the ellipsis is a
+  run of its own with an empty range at the cut. Bidi follows UAX 9 (`unicode-bidi`): the base
   direction is `ParagraphStyle::direction` or the first strong character's (`Paragraph::direction`); without a set
   direction each hard line takes its own first strong character's (UAX 9 P1–P3), and a line without one keeps the
   text's. Each run of one

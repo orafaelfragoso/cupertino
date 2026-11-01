@@ -27,6 +27,8 @@ from the application's model and reports changes as messages.
   and a selection that does not change is not reported again. Assistive technology reads a list with a group per
   heading and a selected list item per row. A row is keyed by its item's key, so its focus and accessible object stay
   with it while rows come and go around it.
+- **Truncation.** A `Text` that does not wrap, and a tooltip's tip past its 300 pt text width, end in an ellipsis
+  where they are cut; the accessible name keeps the whole text.
 
 ## Not yet
 

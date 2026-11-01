@@ -3,7 +3,8 @@
 //! disabled, radio buttons, a segmented control, the regular, ticked, level and disabled sliders, and progress), and
 //! `kit/icons`, a grid of system symbols at the toolkit's sizes and tints with the chevrons along the reading direction
 //! and the placeholder of a missing symbol, `kit/sidebar`, a sidebar's sections running to the window's edges with
-//! its second row selected. `kit/counter`, `kit/forms`, `kit/virtual-list` and `kit/editor` are the examples' windows
+//! its second row selected, `kit/tooltip`, a short tip, one cut with an ellipsis at the text width and a one-line label
+//! cut at its row's width. `kit/counter`, `kit/forms`, `kit/virtual-list` and `kit/editor` are the examples' windows
 //! at their own sizes, as they open (the Editor with a short document typed in). `--direction ltr|rtl` (default ltr)
 //! lays a surface out in that direction; the sheet shows both.
 //!
@@ -28,7 +29,7 @@ use std::sync::Arc;
 use cupertino_capture::{App, Look, Request, State};
 use cupertino_kit::controls::{
     CheckBox, Icon, IconDirection, Progress, RadioGroup, SegmentedControl, Sidebar, SidebarItem,
-    SidebarSection, Slider, SliderStyle, TextRole, WINDOW_CONTENT_INSET,
+    SidebarSection, Slider, SliderStyle, TextRole, Tooltip, TooltipState, WINDOW_CONTENT_INSET,
 };
 use cupertino_kit::core::{Checked, CommandRegistry, Key};
 use cupertino_kit::geometry::{Insets, Point, Size};
@@ -261,6 +262,65 @@ impl Application for Icons {
     }
 }
 
+/// A short tip, a tip past the tooltip's text width, and a one-line label past its row's width.
+struct Tips;
+
+impl Application for Tips {
+    type Model = ();
+    type Message = ();
+
+    fn init() -> ((), Vec<Command<()>>) {
+        ((), Vec::new())
+    }
+
+    fn update(_: &mut (), _: ()) -> Vec<Command<()>> {
+        Vec::new()
+    }
+
+    fn view(_: &()) -> Vec<Window<()>> {
+        let bubble = |text: &str| {
+            let tip = Tooltip {
+                text: text.into(),
+                anchor: Element::new(Spacer { min: 0.0 }),
+                state: TooltipState::default(),
+                on_change: Box::new(|_| ()),
+            }
+            .window(
+                WindowKey("tip".into()),
+                WindowKey("Tips".into()),
+                "anchor".into(),
+            )
+            .content;
+            Element::new(Stack {
+                axis: Axis::Horizontal,
+                padding: Insets::default(),
+                spacing: 0.0,
+                align: Align::Start,
+                children: vec![tip],
+            })
+        };
+        let label = Element::new(Text {
+            content: AttributedText::plain(
+                "Quarterly report, final revision with the reviewers' comments.pdf",
+                TextStyle::new(13.0),
+            ),
+            role: TextRole::Body,
+            wrap: false,
+            secondary: false,
+            selected: false,
+        });
+        window(
+            "Tips",
+            Size::new(360.0, 140.0),
+            vec![
+                bubble("Move to the bin"),
+                bubble("Move the selected items to the bin, where they stay until it is emptied or they are put back"),
+                label,
+            ],
+        )
+    }
+}
+
 struct Places;
 
 impl Application for Places {
@@ -429,6 +489,7 @@ impl App for Capture {
             "controls",
             "icons",
             "sidebar",
+            "tooltip",
             "counter",
             "forms",
             "virtual-list",
@@ -460,6 +521,7 @@ impl App for Capture {
             "counter" => draw::<counter::Counter>(r.look, r.scale, direction, size),
             "forms" => draw::<forms::Forms>(r.look, r.scale, direction, size),
             "sidebar" => draw::<Places>(r.look, r.scale, direction, size),
+            "tooltip" => draw::<Tips>(r.look, r.scale, direction, size),
             "virtual-list" => {
                 draw::<virtual_list::VirtualList<50_000>>(r.look, r.scale, direction, size)
             }

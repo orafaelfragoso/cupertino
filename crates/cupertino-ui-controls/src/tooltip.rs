@@ -8,8 +8,7 @@ use cupertino_ui_core::{
 };
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 use cupertino_ui_platform::{DecorationMode, Keysym, PointerEvent, Timestamp, WindowSpec};
-use cupertino_ui_render::{PaintOp, Shape};
-use cupertino_ui_text::{AttributedText, ParagraphLayout, ParagraphStyle, TextStyle};
+use cupertino_ui_text::{AttributedText, ParagraphLayout, ParagraphStyle, TextStyle, Wrap};
 use cupertino_ui_theme::{ColorRole, StateVariant};
 
 const ESCAPE: Keysym = Keysym(0xff1b);
@@ -276,16 +275,21 @@ impl<M: 'static> Widget<M> for Anchor<M> {
     }
 }
 
-/// The tip's text on one line in the tooltip's type.
+/// The tip's text on one line in the tooltip's type, ending in an ellipsis past the text width.
 fn layout(env: &Environment, text: &str) -> Option<ParagraphLayout> {
+    let style = ParagraphStyle {
+        wrap: Wrap::None,
+        ellipsis: true,
+        ..ParagraphStyle::default()
+    };
     let paragraph = env
         .text
         .paragraph(
             &AttributedText::plain(text, TextStyle::new(TEXT_SIZE)),
-            &ParagraphStyle::default(),
+            &style,
         )
         .ok()?;
-    Some(paragraph.layout(None))
+    Some(look::one_line(&paragraph, TEXT_WIDTH))
 }
 
 /// The tip: its text in a rounded bubble. Leaving it gives the pointer the same grace to come back as leaving the
@@ -320,7 +324,7 @@ impl<M: Clone + 'static> Widget<M> for Bubble<M> {
     fn measure(&self, _: &Option<Timestamp>, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
         let width = layout(cx.env(), &self.text).map_or(0.0, |l| l.size().width);
         Measured {
-            size: Size::new(width.min(TEXT_WIDTH) + 2.0 * PADDING, HEIGHT),
+            size: Size::new(width + 2.0 * PADDING, HEIGHT),
             baseline: None,
         }
     }
@@ -369,21 +373,13 @@ impl<M: Clone + 'static> Widget<M> for Bubble<M> {
         let Some(text) = layout(&env, &self.text) else {
             return;
         };
-        let area = rect.inset(Insets {
-            top: 0.0,
-            left: PADDING,
-            bottom: 0.0,
-            right: PADDING,
-        });
         let top = (size.height - text.size().height) / 2.0;
-        cx.push(PaintOp::PushClip(Shape::Rect(area)));
         look::glyphs(
             cx,
             &text,
-            Point::new(area.min_x(), top),
+            Point::new(PADDING, top),
             color(ColorRole::ToolTipText),
         );
-        cx.push(PaintOp::PopClip);
     }
 
     fn semantics(&self, _: &Option<Timestamp>, cx: &mut SemanticsCx<'_>) {

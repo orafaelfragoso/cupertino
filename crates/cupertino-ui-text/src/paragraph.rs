@@ -43,6 +43,8 @@ pub(crate) struct Item {
     /// The paragraph level of the item's hard line (UAX 9 P2–P3): its direction and the side `Start` aligns to.
     pub base: Level,
     pub run: ShapedRun,
+    /// The ellipsis in the item's font, when the paragraph's style asks for one; its glyphs' cluster is the item's end.
+    pub ellipsis: Option<ShapedRun>,
     pub ascent: f32,
     pub descent: f32,
     pub line_gap: f32,
@@ -209,42 +211,52 @@ fn layout(shaped: &Shaped, max_width: Option<f32>) -> ParagraphLayout {
         Wrap::Word => max_width,
         Wrap::None => None,
     };
-    let mut hard_lines: Vec<(&HardLine, Vec<LineSpec>)> =
-        Vec::with_capacity(shaped.hard_lines.len());
-    let mut line_count = 0;
-    for hard in &shaped.hard_lines {
-        let lines = break_lines(&hard.clusters, wrap_width);
-        line_count += lines.len();
-        hard_lines.push((hard, lines));
-        if line_count >= line_limit {
-            break;
+    let mut specs: Vec<(&HardLine, LineSpec)> = Vec::new();
+    let mut dropped = false;
+    'collect: for hard in &shaped.hard_lines {
+        for spec in break_lines(&hard.clusters, wrap_width) {
+            if specs.len() == line_limit {
+                dropped = true;
+                break 'collect;
+            }
+            specs.push((hard, spec));
         }
     }
 
-    let natural_width = hard_lines
+    let mut ellipsis = None;
+    if let Some((hard, spec)) = specs.last_mut().filter(|_| shaped.style.ellipsis) {
+        let overflows = max_width.is_some_and(|limit| trimmed_width(&hard.clusters, spec) > limit);
+        if dropped || overflows {
+            ellipsis = elide(shaped, hard, spec, max_width);
+        }
+    }
+    let ellipsis_width = |index: usize| {
+        ellipsis
+            .filter(|_| index + 1 == specs.len())
+            .map_or(0.0, ShapedRun::advance)
+    };
+
+    let natural_width = specs
         .iter()
-        .flat_map(|(hard, lines)| lines.iter().map(|line| trimmed_width(&hard.clusters, line)))
+        .enumerate()
+        .map(|(index, (hard, spec))| trimmed_width(&hard.clusters, spec) + ellipsis_width(index))
         .fold(0.0_f32, f32::max);
     let container = f64::from(max_width.unwrap_or(natural_width).max(natural_width));
 
-    let mut lines = Vec::with_capacity(line_count);
+    let mut lines = Vec::with_capacity(specs.len());
     let mut top = 0.0_f64;
-    'build: for (hard, specs) in &hard_lines {
-        for spec in specs {
-            if lines.len() >= line_limit {
-                break 'build;
-            }
-            let line = build_line(
-                shaped,
-                hard.items.clone(),
-                &hard.clusters,
-                spec,
-                top,
-                container,
-            );
-            top += line.rect.height();
-            lines.push(line);
-        }
+    for (index, (hard, spec)) in specs.iter().enumerate() {
+        let line = build_line(
+            shaped,
+            hard.items.clone(),
+            &hard.clusters,
+            spec,
+            ellipsis.filter(|_| index + 1 == specs.len()),
+            top,
+            container,
+        );
+        top += line.rect.height();
+        lines.push(line);
     }
 
     ParagraphLayout {
@@ -359,6 +371,35 @@ fn break_lines(clusters: &[Cluster], max_width: Option<f32>) -> Vec<LineSpec> {
     specs
 }
 
+/// Cuts the last line `spec` to the clusters that fit before an ellipsis within `max_width`, at least none, and returns
+/// the ellipsis of the last cluster it keeps.
+fn elide<'a>(
+    shaped: &'a Shaped,
+    hard: &HardLine,
+    spec: &mut LineSpec,
+    max_width: Option<f32>,
+) -> Option<&'a ShapedRun> {
+    let ellipsis = |item: usize| shaped.items[item].ellipsis.as_ref();
+    let mut kept = (spec.clusters.start, ellipsis(hard.items.start)?);
+    let mut width = 0.0_f32;
+    for (index, cluster) in hard.clusters[spec.clusters.clone()].iter().enumerate() {
+        work::step();
+        width += cluster.width;
+        if max_width.is_some_and(|limit| width > limit) {
+            break;
+        }
+        let Some(run) = ellipsis(cluster.item).filter(|_| !cluster.space) else {
+            continue;
+        };
+        if max_width.is_none_or(|limit| width + run.advance() <= limit) {
+            kept = (spec.clusters.start + index + 1, run);
+        }
+    }
+    spec.clusters.end = kept.0;
+    spec.soft_wrapped = false;
+    Some(kept.1)
+}
+
 fn trimmed_width(clusters: &[Cluster], spec: &LineSpec) -> f32 {
     let line = &clusters[spec.clusters.clone()];
     let visible = line
@@ -373,11 +414,13 @@ fn build_line(
     items: Range<usize>,
     clusters: &[Cluster],
     spec: &LineSpec,
+    ellipsis: Option<&ShapedRun>,
     top: f64,
     container: f64,
 ) -> Line {
     let line_clusters = &clusters[spec.clusters.clone()];
-    let width = f64::from(trimmed_width(clusters, spec));
+    let ellipsis_width = f64::from(ellipsis.map_or(0.0, ShapedRun::advance));
+    let width = f64::from(trimmed_width(clusters, spec)) + ellipsis_width;
     let base = shaped.items[items.start].base;
     let rtl = base.is_rtl();
     let offset = match (shaped.style.align, rtl) {
@@ -450,7 +493,11 @@ fn build_line(
         };
         line_clusters.len().max(1)
     ];
-    let mut x = if rtl { offset - hanging } else { offset };
+    let mut x = if rtl {
+        offset + ellipsis_width - hanging
+    } else {
+        offset
+    };
     for piece_index in BidiInfo::reorder_visual(&levels) {
         let (piece, level) = &pieces[piece_index];
         let item = &shaped.items[line_clusters[piece.start].item];
@@ -493,6 +540,37 @@ fn build_line(
                 glyphs,
             },
         });
+    }
+    if let Some(ellipsis) = ellipsis {
+        let mut pen = 0.0_f32;
+        let glyphs = ellipsis
+            .glyphs
+            .iter()
+            .map(|glyph| {
+                let placed = PositionedGlyph {
+                    id: glyph.id,
+                    x: pen + glyph.x_offset,
+                    y: -glyph.y_offset,
+                    cluster: end,
+                };
+                pen += glyph.advance;
+                placed
+            })
+            .collect();
+        let run = LineRun {
+            origin: Point::new(if rtl { offset } else { x }, baseline),
+            range: TextRange(end..end),
+            run: GlyphRun {
+                font: ellipsis.font,
+                size: ellipsis.size,
+                glyphs,
+            },
+        };
+        if rtl {
+            runs.insert(0, run);
+        } else {
+            runs.push(run);
+        }
     }
 
     let visible_end = line_clusters[..visible]
@@ -799,6 +877,100 @@ mod tests {
             line_texts(&layout_with(text, style, None), text),
             ["a", "b"]
         );
+    }
+
+    fn ellipsized(text: &str, style: ParagraphStyle, width: Option<f32>) -> ParagraphLayout {
+        layout_with(
+            text,
+            ParagraphStyle {
+                ellipsis: true,
+                ..style
+            },
+            width,
+        )
+    }
+
+    fn width_of(text: &str) -> f64 {
+        layout(text, None).size().width
+    }
+
+    #[test]
+    fn a_line_wider_than_the_limit_ends_in_an_ellipsis_after_the_characters_that_fit() {
+        let text = "alpha beta gamma delta";
+        let fits = width_of("alpha beta") + width_of("\u{2026}");
+        let style = ParagraphStyle {
+            wrap: Wrap::None,
+            ..ParagraphStyle::default()
+        };
+        let layout = ellipsized(text, style, Some(fits as f32 + 0.5));
+        assert_eq!(line_texts(&layout, text), ["alpha beta"]);
+        assert!(
+            (layout.size().width - fits).abs() < 1e-3,
+            "{:?}",
+            layout.size()
+        );
+        let runs = &layout.lines()[0].runs;
+        let ellipsis = runs.last().unwrap();
+        assert_eq!(ellipsis.range, TextRange(10..10));
+        assert_eq!(ellipsis.run.glyphs.len(), 1);
+        assert!((ellipsis.origin.x - width_of("alpha beta")).abs() < 1e-3);
+    }
+
+    #[test]
+    fn text_past_max_lines_ends_its_last_line_in_an_ellipsis() {
+        let text = "a\nb\nc";
+        let style = ParagraphStyle {
+            max_lines: Some(2),
+            ..ParagraphStyle::default()
+        };
+        let layout = ellipsized(text, style, None);
+        assert_eq!(line_texts(&layout, text), ["a", "b"]);
+        let ranges = |line: &Line| {
+            line.runs
+                .iter()
+                .map(|run| run.range.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ranges(&layout.lines()[0]), [TextRange(0..1)]);
+        assert_eq!(
+            ranges(&layout.lines()[1]),
+            [TextRange(2..3), TextRange(3..3)]
+        );
+    }
+
+    #[test]
+    fn text_that_fits_shows_no_ellipsis() {
+        let text = "alpha beta";
+        let layout = ellipsized(text, ParagraphStyle::default(), Some(500.0));
+        assert_eq!(line_texts(&layout, text), [text]);
+        assert!(layout.lines()[0]
+            .runs
+            .iter()
+            .all(|run| !run.range.0.is_empty()));
+    }
+
+    #[test]
+    fn a_right_to_left_line_shows_its_ellipsis_at_its_left_end() {
+        let text = "alpha beta gamma delta";
+        let kept = width_of("alpha beta");
+        let limit = kept + width_of("\u{2026}") + 0.5;
+        let style = ParagraphStyle {
+            direction: Some(Direction::Rtl),
+            wrap: Wrap::None,
+            ..ParagraphStyle::default()
+        };
+        let layout = ellipsized(text, style, Some(limit as f32));
+        let line = &layout.lines()[0];
+        assert_eq!(&text[line.range.0.clone()], "alpha beta");
+        let ellipsis = &line.runs[0];
+        assert_eq!(ellipsis.range, TextRange(10..10));
+        let edge = f64::from(limit as f32) - (kept + width_of("\u{2026}"));
+        assert!(
+            (ellipsis.origin.x - edge).abs() < 1e-3,
+            "{}",
+            ellipsis.origin.x
+        );
+        assert!((line.runs[1].origin.x - (f64::from(limit as f32) - kept)).abs() < 1e-3);
     }
 
     #[test]

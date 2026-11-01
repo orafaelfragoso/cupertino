@@ -93,9 +93,10 @@ while [ -n "$interrupted" ]; do
 done
 seconds=$(($(date +%s) - started))
 
-# The session target and the variables the compositor put on a shared user bus (activation_env.rs) end with it.
+# The session target and the variables the compositor put on a shared user bus (activation_env.rs) end with it. The stop
+# is queued, not waited for: the login screen comes back when this script ends, whatever the target's services take.
 if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet cupertino-session.target 2>/dev/null; then
-    systemctl --user stop cupertino-session.target 2>/dev/null || true
+    systemctl --user --no-block stop cupertino-session.target 2>/dev/null || true
     # the defaults the compositor set because the manager had no value of the user's own (activation_env.rs DEFAULTS_RECORD)
     defaults=
     if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -f "$XDG_RUNTIME_DIR/cupertino-session-defaults" ]; then

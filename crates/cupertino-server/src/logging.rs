@@ -1,11 +1,15 @@
 //! Logging: standard error for development runs, and on the TTY a file in the state directory that survives the session
 //! (the console is overwritten by the compositor, and a crash leaves nothing else to read).
 
-use std::ffi::OsString;
+use std::backtrace::Backtrace;
+use std::ffi::{CString, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io;
+use std::os::fd::IntoRawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread::ThreadId;
 use std::time::Duration;
@@ -18,10 +22,13 @@ use tracing_subscriber::{EnvFilter, Layer};
 const DEFAULT_FILTER: &str =
     "info,smithay=warn,usvg=error,resvg=error,smithay::backend::egl::ffi=off";
 
+/// The log file a run is told to write, in any mode.
+pub const LOG_FILE_ENV: &str = "CUPERTINO_LOG_FILE";
+
 /// The TTY log: `CUPERTINO_LOG_FILE`, else `$XDG_STATE_HOME/cupertino/server.log`, else
 /// `~/.local/state/cupertino/server.log`.
 pub fn log_path(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-    if let Some(path) = var("CUPERTINO_LOG_FILE").filter(|p| !p.is_empty()) {
+    if let Some(path) = var(LOG_FILE_ENV).filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(path));
     }
     let state = var("XDG_STATE_HOME")
@@ -52,13 +59,17 @@ pub fn open_log(path: &PathBuf) -> io::Result<File> {
         .open(path)
 }
 
-/// Installs the subscriber and a panic hook that writes the panic to the log before the default report.
-/// With a file, everything goes to it and only warnings and errors also reach standard error.
+/// Installs the subscriber, a panic hook that writes the panic and its backtrace to the log before the default report,
+/// and the handler of the [`FATAL_SIGNALS`]. With a file, everything goes to it and only warnings and errors also reach
+/// standard error.
 pub fn init(file: Option<File>) {
     let filter =
         || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
     match file {
         Some(file) => {
+            if let Ok(crash_log) = file.try_clone() {
+                CRASH_LOG.store(crash_log.into_raw_fd(), Ordering::Relaxed);
+            }
             let file = tracing_subscriber::fmt::layer()
                 .with_ansi(false)
                 .with_writer(Mutex::new(file))
@@ -89,9 +100,141 @@ pub fn init(file: Option<File>) {
         {
             session_ends(&format!("panic: {info}"), 101);
         }
-        tracing::error!("panic: {info}");
+        tracing::error!("panic: {info}\nbacktrace:\n{}", Backtrace::force_capture());
         previous(info);
     }));
+    catch_fatal_signals();
+}
+
+/// The signals that end the server at once, with no unwinding: an abort (a failed check in a library, a panic while
+/// panicking) and a fault.
+pub const FATAL_SIGNALS: [libc::c_int; 2] = [libc::SIGABRT, libc::SIGSEGV];
+
+/// Where a fatal signal writes: the log file, or standard error without one.
+static CRASH_LOG: AtomicI32 = AtomicI32::new(libc::STDERR_FILENO);
+
+/// The actions the [`FATAL_SIGNALS`] had before [`catch_fatal_signals`], in the same order.
+static PREVIOUS_ACTIONS: OnceLock<[libc::sigaction; FATAL_SIGNALS.len()]> = OnceLock::new();
+
+/// The alternate stack of the thread that starts the server, which runs its event loop: big enough for the backtrace
+/// of a stack overflow, with a guard page below it.
+const SIGNAL_STACK: usize = 1 << 20;
+
+fn catch_fatal_signals() {
+    let fault_stack = signal_stack();
+    let mut previous = [unsafe { std::mem::zeroed::<libc::sigaction>() }; FATAL_SIGNALS.len()];
+    for (signal, previous) in FATAL_SIGNALS.iter().zip(&mut previous) {
+        // Safety: the action is fully initialised, the handler has the signature handlers without SA_SIGINFO take,
+        // and `previous` is valid for writing.
+        unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = fatal_signal as extern "C" fn(libc::c_int) as usize;
+            // a fault while the handler runs ends the process at once instead of running it again
+            libc::sigemptyset(&mut action.sa_mask);
+            for blocked in FATAL_SIGNALS {
+                libc::sigaddset(&mut action.sa_mask, blocked);
+            }
+            // a fault may be a stack overflow, with no stack left to handle it on
+            if *signal == libc::SIGSEGV && fault_stack {
+                action.sa_flags = libc::SA_ONSTACK;
+            }
+            libc::sigaction(*signal, &action, previous);
+        }
+    }
+    let _ = PREVIOUS_ACTIONS.set(previous);
+}
+
+/// Gives the calling thread an alternate signal stack of [`SIGNAL_STACK`] bytes, in place of the standard library's
+/// smaller one. False when it cannot be mapped.
+fn signal_stack() -> bool {
+    let page = 4096;
+    // Safety: a private anonymous mapping, never unmapped; its first page is made inaccessible as the guard, and the
+    // rest is handed to `sigaltstack`, which keeps the pointer.
+    unsafe {
+        let base = libc::mmap(
+            std::ptr::null_mut(),
+            SIGNAL_STACK + page,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        );
+        if base == libc::MAP_FAILED {
+            return false;
+        }
+        libc::mprotect(base, page, libc::PROT_NONE);
+        let stack = libc::stack_t {
+            ss_sp: base.cast::<u8>().add(page).cast(),
+            ss_flags: 0,
+            ss_size: SIGNAL_STACK,
+        };
+        libc::sigaltstack(&stack, std::ptr::null_mut()) == 0
+    }
+}
+
+/// Writes the signal to the session-end file and the log, then the backtrace, and ends the process as the signal's
+/// previous action would. The reason is written with no allocation first. The backtrace allocates and takes locks, which
+/// a crash inside the allocator may hold, so an alarm ends the process if it hangs.
+extern "C" fn fatal_signal(signal: libc::c_int) {
+    let name: &[u8] = match signal {
+        libc::SIGABRT => b"SIGABRT",
+        libc::SIGSEGV => b"SIGSEGV",
+        _ => b"a fatal signal",
+    };
+    if let Some(end) = SESSION_END.get() {
+        // a reason written already (a panic, a lost rendering context) is the real one, and a crash in the teardown it
+        // started keeps it; `cupertino-session` removes the file before the start
+        // Safety: `open`, `write` and `close` are async-signal-safe; the path is a C string made before any crash.
+        unsafe {
+            let fd = libc::open(
+                end.c_path.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC,
+                0o600,
+            );
+            if fd >= 0 {
+                write_raw(fd, &[b"the server was ended by ", name, b"\n"]);
+                libc::close(fd);
+            }
+        }
+    }
+    let log = CRASH_LOG.load(Ordering::Relaxed);
+    write_raw(log, &[b"fatal signal ", name, b"; backtrace:\n"]);
+    // Safety: `sigaction`, `sigprocmask` and `alarm` are async-signal-safe and take initialised values.
+    unsafe {
+        let mut default: libc::sigaction = std::mem::zeroed();
+        default.sa_sigaction = libc::SIG_DFL;
+        libc::sigaction(libc::SIGALRM, &default, std::ptr::null_mut());
+        let mut alarm: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut alarm);
+        libc::sigaddset(&mut alarm, libc::SIGALRM);
+        libc::pthread_sigmask(libc::SIG_UNBLOCK, &alarm, std::ptr::null_mut());
+        libc::alarm(TEARDOWN_LIMIT.as_secs() as libc::c_uint);
+    }
+    let trace = Backtrace::force_capture().to_string();
+    write_raw(log, &[trace.as_bytes(), b"\n"]);
+    let index = FATAL_SIGNALS.iter().position(|s| *s == signal);
+    // Safety: the previous action was read by `sigaction` itself; the signal stays blocked until this handler returns,
+    // so the raised one is taken by that action then (or the fault happens again, for a fault).
+    unsafe {
+        if let (Some(previous), Some(index)) = (PREVIOUS_ACTIONS.get(), index) {
+            libc::sigaction(signal, &previous[index], std::ptr::null_mut());
+        }
+        libc::raise(signal);
+    }
+}
+
+fn write_raw(fd: libc::c_int, parts: &[&[u8]]) {
+    for part in parts {
+        let mut rest = *part;
+        while !rest.is_empty() {
+            // Safety: `write` is async-signal-safe and reads `rest.len()` bytes of `rest`.
+            let written = unsafe { libc::write(fd, rest.as_ptr().cast(), rest.len()) };
+            if written <= 0 {
+                return;
+            }
+            rest = &rest[written as usize..];
+        }
+    }
 }
 
 /// The file `cupertino-session` reads, when the compositor has ended, for the reason it writes to the session log.
@@ -105,6 +248,7 @@ const REASON_LIMIT: usize = 400;
 
 struct SessionEnd {
     path: PathBuf,
+    c_path: CString,
     thread: ThreadId,
 }
 
@@ -113,12 +257,17 @@ static SESSION_END: OnceLock<SessionEnd> = OnceLock::new();
 /// Makes the calling thread the session's when `CUPERTINO_SESSION_END` names a file: a panic on it, and
 /// [`session_ends`], write their reason there and bound the teardown.
 pub fn record_session_end(var: impl Fn(&str) -> Option<OsString>) {
-    if let Some(path) = var(SESSION_END_ENV).filter(|p| !p.is_empty()) {
-        let _ = SESSION_END.set(SessionEnd {
-            path: PathBuf::from(path),
-            thread: std::thread::current().id(),
-        });
-    }
+    let Some(path) = var(SESSION_END_ENV).filter(|p| !p.is_empty()) else {
+        return;
+    };
+    let Ok(c_path) = CString::new(path.as_bytes()) else {
+        return;
+    };
+    let _ = SESSION_END.set(SessionEnd {
+        path: PathBuf::from(path),
+        c_path,
+        thread: std::thread::current().id(),
+    });
 }
 
 /// The session ends for `reason`: writes it for `cupertino-session` and exits with `status` once [`TEARDOWN_LIMIT`]

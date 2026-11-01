@@ -49,7 +49,7 @@ All rules are constants in `src/lib.rs`; nothing is read from a configuration fi
 | `shell` | `foundation`, `models`, `platform`, `protocol`, `transport`, `render`, `ui` | controlcenter, dock, launcher, login, menubar, notifications, osd, screenshot, windowmanager |
 | `services` | `foundation`, `models`, `platform`, `protocol`, `services` | btd, netd, powerd, sessiond |
 | `apps` | `foundation`, `models`, `protocol`, `transport`, `ui` | files, settings |
-| `tools` | all but `core`, `shell`, `services`, `apps` | diagnostics, layers, testclient |
+| `tools` | all but `core`, `shell`, `services`, `apps` | cli, diagnostics, layers, testclient |
 
 Pure toolkit-facing models (filepicker, typeahead, keyboard bindings) and the icon loader are `foundation`, so the toolkit can use them.
 

@@ -8,7 +8,7 @@ use cupertino_kit::prelude::*;
 use cupertino_kit::text::{AttributedText, TextStyle};
 
 use super::Message;
-use crate::controls::{Control, Value};
+use crate::controls::{self, metrics, Control, Value};
 use crate::panes::{ControlId, Row, Section};
 use crate::search::Hit;
 
@@ -57,8 +57,8 @@ fn button(label: &str, enabled: bool, on_press: Message) -> Element<Message> {
     })
 }
 
-fn popup_key(id: ControlId) -> Key {
-    Key::from(format!("{id:?}"))
+fn control_key(id: ControlId) -> Key {
+    Key::from(format!("{id:?}-control"))
 }
 
 /// The control of `row`; a disabled row's control takes no input.
@@ -87,8 +87,7 @@ fn control(row: &Row, open: Option<ControlId>) -> Option<Element<Message>> {
             open: open == Some(id),
             enabled,
             on_open: Some(Message::Open(Some(id))),
-        })
-        .key(popup_key(id)),
+        }),
         Control::Slider { value, stops, .. } => {
             let stops = stops.filter(|n| *n > 1);
             Element::new(Slider {
@@ -100,8 +99,9 @@ fn control(row: &Row, open: Option<ControlId>) -> Option<Element<Message>> {
                 style: SliderStyle::Regular,
                 ticks: stops.map_or(0, |n| n as u32),
                 enabled,
-                on_change: Some(Box::new(move |v| commit(Value::Fraction(v)))),
+                on_change: Some(Box::new(move |v| commit(controls::release(stops, v)))),
             })
+            .width(metrics::SLIDER_WIDTH)
         }
         Control::Level { value } => Element::new(Slider {
             label: row.label.clone(),
@@ -113,7 +113,8 @@ fn control(row: &Row, open: Option<ControlId>) -> Option<Element<Message>> {
             ticks: 0,
             enabled,
             on_change: Some(Box::new(move |v| Message::Level(id, v))),
-        }),
+        })
+        .width(metrics::LEVEL_WIDTH),
         Control::Button { title } => button(title, enabled, commit(Value::Index(0))),
         Control::Buttons { titles } => Element::new(Stack {
             axis: Axis::Horizontal,
@@ -153,7 +154,7 @@ fn control(row: &Row, open: Option<ControlId>) -> Option<Element<Message>> {
                 .collect(),
         ),
     };
-    Some(control.key(format!("{id:?}-control")))
+    Some(control.key(control_key(id)))
 }
 
 fn row(row: &Row, open: Option<ControlId>) -> Element<Message> {
@@ -246,7 +247,7 @@ pub fn menu(
     };
     let menu = button.menu(
         parent,
-        popup_key(id),
+        control_key(id),
         Box::new(move |i| Message::Commit(id, Value::Index(i))),
         Message::Open(None),
     );

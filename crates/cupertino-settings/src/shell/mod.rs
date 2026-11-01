@@ -44,6 +44,8 @@ const LEVEL_TICK: Duration = Duration::from_millis(17);
 const SIDEBAR: f64 = 215.0;
 const MIN_SIDEBAR: f64 = 150.0;
 const MIN_CONTENT: f64 = 320.0;
+/// The toolbar's search field, as wide as other toolbars' (approximate).
+const SEARCH_WIDTH: f64 = 112.0;
 /// The interface width factor: 1 for English (approximate).
 const WIDTH_FACTOR: f64 = 1.0;
 
@@ -390,6 +392,7 @@ impl Shell {
                 selection: None,
                 initial: false,
             })
+            .width(SEARCH_WIDTH)
             .key("search"),
         ]);
         items
@@ -541,7 +544,7 @@ mod tests {
     use std::sync::Arc;
 
     use cupertino_assets::BUILTIN_FONT;
-    use cupertino_kit::core::AccessibilityUpdate;
+    use cupertino_kit::core::{AccessibilityUpdate, NodeId, Role};
     use cupertino_kit::core::{PlaceholderIcons, RuntimeOptions};
     use cupertino_kit::layout::LayoutDirection;
     use cupertino_kit::platform::{
@@ -555,12 +558,16 @@ mod tests {
     use cupertino_ui_test::{semantic_gaps, ManualClock, TestDriver};
 
     use super::*;
+    use crate::mapping;
     use crate::services::Bus;
     use crate::settings::Settings;
+    use crate::sheet::Sheet;
 
     const NOWHERE: &str = "unix:path=/nonexistent/cupertino-test-bus";
     const RETURN: u32 = 0xff0d;
     const BRACKET_LEFT: u32 = 0x5b;
+    const HOME: u32 = 0xff50;
+    const END: u32 = 0xff57;
 
     fn paths(dir: &Path) -> Paths {
         Paths {
@@ -586,12 +593,21 @@ mod tests {
     static WINDOW: Mutex<()> = Mutex::new(());
 
     fn start(dir: &Path, pane: PaneId) -> (TestDriver<SettingsApp>, WindowId) {
+        start_with(dir, pane, None)
+    }
+
+    fn start_with(
+        dir: &Path,
+        pane: PaneId,
+        sheet: Option<Sheet>,
+    ) -> (TestDriver<SettingsApp>, WindowId) {
         let (wake, woken) = async_channel::bounded(1);
         let (notify, background) = background_channel(move || {
             let _ = wake.try_send(());
         });
         let services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
-        let state = State::new(paths(dir), services, pane, 1080.0, notify).unwrap();
+        let mut state = State::new(paths(dir), services, pane, 1080.0, notify).unwrap();
+        state.sheet = sheet;
         launch(Start {
             state,
             background,
@@ -669,9 +685,29 @@ mod tests {
     }
 
     fn click(driver: &mut TestDriver<SettingsApp>, window: WindowId, key: &str) {
-        let runtime = driver.runtime();
-        let id = runtime.find(window, &Key::from(key.to_owned())).unwrap();
-        let rect = runtime
+        let id = driver
+            .runtime()
+            .find(window, &Key::from(key.to_owned()))
+            .unwrap();
+        click_node(driver, window, id);
+    }
+
+    /// The accessibility node with `role` named `name`.
+    fn node(driver: &TestDriver<SettingsApp>, window: WindowId, role: Role, name: &str) -> NodeId {
+        driver
+            .runtime()
+            .snapshot(window)
+            .unwrap()
+            .accessibility
+            .into_iter()
+            .find(|(_, n)| n.role == role && n.name.as_deref() == Some(name))
+            .unwrap()
+            .0
+    }
+
+    fn click_node(driver: &mut TestDriver<SettingsApp>, window: WindowId, id: NodeId) {
+        let rect = driver
+            .runtime()
             .snapshot(window)
             .unwrap()
             .nodes
@@ -772,6 +808,59 @@ mod tests {
         );
         let stored = Settings::load(&paths(dir.path()), 1080.0).unwrap();
         assert_eq!(stored.dock.autohide, Some(true));
+    }
+
+    #[test]
+    fn a_stepped_slider_commits_its_stop() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let (mut driver, window) = start(dir.path(), PaneId::Keyboard);
+        click(
+            &mut driver,
+            window,
+            &format!("{:?}-control", ControlId::RepeatRate),
+        );
+        key(&mut driver, window, END, None, Mods::NONE);
+        let stored = Settings::load(&paths(dir.path()), 1080.0).unwrap();
+        assert_eq!(
+            stored.keyboard.repeat_interval_ms,
+            Some(mapping::rate_interval_ms(mapping::RATE_POSITIONS - 1))
+        );
+        key(&mut driver, window, HOME, None, Mods::NONE);
+        let stored = Settings::load(&paths(dir.path()), 1080.0).unwrap();
+        assert_eq!(
+            stored.keyboard.repeat_delay_ms,
+            Some(0),
+            "the first stop is Off"
+        );
+    }
+
+    #[test]
+    fn the_join_button_joins_with_the_typed_passphrase() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let sheet = Sheet::passphrase("home", "Home");
+        let asking = sheet.message();
+        let (mut driver, window) = start_with(dir.path(), PaneId::Wifi, Some(sheet));
+        let described = |driver: &TestDriver<SettingsApp>| {
+            format!(
+                "{:?}",
+                driver.runtime().snapshot(window).unwrap().accessibility
+            )
+        };
+        assert!(described(&driver).contains(&asking));
+
+        let field = node(&driver, window, Role::PasswordInput, "Password");
+        click_node(&mut driver, window, field);
+        for c in "hunter2".chars() {
+            key(&mut driver, window, c as u32, Some(c), Mods::NONE);
+        }
+        let join = node(&driver, window, Role::Button, "Join");
+        click_node(&mut driver, window, join);
+        assert!(
+            !described(&driver).contains(&asking),
+            "Join called the service, which has no bus here, and the sheet shows why it failed"
+        );
     }
 
     #[test]

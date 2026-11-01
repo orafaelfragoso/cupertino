@@ -3,7 +3,7 @@
 use cupertino_kit::controls::{Dialog, DialogAction, DialogButton, DialogKind};
 use cupertino_kit::geometry::Insets;
 use cupertino_kit::prelude::*;
-use cupertino_kit::text::ContentPurpose;
+use cupertino_kit::text::{ContentPurpose, SecureBuffer};
 
 use super::state::State;
 use super::Message;
@@ -15,6 +15,8 @@ pub enum Action {
     Cancel,
     Act,
     Text(String),
+    /// The passphrase as typed so far, which the action button joins with.
+    Typed(Secret),
     /// The passphrase as typed, then Join.
     Join(Secret),
     Row(usize),
@@ -31,6 +33,10 @@ pub fn apply(state: &mut State, action: Action) -> Option<Outcome> {
             sheet.set_text(&text);
             Outcome::Stay
         }
+        Action::Typed(secret) => {
+            sheet.set_text(&secret);
+            Outcome::Stay
+        }
         Action::Join(secret) => {
             sheet.set_text(&secret);
             sheet.action()
@@ -38,6 +44,12 @@ pub fn apply(state: &mut State, action: Action) -> Option<Outcome> {
         Action::Row(row) => sheet.press_row(row),
         Action::Parent => sheet.parent(),
     })
+}
+
+fn typed(secret: &SecureBuffer) -> Secret {
+    let mut typed = Secret::new();
+    secret.with_secret(|s| typed.push_str(s));
+    typed
 }
 
 fn body(sheet: &Sheet) -> Option<Element<Message>> {
@@ -86,10 +98,11 @@ fn body(sheet: &Sheet) -> Option<Element<Message>> {
                 label: "Password".into(),
                 placeholder: "Password".into(),
                 enabled: true,
+                on_change: Some(Box::new(|secret| {
+                    Message::Sheet(Action::Typed(typed(secret)))
+                })),
                 on_submit: Some(Box::new(|secret| {
-                    let mut typed = Secret::new();
-                    secret.with_secret(|s| typed.push_str(s));
-                    Message::Sheet(Action::Join(typed))
+                    Message::Sheet(Action::Join(typed(secret)))
                 })),
             })
             .key("passphrase"),

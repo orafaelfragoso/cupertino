@@ -1,0 +1,24 @@
+[package]
+name = "cupertino-screencast"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "A PipeWire video source node for screen sharing: the format negotiation, and the buffers a capture fills"
+
+[package.metadata.cupertino]
+layer = "platform"
+
+[features]
+default = []
+# `fake::Daemon` and `fake::Consumer`, a private PipeWire daemon and a video consumer for the tests of screen sharing
+fake = ["dep:tempfile", "rustix/process"]
+
+[dependencies]
+# 0.3.34 adds pw_stream_trigger_process, which drives the graph after a frame is queued
+pipewire = { version = "0.10.1", features = ["v0_3_34"] }
+rustix = { version = "1", features = ["fs"] }
+tempfile = { version = "3", optional = true }
+
+[[test]]
+name = "stream"
+required-features = ["fake"]

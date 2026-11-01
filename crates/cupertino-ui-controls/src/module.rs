@@ -45,6 +45,7 @@ const BATTERY_TERMINAL: Size = Size {
 const BATTERY_FILL_INSET: f64 = 2.0;
 const BATTERY_FILL_HEIGHT: f64 = 8.0;
 const BATTERY_FILL_RADIUS: f64 = 1.5;
+const BATTERY_FILL_MIN: f64 = 2.0;
 /// At or below this level the fill turns red.
 const BATTERY_LOW: f64 = 0.1;
 
@@ -372,6 +373,17 @@ impl<M: 'static> Widget<M> for TileFrame<M> {
     }
 }
 
+impl BatteryMeter {
+    /// The level in `0..=1`, with an unknown one read as empty.
+    fn level(&self) -> f64 {
+        if self.level.is_nan() {
+            0.0
+        } else {
+            self.level.clamp(0.0, 1.0)
+        }
+    }
+}
+
 impl<M: 'static> Widget<M> for BatteryMeter {
     type State = ();
 
@@ -436,9 +448,10 @@ impl<M: 'static> Widget<M> for BatteryMeter {
             BATTERY_TERMINAL.width / 2.0,
             outline,
         );
-        let level = self.level.clamp(0.0, 1.0);
+        let level = self.level();
         let span = BATTERY_BODY.width - 2.0 * BATTERY_FILL_INSET;
-        let width = span * level;
+        // an empty battery still shows a sliver, so the red warning stays visible
+        let width = (span * level).round().clamp(BATTERY_FILL_MIN, span);
         let fill_x = if rtl {
             body.max_x() - BATTERY_FILL_INSET - width
         } else {
@@ -469,7 +482,7 @@ impl<M: 'static> Widget<M> for BatteryMeter {
             cx.description("Charging".to_owned());
         }
         cx.value(AccessibleValue::Number {
-            value: self.level.clamp(0.0, 1.0),
+            value: self.level(),
             min: 0.0,
             max: 1.0,
             step: None,

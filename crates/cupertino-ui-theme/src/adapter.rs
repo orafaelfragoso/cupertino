@@ -59,6 +59,8 @@ pub(crate) const LIGHT: Palette<Source> = Palette {
         (PageDot, Rgba([0, 0, 0, 51])),
         (GroupFill, Token("secondary-system-fill")),
         (SwitchThumbGlyph, Rgba([115, 115, 115, 255])),
+        (PanelTrack, Rgba([232, 232, 232, 255])),
+        (PanelTrackBorder, Rgba([0, 0, 0, 26])),
     ],
     states: StateColors {
         emphasized_border: Rgba([0, 0, 0, 96]),
@@ -114,6 +116,8 @@ pub(crate) const DARK: Palette<Source> = Palette {
         (PageDot, Rgba([255, 255, 255, 51])),
         (GroupFill, Token("secondary-system-fill")),
         (SwitchThumbGlyph, Rgba([115, 115, 115, 255])),
+        (PanelTrack, Rgba([35, 35, 35, 255])),
+        (PanelTrackBorder, Rgba([0, 0, 0, 0])),
     ],
     states: StateColors {
         emphasized_border: Rgba([255, 255, 255, 96]),

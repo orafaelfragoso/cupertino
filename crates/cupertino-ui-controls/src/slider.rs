@@ -26,6 +26,7 @@ const END: Keysym = Keysym(0xff57);
 const LEVEL: f64 = 22.0;
 /// The symbol inside a level slider's minimum end.
 const LEVEL_SYMBOL: f64 = 14.0;
+const PANEL_TRACK_BORDER: f64 = 0.5;
 /// A tick mark: a round dot under the track at each step position.
 const TICK_DOT: f64 = 4.0;
 /// Between the track's bottom and the dots under it.
@@ -282,12 +283,25 @@ impl<M: 'static> Widget<M> for Slider<M> {
         let mid = size.height / 2.0;
         let track = Rect::new(0.0, mid - track_height / 2.0, size.width, track_height);
         let radius = track_height / 2.0;
+        let track_role = match self.style {
+            SliderStyle::PanelLevel(_) => ColorRole::PanelTrack,
+            _ => ColorRole::SwitchTrack,
+        };
         look::fill(
             cx,
             track,
             radius,
-            look::color(&theme, ColorRole::SwitchTrack, &look_state),
+            look::color(&theme, track_role, &look_state),
         );
+        if let SliderStyle::PanelLevel(_) = self.style {
+            look::stroke(
+                cx,
+                track.inset(Insets::uniform(PANEL_TRACK_BORDER / 2.0)),
+                radius - PANEL_TRACK_BORDER / 2.0,
+                PANEL_TRACK_BORDER,
+                look::color(&theme, ColorRole::PanelTrackBorder, &look_state),
+            );
+        }
         let (from, to) = self.run(size.width, knob, direction);
         let centre = from + (to - from) * self.fraction();
         // the level style fills to the knob's far edge, the regular one to its centre

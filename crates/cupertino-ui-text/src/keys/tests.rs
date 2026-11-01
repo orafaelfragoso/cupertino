@@ -4,7 +4,9 @@ use cupertino_key_bindings::{BindingTable, TextAction};
 use cupertino_modifiers::Profile;
 
 use crate::keymap::Command;
-use crate::{KeyInput, Keymap, Response, TextBuffer as TextField, TextFieldKeys};
+use crate::{
+    Affinity, Direction, KeyInput, Keymap, Response, TextBuffer as TextField, TextFieldKeys,
+};
 
 const A: u32 = 30;
 const C: u32 = 46;
@@ -153,6 +155,62 @@ fn option_arrows_move_by_word_and_command_arrows_home_and_end_to_the_line_ends()
     assert_eq!(f.field.caret(), 0);
     f.press(END, "s", None);
     assert_eq!(f.field.selection(), 0..14);
+}
+
+#[test]
+fn option_arrows_move_by_word_in_the_order_the_words_are_drawn() {
+    let mut f = Fixture::new("abc \u{5D0}\u{5D1}\u{5D2} \u{5D3}\u{5D4}\u{5D5} xyz");
+    f.field.select(3..3);
+    let mut carets = Vec::new();
+    for _ in 0..3 {
+        f.press(RIGHT, "a", None);
+        carets.push(f.field.caret());
+    }
+    for _ in 0..4 {
+        f.press(LEFT, "a", None);
+        carets.push(f.field.caret());
+    }
+    assert_eq!(
+        carets,
+        [11, 4, 21, 18, 10, 17, 0],
+        "the Hebrew word read last is drawn first"
+    );
+    f.field.select(4..10);
+    f.press(RIGHT, "a", None);
+    assert_eq!(
+        f.field.caret(),
+        21,
+        "from the selection's right edge, its start"
+    );
+    f.field.select(4..10);
+    f.press(LEFT, "a", None);
+    assert_eq!(f.field.caret(), 17, "from its left edge, its end");
+    f.field.select(3..3);
+    f.field.move_word(true, false);
+    assert_eq!(f.field.caret(), 10, "a word forward stays logical");
+}
+
+#[test]
+fn option_right_in_a_right_to_left_field_goes_to_the_start_of_the_word_before() {
+    let mut f = Fixture::new("\u{5D0}\u{5D1}\u{5D2} \u{5D3}\u{5D4}\u{5D5}");
+    f.field.set_direction(Some(Direction::Rtl));
+    f.press(END, "", None);
+    let mut carets = Vec::new();
+    for _ in 0..3 {
+        f.press(RIGHT, "a", None);
+        carets.push(f.field.caret());
+    }
+    assert_eq!(carets, [7, 0, 0]);
+}
+
+#[test]
+fn a_new_direction_draws_the_caret_on_the_side_of_its_own_text() {
+    let mut f = Fixture::new("abc \u{5D0}\u{5D1}\u{5D2}");
+    f.field.select(3..3);
+    f.press(RIGHT, "", None);
+    assert_eq!(f.field.caret_position().affinity, Affinity::Upstream);
+    f.field.set_direction(Some(Direction::Rtl));
+    assert_eq!(f.field.caret_position().affinity, Affinity::Downstream);
 }
 
 #[test]

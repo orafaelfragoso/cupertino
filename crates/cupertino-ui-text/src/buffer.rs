@@ -129,6 +129,7 @@ impl TextBuffer {
     /// and Right walk the carets as they are drawn.
     pub fn set_direction(&mut self, direction: Option<Direction>) {
         self.direction = direction;
+        self.upstream = None;
     }
 
     /// The caret with the side of a direction change it is drawn on, for `ParagraphLayout::caret_rect`.
@@ -411,6 +412,32 @@ impl TextBuffer {
             (true, true) => self.word_right(self.caret),
         };
         self.move_to(to, extend);
+    }
+
+    /// Move by a word in the direction the text is drawn: rightward ends right of the next word on screen, whichever
+    /// way that word reads. A plain move starts from the selection's edge on that side.
+    pub fn move_word_visual(&mut self, rightward: bool, extend: bool) {
+        let lines = bidi::caret_lines(&self.text, self.direction);
+        let selection = self.selection();
+        let from = if extend || selection.is_empty() {
+            self.caret_position()
+        } else {
+            let [start, end] = [selection.start, selection.end].map(|byte| TextPosition {
+                byte,
+                affinity: Affinity::Downstream,
+            });
+            let start_is_right = bidi::place_of(&lines, start) > bidi::place_of(&lines, end);
+            if start_is_right == rightward {
+                start
+            } else {
+                end
+            }
+        };
+        let words: Vec<Range<usize>> = self.words().collect();
+        let to = bidi::visual_word_neighbour_in(&self.text, &lines, &words, from, rightward)
+            .unwrap_or(from);
+        self.move_to(to.byte, extend);
+        self.upstream = (to.affinity == Affinity::Upstream).then_some(to.byte);
     }
 
     pub fn move_to_start(&mut self, extend: bool) {

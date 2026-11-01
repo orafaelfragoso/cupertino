@@ -1100,6 +1100,55 @@ mod tests {
     }
 
     #[test]
+    fn a_word_move_right_through_hebrew_words_only_moves_the_caret_right() {
+        let text = "abc \u{5D0}\u{5D1}\u{5D2} \u{5D3}\u{5D4}\u{5D5} xyz";
+        let layout = layout(text, None);
+        let mut buffer = crate::TextBuffer::new();
+        buffer.set_text(text);
+        buffer.select(3..3);
+        let mut xs = vec![layout.caret_rect(buffer.caret_position()).x()];
+        for _ in 0..3 {
+            buffer.move_word_visual(true, false);
+            xs.push(layout.caret_rect(buffer.caret_position()).x());
+        }
+        assert!(xs.windows(2).all(|pair| pair[1] > pair[0]), "{xs:?}");
+        assert_eq!(xs[3], layout.size().width, "{xs:?}");
+    }
+
+    #[test]
+    fn a_word_move_into_a_right_to_left_line_walks_its_words_leftward() {
+        let text = "abc def\n\u{5D0}\u{5D1}\u{5D2} \u{5D3}\u{5D4}\u{5D5}";
+        let layout = layout(text, None);
+        let mut buffer = crate::TextBuffer::multiline();
+        buffer.set_text(text);
+        buffer.select(7..7);
+        buffer.move_word_visual(true, false);
+        assert_eq!(
+            buffer.caret(),
+            8,
+            "Option+Right past def starts the next line"
+        );
+        let mut stops = vec![buffer.caret_position()];
+        for _ in 0..2 {
+            buffer.move_word_visual(false, false);
+            stops.push(buffer.caret_position());
+        }
+        let bytes: Vec<usize> = stops.iter().map(|at| at.byte).collect();
+        assert_eq!(
+            bytes,
+            [8, 14, 21],
+            "each Hebrew word in turn, right to left"
+        );
+        let carets: Vec<Rect> = stops.iter().map(|at| layout.caret_rect(*at)).collect();
+        assert!(
+            carets
+                .windows(2)
+                .all(|pair| pair[1].x() < pair[0].x() && pair[1].y() == pair[0].y()),
+            "{carets:?}"
+        );
+    }
+
+    #[test]
     fn right_walks_latin_text_laid_out_right_to_left_in_the_order_it_is_drawn() {
         let text = "abc!";
         let style = ParagraphStyle {

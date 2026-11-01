@@ -261,6 +261,7 @@ fn node(role: Role, name: Option<&str>, bounds: Rect) -> AccessibilityNode {
         level: None,
         item_index: None,
         column_index: None,
+        sort: None,
     }
 }
 

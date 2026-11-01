@@ -67,6 +67,14 @@ pub enum Live {
     Assertive,
 }
 
+/// The order of a table sorted by a column, which its column header tells assistive technology.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum SortOrder {
+    #[default]
+    Ascending,
+    Descending,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum AccessibleValue {
     Text {
@@ -152,6 +160,8 @@ pub struct AccessibilityNode {
     pub item_index: Option<usize>,
     /// On a table's cell or column header: its column, from 0, which pairs a cell with its header.
     pub column_index: Option<usize>,
+    /// On the column header a table is sorted by: the order it is sorted in.
+    pub sort: Option<SortOrder>,
 }
 
 /// What changed in one window's tree since the previous update.

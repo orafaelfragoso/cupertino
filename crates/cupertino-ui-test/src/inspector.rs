@@ -40,9 +40,10 @@ fn node(out: &mut String, id: impl std::fmt::Debug, n: &AccessibilityNode) {
         .column_index
         .map(|c| format!(" column={c}"))
         .unwrap_or_default();
+    let sort = n.sort.map(|s| format!(" sort={s:?}")).unwrap_or_default();
     let _ = writeln!(
         out,
-        "  {id:?} role={:?} name={:?} description={:?} value={value}{live}{items}{index}{level}{column} states={:?} bounds=[{}] actions={:?} \
+        "  {id:?} role={:?} name={:?} description={:?} value={value}{live}{items}{index}{level}{column}{sort} states={:?} bounds=[{}] actions={:?} \
          relations={:?} children={:?}",
         n.role,
         n.name,
@@ -153,7 +154,9 @@ impl Inspector {
 mod tests {
     use super::*;
     use cupertino_geometry::{Point, Size};
-    use cupertino_ui_core::{AccessibleStates, Action, NodeId, NodeSnapshot, Pending, Role};
+    use cupertino_ui_core::{
+        AccessibleStates, Action, NodeId, NodeSnapshot, Pending, Role, SortOrder,
+    };
     use cupertino_ui_platform::{Timestamp, WindowId};
     use cupertino_ui_render::{DisplayList, PaintNode, PaintNodeId, PaintRevision, Transform};
     use std::num::NonZeroU32;
@@ -204,6 +207,7 @@ mod tests {
                     level: None,
                     item_index: None,
                     column_index: None,
+                    sort: None,
                 },
             )],
             display_list: DisplayList {
@@ -262,16 +266,19 @@ display
     }
 
     #[test]
-    fn an_items_place_is_shown_only_when_set() {
+    fn an_items_place_and_a_headers_sort_are_shown_only_when_set() {
         let mut frame = snapshot(AccessibleValue::Protected);
         let node = &mut frame.accessibility[0].1;
         node.item_count = Some(6);
         node.item_index = Some(0);
         node.level = Some(2);
         node.column_index = Some(1);
+        node.sort = Some(SortOrder::Descending);
         let dump = Inspector::default().dump(&frame);
         assert!(
-            dump.contains("value=<protected> items=6 index=0 level=2 column=1 states="),
+            dump.contains(
+                "value=<protected> items=6 index=0 level=2 column=1 sort=Descending states="
+            ),
             "{dump}"
         );
     }

@@ -233,7 +233,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         &mut self.system
     }
 
-    /// Whether the application asked to exit or closed its last window.
+    /// Whether the application asked to exit, or closed its last window and is not [resident](Application::RESIDENT).
     pub fn exited(&self) -> bool {
         self.exit
     }
@@ -487,7 +487,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
             }
         }
-        if self.windows.is_empty() {
+        if self.windows.is_empty() && !A::RESIDENT {
             self.exit = true;
         }
         Ok(())

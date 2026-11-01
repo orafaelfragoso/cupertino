@@ -33,16 +33,12 @@ fn fold(mut appearance: Appearance, events: Vec<Event>) -> Appearance {
     appearance
 }
 
-/// The file-chooser windows, a run of [`Dialogs`] whenever a request waits; a dialog that cannot be shown ends the
-/// process.
+/// The file-chooser windows; a dialog that cannot be shown ends the process.
 fn dialogs() {
-    loop {
-        inbox().wait();
-        if let Err(e) = cupertino_kit::app::run::<Dialogs>() {
-            eprintln!("cupertino-portal: {e}");
-            std::process::exit(1);
-        }
+    if let Err(e) = cupertino_kit::app::run::<Dialogs>() {
+        eprintln!("cupertino-portal: {e}");
     }
+    std::process::exit(1);
 }
 
 fn run() -> Result<()> {

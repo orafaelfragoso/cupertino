@@ -286,7 +286,7 @@ mod tests {
     use cupertino_shell_client::{
         ActiveApp, AppWindow, GtkMenu, MenuBarUpdate, WindowMenu, WindowState,
     };
-    use cupertino_text_field::{KeyInput, Keymap};
+    use cupertino_ui_text::{KeyInput, Keymap};
     use std::time::Instant;
 
     struct Fixture {

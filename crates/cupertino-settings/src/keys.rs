@@ -39,7 +39,7 @@ pub enum Action {
 /// A key the search field takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchKey {
-    /// Characters and the editing keys: the text field takes them (`cupertino-text-field`).
+    /// Characters and the editing keys: the text field takes them (`cupertino-ui-text`'s `TextBuffer`).
     Edit,
     /// Up and Down move the highlighted result.
     Up,
@@ -62,7 +62,7 @@ pub struct Mods {
 /// The physical modifiers held, as the window's chords read them: `logo` is the command key of the user's profile, `ctrl`
 /// the key that has the Ctrl role (Super under `classic-pc`).
 pub fn command_mods(
-    keymap: &cupertino_text_field::Keymap,
+    keymap: &cupertino_ui_text::Keymap,
     shift: bool,
     ctrl: bool,
     alt: bool,
@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn the_command_key_is_logo_whatever_key_the_profile_makes_it() {
         use cupertino_modifiers::Profile;
-        use cupertino_text_field::Keymap;
+        use cupertino_ui_text::Keymap;
         let cupertino = Keymap::standard_for(Profile::cupertino());
         let classic = Keymap::standard_for(Profile::classic_pc());
         let only = |keymap: &Keymap, ctrl: bool, logo: bool| {

@@ -30,7 +30,7 @@ cupertino-animation = { path = "../cupertino-animation" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-decorations = { path = "../cupertino-decorations" }
 cupertino-keyboard = { path = "../cupertino-keyboard" }
-cupertino-text-field = { path = "../cupertino-text-field" }
+cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }

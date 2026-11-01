@@ -1059,7 +1059,6 @@ dependencies = [
  "cupertino-modifiers",
  "cupertino-protocol-app",
  "cupertino-test-bus",
- "cupertino-text-field",
  "cupertino-theme",
  "cupertino-thumbnails",
  "cupertino-typeahead",
@@ -1067,6 +1066,7 @@ dependencies = [
  "cupertino-ui-core",
  "cupertino-ui-menus",
  "cupertino-ui-platform",
+ "cupertino-ui-text",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "libc",
@@ -1190,8 +1190,8 @@ dependencies = [
  "cupertino-protocol-app",
  "cupertino-shell-client",
  "cupertino-test-bus",
- "cupertino-text-field",
  "cupertino-theme",
+ "cupertino-ui-text",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "image",
@@ -1272,9 +1272,9 @@ dependencies = [
  "cupertino-protocol-app",
  "cupertino-shell-client",
  "cupertino-test-bus",
- "cupertino-text-field",
  "cupertino-theme",
  "cupertino-ui-menus",
+ "cupertino-ui-text",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "futures-util",
@@ -1615,11 +1615,11 @@ dependencies = [
  "cupertino-pipewire",
  "cupertino-protocol-app",
  "cupertino-test-bus",
- "cupertino-text-field",
  "cupertino-theme",
  "cupertino-thumbnails",
  "cupertino-typeahead",
  "cupertino-ui-menus",
+ "cupertino-ui-text",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "serde_json",
@@ -1668,13 +1668,6 @@ name = "cupertino-testclient"
 version = "0.1.0"
 dependencies = [
  "cupertino-wayland-client",
-]
-
-[[package]]
-name = "cupertino-text-field"
-version = "0.1.0"
-dependencies = [
- "cupertino-ui-text",
 ]
 
 [[package]]

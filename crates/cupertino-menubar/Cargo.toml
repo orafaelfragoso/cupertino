@@ -42,7 +42,7 @@ cupertino-peer = { path = "../cupertino-peer", optional = true }
 cupertino-icons = { path = "../cupertino-icons", optional = true }
 cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
-cupertino-text-field = { path = "../cupertino-text-field" }
+cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-theme = { path = "../cupertino-theme", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }

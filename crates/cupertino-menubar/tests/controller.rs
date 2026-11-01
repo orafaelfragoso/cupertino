@@ -9,7 +9,7 @@ use cupertino_menubar::geom::{Point, Rect};
 use cupertino_menubar::item::{ItemId, MenuItem, Shortcut, Toggle};
 use cupertino_menubar::layout::{BarContent, MonoMeasure, SlotKey, StatusEntry};
 use cupertino_menubar::recent::RecentItems;
-use cupertino_text_field::{KeyInput, Keymap};
+use cupertino_ui_text::{KeyInput, Keymap};
 use std::time::Instant;
 
 const OUT: Rect = Rect::new(0.0, 0.0, 1920.0, 1080.0);

@@ -11,7 +11,7 @@
 
 use crate::pane::{Pane, PaneId, PANES};
 use crate::sidebar::{self, fold_width, RowSize};
-use cupertino_text_field::TextField;
+use cupertino_ui_text::TextBuffer;
 
 /// Why an entry matched, best first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -142,7 +142,7 @@ pub const MAX_LEN: usize = 1024;
 /// The search field's text editor, the results it shows and the highlighted one.
 #[derive(Clone, Debug)]
 pub struct SearchField {
-    field: TextField,
+    field: TextBuffer,
     results: Vec<Hit>,
     highlighted: Option<usize>,
     /// The panes left out of the sidebar, and so of the results.
@@ -152,7 +152,7 @@ pub struct SearchField {
 impl Default for SearchField {
     fn default() -> Self {
         SearchField {
-            field: TextField::with_max_len(MAX_LEN),
+            field: TextBuffer::with_max_len(MAX_LEN),
             results: Vec::new(),
             highlighted: None,
             hidden: Vec::new(),
@@ -165,7 +165,7 @@ impl SearchField {
         self.field.text()
     }
 
-    pub fn field(&self) -> &TextField {
+    pub fn field(&self) -> &TextBuffer {
         &self.field
     }
 
@@ -183,7 +183,7 @@ impl SearchField {
     }
 
     /// Change the field with `f`; when its text changes the search runs again.
-    pub fn edit<R>(&mut self, f: impl FnOnce(&mut TextField) -> R) -> R {
+    pub fn edit<R>(&mut self, f: impl FnOnce(&mut TextBuffer) -> R) -> R {
         let before = self.field.text().to_string();
         let r = f(&mut self.field);
         if self.field.text() != before {
@@ -463,7 +463,7 @@ mod tests {
         assert!(f.results().len() > 1);
         f.step(1);
         assert_eq!(f.highlighted(), Some(1));
-        f.edit(TextField::select_all);
+        f.edit(TextBuffer::select_all);
         assert_eq!(
             f.highlighted(),
             Some(1),

@@ -10,7 +10,7 @@ use cupertino_files::render::{Palette, Renderer};
 use cupertino_files::window::{Bars, ViewMode, WindowPainter, WindowState};
 use cupertino_files::{Size, SortSpec};
 use cupertino_icons::document::FileIcons;
-use cupertino_text_field::TextField;
+use cupertino_ui_text::TextBuffer;
 use cupertino_ui_wayland::rgba_to_argb8888;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -74,7 +74,7 @@ fn main() {
     );
     let mut painter = WindowPainter::new(Renderer::new(icons, &assets).unwrap());
     let pal = Palette::builtin(false);
-    let search = TextField::new();
+    let search = TextBuffer::new();
     for (w, h, scale) in [(2560.0, 1440.0, 1.5_f32), (1920.0, 1080.0, 2.0)] {
         let frame = painter.frame(
             Size { w, h },

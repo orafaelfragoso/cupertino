@@ -16,8 +16,8 @@ use cupertino_decorations::palette::Rgba;
 use cupertino_decorations::text::TextRenderer;
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_geometry::{CornerStyle, Radii, Rect as GRect};
-use cupertino_text_field::TextField;
 use cupertino_theme::Typography;
+use cupertino_ui_text::TextBuffer;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use tiny_skia::{
@@ -484,7 +484,7 @@ impl Style {
         pm: &mut Pixmap,
         layout: &PopupLayout,
         selected: Option<usize>,
-        field: Option<&TextField>,
+        field: Option<&TextBuffer>,
         origin: (f64, f64),
         scale: f64,
     ) {
@@ -646,7 +646,7 @@ impl Style {
         text: &BarText,
         pm: &mut Pixmap,
         rr: GRect,
-        field: &TextField,
+        field: &TextBuffer,
         placeholder: &str,
         chord_left: Option<f64>,
         scale: f64,

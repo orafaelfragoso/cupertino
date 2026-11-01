@@ -6,12 +6,12 @@ use std::fs;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 
-use cupertino_diagnostics::{run, Area, Check, Scope, Sources, Status, NOT_FOUND};
+use cupertino_diagnostics::{run, Area, Check, Scope, Sources, Status, Unit, NOT_FOUND};
 
 struct Fixture {
     dir: tempfile::TempDir,
     env: HashMap<String, String>,
-    units: HashMap<String, String>,
+    units: HashMap<String, Unit>,
 }
 
 impl Fixture {
@@ -62,8 +62,16 @@ impl Fixture {
         fs::write(path, text).unwrap();
     }
 
-    fn unit(mut self, name: &str, state: &str) -> Self {
-        self.units.insert(name.to_owned(), state.to_owned());
+    fn unit(self, name: &str, state: &str) -> Self {
+        self.unit_file(name, state, "enabled")
+    }
+
+    fn unit_file(mut self, name: &str, state: &str, file: &str) -> Self {
+        let unit = Unit {
+            active: state.to_owned(),
+            file: file.to_owned(),
+        };
+        self.units.insert(name.to_owned(), unit);
         self
     }
 
@@ -224,6 +232,55 @@ fn unit_states_map_to_statuses_and_a_missing_manager_skips() {
     assert!(find(&checks, "services.power")
         .summary
         .contains("is not installed"));
+}
+
+#[test]
+fn a_disabled_daemon_is_ok_while_the_distribution_service_does_its_job() {
+    let fixture = Fixture::new()
+        .unit_file("cupertino-netd.service", "inactive", "disabled")
+        .unit("NetworkManager.service", "active")
+        // masked counts as disabled, and BlueZ is enabled but stopped by its condition without an adapter
+        .unit_file("cupertino-btd.service", "inactive", "masked")
+        .unit("bluetooth.service", "inactive");
+    let checks = fixture.run(Area::Services);
+    let network = find(&checks, "services.network");
+    assert_eq!(
+        (network.status, network.summary.as_str()),
+        (
+            Status::Ok,
+            "cupertino-netd.service is disabled: managed by NetworkManager"
+        )
+    );
+    let bluetooth = find(&checks, "services.bluetooth");
+    assert_eq!(
+        (bluetooth.status, bluetooth.summary.as_str()),
+        (
+            Status::Ok,
+            "cupertino-btd.service is disabled: managed by BlueZ"
+        )
+    );
+}
+
+#[test]
+fn a_disabled_daemon_warns_when_nothing_does_its_job() {
+    let fixture = Fixture::new()
+        .unit_file("cupertino-netd.service", "inactive", "disabled")
+        .unit_file("NetworkManager.service", "inactive", "disabled")
+        .unit_file("cupertino-btd.service", "inactive", "disabled")
+        .unit_file("bluetooth.service", NOT_FOUND, "")
+        // nothing takes over power profiles, so a disabled powerd still warns
+        .unit_file("cupertino-powerd.service", "inactive", "disabled");
+    let checks = fixture.run(Area::Services);
+    for id in ["services.network", "services.bluetooth", "services.power"] {
+        assert_eq!(find(&checks, id).status, Status::Warn, "{id}");
+    }
+    let enabled = Fixture::new()
+        .unit("cupertino-netd.service", "inactive")
+        .unit("NetworkManager.service", "active");
+    assert_eq!(
+        find(&enabled.run(Area::Services), "services.network").status,
+        Status::Warn
+    );
 }
 
 #[test]

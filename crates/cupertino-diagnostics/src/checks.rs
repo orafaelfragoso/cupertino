@@ -263,6 +263,7 @@ pub fn portals(sources: &Sources) -> Vec<Check> {
             Scope::User,
             "xdg-desktop-portal.service",
             "applications cannot ask for files, settings or screen sharing",
+            None,
         ));
     }
     checks
@@ -324,6 +325,7 @@ pub fn services(sources: &Sources) -> Vec<Check> {
             Scope::System,
             "cupertino-login.service",
             "no login screen at boot",
+            None,
         ),
         unit(
             sources,
@@ -332,6 +334,7 @@ pub fn services(sources: &Sources) -> Vec<Check> {
             Scope::System,
             "cupertino-netd.service",
             "the network menu and settings cannot change anything",
+            Some(("NetworkManager.service", "NetworkManager")),
         ),
         unit(
             sources,
@@ -340,6 +343,7 @@ pub fn services(sources: &Sources) -> Vec<Check> {
             Scope::System,
             "cupertino-powerd.service",
             "no battery or power profile information",
+            None,
         ),
         unit(
             sources,
@@ -348,6 +352,7 @@ pub fn services(sources: &Sources) -> Vec<Check> {
             Scope::System,
             "cupertino-btd.service",
             "no Bluetooth menu",
+            Some(("bluetooth.service", "BlueZ")),
         ),
     ];
     if sources.var("XDG_SESSION_ID").is_some() {
@@ -358,6 +363,7 @@ pub fn services(sources: &Sources) -> Vec<Check> {
             Scope::User,
             "cupertino-session.target",
             "user services bound to the session did not start",
+            None,
         ));
         checks.push(unit(
             sources,
@@ -366,6 +372,7 @@ pub fn services(sources: &Sources) -> Vec<Check> {
             Scope::User,
             "pipewire.service",
             "no sound and no screen sharing",
+            None,
         ));
     }
     checks
@@ -378,27 +385,46 @@ fn unit(
     scope: Scope,
     name: &str,
     without: &str,
+    replaced_by: Option<(&str, &str)>,
 ) -> Check {
     let manager = match scope {
         Scope::System => "systemctl",
         Scope::User => "systemctl --user",
     };
-    match (sources.unit_state)(scope, name).as_deref() {
-        None => Check::new(
+    let Some(unit) = (sources.unit_state)(scope, name) else {
+        return Check::new(
             id,
             area,
             Status::Skip,
             format!("{manager} cannot be asked about {name}"),
-        ),
-        Some("active") => Check::new(id, area, Status::Ok, format!("{name} is active")),
-        Some(crate::NOT_FOUND) => Check::new(
+        );
+    };
+    // an installation may leave a Cupertino daemon off and let the distribution's service do its job; that service may
+    // be enabled yet stopped by a unit condition, as BlueZ is on a machine without a Bluetooth adapter
+    if let Some((service, by)) = replaced_by {
+        let replacement = (sources.unit_state)(scope, service);
+        if unit.active == "inactive"
+            && matches!(unit.file.as_str(), "disabled" | "masked")
+            && replacement.is_some_and(|r| r.active == "active" || r.file == "enabled")
+        {
+            return Check::new(
+                id,
+                area,
+                Status::Ok,
+                format!("{name} is disabled: managed by {by}"),
+            );
+        }
+    }
+    match unit.active.as_str() {
+        "active" => Check::new(id, area, Status::Ok, format!("{name} is active")),
+        crate::NOT_FOUND => Check::new(
             id,
             area,
             Status::Warn,
             format!("{name} is not installed: {without}"),
         )
         .fix("install the cupertino package, which ships the unit"),
-        Some(state @ ("failed" | "inactive")) => {
+        state @ ("failed" | "inactive") => {
             let status = if state == "failed" {
                 Status::Fail
             } else {
@@ -409,7 +435,7 @@ fn unit(
                 if scope == Scope::User { "--user" } else { "-b" }
             ))
         }
-        Some(state) => Check::new(
+        state => Check::new(
             id,
             area,
             Status::Warn,

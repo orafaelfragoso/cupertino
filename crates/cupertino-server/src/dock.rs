@@ -263,7 +263,6 @@ fn send_overview(resource: &CupertinoDockV1, g: &OverviewGroup) {
     resource.done();
 }
 
-/// One group: the panel's output, the switcher's list and its selection.
 /// `window_icon` for window `id`, its pixels in a sealed memfd; nothing when the file cannot be made.
 fn send_window_icon(resource: &CupertinoDockV1, id: u32, icon: &WindowIcon) {
     let (size, argb) = icon
@@ -298,6 +297,7 @@ fn sealed_file(bytes: &[u8]) -> std::io::Result<std::fs::File> {
     Ok(file)
 }
 
+/// One group: the panel's output, the switcher's list and its selection.
 fn send_switcher(resource: &CupertinoDockV1, output: &WlOutput, state: &SwitcherState) {
     resource.switcher_output(output);
     for app in &state.apps {

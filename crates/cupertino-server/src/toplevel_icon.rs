@@ -1,8 +1,8 @@
 //! The icon a window sets for itself with `xdg_toplevel_icon_v1`, as the server keeps it: copied once when the
 //! surface commits a new icon, so nothing of the client (its `wl_buffer`s, its pool) is read after that commit.
-//! The name is only ever a key into the icon theme: a name that could be read as a path is dropped. Of the
-//! buffers, the largest square `wl_shm` one of at most [`MAX_ICON_PIXELS`] a side is copied, read through
-//! smithay's shm access; larger ones are refused.
+//! The name is only ever a key into the icon theme: a name that could be read as a path is dropped. Of the first
+//! [`MAX_ICON_BUFFERS`] buffers, the largest square `wl_shm` one of at most [`MAX_ICON_PIXELS`] a side is chosen by
+//! its size and format alone, and only it is copied, read through smithay's shm access; larger ones are refused.
 
 use std::sync::{Arc, Mutex};
 
@@ -17,6 +17,8 @@ use smithay::wayland::xdg_toplevel_icon::ToplevelIconCachedState;
 pub const MAX_ICON_NAME: usize = 255;
 /// Largest icon side kept, in pixels.
 pub const MAX_ICON_PIXELS: i32 = 512;
+/// Icon buffers looked at; the rest are ignored.
+pub const MAX_ICON_BUFFERS: usize = 32;
 
 /// A copied icon image: `size` × `size` pixels of `wl_shm` ARGB8888 (premultiplied, little-endian), rows packed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,6 +77,20 @@ pub fn icon_name_allowed(name: &str) -> bool {
         && !name.contains("..")
 }
 
+/// The side of a square `wl_shm` ARGB8888 or XRGB8888 buffer of at most [`MAX_ICON_PIXELS`] a side, read from its
+/// metadata without touching its pixels.
+fn icon_side(buffer: &WlBuffer) -> Option<i32> {
+    with_buffer_contents(buffer, |_, _, data| {
+        (data.width > 0
+            && data.width <= MAX_ICON_PIXELS
+            && data.height == data.width
+            && matches!(data.format, Format::Argb8888 | Format::Xrgb8888))
+        .then_some(data.width)
+    })
+    .ok()
+    .flatten()
+}
+
 /// The pixels of a square `wl_shm` buffer of at most [`MAX_ICON_PIXELS`] a side, in ARGB8888.
 fn copy_image(buffer: &WlBuffer) -> Option<IconImage> {
     with_buffer_contents(buffer, |ptr, len, data| {
@@ -127,8 +143,10 @@ fn copy(state: &ToplevelIconCachedState) -> WindowIcon {
     let image = state
         .buffers()
         .iter()
-        .filter_map(|(buffer, _)| copy_image(buffer))
-        .max_by_key(|i| i.size);
+        .take(MAX_ICON_BUFFERS)
+        .filter_map(|(buffer, _)| Some((icon_side(buffer)?, buffer)))
+        .max_by_key(|(side, _)| *side)
+        .and_then(|(_, buffer)| copy_image(buffer));
     WindowIcon { name, image }
 }
 

@@ -124,12 +124,13 @@ impl<M: 'static> Tree<M> {
         }
         let children = element.widget.take_children();
         let revision = self.next_revision();
+        let spec = element.layout();
         let node = Box::new(Node {
             parent,
             children: Vec::new(),
             key: element.key,
             state: element.widget.new_state(),
-            spec: element.widget.layout(),
+            spec,
             widget: element.widget,
             generation: Generation(revision),
             paint_revision: revision,
@@ -162,7 +163,7 @@ impl<M: 'static> Tree<M> {
 
     fn update(&mut self, id: NodeId, mut element: Element<M>) -> Result<(), UiError> {
         let children = element.widget.take_children();
-        let spec = element.widget.layout();
+        let spec = element.layout();
         let node = self.node_mut(id);
         let mut change = element.widget.update(&*node.widget, &mut *node.state);
         if spec != node.spec {

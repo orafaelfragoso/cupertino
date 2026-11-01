@@ -361,6 +361,14 @@ impl<A: Application> Harness<A> {
         panic!("the window keeps asking for frames");
     }
 
+    pub fn resize(&mut self, size: Size) {
+        self.rt
+            .window_system_mut()
+            .configure(self.window, Some(size), active())
+            .unwrap();
+        self.settle();
+    }
+
     pub fn send(&mut self, event: WindowEvent) {
         self.rt
             .window_system_mut()

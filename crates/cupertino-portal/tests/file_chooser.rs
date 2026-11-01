@@ -265,3 +265,22 @@ fn only_the_frontend_may_ask_and_bad_options_are_refused_before_a_dialog() {
     }
     assert!(r.events.try_recv().is_err(), "no dialog was shown");
 }
+
+#[test]
+fn the_portal_file_and_the_portals_conf_name_the_file_chooser() {
+    let file = include_str!("../data/cupertino.portal");
+    let interfaces = file
+        .lines()
+        .find_map(|l| l.strip_prefix("Interfaces="))
+        .unwrap();
+    assert!(interfaces.split(';').any(|i| i == INTERFACE));
+    let conf = include_str!("../data/cupertino-portals.conf");
+    let backends = conf
+        .lines()
+        .find_map(|l| l.strip_prefix(INTERFACE)?.strip_prefix('='))
+        .unwrap();
+    assert_eq!(
+        backends.split(';').next(),
+        Some(BUS_NAME.rsplit('.').next().unwrap())
+    );
+}

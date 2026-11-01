@@ -1411,11 +1411,15 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "cupertino-defaults",
+ "cupertino-filepicker",
+ "cupertino-kit",
  "cupertino-protocol-app",
  "cupertino-test-bus",
  "cupertino-wayland-client",
  "futures-lite",
+ "mime_guess",
  "percent-encoding",
+ "tempfile",
  "zbus",
 ]
 

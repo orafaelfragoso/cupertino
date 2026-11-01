@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use cupertino_typeahead::TypeAhead;
 
+pub mod places;
+
 /// What the picker chooses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Mode {
@@ -288,6 +290,11 @@ impl Picker {
     fn open_dir(&mut self, dir: PathBuf, then_highlight: Option<PathBuf>) -> Outcome {
         self.request(dir, false, then_highlight);
         Outcome::Changed
+    }
+
+    /// Open `dir`, a place of a sidebar.
+    pub fn go(&mut self, dir: &Path) -> Outcome {
+        self.open_dir(dir.to_path_buf(), None)
     }
 
     /// Open the parent folder, highlighting the folder that was left.

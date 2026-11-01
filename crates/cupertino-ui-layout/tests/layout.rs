@@ -4,7 +4,7 @@ use common::TestTree;
 use cupertino_geometry::{Insets, Rect, Size};
 use cupertino_ui_layout::{
     Align, Axis, ContainerKind, Flex, Justify, LayoutDirection, LayoutError, Overflow, SizeSpec,
-    Track,
+    SplitSpec, Track,
 };
 
 const OPEN: Size = Size::new(f64::INFINITY, f64::INFINITY);
@@ -520,4 +520,68 @@ fn the_result_reports_the_work_it_did() {
     let r = t.run(root, OPEN);
     assert_eq!(r.stats.leaf_measures, t.leaf_measures.get());
     assert!(r.stats.solves >= 3);
+}
+
+fn split(t: &mut TestTree, leading: f64) -> (usize, usize, usize) {
+    let (a, b) = (t.leaf(10.0, 10.0), t.leaf(10.0, 10.0));
+    let root = t.container(
+        ContainerKind::Split(SplitSpec {
+            axis: Axis::Horizontal,
+            leading,
+            gap: 1.0,
+            min_leading: 128.0,
+            min_trailing: 128.0,
+        }),
+        vec![a, b],
+    );
+    (root, a, b)
+}
+
+#[test]
+fn a_split_keeps_the_trailing_minimum_and_then_hides_the_leading_child() {
+    let mut t = TestTree::default();
+    let (root, a, b) = split(&mut t, 200.0);
+    let at = |width: f64| {
+        let r = t.run_tight(root, Size::new(width, 50.0), LayoutDirection::Ltr);
+        (r.nodes[&a].rect, r.nodes[&b].rect)
+    };
+    assert_eq!(
+        at(500.0),
+        (
+            Rect::new(0.0, 0.0, 200.0, 50.0),
+            Rect::new(201.0, 0.0, 299.0, 50.0)
+        )
+    );
+    assert_eq!(
+        at(300.0),
+        (
+            Rect::new(0.0, 0.0, 171.0, 50.0),
+            Rect::new(172.0, 0.0, 128.0, 50.0)
+        ),
+        "the leading child gives way first"
+    );
+    assert_eq!(
+        at(257.0),
+        (
+            Rect::new(0.0, 0.0, 128.0, 50.0),
+            Rect::new(129.0, 0.0, 128.0, 50.0)
+        )
+    );
+    assert_eq!(
+        at(250.0),
+        (
+            Rect::new(0.0, 0.0, 0.0, 50.0),
+            Rect::new(0.0, 0.0, 250.0, 50.0)
+        ),
+        "both minimums do not fit"
+    );
+}
+
+#[test]
+fn a_split_raises_a_short_leading_child_to_its_minimum_and_mirrors_in_right_to_left() {
+    let mut t = TestTree::default();
+    let (root, a, b) = split(&mut t, 40.0);
+    let r = t.run_tight(root, Size::new(400.0, 50.0), LayoutDirection::Rtl);
+    assert_eq!(r.nodes[&a].rect, Rect::new(272.0, 0.0, 128.0, 50.0));
+    assert_eq!(r.nodes[&b].rect, Rect::new(0.0, 0.0, 271.0, 50.0));
 }

@@ -962,6 +962,15 @@
   source: crates/cupertino-settings/src/bluez.rs
   source_match: "org.bluez.Agent1"
   note: the pairing agent Settings registers with BlueZ; only bluetoothd calls
+- name: cupertino
+  kind: binary
+  version: 0.1.0
+  shipped: no
+  owner_crate: cupertino-cli
+  owner_area: packaging
+  scope: public
+  test_owner: crates/cupertino-cli/tests/cli.rs
+  source: crates/cupertino-cli/src/bin/cupertino.rs
 - name: cupertino-assets
   kind: binary
   version: 0.1.0

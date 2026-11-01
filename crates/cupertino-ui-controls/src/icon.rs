@@ -5,7 +5,33 @@ use cupertino_ui_core::{
 };
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured};
 use cupertino_ui_render::Sampling;
-use cupertino_ui_theme::{ColorRole, StateVariant};
+use cupertino_ui_theme::{Color, ColorRole, StateVariant};
+
+/// Draws the system symbol `name` at `size` points in `color`, at the device's pixels and centred in `area`.
+pub(crate) fn symbol(
+    cx: &mut PaintCx<'_>,
+    name: &str,
+    size: f64,
+    color: Color,
+    mirrored: bool,
+    area: Rect,
+) {
+    let env = cx.env();
+    let scale = env.scale;
+    let px = (size * scale).round().max(1.0) as u32;
+    let icon = env.icons.symbol(name, px, color, mirrored);
+    let (width, height) = (
+        f64::from(icon.image.width) / scale,
+        f64::from(icon.image.height) / scale,
+    );
+    let dst = Rect::new(
+        area.min_x() + (area.width() - width) / 2.0,
+        area.min_y() + (area.height() - height) / 2.0,
+        width,
+        height,
+    );
+    cx.image(icon.id, &icon.image, dst, Sampling::Linear);
+}
 
 impl<M: 'static> Widget<M> for Icon {
     type State = ();
@@ -45,23 +71,11 @@ impl<M: 'static> Widget<M> for Icon {
         let Some(color) = env.theme.colors.get(role, StateVariant::NORMAL) else {
             return;
         };
-        let scale = env.scale;
-        let px = (self.size * scale).round().max(1.0) as u32;
         let mirrored =
             self.direction == IconDirection::Semantic && env.direction == LayoutDirection::Rtl;
-        let icon = env.icons.symbol(&self.name, px, color, mirrored);
-        let (width, height) = (
-            f64::from(icon.image.width) / scale,
-            f64::from(icon.image.height) / scale,
-        );
         let size = cx.size();
-        let dst = Rect::new(
-            (size.width - width) / 2.0,
-            (size.height - height) / 2.0,
-            width,
-            height,
-        );
-        cx.image(icon.id, &icon.image, dst, Sampling::Linear);
+        let area = Rect::new(0.0, 0.0, size.width, size.height);
+        symbol(cx, &self.name, self.size, color, mirrored, area);
     }
 
     /// A decorative icon (no label) stays out of the accessibility tree.

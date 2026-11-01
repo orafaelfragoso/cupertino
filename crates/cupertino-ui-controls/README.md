@@ -22,6 +22,11 @@ from the application's model and reports changes as messages.
 - **Passwords.** `SecureField` keeps its text in a `SecureBuffer` only: no undo, copy, cut or other command chord, no
   surrounding text for the input method, a protected accessible value, and the secret reaches the application only
   borrowed, in the submit handler. A composition is never held; only committed text goes in.
+- **Sidebar.** `Sidebar` lays out sections, each an optional heading over rows of an icon and a label, and keeps one
+  row selected, counted over every section. The rows share one Tab stop; Up, Down, Home and End cross the sections,
+  and a selection that does not change is not reported again. Assistive technology reads a list with a group per
+  heading and a selected list item per row. A row is keyed by its item's key, so its focus and accessible object stay
+  with it while rows come and go around it.
 
 ## Not yet
 

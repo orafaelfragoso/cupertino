@@ -367,6 +367,17 @@ impl WaylandWindowSystem {
                     WindowEvent::Pointer(convert::pointer(event, serial, mods), time),
                 )
             }
+            Event::Touch {
+                surface,
+                time,
+                event,
+            } => {
+                let Some(i) = on(&self.windows, surface) else {
+                    return;
+                };
+                let time = self.input_time(time);
+                (i, WindowEvent::Touch(convert::touch(event), time))
+            }
             Event::Keyboard {
                 surface,
                 time,

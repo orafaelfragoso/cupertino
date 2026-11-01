@@ -28,6 +28,7 @@ cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-test-bus = { path = "../cupertino-test-bus" }
 memmap2 = "0.9"
 rustix = { version = "1", features = ["event"] }
-wayland-protocols = { version = "0.32", features = ["server"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "server"] }
 wayland-server = "0.31"
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }

@@ -50,7 +50,12 @@ impl std::error::Error for AppError {}
 /// the session's appearance and display options, and runs until the application exits, its last window without a
 /// close handler is closed, or a non-[resident](Application::RESIDENT) application closes its last window.
 pub fn run<A: Application>() -> Result<(), AppError> {
-    let system = WaylandWindowSystem::connect(Profile::cupertino()).map_err(AppError::Connect)?;
+    run_on::<A>(WaylandWindowSystem::connect(Profile::cupertino()).map_err(AppError::Connect)?)
+}
+
+/// [`run`] on `system`, a connection the caller set up: a desktop shell gives it the roles of its surfaces with
+/// [`WaylandWindowSystem::with_roles`].
+pub fn run_on<A: Application>(system: WaylandWindowSystem) -> Result<(), AppError> {
     // the first frame already has the session's appearance
     let (mut options, theme) = options_and_theme(start_preferences(system.appearance()))?;
     let follow = theme_for(theme, Arc::clone(&options.theme));

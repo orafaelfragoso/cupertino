@@ -1,0 +1,10 @@
+[Trigger]
+Operation = Upgrade
+Type = Package
+Target = cupertino
+Target = cupertino-data
+
+[Action]
+Description = Keeping the installed Cupertino packages for a rollback...
+When = PreTransaction
+Exec = /usr/share/libalpm/scripts/cupertino-save-previous

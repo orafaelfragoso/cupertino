@@ -1,0 +1,88 @@
+#!/bin/sh
+# Install an earlier Cupertino release: cupertino-rollback VERSION (for example 0.1.0-1).
+# Both packages are taken from /var/lib/cupertino/previous, the pacman cache, or the archive named in
+# /etc/cupertino-rollback.conf (archive=URL), copied into a private directory, and installed only when each one passes
+# pacman's own signature rules AND these: the signature's primary key is the Cupertino key in the keyring package, and the
+# package's .PKGINFO names the requested package and version. pacman -U alone would accept an unsigned file
+# (LocalFileSigLevel is Optional in the stock pacman.conf).
+set -eu
+umask 077
+
+PREVIOUS=/var/lib/cupertino/previous
+CACHE=/var/cache/pacman/pkg
+CONF=/etc/cupertino-rollback.conf
+TRUSTED=/usr/share/pacman/keyrings/cupertino-trusted
+GPGDIR=/etc/pacman.d/gnupg
+PACKAGES='cupertino cupertino-data'
+
+die() {
+    echo "cupertino-rollback: $*" >&2
+    exit 1
+}
+
+[ "$#" -eq 1 ] || die 'usage: cupertino-rollback VERSION'
+version=$1
+case $version in
+'' | *[!0-9A-Za-z.+_:~-]*) die "not a package version: $version" ;;
+esac
+[ "$(id -u)" -eq 0 ] || die 'run as root (sudo cupertino-rollback VERSION)'
+[ -r "$TRUSTED" ] || die "$TRUSTED is missing: install cupertino-keyring"
+
+archive=
+if [ -r "$CONF" ]; then
+    archive=$(sed -n 's/^archive=\(https:\/\/[^[:space:]]*\)$/\1/p;s/^archive=\(http:\/\/127\.0\.0\.1[^[:space:]]*\)$/\1/p' "$CONF" | head -n 1)
+fi
+
+work=$(mktemp -d /var/tmp/cupertino-rollback.XXXXXX)
+trap 'rm -rf "$work"' EXIT
+
+# file name of a package: the version contains no '/', so the name is the whole name
+file_of() {
+    printf '%s-%s-x86_64.pkg.tar.zst' "$1" "$version"
+}
+
+fetch() { # name: copy the package and its signature into $work
+    f=$(file_of "$1")
+    for dir in "$PREVIOUS" "$CACHE"; do
+        if [ -f "$dir/$f" ] && [ ! -f "$dir/$f.sig" ]; then
+            die "$dir/$f has no signature (.sig)"
+        fi
+        if [ -f "$dir/$f" ]; then
+            cp "$dir/$f" "$dir/$f.sig" "$work/"
+            return 0
+        fi
+    done
+    if [ -n "$archive" ]; then
+        if curl -fsS --proto '=https,http' -o "$work/$f" "$archive/$f" && curl -fsS --proto '=https,http' -o "$work/$f.sig" "$archive/$f.sig"; then
+            return 0
+        fi
+        rm -f "$work/$f" "$work/$f.sig"
+    fi
+    return 1
+}
+
+verify() { # name: signature, primary key, name and version
+    f=$work/$(file_of "$1")
+    status=$(gpg --homedir "$GPGDIR" --no-permission-warning --batch --status-fd 1 --verify "$f.sig" "$f" 2>/dev/null) || die "$1: the signature does not verify"
+    [ "$(printf '%s\n' "$status" | grep -c '^\[GNUPG:\] VALIDSIG ')" -eq 1 ] || die "$1: not exactly one valid signature"
+    if printf '%s\n' "$status" | grep -q '^\[GNUPG:\] \(BADSIG\|ERRSIG\|EXPSIG\|EXPKEYSIG\|REVKEYSIG\) '; then
+        die "$1: the signature is bad, expired or from a revoked key"
+    fi
+    primary=$(printf '%s\n' "$status" | awk '$2 == "VALIDSIG" { print toupper($NF) }')
+    awk -F: -v fpr="$primary" 'toupper($1) == fpr { found = 1 } END { exit !found }' "$TRUSTED" || die "$1: not signed by the Cupertino key"
+    info=$(bsdtar -xOf "$f" .PKGINFO) || die "$1: no .PKGINFO"
+    [ "$(printf '%s\n' "$info" | grep -c '^pkgname = ')" -eq 1 ] || die "$1: .PKGINFO names more than one package"
+    [ "$(printf '%s\n' "$info" | sed -n 's/^pkgname = //p')" = "$1" ] || die "$1: .PKGINFO names another package"
+    [ "$(printf '%s\n' "$info" | sed -n 's/^pkgver = //p')" = "$version" ] || die "$1: .PKGINFO has another version"
+}
+
+for name in $PACKAGES; do
+    fetch "$name" || die "$name $version is in none of $PREVIOUS, $CACHE or the archive"
+    verify "$name"
+done
+
+set --
+for name in $PACKAGES; do
+    set -- "$@" "$work/$(file_of "$name")"
+done
+pacman -U "$@"

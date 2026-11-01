@@ -82,10 +82,9 @@ impl Harness {
     }
 
     fn shoot(&mut self) -> image::RgbaImage {
-        let path = self
-            .dir
-            .path()
-            .join(format!("shot-{}.png", self.state.screenshot_requests.len()));
+        let path = self.dir.path().join("shot.png");
+        // the request list is drained once drawn, so a leftover shot would pass for the new one
+        let _ = std::fs::remove_file(&path);
         self.state.screenshot_requests.push(path.clone());
         self.state.request_redraw();
         let p = path.clone();

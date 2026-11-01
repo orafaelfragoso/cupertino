@@ -291,6 +291,22 @@ async fn end(
     let _ = connection.object_server().remove::<Session, _>(path).await;
 }
 
+/// Hand a [`Capture::Start`] to the capture side unless its session has ended. It runs under the lock [`end`] takes the
+/// session out with, so a Close that wins the race with the chooser's answer either finds no share or stops this one.
+fn start_unless_ended(
+    sessions: &Sessions,
+    shares: &Shares,
+    session: &OwnedObjectPath,
+    start: Capture,
+) -> bool {
+    let sessions = lock(sessions);
+    if !sessions.contains_key(session) {
+        return false;
+    }
+    shares(start);
+    true
+}
+
 /// The object on the bus.
 pub struct ScreenCast {
     sources: Box<dyn Fn() -> Vec<Source> + Send + Sync>,
@@ -410,13 +426,16 @@ impl ScreenCast {
         };
         let (started, stream) = async_channel::bounded(1);
         let (running, ended) = async_channel::bounded::<()>(1);
-        (self.shares)(Capture::Start {
+        let start = Capture::Start {
             session: session.clone(),
             source,
             cursor,
             started: Started(started),
             running: Running(running),
-        });
+        };
+        if !start_unless_ended(&self.sessions, &self.shares, &session, start) {
+            return Ok((Response::Other as u32, HashMap::new()));
+        }
         let stream = futures_lite::future::or(async { stream.recv().await.ok() }, async {
             let _ = closed.recv().await;
             None
@@ -658,4 +677,51 @@ fn results(stream: &Stream) -> Result<HashMap<String, OwnedValue>, PortalError> 
         ("streams".to_owned(), owned(Value::from(streams))?),
         ("persist_mode".to_owned(), owned(Value::from(0u32))?),
     ]))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    #[test]
+    fn a_start_reaches_the_capture_side_only_while_its_session_lives() {
+        let path =
+            OwnedObjectPath::try_from("/org/freedesktop/portal/desktop/session/1_7/s").unwrap();
+        let sessions: Sessions = Arc::default();
+        let starts = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&starts);
+        let shares: Shares = Arc::new(move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+        });
+        let start = || Capture::Start {
+            session: path.clone(),
+            source: Source::Display {
+                output: 1,
+                name: "DP-1".to_owned(),
+                description: String::new(),
+            },
+            cursor: CursorMode::Hidden,
+            started: Started(async_channel::bounded(1).0),
+            running: Running(async_channel::bounded(1).0),
+        };
+
+        assert!(
+            !start_unless_ended(&sessions, &shares, &path, start()),
+            "a Close that ended the session after the chooser answered"
+        );
+        assert_eq!(starts.load(Ordering::SeqCst), 0);
+
+        lock(&sessions).insert(
+            path.clone(),
+            Entry {
+                app_id: "org.example.App".to_owned(),
+                phase: Phase::Starting,
+                closed: async_channel::bounded(1).1,
+            },
+        );
+        assert!(start_unless_ended(&sessions, &shares, &path, start()));
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+    }
 }

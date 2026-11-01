@@ -8,7 +8,7 @@ use cupertino_kit::prelude::*;
 use cupertino_kit::text::{AttributedText, TextStyle};
 
 use super::Message;
-use crate::controls::{self, metrics, Control, Value};
+use crate::controls::{metrics, Control, Value};
 use crate::panes::{ControlId, Row, Section};
 use crate::search::Hit;
 
@@ -99,7 +99,10 @@ fn control(row: &Row, open: Option<ControlId>) -> Option<Element<Message>> {
                 style: SliderStyle::Regular,
                 ticks: stops.map_or(0, |n| n as u32),
                 enabled,
-                on_change: Some(Box::new(move |v| commit(controls::release(stops, v)))),
+                on_change: Some(Box::new(move |v| match stops {
+                    Some(n) => commit(Value::Index(Control::nearest_stop(v, n))),
+                    None => Message::Slide(id, v),
+                })),
             })
             .width(metrics::SLIDER_WIDTH)
         }

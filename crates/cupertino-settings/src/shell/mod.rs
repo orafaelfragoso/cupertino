@@ -40,6 +40,8 @@ pub const APP_ID: &str = "cupertino-settings";
 const REFRESH: Duration = Duration::from_secs(1);
 /// The level slider's waiting write is checked this often while it is dragged.
 const LEVEL_TICK: Duration = Duration::from_millis(17);
+/// How often a dragged slider without stops checks whether it has settled.
+const SLIDE_TICK: Duration = Duration::from_millis(100);
 /// The sidebar's width at the start and its least; the content's least.
 const SIDEBAR: f64 = 215.0;
 const MIN_SIDEBAR: f64 = 150.0;
@@ -167,6 +169,9 @@ pub enum Message {
     Woken,
     Refresh,
     LevelTick,
+    /// The slider without stops of `ControlId` moved, committed once it settles.
+    Slide(ControlId, f64),
+    SlideTick,
 }
 
 /// Wait for the next wake of the background queue.
@@ -270,6 +275,26 @@ impl Shell {
                     if more {
                         return Ok(vec![after(LEVEL_TICK, Message::LevelTick)]);
                     }
+                }
+            }
+            Message::Slide(id, value) => {
+                let now = self.state.now();
+                let started = self.state.slide.is_none();
+                if let Some((ended, v)) = self.state.slide_moved(id, value, now) {
+                    self.state.commit(ended, Value::Fraction(v))?;
+                }
+                if started {
+                    return Ok(vec![after(SLIDE_TICK, Message::SlideTick)]);
+                }
+            }
+            Message::SlideTick => {
+                let now = self.state.now();
+                let (settled, more) = self.state.slide_tick(now);
+                if let Some((id, v)) = settled {
+                    self.state.commit(id, Value::Fraction(v))?;
+                }
+                if more {
+                    return Ok(vec![after(SLIDE_TICK, Message::SlideTick)]);
                 }
             }
             Message::Open(id) => self.open = id,
@@ -833,6 +858,29 @@ mod tests {
             Some(0),
             "the first stop is Off"
         );
+    }
+
+    #[test]
+    fn a_slider_without_stops_writes_once_it_settles() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let (mut driver, window) = start(dir.path(), PaneId::DesktopDock);
+        click(
+            &mut driver,
+            window,
+            &format!("{:?}-control", ControlId::DockSize),
+        );
+        key(&mut driver, window, END, None, Mods::NONE);
+        let stored = || {
+            Settings::load(&paths(dir.path()), 1080.0)
+                .unwrap()
+                .dock
+                .tile_size
+        };
+        assert_eq!(stored(), None, "nothing is written while the knob moves");
+        std::thread::sleep(Duration::from_secs_f64(0.8));
+        settle(&mut driver, window);
+        assert_eq!(stored(), Some(mapping::dock_px(1.0)));
     }
 
     #[test]

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Install Cupertino
+Comment=Erase a disk and install Cupertino
+Exec=foot sudo cupertino-install
+Icon=system-software-install
+Terminal=false
+Categories=System;

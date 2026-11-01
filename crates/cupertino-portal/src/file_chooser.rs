@@ -99,7 +99,7 @@ pub enum Answer {
 }
 
 /// The dialog's answer to one [`Ask`].
-pub struct Reply(async_channel::Sender<Answer>);
+pub struct Reply(pub(crate) async_channel::Sender<Answer>);
 
 impl Reply {
     pub fn send(self, answer: Answer) {

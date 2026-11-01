@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use cupertino_typeahead::TypeAhead;
 
+pub mod places;
+
 /// What the picker chooses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Mode {
@@ -13,6 +15,8 @@ pub enum Mode {
     Photo,
     /// A program: folders, and the files in them that may be executed.
     Program,
+    /// Any file: folders and every file in them; the caller filters what it shows.
+    File,
 }
 
 /// One row of the open folder.
@@ -89,6 +93,7 @@ fn read_entries(dir: &Path, mode: Mode, hidden: bool) -> Option<Vec<Entry>> {
                         Mode::Folder => false,
                         Mode::Photo => is_picture(&name),
                         Mode::Program => is_executable(&e.path()),
+                        Mode::File => true,
                     });
             listed.then(|| Entry {
                 name,
@@ -287,6 +292,11 @@ impl Picker {
         Outcome::Changed
     }
 
+    /// Open `dir`, a place of a sidebar.
+    pub fn go(&mut self, dir: &Path) -> Outcome {
+        self.open_dir(dir.to_path_buf(), None)
+    }
+
     /// Open the parent folder, highlighting the folder that was left.
     pub fn parent(&mut self) -> Outcome {
         match self.dir.parent().map(Path::to_path_buf) {
@@ -320,15 +330,17 @@ impl Picker {
         }
     }
 
-    /// What the Choose button picks: in `Folder` mode the highlighted folder, else the open one; in `Photo` mode the
+    /// What the Choose button picks: in `Folder` mode the highlighted folder, else the open one; in the other modes the
     /// highlighted file.
     pub fn choice(&self) -> Option<PathBuf> {
         let highlighted = self.highlighted.and_then(|i| self.entries.get(i));
         match (self.mode, highlighted) {
             (Mode::Folder, Some(entry)) => Some(entry.path.clone()),
             (Mode::Folder, None) => Some(self.dir.clone()),
-            (Mode::Photo | Mode::Program, Some(entry)) if !entry.is_dir => Some(entry.path.clone()),
-            (Mode::Photo | Mode::Program, _) => None,
+            (Mode::Photo | Mode::Program | Mode::File, Some(entry)) if !entry.is_dir => {
+                Some(entry.path.clone())
+            }
+            (Mode::Photo | Mode::Program | Mode::File, _) => None,
         }
     }
 
@@ -421,6 +433,17 @@ mod tests {
         assert_eq!(names(&p), ["art", "Beach", "tool"]);
         p.key(Key::End, 0.0);
         assert_eq!(p.choice(), Some(tool));
+        p.key(Key::Home, 0.0);
+        assert_eq!(p.choice(), None, "a folder is opened, not chosen");
+    }
+
+    #[test]
+    fn a_file_chooser_lists_folders_then_every_file_and_chooses_only_a_file() {
+        let d = tree();
+        let mut p = Picker::open(d.path(), Mode::File);
+        assert_eq!(names(&p), ["art", "Beach", "a.jpg", "b.PNG", "notes.txt"]);
+        p.key(Key::End, 0.0);
+        assert_eq!(p.choice(), Some(d.path().join("notes.txt")));
         p.key(Key::Home, 0.0);
         assert_eq!(p.choice(), None, "a folder is opened, not chosen");
     }

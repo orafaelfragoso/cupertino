@@ -33,9 +33,27 @@ appearance, as `cupertino_app_effects_v1` sends it:
 `Read` of any other key fails, so xdg-desktop-portal asks the next backend. A change of appearance emits
 `SettingChanged` once for each key whose value changed.
 
+## File chooser
+
+`org.freedesktop.impl.portal.FileChooser` answers `OpenFile`, `SaveFile` and `SaveFiles` with a window drawn with
+CupertinoKit: a sidebar of the home folder and the user directories, the open folder's list, and a bottom bar with the
+filters, the choices, Cancel and the action button. A save adds a Save As field and asks before it replaces a file.
+
+- Only the owner of `org.freedesktop.portal.Desktop` may call it or close a request; any other caller gets
+  `AccessDenied`. Options are checked before a window shows: a wrong type, a relative folder, a `current_name` with a
+  `/`, an unknown filter kind, a filter pattern over 256 bytes or a string or list over its bound is `InvalidArgs`. At
+  most 16 dialogs are open at once, 4 for one app id.
+- Glob filters match without regard to case, in at most pattern × name steps; MIME filters match by extension. Folders
+  always show. The filter runs once for each listing, not on each redraw.
+- The title, the action label, filter names and choice labels lose control and bidirectional-override characters.
+- The answer is `0` with `uris` (`file://`, escaped), `choices` and `current_filter`; Cancel or closing the window is
+  `1`; `Close` on the request takes the window down and answers `2`.
+- `parent_window` is not followed yet: the dialog is a window of its own, centred.
+- A folder is read on a thread of its own, so one on a hung mount leaves the window responsive.
+
 ## Installing
 
 - `bin/cupertino-portal`
 - `data/cupertino.portal` to `/usr/share/xdg-desktop-portal/portals/`
-- `data/cupertino-portals.conf` to `/usr/share/xdg-desktop-portal/`: Settings from this backend first, then the GTK
-  backend for the namespaces it does not serve; every other interface from the GTK backend until this one serves it
+- `data/cupertino-portals.conf` to `/usr/share/xdg-desktop-portal/`: Settings and FileChooser from this backend
+  first, then the GTK backend for what it does not serve; every other interface from the GTK backend

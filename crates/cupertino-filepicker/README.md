@@ -9,11 +9,13 @@ Settings wallpaper pane today, the file-chooser portal later.
   true. An answer for an older request is dropped. `Picker::open(start, mode)` is the same with the answers read in place
   (`settle`), for callers with nothing to keep responsive.
 - `Mode::Folder` shows folders, `Mode::Photo` shows folders and PNG and JPEG
-  files, `Mode::Program` shows folders and the files someone may execute. Folders come first, then files, each by name without regard to case. Names that start with a dot are hidden
+  files, `Mode::Program` shows folders and the files someone may execute, `Mode::File` shows folders and every file (the file-chooser portal filters them itself). Folders come first, then files, each by name without regard to case. Names that start with a dot are hidden
   until `set_hidden(true)`.
 - `Picker::key(key, now)` takes the keys of the chooser: Up, Down, Home and End move the highlight (no wrap); Return
   enters the highlighted folder or chooses the highlighted file; Super+Return (`Key::Choose`) chooses (in `Folder`
   mode the highlighted folder, else the open one); Super+Up (`Key::Parent`) opens the parent folder; Escape cancels; a
   typed character jumps to the next entry whose name starts with the text typed so far (`cupertino-typeahead`).
+  `Picker::go(dir)` opens a folder of a sidebar; `places::session_places(home)` lists the home folder and the
+  user directories of `user-dirs.dirs` that exist.
 - A folder that cannot be read leaves the picker where it was and sets `unreadable`, which the view words plainly.
 - The result is `Outcome::Choose(path)`, `Cancel`, `Changed` (redraw) or `Ignore`.

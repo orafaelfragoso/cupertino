@@ -136,9 +136,13 @@ impl Paragraph {
         }
         let hard_lines = groups
             .into_iter()
-            .map(|group| HardLine {
-                clusters: clusters_of(&text, &items, group.clone(), &breaks),
-                items: group,
+            .map(|group| {
+                let start = items[group.start].range.start;
+                let breaks = &breaks[breaks.partition_point(|&b| b < start)..];
+                HardLine {
+                    clusters: clusters_of(&text, &items, group.clone(), breaks),
+                    items: group,
+                }
             })
             .collect();
         Self {
@@ -1061,6 +1065,38 @@ mod tests {
             buffer.move_visual(false, false);
         }
         assert_eq!(buffer.caret(), 3);
+    }
+
+    #[test]
+    fn right_walks_each_hard_line_in_the_order_that_line_is_drawn() {
+        let text = "abc\n\u{5D0}\u{5D1}\u{5D2}";
+        let layout = layout(text, None);
+        let mut buffer = crate::TextBuffer::multiline();
+        buffer.set_text(text);
+        buffer.select(text.len()..text.len());
+        let mut stops = vec![buffer.caret_position()];
+        for _ in 0..4 {
+            buffer.move_visual(true, false);
+            stops.push(buffer.caret_position());
+        }
+        let bytes: Vec<usize> = stops.iter().map(|at| at.byte).collect();
+        assert_eq!(
+            bytes,
+            [10, 8, 6, 4, 3],
+            "through the Hebrew to its start, then to the end of the line before"
+        );
+        let carets: Vec<Rect> = stops.iter().map(|at| layout.caret_rect(*at)).collect();
+        assert!(
+            carets[..4]
+                .windows(2)
+                .all(|pair| pair[1].x() > pair[0].x() && pair[1].y() == pair[0].y()),
+            "{carets:?}"
+        );
+        assert!(carets[4].y() < carets[3].y(), "{carets:?}");
+        buffer.move_visual(true, false);
+        assert_eq!(buffer.caret(), 4, "Right past abc starts the next line");
+        buffer.move_visual(false, false);
+        assert_eq!(buffer.caret(), 6, "Left from the line's start goes into it");
     }
 
     #[test]

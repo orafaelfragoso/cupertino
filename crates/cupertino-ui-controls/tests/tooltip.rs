@@ -1,7 +1,9 @@
 mod support;
 
 use cupertino_geometry::{Insets, Point};
-use cupertino_ui_controls::{Button, ButtonRole, ButtonStyle, Stack, TextField, Tooltip};
+use cupertino_ui_controls::{
+    Button, ButtonRole, ButtonStyle, Stack, TextField, Tooltip, TooltipChange, TooltipState,
+};
 use cupertino_ui_core::{Application, Command, Element, Role, Window, WindowKey};
 use cupertino_ui_layout::{Align, Axis};
 use cupertino_ui_platform::{PointerEvent, PopupEdge, Timestamp, WindowEvent, WindowId};
@@ -13,6 +15,8 @@ const MS: u64 = 1_000_000;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Message {
+    Tip(TooltipChange),
+    /// Logged when the state starts or stops showing.
     Show,
     Hide,
     Trash,
@@ -21,6 +25,7 @@ enum Message {
 
 #[derive(Default)]
 struct Model {
+    tip: TooltipState,
     shown: bool,
     said: Vec<Message>,
 }
@@ -40,13 +45,12 @@ fn button(label: &'static str, on_press: Message) -> Element<Message> {
     .key(label)
 }
 
-fn tip(shown: bool) -> Tooltip<Message> {
+fn tip(state: TooltipState) -> Tooltip<Message> {
     Tooltip {
         text: "Move to the bin".into(),
         anchor: button("Trash", Message::Trash),
-        shown,
-        on_show: Message::Show,
-        on_hide: Message::Hide,
+        state,
+        on_change: Box::new(Message::Tip),
     }
 }
 
@@ -60,11 +64,19 @@ impl Application for Page {
 
     fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
         match message {
-            Message::Show => model.shown = true,
-            Message::Hide => model.shown = false,
-            Message::Trash | Message::Other => {}
+            Message::Tip(change) => {
+                model.tip.apply(change);
+                if model.tip.shown() != model.shown {
+                    model.shown = model.tip.shown();
+                    model.said.push(if model.shown {
+                        Message::Show
+                    } else {
+                        Message::Hide
+                    });
+                }
+            }
+            message => model.said.push(message),
         }
-        model.said.push(message);
         Vec::new()
     }
 
@@ -75,12 +87,12 @@ impl Application for Page {
             spacing: 8.0,
             align: Align::Start,
             children: vec![
-                Element::from(tip(model.shown)).key("tip"),
+                Element::from(tip(model.tip)).key("tip"),
                 button("Other", Message::Other),
             ],
         }));
-        if model.shown {
-            windows.push(tip(true).window(
+        if model.tip.shown() {
+            windows.push(tip(model.tip).window(
                 WindowKey("tooltip".into()),
                 WindowKey("test".into()),
                 "tip".into(),
@@ -105,6 +117,24 @@ fn at<A: Application>(h: &mut Harness<A>, ms: u64) {
 fn hover<A: Application>(h: &mut Harness<A>, key: &'static str) {
     let position = h.center(key);
     h.pointer(PointerEvent::Motion { position });
+}
+
+/// Moves the pointer off the window and onto the middle of the tip.
+fn onto_tip(h: &mut Harness<Page>) {
+    h.pointer(PointerEvent::Leave);
+    let main = h.window;
+    h.window = tooltip(h).expect("the tip shows");
+    h.pointer(PointerEvent::Motion {
+        position: Point::new(20.0, 12.0),
+    });
+    h.window = main;
+}
+
+fn off_tip(h: &mut Harness<Page>) {
+    let main = h.window;
+    h.window = tooltip(h).expect("the tip shows");
+    h.pointer(PointerEvent::Leave);
+    h.window = main;
 }
 
 fn rested() -> Harness<Page> {
@@ -148,10 +178,38 @@ fn leaving_before_the_delay_asks_for_nothing() {
 }
 
 #[test]
-fn leaving_the_anchor_hides_the_tip() {
+fn leaving_the_anchor_hides_the_tip_after_the_grace() {
     let mut h = rested();
     hover(&mut h, "Other");
+    at(&mut h, 899);
+    assert!(h.model().shown);
+    at(&mut h, 900);
     assert!(!h.model().shown);
+    assert!(tooltip(&h).is_none());
+}
+
+#[test]
+fn the_pointer_can_move_onto_the_tip_and_back_without_it_closing() {
+    let mut h = rested();
+    onto_tip(&mut h);
+    at(&mut h, 2000);
+    assert!(h.model().shown, "the pointer is on the tip");
+    off_tip(&mut h);
+    hover(&mut h, "Trash");
+    at(&mut h, 4000);
+    assert_eq!(h.model().said, [Message::Show]);
+}
+
+#[test]
+fn leaving_the_tip_hides_it_after_the_grace() {
+    let mut h = rested();
+    onto_tip(&mut h);
+    at(&mut h, 700);
+    off_tip(&mut h);
+    at(&mut h, 999);
+    assert!(h.model().shown);
+    at(&mut h, 1000);
+    assert_eq!(h.model().said, [Message::Show, Message::Hide]);
     assert!(tooltip(&h).is_none());
 }
 
@@ -243,6 +301,7 @@ fn a_tip_shown_for_the_keyboard_focus_stays_when_the_pointer_passes() {
     hover(&mut h, "Trash");
     at(&mut h, 600);
     hover(&mut h, "Other");
+    at(&mut h, 2000);
     assert!(h.model().shown, "the focus is still on the anchor");
     h.tap(ESCAPE);
     assert!(!h.model().shown);
@@ -309,9 +368,8 @@ impl Application for FieldPage {
                         on_submit: None,
                     })
                     .key("Name"),
-                    shown: model.shown,
-                    on_show: Message::Show,
-                    on_hide: Message::Hide,
+                    state: model.tip,
+                    on_change: Box::new(Message::Tip),
                 }),
                 button("Other", Message::Other),
             ],

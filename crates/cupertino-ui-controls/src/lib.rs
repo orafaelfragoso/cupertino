@@ -35,6 +35,7 @@ pub use scroll::{BarState, ViewportState};
 pub use slider::SliderState;
 pub use split::DividerState;
 pub use stepper::StepperState;
+pub use tooltip::{TooltipChange, TooltipState};
 
 use cupertino_geometry::Insets;
 use cupertino_ui_core::{Checked, Element, Key, WindowKey};
@@ -267,17 +268,16 @@ pub struct Toggle<M> {
     pub on_toggle: Option<Handler<bool, M>>,
 }
 
-/// A short tip for its anchor: asked for after the pointer rests on the anchor, and dismissed by a press, Escape or
-/// the pointer leaving. The text is the anchor's description to assistive technology whether the tip shows or not. Key
-/// the element, and declare [`Tooltip::window`] with the other windows while `shown`.
+/// A short tip for its anchor: shown after the pointer rests on the anchor or the keyboard focus comes to it, and
+/// dismissed by a press, Escape, the focus leaving, or the pointer leaving both anchor and tip. The text is the anchor's
+/// description to assistive technology whether the tip shows or not. Key the element, and declare
+/// [`Tooltip::window`] with the other windows while the state is shown.
 pub struct Tooltip<M> {
     pub text: String,
     pub anchor: Element<M>,
-    pub shown: bool,
-    /// Sent when the pointer has rested on the anchor for the hover delay.
-    pub on_show: M,
-    /// Sent while shown, on a press, Escape, or the pointer leaving the anchor.
-    pub on_hide: M,
+    pub state: TooltipState,
+    /// Sent with each change; apply it to the state with [`TooltipState::apply`].
+    pub on_change: Handler<TooltipChange, M>,
 }
 
 /// A field's text after an edit, with the revision the field gave it.

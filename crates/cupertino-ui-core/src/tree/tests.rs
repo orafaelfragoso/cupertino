@@ -65,6 +65,18 @@ fn a_new_widget_type_under_the_same_key_remounts() {
 }
 
 #[test]
+fn siblings_sharing_a_key_keep_a_stable_node_count_and_the_first_keeps_its_node() {
+    let mut tree = Tree::<M>::new(100);
+    let root = tree.reconcile(None, keyed(&[1, 1, 2])).unwrap();
+    let first = tree.get(root).unwrap().children[0];
+    for _ in 0..2 {
+        tree.reconcile(Some(root), keyed(&[1, 1, 2])).unwrap();
+        assert_eq!(tree.len(), 4);
+        assert_eq!(tree.get(root).unwrap().children[0], first);
+    }
+}
+
+#[test]
 fn unkeyed_children_match_by_position_and_the_tail_unmounts_with_its_subtree() {
     let mut tree = Tree::<M>::new(100);
     let view = |n: usize| {

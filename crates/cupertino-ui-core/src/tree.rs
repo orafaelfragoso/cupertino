@@ -1,12 +1,14 @@
 //! The retained node tree. Each update's element tree is reconciled into it: a child is matched to an old node by
 //! key, or by position among its unkeyed siblings, and kept only when the widget type is the same; everything else
-//! unmounts. Node ids carry their slot's generation, so an id of an unmounted node never reaches its successor.
+//! unmounts, as do all but the first of siblings that share a key. Node ids carry their slot's generation, so an id
+//! of an unmounted node never reaches its successor.
 
 use crate::widget::{AnyWidget, Change, Element};
 use crate::{Key, NodeId, UiError};
 use cupertino_ui_layout::{Generation, LayoutSpec};
 use std::any::Any;
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;
 
 pub(crate) struct Node<M> {
@@ -36,6 +38,8 @@ pub(crate) struct Tree<M> {
     removed: Vec<NodeId>,
     paint_dirty: BTreeSet<NodeId>,
     layout_dirty: bool,
+    /// Keys already warned about, so a duplicate is reported once.
+    duplicates: HashSet<Key>,
 }
 
 impl<M: 'static> Tree<M> {
@@ -49,6 +53,7 @@ impl<M: 'static> Tree<M> {
             removed: Vec::new(),
             paint_dirty: BTreeSet::new(),
             layout_dirty: false,
+            duplicates: HashSet::new(),
         }
     }
 
@@ -185,10 +190,18 @@ impl<M: 'static> Tree<M> {
         let mut keyed = HashMap::new();
         let mut unkeyed = VecDeque::new();
         for (at, &child) in old.iter().enumerate() {
-            match &self.node(child).key {
-                Some(key) => {
-                    keyed.insert(key.clone(), (at, child));
-                }
+            match self.node(child).key.clone() {
+                Some(key) => match keyed.entry(key) {
+                    Entry::Vacant(entry) => {
+                        entry.insert((at, child));
+                    }
+                    Entry::Occupied(entry) => {
+                        if self.duplicates.insert(entry.key().clone()) {
+                            tracing::warn!(key = ?entry.key(), "siblings share a key; only the first keeps its node");
+                        }
+                        self.unmount(child);
+                    }
+                },
                 None => unkeyed.push_back(child),
             }
         }

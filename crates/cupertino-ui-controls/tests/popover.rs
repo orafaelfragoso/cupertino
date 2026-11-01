@@ -1,10 +1,13 @@
 mod support;
 
-use cupertino_geometry::{Insets, Point};
-use cupertino_ui_controls::{Button, ButtonRole, ButtonStyle, Popover, Stack};
+use cupertino_geometry::{Insets, Point, Size};
+use cupertino_ui_controls::{Button, ButtonRole, ButtonStyle, Popover, Spacer, Stack};
 use cupertino_ui_core::{Application, Command, Element, Role, Window, WindowKey};
-use cupertino_ui_layout::{Align, Axis};
-use cupertino_ui_platform::{PopupEdge, WindowEvent, WindowId, WindowRequest, WindowStates};
+use cupertino_ui_layout::{Align, Axis, ScrollState};
+use cupertino_ui_platform::{
+    PointerEvent, PopupEdge, ScrollSource, WindowEvent, WindowId, WindowRequest, WindowStates,
+};
+use cupertino_ui_render::{Paint, PaintOp, Shape};
 use std::cell::Cell;
 use support::{window, Harness, SPACE, TAB};
 
@@ -13,6 +16,8 @@ const ESCAPE: u32 = 0xff1b;
 thread_local! {
     static OPEN_AT_START: Cell<bool> = const { Cell::new(false) };
     static POPOVER_FIRST: Cell<bool> = const { Cell::new(false) };
+    /// A 1000 pt space below the buttons makes the content taller than the popover's bound.
+    static TALL: Cell<bool> = const { Cell::new(false) };
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -21,13 +26,14 @@ enum Message {
     Close,
     Shift,
     Choose,
+    Scrolled(ScrollState),
 }
 
-#[derive(Default)]
 struct Model {
     open: bool,
     shifted: bool,
     closes: usize,
+    scroll: ScrollState,
 }
 
 struct Options;
@@ -51,7 +57,13 @@ impl Application for Options {
     fn init() -> (Model, Vec<Command<Message>>) {
         let model = Model {
             open: OPEN_AT_START.get(),
-            ..Model::default()
+            shifted: false,
+            closes: 0,
+            scroll: ScrollState {
+                offset: Point::ZERO,
+                content: Size::ZERO,
+                viewport: Size::ZERO,
+            },
         };
         (model, Vec::new())
     }
@@ -65,6 +77,7 @@ impl Application for Options {
             }
             Message::Shift => model.shifted = true,
             Message::Choose => {}
+            Message::Scrolled(state) => model.scroll = state,
         }
         Vec::new()
     }
@@ -93,11 +106,17 @@ impl Application for Options {
                         padding: Insets::uniform(0.0),
                         spacing: 6.0,
                         align: Align::Start,
-                        children: vec![
+                        children: [
                             button("First", Message::Choose),
                             button("Second", Message::Shift),
-                        ],
-                    }),
+                        ]
+                        .into_iter()
+                        .chain(TALL.get().then(|| Element::new(Spacer { min: 1000.0 })))
+                        .collect(),
+                    })
+                    .key("content"),
+                    scroll: model.scroll,
+                    on_scroll: Box::new(Message::Scrolled),
                     on_close: Message::Close,
                 }
                 .window(WindowKey("popover".into())),
@@ -234,4 +253,66 @@ fn one_declared_before_its_parent_opens_and_stays_open() {
     h.tap(TAB);
     assert_eq!(popover(&h), Some(id), "a later view keeps it");
     assert!(h.focused("Second"));
+}
+
+#[test]
+fn content_taller_than_its_bound_scrolls_inside_the_padding() {
+    TALL.set(true);
+    let mut h = harness(false);
+    h.click(h.center("Open"));
+    let id = popover(&h).expect("open");
+    let placed = h.rt.window_system().placement(id).unwrap().unwrap().clone();
+    assert_eq!(placed.size.height, 600.0, "the bound");
+    enter(&mut h);
+    let content = h.rect("content");
+    let state = h.model().scroll;
+    // the harness configures the popup at the window's 400 pt width
+    assert_eq!(state.viewport, Size::new(376.0, 576.0));
+    assert_eq!(state.content.height, content.height());
+    assert!(content.height() > 1000.0);
+    assert_eq!(h.rect("First").origin, Point::new(12.0, 12.0));
+    h.pointer(PointerEvent::Scroll {
+        position: Point::new(30.0, 300.0),
+        delta: Point::new(0.0, 30.0),
+        value120: None,
+        source: ScrollSource::Wheel,
+        stop: false,
+    });
+    assert_eq!(h.model().scroll.offset.y, 30.0);
+    let thumb = h
+        .snapshot()
+        .display_list
+        .nodes
+        .iter()
+        .flat_map(|n| n.ops.iter())
+        .find_map(|op| match op {
+            PaintOp::Fill {
+                shape: Shape::RoundedRect { rect, radius },
+                paint: Paint::Solid(_),
+            } if *radius == 6.0 && rect.size.width == 12.0 => Some(*rect),
+            _ => None,
+        })
+        .expect("the scroller shows while it moves");
+    assert_eq!(
+        (thumb.origin.x, thumb.size.width),
+        (362.0, 12.0),
+        "along the trailing edge, 2 pt in"
+    );
+    assert_eq!(
+        h.rect("First").origin,
+        Point::new(12.0, -18.0),
+        "moved by the offset"
+    );
+    h.pointer(PointerEvent::Scroll {
+        position: Point::new(30.0, 300.0),
+        delta: Point::new(0.0, 10_000.0),
+        value120: None,
+        source: ScrollSource::Wheel,
+        stop: false,
+    });
+    assert_eq!(
+        h.model().scroll.offset.y,
+        content.height() - 576.0,
+        "it stops at the end"
+    );
 }

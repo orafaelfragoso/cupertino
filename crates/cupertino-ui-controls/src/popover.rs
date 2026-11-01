@@ -1,4 +1,5 @@
 use crate::look;
+use crate::scroll;
 use crate::Popover;
 use cupertino_geometry::{Insets, Rect, Size};
 use cupertino_ui_core::{
@@ -8,6 +9,7 @@ use cupertino_ui_core::{
 use cupertino_ui_layout::{Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured};
 use cupertino_ui_platform::{DecorationMode, Keysym, WindowSpec};
 use cupertino_ui_theme::{ColorRole, StateVariant};
+use std::rc::Rc;
 
 const ESCAPE: Keysym = Keysym(0xff1b);
 const RADIUS: f64 = 8.0;
@@ -40,7 +42,11 @@ impl<M: Clone + 'static> Popover<M> {
             content: Element::new(Panel {
                 label: self.label,
                 on_close: self.on_close.clone(),
-                children: vec![self.content],
+                children: vec![scroll::fitted(
+                    self.content,
+                    self.scroll,
+                    Rc::new(self.on_scroll),
+                )],
             }),
             popup: Some(Popup {
                 parent: self.parent,

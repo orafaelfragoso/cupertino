@@ -2,7 +2,7 @@
 
 `cupertino-diagnose` checks this machine and the session it runs in for what Cupertino needs: the GPU and its driver, the session, the desktop portal, the services, how the last sessions ended, and where the logs are. It changes nothing and opens no device. It reads sysfs, installed files, the session's logs and the states of systemd units. It runs as your user, from the session or from a text console; the checks that need a session are skipped outside one.
 
-This page describes the command as it is on `main` today. The `cupertino` command with its registry and `--format` option is not described here yet.
+This page describes the command as it is on `main` today. The `cupertino` command, with its registry and `--format` option, has [its own page](cupertino-command.md). It does not have a `diagnose` subcommand yet, so `cupertino-diagnose` stays the way to run these checks.
 
 ## Usage
 
@@ -87,7 +87,7 @@ warn  portals.conf        no cupertino-portals.conf: xdg-desktop-portal picks th
 
 For a unit check, the status follows the unit's state: `ok` when active, `fail` when failed, `warn` when inactive, not installed or in another state, and `skip` when systemd cannot be asked. The `fix` names `systemctl status` and `journalctl` for the unit, or says to install the cupertino package.
 
-On a machine installed from the [USB image](install-usb.md), the installer leaves `cupertino-netd` and `cupertino-btd` disabled, because NetworkManager and BlueZ own the network and Bluetooth. By that design `services.network` and `services.bluetooth` should show `warn` there. This was not observed on an installed machine.
+`services.network` and `services.bluetooth` also give `ok` when `cupertino-netd` or `cupertino-btd` is disabled (or masked) and inactive while `NetworkManager.service` or `bluetooth.service` is active or enabled, because that service does the same job. The summary then reads `... is disabled: managed by NetworkManager` (or `BlueZ`). A machine installed from the [USB image](install-usb.md) is set up this way. BlueZ may be enabled but stopped on a machine without a Bluetooth adapter, and that still counts.
 
 ## Known limits
 

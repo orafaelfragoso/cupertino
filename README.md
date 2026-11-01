@@ -4,6 +4,21 @@ Cupertino is a Wayland compositor and desktop shell for Linux, written in Rust o
 
 **Status: early release (0.x).** It runs nested inside another Wayland session and on a TTY. The TTY backend has run in a virtual machine, not yet on real hardware; treat it as experimental. Interfaces and configuration files can still change between releases. The [changelog](CHANGELOG.md) lists what changed in the current candidate.
 
+## Status
+
+Work is grouped in six phases. As of 2026-11-01:
+
+| Phase | State |
+|---|---|
+| 1. Baseline and trust | Done |
+| 2. Transport and scene | Done |
+| 3. CupertinoKit core | Done |
+| 4. Apps and portals | Started: Settings, the on-screen display and a second Files window run on CupertinoKit; the portal backend serves settings, file choosing, screen sharing, the app chooser and screenshots |
+| 5. Command line, diagnostics, SDK | Started: the `cupertino` command with one subcommand, `cupertino-diagnose`, a first C interface |
+| 6. Hardware and distribution | Started: you can install from a USB stick; signed packages and rollback exist but nothing is published yet |
+
+The TTY backend has run in a virtual machine and the install image has not been booted yet, so a first install is the test. The [book](docs/src/roadmap.md) has the roadmap, and [Install from a USB stick](docs/src/install-usb.md) the steps.
+
 Cupertino serves Wayland clients. X11 programs run through [`xwayland-satellite`](https://github.com/Supreeeme/xwayland-satellite) when it is installed, started at the first X11 program. Fedora pulls it in as a recommended dependency; Arch lists it as optional (install it with pacman); Debian does not package it, so the Debian package recommends only Xwayland, and X11 programs stay off until you install `xwayland-satellite` yourself.
 
 ## Try it in one minute

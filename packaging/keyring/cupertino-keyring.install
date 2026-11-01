@@ -1,0 +1,7 @@
+post_install() {
+  pacman-key --populate cupertino
+}
+
+post_upgrade() {
+  pacman-key --populate cupertino
+}

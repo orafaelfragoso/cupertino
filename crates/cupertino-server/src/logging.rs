@@ -82,13 +82,14 @@ pub fn init(file: Option<File>) {
     }
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        tracing::error!("panic: {info}");
+        // the exit timer first: a log that blocks must not keep the session from ending
         if SESSION_END
             .get()
             .is_some_and(|end| end.thread == std::thread::current().id())
         {
             session_ends(&format!("panic: {info}"), 101);
         }
+        tracing::error!("panic: {info}");
         previous(info);
     }));
 }
@@ -126,9 +127,6 @@ pub fn session_ends(reason: &str, status: i32) {
     let Some(end) = SESSION_END.get() else {
         return;
     };
-    if let Err(e) = write_reason(&end.path, reason) {
-        tracing::warn!("cannot write the session end {}: {e}", end.path.display());
-    }
     let _ = std::thread::Builder::new()
         .name("teardown-limit".into())
         .spawn(move || {
@@ -137,6 +135,9 @@ pub fn session_ends(reason: &str, status: i32) {
             // may hold the log, or be inside a driver's handler.
             unsafe { libc::_exit(status) }
         });
+    if let Err(e) = write_reason(&end.path, reason) {
+        tracing::warn!("cannot write the session end {}: {e}", end.path.display());
+    }
 }
 
 /// One line of at most [`REASON_LIMIT`] bytes, control characters as spaces, mode 0600.

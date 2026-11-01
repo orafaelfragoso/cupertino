@@ -6,6 +6,7 @@ mod engine;
 mod grid;
 mod layers;
 mod scroll;
+mod split;
 mod stack;
 mod virtual_list;
 
@@ -210,6 +211,30 @@ pub enum ContainerKind {
         horizontal: bool,
         vertical: bool,
     },
+    /// Two children along an axis: the leading one at its asked extent within its limits, the trailing one taking
+    /// the rest; see [`SplitSpec::shown`].
+    Split(SplitSpec),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SplitSpec {
+    pub axis: Axis,
+    /// The leading child's asked extent.
+    pub leading: f64,
+    /// The room between the children.
+    pub gap: f64,
+    pub min_leading: f64,
+    pub min_trailing: f64,
+}
+
+impl SplitSpec {
+    /// The leading child's extent in `extent`: the asked one, kept between its minimum and what leaves the trailing
+    /// child its minimum. None when both minimums do not fit, so the leading child hides and the trailing one takes
+    /// all of `extent`.
+    pub fn shown(&self, extent: f64) -> Option<f64> {
+        let room = extent - self.gap - self.min_trailing;
+        (self.min_leading <= room).then(|| self.leading.clamp(self.min_leading, room))
+    }
 }
 
 /// How many grid tracks a cell covers. Zero counts as one.

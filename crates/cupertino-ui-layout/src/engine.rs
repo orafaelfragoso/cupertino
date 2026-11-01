@@ -230,6 +230,12 @@ fn validate_spec(spec: &LayoutSpec) -> Result<(), LayoutError> {
     }
     match &spec.kind {
         ContainerKind::Stack { spacing, .. } => values.push(*spacing),
+        ContainerKind::Split(split) => values.extend([
+            split.leading,
+            split.gap,
+            split.min_leading,
+            split.min_trailing,
+        ]),
         ContainerKind::Grid {
             columns,
             rows,
@@ -369,6 +375,17 @@ impl<T: LayoutTree> Engine<'_, T> {
                 }
                 sizes.iter().sum::<f64>() + gap * sizes.len().saturating_sub(1) as f64
             }
+            ContainerKind::Split(split) if split.axis == axis => match kids.get(1) {
+                Some(&trailing) => self.min_content(trailing, axis, inner_cross)?,
+                None => 0.0,
+            },
+            ContainerKind::Split(_) => {
+                let mut largest = 0.0f64;
+                for &kid in kids {
+                    largest = largest.max(self.min_content(kid, axis, inner_cross)?);
+                }
+                largest
+            }
             ContainerKind::Absolute | ContainerKind::Overlay | ContainerKind::Scroll { .. } => {
                 let scrolled = match spec.kind {
                     ContainerKind::Scroll {
@@ -448,6 +465,7 @@ impl<T: LayoutTree> Engine<'_, T> {
             } => grid::arrange(self, kids, columns, rows, *gaps, inner)?,
             ContainerKind::Absolute => layers::arrange(self, kids, layers::Mode::Absolute, inner)?,
             ContainerKind::Overlay => layers::arrange(self, kids, layers::Mode::Overlay, inner)?,
+            ContainerKind::Split(split) => crate::split::arrange(self, kids, split, inner)?,
             ContainerKind::Scroll {
                 horizontal,
                 vertical,

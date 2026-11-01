@@ -141,6 +141,20 @@ impl Place {
     }
 }
 
+/// What a window showing `dir` is titled: the place's name for the trash and Recents, else the folder's name.
+pub fn window_title(dir: &Path, places: &[Place]) -> String {
+    if let Some(place) = places
+        .iter()
+        .find(|p| matches!(p.kind, PlaceKind::Trash | PlaceKind::Recents) && p.path == dir)
+    {
+        return place.name.clone();
+    }
+    dir.file_name().map_or_else(
+        || dir.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
 /// The removable place of `places` whose mount holds `dir`, the innermost when mounts nest.
 pub fn removable_holding(dir: &Path, places: &[Place]) -> Option<usize> {
     places

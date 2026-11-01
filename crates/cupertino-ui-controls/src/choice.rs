@@ -1,4 +1,4 @@
-//! Radio groups and segmented controls: one item per choice, one Tab stop at the selected item (the first when none
+//! Radio groups, segmented controls and tab rows: one item per choice, one Tab stop at the selected item (the first when none
 //! is), arrows that choose the next or previous item and move the focus with the choice.
 
 use crate::look::{self, paint_focus_ring};
@@ -22,6 +22,8 @@ const LEFT: Keysym = Keysym(0xff51);
 const UP: Keysym = Keysym(0xff52);
 const RIGHT: Keysym = Keysym(0xff53);
 const DOWN: Keysym = Keysym(0xff54);
+const HOME: Keysym = Keysym(0xff50);
+const END: Keysym = Keysym(0xff57);
 
 /// Between a radio button's circle and its label.
 const LABEL_GAP: f64 = 6.0;
@@ -30,9 +32,11 @@ const SEGMENT_RADIUS: f64 = 5.0;
 const SEGMENT_INSET: f64 = 10.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Look {
+pub(crate) enum Look {
     Radio,
     Segment,
+    /// A segment that is a tab: Home and End reach the ends, and Return selects too.
+    Tab,
 }
 
 /// A segment's width: the widest label between the insets, at least the minimum target.
@@ -57,7 +61,7 @@ struct Item<M> {
     messages: Rc<[M]>,
 }
 
-fn items<M>(
+pub(crate) fn items<M>(
     look: Look,
     labels: &[String],
     selected: Option<usize>,
@@ -143,7 +147,7 @@ impl<M: Clone + 'static> Widget<M> for Item<M> {
                     label.map_or(side, |l| side.max(l.height)),
                 )
             }
-            Look::Segment => Size::new(
+            Look::Segment | Look::Tab => Size::new(
                 segment_width(env, &self.labels),
                 look::metric(Control::SegmentedControl, &env.theme),
             ),
@@ -163,14 +167,19 @@ impl<M: Clone + 'static> Widget<M> for Item<M> {
                     (Axis::Horizontal, true) => (LEFT, RIGHT),
                 };
                 let count = self.labels.len();
+                let tab = self.look == Look::Tab;
                 let step = match key.keysym {
                     k if k == forward || k == DOWN => Some(FocusTarget::Next),
                     k if k == back || k == UP => Some(FocusTarget::Previous),
+                    HOME if tab => Some(FocusTarget::First),
+                    END if tab => Some(FocusTarget::Last),
                     _ => None,
                 };
                 if let Some(target) = step {
                     let index = match target {
                         FocusTarget::Next => (self.index + 1) % count,
+                        FocusTarget::First => 0,
+                        FocusTarget::Last => count - 1,
                         _ => (self.index + count - 1) % count,
                     };
                     if self.selected != Some(index) {
@@ -181,7 +190,11 @@ impl<M: Clone + 'static> Widget<M> for Item<M> {
                 }
             }
         }
-        match press.event(event, self.enabled, Keys::Space, cx) {
+        let keys = match self.look {
+            Look::Tab => Keys::SpaceAndReturn,
+            Look::Radio | Look::Segment => Keys::Space,
+        };
+        match press.event(event, self.enabled, keys, cx) {
             Outcome::Ignored => Propagation::Continue,
             Outcome::Changed => {
                 cx.request_paint();
@@ -268,7 +281,7 @@ impl<M: Clone + 'static> Widget<M> for Item<M> {
                 }
                 paint_focus_ring(cx, circle, side / 2.0);
             }
-            Look::Segment => {
+            Look::Segment | Look::Tab => {
                 let height = look::metric(Control::SegmentedControl, theme);
                 let chrome = Rect::new(0.0, (size.height - height) / 2.0, size.width, height);
                 if self.checked() {
@@ -294,15 +307,20 @@ impl<M: Clone + 'static> Widget<M> for Item<M> {
     }
 
     fn semantics(&self, _: &Press, cx: &mut SemanticsCx<'_>) {
-        cx.role(Role::RadioButton);
         cx.name(self.label().to_owned());
-        cx.value(AccessibleValue::Toggle(if self.checked() {
-            Checked::True
+        if self.look == Look::Tab {
+            cx.role(Role::Tab);
         } else {
-            Checked::False
-        }));
+            cx.role(Role::RadioButton);
+            cx.value(AccessibleValue::Toggle(if self.checked() {
+                Checked::True
+            } else {
+                Checked::False
+            }));
+        }
         cx.states(AccessibleStates {
             disabled: !self.enabled,
+            selected: self.look == Look::Tab && self.checked(),
             ..AccessibleStates::default()
         });
         cx.roving_item();
@@ -321,7 +339,7 @@ fn group_semantics(label: &str, cx: &mut SemanticsCx<'_>) {
     cx.roving_group();
 }
 
-fn no_measure() -> Measured {
+pub(crate) fn no_measure() -> Measured {
     Measured {
         size: Size::ZERO,
         baseline: None,
@@ -419,55 +437,65 @@ impl<M: Clone + 'static> Widget<M> for SegmentedControl<M> {
 
     /// The chrome around every segment and the dividers between them; each segment paints its selection and label.
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        let theme = cx.env().theme.clone();
-        let state = ControlState {
-            enabled: self.enabled,
-            window_active: cx.window_active(),
-            ..ControlState::default()
-        };
-        let size = cx.size();
-        let height = look::metric(Control::SegmentedControl, &theme);
-        let count = self.segments.len();
-        // the segments, not the width a stretching parent gives the control
-        let segment = segment_width(cx.env(), &self.segments);
-        let chrome = Rect::new(
-            0.0,
-            (size.height - height) / 2.0,
-            segment * count as f64,
-            height,
-        );
-        look::fill(
-            cx,
-            chrome,
-            SEGMENT_RADIUS,
-            look::color(&theme, ColorRole::ControlFill, &state),
-        );
-        look::stroke(
-            cx,
-            chrome.inset(Insets::uniform(0.5)),
-            SEGMENT_RADIUS - 0.5,
-            1.0,
-            look::color(&theme, ColorRole::ControlBorder, &state),
-        );
-        let divider = theme.colors.get(ColorRole::Separator, StateVariant::NORMAL);
-        if let (Some(color), true) = (divider, count > 1) {
-            // none beside the chosen segment, whose fill would show a seam against it
-            let beside = |i: usize| self.selected.is_some_and(|s| s == i || s + 1 == i);
-            for i in (1..count).filter(|&i| !beside(i)) {
-                cx.push(PaintOp::Fill {
-                    shape: Shape::Rect(Rect::new(
-                        segment * i as f64,
-                        chrome.min_y() + 4.0,
-                        1.0,
-                        height - 8.0,
-                    )),
-                    paint: Paint::Solid(color),
-                });
-            }
-        }
+        paint_segments(cx, &self.segments, self.selected, self.enabled);
     }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         group_semantics(&self.label, cx);
+    }
+}
+
+/// A row of segments' shared chrome: the fill and edge around all of them and the dividers between them.
+pub(crate) fn paint_segments(
+    cx: &mut PaintCx<'_>,
+    segments: &[String],
+    selected: Option<usize>,
+    enabled: bool,
+) {
+    let theme = cx.env().theme.clone();
+    let state = ControlState {
+        enabled,
+        window_active: cx.window_active(),
+        ..ControlState::default()
+    };
+    let size = cx.size();
+    let height = look::metric(Control::SegmentedControl, &theme);
+    let count = segments.len();
+    // the segments, not the width a stretching parent gives the control
+    let segment = segment_width(cx.env(), segments);
+    let chrome = Rect::new(
+        0.0,
+        (size.height - height) / 2.0,
+        segment * count as f64,
+        height,
+    );
+    look::fill(
+        cx,
+        chrome,
+        SEGMENT_RADIUS,
+        look::color(&theme, ColorRole::ControlFill, &state),
+    );
+    look::stroke(
+        cx,
+        chrome.inset(Insets::uniform(0.5)),
+        SEGMENT_RADIUS - 0.5,
+        1.0,
+        look::color(&theme, ColorRole::ControlBorder, &state),
+    );
+    let divider = theme.colors.get(ColorRole::Separator, StateVariant::NORMAL);
+    if let (Some(color), true) = (divider, count > 1) {
+        // none beside the chosen segment, whose fill would show a seam against it
+        let beside = |i: usize| selected.is_some_and(|s| s == i || s + 1 == i);
+        for i in (1..count).filter(|&i| !beside(i)) {
+            cx.push(PaintOp::Fill {
+                shape: Shape::Rect(Rect::new(
+                    segment * i as f64,
+                    chrome.min_y() + 4.0,
+                    1.0,
+                    height - 8.0,
+                )),
+                paint: Paint::Solid(color),
+            });
+        }
     }
 }

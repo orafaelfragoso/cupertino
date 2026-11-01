@@ -21,6 +21,7 @@ mod slider;
 mod split;
 mod stack;
 mod stepper;
+mod tabs;
 mod text;
 mod toggle;
 
@@ -243,6 +244,17 @@ pub struct SegmentedControl<M> {
     pub segments: Vec<String>,
     pub selected: Option<usize>,
     pub enabled: bool,
+    pub on_select: Option<Handler<usize, M>>,
+}
+
+/// A row of tabs over a panel showing the selected tab's content; one Tab stop, the arrows select. Only `content`,
+/// the selected tab's, is mounted.
+pub struct Tabs<M> {
+    /// The tab list's accessible name.
+    pub label: String,
+    pub tabs: Vec<String>,
+    pub selected: usize,
+    pub content: Element<M>,
     pub on_select: Option<Handler<usize, M>>,
 }
 

@@ -14,8 +14,8 @@ use cupertino_kit::controls::{
     Badge, Button, ButtonRole, ButtonStyle, CheckBox, Column, ColumnWidth, DisclosureButton,
     DisclosureStyle, Icon, IconDirection, ListView, NavigationStack, PageDots, Progress,
     RadioGroup, ScrollView, Scroller, SecureField, SegmentedControl, Selection, Separator, Slider,
-    SliderStyle, SortOrder, SplitLayout, SplitView, Stack, Stepper, TableView, Text, TextField,
-    TextRole, Toggle,
+    SliderStyle, SortOrder, SplitLayout, SplitView, Stack, Stepper, TableView, Tabs, Text,
+    TextField, TextRole, Toggle,
 };
 use cupertino_kit::core::{
     Application, Checked, Command, CommandRegistry, Element, Window, WindowBackground, WindowKey,
@@ -485,6 +485,13 @@ fixtures! {
         enabled: look.enabled,
         on_select: Some(Box::new(|_| Message::Nothing)),
     });
+    tabs: "tabs", Size::new(280.0, 120.0), &[State::Normal, State::Hover, State::Pressed, State::Focused], |_| Tabs {
+        label: "Settings".into(),
+        tabs: vec!["General".into(), "Sharing".into(), "Advanced".into()],
+        selected: 0,
+        content: body("Start up in the last folder"),
+        on_select: Some(Box::new(|_| Message::Nothing)),
+    }.into();
     text_field: "text-field", WIDE, FIELD, |look| Element::new(TextField {
         label: "Name".into(),
         placeholder: "Your name".into(),

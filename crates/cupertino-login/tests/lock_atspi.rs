@@ -10,7 +10,7 @@ use std::io::{Read, Write};
 use std::num::NonZeroU32;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{channel, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Wake, Waker};
 use std::thread::Thread;
 use std::time::{Duration, Instant};
@@ -42,6 +42,9 @@ const ASSERTIVE: i32 = 2;
 /// What the lock screen announces just before and just after its part.
 const READY: &str = "Test part starts";
 const PLAYED: &str = "Test part ends";
+/// How long one step may take on a heavily loaded machine; on an idle one each takes milliseconds. Below nextest's
+/// 120 s budget for the whole test, so a hang fails with its own message.
+const PATIENCE: Duration = Duration::from_secs(60);
 
 struct Unpark(Thread);
 
@@ -112,7 +115,7 @@ fn lock_screen(part: impl FnOnce(&mut LockScreen, &mut dyn FnMut(&LockScreen))) 
             .borrow_mut()
             .update(&with_markers(tree, &markers.borrow()));
     };
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + PATIENCE;
     while !adapter.borrow().is_active() {
         assert!(Instant::now() < deadline, "accessibility never turned on");
         std::thread::park_timeout(Duration::from_millis(20));
@@ -207,7 +210,7 @@ struct Locked {
     app: Child,
     stdin: ChildStdin,
     peer: String,
-    sent: Arc<Mutex<Vec<Message>>>,
+    sent: Arc<(Mutex<Vec<Message>>, Condvar)>,
     conn: Connection,
     _services: (Connection, Connection),
     _bus: PrivateBus,
@@ -241,9 +244,7 @@ impl Locked {
             .stdin(Stdio::piped())
             .spawn()
             .unwrap();
-        let peer = embeds
-            .recv_timeout(Duration::from_secs(10))
-            .expect("the root embedded");
+        let peer = embeds.recv_timeout(PATIENCE).expect("the root embedded");
         let monitor = bus.connect();
         monitor
             .call_method(
@@ -254,11 +255,12 @@ impl Locked {
                 &(vec![format!("sender='{peer}'")], 0u32),
             )
             .unwrap();
-        let sent = Arc::new(Mutex::new(Vec::new()));
+        let sent = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
         let record = Arc::clone(&sent);
         std::thread::spawn(move || {
             for message in MessageIterator::from(&monitor).flatten() {
-                record.lock().unwrap().push(message);
+                record.0.lock().unwrap().push(message);
+                record.1.notify_all();
             }
         });
         let stdin = app.stdin.take().unwrap();
@@ -281,9 +283,10 @@ impl Locked {
             sent.iter()
                 .position(|m| announcement(m).is_some_and(|(said, _)| said == text))
         };
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + PATIENCE;
+        let (lock, recorded) = &*self.sent;
+        let mut sent = lock.lock().unwrap();
         loop {
-            let sent = self.sent.lock().unwrap().clone();
             if let (Some(ready), Some(played)) = (marker(&sent, READY), marker(&sent, PLAYED)) {
                 let path = |i: usize| sent[i].header().path().unwrap().to_string();
                 return Part {
@@ -291,17 +294,15 @@ impl Locked {
                     sent: sent[ready + 1..played].to_vec(),
                 };
             }
-            assert!(
-                Instant::now() < deadline,
-                "the lock screen never played its part"
-            );
-            std::thread::sleep(Duration::from_millis(10));
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(!left.is_zero(), "the lock screen never played its part");
+            sent = recorded.wait_timeout(sent, left).unwrap().0;
         }
     }
 
     /// Everything the lock screen sent until now.
     fn sent(&self) -> Vec<Message> {
-        self.sent.lock().unwrap().clone()
+        self.sent.0.lock().unwrap().clone()
     }
 
     fn finish(mut self) {
@@ -325,7 +326,7 @@ fn typing_a_password_sends_assistive_technology_nothing() {
         return;
     };
     let (conn, peer) = (&locked.conn, locked.peer.as_str());
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + PATIENCE;
     let window = loop {
         let windows: Vec<(String, OwnedObjectPath)> = accessible(conn, peer, ROOT)
             .call("GetChildren", &())

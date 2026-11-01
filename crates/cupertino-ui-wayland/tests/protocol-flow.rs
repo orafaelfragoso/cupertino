@@ -43,6 +43,7 @@ use wayland_server::protocol::wl_seat::{self, Capability, WlSeat};
 use wayland_server::protocol::wl_shm::{self, WlShm};
 use wayland_server::protocol::wl_shm_pool::{self, WlShmPool};
 use wayland_server::protocol::wl_surface::{self, WlSurface};
+use wayland_server::protocol::wl_touch::WlTouch;
 use wayland_server::{
     Client as ServerClient, DataInit, Dispatch, Display, DisplayHandle, GlobalDispatch, New,
     Resource,
@@ -80,6 +81,8 @@ enum Control {
     FrameDone,
     /// Enter the surface with the pointer, move, and press the left button.
     PointerPress,
+    /// A finger touches the surface and lifts.
+    Tap,
     /// Another client's text becomes the selection: offer it to the client's data device.
     OfferSelection(String),
     /// Keep every buffer the next commits replace.
@@ -134,6 +137,7 @@ struct Mock {
     next_serial: u32,
     outputs: Vec<WlOutput>,
     pointer: Option<WlPointer>,
+    touch: Option<WlTouch>,
     pending_frames: Vec<WlCallback>,
     shown: Option<WlBuffer>,
     /// Replaced buffers kept unreleased, while holding.
@@ -204,6 +208,7 @@ ignore_requests!(
     WlBuffer: BufferData,
     WlOutput: (),
     WlPointer: (),
+    WlTouch: (),
     XdgToplevel: (),
     CupertinoAppearanceV1: ()
 );
@@ -411,7 +416,8 @@ impl GlobalDispatch<WlSeat, ()> for Mock {
         _: &(),
         init: &mut DataInit<'_, Self>,
     ) {
-        init.init(r, ()).capabilities(Capability::Pointer);
+        init.init(r, ())
+            .capabilities(Capability::Pointer | Capability::Touch);
     }
 }
 impl Dispatch<WlSeat, ()> for Mock {
@@ -424,8 +430,10 @@ impl Dispatch<WlSeat, ()> for Mock {
         _: &DisplayHandle,
         init: &mut DataInit<'_, Self>,
     ) {
-        if let wl_seat::Request::GetPointer { id } = request {
-            state.pointer = Some(init.init(id, ()));
+        match request {
+            wl_seat::Request::GetPointer { id } => state.pointer = Some(init.init(id, ())),
+            wl_seat::Request::GetTouch { id } => state.touch = Some(init.init(id, ())),
+            _ => {}
         }
     }
 }
@@ -592,6 +600,7 @@ fn spawn_server_with(
             next_serial: 1,
             outputs: Vec::new(),
             pointer: None,
+            touch: None,
             pending_frames: Vec::new(),
             shown: None,
             held: None,
@@ -637,6 +646,16 @@ fn spawn_server_with(
                     pointer.enter(5, &t.surface, 1.5, 2.5);
                     pointer.motion(0, 10.25, 20.75);
                     pointer.button(6, 0, 0x110, wl_pointer::ButtonState::Pressed);
+                }
+                Ok(Control::Tap) => {
+                    let (touch, t) = (
+                        mock.touch.as_ref().unwrap(),
+                        mock.toplevel.as_ref().unwrap(),
+                    );
+                    touch.down(7, 30, &t.surface, 3, 4.5, 5.5);
+                    touch.frame();
+                    touch.up(8, 40, 3);
+                    touch.frame();
                 }
                 Ok(Control::OfferSelection(text)) => {
                     let device = mock.data_device.as_ref().unwrap();
@@ -1094,7 +1113,7 @@ mod window_system {
     use cupertino_modifiers::Profile;
     use cupertino_ui_platform::{
         ClipboardKind, DecorationMode, MouseButton, PlatformEvent, PointerEvent, PresentOutcome,
-        WindowEvent, WindowId, WindowSpec, WindowSystem,
+        TouchEvent, WindowEvent, WindowId, WindowSpec, WindowSystem,
     };
     use cupertino_ui_render::{CpuFrame, PixelFormat, PixelRect, RenderFrameId};
     use cupertino_ui_wayland::WaylandWindowSystem;
@@ -1480,6 +1499,30 @@ mod window_system {
             }
         );
         assert!(time.0 > 0);
+    }
+
+    #[test]
+    fn a_tap_arrives_as_a_touch_down_and_up_in_logical_points() {
+        let (mut kit, control, _committed, _seen) = mapped();
+        control.send(Control::Tap).unwrap();
+        let down = kit.window_event(|e| match e {
+            WindowEvent::Touch(t, _) => Some(*t),
+            _ => None,
+        });
+        let up = kit.window_event(|e| match e {
+            WindowEvent::Touch(t, _) => Some(*t),
+            _ => None,
+        });
+        assert_eq!(
+            (down, up),
+            (
+                TouchEvent::Down {
+                    id: 3,
+                    position: Point::new(4.5, 5.5)
+                },
+                TouchEvent::Up { id: 3 }
+            )
+        );
     }
 
     #[test]

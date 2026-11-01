@@ -577,7 +577,7 @@ impl App {
                     },
                 ..
             } => self.key(code, mods, character)?,
-            Event::Keyboard { .. } => {}
+            Event::Keyboard { .. } | Event::Touch { .. } => {}
             Event::Selection(offer) => self.clipboard.selection_changed(offer),
             Event::ActivationToken { request, token } => self.launch(request, &token)?,
             Event::Extension(_) => match app_event(&event) {

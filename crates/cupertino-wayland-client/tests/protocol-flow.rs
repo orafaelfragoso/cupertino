@@ -8,7 +8,7 @@ use cupertino_wayland_client::{
     Error, Event, Extension, Gravity, KeyboardEvent, OutputGeometry, OutputTransform, PixelRect,
     PointerEvent, PopupPlacement, Preedit, Presented, PresentedKind, ReadId, Scale, ScrollSource,
     SurfaceId, SurroundingText, TextInputDone, TextInputEvent, TextInputState, Toplevel,
-    ToplevelConfig, WindowConfigure, WmCapabilities,
+    ToplevelConfig, TouchEvent, WindowConfigure, WmCapabilities,
 };
 use std::collections::VecDeque;
 use std::io::Write;
@@ -71,6 +71,7 @@ use wayland_server::protocol::wl_seat::{self, WlSeat};
 use wayland_server::protocol::wl_shm::{self, WlShm};
 use wayland_server::protocol::wl_shm_pool::{self, WlShmPool};
 use wayland_server::protocol::wl_surface::{self, WlSurface};
+use wayland_server::protocol::wl_touch::WlTouch;
 use wayland_server::{
     Client as ServerClient, DataInit, Dispatch, Display, DisplayHandle, GlobalDispatch, New,
     Resource,
@@ -138,6 +139,12 @@ enum Control {
     ButtonUp,
     /// The seat loses its pointer and keeps its keyboard.
     DropPointer,
+    /// Two fingers touch the toplevel and the first moves and lifts, each step a frame.
+    Touch,
+    /// The compositor takes the touch sequence over.
+    CancelTouch,
+    /// The seat loses its touch screen.
+    DropTouch,
     TypeKey(u32),
     Offer(Vec<&'static str>),
     /// Configure the layer surface this many times in a row, each a pixel wider.
@@ -314,6 +321,7 @@ struct Mock {
     fractional: Option<WpFractionalScaleV1>,
     pointer: Option<WlPointer>,
     keyboard: Option<WlKeyboard>,
+    touch: Option<WlTouch>,
     data_device: Option<WlDataDevice>,
     shown: Option<WlBuffer>,
     frames: Vec<WlCallback>,
@@ -381,7 +389,7 @@ macro_rules! ignore_requests {
     )*};
 }
 
-ignore_requests!(WlBuffer => BufferData, WlCallback => (), WlKeyboard => (), WlOutput => (), WpFractionalScaleV1 => (), ZxdgOutputV1 => (), WpPresentationFeedback => ());
+ignore_requests!(WlBuffer => BufferData, WlCallback => (), WlKeyboard => (), WlTouch => (), WlOutput => (), WpFractionalScaleV1 => (), ZxdgOutputV1 => (), WpPresentationFeedback => ());
 
 /// What a client's data source offers.
 #[derive(Default)]
@@ -986,7 +994,11 @@ impl GlobalDispatch<WlSeat, ()> for Mock {
         init: &mut DataInit<'_, Self>,
     ) {
         let seat = init.init(r, ());
-        seat.capabilities(wl_seat::Capability::Pointer | wl_seat::Capability::Keyboard);
+        seat.capabilities(
+            wl_seat::Capability::Pointer
+                | wl_seat::Capability::Keyboard
+                | wl_seat::Capability::Touch,
+        );
         state.seat = Some(seat);
     }
 }
@@ -1003,6 +1015,7 @@ impl Dispatch<WlSeat, ()> for Mock {
     ) {
         match request {
             wl_seat::Request::GetPointer { id } => state.pointer = Some(init.init(id, ())),
+            wl_seat::Request::GetTouch { id } => state.touch = Some(init.init(id, ())),
             wl_seat::Request::GetKeyboard { id } => {
                 let keyboard = init.init(id, ());
                 let (fd, size) = us_keymap();
@@ -1292,6 +1305,7 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
             fractional: None,
             pointer: None,
             keyboard: None,
+            touch: None,
             data_device: None,
             shown: None,
             frames: Vec::new(),
@@ -1377,6 +1391,23 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
             pointer.leave(serial, &surface);
             pointer.frame();
         }
+        Control::Touch => {
+            let (serial, surface) = (mock.serial(), mock.surface().clone());
+            let touch = mock.touch.as_ref().unwrap();
+            touch.down(serial, 100, &surface, 0, 5.0, 6.0);
+            touch.frame();
+            touch.down(serial + 1, 105, &surface, 1, 9.0, 9.0);
+            touch.motion(110, 0, 7.5, 8.5);
+            touch.frame();
+            touch.up(serial + 2, 120, 0);
+            touch.frame();
+        }
+        Control::CancelTouch => mock.touch.as_ref().unwrap().cancel(),
+        Control::DropTouch => mock
+            .seat
+            .as_ref()
+            .unwrap()
+            .capabilities(wl_seat::Capability::Pointer | wl_seat::Capability::Keyboard),
         Control::DropPointer => mock
             .seat
             .as_ref()
@@ -3824,4 +3855,63 @@ fn a_field_is_sent_again_after_each_enter_and_disabled_when_its_window_goes() {
         (next_text_input(&seen), next_text_input(&seen)),
         (Disable, Commit)
     );
+}
+
+#[test]
+fn touch_contacts_report_on_their_surface_until_up_and_a_cancel_or_a_lost_touch_screen_ends_them() {
+    for end in [Control::CancelTouch, Control::DropTouch] {
+        let (mut conn, control, _seen) = connect(Globals {
+            seat: true,
+            ..Globals::core()
+        });
+        let mut stash = Stash::new();
+        let w = window(&mut conn, Decorations::Client);
+        configured(&mut conn, &mut stash, w);
+        control.send(Control::Touch).unwrap();
+        let mut touches = Vec::new();
+        while touches.len() < 4 {
+            touches.push(wait_for(&mut conn, &mut stash, |e| match e {
+                Event::Touch {
+                    surface,
+                    time,
+                    event,
+                } if *surface == w.surface() => Some((*time, *event)),
+                _ => None,
+            }));
+        }
+        let at = Point::new;
+        assert_eq!(
+            touches,
+            vec![
+                (
+                    100,
+                    TouchEvent::Down {
+                        id: 0,
+                        position: at(5.0, 6.0)
+                    }
+                ),
+                (
+                    105,
+                    TouchEvent::Down {
+                        id: 1,
+                        position: at(9.0, 9.0)
+                    }
+                ),
+                (
+                    110,
+                    TouchEvent::Motion {
+                        id: 0,
+                        position: at(7.5, 8.5)
+                    }
+                ),
+                (120, TouchEvent::Up { id: 0 }),
+            ]
+        );
+        control.send(end).unwrap();
+        let cancel = wait_for(&mut conn, &mut stash, |e| match e {
+            Event::Touch { surface, event, .. } => Some((*surface, *event)),
+            _ => None,
+        });
+        assert_eq!(cancel, (w.surface(), TouchEvent::Cancel));
+    }
 }

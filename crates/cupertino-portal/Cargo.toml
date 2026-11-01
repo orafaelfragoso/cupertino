@@ -3,7 +3,7 @@ name = "cupertino-portal"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "xdg-desktop-portal backend of the session: the appearance settings, the file chooser, the app chooser and screen sharing applications reach through the portal"
+description = "xdg-desktop-portal backend of the session: the appearance settings, the file chooser, the app chooser, screen sharing and screenshots applications reach through the portal"
 
 [package.metadata.cupertino]
 layer = "shell"
@@ -22,9 +22,11 @@ cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
 cupertino-screencast = { path = "../cupertino-screencast", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 futures-lite = "2"
+libc = "0.2"
 mime_guess = "2"
 percent-encoding = "2"
-rustix = { version = "1", features = ["time"], optional = true }
+rustix = { version = "1", features = ["fs", "time"], optional = true }
+tiny-skia = "0.11"
 wayland-client = { version = "0.31", optional = true }
 wayland-protocols = { version = "0.32", features = ["client", "staging"], optional = true }
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }

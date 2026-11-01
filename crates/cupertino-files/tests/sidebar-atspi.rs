@@ -12,7 +12,7 @@ use std::task::{Wake, Waker};
 use std::thread::Thread;
 use std::time::{Duration, Instant};
 
-use cupertino_files::access::{window_tree, SidebarNode, WindowView, WINDOW};
+use cupertino_files::access::{sidebar_node, window_tree, SidebarNode, WindowView, WINDOW};
 use cupertino_files::geom::Size;
 use cupertino_files::places::{Place, PlaceGroup, PlaceKind};
 use cupertino_files::window::{Bars, WindowLayout};
@@ -33,6 +33,8 @@ const BUSY: u32 = 3;
 const FOCUSED: u32 = 12;
 const SELECTED: u32 = 23;
 
+/// The places' keys, out of row order as a window's are once rows came and went.
+const KEYS: [u32; 5] = [0, 1, 7, 3, 4];
 const DOWNLOADS: usize = 1;
 const BACKUP: usize = 2;
 
@@ -77,6 +79,7 @@ fn window() {
         title: "Downloads",
         layout: &layout,
         places: &places,
+        keys: &KEYS,
         dir: Path::new("/home/rafael/Downloads"),
         sidebar_focus: Some(BACKUP),
     });
@@ -93,7 +96,7 @@ fn window() {
         adapter.drain_actions(&mut requests);
         if requests.iter().any(|r| {
             r.action == Action::Click
-                && SidebarNode::of(r.target) == Some(SidebarNode::Eject(BACKUP))
+                && sidebar_node(&KEYS, r.target) == Some(SidebarNode::Eject(BACKUP))
         }) {
             std::io::stdin().read_to_end(&mut Vec::new()).unwrap();
             return;

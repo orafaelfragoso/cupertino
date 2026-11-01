@@ -96,6 +96,8 @@ sidebar, a list named "Sidebar" with a group per section. A row is a list item n
 folder is shown and focused while it has the keyboard. A removable file system's row is described as "Removable", plus
 ", not mounted" when it is not mounted, and is busy while a call runs; a mounted one holds a button "Eject" and its name.
 A click on a row opens it, a click on an eject button ejects, and focus on a row gives the sidebar the keyboard there.
+A row's objects are named by its place's key, not its position (a folder by its kind and path, a removable file system by
+its udisks object), so they stay the same objects as rows come and go, and a request to a row that went away does nothing.
 The descriptions are approximate.
 
 In the list every folder has a disclosure triangle: a click on it, Right and Left expand and collapse the folder in place, its

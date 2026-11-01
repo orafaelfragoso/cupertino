@@ -4,7 +4,11 @@
 //! ", not mounted" when it is not mounted, and is busy while a mount or an eject runs; a mounted one holds its eject
 //! button, "Eject" and the name. A click on a row opens it as a pointer click does, and a click on an eject button
 //! ejects. The folder's items are not in the tree yet.
+//!
+//! A row's objects are named by its place's key ([`PlaceKeys`]), not by its position, so they stay the same objects
+//! while rows come and go around them, and a request to a row that went away finds nothing.
 
+use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::path::Path;
 
@@ -24,37 +28,57 @@ pub const WINDOW: WindowId = WindowId(1);
 const ROOT: u32 = 1;
 const LIST: u32 = 2;
 const GROUPS: u32 = 3;
-/// Row `i` is `ROWS + 2 i`, its eject button the id after it.
+/// The row of the place with key `k` is `ROWS + 2 k`, its eject button the id after it.
 const ROWS: u32 = 16;
 
-/// A sidebar node assistive technology can act on.
+/// The keys of the sidebar's places. A place keeps the key of its identity for as long as the window lives (a folder by
+/// its kind and path, a removable file system by its udisks object), and a key is never given to another identity.
+#[derive(Debug, Default)]
+pub struct PlaceKeys {
+    known: HashMap<String, u32>,
+    next: u32,
+}
+
+impl PlaceKeys {
+    pub fn key(&mut self, identity: &str) -> u32 {
+        if let Some(key) = self.known.get(identity) {
+            return *key;
+        }
+        let key = self.next;
+        self.next += 1;
+        self.known.insert(identity.to_owned(), key);
+        key
+    }
+}
+
+/// A sidebar node assistive technology can act on, by its row's index in the places now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SidebarNode {
     Row(usize),
     Eject(usize),
 }
 
-impl SidebarNode {
-    pub fn id(self) -> NodeId {
-        let index = match self {
-            SidebarNode::Row(i) => ROWS + 2 * i as u32,
-            SidebarNode::Eject(i) => ROWS + 2 * i as u32 + 1,
-        };
-        id(index)
-    }
+fn row_id(key: u32) -> NodeId {
+    id(ROWS + 2 * key)
+}
 
-    /// The node `id` names, when it is a row or an eject button.
-    pub fn of(id: NodeId) -> Option<SidebarNode> {
-        if id.generation() != NonZeroU32::MIN {
-            return None;
-        }
-        let offset = id.index().checked_sub(ROWS)? as usize;
-        Some(if offset.is_multiple_of(2) {
-            SidebarNode::Row(offset / 2)
-        } else {
-            SidebarNode::Eject(offset / 2)
-        })
+fn eject_id(key: u32) -> NodeId {
+    id(ROWS + 2 * key + 1)
+}
+
+/// The row or eject button `id` names among the places whose keys are `keys`; `None` for any other node and for a row
+/// no longer listed.
+pub fn sidebar_node(keys: &[u32], id: NodeId) -> Option<SidebarNode> {
+    if id.generation() != NonZeroU32::MIN {
+        return None;
     }
+    let offset = id.index().checked_sub(ROWS)?;
+    let row = keys.iter().position(|k| *k == offset / 2)?;
+    Some(if offset.is_multiple_of(2) {
+        SidebarNode::Row(row)
+    } else {
+        SidebarNode::Eject(row)
+    })
 }
 
 /// A Files window as the person sees it.
@@ -62,6 +86,8 @@ pub struct WindowView<'a> {
     pub title: &'a str,
     pub layout: &'a WindowLayout,
     pub places: &'a [Place],
+    /// The key of each place ([`PlaceKeys`]).
+    pub keys: &'a [u32],
     /// The folder shown.
     pub dir: &'a Path,
     /// The sidebar row with the keyboard focus.
@@ -84,7 +110,7 @@ pub fn window_tree(view: &WindowView<'_>) -> AccessibilityUpdate {
             .filter(|(_, (p, _))| p.group == *group);
         for (index, (place, frame)) in in_group {
             bounds = union(bounds, *frame);
-            let row = SidebarNode::Row(index).id();
+            let row = row_id(view.keys[index]);
             rows.push(row);
             nodes.extend(row_nodes(view, index, place, *frame));
         }
@@ -119,7 +145,7 @@ pub fn window_tree(view: &WindowView<'_>) -> AccessibilityUpdate {
         focus: view
             .sidebar_focus
             .filter(|i| *i < layout.places.len())
-            .map(|i| SidebarNode::Row(i).id()),
+            .map(|i| row_id(view.keys[i])),
         nodes,
         removed: Vec::new(),
         full: true,
@@ -136,7 +162,7 @@ fn row_nodes(
     let mut nodes = Vec::new();
     let mut children = Vec::new();
     if let Some((_, target)) = view.layout.ejects.iter().find(|(i, _)| *i == index) {
-        let eject = SidebarNode::Eject(index).id();
+        let eject = eject_id(view.keys[index]);
         children.push(eject);
         nodes.push((
             eject,
@@ -169,7 +195,7 @@ fn row_nodes(
         item_index: Some(index),
         ..node(Role::ListItem, Some(&place.name), frame)
     };
-    nodes.insert(0, (SidebarNode::Row(index).id(), row));
+    nodes.insert(0, (row_id(view.keys[index]), row));
     nodes
 }
 
@@ -209,19 +235,79 @@ fn node(role: Role, name: Option<&str>, bounds: Rect) -> AccessibilityNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geom::Size;
+    use crate::places::PlaceGroup;
+    use crate::window::Bars;
+    use std::path::PathBuf;
+
+    fn home() -> Place {
+        Place {
+            name: "rafael".into(),
+            path: PathBuf::from("/home/rafael"),
+            group: PlaceGroup::Favorites,
+            kind: PlaceKind::Home,
+        }
+    }
+
+    fn disk(name: &str) -> Place {
+        Place::removable(
+            name,
+            Some(Path::new("/run/media/rafael").join(name).as_path()),
+            false,
+        )
+    }
+
+    /// The node named `name` in the tree of `places` with `keys`.
+    fn named(places: &[Place], keys: &[u32], name: &str) -> NodeId {
+        let layout = WindowLayout::new(Size { w: 920.0, h: 436.0 }, places, Bars::HIDDEN);
+        let tree = window_tree(&WindowView {
+            title: "rafael",
+            layout: &layout,
+            places,
+            keys,
+            dir: Path::new("/home/rafael"),
+            sidebar_focus: None,
+        });
+        tree.nodes
+            .iter()
+            .find(|(_, n)| n.name.as_deref() == Some(name))
+            .map(|(id, _)| *id)
+            .unwrap()
+    }
 
     #[test]
-    fn row_and_eject_ids_name_their_node_and_no_other() {
-        for node in [
-            SidebarNode::Row(0),
-            SidebarNode::Eject(0),
-            SidebarNode::Row(7),
-            SidebarNode::Eject(7),
-        ] {
-            assert_eq!(SidebarNode::of(node.id()), Some(node));
-        }
-        assert_eq!(SidebarNode::of(id(ROOT)), None);
-        assert_eq!(SidebarNode::of(id(LIST)), None);
-        assert_eq!(SidebarNode::of(id(GROUPS + 1)), None);
+    fn an_eject_button_stays_with_its_disk_when_another_disk_lists_above_it_and_names_nothing_once_it_is_gone(
+    ) {
+        let mut keys = PlaceKeys::default();
+        let mut key_of =
+            |identities: &[&str]| -> Vec<u32> { identities.iter().map(|i| keys.key(i)).collect() };
+        let before = [home(), disk("Backup Disk")];
+        let before_keys = key_of(&["home", "/org/freedesktop/UDisks2/block_devices/sdb1"]);
+        let eject = named(&before, &before_keys, "Eject Backup Disk");
+        let row = named(&before, &before_keys, "Backup Disk");
+        assert_eq!(
+            sidebar_node(&before_keys, eject),
+            Some(SidebarNode::Eject(1))
+        );
+
+        let after = [home(), disk("Camera Card"), disk("Backup Disk")];
+        let after_keys = key_of(&[
+            "home",
+            "/org/freedesktop/UDisks2/block_devices/sdc1",
+            "/org/freedesktop/UDisks2/block_devices/sdb1",
+        ]);
+        assert_eq!(
+            sidebar_node(&after_keys, eject),
+            Some(SidebarNode::Eject(2))
+        );
+        assert_eq!(sidebar_node(&after_keys, row), Some(SidebarNode::Row(2)));
+        assert_eq!(named(&after, &after_keys, "Eject Backup Disk"), eject);
+
+        let gone_keys = key_of(&["home", "/org/freedesktop/UDisks2/block_devices/sdc1"]);
+        assert_eq!(sidebar_node(&gone_keys, eject), None);
+        assert_eq!(sidebar_node(&gone_keys, row), None);
+        assert_eq!(sidebar_node(&gone_keys, id(ROOT)), None);
+        assert_eq!(sidebar_node(&gone_keys, id(LIST)), None);
+        assert_eq!(sidebar_node(&gone_keys, id(GROUPS + 1)), None);
     }
 }

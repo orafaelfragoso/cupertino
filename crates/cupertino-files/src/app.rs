@@ -19,7 +19,9 @@
 use cupertino_apps::{launch, Locale, MimeApps, MimeDatabase, Visibility, XdgDirs};
 use cupertino_assets::Assets;
 use cupertino_defaults::accessibility::DisplayOptions;
-use cupertino_files::access::{window_tree, SidebarNode, WindowView, WINDOW};
+use cupertino_files::access::{
+    sidebar_node, window_tree, PlaceKeys, SidebarNode, WindowView, WINDOW,
+};
 use cupertino_files::browser::{Activation, Browser};
 use cupertino_files::context_menu::{
     common_apps, AppChoice, Command as MenuCommand, Key as MenuKey, Menu, MenuItem,
@@ -174,6 +176,7 @@ struct App {
     /// Assistive technology's view of the window, the tree it was sent last and whether it was told the window is
     /// focused.
     access: AtspiAdapter,
+    place_keys: PlaceKeys,
     access_sent: Option<AccessibilityUpdate>,
     access_focused: Option<bool>,
 }
@@ -498,6 +501,7 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
         trash_files: Trash::new().home_trash().join("files"),
         closing: false,
         access,
+        place_keys: PlaceKeys::default(),
         access_sent: None,
         access_focused: None,
     };
@@ -757,7 +761,7 @@ impl App {
         let mut requests = Vec::new();
         self.access.drain_actions(&mut requests);
         for request in requests {
-            let target = SidebarNode::of(request.target);
+            let target = sidebar_node(&self.keys(), request.target);
             match (target, request.action) {
                 (Some(SidebarNode::Row(i)), AccessAction::Click) if i < self.places.len() => {
                     self.open_place(i)?;
@@ -780,6 +784,24 @@ impl App {
         Ok(())
     }
 
+    /// The key of each sidebar place: a standard place by its kind and folder, a removable file system by its udisks
+    /// object.
+    fn keys(&mut self) -> Vec<u32> {
+        let standard = self.standard_places;
+        let identities: Vec<String> = self
+            .places
+            .iter()
+            .enumerate()
+            .map(
+                |(i, place)| match i.checked_sub(standard).and_then(|d| self.devices.get(d)) {
+                    Some(device) => device.object.to_string(),
+                    None => format!("{:?} {}", place.kind, place.path.display()),
+                },
+            )
+            .collect();
+        identities.iter().map(|i| self.place_keys.key(i)).collect()
+    }
+
     /// Tell assistive technology what the window shows now, while one listens and it changed.
     fn publish_access(&mut self) {
         // the adapter makes the window's object on its first focus, which is how assistive technology finds it
@@ -792,13 +814,16 @@ impl App {
             self.access_sent = None;
             return;
         }
-        let Some(frame) = &self.frame else {
+        if self.frame.is_none() {
             return;
-        };
+        }
+        let keys = self.keys();
+        let frame = self.frame.as_ref().expect("checked above");
         let tree = window_tree(&WindowView {
             title: &title(self.browser.dir(), &self.places),
             layout: &frame.window,
             places: &self.places,
+            keys: &keys,
             dir: self.browser.dir(),
             sidebar_focus: self.sidebar_focus,
         });

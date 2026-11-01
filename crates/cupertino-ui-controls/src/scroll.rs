@@ -44,6 +44,12 @@ const TRACK: f64 = 15.0;
 const SHOWN_NS: u64 = 1_000_000_000;
 const FADE_NS: u64 = 300_000_000;
 
+/// A fitted frame keeps its content's size until the room runs out, then gives way.
+const SHRINK: Flex = Flex {
+    shrink: 1.0,
+    ..Flex::NONE
+};
+
 pub(crate) type ScrollHandler<M> = Rc<Handler<ScrollState, M>>;
 
 impl<M: 'static> From<ScrollView<M>> for Element<M> {
@@ -71,6 +77,7 @@ pub(crate) fn frame<M: 'static>(
         state,
         horizontal,
         vertical,
+        fit: false,
         on_scroll: on_scroll.clone(),
     });
     let bar = |axis| {
@@ -78,6 +85,7 @@ pub(crate) fn frame<M: 'static>(
             axis,
             scroller,
             state,
+            fit: false,
             on_scroll: on_scroll.clone(),
         })
     };
@@ -96,6 +104,7 @@ pub(crate) fn frame<M: 'static>(
             if vertical {
                 inner = Element::new(Frame {
                     kind: Some(Axis::Horizontal),
+                    fit: false,
                     children: vec![inner, bars.next().expect("one bar per scrolled axis")],
                 });
             }
@@ -103,19 +112,53 @@ pub(crate) fn frame<M: 'static>(
             children.extend(bars);
             return Element::new(Frame {
                 kind: Some(Axis::Vertical),
+                fit: false,
                 children,
             });
         }
     };
     Element::new(Frame {
         kind: None,
+        fit: false,
         children,
+    })
+}
+
+/// A vertical viewport as tall as `content` up to the room it is given, then scrolling, with an overlay bar: nothing
+/// in it fills the room, so the frame takes the content's size.
+pub(crate) fn fitted<M: 'static>(
+    content: Element<M>,
+    state: ScrollState,
+    on_scroll: ScrollHandler<M>,
+) -> Element<M> {
+    Element::new(Frame {
+        kind: None,
+        fit: true,
+        children: vec![
+            Element::new(Viewport {
+                content: Some(content),
+                state,
+                horizontal: false,
+                vertical: true,
+                fit: true,
+                on_scroll: on_scroll.clone(),
+            }),
+            Element::new(Bar {
+                axis: Axis::Vertical,
+                scroller: Scroller::Overlay,
+                state,
+                fit: true,
+                on_scroll,
+            }),
+        ],
     })
 }
 
 /// Lays out a viewport and its bars: layered (`None`) or in a row or column.
 pub(crate) struct Frame<M> {
     pub(crate) kind: Option<Axis>,
+    /// Sized by the viewport's content instead of filling the room.
+    pub(crate) fit: bool,
     pub(crate) children: Vec<Element<M>>,
 }
 
@@ -132,6 +175,12 @@ impl<M: 'static> Widget<M> for Frame<M> {
                 justify: Justify::Start,
             },
         };
+        if self.fit {
+            return LayoutSpec {
+                flex: SHRINK,
+                ..LayoutSpec::new(kind)
+            };
+        }
         LayoutSpec {
             width: SizeSpec::Fill,
             height: SizeSpec::Fill,
@@ -147,7 +196,7 @@ impl<M: 'static> Widget<M> for Frame<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.kind != old.kind {
+        if self.kind != old.kind || self.fit != old.fit {
             Change::Layout
         } else {
             Change::None
@@ -175,6 +224,7 @@ struct Viewport<M> {
     state: ScrollState,
     horizontal: bool,
     vertical: bool,
+    fit: bool,
     on_scroll: ScrollHandler<M>,
 }
 
@@ -376,10 +426,15 @@ impl<M: 'static> Widget<M> for Viewport<M> {
     type State = ViewportState;
 
     fn layout(&self) -> LayoutSpec {
+        let (size, flex) = if self.fit {
+            (SizeSpec::Fit, SHRINK)
+        } else {
+            (SizeSpec::Fill, Flex::grow(1.0))
+        };
         LayoutSpec {
-            width: SizeSpec::Fill,
-            height: SizeSpec::Fill,
-            flex: Flex::grow(1.0),
+            width: size,
+            height: size,
+            flex,
             overflow: Overflow::Clip,
             ..LayoutSpec::new(ContainerKind::Scroll {
                 horizontal: self.horizontal,
@@ -401,7 +456,7 @@ impl<M: 'static> Widget<M> for Viewport<M> {
 
     fn update(&self, old: &Self, state: &mut ViewportState) -> Change {
         state.offset = self.state.offset;
-        if (self.horizontal, self.vertical) != (old.horizontal, old.vertical)
+        if (self.horizontal, self.vertical, self.fit) != (old.horizontal, old.vertical, old.fit)
             || self.state.offset != old.state.offset
         {
             Change::Layout
@@ -530,6 +585,8 @@ struct Bar<M> {
     axis: Axis,
     scroller: Scroller,
     state: ScrollState,
+    /// Covers the whole frame, so it does not size it, and draws and takes the pointer only in its strip.
+    fit: bool,
     on_scroll: ScrollHandler<M>,
 }
 
@@ -589,18 +646,46 @@ impl<M: 'static> Bar<M> {
         Some((start + (track - len) * (offset / max).clamp(0.0, 1.0), len))
     }
 
+    fn thickness(&self) -> f64 {
+        match self.scroller {
+            Scroller::Overlay => THUMB + 2.0 * INSET,
+            Scroller::Always => TRACK,
+        }
+    }
+
+    /// The strip of the node's `size` that the bar draws in: all of it, or for a fitted bar the trailing or bottom
+    /// edge.
+    fn strip(&self, size: Size, rtl: bool) -> Rect {
+        let thickness = self.thickness().min(match self.axis {
+            Axis::Vertical => size.width,
+            Axis::Horizontal => size.height,
+        });
+        match (self.fit, self.axis) {
+            (false, _) => Rect::new(0.0, 0.0, size.width, size.height),
+            (true, Axis::Vertical) if rtl => Rect::new(0.0, 0.0, thickness, size.height),
+            (true, Axis::Vertical) => {
+                Rect::new(size.width - thickness, 0.0, thickness, size.height)
+            }
+            (true, Axis::Horizontal) => {
+                Rect::new(0.0, size.height - thickness, size.width, thickness)
+            }
+        }
+    }
+
     /// The thumb's rect in the bar, with a horizontal bar's start on the right in right-to-left.
     fn thumb_rect(&self, size: Size, rtl: bool) -> Option<Rect> {
+        let strip = self.strip(size, rtl);
         let (start, len) = self.thumb(size)?;
         let thickness = match self.axis {
-            Axis::Horizontal => size.height,
-            Axis::Vertical => size.width,
+            Axis::Horizontal => strip.height(),
+            Axis::Vertical => strip.width(),
         };
         let across = (thickness - THUMB) / 2.0;
+        let (x, y) = (strip.min_x(), strip.min_y());
         Some(match self.axis {
-            Axis::Vertical => Rect::new(across, start, THUMB, len),
-            Axis::Horizontal if rtl => Rect::new(size.width - start - len, across, len, THUMB),
-            Axis::Horizontal => Rect::new(start, across, len, THUMB),
+            Axis::Vertical => Rect::new(x + across, start, THUMB, len),
+            Axis::Horizontal if rtl => Rect::new(size.width - start - len, y + across, len, THUMB),
+            Axis::Horizontal => Rect::new(start, y + across, len, THUMB),
         })
     }
 
@@ -650,10 +735,10 @@ impl<M: 'static> Widget<M> for Bar<M> {
     type State = BarState;
 
     fn layout(&self) -> LayoutSpec {
-        let thickness = match self.scroller {
-            Scroller::Overlay => THUMB + 2.0 * INSET,
-            Scroller::Always => TRACK,
-        };
+        if self.fit {
+            return LayoutSpec::new(ContainerKind::Leaf);
+        }
+        let thickness = self.thickness();
         let (width, height) = match self.axis {
             Axis::Vertical => (SizeSpec::Fixed(thickness), SizeSpec::Fill),
             Axis::Horizontal => (SizeSpec::Fill, SizeSpec::Fixed(thickness)),
@@ -674,7 +759,9 @@ impl<M: 'static> Widget<M> for Bar<M> {
         if self.state.offset != old.state.offset {
             state.moved.set(true);
         }
-        if self.state != old.state || self.scroller != old.scroller {
+        if self.fit != old.fit {
+            Change::Layout
+        } else if self.state != old.state || self.scroller != old.scroller {
             Change::Paint
         } else {
             Change::None
@@ -737,7 +824,8 @@ impl<M: 'static> Widget<M> for Bar<M> {
                     };
                     state.grab = Some(at - start);
                     cx.capture_pointer();
-                } else if self.scroller == Scroller::Always {
+                } else if self.scroller == Scroller::Always && self.strip(size, rtl).contains(local)
+                {
                     let (viewport, _, offset) = self.lengths();
                     let page = (viewport - LINE).max(LINE);
                     let before = match self.axis {
@@ -789,7 +877,7 @@ impl<M: 'static> Widget<M> for Bar<M> {
             Scroller::Always => {
                 look::fill(
                     cx,
-                    Rect::new(0.0, 0.0, size.width, size.height),
+                    self.strip(size, rtl),
                     0.0,
                     look::color(&theme, ColorRole::ControlFill, &normal),
                 );
@@ -830,7 +918,10 @@ impl<M: 'static> Widget<M> for Bar<M> {
 
     fn hit(&self, state: &BarState, point: Point) -> bool {
         match self.scroller {
-            Scroller::Always => true,
+            Scroller::Always => state
+                .painted
+                .get()
+                .is_some_and(|(size, rtl)| self.strip(size, rtl).contains(point)),
             // only a shown thumb takes the pointer; the content under the rest of the strip stays reachable
             Scroller::Overlay => {
                 state.shown_from.get().is_some()

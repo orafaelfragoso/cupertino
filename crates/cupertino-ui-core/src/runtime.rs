@@ -840,6 +840,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         now: Timestamp,
         effects: &mut Effects<A::Message>,
     ) {
+        self.settle_focus_request(i, now);
         let w = &mut self.windows[i];
         let Some(root) = w.root else { return };
         let path = match w.focus.node() {
@@ -888,6 +889,22 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             let rest = Self::focus_events(&mut self.tree, w, change, &mut self.messages, now);
             effects.absorb(rest);
         }
+    }
+
+    /// Moves the focus a roving item asked for before the next frame when the item is already a Tab stop, so a key
+    /// that follows at once, such as Return after Down in a menu, goes to the item the first key chose.
+    fn settle_focus_request(&mut self, i: usize, now: Timestamp) {
+        let w = &mut self.windows[i];
+        let Some(FocusRequest::Node(node)) = w.focus_request else {
+            return;
+        };
+        if !self.tree.contains(node) || !w.focusable.contains(&node) {
+            return;
+        }
+        w.focus_request = None;
+        let change = w.focus.set(&self.tree, Some(node), true);
+        let effects = Self::focus_events(&mut self.tree, w, change, &mut self.messages, now);
+        self.apply(i, effects);
     }
 
     fn touch(

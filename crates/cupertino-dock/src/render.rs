@@ -2,7 +2,7 @@
 //! panel, the application grid, the overview's chrome and the context menus. The material below
 //! each surface is the server's backdrop, so nothing here fills a panel itself.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -11,6 +11,7 @@ use cupertino_decorations::shape::rounded_path;
 use cupertino_decorations::text::TextRenderer;
 use cupertino_geometry::{CornerStyle, Radii, Rect as GRect};
 use cupertino_icons::{SystemIcons, ThemeIcons};
+use cupertino_shell_client::{DockWindowIcon, WindowIconImage};
 use cupertino_theme::Typography;
 use cupertino_wm::geometry::{Point, Rect};
 use tiny_skia::{Color, FillRule, FilterQuality, Paint, Pixmap, PixmapPaint, Stroke, Transform};
@@ -48,12 +49,41 @@ fn trash_is_full() -> bool {
 }
 
 /// Icon pixmaps by name and pixel size, loaded once: an application's own icon (an absolute path or the `hicolor`
-/// theme) and the system's icons from the asset directory.
+/// theme) and the system's icons from the asset directory; and the icons windows set for themselves.
 pub struct Icons {
     apps: ThemeIcons,
     system: SystemIcons,
     cache: HashMap<(String, u32), Option<Pixmap>>,
+    /// Windows' own icons by window id.
+    windows: BTreeMap<u32, WindowIcon>,
     trash: Option<(Instant, bool)>,
+}
+
+/// The icon a window set for itself: a theme name, an image, or both.
+struct WindowIcon {
+    /// The window's application id and the dock's key for it (its tile's).
+    apps: [String; 2],
+    name: Option<String>,
+    image: Option<Pixmap>,
+}
+
+/// Where an application's icon comes from.
+enum IconSource {
+    Theme(String),
+    Window(u32),
+    Generic,
+}
+
+/// A window's ARGB8888 image (premultiplied, little-endian) as a pixmap; a colour channel over its alpha is cut to it.
+fn window_pixmap(image: &WindowIconImage) -> Option<Pixmap> {
+    let rgba = image
+        .argb
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|&[b, g, r, a]| [r.min(a), g.min(a), b.min(a), a])
+        .collect();
+    Pixmap::from_vec(rgba, tiny_skia::IntSize::from_wh(image.size, image.size)?)
 }
 
 impl Icons {
@@ -69,22 +99,82 @@ impl Icons {
             apps: ThemeIcons::new(assets),
             system,
             cache: HashMap::new(),
+            windows: BTreeMap::new(),
             trash: None,
         }
     }
 
-    /// The icon of an application: its own icon `name` when it has one, else the asset `application.generic`.
-    fn app(&mut self, name: &str, px: u32) -> &Pixmap {
-        let key = (name.to_string(), px);
-        let own = self
-            .cache
-            .entry(key.clone())
-            .or_insert_with(|| self.apps.load(name, px))
-            .is_some();
-        if own {
-            self.cache[&key].as_ref().expect("checked above")
+    /// A window set its own icon, or removed it; `apps` are its application id and the dock's key for it.
+    pub fn window_icon(&mut self, apps: [String; 2], icon: DockWindowIcon) {
+        let image = icon.image.as_ref().and_then(window_pixmap);
+        if icon.name.is_none() && image.is_none() {
+            self.windows.remove(&icon.id);
+        } else {
+            self.windows.insert(
+                icon.id,
+                WindowIcon {
+                    apps,
+                    name: icon.name,
+                    image,
+                },
+            );
+        }
+    }
+
+    pub fn window_closed(&mut self, id: u32) {
+        self.windows.remove(&id);
+    }
+
+    /// Whether the theme has icon `name` at `px`, loading it once.
+    fn has_themed(&mut self, name: &str, px: u32) -> bool {
+        let apps = &mut self.apps;
+        self.cache
+            .entry((name.to_owned(), px))
+            .or_insert_with(|| apps.load(name, px))
+            .is_some()
+    }
+
+    /// The theme's icon `name`, else the asset `application.generic`.
+    fn named(&mut self, name: &str, px: u32) -> &Pixmap {
+        if self.has_themed(name, px) {
+            self.cache[&(name.to_owned(), px)].as_ref().expect("loaded")
         } else {
             self.system.raster(GENERIC_APPLICATION_ICON, px)
+        }
+    }
+
+    fn source(&mut self, desktop: &DesktopIndex, app_id: &str, px: u32) -> IconSource {
+        if let Some(name) = desktop.entry_icon(app_id) {
+            if self.has_themed(name, px) {
+                return IconSource::Theme(name.to_owned());
+            }
+        }
+        let window = self
+            .windows
+            .iter()
+            .find(|(_, w)| w.apps.iter().any(|a| a == app_id))
+            .map(|(id, w)| (*id, w.name.clone(), w.image.is_some()));
+        if let Some((id, name, image)) = window {
+            if let Some(name) = name.filter(|n| self.has_themed(n, px)) {
+                return IconSource::Theme(name);
+            }
+            if image {
+                return IconSource::Window(id);
+            }
+        }
+        if self.has_themed(app_id, px) {
+            return IconSource::Theme(app_id.to_owned());
+        }
+        IconSource::Generic
+    }
+
+    /// The icon of an application: its desktop entry's, else the one its window set for itself (a theme name, then
+    /// its image), else the theme's icon named as the application, else the asset `application.generic`.
+    fn app(&mut self, desktop: &DesktopIndex, app_id: &str, px: u32) -> &Pixmap {
+        match self.source(desktop, app_id, px) {
+            IconSource::Theme(name) => self.cache[&(name, px)].as_ref().expect("loaded"),
+            IconSource::Window(id) => self.windows[&id].image.as_ref().expect("has an image"),
+            IconSource::Generic => self.system.raster(GENERIC_APPLICATION_ICON, px),
         }
     }
 
@@ -260,7 +350,7 @@ fn draw_icon_of(
     let icon = if kind == TileKind::Trash {
         icons.trash(icon_px)
     } else {
-        icons.app(&session.desktop().icon_name(key), icon_px)
+        icons.app(session.desktop(), key, icon_px)
     };
     draw_icon(pixmap, icon, rect, opacity, scale);
 }
@@ -514,7 +604,7 @@ pub fn paint_switcher(
         let rect = to_panel(layout.item(i));
         draw_icon(
             pixmap,
-            icons.app(&panel.desktop.icon_name(app), icon_px),
+            icons.app(panel.desktop, app, icon_px),
             &rect,
             1.0,
             scale,
@@ -674,7 +764,7 @@ fn paint_grid_content(
                 );
             }
             let image = layout.image_rect(&cell);
-            draw_icon(pixmap, icons.app(&app.icon, icon_px), &image, 1.0, scale);
+            draw_icon(pixmap, icons.named(&app.icon, icon_px), &image, 1.0, scale);
             let (fitted, width_px) = text.text.fit(
                 &app.name,
                 label_px,
@@ -1301,7 +1391,7 @@ pub fn paint_force_quit(
             if let Some(first) = asked.first() {
                 draw_icon(
                     pixmap,
-                    icons.app(&view.desktop.icon_name(&first.app_id), icon_px),
+                    icons.app(view.desktop, &first.app_id, icon_px),
                     &q.icon,
                     1.0,
                     scale,
@@ -1398,7 +1488,7 @@ pub fn paint_force_quit(
                 }
                 draw_icon(
                     pixmap,
-                    icons.app(&view.desktop.icon_name(&entry.app_id), icon_px),
+                    icons.app(view.desktop, &entry.app_id, icon_px),
                     &Rect::new(row.x + 6.0, row.cy() - 8.0, 16.0, 16.0),
                     1.0,
                     scale,
@@ -1786,6 +1876,14 @@ mod tests {
 
     /// A panel of the two unthemed applications with `selected` chosen, on a 400 × 300 output.
     fn switcher_pixmap(selected: usize, alpha: f64) -> (Pixmap, SwitcherLayout) {
+        switcher_pixmap_with(selected, alpha, &mut bare_icons())
+    }
+
+    fn switcher_pixmap_with(
+        selected: usize,
+        alpha: f64,
+        icons: &mut Icons,
+    ) -> (Pixmap, SwitcherLayout) {
         let apps = vec![FIRST.to_string(), SECOND.to_string()];
         let switcher = Switcher::new(apps, selected, 0.0).unwrap();
         let layout = SwitcherLayout::new(2, 400.0, 300.0);
@@ -1798,13 +1896,7 @@ mod tests {
             dark: false,
             alpha,
         };
-        paint_switcher(
-            &mut pixmap,
-            1.0,
-            &panel,
-            &mut bare_icons(),
-            &mut label_text(),
-        );
+        paint_switcher(&mut pixmap, 1.0, &panel, icons, &mut label_text());
         (pixmap, layout)
     }
 
@@ -1891,6 +1983,46 @@ mod tests {
                 "tile {i} ({key}) shows the generic application icon"
             );
         }
+    }
+
+    /// Window 1's own icon: an 8 px image of opaque red, in the server's ARGB8888 bytes.
+    fn red_window_icon() -> DockWindowIcon {
+        DockWindowIcon {
+            id: 1,
+            name: None,
+            image: Some(WindowIconImage {
+                size: 8,
+                argb: [0, 0, 255, 255].repeat(64),
+            }),
+        }
+    }
+
+    #[test]
+    fn an_application_without_a_desktop_icon_shows_its_windows_own_image_in_the_dock_and_the_switcher(
+    ) {
+        let session = first_running();
+        let layout = session.dock.layout(SCREEN, 10.0);
+        let mut icons = bare_icons();
+        icons.window_icon([FIRST.into(), FIRST.into()], red_window_icon());
+        let tile = |icons: &mut Icons| {
+            let mut pixmap = Pixmap::new(SIZE.0, SIZE.1).unwrap();
+            paint(&mut pixmap, 1.0, &session, &layout, icons, false);
+            let c = first_tile_centre(&session, &layout);
+            let p = pixmap.pixel(c.x as u32, c.y as u32).unwrap();
+            [p.red(), p.green(), p.blue(), p.alpha()]
+        };
+        assert_eq!(tile(&mut icons), [255, 0, 0, 255]);
+
+        let (pixmap, switcher) = switcher_pixmap_with(1, 1.0, &mut icons);
+        let at = |i: usize| {
+            let c = switcher.item(i).center();
+            pixel_at(&pixmap, &switcher, c.x, c.y)
+        };
+        assert_eq!(at(0), [255, 0, 0, 255], "the window's own icon");
+        assert_eq!(at(1), GENERIC_APPLICATION_PIXEL, "no window icon");
+
+        icons.window_closed(1);
+        assert_eq!(tile(&mut icons), GENERIC_APPLICATION_PIXEL);
     }
 
     /// A grid of `n` unthemed applications on a 1440 × 790 layer (the 1440 × 900 output of the

@@ -5,8 +5,10 @@ use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::thread::ThreadId;
+use std::time::Duration;
 
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -81,8 +83,83 @@ pub fn init(file: Option<File>) {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         tracing::error!("panic: {info}");
+        if SESSION_END
+            .get()
+            .is_some_and(|end| end.thread == std::thread::current().id())
+        {
+            session_ends(&format!("panic: {info}"), 101);
+        }
         previous(info);
     }));
+}
+
+/// The file `cupertino-session` reads, when the compositor has ended, for the reason it writes to the session log.
+pub const SESSION_END_ENV: &str = "CUPERTINO_SESSION_END";
+
+/// How long the teardown after a panic or a lost rendering context may take before the server exits without finishing
+/// it, so the display manager's login screen comes back within seconds even when a driver call hangs.
+pub const TEARDOWN_LIMIT: Duration = Duration::from_secs(2);
+
+const REASON_LIMIT: usize = 400;
+
+struct SessionEnd {
+    path: PathBuf,
+    thread: ThreadId,
+}
+
+static SESSION_END: OnceLock<SessionEnd> = OnceLock::new();
+
+/// Makes the calling thread the session's when `CUPERTINO_SESSION_END` names a file: a panic on it, and
+/// [`session_ends`], write their reason there and bound the teardown.
+pub fn record_session_end(var: impl Fn(&str) -> Option<OsString>) {
+    if let Some(path) = var(SESSION_END_ENV).filter(|p| !p.is_empty()) {
+        let _ = SESSION_END.set(SessionEnd {
+            path: PathBuf::from(path),
+            thread: std::thread::current().id(),
+        });
+    }
+}
+
+/// The session ends for `reason`: writes it for `cupertino-session` and exits with `status` once [`TEARDOWN_LIMIT`]
+/// has passed, if the server is still tearing down. Nothing without [`record_session_end`].
+pub fn session_ends(reason: &str, status: i32) {
+    let Some(end) = SESSION_END.get() else {
+        return;
+    };
+    if let Err(e) = write_reason(&end.path, reason) {
+        tracing::warn!("cannot write the session end {}: {e}", end.path.display());
+    }
+    let _ = std::thread::Builder::new()
+        .name("teardown-limit".into())
+        .spawn(move || {
+            std::thread::sleep(TEARDOWN_LIMIT);
+            // Safety: `_exit` takes no pointers. It skips logging and exit handlers on purpose: the thread that hangs
+            // may hold the log, or be inside a driver's handler.
+            unsafe { libc::_exit(status) }
+        });
+}
+
+/// One line of at most [`REASON_LIMIT`] bytes, control characters as spaces, mode 0600.
+fn write_reason(path: &Path, reason: &str) -> io::Result<()> {
+    let mut line: String = reason
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    if line.len() > REASON_LIMIT {
+        let mut end = REASON_LIMIT;
+        while !line.is_char_boundary(end) {
+            end -= 1;
+        }
+        line.truncate(end);
+    }
+    line.push('\n');
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    io::Write::write_all(&mut file, line.as_bytes())
 }
 
 #[cfg(test)]

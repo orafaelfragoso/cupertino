@@ -139,6 +139,7 @@ pub fn theme() -> ThemeTokens {
             ));
         }
     }
+    entries.push(((ToolTipText, state(Normal, false)), gray(1)));
     ThemeTokens {
         preferences: ThemePreferences {
             appearance: Appearance::Light,

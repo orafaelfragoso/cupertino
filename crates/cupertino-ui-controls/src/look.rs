@@ -4,7 +4,9 @@ use cupertino_geometry::{Point, Rect};
 use cupertino_theme::metrics::{alignment_height, Control};
 use cupertino_ui_core::{ControlState, Environment, PaintCx};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
-use cupertino_ui_text::{AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextStyle};
+use cupertino_ui_text::{
+    AttributedText, FontWeight, Paragraph, ParagraphLayout, ParagraphStyle, TextStyle,
+};
 use cupertino_ui_theme::{
     Color, ColorRole, ControlSize, FocusRing, InteractionVariant, StateVariant, ThemeTokens,
 };
@@ -123,6 +125,17 @@ pub(crate) fn top(layout: &ParagraphLayout, chrome: Rect, env: &Environment) -> 
 }
 
 /// Paints `layout` with its top-left corner at `origin`.
+/// `paragraph` on one line: as it is when it fits `width`, else cut to end in its style's ellipsis within `width` and
+/// laid out again at the cut line's width, so its box is the line's in either direction.
+pub(crate) fn one_line(paragraph: &Paragraph, width: f64) -> ParagraphLayout {
+    let line = paragraph.layout(None);
+    if !width.is_finite() || line.size().width <= width {
+        return line;
+    }
+    let cut = paragraph.layout(Some(width as f32));
+    paragraph.layout(Some(cut.size().width as f32))
+}
+
 pub(crate) fn glyphs(
     cx: &mut PaintCx<'_>,
     layout: &ParagraphLayout,

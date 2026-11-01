@@ -10,13 +10,21 @@ use cupertino_ui_core::{
 };
 use cupertino_ui_layout::{Align, Axis};
 use cupertino_ui_platform::{
-    Keysym, Mods, PointerEvent, PopupEdge, Timestamp, WindowEvent, WindowId,
+    Keysym, Mods, PointerEvent, PopupEdge, Timestamp, WindowEvent, WindowId, WindowStates,
 };
-use cupertino_ui_text::{ContentPurpose, ImeBatch, ImeEvent, Preedit};
-use support::{window, Harness, TAB};
+use cupertino_ui_render::PaintOp;
+use cupertino_ui_text::{
+    AttributedText, ContentPurpose, ImeBatch, ImeEvent, ParagraphStyle, Preedit, TextStyle,
+};
+use std::cell::Cell;
+use support::{text, window, Harness, TAB};
 
 const ESCAPE: u32 = 0xff1b;
 const MS: u64 = 1_000_000;
+
+thread_local! {
+    static TIP: Cell<&'static str> = const { Cell::new("Move to the bin") };
+}
 
 #[derive(Clone, Debug, PartialEq)]
 enum Message {
@@ -37,7 +45,7 @@ struct Model {
     said: Vec<Message>,
 }
 
-/// A trash button with the tip "Move to the bin", and another button beside it.
+/// A trash button with the tip "Move to the bin", unless a test sets another, and another button beside it.
 struct Page;
 
 fn button(label: &'static str, on_press: Message) -> Element<Message> {
@@ -54,7 +62,7 @@ fn button(label: &'static str, on_press: Message) -> Element<Message> {
 
 fn tip(state: TooltipState) -> Tooltip<Message> {
     Tooltip {
-        text: "Move to the bin".into(),
+        text: TIP.get().into(),
         anchor: button("Trash", Message::Trash),
         state,
         on_change: Box::new(Message::Tip),
@@ -487,4 +495,47 @@ fn escape_first_cancels_what_the_field_is_composing() {
     assert_eq!(escaped(&h), 0);
     h.tap(ESCAPE);
     assert!(!h.model().tip.shown());
+}
+
+#[test]
+fn an_overlong_tip_ends_in_an_ellipsis_within_the_text_width() {
+    TIP.set("Move the selected items to the bin, where they stay until it is emptied or they are put back");
+    let mut h = rested();
+    let id = tooltip(&h).unwrap();
+    h.rt.window_system_mut()
+        .configure(id, None, WindowStates::default())
+        .unwrap();
+    h.window = id;
+    h.settle();
+    let runs: Vec<_> = h
+        .snapshot()
+        .display_list
+        .nodes
+        .into_iter()
+        .flat_map(|node| node.ops)
+        .filter_map(|op| match op {
+            PaintOp::Glyphs { origin, run, .. } => Some((origin, run)),
+            _ => None,
+        })
+        .collect();
+    let mark = text()
+        .paragraph(
+            &AttributedText::plain("\u{2026}", TextStyle::new(11.0)),
+            &ParagraphStyle::default(),
+        )
+        .unwrap()
+        .layout(None);
+    let (origin, ellipsis) = runs.last().unwrap();
+    assert_eq!(runs.len(), 2, "the text, then the ellipsis");
+    assert_eq!(ellipsis.glyphs.len(), 1);
+    assert_eq!(
+        ellipsis.glyphs[0].id,
+        mark.lines()[0].runs[0].run.glyphs[0].id
+    );
+    let padding = 10.0;
+    assert!(
+        origin.x + mark.size().width <= padding + 300.0 + 1e-6,
+        "{origin:?}"
+    );
+    assert!(origin.x + mark.size().width > padding + 280.0, "{origin:?}");
 }

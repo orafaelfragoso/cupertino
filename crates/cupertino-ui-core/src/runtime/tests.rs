@@ -728,6 +728,103 @@ fn a_release_ends_its_press_by_physical_key_even_when_its_symbol_changed() {
     );
 }
 
+/// A dismissible node until it has heard Escape once, and beside it a field that logs its keys.
+struct Dismisser;
+
+impl Application for Dismisser {
+    type Model = Vec<String>;
+    type Message = String;
+
+    fn init() -> (Vec<String>, Vec<Command<String>>) {
+        (Vec::new(), Vec::new())
+    }
+
+    fn update(log: &mut Vec<String>, message: String) -> Vec<Command<String>> {
+        log.push(message);
+        Vec::new()
+    }
+
+    fn view(log: &Vec<String>) -> Vec<Window<String>> {
+        let open = !log.iter().any(|m| m == "tip:Target:dismiss");
+        vec![Window {
+            key: WindowKey("main".into()),
+            spec: WindowSpec {
+                title: "Dismisser".into(),
+                app_id: "test.dismisser".into(),
+                size: Size::new(200.0, 100.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Preferred,
+                foreign_parent: None,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            background: WindowBackground::Theme,
+            popup: None,
+            content: Element::new(row(vec![
+                Element::new(Leaf {
+                    focusable: false,
+                    stop: true,
+                    dismissible: open,
+                    ..leaf("tip")
+                }),
+                Element::new(leaf("field")),
+            ])),
+        }]
+    }
+}
+
+#[test]
+fn a_deactivation_that_eats_a_dismissing_release_leaves_the_next_release_alone() {
+    let damage = Rc::default();
+    let mut rt = Runtime::<Dismisser, _>::new(FakeSystem::default(), options(&damage));
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+    let send = |rt: &mut Runtime<Dismisser, FakeSystem>, event| {
+        rt.window_system_mut().send(window, event);
+        rt.step(steps()).unwrap();
+    };
+    let key = |keysym, pressed| {
+        WindowEvent::Key(
+            KeyEvent {
+                code: 1,
+                keysym: Keysym(keysym),
+                text: None,
+                pressed,
+                repeat: false,
+                mods: Mods::NONE,
+            },
+            Timestamp(0),
+        )
+    };
+    let (tab, escape) = (0xff09, 0xff1b);
+    send(&mut rt, key(tab, true));
+    send(&mut rt, key(escape, true));
+    send(&mut rt, WindowEvent::Focus(false));
+    send(&mut rt, WindowEvent::Focus(true));
+    send(&mut rt, key(escape, true));
+    send(&mut rt, key(escape, false));
+    let field: Vec<_> = rt
+        .model()
+        .iter()
+        .filter(|m| m.starts_with("field:") && m.ends_with(":key"))
+        .collect();
+    assert_eq!(
+        field.len(),
+        2,
+        "the field hears the press and its release: {:?}",
+        rt.model()
+    );
+    assert_eq!(
+        rt.model()
+            .iter()
+            .filter(|m| *m == "tip:Target:dismiss")
+            .count(),
+        1
+    );
+}
+
 #[test]
 fn an_appearance_change_redraws_open_windows_with_the_new_theme_and_keeps_the_focus() {
     let seen = Rc::new(RefCell::new(Vec::new()));

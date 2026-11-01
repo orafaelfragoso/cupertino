@@ -720,6 +720,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.active = focused;
                 if !focused {
                     let held: BTreeSet<NodeId> = w.held.drain(..).map(|(_, node)| node).collect();
+                    w.dismissed = None;
                     let mut pointer = std::mem::take(&mut w.pointer);
                     let mut route = route(&mut self.tree, w, now, &mut effects);
                     pointer.revoke(&mut route);

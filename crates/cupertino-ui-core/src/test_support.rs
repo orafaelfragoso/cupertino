@@ -103,6 +103,8 @@ pub(crate) struct Leaf {
     pub(crate) wake_after: Option<u64>,
     /// Asks for the focus when its scope opens.
     pub(crate) initial: bool,
+    /// Takes Escape before the focus path.
+    pub(crate) dismissible: bool,
 }
 
 pub(crate) fn leaf(label: &'static str) -> Leaf {
@@ -116,6 +118,7 @@ pub(crate) fn leaf(label: &'static str) -> Leaf {
         animated: false,
         wake_after: None,
         initial: false,
+        dismissible: false,
     }
 }
 
@@ -199,6 +202,7 @@ impl<M: From<String> + 'static> Widget<M> for Leaf {
             }
             Event::Focus { .. } => "blur",
             Event::Cancel => "cancel",
+            Event::Dismiss => "dismiss",
             _ => "other",
         };
         cx.emit(M::from(format!("{}:{:?}:{name}", self.label, cx.phase())));
@@ -224,6 +228,9 @@ impl<M: From<String> + 'static> Widget<M> for Leaf {
         }
         if self.initial {
             cx.initial_focus();
+        }
+        if self.dismissible {
+            cx.dismissible();
         }
     }
 }

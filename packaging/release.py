@@ -55,6 +55,7 @@ BINARIES = (
     'cupertino-portal',
     *APPS,
     'cupertino-sessiond', 'cupertino-netd', 'cupertino-btd', 'cupertino-powerd',
+    'cupertino-diagnose',
 )
 # Besides an app's own entry, the only file an app crate may ship there: the session's default applications.
 MIMEAPPS = 'cupertino-mimeapps.list'

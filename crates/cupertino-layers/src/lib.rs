@@ -169,6 +169,10 @@ pub const DENIED_CRATES: &[(&str, &[&str])] = &[
         &["cupertino-protocols", "cupertino-shell-client"],
     ),
     (
+        "cupertino-ui-abi",
+        &["cupertino-protocols", "cupertino-shell-client"],
+    ),
+    (
         "cupertino-kit",
         &["cupertino-protocols", "cupertino-shell-client"],
     ),

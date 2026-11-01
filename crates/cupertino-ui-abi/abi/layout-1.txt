@@ -1,0 +1,23 @@
+CkRuntime size 8 align 8
+  bits 0
+CkWaker size 8 align 8
+  bits 0
+CkWindow size 8 align 8
+  bits 0
+CkStr size 16 align 8
+  ptr 0
+  len 8
+CkRuntimeOptions size 32 align 8
+  struct_size 0
+  abi_major 4
+  abi_minor 8
+  backend 12
+  app_id 16
+CkEvent size 40 align 8
+  kind 0
+  reserved 4
+  window 8
+  message 16
+  value 24
+  payload_offset 32
+  payload_len 36

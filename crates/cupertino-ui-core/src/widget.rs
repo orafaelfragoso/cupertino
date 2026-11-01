@@ -1,7 +1,7 @@
 use crate::cx::{EventCx, MeasureCx, PaintCx, SemanticsCx};
 use crate::{Event, Key};
 use cupertino_geometry::Point;
-use cupertino_ui_layout::{Constraints, LayoutSpec, Measured};
+use cupertino_ui_layout::{Constraints, LayoutSpec, Measured, SizeSpec};
 use std::any::{type_name, Any, TypeId};
 use std::fmt;
 
@@ -59,6 +59,7 @@ pub trait Widget<M>: 'static {
 pub struct Element<M> {
     pub(crate) key: Option<Key>,
     pub(crate) widget: Box<dyn AnyWidget<M>>,
+    pub(crate) width: Option<f64>,
 }
 
 impl<M: 'static> Element<M> {
@@ -66,12 +67,27 @@ impl<M: 'static> Element<M> {
         Self {
             key: None,
             widget: Box::new(widget),
+            width: None,
         }
     }
 
     pub fn key(mut self, key: impl Into<Key>) -> Self {
         self.key = Some(key.into());
         self
+    }
+
+    /// Holds the element at `points` wide, whatever room its parent offers.
+    pub fn width(mut self, points: f64) -> Self {
+        self.width = Some(points);
+        self
+    }
+
+    pub(crate) fn layout(&self) -> LayoutSpec {
+        let mut spec = self.widget.layout();
+        if let Some(width) = self.width {
+            spec.width = SizeSpec::Fixed(width);
+        }
+        spec
     }
 }
 
@@ -80,6 +96,7 @@ impl<M> fmt::Debug for Element<M> {
         f.debug_struct("Element")
             .field("key", &self.key)
             .field("widget", &self.widget.type_name())
+            .field("width", &self.width)
             .finish()
     }
 }

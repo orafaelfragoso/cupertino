@@ -380,6 +380,7 @@ delegate_relative_pointer!(Cupertino);
 delegate_single_pixel_buffer!(Cupertino);
 delegate_viewporter!(Cupertino);
 delegate_presentation!(Cupertino);
+smithay::delegate_content_type!(Cupertino);
 
 impl SelectionHandler for Cupertino {
     /// The server's copy of a clipboard whose client has gone (`clipboard.rs`).

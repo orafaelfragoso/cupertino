@@ -19,6 +19,7 @@ use cupertino_kit::controls::{
     SliderStyle, SortOrder, SplitLayout, SplitView, Stack, Stepper, TableView, Text, TextBox,
     TextEditor, TextField, TextRole, Toggle,
 };
+use cupertino_kit::controls::{Canvas, Grid, Image, ImageFit, ImageSource, RichText, TextLink};
 use cupertino_kit::controls::{Popover, TreeItem, TreeView};
 use cupertino_kit::controls::{Sidebar, SidebarItem, SidebarSection};
 use cupertino_kit::core::{
@@ -26,12 +27,13 @@ use cupertino_kit::core::{
     WindowKey,
 };
 use cupertino_kit::geometry::{Insets, Point, Size};
-use cupertino_kit::layout::{Align, Axis, LayoutDirection, ScrollState};
+use cupertino_kit::layout::{Align, Axis, LayoutDirection, ScrollState, Track};
 use cupertino_kit::platform::{
     DecorationMode, Mods, MouseButton, PointerEvent, Timestamp, WindowEvent, WindowSpec,
 };
+use cupertino_kit::render::{ImageResource, Paint, PaintOp, PixelFormat, ResourceId, Shape};
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
-use cupertino_kit::theme::Appearance;
+use cupertino_kit::theme::{Appearance, ColorRole, StateVariant};
 use cupertino_ui_test::Inspector;
 use std::cell::Cell;
 use support::{repository_theme, Run, TAB};
@@ -333,6 +335,44 @@ fn button(style: ButtonStyle, role: ButtonRole, look: &Look) -> Element<Message>
         enabled: look.enabled,
         busy: false,
         on_press: Some(Message::Nothing),
+    })
+}
+
+/// A 64 by 32 pixel picture, a warm left half and a cool right half over a vertical ramp, so a fit or a crop shows.
+fn picture() -> ImageSource {
+    let (width, height) = (64u32, 32u32);
+    let pixels: Vec<u8> = (0..height)
+        .flat_map(|y| {
+            (0..width).flat_map(move |x| {
+                let ramp = (255 * y / (height - 1)) as u8;
+                if x < width / 2 {
+                    [230, ramp, 40, 255]
+                } else {
+                    [40, ramp, 230, 255]
+                }
+            })
+        })
+        .collect();
+    ImageSource {
+        id: ResourceId(1),
+        image: ImageResource {
+            revision: 1,
+            width,
+            height,
+            stride: width * 4,
+            format: PixelFormat::Rgba8Premultiplied,
+            pixels: pixels.into(),
+        },
+    }
+}
+
+fn image(fit: ImageFit, radius: f64) -> Element<Message> {
+    Element::new(Image {
+        sources: vec![picture()],
+        size: Size::new(48.0, 40.0),
+        fit,
+        radius,
+        label: Some("Picture".into()),
     })
 }
 
@@ -834,4 +874,64 @@ fixtures! {
         .windows(WindowKey("menu".into()));
         windows.remove(0).content
     };
+    rich_text: "rich-text", WIDE, &[State::Normal, State::Focused], |_| {
+        let text = "Read the guide first.";
+        let start = text.find("guide").unwrap();
+        Element::new(RichText {
+            content: label(text),
+            role: TextRole::Body,
+            wrap: false,
+            secondary: false,
+            links: vec![TextLink {
+                range: start..start + "guide".len(),
+                url: "https://example.org/guide".into(),
+                on_open: Some(Message::Nothing),
+            }],
+        })
+    };
+    image_contain: "image-contain", CONTROL, &[State::Normal], |_| image(ImageFit::Contain, 0.0);
+    image_cover: "image-cover", CONTROL, &[State::Normal], |_| image(ImageFit::Cover, 6.0);
+    canvas: "canvas", CONTROL, &[State::Normal], |_| Element::new(Canvas {
+        size: Some(Size::new(120.0, 32.0)),
+        label: "Levels".into(),
+        paint: Box::new(|cx| {
+            let colors = cx.env().theme.colors.clone();
+            let bar = colors.get(ColorRole::DefaultButtonFill, StateVariant::NORMAL);
+            let line = colors.get(ColorRole::Separator, StateVariant::NORMAL);
+            for (i, level) in [0.4, 0.9, 0.6, 0.25].into_iter().enumerate() {
+                if let Some(bar) = bar {
+                    let height = 30.0 * level;
+                    cx.push(PaintOp::Fill {
+                        shape: Shape::RoundedRect {
+                            rect: cupertino_kit::geometry::Rect::new(8.0 + 28.0 * i as f64, 31.0 - height, 20.0, height),
+                            radius: 3.0,
+                        },
+                        paint: Paint::Solid(bar),
+                    });
+                }
+            }
+            if let Some(line) = line {
+                cx.push(PaintOp::Fill {
+                    shape: Shape::Rect(cupertino_kit::geometry::Rect::new(0.0, 31.0, 120.0, 1.0)),
+                    paint: Paint::Solid(line),
+                });
+            }
+        }),
+        children: Vec::new(),
+    });
+    grid: "grid", TALL, &[State::Normal], |_| Element::new(Grid {
+        columns: vec![Track::Auto, Track::Fraction(1.0)],
+        rows: Vec::new(),
+        padding: Insets::ZERO,
+        spacing: Size::new(8.0, 4.0),
+        children: vec![
+            body("Name"),
+            body("Ada"),
+            body("Kind"),
+            body("Folder"),
+            body("Shared folder").span(2, 1),
+            body("Size"),
+            body("12 KB"),
+        ],
+    });
 }

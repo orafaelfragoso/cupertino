@@ -21,11 +21,12 @@ pub struct Press {
     inside: bool,
 }
 
-/// The keys that activate: a button takes Return too, a switch only Space.
+/// The keys that activate: a button takes Space and Return, a switch only Space, a link only Return.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Keys {
     SpaceAndReturn,
     Space,
+    Return,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -151,7 +152,13 @@ impl Press {
             Event::Touch(TouchEvent::Cancel, _) | Event::Cancel => self.disarm(),
             Event::Focus { gained: false, .. } if self.key => self.disarm(),
             Event::Key(key, _) if cx.node() == cx.target() => match key.keysym {
-                SPACE if key.pressed && !key.repeat && enabled && !self.armed() => {
+                SPACE
+                    if keys != Keys::Return
+                        && key.pressed
+                        && !key.repeat
+                        && enabled
+                        && !self.armed() =>
+                {
                     self.key = true;
                     Outcome::Changed
                 }
@@ -164,7 +171,7 @@ impl Press {
                     }
                 }
                 RETURN | KP_ENTER
-                    if keys == Keys::SpaceAndReturn
+                    if keys != Keys::Space
                         && key.pressed
                         && !key.repeat
                         && enabled

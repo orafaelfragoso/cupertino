@@ -32,7 +32,7 @@ impl Text {
 
     /// Laid out within `width` when it wraps, else on one line that ends in an ellipsis past `width`, its lines against
     /// the layout's leading edge; `None` if the fonts cannot shape it.
-    fn laid_out(&self, env: &Environment, width: f64) -> Option<ParagraphLayout> {
+    pub(crate) fn laid_out(&self, env: &Environment, width: f64) -> Option<ParagraphLayout> {
         let style = ParagraphStyle {
             align: match env.direction {
                 LayoutDirection::Ltr => TextAlign::Left,
@@ -48,6 +48,21 @@ impl Text {
         } else {
             look::one_line(&paragraph, width)
         })
+    }
+}
+
+/// Where a layout laid out for a node `width` wide is drawn: against the node's leading edge.
+pub(crate) fn leading_origin(
+    layout: &ParagraphLayout,
+    width: f64,
+    direction: LayoutDirection,
+) -> Point {
+    match direction {
+        LayoutDirection::Ltr => Point::ZERO,
+        LayoutDirection::Rtl => Point::new(
+            width - layout.lines().first().map_or(0.0, |line| line.rect.width()),
+            0.0,
+        ),
     }
 }
 
@@ -104,13 +119,8 @@ impl<M: 'static> Widget<M> for Text {
             (ColorRole::Text, StateVariant::NORMAL)
         };
         let color = cx.env().theme.colors.get(role, variant);
-        let x = match cx.env().direction {
-            LayoutDirection::Ltr => 0.0,
-            LayoutDirection::Rtl => {
-                cx.size().width - layout.lines().first().map_or(0.0, |line| line.rect.width())
-            }
-        };
-        look::glyphs(cx, &layout, Point::new(x, 0.0), color);
+        let origin = leading_origin(&layout, cx.size().width, cx.env().direction);
+        look::glyphs(cx, &layout, origin, color);
     }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {

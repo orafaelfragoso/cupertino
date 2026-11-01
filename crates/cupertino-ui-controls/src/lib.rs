@@ -3,13 +3,16 @@
 
 mod badge;
 mod button;
+mod canvas;
 mod checkbox;
 mod choice;
 mod dialog;
 mod disclosure;
 mod editor;
 mod field;
+mod grid;
 mod icon;
+mod image;
 mod list;
 mod look;
 mod menu;
@@ -18,6 +21,7 @@ mod pages;
 mod popover;
 mod press;
 mod progress;
+mod rich_text;
 mod scroll;
 mod sidebar;
 mod slider;
@@ -42,10 +46,13 @@ pub use stepper::StepperState;
 pub use text_box::TextBoxState;
 pub use tooltip::{TooltipChange, TooltipState};
 
-use cupertino_geometry::{Insets, Point};
-use cupertino_ui_core::{Checked, CommandRegistry, Element, Key, WindowBackground, WindowKey};
-use cupertino_ui_layout::{Align, Axis, ScrollState};
+use cupertino_geometry::{Insets, Point, Size};
+use cupertino_ui_core::{
+    Checked, CommandRegistry, Element, Key, PaintCx, WindowBackground, WindowKey,
+};
+use cupertino_ui_layout::{Align, Axis, ScrollState, Track};
 use cupertino_ui_platform::WindowSpec;
+use cupertino_ui_render::{ImageResource, ResourceId};
 use cupertino_ui_text::{AttributedText, ContentPurpose, SecureBuffer};
 use cupertino_ui_theme::ColorRole;
 use std::ops::Range;
@@ -85,6 +92,73 @@ pub struct Text {
     pub secondary: bool,
     /// On a selected row: drawn in the selected control text colour, whatever `secondary` says.
     pub selected: bool,
+}
+
+/// A link in a [`RichText`]: the bytes of its text and where it leads.
+pub struct TextLink<M> {
+    pub range: Range<usize>,
+    pub url: String,
+    /// Sent when the link is activated by a click, Return or assistive technology.
+    pub on_open: Option<M>,
+}
+
+/// Static text whose links are drawn in the link colour, underlined, and are tab stops in text order.
+pub struct RichText<M> {
+    pub content: AttributedText,
+    pub role: TextRole,
+    pub wrap: bool,
+    pub secondary: bool,
+    pub links: Vec<TextLink<M>>,
+}
+
+/// How an image fills its box.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ImageFit {
+    /// The whole image, as large as fits, centred.
+    #[default]
+    Contain,
+    /// The whole box, cropped to it, centred.
+    Cover,
+}
+
+/// One rendition of an image's pixels; `id` names these pixels for good.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImageSource {
+    pub id: ResourceId,
+    pub image: ImageResource,
+}
+
+/// A raster image drawn from the rendition that best covers its box at the device's scale.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Image {
+    pub sources: Vec<ImageSource>,
+    pub size: Size,
+    pub fit: ImageFit,
+    pub radius: f64,
+    /// `None` marks the image decorative, so accessibility skips it.
+    pub label: Option<String>,
+}
+
+/// Draws itself through `paint`, in node coordinates; `children` are layered over the drawing and are its interactive
+/// parts, with their own semantics.
+pub struct Canvas<M> {
+    /// `None` fills the room offered.
+    pub size: Option<Size>,
+    pub label: String,
+    pub paint: Box<dyn Fn(&mut PaintCx<'_>)>,
+    pub children: Vec<Element<M>>,
+}
+
+/// Lays its children out in tracks, row by row; a child covers more than one cell with [`Element::span`]. Rows past
+/// `rows` are sized to their content.
+pub struct Grid<M> {
+    pub columns: Vec<Track>,
+    pub rows: Vec<Track>,
+    /// Space between the grid's edges and its cells.
+    pub padding: Insets,
+    /// Between columns (`width`) and rows (`height`).
+    pub spacing: Size,
+    pub children: Vec<Element<M>>,
 }
 
 /// Whether an icon's artwork mirrors in right-to-left layouts.

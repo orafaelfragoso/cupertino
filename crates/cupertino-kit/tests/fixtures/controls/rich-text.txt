@@ -1,0 +1,144 @@
+Light Ltr Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 240x56] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1)]
+  NodeId(2v1) role=StaticText name=Some("Read the guide first.") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 123.6904296875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=Link name=Some("guide") description=Some("https://example.org/guide") value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[69.97314453125,12 34.34716796875x15.7294921875] actions=[Click] relations=[] children=[]
+Light Ltr Hover
+  n/a
+Light Ltr Pressed
+  n/a
+Light Ltr Disabled
+  n/a
+Light Ltr Focused
+focus Some(NodeId(3v1))
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 240x56] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1)]
+  NodeId(2v1) role=StaticText name=Some("Read the guide first.") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 123.6904296875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=Link name=Some("guide") description=Some("https://example.org/guide") value=none states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[69.97314453125,12 34.34716796875x15.7294921875] actions=[Click] relations=[] children=[]
+Light Ltr Selected
+  n/a
+Light Rtl Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 240x56] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1)]
+  NodeId(2v1) role=StaticText name=Some("Read the guide first.") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.3095703125,12 123.6904296875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=Link name=Some("guide") description=Some("https://example.org/guide") value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[162.28271484375,12 34.34716796875x15.7294921875] actions=[Click] relations=[] children=[]
+Light Rtl Hover
+  n/a
+Light Rtl Pressed
+  n/a
+Light Rtl Disabled
+  n/a
+Light Rtl Focused
+focus Some(NodeId(3v1))
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 240x56] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1)]
+  NodeId(2v1) role=StaticText name=Some("Read the guide first.") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.3095703125,12 123.6904296875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=Link name=Some("guide") description=Some("https://example.org/guide") value=none states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[162.28271484375,12 34.34716796875x15.7294921875] actions=[Click] relations=[] children=[]
+Light Rtl Selected
+  n/a
+Dark Ltr Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 240x56] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1)]
+  NodeId(2v1) role=StaticText name=Some("Read the guide first.") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 123.6904296875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=Link name=Some("guide") description=Some("https://example.org/guide") value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[69.97314453125,12 34.34716796875x15.7294921875] actions=[Click] relations=[] children=[]
+Dark Ltr Hover
+  n/a
+Dark Ltr Pressed
+  n/a
+Dark Ltr Disabled
+  n/a
+Dark Ltr Focused
+focus Some(NodeId(3v1))
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 240x56] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1)]
+  NodeId(2v1) role=StaticText name=Some("Read the guide first.") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 123.6904296875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=Link name=Some("guide") description=Some("https://example.org/guide") value=none states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[69.97314453125,12 34.34716796875x15.7294921875] actions=[Click] relations=[] children=[]
+Dark Ltr Selected
+  n/a
+Dark Rtl Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 240x56] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1)]
+  NodeId(2v1) role=StaticText name=Some("Read the guide first.") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.3095703125,12 123.6904296875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=Link name=Some("guide") description=Some("https://example.org/guide") value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[162.28271484375,12 34.34716796875x15.7294921875] actions=[Click] relations=[] children=[]
+Dark Rtl Hover
+  n/a
+Dark Rtl Pressed
+  n/a
+Dark Rtl Disabled
+  n/a
+Dark Rtl Focused
+focus Some(NodeId(3v1))
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 240x56] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1)]
+  NodeId(2v1) role=StaticText name=Some("Read the guide first.") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.3095703125,12 123.6904296875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=Link name=Some("guide") description=Some("https://example.org/guide") value=none states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[162.28271484375,12 34.34716796875x15.7294921875] actions=[Click] relations=[] children=[]
+Dark Rtl Selected
+  n/a
+LightHighContrast Ltr Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 240x56] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1)]
+  NodeId(2v1) role=StaticText name=Some("Read the guide first.") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 123.6904296875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=Link name=Some("guide") description=Some("https://example.org/guide") value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[69.97314453125,12 34.34716796875x15.7294921875] actions=[Click] relations=[] children=[]
+LightHighContrast Ltr Hover
+  n/a
+LightHighContrast Ltr Pressed
+  n/a
+LightHighContrast Ltr Disabled
+  n/a
+LightHighContrast Ltr Focused
+focus Some(NodeId(3v1))
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 240x56] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1)]
+  NodeId(2v1) role=StaticText name=Some("Read the guide first.") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 123.6904296875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=Link name=Some("guide") description=Some("https://example.org/guide") value=none states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[69.97314453125,12 34.34716796875x15.7294921875] actions=[Click] relations=[] children=[]
+LightHighContrast Ltr Selected
+  n/a
+LightHighContrast Rtl Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 240x56] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1)]
+  NodeId(2v1) role=StaticText name=Some("Read the guide first.") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.3095703125,12 123.6904296875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=Link name=Some("guide") description=Some("https://example.org/guide") value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[162.28271484375,12 34.34716796875x15.7294921875] actions=[Click] relations=[] children=[]
+LightHighContrast Rtl Hover
+  n/a
+LightHighContrast Rtl Pressed
+  n/a
+LightHighContrast Rtl Disabled
+  n/a
+LightHighContrast Rtl Focused
+focus Some(NodeId(3v1))
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 240x56] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1)]
+  NodeId(2v1) role=StaticText name=Some("Read the guide first.") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.3095703125,12 123.6904296875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=Link name=Some("guide") description=Some("https://example.org/guide") value=none states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[162.28271484375,12 34.34716796875x15.7294921875] actions=[Click] relations=[] children=[]
+LightHighContrast Rtl Selected
+  n/a
+DarkHighContrast Ltr Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 240x56] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1)]
+  NodeId(2v1) role=StaticText name=Some("Read the guide first.") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 123.6904296875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=Link name=Some("guide") description=Some("https://example.org/guide") value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[69.97314453125,12 34.34716796875x15.7294921875] actions=[Click] relations=[] children=[]
+DarkHighContrast Ltr Hover
+  n/a
+DarkHighContrast Ltr Pressed
+  n/a
+DarkHighContrast Ltr Disabled
+  n/a
+DarkHighContrast Ltr Focused
+focus Some(NodeId(3v1))
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 240x56] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1)]
+  NodeId(2v1) role=StaticText name=Some("Read the guide first.") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[12,12 123.6904296875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=Link name=Some("guide") description=Some("https://example.org/guide") value=none states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[69.97314453125,12 34.34716796875x15.7294921875] actions=[Click] relations=[] children=[]
+DarkHighContrast Ltr Selected
+  n/a
+DarkHighContrast Rtl Normal
+focus None
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 240x56] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1)]
+  NodeId(2v1) role=StaticText name=Some("Read the guide first.") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.3095703125,12 123.6904296875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=Link name=Some("guide") description=Some("https://example.org/guide") value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[162.28271484375,12 34.34716796875x15.7294921875] actions=[Click] relations=[] children=[]
+DarkHighContrast Rtl Hover
+  n/a
+DarkHighContrast Rtl Pressed
+  n/a
+DarkHighContrast Rtl Disabled
+  n/a
+DarkHighContrast Rtl Focused
+focus Some(NodeId(3v1))
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 240x56] actions=[] relations=[] children=[NodeId(2v1), NodeId(3v1)]
+  NodeId(2v1) role=StaticText name=Some("Read the guide first.") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[104.3095703125,12 123.6904296875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(3v1) role=Link name=Some("guide") description=Some("https://example.org/guide") value=none states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[162.28271484375,12 34.34716796875x15.7294921875] actions=[Click] relations=[] children=[]
+DarkHighContrast Rtl Selected
+  n/a

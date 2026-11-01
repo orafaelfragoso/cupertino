@@ -55,6 +55,8 @@ use std::sync::Arc;
 pub trait Application: 'static {
     type Model: 'static;
     type Message: Clone + Send + 'static;
+    /// Keeps running with no window open, until [`Command::Exit`].
+    const RESIDENT: bool = false;
 
     fn init() -> (Self::Model, Vec<Command<Self::Message>>);
     fn update(model: &mut Self::Model, message: Self::Message) -> Vec<Command<Self::Message>>;

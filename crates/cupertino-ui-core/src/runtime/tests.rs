@@ -320,6 +320,60 @@ fn a_task_reports_back_as_a_message_and_a_close_request_ends_the_application() {
     assert!(rt.exited());
 }
 
+/// A window while `open`; closing it only hides it.
+struct Resident;
+
+impl Application for Resident {
+    type Model = bool;
+    type Message = String;
+    const RESIDENT: bool = true;
+
+    fn init() -> (bool, Vec<Command<String>>) {
+        (true, Vec::new())
+    }
+
+    fn update(open: &mut bool, message: String) -> Vec<Command<String>> {
+        match message.as_str() {
+            "open" => *open = true,
+            "close" => *open = false,
+            "quit" => return vec![Command::Exit],
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    fn view(open: &bool) -> Vec<Window<String>> {
+        let mut windows = Counter::view(&Model::default());
+        windows[0].on_close = Some("close".into());
+        windows.truncate(usize::from(*open));
+        windows
+    }
+}
+
+#[test]
+fn a_resident_application_outlives_its_last_window_until_it_exits() {
+    let damage = Rc::default();
+    let mut rt = Runtime::<Resident, _>::new(FakeSystem::default(), options(&damage));
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+
+    rt.window_system_mut()
+        .send(window, WindowEvent::CloseRequested);
+    rt.step(steps()).unwrap();
+    assert!(rt.windows().is_empty());
+    assert!(!rt.exited());
+
+    rt.messages.push_back("open".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.windows().len(), 1);
+    assert!(!rt.exited());
+
+    rt.messages.push_back("quit".into());
+    rt.step(steps()).unwrap();
+    assert!(rt.exited());
+}
+
 #[test]
 fn the_snapshot_lists_the_nodes_in_reading_order_with_their_window_rects() {
     let (mut rt, window, _) = start();

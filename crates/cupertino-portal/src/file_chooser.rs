@@ -278,7 +278,12 @@ fn text(what: &str, value: String) -> Result<String, PortalError> {
 /// App text the dialog shows, without control or bidirectional-override characters, so it cannot reorder or hide
 /// what the trusted window says around it.
 fn display_text(what: &str, value: String) -> Result<String, PortalError> {
-    Ok(text(what, value)?
+    Ok(plain(&text(what, value)?))
+}
+
+/// `value` without control or bidirectional-override characters.
+pub(crate) fn plain(value: &str) -> String {
+    value
         .chars()
         .filter(|c| {
             !c.is_control()
@@ -287,7 +292,7 @@ fn display_text(what: &str, value: String) -> Result<String, PortalError> {
                     '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
                 )
         })
-        .collect())
+        .collect()
 }
 
 fn option<T>(options: &Options, key: &str) -> Result<Option<T>, PortalError>

@@ -425,10 +425,12 @@ fn build_line(
     let rtl = base.is_rtl();
     let offset = match (shaped.style.align, rtl) {
         (TextAlign::Center, _) => (container - width) / 2.0,
-        (TextAlign::Start | TextAlign::Justify, false) | (TextAlign::End, true) => 0.0,
-        (TextAlign::Start | TextAlign::Justify, true) | (TextAlign::End, false) => {
-            container - width
-        }
+        (TextAlign::Left, _)
+        | (TextAlign::Start | TextAlign::Justify, false)
+        | (TextAlign::End, true) => 0.0,
+        (TextAlign::Right, _)
+        | (TextAlign::Start | TextAlign::Justify, true)
+        | (TextAlign::End, false) => container - width,
     };
 
     let (start, end) = match (line_clusters.first(), line_clusters.last()) {
@@ -1000,6 +1002,31 @@ mod tests {
         assert_eq!(place(TextAlign::Start), 0.0);
         assert!((place(TextAlign::Center) - (f64::from(width) - natural) / 2.0).abs() < 1e-3);
         assert!((place(TextAlign::End) - (f64::from(width) - natural)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn left_and_right_alignment_hold_in_either_base_direction() {
+        let text = "hi";
+        let width = 200.0;
+        let natural = layout(text, None).size().width;
+        let place = |align, direction| {
+            let style = ParagraphStyle {
+                align,
+                direction: Some(direction),
+                ..ParagraphStyle::default()
+            };
+            layout_with(text, style, Some(width)).lines()[0].runs[0]
+                .origin
+                .x
+        };
+        for direction in [Direction::Ltr, Direction::Rtl] {
+            assert_eq!(place(TextAlign::Left, direction), 0.0, "{direction:?}");
+            let right = place(TextAlign::Right, direction);
+            assert!(
+                (right - (f64::from(width) - natural)).abs() < 1e-3,
+                "{direction:?}"
+            );
+        }
     }
 
     #[test]

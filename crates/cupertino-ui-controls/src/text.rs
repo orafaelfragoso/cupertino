@@ -4,8 +4,10 @@ use cupertino_geometry::Point;
 use cupertino_ui_core::{
     Change, Environment, Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
-use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
-use cupertino_ui_text::{AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, Wrap};
+use cupertino_ui_layout::{Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured};
+use cupertino_ui_text::{
+    AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, Wrap,
+};
 use cupertino_ui_theme::{ColorRole, StateVariant, ThemeTokens};
 
 impl Text {
@@ -28,10 +30,14 @@ impl Text {
         content
     }
 
-    /// Laid out within `width` when it wraps, else on one line that ends in an ellipsis past `width`; `None` if the
-    /// fonts cannot shape it.
+    /// Laid out within `width` when it wraps, else on one line that ends in an ellipsis past `width`, its lines against
+    /// the layout's leading edge; `None` if the fonts cannot shape it.
     fn laid_out(&self, env: &Environment, width: f64) -> Option<ParagraphLayout> {
         let style = ParagraphStyle {
+            align: match env.direction {
+                LayoutDirection::Ltr => TextAlign::Left,
+                LayoutDirection::Rtl => TextAlign::Right,
+            },
             wrap: if self.wrap { Wrap::Word } else { Wrap::None },
             ellipsis: !self.wrap,
             ..ParagraphStyle::default()
@@ -98,7 +104,13 @@ impl<M: 'static> Widget<M> for Text {
             (ColorRole::Text, StateVariant::NORMAL)
         };
         let color = cx.env().theme.colors.get(role, variant);
-        look::glyphs(cx, &layout, Point::ZERO, color);
+        let x = match cx.env().direction {
+            LayoutDirection::Ltr => 0.0,
+            LayoutDirection::Rtl => {
+                cx.size().width - layout.lines().first().map_or(0.0, |line| line.rect.width())
+            }
+        };
+        look::glyphs(cx, &layout, Point::new(x, 0.0), color);
     }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {

@@ -168,6 +168,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | `window` | window layout and painting | `WindowLayout` (toolbar, sidebar, browser, path and status bars), `Bars`, `path_chain`, `path_segments`, `status_text`, `Frame::{hit, reveal, scroll_by}`, `WindowPainter`, `ViewMode`, `metrics` |
 | `udisks` (feature `app`) | removable media | `devices` (the listed file systems of udisks' managed objects), `Volumes::{watch, poll, mount, eject}` → `Report` (`Devices`, `Mounted`, `Done`), `notice` (a failure's notification text) |
 | `notice` (feature `app`) | failures as notifications | `failure`, `unopened`, `bad_name` → `Notice`; `Notices::{start, post}`; `shown`, `escape` |
+| `kit` (feature `app`) | the browser window on CupertinoKit, beside the binary's window until it does all that one does; driven headless through `cupertino-ui-test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, then `run` or a `TestDriver<Files>`: the sidebar's places, the toolbar row (back / forward, title, search), the list as a `TableView` (Name, Date Modified, Size, Kind; sort, selection, open), the path and status bars, the menu bar with the actions it can't do yet disabled, and live folder updates |
 | `app`, `main` (feature `app`) | the binary | toplevel, input, `open` (default application, one activation token per file), asset file icons (`cupertino-icons::document`), inotify wake-ups through the connection's `Waker`, session appearance |
 
 ### Measured defaults

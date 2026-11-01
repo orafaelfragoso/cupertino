@@ -23,6 +23,8 @@ pub mod entry;
 pub mod geom;
 pub mod group;
 pub mod history;
+#[cfg(feature = "app")]
+pub mod kit;
 pub mod layout;
 pub mod menu_bar;
 pub mod menu_spec;

@@ -1,0 +1,85 @@
+init Document { text: "", revision: 0, scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 0.0, height: 0.0 }, viewport: Size { width: 0.0, height: 0.0 } } }
+  Scrolled(ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 320.0 }, viewport: Size { width: 480.0, height: 320.0 } })
+    = Document { text: "", revision: 0, scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 320.0 }, viewport: Size { width: 480.0, height: 320.0 } } }
+> click Str("text")
+> key 'H'
+  Edited(TextChange { text: "H", revision: 1 })
+    = Document { text: "H", revision: 1, scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 320.0 }, viewport: Size { width: 480.0, height: 320.0 } } }
+> key 'e'
+  Edited(TextChange { text: "He", revision: 2 })
+    = Document { text: "He", revision: 2, scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 320.0 }, viewport: Size { width: 480.0, height: 320.0 } } }
+> key 'l'
+  Edited(TextChange { text: "Hel", revision: 3 })
+    = Document { text: "Hel", revision: 3, scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 320.0 }, viewport: Size { width: 480.0, height: 320.0 } } }
+> key 'l'
+  Edited(TextChange { text: "Hell", revision: 4 })
+    = Document { text: "Hell", revision: 4, scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 320.0 }, viewport: Size { width: 480.0, height: 320.0 } } }
+> key 'o'
+  Edited(TextChange { text: "Hello", revision: 5 })
+    = Document { text: "Hello", revision: 5, scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 320.0 }, viewport: Size { width: 480.0, height: 320.0 } } }
+> key Return
+  Edited(TextChange { text: "Hello\n", revision: 6 })
+    = Document { text: "Hello\n", revision: 6, scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 320.0 }, viewport: Size { width: 480.0, height: 320.0 } } }
+> key 'w'
+  Edited(TextChange { text: "Hello\nw", revision: 7 })
+    = Document { text: "Hello\nw", revision: 7, scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 320.0 }, viewport: Size { width: 480.0, height: 320.0 } } }
+> key 'o'
+  Edited(TextChange { text: "Hello\nwo", revision: 8 })
+    = Document { text: "Hello\nwo", revision: 8, scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 320.0 }, viewport: Size { width: 480.0, height: 320.0 } } }
+> key 'r'
+  Edited(TextChange { text: "Hello\nwor", revision: 9 })
+    = Document { text: "Hello\nwor", revision: 9, scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 320.0 }, viewport: Size { width: 480.0, height: 320.0 } } }
+> key 'l'
+  Edited(TextChange { text: "Hello\nworl", revision: 10 })
+    = Document { text: "Hello\nworl", revision: 10, scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 320.0 }, viewport: Size { width: 480.0, height: 320.0 } } }
+> key 'd'
+  Edited(TextChange { text: "Hello\nworld", revision: 11 })
+    = Document { text: "Hello\nworld", revision: 11, scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 320.0 }, viewport: Size { width: 480.0, height: 320.0 } } }
+> key Left Mods(Shift)
+> key Left Mods(Shift)
+> key Left Mods(Shift)
+> key Left Mods(Shift)
+> key Left Mods(Shift)
+> key 't'
+  Edited(TextChange { text: "Hello\nt", revision: 12 })
+    = Document { text: "Hello\nt", revision: 12, scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 320.0 }, viewport: Size { width: 480.0, height: 320.0 } } }
+> key 'h'
+  Edited(TextChange { text: "Hello\nth", revision: 13 })
+    = Document { text: "Hello\nth", revision: 13, scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 320.0 }, viewport: Size { width: 480.0, height: 320.0 } } }
+> key 'e'
+  Edited(TextChange { text: "Hello\nthe", revision: 14 })
+    = Document { text: "Hello\nthe", revision: 14, scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 320.0 }, viewport: Size { width: 480.0, height: 320.0 } } }
+> key 'r'
+  Edited(TextChange { text: "Hello\nther", revision: 15 })
+    = Document { text: "Hello\nther", revision: 15, scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 320.0 }, viewport: Size { width: 480.0, height: 320.0 } } }
+> key 'e'
+  Edited(TextChange { text: "Hello\nthere", revision: 16 })
+    = Document { text: "Hello\nthere", revision: 16, scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 320.0 }, viewport: Size { width: 480.0, height: 320.0 } } }
+> key 'z' Mods(Primary)
+  Edited(TextChange { text: "Hello\nworld", revision: 17 })
+    = Document { text: "Hello\nworld", revision: 17, scroll: ScrollState { offset: Point { x: 0.0, y: 0.0 }, content: Size { width: 480.0, height: 320.0 }, viewport: Size { width: 480.0, height: 320.0 } } }
+
+window 1
+pending messages=0 tasks=0 frames=0 animating=false next_wake=Some(500000000)
+focus Some(NodeId(2v1))
+pointer_capture None
+text_input Some(NodeId(2v1))
+layout
+  NodeId(0v1) cupertino_ui_controls::scroll::Frame<examples::editor::Message> key=None parent=None children=[NodeId(1v1), NodeId(3v1)] rect=[0,0 480x320] clip=[none]
+  NodeId(1v1) cupertino_ui_controls::scroll::Viewport<examples::editor::Message> key=None parent=Some(NodeId(0v1)) children=[NodeId(2v1)] rect=[0,0 480x320] clip=[none]
+  NodeId(2v1) cupertino_ui_controls::TextEditor<examples::editor::Message> key=Some(Str("text")) parent=Some(NodeId(1v1)) children=[] rect=[0,0 480x320] clip=[0,0 480x320]
+  NodeId(3v1) cupertino_ui_controls::scroll::Bar<examples::editor::Message> key=None parent=Some(NodeId(0v1)) children=[] rect=[464,0 16x320] clip=[none]
+semantics
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 480x320] actions=[] relations=[] children=[NodeId(1v1)]
+  NodeId(1v1) role=ScrollView name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 480x320] actions=[] relations=[] children=[NodeId(2v1)]
+  NodeId(2v1) role=MultilineTextInput name=Some("Document") description=None value=Text { value: "Hello\nworld", editing: Some(TextSemantics { caret: 6, selection: 6..11 }) } states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 480x320] actions=[Focus, SetValue, SetSelection] relations=[] children=[]
+display
+  paint 4294967296 parent=None revision=1 bounds=[0,0 480x320] hit=[0,0 480x320] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    Fill { shape: Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 480.0, height: 320.0 } }), paint: Solid(Color { r: 0.9254902, g: 0.9254902, b: 0.9254902, a: 1.0 }) }
+  paint 4294967297 parent=Some(4294967296) revision=2 bounds=[0,0 480x320] hit=[0,0 480x320] clip=Some(Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 480.0, height: 320.0 } })) transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+  paint 4294967298 parent=Some(4294967297) revision=50 bounds=[0,0 480x320] hit=[0,0 480x320] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    Fill { shape: Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 480.0, height: 320.0 } }), paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
+    Glyphs origin=6,18.59375 font=FontId(0) size=13 count=5 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
+    Fill { shape: Rect(Rect { origin: Point { x: 6.0, y: 21.7294921875 }, size: Size { width: 34.404296875, height: 15.7294921875 } }), paint: Solid(Color { r: 0.6509804, g: 0.81960785, b: 1.0, a: 1.0 }) }
+    Glyphs origin=6,34.3232421875 font=FontId(0) size=13 count=5 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
+  paint 4294967299 parent=Some(4294967296) revision=4 bounds=[464,0 16x320] hit=[464,0 16x320] clip=None transform=[1.0, 0.0, 0.0, 1.0, 464.0, 0.0]

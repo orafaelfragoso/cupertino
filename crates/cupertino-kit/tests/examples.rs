@@ -3,6 +3,8 @@
 
 #[path = "../examples/apps/counter.rs"]
 mod counter;
+#[path = "../examples/apps/editor.rs"]
+mod editor;
 #[path = "../examples/apps/forms.rs"]
 mod forms;
 #[path = "../examples/apps/virtual-list.rs"]
@@ -14,7 +16,7 @@ use cupertino_kit::core::{Key, Role};
 use cupertino_kit::geometry::Point;
 use cupertino_kit::platform::Mods;
 use cupertino_kit::theme::ThemeTokens;
-use support::{Run, Traced, DOWN, END, PAGE_UP, RETURN, SPACE, TAB};
+use support::{Run, Traced, DOWN, END, LEFT, PAGE_UP, RETURN, SPACE, TAB};
 use virtual_list::{VirtualList, ROW_HEIGHT};
 
 #[test]
@@ -60,6 +62,28 @@ fn the_counter_golden_fails_when_two_inputs_swap_places() {
         run.compare("counter").unwrap_err(),
         "line 2:\n  expected: > click Str(\"more\")\n  actual:   > key Tab"
     );
+}
+
+/// Points `CUPERTINO_SPEC_DIR` at an empty directory, as the neutral Counter test does.
+#[test]
+fn the_editor_types_selects_and_undoes() {
+    let empty = tempfile::tempdir().unwrap();
+    std::env::set_var(cupertino_theme::SPEC_DIR_ENV, empty.path());
+    let neutral = ThemeTokens::neutral(cupertino_kit::app::start_preferences(None)).unwrap();
+
+    let mut run = Run::<Traced<editor::Editor>>::with_theme(neutral);
+    run.click("text");
+    run.type_text("Hello");
+    run.key(RETURN, None);
+    run.type_text("world");
+    for _ in 0.."world".len() {
+        run.chord(LEFT, None, Mods::SHIFT);
+    }
+    run.type_text("there");
+    assert_eq!(run.model().text, "Hello\nthere");
+    run.chord(u32::from('z'), Some('z'), Mods::PRIMARY);
+    assert_eq!(run.model().text, "Hello\nworld");
+    run.golden("editor");
 }
 
 #[test]

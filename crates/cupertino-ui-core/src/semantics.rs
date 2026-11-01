@@ -213,6 +213,36 @@ fn join(own: Option<String>, given: String) -> String {
     }
 }
 
+/// What the node declares now, rather than at the last semantics pass.
+fn current<M: 'static>(tree: &Tree<M>, id: NodeId) -> Semantics {
+    let mut semantics = Semantics::default();
+    if let Some(node) = tree.get(id) {
+        node.widget.semantics(
+            &*node.state,
+            &mut SemanticsCx {
+                node: id,
+                size: Size::ZERO,
+                direction: LayoutDirection::Ltr,
+                semantics: &mut semantics,
+            },
+        );
+    }
+    semantics
+}
+
+/// Whether the node is composing text, which Escape cancels before it dismisses anything.
+pub(crate) fn composing<M: 'static>(tree: &Tree<M>, id: NodeId) -> bool {
+    current(tree, id).composing
+}
+
+/// The nodes under `root` that are dismissible now, in reading order.
+pub(crate) fn dismissible<M: 'static>(tree: &Tree<M>, root: NodeId) -> Vec<NodeId> {
+    tree.preorder(root)
+        .into_iter()
+        .filter(|&id| current(tree, id).dismissible)
+        .collect()
+}
+
 /// The nodes that are new or changed in `next`, and those gone since `prev`.
 pub(crate) fn diff(
     prev: &BTreeMap<NodeId, AccessibilityNode>,

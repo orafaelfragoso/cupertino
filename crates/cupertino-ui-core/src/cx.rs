@@ -353,6 +353,8 @@ pub(crate) struct Semantics {
     pub(crate) roving_group: bool,
     pub(crate) roving_item: bool,
     pub(crate) focus_fallback: bool,
+    pub(crate) dismissible: bool,
+    pub(crate) composing: bool,
     pub(crate) bounds: Option<Rect>,
     pub(crate) content_description: Option<String>,
 }
@@ -473,6 +475,18 @@ impl SemanticsCx<'_> {
     /// Makes the node a Tab stop only when no node under it is one, such as a scroll view around long text.
     pub fn focus_fallback(&mut self) {
         self.semantics.focus_fallback = true;
+    }
+
+    /// While declared, Escape comes to this node first, as [`Event::Dismiss`](crate::Event::Dismiss), before the focus
+    /// path hears it: a tip that shows while the focus is elsewhere.
+    pub fn dismissible(&mut self) {
+        self.semantics.dismissible = true;
+    }
+
+    /// Marks text an input method or a dead key is still composing here; Escape then goes to this node first, to
+    /// cancel it, and dismisses nothing.
+    pub fn composing(&mut self) {
+        self.semantics.composing = true;
     }
 
     /// Describes the first node with a role under this one, in reading order, after that node's own description: a

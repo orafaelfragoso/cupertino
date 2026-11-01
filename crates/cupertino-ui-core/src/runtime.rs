@@ -1498,6 +1498,18 @@ fn place<M: 'static>(
             PopupEdge::BottomRight,
             *offset,
         ),
+        PopupAnchor::Over { key, offset } if rtl => (
+            rect_of(key)?,
+            PopupEdge::Right,
+            PopupEdge::BottomLeft,
+            Point::new(-offset.x, offset.y),
+        ),
+        PopupAnchor::Over { key, offset } => (
+            rect_of(key)?,
+            PopupEdge::Left,
+            PopupEdge::BottomRight,
+            *offset,
+        ),
     };
     Some(PopupSpec {
         anchor_rect,
@@ -1507,7 +1519,7 @@ fn place<M: 'static>(
         size,
         constraint: ConstraintAdjust {
             slide: true,
-            flip: true,
+            flip: !matches!(anchor, PopupAnchor::Over { .. }),
             resize: false,
         },
         reactive: true,

@@ -17,7 +17,7 @@ use cupertino_ui_layout::{
 };
 use cupertino_ui_platform::{DecorationMode, Keysym, Mods, MouseButton, PointerEvent, WindowSpec};
 use cupertino_ui_render::{Paint, PaintOp, Sampling, Shape};
-use cupertino_ui_theme::{Color, ColorRole, StateVariant};
+use cupertino_ui_theme::{Color, ColorRole, StateVariant, Surface};
 use std::rc::Rc;
 
 const LEFT: Keysym = Keysym(0xff51);
@@ -59,6 +59,8 @@ const MAX: Size = Size {
 };
 /// Between a pop-up button's label and its chevrons.
 const CHEVRONS_GAP: f64 = 6.0;
+/// Between a pop-up button's sides and its label or chevrons; its menu lines its rows' labels up with the label.
+const LABEL_INSET: f64 = 10.0;
 
 /// The key of the window of the submenu `depth` levels below the menu in `key`.
 fn level_key(key: &WindowKey, depth: usize) -> WindowKey {
@@ -89,6 +91,22 @@ impl<M: Clone + 'static> Menu<M> {
         let mut anchor = match anchor {
             MenuAnchor::Below(key) => PopupAnchor::Below { key, gap: GAP },
             MenuAnchor::At(point) => PopupAnchor::At(point),
+            MenuAnchor::Over(key) => {
+                let above: f64 = items[..current.unwrap_or(0).min(items.len())]
+                    .iter()
+                    .map(|item| match item {
+                        MenuItem::Separator => SEPARATOR_HEIGHT,
+                        _ => ROW_HEIGHT,
+                    })
+                    .sum();
+                PopupAnchor::Over {
+                    key,
+                    offset: Point::new(
+                        LABEL_INSET - PADDING_X - MARK_COLUMN,
+                        -(PADDING_Y + above + ROW_HEIGHT / 2.0),
+                    ),
+                }
+            }
         };
         let mut label = label;
         let mut windows = Vec::new();
@@ -134,7 +152,10 @@ impl<M: Clone + 'static> Menu<M> {
                 },
                 shortcuts: CommandRegistry::new(),
                 on_close: None,
-                background: WindowBackground::None,
+                background: WindowBackground::Surface {
+                    surface: Surface::Menu,
+                    radius: PANEL_RADIUS,
+                },
                 content: Element::new(panel),
                 popup: Some(Popup {
                     parent,
@@ -331,15 +352,12 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
         }
     }
 
+    /// The window paints the material or the opaque fill under it; the panel adds its edge.
     fn paint(&self, _: &bool, cx: &mut PaintCx<'_>) {
         let size = cx.size();
         let theme = &cx.env().theme;
-        let fill = theme
-            .colors
-            .get(ColorRole::WindowBackground, StateVariant::NORMAL);
         let edge = theme.colors.get(ColorRole::Separator, StateVariant::NORMAL);
         let rect = Rect::new(0.0, 0.0, size.width, size.height);
-        look::fill(cx, rect, PANEL_RADIUS, fill);
         look::stroke(
             cx,
             rect.inset(Insets::uniform(EDGE / 2.0)),
@@ -771,8 +789,8 @@ impl<M: Clone + 'static> Widget<M> for ContextMenu<M> {
 }
 
 impl<M: Clone + 'static> PopUpButton<M> {
-    /// The menu of the options below the button, which has the key `anchor` in `parent`: choosing one sends
-    /// `on_select` with its index, and the menu closes with `on_close`.
+    /// The menu of the options over the button, which has the key `anchor` in `parent`, the chosen one's label on the
+    /// button's: choosing one sends `on_select` with its index, and the menu closes with `on_close`.
     pub fn menu(
         &self,
         parent: WindowKey,
@@ -794,7 +812,7 @@ impl<M: Clone + 'static> PopUpButton<M> {
         let close = on_close.clone();
         Menu {
             parent,
-            anchor: MenuAnchor::Below(anchor),
+            anchor: MenuAnchor::Over(anchor),
             label: self.label.clone(),
             items,
             current: Some(self.selected),
@@ -844,7 +862,7 @@ impl<M: Clone + 'static> Widget<M> for PopUpButton<M> {
             .map(|l| l.size().width)
             .fold(0.0, f64::max);
         let height = look::metric(Control::PopUpButton, &env.theme);
-        let width = metrics.button_inset + widest + CHEVRONS_GAP + SYMBOL + metrics.button_inset;
+        let width = LABEL_INSET + widest + CHEVRONS_GAP + SYMBOL + LABEL_INSET;
         Measured {
             size: Size::new(
                 width.max(metrics.min_target.width),
@@ -912,7 +930,7 @@ impl<M: Clone + 'static> Widget<M> for PopUpButton<M> {
             look::color(theme, ColorRole::ControlBorder, &state),
         );
         let text = look::color(theme, ColorRole::ControlText, &state);
-        let inset = theme.metrics.button_inset;
+        let inset = LABEL_INSET;
         let rtl = env.direction == LayoutDirection::Rtl;
         if let Some(label) = look::label(&env, self.chosen()) {
             let width = label.size().width;

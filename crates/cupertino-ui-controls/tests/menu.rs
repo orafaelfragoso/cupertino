@@ -491,7 +491,7 @@ fn assistive_technology_reads_a_menu_of_items_and_clicks_one() {
 }
 
 #[test]
-fn a_pop_up_button_opens_its_options_below_itself_with_the_chosen_one_checked() {
+fn a_pop_up_button_opens_its_options_over_itself_with_the_chosen_one_checked_on_its_label() {
     let mut h = Harness::<Editor>::assistive();
     let button = h.rect("size");
     h.tap(TAB);
@@ -500,10 +500,16 @@ fn a_pop_up_button_opens_its_options_below_itself_with_the_chosen_one_checked() 
     let id = popup(&h, "sizes").expect("open");
     let placed = h.rt.window_system().placement(id).unwrap().unwrap().clone();
     assert_eq!(placed.anchor_rect, button);
+    // the button's label is 10 pt in, a row's 10 + 18; the chosen first row's middle is 5 + 11 down
     assert_eq!(
-        (placed.anchor, placed.offset),
-        (PopupEdge::Bottom, Point::new(0.0, 4.0))
+        (placed.anchor, placed.gravity, placed.offset),
+        (
+            PopupEdge::Left,
+            PopupEdge::BottomRight,
+            Point::new(-18.0, -16.0)
+        )
     );
+    assert!(!placed.constraint.flip, "it slides to fit and never flips");
     let main = enter(&mut h, "sizes");
     let checked: Vec<_> = (0..3)
         .map(|i| semantic(&h, row(&h, i)).value == Some(AccessibleValue::Toggle(Checked::True)))
@@ -523,10 +529,34 @@ fn a_pop_up_button_opens_its_options_below_itself_with_the_chosen_one_checked() 
     h.send(WindowEvent::PopupDone);
     h.click(h.center("size"));
     assert_eq!(h.model().menu, Some(Open::Sizes), "and a click");
+    let id = popup(&h, "sizes").expect("open");
+    let placed = h.rt.window_system().placement(id).unwrap().unwrap();
+    assert_eq!(
+        placed.offset,
+        Point::new(-18.0, -60.0),
+        "Large, the third row, is over the button"
+    );
     enter(&mut h, "sizes");
     assert!(on_row(&h, 2), "on the chosen option");
     assert!(
         highlighted(&h, 2),
         "highlighted although the pointer opened it"
+    );
+}
+
+#[test]
+fn in_right_to_left_a_pop_up_buttons_menu_lines_up_with_its_right_edge() {
+    let mut h = Harness::<Editor>::with_direction(LayoutDirection::Rtl);
+    h.tap(TAB);
+    h.tap(SPACE);
+    let id = popup(&h, "sizes").expect("open");
+    let placed = h.rt.window_system().placement(id).unwrap().unwrap();
+    assert_eq!(
+        (placed.anchor, placed.gravity, placed.offset),
+        (
+            PopupEdge::Right,
+            PopupEdge::BottomLeft,
+            Point::new(18.0, -16.0)
+        )
     );
 }

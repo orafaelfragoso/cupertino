@@ -24,6 +24,7 @@ mod stepper;
 mod tabs;
 mod text;
 mod toggle;
+mod tooltip;
 
 pub use editor::EditorState;
 pub use field::{FieldState, SecureState};
@@ -263,6 +264,19 @@ pub struct Toggle<M> {
     pub on: bool,
     pub enabled: bool,
     pub on_toggle: Option<Handler<bool, M>>,
+}
+
+/// A short tip for its anchor: asked for after the pointer rests on the anchor, and dismissed by a press, Escape or
+/// the pointer leaving. The text is the anchor's description to assistive technology whether the tip shows or not. Key
+/// the element, and declare [`Tooltip::window`] with the other windows while `shown`.
+pub struct Tooltip<M> {
+    pub text: String,
+    pub anchor: Element<M>,
+    pub shown: bool,
+    /// Sent when the pointer has rested on the anchor for the hover delay.
+    pub on_show: M,
+    /// Sent while shown, on a press, Escape, or the pointer leaving the anchor.
+    pub on_hide: M,
 }
 
 /// A field's text after an edit, with the revision the field gave it.

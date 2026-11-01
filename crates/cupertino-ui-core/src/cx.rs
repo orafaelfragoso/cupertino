@@ -344,6 +344,8 @@ pub(crate) struct Semantics {
     pub(crate) keyed_relations: Vec<KeyedRelation>,
     pub(crate) focusable: bool,
     pub(crate) focus_scope: bool,
+    pub(crate) initial_focus: bool,
+    pub(crate) hidden: bool,
     pub(crate) protected: bool,
     pub(crate) live: Option<Live>,
     pub(crate) item_count: Option<usize>,
@@ -426,6 +428,18 @@ impl SemanticsCx<'_> {
     /// popovers, menus).
     pub fn focus_scope(&mut self) {
         self.semantics.focus_scope = true;
+    }
+
+    /// Makes the node, or its first Tab stop, the one its focus scope gives the focus to when it opens, in place of the
+    /// scope's first Tab stop. The first such stop in reading order wins.
+    pub fn initial_focus(&mut self) {
+        self.semantics.initial_focus = true;
+    }
+
+    /// Leaves the node and everything under it out of the accessibility tree and the Tab order, such as the content
+    /// behind a modal sheet.
+    pub fn hidden(&mut self) {
+        self.semantics.hidden = true;
     }
 
     /// Makes the node a group whose items share one Tab stop and move the focus among themselves with

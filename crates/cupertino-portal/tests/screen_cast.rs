@@ -473,3 +473,29 @@ fn the_properties_name_the_served_types_and_modes_and_version_5() {
     assert_eq!(get("AvailableCursorModes"), 3);
     assert_eq!(get("version"), 5);
 }
+
+#[test]
+fn the_portal_file_and_the_portals_conf_name_the_screen_cast() {
+    let file = include_str!("../data/cupertino.portal");
+    let interfaces = file
+        .lines()
+        .find_map(|l| l.strip_prefix("Interfaces="))
+        .unwrap();
+    assert!(interfaces.split(';').any(|i| i == INTERFACE));
+    for conf in [
+        include_str!("../data/cupertino-portals.conf"),
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packaging/files/usr/share/xdg-desktop-portal/cupertino-portals.conf"
+        )),
+    ] {
+        let backends = conf
+            .lines()
+            .find_map(|l| l.strip_prefix(INTERFACE)?.strip_prefix('='))
+            .unwrap();
+        assert_eq!(
+            backends.split(';').next(),
+            Some(BUS_NAME.rsplit('.').next().unwrap())
+        );
+    }
+}

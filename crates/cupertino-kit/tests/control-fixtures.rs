@@ -16,8 +16,8 @@ use cupertino_kit::controls::{
     DialogButton, DialogKind, DisclosureButton, DisclosureStyle, Icon, IconDirection, ListView,
     Menu, MenuAnchor, MenuItem, Modal, NavigationStack, PageDots, PopUpButton, Progress,
     RadioGroup, ScrollView, Scroller, SecureField, SegmentedControl, Selection, Separator, Slider,
-    SliderStyle, SortOrder, SplitLayout, SplitView, Stack, Stepper, TableView, Text, TextField,
-    TextRole, Toggle,
+    SliderStyle, SortOrder, SplitLayout, SplitView, Stack, Stepper, TableView, Text, TextBox,
+    TextEditor, TextField, TextRole, Toggle,
 };
 use cupertino_kit::controls::{Sidebar, SidebarItem, SidebarSection};
 use cupertino_kit::core::{
@@ -539,6 +539,21 @@ fixtures! {
         selection: None,
         initial: false,
     });
+    text_box: "text-box", TALL, FIELD, |look| TextBox {
+        editor: Element::new(TextEditor {
+            label: "Notes".into(),
+            placeholder: String::new(),
+            value: "One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight".into(),
+            revision: 0,
+            enabled: look.enabled,
+            bordered: true,
+            on_change: Some(Box::new(|_| Message::Nothing)),
+        }),
+        enabled: look.enabled,
+        state: look.scroll,
+        scroller: Scroller::Always,
+        on_scroll: Box::new(Message::Scroll),
+    }.into();
     secure_field: "secure-field", WIDE, FIELD, |look| Element::new(SecureField {
         label: "Password".into(),
         placeholder: "Required".into(),

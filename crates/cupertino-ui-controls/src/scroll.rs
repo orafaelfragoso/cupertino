@@ -68,9 +68,21 @@ impl<M: 'static> From<ScrollView<M>> for Element<M> {
 pub(crate) fn frame<M: 'static>(
     content: Element<M>,
     state: ScrollState,
+    axes: (bool, bool),
+    scroller: Scroller,
+    on_scroll: ScrollHandler<M>,
+) -> Element<M> {
+    tracked(content, state, axes, scroller, on_scroll, true)
+}
+
+/// As [`frame`], with the bars' tracks disabled, as a disabled text box shows them, unless `enabled`.
+pub(crate) fn tracked<M: 'static>(
+    content: Element<M>,
+    state: ScrollState,
     (horizontal, vertical): (bool, bool),
     scroller: Scroller,
     on_scroll: ScrollHandler<M>,
+    enabled: bool,
 ) -> Element<M> {
     let viewport = Element::new(Viewport {
         content: Some(content),
@@ -87,6 +99,7 @@ pub(crate) fn frame<M: 'static>(
             state,
             fit: false,
             on_scroll: on_scroll.clone(),
+            enabled,
         })
     };
     let bars: Vec<Element<M>> = [(vertical, Axis::Vertical), (horizontal, Axis::Horizontal)]
@@ -149,6 +162,7 @@ pub(crate) fn fitted<M: 'static>(
                 state,
                 fit: true,
                 on_scroll,
+                enabled: true,
             }),
         ],
     })
@@ -588,6 +602,7 @@ struct Bar<M> {
     /// Covers the whole frame, so it does not size it, and draws and takes the pointer only in its strip.
     fit: bool,
     on_scroll: ScrollHandler<M>,
+    enabled: bool,
 }
 
 /// The node state of a scroll bar. Opaque.
@@ -761,7 +776,10 @@ impl<M: 'static> Widget<M> for Bar<M> {
         }
         if self.fit != old.fit {
             Change::Layout
-        } else if self.state != old.state || self.scroller != old.scroller {
+        } else if self.state != old.state
+            || self.scroller != old.scroller
+            || self.enabled != old.enabled
+        {
             Change::Paint
         } else {
             Change::None
@@ -879,7 +897,14 @@ impl<M: 'static> Widget<M> for Bar<M> {
                     cx,
                     self.strip(size, rtl),
                     0.0,
-                    look::color(&theme, ColorRole::ControlFill, &normal),
+                    look::color(
+                        &theme,
+                        ColorRole::ControlFill,
+                        &ControlState {
+                            enabled: self.enabled,
+                            ..normal
+                        },
+                    ),
                 );
                 1.0
             }

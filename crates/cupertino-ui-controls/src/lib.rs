@@ -16,6 +16,7 @@ mod image;
 mod list;
 mod look;
 mod menu;
+mod module;
 mod navigation;
 mod pages;
 mod popover;
@@ -226,6 +227,9 @@ pub enum SliderStyle {
     Regular,
     /// A wide track filled up to the knob, as a volume or brightness level.
     Level,
+    /// A panel's [`SliderStyle::Level`]: fill and knob in the switch thumb's neutral colour, with a system symbol inside
+    /// the track's minimum end, as a control centre's brightness.
+    PanelLevel(&'static str),
 }
 
 /// A value in `min..=max`, set by dragging or the arrow keys; it takes the whole width it is offered.
@@ -346,6 +350,47 @@ pub struct Toggle<M> {
     pub on: bool,
     pub enabled: bool,
     pub on_toggle: Option<Handler<bool, M>>,
+}
+
+/// How a [`ModuleToggle`] sets out its symbol and text.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ModuleLayout {
+    /// A round button with the symbol, then the title over the caption; 40 pt high, as wide as it is offered.
+    #[default]
+    Row,
+    /// The symbol over the title, centred, filling a square module; the caption is only its description.
+    Compact,
+}
+
+/// The switch of one module of a panel, as Wi-Fi in a control centre: a system symbol on a round button that the accent
+/// fills while on, with the title and caption beside it. The whole module is the target; Space toggles.
+pub struct ModuleToggle<M> {
+    pub label: String,
+    /// What the module is on, such as a network's name, or its state.
+    pub caption: String,
+    /// A system symbol name.
+    pub symbol: String,
+    pub layout: ModuleLayout,
+    pub on: bool,
+    pub enabled: bool,
+    pub on_toggle: Option<Handler<bool, M>>,
+}
+
+/// A group of controls set off on a rounded fill, as a module of a panel; not a Tab stop. The label names the group to
+/// assistive technology. Build its element with `Element::from`.
+pub struct Tile<M> {
+    pub label: String,
+    pub content: Element<M>,
+}
+
+/// A battery's charge: a battery outline filled to `level` from its leading end, red below a tenth. Not a Tab stop.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BatteryMeter {
+    /// The accessible name.
+    pub label: String,
+    /// From 0 to 1.
+    pub level: f64,
+    pub charging: bool,
 }
 
 /// A short tip for its anchor: shown after the pointer rests on the anchor or the keyboard focus comes to it, and

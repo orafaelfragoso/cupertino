@@ -19,6 +19,7 @@ use cupertino_kit::controls::{
     SliderStyle, SortOrder, SplitLayout, SplitView, Stack, Stepper, TableView, Text, TextBox,
     TextEditor, TextField, TextRole, Toggle,
 };
+use cupertino_kit::controls::{BatteryMeter, ModuleLayout, ModuleToggle, Tile};
 use cupertino_kit::controls::{Canvas, Grid, Image, ImageFit, ImageSource, RichText, TextLink};
 use cupertino_kit::controls::{Popover, TreeItem, TreeView};
 use cupertino_kit::controls::{Sidebar, SidebarItem, SidebarSection};
@@ -381,6 +382,8 @@ const WIDE: Size = Size::new(240.0, 56.0);
 const TALL: Size = Size::new(200.0, 112.0);
 const SIDEBAR: Size = Size::new(200.0, 220.0);
 const SHEET: Size = Size::new(400.0, 220.0);
+/// A compact module of a panel, 62 pt square inside the cell padding.
+const MODULE: Size = Size::new(86.0, 86.0);
 
 fn choice(label: &str, action: DialogAction) -> DialogButton<Message> {
     DialogButton {
@@ -453,6 +456,37 @@ fixtures! {
         enabled: look.enabled,
         on_toggle: Some(Box::new(|_| Message::Nothing)),
     });
+    module_toggle: "module-toggle", CONTROL, ALL, |look| Element::new(ModuleToggle {
+        label: "Wi-Fi".into(),
+        caption: "Home Network".into(),
+        symbol: "symbol.wifi".into(),
+        layout: ModuleLayout::Row,
+        on: look.selected,
+        enabled: look.enabled,
+        on_toggle: Some(Box::new(|_| Message::Nothing)),
+    });
+    module_tile: "module-tile", MODULE, ALL, |look| Element::from(Tile {
+        label: "Stage".into(),
+        content: Element::new(ModuleToggle {
+            label: "Stage".into(),
+            caption: "Off".into(),
+            symbol: "symbol.stage".into(),
+            layout: ModuleLayout::Compact,
+            on: look.selected,
+            enabled: look.enabled,
+            on_toggle: Some(Box::new(|_| Message::Nothing)),
+        }),
+    });
+    battery: "battery", CONTROL, &[State::Normal], |_| Element::new(BatteryMeter {
+        label: "Battery".into(),
+        level: 0.8,
+        charging: false,
+    });
+    battery_low: "battery-low", CONTROL, &[State::Normal], |_| Element::new(BatteryMeter {
+        label: "Battery".into(),
+        level: 0.08,
+        charging: false,
+    });
     // the tip's popup content, drawn in a cell of its own
     tooltip: "tooltip", CONTROL, &[State::Normal], |_| cupertino_kit::controls::Tooltip {
         text: "Move to the bin".into(),
@@ -491,6 +525,17 @@ fixtures! {
         max: 1.0,
         step: None,
         style: SliderStyle::Level,
+        ticks: 0,
+        enabled: look.enabled,
+        on_change: Some(Box::new(|_| Message::Nothing)),
+    });
+    slider_panel_level: "slider-panel-level", WIDE, INTERACTIVE, |look| Element::new(Slider {
+        label: "Display".into(),
+        value: 0.4,
+        min: 0.0,
+        max: 1.0,
+        step: None,
+        style: SliderStyle::PanelLevel("symbol.sun"),
         ticks: 0,
         enabled: look.enabled,
         on_change: Some(Box::new(|_| Message::Nothing)),

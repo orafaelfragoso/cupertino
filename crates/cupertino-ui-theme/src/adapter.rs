@@ -57,6 +57,8 @@ pub(crate) const LIGHT: Palette<Source> = Palette {
         (DialogScrim, Rgba([0, 0, 0, 51])),
         (Link, Token("link")),
         (PageDot, Rgba([0, 0, 0, 51])),
+        (GroupFill, Token("secondary-system-fill")),
+        (SwitchThumbGlyph, Rgba([115, 115, 115, 255])),
     ],
     states: StateColors {
         emphasized_border: Rgba([0, 0, 0, 96]),
@@ -110,6 +112,8 @@ pub(crate) const DARK: Palette<Source> = Palette {
         (DialogScrim, Rgba([0, 0, 0, 102])),
         (Link, Token("link")),
         (PageDot, Rgba([255, 255, 255, 51])),
+        (GroupFill, Token("secondary-system-fill")),
+        (SwitchThumbGlyph, Rgba([115, 115, 115, 255])),
     ],
     states: StateColors {
         emphasized_border: Rgba([255, 255, 255, 96]),

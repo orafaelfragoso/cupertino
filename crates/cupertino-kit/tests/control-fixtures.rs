@@ -406,9 +406,8 @@ fixtures! {
     tooltip: "tooltip", CONTROL, &[State::Normal], |_| cupertino_kit::controls::Tooltip {
         text: "Move to the bin".into(),
         anchor: body("Trash"),
-        shown: true,
-        on_show: Message::Nothing,
-        on_hide: Message::Nothing,
+        state: cupertino_kit::controls::TooltipState::default(),
+        on_change: Box::new(|_| Message::Nothing),
     }
     .window(WindowKey("tip".into()), WindowKey("fixture".into()), "control".into())
     .content;

@@ -127,6 +127,10 @@ pub enum PopupAnchor {
     /// Beside the parent's node with this key, on its trailing side with their tops aligned (`offset` moves it toward
     /// the trailing side and down), flipping to the leading side when there is no room: a submenu.
     Beside { key: Key, offset: Point },
+    /// Over the parent's node with this key: its top-leading corner at the middle of the node's leading edge, moved by
+    /// `offset` (`x` toward the trailing side), sliding to fit and never flipping: a pop-up button's menu, its chosen
+    /// item over the button.
+    Over { key: Key, offset: Point },
 }
 
 /// What a window paints under its content.

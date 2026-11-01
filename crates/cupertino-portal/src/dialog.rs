@@ -632,7 +632,7 @@ fn sidebar(d: &Dialog, places: &[Place]) -> Element<Message> {
         scroll: d.places_scroll,
         selection,
         multiple: false,
-        initial_focus: false,
+        initial: false,
         row: Box::new(move |i, selected| row(rows[i].0, rows[i].1.clone(), selected)),
         key: Some(Box::new(move |i| Key::from(keys[i]))),
         type_select: Some(Box::new(move |i| names[i].clone())),
@@ -669,7 +669,7 @@ fn files(d: &Dialog) -> Element<Message> {
         scroll: d.scroll,
         selection: d.rows.clone(),
         multiple: d.chooser.ask().multiple,
-        initial_focus: false,
+        initial: false,
         row: Box::new(move |i, selected| {
             let (is_dir, name) = &rows[i];
             row(
@@ -968,7 +968,7 @@ fn picker_window(p: &Picker) -> Window<Message> {
         scroll: p.scroll,
         selection: p.rows.clone(),
         multiple: false,
-        initial_focus: false,
+        initial: false,
         row: Box::new(move |i, selected| row(rows[i].0, rows[i].1.clone(), selected)),
         key: Some(Box::new(|i| Key::Int(i as u64))),
         type_select: Some(Box::new(move |i| names[i].clone())),
@@ -1085,7 +1085,7 @@ fn app_window(a: &AppPicker) -> Window<Message> {
         scroll: a.scroll,
         selection: a.rows.clone(),
         multiple: false,
-        initial_focus: true,
+        initial: true,
         row: Box::new(move |i, selected| row("symbol.applications", shown[i].clone(), selected)),
         key: Some(Box::new(|i| Key::Int(i as u64))),
         type_select: Some(Box::new(move |i| names[i].clone())),

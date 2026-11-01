@@ -148,7 +148,7 @@ impl Application for Listed {
             scroll: model.scroll,
             selection: model.selection.clone(),
             multiple: setup.multiple,
-            initial_focus: setup.initial,
+            initial: setup.initial,
             row: Box::new(|i, selected| text(name(i), selected)),
             key: None,
             type_select,
@@ -328,7 +328,7 @@ fn typing_selects_the_next_row_that_starts_with_it_and_return_activates_the_curs
 }
 
 #[test]
-fn a_list_with_the_initial_focus_has_it_when_its_window_opens_so_the_arrows_work_at_once() {
+fn an_initial_list_takes_the_focus_when_its_window_opens_so_the_arrows_work_at_once() {
     assert_eq!(focused_row(&harness(1000, false, false)), None);
     SETUP.set(Setup {
         count: 1000,
@@ -602,7 +602,7 @@ impl Application for Grocer {
             scroll: model.scroll,
             selection: model.selection.clone(),
             multiple: false,
-            initial_focus: false,
+            initial: false,
             row: Box::new(move |i, selected| text(names[i].into(), selected)),
             key: Some(Box::new(move |i| Key::from(keys[i]))),
             type_select: None,

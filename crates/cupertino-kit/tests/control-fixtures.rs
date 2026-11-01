@@ -628,7 +628,7 @@ fixtures! {
             scroll: look.scroll,
             selection,
             multiple: false,
-            initial_focus: false,
+            initial: false,
             row: Box::new(|index, selected| Element::new(Text {
                 content: label(&format!("Row {index}")),
                 role: TextRole::Body,

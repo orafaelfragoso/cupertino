@@ -49,7 +49,16 @@ BASE_PACKAGES = (
 )
 CHROMIUM_FLAGS = "--ozone-platform=wayland\n"
 NVIDIA_PACKAGES = ("nvidia-open", "nvidia-utils", "libva-nvidia-driver")
-NVIDIA_OPTIONS = "options nvidia_drm modeset=1\n"
+# the working state of the RTX 3060 this installer is first used on: its modprobe.d, its driver parameters and its early KMS
+NVIDIA_OPTIONS = (
+    "options nvidia_drm modeset=1 fbdev=1\n"
+    "options nvidia NVreg_UseKernelSuspendNotifiers=1 NVreg_PreserveVideoMemoryAllocations=1\n"
+)
+NVIDIA_EARLY_KMS = "MODULES+=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)\n"
+# with UseKernelSuspendNotifiers the driver suspends itself; these units would do it a second time
+NVIDIA_SLEEP_UNITS = ("nvidia-suspend.service", "nvidia-resume.service", "nvidia-hibernate.service",
+                      "nvidia-suspend-then-hibernate.service")
+SECURE_BOOT = Path("/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c")
 NVIDIA = 0x10DE
 AMD = 0x1002
 INTEL = 0x8086
@@ -93,6 +102,7 @@ class Answers:
 class Graphics:
     packages: tuple[str, ...]
     nvidia: bool
+    only_nvidia: bool
     summary: str
 
 
@@ -163,7 +173,8 @@ def graphics(devices: list[tuple[int, int, int]]) -> Graphics:
             summary.append(f"Intel {device:04x}: mesa")
     if nvidia:
         packages.extend(NVIDIA_PACKAGES)
-    return Graphics(tuple(dict.fromkeys(packages)), nvidia, "; ".join(summary) or "no graphics card found: mesa")
+    only_nvidia = nvidia and all(vendor == NVIDIA for vendor, _ in display)
+    return Graphics(tuple(dict.fromkeys(packages)), nvidia, only_nvidia, "; ".join(summary) or "no graphics card found: mesa")
 
 
 def pci_devices(root: Path = Path("/sys/bus/pci/devices")) -> list[tuple[int, int, int]]:
@@ -307,6 +318,8 @@ def preflight() -> None:
         raise Failed(2, "start", "this is not the live USB; cupertino-install only runs there")
     if not Path("/sys/firmware/efi").is_dir():
         raise Failed(2, "start", "this computer started in legacy BIOS mode; start the USB in UEFI mode")
+    if SECURE_BOOT.exists() and SECURE_BOOT.read_bytes()[-1:] == b"\x01":
+        raise Failed(2, "start", "Secure Boot is on; turn it off in the firmware settings (the boot loader and drivers are not signed)")
     version = run("pacman", "-Q", "archinstall", step="start", status=2, capture=True).split()[1]
     if not re.fullmatch(re.escape(ARCHINSTALL_VERSION) + r"(-\d+)?", version):
         raise Failed(2, "start", f"archinstall {version} is not {ARCHINSTALL_VERSION}, the version this installer was written for")
@@ -407,11 +420,35 @@ def install(plan: Plan, workdir: Path) -> None:
             raise Failed(4, "encryption", f"{root} is not an encrypted volume; archinstall did not encrypt the disk")
 
 
+def without_kms_hook(mkinitcpio_conf: str) -> str:
+    """mkinitcpio.conf without the kms hook: with nvidia_drm loaded early and no other GPU it only adds nouveau."""
+    def strip(match: re.Match) -> str:
+        return "HOOKS=(" + " ".join(h for h in match.group(1).split() if h != "kms") + ")"
+    return re.sub(r"^HOOKS=\(([^)]*)\)", strip, mkinitcpio_conf, flags=re.MULTILINE)
+
+
+def nvidia(only_nvidia: bool) -> None:
+    kernel = run("arch-chroot", str(TARGET), "pacman", "-Q", "linux", step="nvidia", status=5, capture=True).split()[1]
+    modules = [p.name for p in (TARGET / "usr/lib/modules").iterdir() if (p / "pkgbase").is_file()
+               and (p / "pkgbase").read_text().strip() == "linux"]
+    if len(modules) != 1:
+        raise Failed(5, "nvidia", f"expected one module directory for linux {kernel}, found {modules}")
+    run("arch-chroot", str(TARGET), "modinfo", "-k", modules[0], "-F", "version", "nvidia", step="nvidia", status=5, capture=True)
+    (TARGET / "etc/modprobe.d").mkdir(parents=True, exist_ok=True)
+    (TARGET / "etc/modprobe.d/nvidia.conf").write_text(NVIDIA_OPTIONS)
+    (TARGET / "etc/mkinitcpio.conf.d").mkdir(parents=True, exist_ok=True)
+    (TARGET / "etc/mkinitcpio.conf.d/nvidia.conf").write_text(NVIDIA_EARLY_KMS)
+    if only_nvidia:
+        conf = TARGET / "etc/mkinitcpio.conf"
+        conf.write_text(without_kms_hook(conf.read_text()))
+    run("arch-chroot", str(TARGET), "systemctl", "disable", "--quiet", *NVIDIA_SLEEP_UNITS, step="nvidia", status=5)
+    run("arch-chroot", str(TARGET), "mkinitcpio", "-P", step="nvidia", status=5)
+
+
 def finish(plan: Plan) -> None:
     boot_entries(TARGET / "boot/loader/entries", plan.answers.kernel_args)
     if plan.graphics.nvidia:
-        (TARGET / "etc/modprobe.d").mkdir(parents=True, exist_ok=True)
-        (TARGET / "etc/modprobe.d/nvidia.conf").write_text(NVIDIA_OPTIONS)
+        nvidia(plan.graphics.only_nvidia)
     pacman_conf = TARGET / "etc/pacman.conf"
     pacman_conf.write_text(without_repository(pacman_conf.read_text()))
     config = TARGET / "home" / plan.answers.user / ".config"

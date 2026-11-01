@@ -2460,16 +2460,10 @@ impl Dispatch<WlKeyboard, ()> for State {
                 let (Some(surface), Some(t)) = (state.key_focus, state.translator.as_mut()) else {
                     return;
                 };
-                if pressed {
-                    if t.repeats(key) {
-                        state.repeat.press(key, Instant::now());
-                    }
+                let k = if pressed {
+                    t.press(key, &mut state.repeat, Instant::now())
                 } else {
                     state.repeat.release(key);
-                }
-                let k = if pressed {
-                    t.press(key)
-                } else {
                     t.translate(key)
                 };
                 state.events.push(Event::Keyboard {

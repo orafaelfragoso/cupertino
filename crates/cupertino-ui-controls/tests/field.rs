@@ -386,7 +386,11 @@ fn long_text_scrolls_to_keep_the_caret_inside_the_field() {
     h.type_text(&"w".repeat(60));
     let width = h.rect("name").width();
     let end = caret(&h).unwrap();
-    assert!(end.max_x() <= width - 6.0 + CARET_WIDTH && end.min_x() > width / 2.0);
+    assert_eq!(
+        end.max_x(),
+        width - 6.0,
+        "the whole caret shows, at the interior's end"
+    );
     assert_eq!(
         h.rt.window_system()
             .text_input(h.window)
@@ -482,9 +486,9 @@ fn an_unfocused_overlong_field_shows_the_start_of_its_text() {
     h.tap(TAB);
     assert!(h.focused("name"));
     assert_eq!(
-        caret(&h).unwrap().min_x(),
+        caret(&h).unwrap().max_x(),
         width - 6.0,
-        "a focused field follows its caret back to the end"
+        "a focused field follows its caret back to the end, all of it showing"
     );
 }
 

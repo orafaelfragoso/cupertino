@@ -48,7 +48,7 @@ filters, the choices, Cancel and the action button. A save adds a Save As field 
 - The title, the action label, filter names and choice labels lose control and bidirectional-override characters.
 - The answer is `0` with `uris` (`file://`, escaped), `choices` and `current_filter`; Cancel or closing the window is
   `1`; `Close` on the request takes the window down and answers `2`.
-- `parent_window` is not followed yet: the dialog is a window of its own, centred.
+- A `parent_window` of `wayland:<handle>` makes the dialog a child of that window (xdg-foreign-unstable-v2, `wayland_parent`). An `x11:` window, an empty one, or a handle the server does not know leaves the dialog a window of its own, centred.
 - A folder is read on a thread of its own, so one on a hung mount leaves the window responsive.
 
 ## Installing

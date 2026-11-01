@@ -50,6 +50,10 @@ pub struct WindowSpec {
     pub min_size: Option<Size>,
     pub max_size: Option<Size>,
     pub decorations: DecorationMode,
+    /// The handle another application exported one of its windows under, which this window opens as a child of (a
+    /// dialog the system shows for that window). Read when the window opens; an unknown handle, or a platform without
+    /// the protocol, leaves the window without a parent.
+    pub foreign_parent: Option<String>,
 }
 
 /// An edge or corner of a popup's anchor rectangle, or the direction the popup extends from it, as

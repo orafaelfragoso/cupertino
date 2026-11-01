@@ -105,6 +105,7 @@ fn run(options: &Options) -> Result<(), Box<dyn Error>> {
         min_size: Some((1, 1)),
         max_size: None,
         decorations: Decorations::Server,
+        foreign_parent: None,
     })?;
     let mut output: Option<File> = None;
     let (mut configured, mut dirty, mut blocked) = (false, false, false);

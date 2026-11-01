@@ -49,6 +49,10 @@ pub(crate) const LIGHT: Palette<[u8; 4]> = Palette {
         (DialogScrim, [0, 0, 0, 51]),
         (Link, [0, 95, 210, 255]),
         (PageDot, gray(105)),
+        (GroupFill, gray(217)),
+        (SwitchThumbGlyph, gray(115)),
+        (PanelTrack, gray(232)),
+        (PanelTrackBorder, gray(208)),
     ],
     states: StateColors {
         emphasized_border: gray(100),
@@ -100,6 +104,10 @@ pub(crate) const DARK: Palette<[u8; 4]> = Palette {
         (DialogScrim, [0, 0, 0, 102]),
         (Link, [65, 156, 255, 255]),
         (PageDot, gray(163)),
+        (GroupFill, gray(66)),
+        (SwitchThumbGlyph, gray(115)),
+        (PanelTrack, gray(35)),
+        (PanelTrackBorder, gray(35)),
     ],
     states: StateColors {
         emphasized_border: gray(159),
@@ -152,6 +160,10 @@ pub(crate) const HIGH_CONTRAST_LIGHT: Palette<[u8; 4]> = Palette {
         (DialogScrim, [0, 0, 0, 102]),
         (Link, [0, 64, 221, 255]),
         (PageDot, gray(60)),
+        (GroupFill, gray(209)),
+        (SwitchThumbGlyph, gray(60)),
+        (PanelTrack, gray(117)),
+        (PanelTrackBorder, gray(105)),
     ],
     states: StateColors {
         emphasized_border: BLACK,
@@ -203,6 +215,10 @@ pub(crate) const HIGH_CONTRAST_DARK: Palette<[u8; 4]> = Palette {
         (DialogScrim, [0, 0, 0, 153]),
         (Link, [102, 178, 255, 255]),
         (PageDot, gray(210)),
+        (GroupFill, gray(81)),
+        (SwitchThumbGlyph, gray(200)),
+        (PanelTrack, gray(156)),
+        (PanelTrackBorder, gray(156)),
     ],
     states: StateColors {
         emphasized_border: WHITE,
@@ -287,6 +303,8 @@ mod tests {
         ];
         // a link has no disabled look
         let link_pairs = [(Link, WindowBackground), (Link, TextBackground)];
+        // a disabled slider draws its symbol in the disabled text colour
+        let thumb_pairs = [(SwitchThumbGlyph, SwitchThumb)];
         let boundary_pairs = [
             (ControlBorder, WindowBackground),
             (TextFieldBorder, WindowBackground),
@@ -317,7 +335,7 @@ mod tests {
                 for pair in text_pairs {
                     check(pair, TEXT);
                 }
-                for pair in link_pairs {
+                for pair in link_pairs.into_iter().chain(thumb_pairs) {
                     if !disabled {
                         check(pair, TEXT);
                     }
@@ -371,6 +389,7 @@ mod tests {
                 }
                 ControlBorder => control,
                 DisabledControlBorder => normal(DisabledControlFill),
+                PanelTrackBorder => normal(PanelTrack),
                 _ => normal(WindowBackground),
             };
             let raised_for_contrast = [

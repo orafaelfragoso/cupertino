@@ -9,6 +9,7 @@ use cupertino_portal::capture::Capture;
 use cupertino_portal::dialog::{inbox, Dialogs};
 use cupertino_portal::file_chooser::FileChooser;
 use cupertino_portal::screen_cast::ScreenCast;
+use cupertino_portal::screenshot::{self, Screenshot};
 use cupertino_portal::settings::{Appearance, Service};
 use cupertino_portal::{BUS_NAME, PORTAL_PATH};
 use cupertino_protocol_app::{AppEffects, AppEvent};
@@ -37,7 +38,7 @@ fn fold(mut appearance: Appearance, events: &[Event]) -> Appearance {
     appearance
 }
 
-/// The file-chooser, app-chooser and screen-sharing windows; a dialog that cannot be shown ends the process.
+/// The file-chooser, app-chooser, screen-sharing and screenshot windows; a dialog that cannot be shown ends the process.
 fn dialogs() {
     if let Err(e) = cupertino_kit::app::run::<Dialogs>() {
         eprintln!("cupertino-portal: {e}");
@@ -52,9 +53,10 @@ fn run() -> Result<()> {
     // the session is published once the name is owned, so the first reply must already carry the session's appearance
     conn.roundtrip()?;
     let (requests, received) = mpsc::channel();
+    let (shoots, shots) = mpsc::channel();
     // without the capture globals the other interfaces are still served
-    let mut capture = Capture::bind(&mut conn, received)
-        .inspect_err(|e| eprintln!("cupertino-portal: no screen sharing: {e}"))
+    let mut capture = Capture::bind(&mut conn, received, shots)
+        .inspect_err(|e| eprintln!("cupertino-portal: no screen sharing or screenshots: {e}"))
         .ok();
     let first = conn.wait(Some(Duration::ZERO))?;
     let mut appearance = fold(Appearance::default(), &first);
@@ -83,6 +85,19 @@ fn run() -> Result<()> {
             },
         )
         .serve(&bus)?;
+        let waker = conn.waker();
+        bus.object_server().at(
+            PORTAL_PATH,
+            Screenshot::new(
+                cupertino_apps::entry::xdg_application_dirs(),
+                screenshot::pictures,
+                |event| inbox().push(event),
+                move |shoot| {
+                    let _ = shoots.send(shoot);
+                    waker.wake();
+                },
+            ),
+        )?;
     }
     std::thread::Builder::new()
         .name("dialogs".to_owned())

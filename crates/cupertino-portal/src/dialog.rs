@@ -1,4 +1,4 @@
-//! The file-chooser, app-chooser and screen-sharing windows: one for each open request, drawn with CupertinoKit. The D-Bus side
+//! The file-chooser, app-chooser, screen-sharing and screenshot windows: one for each open request, drawn with CupertinoKit. The D-Bus side
 //! hands its events to the [`inbox`]; [`Dialogs`] is resident and keeps running while no dialog is open.
 
 use std::collections::VecDeque;
@@ -22,6 +22,7 @@ use crate::app_chooser;
 use crate::chooser::{Accept, Chooser};
 use crate::file_chooser::{self, Answer, Kind, Reply};
 use crate::screen_cast::{self, Source};
+use crate::screenshot;
 
 const ROW_HEIGHT: f64 = 24.0;
 const SIDEBAR_WIDTH: f64 = 180.0;
@@ -36,6 +37,7 @@ const BAR_INSETS: Insets = Insets {
 };
 const SIZE: Size = Size::new(720.0, 460.0);
 const PICKER_SIZE: Size = Size::new(480.0, 360.0);
+const CONSENT_SIZE: Size = Size::new(420.0, 140.0);
 const RETURN: Keysym = Keysym(0xff0d);
 const ESCAPE: Keysym = Keysym(0xff1b);
 /// Characters of a file name or URI the app chooser's prompt shows before it ends it with an ellipsis.
@@ -46,6 +48,7 @@ pub enum Event {
     FileChooser(file_chooser::Event),
     ScreenCast(screen_cast::Event),
     AppChooser(app_chooser::Event),
+    Screenshot(screenshot::Event),
 }
 
 impl From<file_chooser::Event> for Event {
@@ -63,6 +66,12 @@ impl From<screen_cast::Event> for Event {
 impl From<app_chooser::Event> for Event {
     fn from(event: app_chooser::Event) -> Self {
         Event::AppChooser(event)
+    }
+}
+
+impl From<screenshot::Event> for Event {
+    fn from(event: screenshot::Event) -> Self {
+        Event::Screenshot(event)
     }
 }
 
@@ -130,6 +139,7 @@ pub struct Model {
     open: Vec<Dialog>,
     pickers: Vec<Picker>,
     apps: Vec<AppPicker>,
+    consents: Vec<Consent>,
 }
 
 struct Dialog {
@@ -154,6 +164,14 @@ struct Picker {
     ask: screen_cast::Ask,
     rows: Selection,
     scroll: ScrollState,
+}
+
+/// The question whether an app may take a screenshot.
+struct Consent {
+    id: u64,
+    handle: OwnedObjectPath,
+    reply: screenshot::Reply,
+    ask: screenshot::Ask,
 }
 
 impl Picker {
@@ -211,6 +229,7 @@ pub enum Message {
     AppScroll(u64, ScrollState),
     AppSelect(u64, Selection),
     OpenWith(u64),
+    TakeScreenshot(u64),
 }
 
 const NO_SCROLL: ScrollState = ScrollState {
@@ -308,6 +327,19 @@ impl Model {
                 Event::AppChooser(app_chooser::Event::Close { handle }) => {
                     self.apps.retain(|a| a.handle != handle)
                 }
+                Event::Screenshot(screenshot::Event::Ask { handle, ask, reply }) => {
+                    let id = self.next;
+                    self.next += 1;
+                    self.consents.push(Consent {
+                        id,
+                        handle,
+                        reply,
+                        ask: *ask,
+                    });
+                }
+                Event::Screenshot(screenshot::Event::Close { handle }) => {
+                    self.consents.retain(|c| c.handle != handle)
+                }
             }
         }
         commands
@@ -331,6 +363,13 @@ impl Model {
     fn finish_app(&mut self, id: u64, answer: app_chooser::Answer) {
         if let Some(i) = self.apps.iter().position(|a| a.id == id) {
             self.apps.remove(i).reply.send(answer);
+        }
+    }
+
+    /// End consent window `id` with `answer`.
+    fn finish_consent(&mut self, id: u64, answer: screenshot::Answer) {
+        if let Some(i) = self.consents.iter().position(|c| c.id == id) {
+            self.consents.remove(i).reply.send(answer);
         }
     }
 }
@@ -365,6 +404,7 @@ impl Application for Dialogs {
             open: Vec::new(),
             pickers: Vec::new(),
             apps: Vec::new(),
+            consents: Vec::new(),
         };
         let mut commands = model.take(inbox().take());
         commands.push(woken());
@@ -487,6 +527,7 @@ impl Application for Dialogs {
                 model.finish(id, Answer::Cancelled);
                 model.finish_picker(id, screen_cast::Answer::Cancelled);
                 model.finish_app(id, app_chooser::Answer::Cancelled);
+                model.finish_consent(id, screenshot::Answer::Cancelled);
             }
             Message::PickerScroll(id, scroll) => {
                 if let Some(p) = model.picker(id) {
@@ -520,6 +561,7 @@ impl Application for Dialogs {
                     model.finish_app(id, app_chooser::Answer::Chosen(choice.id));
                 }
             }
+            Message::TakeScreenshot(id) => model.finish_consent(id, screenshot::Answer::Granted),
         }
         commands
     }
@@ -531,6 +573,7 @@ impl Application for Dialogs {
             .map(|d| window(d, &model.places))
             .chain(model.pickers.iter().map(picker_window))
             .chain(model.apps.iter().map(app_window))
+            .chain(model.consents.iter().map(consent_window))
             .collect()
     }
 }
@@ -1185,6 +1228,89 @@ fn app_window(a: &AppPicker) -> Window<Message> {
     }
 }
 
+/// What the consent window asks: the app by its name, else an unnamed app.
+fn consent_prompt(ask: &screenshot::Ask) -> String {
+    match &ask.app_name {
+        Some(name) => format!("“{name}” wants to take a screenshot of your screen."),
+        None => "An application wants to take a screenshot of your screen.".to_owned(),
+    }
+}
+
+fn consent_window(c: &Consent) -> Window<Message> {
+    let id = c.id;
+    let prompt = Element::new(Stack {
+        axis: Axis::Horizontal,
+        padding: BAR_INSETS,
+        spacing: GAP,
+        align: Align::Center,
+        children: vec![Element::new(Text {
+            content: AttributedText::plain(consent_prompt(&c.ask), TextStyle::new(13.0)),
+            role: TextRole::Body,
+            wrap: true,
+            secondary: false,
+            selected: false,
+        })
+        .key("prompt")],
+    });
+    let bar = bar_row(
+        Vec::new(),
+        vec![
+            button(
+                "Cancel".to_owned(),
+                ButtonRole::Normal,
+                true,
+                Message::Cancel(id),
+            )
+            .key("cancel"),
+            button(
+                "Take Screenshot".to_owned(),
+                ButtonRole::Default,
+                true,
+                Message::TakeScreenshot(id),
+            )
+            .key("take"),
+        ],
+    );
+    Window {
+        key: WindowKey(Key::Str(format!("consent-{id}").into())),
+        spec: WindowSpec {
+            title: "Screenshot".to_owned(),
+            app_id: "org.cupertino.Portal".into(),
+            size: CONSENT_SIZE,
+            min_size: Some(CONSENT_SIZE),
+            max_size: None,
+            decorations: DecorationMode::Preferred,
+            foreign_parent: crate::wayland_parent(&c.ask.parent_window).map(str::to_owned),
+        },
+        // Escape cancels wherever the focus is; Return has no shortcut, so a key meant for the app never consents
+        shortcuts: CommandRegistry::new().with(
+            Shortcut {
+                mods: Mods::NONE,
+                keysym: ESCAPE,
+            },
+            Message::Cancel(id),
+        ),
+        on_close: Some(Message::Cancel(id)),
+        background: WindowBackground::Theme,
+        popup: None,
+        menus: None,
+        content: Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets::ZERO,
+            spacing: 0.0,
+            align: Align::Stretch,
+            children: vec![
+                prompt,
+                Element::new(Spacer { min: 0.0 }),
+                Element::new(Separator {
+                    axis: Axis::Horizontal,
+                }),
+                bar,
+            ],
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
@@ -1525,6 +1651,58 @@ mod tests {
         );
         type_key(&mut driver, window, ESCAPE, None);
         assert_eq!(answer.try_recv().unwrap(), app_chooser::Answer::Cancelled);
+        assert!(driver.runtime().windows().is_empty());
+
+        let consent = |n: u32, app_name: Option<&str>| {
+            let (sender, answer) = async_channel::bounded(1);
+            inbox().push(screenshot::Event::Ask {
+                handle: handle(n),
+                ask: Box::new(screenshot::Ask {
+                    app_id: "org.example.Draw".to_owned(),
+                    app_name: app_name.map(str::to_owned),
+                    parent_window: String::new(),
+                }),
+                reply: screenshot::Reply(sender),
+            });
+            answer
+        };
+        let shown = |driver: &TestDriver<Dialogs>, window: WindowId| -> Vec<String> {
+            let snapshot = driver.runtime().snapshot(window).unwrap();
+            snapshot
+                .accessibility
+                .iter()
+                .filter_map(|(_, n)| n.name.clone())
+                .collect()
+        };
+        let answer = consent(6, Some("Drawing"));
+        let window = show(&mut driver);
+        let spec = driver.window_system_mut().spec(window).unwrap().clone();
+        assert_eq!(spec.title, "Screenshot");
+        let names = shown(&driver, window);
+        for text in [
+            "“Drawing” wants to take a screenshot of your screen.",
+            "Cancel",
+            "Take Screenshot",
+        ] {
+            assert!(names.iter().any(|n| n == text), "{text:?} in {names:?}");
+        }
+        type_key(&mut driver, window, RETURN, None);
+        type_key(&mut driver, window, Keysym(' ' as u32), Some(' '));
+        assert!(
+            answer.try_recv().is_err(),
+            "nothing is preselected, so no key consents"
+        );
+        click(&mut driver, window, "take");
+        assert_eq!(answer.try_recv().unwrap(), screenshot::Answer::Granted);
+        assert!(driver.runtime().windows().is_empty());
+
+        let answer = consent(7, None);
+        let window = show(&mut driver);
+        let names = shown(&driver, window);
+        let unnamed = "An application wants to take a screenshot of your screen.";
+        assert!(names.iter().any(|n| n == unnamed), "{names:?}");
+        type_key(&mut driver, window, ESCAPE, None);
+        assert_eq!(answer.try_recv().unwrap(), screenshot::Answer::Cancelled);
         assert!(driver.runtime().windows().is_empty());
         assert!(!driver.runtime().exited());
     }

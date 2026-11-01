@@ -1,17 +1,22 @@
 //! The capture side of the process, on its connection to the server, which offers the capture globals only to the
 //! connection it started the process with. It lists the displays and the windows (`ext-foreign-toplevel-list-v1`) for
 //! the chooser, and shares each chosen source as a PipeWire stream: one `ext-image-copy-capture-v1` session on the
-//! source, each frame copied straight into a buffer of the stream through `wl_shm` on the buffer's memfd.
+//! source, each frame copied straight into a buffer of the stream through `wl_shm` on the buffer's memfd. A screenshot
+//! copies one frame of every display into a memfd of its own once it is due.
 //!
 //! A frame is asked for once the consumer takes frames and a buffer is free, at most at the negotiated rate. The server
 //! answers a frame when the source changed, so a still screen sends nothing; the frame's damage goes on the buffer.
 
+use std::fs::File;
 use std::os::fd::AsFd;
+use std::os::unix::fs::FileExt;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cupertino_screencast::{BufferId, Format, Frame, Notice, Offer, Pixel, Region, Screencast, Size, State, StreamId};
 use cupertino_wayland_client::{Connection, Event, OutputId, OutputInfo, State as Wayland, Waker};
+use rustix::fs::{memfd_create, MemfdFlags};
+use tiny_skia::Pixmap;
 use wayland_client::protocol::wl_buffer::WlBuffer;
 use wayland_client::protocol::wl_shm::{self, WlShm};
 use wayland_client::protocol::wl_shm_pool::WlShmPool;
@@ -27,6 +32,7 @@ use wayland_protocols::ext::image_copy_capture::v1::client::ext_image_copy_captu
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::screen_cast::{Capture as Request, CursorMode, Running, Source, Started, Stream};
+use crate::screenshot::{self, Output, Shoot, Shot};
 
 /// The name of every stream's node.
 const NODE_NAME: &str = "cupertino-screencast";
@@ -37,6 +43,8 @@ pub struct Quiet;
 pub struct Listed;
 /// User data of a share's copy session and frames.
 pub struct Tag(StreamId);
+/// User data of a screenshot's copy sessions and frames: the screenshot, and the display among its copies.
+pub struct Part(u64, usize);
 
 /// What the objects of the capture received, handed on by [`Wayland::emit`].
 enum Wire {
@@ -47,6 +55,8 @@ enum Wire {
     NewToplevel(ExtForeignToplevelHandleV1),
     Session(StreamId, ext_image_copy_capture_session_v1::Event),
     Frame(StreamId, ext_image_copy_capture_frame_v1::Event),
+    StillSession(u64, usize, ext_image_copy_capture_session_v1::Event),
+    StillFrame(u64, usize, ext_image_copy_capture_frame_v1::Event),
 }
 
 /// A window as the toplevel list describes it; `done` once its first group of properties arrived.
@@ -119,6 +129,35 @@ impl Share {
     }
 }
 
+/// A frame of a display being copied into `file`.
+struct Copying {
+    frame: ExtImageCopyCaptureFrameV1,
+    file: File,
+    pool: WlShmPool,
+    buffer: WlBuffer,
+    size: Size,
+    alpha: bool,
+}
+
+/// One display of a screenshot.
+struct OutputCopy {
+    position: (i32, i32),
+    size: (i32, i32),
+    source: ExtImageCaptureSourceV1,
+    session: ExtImageCopyCaptureSessionV1,
+    constraints: Constraints,
+    copying: Option<Copying>,
+    image: Option<Pixmap>,
+}
+
+/// A screenshot: waiting until `due` while it has no copies, then copying every display.
+struct Still {
+    id: u64,
+    due: Instant,
+    shot: Shot,
+    copies: Vec<OutputCopy>,
+}
+
 /// Why a share ends.
 enum End {
     /// The session was closed.
@@ -143,14 +182,17 @@ pub struct Capture {
     screencast: Option<Screencast>,
     shares: Vec<Share>,
     next: u64,
+    shoots: mpsc::Receiver<Shoot>,
+    stills: Vec<Still>,
 }
 
 impl Capture {
-    /// Bind the capture globals on `conn`, which [`Request`]s reach through `requests` (each followed by a wake of the
-    /// connection).
+    /// Bind the capture globals on `conn`, which [`Request`]s reach through `requests` and screenshots through
+    /// `shoots` (each followed by a wake of the connection).
     pub fn bind(
         conn: &mut Connection,
         requests: mpsc::Receiver<Request>,
+        shoots: mpsc::Receiver<Shoot>,
     ) -> Result<Capture, String> {
         fn missing(name: &str) -> String {
             format!("the server offers no {name} (was the process started by the server?)")
@@ -187,6 +229,8 @@ impl Capture {
             screencast: None,
             shares: Vec::new(),
             next: 0,
+            shoots,
+            stills: Vec::new(),
         })
     }
 
@@ -195,9 +239,14 @@ impl Capture {
         Arc::clone(&self.listed)
     }
 
-    /// How long the connection may wait before a share's next frame is due.
+    /// How long the connection may wait before a share's next frame or a screenshot is due.
     pub fn timeout(&self) -> Option<Duration> {
         let now = Instant::now();
+        let stills = self
+            .stills
+            .iter()
+            .filter(|s| s.copies.is_empty())
+            .map(|s| s.due.saturating_duration_since(now));
         self.shares
             .iter()
             .filter(|s| s.streaming().is_some())
@@ -205,6 +254,7 @@ impl Capture {
                 Pacing::Idle { next, .. } => Some(next.saturating_duration_since(now)),
                 _ => None,
             })
+            .chain(stills)
             .min()
     }
 
@@ -237,8 +287,18 @@ impl Capture {
         while let Ok(notice) = self.notices.try_recv() {
             self.notice(notice);
         }
+        while let Ok(Shoot { due, shot }) = self.shoots.try_recv() {
+            self.stills.push(Still {
+                id: self.next,
+                due,
+                shot,
+                copies: Vec::new(),
+            });
+            self.next += 1;
+        }
         self.list(&conn.outputs());
         self.pace();
+        self.shoot(conn);
         let _ = conn.flush();
     }
 
@@ -381,6 +441,8 @@ impl Capture {
                     self.frame_event(i, event);
                 }
             }
+            Wire::StillSession(id, n, event) => self.still_session(*id, *n, event),
+            Wire::StillFrame(id, n, event) => self.still_frame(*id, *n, event),
         }
     }
 
@@ -665,6 +727,162 @@ impl Capture {
         }
     }
 
+    /// Open a copy session on every display for each screenshot that is due. One with no display to copy fails.
+    fn shoot(&mut self, conn: &Connection) {
+        let now = Instant::now();
+        let qh = conn.queue_handle();
+        let outputs = conn.outputs();
+        for still in self
+            .stills
+            .iter_mut()
+            .filter(|s| s.copies.is_empty() && s.due <= now)
+        {
+            for info in &outputs {
+                let Some(wl_output) = conn.wl_output(info.id) else {
+                    continue;
+                };
+                let (position, size) = match info.geometry {
+                    Some(g) => ((g.x, g.y), (g.width as i32, g.height as i32)),
+                    None => {
+                        let (w, h) = info.mode.unwrap_or_default();
+                        ((0, 0), (w as i32, h as i32))
+                    }
+                };
+                let source = self.output_sources.create_source(&wl_output, &qh, Quiet);
+                let part = Part(still.id, still.copies.len());
+                let session = self
+                    .copy
+                    .create_session(&source, Options::empty(), &qh, part);
+                still.copies.push(OutputCopy {
+                    position,
+                    size,
+                    source,
+                    session,
+                    constraints: Constraints::default(),
+                    copying: None,
+                    image: None,
+                });
+            }
+        }
+        while let Some(i) = self
+            .stills
+            .iter()
+            .position(|s| s.copies.is_empty() && s.due <= now)
+        {
+            self.end_still(i, Some("there is no display to capture".to_owned()));
+        }
+    }
+
+    fn still(&self, id: u64) -> Option<usize> {
+        self.stills.iter().position(|s| s.id == id)
+    }
+
+    fn still_session(
+        &mut self,
+        id: u64,
+        n: usize,
+        event: &ext_image_copy_capture_session_v1::Event,
+    ) {
+        let Some(i) = self.still(id) else {
+            return;
+        };
+        let Some(copy) = self.stills[i].copies.get_mut(n) else {
+            return;
+        };
+        match event {
+            ext_image_copy_capture_session_v1::Event::BufferSize { width, height } => {
+                copy.constraints.size = Some(Size {
+                    width: *width,
+                    height: *height,
+                })
+            }
+            ext_image_copy_capture_session_v1::Event::ShmFormat {
+                format: WEnum::Value(format),
+            } => copy.constraints.formats.push(*format),
+            ext_image_copy_capture_session_v1::Event::Done => {
+                let constraints = std::mem::take(&mut copy.constraints);
+                if copy.copying.is_some() || copy.image.is_some() {
+                    return;
+                }
+                if let Err(reason) = copy_frame(&self.shm, &self.qh, copy, constraints, Part(id, n))
+                {
+                    self.end_still(i, Some(reason));
+                }
+            }
+            ext_image_copy_capture_session_v1::Event::Stopped => {
+                self.end_still(i, Some("a display went away".to_owned()))
+            }
+            _ => {}
+        }
+    }
+
+    fn still_frame(&mut self, id: u64, n: usize, event: &ext_image_copy_capture_frame_v1::Event) {
+        let Some(i) = self.still(id) else {
+            return;
+        };
+        let Some(copy) = self.stills[i].copies.get_mut(n) else {
+            return;
+        };
+        match event {
+            ext_image_copy_capture_frame_v1::Event::Ready => {
+                let Some(copying) = copy.copying.take() else {
+                    return;
+                };
+                copying.frame.destroy();
+                let Size { width, height } = copying.size;
+                let stride = width as usize * 4;
+                let mut data = vec![0; stride * height as usize];
+                let image = copying
+                    .file
+                    .read_exact_at(&mut data, 0)
+                    .ok()
+                    .and_then(|()| {
+                        screenshot::from_shm(width, height, stride, &data, copying.alpha)
+                    });
+                copying.buffer.destroy();
+                copying.pool.destroy();
+                let Some(image) = image else {
+                    return self
+                        .end_still(i, Some("a display's copy could not be read".to_owned()));
+                };
+                copy.image = Some(image);
+                if self.stills[i].copies.iter().all(|c| c.image.is_some()) {
+                    self.end_still(i, None);
+                }
+            }
+            ext_image_copy_capture_frame_v1::Event::Failed { reason } => {
+                self.end_still(i, Some(format!("copying a display failed: {reason:?}")))
+            }
+            _ => {}
+        }
+    }
+
+    /// End screenshot `i` and answer it: with every display's image, or with `failed`.
+    fn end_still(&mut self, i: usize, failed: Option<String>) {
+        let still = self.stills.remove(i);
+        let mut outputs = Vec::new();
+        for copy in still.copies {
+            if let Some(copying) = copy.copying {
+                copying.frame.destroy();
+                copying.buffer.destroy();
+                copying.pool.destroy();
+            }
+            copy.session.destroy();
+            copy.source.destroy();
+            if let Some(image) = copy.image {
+                outputs.push(Output {
+                    position: copy.position,
+                    size: copy.size,
+                    image,
+                });
+            }
+        }
+        still.shot.send(match failed {
+            Some(reason) => Err(reason),
+            None => Ok(outputs),
+        });
+    }
+
     /// End share `i`: its stream and copy session go, and so does the session it belongs to.
     fn end(&mut self, i: usize, end: End) {
         let share = self.shares.remove(i);
@@ -706,6 +924,58 @@ fn pixels(source: &Source, formats: &[wl_shm::Format]) -> Vec<Pixel> {
         .into_iter()
         .filter(|p| formats.contains(&wl_format(*p)))
         .collect()
+}
+
+/// Ask `copy`'s session for one frame, in a memfd buffer that fits the constraints it announced; an opaque format first.
+fn copy_frame(
+    shm: &WlShm,
+    qh: &QueueHandle<Wayland>,
+    copy: &mut OutputCopy,
+    constraints: Constraints,
+    part: Part,
+) -> Result<(), String> {
+    let size = constraints
+        .size
+        .ok_or("the capture announced no buffer size")?;
+    let (format, alpha) = if constraints.formats.contains(&wl_shm::Format::Xrgb8888) {
+        (wl_shm::Format::Xrgb8888, false)
+    } else if constraints.formats.contains(&wl_shm::Format::Argb8888) {
+        (wl_shm::Format::Argb8888, true)
+    } else {
+        return Err("the capture offers neither XRGB8888 nor ARGB8888 shm buffers".to_owned());
+    };
+    let stride = size.width as usize * 4;
+    let len = stride
+        .checked_mul(size.height as usize)
+        .filter(|len| *len > 0 && i32::try_from(*len).is_ok())
+        .ok_or_else(|| format!("a {}x{} display cannot be copied", size.width, size.height))?;
+    let fd = memfd_create("cupertino-portal-screenshot", MemfdFlags::CLOEXEC)
+        .map_err(|e| e.to_string())?;
+    let file = File::from(fd);
+    file.set_len(len as u64).map_err(|e| e.to_string())?;
+    let pool = shm.create_pool(file.as_fd(), len as i32, qh, Quiet);
+    let buffer = pool.create_buffer(
+        0,
+        size.width as i32,
+        size.height as i32,
+        stride as i32,
+        format,
+        qh,
+        Quiet,
+    );
+    let frame = copy.session.create_frame(qh, part);
+    frame.attach_buffer(&buffer);
+    frame.damage_buffer(0, 0, size.width as i32, size.height as i32);
+    frame.capture();
+    copy.copying = Some(Copying {
+        frame,
+        file,
+        pool,
+        buffer,
+        size,
+        alpha,
+    });
+    Ok(())
 }
 
 fn wl_format(pixel: Pixel) -> wl_shm::Format {
@@ -801,6 +1071,32 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, Tag> for Wayland {
         _: &QueueHandle<Self>,
     ) {
         state.emit(Wire::Frame(tag.0, event));
+    }
+}
+
+impl Dispatch<ExtImageCopyCaptureSessionV1, Part> for Wayland {
+    fn event(
+        state: &mut Self,
+        _: &ExtImageCopyCaptureSessionV1,
+        event: ext_image_copy_capture_session_v1::Event,
+        part: &Part,
+        _: &wayland_client::Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        state.emit(Wire::StillSession(part.0, part.1, event));
+    }
+}
+
+impl Dispatch<ExtImageCopyCaptureFrameV1, Part> for Wayland {
+    fn event(
+        state: &mut Self,
+        _: &ExtImageCopyCaptureFrameV1,
+        event: ext_image_copy_capture_frame_v1::Event,
+        part: &Part,
+        _: &wayland_client::Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        state.emit(Wire::StillFrame(part.0, part.1, event));
     }
 }
 

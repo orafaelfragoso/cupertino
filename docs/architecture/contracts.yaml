@@ -926,6 +926,18 @@
   source: crates/cupertino-portal/src/app_chooser.rs
   source_match: "org.freedesktop.impl.portal.AppChooser"
   note: only the xdg-desktop-portal frontend calls
+- name: org.freedesktop.impl.portal.Screenshot
+  kind: dbus-interface
+  version: n/a
+  bus: session
+  bus_name: org.freedesktop.impl.portal.desktop.cupertino
+  owner_crate: cupertino-portal
+  owner_area: services
+  scope: shell-private
+  test_owner: crates/cupertino-portal/tests/screenshot.rs
+  source: crates/cupertino-portal/src/screenshot.rs
+  source_match: "org.freedesktop.impl.portal.Screenshot"
+  note: only the xdg-desktop-portal frontend calls; nothing is captured before the person agrees
 - name: org.freedesktop.PolicyKit1.AuthenticationAgent
   kind: dbus-interface
   version: n/a

@@ -102,6 +102,13 @@ pub(crate) struct LevelDrag {
     value: f64,
 }
 
+/// A slider without stops being dragged: it commits once, when it has been still for [`LEVEL_SETTLE`].
+pub(crate) struct SliderDrag {
+    id: ControlId,
+    value: f64,
+    moved: f64,
+}
+
 pub struct State {
     pub(crate) paths: Paths,
     pub(crate) settings: Settings,
@@ -121,6 +128,7 @@ pub struct State {
     pub(crate) bus: Option<zbus::blocking::Connection>,
     pub(crate) sheet: Option<Sheet>,
     pub(crate) level: Option<LevelDrag>,
+    pub(crate) slide: Option<SliderDrag>,
     pub(crate) start: std::time::Instant,
     pub(crate) refreshed: f64,
     pub(crate) scanned: f64,
@@ -197,6 +205,7 @@ impl State {
             bus: None,
             sheet: None,
             level: None,
+            slide: None,
             start: std::time::Instant::now(),
             refreshed: f64::NEG_INFINITY,
             scanned: f64::NEG_INFINITY,
@@ -390,10 +399,15 @@ impl State {
             if let Some((_, e)) = self.errors.iter().find(|(id, _)| *id == row.id) {
                 row.error = Some(e.clone());
             }
-            if let (Some(drag), Control::Level { value }) = (&self.level, &mut row.control) {
-                if drag.id == row.id {
-                    *value = drag.value;
-                }
+            let dragged = match &row.control {
+                Control::Level { .. } => self.level.as_ref().map(|d| (d.id, d.value)),
+                Control::Slider { .. } => self.slide.as_ref().map(|d| (d.id, d.value)),
+                _ => None,
+            };
+            if let (Some((_, v)), Control::Level { value } | Control::Slider { value, .. }) =
+                (dragged.filter(|(id, _)| *id == row.id), &mut row.control)
+            {
+                *value = v;
             }
         }
         sections
@@ -894,6 +908,37 @@ impl State {
             self.level = None;
         }
         Some((id, write, more))
+    }
+
+    /// The slider `id` moved to `value` at `now`: the drag of another slider that this one ends, to commit now.
+    pub(crate) fn slide_moved(
+        &mut self,
+        id: ControlId,
+        value: f64,
+        now: f64,
+    ) -> Option<(ControlId, f64)> {
+        let ended = self
+            .slide
+            .take()
+            .filter(|drag| drag.id != id)
+            .map(|drag| (drag.id, drag.value));
+        self.slide = Some(SliderDrag {
+            id,
+            value,
+            moved: now,
+        });
+        ended
+    }
+
+    /// The slider's timer at `now`: the drag to commit once it has settled, and whether a drag still waits.
+    pub(crate) fn slide_tick(&mut self, now: f64) -> (Option<(ControlId, f64)>, bool) {
+        match self.slide.take() {
+            Some(drag) if now - drag.moved < LEVEL_SETTLE => {
+                self.slide = Some(drag);
+                (None, true)
+            }
+            drag => (drag.map(|d| (d.id, d.value)), false),
+        }
     }
 
     /// Write the level slider `id` at `v`.

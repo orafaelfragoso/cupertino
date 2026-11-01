@@ -827,6 +827,7 @@ fn window(d: &Dialog, places: &[Place]) -> Window<Message> {
         on_close: Some(Message::Cancel(id)),
         background: WindowBackground::Theme,
         popup: None,
+        menus: None,
         content: Element::new(Stack {
             axis: Axis::Vertical,
             padding: Insets::ZERO,

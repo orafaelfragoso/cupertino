@@ -1337,14 +1337,17 @@ fn a_menu_window_shows_the_menu_material_where_the_desktop_draws_it_and_the_opaq
     assert_eq!(backdrops(&rt).last(), Some(&None));
 }
 
-/// One of four choices in a roving group; only the selected one is a Tab stop. Arrows, Home and End choose another and
-/// move the focus to it.
+/// One of four choices in a roving group; only the selected one is a Tab stop, or every one with `every_stop`, as in a
+/// menu. Arrows, Home and End choose another and move the focus to it.
 struct Choice {
     index: usize,
     selected: bool,
+    every_stop: bool,
 }
 
 const CHOICES: usize = 4;
+/// A model that makes every choice a Tab stop and keeps them all so, as a menu's rows.
+const EVERY_STOP: usize = usize::MAX;
 
 impl Widget<String> for Choice {
     type State = ();
@@ -1398,7 +1401,7 @@ impl Widget<String> for Choice {
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(Role::RadioButton);
         cx.roving_item();
-        if self.selected {
+        if self.selected || self.every_stop {
             cx.focusable();
         }
     }
@@ -1416,9 +1419,13 @@ impl Application for Choices {
     }
 
     fn update(selected: &mut usize, message: String) -> Vec<Command<String>> {
+        if message == "every" {
+            *selected = EVERY_STOP;
+            return vec![Command::Focus(Key::from("choice0"))];
+        }
         if let Some(index) = message.strip_prefix("choose:") {
             let index: usize = index.parse().unwrap();
-            if index != 2 {
+            if index != 2 && *selected != EVERY_STOP {
                 *selected = index;
             }
         }
@@ -1431,6 +1438,7 @@ impl Application for Choices {
                 Element::new(Choice {
                     index,
                     selected: index == *selected,
+                    every_stop: *selected == EVERY_STOP,
                 })
                 .key(Key::from(format!("choice{index}")))
             })
@@ -1525,6 +1533,37 @@ fn arrows_move_the_focus_with_the_selection_in_a_roving_group_and_a_refused_one_
     );
     key(&mut rt, 0xff51);
     assert_eq!(focused(&rt), Some(3), "Previous wraps to the last");
+}
+
+#[test]
+fn a_key_right_after_a_roving_move_goes_to_the_item_it_moved_to() {
+    let damage = Rc::default();
+    let mut rt = Runtime::<Choices, _>::new(FakeSystem::default(), options(&damage));
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+    rt.messages.push_back("every".into());
+    rt.step(steps()).unwrap();
+    let right = WindowEvent::Key(
+        KeyEvent {
+            code: 0,
+            keysym: Keysym(0xff53),
+            text: None,
+            pressed: true,
+            repeat: false,
+            mods: Mods::NONE,
+        },
+        Timestamp(0),
+    );
+    rt.window_system_mut().send(window, right.clone());
+    rt.window_system_mut().send(window, right);
+    rt.step(steps()).unwrap();
+    let focus = rt.snapshot(window).unwrap().focus;
+    assert_eq!(
+        focus,
+        rt.find(window, &Key::from("choice2")),
+        "the second Right, before any frame, moves on from the first one's item"
+    );
 }
 
 /// A vertical scroll container whose offset is the model's; it reports its geometry and reveals as messages.

@@ -89,6 +89,84 @@ fn upstream(byte: usize) -> TextPosition {
     }
 }
 
+/// One hard line of a text: its bytes without the separator, and its caret positions in the line's own direction, as
+/// `caret_edges` gives them.
+pub(crate) struct CaretLine {
+    start: usize,
+    end: usize,
+    rtl: bool,
+    edges: Vec<(TextPosition, usize)>,
+}
+
+/// The hard lines of `text`, each laid out in its own direction as `ParagraphLayout` does (`line_direction`).
+pub(crate) fn caret_lines(text: &str, direction: Option<Direction>) -> Vec<CaretLine> {
+    let text_direction = base_direction(text, direction);
+    let mut lines = Vec::new();
+    let mut start = 0;
+    loop {
+        let (end, next) = crate::system::next_line(text, start);
+        let line = &text[start..end];
+        let line_direction = line_direction(line, direction, text_direction);
+        let edges = caret_edges(line, Some(line_direction))
+            .into_iter()
+            .map(|(position, edge)| {
+                (
+                    TextPosition {
+                        byte: start + position.byte,
+                        ..position
+                    },
+                    edge,
+                )
+            })
+            .collect();
+        lines.push(CaretLine {
+            start,
+            end,
+            rtl: line_direction == Direction::Rtl,
+            edges,
+        });
+        match next {
+            Some(next) => start = next,
+            None => return lines,
+        }
+    }
+}
+
+/// The index of the hard line `byte` is on.
+fn line_at(lines: &[CaretLine], byte: usize) -> usize {
+    lines
+        .iter()
+        .rposition(|line| line.start <= byte)
+        .unwrap_or(0)
+}
+
+/// The caret one stop right (or left) of the caret at `at`. Past that edge of its line it goes on in the line's reading
+/// order: rightward from the right edge of a left-to-right line to the start of the next, of a right-to-left line to
+/// the end of the one before. `None` at the end of the text in that direction.
+pub(crate) fn visual_neighbour_in(
+    lines: &[CaretLine],
+    at: TextPosition,
+    rightward: bool,
+) -> Option<TextPosition> {
+    let index = line_at(lines, at.byte);
+    let line = &lines[index];
+    visual_neighbour(&line.edges, at, rightward).or_else(|| {
+        if rightward != line.rtl {
+            lines.get(index + 1).map(|next| downstream_at(next.start))
+        } else {
+            index
+                .checked_sub(1)
+                .map(|before| downstream_at(lines[before].end))
+        }
+    })
+}
+
+/// The line and the edge of the caret at `at`, for ordering carets on screen.
+pub(crate) fn place_of(lines: &[CaretLine], at: TextPosition) -> (usize, usize) {
+    let index = line_at(lines, at.byte);
+    (index, edge_at(&lines[index].edges, at))
+}
+
 /// The position whose caret is the nearest one right (or left) of the caret at `at`; `None` at that edge of the line.
 pub(crate) fn visual_neighbour(
     edges: &[(TextPosition, usize)],

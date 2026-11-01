@@ -1,5 +1,5 @@
 //! The file-chooser windows: one for each open request, drawn with CupertinoKit. The D-Bus side hands its events to
-//! the [`inbox`]; a run of [`Dialogs`] lasts while any dialog is open, so the process starts one when an event waits.
+//! the [`inbox`]; [`Dialogs`] is resident and keeps running while no dialog is open.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -65,18 +65,6 @@ impl Inbox {
             .unwrap_or_else(|e| e.into_inner())
             .drain(..)
             .collect()
-    }
-
-    /// Block until an event waits. Events stay in the inbox until a run takes them, so none is lost when a run ends.
-    pub fn wait(&self) {
-        while self
-            .events
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_empty()
-        {
-            let _ = self.wake.1.recv_blocking();
-        }
     }
 }
 
@@ -221,6 +209,7 @@ impl Dialog {
 impl Application for Dialogs {
     type Model = Model;
     type Message = Message;
+    const RESIDENT: bool = true;
 
     fn init() -> (Model, Vec<Command<Message>>) {
         let home = home();
@@ -853,6 +842,12 @@ mod tests {
             options,
             ManualClock::new(Timestamp(0)),
         );
+        let window = show(&mut driver);
+        (driver, window)
+    }
+
+    /// Configures the window of the request that waits.
+    fn show(driver: &mut TestDriver<Dialogs>) -> WindowId {
         driver.run_until_idle(budget()).unwrap();
         let window = driver.runtime().windows()[0].1;
         let active = WindowStates {
@@ -863,8 +858,8 @@ mod tests {
             .window_system_mut()
             .configure(window, None, active)
             .unwrap();
-        settle(&mut driver, window);
-        (driver, window)
+        settle(driver, window);
+        window
     }
 
     fn settle(driver: &mut TestDriver<Dialogs>, window: WindowId) {
@@ -920,7 +915,7 @@ mod tests {
 
     // one test: the inbox is the process's
     #[test]
-    fn a_request_opens_a_window_that_answers_it_and_the_run_ends_with_the_last_window() {
+    fn a_request_opens_a_window_that_answers_it_and_the_portal_waits_with_none_open() {
         let folder = tempfile::tempdir().unwrap();
 
         let answer = post(1, ask(Kind::Save, folder.path()));
@@ -936,18 +931,20 @@ mod tests {
                 choices: Vec::new(),
             }
         );
-        assert!(driver.runtime().exited(), "no dialog is left open");
+        assert!(driver.runtime().windows().is_empty());
+        assert!(!driver.runtime().exited());
 
         let answer = post(2, ask(Kind::Open, folder.path()));
-        let (mut driver, window) = start();
+        let window = show(&mut driver);
         send(&mut driver, window, WindowEvent::CloseRequested);
         assert_eq!(answer.try_recv().unwrap(), Answer::Cancelled);
 
         let answer = post(3, ask(Kind::Open, folder.path()));
-        let (mut driver, window) = start();
+        let window = show(&mut driver);
         inbox().push(Event::Close { handle: handle(3) });
         settle(&mut driver, window);
         assert!(answer.is_closed(), "a closed request is dropped unanswered");
-        assert!(driver.runtime().exited());
+        assert!(driver.runtime().windows().is_empty());
+        assert!(!driver.runtime().exited());
     }
 }

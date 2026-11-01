@@ -266,6 +266,9 @@ pub fn render(state: &mut Cupertino) {
             let Some(idx) = state.outputs.iter().position(|o| o.id == target.output) else {
                 continue;
             };
+            // no vblank paces an offscreen output; a fixed clock is stepped, and so paced, by its owner
+            let paced = state.fixed_time.is_none();
+            state.outputs[idx].scheduler.pace_changes(paced);
             if !state.displays.powered(target.output) || !state.frame_due(idx, state.frame_now()) {
                 continue;
             }
@@ -325,8 +328,15 @@ pub fn run(
     event_loop: &mut EventLoop<'static, Cupertino>,
     deadline: Option<Instant>,
 ) -> Result<()> {
+    const PASS: Duration = Duration::from_millis(8);
     while state.running {
-        step(state, event_loop, Duration::from_millis(8))?;
+        let now = state.frame_now();
+        let timeout = (0..state.outputs.len())
+            .filter(|&idx| state.displays.powered(state.outputs[idx].id))
+            .filter_map(|idx| state.frame_deadline(idx, now))
+            .min()
+            .map_or(PASS, |at| at.saturating_sub(now).min(PASS));
+        step(state, event_loop, timeout)?;
         if deadline.is_some_and(|d| Instant::now() >= d) {
             break;
         }

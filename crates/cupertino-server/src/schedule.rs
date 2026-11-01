@@ -85,6 +85,8 @@ pub struct FrameScheduler {
     damaged: bool,
     /// The next grid point: previous due time plus one refresh, moved to a vblank when one is reported.
     next_due: Option<Duration>,
+    /// A change waits for the grid point too ([`FrameScheduler::pace_changes`]).
+    paced: bool,
     failed: Option<FailedFrames>,
     in_flight: Option<InFlight>,
     generation: u64,
@@ -98,6 +100,7 @@ impl Default for FrameScheduler {
         Self {
             damaged: true,
             next_due: None,
+            paced: false,
             failed: None,
             in_flight: None,
             generation: GENERATIONS.fetch_add(1, Ordering::Relaxed),
@@ -108,6 +111,12 @@ impl Default for FrameScheduler {
 }
 
 impl FrameScheduler {
+    /// Whether a change waits for the grid point too, for an output that no vblank paces (an offscreen one): a client
+    /// that draws on every frame callback then runs at the refresh rate, not as fast as the loop turns.
+    pub fn pace_changes(&mut self, paced: bool) {
+        self.paced = paced;
+    }
+
     /// Something on the output changed: it wants a frame.
     pub fn damage(&mut self) {
         self.damaged = true;
@@ -123,18 +132,18 @@ impl FrameScheduler {
         self.counts.callbacks += 1;
     }
 
-    /// Whether the output draws a frame at `now`: a change at once, an animation frame from its next grid point on, and
-    /// neither before the retry time of a failed frame.
+    /// Whether the output draws a frame at `now`: a change at once (at the next grid point without a vblank), an
+    /// animation frame from its next grid point on, and neither before the retry time of a failed frame.
     pub fn due(&self, now: Duration, animating: bool) -> bool {
-        self.retry_due(now)
-            && (self.damaged || animating && self.next_due.is_none_or(|due| now >= due))
+        let on_grid = self.next_due.is_none_or(|due| now >= due);
+        self.retry_due(now) && (self.damaged && (on_grid || !self.paced) || animating && on_grid)
     }
 
     /// When the output is next due, if anything wants a frame: what the loop may sleep until.
     pub fn deadline(&self, now: Duration, animating: bool) -> Option<Duration> {
-        let due = if self.damaged {
+        let due = if self.damaged && !self.paced {
             now
-        } else if animating {
+        } else if self.damaged || animating {
             self.next_due.map_or(now, |due| due.max(now))
         } else {
             return None;
@@ -409,6 +418,50 @@ mod tests {
             Some(MS + REFRESH),
             "a failed frame waits for its retry"
         );
+    }
+
+    /// Frames in one second of an output whose one client commits a new frame as soon as it is called back, with loop
+    /// passes 100 µs apart.
+    fn client_frames_in_a_second(mut s: FrameScheduler) -> u32 {
+        let mut frames = 0;
+        let mut now = Duration::ZERO;
+        while now < Duration::from_secs(1) {
+            if s.due(now, false) {
+                s.cycle(now, REFRESH);
+                s.called_back();
+                s.damage();
+                frames += 1;
+            }
+            now += Duration::from_micros(100);
+        }
+        frames
+    }
+
+    #[test]
+    fn without_a_vblank_a_client_drawing_on_every_callback_runs_at_the_refresh_rate() {
+        let mut paced = FrameScheduler::default();
+        paced.pace_changes(true);
+        assert_eq!(client_frames_in_a_second(paced), 60);
+        assert_eq!(
+            client_frames_in_a_second(FrameScheduler::default()),
+            10_000,
+            "with a vblank the flip in flight paces it, not the scheduler"
+        );
+    }
+
+    #[test]
+    fn without_a_vblank_a_change_is_drawn_at_the_next_grid_point() {
+        let mut s = FrameScheduler::default();
+        s.pace_changes(true);
+        assert!(s.due(Duration::ZERO, false), "a new output draws at once");
+        s.cycle(Duration::ZERO, REFRESH);
+        s.called_back();
+        s.damage();
+        assert!(!s.due(MS, false));
+        assert_eq!(s.deadline(MS, false), Some(REFRESH));
+        assert!(s.due(REFRESH, false));
+        s.reset();
+        assert!(!s.due(MS, false), "a reset keeps the pacing");
     }
 
     #[test]

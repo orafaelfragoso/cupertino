@@ -1,6 +1,7 @@
 //! Each output is paced by its own refresh: an animation draws once per grid point of every head, a commit marks only
 //! the heads that show its surface, and the cursor follows the head under the pointer. Counts are taken on the fixed
-//! model clock of the headless compositor, as differences, so they do not depend on machine load.
+//! model clock of the headless compositor, as differences, so they do not depend on machine load. Only the pacing of a
+//! change, which no vblank does offscreen, is counted on the running clock.
 
 mod common;
 
@@ -190,5 +191,28 @@ fn a_window_shown_nowhere_marks_only_the_head_under_the_pointer() {
     assert!(
         !marked[shown],
         "the window's own head, where it is hidden, is not"
+    );
+}
+
+#[test]
+fn on_the_running_clock_a_window_that_commits_after_every_frame_draws_once_per_refresh() {
+    let mut d = Desktop::new(1.0);
+    d.window();
+    d.at(2000);
+    let surface = d.state.windows[0].toplevel.wl_surface().clone();
+    d.state.fixed_time = None;
+    let before = d.state.outputs[0].scheduler.counts().composes;
+    let span = Duration::from_secs(1);
+    let end = Instant::now() + span;
+    while Instant::now() < end {
+        CompositorHandler::commit(&mut d.state, &surface);
+        headless::step(&mut d.state, &mut d.event_loop, Duration::from_millis(1))
+            .expect("a loop pass");
+    }
+    let drawn = d.state.outputs[0].scheduler.counts().composes - before;
+    let grid = (span.as_secs_f64() / d.state.refresh_of(0).as_secs_f64()).round() as u64;
+    assert!(
+        drawn <= grid + 2,
+        "{drawn} frames in {span:?}, the 60 Hz grid has {grid}"
     );
 }

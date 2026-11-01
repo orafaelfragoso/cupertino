@@ -11,6 +11,18 @@ const SCRIPT: &str = r#"#!/bin/sh
 dir=$(dirname "$0")
 if [ -e "$dir/down" ]; then echo "Could not connect to PipeWire" >&2; exit 1; fi
 if [ -e "$dir/hung" ]; then exec sleep 30; fi
+case "$1" in
+status)
+printf 'Audio\n'
+printf ' ├─ Sinks:\n'
+[ -e "$dir/sinks" ] && while IFS='|' read -r id name; do
+if [ "$id" = "$(cat "$dir/default")" ]; then mark='*'; else mark=' '; fi
+printf ' │  %s   %s. %s        [vol: 0.40]\n' "$mark" "$id" "$name"
+done < "$dir/sinks"
+printf ' │\n ├─ Sources:\n'
+exit 0 ;;
+set-default) echo "$2" > "$dir/default"; exit 0 ;;
+esac
 case "$2" in
 @DEFAULT_AUDIO_SINK@) node="$dir/sink" ;;
 @DEFAULT_AUDIO_SOURCE@) node="$dir/source" ;;
@@ -65,6 +77,26 @@ impl FakeWpctl {
             format!("{} {}\n", volume.level, u8::from(volume.muted)),
         )
         .expect("the state is written");
+    }
+
+    /// The outputs `wpctl status` lists, as `(id, name)`, and the id of the default.
+    pub fn set_sinks(&self, sinks: &[(u32, &str)], default: u32) {
+        let lines: String = sinks
+            .iter()
+            .map(|(id, name)| format!("{id}|{name}\n"))
+            .collect();
+        fs::write(self.dir.path().join("sinks"), lines).expect("the sinks are written");
+        fs::write(self.dir.path().join("default"), format!("{default}\n"))
+            .expect("the default is written");
+    }
+
+    /// The id `wpctl set-default` last set, or the one given to [`Self::set_sinks`].
+    pub fn default_sink(&self) -> u32 {
+        fs::read_to_string(self.dir.path().join("default"))
+            .expect("the default is written")
+            .trim()
+            .parse()
+            .expect("an id")
     }
 
     /// Make every call fail as when no PipeWire daemon runs, or answer again.

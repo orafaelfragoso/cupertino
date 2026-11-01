@@ -95,6 +95,16 @@ pub struct Volume {
     pub muted: bool,
 }
 
+/// A sound output the system can play to (a PipeWire sink).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Output {
+    /// The id `wpctl set-default` takes.
+    pub id: u32,
+    pub name: String,
+    /// Whether applications play to it now.
+    pub default: bool,
+}
+
 /// What the battery is doing (UPower `State`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BatteryState {
@@ -240,6 +250,8 @@ pub struct Live {
     pub mice: Reading<Vec<Mouse>>,
     pub focus: Reading<Focus>,
     pub volume: Reading<Volume>,
+    /// The sound outputs, empty when there is no PipeWire daemon or none is listed.
+    pub outputs: Vec<Output>,
     /// The display backlight, 0 to 1 (`org.cupertino.Power1`).
     pub brightness: Reading<f64>,
     /// `None` inside: no battery (`IsPresent` false).
@@ -259,6 +271,7 @@ impl Default for Live {
             mice: Reading::Unknown,
             focus: Reading::Unknown,
             volume: Reading::Unknown,
+            outputs: Vec::new(),
             brightness: Reading::Unknown,
             battery: Reading::Unknown,
             wifi: Reading::Unknown,

@@ -3,9 +3,9 @@
 
 use std::ffi::OsString;
 use std::fmt;
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -43,6 +43,17 @@ pub struct Volume {
     pub level: f64,
     /// Whether the node is muted.
     pub muted: bool,
+}
+
+/// An output the system can play to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sink {
+    /// The WirePlumber object id, the argument of `wpctl set-default`.
+    pub id: u32,
+    /// The name `wpctl status` lists.
+    pub name: String,
+    /// Whether applications play to it now.
+    pub default: bool,
 }
 
 /// Why a call failed.
@@ -145,19 +156,47 @@ impl Wpctl {
             .map(drop)
     }
 
+    /// The outputs `wpctl status` lists, in its order.
+    pub fn sinks(&self) -> Result<Vec<Sink>> {
+        let output = self.run(["status"])?;
+        Ok(parse_sinks(&String::from_utf8_lossy(&output)))
+    }
+
+    /// Make the sink `id` the output applications play to.
+    pub fn set_default_sink(&self, id: u32) -> Result<()> {
+        self.run(["set-default", &id.to_string()]).map(drop)
+    }
+
+    /// Start `wpctl`. A program another thread has just written can be busy (`ETXTBSY`) until that thread's concurrent
+    /// fork has executed; a few short retries ride it out.
+    fn spawn(&self, args: &[OsString]) -> Result<Child> {
+        let mut busy = 0;
+        loop {
+            match Command::new(&self.program)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+            {
+                Err(e) if e.kind() == ErrorKind::ExecutableFileBusy && busy < 20 => {
+                    busy += 1;
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                other => {
+                    return other.map_err(|source| Error::Spawn {
+                        program: self.program.clone(),
+                        source,
+                    })
+                }
+            }
+        }
+    }
+
     /// Run `wpctl` with `args` and return what it printed. One that has not finished within the timeout is killed and
     /// fails as [`Error::Failed`] without a code.
     fn run<const N: usize>(&self, args: [&str; N]) -> Result<Vec<u8>> {
-        let mut child = Command::new(&self.program)
-            .args(args.map(OsString::from))
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|source| Error::Spawn {
-                program: self.program.clone(),
-                source,
-            })?;
+        let mut child = self.spawn(&args.map(OsString::from))?;
         let (sender, read) = mpsc::channel();
         for (stream, pipe) in [
             (
@@ -236,6 +275,50 @@ pub fn parse_volume(output: &str) -> Result<Volume> {
         level: level.clamp(0.0, 1.0),
         muted,
     })
+}
+
+/// The sinks in `wpctl status` output: the entries below the `Sinks:` heading of the `Audio` section, each
+/// `*   52. Built-in Audio Analog Stereo        [vol: 0.40]` with `*` on the default. Output without that heading lists none.
+pub fn parse_sinks(output: &str) -> Vec<Sink> {
+    let mut audio = false;
+    let mut in_sinks = false;
+    let mut sinks = Vec::new();
+    for line in output.lines() {
+        let text = line.trim_start_matches(|c: char| c.is_whitespace() || "│├└─".contains(c));
+        if !line.starts_with(char::is_whitespace) && !line.is_empty() {
+            audio = text.trim() == "Audio";
+            in_sinks = false;
+            continue;
+        }
+        if !audio {
+            continue;
+        }
+        if text.trim_end().ends_with(':') {
+            in_sinks = text.trim_end() == "Sinks:";
+            continue;
+        }
+        if !in_sinks {
+            continue;
+        }
+        let (default, rest) = match text.strip_prefix('*') {
+            Some(rest) => (true, rest),
+            None => (false, text),
+        };
+        let Some((id, name)) = rest.trim_start().split_once(". ") else {
+            continue;
+        };
+        let Ok(id) = id.parse() else { continue };
+        let name = match name.rfind(" [") {
+            Some(at) if name.ends_with(']') => &name[..at],
+            _ => name,
+        };
+        sinks.push(Sink {
+            id,
+            name: name.trim().to_string(),
+            default,
+        });
+    }
+    sinks
 }
 
 #[cfg(test)]
@@ -356,5 +439,78 @@ mod tests {
                 "{output:?}"
             );
         }
+    }
+
+    const STATUS: &str = "PipeWire 'pipewire-0' [1.4.7, rafael@box, cpid:1234]
+ └─ Clients:
+        33. WirePlumber                         [1.4.7, rafael@box, pid:1301]
+
+Audio
+ ├─ Devices:
+ │      47. Built-in Audio                      [alsa]
+ │      48. GA106 High Definition Audio         [alsa]
+ │
+ ├─ Sinks:
+ │      53. HDMI / DisplayPort 1 [Output]       [vol: 1.00]
+ │  *   52. Built-in Audio Analog Stereo        [vol: 0.40 MUTED]
+ │
+ ├─ Sink endpoints:
+ │
+ ├─ Sources:
+ │  *   54. Built-in Audio Analog Stereo        [vol: 1.00]
+ │
+ └─ Streams:
+
+Video
+ └─ Sinks:
+        99. Not an audio output                 [vol: 1.00]
+";
+
+    #[test]
+    fn the_sinks_of_the_audio_section_are_listed_with_the_default_marked() {
+        assert_eq!(
+            parse_sinks(STATUS),
+            [
+                Sink {
+                    id: 53,
+                    name: "HDMI / DisplayPort 1 [Output]".into(),
+                    default: false
+                },
+                Sink {
+                    id: 52,
+                    name: "Built-in Audio Analog Stereo".into(),
+                    default: true
+                },
+            ]
+        );
+        assert_eq!(parse_sinks("Audio\n ├─ Sinks:\n │\n ├─ Sources:\n"), []);
+        assert_eq!(parse_sinks(""), []);
+    }
+
+    #[test]
+    fn the_default_sink_is_changed_and_listed_again() {
+        let fake = FakeWpctl::new(QUIET, QUIET);
+        fake.set_sinks(&[(52, "Speakers"), (53, "Headphones")], 52);
+        let wpctl = Wpctl::new(fake.program());
+        assert_eq!(
+            wpctl
+                .sinks()
+                .unwrap()
+                .iter()
+                .map(|s| s.default)
+                .collect::<Vec<_>>(),
+            [true, false]
+        );
+        wpctl.set_default_sink(53).unwrap();
+        let sinks = wpctl.sinks().unwrap();
+        assert_eq!(
+            sinks[1],
+            Sink {
+                id: 53,
+                name: "Headphones".into(),
+                default: true
+            }
+        );
+        assert!(!sinks[0].default);
     }
 }

@@ -1,0 +1,26 @@
+#!/bin/sh
+# pacman hook (PreTransaction, Upgrade): keep the installed Cupertino packages and their signatures in
+# /var/lib/cupertino/previous, root-only, so that cupertino-rollback still finds them after a cache cleanup. Only the
+# last release is kept. A package without a signature in the cache (installed from a local file) is not kept: the rollback
+# would refuse it.
+set -eu
+umask 077
+
+DIR=/var/lib/cupertino/previous
+CACHE=/var/cache/pacman/pkg
+
+mkdir -p "$DIR"
+chown root:root "$DIR"
+chmod 0700 "$DIR"
+
+for name in cupertino cupertino-data; do
+    version=$(pacman -Q "$name" 2>/dev/null | cut -d ' ' -f 2) || continue
+    [ -n "$version" ] || continue
+    file=$name-$version-x86_64.pkg.tar.zst
+    if [ -f "$CACHE/$file" ] && [ -f "$CACHE/$file.sig" ]; then
+        find "$DIR" -maxdepth 1 -name "$name-*.pkg.tar.zst*" -delete
+        cp "$CACHE/$file" "$CACHE/$file.sig" "$DIR/"
+    else
+        echo "cupertino-save-previous: $file or its signature is not in the cache; no rollback copy kept" >&2
+    fi
+done

@@ -685,18 +685,15 @@ What is open for using Cupertino every day, as of this file. Nothing here has a 
 * **First real session.** Starting Cupertino from a display manager (GDM) on real hardware, with the NVIDIA driver, has not been run (*From the display manager*).
 * **NVIDIA.** Explicit sync (the release point is signalled once the flip of the last frame drawn from the buffer is done) has not run on NVIDIA. Lock, unlock, sleep and resume, and log out, restart and shut down through logind, are not run on hardware either.
 * **Lost GPU context.** The session ends and the display manager shows the login screen; the renderer is not rebuilt in place (*Lost rendering context* below).
-* **Portals.** The session supervisor starts `cupertino-portal`, but that program does not exist yet and no portal configuration is installed. Until it does, browser file choosers, screen sharing in video calls and the dark-mode setting for apps do not go through Cupertino.
+* **Portals.** `cupertino-portal` serves the appearance settings and the file chooser (`data/cupertino.portal`). It has no screen sharing or screenshot interface, so screen sharing in video calls does not go through Cupertino.
 * **Authentication prompt.** The polkit agent is built and tested but is not in the packaged binaries, so an installed session does not start it.
-* **Audio.** The volume and mute keys change the ALSA hardware mixer, not the PipeWire sink that is playing, and the microphone mute key is unbound.
-* **Network and Bluetooth.** The panes talk to `cupertino-netd` (iwd) and `cupertino-btd`, not to NetworkManager or BlueZ. There is no VPN and no A2DP or HFP audio.
+* **Audio.** The volume and mute keys change the default PipeWire sink and the microphone mute key toggles the default source (*Volume and brightness overlay*). With no PipeWire daemon, volume and mute fall back to the ALSA master mixer.
 * **X11 applications.** Started through `xwayland-satellite`; the server tests use a fake satellite, and the real one is checked in a QEMU guest only (`ci/vm/x11_apps.py`: scale 2, clipboard both ways). Outputs of different scales give every X11 window the smallest one.
-* **Keyboard layout.** Layouts come only from `keyboard.conf`; the system layout at login (localed) and a Compose key setting are not read.
 * **Terminal.** No terminal is shipped, and the launcher falls back to `xterm`.
-* **Scrolling.** Natural scrolling is on by default, mice included.
 * **Crash recovery.** A server crash ends the session and returns to the display manager; windows are not reopened.
-* **Long runs.** No soak or endurance test has been run.
+* **Long runs.** `ci/soak.py` is the soak run (server memory, open descriptors and frame pacing every minute); no result from the hardware is recorded here.
 * **Input methods.** An input method framework (fcitx5, ibus) cannot attach; the input-method global is given only to the compositor's own accent bridge.
-* **Drag and drop and the primary selection.** Drag and drop between applications has no server test. The primary selection is not kept after its source application closes.
+* **Drag and drop and the primary selection.** Drag and drop is tested between two Wayland test clients only. The primary selection is not kept after its source application closes.
 * **Screen recording, night light, DDC/CI brightness.** Not implemented. Screenshots work.
 * **Several monitors and a second GPU.** Tested in a virtual machine only.
 

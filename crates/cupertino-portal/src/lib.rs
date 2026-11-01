@@ -1,10 +1,13 @@
 //! The session's xdg-desktop-portal backend. See the README.
 
+#[cfg(feature = "app")]
+pub mod capture;
 pub mod chooser;
 #[cfg(feature = "app")]
 pub mod dialog;
 pub mod file_chooser;
 pub mod request;
+pub mod screen_cast;
 pub mod settings;
 
 /// The name xdg-desktop-portal reaches the backend at, as `data/cupertino.portal` declares it.

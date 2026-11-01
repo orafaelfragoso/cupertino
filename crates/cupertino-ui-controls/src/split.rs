@@ -7,7 +7,7 @@ use cupertino_ui_core::{
 };
 use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutDirection, LayoutSpec, Measured,
-    Overflow, SizeSpec,
+    Overflow, SizeSpec, SplitSpec,
 };
 use cupertino_ui_platform::{CursorShape, Keysym, MouseButton, PointerEvent};
 use cupertino_ui_theme::ColorRole;
@@ -39,32 +39,38 @@ fn no_measure() -> Measured {
 
 impl<M: 'static> From<SplitView<M>> for Element<M> {
     fn from(view: SplitView<M>) -> Self {
-        let collapsed = view.layout.collapsed;
-        let pane = |content, extent| {
+        let pane = |content| {
             Element::new(Pane {
                 axis: view.axis,
-                extent,
                 content: Some(content),
             })
         };
-        let mut panes = Vec::with_capacity(2);
-        if collapsed != Some(SplitPane::Leading) {
-            let extent = (collapsed.is_none()).then_some(view.layout.position.max(0.0));
-            panes.push(pane(view.leading, extent));
-        }
-        if collapsed != Some(SplitPane::Trailing) {
-            panes.push(pane(view.trailing, None));
-        }
-        let spacing = if collapsed.is_none() { DIVIDER } else { 0.0 };
+        let alone = |content| {
+            Element::new(Stack {
+                axis: view.axis,
+                padding: Insets::ZERO,
+                spacing: 0.0,
+                align: Align::Stretch,
+                children: vec![pane(content)],
+            })
+        };
+        let panes = match view.layout.collapsed {
+            None => Element::new(Panes {
+                spec: SplitSpec {
+                    axis: view.axis,
+                    leading: view.layout.position.max(0.0),
+                    gap: DIVIDER,
+                    min_leading: view.min_leading,
+                    min_trailing: view.min_trailing,
+                },
+                children: vec![pane(view.leading), pane(view.trailing)],
+            }),
+            Some(SplitPane::Leading) => alone(view.trailing),
+            Some(SplitPane::Trailing) => alone(view.leading),
+        };
         Element::new(Split {
             children: vec![
-                Element::new(Stack {
-                    axis: view.axis,
-                    padding: Insets::ZERO,
-                    spacing,
-                    align: Align::Stretch,
-                    children: panes,
-                }),
+                panes,
                 Element::new(Divider {
                     label: view.label,
                     axis: view.axis,
@@ -119,52 +125,32 @@ impl<M: 'static> Widget<M> for Split<M> {
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
-/// One pane, clipped: the leading one at its extent, the trailing one taking what is left.
-struct Pane<M> {
-    axis: Axis,
-    extent: Option<f64>,
-    content: Option<Element<M>>,
+/// Both panes when neither is collapsed: the leading one at the model's position within the minimums, or hidden
+/// when the minimums do not fit, the trailing one taking the rest.
+struct Panes<M> {
+    spec: SplitSpec,
+    children: Vec<Element<M>>,
 }
 
-impl<M: 'static> Widget<M> for Pane<M> {
+impl<M: 'static> Widget<M> for Panes<M> {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
-        let kind = ContainerKind::Stack {
-            axis: Axis::Vertical,
-            spacing: 0.0,
-            align: Align::Stretch,
-            justify: Justify::Start,
-        };
-        let along = self.extent.map_or(SizeSpec::Fill, SizeSpec::Fixed);
-        let (width, height) = match self.axis {
-            Axis::Horizontal => (along, SizeSpec::Fill),
-            Axis::Vertical => (SizeSpec::Fill, along),
-        };
         LayoutSpec {
-            width,
-            height,
-            flex: match self.extent {
-                Some(_) => Flex::NONE,
-                None => Flex {
-                    grow: 1.0,
-                    shrink: 1.0,
-                    basis: Some(0.0),
-                },
-            },
-            overflow: Overflow::Clip,
-            ..LayoutSpec::new(kind)
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fill,
+            ..LayoutSpec::new(ContainerKind::Split(self.spec))
         }
     }
 
     fn take_children(&mut self) -> Vec<Element<M>> {
-        self.content.take().into_iter().collect()
+        std::mem::take(&mut self.children)
     }
 
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.axis != old.axis || self.extent != old.extent {
+        if self.spec != old.spec {
             Change::Layout
         } else {
             Change::None
@@ -182,6 +168,71 @@ impl<M: 'static> Widget<M> for Pane<M> {
     fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// One pane, clipped. A pane laid out with no room along the axis is hidden, its content out of the Tab order.
+struct Pane<M> {
+    axis: Axis,
+    content: Option<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for Pane<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        let kind = ContainerKind::Stack {
+            axis: Axis::Vertical,
+            spacing: 0.0,
+            align: Align::Stretch,
+            justify: Justify::Start,
+        };
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fill,
+            flex: Flex {
+                grow: 1.0,
+                shrink: 1.0,
+                basis: Some(0.0),
+            },
+            overflow: Overflow::Clip,
+            ..LayoutSpec::new(kind)
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        self.content.take().into_iter().collect()
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.axis != old.axis {
+            Change::Layout
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        let size = cx.size();
+        let along = match self.axis {
+            Axis::Horizontal => size.width,
+            Axis::Vertical => size.height,
+        };
+        if along == 0.0 {
+            cx.hidden();
+        }
+    }
 }
 
 /// The divider: as large as the split view, so it knows the panes' room, but hit only on its strip.
@@ -223,13 +274,37 @@ impl<M> Divider<M> {
         (extent - DIVIDER - self.min_trailing).max(self.min_leading)
     }
 
-    /// Where the line starts, from the leading edge.
+    /// Where the line starts, from the leading edge: after the leading pane as shown, or at the edge of a collapsed
+    /// pane.
     fn line(&self, extent: f64) -> f64 {
-        let end = (extent - DIVIDER).max(0.0);
         match self.layout.collapsed {
             Some(SplitPane::Leading) => 0.0,
-            Some(SplitPane::Trailing) => end,
-            None => self.layout.position.clamp(0.0, end),
+            Some(SplitPane::Trailing) => (extent - DIVIDER).max(0.0),
+            None => self.spec().shown(extent).unwrap_or(0.0),
+        }
+    }
+
+    fn spec(&self) -> SplitSpec {
+        SplitSpec {
+            axis: self.axis,
+            leading: self.layout.position.max(0.0),
+            gap: DIVIDER,
+            min_leading: self.min_leading,
+            min_trailing: self.min_trailing,
+        }
+    }
+
+    /// Whether the leading pane is hidden for want of room, which takes the divider with it: no line, no strip, no
+    /// Tab stop. A pane the person collapsed keeps the divider at its edge.
+    fn gone(&self, extent: f64) -> bool {
+        self.layout.collapsed.is_none() && self.spec().shown(extent).is_none()
+    }
+
+    /// Where the keys and actions step from: the shown position, or the model's while a pane is collapsed.
+    fn step_base(&self, extent: f64) -> f64 {
+        match self.layout.collapsed {
+            Some(_) => self.layout.position,
+            None => self.line(extent),
         }
     }
 
@@ -301,7 +376,7 @@ impl<M: 'static> Divider<M> {
             (Axis::Horizontal, false) => (RIGHT, LEFT),
             (Axis::Horizontal, true) => (LEFT, RIGHT),
         };
-        let position = self.layout.position;
+        let position = self.step_base(extent);
         match keysym {
             k if k == grow => self.place(position + KEY_STEP, extent, cx),
             k if k == shrink => self.place(position - KEY_STEP, extent, cx),
@@ -351,10 +426,9 @@ impl<M: 'static> Widget<M> for Divider<M> {
     }
 
     fn hit(&self, state: &DividerState, point: Point) -> bool {
-        state
-            .painted
-            .get()
-            .is_some_and(|(size, mirrored)| self.zone(size, mirrored).contains(point))
+        state.painted.get().is_some_and(|(size, mirrored)| {
+            !self.gone(self.extent(size)) && self.zone(size, mirrored).contains(point)
+        })
     }
 
     fn event(
@@ -421,7 +495,7 @@ impl<M: 'static> Widget<M> for Divider<M> {
                 }
             }
             Event::Action(ref request) => {
-                let position = self.layout.position;
+                let position = self.step_base(extent);
                 match (request.action, &request.data) {
                     (Action::Increment, _) => self.place(position + KEY_STEP, extent, cx),
                     (Action::Decrement, _) => self.place(position - KEY_STEP, extent, cx),
@@ -441,6 +515,9 @@ impl<M: 'static> Widget<M> for Divider<M> {
         let size = cx.size();
         let mirrored = self.mirrored(cx.env().direction);
         state.painted.set(Some((size, mirrored)));
+        if self.gone(self.extent(size)) {
+            return;
+        }
         let theme = cx.env().theme.clone();
         let zone = self.zone(size, mirrored);
         if self.layout.collapsed.is_none() {
@@ -473,6 +550,10 @@ impl<M: 'static> Widget<M> for Divider<M> {
     fn semantics(&self, _: &DividerState, cx: &mut SemanticsCx<'_>) {
         let size = cx.size();
         let extent = self.extent(size);
+        if self.gone(extent) {
+            cx.hidden();
+            return;
+        }
         cx.role(Role::Splitter);
         cx.name(self.label.clone());
         // the whole span the line can stand on, collapsed ends included, so the value never leaves it

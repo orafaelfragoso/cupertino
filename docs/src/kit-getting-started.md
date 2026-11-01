@@ -72,10 +72,11 @@ Works:
 - Actions from the assistive technology: click, focus, increment, decrement, expand, collapse, show menu, scroll into
   view, set value. An action reaches the application only if its target advertised it.
 - Password and protected values carry no value and cannot be set from outside.
+- A text field's caret and selection, in characters, and a selection set from the assistive technology. A protected
+  field publishes neither.
 
 Not done:
 
-- A text field's caret and selection are not published, and selection cannot be set.
 - Bounds are window-relative, because a Wayland client does not know its window position.
 - A closed window's AT-SPI object stays until the application exits.
 
@@ -86,9 +87,10 @@ cargo test -p cupertino-ui-atspi
 cargo test -p cupertino-kit --test assistive-technology
 ```
 
-The first runs 19 mapping and filter tests, one test of the live-region rules while the session is locked, and, when
-`dbus-daemon` is installed, two tests on a private bus with a fake AT-SPI registry (22 tests ran with `dbus-daemon`
-present; without it the two bus tests print `SKIPPED`). The second changes a form value and moves focus through assistive-technology requests. No screen reader was
+The first runs the mapping and filter tests, a test of the live-region rules while the session is locked, and, when
+`dbus-daemon` is installed, tests on a private bus with a fake AT-SPI registry, one of them following a text field's
+caret and selection (without `dbus-daemon` the bus tests print `SKIPPED`).
+The second changes a form value and moves focus through assistive-technology requests. No screen reader was
 run against the examples for this page, so how a screen reader reads them is not documented here.
 
 ## Right to left

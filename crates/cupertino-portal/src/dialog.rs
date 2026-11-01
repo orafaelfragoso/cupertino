@@ -1239,10 +1239,10 @@ fn consent_prompt(ask: &screenshot::Ask) -> String {
 fn consent_window(c: &Consent) -> Window<Message> {
     let id = c.id;
     let prompt = Element::new(Stack {
-        axis: Axis::Horizontal,
+        axis: Axis::Vertical,
         padding: BAR_INSETS,
         spacing: GAP,
-        align: Align::Center,
+        align: Align::Stretch,
         children: vec![Element::new(Text {
             content: AttributedText::plain(consent_prompt(&c.ask), TextStyle::new(13.0)),
             role: TextRole::Body,
@@ -1716,6 +1716,20 @@ mod tests {
         type_key(&mut driver, window, ESCAPE, None);
         assert_eq!(answer.try_recv().unwrap(), screenshot::Answer::Cancelled);
         assert!(driver.runtime().windows().is_empty());
+
+        let answer = consent(
+            8,
+            Some("Very Long Application Name Studio Professional Edition"),
+        );
+        let window = show(&mut driver);
+        let prompt = rect_of(&driver, window, &Key::from("prompt"));
+        assert!(
+            prompt.origin.x + prompt.size.width <= CONSENT_SIZE.width - BAR_INSETS.right
+                && prompt.size.height > 20.0,
+            "a long name wraps inside the window: {prompt:?}"
+        );
+        type_key(&mut driver, window, ESCAPE, None);
+        assert_eq!(answer.try_recv().unwrap(), screenshot::Answer::Cancelled);
         assert!(!driver.runtime().exited());
     }
 }

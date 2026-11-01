@@ -49,6 +49,11 @@ pub(crate) fn initial_focus<M: 'static>(tree: &Tree<M>, id: NodeId) -> bool {
     declared(tree, id).is_some_and(|s| s.initial_focus)
 }
 
+/// Whether the node is a text input, whose focus shows its ring however it got there.
+pub(crate) fn text_input<M: 'static>(tree: &Tree<M>, id: NodeId) -> bool {
+    declared(tree, id).is_some_and(|s| s.role == Some(Role::TextInput))
+}
+
 pub(crate) fn build<M: 'static>(
     tree: &Tree<M>,
     root: NodeId,

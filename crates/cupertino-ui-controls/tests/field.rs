@@ -78,6 +78,7 @@ impl<const ENABLED: bool> Application for Form<ENABLED> {
                     on_change: Some(Box::new(Message::Changed)),
                     on_submit: Some(Message::Submit),
                     selection: None,
+                    initial: false,
                 })
                 .key("name"),
                 Element::new(SecureField {
@@ -401,6 +402,7 @@ impl Application for Rename {
                 on_change: Some(Box::new(Message::Changed)),
                 on_submit: None,
                 selection: Some(0..5),
+                initial: false,
             })
             .key("name"),
         )
@@ -629,6 +631,7 @@ impl<const N: usize> Application for Long<N> {
             on_change: Some(Box::new(Message::Changed)),
             on_submit: None,
             selection: None,
+            initial: false,
         }))
     }
 }

@@ -2,7 +2,7 @@
 //! menu) keeps Tab inside itself while it is the innermost open scope, and hands the focus back when it unmounts:
 //! to the node focused before it opened or, if that node is gone, its nearest surviving ancestor.
 
-use crate::semantics::initial_focus;
+use crate::semantics::{initial_focus, text_input};
 use crate::tree::Tree;
 use crate::NodeId;
 
@@ -30,6 +30,7 @@ pub(crate) struct Focus {
     visible: bool,
     path: Vec<NodeId>,
     scopes: Vec<Scope>,
+    opened: bool,
 }
 
 impl Focus {
@@ -81,7 +82,9 @@ impl Focus {
 
     /// Brings focus up to date after a frame: closed scopes give the focus back, a focus whose node unmounted moves
     /// to its nearest surviving ancestor, and a newly open scope takes the focus to its first Tab stop at or under an
-    /// initial-focus node, or else its first focusable one. `scopes` and `focusable` are in reading order.
+    /// initial-focus node, or else its first focusable one. On the window's first frame an unfocused window takes the
+    /// focus to its first Tab stop at or under an initial-focus node, if it has one. A text input given the focus as
+    /// its window or scope opens shows its ring. `scopes` and `focusable` are in reading order.
     pub(crate) fn sync<M: 'static>(
         &mut self,
         tree: &Tree<M>,
@@ -89,7 +92,7 @@ impl Focus {
         focusable: &[NodeId],
     ) -> Option<FocusChange> {
         let from = self.node;
-        let visible = self.visible;
+        let mut visible = self.visible;
         let mut target = self.node;
         let mut moved = false;
 
@@ -106,6 +109,17 @@ impl Focus {
         if !moved && target.is_some_and(|n| !tree.contains(n)) {
             target = deepest_alive(tree, &self.path);
             moved = true;
+        }
+
+        if !std::mem::replace(&mut self.opened, true) && target.is_none() {
+            target = focusable
+                .iter()
+                .copied()
+                .find(|&n| tree.path(n).into_iter().any(|p| initial_focus(tree, p)));
+            if let Some(node) = target {
+                moved = true;
+                visible |= text_input(tree, node);
+            }
         }
 
         for &scope in scopes {
@@ -134,6 +148,7 @@ impl Focus {
                     })
                     .or(inside.first().copied())
                     .or(Some(scope));
+                visible |= target.is_some_and(|n| text_input(tree, n));
                 moved = true;
             }
         }

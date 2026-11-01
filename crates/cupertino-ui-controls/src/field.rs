@@ -780,6 +780,9 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
             cx.action(Action::Focus);
             cx.action(Action::SetValue);
             cx.action(Action::SetSelection);
+            if self.initial {
+                cx.initial_focus();
+            }
         }
     }
 }

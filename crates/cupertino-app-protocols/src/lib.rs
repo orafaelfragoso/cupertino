@@ -3,6 +3,11 @@
 
 #![allow(clippy::all)]
 
+// The scanner macros read the XML without telling rustc; including it puts it in the dep-info that caches such as
+// sccache key on, so an edited protocol regenerates the bindings.
+const _: &[u8] = include_bytes!("../protocols/cupertino-app-effects-v1.xml");
+const _: &[u8] = include_bytes!("../protocols/cupertino-scroll-v1.xml");
+
 #[cfg(feature = "client")]
 pub mod client {
     #![allow(

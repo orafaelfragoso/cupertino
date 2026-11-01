@@ -51,6 +51,8 @@ pub(crate) const LIGHT: Palette<[u8; 4]> = Palette {
         (PageDot, gray(105)),
         (GroupFill, gray(217)),
         (SwitchThumbGlyph, gray(115)),
+        (PanelTrack, gray(232)),
+        (PanelTrackBorder, gray(208)),
     ],
     states: StateColors {
         emphasized_border: gray(100),
@@ -104,6 +106,8 @@ pub(crate) const DARK: Palette<[u8; 4]> = Palette {
         (PageDot, gray(163)),
         (GroupFill, gray(66)),
         (SwitchThumbGlyph, gray(115)),
+        (PanelTrack, gray(35)),
+        (PanelTrackBorder, gray(35)),
     ],
     states: StateColors {
         emphasized_border: gray(159),
@@ -158,6 +162,8 @@ pub(crate) const HIGH_CONTRAST_LIGHT: Palette<[u8; 4]> = Palette {
         (PageDot, gray(60)),
         (GroupFill, gray(209)),
         (SwitchThumbGlyph, gray(60)),
+        (PanelTrack, gray(117)),
+        (PanelTrackBorder, gray(105)),
     ],
     states: StateColors {
         emphasized_border: BLACK,
@@ -211,6 +217,8 @@ pub(crate) const HIGH_CONTRAST_DARK: Palette<[u8; 4]> = Palette {
         (PageDot, gray(210)),
         (GroupFill, gray(81)),
         (SwitchThumbGlyph, gray(200)),
+        (PanelTrack, gray(156)),
+        (PanelTrackBorder, gray(156)),
     ],
     states: StateColors {
         emphasized_border: WHITE,
@@ -381,6 +389,7 @@ mod tests {
                 }
                 ControlBorder => control,
                 DisabledControlBorder => normal(DisabledControlFill),
+                PanelTrackBorder => normal(PanelTrack),
                 _ => normal(WindowBackground),
             };
             let raised_for_contrast = [

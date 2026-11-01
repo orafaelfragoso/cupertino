@@ -100,6 +100,7 @@ impl Application for Panel {
                     on_change: Some(Box::new(Message::Brightness)),
                 })
                 .key("display"),
+                battery(0.0).key("empty"),
                 battery(0.1).key("low"),
                 battery(0.11).key("high"),
             ],
@@ -179,8 +180,12 @@ fn a_tile_is_a_group_named_by_its_label_holding_its_compact_module() {
 }
 
 #[test]
-fn a_panel_level_slider_fills_with_the_thumb_colour_not_the_accent() {
+fn a_panel_level_slider_keeps_its_own_track_grey_and_fills_with_the_thumb_colour() {
     let h = Harness::<Panel>::new();
+    assert_eq!(
+        fills(&h, "display")[0].1,
+        color(ColorRole::PanelTrack, InteractionVariant::Normal, false)
+    );
     assert_eq!(
         fills(&h, "display")[1].1,
         color(ColorRole::SwitchThumb, InteractionVariant::Normal, false)
@@ -188,7 +193,7 @@ fn a_panel_level_slider_fills_with_the_thumb_colour_not_the_accent() {
 }
 
 #[test]
-fn a_battery_at_or_below_a_tenth_fills_red_and_reports_its_level() {
+fn a_battery_at_or_below_a_tenth_fills_red_never_narrower_than_a_sliver_and_reports_its_level() {
     let h = Harness::<Panel>::new();
     let low = fills(&h, "low")[1];
     assert_eq!(
@@ -199,10 +204,10 @@ fn a_battery_at_or_below_a_tenth_fills_red_and_reports_its_level() {
             false
         )
     );
-    assert!(
-        (low.0.width() - 1.9).abs() < 1e-9,
-        "a tenth of the 19 pt span"
-    );
+    assert_eq!(low.0.width(), 2.0, "a tenth of the 19 pt span, rounded");
+    let empty = fills(&h, "empty")[1];
+    assert_eq!(empty.0.width(), 2.0, "an empty battery keeps a sliver");
+    assert_eq!(empty.1, low.1, "in red");
     assert_eq!(
         fills(&h, "high")[1].1,
         color(ColorRole::Text, InteractionVariant::Normal, false)

@@ -484,7 +484,7 @@ fixtures! {
     });
     battery_low: "battery-low", CONTROL, &[State::Normal], |_| Element::new(BatteryMeter {
         label: "Battery".into(),
-        level: 0.08,
+        level: 0.03,
         charging: false,
     });
     // the tip's popup content, drawn in a cell of its own

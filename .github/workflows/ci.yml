@@ -38,6 +38,7 @@ jobs:
       - run: cargo fetch --locked
       - run: python3 -I packaging/test_release.py
       - run: python3 -I packaging/test_session.py
+      - run: python3 -I packaging/installer/test_cupertino_install.py
       - run: python3 -I ci/test_contracts.py
       - run: python3 -I ci/test_goldens_log.py
       - run: python3 -I ci/gate.py .

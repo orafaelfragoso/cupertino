@@ -779,6 +779,7 @@ impl App {
             PaneId::Sound => {
                 if self.level.is_none() {
                     self.live.volume = self.services.volume();
+                    self.live.outputs = self.services.outputs();
                 }
             }
             PaneId::Displays => {

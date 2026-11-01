@@ -22,7 +22,7 @@ use crate::pane::PaneId;
 
 use crate::live::{
     display_name, Battery, BatteryState, Bluetooth, BtDevice, Device, Focus, Mouse, Network,
-    Reading, Volume, Wifi,
+    Output, Reading, Volume, Wifi,
 };
 use crate::panes::Call;
 
@@ -615,6 +615,27 @@ impl Services {
         }
     }
 
+    /// The PipeWire sinks, in `wpctl status` order; none when the volume is not on PipeWire or `wpctl` does not answer.
+    pub fn outputs(&mut self) -> Vec<Output> {
+        if !self.pipewire {
+            return Vec::new();
+        }
+        match self.wpctl.sinks() {
+            Ok(sinks) => sinks
+                .into_iter()
+                .map(|s| Output {
+                    id: s.id,
+                    name: s.name,
+                    default: s.default,
+                })
+                .collect(),
+            Err(e) => {
+                log_once(&format!("the sound outputs could not be listed: {e}"));
+                Vec::new()
+            }
+        }
+    }
+
     fn with_mixer<T>(
         &mut self,
         action: impl FnOnce(&cupertino_alsa::Master) -> cupertino_alsa::Result<T>,
@@ -680,6 +701,10 @@ impl Services {
                     log_once(&format!("the volume could not be changed: {e}"));
                     "The volume could not be changed.".to_string()
                 }),
+            Call::SetOutput(id) => self.wpctl.set_default_sink(*id).map_err(|e| {
+                log_once(&format!("the sound output could not be changed: {e}"));
+                "The sound output could not be changed.".to_string()
+            }),
             Call::SetBrightness(level) => system(self, POWER_NAME, POWER_PATH, POWER_NAME, &|p| {
                 let max: u32 = p.call("GetMaxBrightness", &())?;
                 let raw = ((level.clamp(0.0, 1.0) * f64::from(max)).round() as u32).clamp(BRIGHTNESS_FLOOR.min(max), max);

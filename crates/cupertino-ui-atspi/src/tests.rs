@@ -54,6 +54,7 @@ fn publish(h: &Handlers, role: Role, value: Option<AccessibleValue>, actions: Ve
         level: None,
         item_index: None,
         column_index: None,
+        sort: None,
     };
     let mut m = lock(&h.mirror);
     m.root = Some(id(1));

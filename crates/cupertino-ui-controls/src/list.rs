@@ -1195,6 +1195,9 @@ impl<M: 'static> Widget<M> for Cell<M> {
                     cx.focusable();
                     cx.action(Action::Click);
                 }
+                if let Some(order) = sort.order {
+                    cx.sort(order);
+                }
             }
             None => cx.role(Role::Cell),
         }

@@ -24,6 +24,7 @@ fn base(role: Role) -> AccessibilityNode {
         level: None,
         item_index: None,
         column_index: None,
+        sort: None,
     }
 }
 
@@ -135,6 +136,22 @@ fn a_cell_and_a_column_header_carry_their_column() {
         assert_eq!(node(&cell).column_index(), Some(1), "{role:?}");
     }
     assert_eq!(node(&base(Role::Row)).column_index(), None);
+}
+
+#[test]
+fn a_sorting_column_header_carries_its_order_and_says_it_in_its_description() {
+    let mut header = base(Role::ColumnHeader);
+    header.sort = Some(SortOrder::Descending);
+    let out = node(&header);
+    assert_eq!(out.sort_direction(), Some(SortDirection::Descending));
+    assert_eq!(out.description(), Some("Sorted descending"));
+    header.description = Some("Modified".into());
+    assert_eq!(node(&header).description(), Some("Modified"));
+    let unsorted = node(&base(Role::ColumnHeader));
+    assert_eq!(
+        (unsorted.sort_direction(), unsorted.description()),
+        (None, None)
+    );
 }
 
 #[test]

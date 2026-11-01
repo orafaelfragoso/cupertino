@@ -75,6 +75,7 @@ fn with_markers(mut update: AccessibilityUpdate, markers: &[&str]) -> Accessibil
                 level: None,
                 item_index: None,
                 column_index: None,
+                sort: None,
             },
         ));
         let root = update.root;

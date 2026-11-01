@@ -2,10 +2,10 @@
 
 use std::num::NonZeroU32;
 
-use accesskit::{Invalid, Toggled};
+use accesskit::{Invalid, SortDirection, Toggled};
 use cupertino_ui_core::{
     AccessibilityNode, AccessibleValue, Action, ActionData, ActionRequest, Checked, Live, NodeId,
-    Relation, Role,
+    Relation, Role, SortOrder,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -37,6 +37,19 @@ pub(crate) fn node(node: &AccessibilityNode) -> accesskit::Node {
     }
     if let Some(description) = &node.description {
         out.set_description(description.as_str());
+    }
+    if let Some(order) = node.sort {
+        out.set_sort_direction(match order {
+            SortOrder::Ascending => SortDirection::Ascending,
+            SortOrder::Descending => SortDirection::Descending,
+        });
+        // AccessKit's AT-SPI adapter drops the sort direction, so a screen reader hears it in the description
+        if node.description.is_none() {
+            out.set_description(match order {
+                SortOrder::Ascending => "Sorted ascending",
+                SortOrder::Descending => "Sorted descending",
+            });
+        }
     }
     match &node.value {
         _ if secret => {}

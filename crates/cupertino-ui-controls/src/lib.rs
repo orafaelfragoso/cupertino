@@ -46,6 +46,8 @@ pub use stepper::StepperState;
 pub use text_box::TextBoxState;
 pub use tooltip::{TooltipChange, TooltipState};
 
+pub use cupertino_ui_core::SortOrder;
+
 use cupertino_geometry::{Insets, Point, Size};
 use cupertino_ui_core::{
     Checked, CommandRegistry, Element, Key, PaintCx, WindowBackground, WindowKey,
@@ -753,13 +755,6 @@ pub enum ColumnWidth {
 pub struct Column {
     pub title: String,
     pub width: ColumnWidth,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum SortOrder {
-    #[default]
-    Ascending,
-    Descending,
 }
 
 /// A [`ListView`] whose rows lay their cells out in columns under a header. A click on a column's title asks to sort

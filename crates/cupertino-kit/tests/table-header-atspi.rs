@@ -1,6 +1,7 @@
 //! On a private bus, a test acting as the accessibility registry and as an assistive technology finds a table's sorting
-//! column header over AT-SPI as a focusable column header, and its click sorts the table in the application. The
-//! application, a table on the headless window system with the AT-SPI adapter, runs in a copy of this test binary.
+//! column header over AT-SPI as a focusable column header that says its order, and its click sorts the table in the
+//! application. The application, a table on the headless window system with the AT-SPI adapter, runs in a copy of this
+//! test binary.
 
 mod support;
 
@@ -207,9 +208,9 @@ fn find(conn: &Connection, peer: &str, path: &str, role: u32) -> Option<OwnedObj
 }
 
 #[test]
-fn an_assistive_technology_finds_a_focusable_column_header_whose_click_sorts_the_table() {
+fn an_assistive_technology_finds_a_focusable_sorted_column_header_whose_click_sorts_the_table() {
     const NAME: &str =
-        "an_assistive_technology_finds_a_focusable_column_header_whose_click_sorts_the_table";
+        "an_assistive_technology_finds_a_focusable_sorted_column_header_whose_click_sorts_the_table";
     if std::env::var_os(APPLICATION).is_some() {
         return application();
     }
@@ -261,6 +262,10 @@ fn an_assistive_technology_finds_a_focusable_column_header_whose_click_sorts_the
         0,
         "the header is not focusable"
     );
+    let description: String = proxy(&conn, &peer, header.as_str(), "org.a11y.atspi.Accessible")
+        .get_property("Description")
+        .unwrap();
+    assert_eq!(description, "Sorted ascending");
     let action = proxy(&conn, &peer, header.as_str(), "org.a11y.atspi.Action");
     let name: String = action.call("GetName", &(0i32,)).unwrap();
     assert_eq!(name, "click");

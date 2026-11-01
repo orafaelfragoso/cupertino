@@ -645,6 +645,7 @@ fn window(conn: &mut Connection) -> Toplevel {
         min_size: Some((445, 139)),
         max_size: None,
         decorations: Decorations::Server,
+        foreign_parent: None,
     })
     .unwrap()
 }

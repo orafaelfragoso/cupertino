@@ -87,6 +87,7 @@ pub fn run(activation_token: String) -> Result<()> {
         min_size: Some(size),
         max_size: Some(size),
         decorations: Decorations::Server,
+        foreign_parent: None,
     })?;
     let mut presenter = ShmPresenter::new(window.surface());
     if !activation_token.is_empty() {

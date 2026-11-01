@@ -245,6 +245,7 @@ impl Window {
             min_size: Some(min_size),
             max_size: None,
             decorations: Decorations::Server,
+            foreign_parent: None,
         })?;
         effects.unify_titlebar(conn, toplevel.surface())?;
         Ok(Window {

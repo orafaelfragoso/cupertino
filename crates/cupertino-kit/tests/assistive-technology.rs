@@ -98,6 +98,7 @@ impl Application for Form {
                 min_size: None,
                 max_size: None,
                 decorations: DecorationMode::Preferred,
+                foreign_parent: None,
             },
             shortcuts: CommandRegistry::new(),
             on_close: None,

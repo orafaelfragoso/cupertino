@@ -176,9 +176,13 @@ pub(crate) fn glyphs(
 /// Draws the keyboard focus ring around `chrome` when the focus is keyboard-visible and the window is active; an
 /// inactive window keeps its focus but shows no ring until it is active again.
 pub(crate) fn paint_focus_ring(cx: &mut PaintCx<'_>, chrome: Rect, radius: f64) {
-    if !cx.focus_visible() || !cx.window_active() {
-        return;
+    if cx.focus_visible() && cx.window_active() {
+        paint_ring(cx, chrome, radius);
     }
+}
+
+/// Draws the keyboard focus ring around `chrome`.
+pub(crate) fn paint_ring(cx: &mut PaintCx<'_>, chrome: Rect, radius: f64) {
     let theme = cx.env().theme.clone();
     let (rect, radius) = focus_ring(chrome, radius, &theme.focus);
     let color = theme

@@ -1264,7 +1264,7 @@ fn consent_window(c: &Consent) -> Window<Message> {
             .key("cancel"),
             button(
                 "Take Screenshot".to_owned(),
-                ButtonRole::Default,
+                ButtonRole::Normal,
                 true,
                 Message::TakeScreenshot(id),
             )
@@ -1300,6 +1300,7 @@ fn consent_window(c: &Consent) -> Window<Message> {
             spacing: 0.0,
             align: Align::Stretch,
             children: vec![
+                Element::new(Spacer { min: 0.0 }),
                 prompt,
                 Element::new(Spacer { min: 0.0 }),
                 Element::new(Separator {
@@ -1318,7 +1319,7 @@ mod tests {
 
     use cupertino_assets::BUILTIN_FONT;
     use cupertino_kit::core::{PlaceholderIcons, RuntimeOptions};
-    use cupertino_kit::geometry::Point;
+    use cupertino_kit::geometry::{Point, Rect};
     use cupertino_kit::layout::LayoutDirection;
     use cupertino_kit::platform::{
         Capabilities, KeyEvent, Mods, MouseButton, PointerEvent, Timestamp, WindowEvent, WindowId,
@@ -1470,17 +1471,21 @@ mod tests {
         click_at(driver, window, Key::from(key));
     }
 
-    fn click_at(driver: &mut TestDriver<Dialogs>, window: WindowId, key: Key) {
+    fn rect_of(driver: &TestDriver<Dialogs>, window: WindowId, key: &Key) -> Rect {
         let runtime = driver.runtime();
-        let id = runtime.find(window, &key).unwrap();
-        let rect = runtime
+        let id = runtime.find(window, key).unwrap();
+        runtime
             .snapshot(window)
             .unwrap()
             .nodes
             .iter()
             .find(|n| n.id == id)
             .unwrap()
-            .rect;
+            .rect
+    }
+
+    fn click_at(driver: &mut TestDriver<Dialogs>, window: WindowId, key: Key) {
+        let rect = rect_of(driver, window, &key);
         let position = Point::new(
             rect.origin.x + rect.size.width / 2.0,
             rect.origin.y + rect.size.height / 2.0,
@@ -1686,6 +1691,13 @@ mod tests {
         ] {
             assert!(names.iter().any(|n| n == text), "{text:?} in {names:?}");
         }
+        let prompt = rect_of(&driver, window, &Key::from("prompt"));
+        let take = rect_of(&driver, window, &Key::from("take"));
+        let separator = take.origin.y - BAR_INSETS.top - 1.0;
+        assert!(
+            (prompt.origin.y - (separator - prompt.origin.y - prompt.size.height)).abs() < 0.5,
+            "the prompt is centred in the body above the separator: {prompt:?}, separator at {separator}"
+        );
         type_key(&mut driver, window, RETURN, None);
         type_key(&mut driver, window, Keysym(' ' as u32), Some(' '));
         assert!(

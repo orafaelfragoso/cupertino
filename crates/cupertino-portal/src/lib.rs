@@ -9,6 +9,7 @@ pub mod dialog;
 pub mod file_chooser;
 pub mod request;
 pub mod screen_cast;
+pub mod screenshot;
 pub mod settings;
 
 /// The name xdg-desktop-portal reaches the backend at, as `data/cupertino.portal` declares it.

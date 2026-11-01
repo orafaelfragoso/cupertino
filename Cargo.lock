@@ -1934,6 +1934,7 @@ dependencies = [
  "memmap2",
  "rustix 1.1.5",
  "tiny-skia",
+ "wayland-client",
  "wayland-protocols",
  "wayland-server",
  "zbus",

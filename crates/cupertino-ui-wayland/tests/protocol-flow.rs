@@ -98,6 +98,8 @@ enum Control {
     Discard,
     /// Name the bus connection that reads the window's menus.
     MenuReader(String),
+    /// Ask the window to close.
+    Close,
 }
 
 /// A request the server saw that the commit record does not cover.
@@ -690,6 +692,7 @@ fn spawn_server_with(
                 }
                 Ok(Control::Discard) => mock.feedbacks.pop_front().unwrap().discarded(),
                 Ok(Control::MenuReader(name)) => mock.menu.as_ref().unwrap().menu_reader(name),
+                Ok(Control::Close) => mock.toplevel.as_ref().unwrap().toplevel.close(),
                 Ok(Control::PointerPress) => {
                     let (pointer, t) = (
                         mock.pointer.as_ref().unwrap(),
@@ -1754,6 +1757,176 @@ mod window_system {
         let waker = kit.ws.waker();
         std::thread::spawn(move || waker.wake());
         kit.wait_for(|e| matches!(e, PlatformEvent::Wake).then_some(()));
+    }
+
+    /// A role the test gives windows through the transport's external surfaces, the way a shell gives layer surfaces:
+    /// an xdg toplevel of its own `xdg_wm_base`, whose configure leaves the size to the client.
+    mod role {
+        use cupertino_ui_platform::WindowSpec;
+        use cupertino_ui_wayland::{RoleEvent, SurfaceRoles};
+        use cupertino_wayland_client::{
+            Connection, Error, ExtensionEvent, ExternalRole, State, SurfaceId,
+        };
+        use wayland_client::{Connection as WlConnection, Dispatch, QueueHandle};
+        use wayland_protocols::xdg::shell::client::xdg_surface::{self, XdgSurface};
+        use wayland_protocols::xdg::shell::client::xdg_toplevel::{self, XdgToplevel};
+        use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
+
+        pub const APP_ID: &str = "org.example.Card";
+        /// The size the role resolves the client's extents to.
+        pub const SIZE: (u32, u32) = (120, 40);
+
+        pub struct Base;
+        pub struct OfSurface(SurfaceId);
+
+        struct Role(XdgSurface, XdgToplevel);
+
+        impl ExternalRole for Role {
+            fn ack_configure(&self, serial: u32) {
+                self.0.ack_configure(serial);
+            }
+
+            fn destroy(&self) {
+                self.1.destroy();
+                self.0.destroy();
+            }
+        }
+
+        #[derive(Default)]
+        pub struct Roles {
+            base: Option<XdgWmBase>,
+        }
+
+        impl SurfaceRoles for Roles {
+            fn create(
+                &mut self,
+                conn: &mut Connection,
+                spec: &WindowSpec,
+            ) -> Option<Result<SurfaceId, Error>> {
+                if spec.app_id != APP_ID {
+                    return None;
+                }
+                if self.base.is_none() {
+                    self.base = conn.bind_extension(1..=6, Base);
+                }
+                let Some(base) = self.base.clone() else {
+                    return Some(Err(Error::Protocol("no xdg_wm_base")));
+                };
+                Some(Ok(conn.external_surface(|wl, qh, surface| {
+                    let xdg = base.get_xdg_surface(wl, qh, OfSurface(surface));
+                    let toplevel = xdg.get_toplevel(qh, OfSurface(surface));
+                    Role(xdg, toplevel)
+                })))
+            }
+
+            fn event(&mut self, event: &ExtensionEvent) -> Option<RoleEvent> {
+                event.downcast_ref::<RoleEvent>().copied()
+            }
+        }
+
+        impl Dispatch<XdgWmBase, Base> for State {
+            fn event(
+                _: &mut State,
+                base: &XdgWmBase,
+                event: xdg_wm_base::Event,
+                _: &Base,
+                _: &WlConnection,
+                _: &QueueHandle<State>,
+            ) {
+                if let xdg_wm_base::Event::Ping { serial } = event {
+                    base.pong(serial);
+                }
+            }
+        }
+
+        impl Dispatch<XdgSurface, OfSurface> for State {
+            fn event(
+                state: &mut State,
+                _: &XdgSurface,
+                event: xdg_surface::Event,
+                data: &OfSurface,
+                _: &WlConnection,
+                _: &QueueHandle<State>,
+            ) {
+                if let xdg_surface::Event::Configure { serial } = event {
+                    state.configure_external(data.0, serial, (0, 0));
+                    state.emit(RoleEvent::Configure {
+                        surface: data.0,
+                        size: SIZE,
+                    });
+                }
+            }
+        }
+
+        impl Dispatch<XdgToplevel, OfSurface> for State {
+            fn event(
+                state: &mut State,
+                _: &XdgToplevel,
+                event: xdg_toplevel::Event,
+                data: &OfSurface,
+                _: &WlConnection,
+                _: &QueueHandle<State>,
+            ) {
+                if let xdg_toplevel::Event::Close = event {
+                    state.emit(RoleEvent::Closed(data.0));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_window_given_a_role_by_the_application_draws_at_the_roles_size_and_closes_with_it() {
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let (control, committed, _seen) = spawn_server(server_stream);
+        let ws = WaylandWindowSystem::new(
+            Connection::from_stream(client_stream).unwrap(),
+            Profile::cupertino(),
+        )
+        .with_roles(role::Roles::default());
+        let mut kit = Kit {
+            ws,
+            window: WindowId(0),
+            stash: VecDeque::new(),
+        };
+        let w = kit
+            .ws
+            .create_window(&WindowSpec {
+                title: "Card".into(),
+                app_id: role::APP_ID.into(),
+                size: Size::new(10.0, 10.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::None,
+                foreign_parent: None,
+            })
+            .unwrap();
+        kit.window = w;
+
+        let configure = kit.window_event(|e| match e {
+            WindowEvent::Configure(c) => Some(*c),
+            _ => None,
+        });
+        assert_eq!(configure.size, Some(Size::new(120.0, 40.0)));
+        assert_eq!(
+            kit.ws
+                .request(w, cupertino_ui_platform::WindowRequest::Minimize),
+            Err(cupertino_ui_platform::PlatformError::Unsupported)
+        );
+        kit.window_event(|e| matches!(e, WindowEvent::Scale(_)).then_some(()));
+
+        kit.ws.request_frame(w);
+        kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+        let outcome = kit
+            .ws
+            .present(w, &frame_sized(1, (240, 80), [10, 20, 30, 40], &[]), None)
+            .unwrap();
+        assert_eq!(outcome, PresentOutcome::Presented);
+        kit.pump();
+        let shown = committed.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(shown.buffer_size, (240, 80));
+
+        control.send(Control::Close).unwrap();
+        kit.window_event(|e| matches!(e, WindowEvent::CloseRequested).then_some(()));
     }
 
     #[test]

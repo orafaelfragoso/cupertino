@@ -1,7 +1,8 @@
 # cupertino-install
 
-The installer on the live USB. It erases one whole disk and installs Arch Linux with Cupertino as the only desktop:
-Cupertino's login screen starts at boot (`cupertino-login.service` is the display manager). The USB image ships
+The installer on the live USB. It erases one whole disk and installs Arch Linux with GDM as the login screen, the
+Cupertino session as the account's default and a GNOME session beside it. `cupertino-login.service` is not enabled: GDM
+does not depend on the Cupertino compositor working. The USB image ships
 `cupertino_install.py` as `/usr/local/bin/cupertino-install`; it is not part of the `cupertino` package.
 
 ```sh
@@ -20,20 +21,25 @@ installer refuses any other archinstall version, because the configuration forma
 
 | Part | What is installed |
 |---|---|
-| Disk | GPT: a 1 GiB FAT32 ESP at `/boot`, then ext4 at `/` filling the disk (in LUKS2 when encrypted); zram swap |
-| Boot | systemd-boot with the entries "Cupertino" (the default) and "Cupertino (recovery: text login)"; a 3 s menu |
-| Graphics | `mesa`; on an NVIDIA card from Turing (PCI device `10de:1e00`) on: `nvidia-open`, `nvidia-utils`, `libva-nvidia-driver` and `nvidia_drm modeset=1`; older NVIDIA cards stay on nouveau |
+| Disk | GPT: a 1 GiB FAT32 ESP at `/boot`, then btrfs filling the disk (in LUKS2 when encrypted) with the subvolumes `@` (`/`), `@home`, `@log` and `@pkg` (the package cache), `compress=zstd`; snapper configs `root` and `home` with snap-pac; zram swap |
+| Boot | systemd-boot with "Cupertino" (linux, the default), "Cupertino (LTS kernel)" (linux-lts) and "Cupertino (recovery: text login)"; a 3 s menu |
+| Graphics | `mesa`; on an NVIDIA card from Turing (PCI device `10de:1e00`) on: `nvidia-open`, `nvidia-open-lts`, `nvidia-utils`, `libva-nvidia-driver`; `nvidia_drm modeset=1 fbdev=1`, `NVreg_UseKernelSuspendNotifiers=1`, early KMS (`MODULES+=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)`, no `kms` hook when NVIDIA is the only GPU) and the `nvidia-suspend`/`resume`/`hibernate` units disabled; older NVIDIA cards stay on nouveau |
+| Login | GDM; the account's session is `cupertino` (`/var/lib/AccountsService/users/ACCOUNT`); GNOME (`gnome-shell`, `gnome-session`, `gnome-control-center`, `gnome-keyring`, `gnome-terminal`, `nautilus`, `xdg-desktop-portal-gnome`) is the second session |
 | System | NetworkManager (enabled, so a text login has a network: `nmtui`), PipeWire, Bluetooth, `foot`, `xwayland-satellite` |
 | Apps | Chromium (native Wayland: `~/.config/chromium-flags.conf` holds `--ozone-platform=wayland`), `git`, `base-devel`, `rustup`, `github-cli` |
 | Cupertino | `cupertino` and `cupertino-data` from the USB's `[cupertino]` repository, which is then taken out of the new `pacman.conf` |
 
 ## When the Cupertino session does not start
 
-- Ctrl+Alt+F2 to F6 give a text login; the login manager only takes tty1.
+- At GDM, pick the account, then the GNOME session in the gear menu before the password.
+- Ctrl+Alt+F3 to F6 give a text login.
 - The boot menu's "Cupertino (recovery: text login)" starts the system without the login manager
   (`systemd.unit=multi-user.target`): tty1 shows a text login.
-- From a text login, `sudo systemctl disable cupertino-login` makes every boot a text login until it is enabled again,
-  and `nmtui` sets up the network.
+- "Cupertino (LTS kernel)" starts linux-lts with nvidia-open-lts, for when a kernel or driver update breaks the main one.
+- `nmtui` sets up the network from a text login.
+- A bad package update: `sudo pacman -U /var/cache/pacman/pkg/NAME-OLDVERSION-*.pkg.tar.zst`, or undo a whole pacman
+  transaction with snapper (`snapper -c root list` shows snap-pac's pre and post pairs; `sudo snapper -c root undochange
+  PRE..POST`). `/boot` is not in the snapshots, so a kernel is rolled back with the LTS entry and `pacman -U`.
 
 ## Testing
 
@@ -49,4 +55,5 @@ and optionally `hostname`, `keyboard`, `extra_packages` and `kernel_args`. The d
 - UEFI only, with Secure Boot off. One disk, erased whole: no dual boot.
 - Installing needs a network for the Arch packages.
 - NVIDIA cards older than Turing get nouveau; Arch has no proprietary driver for them.
+- systemd-boot cannot start a snapshot: snapper rollback works from a running system (undochange), not from the boot menu.
 - No polkit agent in the package yet, so administrator actions go through `sudo` in a terminal.

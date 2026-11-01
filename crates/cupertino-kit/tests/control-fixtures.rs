@@ -19,6 +19,7 @@ use cupertino_kit::controls::{
     SliderStyle, SortOrder, SplitLayout, SplitView, Stack, Stepper, TableView, Text, TextBox,
     TextEditor, TextField, TextRole, Toggle,
 };
+use cupertino_kit::controls::{Popover, TreeItem, TreeView};
 use cupertino_kit::controls::{Sidebar, SidebarItem, SidebarSection};
 use cupertino_kit::core::{
     Application, Checked, Command, CommandRegistry, Element, Key, Window, WindowBackground,
@@ -601,6 +602,64 @@ fixtures! {
         }
         .into()
     };
+    tree: "tree", TALL, &[State::Normal, State::Hover, State::Focused, State::Selected], |look| {
+        const ROWS: [(&str, usize, Option<bool>, usize, usize); 5] = [
+            ("Documents", 0, Some(true), 0, 2),
+            ("Notes", 1, None, 0, 2),
+            ("Drafts", 1, Some(false), 1, 2),
+            ("Pictures", 0, Some(false), 1, 2),
+            ("Music", 0, None, 2, 3),
+        ];
+        let mut selection = Selection::default();
+        if look.selected {
+            selection.select_only(1);
+        }
+        TreeView {
+            label: "Folders".into(),
+            count: ROWS.len(),
+            row_height: 24.0,
+            scroll: look.scroll,
+            selection,
+            multiple: false,
+            item: Box::new(|index| {
+                let (_, level, expanded, position, siblings) = ROWS[index];
+                TreeItem { level, expanded, position, siblings }
+            }),
+            row: Box::new(|index, selected| Element::new(Text {
+                content: label(ROWS[index].0),
+                role: TextRole::Body,
+                wrap: false,
+                secondary: false,
+                selected,
+            })),
+            type_select: None,
+            on_scroll: Box::new(Message::Scroll),
+            on_select: Some(Box::new(|_| Message::Nothing)),
+            on_activate: None,
+            on_toggle: Some(Box::new(|_| Message::Nothing)),
+        }
+        .into()
+    };
+    text_editor: "text-editor", TALL, FIELD, |look| Element::new(TextEditor {
+        label: "Notes".into(),
+        placeholder: String::new(),
+        value: "First line\nA second line that is long enough to wrap".into(),
+        revision: 0,
+        enabled: look.enabled,
+        bordered: false,
+        on_change: None,
+    });
+    popover: "popover", TALL, &[State::Normal], |look| Popover {
+        parent: WindowKey("fixture".into()),
+        anchor: Key::from("anchor"),
+        label: "Details".into(),
+        content: body("Shared with 3 people"),
+        scroll: look.scroll,
+        on_scroll: Box::new(Message::Scroll),
+        on_close: Message::Nothing,
+    }
+    .window(WindowKey("popover".into()))
+    .content;
     sidebar: "sidebar", SIDEBAR, &[State::Normal, State::Hover, State::Focused, State::Selected], |look| {
         let item = |label: &str, icon: &str| SidebarItem {
             key: Key::from(label.to_owned()),

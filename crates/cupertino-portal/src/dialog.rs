@@ -1,4 +1,4 @@
-//! The file-chooser and screen-sharing windows: one for each open request, drawn with CupertinoKit. The D-Bus side
+//! The file-chooser, app-chooser and screen-sharing windows: one for each open request, drawn with CupertinoKit. The D-Bus side
 //! hands its events to the [`inbox`]; [`Dialogs`] is resident and keeps running while no dialog is open.
 
 use std::collections::VecDeque;
@@ -18,6 +18,7 @@ use cupertino_kit::prelude::*;
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
 use zbus::zvariant::OwnedObjectPath;
 
+use crate::app_chooser;
 use crate::chooser::{Accept, Chooser};
 use crate::file_chooser::{self, Answer, Kind, Reply};
 use crate::screen_cast::{self, Source};
@@ -37,11 +38,14 @@ const SIZE: Size = Size::new(720.0, 460.0);
 const PICKER_SIZE: Size = Size::new(480.0, 360.0);
 const RETURN: Keysym = Keysym(0xff0d);
 const ESCAPE: Keysym = Keysym(0xff1b);
+/// Characters of a file name or URI the app chooser's prompt shows before it ends it with an ellipsis.
+const TARGET_CHARS: usize = 80;
 
 /// What the D-Bus side asks of the dialogs.
 pub enum Event {
     FileChooser(file_chooser::Event),
     ScreenCast(screen_cast::Event),
+    AppChooser(app_chooser::Event),
 }
 
 impl From<file_chooser::Event> for Event {
@@ -53,6 +57,12 @@ impl From<file_chooser::Event> for Event {
 impl From<screen_cast::Event> for Event {
     fn from(event: screen_cast::Event) -> Self {
         Event::ScreenCast(event)
+    }
+}
+
+impl From<app_chooser::Event> for Event {
+    fn from(event: app_chooser::Event) -> Self {
+        Event::AppChooser(event)
     }
 }
 
@@ -119,6 +129,7 @@ pub struct Model {
     next: u64,
     open: Vec<Dialog>,
     pickers: Vec<Picker>,
+    apps: Vec<AppPicker>,
 }
 
 struct Dialog {
@@ -151,6 +162,30 @@ impl Picker {
     }
 }
 
+/// The chooser of the app that opens a link or a file.
+struct AppPicker {
+    id: u64,
+    handle: OwnedObjectPath,
+    reply: app_chooser::Reply,
+    ask: app_chooser::Ask,
+    rows: Selection,
+    scroll: ScrollState,
+}
+
+impl AppPicker {
+    fn chosen(&self) -> Option<&app_chooser::Choice> {
+        self.rows.cursor().and_then(|i| self.ask.choices.get(i))
+    }
+
+    /// The rows with the choice `id` selected, or none when it is not offered.
+    fn select(&mut self, id: Option<&str>) {
+        self.rows = Selection::default();
+        if let Some(i) = id.and_then(|id| self.ask.choices.iter().position(|c| c.id == id)) {
+            self.rows.select_only(i);
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Message {
     Woken,
@@ -173,6 +208,9 @@ pub enum Message {
     PickerScroll(u64, ScrollState),
     PickerSelect(u64, Selection),
     Share(u64),
+    AppScroll(u64, ScrollState),
+    AppSelect(u64, Selection),
+    OpenWith(u64),
 }
 
 const NO_SCROLL: ScrollState = ScrollState {
@@ -195,6 +233,10 @@ impl Model {
 
     fn picker(&mut self, id: u64) -> Option<&mut Picker> {
         self.pickers.iter_mut().find(|p| p.id == id)
+    }
+
+    fn app_picker(&mut self, id: u64) -> Option<&mut AppPicker> {
+        self.apps.iter_mut().find(|a| a.id == id)
     }
 
     fn take(&mut self, events: Vec<Event>) -> Vec<Command<Message>> {
@@ -241,6 +283,31 @@ impl Model {
                 Event::ScreenCast(screen_cast::Event::Close { handle }) => {
                     self.pickers.retain(|p| p.handle != handle)
                 }
+                Event::AppChooser(app_chooser::Event::Ask { handle, ask, reply }) => {
+                    let id = self.next;
+                    self.next += 1;
+                    let mut picker = AppPicker {
+                        id,
+                        handle,
+                        reply,
+                        ask: *ask,
+                        rows: Selection::default(),
+                        scroll: NO_SCROLL,
+                    };
+                    let last = picker.ask.last_choice.clone();
+                    picker.select(last.as_deref());
+                    self.apps.push(picker);
+                }
+                Event::AppChooser(app_chooser::Event::Update { handle, choices }) => {
+                    if let Some(a) = self.apps.iter_mut().find(|a| a.handle == handle) {
+                        let chosen = a.chosen().map(|c| c.id.clone());
+                        a.ask.choices = choices;
+                        a.select(chosen.as_deref());
+                    }
+                }
+                Event::AppChooser(app_chooser::Event::Close { handle }) => {
+                    self.apps.retain(|a| a.handle != handle)
+                }
             }
         }
         commands
@@ -257,6 +324,13 @@ impl Model {
     fn finish_picker(&mut self, id: u64, answer: screen_cast::Answer) {
         if let Some(i) = self.pickers.iter().position(|p| p.id == id) {
             self.pickers.remove(i).reply.send(answer);
+        }
+    }
+
+    /// End app chooser `id` with `answer`.
+    fn finish_app(&mut self, id: u64, answer: app_chooser::Answer) {
+        if let Some(i) = self.apps.iter().position(|a| a.id == id) {
+            self.apps.remove(i).reply.send(answer);
         }
     }
 }
@@ -290,6 +364,7 @@ impl Application for Dialogs {
             next: 0,
             open: Vec::new(),
             pickers: Vec::new(),
+            apps: Vec::new(),
         };
         let mut commands = model.take(inbox().take());
         commands.push(woken());
@@ -411,6 +486,7 @@ impl Application for Dialogs {
             Message::Cancel(id) => {
                 model.finish(id, Answer::Cancelled);
                 model.finish_picker(id, screen_cast::Answer::Cancelled);
+                model.finish_app(id, app_chooser::Answer::Cancelled);
             }
             Message::PickerScroll(id, scroll) => {
                 if let Some(p) = model.picker(id) {
@@ -428,6 +504,22 @@ impl Application for Dialogs {
                     model.finish_picker(id, screen_cast::Answer::Chosen(source));
                 }
             }
+            Message::AppScroll(id, scroll) => {
+                if let Some(a) = model.app_picker(id) {
+                    a.scroll = scroll;
+                }
+            }
+            Message::AppSelect(id, rows) => {
+                if let Some(a) = model.app_picker(id) {
+                    a.rows = rows;
+                }
+            }
+            Message::OpenWith(id) => {
+                let chosen = model.app_picker(id).and_then(|a| a.chosen().cloned());
+                if let Some(choice) = chosen {
+                    model.finish_app(id, app_chooser::Answer::Chosen(choice.id));
+                }
+            }
         }
         commands
     }
@@ -438,6 +530,7 @@ impl Application for Dialogs {
             .iter()
             .map(|d| window(d, &model.places))
             .chain(model.pickers.iter().map(picker_window))
+            .chain(model.apps.iter().map(app_window))
             .collect()
     }
 }
@@ -963,6 +1056,117 @@ fn picker_window(p: &Picker) -> Window<Message> {
     }
 }
 
+/// `target` as the app chooser's prompt names it: at most [`TARGET_CHARS`] characters, the rest left out.
+fn shortened(target: &str) -> String {
+    match target.char_indices().nth(TARGET_CHARS) {
+        Some((end, _)) => format!("{}…", &target[..end]),
+        None => target.to_owned(),
+    }
+}
+
+fn app_window(a: &AppPicker) -> Window<Message> {
+    let id = a.id;
+    let names: Vec<String> = a.ask.choices.iter().map(|c| c.name.clone()).collect();
+    let shown = names.clone();
+    let list = Element::from(ListView {
+        label: "Apps".into(),
+        count: names.len(),
+        row_height: ROW_HEIGHT,
+        scroll: a.scroll,
+        selection: a.rows.clone(),
+        multiple: false,
+        row: Box::new(move |i, selected| row("symbol.applications", shown[i].clone(), selected)),
+        key: Some(Box::new(|i| Key::Int(i as u64))),
+        type_select: Some(Box::new(move |i| names[i].clone())),
+        on_scroll: Box::new(move |s| Message::AppScroll(id, s)),
+        on_select: Some(Box::new(move |s| Message::AppSelect(id, s))),
+        on_activate: Some(Box::new(move |_| Message::OpenWith(id))),
+    })
+    .key("apps");
+    let target = a.ask.target.as_deref().map(shortened);
+    let prompt = match (&target, a.ask.choices.is_empty()) {
+        (Some(target), false) => format!("Open “{target}” with:"),
+        (Some(target), true) => format!("There is no app to open “{target}” with."),
+        (None, false) => "Choose an app to open it with.".to_owned(),
+        (None, true) => "There is no app to open it with.".to_owned(),
+    };
+    let header = Element::new(Stack {
+        axis: Axis::Horizontal,
+        padding: BAR_INSETS,
+        spacing: GAP,
+        align: Align::Center,
+        children: vec![text(prompt, TextRole::Body, false, false).key("prompt")],
+    });
+    let bar = bar_row(
+        Vec::new(),
+        vec![
+            button(
+                "Cancel".to_owned(),
+                ButtonRole::Normal,
+                true,
+                Message::Cancel(id),
+            )
+            .key("cancel"),
+            button(
+                "Open".to_owned(),
+                ButtonRole::Default,
+                a.chosen().is_some(),
+                Message::OpenWith(id),
+            )
+            .key("open"),
+        ],
+    );
+    Window {
+        key: WindowKey(Key::Str(format!("apps-{id}").into())),
+        spec: WindowSpec {
+            title: "Open With".to_owned(),
+            app_id: "org.cupertino.Portal".into(),
+            size: PICKER_SIZE,
+            min_size: Some(Size::new(360.0, 240.0)),
+            max_size: None,
+            decorations: DecorationMode::Preferred,
+            foreign_parent: crate::wayland_parent(&a.ask.parent_window).map(str::to_owned),
+        },
+        // Return opens the selected app and Escape cancels, wherever the focus is
+        shortcuts: CommandRegistry::new()
+            .with(
+                Shortcut {
+                    mods: Mods::NONE,
+                    keysym: RETURN,
+                },
+                Message::OpenWith(id),
+            )
+            .with(
+                Shortcut {
+                    mods: Mods::NONE,
+                    keysym: ESCAPE,
+                },
+                Message::Cancel(id),
+            ),
+        on_close: Some(Message::Cancel(id)),
+        background: WindowBackground::Theme,
+        popup: None,
+        menus: None,
+        content: Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets::ZERO,
+            spacing: 0.0,
+            align: Align::Stretch,
+            children: vec![
+                header,
+                Element::new(Separator {
+                    axis: Axis::Horizontal,
+                }),
+                list,
+                Element::new(Separator {
+                    axis: Axis::Horizontal,
+                }),
+                bar,
+            ],
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
@@ -1242,6 +1446,66 @@ mod tests {
         let window = show(&mut driver);
         click(&mut driver, window, "cancel");
         assert_eq!(answer.try_recv().unwrap(), screen_cast::Answer::Cancelled);
+        assert!(driver.runtime().windows().is_empty());
+        assert!(!driver.runtime().exited());
+
+        let choice = |id: &str, name: &str| app_chooser::Choice {
+            id: id.to_owned(),
+            name: name.to_owned(),
+        };
+        let open_with = |n: u32| {
+            let (sender, answer) = async_channel::bounded(1);
+            inbox().push(app_chooser::Event::Ask {
+                handle: handle(n),
+                ask: Box::new(app_chooser::Ask {
+                    app_id: "org.example.Mail".to_owned(),
+                    parent_window: String::new(),
+                    target: Some("report.pdf".to_owned()),
+                    choices: vec![
+                        choice("org.example.Viewer", "Document Viewer"),
+                        choice("org.example.Draw", "Drawing"),
+                    ],
+                    last_choice: Some("org.example.Draw".to_owned()),
+                }),
+                reply: app_chooser::Reply(sender),
+            });
+            answer
+        };
+        let answer = open_with(6);
+        let window = show(&mut driver);
+        let spec = driver.window_system_mut().spec(window).unwrap().clone();
+        assert_eq!(spec.title, "Open With");
+        let snapshot = driver.runtime().snapshot(window).unwrap();
+        let names: Vec<&str> = snapshot
+            .accessibility
+            .iter()
+            .filter_map(|(_, n)| n.name.as_deref())
+            .collect();
+        for shown in ["Open “report.pdf” with:", "Document Viewer", "Drawing"] {
+            assert!(names.contains(&shown), "{shown:?} in {names:?}");
+        }
+        type_key(&mut driver, window, RETURN, None);
+        assert_eq!(
+            answer.try_recv().unwrap(),
+            app_chooser::Answer::Chosen("org.example.Draw".to_owned()),
+            "the last choice opens selected and Return opens it"
+        );
+        assert!(driver.runtime().windows().is_empty());
+
+        let answer = open_with(7);
+        let window = show(&mut driver);
+        inbox().push(app_chooser::Event::Update {
+            handle: handle(7),
+            choices: vec![choice("org.example.Viewer", "Document Viewer")],
+        });
+        settle(&mut driver, window);
+        type_key(&mut driver, window, RETURN, None);
+        assert!(
+            answer.try_recv().is_err(),
+            "a selected choice that is no longer offered opens nothing"
+        );
+        type_key(&mut driver, window, ESCAPE, None);
+        assert_eq!(answer.try_recv().unwrap(), app_chooser::Answer::Cancelled);
         assert!(driver.runtime().windows().is_empty());
         assert!(!driver.runtime().exited());
     }

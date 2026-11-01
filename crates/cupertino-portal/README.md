@@ -1,7 +1,7 @@
 # cupertino-portal
 
 The session's xdg-desktop-portal backend. Applications ask xdg-desktop-portal, and xdg-desktop-portal asks this
-backend for the interfaces `data/cupertino.portal` lists: Settings, FileChooser and ScreenCast. The server sets `XDG_CURRENT_DESKTOP=Cupertino`, so
+backend for the interfaces `data/cupertino.portal` lists: Settings, FileChooser, ScreenCast and AppChooser. The server sets `XDG_CURRENT_DESKTOP=Cupertino`, so
 xdg-desktop-portal reads `cupertino-portals.conf` to pick the backend for each interface.
 
 ## Running
@@ -78,12 +78,33 @@ ext-foreign-toplevel-list-v1).
 Known limitations: no restore tokens, no cursor metadata, no region source, one source for each `Start`, shared memory
 only (no dmabuf), and no audio.
 
+## App chooser
+
+`org.freedesktop.impl.portal.AppChooser` version 2 asks which app opens a link or a file when xdg-desktop-portal's
+OpenURI needs the person to pick or confirm one. The window is the consent: nothing opens unless they choose an app.
+
+- `ChooseApplication` shows a window, "Open “<file name or URI>” with:", that lists the `choices` by the name of their
+  desktop entry (`<id>.desktop` in `$XDG_DATA_HOME/applications` and each `XDG_DATA_DIRS` entry); an id with no
+  installed entry shows as the id. `last_choice` opens selected when it is one of `choices`. Open is the default
+  button: Return opens the selected app, and Escape cancels.
+- The answer is `0` with `choice` and, when the caller sent one, its `activation_token` handed on; Cancel or closing
+  the window is `1`; `Close` on the request takes the window down and answers `2`. An answer that is not one of the
+  choices offered at that moment is `2` with no `choice`.
+- `UpdateChoices` replaces the list of the open window at `handle`; the selection stays on its app while that app is
+  still offered. Any other handle is `InvalidArgs`.
+- The same callers and bounds as the file chooser apply: only the frontend calls, at most 16 windows and 4 for one app
+  id, at most 256 choices, an id with a `/` or a control character is refused, and shown text loses control and
+  bidirectional-override characters.
+
+Known limitations: rows show the applications symbol rather than each app's own icon, and no new activation token is
+made for the chosen app.
+
 ## Installing
 
 - `bin/cupertino-portal`
 - `data/cupertino.portal` to `/usr/share/xdg-desktop-portal/portals/`
 - `data/cupertino-portals.conf` to `/usr/share/xdg-desktop-portal/`: Settings and FileChooser from this backend
-  first, then the GTK backend for what it does not serve; ScreenCast from this backend; every other interface from the
+  first, then the GTK backend for what it does not serve; ScreenCast and AppChooser from this backend; every other interface from the
   GTK backend
 
 The packages ship the binary and `cupertino.portal`, with `packaging/files/usr/share/xdg-desktop-portal/cupertino-portals.conf`

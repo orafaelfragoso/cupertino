@@ -153,5 +153,47 @@ class IgnoredOutputTest(unittest.TestCase):
             self.assertEqual(gate.contracts_problems(Path(tmp).resolve()), [])
 
 
+class ProtocolXmlTest(unittest.TestCase):
+    cargo = "[package]\nname = \"x\"\n"
+    generated = 'wayland_scanner::generate_client_code!("protocols/x-v1.xml");\n'
+
+    def problems(self, files: dict[str, str]) -> list[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for rel, text in {"crates/x/Cargo.toml": self.cargo, **files}.items():
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_text(text)
+            return gate.protocol_xml_problems(root.resolve())
+
+    def test_a_library_xml_without_include_bytes_fails(self):
+        self.assertEqual(
+            self.problems({"crates/x/src/lib.rs": "\n" + self.generated}),
+            ["crates/x/src/lib.rs:2: protocol XML read by wayland-scanner is not include_bytes!-ed in its crate: protocols/x-v1.xml"],
+        )
+
+    def test_an_include_bytes_anywhere_in_the_crate_counts_relative_to_its_file(self):
+        files = {
+            "crates/x/src/lib.rs": "mod protocols;\n",
+            "crates/x/src/protocols.rs": 'const _: &[u8] = include_bytes!("../protocols/x-v1.xml");\n' + self.generated,
+        }
+        self.assertEqual(self.problems(files), [])
+
+    def test_an_include_bytes_in_another_crate_does_not_count(self):
+        files = {
+            "crates/x/src/lib.rs": self.generated,
+            "crates/y/Cargo.toml": self.cargo,
+            "crates/y/src/lib.rs": 'const _: &[u8] = include_bytes!("../../x/protocols/x-v1.xml");\n',
+        }
+        self.assertEqual(len(self.problems(files)), 1)
+
+    def test_binaries_and_tests_are_not_checked(self):
+        files = {
+            "crates/x/src/main.rs": self.generated,
+            "crates/x/src/bin/tool.rs": self.generated,
+            "crates/x/tests/protocol.rs": self.generated,
+        }
+        self.assertEqual(self.problems(files), [])
+
+
 if __name__ == "__main__":
     unittest.main()

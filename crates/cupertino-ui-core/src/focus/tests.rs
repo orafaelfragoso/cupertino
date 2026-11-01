@@ -1,6 +1,6 @@
 use super::*;
 use crate::test_support::{group, leaf, Group, Leaf};
-use crate::Element;
+use crate::{Element, Role};
 
 type M = String;
 
@@ -162,12 +162,66 @@ fn a_window_gives_the_focus_to_its_initial_focus_node_when_it_opens_and_only_the
     let mut focus = Focus::default();
     let change = f.sync(&mut focus).unwrap();
     assert_eq!((change.from, change.to), (None, Some(f.id("b"))));
-    assert!(!focus.visible());
+    assert!(
+        !focus.visible(),
+        "a button taking the focus on open shows no ring"
+    );
 
     focus.set(&f.tree, None, false);
     f.tree.reconcile(Some(f.root), window("c")).unwrap();
     assert_eq!(f.sync(&mut focus), None);
     assert_eq!(focus.node(), None);
+}
+
+#[test]
+fn a_text_input_taking_the_focus_when_its_window_opens_shows_its_ring() {
+    let mut f = Fixture::new();
+    let field = Element::new(Leaf {
+        role: Some(Role::TextInput),
+        initial: true,
+        ..leaf("name")
+    })
+    .key("name");
+    f.tree
+        .reconcile(Some(f.root), Element::new(group(vec![field])))
+        .unwrap();
+    let mut focus = Focus::default();
+    let change = f.sync(&mut focus).unwrap();
+    assert_eq!(change.to, Some(f.id("name")));
+    assert!(focus.visible());
+}
+
+#[test]
+fn a_text_input_taking_the_focus_when_its_scope_opens_shows_its_ring() {
+    let mut f = Fixture::new();
+    let mut focus = Focus::default();
+    f.tree
+        .reconcile(
+            Some(f.root),
+            Element::new(group(vec![Element::new(leaf("a")).key("a")])),
+        )
+        .unwrap();
+    assert_eq!(f.sync(&mut focus), None);
+    let sheet = Element::new(Group {
+        children: vec![Element::new(Leaf {
+            role: Some(Role::TextInput),
+            initial: true,
+            ..leaf("name")
+        })
+        .key("name")],
+        scope: true,
+        row: false,
+        roving: false,
+    })
+    .key("dialog");
+    f.tree
+        .reconcile(
+            Some(f.root),
+            Element::new(group(vec![Element::new(leaf("a")).key("a"), sheet])),
+        )
+        .unwrap();
+    assert_eq!(f.sync(&mut focus).unwrap().to, Some(f.id("name")));
+    assert!(focus.visible());
 }
 
 #[test]

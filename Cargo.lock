@@ -1784,6 +1784,7 @@ dependencies = [
  "cupertino-test-bus",
  "cupertino-ui-core",
  "cupertino-ui-platform",
+ "unicode-segmentation",
  "zbus",
 ]
 

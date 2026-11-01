@@ -7,6 +7,7 @@ use cupertino_ui_core::{
     AccessibilityNode, AccessibleValue, Action, ActionData, ActionRequest, Checked, Live, NodeId,
     Relation, Role,
 };
+use unicode_segmentation::UnicodeSegmentation;
 
 pub(crate) fn node_id(id: NodeId) -> accesskit::NodeId {
     accesskit::NodeId(u64::from(id.generation().get()) << 32 | u64::from(id.index()))
@@ -197,7 +198,162 @@ fn role(role: Role) -> accesskit::Role {
     }
 }
 
-/// `None` for a selection: AccessKit expresses one in text runs, which this crate doesn't build.
+/// A line of an editable value as AccessKit reads it: a text run, and the byte its line starts at in the value.
+pub(crate) struct Run {
+    pub(crate) id: accesskit::NodeId,
+    pub(crate) node: accesskit::Node,
+    start: usize,
+}
+
+impl Run {
+    fn lengths(&self) -> &[u8] {
+        self.node.character_lengths()
+    }
+}
+
+/// A character of a line: its byte in the line, its length, and whether a word starts at it.
+struct Character {
+    at: usize,
+    len: u8,
+    word: bool,
+}
+
+/// The text runs of `node`'s editable value, made children of `out` with the caret and selection in them, and the
+/// selection offered when core offers it. One run per line, ending with its line break, made of characters (grapheme
+/// clusters) and words as the text buffer moves by them. `id` names the n-th run. None for a node without editable text,
+/// and none for a secret.
+pub(crate) fn text_runs(
+    node: &AccessibilityNode,
+    out: &mut accesskit::Node,
+    mut id: impl FnMut(usize) -> accesskit::NodeId,
+) -> Vec<Run> {
+    let Some(AccessibleValue::Text {
+        value,
+        editing: Some(editing),
+    }) = &node.value
+    else {
+        return Vec::new();
+    };
+    if protected(node) {
+        return Vec::new();
+    }
+    let mut lines: Vec<(usize, &str)> = value
+        .split_inclusive('\n')
+        .scan(0, |start, line| {
+            let at = *start;
+            *start += line.len();
+            Some((at, line))
+        })
+        .collect();
+    if value.is_empty() || value.ends_with('\n') {
+        lines.push((value.len(), ""));
+    }
+    let mut runs: Vec<Run> = Vec::new();
+    for (start, line) in lines {
+        // a word takes the spaces after it
+        let words: Vec<usize> = line
+            .split_word_bound_indices()
+            .filter(|(_, w)| !w.trim().is_empty())
+            .map(|(at, _)| at)
+            .collect();
+        let starts_word = |at: usize| words.binary_search(&at).is_ok();
+        let mut characters: Vec<Character> = Vec::new();
+        for (at, grapheme) in line.grapheme_indices(true) {
+            match u8::try_from(grapheme.len()) {
+                Ok(len) => characters.push(Character {
+                    at,
+                    len,
+                    word: starts_word(at),
+                }),
+                // AccessKit counts a character's bytes in a u8: a longer cluster goes as its scalar values
+                Err(_) => characters.extend(grapheme.char_indices().map(|(i, c)| Character {
+                    at: at + i,
+                    len: c.len_utf8() as u8,
+                    word: i == 0 && starts_word(at),
+                })),
+            }
+        }
+        // a word start is a u8 too, so a line of more characters than that is several runs
+        let chunks: Vec<&[Character]> = if characters.is_empty() {
+            vec![&[]]
+        } else {
+            characters.chunks(usize::from(u8::MAX)).collect()
+        };
+        let first = runs.len();
+        for chunk in chunks {
+            let from = chunk.first().map_or(line.len(), |c| c.at);
+            let to = chunk
+                .last()
+                .map_or(line.len(), |c| c.at + usize::from(c.len));
+            let mut run = accesskit::Node::new(accesskit::Role::TextRun);
+            run.set_value(&line[from..to]);
+            run.set_character_lengths(chunk.iter().map(|c| c.len).collect::<Vec<_>>());
+            run.set_word_starts(
+                (0..chunk.len() as u8)
+                    .filter(|i| chunk[usize::from(*i)].word)
+                    .collect::<Vec<_>>(),
+            );
+            runs.push(Run {
+                id: id(runs.len()),
+                node: run,
+                start: start + from,
+            });
+        }
+        for i in first + 1..runs.len() {
+            let (previous, next) = (runs[i - 1].id, runs[i].id);
+            runs[i - 1].node.set_next_on_line(next);
+            runs[i].node.set_previous_on_line(previous);
+        }
+    }
+    let caret = position(&runs, editing.caret);
+    let other = if editing.caret == editing.selection.start {
+        editing.selection.end
+    } else {
+        editing.selection.start
+    };
+    out.set_text_selection(accesskit::TextSelection {
+        anchor: position(&runs, other),
+        focus: caret,
+    });
+    for run in &runs {
+        out.push_child(run.id);
+    }
+    if node.actions.contains(&Action::SetSelection) {
+        out.add_action(accesskit::Action::SetTextSelection);
+    }
+    runs
+}
+
+/// Where byte `at` of the value lies in its runs: a byte inside a character counts as that character's start.
+fn position(runs: &[Run], at: usize) -> accesskit::TextPosition {
+    let run = runs
+        .iter()
+        .rev()
+        .find(|r| r.start <= at)
+        .unwrap_or(&runs[0]);
+    let mut end = run.start;
+    let character_index = run
+        .lengths()
+        .iter()
+        .take_while(|len| {
+            end += usize::from(**len);
+            end <= at
+        })
+        .count();
+    accesskit::TextPosition {
+        node: run.id,
+        character_index,
+    }
+}
+
+/// The byte of the value at `position`, when it lies in `runs`.
+fn offset(runs: &[Run], position: accesskit::TextPosition) -> Option<usize> {
+    let run = runs.iter().find(|r| r.id == position.node)?;
+    let before = run.lengths().get(..position.character_index)?;
+    Some(run.start + before.iter().map(|len| usize::from(*len)).sum::<usize>())
+}
+
+/// `None` for a selection: AccessKit takes one only on a node with text runs, which [`text_runs`] offers.
 fn action_out(action: Action) -> Option<accesskit::Action> {
     use accesskit::Action as A;
     Some(match action {
@@ -214,8 +370,12 @@ fn action_out(action: Action) -> Option<accesskit::Action> {
     })
 }
 
-/// Core's request for an AccessKit one, when it maps to an action core knows with the data that action takes.
-pub(crate) fn request(request: &accesskit::ActionRequest) -> Option<ActionRequest> {
+/// Core's request for an AccessKit one, when it maps to an action core knows with the data that action takes. `runs`
+/// gives the text runs a node was last sent with, for a selection in them.
+pub(crate) fn request<'a>(
+    request: &accesskit::ActionRequest,
+    runs: impl FnOnce(NodeId) -> Option<&'a [Run]>,
+) -> Option<ActionRequest> {
     use accesskit::Action as A;
     let target = core_id(request.target_node)?;
     let (action, data) = match (request.action, &request.data) {
@@ -232,6 +392,15 @@ pub(crate) fn request(request: &accesskit::ActionRequest) -> Option<ActionReques
         }
         (A::SetValue, Some(accesskit::ActionData::NumericValue(n))) => {
             (Action::SetValue, Some(ActionData::Number(*n)))
+        }
+        (A::SetTextSelection, Some(accesskit::ActionData::SetTextSelection(selection))) => {
+            let runs = runs(target)?;
+            let anchor = offset(runs, selection.anchor)?;
+            let focus = offset(runs, selection.focus)?;
+            (
+                Action::SetSelection,
+                Some(ActionData::Selection(anchor.min(focus)..anchor.max(focus))),
+            )
         }
         _ => return None,
     };

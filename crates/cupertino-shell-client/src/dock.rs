@@ -21,6 +21,26 @@ pub struct DockWindow {
     pub active: bool,
 }
 
+/// Largest window icon side a dock accepts, in pixels: the server sends at most 512.
+pub const MAX_WINDOW_ICON: u32 = 512;
+
+/// A window's own icon image: `size` × `size` pixels of `wl_shm` ARGB8888 (premultiplied, little-endian), rows packed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowIconImage {
+    pub size: u32,
+    pub argb: Vec<u8>,
+}
+
+/// The icon a window set for itself (`xdg_toplevel_icon_v1`), as the server copied it; from shell version 17.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DockWindowIcon {
+    /// The window's id, as in [`DockWindow`].
+    pub id: u32,
+    /// A key into the icon theme, never a path.
+    pub name: Option<String>,
+    pub image: Option<WindowIconImage>,
+}
+
 /// Which windows the open overview shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OverviewMode {
@@ -52,6 +72,8 @@ pub struct OverviewWorkspace {
 pub enum DockChange {
     /// A window appeared or one of its properties changed.
     Window(DockWindow),
+    /// The window's own icon is set, changed or removed; it follows the window's [`DockChange::Window`].
+    WindowIcon(DockWindowIcon),
     /// The window with this id went away.
     WindowClosed(u32),
     /// The server started a program of this application id.
@@ -234,6 +256,23 @@ fn whole_rect(rect: &Rect) -> Result<(i32, i32, i32, i32), Error> {
     ))
 }
 
+/// The image of a `window_icon` event: `None` for size 0, a size over [`MAX_WINDOW_ICON`], or a file that does not
+/// hold exactly the image.
+fn icon_image(size: u32, pixels: std::os::fd::OwnedFd) -> Option<WindowIconImage> {
+    use std::os::unix::fs::FileExt;
+    if size == 0 || size > MAX_WINDOW_ICON {
+        return None;
+    }
+    let file = std::fs::File::from(pixels);
+    let len = size as usize * size as usize * 4;
+    if file.metadata().ok()?.len() != len as u64 {
+        return None;
+    }
+    let mut argb = vec![0; len];
+    file.read_exact_at(&mut argb, 0).ok()?;
+    Some(WindowIconImage { size, argb })
+}
+
 /// Collects the events of a group until `done`.
 #[derive(Debug, Default)]
 pub(crate) struct GroupBuilder {
@@ -287,6 +326,16 @@ impl GroupBuilder {
                     active: state.contains(WindowState::Active),
                 }));
             }
+            Event::WindowIcon {
+                id,
+                name,
+                size,
+                pixels,
+            } => self.changes.push(DockChange::WindowIcon(DockWindowIcon {
+                id,
+                name: (!name.is_empty()).then_some(name),
+                image: icon_image(size, pixels),
+            })),
             Event::WindowClosed { id } => self.changes.push(DockChange::WindowClosed(id)),
             Event::Launching { app_id } => self.changes.push(DockChange::Launching(app_id)),
             Event::ToggleAutoHide => self.changes.push(DockChange::ToggleAutoHide),

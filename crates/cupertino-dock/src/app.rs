@@ -773,7 +773,16 @@ impl App {
                     self.session
                         .window(w.id, &w.app_id, &w.title, w.minimized, now)
                 }
-                DockChange::WindowClosed(id) => self.session.window_closed(id, now),
+                DockChange::WindowIcon(icon) => {
+                    if let Some(w) = self.session.window_info(icon.id) {
+                        let apps = [w.app_id.clone(), w.key.clone()];
+                        self.icons.window_icon(apps, icon);
+                    }
+                }
+                DockChange::WindowClosed(id) => {
+                    self.icons.window_closed(id);
+                    self.session.window_closed(id, now)
+                }
                 DockChange::Launching(app_id) => self.session.launching(&app_id, now),
                 DockChange::ToggleAutoHide => {
                     self.session.dock.toggle_autohide(now);

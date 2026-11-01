@@ -53,7 +53,7 @@ use smithay::wayland::xdg_activation::{XdgActivationHandler, XdgActivationState,
 use smithay::{
     delegate_compositor, delegate_cursor_shape, delegate_data_device, delegate_dmabuf, delegate_drm_syncobj, delegate_foreign_toplevel_list,
     delegate_fractional_scale, delegate_layer_shell, delegate_output, delegate_pointer_gestures, delegate_presentation,
-    delegate_primary_selection, delegate_relative_pointer, delegate_seat, delegate_shm, delegate_viewporter, delegate_xdg_activation,
+    delegate_primary_selection, delegate_relative_pointer, delegate_seat, delegate_shm, delegate_single_pixel_buffer, delegate_viewporter, delegate_xdg_activation,
     delegate_xdg_decoration, delegate_xdg_dialog, delegate_xdg_shell,
 };
 
@@ -376,6 +376,7 @@ impl TabletSeatHandler for Cupertino {
 delegate_cursor_shape!(Cupertino);
 delegate_pointer_gestures!(Cupertino);
 delegate_relative_pointer!(Cupertino);
+delegate_single_pixel_buffer!(Cupertino);
 delegate_viewporter!(Cupertino);
 delegate_presentation!(Cupertino);
 

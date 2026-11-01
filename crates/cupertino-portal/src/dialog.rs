@@ -1,5 +1,5 @@
-//! The file-chooser windows: one for each open request, drawn with CupertinoKit. The D-Bus side hands its events to
-//! the [`inbox`]; [`Dialogs`] is resident and keeps running while no dialog is open.
+//! The file-chooser and screen-sharing windows: one for each open request, drawn with CupertinoKit. The D-Bus side
+//! hands its events to the [`inbox`]; [`Dialogs`] is resident and keeps running while no dialog is open.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -10,16 +10,17 @@ use cupertino_filepicker::{Listing, Request};
 use cupertino_kit::controls::{
     CheckBox, ListView, SegmentedControl, Selection, SplitLayout, SplitView, TextRole,
 };
-use cupertino_kit::core::{Checked, CommandRegistry, Key};
+use cupertino_kit::core::{Checked, CommandRegistry, Key, Shortcut};
 use cupertino_kit::geometry::{Insets, Point, Size};
 use cupertino_kit::layout::ScrollState;
-use cupertino_kit::platform::DecorationMode;
+use cupertino_kit::platform::{DecorationMode, Keysym, Mods};
 use cupertino_kit::prelude::*;
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::chooser::{Accept, Chooser};
-use crate::file_chooser::{Answer, Event, Kind, Reply};
+use crate::file_chooser::{self, Answer, Kind, Reply};
+use crate::screen_cast::{self, Source};
 
 const ROW_HEIGHT: f64 = 24.0;
 const SIDEBAR_WIDTH: f64 = 180.0;
@@ -33,6 +34,27 @@ const BAR_INSETS: Insets = Insets {
     right: 16.0,
 };
 const SIZE: Size = Size::new(720.0, 460.0);
+const PICKER_SIZE: Size = Size::new(480.0, 360.0);
+const RETURN: Keysym = Keysym(0xff0d);
+const ESCAPE: Keysym = Keysym(0xff1b);
+
+/// What the D-Bus side asks of the dialogs.
+pub enum Event {
+    FileChooser(file_chooser::Event),
+    ScreenCast(screen_cast::Event),
+}
+
+impl From<file_chooser::Event> for Event {
+    fn from(event: file_chooser::Event) -> Self {
+        Event::FileChooser(event)
+    }
+}
+
+impl From<screen_cast::Event> for Event {
+    fn from(event: screen_cast::Event) -> Self {
+        Event::ScreenCast(event)
+    }
+}
 
 /// Events from the D-Bus side waiting for a run of [`Dialogs`].
 pub struct Inbox {
@@ -50,11 +72,11 @@ pub fn inbox() -> &'static Inbox {
 }
 
 impl Inbox {
-    pub fn push(&self, event: Event) {
+    pub fn push(&self, event: impl Into<Event>) {
         self.events
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push_back(event);
+            .push_back(event.into());
         // a token already waiting wakes for this event too
         let _ = self.wake.0.try_send(());
     }
@@ -96,6 +118,7 @@ pub struct Model {
     places: Vec<Place>,
     next: u64,
     open: Vec<Dialog>,
+    pickers: Vec<Picker>,
 }
 
 struct Dialog {
@@ -110,6 +133,22 @@ struct Dialog {
     name_revision: u64,
     /// The file a save would replace, while the person is asked.
     replace: Option<PathBuf>,
+}
+
+/// The chooser of what a screen-sharing request shares.
+struct Picker {
+    id: u64,
+    handle: OwnedObjectPath,
+    reply: screen_cast::Reply,
+    ask: screen_cast::Ask,
+    rows: Selection,
+    scroll: ScrollState,
+}
+
+impl Picker {
+    fn chosen(&self) -> Option<&Source> {
+        self.rows.cursor().and_then(|i| self.ask.sources.get(i))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -131,6 +170,9 @@ pub enum Message {
     Replace(u64),
     KeepEditing(u64),
     Cancel(u64),
+    PickerScroll(u64, ScrollState),
+    PickerSelect(u64, Selection),
+    Share(u64),
 }
 
 const NO_SCROLL: ScrollState = ScrollState {
@@ -151,11 +193,15 @@ impl Model {
         self.open.iter_mut().find(|d| d.id == id)
     }
 
+    fn picker(&mut self, id: u64) -> Option<&mut Picker> {
+        self.pickers.iter_mut().find(|p| p.id == id)
+    }
+
     fn take(&mut self, events: Vec<Event>) -> Vec<Command<Message>> {
         let mut commands = Vec::new();
         for event in events {
             match event {
-                Event::Ask { handle, ask, reply } => {
+                Event::FileChooser(file_chooser::Event::Ask { handle, ask, reply }) => {
                     let id = self.next;
                     self.next += 1;
                     let mut chooser = Chooser::new(*ask, &self.home);
@@ -176,7 +222,28 @@ impl Model {
                         replace: None,
                     });
                 }
-                Event::Close { handle } => self.open.retain(|d| d.handle != handle),
+                Event::FileChooser(file_chooser::Event::Close { handle }) => {
+                    self.open.retain(|d| d.handle != handle)
+                }
+                Event::ScreenCast(screen_cast::Event::Ask { handle, ask, reply }) => {
+                    let id = self.next;
+                    self.next += 1;
+                    let mut rows = Selection::default();
+                    if !ask.sources.is_empty() {
+                        rows.select_only(0);
+                    }
+                    self.pickers.push(Picker {
+                        id,
+                        handle,
+                        reply,
+                        ask: *ask,
+                        rows,
+                        scroll: NO_SCROLL,
+                    });
+                }
+                Event::ScreenCast(screen_cast::Event::Close { handle }) => {
+                    self.pickers.retain(|p| p.handle != handle)
+                }
             }
         }
         commands
@@ -186,6 +253,13 @@ impl Model {
     fn finish(&mut self, id: u64, answer: Answer) {
         if let Some(i) = self.open.iter().position(|d| d.id == id) {
             self.open.remove(i).reply.send(answer);
+        }
+    }
+
+    /// End chooser `id` with `answer`.
+    fn finish_picker(&mut self, id: u64, answer: screen_cast::Answer) {
+        if let Some(i) = self.pickers.iter().position(|p| p.id == id) {
+            self.pickers.remove(i).reply.send(answer);
         }
     }
 }
@@ -218,6 +292,7 @@ impl Application for Dialogs {
             home,
             next: 0,
             open: Vec::new(),
+            pickers: Vec::new(),
         };
         let mut commands = model.take(inbox().take());
         commands.push(woken());
@@ -336,7 +411,26 @@ impl Application for Dialogs {
                     d.replace = None;
                 }
             }
-            Message::Cancel(id) => model.finish(id, Answer::Cancelled),
+            Message::Cancel(id) => {
+                model.finish(id, Answer::Cancelled);
+                model.finish_picker(id, screen_cast::Answer::Cancelled);
+            }
+            Message::PickerScroll(id, scroll) => {
+                if let Some(p) = model.picker(id) {
+                    p.scroll = scroll;
+                }
+            }
+            Message::PickerSelect(id, rows) => {
+                if let Some(p) = model.picker(id) {
+                    p.rows = rows;
+                }
+            }
+            Message::Share(id) => {
+                let chosen = model.picker(id).and_then(|p| p.chosen().cloned());
+                if let Some(source) = chosen {
+                    model.finish_picker(id, screen_cast::Answer::Chosen(source));
+                }
+            }
         }
         commands
     }
@@ -346,6 +440,7 @@ impl Application for Dialogs {
             .open
             .iter()
             .map(|d| window(d, &model.places))
+            .chain(model.pickers.iter().map(picker_window))
             .collect()
     }
 }
@@ -745,6 +840,130 @@ fn window(d: &Dialog, places: &[Place]) -> Window<Message> {
     }
 }
 
+/// A source as its row shows it: the display's description or connector name, the window's title and app.
+fn source_row(source: &Source) -> (&'static str, String) {
+    match source {
+        Source::Display {
+            name, description, ..
+        } => (
+            "symbol.desktop",
+            if description.is_empty() {
+                name.clone()
+            } else {
+                description.clone()
+            },
+        ),
+        Source::Window { title, app_id, .. } => (
+            "symbol.applications",
+            match (title.is_empty(), app_id.is_empty()) {
+                (false, false) => format!("{title} ({app_id})"),
+                (false, true) => title.clone(),
+                (true, _) => app_id.clone(),
+            },
+        ),
+    }
+}
+
+fn picker_window(p: &Picker) -> Window<Message> {
+    let id = p.id;
+    let rows: Vec<(&'static str, String)> = p.ask.sources.iter().map(source_row).collect();
+    let names: Vec<String> = rows.iter().map(|(_, n)| n.clone()).collect();
+    let list = Element::from(ListView {
+        label: "Displays and Windows".into(),
+        count: rows.len(),
+        row_height: ROW_HEIGHT,
+        scroll: p.scroll,
+        selection: p.rows.clone(),
+        multiple: false,
+        row: Box::new(move |i, selected| row(rows[i].0, rows[i].1.clone(), selected)),
+        key: Some(Box::new(|i| Key::Int(i as u64))),
+        type_select: Some(Box::new(move |i| names[i].clone())),
+        on_scroll: Box::new(move |s| Message::PickerScroll(id, s)),
+        on_select: Some(Box::new(move |s| Message::PickerSelect(id, s))),
+        on_activate: Some(Box::new(move |_| Message::Share(id))),
+    })
+    .key("sources");
+    let prompt = if p.ask.sources.is_empty() {
+        "There is no display or window to share.".to_owned()
+    } else {
+        "Choose a display or a window to share.".to_owned()
+    };
+    let header = Element::new(Stack {
+        axis: Axis::Horizontal,
+        padding: BAR_INSETS,
+        spacing: GAP,
+        align: Align::Center,
+        children: vec![text(prompt, TextRole::Body, false, false).key("prompt")],
+    });
+    let bar = bar_row(
+        Vec::new(),
+        vec![
+            button(
+                "Cancel".to_owned(),
+                ButtonRole::Normal,
+                true,
+                Message::Cancel(id),
+            )
+            .key("cancel"),
+            button(
+                "Share".to_owned(),
+                ButtonRole::Default,
+                p.chosen().is_some(),
+                Message::Share(id),
+            )
+            .key("share"),
+        ],
+    );
+    Window {
+        key: WindowKey(Key::Str(format!("picker-{id}").into())),
+        spec: WindowSpec {
+            title: "Share Screen".to_owned(),
+            app_id: "org.cupertino.Portal".into(),
+            size: PICKER_SIZE,
+            min_size: Some(Size::new(360.0, 240.0)),
+            max_size: None,
+            decorations: DecorationMode::Preferred,
+            foreign_parent: crate::wayland_parent(&p.ask.parent_window).map(str::to_owned),
+        },
+        // Return is the default button and Escape cancels, wherever the focus is
+        shortcuts: CommandRegistry::new()
+            .with(
+                Shortcut {
+                    mods: Mods::NONE,
+                    keysym: RETURN,
+                },
+                Message::Share(id),
+            )
+            .with(
+                Shortcut {
+                    mods: Mods::NONE,
+                    keysym: ESCAPE,
+                },
+                Message::Cancel(id),
+            ),
+        on_close: Some(Message::Cancel(id)),
+        background: WindowBackground::Theme,
+        popup: None,
+        content: Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets::ZERO,
+            spacing: 0.0,
+            align: Align::Stretch,
+            children: vec![
+                header,
+                Element::new(Separator {
+                    axis: Axis::Horizontal,
+                }),
+                list,
+                Element::new(Separator {
+                    axis: Axis::Horizontal,
+                }),
+                bar,
+            ],
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
@@ -765,7 +984,7 @@ mod tests {
     use cupertino_ui_test::{ManualClock, TestDriver};
 
     use super::*;
-    use crate::file_chooser::Ask;
+    use crate::file_chooser::{Ask, Event};
 
     fn ask(kind: Kind, folder: &std::path::Path) -> Ask {
         Ask {
@@ -952,6 +1171,49 @@ mod tests {
         inbox().push(Event::Close { handle: handle(3) });
         settle(&mut driver, window);
         assert!(answer.is_closed(), "a closed request is dropped unanswered");
+        assert!(driver.runtime().windows().is_empty());
+        assert!(!driver.runtime().exited());
+
+        let display = Source::Display {
+            output: 4,
+            name: "DP-1".to_owned(),
+            description: "Studio Display".to_owned(),
+        };
+        let share = |n: u32| {
+            let (sender, answer) = async_channel::bounded(1);
+            inbox().push(screen_cast::Event::Ask {
+                handle: handle(n),
+                ask: Box::new(screen_cast::Ask {
+                    app_id: "org.example.Meeting".to_owned(),
+                    parent_window: String::new(),
+                    sources: vec![
+                        display.clone(),
+                        Source::Window {
+                            identifier: "a1".to_owned(),
+                            title: "Notes".to_owned(),
+                            app_id: "org.example.Notes".to_owned(),
+                        },
+                    ],
+                }),
+                reply: screen_cast::Reply(sender),
+            });
+            answer
+        };
+        let answer = share(4);
+        let window = show(&mut driver);
+        let spec = driver.window_system_mut().spec(window).unwrap().clone();
+        assert_eq!(spec.title, "Share Screen");
+        click(&mut driver, window, "share");
+        assert_eq!(
+            answer.try_recv().unwrap(),
+            screen_cast::Answer::Chosen(display.clone())
+        );
+        assert!(driver.runtime().windows().is_empty());
+
+        let answer = share(5);
+        let window = show(&mut driver);
+        click(&mut driver, window, "cancel");
+        assert_eq!(answer.try_recv().unwrap(), screen_cast::Answer::Cancelled);
         assert!(driver.runtime().windows().is_empty());
         assert!(!driver.runtime().exited());
     }

@@ -2,9 +2,10 @@
 //! `kit/controls`, the sheet of the choice and value controls of Kit's row 167a capture (check boxes off, on, mixed and
 //! disabled, radio buttons, a segmented control, the regular, ticked, level and disabled sliders, and progress), and
 //! `kit/icons`, a grid of system symbols at the toolkit's sizes and tints with the chevrons along the reading direction
-//! and the placeholder of a missing symbol. `kit/counter`, `kit/forms`, `kit/virtual-list` and `kit/editor` are the
-//! examples' windows at their own sizes, as they open (the Editor with a short document typed in). `--direction ltr|rtl` (default ltr) lays a surface out in that direction; the sheet
-//! shows both.
+//! and the placeholder of a missing symbol, `kit/sidebar`, a sidebar's sections running to the window's edges with
+//! its second row selected. `kit/counter`, `kit/forms`, `kit/virtual-list` and `kit/editor` are the examples' windows
+//! at their own sizes, as they open (the Editor with a short document typed in). `--direction ltr|rtl` (default ltr)
+//! lays a surface out in that direction; the sheet shows both.
 //!
 //! `ci/capture.sh kit/controls --scale 2` (the flags are `cupertino-capture`'s)
 //!
@@ -26,12 +27,12 @@ use std::sync::Arc;
 
 use cupertino_capture::{App, Look, Request, State};
 use cupertino_kit::controls::{
-    CheckBox, Icon, IconDirection, Progress, RadioGroup, SegmentedControl, Slider, SliderStyle,
-    TextRole, WINDOW_CONTENT_INSET,
+    CheckBox, Icon, IconDirection, Progress, RadioGroup, SegmentedControl, Sidebar, SidebarItem,
+    SidebarSection, Slider, SliderStyle, TextRole, WINDOW_CONTENT_INSET,
 };
-use cupertino_kit::core::{Checked, CommandRegistry};
-use cupertino_kit::geometry::{Insets, Size};
-use cupertino_kit::layout::LayoutDirection;
+use cupertino_kit::core::{Checked, CommandRegistry, Key};
+use cupertino_kit::geometry::{Insets, Point, Size};
+use cupertino_kit::layout::{LayoutDirection, ScrollState};
 use cupertino_kit::platform::{
     Capabilities, DecorationMode, SystemAppearance, Timestamp, WindowEvent, WindowStates,
 };
@@ -100,7 +101,11 @@ fn stack(axis: Axis, spacing: f64, children: Vec<Element<Message>>) -> Element<M
     })
 }
 
-fn window(title: &'static str, size: Size, content: Vec<Element<Message>>) -> Vec<Window<Message>> {
+fn window<M: Clone + 'static>(
+    title: &'static str,
+    size: Size,
+    content: Vec<Element<M>>,
+) -> Vec<Window<M>> {
     vec![Window {
         key: WindowKey(title.into()),
         spec: WindowSpec {
@@ -256,6 +261,59 @@ impl Application for Icons {
     }
 }
 
+struct Places;
+
+impl Application for Places {
+    type Model = ScrollState;
+    type Message = ScrollState;
+
+    fn init() -> (ScrollState, Vec<Command<ScrollState>>) {
+        let scroll = ScrollState {
+            offset: Point::ZERO,
+            content: Size::ZERO,
+            viewport: Size::ZERO,
+        };
+        (scroll, Vec::new())
+    }
+
+    fn update(scroll: &mut ScrollState, message: ScrollState) -> Vec<Command<ScrollState>> {
+        *scroll = message;
+        Vec::new()
+    }
+
+    fn view(scroll: &ScrollState) -> Vec<Window<ScrollState>> {
+        let item = |label: &str, icon: &str| SidebarItem {
+            key: Key::from(label.to_owned()),
+            label: label.into(),
+            icon: Some(icon.into()),
+        };
+        let mut windows = window("Sidebar", Size::new(220.0, 300.0), Vec::new());
+        windows[0].content = Element::from(Sidebar {
+            label: "Places".into(),
+            sections: vec![
+                SidebarSection {
+                    title: Some("Favourites".into()),
+                    items: vec![
+                        item("Home", "symbol.house"),
+                        item("Desktop", "symbol.desktop"),
+                        item("Documents", "symbol.document"),
+                        item("Downloads", "symbol.download"),
+                    ],
+                },
+                SidebarSection {
+                    title: Some("Locations".into()),
+                    items: vec![item("Trash", "symbol.trash")],
+                },
+            ],
+            selected: Some(1),
+            scroll: *scroll,
+            on_scroll: Box::new(|scroll| scroll),
+            on_select: None,
+        });
+        windows
+    }
+}
+
 /// The window of `A` drawn at rest in `look` at `scale` and `direction`, `size` points when given.
 fn draw<A: Application>(
     look: Look,
@@ -370,6 +428,7 @@ impl App for Capture {
         [
             "controls",
             "icons",
+            "sidebar",
             "counter",
             "forms",
             "virtual-list",
@@ -400,6 +459,7 @@ impl App for Capture {
             "controls" => draw::<Controls>(r.look, r.scale, direction, size),
             "counter" => draw::<counter::Counter>(r.look, r.scale, direction, size),
             "forms" => draw::<forms::Forms>(r.look, r.scale, direction, size),
+            "sidebar" => draw::<Places>(r.look, r.scale, direction, size),
             "virtual-list" => {
                 draw::<virtual_list::VirtualList<50_000>>(r.look, r.scale, direction, size)
             }

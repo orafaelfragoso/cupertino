@@ -29,7 +29,7 @@ A paused session does not scan. The scan compares the displays with every connec
 
 **Changing displays from a program.** The server offers `zwlr_output_manager_v1`, which tools such as `wlr-randr` and `kanshi` use. A configuration the display cannot carry out fails and the previous state is restored. A sandboxed client does not see this protocol.
 
-**More than one GPU.** Every DRM card is opened. One card draws every frame: the one named by `CUPERTINO_RENDER_GPU` (a path such as `/dev/dri/card1`), otherwise the primary one. If the variable names no GPU, the log warns and the primary one renders. A display on another card shows a copy of what the render card drew. If the render card goes away, the session cannot go on drawing.
+**More than one GPU.** Every DRM card is opened. One card draws every frame: the one named by `CUPERTINO_DRM_DEVICE`, otherwise the primary one. The value is a card node such as `/dev/dri/card1`, its render node such as `/dev/dri/renderD129`, or a `/dev/dri/by-path` link to either. If the variable names no GPU, the log warns and the primary one renders; an empty value counts as unset. A display on another card shows a copy of what the render card drew. If the render card goes away, the session cannot go on drawing.
 
 ## NVIDIA
 

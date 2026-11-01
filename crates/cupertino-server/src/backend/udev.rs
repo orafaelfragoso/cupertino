@@ -475,12 +475,18 @@ fn drm_uevent(state: &mut Cupertino, event: &DeviceEvent) {
     match card_event(&event.action, card, u.render_node, node_is_card) {
         CardEvent::Scan(node) => scan_card(state, node),
         CardEvent::Open => {
-            let primary = cupertino_devices::primary_gpu(Path::new("/sys"))
-                .ok()
-                .flatten();
-            let gpu = cupertino_devices::gpus(Path::new("/sys"))
-                .ok()
-                .and_then(|gpus| gpus.into_iter().find(|g| g.device.devnum() == event.devnum));
+            let gpus = match cupertino_devices::gpus(Path::new("/sys")) {
+                Ok(gpus) => gpus,
+                Err(e) => {
+                    tracing::warn!(error = %e, "listing GPUs for a card plugged in failed");
+                    return;
+                }
+            };
+            let gpu = gpus
+                .iter()
+                .find(|g| g.device.devnum() == event.devnum)
+                .cloned();
+            let primary = cupertino_devices::select_primary(gpus);
             if let (Some(gpu), Some(primary), Some(path)) = (gpu, primary, event.devnode.as_deref())
             {
                 if let Some(node) = open_display_card(state, path, card_prefix(&gpu, &primary)) {
@@ -564,14 +570,14 @@ pub fn run(
     let gpus =
         cupertino_devices::gpus(Path::new("/sys")).map_err(|e| anyhow!("listing GPUs: {e}"))?;
     let primary = cupertino_devices::select_primary(gpus.clone()).context("no GPU found")?;
-    let wanted = std::env::var_os("CUPERTINO_RENDER_GPU").map(PathBuf::from);
-    let gpu = cupertino_devices::select_render(gpus.clone(), wanted.as_deref())
+    // a /dev/dri/by-path link names the card that it points to
+    let wanted = std::env::var_os("CUPERTINO_DRM_DEVICE")
+        .map(PathBuf::from)
+        .map(|w| std::fs::canonicalize(&w).unwrap_or(w));
+    let (gpu, choice) = cupertino_devices::select_render(gpus.clone(), wanted.as_deref())
         .context("no GPU found")?;
-    if let Some(wanted) = wanted
-        .as_deref()
-        .filter(|w| gpu.device.devnode() != Some(*w))
-    {
-        tracing::warn!(wanted = %wanted.display(), "CUPERTINO_RENDER_GPU names no GPU; the primary one renders");
+    if let cupertino_devices::RenderChoice::Unmatched(wanted) = choice {
+        tracing::warn!(wanted = %wanted.display(), "CUPERTINO_DRM_DEVICE names no GPU; the primary one renders");
     }
     let gpu_path = gpu
         .device

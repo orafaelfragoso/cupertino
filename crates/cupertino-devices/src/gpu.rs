@@ -1,6 +1,6 @@
 //! GPU discovery: replaces smithay's `all_gpus` and `primary_gpu` for the udev backend.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::device::{self, Device, Subsystem};
 use crate::error::{Error, ParseError, Result};
@@ -14,6 +14,19 @@ pub struct Gpu {
     /// The `boot_vga` attribute of the nearest ancestor that has one (the PCI device). `false`
     /// when no ancestor has it, as on virtual or platform GPUs.
     pub boot_vga: bool,
+    /// The `renderD*` node of the same device, as `/dev/dri/renderD128`; `None` on a display-only card.
+    pub render_node: Option<PathBuf>,
+}
+
+/// How [`select_render`] chose the GPU that renders.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RenderChoice {
+    /// No override is set, or it is empty: the primary GPU.
+    Primary,
+    /// The override names this card's node or its render node.
+    Named,
+    /// The override names no GPU: the primary one renders.
+    Unmatched(PathBuf),
 }
 
 /// Every GPU, lowest card number first.
@@ -23,7 +36,12 @@ pub fn gpus(sysfs_root: &Path) -> Result<Vec<Gpu>> {
         .into_iter()
         .map(|device| {
             let boot_vga = boot_vga(device.syspath(), &devices_dir)?;
-            Ok(Gpu { device, boot_vga })
+            let render_node = render_node(device.syspath())?;
+            Ok(Gpu {
+                device,
+                boot_vga,
+                render_node,
+            })
         })
         .collect()
 }
@@ -40,14 +58,51 @@ pub fn select_primary(gpus: Vec<Gpu>) -> Option<Gpu> {
     gpus.into_iter().nth(index)
 }
 
-/// Picks the GPU that renders from `gpus`: the card whose node is `wanted`, else the primary one.
-pub fn select_render(gpus: Vec<Gpu>, wanted: Option<&Path>) -> Option<Gpu> {
-    match gpus
-        .iter()
-        .position(|gpu| wanted.is_some() && gpu.device.devnode() == wanted)
-    {
-        Some(index) => gpus.into_iter().nth(index),
-        None => select_primary(gpus),
+/// Picks the GPU that renders from `gpus`: the card whose node or render node is `wanted`, else the primary one.
+/// `None` without any card.
+pub fn select_render(gpus: Vec<Gpu>, wanted: Option<&Path>) -> Option<(Gpu, RenderChoice)> {
+    let Some(wanted) = wanted.filter(|w| !w.as_os_str().is_empty()) else {
+        return select_primary(gpus).map(|gpu| (gpu, RenderChoice::Primary));
+    };
+    let named = gpus.iter().position(|gpu| {
+        gpu.device.devnode() == Some(wanted) || gpu.render_node.as_deref() == Some(wanted)
+    });
+    match named {
+        Some(index) => gpus
+            .into_iter()
+            .nth(index)
+            .map(|gpu| (gpu, RenderChoice::Named)),
+        None => select_primary(gpus).map(|gpu| (gpu, RenderChoice::Unmatched(wanted.to_owned()))),
+    }
+}
+
+/// The `/dev` node of the `renderD*` device next to the card, in the same `drm/` directory.
+fn render_node(card_syspath: &Path) -> Result<Option<PathBuf>> {
+    let Some(drm_dir) = card_syspath.parent() else {
+        return Ok(None);
+    };
+    let io = |source| Error::Io {
+        path: drm_dir.to_owned(),
+        source,
+    };
+    let mut nodes = Vec::new();
+    for entry in std::fs::read_dir(drm_dir).map_err(io)? {
+        let entry = entry.map_err(io)?;
+        let name = entry.file_name();
+        if let Some(number) = name
+            .to_str()
+            .and_then(|n| n.strip_prefix("renderD"))
+            .and_then(|n| n.parse::<u32>().ok())
+        {
+            nodes.push((number, entry.path()));
+        }
+    }
+    nodes.sort();
+    match nodes.into_iter().next() {
+        Some((_, syspath)) => Ok(Device::from_syspath(&syspath)?
+            .devnode()
+            .map(Path::to_owned)),
+        None => Ok(None),
     }
 }
 

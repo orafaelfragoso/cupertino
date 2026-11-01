@@ -1121,8 +1121,23 @@ impl Manager {
             "cupertino-sessiond: the leader of the adopted session {} exited",
             adopted.id
         );
-        if let Err(e) = self.logind.terminate_session(&adopted.id) {
+        self.leader_exited(&adopted.id);
+    }
+
+    /// The leader of session `id` exited: logind ends what it left behind, and the login screen takes the console now
+    /// when the session had it. logind removes the session only once its last process is gone, which an app that ignores
+    /// the end can put off for the stop timeout, and the console must not wait on a session whose compositor has ended.
+    fn leader_exited(&mut self, id: &str) {
+        if let Err(e) = self.logind.terminate_session(id) {
             eprintln!("cupertino-sessiond: {e}");
+        }
+        match self.logind.active_session() {
+            Ok(Some(foreground)) if foreground == id => {
+                eprintln!("cupertino-sessiond: session {id} ended; returning to the login screen");
+                self.return_to_login_screen();
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("cupertino-sessiond: {e}"),
         }
     }
 
@@ -1630,17 +1645,17 @@ impl Manager {
                 {
                     self.attempt_failed();
                 }
-                // the leader is gone and its PAM session closed; whatever it left behind in the session is killed so that logind
-                // can remove the session (the design's final hooks end the session's processes the same way)
-                if let Some(session) = self
+                // the leader is gone and its PAM session closed (the design's final hooks end the session's processes the
+                // same way)
+                let Some(ended) = self
                     .sessions
                     .iter()
                     .find(|session| session.worker == Some(id))
-                {
-                    if let Err(e) = self.logind.terminate_session(&session.id) {
-                        eprintln!("cupertino-sessiond: {e}");
-                    }
-                }
+                    .map(|session| session.id.clone())
+                else {
+                    return Ok(());
+                };
+                self.leader_exited(&ended);
                 Ok(())
             }
         }
@@ -1862,6 +1877,12 @@ impl Manager {
             return Ok(());
         }
         eprintln!("cupertino-sessiond: session {id} ended; returning to the login screen");
+        self.return_to_login_screen();
+        Ok(())
+    }
+
+    /// Bring the login screen to the console, cleared: the session in the foreground ended.
+    fn return_to_login_screen(&mut self) {
         match self.greeter_session.clone() {
             Some(greeter) => {
                 if let Err(e) = self.activate(&greeter) {
@@ -1871,7 +1892,6 @@ impl Manager {
             None => eprintln!("cupertino-sessiond: the login screen has no session to return to"),
         }
         self.show_login_screen();
-        Ok(())
     }
 
     /// Send the screen the list again: a session started or ended. What is typed on the screen stays.

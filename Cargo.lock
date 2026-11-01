@@ -1016,6 +1016,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-cli"
+version = "0.1.0"
+dependencies = [
+ "cupertino-assets",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "cupertino-controlcenter"
 version = "0.1.0"
 dependencies = [

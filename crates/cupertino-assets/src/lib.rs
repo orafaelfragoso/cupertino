@@ -15,10 +15,12 @@
 mod error;
 mod manifest;
 mod name;
+mod report;
 
 pub use error::AssetError;
 pub use manifest::{FontRole, RasterIcon};
 pub use name::{IconName, CURSOR_NAMES, RASTER_NAMES, SYMBOL_NAMES};
+pub use report::{PackEntry, PackReport, Provided};
 
 use manifest::Manifest;
 use std::collections::BTreeMap;
@@ -38,7 +40,7 @@ pub const BUILTIN_UI_FAMILY: &str = "Inter Variable";
 pub const BUILTIN_FONT: &[u8] = include_bytes!("../fonts/InterVariable-subset.ttf");
 
 /// The XCursor theme of an asset pack: `<search_dir>/<name>/{index.theme,cursors/}`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CursorTheme {
     /// Theme name from the manifest.
     pub name: String,

@@ -28,15 +28,20 @@ impl Text {
         content
     }
 
-    /// Laid out within `width` when it wraps, else on one line; `None` if the fonts cannot shape it.
+    /// Laid out within `width` when it wraps, else on one line that ends in an ellipsis past `width`; `None` if the
+    /// fonts cannot shape it.
     fn laid_out(&self, env: &Environment, width: f64) -> Option<ParagraphLayout> {
         let style = ParagraphStyle {
             wrap: if self.wrap { Wrap::Word } else { Wrap::None },
+            ellipsis: !self.wrap,
             ..ParagraphStyle::default()
         };
-        let width = (self.wrap && width.is_finite()).then_some(width as f32);
         let paragraph = env.text.paragraph(&self.styled(&env.theme), &style).ok()?;
-        Some(paragraph.layout(width))
+        Some(if self.wrap {
+            paragraph.layout(width.is_finite().then_some(width as f32))
+        } else {
+            look::one_line(&paragraph, width)
+        })
     }
 }
 

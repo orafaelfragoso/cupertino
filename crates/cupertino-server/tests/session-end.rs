@@ -52,6 +52,37 @@ fn a_panic_is_recorded_for_the_session_and_a_hung_teardown_is_cut_short() {
     assert!(reason.ends_with(": the output vanished\n"), "{reason:?}");
 }
 
+struct AbortOnDrop;
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        std::process::abort();
+    }
+}
+
+#[test]
+fn an_abort_in_the_teardown_of_a_panic_keeps_the_panic_as_the_reason() {
+    if std::env::var_os(CHILD).is_some() {
+        logging::init(None);
+        logging::record_session_end(|key| std::env::var_os(key));
+        let _abort = AbortOnDrop;
+        panic!("the first failure");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let end = dir.path().join("session-end");
+    let (status, _) = run_child_test(
+        "an_abort_in_the_teardown_of_a_panic_keeps_the_panic_as_the_reason",
+        &[(CHILD, OsStr::new("1")), (SESSION_END_ENV, end.as_os_str())],
+        TEARDOWN_LIMIT + Duration::from_secs(3),
+    );
+    assert_eq!(
+        std::os::unix::process::ExitStatusExt::signal(&status),
+        Some(libc::SIGABRT)
+    );
+    let reason = std::fs::read_to_string(&end).unwrap();
+    assert!(reason.ends_with(": the first failure\n"), "{reason:?}");
+}
+
 #[test]
 fn the_session_command_logs_why_the_compositor_panicked_and_ends_within_five_seconds() {
     let dir = tempfile::tempdir().unwrap();

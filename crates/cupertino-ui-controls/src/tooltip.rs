@@ -7,11 +7,10 @@ use cupertino_ui_core::{
     WindowKey,
 };
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
-use cupertino_ui_platform::{DecorationMode, Keysym, PointerEvent, Timestamp, WindowSpec};
+use cupertino_ui_platform::{DecorationMode, PointerEvent, Timestamp, WindowSpec};
 use cupertino_ui_text::{AttributedText, ParagraphLayout, ParagraphStyle, TextStyle, Wrap};
 use cupertino_ui_theme::{ColorRole, StateVariant};
 
-const ESCAPE: Keysym = Keysym(0xff1b);
 /// How long the pointer rests on the anchor before the tip is asked for.
 const DELAY: u64 = 600_000_000;
 /// How long the pointer may be off both anchor and tip, crossing the gap between them, before the tip hides.
@@ -248,17 +247,13 @@ impl<M: 'static> Widget<M> for Anchor<M> {
             {
                 self.hide(rest, cx);
             }
-            Event::Dismiss if self.state.shown => {
-                self.hide(rest, cx);
-                return Propagation::Stop;
-            }
-            Event::Key(key, _)
-                if cx.phase() == Phase::Capture
-                    && key.pressed
-                    && key.keysym == ESCAPE
-                    && key.mods.is_empty() =>
-            {
+            // Escape cancels a pending show too, and lets the key go on
+            Event::Dismiss => {
                 rest.show_at = None;
+                if self.state.shown {
+                    self.send(Step::Hide, cx);
+                    return Propagation::Stop;
+                }
             }
             _ => {}
         }
@@ -267,9 +262,9 @@ impl<M: 'static> Widget<M> for Anchor<M> {
 
     fn paint(&self, _: &Rest, _: &mut PaintCx<'_>) {}
 
-    fn semantics(&self, _: &Rest, cx: &mut SemanticsCx<'_>) {
+    fn semantics(&self, rest: &Rest, cx: &mut SemanticsCx<'_>) {
         cx.describe_content(self.text.clone());
-        if self.state.shown {
+        if self.state.shown || rest.show_at.is_some() {
             cx.dismissible();
         }
     }

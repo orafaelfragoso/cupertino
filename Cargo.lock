@@ -1724,6 +1724,7 @@ name = "cupertino-settings"
 version = "0.1.0"
 dependencies = [
  "async-channel",
+ "async-io",
  "cupertino-alsa",
  "cupertino-apps",
  "cupertino-assets",
@@ -1734,6 +1735,7 @@ dependencies = [
  "cupertino-geometry",
  "cupertino-icons",
  "cupertino-keyboard",
+ "cupertino-kit",
  "cupertino-menu-model",
  "cupertino-modifiers",
  "cupertino-pipewire",
@@ -1743,6 +1745,7 @@ dependencies = [
  "cupertino-thumbnails",
  "cupertino-typeahead",
  "cupertino-ui-menus",
+ "cupertino-ui-test",
  "cupertino-ui-text",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",

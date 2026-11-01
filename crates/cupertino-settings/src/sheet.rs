@@ -474,7 +474,7 @@ impl Sheet {
 
     /// The sheet's call: Join with the passphrase (moved out of the field, not copied), the confirmed removal, or the
     /// pairing answer.
-    fn action(&mut self) -> Outcome {
+    pub fn action(&mut self) -> Outcome {
         match &mut self.kind {
             Kind::Passphrase { text, .. } if text.is_empty() => Outcome::Stay,
             Kind::Passphrase { ssid, text, .. } => Outcome::Do(Call::Join {
@@ -534,7 +534,7 @@ impl Sheet {
     }
 
     /// Cancel: a pairing question is refused; every other sheet just closes.
-    fn cancel(&self) -> Outcome {
+    pub fn cancel(&self) -> Outcome {
         match &self.kind {
             Kind::Pairing {
                 prompt: Prompt::Confirm { .. } | Prompt::Request,
@@ -854,6 +854,69 @@ impl Sheet {
             top.saturating_sub(rows)
         };
         std::mem::replace(top, to) != to
+    }
+
+    /// The field now holds `typed`, as far as the sheet takes it: digits only where it asks for a number, and no more
+    /// than its field holds.
+    pub fn set_text(&mut self, typed: &str) {
+        match &mut self.kind {
+            Kind::Passphrase { text, .. } | Kind::Pairing { text, .. } => text.zeroize(),
+            Kind::Resolution { text, .. } => text.clear(),
+            Kind::Forget { .. } | Kind::Picker { .. } | Kind::Apps { .. } => return,
+        }
+        for c in typed.chars() {
+            self.key(SheetKey::Type(c));
+        }
+    }
+
+    /// The rows of a chooser or of the applications list, and the highlighted one; `None` for a sheet without a list.
+    pub fn rows(&self) -> Option<(Vec<String>, Option<usize>)> {
+        match &self.kind {
+            Kind::Picker { chooser, .. } => Some((
+                chooser.0.entries().iter().map(|e| e.name.clone()).collect(),
+                chooser.0.highlighted(),
+            )),
+            Kind::Apps { apps, selected, .. } => {
+                Some((apps.iter().map(|a| a.name.clone()).collect(), *selected))
+            }
+            _ => None,
+        }
+    }
+
+    /// A press on row `row` of the list: it highlights, and a press on the highlighted row opens a folder or allows
+    /// the application (the second press of a double click).
+    pub fn press_row(&mut self, row: usize) -> Outcome {
+        match &mut self.kind {
+            Kind::Picker { chooser, top, .. } => {
+                let outcome = if chooser.0.highlighted() == Some(row) {
+                    chooser.0.activate(row)
+                } else {
+                    chooser.0.highlight(row)
+                };
+                picked(chooser, top, outcome)
+            }
+            Kind::Apps { apps, selected, .. } => {
+                if apps.get(row).is_some_and(|a| a.reason.is_none()) {
+                    if *selected == Some(row) {
+                        return self.action();
+                    }
+                    *selected = Some(row);
+                }
+                Outcome::Stay
+            }
+            _ => Outcome::Stay,
+        }
+    }
+
+    /// The chooser's folder up: its parent.
+    pub fn parent(&mut self) -> Outcome {
+        match &mut self.kind {
+            Kind::Picker { chooser, top, .. } => {
+                let outcome = chooser.0.parent();
+                picked(chooser, top, outcome)
+            }
+            _ => Outcome::Stay,
+        }
     }
 
     /// A press at `p` in a sheet laid out as `layout`.

@@ -15,5 +15,7 @@ Settings wallpaper pane today, the file-chooser portal later.
   enters the highlighted folder or chooses the highlighted file; Super+Return (`Key::Choose`) chooses (in `Folder`
   mode the highlighted folder, else the open one); Super+Up (`Key::Parent`) opens the parent folder; Escape cancels; a
   typed character jumps to the next entry whose name starts with the text typed so far (`cupertino-typeahead`).
+  `Picker::go(dir)` opens a folder of a sidebar; `places::session_places(home)` lists the home folder and the
+  user directories of `user-dirs.dirs` that exist.
 - A folder that cannot be read leaves the picker where it was and sets `unreadable`, which the view words plainly.
 - The result is `Outcome::Choose(path)`, `Cancel`, `Changed` (redraw) or `Ignore`.

@@ -52,8 +52,8 @@ buffer follow.
   direction each hard line takes its own first strong character's (UAX 9 P1–P3), and a line without one keeps the
   text's. Each run of one
   embedding level is shaped in its direction, and each line is reordered for display, with the spaces that end it at
-  the paragraph's level so they hang past its end edge. `Start` and `End` follow the base direction. Positions stay
-  logical: a downstream caret sits at the start edge of the character after it and an upstream one at the end edge of
+  the paragraph's level so they hang past its end edge. `Start` and `End` follow the base direction; `Left` and
+  `Right` hold in either. Positions stay logical: a downstream caret sits at the start edge of the character after it and an upstream one at the end edge of
   the character before it, `index_at` returns the side a click lands on, and a selection across a direction change can
   be several rectangles on one line. `tests/corpus.rs` pins the caret stops,
   glyph order, wrap points and hit testing of Latin, combining marks, Hebrew, Arabic, Devanagari, ZWJ emoji, flags and

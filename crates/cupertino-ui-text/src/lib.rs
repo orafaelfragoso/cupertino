@@ -134,6 +134,9 @@ pub enum TextAlign {
     Center,
     End,
     Justify,
+    /// The left edge in either direction, as a layout that runs left to right places its text.
+    Left,
+    Right,
 }
 
 /// The paragraph's base direction; `None` takes it from the first strong character.

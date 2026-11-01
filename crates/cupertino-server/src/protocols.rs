@@ -24,6 +24,10 @@ use crate::menu_bar::{
 use crate::owner_check::{OwnerCheck, OwnerKey, OwnerRefusal};
 use crate::state::Cupertino;
 
+// The scanner macros read the XML without telling rustc; including it puts it in the dep-info that caches such as
+// sccache key on, so an edited protocol regenerates the bindings.
+const _: &[u8] = include_bytes!("../protocols/gtk-shell.xml");
+
 pub mod gtk_shell {
     #![allow(
         dead_code,

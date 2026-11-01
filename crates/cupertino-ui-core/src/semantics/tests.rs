@@ -634,3 +634,26 @@ fn a_hidden_subtree_is_gone_from_the_tree_and_the_tab_order() {
     assert_eq!(nodes, expected);
     assert_eq!(pass.nodes[&root].children, [id("b")]);
 }
+
+#[test]
+fn a_dismissible_node_behind_hidden_content_does_not_take_escape() {
+    let closable = || {
+        Element::new(Closable {
+            open: true,
+            composing: false,
+        })
+    };
+    let mut tree = Tree::<M>::new(20);
+    let root = tree
+        .reconcile(
+            None,
+            Element::new(group(vec![
+                Element::new(Hidden(vec![Element::new(group(vec![closable()]))])),
+                closable(),
+            ])),
+        )
+        .unwrap();
+    let children = tree.get(root).unwrap().children.clone();
+
+    assert_eq!(dismissible(&tree, root), [children[1]]);
+}

@@ -138,6 +138,7 @@ fn build_for(tree: &Tree<M>, root: NodeId) -> SemanticsPass {
                 id,
                 Placement {
                     rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                    target: Rect::new(0.0, 0.0, 10.0, 10.0),
                     clip: None,
                     own_clip: None,
                 },

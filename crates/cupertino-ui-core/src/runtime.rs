@@ -1176,7 +1176,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             )
             .map_err(UiError::Layout)?;
             w.layout = result.stats;
-            w.geometry = placements(&self.tree, root, &result, w.env.direction);
+            w.geometry = placements(&self.tree, root, &result, &w.env);
 
             let semantics = build(
                 &self.tree,

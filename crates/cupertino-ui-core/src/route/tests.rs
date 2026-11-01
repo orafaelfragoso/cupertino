@@ -92,6 +92,7 @@ fn place(geometry: &mut Geometry, id: NodeId, rect: Rect, clip: Option<Rect>) {
         id,
         Placement {
             rect,
+            target: rect,
             clip,
             own_clip: None,
         },
@@ -131,15 +132,86 @@ fn the_later_sibling_is_on_top_and_a_clip_hides_what_it_cuts_off() {
 }
 
 #[test]
-fn a_node_is_hit_only_inside_its_rect_and_every_clip_above_it() {
+fn a_press_beside_a_control_reaches_the_nearest_target_and_the_topmost_on_a_tie() {
+    let mut tree = Tree::<M>::new(10);
+    let view = Element::new(group(vec![
+        Element::new(leaf("a")),
+        Element::new(leaf("b")),
+    ]));
+    let root = tree.reconcile(None, view).unwrap();
+    let [a, b] = tree.get(root).unwrap().children[..] else {
+        unreachable!()
+    };
+    let mut geometry = Geometry::new();
+    place(&mut geometry, root, Rect::new(0.0, 0.0, 100.0, 100.0), None);
+    for (id, x) in [(a, 10.0), (b, 40.0)] {
+        let rect = Rect::new(x, 10.0, 20.0, 20.0);
+        geometry.insert(
+            id,
+            Placement {
+                rect,
+                target: rect.outset(6.0),
+                clip: None,
+                own_clip: None,
+            },
+        );
+    }
+
+    let hit = |x, y| hit_test(&tree, root, &geometry, Point::new(x, y));
+    assert_eq!(hit(5.0, 20.0), Some(vec![root, a]), "a lone outset");
+    assert_eq!(hit(34.5, 20.0), Some(vec![root, a]), "a is nearer");
+    assert_eq!(hit(35.5, 20.0), Some(vec![root, b]), "b is nearer");
+    assert_eq!(
+        hit(35.0, 20.0),
+        Some(vec![root, b]),
+        "a tie goes to the topmost"
+    );
+    assert_eq!(hit(35.0, 45.0), Some(vec![root]), "outside every target");
+}
+
+#[test]
+fn a_rect_that_holds_the_point_beats_a_target_that_reaches_it() {
+    let mut tree = Tree::<M>::new(10);
+    let view = Element::new(group(vec![
+        Element::new(leaf("under")),
+        Element::new(leaf("over")),
+    ]));
+    let root = tree.reconcile(None, view).unwrap();
+    let [under, over] = tree.get(root).unwrap().children[..] else {
+        unreachable!()
+    };
+    let mut geometry = Geometry::new();
+    place(&mut geometry, root, Rect::new(0.0, 0.0, 100.0, 100.0), None);
+    place(&mut geometry, under, Rect::new(0.0, 0.0, 30.0, 30.0), None);
+    let rect = Rect::new(32.0, 0.0, 20.0, 20.0);
+    geometry.insert(
+        over,
+        Placement {
+            rect,
+            target: rect.outset(6.0),
+            clip: None,
+            own_clip: None,
+        },
+    );
+
+    let hit = |x, y| hit_test(&tree, root, &geometry, Point::new(x, y));
+    assert_eq!(hit(29.0, 10.0), Some(vec![root, under]));
+    assert_eq!(hit(31.0, 10.0), Some(vec![root, over]));
+}
+
+#[test]
+fn a_node_is_hit_only_inside_its_target_and_every_clip_above_it() {
     let placement = Placement {
         rect: Rect::new(0.0, 0.0, 100.0, 20.0),
+        target: Rect::new(0.0, -2.0, 100.0, 24.0),
         clip: Some(Rect::new(0.0, 0.0, 50.0, 50.0)),
         own_clip: None,
     };
     assert!(placement.hit(Point::new(10.0, 10.0)));
+    assert!(placement.hit(Point::new(10.0, 21.0)), "inside the target");
+    assert!(!placement.hit(Point::new(10.0, -1.0)), "clipped away");
     assert!(!placement.hit(Point::new(70.0, 10.0)), "clipped away");
-    assert!(!placement.hit(Point::new(10.0, 30.0)), "outside the rect");
+    assert!(!placement.hit(Point::new(10.0, 30.0)), "outside the target");
 }
 
 /// A node that records each delivery as `label:phase` and stops the event in the phase `stop` names.

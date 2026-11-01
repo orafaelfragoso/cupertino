@@ -21,6 +21,8 @@ pub(crate) struct SemanticsPass {
     pub(crate) roving_groups: Vec<NodeId>,
     /// Items of roving groups, in reading order.
     pub(crate) roving_items: Vec<NodeId>,
+    /// The roots of hidden subtrees, in reading order.
+    pub(crate) hidden: Vec<NodeId>,
 }
 
 /// What a mounted node declares, outside a pass.
@@ -67,6 +69,7 @@ pub(crate) fn build<M: 'static>(
         scopes: Vec::new(),
         roving_groups: Vec::new(),
         roving_items: Vec::new(),
+        hidden: Vec::new(),
     };
     // Each fallback and where it would stand among the Tab stops, in reading order.
     let mut fallbacks = Vec::new();
@@ -90,6 +93,7 @@ pub(crate) fn build<M: 'static>(
             },
         );
         if semantics.hidden {
+            pass.hidden.push(id);
             continue;
         }
         if semantics.focusable {

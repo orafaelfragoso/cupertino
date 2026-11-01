@@ -63,7 +63,7 @@ impl Fixture {
     }
 
     fn sync(&self, focus: &mut Focus) -> Option<FocusChange> {
-        focus.sync(&self.tree, &self.scopes(), &self.focusable())
+        focus.sync(&self.tree, &self.scopes(), &self.focusable(), &[])
     }
 }
 
@@ -297,4 +297,19 @@ fn when_the_focused_node_unmounts_its_surviving_ancestors_lose_the_focus_within_
     assert_eq!(change.left, [f.root], "the unmounted dialog hears nothing");
     assert!(change.entered.is_empty());
     assert_eq!(f.sync(&mut focus), None);
+}
+
+#[test]
+fn a_focus_in_a_hidden_subtree_moves_to_the_next_tab_stop_after_it_or_else_the_one_before() {
+    let f = Fixture::new();
+    let (a, b, c) = (f.id("a"), f.id("b"), f.id("c"));
+    let mut focus = Focus::default();
+    focus.set(&f.tree, Some(b), true);
+    let change = focus.sync(&f.tree, &[], &[a, c], &[b]).unwrap();
+    assert_eq!(change.to, Some(c));
+    assert!(change.visible);
+
+    let change = focus.sync(&f.tree, &[], &[a], &[c]).unwrap();
+    assert_eq!(change.to, Some(a), "nothing follows c");
+    assert_eq!(focus.sync(&f.tree, &[], &[a], &[c]), None);
 }

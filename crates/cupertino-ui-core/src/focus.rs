@@ -84,12 +84,14 @@ impl Focus {
     /// to its nearest surviving ancestor, and a newly open scope takes the focus to its first Tab stop at or under an
     /// initial-focus node, or else its first focusable one. On the window's first frame an unfocused window takes the
     /// focus to its first Tab stop at or under an initial-focus node, if it has one. A text input given the focus as
-    /// its window or scope opens shows its ring. `scopes` and `focusable` are in reading order.
+    /// its window or scope opens shows its ring. A focus left inside a hidden subtree moves to the next Tab stop after
+    /// that subtree, or else the one before it. `scopes`, `focusable` and `hidden` are in reading order.
     pub(crate) fn sync<M: 'static>(
         &mut self,
         tree: &Tree<M>,
         scopes: &[NodeId],
         focusable: &[NodeId],
+        hidden: &[NodeId],
     ) -> Option<FocusChange> {
         let from = self.node;
         let mut visible = self.visible;
@@ -153,6 +155,11 @@ impl Focus {
             }
         }
 
+        if let Some(past) = target.and_then(|n| self.past_hidden(tree, n, focusable, hidden)) {
+            target = past;
+            moved = true;
+        }
+
         if !moved {
             return None;
         }
@@ -163,6 +170,34 @@ impl Focus {
         self.node = None;
         self.set(tree, target, visible)
             .map(|change| FocusChange { from, ..change })
+    }
+
+    /// Where a focus on `node` goes when a hidden subtree holds it: the first Tab stop after the subtree in the innermost
+    /// open scope, or else the last one before it. None when no hidden subtree holds `node`.
+    fn past_hidden<M: 'static>(
+        &self,
+        tree: &Tree<M>,
+        node: NodeId,
+        focusable: &[NodeId],
+        hidden: &[NodeId],
+    ) -> Option<Option<NodeId>> {
+        let path = tree.path(node);
+        let &cut = hidden.iter().find(|h| path.contains(h))?;
+        let scope = self.scopes.last().map(|s| s.node);
+        let mut before = None;
+        let mut past = false;
+        for n in tree.preorder(path[0]) {
+            let at = tree.path(n);
+            if at.contains(&cut) {
+                past = true;
+            } else if focusable.contains(&n) && scope.is_none_or(|s| at.contains(&s)) {
+                if past {
+                    return Some(Some(n));
+                }
+                before = Some(n);
+            }
+        }
+        Some(before)
     }
 
     /// The next (or previous) Tab stop, inside the innermost open scope.

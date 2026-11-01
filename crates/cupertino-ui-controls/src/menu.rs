@@ -29,6 +29,8 @@ const END: Keysym = Keysym(0xff57);
 const ESCAPE: Keysym = Keysym(0xff1b);
 const MENU: Keysym = Keysym(0xff67);
 const F10: Keysym = Keysym(0xffc7);
+const RETURN: Keysym = Keysym(0xff0d);
+const SPACE: Keysym = Keysym(0x20);
 
 const PANEL_RADIUS: f64 = 8.0;
 const EDGE: f64 = 1.0;
@@ -385,6 +387,12 @@ impl<M> Row<M> {
     fn open(&self) -> bool {
         matches!(self.action, RowAction::Open { open: true, .. })
     }
+
+    /// Whether the row shows as the menu's selection when it has the focus: a menu opened with the pointer focuses
+    /// its first row but selects nothing until the pointer or a key moves.
+    fn selected(&self, state: &RowState, focus_visible: bool) -> bool {
+        self.open() || focus_visible || state.pointed || self.current
+    }
 }
 
 impl<M: Clone + 'static> Row<M> {
@@ -401,26 +409,35 @@ impl<M: Clone + 'static> Row<M> {
         }
     }
 
-    /// The next enabled row after this one whose label starts with `c`, wrapping around.
-    fn typed(&self, c: char) -> Option<usize> {
+    /// The next enabled row after this one whose label starts with `c`, wrapping around; from this one when it is
+    /// not `selected`.
+    fn typed(&self, c: char, selected: bool) -> Option<usize> {
         let typed: String = c.to_lowercase().collect();
         let count = self.labels.len();
-        (1..=count)
+        (usize::from(selected)..count + usize::from(selected))
             .map(|k| (self.position + k) % count)
             .find(|&i| self.labels[i].to_lowercase().starts_with(&typed))
     }
 
-    fn key(&self, key: &cupertino_ui_platform::KeyEvent, cx: &mut EventCx<'_, M>) -> bool {
+    fn key(
+        &self,
+        key: &cupertino_ui_platform::KeyEvent,
+        selected: bool,
+        cx: &mut EventCx<'_, M>,
+    ) -> bool {
         let trailing = match cx.env().direction {
             LayoutDirection::Ltr => RIGHT,
             LayoutDirection::Rtl => LEFT,
         };
         let target = match key.keysym {
+            RETURN | SPACE if !selected => return true,
+            DOWN if !selected => FocusTarget::First,
+            UP if !selected => FocusTarget::Last,
             DOWN => FocusTarget::Next,
             UP => FocusTarget::Previous,
             HOME => FocusTarget::First,
             END => FocusTarget::Last,
-            k if k == trailing && matches!(self.action, RowAction::Open { .. }) => {
+            k if k == trailing && selected && matches!(self.action, RowAction::Open { .. }) => {
                 self.activate(cx);
                 return true;
             }
@@ -429,7 +446,7 @@ impl<M: Clone + 'static> Row<M> {
                     && !key.mods.contains(Mods::ALT)
                     && !key.mods.contains(Mods::PRIMARY);
                 match key.text.filter(|c| plain && !c.is_control() && *c != ' ') {
-                    Some(c) => match self.typed(c) {
+                    Some(c) => match self.typed(c, selected) {
                         Some(index) => FocusTarget::Index(index),
                         None => return true,
                     },
@@ -519,7 +536,7 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
                     && key.pressed
                     && cx.node() == cx.target()
                     && cx.phase() != Phase::Capture
-                    && self.key(key, cx) =>
+                    && self.key(key, self.selected(state, cx.focus_visible()), cx) =>
             {
                 return Propagation::Stop;
             }
@@ -547,8 +564,7 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
         let theme = &env.theme;
         let size = cx.size();
         let highlighted = self.enabled
-            && (self.open()
-                || cx.is_focused() && (cx.focus_visible() || state.pointed || self.current));
+            && (self.open() || cx.is_focused() && self.selected(state, cx.focus_visible()));
         if highlighted {
             let rect = Rect::new(
                 HIGHLIGHT_INSET,

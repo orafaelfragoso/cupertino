@@ -278,6 +278,7 @@ fn the_menu_key_and_shift_f10_open_it_at_the_region() {
 fn arrows_home_end_and_typed_characters_move_between_the_enabled_items() {
     let mut h = Harness::<Editor>::new();
     context(&mut h);
+    h.tap(DOWN);
     assert!(on_row(&h, 0), "the first item");
     h.tap(DOWN);
     assert!(on_row(&h, 1));
@@ -325,9 +326,25 @@ fn a_menu_opened_with_the_pointer_highlights_nothing_until_the_pointer_moves_and
 }
 
 #[test]
+fn in_a_menu_opened_with_the_pointer_return_and_space_choose_nothing_and_up_goes_to_the_last_item()
+{
+    let mut h = Harness::<Editor>::new();
+    context(&mut h);
+    h.tap(RETURN);
+    h.tap(SPACE);
+    assert!(h.model().chosen.is_empty());
+    assert_eq!(h.model().closes, 0);
+    assert!(popup(&h, "menu").is_some());
+    h.tap(UP);
+    assert!(on_row(&h, 4));
+    assert!(highlighted(&h, 4));
+}
+
+#[test]
 fn return_or_a_click_chooses_an_item_and_closes_the_menu() {
     let mut h = Harness::<Editor>::new();
     let main = context(&mut h);
+    h.tap(DOWN);
     h.tap(DOWN);
     h.key(RETURN, true);
     assert_eq!(h.model().chosen, ["Copy"]);

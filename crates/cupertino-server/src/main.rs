@@ -6,7 +6,9 @@ use cupertino_server::logging;
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let on_tty = !cli.check_hardware && matches!(cli.mode(), Ok(Mode::Udev));
-    let opened = on_tty
+    // a log file named on purpose is written in every mode, as offscreen crash tests need
+    let named_log = std::env::var_os(logging::LOG_FILE_ENV).is_some_and(|p| !p.is_empty());
+    let opened = (on_tty || named_log)
         .then(|| logging::log_path(|key| std::env::var_os(key)))
         .flatten()
         .map(|path| (logging::open_log(&path), path));
@@ -20,9 +22,10 @@ fn main() -> Result<()> {
     };
     let to_file = file.is_some();
     logging::init(file);
-    if on_tty {
-        logging::record_session_end(|key| std::env::var_os(key));
-    }
+    logging::record_session_end(|key| std::env::var_os(key));
+    // a server started from this one's clients writes neither this log nor this session's end
+    std::env::remove_var(logging::LOG_FILE_ENV);
+    std::env::remove_var(logging::SESSION_END_ENV);
     if let Some((path, e)) = failure {
         tracing::warn!("cannot write the log file {}: {e}", path.display());
     }

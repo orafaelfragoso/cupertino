@@ -13,7 +13,7 @@ use cupertino_ui_render::{
     DisplayList, Effect, Group, ImageResource, Paint, PaintNode, PaintNodeId, PaintOp,
     PaintResources, PaintRevision, PathVerb, ResourceId, Shape, Transform,
 };
-use cupertino_ui_theme::{ColorRole, StateVariant};
+use cupertino_ui_theme::{Color, ColorRole, StateVariant};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -240,12 +240,19 @@ impl Painter {
                 if let Some(background) = background {
                     let bounds = Rect::new(0.0, 0.0, size.width, size.height);
                     let (shape, color) = match background {
-                        WindowBackground::Surface { surface, radius } => (
+                        WindowBackground::Surface {
+                            surface,
+                            radius,
+                            alpha,
+                        } => (
                             Shape::RoundedRect {
                                 rect: bounds,
                                 radius,
                             },
-                            input.env.theme.surface(surface).fill,
+                            input.env.theme.surface(surface).fill.map(|fill| Color {
+                                a: fill.a * alpha.clamp(0.0, 1.0) as f32,
+                                ..fill
+                            }),
                         ),
                         _ => {
                             let state = StateVariant {

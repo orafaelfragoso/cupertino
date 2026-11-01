@@ -156,8 +156,13 @@ pub enum WindowBackground {
     None,
     /// The compositor material of `surface` under the whole window, its corners rounded by `radius` points, where the
     /// desktop's effects offer it and the theme asks for one ([`ThemeTokens::surface`]); otherwise the theme's opaque
-    /// fill for the surface in the same shape.
-    Surface { surface: Surface, radius: f64 },
+    /// fill for the surface in the same shape. Either shows at `alpha`, from 0 (hidden) to 1 (opaque), so a window can
+    /// fade its background with its content.
+    Surface {
+        surface: Surface,
+        radius: f64,
+        alpha: f64,
+    },
 }
 
 /// A node of the retained tree: a 32-bit slot index and the slot's 32-bit generation, so a stale id never matches

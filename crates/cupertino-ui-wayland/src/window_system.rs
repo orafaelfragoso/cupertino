@@ -94,6 +94,7 @@ enum Published {
 /// The material under a window, shaped to the window's size with the next present.
 struct ShownBackdrop {
     material: Material,
+    name: String,
     radius: f64,
     /// The logical size its shape was last given.
     shaped: Option<(u32, u32)>,
@@ -371,17 +372,38 @@ impl WaylandWindowSystem {
         window: WindowId,
         backdrop: Option<Backdrop>,
     ) -> Result<(), PlatformError> {
+        let protocol = |e: cupertino_protocol_app::Error| PlatformError::Protocol(e.to_string());
         let surface = self.window(window)?.surface;
         let shown = match backdrop {
             None => None,
-            Some(Backdrop { material, radius }) => {
+            Some(Backdrop {
+                material,
+                radius,
+                alpha,
+            }) => {
+                // a fade changes only the alpha of the material already shown
+                if let Some(shown) = self
+                    .window_mut(window)?
+                    .backdrop
+                    .as_mut()
+                    .filter(|b| b.name == material)
+                {
+                    shown.material.set_alpha(alpha).map_err(protocol)?;
+                    if shown.radius != radius {
+                        shown.radius = radius;
+                        shown.shaped = None;
+                    }
+                    return Ok(());
+                }
                 let (effects, _) = self.effects.as_ref().ok_or(PlatformError::Unsupported)?;
                 let wire = effects
                     .backdrop(&self.conn, surface)
                     .map_err(|e| PlatformError::Protocol(e.to_string()))?;
                 wire.set_material(&material);
+                wire.set_alpha(alpha).map_err(protocol)?;
                 Some(ShownBackdrop {
                     material: wire,
+                    name: material,
                     radius,
                     shaped: None,
                 })

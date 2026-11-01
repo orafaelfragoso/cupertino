@@ -1,8 +1,9 @@
 //! A frame of the render GPU on a display of another card. The render GPU draws into a linear buffer of its own; the
 //! display's card imports that buffer as a texture and draws it, waiting on the render's sync point inside its own
 //! frame. When the render GPU cannot draw into a linear buffer or the card cannot import it (by the formats they list,
-//! or as it turns out), the render GPU draws into a texture of its own, read back into memory and uploaded to the card;
-//! when that fails too, the display is unsupported and nothing is tried again.
+//! or as it turns out), the render GPU draws into a texture of its own, read back into memory and uploaded to the card,
+//! only the rows that changed once the card's texture holds the frame before; when that fails too, the display is
+//! unsupported and nothing is tried again.
 
 use std::os::fd::AsFd;
 
@@ -13,7 +14,7 @@ use smithay::backend::allocator::{Format, Fourcc, Modifier, Slot, Swapchain};
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement};
 use smithay::backend::renderer::gles::{
-    GlesError, GlesFrame, GlesMapping, GlesRenderer, GlesTexture,
+    ffi, GlesError, GlesFrame, GlesMapping, GlesRenderer, GlesTexture,
 };
 use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
@@ -72,6 +73,9 @@ pub struct FrameCopy<F: AsFd + Clone + 'static> {
     shown: Option<Slot<GbmBuffer>>,
     #[cfg(test)]
     refused: Vec<Via>,
+    /// The regions the memory path read back and uploaded.
+    #[cfg(test)]
+    copied: Vec<Rectangle<i32, Buffer>>,
 }
 
 /// How a display of `display`'s card gets the frames of `render` first: through a linear buffer where both list it.
@@ -120,6 +124,8 @@ impl<F: AsFd + Clone + 'static> FrameCopy<F> {
             shown: None,
             #[cfg(test)]
             refused: Vec::new(),
+            #[cfg(test)]
+            copied: Vec::new(),
         }
     }
 
@@ -216,7 +222,7 @@ impl<F: AsFd + Clone + 'static> FrameCopy<F> {
         if self.via == Via::Memory {
             match self
                 .refuse(Via::Memory)
-                .and_then(|()| self.upload(render, display, &mut target))
+                .and_then(|()| self.upload(render, display, &mut target, damage))
             {
                 Ok(texture) => {
                     return Ok(self.copied(texture, SyncPoint::signaled(), target, damage))
@@ -251,32 +257,65 @@ impl<F: AsFd + Clone + 'static> FrameCopy<F> {
         }
     }
 
-    /// Read the frame in `target` back on the render GPU and upload it to the display's card.
+    /// Read the frame in `target` back on the render GPU and upload it to the display's card: only the rows `damage`
+    /// covers where the card's texture holds the frame the render GPU's texture was drawn over, else all of it.
     fn upload(
         &mut self,
         render: &mut GlesRenderer,
         display: &mut GlesRenderer,
         target: &mut Target,
+        damage: &[Rectangle<i32, Physical>],
     ) -> Result<GlesTexture> {
-        let region = Rectangle::from_size(Size::<i32, Buffer>::from((self.size.w, self.size.h)));
-        let mapping = match target {
-            Target::Dmabuf { dmabuf, .. } => read_back(render, dmabuf, region)?,
-            Target::Texture { texture, .. } => read_back(render, texture, region)?,
-        };
-        let data = render.map_texture(&mapping)?;
-        match &self.uploaded {
-            Some(texture) => {
-                display.update_memory(texture, data, region)?;
-                Ok(texture.clone())
-            }
-            None => {
-                // the rows come top first; a texture marked flipped would be drawn as its first row repeated
-                let texture = display.import_memory(data, MEMORY_FORMAT, region.size, false)?;
+        let full = Rectangle::from_size(Size::<i32, Buffer>::from((self.size.w, self.size.h)));
+        let texture = match &self.uploaded {
+            Some(texture) if matches!(target, Target::Texture { age: 1, .. }) => texture.clone(),
+            uploaded => {
+                let mapping = read_back(render, target, full)?;
+                let data = render.map_texture(&mapping)?;
+                let texture = match uploaded {
+                    Some(texture) => {
+                        display.update_memory(texture, data, full)?;
+                        texture.clone()
+                    }
+                    // the rows come top first; a texture marked flipped would be drawn as its first row repeated
+                    None => display.import_memory(data, MEMORY_FORMAT, full.size, false)?,
+                };
+                self.copied_rows(full);
                 self.uploaded = Some(texture.clone());
-                Ok(texture)
+                return Ok(texture);
             }
+        };
+        for rows in damaged_rows(damage, self.size) {
+            let mapping = read_back(render, target, rows)?;
+            let data = render.map_texture(&mapping)?;
+            // smithay's update_memory takes the region out of a whole frame's pixels; these are the region's alone
+            display.with_context(|gl| unsafe {
+                gl.BindTexture(ffi::TEXTURE_2D, texture.tex_id());
+                gl.TexSubImage2D(
+                    ffi::TEXTURE_2D,
+                    0,
+                    rows.loc.x,
+                    rows.loc.y,
+                    rows.size.w,
+                    rows.size.h,
+                    ffi::RGBA,
+                    ffi::UNSIGNED_BYTE,
+                    data.as_ptr().cast(),
+                );
+                gl.BindTexture(ffi::TEXTURE_2D, 0);
+            })?;
+            self.copied_rows(rows);
         }
+        Ok(texture)
     }
+
+    #[cfg(test)]
+    fn copied_rows(&mut self, rows: Rectangle<i32, Buffer>) {
+        self.copied.push(rows);
+    }
+
+    #[cfg(not(test))]
+    fn copied_rows(&mut self, _: Rectangle<i32, Buffer>) {}
 
     #[cfg(test)]
     fn refuse(&self, via: Via) -> Result<()> {
@@ -292,16 +331,40 @@ impl<F: AsFd + Clone + 'static> FrameCopy<F> {
     }
 }
 
-fn read_back<T>(
+fn read_back(
     render: &mut GlesRenderer,
-    buffer: &mut T,
+    target: &mut Target,
     region: Rectangle<i32, Buffer>,
-) -> Result<GlesMapping>
-where
-    GlesRenderer: Bind<T>,
-{
-    let framebuffer = render.bind(buffer)?;
+) -> Result<GlesMapping> {
+    let framebuffer = match target {
+        Target::Dmabuf { dmabuf, .. } => render.bind(dmabuf)?,
+        Target::Texture { texture, .. } => render.bind(texture)?,
+    };
     Ok(render.copy_framebuffer(&framebuffer, region, MEMORY_FORMAT)?)
+}
+
+/// The rows `damage` covers in a frame of `size`, as bands across its whole width, merged where they meet.
+fn damaged_rows(
+    damage: &[Rectangle<i32, Physical>],
+    size: Size<i32, Physical>,
+) -> Vec<Rectangle<i32, Buffer>> {
+    let mut spans: Vec<(i32, i32)> = damage
+        .iter()
+        .map(|r| (r.loc.y.max(0), (r.loc.y + r.size.h).min(size.h)))
+        .filter(|(top, bottom)| top < bottom)
+        .collect();
+    spans.sort_unstable();
+    let mut bands: Vec<(i32, i32)> = Vec::new();
+    for (top, bottom) in spans {
+        match bands.last_mut() {
+            Some(band) if top <= band.1 => band.1 = band.1.max(bottom),
+            _ => bands.push((top, bottom)),
+        }
+    }
+    bands
+        .into_iter()
+        .map(|(top, bottom)| Rectangle::new((0, top).into(), (size.w, bottom - top).into()))
+        .collect()
 }
 
 /// The render GPU's frame as the display's card draws it: one texture over the whole display.
@@ -454,6 +517,12 @@ mod tests {
 
     /// The first pixels of the first and the last row of `copied` as the display's card draws it.
     fn shown(display: &mut GlesRenderer, copied: &CopiedFrame) -> [[u8; 4]; 2] {
+        let column = column(display, copied);
+        [column[0], column[column.len() - 1]]
+    }
+
+    /// The first pixel of every row of `copied` as the display's card draws it, top row first.
+    fn column(display: &mut GlesRenderer, copied: &CopiedFrame) -> Vec<[u8; 4]> {
         let size = copied.size;
         let mut target: GlesTexture = display
             .create_buffer(FORMAT, Size::from((size.w, size.h)))
@@ -476,11 +545,64 @@ mod tests {
                 .unwrap()
         };
         let data = display.map_texture(&mapping).unwrap();
-        let last = (size.h as usize - 1) * 4;
-        [
-            data[..4].try_into().unwrap(),
-            data[last..last + 4].try_into().unwrap(),
-        ]
+        data.as_chunks::<4>().0.to_vec()
+    }
+
+    #[test]
+    fn the_memory_path_reads_and_uploads_only_the_rows_that_changed() {
+        let Some((gbm, mut render, mut display)) = devices() else {
+            eprintln!("skipping: no GBM render node");
+            return;
+        };
+        let size = Size::from((64, 32));
+        let mut copy = FrameCopy::new(
+            GbmAllocator::new(gbm, GbmBufferFlags::RENDERING),
+            size,
+            1.0,
+            Via::Memory,
+        );
+        let full = Rectangle::from_size(Size::from((64, 32)));
+        frame(&mut copy, &mut render, &mut display, RED).unwrap();
+        assert_eq!(copy.copied, [full]);
+
+        // two changes near the top, one further down: the rows of each, across the whole width
+        let damage = [
+            Rectangle::new((10, 4).into(), (5, 3).into()),
+            Rectangle::new((40, 6).into(), (8, 4).into()),
+            Rectangle::new((0, 20).into(), (2, 2).into()),
+        ];
+        let Ok(Target::Texture {
+            mut texture,
+            age: 1,
+        }) = copy.acquire(&mut render)
+        else {
+            panic!("the memory path draws over the frame before");
+        };
+        let sync = {
+            let mut framebuffer = render.bind(&mut texture).unwrap();
+            let mut frame = render
+                .render(&mut framebuffer, size, Transform::Normal)
+                .unwrap();
+            frame.clear(GREEN, &damage).unwrap();
+            frame.finish().unwrap()
+        };
+        let target = Target::Texture { texture, age: 1 };
+        let copied = copy
+            .bring(&mut render, &mut display, target, sync, &damage)
+            .unwrap();
+        assert_eq!(
+            copy.copied[1..],
+            [
+                Rectangle::new((0, 4).into(), (64, 6).into()),
+                Rectangle::new((0, 20).into(), (64, 2).into()),
+            ]
+        );
+        let (red, green, blue) = ([255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]);
+        let mut expected = vec![red; 32];
+        expected[20..22].fill(green);
+        expected[31] = blue;
+        // column 0 changed only in rows 20 and 21; the rest is the frame before, the blue last row included
+        assert_eq!(column(&mut display, &copied), expected);
     }
 
     #[test]

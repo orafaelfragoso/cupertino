@@ -19,7 +19,7 @@ use cupertino_settings::history::History;
 use cupertino_settings::inflight::Reads;
 use cupertino_settings::instance;
 use cupertino_settings::keys::{self, Action, Focus, Mods, SearchKey};
-use cupertino_settings::live::{Live, LoginScreen, Pictures, Reading};
+use cupertino_settings::live::{display_name, Live, LoginScreen, Pictures, Reading};
 use cupertino_settings::menu;
 use cupertino_settings::menu_bar::{self, MenuAction, MenuState};
 use cupertino_settings::paint::{
@@ -1714,7 +1714,13 @@ impl App {
                     ssid,
                     passphrase: None,
                 }) => {
-                    self.sheet = Some(Sheet::passphrase(&ssid));
+                    let name = self
+                        .live
+                        .wifi
+                        .ready()
+                        .and_then(|w| w.networks.iter().find(|n| n.ssid == ssid))
+                        .map_or_else(|| display_name(&ssid), |n| n.name.clone());
+                    self.sheet = Some(Sheet::passphrase(&ssid, &name));
                     Ok(())
                 }
                 Effect::Service(Call::Remove {

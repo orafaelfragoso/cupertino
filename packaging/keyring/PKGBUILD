@@ -11,7 +11,9 @@ license=('GPL-3.0-or-later')
 depends=('pacman' 'gnupg' 'libarchive' 'curl')
 install=cupertino-keyring.install
 source=('cupertino-rollback' 'cupertino-save-previous' 'cupertino-previous.hook')
-sha256sums=('SKIP' 'SKIP' 'SKIP')
+sha256sums=('72a5d9b8ed55da34cc9a92a6fd26c4397db317a6d0b87199700137a7c26ebd85'
+            'ccadb49635980ae21e603fbd12c66fc13fe2c051b93c89ae7f9c136391a417fa'
+            '40c3adf2519915b4be3bd99413a798ba36b45bea1a29f15af5fd3211a85cfa49')
 
 prepare() {
   : "${CUPERTINO_KEYRING_KEY:?set CUPERTINO_KEYRING_KEY to the public key file}"

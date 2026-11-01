@@ -65,6 +65,10 @@ class RegistryTest(unittest.TestCase):
         self.assertEqual(len(problems), 1, problems)
         self.assertIn("org.cupertino.Other1", problems[0])
 
+    def test_a_window_app_id_is_not_a_bus_name(self):
+        files = {"crates/cupertino-demo/src/window.rs": 'let spec = WindowSpec { app_id: "org.cupertino.Other1".into() };\n'}
+        self.assertEqual(run(INTERFACE_ENTRY + BINARY_ENTRY, files), [])
+
     def test_an_error_name_of_a_registered_interface_passes(self):
         files = {"crates/cupertino-demo/src/names.rs": 'const E: &str = "org.cupertino.Demo1.Error.Denied";\n'}
         self.assertEqual(run(INTERFACE_ENTRY + BINARY_ENTRY, files), [])

@@ -76,7 +76,7 @@ impl<M: 'static> Element<M> {
         self
     }
 
-    /// Holds the element at `points` wide, whatever room its parent offers.
+    /// Holds the element at `points` wide, or at its parent's limit when that is narrower.
     pub fn width(mut self, points: f64) -> Self {
         self.width = Some(points);
         self

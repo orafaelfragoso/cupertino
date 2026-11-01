@@ -28,7 +28,7 @@ const END: Keysym = Keysym(0xff57);
 /// Between a radio button's circle and its label.
 const LABEL_GAP: f64 = 6.0;
 const DOT: f64 = 6.0;
-const SEGMENT_RADIUS: f64 = 5.0;
+pub(crate) const SEGMENT_RADIUS: f64 = 5.0;
 const SEGMENT_INSET: f64 = 10.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,7 +40,7 @@ pub(crate) enum Look {
 }
 
 /// A segment's width: the widest label between the insets, at least the minimum target.
-fn segment_width(env: &Environment, labels: &[String]) -> f64 {
+pub(crate) fn segment_width(env: &Environment, labels: &[String]) -> f64 {
     let widest = labels
         .iter()
         .filter_map(|l| look::label(env, l))

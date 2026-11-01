@@ -106,6 +106,7 @@ fn main() {
             increase_contrast: false,
             marquee: None,
             status: "40 items",
+            sidebar_focus: None,
         };
         let (pw, ph) = ((w * f64::from(scale)) as u32, (h * f64::from(scale)) as u32);
         let mut pm = Pixmap::new(pw, ph).unwrap();

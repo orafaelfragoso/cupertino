@@ -369,6 +369,7 @@ impl Sheet {
                 Mode::Folder => "Add a Folder".to_string(),
                 Mode::Photo => "Add a Photo".to_string(),
                 Mode::Program => "Choose a Program".to_string(),
+                Mode::File => "Choose a File".to_string(),
             },
             Kind::Apps { .. } => "Allow an Application to Use the Clipboard".to_string(),
             Kind::Resolution { name, .. } => format!("Resolution of \u{201c}{name}\u{201d}"),
@@ -436,6 +437,7 @@ impl Sheet {
                 Mode::Folder => "Choose",
                 Mode::Photo => "Add",
                 Mode::Program => "Allow",
+                Mode::File => "Choose",
             },
             Kind::Pairing {
                 prompt: Prompt::Confirm { .. } | Prompt::Request,

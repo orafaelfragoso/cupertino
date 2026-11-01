@@ -1,5 +1,5 @@
 // cupertino-layers --graph
-// 76 crates, 344 internal dependencies
+// 76 crates, 349 internal dependencies
 // per layer: foundation 18, models 8, platform 8, protocol 3, transport 3, render 3, ui 13, core 1, shell 11, services 4, apps 2, tools 2
 // forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the default sink and the mixer itself until audio goes through a service
@@ -305,9 +305,14 @@ digraph "layers" {
   "cupertino-polkit-agent" -> "cupertino-ui-platform";
   "cupertino-polkit-agent" -> "cupertino-ui-wayland";
   "cupertino-polkit-agent" -> "cupertino-wayland-client";
+  "cupertino-portal" -> "cupertino-assets" [label="dev"];
   "cupertino-portal" -> "cupertino-defaults" [label="dev"];
+  "cupertino-portal" -> "cupertino-filepicker";
+  "cupertino-portal" -> "cupertino-kit";
   "cupertino-portal" -> "cupertino-protocol-app";
   "cupertino-portal" -> "cupertino-test-bus" [label="dev"];
+  "cupertino-portal" -> "cupertino-theme" [label="dev"];
+  "cupertino-portal" -> "cupertino-ui-test" [label="dev"];
   "cupertino-portal" -> "cupertino-wayland-client";
   "cupertino-powerd" -> "cupertino-devices";
   "cupertino-powerd" -> "cupertino-evdev";

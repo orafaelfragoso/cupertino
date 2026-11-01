@@ -1,4 +1,4 @@
-//! Pointer and keyboard input: the raw `wl_pointer` and `wl_keyboard` streams turned into typed events. The
+//! Pointer, touch and keyboard input: the raw `wl_pointer`, `wl_touch` and `wl_keyboard` streams turned into typed events. The
 //! compositor describes the layout with an xkb keymap; the client translates and repeats keys itself.
 
 use crate::compose::{ComposeEnv, ComposeState, ComposeTable, Composed};
@@ -83,6 +83,76 @@ pub enum PointerEvent {
         /// The finger left the touchpad (or a continuous scroll ended): kinetic scrolling may start from here.
         stop: bool,
     },
+}
+
+/// Touch input on a surface. `id` names one contact from its down to its up; positions are surface-local logical
+/// points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TouchEvent {
+    Down {
+        id: i32,
+        position: Point,
+    },
+    Motion {
+        id: i32,
+        position: Point,
+    },
+    Up {
+        id: i32,
+    },
+    /// The compositor took every contact on the surface over: none of them ends with an up.
+    Cancel,
+}
+
+/// The surface each contact went down on: motion, up and cancel name only the contact.
+#[derive(Debug, Default)]
+pub(crate) struct TouchTracker {
+    contacts: Vec<(i32, SurfaceId)>,
+}
+
+impl TouchTracker {
+    pub(crate) fn down(&mut self, id: i32, surface: SurfaceId, position: Point) -> TouchEvent {
+        self.contacts.retain(|(c, _)| *c != id);
+        self.contacts.push((id, surface));
+        TouchEvent::Down { id, position }
+    }
+
+    pub(crate) fn motion(&self, id: i32, position: Point) -> Option<(SurfaceId, TouchEvent)> {
+        self.surface(id)
+            .map(|s| (s, TouchEvent::Motion { id, position }))
+    }
+
+    pub(crate) fn up(&mut self, id: i32) -> Option<(SurfaceId, TouchEvent)> {
+        let surface = self.surface(id)?;
+        self.contacts.retain(|(c, _)| *c != id);
+        Some((surface, TouchEvent::Up { id }))
+    }
+
+    /// One cancel for each surface with a contact on it.
+    pub(crate) fn cancel(&mut self) -> Vec<(SurfaceId, TouchEvent)> {
+        let mut surfaces: Vec<SurfaceId> = Vec::new();
+        for (_, s) in self.contacts.drain(..) {
+            if !surfaces.contains(&s) {
+                surfaces.push(s);
+            }
+        }
+        surfaces
+            .into_iter()
+            .map(|s| (s, TouchEvent::Cancel))
+            .collect()
+    }
+
+    /// Drop the contacts on a surface that is going away.
+    pub(crate) fn forget(&mut self, surface: SurfaceId) {
+        self.contacts.retain(|(_, s)| *s != surface);
+    }
+
+    fn surface(&self, id: i32) -> Option<SurfaceId> {
+        self.contacts
+            .iter()
+            .find(|(c, _)| *c == id)
+            .map(|(_, s)| *s)
+    }
 }
 
 /// The logical modifiers held while a key event happened.
@@ -577,6 +647,29 @@ mod tests {
         assert_eq!(Button::from_evdev(0x110), Button::Left);
         assert_eq!(Button::from_evdev(0x112), Button::Middle);
         assert_eq!(Button::from_evdev(0x113), Button::Other(0x113));
+    }
+
+    #[test]
+    fn a_contact_reports_on_the_surface_it_went_down_on_until_its_up_and_a_cancel_ends_every_surface_once(
+    ) {
+        let mut t = TouchTracker::default();
+        let (a, b) = (SurfaceId(1), SurfaceId(2));
+        let p = Point::new(3.0, 4.0);
+        assert_eq!(t.motion(0, p), None);
+        assert_eq!(t.down(0, a, p), TouchEvent::Down { id: 0, position: p });
+        t.down(1, b, p);
+        t.down(2, b, p);
+        assert_eq!(
+            t.motion(0, p),
+            Some((a, TouchEvent::Motion { id: 0, position: p }))
+        );
+        assert_eq!(t.up(0), Some((a, TouchEvent::Up { id: 0 })));
+        assert_eq!(t.up(0), None);
+        assert_eq!(t.cancel(), vec![(b, TouchEvent::Cancel)]);
+        assert_eq!(t.motion(1, p), None);
+        t.down(3, a, p);
+        t.forget(a);
+        assert_eq!(t.up(3), None);
     }
 
     #[test]

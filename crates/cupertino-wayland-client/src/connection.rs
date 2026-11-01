@@ -25,6 +25,7 @@ use wayland_client::protocol::wl_seat::{self, WlSeat};
 use wayland_client::protocol::wl_shm::WlShm;
 use wayland_client::protocol::wl_shm_pool::WlShmPool;
 use wayland_client::protocol::wl_surface::{self, WlSurface};
+use wayland_client::protocol::wl_touch::{self, WlTouch};
 use wayland_client::{
     delegate_noop, Connection as WlConnection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
 };
@@ -65,7 +66,9 @@ use crate::capability::REQUIRED;
 use crate::clipboard::Clipboard;
 use crate::configure::{wire_size, Serials};
 use crate::cursor::{CursorTheme, ThemedCursor};
-use crate::input::{InputClock, Modifiers, PointerTracker, Repeat, Translator};
+use crate::input::{
+    InputClock, Modifiers, PointerTracker, Repeat, TouchEvent, TouchTracker, Translator,
+};
 use crate::output::{identification, physical_size, OutputBuilder, OutputId, OutputTransform};
 use crate::scale::ScaleSources;
 use crate::text_input::TextInput;
@@ -200,6 +203,11 @@ pub enum Event {
         surface: SurfaceId,
         time: u32,
         event: PointerEvent,
+    },
+    Touch {
+        surface: SurfaceId,
+        time: u32,
+        event: TouchEvent,
     },
     Keyboard {
         surface: SurfaceId,
@@ -396,6 +404,8 @@ pub struct State {
     /// The buttons held down, and the serial of the latest press among them: the implicit grab a drag starts from.
     held_buttons: Vec<u32>,
     press_serial: Option<u32>,
+    touch: Option<WlTouch>,
+    touch_tracker: TouchTracker,
     keyboard: Option<WlKeyboard>,
     outputs: Vec<Output>,
     surfaces: Vec<Surface>,
@@ -512,6 +522,7 @@ impl Connection {
             pointer_enter_serial: None,
             held_buttons: Vec::new(),
             press_serial: None,
+            touch: None,
             keyboard: None,
             outputs: Vec::new(),
             surfaces: Vec::new(),
@@ -519,6 +530,7 @@ impl Connection {
             next_reposition: 0,
             next_token: 0,
             pointer_tracker: PointerTracker::default(),
+            touch_tracker: TouchTracker::default(),
             key_focus: None,
             translator: None,
             repeat: Repeat::default(),
@@ -760,6 +772,7 @@ impl Connection {
         }
         s.wl.destroy();
         self.state.pointer_tracker.forget(surface);
+        self.state.touch_tracker.forget(surface);
         self.state.text_input.forget(surface);
         if self.state.key_focus == Some(surface) {
             self.state.key_focus = None;
@@ -2304,6 +2317,15 @@ impl Dispatch<WlSeat, ()> for State {
                 });
             }
         }
+        let has_touch = caps.contains(wl_seat::Capability::Touch);
+        if has_touch && state.touch.is_none() {
+            state.touch = Some(seat.get_touch(qh, ()));
+        } else if let Some(touch) = state.touch.take_if(|_| !has_touch) {
+            if touch.version() >= 3 {
+                touch.release();
+            }
+            state.cancel_touches();
+        }
         let has_keyboard = caps.contains(wl_seat::Capability::Keyboard);
         if has_keyboard && state.keyboard.is_none() {
             state.keyboard = Some(seat.get_keyboard(qh, ()));
@@ -2446,6 +2468,67 @@ impl Dispatch<WlPointer, ()> for State {
         if let Some((surface, event)) = found {
             let time = own_time.unwrap_or_else(|| state.input_time(Instant::now()));
             state.events.push(Event::Pointer {
+                surface,
+                time,
+                event,
+            });
+        }
+    }
+}
+
+impl State {
+    fn cancel_touches(&mut self) {
+        let time = self.input_time(Instant::now());
+        for (surface, event) in self.touch_tracker.cancel() {
+            self.events.push(Event::Touch {
+                surface,
+                time,
+                event,
+            });
+        }
+    }
+}
+
+impl Dispatch<WlTouch, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &WlTouch,
+        event: wl_touch::Event,
+        _: &(),
+        _: &WlConnection,
+        _: &QueueHandle<Self>,
+    ) {
+        let (found, time) = match event {
+            wl_touch::Event::Down {
+                serial,
+                time,
+                surface,
+                id,
+                x,
+                y,
+            } => {
+                state.last_serial = Some(serial);
+                let found = state
+                    .surface_of(&surface)
+                    .map(|s| (s, state.touch_tracker.down(id, s, Point::new(x, y))));
+                (found, time)
+            }
+            wl_touch::Event::Motion { time, id, x, y } => {
+                (state.touch_tracker.motion(id, Point::new(x, y)), time)
+            }
+            wl_touch::Event::Up { serial, time, id } => {
+                state.last_serial = Some(serial);
+                (state.touch_tracker.up(id), time)
+            }
+            wl_touch::Event::Cancel => {
+                state.cancel_touches();
+                return;
+            }
+            _ => return,
+        };
+        state.note_time(time);
+        if let Some((surface, event)) = found {
+            state.events.push(Event::Touch {
                 surface,
                 time,
                 event,

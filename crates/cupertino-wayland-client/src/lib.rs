@@ -34,7 +34,7 @@ pub use connection::{
 };
 pub use cursor::CursorTheme;
 pub use error::{Disconnect, Error};
-pub use input::{key, Button, KeyboardEvent, Modifiers, PointerEvent};
+pub use input::{key, Button, KeyboardEvent, Modifiers, PointerEvent, TouchEvent};
 pub use output::{OutputGeometry, OutputId, OutputInfo, OutputTransform};
 pub use presentation::Presented;
 pub use scale::Scale;

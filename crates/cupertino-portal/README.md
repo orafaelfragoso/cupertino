@@ -61,7 +61,9 @@ ext-foreign-toplevel-list-v1).
 - `CreateSession` adds an `org.freedesktop.impl.portal.Session` object at the session handle. `SelectSources` takes
   `types` (monitor, window or both) and `cursor_mode` (hidden or embedded); `multiple` and `persist_mode` are read but
   one source is shared and nothing persists. `Start` shows a window that lists the displays and the windows, by title
-  and app id, with Share as the default button: Return shares the selected source and Escape cancels.
+  and app id, with nothing selected. Share is the default button and is enabled only once a row is picked, so keys
+  typed for the app before the window took focus share nothing: Return then shares the picked source, and Escape
+  cancels.
 - The answer to `Start` is `0` with one entry in `streams`: the node id, `source_type`, `size` (logical for a display,
   in pixels for a window) and `position` for a display, and `persist_mode` 0. Cancel or closing the window is `1`; a
   `Close` on the request or the session while the window shows takes it down and answers `2`.

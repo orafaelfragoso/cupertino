@@ -595,6 +595,7 @@ impl<M: 'static> Widget<M> for Rows<M> {
                     content.push(Element::new(Twisty {
                         index,
                         item,
+                        selected,
                         outline: Rc::clone(outline),
                     }));
                 }
@@ -807,18 +808,30 @@ impl<M: 'static> Widget<M> for ListRow<M> {
             (size.width - 2.0 * SELECTION_INSET).max(0.0),
             size.height,
         );
+        let theme = cx.env().theme.clone();
+        let selected = ControlState {
+            enabled: true,
+            selected: true,
+            window_active: cx.window_active(),
+            ..ControlState::default()
+        };
         if self.selected {
-            let state = ControlState {
-                enabled: true,
-                selected: true,
-                window_active: cx.window_active(),
-                ..ControlState::default()
-            };
-            let color = look::color(&cx.env().theme, ColorRole::ControlFill, &state);
+            let color = look::color(&theme, ColorRole::ControlFill, &selected);
             look::fill(cx, chrome, SELECTION_RADIUS, color);
         }
-        if cx.is_focused() {
-            paint_focus_ring(cx, chrome, SELECTION_RADIUS);
+        if cx.is_focused() && cx.focus_visible() && cx.window_active() {
+            let inner = chrome.inset(Insets::uniform(theme.focus.outset + theme.focus.width));
+            let radius =
+                (SELECTION_RADIUS - theme.focus.width / 2.0 - theme.focus.radius_extra).max(0.0);
+            let (rect, radius) = look::focus_ring(inner, radius, &theme.focus);
+            let color = if self.selected {
+                look::color(&theme, ColorRole::ControlText, &selected)
+            } else {
+                theme
+                    .colors
+                    .get(ColorRole::KeyboardFocusIndicator, StateVariant::NORMAL)
+            };
+            look::stroke(cx, rect, radius, theme.focus.width, color);
         }
     }
 
@@ -862,6 +875,7 @@ impl<M: 'static> Widget<M> for ListRow<M> {
 struct Twisty<M> {
     index: usize,
     item: TreeItem,
+    selected: bool,
     outline: Rc<Outline<M>>,
 }
 
@@ -881,7 +895,7 @@ impl<M: 'static> Widget<M> for Twisty<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if self.item.level != old.item.level {
             Change::Layout
-        } else if self.item.expanded != old.item.expanded {
+        } else if (self.item.expanded, self.selected) != (old.item.expanded, old.selected) {
             Change::Paint
         } else {
             Change::None
@@ -938,10 +952,16 @@ impl<M: 'static> Widget<M> for Twisty<M> {
         let points = disclosure::place([(0.25, 0.15), (0.8, 0.5), (0.25, 0.85)], area, open, rtl);
         let state = ControlState {
             enabled: true,
+            selected: self.selected,
             window_active: cx.window_active(),
             ..ControlState::default()
         };
-        if let Some(color) = look::color(&cx.env().theme, ColorRole::SecondaryText, &state) {
+        let role = if self.selected {
+            ColorRole::ControlText
+        } else {
+            ColorRole::SecondaryText
+        };
+        if let Some(color) = look::color(&cx.env().theme, role, &state) {
             cx.push(PaintOp::Fill {
                 shape: disclosure::path(&points, true),
                 paint: Paint::Solid(color),

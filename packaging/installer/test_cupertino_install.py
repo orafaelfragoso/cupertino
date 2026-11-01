@@ -57,7 +57,7 @@ class GraphicsTest(unittest.TestCase):
         # Rafael's RTX 3060 (GA106)
         found = ci.graphics([(0x030000, 0x10DE, 0x2504), (0x040300, 0x10DE, 0x228E)])
         self.assertEqual(found.packages, ("mesa", "nvidia-open", "nvidia-utils", "libva-nvidia-driver"))
-        self.assertTrue(found.nvidia)
+        self.assertEqual((found.nvidia, found.only_nvidia), (True, True))
 
     def test_cards_older_than_turing_stay_on_nouveau(self):
         found = ci.graphics([(0x030000, 0x10DE, 0x1C03)])
@@ -67,6 +67,14 @@ class GraphicsTest(unittest.TestCase):
     def test_a_hybrid_laptop_gets_both_drivers(self):
         found = ci.graphics([(0x030000, 0x1002, 0x1638), (0x030200, 0x10DE, 0x25A2)])
         self.assertEqual(found.packages, ("mesa", "vulkan-radeon", "nvidia-open", "nvidia-utils", "libva-nvidia-driver"))
+        self.assertEqual((found.nvidia, found.only_nvidia), (True, False))
+
+
+class InitramfsTest(unittest.TestCase):
+    def test_only_the_kms_hook_is_removed(self):
+        conf = "# HOOKS=(base kms)\nMODULES=()\nHOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block filesystems fsck)\n"
+        self.assertEqual(ci.without_kms_hook(conf),
+                         "# HOOKS=(base kms)\nMODULES=()\nHOOKS=(base systemd autodetect microcode modconf keyboard sd-vconsole block filesystems fsck)\n")
 
 
 class ConfigurationTest(unittest.TestCase):

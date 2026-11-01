@@ -10,6 +10,7 @@ use crate::{parse_volume, Target, Volume};
 const SCRIPT: &str = r#"#!/bin/sh
 dir=$(dirname "$0")
 if [ -e "$dir/down" ]; then echo "Could not connect to PipeWire" >&2; exit 1; fi
+if [ -e "$dir/hung" ]; then exec sleep 30; fi
 case "$2" in
 @DEFAULT_AUDIO_SINK@) node="$dir/sink" ;;
 @DEFAULT_AUDIO_SOURCE@) node="$dir/source" ;;
@@ -73,6 +74,16 @@ impl FakeWpctl {
             let _ = fs::remove_file(down);
         } else {
             fs::write(down, "").expect("the marker is written");
+        }
+    }
+
+    /// Make every call hang as when the daemon is up but does not answer, or answer again.
+    pub fn set_hung(&self, hung: bool) {
+        let marker = self.dir.path().join("hung");
+        if hung {
+            fs::write(marker, "").expect("the marker is written");
+        } else {
+            let _ = fs::remove_file(marker);
         }
     }
 

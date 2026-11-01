@@ -3,14 +3,20 @@
 
 use std::ffi::OsString;
 use std::fmt;
+use std::io::Read;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 #[cfg(any(test, feature = "fake"))]
 pub mod fake;
 
 /// The program run when no other is given.
 pub const WPCTL: &str = "wpctl";
+/// How long a call waits for `wpctl` before it kills it: a PipeWire daemon that is up but does not answer must not
+/// hold the caller's UI thread.
+pub const TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Which node a call changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,6 +98,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Debug)]
 pub struct Wpctl {
     program: PathBuf,
+    timeout: Duration,
 }
 
 impl Default for Wpctl {
@@ -103,13 +110,22 @@ impl Default for Wpctl {
 impl Wpctl {
     /// `program` is looked up on `PATH` when it has no directory.
     pub fn new(program: PathBuf) -> Self {
-        Self { program }
+        Self {
+            program,
+            timeout: TIMEOUT,
+        }
+    }
+
+    /// Wait `timeout` instead of [`TIMEOUT`] before a call gives up.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 
     /// The volume of `target` now.
     pub fn volume(&self, target: Target) -> Result<Volume> {
         let output = self.run(["get-volume", target.id()])?;
-        parse_volume(&String::from_utf8_lossy(&output.stdout))
+        parse_volume(&String::from_utf8_lossy(&output))
     }
 
     /// Set the level of `target`, clamped to 0 to 1, without touching its mute state.
@@ -129,21 +145,73 @@ impl Wpctl {
             .map(drop)
     }
 
-    fn run<const N: usize>(&self, args: [&str; N]) -> Result<Output> {
-        let output = Command::new(&self.program)
+    /// Run `wpctl` with `args` and return what it printed. One that has not finished within the timeout is killed and
+    /// fails as [`Error::Failed`] without a code.
+    fn run<const N: usize>(&self, args: [&str; N]) -> Result<Vec<u8>> {
+        let mut child = Command::new(&self.program)
             .args(args.map(OsString::from))
-            .output()
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|source| Error::Spawn {
                 program: self.program.clone(),
                 source,
             })?;
-        if !output.status.success() {
-            return Err(Error::Failed {
-                code: output.status.code(),
-                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        let (sender, read) = mpsc::channel();
+        for (stream, pipe) in [
+            (
+                0,
+                child
+                    .stdout
+                    .take()
+                    .map(|p| Box::new(p) as Box<dyn Read + Send>),
+            ),
+            (
+                1,
+                child
+                    .stderr
+                    .take()
+                    .map(|p| Box::new(p) as Box<dyn Read + Send>),
+            ),
+        ] {
+            let sender = sender.clone();
+            std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                if let Some(mut pipe) = pipe {
+                    let _ = pipe.read_to_end(&mut bytes);
+                }
+                let _ = sender.send((stream, bytes));
             });
         }
-        Ok(output)
+        // both pipes close when wpctl ends
+        let deadline = Instant::now() + self.timeout;
+        let mut out = [Vec::new(), Vec::new()];
+        for _ in 0..2 {
+            match read.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok((stream, bytes)) => out[stream] = bytes,
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(Error::Failed {
+                        code: None,
+                        stderr: format!("no answer within {} ms", self.timeout.as_millis()),
+                    });
+                }
+            }
+        }
+        let status = child.wait().map_err(|source| Error::Spawn {
+            program: self.program.clone(),
+            source,
+        })?;
+        let [stdout, stderr] = out;
+        if !status.success() {
+            return Err(Error::Failed {
+                code: status.code(),
+                stderr: String::from_utf8_lossy(&stderr).trim().to_string(),
+            });
+        }
+        Ok(stdout)
     }
 }
 
@@ -197,6 +265,22 @@ mod tests {
             QUIET,
             "the source is untouched"
         );
+    }
+
+    #[test]
+    fn a_wpctl_that_does_not_answer_is_killed_after_the_timeout() {
+        let fake = FakeWpctl::new(QUIET, QUIET);
+        fake.set_hung(true);
+        let wpctl = Wpctl::new(fake.program()).with_timeout(Duration::from_millis(200));
+        let start = Instant::now();
+        let error = wpctl.volume(Target::DefaultSink).unwrap_err();
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert_eq!(
+            error.to_string(),
+            "wpctl was killed: no answer within 200 ms"
+        );
+        fake.set_hung(false);
+        assert_eq!(wpctl.volume(Target::DefaultSink).unwrap(), QUIET);
     }
 
     #[test]

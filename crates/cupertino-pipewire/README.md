@@ -16,8 +16,10 @@ PipeWire library is linked. Layer: `platform`.
 
 ## How it works
 
-- Every call starts `wpctl` once and waits for it. A non-zero exit is `Error::Failed` with its standard error, for
-  example when no PipeWire daemon runs or there is no default node; a program that cannot start is `Error::Spawn`.
+- Every call starts `wpctl` once and waits for it, at most `TIMEOUT` (1 s; `with_timeout` changes it). A non-zero exit
+  is `Error::Failed` with its standard error, for example when no PipeWire daemon runs or there is no default node; a
+  `wpctl` still running at the timeout, as when the daemon is up but does not answer, is killed and fails the same way
+  without a code. A program that cannot start is `Error::Spawn`.
 - `set_level` clamps the level to 0 to 1 and does not touch the mute state. A node amplified above 100% reads as 1.
 - `wpctl` prints two decimals, so a level reads back rounded to a hundredth.
 

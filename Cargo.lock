@@ -1159,6 +1159,7 @@ dependencies = [
  "cupertino-ui-core",
  "cupertino-ui-menus",
  "cupertino-ui-platform",
+ "cupertino-ui-test",
  "cupertino-ui-text",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",

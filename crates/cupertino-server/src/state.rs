@@ -22,6 +22,7 @@ use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::backend::{
     ClientData, ClientId, DisconnectReason, GlobalId,
 };
+use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::BindError;
 use smithay::reexports::wayland_server::Resource;
@@ -49,6 +50,7 @@ use smithay::wayland::single_pixel_buffer::SinglePixelBufferState;
 use smithay::wayland::socket::ListeningSocketSource;
 use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::xdg_activation::XdgActivationState;
+use smithay::wayland::xdg_toplevel_icon::{ToplevelIconCachedState, XdgToplevelIconManager};
 
 use crate::app_effects_v1::AppEffectsV1Global;
 use crate::authorization::{ClientCapabilitySet, Holder};
@@ -218,6 +220,28 @@ impl WindowEntry {
         self.toplevel.wl_surface()
     }
 
+    /// The icon theme name the client set with `xdg_toplevel_icon_v1`, as of its last commit.
+    pub fn icon_name(&self) -> Option<String> {
+        with_states(self.surface(), |s| {
+            s.cached_state
+                .get::<ToplevelIconCachedState>()
+                .current()
+                .icon_name()
+                .map(str::to_owned)
+        })
+    }
+
+    /// The square `wl_shm` icon buffers the client set with `xdg_toplevel_icon_v1`, each with its scale.
+    pub fn icon_buffers(&self) -> Vec<(WlBuffer, i32)> {
+        with_states(self.surface(), |s| {
+            s.cached_state
+                .get::<ToplevelIconCachedState>()
+                .current()
+                .buffers()
+                .to_vec()
+        })
+    }
+
     pub fn has_surface(&self, surface: &WlSurface) -> bool {
         self.toplevel.wl_surface() == surface
     }
@@ -365,6 +389,8 @@ pub struct Cupertino {
     pub input_focus: bool,
     pub cursor_shape_state: CursorShapeManagerState,
     pub foreign_toplevel_state: ForeignToplevelListState,
+    /// `xdg_toplevel_icon_manager_v1`: the icon a window sets for itself (`WindowEntry::icon_name`, `icon_buffers`).
+    pub toplevel_icon_manager: XdgToplevelIconManager,
     pub session_lock: crate::session_lock::SessionLock,
     pub idle: crate::idle::Idle,
     /// Dim, display sleep, the lock after it and system sleep (`power`, `display_power`).
@@ -611,6 +637,7 @@ impl Cupertino {
             &dh,
             crate::authorization::unsandboxed,
         );
+        let toplevel_icon_manager = XdgToplevelIconManager::new::<Self>(&dh);
         let session_lock = crate::session_lock::SessionLock::new(&dh);
         let idle = crate::idle::Idle::new(
             smithay::wayland::idle_notify::IdleNotifierState::new(&dh, loop_handle.clone()),
@@ -698,6 +725,7 @@ impl Cupertino {
             input_focus: false,
             cursor_shape_state,
             foreign_toplevel_state,
+            toplevel_icon_manager,
             session_lock,
             idle,
             power,

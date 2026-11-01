@@ -92,6 +92,7 @@ impl Fixture {
             self.root,
             Placement {
                 rect,
+                target: rect,
                 clip,
                 own_clip: None,
             },
@@ -181,6 +182,7 @@ fn a_node_carries_the_clip_it_puts_on_its_children_and_bounds_that_cover_its_sub
             root,
             Placement {
                 rect: viewport,
+                target: viewport,
                 clip: None,
                 own_clip: Some(viewport),
             },
@@ -189,6 +191,7 @@ fn a_node_carries_the_clip_it_puts_on_its_children_and_bounds_that_cover_its_sub
             child,
             Placement {
                 rect: Rect::new(10.0, -20.0, 50.0, 200.0),
+                target: Rect::new(10.0, -20.0, 50.0, 200.0),
                 clip: Some(viewport),
                 own_clip: None,
             },
@@ -335,6 +338,7 @@ fn a_group_reaches_the_renderer_and_its_effects_widen_the_subtree_bounds() {
         root,
         Placement {
             rect,
+            target: rect,
             clip: None,
             own_clip: None,
         },
@@ -430,6 +434,7 @@ fn an_image_a_node_draws_travels_with_the_list_and_stays_when_the_node_is_reused
         root,
         Placement {
             rect: Rect::new(4.0, 4.0, 16.0, 16.0),
+            target: Rect::new(4.0, 4.0, 16.0, 16.0),
             clip: None,
             own_clip: None,
         },

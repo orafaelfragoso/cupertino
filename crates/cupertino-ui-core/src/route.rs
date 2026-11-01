@@ -12,6 +12,8 @@ use std::collections::HashMap;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Placement {
     pub(crate) rect: Rect,
+    /// The rect grown evenly to the node's least hit size; it can reach past the rect but takes no layout space.
+    pub(crate) target: Rect,
     /// The intersection of every ancestor's clip; it limits this node and its subtree.
     pub(crate) clip: Option<Rect>,
     /// The clip this node puts on its descendants.
@@ -19,9 +21,9 @@ pub(crate) struct Placement {
 }
 
 impl Placement {
-    /// Whether `point` lands on the node: inside its rect and every clip above it.
+    /// Whether `point` lands on the node: inside its hit target and every clip above it.
     pub(crate) fn hit(&self, point: Point) -> bool {
-        self.rect.contains(point) && self.clip.is_none_or(|clip| clip.contains(point))
+        self.target.contains(point) && self.clip.is_none_or(|clip| clip.contains(point))
     }
 }
 
@@ -87,49 +89,80 @@ impl<M: 'static> Route<'_, M> {
     }
 }
 
-/// The path from `root` to the topmost node containing `point`; later siblings paint over earlier ones.
+/// The path from `root` to the topmost node containing `point`; later siblings paint over earlier ones. Among
+/// siblings, a rect that holds the point wins over a hit target that only reaches it, and of those targets the one
+/// whose rect is nearest wins, the topmost on a tie. A node's subtree comes before the node itself.
 pub(crate) fn hit_test<M: 'static>(
     tree: &Tree<M>,
     root: NodeId,
     geometry: &Geometry,
     point: Point,
 ) -> Option<Vec<NodeId>> {
+    /// How the hit node reaches `point`, and the path up from that node.
     fn visit<M: 'static>(
         tree: &Tree<M>,
         id: NodeId,
         geometry: &Geometry,
         point: Point,
-        path: &mut Vec<NodeId>,
-    ) -> bool {
-        let Some(placement) = geometry.get(&id) else {
-            return false;
-        };
+    ) -> Option<(Reach, Vec<NodeId>)> {
+        let placement = geometry.get(&id)?;
         if placement.clip.is_some_and(|clip| !clip.contains(point)) {
-            return false;
+            return None;
         }
-        path.push(id);
         let children = tree.get(id).map_or(&[][..], |n| &n.children[..]);
-        if children
-            .iter()
-            .rev()
-            .any(|&child| visit(tree, child, geometry, point, path))
-        {
-            return true;
+        let mut nearest: Option<(Reach, Vec<NodeId>)> = None;
+        for &child in children.iter().rev() {
+            let Some(found) = visit(tree, child, geometry, point) else {
+                continue;
+            };
+            let inside = found.0 == Reach::Rect;
+            if nearest.as_ref().is_none_or(|(reach, _)| found.0 < *reach) {
+                nearest = Some(found);
+            }
+            if inside {
+                break;
+            }
         }
-        let own = Point::new(
-            point.x - placement.rect.origin.x,
-            point.y - placement.rect.origin.y,
-        );
-        if placement.rect.contains(point)
-            && tree.get(id).is_none_or(|n| n.widget.hit(&*n.state, own))
-        {
-            return true;
-        }
-        path.pop();
-        false
+        let (reach, mut path) = match nearest {
+            Some(found) => found,
+            None if placement.rect.contains(point) => {
+                let own = Point::new(
+                    point.x - placement.rect.origin.x,
+                    point.y - placement.rect.origin.y,
+                );
+                if !tree.get(id).is_none_or(|n| n.widget.hit(&*n.state, own)) {
+                    return None;
+                }
+                (Reach::Rect, Vec::new())
+            }
+            None if placement.target.contains(point) => {
+                (Reach::Target(distance(placement.rect, point)), Vec::new())
+            }
+            None => return None,
+        };
+        path.push(id);
+        Some((reach, path))
     }
-    let mut path = Vec::new();
-    visit(tree, root, geometry, point, &mut path).then_some(path)
+    let (_, mut path) = visit(tree, root, geometry, point)?;
+    path.reverse();
+    Some(path)
+}
+
+/// How a hit node reaches a point; a rect beats any target, and a nearer target beats a farther one.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+enum Reach {
+    Rect,
+    Target(f64),
+}
+
+fn distance(rect: Rect, point: Point) -> f64 {
+    let dx = (rect.min_x() - point.x)
+        .max(point.x - rect.max_x())
+        .max(0.0);
+    let dy = (rect.min_y() - point.y)
+        .max(point.y - rect.max_y())
+        .max(0.0);
+    dx.hypot(dy)
 }
 
 #[cfg(test)]

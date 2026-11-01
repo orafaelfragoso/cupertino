@@ -5,7 +5,7 @@ use crate::cx::MeasureCx;
 use crate::route::{Geometry, Placement};
 use crate::tree::Tree;
 use crate::{Environment, NodeId};
-use cupertino_geometry::{Point, Rect};
+use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_layout::{
     Constraints, ContainerKind, Generation, LayoutDirection, LayoutResult, LayoutSpec, LayoutTree,
     Measured,
@@ -60,7 +60,7 @@ pub(crate) fn placements<M: 'static>(
     tree: &Tree<M>,
     root: NodeId,
     layout: &LayoutResult<NodeId>,
-    direction: LayoutDirection,
+    env: &Environment,
 ) -> Geometry {
     let mut geometry = Geometry::with_capacity(layout.nodes.len());
     let mut stack = vec![(root, Point::new(0.0, 0.0), None::<Rect>)];
@@ -70,10 +70,14 @@ pub(crate) fn placements<M: 'static>(
         };
         let rect = node.rect.translate(parent_origin.x, parent_origin.y);
         let own_clip = node.clip.map(|c| c.translate(rect.origin.x, rect.origin.y));
+        let least = tree
+            .get(id)
+            .map_or(Size::ZERO, |n| n.widget.target(&*n.state, env));
         geometry.insert(
             id,
             Placement {
                 rect,
+                target: grown(rect, least),
                 clip,
                 own_clip,
             },
@@ -99,7 +103,7 @@ pub(crate) fn placements<M: 'static>(
             {
                 let offset = n.widget.scroll_offset(&*n.state);
                 if horizontal {
-                    origin.x += match direction {
+                    origin.x += match env.direction {
                         LayoutDirection::Ltr => -offset.x,
                         LayoutDirection::Rtl => offset.x,
                     };
@@ -114,11 +118,23 @@ pub(crate) fn placements<M: 'static>(
     geometry
 }
 
+/// `rect` grown evenly about its centre to at least `least`.
+fn grown(rect: Rect, least: Size) -> Rect {
+    let width = rect.size.width.max(least.width);
+    let height = rect.size.height.max(least.height);
+    Rect::new(
+        rect.origin.x - (width - rect.size.width) / 2.0,
+        rect.origin.y - (height - rect.size.height) / 2.0,
+        width,
+        height,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::route::hit_test;
-    use crate::test_support::{group, leaf, Scroller};
+    use crate::test_support::{env, group, leaf, Scroller};
     use crate::Element;
     use cupertino_ui_layout::{LayoutStats, NodeLayout};
 
@@ -155,7 +171,7 @@ mod tests {
             stats: LayoutStats::default(),
         };
 
-        let g = placements(&tree, root, &layout, LayoutDirection::Ltr);
+        let g = placements(&tree, root, &layout, &env());
 
         assert_eq!(g[&scroller].rect, Rect::new(10.0, 20.0, 100.0, 50.0));
         assert_eq!(
@@ -201,7 +217,7 @@ mod tests {
             .into(),
             stats: LayoutStats::default(),
         };
-        let geometry = placements(&tree, root, &layout, direction);
+        let geometry = placements(&tree, root, &layout, &Environment { direction, ..env() });
         (tree, root, geometry)
     }
 

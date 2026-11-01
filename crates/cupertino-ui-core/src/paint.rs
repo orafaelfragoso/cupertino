@@ -327,7 +327,9 @@ impl Painter {
                 bounds: bounds(placement.rect, painted.extent, placement.clip),
                 hit: placement
                     .clip
-                    .map_or(Some(placement.rect), |c| c.intersection(&placement.rect))
+                    .map_or(Some(placement.target), |c| {
+                        c.intersection(&placement.target)
+                    })
                     .unwrap_or(Rect::new(origin.x, origin.y, 0.0, 0.0)),
                 group: painted.group.clone(),
                 ops: painted.ops.clone(),

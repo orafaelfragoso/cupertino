@@ -1,6 +1,6 @@
 use crate::cx::{EventCx, MeasureCx, PaintCx, SemanticsCx};
-use crate::{Event, Key};
-use cupertino_geometry::Point;
+use crate::{Environment, Event, Key};
+use cupertino_geometry::{Point, Size};
 use cupertino_ui_layout::{Constraints, LayoutSpec, Measured, SizeSpec};
 use std::any::{type_name, Any, TypeId};
 use std::fmt;
@@ -52,6 +52,11 @@ pub trait Widget<M>: 'static {
     /// under it, such as an overlay scroll bar that shows only its thumb. Children are hit-tested either way.
     fn hit(&self, _state: &Self::State, _point: Point) -> bool {
         true
+    }
+    /// The least size of the node's hit target, centred on its rect. A target larger than the rect takes no layout
+    /// space; it reaches past the rect only where no other node's rect holds the point.
+    fn target(&self, _state: &Self::State, _env: &Environment) -> Size {
+        Size::ZERO
     }
 }
 
@@ -122,6 +127,7 @@ pub(crate) trait AnyWidget<M> {
     fn semantics(&self, state: &dyn Any, cx: &mut SemanticsCx<'_>);
     fn scroll_offset(&self, state: &dyn Any) -> Point;
     fn hit(&self, state: &dyn Any, point: Point) -> bool;
+    fn target(&self, state: &dyn Any, env: &Environment) -> Size;
 }
 
 const STATE: &str = "a node's state is the one its widget type created";
@@ -186,5 +192,9 @@ impl<M, W: Widget<M>> AnyWidget<M> for W {
 
     fn hit(&self, state: &dyn Any, point: Point) -> bool {
         Widget::hit(self, state.downcast_ref().expect(STATE), point)
+    }
+
+    fn target(&self, state: &dyn Any, env: &Environment) -> Size {
+        Widget::target(self, state.downcast_ref().expect(STATE), env)
     }
 }

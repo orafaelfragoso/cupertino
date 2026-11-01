@@ -246,6 +246,8 @@ impl Locked {
             .unwrap();
         let peer = embeds.recv_timeout(PATIENCE).expect("the root embedded");
         let monitor = bus.connect();
+        // zbus drops what arrives before a stream subscribes: subscribe before the lock screen can send
+        let messages = MessageIterator::from(&monitor);
         monitor
             .call_method(
                 Some("org.freedesktop.DBus"),
@@ -258,7 +260,7 @@ impl Locked {
         let sent = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
         let record = Arc::clone(&sent);
         std::thread::spawn(move || {
-            for message in MessageIterator::from(&monitor).flatten() {
+            for message in messages.flatten() {
                 record.0.lock().unwrap().push(message);
                 record.1.notify_all();
             }

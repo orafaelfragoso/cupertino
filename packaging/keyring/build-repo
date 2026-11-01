@@ -12,8 +12,8 @@
 #   OUT/cupertino-rollback.conf the archive=BASE_URL/archive line for /etc/cupertino-rollback.conf
 #   OUT/SHA256SUMS              every file of the tree, with its detached signature SHA256SUMS.sig
 #
-# Packages taken from --archive-from must already be signed under the same primary key (gpg VALIDSIG, nothing written
-# otherwise). There is no upload. Upload the packages and their .sig first and the database files last, so that a client never sees a
+# Packages taken from --archive-from must already be signed under the same primary key (gpg VALIDSIG). They are copied into
+# OUT/archive first and verified there, never in the source; on a failure OUT/repo and OUT/archive are removed. There is no upload. Upload the packages and their .sig first and the database files last, so that a client never sees a
 # database that names a missing file. The key comes from GNUPGHOME (or --gnupghome DIR); the release job loads the signing
 # subkey into a temporary GNUPGHOME and never holds the master key. BASE_URL is https://, or http://127.0.0.1 for tests.
 set -eu
@@ -73,27 +73,30 @@ fi
 primary=$(gpg --batch --with-colons --list-secret-keys "$key" | awk -F: '$1 == "fpr" { print toupper($10); exit }')
 [ "${#primary}" -eq 40 ] || die "cannot read the primary key of $key"
 
-# Every package that comes from an earlier release must be signed under that primary key, and nothing is written before it
-# is. The check is gpg's own: one valid signature, none bad, expired or revoked, and the VALIDSIG primary key pinned.
-if [ -n "$archive_from" ]; then
-    [ -d "$archive_from" ] || die "$archive_from is not a directory"
-    for f in "$archive_from"/*.pkg.tar.zst; do
-        [ -e "$f" ] || continue
-        name=$(basename "$f")
-        [ -f "$f.sig" ] || die "archive package $name has no .sig"
-        status=$(gpg --batch --status-fd 1 --verify "$f.sig" "$f" 2>/dev/null) || die "archive package $name: the signature does not verify"
-        [ "$(printf '%s\n' "$status" | grep -c '^\[GNUPG:\] VALIDSIG ')" -eq 1 ] || die "archive package $name: not exactly one valid signature"
-        if printf '%s\n' "$status" | grep -q '^\[GNUPG:\] \(BADSIG\|ERRSIG\|EXPSIG\|EXPKEYSIG\|REVKEYSIG\) '; then
-            die "archive package $name: the signature is bad, expired or from a revoked key"
-        fi
-        [ "$(printf '%s\n' "$status" | awk '$2 == "VALIDSIG" { print toupper($NF) }')" = "$primary" ] || die "archive package $name: not signed under the Cupertino key $primary"
-    done
-fi
-
 mkdir -p "$out/repo" "$out/archive"
+
+# Every package that comes from an earlier release is copied into OUT first and verified there, so the bytes that are checked
+# are the bytes that are published and the source directory is read once. The check is gpg's own: one valid signature, none
+# bad, expired or revoked, and the VALIDSIG primary key pinned. A failure removes what was written and publishes nothing.
+archive_die() {
+    rm -rf "$out/repo" "$out/archive"
+    die "$@"
+}
 if [ -n "$archive_from" ]; then
+    [ -d "$archive_from" ] || archive_die "$archive_from is not a directory"
     for f in "$archive_from"/*.pkg.tar.zst "$archive_from"/*.pkg.tar.zst.sig; do
         [ -e "$f" ] && cp "$f" "$out/archive/"
+    done
+    for f in "$out/archive"/*.pkg.tar.zst; do
+        [ -e "$f" ] || continue
+        name=$(basename "$f")
+        [ -f "$f.sig" ] || archive_die "archive package $name has no .sig"
+        status=$(gpg --batch --status-fd 1 --verify "$f.sig" "$f" 2>/dev/null) || archive_die "archive package $name: the signature does not verify"
+        [ "$(printf '%s\n' "$status" | grep -c '^\[GNUPG:\] VALIDSIG ')" -eq 1 ] || archive_die "archive package $name: not exactly one valid signature"
+        if printf '%s\n' "$status" | grep -q '^\[GNUPG:\] \(BADSIG\|ERRSIG\|EXPSIG\|EXPKEYSIG\|REVKEYSIG\) '; then
+            archive_die "archive package $name: the signature is bad, expired or from a revoked key"
+        fi
+        [ "$(printf '%s\n' "$status" | awk '$2 == "VALIDSIG" { print toupper($NF) }')" = "$primary" ] || archive_die "archive package $name: not signed under the Cupertino key $primary"
     done
 fi
 

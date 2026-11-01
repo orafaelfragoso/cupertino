@@ -8,7 +8,8 @@
 # the key refuses the repository; with the key trusted, a tampered database signature, a tampered database and a tampered
 # package each fail, and an untampered repository installs; cupertino-rollback installs the earlier release from the archive
 # and refuses a tampered archive package; SHA256SUMS.sig verifies under the master key; build-repo refuses a tampered,
-# unsigned or foreign-signed --archive-from package before writing anything, and refuses a bad URL, a missing key and a non-empty output directory.
+# unsigned or foreign-signed --archive-from package (it copies them into OUT, verifies the copy and leaves no tree), publishes the
+# verified bytes of a source that changes after its copy, and refuses a bad URL, a missing key and a non-empty output directory.
 set -euo pipefail
 
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
@@ -17,7 +18,7 @@ image=docker.io/library/archlinux@sha256:3cbf69d2d5958d6a294f3722c5668e6187c4df8
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
 work=$(mktemp -d "$out/work.XXXXXX")
-trap 'docker run --rm -v "$work:/w" "$image" rm -rf /w/build /w/pkgs1 /w/pkgs2 /w/stage1 /w/stage2 /w/stage3 /w/tamper /w/bad >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
+trap 'docker run --rm -v "$work:/w" "$image" rm -rf /w/build /w/pkgs1 /w/pkgs2 /w/stage1 /w/stage2 /w/stage3 /w/tamper /w/bad /w/arch-swap /w/stage-swap /w/shim >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
 git -C "$root" archive --format=tar --prefix=src/ HEAD packaging/keyring packaging/ci/keyring-test-lib.sh | tar -x -C "$work"
 
 test_script=$(
@@ -60,7 +61,7 @@ ok '--keep 1 prunes the archive to the newest release, signatures included'
 as_builder "gpg --batch --status-fd 1 --verify $S/SHA256SUMS.sig $S/SHA256SUMS 2>/dev/null" | awk '$2 == "VALIDSIG" { print toupper($NF) }' | grep -qx "$MASTER" || fail 'SHA256SUMS.sig is not a valid signature under the master key'
 ok 'SHA256SUMS.sig verifies, primary key = master'
 
-# an archive package that is tampered, unsigned or signed by another key stops build-repo before it writes anything
+# an archive package that is tampered, unsigned or signed by another key stops build-repo and nothing is published
 for n in tampered unsigned foreign; do
     rm -rf /work/arch-$n /work/stage-$n
     cp -r /work/stage1/archive /work/arch-$n
@@ -72,8 +73,25 @@ for n in tampered unsigned foreign; do
         foreign) rm -f $f.sig; sign $f "$OTHER" ;;
     esac
     refused "an archive package that is $n" as_builder "$BUILD --packages /work/pkgs2 --key $SUB --url $URL --out /work/stage-$n --archive-from /work/arch-$n"
-    [ ! -e /work/stage-$n ] || fail "$n archive package: build-repo wrote the output directory"
+    [ ! -e /work/stage-$n/repo ] && [ ! -e /work/stage-$n/archive ] && [ ! -e /work/stage-$n/SHA256SUMS ] || fail "$n archive package: build-repo left a tree behind"
 done
+
+# the source is read once: it is changed right after its copy, and the tree holds the verified bytes
+rm -rf /work/arch-swap /work/stage-swap /work/shim
+cp -r /work/stage1/archive /work/arch-swap
+chown -R builder /work/arch-swap
+mkdir /work/shim
+cat >/work/shim/cp <<'SHIM'
+#!/bin/sh
+/usr/bin/cp "$@" || exit
+for a; do case $a in /work/arch-swap/*) printf x >>"$a" ;; esac; done
+SHIM
+chmod +x /work/shim/cp
+as_builder "PATH=/work/shim:\$PATH $BUILD --packages /work/pkgs2 --key $SUB --url $URL --out /work/stage-swap --archive-from /work/arch-swap" >/dev/null || fail 'build-repo failed after its source changed behind it'
+[ -f /work/stage-swap/archive/cupertino-1.0-1-x86_64.pkg.tar.zst ] || fail 'the swap build lacks the archived package'
+(cd /work/stage1/archive && sha256sum cupertino-1.0-1-x86_64.pkg.tar.zst cupertino-1.0-1-x86_64.pkg.tar.zst.sig) | (cd /work/stage-swap/archive && sha256sum -c --quiet) || fail 'the published archive bytes are not the verified bytes'
+cmp -s /work/arch-swap/cupertino-1.0-1-x86_64.pkg.tar.zst /work/stage1/archive/cupertino-1.0-1-x86_64.pkg.tar.zst && fail 'the shim did not change the source'
+ok 'a source that changes after its copy cannot change what build-repo verifies and publishes'
 
 # build-repo refuses what it should
 refused 'an http URL that is not loopback' as_builder "$BUILD --packages /work/pkgs2 --key $SUB --url http://example.invalid --out /work/bad1"

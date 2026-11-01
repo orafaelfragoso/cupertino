@@ -145,7 +145,7 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
     Ctrl+Q, `<Super>q` Super+Q). Accepted gaps: the bar does not know `rewrite_off`, so an application opted out of the
     rewrite shows Super+Q where only Ctrl+Q works; and it does not know `rewrite_terminals`, so a terminal is shown as
     an ordinary application.
-- **Help search (`search`).** The Help menu's first row is a search field (`cupertino-text-field`, the editing chords of
+- **Help search (`search`).** The Help menu's first row is a search field (`cupertino-ui-text`'s `TextBuffer`, the editing chords of
   `keyboard.conf`). It takes the typing keys while the Help menu is open, through the popup's keyboard grab: Space, and the
   arrows, Home and End while it holds text (with no text Left and Right switch menus as elsewhere). Up and Down move
   through the rows, Return or a click chooses the selected one, and Esc clears the text first, then closes the menu.

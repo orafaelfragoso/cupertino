@@ -29,8 +29,8 @@ use cupertino_shell_client::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
     MenuBar, Session as SessionObserver, SessionChange, SessionState, Shell, ShellEvent,
 };
-use cupertino_text_field::{KeyInput, Keymap};
 use cupertino_theme::Theme;
+use cupertino_ui_text::{KeyInput, Keymap};
 use cupertino_ui_wayland::{popup, Ready, ShmPresenter};
 use cupertino_wayland_client::{
     Button, Connection, Event, KeyboardEvent, OutputGeometry, OutputId, PointerEvent, Popup,

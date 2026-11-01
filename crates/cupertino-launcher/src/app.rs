@@ -19,8 +19,8 @@ use cupertino_shell_client::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
     Session, SessionChange, SessionState, Shell, ShellEvent,
 };
-use cupertino_text_field::{KeyInput, Keymap, Response, TextField, TextFieldKeys};
 use cupertino_theme::{Appearance, Theme};
+use cupertino_ui_text::{KeyInput, Keymap, Response, TextBuffer, TextFieldKeys};
 use cupertino_ui_wayland::clipboard::Clipboard;
 use cupertino_ui_wayland::{Ready, ShmPresenter};
 use cupertino_wayland_client::{
@@ -943,7 +943,7 @@ impl App {
                 ..
             } if self.panel.field().is_dragging() => {
                 let now = self.now();
-                self.panel.edit(&self.launcher, now, TextField::release);
+                self.panel.edit(&self.launcher, now, TextBuffer::release);
             }
             PointerEvent::Button {
                 button: Button::Left,
@@ -995,8 +995,8 @@ impl App {
     }
 }
 
-/// The x of `field`'s caret among `offsets` (one per [`TextField::boundaries`]).
-fn caret_x(field: &TextField, offsets: &[f64]) -> f64 {
+/// The x of `field`'s caret among `offsets` (one per [`TextBuffer::boundaries`]).
+fn caret_x(field: &TextBuffer, offsets: &[f64]) -> f64 {
     field
         .boundaries()
         .iter()

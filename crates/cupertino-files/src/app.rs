@@ -55,11 +55,11 @@ use cupertino_files::{Entry, Kind, Point, Size, SortSpec};
 use cupertino_geometry::Rect as PopupRect;
 use cupertino_icons::document::FileIcons;
 use cupertino_protocol_app::{AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop};
-use cupertino_text_field::{KeyInput, Keymap, Response, TextField, TextFieldKeys};
 use cupertino_theme::{Appearance, Theme, WindowCornerSize};
 use cupertino_ui_atspi::AtspiAdapter;
 use cupertino_ui_core::{AccessibilityAdapter, AccessibilityUpdate, Action as AccessAction};
 use cupertino_ui_menus::WindowMenus;
+use cupertino_ui_text::{KeyInput, Keymap, Response, TextBuffer, TextFieldKeys};
 use cupertino_ui_wayland::clipboard::Clipboard;
 use cupertino_ui_wayland::{copy_rects, popup, Damage, Ready, ShmPresenter};
 use cupertino_wayland_client::{
@@ -130,7 +130,7 @@ struct App {
     available: Option<u64>,
     /// The toolbar search field (the browser shows the folder's items that match its text), and whether it has the
     /// keyboard.
-    search: TextField,
+    search: TextBuffer,
     search_focused: bool,
     /// The sidebar row with the keyboard focus, while the sidebar has the keyboard.
     sidebar_focus: Option<usize>,
@@ -474,7 +474,7 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
         mode: ViewMode::Icons,
         bars: Bars::HIDDEN,
         available: None,
-        search: TextField::with_max_len(SEARCH_MAX_LEN),
+        search: TextBuffer::with_max_len(SEARCH_MAX_LEN),
         search_focused: false,
         sidebar_focus: None,
         search_width: SearchWidth::default(),

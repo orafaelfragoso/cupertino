@@ -336,6 +336,8 @@ pub(crate) struct FakeSystem {
     pub(crate) clipboard: Option<ClipboardData>,
     /// Offers the desktop's effects.
     pub(crate) effects: bool,
+    /// Every activation token asked for: the window and the application named.
+    pub(crate) activations: Vec<(WindowId, Option<String>)>,
 }
 
 impl FakeSystem {
@@ -393,8 +395,13 @@ impl WindowSystem for FakeSystem {
         ClipboardToken(0)
     }
 
-    fn request_activation_token(&mut self, _: WindowId) -> ActivationRequest {
-        ActivationRequest(0)
+    fn request_activation_token(
+        &mut self,
+        window: WindowId,
+        app_id: Option<&str>,
+    ) -> ActivationRequest {
+        self.activations.push((window, app_id.map(str::to_owned)));
+        ActivationRequest(self.activations.len() as u64)
     }
 
     fn request_frame(&mut self, window: WindowId) {

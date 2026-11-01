@@ -259,6 +259,8 @@ pub enum ActivationSource {
 }
 
 pub type Task<M> = Pin<Box<dyn Future<Output = M> + Send>>;
+/// What an activation token, or `None`, becomes in the application.
+pub type TokenHandler<M> = Box<dyn FnOnce(Option<String>) -> M + Send>;
 
 /// Work an update asks the runtime to do.
 pub enum Command<M> {
@@ -268,6 +270,13 @@ pub enum Command<M> {
     CloseWindow(WindowKey),
     Window(WindowKey, WindowRequest),
     SetClipboard(String),
+    /// Asks for an activation token for `window`, to hand to the application `app_id` names when it is started; the
+    /// token is `None` when the window is gone or the compositor gives none.
+    ActivationToken {
+        window: WindowKey,
+        app_id: Option<String>,
+        on_token: TokenHandler<M>,
+    },
     Exit,
 }
 

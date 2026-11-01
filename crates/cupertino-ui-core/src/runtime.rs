@@ -18,17 +18,17 @@ use crate::tree::Tree;
 use crate::{
     AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, Application, Clock, Command,
     Element, Environment, Event, FocusTarget, FrameSnapshot, Icons, Key, Menus, NodeId,
-    NodeSnapshot, Pending, Popup, PopupAnchor, Propagation, StepStatus, UiError, Window,
-    WindowBackground, WindowKey,
+    NodeSnapshot, Pending, Popup, PopupAnchor, Propagation, StepStatus, TokenHandler, UiError,
+    Window, WindowBackground, WindowKey,
 };
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_menu_model::ActionName;
 use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutOptions, LayoutStats};
 use cupertino_ui_platform::{
-    Backdrop, ClipboardData, ClipboardKind, ConfigureId, ConstraintAdjust, KeyEvent, Keysym,
-    MenuDescription, PlatformError, PlatformEvent, PointerEvent, PopupEdge, PopupSpec,
-    PresentOutcome, SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest,
-    WindowSpec, WindowSystem,
+    ActivationRequest, Backdrop, ClipboardData, ClipboardKind, ConfigureId, ConstraintAdjust,
+    KeyEvent, Keysym, MenuDescription, PlatformError, PlatformEvent, PointerEvent, PopupEdge,
+    PopupSpec, PresentOutcome, SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId,
+    WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, DisplayList, PaintResources, RenderRequest, UiRenderer,
@@ -184,6 +184,8 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     keyboard: bool,
     exit: bool,
     theme_for: Option<ThemeForAppearance>,
+    /// What each activation token asked for and not yet given turns into.
+    tokens: HashMap<ActivationRequest, TokenHandler<A::Message>>,
 }
 
 impl<A: Application, W: WindowSystem> Runtime<A, W> {
@@ -213,6 +215,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             keyboard: false,
             exit: false,
             theme_for: None,
+            tokens: HashMap::new(),
         };
         for command in commands {
             runtime.command(command);
@@ -397,6 +400,19 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
             }
             Command::SetClipboard(text) => Self::set_clipboard(&mut self.system, text),
+            Command::ActivationToken {
+                window,
+                app_id,
+                on_token,
+            } => match self.windows.iter().find(|w| w.key == window) {
+                Some(w) => {
+                    let request = self
+                        .system
+                        .request_activation_token(w.id, app_id.as_deref());
+                    self.tokens.insert(request, on_token);
+                }
+                None => self.messages.push_back(on_token(None)),
+            },
             Command::Exit => self.exit = true,
         }
     }
@@ -657,9 +673,14 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     fn platform_event(&mut self, event: PlatformEvent) -> Result<(), UiError> {
         let (window, event) = match event {
             PlatformEvent::Window { window, event } => (window, event),
+            PlatformEvent::ActivationToken { request, token } => {
+                if let Some(on_token) = self.tokens.remove(&request) {
+                    self.messages.push_back(on_token(token));
+                }
+                return Ok(());
+            }
             PlatformEvent::Clipboard { .. }
             | PlatformEvent::ClipboardOffered { .. }
-            | PlatformEvent::ActivationToken { .. }
             | PlatformEvent::Wake => return Ok(()),
             PlatformEvent::Appearance(appearance) => {
                 if let Some(theme_for) = &mut self.theme_for {

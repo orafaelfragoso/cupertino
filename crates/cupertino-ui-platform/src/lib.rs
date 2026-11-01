@@ -356,10 +356,11 @@ pub enum PlatformEvent {
         kind: ClipboardKind,
         mimes: Option<Vec<String>>,
     },
-    /// A token to hand to another client so it may take the focus.
+    /// A token to hand to another client so it may take the focus; `None` when the window is gone or the compositor
+    /// gives none.
     ActivationToken {
         request: ActivationRequest,
-        token: String,
+        token: Option<String>,
     },
     /// The waker was woken.
     Wake,
@@ -405,7 +406,13 @@ pub trait WindowSystem {
     fn set_cursor(&mut self, window: WindowId, shape: Option<CursorShape>);
     fn set_clipboard(&mut self, kind: ClipboardKind, data: ClipboardData);
     fn read_clipboard(&mut self, kind: ClipboardKind, mime: &str) -> ClipboardToken;
-    fn request_activation_token(&mut self, window: WindowId) -> ActivationRequest;
+    /// Asks for a token for the application whose desktop entry is `app_id`, when known, so the desktop can tell
+    /// what is starting. The answer always arrives, as [`PlatformEvent::ActivationToken`].
+    fn request_activation_token(
+        &mut self,
+        window: WindowId,
+        app_id: Option<&str>,
+    ) -> ActivationRequest;
     /// Asks for a [`WindowEvent::Frame`] when the compositor wants the next frame.
     fn request_frame(&mut self, window: WindowId);
     /// Copies the frame's damage, plus whatever the chosen buffer missed since it was last used, into a buffer and

@@ -4,6 +4,7 @@
 - [Trying Cupertino](trying.md)
 - [Using Cupertino every day](daily-use.md)
 - [Install from a USB stick](install-usb.md)
+- [Checking a machine with cupertino-diagnose](diagnose.md)
 - [Release checklist](release-checklist.md)
 - [Building and running](building.md)
 - [CupertinoKit: getting started](kit-getting-started.md)

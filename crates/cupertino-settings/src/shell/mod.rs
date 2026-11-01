@@ -31,6 +31,7 @@ use crate::services::Services;
 use crate::settings::Paths;
 use crate::window::metrics;
 use crate::PaneId;
+use cupertino_assets::Assets;
 use state::{background_channel, Background, Result, State};
 
 /// The window's identifier for the server and the name of its desktop entry.
@@ -91,6 +92,8 @@ pub fn run(pane: PaneId, activation: String) -> Result<()> {
     else {
         return Ok(());
     };
+    // missing icons never stop the start: they are named here and drawn as placeholders
+    crate::paint::required_icons(&Assets::discover());
     let state = State::new(
         Paths::from_env(),
         Services::new(),
@@ -345,6 +348,9 @@ impl Shell {
                         key: Key::from(pane.key()),
                         label: pane.title(has_battery).into(),
                         icon: Some(pane.pane().symbol.into()),
+                        description: None,
+                        accessory: None,
+                        busy: false,
                     })
                     .collect(),
             })
@@ -356,6 +362,7 @@ impl Shell {
             scroll: self.sidebar_scroll,
             on_scroll: Box::new(Message::SidebarScroll),
             on_select: Some(Box::new(Message::Select)),
+            on_accessory: None,
         })
         .key("sidebar")
     }
@@ -367,8 +374,9 @@ impl Shell {
             .history
             .current()
             .title(self.state.live.has_battery());
-        vec![
-            form::text(title, TextRole::Title),
+        let mut items: Vec<Element<Message>> =
+            form::text(title, TextRole::Title).into_iter().collect();
+        items.extend([
             Element::new(Spacer::default()),
             Element::new(TextField {
                 label: "Search".into(),
@@ -383,7 +391,8 @@ impl Shell {
                 initial: false,
             })
             .key("search"),
-        ]
+        ]);
+        items
     }
 
     fn content(&self) -> Element<Message> {
@@ -532,6 +541,7 @@ mod tests {
     use std::sync::Arc;
 
     use cupertino_assets::BUILTIN_FONT;
+    use cupertino_kit::core::AccessibilityUpdate;
     use cupertino_kit::core::{PlaceholderIcons, RuntimeOptions};
     use cupertino_kit::layout::LayoutDirection;
     use cupertino_kit::platform::{
@@ -542,7 +552,7 @@ mod tests {
     use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
     use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
     use cupertino_theme::Theme;
-    use cupertino_ui_test::{ManualClock, TestDriver};
+    use cupertino_ui_test::{semantic_gaps, ManualClock, TestDriver};
 
     use super::*;
     use crate::services::Bus;
@@ -569,13 +579,19 @@ mod tests {
         NonZeroU32::new(64).unwrap()
     }
 
-    fn start(dir: &Path) -> (TestDriver<SettingsApp>, WindowId) {
+    /// Gaps of every Kit window, not of Settings: Kit names neither the window's root nor a navigation toolbar.
+    const KIT_GAPS: [&str; 2] = ["Window #0: no name", "Window #0 > Toolbar #1: no name"];
+
+    /// The start is the process's, so the tests that open a window take turns.
+    static WINDOW: Mutex<()> = Mutex::new(());
+
+    fn start(dir: &Path, pane: PaneId) -> (TestDriver<SettingsApp>, WindowId) {
         let (wake, woken) = async_channel::bounded(1);
         let (notify, background) = background_channel(move || {
             let _ = wake.try_send(());
         });
         let services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
-        let state = State::new(paths(dir), services, PaneId::DesktopDock, 1080.0, notify).unwrap();
+        let state = State::new(paths(dir), services, pane, 1080.0, notify).unwrap();
         launch(Start {
             state,
             background,
@@ -718,11 +734,11 @@ mod tests {
         retitled.unwrap_or_else(|| system.spec(window).unwrap().title.clone())
     }
 
-    // one test: the start is the process's
     #[test]
     fn the_shell_navigates_searches_answers_its_menus_and_commits_a_control() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
-        let (mut driver, window) = start(dir.path());
+        let (mut driver, window) = start(dir.path(), PaneId::DesktopDock);
         assert_eq!(title(&mut driver, window), "Desktop & Dock");
         assert!(driver.window_system_mut().menus(window).unwrap().is_some());
 
@@ -756,5 +772,26 @@ mod tests {
         );
         let stored = Settings::load(&paths(dir.path()), 1080.0).unwrap();
         assert_eq!(stored.dock.autohide, Some(true));
+    }
+
+    #[test]
+    fn every_pane_leaves_nothing_a_screen_reader_cannot_announce() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        for pane in crate::sidebar::rows(&[]) {
+            let dir = tempfile::tempdir().unwrap();
+            let (driver, window) = start(dir.path(), pane);
+            let snapshot = driver.runtime().snapshot(window).unwrap();
+            let tree = AccessibilityUpdate {
+                window,
+                root: snapshot.accessibility[0].0,
+                focus: snapshot.focus,
+                nodes: snapshot.accessibility,
+                removed: Vec::new(),
+                full: true,
+            };
+            let mut gaps = semantic_gaps(&tree);
+            gaps.retain(|gap| !KIT_GAPS.contains(&gap.as_str()));
+            assert_eq!(gaps, Vec::<String>::new(), "{pane:?}");
+        }
     }
 }

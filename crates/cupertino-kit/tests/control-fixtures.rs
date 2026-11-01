@@ -18,8 +18,10 @@ use cupertino_kit::controls::{
     SliderStyle, SortOrder, SplitLayout, SplitView, Stack, Stepper, TableView, Text, TextField,
     TextRole, Toggle,
 };
+use cupertino_kit::controls::{Sidebar, SidebarItem, SidebarSection};
 use cupertino_kit::core::{
-    Application, Checked, Command, CommandRegistry, Element, Window, WindowBackground, WindowKey,
+    Application, Checked, Command, CommandRegistry, Element, Key, Window, WindowBackground,
+    WindowKey,
 };
 use cupertino_kit::geometry::{Insets, Point, Size};
 use cupertino_kit::layout::{Align, Axis, LayoutDirection, ScrollState};
@@ -335,6 +337,7 @@ fn button(style: ButtonStyle, role: ButtonRole, look: &Look) -> Element<Message>
 const CONTROL: Size = Size::new(180.0, 48.0);
 const WIDE: Size = Size::new(240.0, 56.0);
 const TALL: Size = Size::new(200.0, 112.0);
+const SIDEBAR: Size = Size::new(200.0, 220.0);
 
 macro_rules! fixtures {
     ($($test:ident: $name:literal, $size:expr, $states:expr, $build:expr;)*) => {
@@ -556,6 +559,35 @@ fixtures! {
             on_scroll: Box::new(Message::Scroll),
             on_select: Some(Box::new(|_| Message::Nothing)),
             on_activate: None,
+        }
+        .into()
+    };
+    sidebar: "sidebar", SIDEBAR, &[State::Normal, State::Hover, State::Focused, State::Selected], |look| {
+        let item = |label: &str, icon: &str| SidebarItem {
+            key: Key::from(label.to_owned()),
+            label: label.into(),
+            icon: Some(icon.into()),
+        };
+        Sidebar {
+            label: "Places".into(),
+            sections: vec![
+                SidebarSection {
+                    title: None,
+                    items: vec![item("Recents", "clock")],
+                },
+                SidebarSection {
+                    title: Some("Favourites".into()),
+                    items: vec![item("Desktop", "menubar.dock.rectangle"), item("Documents", "doc")],
+                },
+                SidebarSection {
+                    title: Some("Locations".into()),
+                    items: vec![item("Computer", "desktopcomputer")],
+                },
+            ],
+            selected: look.selected.then_some(1),
+            scroll: look.scroll,
+            on_scroll: Box::new(Message::Scroll),
+            on_select: Some(Box::new(|_| Message::Nothing)),
         }
         .into()
     };

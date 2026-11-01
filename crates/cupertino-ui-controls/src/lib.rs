@@ -17,6 +17,7 @@ mod popover;
 mod press;
 mod progress;
 mod scroll;
+mod sidebar;
 mod slider;
 mod split;
 mod stack;
@@ -521,6 +522,39 @@ pub struct TableView<M> {
     pub on_scroll: Handler<ScrollState, M>,
     pub on_select: Option<Handler<Selection, M>>,
     pub on_activate: Option<Handler<usize, M>>,
+}
+
+/// A row of a [`Sidebar`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct SidebarItem {
+    /// The row's identity, unique in the sidebar: its focus and accessible object follow it while rows come and go.
+    pub key: Key,
+    pub label: String,
+    /// A system symbol name, drawn before the label in the accent colour.
+    pub icon: Option<String>,
+}
+
+/// A heading and the rows under it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SidebarSection {
+    /// `None` for rows without a heading, as at the top of a sidebar.
+    pub title: Option<String>,
+    pub items: Vec<SidebarItem>,
+}
+
+/// A window's list of places in its leading pane: rows under section headings, one of them selected. One Tab stop at
+/// the selected row, else the first; Up, Down, Home and End move the selection across the sections, and a click or
+/// assistive technology's Click selects a row. A row that becomes selected is reported once; selecting the selected
+/// row reports nothing. Build its element with `Element::from`.
+pub struct Sidebar<M> {
+    /// The accessible name.
+    pub label: String,
+    pub sections: Vec<SidebarSection>,
+    /// The selected row, counted over every section's rows in order.
+    pub selected: Option<usize>,
+    pub scroll: ScrollState,
+    pub on_scroll: Handler<ScrollState, M>,
+    pub on_select: Option<Handler<usize, M>>,
 }
 
 /// Flexible empty space in a stack.

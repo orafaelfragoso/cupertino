@@ -601,6 +601,7 @@ impl Cupertino {
     ) {
         if error.failure() == Failure::ContextLost {
             tracing::error!(error = %error, "the rendering context is lost: ending the session");
+            crate::logging::session_ends(&format!("the rendering context was lost ({error})"), 1);
             self.rendering_lost = Some(error.to_string());
             self.running = false;
             return;

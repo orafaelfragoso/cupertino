@@ -20,13 +20,19 @@ fn main() -> Result<()> {
     };
     let to_file = file.is_some();
     logging::init(file);
+    if on_tty {
+        logging::record_session_end(|key| std::env::var_os(key));
+    }
     if let Some((path, e)) = failure {
         tracing::warn!("cannot write the log file {}: {e}", path.display());
     }
     cupertino_server::file_limit::raise();
     let result = cupertino_server::cli::run(cli);
-    if let (true, Err(e)) = (to_file, &result) {
-        tracing::error!("the server stopped: {e:#}");
+    if let Err(e) = &result {
+        if to_file {
+            tracing::error!("the server stopped: {e:#}");
+        }
+        logging::session_ends(&format!("{e:#}"), 1);
     }
     result
 }

@@ -346,3 +346,34 @@ fn a_lost_rendering_context_ends_the_session_after_one_draw() {
         "with an error, so the session command sees a failure"
     );
 }
+
+#[test]
+fn a_lost_rendering_context_is_recorded_for_the_session_and_a_hung_teardown_is_cut_short() {
+    const CHILD: &str = "CUPERTINO_TEST_CONTEXT_LOST_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        cupertino_server::logging::record_session_end(|key| std::env::var_os(key));
+        let mut d = Desktop::new(1.0);
+        d.window();
+        d.at(3000);
+        fail_for_a_second(&mut d, Failure::ContextLost);
+        loop {
+            std::thread::park();
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let end = dir.path().join("session-end");
+    let (status, _) = common::spawn::run_child_test(
+        "a_lost_rendering_context_is_recorded_for_the_session_and_a_hung_teardown_is_cut_short",
+        &[
+            (CHILD, std::ffi::OsStr::new("1")),
+            (cupertino_server::logging::SESSION_END_ENV, end.as_os_str()),
+        ],
+        cupertino_server::logging::TEARDOWN_LIMIT + Duration::from_secs(3),
+    );
+    assert_eq!(status.code(), Some(1));
+    let reason = std::fs::read_to_string(&end).unwrap();
+    assert!(
+        reason.starts_with("the rendering context was lost ("),
+        "{reason:?}"
+    );
+}

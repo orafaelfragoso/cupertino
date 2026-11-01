@@ -1059,6 +1059,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-diagnostics"
+version = "0.1.0"
+dependencies = [
+ "cupertino-devices",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "cupertino-displays"
 version = "0.1.0"
 

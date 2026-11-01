@@ -1,6 +1,6 @@
 // cupertino-layers --graph
-// 76 crates, 355 internal dependencies
-// per layer: foundation 18, models 8, platform 9, protocol 3, transport 3, render 3, ui 12, core 1, shell 11, services 4, apps 2, tools 2
+// 77 crates, 356 internal dependencies
+// per layer: foundation 18, models 8, platform 9, protocol 3, transport 3, render 3, ui 12, core 1, shell 11, services 4, apps 2, tools 3
 // forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the default sink and the mixer itself until audio goes through a service
 // forbidden normal edge cupertino-settings (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
@@ -117,7 +117,8 @@ digraph "layers" {
     "cupertino-settings";
   }
   subgraph "cluster_tools" {
-    label="tools (2)";
+    label="tools (3)";
+    "cupertino-diagnostics";
     "cupertino-layers";
     "cupertino-testclient";
   }
@@ -143,6 +144,7 @@ digraph "layers" {
   "cupertino-decorations" -> "cupertino-glyph";
   "cupertino-decorations" -> "cupertino-theme";
   "cupertino-devices" -> "cupertino-evdev";
+  "cupertino-diagnostics" -> "cupertino-devices";
   "cupertino-dock" -> "cupertino-animation";
   "cupertino-dock" -> "cupertino-apps";
   "cupertino-dock" -> "cupertino-assets";

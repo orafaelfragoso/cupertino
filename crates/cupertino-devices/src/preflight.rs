@@ -4,7 +4,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
+use crate::error::Result;
 
 /// Where GBM looks for the driver-supplied buffer backends.
 const GBM_DIRS: [&str; 3] = [
@@ -59,13 +59,13 @@ impl fmt::Display for Report {
     }
 }
 
-/// Checks the primary GPU of `sysfs_root` (`/sys` in production).
-pub fn run(sysfs_root: &Path) -> Result<Report> {
-    let gpu = cupertino_devices::primary_gpu(sysfs_root)
-        .map_err(|e| anyhow!("listing GPUs: {e}"))?
-        .context("no GPU found: /sys/class/drm lists no card")?;
+/// Checks the primary GPU of `sysfs_root` (`/sys` in production); `None` when sysfs lists no GPU.
+pub fn run(sysfs_root: &Path) -> Result<Option<Report>> {
+    let Some(gpu) = crate::primary_gpu(sysfs_root)? else {
+        return Ok(None);
+    };
     let gbm_dirs: Vec<PathBuf> = GBM_DIRS.iter().map(PathBuf::from).collect();
-    Ok(check(sysfs_root, gpu.device.syspath(), &gbm_dirs))
+    Ok(Some(check(sysfs_root, gpu.device.syspath(), &gbm_dirs)))
 }
 
 fn check(sysfs_root: &Path, card: &Path, gbm_dirs: &[PathBuf]) -> Report {

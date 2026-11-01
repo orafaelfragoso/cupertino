@@ -20,7 +20,6 @@ efibootmgr
 nvme-cli
 iwd
 openssh
-git
 less
 nano
 vim
@@ -42,3 +41,9 @@ shared-mime-info
 xkeyboard-config
 cupertino
 cupertino-data
+chromium
+base-devel
+rustup
+github-cli
+networkmanager
+git

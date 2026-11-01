@@ -1,10 +1,13 @@
 //! The `cupertino-portal` process, which the server starts for the session. See the README.
 
 use std::process::ExitCode;
+use std::sync::mpsc;
 use std::time::Duration;
 
+use cupertino_portal::capture::Capture;
 use cupertino_portal::dialog::{inbox, Dialogs};
 use cupertino_portal::file_chooser::FileChooser;
+use cupertino_portal::screen_cast::ScreenCast;
 use cupertino_portal::settings::{Appearance, Service};
 use cupertino_portal::{BUS_NAME, PORTAL_PATH};
 use cupertino_protocol_app::{AppEffects, AppEvent};
@@ -21,7 +24,7 @@ fn main() -> ExitCode {
 }
 
 /// `appearance` after the appearance events among `events`.
-fn fold(mut appearance: Appearance, events: Vec<Event>) -> Appearance {
+fn fold(mut appearance: Appearance, events: &[Event]) -> Appearance {
     for event in events {
         let Event::Extension(event) = event else {
             continue;
@@ -33,7 +36,7 @@ fn fold(mut appearance: Appearance, events: Vec<Event>) -> Appearance {
     appearance
 }
 
-/// The file-chooser windows; a dialog that cannot be shown ends the process.
+/// The file-chooser and screen-sharing windows; a dialog that cannot be shown ends the process.
 fn dialogs() {
     if let Err(e) = cupertino_kit::app::run::<Dialogs>() {
         eprintln!("cupertino-portal: {e}");
@@ -47,17 +50,43 @@ fn run() -> Result<()> {
     let _observer = effects.appearance(&conn);
     // the session is published once the name is owned, so the first reply must already carry the session's appearance
     conn.roundtrip()?;
-    let mut appearance = fold(Appearance::default(), conn.wait(Some(Duration::ZERO))?);
+    let (requests, received) = mpsc::channel();
+    // without the capture globals the other interfaces are still served
+    let mut capture = Capture::bind(&mut conn, received)
+        .inspect_err(|e| eprintln!("cupertino-portal: no screen sharing: {e}"))
+        .ok();
+    let first = conn.wait(Some(Duration::ZERO))?;
+    let mut appearance = fold(Appearance::default(), &first);
+    if let Some(capture) = &mut capture {
+        capture.update(&conn, &first);
+    }
     let bus = zbus::blocking::Connection::session()?;
     let settings = Service::serve(&bus, appearance)?;
     bus.object_server()
         .at(PORTAL_PATH, FileChooser::new(|event| inbox().push(event)))?;
+    if let Some(capture) = &capture {
+        let sources = capture.sources();
+        let waker = conn.waker();
+        ScreenCast::new(
+            move || sources.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            |event| inbox().push(event),
+            move |request| {
+                let _ = requests.send(request);
+                waker.wake();
+            },
+        )
+        .serve(&bus)?;
+    }
     std::thread::Builder::new()
         .name("dialogs".to_owned())
         .spawn(dialogs)?;
     bus.request_name(BUS_NAME)?;
     loop {
-        let next = fold(appearance, conn.wait(None)?);
+        let events = conn.wait(capture.as_ref().and_then(Capture::timeout))?;
+        if let Some(capture) = &mut capture {
+            capture.update(&conn, &events);
+        }
+        let next = fold(appearance, &events);
         if next != appearance {
             settings.set(next)?;
             appearance = next;

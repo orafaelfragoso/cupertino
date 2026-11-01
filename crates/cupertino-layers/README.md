@@ -44,7 +44,7 @@ All rules are constants in `src/lib.rs`; nothing is read from a configuration fi
 | `protocol` | `foundation`, `protocol` | app-protocols, login-ipc, protocols |
 | `transport` | `foundation`, `platform`, `protocol`, `transport` | protocol-app, shell-client, wayland-client |
 | `render` | `foundation`, `platform`, `render` | cursor, decorations, glass |
-| `ui` | `foundation`, `protocol`, `transport`, `ui` | kit, text-field, ui-controls, ui-core, ui-layout, ui-menus, ui-platform, ui-render, ui-test, ui-text, ui-theme, ui-wayland |
+| `ui` | `foundation`, `protocol`, `transport`, `ui` | kit, ui-controls, ui-core, ui-layout, ui-menus, ui-platform, ui-render, ui-test, ui-text, ui-theme, ui-wayland |
 | `core` | `foundation`, `models`, `platform`, `protocol`, `render` | server |
 | `shell` | `foundation`, `models`, `platform`, `protocol`, `transport`, `render`, `ui` | controlcenter, dock, launcher, login, menubar, notifications, osd, screenshot, windowmanager |
 | `services` | `foundation`, `models`, `platform`, `protocol`, `services` | btd, netd, powerd, sessiond |
@@ -52,8 +52,6 @@ All rules are constants in `src/lib.rs`; nothing is read from a configuration fi
 | `tools` | all but `core`, `shell`, `services`, `apps` | layers, testclient |
 
 Pure toolkit-facing models (filepicker, typeahead, keyboard bindings) and the icon loader are `foundation`, so the toolkit can use them.
-`text-field` is the apps' key adapter over the toolkit's text buffer (`ui`); no toolkit crate may depend on it, and it is deleted
-when the apps move to Kit controls (Phase 4, row 177).
 
 `DENIED_PATHS` forbids any chain of dependencies from `ui` to `core`, `shell` or `services`; a denied path fails the
 check even when exceptions excuse its edges. The licence check requires a crate whose `license` starts with `MPL-2.0`

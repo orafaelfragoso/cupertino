@@ -4,7 +4,7 @@
 use crate::icon;
 use crate::look::{self, paint_focus_ring};
 use crate::scroll;
-use crate::{Handler, Scroller, Sidebar, SidebarItem};
+use crate::{Handler, Scroller, Sidebar, SidebarAccessory, SidebarItem};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_core::{
     AccessibleStates, Action, Change, ControlState, Element, Environment, Event, EventCx,
@@ -42,8 +42,13 @@ const ICON: f64 = 16.0;
 /// From the icon's leading edge to the label's.
 const LABEL_X: f64 = 22.0;
 const LABEL_TRAILING: f64 = 4.0;
+/// A row's trailing button: its symbol centred in a slot that ends [`LABEL_TRAILING`] before the row's edge, and the
+/// press taken up to that edge.
+const ACCESSORY_SLOT: f64 = 24.0;
+const ACCESSORY_SYMBOL: f64 = 14.0;
 
 type Select<M> = Option<Rc<Handler<usize, M>>>;
+type Accessory<M> = Option<Rc<Handler<Key, M>>>;
 
 impl<M: 'static> From<Sidebar<M>> for Element<M> {
     fn from(sidebar: Sidebar<M>) -> Self {
@@ -51,6 +56,7 @@ impl<M: 'static> From<Sidebar<M>> for Element<M> {
         let selected = sidebar.selected.filter(|&s| s < count);
         let cursor = (count > 0).then(|| selected.unwrap_or(0));
         let on_select = sidebar.on_select.map(Rc::new);
+        let on_accessory = sidebar.on_accessory.map(Rc::new);
         let mut keys = Vec::with_capacity(count);
         let children = sidebar
             .sections
@@ -63,12 +69,28 @@ impl<M: 'static> From<Sidebar<M>> for Element<M> {
                         let index = keys.len();
                         let key = item.key.clone();
                         keys.push(key.clone());
+                        let selected = selected == Some(index);
+                        let children = item
+                            .accessory
+                            .clone()
+                            .filter(|_| !item.busy)
+                            .map(|accessory| {
+                                Element::new(AccessoryButton {
+                                    accessory,
+                                    row: key.clone(),
+                                    selected,
+                                    on_accessory: on_accessory.clone(),
+                                })
+                            })
+                            .into_iter()
+                            .collect();
                         Element::new(Row {
                             index,
                             item,
-                            selected: selected == Some(index),
+                            selected,
                             cursor: cursor == Some(index),
                             on_select: on_select.clone(),
+                            children,
                         })
                         .key(key)
                     })
@@ -306,7 +328,8 @@ impl<M: 'static> Widget<M> for Section<M> {
     }
 }
 
-/// One row: its selection inset from the sidebar's edges, its icon and its label, and the focus at the cursor.
+/// One row: its selection inset from the sidebar's edges, its icon and its label, its accessory at the trailing edge,
+/// and the focus at the cursor.
 struct Row<M> {
     index: usize,
     item: SidebarItem,
@@ -314,6 +337,7 @@ struct Row<M> {
     /// The sidebar's one Tab stop.
     cursor: bool,
     on_select: Select<M>,
+    children: Vec<Element<M>>,
 }
 
 impl<M: 'static> Widget<M> for Row<M> {
@@ -323,8 +347,23 @@ impl<M: 'static> Widget<M> for Row<M> {
         LayoutSpec {
             width: SizeSpec::Fill,
             height: SizeSpec::Fixed(ROW_HEIGHT),
-            ..LayoutSpec::new(ContainerKind::Leaf)
+            insets: Insets {
+                top: 0.0,
+                left: ROW_INSET,
+                bottom: 0.0,
+                right: ROW_INSET,
+            },
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: Axis::Horizontal,
+                spacing: 0.0,
+                align: Align::Stretch,
+                justify: Justify::End,
+            })
         }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
     }
 
     fn state(&self) {}
@@ -406,6 +445,13 @@ impl<M: 'static> Widget<M> for Row<M> {
         } else {
             theme.colors.get(ColorRole::Text, StateVariant::NORMAL)
         };
+        let label_color = if self.item.busy && !self.selected {
+            theme
+                .colors
+                .get(ColorRole::SecondaryText, StateVariant::NORMAL)
+        } else {
+            text
+        };
         let leading = |offset: f64, width: f64| {
             if rtl {
                 chrome.max_x() - offset - width
@@ -431,7 +477,12 @@ impl<M: 'static> Widget<M> for Row<M> {
         }
         if let Some(layout) = look::label(cx.env(), &self.item.label) {
             let start = INDENT + LABEL_X;
-            let room = (chrome.width() - start - LABEL_TRAILING).max(0.0);
+            let trailing = if self.item.accessory.is_some() && !self.item.busy {
+                ACCESSORY_SLOT + LABEL_TRAILING
+            } else {
+                LABEL_TRAILING
+            };
+            let room = (chrome.width() - start - trailing).max(0.0);
             let clip = Rect::new(leading(start, room), 0.0, room, size.height);
             let x = if rtl {
                 clip.max_x() - layout.size().width
@@ -440,7 +491,7 @@ impl<M: 'static> Widget<M> for Row<M> {
             };
             let origin = Point::new(x, look::top(&layout, chrome, cx.env()));
             cx.push(PaintOp::PushClip(Shape::Rect(clip)));
-            look::glyphs(cx, &layout, origin, text);
+            look::glyphs(cx, &layout, origin, label_color);
             cx.push(PaintOp::PopClip);
         }
         if cx.is_focused() {
@@ -451,8 +502,12 @@ impl<M: 'static> Widget<M> for Row<M> {
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(Role::ListItem);
         cx.name(self.item.label.clone());
+        if let Some(description) = &self.item.description {
+            cx.description(description.clone());
+        }
         cx.states(AccessibleStates {
             selected: self.selected,
+            busy: self.item.busy,
             ..AccessibleStates::default()
         });
         cx.item_index(self.index);
@@ -461,5 +516,114 @@ impl<M: 'static> Widget<M> for Row<M> {
         if self.cursor {
             cx.focusable();
         }
+    }
+}
+
+/// A row's trailing button. It acts on press, like the row, and shows no hover or pressed look; it is no Tab stop, so
+/// the keyboard reaches its action through the application's own command.
+struct AccessoryButton<M> {
+    accessory: SidebarAccessory,
+    row: Key,
+    selected: bool,
+    on_accessory: Accessory<M>,
+}
+
+impl<M: 'static> AccessoryButton<M> {
+    fn press(&self, cx: &mut EventCx<'_, M>) {
+        if let Some(on_accessory) = &self.on_accessory {
+            cx.emit(on_accessory(self.row.clone()));
+        }
+    }
+}
+
+impl<M: 'static> Widget<M> for AccessoryButton<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(ACCESSORY_SLOT + LABEL_TRAILING),
+            height: SizeSpec::Fill,
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if (&self.accessory, self.selected) != (&old.accessory, old.selected) {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(ACCESSORY_SLOT + LABEL_TRAILING, ROW_HEIGHT),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        match event {
+            Event::Pointer(
+                PointerEvent::Button {
+                    button: MouseButton::Left,
+                    pressed: true,
+                    ..
+                },
+                _,
+            ) if cx.phase() != Phase::Capture => {
+                self.press(cx);
+                Propagation::Stop
+            }
+            Event::Action(request)
+                if cx.node() == cx.target() && request.action == Action::Click =>
+            {
+                self.press(cx);
+                Propagation::Stop
+            }
+            _ => Propagation::Continue,
+        }
+    }
+
+    /// The symbol in the slot at the node's leading side; the rest of the node, up to the row's edge, takes presses.
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let theme = cx.env().theme.clone();
+        let size = cx.size();
+        let x = match cx.env().direction {
+            LayoutDirection::Ltr => 0.0,
+            LayoutDirection::Rtl => size.width - ACCESSORY_SLOT,
+        };
+        let slot = Rect::new(x, 0.0, ACCESSORY_SLOT, size.height);
+        let state = ControlState {
+            enabled: true,
+            selected: true,
+            window_active: cx.window_active(),
+            ..ControlState::default()
+        };
+        let color = if self.selected {
+            look::color(&theme, ColorRole::ControlText, &state)
+        } else {
+            theme
+                .colors
+                .get(ColorRole::SecondaryText, StateVariant::NORMAL)
+        };
+        if let Some(color) = color {
+            icon::symbol(
+                cx,
+                &self.accessory.symbol,
+                ACCESSORY_SYMBOL,
+                color,
+                false,
+                slot,
+            );
+        }
+    }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::Button);
+        cx.name(self.accessory.label.clone());
+        cx.action(Action::Click);
     }
 }

@@ -21,7 +21,7 @@ use cupertino_kit::controls::{
 };
 use cupertino_kit::controls::{Canvas, Grid, Image, ImageFit, ImageSource, RichText, TextLink};
 use cupertino_kit::controls::{Popover, TreeItem, TreeView};
-use cupertino_kit::controls::{Sidebar, SidebarItem, SidebarSection};
+use cupertino_kit::controls::{Sidebar, SidebarAccessory, SidebarItem, SidebarSection};
 use cupertino_kit::core::{
     Application, Checked, Command, CommandRegistry, Element, Key, Window, WindowBackground,
     WindowKey,
@@ -380,7 +380,7 @@ fn image(fit: ImageFit, radius: f64) -> Element<Message> {
 const CONTROL: Size = Size::new(180.0, 48.0);
 const WIDE: Size = Size::new(240.0, 56.0);
 const TALL: Size = Size::new(200.0, 112.0);
-const SIDEBAR: Size = Size::new(200.0, 220.0);
+const SIDEBAR: Size = Size::new(200.0, 250.0);
 const SHEET: Size = Size::new(400.0, 220.0);
 
 fn choice(label: &str, action: DialogAction) -> DialogButton<Message> {
@@ -706,6 +706,9 @@ fixtures! {
             key: Key::from(label.to_owned()),
             label: label.into(),
             icon: Some(icon.into()),
+            description: None,
+            accessory: None,
+            busy: false,
         };
         Sidebar {
             label: "Places".into(),
@@ -720,13 +723,23 @@ fixtures! {
                 },
                 SidebarSection {
                     title: Some("Locations".into()),
-                    items: vec![item("Computer", "desktopcomputer")],
+                    items: vec![
+                        item("Computer", "desktopcomputer"),
+                        SidebarItem {
+                            accessory: Some(SidebarAccessory {
+                                symbol: "eject".into(),
+                                label: "Eject".into(),
+                            }),
+                            ..item("Backup", "externaldrive")
+                        },
+                    ],
                 },
             ],
             selected: look.selected.then_some(1),
             scroll: look.scroll,
             on_scroll: Box::new(Message::Scroll),
             on_select: Some(Box::new(|_| Message::Nothing)),
+            on_accessory: None,
         }
         .into()
     };

@@ -8,7 +8,7 @@ Cupertino is a Wayland desktop that depends on no other userspace library or pol
 |---|---|---|
 | Own | Userspace libraries and policy daemons | device discovery, input, seat handling, keymaps, network, Bluetooth and power daemons, notification and tray services |
 | Speak | Wire protocols, implemented in Rust without a C library | Wayland; the D-Bus interfaces apps call (notifications, status items, menus); kernel interfaces (DRM/KMS, evdev, netlink, nl80211, Bluetooth management sockets, sysfs) |
-| Keep | External, each behind one crate boundary | the kernel; Mesa GPU drivers; the D-Bus broker; Smithay for Wayland protocol handling; iwd for Wi-Fi authentication; PipeWire for application audio |
+| Keep | External, each behind one crate boundary | the kernel; Mesa GPU drivers; the D-Bus broker; Smithay for Wayland protocol handling; iwd for Wi-Fi authentication; PipeWire for application audio and screen-sharing streams |
 
 ## Processes
 

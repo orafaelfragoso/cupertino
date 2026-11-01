@@ -685,7 +685,7 @@ struct Translator {
 }
 
 impl Translator {
-    /// Applies the natural scrolling setting to the wheel and the touchpad from the next frame on.
+    /// Applies the device's natural scrolling setting (a touchpad's or a wheel's) from the next frame on.
     fn set_natural_scrolling(&mut self, natural_scrolling: bool) {
         self.natural_scrolling = natural_scrolling;
         if let Some(pad) = &mut self.pad {
@@ -875,7 +875,7 @@ impl Translator {
             });
         }
         // The kernel counts a wheel turned away from the user as positive; the axis points the
-        // other way. Natural scrolling flips both wheels, as it flips the touchpad.
+        // other way. Natural scrolling (the mouse's setting) flips both wheels.
         let sign = if self.natural_scrolling { -1.0 } else { 1.0 };
         let v120 = Axes::moved(
             f64::from(frame.wheel.horizontal) * sign,
@@ -1338,7 +1338,12 @@ fn open_device(shared: &SharedInputs, node: &SysDevice, state: &mut Cupertino) -
     let fd = session
         .open(&devnode, OFlags::RDWR | OFlags::CLOEXEC | OFlags::NONBLOCK)
         .map_err(|e| anyhow!("opening {}: {e}", devnode.display()))?;
-    match register(node, class, &fd, state.config.pointer.natural_scrolling) {
+    match register(
+        node,
+        class,
+        &fd,
+        state.config.pointer.natural_scrolling_for(class.touchpad),
+    ) {
         Ok((evdev, translator, mut events)) => {
             let device = translator.device.clone();
             let handle = shared.borrow().handle.clone();
@@ -1421,9 +1426,10 @@ fn read_ready(
             .devices
             .get_mut(&devnum)
             .expect("a registered device has an entry");
+        let touchpad = opened.translator.device.0.class.touchpad;
         opened
             .translator
-            .set_natural_scrolling(state.config.pointer.natural_scrolling);
+            .set_natural_scrolling(state.config.pointer.natural_scrolling_for(touchpad));
         read(evdev, &mut opened.translator, &mut events)
     };
     match result {

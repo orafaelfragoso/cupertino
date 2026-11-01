@@ -250,6 +250,7 @@ impl Cupertino {
             mouse_acceleration,
             mouse_dpi,
             natural_scrolling,
+            mouse_natural_scrolling,
             cursor_size,
             cursor_fill,
             cursor_outline,

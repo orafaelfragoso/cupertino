@@ -418,18 +418,23 @@ mod tests {
     }
 
     #[test]
-    fn on_mains_the_display_dims_15_s_before_it_sleeps_at_10_minutes_and_the_system_sleeps_with_it()
-    {
+    fn on_mains_the_display_dims_15_s_before_it_sleeps_at_10_minutes_and_the_system_stays_awake() {
         let mut p = IdlePolicy::new(settings(), 0.0);
-        let effects = run(&mut p, 0.0, 601.0, AC);
+        let effects = run(&mut p, 0.0, 4.0 * 3600.0, AC);
         assert_eq!(
             effects,
             vec![
                 (585.0, Effect::Display(DisplayState::Dimmed)),
-                (600.0, Effect::Display(DisplayState::Asleep)),
-                (600.0, Effect::SystemSleep)
+                (600.0, Effect::Display(DisplayState::Asleep))
             ]
         );
+    }
+
+    #[test]
+    fn on_battery_the_system_sleeps_at_10_minutes() {
+        let mut p = IdlePolicy::new(settings(), 0.0);
+        let effects = run(&mut p, 0.0, 601.0, BATTERY);
+        assert_eq!(effects.last(), Some(&(600.0, Effect::SystemSleep)));
     }
 
     #[test]

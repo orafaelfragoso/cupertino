@@ -12,7 +12,7 @@
 //! | `terminals` | program names, tried in order |
 //! | `keybindings` | object: chord → action name |
 //! | `corner_radius`, `menu_bar_height`, `hot_corner_size`, `hot_corner_dwell` | number |
-//! | `show_menu_bar`, `decorations`, `closing_animation`, `mouse_acceleration`, `natural_scrolling`, `shake_to_locate` | boolean |
+//! | `show_menu_bar`, `decorations`, `closing_animation`, `mouse_acceleration`, `natural_scrolling` (touchpads), `mouse_natural_scrolling` (wheels), `shake_to_locate` | boolean |
 //! | `minimize_effect` | `warp`, `funnel`, `scale`, `plain` (also `none`) |
 //! | `mouse_speed`, `trackpad_speed` | tracking speed, 0 to 3 |
 //! | `mouse_dpi` | object: mouse key ([`mouse_dpi_key`]) → resolution in dots per inch, 50 to 32000 |
@@ -148,6 +148,7 @@ pub struct CompositorSettings {
     pub mouse_dpi: Option<BTreeMap<String, u32>>,
     pub mouse_acceleration: Option<bool>,
     pub natural_scrolling: Option<bool>,
+    pub mouse_natural_scrolling: Option<bool>,
     pub cursor_size: Option<f64>,
     /// sRGB with alpha.
     pub cursor_fill: Option<[u8; 4]>,
@@ -394,6 +395,7 @@ const KEYS: &[JsonKey] = &[
     ),
     json_key!(mouse_acceleration, boolean, bool_value),
     json_key!(natural_scrolling, boolean, bool_value),
+    json_key!(mouse_natural_scrolling, boolean, bool_value),
     json_key!(cursor_size, number, number_value),
     json_key!(
         cursor_fill,

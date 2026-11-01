@@ -23,6 +23,10 @@ if [ "$free_gb" -lt "$need_gb" ]; then
     exit 1
 fi
 
+if [ -n "$(git -C "$root" status --porcelain)" ]; then
+    echo "the checkout has uncommitted changes; the ISO is built from a clean tree" >&2
+    exit 1
+fi
 head=$(git -C "$root" rev-parse HEAD)
 epoch=$(git -C "$root" log -1 --format=%ct HEAD)
 work=$(mktemp -d "$out/work.XXXXXX")
@@ -39,7 +43,8 @@ while read -r link target; do
     ln -sfn "$target" "$work/profile/airootfs/$link"
 done <"$work/profile/airootfs-links"
 rm "$work/profile/airootfs-links"
-mkdir -p "$work/profile/airootfs/home/live"
+mkdir -p "$work/profile/airootfs/home/live" "$work/profile/airootfs/usr/local/bin"
+install -m 0755 "$root/packaging/installer/cupertino_install.py" "$work/profile/airootfs/usr/local/bin/cupertino-install"
 cp "$work/profile/pacman.conf" "$work/profile/airootfs/etc/pacman.conf"
 mkdir -p "$work/profile/airootfs/opt/cupertino-repo"
 cp "$work/pkgs"/*.pkg.tar.zst "$work/profile/airootfs/opt/cupertino-repo/"

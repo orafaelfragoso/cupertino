@@ -3977,7 +3977,8 @@ mod tests {
     }
 
     #[test]
-    fn the_focused_sidebar_row_has_the_focus_ring_outside_its_highlight_while_the_window_is_active() {
+    fn the_focused_sidebar_row_has_the_focus_ring_outside_its_highlight_while_the_window_is_active()
+    {
         let scale = 2.0_f32;
         let (_d, browser, places, mut painter, frame) = listing(scale, 12, 0.0);
         let pal = Palette::builtin(false);
@@ -4023,7 +4024,10 @@ mod tests {
         );
         let out = m::FOCUS_RING_OUTSET + m::FOCUS_RING_WIDTH;
         let ring_area = GeoRect::new(r.x - out, r.y - out, r.w + 2.0 * out, r.h + 2.0 * out);
-        assert_eq!(differing_outside(&none, &focused, &[ring_area], scale), vec![]);
+        assert_eq!(
+            differing_outside(&none, &focused, &[ring_area], scale),
+            vec![]
+        );
     }
 
     /// The WCAG contrast ratio of two opaque colours.

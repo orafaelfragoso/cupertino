@@ -12,6 +12,7 @@ layer = "apps"
 # the `cupertino-files` process: a browser window as a client of the server
 app = [
     "dep:cupertino-protocol-app",
+    "dep:cupertino-ui-atspi",
     "dep:cupertino-ui-menus",
     "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
@@ -33,7 +34,10 @@ cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-decorations = { path = "../cupertino-decorations" }
 cupertino-text-field = { path = "../cupertino-text-field" }
 cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
+cupertino-ui-atspi = { path = "../cupertino-ui-atspi", optional = true }
+cupertino-ui-core = { path = "../cupertino-ui-core" }
 cupertino-ui-menus = { path = "../cupertino-ui-menus", optional = true }
+cupertino-ui-platform = { path = "../cupertino-ui-platform" }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 tiny-skia = "0.11"
@@ -50,7 +54,9 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 [dev-dependencies]
 cupertino-capture = { path = "../cupertino-capture" }
 cupertino-test-bus = { path = "../cupertino-test-bus" }
+cupertino-ui-atspi = { path = "../cupertino-ui-atspi" }
 tempfile = "3"
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 [[bin]]
 name = "cupertino-files"

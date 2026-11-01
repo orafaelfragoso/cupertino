@@ -21,17 +21,31 @@ fn places() -> Vec<Place> {
     vec![
         folder("rafael", "/home/rafael", PlaceKind::Home),
         folder("Downloads", "/home/rafael/Downloads", PlaceKind::Downloads),
-        Place::removable("Backup Disk", Some(Path::new("/run/media/rafael/Backup")), false),
+        Place::removable(
+            "Backup Disk",
+            Some(Path::new("/run/media/rafael/Backup")),
+            false,
+        ),
         Place::removable("KINGSTON", None, false),
-        Place::removable("Camera Card", Some(Path::new("/run/media/rafael/CARD")), true),
+        Place::removable(
+            "Camera Card",
+            Some(Path::new("/run/media/rafael/CARD")),
+            true,
+        ),
     ]
 }
 
 #[test]
 fn the_sidebar_takes_the_keyboard_on_the_row_of_the_folder_shown_else_the_first() {
     let places = places();
-    assert_eq!(entry_row(&places, Path::new("/home/rafael/Downloads")), DOWNLOADS);
-    assert_eq!(entry_row(&places, Path::new("/run/media/rafael/Backup")), BACKUP);
+    assert_eq!(
+        entry_row(&places, Path::new("/home/rafael/Downloads")),
+        DOWNLOADS
+    );
+    assert_eq!(
+        entry_row(&places, Path::new("/run/media/rafael/Backup")),
+        BACKUP
+    );
     assert_eq!(entry_row(&places, Path::new("/tmp")), HOME);
 }
 
@@ -39,12 +53,24 @@ fn the_sidebar_takes_the_keyboard_on_the_row_of_the_folder_shown_else_the_first(
 fn up_down_home_and_end_move_the_focus_and_stop_at_the_ends() {
     let places = places();
     let key = |focus, key| sidebar_key(&places, focus, key);
-    assert_eq!(key(HOME, SidebarKey::Down), Some(SidebarAction::Focus(DOWNLOADS)));
-    assert_eq!(key(DOWNLOADS, SidebarKey::Up), Some(SidebarAction::Focus(HOME)));
+    assert_eq!(
+        key(HOME, SidebarKey::Down),
+        Some(SidebarAction::Focus(DOWNLOADS))
+    );
+    assert_eq!(
+        key(DOWNLOADS, SidebarKey::Up),
+        Some(SidebarAction::Focus(HOME))
+    );
     assert_eq!(key(HOME, SidebarKey::Up), None);
     assert_eq!(key(CAMERA, SidebarKey::Down), None);
-    assert_eq!(key(BACKUP, SidebarKey::Home), Some(SidebarAction::Focus(HOME)));
-    assert_eq!(key(BACKUP, SidebarKey::End), Some(SidebarAction::Focus(CAMERA)));
+    assert_eq!(
+        key(BACKUP, SidebarKey::Home),
+        Some(SidebarAction::Focus(HOME))
+    );
+    assert_eq!(
+        key(BACKUP, SidebarKey::End),
+        Some(SidebarAction::Focus(CAMERA))
+    );
     assert_eq!(key(HOME, SidebarKey::Home), None);
 }
 

@@ -4,8 +4,9 @@
 //! `ci/capture.sh files/sidebar --drop-place Desktop --scale 2` (the flags are `cupertino-capture`'s)
 //!
 //! State flags: `--view icon|list` (default icon), `--drop-place NAME` (the sidebar place) or `--drop-item NAME` (the
-//! item), with the drop look of a drag over it, `--selected NAME` (the item, selected), and `--devices removable` (three
-//! removable file systems under Locations: "Backup Disk" mounted, "Camera Card" busy, "KINGSTON" not mounted). The
+//! item), with the drop look of a drag over it, `--selected NAME` (the item, selected), `--sidebar-focus NAME` (the
+//! sidebar place, with the keyboard focus ring) and `--devices removable` (three removable file systems under
+//! Locations: "Backup Disk" mounted, "Camera Card" busy, "KINGSTON" not mounted). The
 //! home folder `avery` is made
 //! under a temporary directory with the user folders and sample files; the places are those of a session with that
 //! home on a computer named `cupertino`. File types come from the system's MIME database. The sidebar material is
@@ -162,8 +163,14 @@ fn state(flag: &str, value: &str) -> State {
 
 impl App for Capture {
     const NAME: &'static str = "files";
-    const STATE_FLAGS: &'static [&'static str] =
-        &["view", "drop-place", "drop-item", "selected", "devices"];
+    const STATE_FLAGS: &'static [&'static str] = &[
+        "view",
+        "drop-place",
+        "drop-item",
+        "selected",
+        "sidebar-focus",
+        "devices",
+    ];
 
     fn surfaces(&self) -> Vec<String> {
         vec!["window".into(), "sidebar".into()]
@@ -181,6 +188,10 @@ impl App for Capture {
                 State::new(),
                 state("drop-place", "Desktop"),
                 state("devices", "removable"),
+                vec![
+                    ("devices".to_string(), "removable".to_string()),
+                    ("sidebar-focus".to_string(), "Backup Disk".to_string()),
+                ],
             ],
         }
     }
@@ -189,6 +200,7 @@ impl App for Capture {
         let mut mode = ViewMode::Icons;
         let mut drop_target = None;
         let mut selected = None;
+        let mut sidebar_focus = None;
         let mut places = self.places.clone();
         let item = |name: &str| {
             self.browser
@@ -221,9 +233,19 @@ impl App for Capture {
                     return Err("--drop-place and --drop-item: one drop target at a time".into());
                 }
                 ("drop-item", name) => drop_target = Some(DropOutline::Item(item(name)?)),
+                ("sidebar-focus", name) => sidebar_focus = Some(name),
                 (_, name) => selected = Some(item(name)?),
             }
         }
+        let sidebar_focus = match sidebar_focus {
+            Some(name) => Some(
+                places
+                    .iter()
+                    .position(|p| p.name == name)
+                    .ok_or_else(|| format!("{name}: no sidebar place"))?,
+            ),
+            None => None,
+        };
         let path = self.browser.dir().to_path_buf();
         self.browser.press_empty(Modifiers::default());
         if let Some(i) = selected {
@@ -266,7 +288,7 @@ impl App for Capture {
             increase_contrast: r.look.increase_contrast,
             marquee: None,
             status: "",
-            sidebar_focus: None,
+            sidebar_focus,
         };
         let scale = f64::from(r.scale);
         let mut pm = Pixmap::new((w * scale).ceil() as u32, (h * scale).ceil() as u32)

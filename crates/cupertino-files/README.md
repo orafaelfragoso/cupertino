@@ -8,7 +8,7 @@ manager (and a desktop-icon layer) needs.
 ## Usage
 
 ```sh
-cargo test -p cupertino-files --features app                    # 200+ unit tests, 2 workflow tests, 3 session handler tests, 7 removable media tests (a fake udisks2 on a private bus), 2 error notice tests
+cargo test -p cupertino-files --features app                    # 200+ unit tests, 2 workflow tests, 3 session handler tests, 7 removable media tests (a fake udisks2 on a private bus), 2 error notice tests, 5 sidebar key tests, 1 sidebar AT-SPI test (a fake accessibility registry on a private bus)
 cargo run -p cupertino-files --features app -- [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]  # the window (default $HOME), in a running session
 cargo clippy -p cupertino-files --all-targets
 cargo run -p cupertino-files --release --example files_samples # PNGs in output/ (needs CUPERTINO_ASSET_DIR)
@@ -59,8 +59,8 @@ A failure of something a person did (open, a new folder, duplicate, make alias, 
 name that can't be used, copy, paste, a drop, move to the trash) is one transient notification from "Files" on the session
 bus (`org.freedesktop.Notifications`), posted in order from a thread of its own (`notice`). It names one item, or counts
 several, and its body is the first error, with control and bidirectional formatting characters removed, cut at 256
-characters and escaped, because the body is markup. Without a session bus, or when the post fails, the notice is logged
-to stderr once instead. Failures that only explain the window (an entry that can't be read, the free space, the default
+characters and escaped, because the body is markup. Without a session bus, or when a post fails, that notice is written
+to stderr instead, with the reason. Failures that only explain the window (an entry that can't be read, the free space, the default
 applications) stay on stderr. The wording is approximate.
 
 Removable media come from udisks2 on the system bus (`udisks`): after Trash, Locations lists every file system of a drive
@@ -81,6 +81,22 @@ is named by `HintName`, then `IdLabel`, then the drive's vendor and model, then 
 * **A file system that goes away:** a window on it goes home.
 
 The slot, the symbol size and the copy are approximate.
+
+The sidebar takes the keyboard with Ctrl+Tab (Ctrl+Shift+Tab too), the toolkit's key-view chord, on the row of the
+folder shown, else the first; Tab stays with the items, whose next item in name order it selects. Up and Down move the
+focus a row and stop at the ends, Home and End go to the first and the last row, Return opens the row as a click does
+(it mounts a file system that is not mounted), and Super+E on a mounted removable row ejects its drive; on any other row
+it is File › Eject. Ctrl+Tab again, Escape or a press anywhere gives the keyboard back to the items; the shortcuts keep
+working while the sidebar has it (`sidebar_keys`). The focused row has the toolkit's focus ring while the window is
+active: a 2 pt `keyboard-focus-indicator` stroke 2 pt outside the row's highlight, its radius 3 pt larger, opaque in
+both appearances.
+
+Assistive technology reads the window through `cupertino-ui-atspi` (`access`): a window named by its folder holding the
+sidebar, a list named "Sidebar" with a group per section. A row is a list item named by its place, selected while its
+folder is shown and focused while it has the keyboard. A removable file system's row is described as "Removable", plus
+", not mounted" when it is not mounted, and is busy while a call runs; a mounted one holds a button "Eject" and its name.
+A click on a row opens it, a click on an eject button ejects, and focus on a row gives the sidebar the keyboard there.
+The descriptions are approximate.
 
 In the list every folder has a disclosure triangle: a click on it, Right and Left expand and collapse the folder in place, its
 items one level (15 pt) deeper, read only when it expands and kept live. Left on an item inside an expanded folder
@@ -119,6 +135,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | Super+Backspace | move the selection to the trash (`$XDG_DATA_HOME/Trash`, freedesktop Trash 1.0) |
 | click on the name of the only selected item, or Rename | edit the name in place in a shared text field (`cupertino-text-field`: caret with blink, word and line moves, Shift selection, click, double and triple click, drag, copy, cut and paste, undo): the name without its extension is selected; Return commits, Escape cancels; a name that exists is refused (never replaced) and an invalid one keeps the editor open |
 | click a removable row that is not mounted / its eject button, File › Eject, Super+E | mount it and go there / eject its drive (above) |
+| Ctrl+Tab, then Up / Down, Home / End, Return, Super+E, Escape | the sidebar's keyboard navigation (above) |
 | press an item and move 5 pt | drag the selection onto a folder of the window or a place of the sidebar: moves there (Alt copies, Super moves, copy across volumes, a clash renames the arrival `name copy`); onto the trash place it is trashed; Escape cancels. The folder or place under the pointer that takes the drop is marked with the accent; under Increase Contrast it is also outlined in the label colour |
 
 ## Design
@@ -145,6 +162,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | `render` | CPU renderer | `Renderer::{icon_view, list_view}` (scrolled, visible items only), `icon_layout`, `list_layout`, `Palette::{builtin, from_theme}`, `truncate_middle`, `truncate_tail`, `wrap_label`, `available_size` |
 | `history`, `places`, `recents` | navigation state | `History::{visit, back, forward}`; `standard_places` (Recents, Applications, Desktop, Documents, Downloads, the computer, Trash), `folder_icons`, `session_places` (`SessionPlaces`), `computer_name`, `applications_folder`; `recents::{parse_xbel, recent_entries}` (the bookmark file is read with `cupertino_apps::recent`, which `parse_xbel` and `XBEL_NAME` re-export) |
 | `browser` | one window's folder | `Browser::{open, go, back, forward, parent, poll, sort_by, press, release, move_focus, select_all, type_text, tab, activation, outline, expand, collapse, toggle_expanded, disclose_focus, collapse_all, available_space}: model, history, the list's outline of expanded folders, selection by path across reloads, nearest-ancestor fallback for a deleted folder |
+| `sidebar_keys`, `access` | the sidebar's keyboard and its accessibility | `entry_row`, `sidebar_key` (`SidebarKey` → `SidebarAction`); `window_tree` (`WindowView` → the window's `AccessibilityUpdate`), `SidebarNode::{id, of}`, `WINDOW` |
 | `window` | window layout and painting | `WindowLayout` (toolbar, sidebar, browser, path and status bars), `Bars`, `path_chain`, `path_segments`, `status_text`, `Frame::{hit, reveal, scroll_by}`, `WindowPainter`, `ViewMode`, `metrics` |
 | `udisks` (feature `app`) | removable media | `devices` (the listed file systems of udisks' managed objects), `Volumes::{watch, poll, mount, eject}` → `Report` (`Devices`, `Mounted`, `Done`), `notice` (a failure's notification text) |
 | `notice` (feature `app`) | failures as notifications | `failure`, `unopened`, `bad_name` → `Notice`; `Notices::{start, post}`; `shown`, `escape` |
@@ -229,7 +247,7 @@ and require the frames to differ only inside the reported areas.
   `text/uri-list` of the items (`thumbnail::file_uri`) is not offered yet. No drag image is drawn, and a folder does not
   spring open under a drag (`spring::SpringLoad` is not wired).
 * The lock badge is not drawn, because entries carry no permission bits.
-* Removable media: encrypted containers are not listed (no unlock), and neither are disc images or network mounts. The
-  sidebar has no keyboard navigation and Files no accessibility tree, so a device row has no label or description for
-  assistive technology yet, and only the folder shown can be ejected from the keyboard.
+* Removable media: encrypted containers are not listed (no unlock), and neither are disc images or network mounts.
+* The accessibility tree holds the sidebar only: the toolbar, the folder's items, the bars and the context menus are not
+  in it yet.
 * Opening several files opens each without confirmation; a mixed selection enters the first folder only (approximate).

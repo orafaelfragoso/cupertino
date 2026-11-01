@@ -738,6 +738,7 @@ fn window(d: &Dialog, places: &[Place]) -> Window<Message> {
             min_size: Some(Size::new(560.0, 340.0)),
             max_size: None,
             decorations: DecorationMode::Preferred,
+            foreign_parent: crate::wayland_parent(&ask.parent_window).map(str::to_owned),
         },
         shortcuts: CommandRegistry::new(),
         on_close: Some(Message::Cancel(id)),

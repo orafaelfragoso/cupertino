@@ -1,6 +1,7 @@
 //! xdg-foreign-unstable-v2 against a headless compositor: one client exports its toplevel and passes the handle on, and
 //! another imports it and makes it the parent of its own toplevel, as a portal dialog does for the window that asked for
-//! it. Tests skip (pass) when no EGL device is available.
+//! it; then `cupertino-portal` itself, whose file chooser opens as a child of the window its request names. Tests skip
+//! (pass) when no EGL device is available.
 
 mod common;
 
@@ -8,6 +9,7 @@ use std::io::Write;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
@@ -405,4 +407,132 @@ fn each_export_has_a_handle_of_its_own_that_names_no_window() {
             "{handle}"
         );
     }
+}
+
+// ---- cupertino-portal ------------------------------------------------------------------------------------------------
+
+/// `cupertino-portal` (a no-op build when current). It belongs to another crate, so cargo gives this test no
+/// `CARGO_BIN_EXE_*` for it.
+fn portal_binary() -> PathBuf {
+    // <target>/<profile>/deps/<this test> -> <target>/<profile>
+    let profile_dir = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let mut cargo = Command::new(std::env::var_os("CARGO").expect("CARGO is set by `cargo test`"));
+    cargo
+        .args([
+            "build",
+            "-p",
+            "cupertino-portal",
+            "--features",
+            "app",
+            "--target-dir",
+        ])
+        .arg(profile_dir.parent().unwrap());
+    if profile_dir.file_name().unwrap() == "release" {
+        cargo.arg("--release");
+    }
+    assert!(
+        cargo.status().unwrap().success(),
+        "building cupertino-portal"
+    );
+    profile_dir.join("cupertino-portal")
+}
+
+/// The portal process on the harness's display and `bus`, killed on drop, and its home folder.
+struct Portal {
+    child: Child,
+    _home: tempfile::TempDir,
+}
+
+impl Portal {
+    fn start(h: &Harness, bus: &cupertino_test_bus::PrivateBus) -> Portal {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR");
+        let child = common::spawn::cleared(portal_binary(), home.path())
+            .env("XDG_RUNTIME_DIR", runtime)
+            .env("WAYLAND_DISPLAY", h.state.socket_name.as_ref().unwrap())
+            .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
+            .spawn()
+            .unwrap();
+        Portal { child, _home: home }
+    }
+}
+
+impl Drop for Portal {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Ask the portal for a file chooser titled `title` for the window `parent_window`, as the frontend does; the call waits
+/// for the dialog's answer, so it runs on a thread of its own and is never answered here.
+fn open_file(frontend: &zbus::blocking::Connection, title: &'static str, parent_window: String) {
+    let frontend = frontend.clone();
+    std::thread::spawn(move || {
+        let handle = zbus::zvariant::ObjectPath::try_from(format!(
+            "/org/freedesktop/portal/desktop/request/1_9/{}",
+            title.to_lowercase().replace(' ', "_")
+        ))
+        .unwrap();
+        let options: std::collections::HashMap<&str, zbus::zvariant::Value<'_>> =
+            Default::default();
+        let _ = frontend.call_method(
+            Some("org.freedesktop.impl.portal.desktop.cupertino"),
+            "/org/freedesktop/portal/desktop",
+            Some("org.freedesktop.impl.portal.FileChooser"),
+            "OpenFile",
+            &(handle, "org.example.App", parent_window, title, options),
+        );
+    });
+}
+
+#[test]
+fn the_portal_opens_its_file_chooser_as_a_child_of_the_window_that_asked_and_alone_for_any_other() {
+    let Some(mut h) = Harness::new() else { return };
+    let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+        eprintln!("skipped: dbus-daemon is not available");
+        return;
+    };
+    let (_app, app, handle) = exporter(&mut h, "org.example.App");
+    let frontend = bus.connect();
+    frontend
+        .request_name("org.freedesktop.portal.Desktop")
+        .unwrap();
+    let _portal = Portal::start(&h, &bus);
+    let dbus = zbus::blocking::fdo::DBusProxy::new(&frontend).unwrap();
+    let name: zbus::names::BusName<'_> = "org.freedesktop.impl.portal.desktop.cupertino"
+        .try_into()
+        .unwrap();
+    h.wait_until("the portal on the bus", |_| {
+        dbus.name_has_owner(name.clone()).unwrap()
+    });
+
+    open_file(&frontend, "Open Attachment", format!("wayland:{handle}"));
+    let dialog = h.window("Open Attachment");
+    assert_eq!(
+        h.parent(dialog),
+        Some(app),
+        "the exported window is the parent"
+    );
+
+    // a handle the server does not know, and an X11 window, leave the chooser on its own, and it opens all the same
+    for (title, parent_window) in [
+        ("Open Unknown", format!("wayland:{handle}x")),
+        ("Open From X11", "x11:3a00004".to_string()),
+    ] {
+        open_file(&frontend, title, parent_window);
+        let dialog = h.window(title);
+        assert_eq!(h.parent(dialog), None, "{title}");
+    }
+    assert_eq!(
+        h.parent(dialog),
+        Some(app),
+        "the first chooser keeps its parent"
+    );
 }

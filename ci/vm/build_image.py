@@ -60,7 +60,7 @@ def main() -> None:
         "state": "building", "exit_status": None, "stderr": "",
     }) + "\n")
     command = [
-        "mkosi", "-C", str(CONFIG),
+        "mkosi", "-C", str(CONFIG), "--force",
         "--output-directory", str(ROOT / "output"),
         "--workspace-directory", str(ROOT / "workspace"),
         "--package-cache-directory", str(ROOT / "packages"),

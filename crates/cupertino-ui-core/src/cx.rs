@@ -329,6 +329,8 @@ impl PaintCx<'_> {
     }
 }
 
+pub(crate) type KeyedRelation = (fn(NodeId) -> Relation, Key);
+
 /// What a node declared about itself for accessibility and keyboard focus.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Semantics {
@@ -339,7 +341,7 @@ pub(crate) struct Semantics {
     pub(crate) states: AccessibleStates,
     pub(crate) actions: Vec<Action>,
     pub(crate) relations: Vec<Relation>,
-    pub(crate) keyed_relations: Vec<(fn(NodeId) -> Relation, Key)>,
+    pub(crate) keyed_relations: Vec<KeyedRelation>,
     pub(crate) focusable: bool,
     pub(crate) focus_scope: bool,
     pub(crate) protected: bool,

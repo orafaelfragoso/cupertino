@@ -51,6 +51,7 @@ impl Application for Pages {
                 on_change: Some(Box::new(|_: TextChange| Message::Edit)),
                 on_submit: None,
                 selection: None,
+                initial: false,
             })
             .key("page"),
             can_go_back: *page > 0,

@@ -140,6 +140,44 @@ fn a_dialog_gives_the_focus_to_its_initial_focus_node_rather_than_its_first_tab_
     assert_eq!(change.to, Some(f.id("d2")));
 }
 
+/// Three buttons, the one keyed `initial` declaring initial focus.
+fn window(initial: &'static str) -> Element<M> {
+    Element::new(group(
+        ["a", "b", "c"]
+            .map(|k| {
+                Element::new(Leaf {
+                    initial: k == initial,
+                    ..leaf(k)
+                })
+                .key(k)
+            })
+            .into(),
+    ))
+}
+
+#[test]
+fn a_window_gives_the_focus_to_its_initial_focus_node_when_it_opens_and_only_then() {
+    let mut f = Fixture::new();
+    f.tree.reconcile(Some(f.root), window("b")).unwrap();
+    let mut focus = Focus::default();
+    let change = f.sync(&mut focus).unwrap();
+    assert_eq!((change.from, change.to), (None, Some(f.id("b"))));
+    assert!(!focus.visible());
+
+    focus.set(&f.tree, None, false);
+    f.tree.reconcile(Some(f.root), window("c")).unwrap();
+    assert_eq!(f.sync(&mut focus), None);
+    assert_eq!(focus.node(), None);
+}
+
+#[test]
+fn a_window_without_an_initial_focus_node_opens_unfocused() {
+    let f = Fixture::new();
+    let mut focus = Focus::default();
+    assert_eq!(f.sync(&mut focus), None);
+    assert_eq!(focus.node(), None);
+}
+
 #[test]
 fn a_focus_whose_node_unmounts_moves_to_its_nearest_surviving_ancestor() {
     let mut f = Fixture::new();

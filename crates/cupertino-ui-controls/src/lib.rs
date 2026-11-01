@@ -302,6 +302,8 @@ pub struct TextField<M> {
     /// What the field selects each time it takes `value`, in bytes of it, such as a file name's stem; `None` leaves
     /// the caret at the end.
     pub selection: Option<Range<usize>>,
+    /// Takes the focus when its window or dialog opens.
+    pub initial: bool,
 }
 
 /// A multi-line text editor without chrome, as tall as its text: a vertical [`ScrollView`] around it scrolls it.

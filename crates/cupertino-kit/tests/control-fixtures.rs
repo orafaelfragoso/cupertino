@@ -524,6 +524,7 @@ fixtures! {
         on_change: Some(Box::new(|_| Message::Nothing)),
         on_submit: None,
         selection: None,
+        initial: false,
     });
     text_field_long: "text-field-long", WIDE, FIELD, |look| Element::new(TextField {
         label: "Name".into(),
@@ -535,6 +536,7 @@ fixtures! {
         on_change: Some(Box::new(|_| Message::Nothing)),
         on_submit: None,
         selection: None,
+        initial: false,
     });
     secure_field: "secure-field", WIDE, FIELD, |look| Element::new(SecureField {
         label: "Password".into(),
@@ -701,6 +703,7 @@ fixtures! {
                 on_change: None,
                 on_submit: None,
                 selection: None,
+                initial: false,
             })),
             buttons: vec![choice("Cancel", DialogAction::Cancel), choice("Rename", DialogAction::Default)],
         }),

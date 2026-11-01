@@ -93,6 +93,7 @@ impl Application for Forms {
                     on_change: Some(Box::new(Message::Name)),
                     on_submit: None,
                     selection: None,
+                    initial: false,
                 })
                 .key("name"),
                 Element::new(SecureField {

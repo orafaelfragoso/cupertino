@@ -45,6 +45,7 @@ use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
 use smithay::wayland::shell::xdg::dialog::XdgDialogState;
 use smithay::wayland::shell::xdg::{ToplevelSurface, XdgShellState, XdgToplevelSurfaceData};
 use smithay::wayland::shm::ShmState;
+use smithay::wayland::single_pixel_buffer::SinglePixelBufferState;
 use smithay::wayland::socket::ListeningSocketSource;
 use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::xdg_activation::XdgActivationState;
@@ -348,6 +349,8 @@ pub struct Cupertino {
     /// The server's copy of the clipboard, kept when its client exits (`clipboard`).
     pub clipboard: crate::clipboard::Clipboard,
     pub viewporter_state: ViewporterState,
+    /// `wp_single_pixel_buffer_manager_v1`: one-pixel buffers of a solid colour, stretched by a viewport.
+    pub single_pixel_buffer_state: SinglePixelBufferState,
     pub fractional_scale_state: FractionalScaleManagerState,
     pub presentation_state: PresentationState,
     pub xdg_activation_state: XdgActivationState,
@@ -593,6 +596,7 @@ impl Cupertino {
                 &data_control_access,
             );
         let viewporter_state = ViewporterState::new::<Self>(&dh);
+        let single_pixel_buffer_state = SinglePixelBufferState::new::<Self>(&dh);
         let fractional_scale_state = FractionalScaleManagerState::new::<Self>(&dh);
         let presentation_state = PresentationState::new::<Self>(&dh, clock.id() as u32);
         let xdg_activation_state = XdgActivationState::new::<Self>(&dh);
@@ -684,6 +688,7 @@ impl Cupertino {
             login_screen: false,
             clipboard: crate::clipboard::Clipboard::default(),
             viewporter_state,
+            single_pixel_buffer_state,
             fractional_scale_state,
             presentation_state,
             xdg_activation_state,

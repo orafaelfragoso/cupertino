@@ -13,11 +13,11 @@ use std::path::{Path, PathBuf};
 pub const SPEC_DIR_ENV: &str = "CUPERTINO_SPEC_DIR";
 
 /// Default theme data directory, fixed at compile time: `$CUPERTINO_THEME_DIR` of the build (packages set the installed
-/// path, `/usr/share/cupertino/theme`), otherwise `../../data/theme` relative to this crate's manifest directory. Only
-/// the chosen path is compiled in, so a packaged binary holds no build-tree path.
+/// path, `/usr/share/cupertino/theme`), otherwise `../../data/theme` relative to this crate's manifest directory, where
+/// the checkout is now (`build.rs`). Only the chosen path is compiled in, so a packaged binary holds no build-tree path.
 const DEFAULT_SPEC_DIR: &str = match option_env!("CUPERTINO_THEME_DIR") {
     Some(dir) => dir,
-    None => concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme"),
+    None => env!("CUPERTINO_REPOSITORY_THEME_DIR"),
 };
 
 /// Theme data directory: `$CUPERTINO_SPEC_DIR` if set, otherwise [`DEFAULT_SPEC_DIR`].

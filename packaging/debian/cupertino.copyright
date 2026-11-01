@@ -3,7 +3,7 @@ Upstream-Name: cupertino
 Upstream-Contact: Cupertino contributors
 Source: https://github.com/orafaelfragoso/cupertino
 Comment: The desktop, server and applications are GPL-3+. The toolkit library crates (animation, apps, assets, capture,
- app-protocols, defaults, geometry, glyph, icons, keyboard, kit, menu-model, modifiers, protocol-app, text-field, theme, typeahead,
+ app-protocols, defaults, geometry, glyph, icons, keyboard, kit, menu-model, modifiers, protocol-app, theme, typeahead,
  ui-controls, ui-core, ui-layout, ui-menus, ui-platform, ui-render, ui-test, ui-text, ui-theme, ui-wayland, wayland-client) are MPL-2.0, the protocol description files of the workspace are MIT or Apache-2.0 (the GTK shell
  extension's, from GTK, is LGPL-2.1+), xkbcommon is MIT over the vendored libxkbcommon port (third-party/xkbcommon-rs) and
  the Inter font in the assets crate is OFL-1.1; all are linked into the binaries.
@@ -20,7 +20,7 @@ Files: crates/cupertino-animation/* crates/cupertino-app-protocols/* crates/cupe
  crates/cupertino-defaults/* crates/cupertino-geometry/* crates/cupertino-glyph/* crates/cupertino-icons/*
  crates/cupertino-key-bindings/* crates/cupertino-keyboard/*
  crates/cupertino-menu-model/* crates/cupertino-modifiers/* crates/cupertino-protocol-app/* crates/cupertino-test-bus/*
- crates/cupertino-text-field/* crates/cupertino-theme/* crates/cupertino-kit/* crates/cupertino-ui-controls/*
+ crates/cupertino-theme/* crates/cupertino-kit/* crates/cupertino-ui-controls/*
  crates/cupertino-ui-core/* crates/cupertino-ui-layout/* crates/cupertino-ui-platform/* crates/cupertino-ui-render/*
  crates/cupertino-ui-test/* crates/cupertino-ui-text/* crates/cupertino-ui-theme/*
  crates/cupertino-typeahead/* crates/cupertino-ui-atspi/* crates/cupertino-ui-menus/* crates/cupertino-ui-wayland/*

@@ -1,7 +1,7 @@
 //! Panel state: query editing, result selection, scrolling and the appear/disappear animation.
 //!
 //! The panel is a model. The compositor feeds it translated key events ([`Key`], [`Mods`]) and
-//! pointer events and draws it with [`crate::render`]. The query is a shared text field (`cupertino-text-field`):
+//! pointer events and draws it with [`crate::render`]. The query is a shared text field (`cupertino-ui-text`'s `TextBuffer`):
 //! every key the table below does not name is [`PanelEvent::Edit`], which the host passes to [`Panel::edit`].
 //!
 //! | key | action |
@@ -24,7 +24,7 @@
 
 use crate::engine::{Activation, Launcher, ResultItem, Results};
 use cupertino_animation::{AnimatedValue, Curve, SpringParams};
-use cupertino_text_field::TextField;
+use cupertino_ui_text::TextBuffer;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
@@ -145,7 +145,7 @@ pub enum Focus {
 pub const QUERY_MAX_LEN: usize = 1024;
 
 pub struct Panel {
-    field: TextField,
+    field: TextBuffer,
     results: Results,
     selected: usize,
     scroll_row: usize,
@@ -166,7 +166,7 @@ impl Default for Panel {
 impl Panel {
     pub fn new() -> Self {
         Self {
-            field: TextField::with_max_len(QUERY_MAX_LEN),
+            field: TextBuffer::with_max_len(QUERY_MAX_LEN),
             results: Results::default(),
             selected: 0,
             scroll_row: 0,
@@ -183,7 +183,7 @@ impl Panel {
     }
 
     /// The query's text field (caret, selection, scroll).
-    pub fn field(&self) -> &TextField {
+    pub fn field(&self) -> &TextBuffer {
         &self.field
     }
 
@@ -192,7 +192,7 @@ impl Panel {
         &mut self,
         launcher: &Launcher,
         now: Now,
-        f: impl FnOnce(&mut TextField) -> R,
+        f: impl FnOnce(&mut TextBuffer) -> R,
     ) -> R {
         let before = self.field.text().to_string();
         let r = f(&mut self.field);

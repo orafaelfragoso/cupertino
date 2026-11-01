@@ -55,7 +55,7 @@ A crate's layer is declared in its manifest (`[package.metadata.cupertino] layer
 | `protocol` | cupertino-app-protocols, -login-ipc, -protocols | `foundation`, `protocol` |
 | `transport` | cupertino-protocol-app, -shell-client, -wayland-client | `foundation`, `platform`, `protocol`, `transport` |
 | `render` | cupertino-cursor, -decorations, -glass | `foundation`, `platform`, `render` |
-| `ui` (the toolkit) | cupertino-kit, -text-field, -ui-controls, -ui-core, -ui-layout, -ui-menus, -ui-platform, -ui-render, -ui-test, -ui-text, -ui-theme, -ui-wayland | `foundation`, `protocol`, `transport`, `ui` |
+| `ui` (the toolkit) | cupertino-kit, -ui-controls, -ui-core, -ui-layout, -ui-menus, -ui-platform, -ui-render, -ui-test, -ui-text, -ui-theme, -ui-wayland | `foundation`, `protocol`, `transport`, `ui` |
 | `core` | cupertino-server | `foundation`, `models`, `platform`, `protocol`, `render` |
 | `shell` | cupertino-controlcenter, -dock, -launcher, -login, -menubar, -notifications, -osd, -screenshot, -windowmanager | `foundation`, `models`, `platform`, `protocol`, `transport`, `render`, `ui` |
 | `services` | cupertino-btd, -netd, -powerd, -sessiond | `foundation`, `models`, `platform`, `protocol`, `services` |

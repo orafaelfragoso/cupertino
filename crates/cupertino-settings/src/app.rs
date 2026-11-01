@@ -34,9 +34,9 @@ use cupertino_settings::sheet::{Answer, Outcome, Sheet, SheetKey};
 use cupertino_settings::sidebar::{self, RowSize};
 use cupertino_settings::window::{self, metrics, Hit, WindowLayout};
 use cupertino_settings::{PaneId, Point, Size};
-use cupertino_text_field::{KeyInput, Keymap, Response, TextField, TextFieldKeys};
 use cupertino_theme::{Appearance, Theme, WindowCornerSize};
 use cupertino_ui_menus::WindowMenus;
+use cupertino_ui_text::{KeyInput, Keymap, Response, TextBuffer, TextFieldKeys};
 use cupertino_ui_wayland::clipboard::Clipboard;
 use cupertino_ui_wayland::popup::placement;
 use cupertino_ui_wayland::{copy_rects, Damage, Ready, ShmPresenter};
@@ -1176,7 +1176,7 @@ impl App {
                 button: Button::Left,
                 pressed: false,
                 ..
-            } if self.search.field().is_dragging() => self.search.edit(TextField::release),
+            } if self.search.field().is_dragging() => self.search.edit(TextBuffer::release),
             PointerEvent::Motion(position) if self.level.is_some() => {
                 let (section, row, _, mut writer) =
                     self.level.take().expect("checked by the guard");
@@ -1279,11 +1279,11 @@ impl App {
     fn set_focus(&mut self, focus: Focus) -> Result<()> {
         if self.focus != focus {
             if self.focus == Focus::Search {
-                self.search.edit(TextField::blur);
+                self.search.edit(TextBuffer::blur);
             }
             if focus == Focus::Search {
                 // the keyboard brings the whole text selected; a click places the caret after this
-                self.search.edit(TextField::select_all);
+                self.search.edit(TextBuffer::select_all);
             }
             self.focus = focus;
             self.window.redraw();
@@ -1467,10 +1467,10 @@ impl App {
                 let selected = self.search.field().selected_text().to_owned();
                 match action {
                     MenuAction::Undo => {
-                        self.search.edit(TextField::undo);
+                        self.search.edit(TextBuffer::undo);
                     }
                     MenuAction::Redo => {
-                        self.search.edit(TextField::redo);
+                        self.search.edit(TextBuffer::redo);
                     }
                     MenuAction::Cut | MenuAction::Copy if !selected.is_empty() => {
                         if let Err(e) = self.clipboard.set_text(&mut self.conn, selected) {
@@ -1485,7 +1485,7 @@ impl App {
                         Ok(None) => {}
                         Err(e) => eprintln!("cupertino-settings: paste: {e}"),
                     },
-                    MenuAction::SelectAll => self.search.edit(TextField::select_all),
+                    MenuAction::SelectAll => self.search.edit(TextBuffer::select_all),
                     _ => {}
                 }
                 self.sync_results()?;
@@ -2394,8 +2394,8 @@ impl App {
     }
 }
 
-/// The x of `field`'s caret among `offsets` (one per [`TextField::boundaries`]).
-fn caret_x(field: &TextField, offsets: &[f64]) -> f64 {
+/// The x of `field`'s caret among `offsets` (one per [`TextBuffer::boundaries`]).
+fn caret_x(field: &TextBuffer, offsets: &[f64]) -> f64 {
     field
         .boundaries()
         .iter()

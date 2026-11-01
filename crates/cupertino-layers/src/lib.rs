@@ -162,66 +162,37 @@ pub const DENIED_CRATES: &[(&str, &[&str])] = &[
     ),
     (
         "cupertino-ui-menus",
-        &[
-            "cupertino-protocols",
-            "cupertino-shell-client",
-            "cupertino-text-field",
-        ],
+        &["cupertino-protocols", "cupertino-shell-client"],
     ),
     (
         "cupertino-ui-wayland",
-        &[
-            "cupertino-protocols",
-            "cupertino-shell-client",
-            "cupertino-text-field",
-        ],
+        &["cupertino-protocols", "cupertino-shell-client"],
     ),
     (
         "cupertino-kit",
-        &[
-            "cupertino-protocols",
-            "cupertino-shell-client",
-            "cupertino-text-field",
-        ],
+        &["cupertino-protocols", "cupertino-shell-client"],
     ),
     (
         "cupertino-ui-controls",
-        &[
-            "cupertino-protocols",
-            "cupertino-shell-client",
-            "cupertino-text-field",
-        ],
+        &["cupertino-protocols", "cupertino-shell-client"],
     ),
     (
         "cupertino-ui-core",
-        &[
-            "cupertino-protocols",
-            "cupertino-shell-client",
-            "cupertino-text-field",
-        ],
+        &["cupertino-protocols", "cupertino-shell-client"],
     ),
     (
         "cupertino-ui-layout",
-        &[
-            "cupertino-protocols",
-            "cupertino-shell-client",
-            "cupertino-text-field",
-        ],
+        &["cupertino-protocols", "cupertino-shell-client"],
     ),
     (
         "cupertino-ui-platform",
-        &[
-            "cupertino-protocols",
-            "cupertino-shell-client",
-            "cupertino-text-field",
-        ],
+        &["cupertino-protocols", "cupertino-shell-client"],
     ),
     (
         "cupertino-ui-render",
         &[
             "cupertino-protocols",
             "cupertino-shell-client",
-            "cupertino-text-field",
             "cupertino-ui-wayland",
             "cupertino-wayland-client",
             "cupertino-server",
@@ -235,27 +206,15 @@ pub const DENIED_CRATES: &[(&str, &[&str])] = &[
     ),
     (
         "cupertino-ui-test",
-        &[
-            "cupertino-protocols",
-            "cupertino-shell-client",
-            "cupertino-text-field",
-        ],
+        &["cupertino-protocols", "cupertino-shell-client"],
     ),
     (
         "cupertino-ui-text",
-        &[
-            "cupertino-protocols",
-            "cupertino-shell-client",
-            "cupertino-text-field",
-        ],
+        &["cupertino-protocols", "cupertino-shell-client"],
     ),
     (
         "cupertino-ui-theme",
-        &[
-            "cupertino-protocols",
-            "cupertino-shell-client",
-            "cupertino-text-field",
-        ],
+        &["cupertino-protocols", "cupertino-shell-client"],
     ),
     ("cupertino-files", &["cupertino-shell-client"]),
     ("cupertino-settings", &["cupertino-shell-client"]),

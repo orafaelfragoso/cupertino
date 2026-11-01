@@ -28,8 +28,8 @@ use cupertino_files::render::{Palette, Renderer};
 use cupertino_files::selection::Modifiers;
 use cupertino_files::sort::SortSpec;
 use cupertino_files::window::{Bars, DropOutline, ViewMode, WindowPainter, WindowState};
-use cupertino_text_field::TextField;
 use cupertino_theme::{Appearance, SemanticColor, Theme};
+use cupertino_ui_text::TextBuffer;
 use tiny_skia::{Color, IntRect, Pixmap};
 
 /// The sample home folder's name, the window's title.
@@ -277,7 +277,7 @@ impl App for Capture {
             places: &places,
             mode,
             active: true,
-            search: &TextField::new(),
+            search: &TextBuffer::new(),
             search_focused: false,
             search_caret: false,
             title: HOME,

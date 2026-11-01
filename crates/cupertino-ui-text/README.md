@@ -11,7 +11,7 @@ buffer follow.
 - `Preedit`, `ImeBatch` and `Surrounding` print lengths in `Debug`, never the text.
 - `TextInputSession::state` sends a protected field's own rectangle and no text; `Surrounding::around` cuts the
   bounded window around the caret on grapheme boundaries.
-- `TextBuffer` is the single-line editing model that used to be `cupertino-text-field`'s: grapheme caret and selection,
+- `TextBuffer` is the single-line editing model of Kit's fields and the apps' text fields: grapheme caret and selection,
   undo, kill buffer, composition range, click counting, caret blink and scroll. `Keymap` resolves a key (evdev code, modifiers
   physical through a profile or already logical, and the character) through `cupertino-key-bindings`' chords, and
   `TextFieldKeys` carries the result out on the buffer; neither reads settings, which `cupertino-keyboard` does. Left

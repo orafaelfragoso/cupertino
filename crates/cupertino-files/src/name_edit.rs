@@ -1,9 +1,9 @@
 //! The single-line editor of an item's name while it is renamed in place: a shared text field
-//! (`cupertino-text-field`) that starts with the name selected without its extension (`rename::initial_selection`);
+//! (`cupertino-ui-text`'s `TextBuffer`) that starts with the name selected without its extension (`rename::initial_selection`);
 //! the window draws it over the item's label and feeds it keys and presses.
 
 use crate::rename::{initial_selection, validate_name, NameError};
-use cupertino_text_field::TextField;
+use cupertino_ui_text::TextBuffer;
 
 /// The most bytes a file name holds (the file system's limit).
 pub const NAME_MAX_LEN: usize = 255;
@@ -12,7 +12,7 @@ pub const NAME_MAX_LEN: usize = 255;
 pub struct NameEdit {
     index: usize,
     original: String,
-    field: TextField,
+    field: TextBuffer,
 }
 
 impl NameEdit {
@@ -20,7 +20,7 @@ impl NameEdit {
     pub fn new(index: usize, name: &str, is_dir: bool) -> Self {
         let chars = initial_selection(name, is_dir);
         let byte = |c: usize| name.char_indices().nth(c).map_or(name.len(), |(b, _)| b);
-        let mut field = TextField::with_max_len(NAME_MAX_LEN);
+        let mut field = TextBuffer::with_max_len(NAME_MAX_LEN);
         field.set_text(name);
         field.select(byte(chars.start)..byte(chars.end));
         NameEdit {
@@ -44,11 +44,11 @@ impl NameEdit {
         self.field.text()
     }
 
-    pub fn field(&self) -> &TextField {
+    pub fn field(&self) -> &TextBuffer {
         &self.field
     }
 
-    pub fn field_mut(&mut self) -> &mut TextField {
+    pub fn field_mut(&mut self) -> &mut TextBuffer {
         &mut self.field
     }
 

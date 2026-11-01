@@ -32,7 +32,7 @@ cupertino-thumbnails = { path = "../cupertino-thumbnails" }
 cupertino-typeahead = { path = "../cupertino-typeahead" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-decorations = { path = "../cupertino-decorations" }
-cupertino-text-field = { path = "../cupertino-text-field" }
+cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
 cupertino-ui-atspi = { path = "../cupertino-ui-atspi", optional = true }
 cupertino-ui-core = { path = "../cupertino-ui-core" }

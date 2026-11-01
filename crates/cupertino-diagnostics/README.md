@@ -9,9 +9,10 @@ cupertino-diagnose --json                # the same as JSON
 cupertino-diagnose --area gpu --area crash
 ```
 
-It exits 1 when a check fails, 2 on a wrong argument, else 0. Nothing is changed and no device is opened: the checks
-read sysfs, installed files, `/run/systemd/sessions`, the session's logs, and ask systemd for unit states
-(`systemctl show`). It runs as the user, from the session or from a text console; checks that need a session are skipped
+It exits 0 once the checks ran, whatever they found: a script reads each check's `status` from `--json`. A wrong
+argument exits 2, as `invalid_usage` does in the `cupertino` command's exit codes; it never exits 1. Nothing is changed
+and no device is opened: the checks read sysfs, installed files, `/run/systemd/sessions`, the session's logs, and ask
+systemd for unit states (`systemctl show`). It runs as the user, from the session or from a text console; checks that need a session are skipped
 outside one.
 
 ## Checks

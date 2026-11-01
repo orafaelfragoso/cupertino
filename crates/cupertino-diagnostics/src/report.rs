@@ -128,17 +128,6 @@ pub struct Report {
     pub checks: Vec<Check>,
 }
 
-impl Report {
-    /// The worst status of any check.
-    pub fn worst(&self) -> Status {
-        self.checks
-            .iter()
-            .map(|check| check.status)
-            .max()
-            .unwrap_or(Status::Skip)
-    }
-}
-
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let width = self.checks.iter().map(|c| c.id.len()).max().unwrap_or(0);

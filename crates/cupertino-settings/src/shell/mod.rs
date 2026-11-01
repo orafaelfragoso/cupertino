@@ -15,7 +15,7 @@ use cupertino_kit::controls::{
     SplitLayout, SplitView, TextRole, WINDOW_CONTENT_INSET,
 };
 use cupertino_kit::core::{CommandRegistry, Menus, Shortcut};
-use cupertino_kit::geometry::{Insets, Point, Size};
+use cupertino_kit::geometry::{Point, Size};
 use cupertino_kit::layout::ScrollState;
 use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowRequest};
 use cupertino_kit::prelude::*;
@@ -360,64 +360,56 @@ impl Shell {
         .key("sidebar")
     }
 
-    fn toolbar(&self) -> Element<Message> {
+    /// The pane's title and the search field, after the back and forward buttons.
+    fn toolbar(&self) -> Vec<Element<Message>> {
         let title = self
             .state
             .history
             .current()
             .title(self.state.live.has_battery());
-        Element::new(Stack {
-            axis: Axis::Horizontal,
-            padding: Insets::ZERO,
-            spacing: form::ROW_GAP,
-            align: Align::Center,
-            children: vec![
-                form::text(title, TextRole::Title),
-                Element::new(Spacer::default()),
-                Element::new(TextField {
-                    label: "Search".into(),
-                    placeholder: "Search".into(),
-                    value: self.query.clone(),
-                    revision: self.query_revision,
-                    purpose: ContentPurpose::Normal,
-                    enabled: true,
-                    on_change: Some(Box::new(Message::Query)),
-                    on_submit: Some(Message::Search),
-                    selection: None,
-                    initial: false,
-                })
-                .key("search"),
-            ],
-        })
+        vec![
+            form::text(title, TextRole::Title),
+            Element::new(Spacer::default()),
+            Element::new(TextField {
+                label: "Search".into(),
+                placeholder: "Search".into(),
+                value: self.query.clone(),
+                revision: self.query_revision,
+                purpose: ContentPurpose::Normal,
+                enabled: true,
+                on_change: Some(Box::new(Message::Query)),
+                on_submit: Some(Message::Search),
+                selection: None,
+                initial: false,
+            })
+            .key("search"),
+        ]
     }
 
     fn content(&self) -> Element<Message> {
-        let hits = self.hits();
         let body = if self.query.trim().is_empty() {
             form::pane(&self.state.sections(), self.open)
         } else {
-            form::results(&hits)
+            form::results(&self.hits())
         };
         let page = Element::new(Stack {
             axis: Axis::Vertical,
             padding: WINDOW_CONTENT_INSET,
-            spacing: form::SECTION_GAP,
+            spacing: 0.0,
             align: Align::Stretch,
-            children: vec![
-                self.toolbar(),
-                Element::from(ScrollView {
-                    content: body,
-                    state: self.content_scroll,
-                    horizontal: false,
-                    vertical: true,
-                    scroller: Scroller::Overlay,
-                    on_scroll: Box::new(Message::ContentScroll),
-                })
-                .key("content"),
-            ],
+            children: vec![body],
         });
         Element::from(NavigationStack {
-            content: page,
+            content: Element::from(ScrollView {
+                content: page,
+                state: self.content_scroll,
+                horizontal: false,
+                vertical: true,
+                scroller: Scroller::Overlay,
+                on_scroll: Box::new(Message::ContentScroll),
+            })
+            .key("content"),
+            toolbar: self.toolbar(),
             can_go_back: self.state.history.can_go_back(),
             can_go_forward: self.state.history.can_go_forward(),
             on_navigate: Some(Box::new(Message::Navigate)),

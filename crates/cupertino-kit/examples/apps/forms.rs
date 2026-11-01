@@ -130,6 +130,7 @@ impl Application for Forms {
                 align: Align::Stretch,
                 children: vec![text("Sign In", TextRole::Section), rows],
             }),
+            menus: None,
         }]
     }
 }

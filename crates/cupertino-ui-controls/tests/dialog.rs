@@ -142,6 +142,7 @@ impl<const FIELD: bool, const CANCEL: bool> Application for Page<FIELD, CANCEL> 
             background: WindowBackground::Theme,
             popup: None,
             content: Element::from(Modal { content, dialog }),
+            menus: None,
         }]
     }
 }

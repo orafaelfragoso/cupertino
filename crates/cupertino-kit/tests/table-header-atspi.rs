@@ -113,6 +113,7 @@ impl Application for Files {
                 on_select: None,
                 on_activate: None,
             }),
+            menus: None,
         }]
     }
 }

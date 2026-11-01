@@ -113,6 +113,7 @@ impl Application for Form {
                 align: Align::Stretch,
                 children,
             }),
+            menus: None,
         }]
     }
 }

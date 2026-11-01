@@ -37,6 +37,7 @@ pub use runtime::{
 pub use widget::{Change, Element, Propagation, Widget};
 
 use cupertino_geometry::{Point, Rect, Size};
+use cupertino_menu_model::{ActionName, MenuBar};
 use cupertino_ui_layout::{LayoutDirection, LayoutError, LayoutStats};
 use cupertino_ui_platform::{
     KeyEvent, Keysym, Mods, PlatformError, PointerEvent, Timestamp, TouchEvent, WindowId,
@@ -46,6 +47,7 @@ use cupertino_ui_render::{DisplayList, RenderError};
 use cupertino_ui_text::{ImeEvent, TextSystem};
 use cupertino_ui_theme::{Surface, ThemeTokens};
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::future::Future;
 use std::num::{NonZeroU32, NonZeroU64};
@@ -102,6 +104,17 @@ pub struct Window<M> {
     pub content: Element<M>,
     /// Opens the window as a popup of another window instead of as a toplevel.
     pub popup: Option<Popup<M>>,
+    /// A toplevel's menus, published to the desktop's menu bar; a popup's are ignored.
+    pub menus: Option<Menus<M>>,
+}
+
+/// A toplevel's menus. Their chords are not shortcuts of the window: `shortcuts` takes those.
+pub struct Menus<M> {
+    pub bar: MenuBar,
+    /// Items shown but not available now.
+    pub disabled: BTreeSet<ActionName>,
+    /// The message for the item the user chose.
+    pub on_activate: Box<dyn Fn(ActionName) -> M>,
 }
 
 /// Where a popup opens and what tells the application it closed. The window's `spec.size` is the most the popup

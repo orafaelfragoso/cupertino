@@ -17,17 +17,18 @@ use crate::task::Executor;
 use crate::tree::Tree;
 use crate::{
     AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, Application, Clock, Command,
-    Element, Environment, Event, FocusTarget, FrameSnapshot, Icons, Key, NodeId, NodeSnapshot,
-    Pending, Popup, PopupAnchor, Propagation, StepStatus, UiError, Window, WindowBackground,
-    WindowKey,
+    Element, Environment, Event, FocusTarget, FrameSnapshot, Icons, Key, Menus, NodeId,
+    NodeSnapshot, Pending, Popup, PopupAnchor, Propagation, StepStatus, UiError, Window,
+    WindowBackground, WindowKey,
 };
 use cupertino_geometry::{Point, Rect, Size};
+use cupertino_menu_model::ActionName;
 use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutOptions, LayoutStats};
 use cupertino_ui_platform::{
     Backdrop, ClipboardData, ClipboardKind, ConfigureId, ConstraintAdjust, KeyEvent, Keysym,
-    PlatformError, PlatformEvent, PointerEvent, PopupEdge, PopupSpec, PresentOutcome,
-    SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec,
-    WindowSystem,
+    MenuDescription, PlatformError, PlatformEvent, PointerEvent, PopupEdge, PopupSpec,
+    PresentOutcome, SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest,
+    WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, DisplayList, PaintResources, RenderRequest, UiRenderer,
@@ -102,6 +103,9 @@ struct WindowState<M> {
     background: WindowBackground,
     /// The material the window system shows under the window, as last asked for.
     backdrop: Option<Backdrop>,
+    /// The menus the window system was last asked to publish.
+    menus: Option<MenuDescription>,
+    on_menu: Option<Box<dyn Fn(ActionName) -> M>>,
     root: Option<NodeId>,
     env: Environment,
     size: Size,
@@ -412,6 +416,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             background,
             content,
             popup: _,
+            menus,
         } in toplevels
         {
             let mut w = match old.iter().position(|w| w.key == key && w.popup.is_none()) {
@@ -447,6 +452,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             w.on_close = on_close;
             w.background = background;
             sync_backdrop(&mut self.system, &mut w);
+            sync_menus(&mut self.system, &mut w, menus);
             w.root = Some(self.tree.reconcile(w.root, content)?);
             w.invalidate();
             self.windows.push(w);
@@ -465,6 +471,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 background,
                 content,
                 popup,
+                menus: _,
             } = popups.remove(i);
             let popup = popup.expect("partitioned as a popup");
             if let Some(mut w) = self.popup(key, spec, popup, content, &mut old)? {
@@ -517,6 +524,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             on_close: None,
             background: WindowBackground::Theme,
             backdrop: None,
+            menus: None,
+            on_menu: None,
             root: None,
             env: Environment {
                 theme: Arc::clone(&self.options.theme),
@@ -771,6 +780,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             WindowEvent::PopupDone => {
                 if let Some(popup) = &w.popup {
                     self.messages.push_back(popup.on_dismiss.clone());
+                }
+                return Ok(());
+            }
+            WindowEvent::MenuActivated(action) => {
+                if let Some(on_menu) = &w.on_menu {
+                    self.messages.push_back(on_menu(action));
                 }
                 return Ok(());
             }
@@ -1647,6 +1662,24 @@ fn sync_backdrop<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>) {
         .is_ok();
     w.backdrop = wanted.filter(|_| shown);
     w.invalidate();
+}
+
+/// Asks the window system to publish `menus`, or to withdraw them, when they changed.
+fn sync_menus<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>, menus: Option<Menus<M>>) {
+    let (wanted, on_menu) = menus
+        .map(|m| {
+            let description = MenuDescription {
+                bar: m.bar,
+                disabled: m.disabled,
+            };
+            (description, m.on_activate)
+        })
+        .unzip();
+    w.on_menu = on_menu;
+    if wanted != w.menus {
+        let _ = system.request(w.id, WindowRequest::Menus(wanted.clone()));
+        w.menus = wanted;
+    }
 }
 
 #[cfg(test)]

@@ -211,6 +211,7 @@ impl<const COUNT: usize> Application for VirtualList<COUNT> {
                     bar,
                 ],
             }),
+            menus: None,
         }]
     }
 }

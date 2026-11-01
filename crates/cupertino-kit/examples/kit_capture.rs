@@ -129,6 +129,7 @@ fn window<M: Clone + 'static>(
             align: Align::Stretch,
             children: content,
         }),
+        menus: None,
     }]
 }
 

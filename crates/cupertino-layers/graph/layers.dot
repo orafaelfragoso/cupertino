@@ -1,5 +1,5 @@
 // cupertino-layers --graph
-// 77 crates, 356 internal dependencies
+// 77 crates, 361 internal dependencies
 // per layer: foundation 18, models 8, platform 9, protocol 3, transport 3, render 3, ui 12, core 1, shell 11, services 4, apps 2, tools 3
 // forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the default sink and the mixer itself until audio goes through a service
@@ -429,6 +429,7 @@ digraph "layers" {
   "cupertino-ui-controls" -> "cupertino-ui-text";
   "cupertino-ui-controls" -> "cupertino-ui-theme";
   "cupertino-ui-core" -> "cupertino-geometry";
+  "cupertino-ui-core" -> "cupertino-menu-model";
   "cupertino-ui-core" -> "cupertino-ui-layout";
   "cupertino-ui-core" -> "cupertino-ui-platform";
   "cupertino-ui-core" -> "cupertino-ui-render";
@@ -441,6 +442,7 @@ digraph "layers" {
   "cupertino-ui-menus" -> "cupertino-test-bus" [label="dev"];
   "cupertino-ui-menus" -> "cupertino-wayland-client";
   "cupertino-ui-platform" -> "cupertino-geometry";
+  "cupertino-ui-platform" -> "cupertino-menu-model";
   "cupertino-ui-platform" -> "cupertino-modifiers";
   "cupertino-ui-platform" -> "cupertino-ui-render";
   "cupertino-ui-platform" -> "cupertino-ui-text";
@@ -463,8 +465,11 @@ digraph "layers" {
   "cupertino-ui-wayland" -> "cupertino-app-protocols" [label="dev"];
   "cupertino-ui-wayland" -> "cupertino-defaults" [label="dev"];
   "cupertino-ui-wayland" -> "cupertino-geometry";
+  "cupertino-ui-wayland" -> "cupertino-menu-model";
   "cupertino-ui-wayland" -> "cupertino-modifiers";
   "cupertino-ui-wayland" -> "cupertino-protocol-app";
+  "cupertino-ui-wayland" -> "cupertino-test-bus" [label="dev"];
+  "cupertino-ui-wayland" -> "cupertino-ui-menus";
   "cupertino-ui-wayland" -> "cupertino-ui-platform";
   "cupertino-ui-wayland" -> "cupertino-ui-render";
   "cupertino-ui-wayland" -> "cupertino-ui-text";

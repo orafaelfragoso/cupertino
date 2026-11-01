@@ -350,15 +350,21 @@ impl WindowSystem for HeadlessWindowSystem {
         token
     }
 
-    fn request_activation_token(&mut self, window: WindowId) -> ActivationRequest {
+    /// Answers at once: `headless-activation-<n>`, with ` for <app_id>` when one was named; `None` for a window it
+    /// does not have.
+    fn request_activation_token(
+        &mut self,
+        window: WindowId,
+        app_id: Option<&str>,
+    ) -> ActivationRequest {
         let request = ActivationRequest(self.next_token);
         self.next_token += 1;
-        if self.windows.contains_key(&window) {
-            self.queue.push_back(PlatformEvent::ActivationToken {
-                request,
-                token: format!("headless-activation-{}", request.0),
-            });
-        }
+        let token = self.windows.contains_key(&window).then(|| match app_id {
+            Some(app_id) => format!("headless-activation-{} for {app_id}", request.0),
+            None => format!("headless-activation-{}", request.0),
+        });
+        self.queue
+            .push_back(PlatformEvent::ActivationToken { request, token });
         request
     }
 

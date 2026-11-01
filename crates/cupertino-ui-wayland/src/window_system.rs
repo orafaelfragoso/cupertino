@@ -581,7 +581,10 @@ impl WaylandWindowSystem {
             Event::ActivationToken { request, token } => {
                 if let Some(at) = self.tokens.iter().position(|(r, _)| *r == request) {
                     let (_, request) = self.tokens.swap_remove(at);
-                    out.push(PlatformEvent::ActivationToken { request, token });
+                    out.push(PlatformEvent::ActivationToken {
+                        request,
+                        token: Some(token),
+                    });
                 }
                 return;
             }
@@ -865,13 +868,22 @@ impl WindowSystem for WaylandWindowSystem {
         token
     }
 
-    fn request_activation_token(&mut self, window: WindowId) -> ActivationRequest {
+    fn request_activation_token(
+        &mut self,
+        window: WindowId,
+        app_id: Option<&str>,
+    ) -> ActivationRequest {
         self.next_activation += 1;
         let request = ActivationRequest(self.next_activation);
-        if let Ok(surface) = self.window(window).map(|w| w.surface) {
-            if let Ok(wire) = self.conn.request_activation_token(surface, None) {
-                self.tokens.push((wire, request));
-            }
+        let surface = self.window(window).map(|w| w.surface).ok();
+        let asked =
+            surface.and_then(|surface| self.conn.request_activation_token(surface, app_id).ok());
+        match asked {
+            Some(wire) => self.tokens.push((wire, request)),
+            None => self.queued.push(PlatformEvent::ActivationToken {
+                request,
+                token: None,
+            }),
         }
         request
     }

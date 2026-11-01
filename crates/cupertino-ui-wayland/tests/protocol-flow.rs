@@ -29,6 +29,10 @@ use wayland_protocols::wp::presentation_time::server::wp_presentation::{self, Wp
 use wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::{
     Kind, WpPresentationFeedback,
 };
+use wayland_protocols::xdg::activation::v1::server::xdg_activation_token_v1::{
+    self, XdgActivationTokenV1,
+};
+use wayland_protocols::xdg::activation::v1::server::xdg_activation_v1::{self, XdgActivationV1};
 use wayland_protocols::xdg::shell::server::xdg_surface::{self, XdgSurface};
 use wayland_protocols::xdg::shell::server::xdg_toplevel::XdgToplevel;
 use wayland_protocols::xdg::shell::server::xdg_wm_base::{self, XdgWmBase};
@@ -490,6 +494,59 @@ impl Dispatch<WlSeat, ()> for Mock {
     }
 }
 
+impl GlobalDispatch<XdgActivationV1, ()> for Mock {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<XdgActivationV1>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
+        init.init(r, ());
+    }
+}
+impl Dispatch<XdgActivationV1, ()> for Mock {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &XdgActivationV1,
+        request: xdg_activation_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        if let xdg_activation_v1::Request::GetActivationToken { id } = request {
+            init.init(id, Mutex::new(None::<String>));
+        }
+    }
+}
+/// A token names the application it was asked for: `token-for-<app_id>`, or `token-for-nothing`.
+impl Dispatch<XdgActivationTokenV1, Mutex<Option<String>>> for Mock {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        token: &XdgActivationTokenV1,
+        request: xdg_activation_token_v1::Request,
+        app_id: &Mutex<Option<String>>,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        match request {
+            xdg_activation_token_v1::Request::SetAppId { app_id: id } => {
+                *app_id.lock().unwrap() = Some(id)
+            }
+            xdg_activation_token_v1::Request::Commit => {
+                let named = app_id.lock().unwrap().clone();
+                token.done(format!(
+                    "token-for-{}",
+                    named.as_deref().unwrap_or("nothing")
+                ))
+            }
+            _ => {}
+        }
+    }
+}
 impl GlobalDispatch<XdgWmBase, ()> for Mock {
     fn bind(
         _: &mut Self,
@@ -643,6 +700,7 @@ fn spawn_server_with(
         dh.create_global::<Mock, XdgWmBase, _>(6, ());
         dh.create_global::<Mock, WlDataDeviceManager, _>(3, ());
         dh.create_global::<Mock, WpPresentation, _>(1, ());
+        dh.create_global::<Mock, XdgActivationV1, _>(1, ());
         if let Some(version) = effects {
             dh.create_global::<Mock, CupertinoAppEffectsV1, _>(version, ());
         }
@@ -1962,5 +2020,30 @@ mod window_system {
             kit.ws.present(w, &frame(1, [0; 4], &[]), None),
             Err(cupertino_ui_platform::PlatformError::UnknownWindow(w))
         );
+    }
+
+    #[test]
+    fn an_activation_token_names_the_application_and_a_gone_window_is_answered_with_none() {
+        let (mut kit, _control, _committed, _seen) = mapped();
+        let asked = kit
+            .ws
+            .request_activation_token(kit.window, Some("org.example.Viewer"));
+        let token = kit.wait_for(|e| match e {
+            PlatformEvent::ActivationToken { request, token } if *request == asked => {
+                Some(token.clone())
+            }
+            _ => None,
+        });
+        assert_eq!(token.as_deref(), Some("token-for-org.example.Viewer"));
+
+        let gone = WindowId(kit.window.0 + 100);
+        let asked = kit.ws.request_activation_token(gone, None);
+        let token = kit.wait_for(|e| match e {
+            PlatformEvent::ActivationToken { request, token } if *request == asked => {
+                Some(token.clone())
+            }
+            _ => None,
+        });
+        assert_eq!(token, None);
     }
 }

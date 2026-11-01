@@ -972,6 +972,24 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 },
             );
         }
+        for &node in &change.left {
+            route.notify(
+                node,
+                &Event::FocusWithin {
+                    gained: false,
+                    visible: false,
+                },
+            );
+        }
+        for &node in &change.entered {
+            route.notify(
+                node,
+                &Event::FocusWithin {
+                    gained: true,
+                    visible: change.visible,
+                },
+            );
+        }
         if let Some(to) = change.to {
             route.notify(
                 to,

@@ -1,10 +1,11 @@
 mod support;
 
 use cupertino_geometry::{Insets, Point};
-use cupertino_ui_controls::{Button, ButtonRole, ButtonStyle, Stack, Tooltip};
+use cupertino_ui_controls::{Button, ButtonRole, ButtonStyle, Stack, TextField, Tooltip};
 use cupertino_ui_core::{Application, Command, Element, Role, Window, WindowKey};
 use cupertino_ui_layout::{Align, Axis};
 use cupertino_ui_platform::{PointerEvent, PopupEdge, Timestamp, WindowId};
+use cupertino_ui_text::ContentPurpose;
 use support::{window, Harness, TAB};
 
 const ESCAPE: u32 = 0xff1b;
@@ -96,12 +97,12 @@ fn tooltip(h: &Harness<Page>) -> Option<WindowId> {
         .map(|(_, id)| id)
 }
 
-fn at(h: &mut Harness<Page>, ms: u64) {
+fn at<A: Application>(h: &mut Harness<A>, ms: u64) {
     h.clock().advance_to(Timestamp(ms * MS)).unwrap();
     h.settle();
 }
 
-fn hover(h: &mut Harness<Page>, key: &'static str) {
+fn hover<A: Application>(h: &mut Harness<A>, key: &'static str) {
     let position = h.center(key);
     h.pointer(PointerEvent::Motion { position });
 }
@@ -218,4 +219,86 @@ fn the_text_describes_the_anchor_and_the_tip_is_a_tooltip() {
     assert_eq!(tips.len(), 1);
     assert_eq!(tips[0].name.as_deref(), Some("Move to the bin"));
     assert!(!tips[0].states.focusable);
+}
+
+#[test]
+fn keyboard_focus_shows_the_tip_after_the_delay_and_moving_on_hides_it() {
+    let mut h = Harness::<Page>::new();
+    h.tap(TAB);
+    at(&mut h, 599);
+    assert!(tooltip(&h).is_none());
+    at(&mut h, 600);
+    assert_eq!(h.model().said, [Message::Show]);
+    assert!(tooltip(&h).is_some());
+    h.tap(TAB);
+    assert!(h.focused("Other"));
+    assert_eq!(h.model().said, [Message::Show, Message::Hide]);
+    assert!(tooltip(&h).is_none());
+}
+
+#[test]
+fn a_tip_shown_for_the_keyboard_focus_stays_when_the_pointer_passes() {
+    let mut h = Harness::<Page>::new();
+    h.tap(TAB);
+    hover(&mut h, "Trash");
+    at(&mut h, 600);
+    hover(&mut h, "Other");
+    assert!(h.model().shown, "the focus is still on the anchor");
+    h.tap(ESCAPE);
+    assert!(!h.model().shown);
+}
+
+/// A field with a tip, beside a button: a click focuses the field.
+struct FieldPage;
+
+impl Application for FieldPage {
+    type Model = Model;
+    type Message = Message;
+
+    fn init() -> (Model, Vec<Command<Message>>) {
+        (Model::default(), Vec::new())
+    }
+
+    fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
+        Page::update(model, message)
+    }
+
+    fn view(model: &Model) -> Vec<Window<Message>> {
+        window(Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets::uniform(10.0),
+            spacing: 8.0,
+            align: Align::Start,
+            children: vec![
+                Element::from(Tooltip {
+                    text: "Your full name".into(),
+                    anchor: Element::new(TextField {
+                        label: "Name".into(),
+                        placeholder: String::new(),
+                        value: String::new(),
+                        revision: 0,
+                        purpose: ContentPurpose::Normal,
+                        enabled: true,
+                        on_change: None,
+                        on_submit: None,
+                    })
+                    .key("Name"),
+                    shown: model.shown,
+                    on_show: Message::Show,
+                    on_hide: Message::Hide,
+                }),
+                button("Other", Message::Other),
+            ],
+        }))
+    }
+}
+
+#[test]
+fn a_click_that_focuses_the_anchor_shows_no_tip() {
+    let mut h = Harness::<FieldPage>::new();
+    h.click(h.center("Name"));
+    assert!(h.focused("Name"));
+    hover(&mut h, "Other");
+    at(&mut h, 900);
+    assert!(h.model().said.is_empty());
 }

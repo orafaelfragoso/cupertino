@@ -141,3 +141,41 @@ fn a_focus_whose_node_unmounts_moves_to_its_nearest_surviving_ancestor() {
     assert_eq!(change.to, Some(dialog));
     assert!(!focus.visible());
 }
+
+#[test]
+fn a_move_names_the_ancestors_the_focus_came_into_and_left() {
+    let mut f = Fixture::new();
+    f.show(true);
+    let (root, dialog) = (f.root, f.id("dialog"));
+    let mut focus = Focus::default();
+    let mut moves = Vec::new();
+    for key in ["a", "d1", "d2", "b"] {
+        let change = focus.set(&f.tree, Some(f.id(key)), true).unwrap();
+        moves.push((change.left, change.entered));
+    }
+    assert_eq!(
+        moves,
+        [
+            (vec![], vec![root]),
+            (vec![], vec![dialog]),
+            (vec![], vec![]),
+            (vec![dialog], vec![]),
+        ]
+    );
+}
+
+#[test]
+fn when_the_focused_node_unmounts_its_surviving_ancestors_lose_the_focus_within_once() {
+    let mut f = Fixture::new();
+    f.show(true);
+    let mut focus = Focus::default();
+    focus.set(&f.tree, Some(f.id("d1")), true);
+
+    f.show(false);
+    f.tree.take_removed();
+    let change = f.sync(&mut focus).unwrap();
+    assert_eq!(change.to, Some(f.root));
+    assert_eq!(change.left, [f.root], "the unmounted dialog hears nothing");
+    assert!(change.entered.is_empty());
+    assert_eq!(f.sync(&mut focus), None);
+}

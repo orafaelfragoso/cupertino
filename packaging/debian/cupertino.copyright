@@ -20,7 +20,7 @@ Files: crates/cupertino-animation/* crates/cupertino-app-protocols/* crates/cupe
  crates/cupertino-defaults/* crates/cupertino-geometry/* crates/cupertino-glyph/* crates/cupertino-icons/*
  crates/cupertino-key-bindings/* crates/cupertino-keyboard/*
  crates/cupertino-menu-model/* crates/cupertino-modifiers/* crates/cupertino-protocol-app/* crates/cupertino-test-bus/*
- crates/cupertino-theme/* crates/cupertino-kit/* crates/cupertino-ui-controls/*
+ crates/cupertino-theme/* crates/cupertino-kit/* crates/cupertino-ui-abi/* crates/cupertino-ui-controls/*
  crates/cupertino-ui-core/* crates/cupertino-ui-layout/* crates/cupertino-ui-platform/* crates/cupertino-ui-render/*
  crates/cupertino-ui-test/* crates/cupertino-ui-text/* crates/cupertino-ui-theme/*
  crates/cupertino-typeahead/* crates/cupertino-ui-atspi/* crates/cupertino-ui-menus/* crates/cupertino-ui-wayland/*

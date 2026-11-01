@@ -114,6 +114,16 @@ class RegistryTest(unittest.TestCase):
         self.assertEqual(problems, ["docs/architecture/contracts.yaml:12: test_owner "
                                     "crates/cupertino-demo/tests/run.rs does not name cupertino-demo"])
 
+    def test_a_c_library_test_must_name_its_soname(self):
+        entry = ("- name: libdemo.so.1\n  kind: c-library\n  version: 1.0\n  owner_crate: cupertino-demo\n"
+                 "  owner_area: apps\n  scope: public\n  test_owner: crates/cupertino-demo/tests/symbols.rs\n"
+                 "  source: crates/cupertino-demo/src/lib.rs\n")
+        test = "crates/cupertino-demo/tests/symbols.rs"
+        self.assertEqual(run(INTERFACE_ENTRY + BINARY_ENTRY + entry, {test: '"libdemo.so.1"\n'}), [])
+        problems = run(INTERFACE_ENTRY + BINARY_ENTRY + entry, {test: "fn main() {}\n"})
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("does not name libdemo.so.1", problems[0])
+
     def test_an_interface_test_need_not_name_it(self):
         entry = INTERFACE_ENTRY.replace("test_owner: unknown", "test_owner: crates/cupertino-demo/tests/bus.rs")
         self.assertEqual(run(entry + BINARY_ENTRY, {"crates/cupertino-demo/tests/bus.rs": "fn main() {}\n"}), [])

@@ -13,7 +13,7 @@ import subprocess
 import sys
 
 REGISTRY = "docs/architecture/contracts.yaml"
-KINDS = {"wayland-global", "dbus-interface", "binary", "socket-protocol"}
+KINDS = {"wayland-global", "dbus-interface", "binary", "socket-protocol", "c-library"}
 AREAS = {"compositor", "rendering", "design", "apps", "services", "packaging"}
 SCOPES = {"public", "shell-private", "system", "unknown"}
 COMMON = {"name", "kind", "version", "owner_crate", "owner_area", "scope", "test_owner", "source"}
@@ -22,6 +22,7 @@ EXTRA = {
     "dbus-interface": {"bus", "bus_name", "source_match"},
     "binary": {"shipped"},
     "socket-protocol": {"source_match"},
+    "c-library": set(),
 }
 OPTIONAL = {"note", "version_without_render_node", "visible_to"}
 # Any attribute with an `interface` token that is not a `key = value` argument (`proxy(interface = "...")`) and not inside
@@ -31,11 +32,11 @@ LITERAL_NAME = re.compile(r'\(\s*name\s*=\s*"([^"]+)"\s*[,)]')
 # Entries without a test file. It only goes down: give an entry a test_owner and lower this number.
 UNKNOWN_TEST_OWNERS = 15
 UNKNOWN_SCOPES = 1
-# Kinds whose test_owner must name the entry: a socket path or binary name is a string its tests use. Wayland globals
-# need not, since crates/cupertino-server/tests/contracts.rs compares them with the registry at run time; D-Bus
+# Kinds whose test_owner must name the entry: a socket path, binary name or soname is a string its tests use. Wayland
+# globals need not, since crates/cupertino-server/tests/contracts.rs compares them with the registry at run time; D-Bus
 # interfaces are reached through typed proxies. A substring heuristic: a comment, or a longer name that contains this
 # one (cupertino-dock in cupertino-dock-helper), also passes.
-NAMED_BY_TEST = {"socket-protocol", "binary"}
+NAMED_BY_TEST = {"socket-protocol", "binary", "c-library"}
 NAME = re.compile(r'"(org\.cupertino\.[A-Za-z0-9.]+)"')
 # A window's `app_id` is a desktop entry name, not a bus name.
 APP_ID = re.compile(r'\bapp_id\b')

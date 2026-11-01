@@ -537,24 +537,21 @@ fixtures! {
         on_submit: None,
         selection: None,
     });
-    text_box: "text-box", TALL, FIELD, |look| Element::new(TextBox {
-        content: ScrollView {
-            content: Element::new(TextEditor {
-                label: "Notes".into(),
-                placeholder: String::new(),
-                value: "One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight".into(),
-                revision: 0,
-                enabled: look.enabled,
-                on_change: Some(Box::new(|_| Message::Nothing)),
-            }),
-            state: look.scroll,
-            horizontal: false,
-            vertical: true,
-            scroller: Scroller::Always,
-            on_scroll: Box::new(Message::Scroll),
-        }.into(),
+    text_box: "text-box", TALL, FIELD, |look| TextBox {
+        editor: Element::new(TextEditor {
+            label: "Notes".into(),
+            placeholder: String::new(),
+            value: "One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight".into(),
+            revision: 0,
+            enabled: look.enabled,
+            bordered: true,
+            on_change: Some(Box::new(|_| Message::Nothing)),
+        }),
         enabled: look.enabled,
-    });
+        state: look.scroll,
+        scroller: Scroller::Always,
+        on_scroll: Box::new(Message::Scroll),
+    }.into();
     secure_field: "secure-field", WIDE, FIELD, |look| Element::new(SecureField {
         label: "Password".into(),
         placeholder: "Required".into(),

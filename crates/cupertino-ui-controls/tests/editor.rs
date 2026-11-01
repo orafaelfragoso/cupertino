@@ -1,9 +1,7 @@
 mod support;
 
 use cupertino_geometry::{Insets, Point, Size};
-use cupertino_ui_controls::{
-    ScrollView, Scroller, Stack, TextBox, TextChange, TextEditor, TextField,
-};
+use cupertino_ui_controls::{Scroller, Stack, TextBox, TextChange, TextEditor, TextField};
 use cupertino_ui_core::{AccessibleValue, Application, Command, Element, Role, Window};
 use cupertino_ui_layout::{Align, Axis, ScrollState};
 use cupertino_ui_platform::Mods;
@@ -75,25 +73,21 @@ impl<const LINES: usize> Application for Editor<LINES> {
             spacing: 0.0,
             align: Align::Stretch,
             children: vec![
-                Element::new(TextBox {
-                    content: Element::from(ScrollView {
-                        content: Element::new(TextEditor {
-                            label: "Notes".into(),
-                            placeholder: String::new(),
-                            value: model.text.clone(),
-                            revision: model.revision,
-                            enabled: true,
-                            on_change: Some(Box::new(Message::Changed)),
-                        })
-                        .key("editor"),
-                        state: model.scroll,
-                        horizontal: false,
-                        vertical: true,
-                        scroller: Scroller::Always,
-                        on_scroll: Box::new(Message::Scrolled),
+                Element::from(TextBox {
+                    editor: Element::new(TextEditor {
+                        label: "Notes".into(),
+                        placeholder: String::new(),
+                        value: model.text.clone(),
+                        revision: model.revision,
+                        enabled: true,
+                        bordered: true,
+                        on_change: Some(Box::new(Message::Changed)),
                     })
-                    .key("scroll"),
+                    .key("editor"),
                     enabled: true,
+                    state: model.scroll,
+                    scroller: Scroller::Always,
+                    on_scroll: Box::new(Message::Scrolled),
                 })
                 .key("box"),
                 Element::new(TextField {
@@ -213,8 +207,8 @@ fn tab_moves_the_focus_on_instead_of_typing_a_tab() {
     let mut h = focused::<0>();
     assert_eq!(
         h.rect("editor").height(),
-        h.rect("scroll").height(),
-        "a short text still fills its scroll view, so a press below it focuses the editor"
+        h.rect("box").height() - 4.0,
+        "a short text still fills the box inside its 2 pt edge, so a press below it focuses the editor"
     );
     h.type_text("a");
     press(&mut h, TAB_KEY, Mods::NONE);
@@ -236,6 +230,21 @@ fn the_box_around_the_editor_shows_the_focus_ring_while_the_keyboard_focus_is_in
     press(&mut h, TAB_KEY, Mods::NONE);
     assert!(h.focused("after"));
     assert_eq!(strokes(&h), 1, "the border alone");
+}
+
+#[test]
+fn the_text_in_the_box_starts_6_pt_inside_its_edge_as_a_fields_does() {
+    let mut h = focused::<0>();
+    h.type_text("a");
+    let text = h
+        .ops("editor")
+        .into_iter()
+        .find_map(|op| match op {
+            PaintOp::Glyphs { origin, .. } => Some(origin.x),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(h.rect("editor").min_x() + text - h.rect("box").min_x(), 6.0);
 }
 
 fn glyph_runs<const LINES: usize>(h: &Harness<Editor<LINES>>) -> usize {

@@ -134,7 +134,7 @@ impl Cupertino {
                 let idx = self.outputs.iter().position(|o| o.id == window.output)?;
                 let scale = self.outputs[idx].scale;
                 let geo = entry.window.geometry();
-                let ins = entry.insets;
+                let ins = entry.insets();
                 // the size `capture_window` renders the window at
                 let px = |logical: f64| ((logical * scale).round() as i32).max(1);
                 let size = (

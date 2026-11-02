@@ -354,7 +354,7 @@ impl Cupertino {
         let r = self.text_cursor?;
         let id = self.wm.key_window()?;
         let g = self.wm.window(id)?.geometry();
-        let ins = self.entry(id).map(|e| e.insets).unwrap_or_default();
+        let ins = self.entry(id).map(|e| e.insets()).unwrap_or_default();
         Some(cupertino_geometry::Rect::new(
             g.x + ins.left + f64::from(r.loc.x),
             g.y + ins.top + f64::from(r.loc.y),

@@ -282,11 +282,11 @@ fn a_unified_window_fills_its_frame_and_only_its_buttons_take_the_pointer_over_t
         entry_of(ServerStyle::Standard),
     );
     assert_eq!(
-        unified.insets.vertical(),
+        unified.insets().vertical(),
         0.0,
         "the unified surface starts at the top edge"
     );
-    assert_eq!(standard.insets.vertical(), 28.0);
+    assert_eq!(standard.insets().vertical(), 28.0);
     let (unified_id, standard_id) = (unified.id, standard.id);
     let frame_of = |id| h.state.wm.window(id).unwrap().geometry();
     assert_eq!(

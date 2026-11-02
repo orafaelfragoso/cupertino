@@ -330,7 +330,7 @@ impl Cupertino {
                 let (plan, _) =
                     crate::render::scene::plan_for(p.wm, entry, slide, p.now, p.fx, p.display)?;
                 let geo = entry.window.geometry();
-                let ins = entry.insets;
+                let ins = entry.insets();
                 let natural = cupertino_wm::Rect::new(
                     plan.visual.x,
                     plan.visual.y,

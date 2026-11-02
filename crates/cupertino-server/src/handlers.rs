@@ -764,11 +764,12 @@ impl XdgShellHandler for Cupertino {
             titlebar: cupertino_decorations::TitlebarStyle::Standard,
             foreign: None,
             modal: false,
-            insets: if legacy {
+            decor_insets: if legacy {
                 self.config.window.ssd_insets
             } else {
                 Default::default()
             },
+            fullscreen: false,
         });
     }
 
@@ -1102,7 +1103,7 @@ impl Cupertino {
             let e = &mut self.windows[i];
             e.server_side = server;
             if !e.mapped {
-                e.insets = insets;
+                e.decor_insets = insets;
             }
         }
         if toplevel.is_initial_configure_sent() {

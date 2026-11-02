@@ -89,7 +89,7 @@ warn  portals.conf        no cupertino-portals.conf: xdg-desktop-portal picks th
 
 For a unit check, the status follows the unit's state: `ok` when active, `fail` when failed, `warn` when inactive, not installed or in another state, and `skip` when systemd cannot be asked. The `fix` names `systemctl status` and `journalctl` for the unit, or says to install the cupertino package.
 
-`services.network` and `services.bluetooth` also give `ok` when `cupertino-netd` or `cupertino-btd` is disabled (or masked) and inactive while `NetworkManager.service` or `bluetooth.service` is active or enabled, because that service does the same job. The summary then reads `... is disabled: managed by NetworkManager` (or `BlueZ`). A machine installed from the [USB image](install-usb.md) is set up this way. BlueZ may be enabled but stopped on a machine without a Bluetooth adapter, and that still counts.
+`services.network` and `services.bluetooth` also give `ok` when `cupertino-netd` or `cupertino-btd` is not running, whatever its unit file state (`static`, `indirect`, `disabled`, `masked` or `enabled`), while `NetworkManager.service` or `bluetooth.service` is active or enabled, because that service does the same job. The summary then reads `... is inactive (static): managed by NetworkManager` (or `BlueZ`). They warn only when neither the Cupertino daemon nor that service runs. A machine installed from the [USB image](install-usb.md) is set up this way. BlueZ may be enabled but stopped on a machine without a Bluetooth adapter, and that still counts.
 
 ## Known limits
 

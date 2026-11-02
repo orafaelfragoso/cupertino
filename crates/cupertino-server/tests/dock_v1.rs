@@ -2408,14 +2408,14 @@ fn the_dock_gives_way_to_a_full_screen_window_in_front_and_comes_back() {
     });
     h.advance(1.0);
     let on_dock = (500.0, 660.0).into();
-    let dock_under = |h: &Harness| {
-        let window = h.state.window_surface_under(on_dock).map(|(_, s, _)| s);
-        h.state
-            .surface_under(on_dock)
+    let dock_under = |s: &Cupertino| {
+        let window = s.window_surface_under(on_dock).map(|(_, s, _)| s);
+        s.surface_under(on_dock)
             .is_some_and(|(s, _)| window.as_ref() != Some(&s))
     };
     assert!(!top_layer(&mut h).is_empty(), "the dock is drawn");
-    assert!(dock_under(&h), "and takes the pointer");
+    // a placed dock has not necessarily committed its input region yet (seen under the full gate's load)
+    h.wait_until("the dock to take the pointer", dock_under);
 
     h.state.command(Command::Fullscreen {
         requested_by: cupertino_wm::Requester::Client,
@@ -2434,7 +2434,7 @@ fn the_dock_gives_way_to_a_full_screen_window_in_front_and_comes_back() {
         "nothing of the dock over the window"
     );
     assert!(
-        !dock_under(&h),
+        !dock_under(&h.state),
         "the window takes the pointer where the dock was"
     );
 
@@ -2452,7 +2452,7 @@ fn the_dock_gives_way_to_a_full_screen_window_in_front_and_comes_back() {
     h.advance(5.0);
     h.advance(1.0);
     assert!(!top_layer(&mut h).is_empty(), "back after full screen");
-    assert!(dock_under(&h));
+    assert!(dock_under(&h.state));
     assert_eq!(dock.error(), None);
 }
 

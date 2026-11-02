@@ -29,7 +29,7 @@ keeps its own MIT/X11-style licence (`third-party/xkbcommon-rs/LICENSE`).
 
 ## Tests
 
-`cargo test -p xkbcommon`. The oracle tests compare keymaps compiled from the machine's xkeyboard-config data with recordings of libxkbcommon 1.13 made on xkeyboard-config 2.48 (`tests/fixtures/xkb-data.txt`); the modifier order and key tables change between releases of that data, so on any other release the layout tests are skipped with a message naming both, and fail instead with `CUPERTINO_XKB_DATA_REQUIRED=1`, which CI and the gate set. Point `XKB_CONFIG_ROOT` at a copy of 2.48 to run them there; CI downloads one. `tools/cupertino_xkb_keysyms.py` regenerates the keysym names from the installed
+`cargo test -p xkbcommon`. The oracle tests compare keymaps compiled from the machine's xkeyboard-config data with recordings of libxkbcommon 1.13, one set per xkeyboard-config release in `tests/fixtures/<release>/` (2.48 and 2.49, told apart by `tests/fixtures/xkb-data.txt`); the modifier order and key tables change between releases of that data, so on any other release the layout tests are skipped with a message naming the releases, and fail instead with `CUPERTINO_XKB_DATA_REQUIRED=1`, which CI and the gate set. Point `XKB_CONFIG_ROOT` at a copy of a recorded release to run them there; CI downloads 2.48. A new release needs its recordings from libxkbcommon itself, a line in `xkb-data.txt` with the fingerprint the skip message prints, and an entry in `RECORDED` and `recordings!` in `tests/oracle.rs`. `tools/cupertino_xkb_keysyms.py` regenerates the keysym names from the installed
 `xkbcommon-keysyms.h`.
 
 The vendored port is outside the workspace. Its own unit tests run with

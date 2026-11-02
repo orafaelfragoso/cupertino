@@ -164,9 +164,9 @@ jobs:
           fi
       - name: Disk after the lint build
         run: df -h .
-      # The keymap oracle's recordings are only valid for the xkeyboard-config release they were made with
+      # The keymap oracle's recordings are only valid for the xkeyboard-config releases they were made with
       # (crates/cupertino-xkbcommon/tests/fixtures/xkb-data.txt), and the runner's distribution ships another. This is
-      # that release's package (byte-identical data), verified against a pinned checksum.
+      # one of those releases' package (byte-identical data), verified against a pinned checksum.
       - name: xkeyboard-config 2.48 data
         run: |
           curl -sSfL -o xkeyboard-config.pkg.tar.zst \

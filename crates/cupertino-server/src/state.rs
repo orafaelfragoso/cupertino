@@ -199,6 +199,22 @@ pub const CURRENT_DESKTOP: &str = "Cupertino";
 /// How long a global that went away can still be bound, for the clients that bind it before they hear that it is gone.
 pub const RETIRED_GLOBAL_LIFETIME: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// How a window keeps covering the frame a frame animation shrinks it to: its content is drawn at its own size and
+/// cropped to the frame, so the client keeps a size that covers every animated frame until the animation ends.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Shrink {
+    #[default]
+    None,
+    /// The model's configure, sent when the animation ends.
+    Deferred {
+        frame: Rect,
+        states: cupertino_wm::ToplevelStates,
+    },
+    /// The deferred configure went out with this serial: the window stays cropped to its frame until a commit acks it,
+    /// whatever size the client then draws (the size is a hint to a floating toplevel).
+    Awaiting(smithay::utils::Serial),
+}
+
 /// One toplevel as the compositor sees it.
 pub struct WindowEntry {
     pub id: WindowId,
@@ -216,6 +232,7 @@ pub struct WindowEntry {
     pub decor_insets: crate::config::Insets,
     /// Configured full screen: the decorations are hidden and the client gets the whole frame.
     pub fullscreen: bool,
+    pub shrink: Shrink,
 }
 
 impl WindowEntry {
@@ -226,6 +243,15 @@ impl WindowEntry {
         } else {
             self.decor_insets
         }
+    }
+
+    /// The size the client committed, server-side decorations included, in points.
+    pub fn committed_size(&self) -> (f64, f64) {
+        let geo = self.window.geometry();
+        (
+            f64::from(geo.size.w) + self.insets().horizontal(),
+            f64::from(geo.size.h) + self.insets().vertical(),
+        )
     }
 
     /// The wl_surface of the window.
@@ -258,7 +284,7 @@ impl WindowEntry {
         frame: Rect,
         states: &cupertino_wm::ToplevelStates,
         activated: bool,
-    ) {
+    ) -> Option<smithay::utils::Serial> {
         self.fullscreen = states.fullscreen;
         let ins = self.insets();
         let size = (frame.w > ins.horizontal() && frame.h > ins.vertical()).then(|| {
@@ -280,7 +306,9 @@ impl WindowEntry {
             }
         });
         if t.is_initial_configure_sent() {
-            t.send_pending_configure();
+            t.send_pending_configure()
+        } else {
+            None
         }
     }
 
@@ -1063,6 +1091,26 @@ impl Cupertino {
         self.windows.iter().find(|w| w.id == id)
     }
 
+    /// Send the configures that shrinking frame animations held back once they end.
+    fn send_deferred_configures(&mut self, now: f64) {
+        let key = self.wm.key_window();
+        for e in &mut self.windows {
+            let Shrink::Deferred { frame, states } = e.shrink else {
+                continue;
+            };
+            if self
+                .wm
+                .window(e.id)
+                .is_some_and(|w| w.lifecycle.is_animating(now))
+            {
+                continue;
+            }
+            e.shrink = e
+                .configure(frame, &states, key == Some(e.id))
+                .map_or(Shrink::None, Shrink::Awaiting);
+        }
+    }
+
     pub fn entry_for_surface(&self, surface: &WlSurface) -> Option<&WindowEntry> {
         self.windows.iter().find(|w| w.has_surface(surface))
     }
@@ -1119,12 +1167,23 @@ impl Cupertino {
             (false, true) => self.map_window(idx),
             (true, false) => {
                 self.windows[idx].mapped = false;
+                self.windows[idx].shrink = Shrink::None;
                 let now = self.now();
                 let fx = self.wm.handle(Command::Destroy { window: id }, now);
                 self.apply_effects(fx);
             }
             (true, true) => {
                 self.windows[idx].window.on_commit();
+                if let Shrink::Awaiting(sent) = self.windows[idx].shrink {
+                    let acked = with_states(surface, |s| {
+                        s.data_map
+                            .get::<XdgToplevelSurfaceData>()
+                            .and_then(|d| d.lock().unwrap().current_serial)
+                    });
+                    if acked.is_some_and(|serial| serial.is_no_older_than(&sent)) {
+                        self.windows[idx].shrink = Shrink::None;
+                    }
+                }
                 self.refresh_snapshot(id);
                 let (min, max) = frame_limits(self.windows[idx].insets(), size_hints(surface));
                 let now = self.now();
@@ -1599,6 +1658,7 @@ impl Cupertino {
         self.tick_force_quit(now);
         let fx = self.wm.tick(now);
         self.apply_effects(fx);
+        self.send_deferred_configures(now);
         self.fx.tick(now);
         self.tick_window_managers(now);
         self.tick_menu_bars(now);
@@ -1680,13 +1740,24 @@ impl Cupertino {
                     states,
                 } => {
                     let activated = self.wm.key_window() == Some(window);
-                    let pos = self
+                    let now = self.now();
+                    let (pos, animating) = self
                         .wm
                         .window(window)
-                        .map(|w| w.geometry())
+                        .map(|w| (w.geometry(), w.lifecycle.is_animating(now)))
                         .unwrap_or_default();
                     if let Some(e) = self.windows.iter_mut().find(|e| e.id == window) {
-                        e.configure(Rect::new(pos.x, pos.y, size.w, size.h), &states, activated);
+                        let frame = Rect::new(pos.x, pos.y, size.w, size.h);
+                        let (w, h) = e.committed_size();
+                        if animating && e.mapped && (frame.w < w || frame.h < h) {
+                            let covering =
+                                Rect::new(frame.x, frame.y, frame.w.max(w), frame.h.max(h));
+                            e.configure(covering, &states, activated);
+                            e.shrink = Shrink::Deferred { frame, states };
+                        } else {
+                            e.configure(frame, &states, activated);
+                            e.shrink = Shrink::None;
+                        }
                     }
                 }
                 Effect::RequestClose { window } => {

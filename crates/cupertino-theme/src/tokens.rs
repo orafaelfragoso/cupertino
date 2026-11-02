@@ -203,6 +203,20 @@ mod tests {
     }
 
     #[test]
+    fn both_high_contrast_rims_are_dark_strokes_of_their_own() {
+        let t = tokens();
+        for a in [Appearance::LightHighContrast, Appearance::DarkHighContrast] {
+            for rim in [SemanticColor::WindowRim, SemanticColor::WindowRim2x] {
+                assert!(
+                    t.table(a).get(rim.name()).is_some(),
+                    "{rim:?} missing in {a:?}"
+                );
+                assert_eq!(t.semantic(a, rim).unwrap().to_rgba8(), [0, 0, 0, 127]);
+            }
+        }
+    }
+
+    #[test]
     fn every_listed_name_resolves_in_light_and_dark() {
         let t = tokens();
         for a in [Appearance::Light, Appearance::Dark] {

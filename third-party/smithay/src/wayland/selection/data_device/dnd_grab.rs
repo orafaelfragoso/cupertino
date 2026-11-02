@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use tracing::debug;
 use wayland_server::{
     backend::{protocol::Message, ClientId, Handle, ObjectData, ObjectId},
     protocol::{
@@ -25,7 +26,7 @@ use crate::{
             PointerInnerHandle, RelativeMotionEvent,
         },
         touch::{GrabStartData as TouchGrabStartData, TouchGrab},
-        Seat, SeatHandler,
+        Seat, SeatHandler, WeakSeat,
     },
     utils::{IsAlive, Logical, Point, Serial, SERIAL_COUNTER},
     wayland::{seat::WaylandFocus, selection::seat_data::SeatData},
@@ -182,6 +183,7 @@ where
                                 Arc::new(DndDataOffer {
                                     offer_data: offer_data.clone(),
                                     source: source.clone(),
+                                    seat: self.seat.downgrade(),
                                 }),
                             )
                             .unwrap();
@@ -506,12 +508,14 @@ struct OfferData {
 }
 
 #[derive(Debug)]
-struct DndDataOffer {
+struct DndDataOffer<D: SeatHandler> {
     offer_data: Arc<Mutex<OfferData>>,
     source: WlDataSource,
+    /// The seat of the drag, for [`SelectionHandler::allow_receive`](super::super::SelectionHandler::allow_receive).
+    seat: WeakSeat<D>,
 }
 
-impl<D> ObjectData<D> for DndDataOffer
+impl<D> ObjectData<D> for DndDataOffer<D>
 where
     D: DataDeviceHandler,
     D: 'static,
@@ -520,12 +524,12 @@ where
         self: Arc<Self>,
         dh: &Handle,
         handler: &mut D,
-        _client_id: ClientId,
+        client_id: ClientId,
         msg: Message<ObjectId, OwnedFd>,
     ) -> Option<Arc<dyn ObjectData<D>>> {
         let dh = DisplayHandle::from(dh.clone());
         if let Ok((resource, request)) = WlDataOffer::parse_request(&dh, msg) {
-            handle_dnd(handler, &resource, request, &self);
+            handle_dnd(handler, &client_id, &resource, request, &self);
         }
 
         None
@@ -541,13 +545,19 @@ where
     }
 }
 
-fn handle_dnd<D>(handler: &mut D, offer: &WlDataOffer, request: wl_data_offer::Request, data: &DndDataOffer)
-where
+fn handle_dnd<D>(
+    handler: &mut D,
+    client: &ClientId,
+    offer: &WlDataOffer,
+    request: wl_data_offer::Request,
+    data: &DndDataOffer<D>,
+) where
     D: DataDeviceHandler,
     D: 'static,
 {
     use self::wl_data_offer::Request;
     let source = &data.source;
+    let seat = &data.seat;
     let mut data = data.offer_data.lock().unwrap();
     match request {
         Request::Accept { mime_type, .. } => {
@@ -567,7 +577,12 @@ where
                 .unwrap_or(false)
                 && source.alive()
                 && data.active;
-            if valid {
+            let allowed = seat
+                .upgrade()
+                .is_some_and(|seat| handler.allow_receive(client, &seat));
+            if !allowed {
+                debug!("Denying a wl_data_offer.receive of a drag the compositor refused");
+            } else if valid {
                 source.send(mime_type, fd.as_fd());
             }
         }

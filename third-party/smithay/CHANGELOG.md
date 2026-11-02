@@ -7,8 +7,9 @@
 `SelectionHandler::allow_selection` is asked before a client's set_selection replaces the clipboard or
 primary selection, through wl_data_device, the primary selection, wlr and ext data control. A refused
 source is cancelled, `new_selection` is not called, and the current selection keeps its source.
-`SelectionHandler::allow_receive` is asked before a client reads an offered selection; a refused read
-closes the client's pipe. `SelectionSource::provider` and the re-exported `SelectionSourceProvider`
+`SelectionHandler::allow_receive` is asked before a client reads an offered selection, or the data of a
+client's drag (wl_data_offer.receive during a drag or after its drop); a refused read closes the client's
+pipe, and a read whose seat is gone is refused. `SelectionSource::provider` and the re-exported `SelectionSourceProvider`
 name the protocol object that set a selection.
 
 ## 0.7.0

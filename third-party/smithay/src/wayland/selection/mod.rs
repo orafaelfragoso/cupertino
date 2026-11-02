@@ -44,10 +44,11 @@ pub trait SelectionHandler: Sized + SeatHandler {
         true
     }
 
-    /// The client `client` asks to read a selection offered to it.
+    /// The client `client` asks to read a selection, or the data of a client's drag, offered to it.
     ///
     /// Returning `false` refuses the request: the source is not asked for the data and the
-    /// client's end of the pipe is closed. The default allows every request.
+    /// client's end of the pipe is closed. A request whose seat is gone is refused without
+    /// asking. The default allows every request.
     #[allow(unused_variables)]
     fn allow_receive(&mut self, client: &ClientId, seat: &Seat<Self>) -> bool {
         true

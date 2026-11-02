@@ -19,9 +19,11 @@ fn nearest(stops: &[f64], v: f64) -> usize {
         .expect("the stop table is not empty")
 }
 
-/// Dock size and magnification: the slider value v in 0…1 is `(px − 16) / 112`.
+/// Dock size: the slider value v in 0…1 is `(px − 16) / 112`.
 pub const DOCK_MIN_PX: f64 = 16.0;
 pub const DOCK_SPAN_PX: f64 = 112.0;
+/// The magnified size at the magnification slider's Large end (the size slider's Large end too).
+pub const MAGNIFIED_MAX_PX: f64 = DOCK_MIN_PX + DOCK_SPAN_PX;
 /// The magnification slider's marks: Off 0, Small 0.125, Large 1.
 pub const MAGNIFICATION_MARKS: [f64; 3] = [0.0, 0.125, 1.0];
 /// The dock size slider's marks: Small 0, Large 1.
@@ -35,20 +37,23 @@ pub fn dock_value(px: f64) -> f64 {
     ((px - DOCK_MIN_PX) / DOCK_SPAN_PX).clamp(0.0, 1.0)
 }
 
-/// The magnification slider at `v`: off at 0, else on with the magnified size of `v` (mapping). The
-/// size is clamped by the dock's own rule when it applies it.
-pub fn magnification(v: f64) -> (bool, Option<f64>) {
+/// The magnification slider at `v` over tiles of `tile_px`: off at 0, else on with a magnified size
+/// from just above the tile to [`MAGNIFIED_MAX_PX`] (the tile's own size when it is larger), so every
+/// position past Off magnifies. The dock clamps the size by its own rule when it applies it.
+pub fn magnification(v: f64, tile_px: f64) -> (bool, Option<f64>) {
     if v <= 0.0 {
-        (false, None)
-    } else {
-        (true, Some(dock_px(v)))
+        return (false, None);
     }
+    let top = MAGNIFIED_MAX_PX.max(tile_px);
+    (true, Some((tile_px + (top - tile_px) * v.min(1.0)).ceil()))
 }
 
-/// The magnification slider's value for a stored state.
-pub fn magnification_value(on: bool, large_px: f64) -> f64 {
-    if on {
-        dock_value(large_px)
+/// The magnification slider's value for a stored state over tiles of `tile_px`: Off while the
+/// magnified size is no larger than the tile, which the dock does not magnify.
+pub fn magnification_value(on: bool, large_px: f64, tile_px: f64) -> f64 {
+    let top = MAGNIFIED_MAX_PX.max(tile_px);
+    if on && top > tile_px {
+        ((large_px - tile_px) / (top - tile_px)).clamp(0.0, 1.0)
     } else {
         0.0
     }
@@ -148,11 +153,32 @@ mod tests {
         for px in [16.0, 48.0, 64.0, 128.0] {
             assert_eq!(dock_px(dock_value(px)), px);
         }
-        assert_eq!(magnification(0.0), (false, None));
-        assert_eq!(magnification(0.125), (true, Some(30.0)), "the Small mark");
-        assert_eq!(magnification(1.0), (true, Some(128.0)));
-        assert_eq!(magnification_value(false, 128.0), 0.0);
-        assert_eq!(magnification_value(true, 128.0), 1.0);
+    }
+
+    #[test]
+    fn every_magnification_past_off_is_larger_than_the_tile() {
+        assert_eq!(magnification(0.0, 64.0), (false, None));
+        assert_eq!(magnification(0.001, 64.0), (true, Some(65.0)));
+        assert_eq!(
+            magnification(0.125, 64.0),
+            (true, Some(72.0)),
+            "the Small mark"
+        );
+        assert_eq!(magnification(1.0, 64.0), (true, Some(128.0)));
+        assert_eq!(
+            magnification(0.5, 128.0),
+            (true, Some(128.0)),
+            "a dock at its largest has no room"
+        );
+        assert_eq!(magnification_value(false, 128.0, 64.0), 0.0);
+        assert_eq!(magnification_value(true, 128.0, 64.0), 1.0);
+        assert_eq!(magnification_value(true, 72.0, 64.0), 0.125);
+        assert_eq!(
+            magnification_value(true, 30.0, 64.0),
+            0.0,
+            "a size under the tile shows Off"
+        );
+        assert_eq!(magnification_value(true, 128.0, 128.0), 0.0);
     }
 
     #[test]

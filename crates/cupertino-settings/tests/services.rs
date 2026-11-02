@@ -959,15 +959,10 @@ fn the_sound_pane_reads_and_sets_the_default_pipewire_sink() {
     let no_cards = tempfile::tempdir().unwrap();
     let mut services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE))
         .with_sound(Wpctl::new(fake.program()), no_cards.path().to_path_buf());
-    let settles = |done: &mut dyn FnMut() -> bool| {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !done() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the background reading never arrived"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+    // a reading asked for after a change behind the worker's back, and done
+    let read_again = |services: &mut Services| {
+        services.volume();
+        services.wait_sound();
     };
     assert_eq!(
         services.volume(),
@@ -994,14 +989,12 @@ fn the_sound_pane_reads_and_sets_the_default_pipewire_sink() {
         level: 0.25,
         muted: true,
     };
-    settles(&mut || fake.volume(Target::DefaultSink) == quiet);
+    services.wait_sound();
+    assert_eq!(fake.volume(Target::DefaultSink), quiet);
     assert_eq!(fake.volume(Target::DefaultSource), half);
 
     fake.set_sinks(&[(52, "Speakers"), (53, "Headphones")], 52);
-    settles(&mut || {
-        services.volume();
-        services.outputs().len() == 2
-    });
+    read_again(&mut services);
     assert_eq!(
         services
             .outputs()
@@ -1012,10 +1005,11 @@ fn the_sound_pane_reads_and_sets_the_default_pipewire_sink() {
     );
     services.call(&Call::SetOutput(53)).unwrap();
     assert_eq!(fake.default_sink(), 53);
-    settles(&mut || services.outputs()[1].default);
+    services.wait_sound();
+    assert!(services.outputs()[1].default);
 
     fake.set_running(false);
-    settles(&mut || matches!(services.volume(), Reading::Unavailable(_)));
+    read_again(&mut services);
     assert_eq!(
         services.volume(),
         Reading::Unavailable("No sound output is available".into()),

@@ -20,12 +20,11 @@ impl Backlight for Absent {
     }
 }
 
-/// The sink's volume once it is `expected`, or what it is after 5 s.
+/// Wait until the background write gives the sink `expected`; one that never comes is the test runner's timeout.
 fn sink_settles(fake: &FakeWpctl, expected: Volume) -> Volume {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let sink = fake.volume(Target::DefaultSink);
-        if sink == expected || std::time::Instant::now() > deadline {
+        if sink == expected {
             return sink;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));

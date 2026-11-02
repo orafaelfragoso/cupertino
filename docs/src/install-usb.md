@@ -72,7 +72,7 @@ sudo cupertino-install
 
 The installer checks first that it runs as root on the live USB, in UEFI mode, with Secure Boot off and with archinstall 4.5. It then asks:
 
-1. **The disk.** It lists every disk with its size and model, and marks the ones it cannot use, such as the stick, with the reason. Type the number of the disk. It then says what will be erased and asks you to type the disk's path, for example `/dev/nvme0n1`. A path that does not match erases nothing.
+1. **The disk.** It lists every disk with its path, its size and its model. The sizes are in binary units (GiB, TiB) and read the same as `lsblk -o NAME,MODEL,SIZE`, so a "1 TB" drive shows as about 931.5 GiB. The installer refuses disks under 32 GB (29.8 GiB), and marks the ones it cannot use, such as the stick, with the reason. Type the number of the disk. It then says what will be erased and asks you to type the disk's path, for example `/dev/nvme0n1`. A path that does not match erases nothing.
 2. **The account name,** in lower case. Then the password, twice. The account is an administrator through `sudo` with its password; root stays locked.
 3. **The time zone.** The default is the live session's.
 

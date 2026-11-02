@@ -65,3 +65,6 @@ and optionally `hostname`, `keyboard`, `extra_packages` and `kernel_args`. The d
 `packaging/keyring/local-release` (see `packaging/keyring/README.md`), then `sudo pacman -Syu`. pacman accepts only packages
 signed by the Cupertino key. The installer runs `pacman-key --populate cupertino` in the new system; if that fails it
 prints a warning and you run it after the first boot.
+
+Disk and partition sizes are printed in binary units as `lsblk` prints them (`931.5 GiB`); the smallest disk it accepts is
+32 GB (decimal, 29.8 GiB).

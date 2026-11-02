@@ -45,12 +45,22 @@ class DisksTest(unittest.TestCase):
         self.assertEqual([(d.path, d.refused) for d in found], [
             ("/dev/nvme0n1", None),
             ("/dev/sda", "the live USB"),
-            ("/dev/sdb", "smaller than 32 GB"),
+            ("/dev/sdb", "smaller than 32 GB (decimal, 29.8 GiB)"),
             ("/dev/sde", "in use (mounted, swap, or the USB this system started from)"),
             ("/dev/sdc", "in use (an open encrypted, LVM or RAID volume)"),
             ("/dev/sdd", "read-only"),
         ])
-        self.assertEqual(found[0].partitions, ("/dev/nvme0n1p1 2 GB vfat EFI", "/dev/nvme0n1p2 997 GB crypto_LUKS"))
+        self.assertEqual(found[0].partitions, ("/dev/nvme0n1p1 2 GiB vfat EFI", "/dev/nvme0n1p2 928.5 GiB crypto_LUKS"))
+
+
+class SizeTextTest(unittest.TestCase):
+    def test_sizes_read_like_lsblk_in_binary_units(self):
+        # the bytes and the SIZE column `lsblk` printed for them
+        for size, lsblk in [(15525216256, "14.5 GiB"), (33544994816, "31.2 GiB"), (1000204886016, "931.5 GiB"),
+                            (40 * 1024**3, "40 GiB"), (43 * 1000**3, "40 GiB"), (1000**4, "931.3 GiB"),
+                            (1400 * 1000**2, "1.3 GiB"),
+                            (512 * 1024, "512 KiB"), (999, "999 B")]:
+            self.assertEqual(ci.size_text(size), lsblk, size)
 
 
 class GraphicsTest(unittest.TestCase):

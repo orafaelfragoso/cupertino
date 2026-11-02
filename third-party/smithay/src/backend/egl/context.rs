@@ -206,7 +206,8 @@ impl EGLContext {
     /// Creates a new configless `EGLContext` that is told about GPU resets, with an optional priority.
     ///
     /// With `EGL_EXT_create_context_robustness` the context is created with the reset notification strategy
-    /// `EGL_LOSE_CONTEXT_ON_RESET_EXT`, so a GPU reset makes the context lost and is reported by
+    /// `EGL_LOSE_CONTEXT_ON_RESET_EXT` (and, with `EGL_NV_robustness_video_memory_purge`, a purge of video memory counts
+    /// as a reset, reported as `GL_PURGED_CONTEXT_RESET_NV`), so a GPU reset makes the context lost and is reported by
     /// [`GlesRenderer::graphics_reset_status`](crate::backend::renderer::gles::GlesRenderer::graphics_reset_status).
     /// Without the extension the context is created as by [`EGLContext::new_with_priority`]; see
     /// [`EGLContext::loses_context_on_reset`].
@@ -321,7 +322,7 @@ impl EGLContext {
             warn!("GPU resets cannot be reported: EGL_EXT_create_context_robustness not supported");
         }
         if lose_context_on_reset {
-            context_attributes.extend(reset_notification_attributes());
+            context_attributes.extend(reset_notification_attributes(display.extensions()));
         }
 
         context_attributes.push(ffi::egl::NONE as i32);
@@ -694,12 +695,24 @@ fn reset_notification_supported(extensions: &[String]) -> bool {
         .any(|x| x == "EGL_EXT_create_context_robustness")
 }
 
-/// The context attributes that ask to lose the context on a GPU reset (`EGL_EXT_create_context_robustness`).
-fn reset_notification_attributes() -> [i32; 2] {
-    [
+/// The context attributes that ask to lose the context on a GPU reset (`EGL_EXT_create_context_robustness`), and on a
+/// purge of video memory where a display with `extensions` reports one (`EGL_NV_robustness_video_memory_purge`, which
+/// otherwise loses the contents of buffers silently across a suspend or a VT switch).
+fn reset_notification_attributes(extensions: &[String]) -> Vec<i32> {
+    let mut attributes = vec![
         ffi::egl::CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT as i32,
         ffi::egl::LOSE_CONTEXT_ON_RESET_EXT as i32,
-    ]
+    ];
+    if extensions
+        .iter()
+        .any(|x| x == "EGL_NV_robustness_video_memory_purge")
+    {
+        attributes.extend([
+            ffi::egl::GENERATE_RESET_ON_VIDEO_MEMORY_PURGE_NV as i32,
+            ffi::egl::TRUE as i32,
+        ]);
+    }
+    attributes
 }
 
 #[cfg(test)]
@@ -719,6 +732,20 @@ mod reset_notification_tests {
 
     #[test]
     fn the_attributes_name_the_lose_context_strategy() {
-        assert_eq!(reset_notification_attributes(), [0x3138, 0x31BF]);
+        assert_eq!(
+            reset_notification_attributes(&["EGL_EXT_create_context_robustness".into()]),
+            [0x3138, 0x31BF]
+        );
+    }
+
+    #[test]
+    fn a_purge_of_video_memory_is_reported_where_the_driver_offers_it() {
+        assert_eq!(
+            reset_notification_attributes(&[
+                "EGL_EXT_create_context_robustness".into(),
+                "EGL_NV_robustness_video_memory_purge".into()
+            ]),
+            [0x3138, 0x31BF, 0x334C, 1]
+        );
     }
 }

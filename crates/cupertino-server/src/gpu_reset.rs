@@ -36,13 +36,23 @@ impl Resets {
 /// Whether the GPU was reset since the last check, and why, as `session.log` says it; `None` with no reset or a driver
 /// that cannot tell.
 pub fn status(renderer: &mut GlesRenderer) -> Option<&'static str> {
-    match renderer.graphics_reset_status() {
-        Ok(GraphicsResetStatus::Guilty) => Some("the server's rendering caused it"),
-        Ok(GraphicsResetStatus::Innocent) => Some("another program caused it"),
-        Ok(GraphicsResetStatus::Unknown | GraphicsResetStatus::Other(_)) => {
+    renderer.graphics_reset_status().ok().and_then(reason)
+}
+
+/// `GL_PURGED_CONTEXT_RESET_NV`: the NVIDIA driver lost the video memory, across a suspend or a VT switch.
+const PURGED_CONTEXT_RESET_NV: u32 = 0x92BB;
+
+fn reason(status: GraphicsResetStatus) -> Option<&'static str> {
+    match status {
+        GraphicsResetStatus::Guilty => Some("the server's rendering caused it"),
+        GraphicsResetStatus::Innocent => Some("another program caused it"),
+        GraphicsResetStatus::Other(PURGED_CONTEXT_RESET_NV) => {
+            Some("the driver purged video memory")
+        }
+        GraphicsResetStatus::Unknown | GraphicsResetStatus::Other(_) => {
             Some("the cause is unknown")
         }
-        Ok(GraphicsResetStatus::NoError | GraphicsResetStatus::Unsupported) | Err(_) => None,
+        GraphicsResetStatus::NoError | GraphicsResetStatus::Unsupported => None,
     }
 }
 
@@ -146,6 +156,19 @@ mod tests {
         }
         assert!(!resets.allow(start + Duration::from_secs(3)));
         assert!(resets.allow(start + Duration::from_secs(70)));
+    }
+
+    #[test]
+    fn a_purge_of_video_memory_is_named_as_its_cause() {
+        assert_eq!(
+            reason(GraphicsResetStatus::Other(0x92BB)),
+            Some("the driver purged video memory")
+        );
+        assert_eq!(
+            reason(GraphicsResetStatus::Other(0x1234)),
+            Some("the cause is unknown")
+        );
+        assert_eq!(reason(GraphicsResetStatus::NoError), None);
     }
 
     #[test]

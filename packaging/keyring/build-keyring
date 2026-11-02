@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Build the cupertino-keyring package in the pinned Arch image:
+#
+#   build-keyring PUBLIC_KEY_FILE OUT_DIR
+#
+# PUBLIC_KEY_FILE is the armored public export of the Cupertino master key with its signing subkey (not the secret key).
+# The package lands unsigned in OUT_DIR, which must exist. Needs docker and network (pacman installs gnupg in the image).
+set -euo pipefail
+
+[ "$#" -eq 2 ] || { echo 'usage: build-keyring PUBLIC_KEY_FILE OUT_DIR' >&2; exit 2; }
+key=$(realpath "$1")
+out=$(realpath "$2")
+[ -f "$key" ] && [ -d "$out" ] || { echo "build-keyring: $1 is not a file or $2 is not a directory" >&2; exit 2; }
+here=$(cd "$(dirname "$0")" && pwd)
+image=docker.io/library/archlinux@sha256:3cbf69d2d5958d6a294f3722c5668e6187c4df8e00fa27f72352f0bf83e495e1
+
+docker run --rm -v "$here:/keyring:ro" -v "$key:/key.asc:ro" -v "$out:/out" -e OUT_UID="$(id -u)" -e OUT_GID="$(id -g)" "$image" bash -euc '
+    pacman -Syu --noconfirm --needed -q gnupg libarchive curl fakeroot >/dev/null
+    useradd -m builder
+    install -d -o builder /build
+    cp -r /keyring/. /build/
+    chown -R builder /build
+    su builder -c "cd /build && CUPERTINO_KEYRING_KEY=/key.asc makepkg -f --nodeps >/dev/null"
+    cp /build/cupertino-keyring-*-any.pkg.tar.zst /out/
+    chown "$OUT_UID:$OUT_GID" /out/cupertino-keyring-*-any.pkg.tar.zst
+'
+ls "$out"/cupertino-keyring-*-any.pkg.tar.zst

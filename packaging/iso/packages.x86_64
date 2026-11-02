@@ -39,6 +39,7 @@ shared-mime-info
 xkeyboard-config
 cupertino
 cupertino-data
+cupertino-keyring
 chromium
 base-devel
 rustup

@@ -32,8 +32,13 @@ epoch=$(git -C "$root" log -1 --format=%ct HEAD)
 work=$(mktemp -d "$out/work.XXXXXX")
 trap 'docker run --rm -v "$work:/w" "$image" rm -rf /w/iso-work /w/iso-out >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
 
+# The installed system trusts packages signed by this key (cupertino-keyring); the public key comes from `local-release keygen`.
+keyring_key=${CUPERTINO_KEYRING_KEY:-}
+[ -f "$keyring_key" ] || { echo 'set CUPERTINO_KEYRING_KEY to the public key file (PUBLIC.asc from packaging/keyring/local-release keygen)' >&2; exit 1; }
+
 mkdir -p "$work/pkgs"
 "$root/packaging/ci/build-in-container.sh" arch "$work/pkgs"
+"$root/packaging/keyring/build-keyring" "$keyring_key" "$work/pkgs" >/dev/null
 rm -rf "$work/pkgs/rev-"* "$work/pkgs"/*.log "$work/pkgs"/*.info "$work/pkgs"/*.contents "$work/pkgs/PKGBUILD"
 
 cp -a "$root/packaging/iso" "$work/profile"

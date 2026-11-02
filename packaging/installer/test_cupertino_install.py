@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import io
 import sys
+import tarfile
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -128,6 +129,18 @@ class PacmanConfTest(unittest.TestCase):
         self.assertEqual(ci.without_repository(conf), "[options]\nHoldPkg = pacman\n\n[core]\nInclude = /etc/pacman.d/mirrorlist\n")
 
 
+    def test_the_signed_local_repository_replaces_it_and_comes_last(self):
+        conf = "[options]\nHoldPkg = pacman\n\n[cupertino]\nSigLevel = Optional TrustAll\nServer = file:///opt/cupertino-repo\n\n[core]\nInclude = /etc/pacman.d/mirrorlist\n"
+        self.assertEqual(ci.with_local_repository(conf), "[options]\nHoldPkg = pacman\n\n[core]\nInclude = /etc/pacman.d/mirrorlist\n\n"
+                         "[cupertino]\nSigLevel = Required DatabaseOptional\nServer = file:///var/lib/cupertino/repo\n")
+
+    def test_the_empty_database_is_a_readable_archive_without_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ci.empty_database(Path(tmp) / "cupertino.db")
+            with tarfile.open(Path(tmp) / "cupertino.db") as db:
+                self.assertEqual(db.getnames(), [])
+
+
 class LiveLeftoversTest(unittest.TestCase):
     def target(self, pacman_conf, sudoers, shadow, passwd):
         tmp = tempfile.TemporaryDirectory()
@@ -154,7 +167,7 @@ class LiveLeftoversTest(unittest.TestCase):
                            {"wheel": "%wheel ALL=(ALL) NOPASSWD: ALL\n"}, "root::14871::::::\n",
                            "root:x:0:0::/root:/bin/bash\nrafael:x:1000:1000::/home/rafael:/bin/bash\nlive:x:1001:1001::/home/live:/bin/bash\n")
         self.assertEqual(ci.live_leftovers(root, "rafael"), [
-            "pacman.conf still has [cupertino] or TrustAll", "etc/sudoers.d/wheel has NOPASSWD", "root has a password",
+            "pacman.conf still has the live repository or TrustAll", "etc/sudoers.d/wheel has NOPASSWD", "root has a password",
             "account live is not rafael"])
 
 

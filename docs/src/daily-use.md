@@ -55,18 +55,40 @@ the fix for what is wrong; `cupertino-diagnose --json` gives the same as JSON.
 
 | File | Holds |
 |---|---|
-| `~/.local/state/cupertino/session.log` | one line per session start and end: a normal end, the exit status, the signal that ended the compositor, or the watchdog. When the compositor ends with an error, the end line also has the reason: a panic on its main thread or a lost rendering context. An abort or a fault (SIGABRT, SIGSEGV) is named as the reason, and `server.log` has its backtrace, as it has a panic's. Other signals leave no reason; the line names the signal. |
+| `~/.local/state/cupertino/session.log` | one line per session start and end: a normal end, the exit status, the signal that ended the compositor, or the watchdog. When the compositor ends with an error, the end line also has the reason: a panic on its main thread or a lost rendering context for which the server could not make a new renderer. A GPU reset that the server survives is one line of its own (see [A GPU reset](#a-gpu-reset)). An abort or a fault (SIGABRT, SIGSEGV) is named as the reason, and `server.log` has its backtrace, as it has a panic's. Other signals leave no reason; the line names the signal. |
 | `~/.local/state/cupertino/server.log` | everything the compositor logs, including the GPU, the driver, the kernel and any panic. The previous run is `server.log.1`. An error that stops the start is its last line, `the server stopped: ...`. |
 | `~/cupertino-tty.log` | what the processes print when started with `run-cupertino.sh`, including a start that fails before `server.log` opens. |
 
-`RUST_LOG` changes the log filter, and `CUPERTINO_LOG_FILE` moves `server.log`. After a panic or a lost rendering context, the teardown may take 2 s, then the server exits.
+`RUST_LOG` changes the log filter, and `CUPERTINO_LOG_FILE` moves `server.log`. After a panic, or a lost rendering context for which the server could not make a new renderer, the teardown may take 2 s, then the server exits.
+
+## A GPU reset
+
+On a display, the server asks the render GPU whether it was reset before each round of frames, and a frame that fails with the context lost counts as a reset too. On a reset the server makes a new renderer for each card and draws again: the windows stay, the clients stay connected and nothing restarts. A driver without the robustness extension reports no reset, so only a frame that fails with the context lost starts this.
+
+Each reset is one line in `session.log`:
+
+```text
+<time> the GPU was reset: gpu=<card> reason=<who caused it>; <outcome>
+```
+
+The outcome is `renderer remade, the clients stayed connected` or `renderer not remade (<error>), the session ends`.
+
+The limits: a fourth reset within 60 s, or a renderer that cannot be made, ends the session. The login screen comes back, as after any lost rendering context. A client's buffer that the reset lost shows what the driver left in it until the client draws again.
+
+Not verified on hardware: the new renderer has run only through the offscreen test hook (`tests/gpu-reset.rs`), not against a real reset.
+
+To investigate a reset with an AI assistant:
+
+1. Run `cupertino-diagnose --area crash --json`. The `crash.gpu_reset` check is `warn` when `session.log` has a reset, with the facts `resets`, `remade`, `last_time`, `last_gpu`, `last_reason` and `last_outcome`.
+2. Copy the lines of `~/.local/state/cupertino/server.log` around `last_time` (`server.log.1` if the session has restarted since).
+3. Give both to an AI assistant, or to the driver's bug tracker. The Phase 7 AI service is planned and not built; until it exists, paste them by hand.
 
 ## If it hangs
 
 - **One application does not answer.** The compositor pings every application window once a second. With no answer 2 s after a ping, the pointer over its window shows the busy cursor and the dock marks it Not Responding. Press `Super+Alt+Escape`, or use Force Quit in the menu bar. An application that does not answer is killed at once; any other gets a close request first and is killed 3 s later if it is still there.
 - **A shell process fails** (dock, menu bar, launcher and so on). The compositor starts it again, at most once per second. A process that exits successfully stays stopped.
 - **The compositor hangs.** `Ctrl+Alt+Backspace` and `Ctrl+Alt+F<n>` need a live compositor. From another console or over ssh, `pkill cupertino-server` ends it. As a last resort, with `sudo sysctl kernel.sysrq=1` set beforehand, `Alt+SysRq+R`, `E`, `I` returns the keyboard to the kernel and ends all processes. Save your work in other sessions first.
-- **After a panic, an abort, a fault or a lost rendering context.** The login screen comes back within seconds. `session.log` has the reason and `server.log.1` (after the next login) the backtrace.
+- **After a panic, an abort, a fault, or a lost rendering context with no new renderer.** On a display the server first makes a new renderer and the windows stay ([A GPU reset](#a-gpu-reset)). The login screen comes back within seconds. `session.log` has the reason and `server.log.1` (after the next login) the backtrace.
 
 ## Known limits
 

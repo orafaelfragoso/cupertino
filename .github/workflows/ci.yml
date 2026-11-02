@@ -139,6 +139,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: package-env-${{ matrix.package-env }}
+      # the layer rules' MPL closure reads the whole dependency graph with cargo metadata --offline
+      - run: cargo fetch --locked
       # the layer rules build one small crate: a broken rule fails here before the long lint build
       - name: Layer rules
         if: "!matrix.package-env"

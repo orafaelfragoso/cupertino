@@ -939,6 +939,12 @@ fn revealed_titlebar(
             p.now,
         )
         .filter(|_| plan.exact)?;
+    // it fades with the bar it slides with
+    let shown = p
+        .menu_bars
+        .set
+        .presentation(p.output_id, p.now)
+        .map_or(1.0, |b| b.visible);
     let title =
         p.wm.window(entry.id)
             .map(|w| w.title.clone())
@@ -946,7 +952,7 @@ fn revealed_titlebar(
     // a full-screen window does not minimize; the zoom button is its way out
     let bufs = p.decor.buffers(&DecorInput {
         id: entry.id,
-        style: entry.titlebar,
+        style: WindowEntry::REVEALED_TITLEBAR,
         frame: (strip.w, strip.h),
         scale: p.scale,
         active,
@@ -976,7 +982,7 @@ fn revealed_titlebar(
             scale_x: 1.0,
             scale_y: 1.0,
         },
-        opacity: plan.opacity as f32,
+        opacity: (plan.opacity * shown) as f32,
         clip: Clip::None,
     })))
 }

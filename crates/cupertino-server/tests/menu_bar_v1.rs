@@ -2262,7 +2262,7 @@ fn the_top_edge_reveals_the_title_bar_of_a_full_screen_window_and_its_zoom_butto
     });
     h.advance(5.0);
     h.advance(1.0);
-    let metrics = h.state.decor.decorations().config.metrics.clone();
+    let metrics = h.state.decor.decorations().config.metrics;
     let zoom = h
         .state
         .decor

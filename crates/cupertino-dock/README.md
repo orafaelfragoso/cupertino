@@ -140,8 +140,8 @@ Code: `src/app_grid.rs`, `render::paint_app_grid`, the `Grid` in `app.rs`. The s
 hot corner, four-finger pinch) as `toggle_app_grid` and keeps nothing else.
 
 **Surface.** The dock opens the grid on an overlay layer surface (namespace `cupertino-dock-app-grid`) anchored to every edge of
-its output. The surface starts 30 pt below the top (the design's top band, which keeps the menu bar visible) and
-sits inside the dock bar's exclusive zone, so the bar stays visible. It takes exclusive keyboard focus and the `AppGrid`
+its output. The surface covers the menu bar (the bar's reservation is not a layer zone) and sits inside the dock
+bar's exclusive zone, so the dock bar stays visible. It takes exclusive keyboard focus and the `AppGrid`
 material as a server-rendered backdrop (blur 30, saturate 1.8, gain 0.55 / bias 0.05292).
 
 **Content and geometry.** Every desktop entry without `NoDisplay` is listed, sorted by name (the design keeps the user's
@@ -154,8 +154,10 @@ layer. The dock bar's zone stands for the design's dock extent, an mapping.
 - The page dots are 15 × 15 at pitch 20 (white, others at 0.2).
 - The search field is 250 × 25, 15 pt above the page, with a light 16 pt text.
 
-**Motion.** The grid fades and scales in from 1.05 over 0.25 s ease-in, and out the reverse way. A page flip takes
-0.5 s on the curve. Under Reduce Motion (the session's display options) the grid keeps its opacity
+**Motion.** The grid fades and scales in from 1.05 over 0.25 s ease-in, and out the reverse way. The entry starts once
+the first frame (which loads the icons, at opacity 0) is presented. The compositor applies the scale through the
+surface's viewport (`ShmPresenter::set_zoom`); without a viewport the grid only fades. The dock paints the content once
+per look and fades the kept copy on each frame. A page flip takes 0.5 s on the curve. Under Reduce Motion (the session's display options) the grid keeps its opacity
 animation and skips the scale step.
 
 **Input.**

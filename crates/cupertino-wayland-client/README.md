@@ -34,7 +34,9 @@ workspace's pure-Rust `cupertino-xkbcommon`); `cupertino-layers` fails the build
 A `BufferLease` borrows the connection, so no configure arrives between drawing and presenting: the buffer always
 answers the latest configure, which is acked once, with the first buffer presented for it. The scale is the fractional
 scale when `wp_fractional_scale_v1` and `wp_viewporter` are offered, else `wl_surface.preferred_buffer_scale`, else the
-largest scale of the outputs the surface entered; without the viewporter it is rounded up to a whole number.
+largest scale of the outputs the surface entered; without the viewporter it is rounded up to a whole number. With the
+viewport, `BufferLease::set_zoom` magnifies a frame about its centre on the compositor (the viewport's source is the
+middle of the buffer), and the next frame without a zoom shows the whole buffer again.
 
 An input method gets the focused field's state only while its surface has the text-input focus: it is sent again
 after each enter, only when it changed, and a value once sent (surrounding text, cursor rectangle) is withdrawn by

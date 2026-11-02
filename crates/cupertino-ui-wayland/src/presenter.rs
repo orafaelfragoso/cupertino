@@ -33,6 +33,7 @@ pub struct ShmPresenter {
     reconfigured: bool,
     frame_pending: bool,
     wants_redraw: bool,
+    zoom: f64,
 }
 
 impl ShmPresenter {
@@ -46,6 +47,7 @@ impl ShmPresenter {
             reconfigured: false,
             frame_pending: false,
             wants_redraw: false,
+            zoom: 1.0,
         }
     }
 
@@ -71,6 +73,14 @@ impl ShmPresenter {
     /// Draw again as soon as the surface can take a frame.
     pub fn request_redraw(&mut self) {
         self.wants_redraw = true;
+    }
+
+    /// Show the next frames magnified `zoom` times (at least 1) about their centre, scaled by the compositor where it
+    /// can ([`BufferLease::set_zoom`]); 1 shows them as drawn.
+    ///
+    /// [`BufferLease::set_zoom`]: cupertino_wayland_client::BufferLease::set_zoom
+    pub fn set_zoom(&mut self, zoom: f64) {
+        self.zoom = zoom;
     }
 
     /// The frame callback of this surface fired (`Event::Frame`).
@@ -182,6 +192,7 @@ impl ShmPresenter {
             ),
             None => rgba_to_argb8888(pixmap.data(), lease.pixels_mut()),
         }
+        lease.set_zoom(self.zoom);
         lease.present_damage(damage.as_deref())?;
         self.frame_pending = true;
         self.pixmap = Some(pixmap);

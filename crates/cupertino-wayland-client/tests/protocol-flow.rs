@@ -224,6 +224,7 @@ enum Seen {
         format: wl_shm::Format,
     },
     Viewport(i32, i32),
+    ViewportSource(f64, f64, f64, f64),
     DecorationMode(Mode),
     Positioner(PositionerState),
     Receive(String),
@@ -950,8 +951,22 @@ impl Dispatch<WpViewport, ()> for Mock {
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
-        if let wp_viewport::Request::SetDestination { width, height } = request {
-            state.seen.send(Seen::Viewport(width, height)).unwrap();
+        match request {
+            wp_viewport::Request::SetDestination { width, height } => {
+                state.seen.send(Seen::Viewport(width, height)).unwrap();
+            }
+            wp_viewport::Request::SetSource {
+                x,
+                y,
+                width,
+                height,
+            } => {
+                state
+                    .seen
+                    .send(Seen::ViewportSource(x, y, width, height))
+                    .unwrap();
+            }
+            _ => {}
         }
     }
 }
@@ -1904,6 +1919,35 @@ fn the_scale_follows_the_output_then_the_preferred_buffer_scale() {
             ..
         }
     ));
+}
+
+#[test]
+fn a_zoomed_frame_shows_the_middle_of_its_buffer_and_the_next_unzoomed_one_all_of_it() {
+    let (mut conn, _control, seen) = connect(Globals {
+        fractional_scale: true,
+        ..Globals::core()
+    });
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    let mut lease = conn
+        .lease(w.surface(), (400, 200), BufferFormat::Xrgb8888)
+        .unwrap();
+    assert!(lease.set_zoom(1.25));
+    lease.present().unwrap();
+    assert!(matches!(next_seen(&seen), Seen::Ack(_)));
+    assert_eq!(
+        next_seen(&seen),
+        Seen::ViewportSource(40.0, 20.0, 320.0, 160.0)
+    );
+    assert_eq!(next_seen(&seen), Seen::Viewport(400, 200));
+    assert!(matches!(next_seen(&seen), Seen::Commit { .. }));
+    present(&mut conn, w.surface(), (400, 200));
+    assert_eq!(
+        next_seen(&seen),
+        Seen::ViewportSource(-1.0, -1.0, -1.0, -1.0)
+    );
+    assert_eq!(next_seen(&seen), Seen::Viewport(400, 200));
 }
 
 #[test]

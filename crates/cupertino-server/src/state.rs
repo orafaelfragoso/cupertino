@@ -1643,7 +1643,7 @@ impl Cupertino {
                 for surface in crate::authorization::layers_stacked(&map, *l).rev() {
                     if *l == Layer::Top
                         && covered
-                        && !self.menu_bars.has_surface(surface.wl_surface())
+                        && crate::render::scene::gives_way(surface, &self.menu_bars)
                     {
                         continue;
                     }

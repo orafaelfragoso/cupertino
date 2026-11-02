@@ -773,6 +773,17 @@ fn shell_process_goldens() {
         scene.wait_until("the power panel", |s| s.mapped_layers("login-panel") == 1);
         scene.settle();
         baseline(&root, "power-panel", &mut scene, update);
+        // a lock request that finds no lock screen connected goes to the owner of the name, and the server trusts only
+        // its own login process there: the one before must be gone first
+        drop(scene);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while has_owner(&connection, "org.cupertino.Login1") {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for the lock process before to give up its control name"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
 
         let mut scene = Scene::with_processes(SIZE, vec![login_process(bus, &system.address)]);
         scene.window();

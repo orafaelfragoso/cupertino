@@ -236,6 +236,11 @@ pub struct WindowEntry {
 }
 
 impl WindowEntry {
+    /// The style of the title bar revealed over a full-screen window: standard, with a background of its own: a
+    /// unified bar is drawn over the client's toolbar, which stays at the top of the output under the menu bar.
+    pub const REVEALED_TITLEBAR: cupertino_decorations::TitlebarStyle =
+        cupertino_decorations::TitlebarStyle::Standard;
+
     /// The space the decorations take now: none while the window is full screen.
     pub fn insets(&self) -> crate::config::Insets {
         if self.fullscreen {
@@ -252,6 +257,27 @@ impl WindowEntry {
             f64::from(geo.size.w) + self.insets().horizontal(),
             f64::from(geo.size.h) + self.insets().vertical(),
         )
+    }
+
+    /// Where the title bar of a full-screen window on `output` shows: below the menu bar revealed over it. Ours also for
+    /// a client-decorated window, which hides its own title bar in full screen.
+    pub fn revealed_titlebar(
+        &self,
+        bars: &crate::menu_bar::MenuBars,
+        decor: &crate::decor::Decor,
+        decorations: bool,
+        output: OutputId,
+        now: f64,
+    ) -> Option<Rect> {
+        if !(self.fullscreen && decorations && bars.has_bar(output)) {
+            return None;
+        }
+        let height = decor
+            .decorations()
+            .config
+            .metrics
+            .titlebar_height(Self::REVEALED_TITLEBAR);
+        bars.set.fullscreen_titlebar(output, height, now)
     }
 
     /// The wl_surface of the window.
@@ -1490,6 +1516,33 @@ impl Cupertino {
                         });
                     }
                 }
+            }
+            // the title bar revealed with the menu bar over a full-screen window: its buttons act, the rest takes the
+            // pointer from the client
+            if let Some(strip) = entry
+                .revealed_titlebar(
+                    &self.menu_bars,
+                    &self.decor,
+                    self.config.window.decorations,
+                    out.id,
+                    now,
+                )
+                .filter(|r| plan.exact && r.contains(MPoint::new(pos.x, pos.y)))
+            {
+                let content = (strip.w, strip.h);
+                let local = (pos.x - strip.x, pos.y - strip.y);
+                let style = WindowEntry::REVEALED_TITLEBAR;
+                let hit = match self.decor.hit_test(style, content, local, false) {
+                    hit @ cupertino_decorations::Hit::Button(_) => hit,
+                    _ => cupertino_decorations::Hit::None,
+                };
+                return Some(WindowTarget::Decoration {
+                    id,
+                    style,
+                    hit,
+                    content,
+                    local,
+                });
             }
             // the resize zones, where the window can resize that way (the cursor follows; dropping the zone with the cursor is)
             let edge = if decorated {

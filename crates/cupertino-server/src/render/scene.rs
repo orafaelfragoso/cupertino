@@ -833,6 +833,7 @@ fn builtin_decorations(
         resizable,
         can_minimize,
         can_zoom,
+        flush: false,
     });
     let scale = Scale::from(p.scale);
     let v_phys = to_physical_rect(local(plan.visual, &p.rect), scale);
@@ -921,6 +922,65 @@ fn builtin_decorations(
         ),
     );
     out
+}
+
+/// The title bar of a full-screen window while the menu bar is revealed over it, across the output below the bar.
+fn revealed_titlebar(
+    p: &mut SceneParams<'_>,
+    entry: &WindowEntry,
+    plan: &WindowPlan,
+    active: bool,
+) -> Option<Piece> {
+    let strip = entry
+        .revealed_titlebar(
+            p.menu_bars,
+            p.decor,
+            p.config.window.decorations,
+            p.output_id,
+            p.now,
+        )
+        .filter(|_| plan.exact)?;
+    let title =
+        p.wm.window(entry.id)
+            .map(|w| w.title.clone())
+            .unwrap_or_default();
+    // a full-screen window does not minimize; the zoom button is its way out
+    let bufs = p.decor.buffers(&DecorInput {
+        id: entry.id,
+        style: WindowEntry::REVEALED_TITLEBAR,
+        frame: (strip.w, strip.h),
+        scale: p.scale,
+        active,
+        title: &title,
+        resizable: false,
+        can_minimize: false,
+        can_zoom: true,
+        flush: true,
+    });
+    let origin = OutputPoint(cupertino_geometry::Point::new(
+        strip.x - p.rect.x,
+        strip.y - p.rect.y,
+    ));
+    Some(Piece::Image(Box::new(Picture {
+        buffer: bufs.titlebar.clone(),
+        kind: SceneKind::TitleBar,
+        index: entry.id.0,
+        role: ImageRole::Decoration,
+        buffer_px: bufs.titlebar_px,
+        src: smithay::utils::Rectangle::new(
+            (0.0, 0.0).into(),
+            (f64::from(bufs.titlebar_px.0), f64::from(bufs.titlebar_px.1)).into(),
+        ),
+        size: (strip.w.round() as i32, bufs.titlebar_pt.round() as i32),
+        placement: Placement {
+            origin,
+            pivot: origin,
+            scale_x: 1.0,
+            scale_y: 1.0,
+        },
+        opacity: plan.opacity as f32,
+        clip: Clip::None,
+    })))
 }
 
 /// Per-window pieces of the decorations, front to back.
@@ -1641,7 +1701,8 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
                     (dimming * plan.opacity) as f32,
                 ));
             }
-            let deco = window_decorations(p, entry, &plan, active);
+            let mut deco = window_decorations(p, entry, &plan, active);
+            deco.extend(revealed_titlebar(p, entry, &plan, active));
             front_to_back.extend(window_elements(p, entry, &plan, active, true, deco));
         }
         let mut ghosts: Vec<Piece> = closing_elements(p);

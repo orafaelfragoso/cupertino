@@ -153,7 +153,8 @@ pub struct UdevBackend {
     paused: bool,
     /// The display sleeps (`power.rs`): every CRTC is off and nothing is rendered until it wakes.
     asleep: bool,
-    /// A render reported the rendering context lost, which ends the session; nothing is drawn with it again.
+    /// A render reported the rendering context lost: nothing is drawn with it again, and the next frame makes a new one
+    /// ([`recover_gpu`]) or ends the session.
     renderer_lost: bool,
 }
 
@@ -181,6 +182,7 @@ fn loop_timeout(state: &Cupertino) -> Duration {
         }
     });
     let frames = match state.backend.as_ref() {
+        Some(Backend::Udev(u)) if u.renderer_lost && !(u.paused || u.asleep) => Some(PASSED),
         Some(Backend::Udev(u)) if !(u.paused || u.asleep || u.renderer_lost) => {
             let now = state.frame_now();
             u.cards
@@ -314,7 +316,7 @@ fn open_card(session: &LogindSession, path: &Path) -> Result<Opened> {
         .ok()
         .flatten()
         .or_else(|| node.node_with_type(NodeType::Render).and_then(|n| n.ok()));
-    let context = EGLContext::new_with_priority(&display, ContextPriority::High)
+    let context = EGLContext::new_with_reset_notification(&display, Some(ContextPriority::High))
         .map_err(|e| anyhow!("EGL context: {e}"))?;
     let renderer =
         unsafe { super::gles_renderer(context) }.map_err(|e| anyhow!("GLES renderer: {e}"))?;
@@ -627,6 +629,7 @@ pub fn run(
         asleep: false,
         renderer_lost: false,
     })));
+    state.gpu_recovers = true;
     for other in gpus.iter().filter(|g| g.device != gpu.device) {
         if let Some(path) = other.device.devnode() {
             open_display_card(state, path, card_prefix(other, &primary));
@@ -1138,6 +1141,21 @@ fn render_outputs(state: &mut Cupertino) {
     };
     let mut unsupported = Vec::new();
     if let Backend::Udev(u) = &mut backend {
+        if !(u.paused || u.asleep) {
+            let reset = crate::gpu_reset::status(u.renderer())
+                .map(str::to_owned)
+                .or_else(|| state.gpu_reset.take())
+                .or_else(|| {
+                    u.renderer_lost
+                        .then(|| "the rendering context was lost".to_owned())
+                });
+            if let Some(reason) = reset {
+                if !recover_gpu(state, u, &reason) {
+                    state.backend = Some(backend);
+                    return;
+                }
+            }
+        }
         let places: Vec<(DrmNode, crtc::Handle)> = u
             .cards
             .iter()
@@ -1174,6 +1192,50 @@ fn render_outputs(state: &mut Cupertino) {
     for head in unsupported {
         state.head_unsupported(head);
     }
+}
+
+/// The GPU was reset for `reason`: every card gets a new context and renderer on its EGL display, its displays' buffers
+/// and copies are made again, and so is every GPU object of the scene; client buffers are imported again by the next
+/// frame. Whether the session goes on: too many resets in a row, or a renderer that cannot be made, end it.
+fn recover_gpu(state: &mut Cupertino, u: &mut UdevBackend, reason: &str) -> bool {
+    let gpu = u
+        .render_node
+        .dev_path()
+        .map_or_else(|| u.render_node.to_string(), |p| p.display().to_string());
+    let recovery = if state.gpu_resets.allow(Instant::now()) {
+        new_renderers(state, u).map_err(|e| format!("{e:#}"))
+    } else {
+        Err("the GPU was reset too often within a minute".to_owned())
+    };
+    crate::gpu_reset::record(&gpu, reason, &recovery);
+    match recovery {
+        Ok(()) => {
+            u.renderer_lost = false;
+            state.gpu_reset = None;
+            true
+        }
+        Err(e) => {
+            u.renderer_lost = true;
+            state.end_for_lost_context(&format!("{reason}; {e}"));
+            false
+        }
+    }
+}
+
+fn new_renderers(state: &mut Cupertino, u: &mut UdevBackend) -> Result<()> {
+    for card in u.cards.values_mut() {
+        let display = card.renderer.egl_context().display().clone();
+        let context =
+            EGLContext::new_with_reset_notification(&display, Some(ContextPriority::High))
+                .map_err(|e| anyhow!("EGL context: {e}"))?;
+        card.renderer =
+            unsafe { super::gles_renderer(context) }.map_err(|e| anyhow!("GLES renderer: {e}"))?;
+        for s in card.surfaces.values_mut() {
+            s.copy = None;
+            s.drm_output.reset_buffers();
+        }
+    }
+    state.rebuild_render(u.renderer())
 }
 
 /// A flip whose vblank is overdue: its clients are called back once per refresh, so none waits on a dead head, and after

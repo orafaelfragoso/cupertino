@@ -1816,6 +1816,27 @@ impl GlesRenderer {
         Ok(func(&self.gl))
     }
 
+    /// Whether the GPU was reset since the last call, and who caused it (`glGetGraphicsResetStatus`, core in GLES 3.2,
+    /// else `glGetGraphicsResetStatusEXT` of `GL_EXT_robustness`).
+    ///
+    /// A reset is reported only for a context created with a reset notification strategy, see
+    /// [`EGLContext::new_with_reset_notification`]. Any status but [`GraphicsResetStatus::NoError`] means the context is
+    /// lost: it and every object made with it must be recreated. [`GraphicsResetStatus::Unsupported`] when the driver
+    /// has neither function.
+    #[instrument(level = "trace", parent = &self.span, skip_all)]
+    pub fn graphics_reset_status(&mut self) -> Result<GraphicsResetStatus, GlesError> {
+        self.with_context(|gl| {
+            let status = if gl.GetGraphicsResetStatus.is_loaded() {
+                unsafe { gl.GetGraphicsResetStatus() }
+            } else if gl.GetGraphicsResetStatusEXT.is_loaded() {
+                unsafe { gl.GetGraphicsResetStatusEXT() }
+            } else {
+                return GraphicsResetStatus::Unsupported;
+            };
+            GraphicsResetStatus::from_gl(status)
+        })
+    }
+
     /// Compile a custom pixel shader for rendering with [`GlesFrame::render_pixel_shader_to`].
     ///
     /// Pixel shaders can be used for completely shader-driven drawing into a given region.
@@ -3237,5 +3258,54 @@ mod tests {
         assert_eq!(tex_mat * top_right, Vector3::new(1f32, 0f32, 1f32));
         assert_eq!(tex_mat * bottom_right, Vector3::new(0f32, 0f32, 1f32));
         assert_eq!(tex_mat * bottom_left, Vector3::new(0f32, 1f32, 1f32));
+    }
+}
+
+/// What [`GlesRenderer::graphics_reset_status`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphicsResetStatus {
+    /// No reset since the last check.
+    NoError,
+    /// This context caused the reset.
+    Guilty,
+    /// Another context caused the reset.
+    Innocent,
+    /// The cause of the reset is not known.
+    Unknown,
+    /// A status the driver adds, e.g. NVIDIA's purged context after suspend (`GL_PURGED_CONTEXT_RESET_NV`, 0x92BB).
+    Other(u32),
+    /// The driver has no reset status function.
+    Unsupported,
+}
+
+impl GraphicsResetStatus {
+    fn from_gl(status: ffi::types::GLenum) -> Self {
+        match status {
+            ffi::NO_ERROR => Self::NoError,
+            ffi::GUILTY_CONTEXT_RESET => Self::Guilty,
+            ffi::INNOCENT_CONTEXT_RESET => Self::Innocent,
+            ffi::UNKNOWN_CONTEXT_RESET => Self::Unknown,
+            other => Self::Other(other),
+        }
+    }
+}
+
+#[cfg(test)]
+mod reset_status_tests {
+    use super::*;
+
+    #[test]
+    fn reset_statuses_map_by_their_gl_values() {
+        assert_eq!(GraphicsResetStatus::from_gl(0), GraphicsResetStatus::NoError);
+        assert_eq!(GraphicsResetStatus::from_gl(0x8253), GraphicsResetStatus::Guilty);
+        assert_eq!(
+            GraphicsResetStatus::from_gl(0x8254),
+            GraphicsResetStatus::Innocent
+        );
+        assert_eq!(GraphicsResetStatus::from_gl(0x8255), GraphicsResetStatus::Unknown);
+        assert_eq!(
+            GraphicsResetStatus::from_gl(0x92BB),
+            GraphicsResetStatus::Other(0x92BB)
+        );
     }
 }

@@ -20,6 +20,9 @@ const NORMAL_ENDS: [&str; 2] = [
 /// Lines of the server's log that report a crash.
 const CRASH_MARKS: [&str; 2] = ["panic: ", "fatal signal "];
 
+/// What the server writes to `session.log` after its time when the GPU was reset (`cupertino_server::gpu_reset`).
+const GPU_RESET_MARK: &str = " the GPU was reset: gpu=";
+
 pub fn gpu(sources: &Sources) -> Vec<Check> {
     let report = match preflight::run(&sources.sysfs) {
         Ok(Some(report)) => report,
@@ -511,7 +514,70 @@ pub fn crash(sources: &Sources) -> Vec<Check> {
             );
         }
     }
-    vec![check]
+    vec![check, gpu_resets(&text)]
+}
+
+/// The GPU resets `session.log` records, the last one in parts.
+fn gpu_resets(log: &str) -> Check {
+    let resets: Vec<GpuReset> = log.lines().filter_map(GpuReset::parse).collect();
+    let Some(last) = resets.last() else {
+        return Check::new(
+            "crash.gpu_reset",
+            Area::Crash,
+            Status::Ok,
+            "the GPU has not been reset",
+        );
+    };
+    let remade = resets.iter().filter(|r| r.remade()).count();
+    Check::new(
+        "crash.gpu_reset",
+        Area::Crash,
+        Status::Warn,
+        format!(
+            "the GPU was reset {} times, the last at {}: {}",
+            resets.len(),
+            last.time,
+            last.outcome
+        ),
+    )
+    .fact("resets", resets.len().to_string())
+    .fact("remade", format!("{remade} of {}", resets.len()))
+    .fact("last_time", last.time)
+    .fact("last_gpu", last.gpu)
+    .fact("last_reason", quote(last.reason))
+    .fact("last_outcome", quote(last.outcome))
+    .fix(
+        "a reset is the GPU driver's or the hardware's; to investigate it, give the output of `cupertino-diagnose \
+         --json` and the server.log lines around that time to an AI assistant, or to the driver's bug tracker",
+    )
+}
+
+/// A `session.log` line of a GPU reset: `<time> the GPU was reset: gpu=<gpu> reason=<reason>; <outcome>`.
+struct GpuReset<'a> {
+    time: &'a str,
+    gpu: &'a str,
+    reason: &'a str,
+    outcome: &'a str,
+}
+
+impl<'a> GpuReset<'a> {
+    fn parse(line: &'a str) -> Option<Self> {
+        let (time, rest) = line.split_once(GPU_RESET_MARK)?;
+        let (gpu, rest) = rest.split_once(" reason=")?;
+        let at = rest
+            .find("; renderer remade")
+            .or_else(|| rest.find("; renderer not remade"))?;
+        Some(GpuReset {
+            time: time.trim(),
+            gpu,
+            reason: &rest[..at],
+            outcome: &rest[at + 2..],
+        })
+    }
+
+    fn remade(&self) -> bool {
+        self.outcome.starts_with("renderer remade")
+    }
 }
 
 fn first_crash_line(path: &Path) -> Option<String> {

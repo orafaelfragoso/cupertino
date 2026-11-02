@@ -32,7 +32,9 @@
 //! caps_lock_switch = off # on: a caps-lock tap switches to the next input source, a hold turns caps lock on
 //! caps_lock_hold = 500 # ms a caps-lock press must last to count as a hold, 1 to 1500 (default)
 //! layout_keyboard = ansi # physical key arrangement of `decoded: input sources: ansi, iso, jis
-//! layout_level3 = right-alt # keys that select the alternate symbols of `decoded: sources: both-alt, right-alt, none
+//! layout_level3 = both-alt # keys that select the alternate symbols (level 3, with Shift level 4): both-alt
+//!   # (default), right-alt, none (the layouts' own); a right Alt that is the compose key stays the compose key;
+//!   # unset under classic-pc: right-alt for `decoded:` sources, the system layouts' own keys
 //! compose_key = right-alt # the compose key of the system layouts: off, right-alt, right-ctrl, menu, caps-lock,
 //!   # scroll-lock; unset keeps the compose option of localed's X11Options, which apply except its layout
 //!   # switching keys (grp:*: the input sources switch the layouts); right-alt takes AltGr from layouts that use it
@@ -47,9 +49,12 @@
 //! ```
 //!
 //! The two shortcut toggles of the accessibility
-//! filters default to off and `caps_lock_switch` too (approximate: the design defaults is not known); the
-//! level-3 keys of `decoded: sources default to the right Alt key only (approximate: the design uses both Alt
-//! keys, which would take Alt away from the compositor's and the applications' Alt shortcuts).
+//! filters default to off and `caps_lock_switch` too (approximate: the design defaults is not known). Under the
+//! `cupertino` profile both Alt keys select the alternate symbols by default, as in the design (`classic-pc` keeps
+//! Alt for the applications): applications no longer see Alt from them, while the
+//! compositor's shortcuts and the client rewrite still count them as Alt. Under the `cupertino` profile the US
+//! layout without a variant compiles as `us(mac)`, whose alternate symbols include the dead keys (Alt+E, then E
+//! types é).
 
 use std::path::PathBuf;
 
@@ -144,8 +149,9 @@ pub struct KeyboardSettings {
     pub fn_usage: Option<FnUsage>,
     /// Physical key arrangement of decoded layouts.
     pub layout_keyboard: Keyboard,
-    /// Keys that select the alternate symbol tables of decoded layouts.
-    pub layout_level3: Level3Keys,
+    /// Keys that select the alternate symbols; `None` follows the profile: both Alt keys under `cupertino`, and under
+    /// `classic-pc` the right Alt of decoded layouts while the system layouts keep their own.
+    pub layout_level3: Option<Level3Keys>,
     /// The compose key of the system layouts; `None` keeps the one the system's xkb options set.
     pub compose: Option<ComposeKey>,
     /// The layout localed holds: its layouts are the sources when `keyboard.conf` sets none, its options apply.
@@ -186,7 +192,7 @@ impl Default for KeyboardSettings {
             access: AccessSettings::default(),
             fn_usage: None,
             layout_keyboard: Keyboard::Ansi,
-            layout_level3: Level3Keys::RightAlt,
+            layout_level3: None,
             compose: None,
             system: crate::localed::SystemLayout::default(),
             client_rewrite: true,
@@ -269,11 +275,11 @@ impl KeyboardSettings {
             self.compose = Some(k);
         }
         if let Some(l) = f.layout_level3 {
-            self.layout_level3 = match l {
+            self.layout_level3 = Some(match l {
                 Level3::BothAlt => Level3Keys::BothAlt,
                 Level3::RightAlt => Level3Keys::RightAlt,
                 Level3::None => Level3Keys::None,
-            };
+            });
         }
         let a = &mut self.access;
         for (set, field) in [
@@ -385,7 +391,7 @@ impl KeyboardSettings {
         for (on, bit) in [
             (m.shift, RawMods::SHIFT),
             (m.ctrl, RawMods::CTRL),
-            (m.alt, RawMods::ALT),
+            (m.alt || m.iso_level3_shift, RawMods::ALT),
             (m.logo, RawMods::SUPER),
         ] {
             if on {
@@ -403,10 +409,11 @@ impl KeyboardSettings {
     }
 
     /// The physical modifier keys of a keyboard state: the keys the system shortcuts are matched on (Super is `logo`).
+    /// The level-3 keys count as Alt: with `layout_level3` they set that modifier instead of Alt's.
     pub fn physical(m: &ModifiersState) -> Mods {
         Mods {
             ctrl: m.ctrl,
-            alt: m.alt,
+            alt: m.alt || m.iso_level3_shift,
             shift: m.shift,
             logo: m.logo,
         }
@@ -421,8 +428,18 @@ impl KeyboardSettings {
 
     /// The comma separated xkb options of the system layouts: the system's, with `compose` in place of its compose
     /// option when set, and without its layout switching keys (`grp:`), since the input sources switch the layouts
-    /// (a switch inside xkb would leave the menu, the HUD and the per-application source behind).
+    /// (a switch inside xkb would leave the menu, the HUD and the per-application source behind). With system layouts
+    /// among the sources, the level-3 keys of `layout_level3` replace the system's (`lv3:`), except a right Alt that is
+    /// the compose key.
     pub fn xkb_options(&self) -> String {
+        let system = || self.system.options.split(',').map(str::trim);
+        let compose_on_ralt = match self.compose {
+            Some(key) => matches!(key, ComposeKey::RightAlt),
+            None => system().any(|option| option == "compose:ralt"),
+        };
+        let level3 = self
+            .level3_option(compose_on_ralt)
+            .filter(|_| self.system_sources().next().is_some());
         let compose = self.compose.map(|key| match key {
             ComposeKey::Off => None,
             ComposeKey::RightAlt => Some("compose:ralt"),
@@ -431,44 +448,75 @@ impl KeyboardSettings {
             ComposeKey::CapsLock => Some("compose:caps"),
             ComposeKey::ScrollLock => Some("compose:sclk"),
         });
-        self.system
-            .options
-            .split(',')
-            .map(str::trim)
+        system()
             .filter(|option| {
                 !option.is_empty()
                     && !option.starts_with("grp:")
                     && !(compose.is_some() && option.starts_with("compose:"))
+                    && !(level3.is_some() && option.starts_with("lv3:"))
             })
+            .chain(level3)
             .chain(compose.flatten())
             .collect::<Vec<_>>()
             .join(",")
     }
 
+    fn system_sources(&self) -> impl Iterator<Item = &SourceSpec> {
+        self.sources.iter().filter(|s| s.decoded.is_none())
+    }
+
+    /// The xkb variant a system source compiles with. Under the `cupertino` profile the US layout without a variant
+    /// is `us(mac)`, which has the alternate symbols and dead keys of the level-3 keys (`layout_level3`).
+    fn xkb_variant<'a>(&self, source: &'a SourceSpec) -> &'a str {
+        if self.profile != "classic-pc" && source.layout == "us" && source.variant.is_empty() {
+            "mac"
+        } else {
+            &source.variant
+        }
+    }
+
+    /// The keys that select the alternate symbols of decoded layouts.
+    pub fn decoded_level3(&self) -> Level3Keys {
+        self.layout_level3
+            .unwrap_or(if self.profile == "classic-pc" {
+                Level3Keys::RightAlt
+            } else {
+                Level3Keys::BothAlt
+            })
+    }
+
+    /// The xkb option of `layout_level3` for the system layouts. A right Alt that is the compose key stays one: xkb
+    /// applies `lv3:` options over `compose:` ones whatever their order.
+    fn level3_option(&self, compose_on_ralt: bool) -> Option<&'static str> {
+        let keys = match self.layout_level3 {
+            Some(keys) => keys,
+            None if self.profile == "classic-pc" => return None,
+            None => Level3Keys::BothAlt,
+        };
+        match (keys, compose_on_ralt) {
+            (Level3Keys::BothAlt, false) => Some("lv3:alt_switch"),
+            (Level3Keys::BothAlt, true) => Some("lv3:lalt_switch"),
+            (Level3Keys::RightAlt, false) => Some("lv3:ralt_switch"),
+            (Level3Keys::RightAlt, true) | (Level3Keys::None, _) => None,
+        }
+    }
+
     /// Comma separated xkb layout and variant lists for `XkbConfig` of the system layouts among the sources (empty
     /// without configured system layouts).
     pub fn xkb_names(&self) -> (String, String) {
-        let system: Vec<&SourceSpec> = self
-            .sources
-            .iter()
-            .filter(|s| s.decoded.is_none())
-            .collect();
+        let system: Vec<&SourceSpec> = self.system_sources().collect();
         let layouts = system
             .iter()
             .map(|s| s.layout.as_str())
             .collect::<Vec<_>>()
             .join(",");
-        let variants = system
-            .iter()
-            .map(|s| s.variant.as_str())
-            .collect::<Vec<_>>()
-            .join(",");
+        let variants: Vec<&str> = system.iter().map(|s| self.xkb_variant(s)).collect();
         (
             layouts,
-            if system.iter().all(|s| s.variant.is_empty()) {
+            if variants.iter().all(|v| v.is_empty()) {
                 String::new()
             } else {
-                variants
+                variants.join(",")
             },
         )
     }
@@ -994,6 +1042,93 @@ mod tests {
         assert!(s.rewrite_opted_out("firefox"));
     }
 
+    /// The keysyms of the keys of `presses` pressed together (evdev codes, held in order), in the keymap the server
+    /// builds for `s`.
+    fn typed(s: &KeyboardSettings, presses: &[u32]) -> Vec<String> {
+        let (layout, variant) = s.xkb_names();
+        let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let keymap = xkb::Keymap::new_from_names(
+            &context,
+            "",
+            "",
+            &layout,
+            &variant,
+            Some(s.xkb_options()),
+            xkb::KEYMAP_COMPILE_NO_FLAGS,
+        )
+        .expect("the system keymap compiles");
+        let mut state = xkb::State::new(&keymap);
+        presses
+            .iter()
+            .map(|code| {
+                let key = xkb::Keycode::new(code + 8);
+                let sym = xkb::keysym_get_name(state.key_get_one_sym(key));
+                state.update_key(key, xkb::KeyDirection::Down);
+                sym
+            })
+            .collect()
+    }
+
+    #[test]
+    fn either_alt_key_types_the_alternate_symbols_of_a_us_source() {
+        const LEFT_ALT: u32 = 56;
+        const RIGHT_ALT: u32 = 100;
+        const SHIFT: u32 = 42;
+        const TWO: u32 = 3;
+        const E: u32 = 18;
+        let mut s = KeyboardSettings::default();
+        assert!(apply(&mut s, "input_sources = us").is_empty());
+        assert_eq!(typed(&s, &[TWO]).last().unwrap(), "2");
+        assert_eq!(typed(&s, &[LEFT_ALT, TWO]).last().unwrap(), "trademark");
+        assert_eq!(typed(&s, &[RIGHT_ALT, TWO]).last().unwrap(), "trademark");
+        assert_eq!(
+            typed(&s, &[LEFT_ALT, SHIFT, TWO]).last().unwrap(),
+            "EuroSign"
+        );
+        assert_eq!(typed(&s, &[LEFT_ALT, E]).last().unwrap(), "dead_acute");
+
+        assert!(apply(&mut s, "layout_level3 = right-alt").is_empty());
+        assert_eq!(typed(&s, &[LEFT_ALT, TWO]).last().unwrap(), "2");
+        assert_eq!(typed(&s, &[RIGHT_ALT, TWO]).last().unwrap(), "trademark");
+
+        let mut pc = KeyboardSettings::default();
+        assert!(apply(&mut pc, "input_sources = us\nmodifier_profile = classic-pc").is_empty());
+        assert_eq!(pc.xkb_names(), ("us".to_string(), String::new()));
+        assert_eq!(pc.xkb_options(), "");
+        assert_eq!(typed(&pc, &[LEFT_ALT, TWO]).last().unwrap(), "2");
+        assert_eq!(typed(&pc, &[LEFT_ALT]).last().unwrap(), "Alt_L");
+        assert_eq!(pc.decoded_level3(), Level3Keys::RightAlt);
+        assert!(apply(&mut pc, "layout_level3 = both-alt").is_empty());
+        assert_eq!(pc.xkb_options(), "lv3:alt_switch");
+    }
+
+    #[test]
+    fn a_right_alt_compose_key_keeps_the_right_alt() {
+        let mut s = KeyboardSettings::default();
+        assert!(apply(&mut s, "input_sources = us, de").is_empty());
+        s.system.options = "lv3:ralt_alt,compose:menu".into();
+        assert_eq!(s.xkb_options(), "compose:menu,lv3:alt_switch");
+        s.compose = Some(ComposeKey::RightAlt);
+        assert_eq!(s.xkb_options(), "lv3:lalt_switch,compose:ralt");
+        s.layout_level3 = Some(Level3Keys::RightAlt);
+        assert_eq!(s.xkb_options(), "lv3:ralt_alt,compose:ralt");
+        s.compose = None;
+        s.system.options = "compose:ralt".into();
+        s.layout_level3 = Some(Level3Keys::BothAlt);
+        assert_eq!(s.xkb_options(), "compose:ralt,lv3:lalt_switch");
+    }
+
+    #[test]
+    fn a_level3_key_counts_as_alt_for_the_system_shortcuts() {
+        let option = ModifiersState {
+            iso_level3_shift: true,
+            ctrl: true,
+            ..Default::default()
+        };
+        let mods = KeyboardSettings::physical(&option);
+        assert!(mods.alt && mods.ctrl);
+    }
+
     #[test]
     fn no_sources_are_no_xkb_names() {
         assert_eq!(
@@ -1225,7 +1360,7 @@ mod tests {
         assert_eq!(s.caps_hold_ms, 800);
         assert_eq!(
             (s.layout_keyboard, s.layout_level3),
-            (Keyboard::Iso, Level3Keys::BothAlt)
+            (Keyboard::Iso, Some(Level3Keys::BothAlt))
         );
     }
 
@@ -1268,7 +1403,7 @@ mod tests {
     fn decoded_sources_are_not_xkb_groups() {
         let mut s = KeyboardSettings::default();
         assert!(apply(&mut s, "input_sources = us, decoded:/l/ABC.json, de").is_empty());
-        assert_eq!(s.xkb_names(), ("us,de".to_string(), String::new()));
+        assert_eq!(s.xkb_names(), ("us,de".to_string(), "mac,".to_string()));
         let inputs = InputSources::new(s.sources.clone());
         assert_eq!(inputs.group_of("de"), Some(1));
         assert_eq!(inputs.group_of("decoded:/l/ABC.json"), None);

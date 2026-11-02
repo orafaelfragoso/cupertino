@@ -4,9 +4,8 @@
 //! show and hide animation, paging by keys, wheel and dots, the search
 //! rule and what a click or key asks for. Drawing is in `render::paint_app_grid`.
 //!
-//! Coordinates are top-down points in the grid's layer: the output below its 30 pt top band
-//! ([`TOP_BAND`]) and above the dock bar, whose exclusive zone stands for the
-//! reference's dock extent `d`.
+//! Coordinates are top-down points in the grid's layer: the output above the dock bar, whose
+//! exclusive zone stands for the reference's dock extent `d`, with the menu bar's strip covered.
 
 use cupertino_animation::CubicBezier;
 use cupertino_wm::geometry::{Point, Rect};
@@ -33,9 +32,6 @@ pub const PAGE_CURVE: CubicBezier = CubicBezier::new(0.0, 0.0, 0.35841, 1.0019);
 /// (the design negates the delta under its default reverse preference).
 pub const WHEEL_GAIN: f64 = 2.0;
 pub const WHEEL_SETTLE: f64 = 0.075;
-
-/// The grid's layer starts this far below the output top, over the menu bar's strip.
-pub const TOP_BAND: f64 = 30.0;
 
 /// Material of the background: the grid's own recipe in the server's design tokens.
 pub const MATERIAL: &str = "AppGrid";
@@ -378,6 +374,15 @@ struct Wheel {
     last: f64,
 }
 
+/// What the grid's content shows, opacity and scale aside: equal looks paint equal pixels.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Look {
+    query: String,
+    results: Vec<usize>,
+    page: usize,
+    selected: Option<usize>,
+}
+
 /// Opacity and scale of the whole grid this frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Visual {
@@ -646,6 +651,24 @@ impl AppGrid {
         let before = self.page;
         self.flip_by(if wheel.total > 0.0 { 1 } else { -1 }, now);
         self.page != before
+    }
+
+    /// What the content shows; `None` during a page flip, whose pages move every frame.
+    pub fn look(&self) -> Option<Look> {
+        self.flip.is_none().then(|| Look {
+            query: self.query.clone(),
+            results: self.results.clone(),
+            page: self.page,
+            selected: self.selected,
+        })
+    }
+
+    /// Start the entry over from `now`, once the first frame (which loads the icons, at opacity 0)
+    /// is presented: the entry then runs whole on the frames after it.
+    pub fn restart_entry(&mut self, now: f64) {
+        if matches!(self.phase, Phase::Entering(_)) {
+            self.phase = Phase::Entering(now);
+        }
     }
 
     /// Start the exit animation; a second close changes nothing.
@@ -1136,6 +1159,24 @@ mod tests {
                 scale: 1.05
             }
         );
+    }
+
+    #[test]
+    fn the_entry_runs_whole_from_its_restart_and_an_exit_keeps_its_start() {
+        let mut g = AppGrid::new(apps(3), 10.0);
+        g.restart_entry(10.2);
+        assert_eq!(
+            g.visual(10.2),
+            Visual {
+                alpha: 0.0,
+                scale: ENTER_SCALE
+            }
+        );
+        assert!(g.animating(10.4));
+        assert!(!g.animating(10.45));
+        g.close(11.0);
+        g.restart_entry(11.1);
+        assert!(g.is_gone(11.25));
     }
 
     #[test]

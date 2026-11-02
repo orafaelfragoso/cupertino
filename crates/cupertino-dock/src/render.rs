@@ -16,7 +16,7 @@ use cupertino_theme::Typography;
 use cupertino_wm::geometry::{Point, Rect};
 use tiny_skia::{Color, FillRule, FilterQuality, Paint, Pixmap, PixmapPaint, Stroke, Transform};
 
-use crate::app_grid::{AppGrid, GridLayout, PER_PAGE};
+use crate::app_grid::{AppGrid, GridLayout, Look, PER_PAGE};
 use crate::config::Orientation;
 use crate::desktop::DesktopIndex;
 use crate::dock::{DockLayout, DraggedTile, PlacedTile};
@@ -636,9 +636,25 @@ pub struct Panel<'a> {
 
 /// Multiply every pixel by `alpha` (0 to 1): the panel's fade, applied to the premultiplied pixels.
 fn fade(pixmap: &mut Pixmap, alpha: f64) {
-    for byte in pixmap.data_mut() {
-        *byte = (f64::from(*byte) * alpha).round() as u8;
+    if alpha >= 1.0 {
+        return;
     }
+    let table = fade_table(alpha);
+    for byte in pixmap.data_mut() {
+        *byte = table[usize::from(*byte)];
+    }
+}
+
+/// [`fade`] of `src` written to `dst`, a pixmap of its size.
+fn fade_into(dst: &mut Pixmap, src: &Pixmap, alpha: f64) {
+    let table = fade_table(alpha);
+    for (d, s) in dst.data_mut().iter_mut().zip(src.data()) {
+        *d = table[usize::from(*s)];
+    }
+}
+
+fn fade_table(alpha: f64) -> [u8; 256] {
+    std::array::from_fn(|b| (b as f64 * alpha).round() as u8)
 }
 
 /// Draw the switcher's panel content on a cleared pixmap of the panel's size at `scale` device
@@ -732,39 +748,55 @@ const GRID_NO_RESULTS_TEXT: &str = "No Results";
 
 /// Draw the application grid on a cleared pixmap of its layer at `scale` device pixels per point:
 /// the pages at their flip position with icons, labels and the keyboard selection, the page dots
-/// and the search field, the whole scaled about the centre and faded as the entry or exit stands.
-/// The background is the server's backdrop.
+/// and the search field, faded as the entry or exit stands. The background is the server's backdrop;
+/// the entry's and exit's scale is the compositor's ([`AppGrid::visual`] through the presenter's zoom).
+/// While the grid is faded the content is painted into `cache` and reused for as long as its look
+/// holds, so a frame of the entry or exit costs one pass over the pixels.
 pub fn paint_app_grid(
     pixmap: &mut Pixmap,
     scale: f32,
     view: &GridView<'_>,
     icons: &mut Icons,
     text: &mut LabelText,
+    cache: &mut GridCache,
 ) {
     text.text.set_scale(scale);
-    let visual = view.grid.visual(view.now);
-    if visual.scale == 1.0 {
+    let alpha = view.grid.visual(view.now).alpha;
+    if alpha >= 1.0 {
+        *cache = GridCache::default();
         paint_grid_content(pixmap, scale, view, icons, text);
-    } else {
-        let mut content =
-            Pixmap::new(pixmap.width(), pixmap.height()).expect("the layer's pixmap has a size");
-        paint_grid_content(&mut content, scale, view, icons, text);
-        let s = visual.scale as f32;
-        let (cx, cy) = (pixmap.width() as f32 / 2.0, pixmap.height() as f32 / 2.0);
-        let paint = PixmapPaint {
-            quality: FilterQuality::Bilinear,
-            ..PixmapPaint::default()
-        };
-        pixmap.draw_pixmap(
-            0,
-            0,
-            content.as_ref(),
-            &paint,
-            Transform::from_row(s, 0.0, 0.0, s, cx * (1.0 - s), cy * (1.0 - s)),
-            None,
-        );
+        return;
     }
-    fade(pixmap, visual.alpha);
+    let key = view
+        .grid
+        .look()
+        .map(|look| (look, scale.to_bits(), pixmap.width(), pixmap.height()));
+    let content = match cache.content.take() {
+        Some(content) if key.is_some() && cache.key == key => content,
+        kept => {
+            let mut content = kept
+                .filter(|c| c.width() == pixmap.width() && c.height() == pixmap.height())
+                .unwrap_or_else(|| {
+                    Pixmap::new(pixmap.width(), pixmap.height())
+                        .expect("the layer's pixmap has a size")
+                });
+            content.fill(Color::TRANSPARENT);
+            paint_grid_content(&mut content, scale, view, icons, text);
+            content
+        }
+    };
+    fade_into(pixmap, &content, alpha);
+    *cache = GridCache {
+        key,
+        content: Some(content),
+    };
+}
+
+/// The grid's content behind its last faded frame, with the look and buffer it was painted for.
+#[derive(Default)]
+pub struct GridCache {
+    key: Option<(Look, u32, u32, u32)>,
+    content: Option<Pixmap>,
 }
 
 /// One line of text with its left edge at `x` points, vertically centred on `cy` points by its cap height.
@@ -2159,6 +2191,7 @@ mod tests {
             &view,
             &mut bare_icons(),
             &mut label_text(),
+            &mut GridCache::default(),
         );
         (pixmap, grid, layout)
     }
@@ -2230,7 +2263,7 @@ mod tests {
     }
 
     #[test]
-    fn the_grid_enters_faded_and_scaled_about_the_centre() {
+    fn the_grid_enters_faded_and_leaves_its_scale_to_the_compositor() {
         let (pixmap, _, _) = grid_pixmap(3, 0.0, |_| {});
         assert!(
             pixmap.data().iter().all(|&b| b == 0),
@@ -2240,21 +2273,10 @@ mod tests {
         let image = layout.image_rect(&layout.cell_rect(&layout.page_frame(0, 0.0), 0));
         let alpha = grid.visual(0.125).alpha;
         assert!(alpha > 0.0 && alpha < 1.0);
-        // scaled about the layer's centre (720, 395): the tile's centre moves outward by the scale
-        let s = grid.visual(0.125).scale;
-        let scaled = Point::new(
-            720.0 + (image.cx() - 720.0) * s,
-            395.0 + (image.cy() - 395.0) * s,
-        );
-        let px = rgba_at(&pixmap, scaled);
+        let px = rgba_at(&pixmap, image.center());
         assert!(
-            (f64::from(px[3]) - alpha * 255.0).abs() <= 2.0,
-            "the tile at the fade's opacity: {px:?} for alpha {alpha}"
-        );
-        assert_eq!(
-            rgba_at(&pixmap, Point::new(layout.page.x + 1.0, image.cy()))[3],
-            0,
-            "the page's left edge moved outward"
+            (f64::from(px[3]) - alpha * 255.0).abs() <= 1.0,
+            "the tile in its place at the fade's opacity: {px:?} for alpha {alpha}"
         );
     }
 
@@ -2402,6 +2424,39 @@ mod tests {
         assert!(
             alpha_at(&pixmap, sep.cx(), sep.cy()) > 0,
             "the separator line"
+        );
+    }
+
+    #[test]
+    fn a_faded_frame_shows_a_selection_made_during_the_entry() {
+        let apps = (0..3)
+            .map(|i| AppEntry {
+                key: format!("zz-unthemed-{i:02}"),
+                name: format!("App {i:02}"),
+                icon: format!("zz-unthemed-{i:02}"),
+            })
+            .collect();
+        let mut grid = AppGrid::new(apps, 0.0);
+        let layout = GridLayout::new(1440.0, 790.0);
+        let (mut icons, mut text, mut cache) = (bare_icons(), label_text(), GridCache::default());
+        let mut frame = |grid: &AppGrid, now: f64| {
+            let mut pixmap = Pixmap::new(1440, 790).unwrap();
+            let view = GridView {
+                grid,
+                layout: &layout,
+                now,
+            };
+            paint_app_grid(&mut pixmap, 1.0, &view, &mut icons, &mut text, &mut cache);
+            pixmap
+        };
+        let selection = layout.item_rect(&layout.cell_rect(&layout.page_frame(0, 0.0), 0));
+        let at = Point::new(selection.cx(), selection.y + 2.0);
+        assert_eq!(rgba_at(&frame(&grid, 0.2), at)[3], 0, "nothing selected");
+        grid.key(crate::app_grid::Key::Right, 0.2);
+        assert!(grid.visual(0.22).alpha < 1.0);
+        assert!(
+            rgba_at(&frame(&grid, 0.22), at)[3] > 0,
+            "the selection shows in the next faded frame"
         );
     }
 }

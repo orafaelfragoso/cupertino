@@ -367,6 +367,8 @@ struct Surface {
     wl: WlSurface,
     role: Role,
     viewport: Option<WpViewport>,
+    /// The viewport shows a crop of the buffer: the last frame was magnified ([`BufferLease::set_zoom`]).
+    zoomed: bool,
     fractional: Option<WpFractionalScaleV1>,
     fractional_scale: Option<Scale>,
     preferred_scale: Option<Scale>,
@@ -1290,6 +1292,7 @@ impl Connection {
             serial,
             logical,
             scale,
+            zoom: 1.0,
         })
     }
 
@@ -1417,9 +1420,21 @@ pub struct BufferLease<'a> {
     serial: u32,
     logical: (u32, u32),
     scale: Scale,
+    zoom: f64,
 }
 
 impl BufferLease<'_> {
+    /// Show the frame magnified `zoom` times (at least 1) about its centre, scaled by the compositor: the viewport shows
+    /// the middle `1 / zoom` of the buffer over the whole surface. `false` when the surface has no viewport (the
+    /// compositor lacks `wp_viewporter` or fractional scaling), and the frame shows unmagnified.
+    pub fn set_zoom(&mut self, zoom: f64) -> bool {
+        self.zoom = zoom.max(1.0);
+        self.connection
+            .state
+            .surface(self.surface)
+            .is_ok_and(|s| s.viewport.is_some())
+    }
+
     pub fn layout(&self) -> BufferLayout {
         self.slot_ref().layout
     }
@@ -1504,6 +1519,15 @@ impl BufferLease<'_> {
         match (&surf.viewport, self.scale.integer()) {
             (Some(viewport), _) => {
                 surf.wl.set_buffer_scale(1);
+                if self.zoom > 1.0 {
+                    let (w, h) = (f64::from(layout.width()), f64::from(layout.height()));
+                    let (cw, ch) = (w / self.zoom, h / self.zoom);
+                    viewport.set_source((w - cw) / 2.0, (h - ch) / 2.0, cw, ch);
+                    surf.zoomed = true;
+                } else if surf.zoomed {
+                    viewport.set_source(-1.0, -1.0, -1.0, -1.0);
+                    surf.zoomed = false;
+                }
                 viewport.set_destination(clamp_i32(self.logical.0), clamp_i32(self.logical.1));
             }
             (None, Some(n)) => surf.wl.set_buffer_scale(n),
@@ -1659,6 +1683,7 @@ impl State {
             wl,
             role,
             viewport,
+            zoomed: false,
             fractional,
             fractional_scale: None,
             preferred_scale: None,

@@ -49,8 +49,8 @@ use cupertino_files::tags::{self, TagColor};
 use cupertino_files::trash::Trash;
 use cupertino_files::udisks::{Device, Report, Volumes};
 use cupertino_files::window::{
-    metrics, status_text, Bars, DropOutline, Frame, Hit, Move, SearchWidth, ToolbarItem, ViewMode,
-    WindowPainter, WindowState, SEARCH_MAX_LEN,
+    metrics, sidebar_width, status_text, Bars, DropOutline, Frame, Hit, Move, SearchWidth,
+    ToolbarItem, ViewMode, WindowPainter, WindowState, SEARCH_MAX_LEN,
 };
 use cupertino_files::{Entry, Kind, Point, Size, SortSpec};
 use cupertino_geometry::Rect as PopupRect;
@@ -64,8 +64,9 @@ use cupertino_ui_text::{KeyInput, Keymap, Response, TextBuffer, TextFieldKeys};
 use cupertino_ui_wayland::clipboard::Clipboard;
 use cupertino_ui_wayland::{copy_rects, popup, Damage, Ready, ShmPresenter};
 use cupertino_wayland_client::{
-    key, Button, Connection, Decorations, Event, KeyboardEvent, Modifiers as KeyModifiers,
-    PointerEvent, Popup, SurfaceId, TokenRequest, Toplevel, ToplevelConfig, WindowConfigure,
+    key, Button, Connection, CursorShape, Decorations, Event, KeyboardEvent,
+    Modifiers as KeyModifiers, PointerEvent, Popup, SurfaceId, TokenRequest, Toplevel,
+    ToplevelConfig, WindowConfigure,
 };
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -135,6 +136,10 @@ struct App {
     search_focused: bool,
     /// The sidebar row with the keyboard focus, while the sidebar has the keyboard.
     sidebar_focus: Option<usize>,
+    /// While the sidebar's separator is dragged: the pointer's distance from the sidebar's edge at the press.
+    resizing: Option<f64>,
+    /// Whether the pointer shows the resize cursor of the separator.
+    divider_cursor: bool,
     /// How wide the search field is now: it opens while focused or holding text.
     search_width: SearchWidth,
     /// The frame drawn last: clicks and arrow keys are resolved against it.
@@ -465,6 +470,8 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
         search: TextBuffer::with_max_len(SEARCH_MAX_LEN),
         search_focused: false,
         sidebar_focus: None,
+        resizing: None,
+        divider_cursor: false,
         search_width: SearchWidth::default(),
         frame: None,
         scroll: 0.0,
@@ -1139,7 +1146,12 @@ impl App {
                 self.window.presenter.request_redraw();
                 Ok(())
             }
-            PointerEvent::Enter(_) | PointerEvent::Leave | PointerEvent::Button { .. } => Ok(()),
+            // the cursor is the compositor's again over another surface, and is set anew over this one
+            PointerEvent::Enter(_) | PointerEvent::Leave => {
+                self.divider_cursor = false;
+                Ok(())
+            }
+            PointerEvent::Button { .. } => Ok(()),
         }
     }
 
@@ -1261,6 +1273,10 @@ impl App {
             }
             Hit::Titlebar => self.press_titlebar(),
             Hit::Chrome => Ok(()),
+            Hit::Divider => {
+                self.resizing = Some(at.x - frame.window.sidebar.w);
+                Ok(())
+            }
         }
     }
 
@@ -2478,6 +2494,27 @@ impl App {
     /// The pointer moved with the left button down on an item: past the start distance the selection is dragged, and
     /// the folder or place under the pointer is the target.
     fn drag_motion(&mut self, at: Point) -> Result<()> {
+        if let Some(grab) = self.resizing {
+            let (width, _) = self.window.size()?;
+            let wanted = sidebar_width(at.x - grab, f64::from(width));
+            if wanted != self.painter.sidebar_width {
+                self.painter.sidebar_width = wanted;
+                self.window.redraw();
+            }
+            return Ok(());
+        }
+        let over = self
+            .frame
+            .as_ref()
+            .is_some_and(|frame| frame.hit(at) == Hit::Divider);
+        if over != self.divider_cursor {
+            self.divider_cursor = over;
+            self.conn.set_cursor(if over {
+                CursorShape::EwResize
+            } else {
+                CursorShape::Default
+            })?;
+        }
         if self.search.is_dragging() {
             if let Some(index) = self.painter.search_index(&self.search, at) {
                 self.search.drag_to(index);
@@ -2647,6 +2684,9 @@ impl App {
 
     /// The left button went up: end a drag by dropping on its target, else finish the click.
     fn release(&mut self) -> Result<()> {
+        if self.resizing.take().is_some() {
+            return Ok(());
+        }
         self.search.release();
         if let Some((edit, _)) = self.edit.as_mut() {
             edit.field_mut().release();

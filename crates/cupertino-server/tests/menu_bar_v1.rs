@@ -2225,6 +2225,98 @@ fn full_screen_hides_the_bar_and_an_open_menu_or_the_top_edge_reveals_it() {
     assert_eq!(visible(&h, t + 2.0), 1.0, "revealed by the edge dwell");
 }
 
+/// Title bars in the composed frame of the first output.
+fn title_bars(h: &mut Harness) -> usize {
+    let mut backend = h.state.backend.take().unwrap();
+    let count = h
+        .state
+        .with_scene(backend.renderer(), 0, |r, mut p| {
+            cupertino_server::render::scene::compose_scene(r, &mut p)
+                .frame
+                .items()
+                .iter()
+                .filter(|(_, item)| item.id.kind == cupertino_scene::SceneKind::TitleBar)
+                .count()
+        })
+        .expect("render resources");
+    h.state.backend = Some(backend);
+    count
+}
+
+#[test]
+fn the_top_edge_reveals_the_title_bar_of_a_full_screen_window_and_its_zoom_button_leaves() {
+    use cupertino_decorations::{ButtonKind, TitlebarStyle};
+    use cupertino_geometry::Size;
+    use smithay::backend::input::ButtonState;
+
+    let Some(mut h) = Harness::new() else { return };
+    let _bar = BarClient::spawn(h.shell_stream(), true);
+    let _app = AppClient::spawn(h.socket_path(), "org.example.full");
+    let id = h.mapped_window(1);
+    let out = h.state.outputs[0].id;
+    let width = h.state.outputs[0].rect.w;
+    h.state.command(Command::Fullscreen {
+        requested_by: cupertino_wm::Requester::Client,
+        window: id,
+        output: None,
+    });
+    h.advance(5.0);
+    h.advance(1.0);
+    let metrics = h.state.decor.decorations().config.metrics.clone();
+    let zoom = h
+        .state
+        .decor
+        .decorations()
+        .layout(Size::new(width, 300.0))
+        .button(ButtonKind::Zoom)
+        .center;
+    let (x, y) = (zoom.x, 24.0 + zoom.y);
+    h.state.pointer_moved_to((x, y).into(), 0, None);
+    assert_eq!(h.state.decor.hover_group, None, "hidden with the bar");
+    assert_eq!(title_bars(&mut h), 0);
+
+    let t = h.state.now();
+    h.state.pointer_moved_to((500.0, 0.0).into(), 0, None);
+    common::set_time(&mut h.state, &mut h.event_loop, t + 0.3);
+    h.state.tick();
+    h.advance(1.0);
+    h.advance(1.0);
+    let now = h.state.now();
+    let strip = h.state.menu_bars.set.fullscreen_titlebar(
+        out,
+        metrics.titlebar_height(TitlebarStyle::Standard),
+        now,
+    );
+    assert_eq!(
+        strip,
+        Some(Rect::new(
+            0.0,
+            24.0,
+            width,
+            metrics.titlebar_height(TitlebarStyle::Standard)
+        )),
+        "the bar stays revealed and the title bar shows below it"
+    );
+    assert_eq!(title_bars(&mut h), 1);
+
+    h.state.pointer_moved_to((x, y).into(), 0, None);
+    h.advance(1.0);
+    assert!(
+        h.state.menu_bars.set.is_revealed(out),
+        "the title bar holds the bar while the pointer is on it"
+    );
+    assert_eq!(h.state.decor.hover_group, Some(id));
+    h.state
+        .pointer_button(cupertino_server::events::BTN_LEFT, ButtonState::Pressed, 0);
+    h.state
+        .pointer_button(cupertino_server::events::BTN_LEFT, ButtonState::Released, 0);
+    h.advance(5.0);
+    assert_ne!(
+        h.state.wm.window(id).unwrap().state(),
+        LifecycleState::FullScreen
+    );
+}
+
 /// The session agent's side: records which methods the server called.
 struct FakeLogin(Arc<Mutex<Vec<&'static str>>>);
 

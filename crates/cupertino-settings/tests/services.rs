@@ -973,6 +973,14 @@ fn the_sound_pane_reads_and_sets_the_default_pipewire_sink() {
         })
         .unwrap();
     assert_eq!(
+        services.volume(),
+        Reading::Ready(Volume {
+            level: 0.25,
+            muted: true
+        }),
+        "a reading follows the change written in the background"
+    );
+    assert_eq!(
         fake.volume(Target::DefaultSink),
         Node {
             level: 0.25,

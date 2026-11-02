@@ -226,7 +226,7 @@ assets = [
 
 [package.metadata.generate-rpm.requires]
 cupertino-data = ">= 0.1.0"
-dbus = ">= 1.16"
+dbus = ">= 1:1.16"
 systemd = "*"
 polkit = "*"
 xdg-desktop-portal = "*"

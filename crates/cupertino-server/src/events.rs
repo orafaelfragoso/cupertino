@@ -440,7 +440,7 @@ impl Cupertino {
                 mods,
             };
             // Super+Alt+S at the login screen goes to the screen reader's worker before anything else sees it
-            route = if st.screen_reader_key(code.raw(), sym, modifiers, pressed) {
+            route = if st.screen_reader_key(code.raw(), sym, &mods, pressed) {
                 KeyRoute::Plan(crate::input::ActionPlan::default())
             } else {
                 st.route_key(&okey, pressed, false, &ctx)

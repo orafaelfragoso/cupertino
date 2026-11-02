@@ -8,8 +8,9 @@
 
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
-use smithay::input::keyboard::{keysyms, ModifiersState};
+use smithay::input::keyboard::keysyms;
 
+use crate::input::Mods;
 use crate::state::Cupertino;
 
 /// The variable that names the socket, and the only descriptor it may name.
@@ -55,8 +56,8 @@ pub fn harden() -> bool {
     true
 }
 
-/// Super+Alt+S, with no other modifier.
-pub fn is_chord(sym: u32, mods: &ModifiersState) -> bool {
+/// Super+Alt+S, with no other modifier, on the physical modifier keys (a level-3 Alt is Alt).
+pub fn is_chord(sym: u32, mods: &Mods) -> bool {
     sym == keysyms::KEY_s && mods.logo && mods.alt && !mods.ctrl && !mods.shift
 }
 
@@ -126,13 +127,7 @@ impl Cupertino {
 
     /// A key from an input device: whether it is Super+Alt+S at the login screen (or the release of its key), which the
     /// compositor takes. A press asks the worker to toggle the reader.
-    pub fn screen_reader_key(
-        &mut self,
-        code: u32,
-        sym: u32,
-        mods: &ModifiersState,
-        pressed: bool,
-    ) -> bool {
+    pub fn screen_reader_key(&mut self, code: u32, sym: u32, mods: &Mods, pressed: bool) -> bool {
         let Some(reader) = self.screen_reader.as_mut() else {
             return false;
         };
@@ -154,13 +149,12 @@ impl Cupertino {
 mod tests {
     use super::*;
 
-    fn mods(logo: bool, alt: bool, ctrl: bool, shift: bool) -> ModifiersState {
-        ModifiersState {
+    fn mods(logo: bool, alt: bool, ctrl: bool, shift: bool) -> Mods {
+        Mods {
             logo,
             alt,
             ctrl,
             shift,
-            ..ModifiersState::default()
         }
     }
 

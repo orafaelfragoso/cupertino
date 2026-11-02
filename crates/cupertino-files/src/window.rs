@@ -25,8 +25,8 @@ use crate::metrics::{list_view, marquee, menu as menu_metrics, sidebar, window};
 use crate::name_edit::NameEdit;
 use crate::places::{Place, PlaceGroup, PlaceKind, Volume};
 use crate::render::{
-    available_size, copy_opaque, fill_rect, fill_rounded, paint, stroke_rounded, truncate_middle,
-    truncate_tail, Band, Palette, Renderer,
+    available_size, copy_opaque, fill_rect, fill_rounded, fill_vline_up, paint, stroke_rounded,
+    truncate_middle, truncate_tail, Band, Palette, Renderer,
 };
 use crate::settings::{ColumnDesc, ColumnId, IconViewSettings, ListViewSettings};
 use crate::tags::TagColor;
@@ -1131,10 +1131,11 @@ impl WindowPainter {
         }
         fill_rect(pm, &w.toolbar, scale, strip(state, pal));
         self.paint_sidebar(pm, scale, w, state, pal);
-        fill_rect(
+        fill_vline_up(
             pm,
             &Rect::new(w.sidebar.right(), 0.0, m::SEPARATOR, w.size.h),
             scale,
+            0.0,
             pal.separator,
         );
         // a 1 pt line under the strip at all times: a screenshot shows one (a 222 grey line under the toolbar and

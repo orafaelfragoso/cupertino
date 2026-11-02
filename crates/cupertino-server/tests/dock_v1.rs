@@ -2374,3 +2374,109 @@ fn a_hot_corner_and_a_gesture_reach_the_dock_of_the_output() {
     );
     assert_eq!(dock.error(), None);
 }
+
+/// Kinds of the layer-shell `top` pieces in the composed frame of the first output.
+fn top_layer(h: &mut Harness) -> Vec<cupertino_scene::SceneKind> {
+    let mut backend = h.state.backend.take().unwrap();
+    let kinds = h
+        .state
+        .with_scene(backend.renderer(), 0, |r, mut p| {
+            cupertino_server::render::scene::compose_scene(r, &mut p)
+                .frame
+                .items()
+                .iter()
+                .filter(|(layer, _)| *layer == cupertino_scene::SceneLayer::LayerTop)
+                .map(|(_, item)| item.id.kind)
+                .collect()
+        })
+        .expect("render resources");
+    h.state.backend = Some(backend);
+    kinds
+}
+
+#[test]
+fn the_dock_gives_way_to_a_full_screen_window_in_front_and_comes_back() {
+    let Some(mut h) = Harness::new() else { return };
+    let _one = spawn_app(h.socket_path(), "org.example.one");
+    let one = h.mapped_window(1);
+    let _two = spawn_app(h.socket_path(), "org.example.two");
+    let two = h.mapped_window(2);
+    let dock = DockClient::spawn(h.shell_stream(), true);
+    let out = h.state.outputs[0].id;
+    h.wait_until("the dock surface to be placed", |s| {
+        s.dock_rect(out).is_some_and(|r| r.w > 0.0)
+    });
+    h.advance(1.0);
+    let on_dock = (500.0, 660.0).into();
+    let dock_under = |h: &Harness| {
+        let window = h.state.window_surface_under(on_dock).map(|(_, s, _)| s);
+        h.state
+            .surface_under(on_dock)
+            .is_some_and(|(s, _)| window.as_ref() != Some(&s))
+    };
+    assert!(!top_layer(&mut h).is_empty(), "the dock is drawn");
+    assert!(dock_under(&h), "and takes the pointer");
+
+    h.state.command(Command::Fullscreen {
+        requested_by: cupertino_wm::Requester::Client,
+        window: two,
+        output: None,
+    });
+    h.advance(5.0);
+    h.advance(1.0);
+    assert_eq!(
+        h.state.wm.window(two).unwrap().state(),
+        LifecycleState::FullScreen
+    );
+    assert_eq!(
+        top_layer(&mut h),
+        vec![],
+        "nothing of the dock over the window"
+    );
+    assert!(
+        !dock_under(&h),
+        "the window takes the pointer where the dock was"
+    );
+
+    h.state.command(Command::FocusWindow { window: one });
+    h.advance(5.0);
+    assert!(
+        !top_layer(&mut h).is_empty(),
+        "back with another window in front"
+    );
+
+    h.state.command(Command::FocusWindow { window: two });
+    h.advance(5.0);
+    assert_eq!(top_layer(&mut h), vec![]);
+    h.state.command(Command::ExitFullscreen { window: two });
+    h.advance(5.0);
+    h.advance(1.0);
+    assert!(!top_layer(&mut h).is_empty(), "back after full screen");
+    assert!(dock_under(&h));
+    assert_eq!(dock.error(), None);
+}
+
+#[test]
+fn a_panel_outside_click_catcher_still_takes_the_click_over_a_full_screen_window() {
+    let Some(mut h) = Harness::new() else { return };
+    let _app = spawn_app(h.socket_path(), "org.example.one");
+    let window = h.mapped_window(1);
+    h.state.command(Command::Fullscreen {
+        requested_by: cupertino_wm::Requester::Client,
+        window,
+        output: None,
+    });
+    h.advance(5.0);
+    h.advance(1.0);
+    assert_eq!(
+        h.state.wm.fullscreen_front(h.state.outputs[0].id),
+        Some(window)
+    );
+    let _catcher = common::Client::catcher(UnixStream::connect(h.socket_path()).unwrap());
+    let outside = (500.0, 350.0).into();
+    h.wait_until("the catcher to take a click outside its panel", |s| {
+        let window = s.window_surface_under(outside).map(|(_, s, _)| s);
+        s.surface_under(outside)
+            .is_some_and(|(s, _)| window.as_ref() != Some(&s))
+    });
+}

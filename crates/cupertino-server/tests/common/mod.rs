@@ -923,6 +923,38 @@ impl Client {
         size: (u32, u32),
         keyboard: zwlr_layer_surface_v1::KeyboardInteractivity,
     ) -> Client {
+        let anchor = zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left;
+        Self::layer(
+            stream,
+            zwlr_layer_shell_v1::Layer::Overlay,
+            namespace,
+            size,
+            anchor,
+            keyboard,
+        )
+    }
+
+    /// The outside-click catcher of a shell panel: a top layer surface over the whole output that ignores the exclusive
+    /// zones of others, over `stream`.
+    pub fn catcher(stream: UnixStream) -> Client {
+        Self::layer(
+            stream,
+            zwlr_layer_shell_v1::Layer::Top,
+            "catcher",
+            (0, 0),
+            zwlr_layer_surface_v1::Anchor::all(),
+            zwlr_layer_surface_v1::KeyboardInteractivity::None,
+        )
+    }
+
+    fn layer(
+        stream: UnixStream,
+        level: zwlr_layer_shell_v1::Layer,
+        namespace: &'static str,
+        size: (u32, u32),
+        anchor: zwlr_layer_surface_v1::Anchor,
+        keyboard: zwlr_layer_surface_v1::KeyboardInteractivity,
+    ) -> Client {
         Self::run_over(stream, move |queue, client, globals| {
             let qh = queue.handle();
             let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
@@ -932,15 +964,16 @@ impl Client {
             let layer = layer_shell.get_layer_surface(
                 &surface,
                 None,
-                zwlr_layer_shell_v1::Layer::Overlay,
+                level,
                 namespace.to_string(),
                 &qh,
                 surface.clone(),
             );
             layer.set_size(size.0, size.1);
-            layer.set_anchor(
-                zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left,
-            );
+            layer.set_anchor(anchor);
+            if anchor == zwlr_layer_surface_v1::Anchor::all() {
+                layer.set_exclusive_zone(-1);
+            }
             layer.set_keyboard_interactivity(keyboard);
             surface.commit();
             queue.roundtrip(client).unwrap();

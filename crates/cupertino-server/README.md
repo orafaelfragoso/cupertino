@@ -427,7 +427,7 @@ Precedence of shortcut sources, highest first: `compositor.json` `keybindings` â
 | `Super+grave` | cycle windows of the application |
 | `Super+Q` / `W` / `M` / `H` / `Alt+H` | quit application, close window, minimize, hide application, hide others |
 | `Super+Ctrl+F` / `Z` / `Left` / `Right` / `Up` | fullscreen, zoom, tile left / right / fill |
-| `Ctrl+Up` / `Ctrl+Down` | overview / application overview (`Escape` leaves; arrows, `Tab`, `Return` and `Space` go to the dock's overview surface) |
+| `Ctrl+Up` (or `F3`, or the overview key `XF86LaunchA`; under `classic-pc` `Super+Tab` and the overview key) / `Ctrl+Down` | overview / application overview (`Escape` leaves; arrows, `Tab`, `Return` and `Space` go to the dock's overview surface) |
 | `Ctrl+Left` / `Ctrl+Right`, `Ctrl+1..9` | previous / next / numbered workspace (`Super+Shift+Left/Right` moves the window, `Ctrl+Alt+N` adds one) |
 | `Super+Space` (`Super+Alt+Space`) | show / hide the launcher panel (a `Toggle` call to the launcher process) |
 | `F11`, `F4` | show desktop, application grid (the dock process draws the grid; see *Shell processes*) |

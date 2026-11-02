@@ -1907,6 +1907,32 @@ mod tests {
     }
 
     #[test]
+    fn f3_and_the_overview_key_open_and_close_the_overview() {
+        let mut c = ctx();
+        let mut cupertino = KeyRouter::new(cupertino_bindings());
+        for open in [false, true] {
+            c.overview_open = open;
+            for chord in ["F3", "XF86LaunchA"] {
+                let KeyOutcome::Consumed(p) = press(&mut cupertino, chord, &c) else {
+                    panic!("{chord} with the overview open: {open}")
+                };
+                assert_eq!(dbg(&p.ops), dbg(&vec![ShellOp::ToggleOverview]), "{chord}");
+            }
+        }
+        // under classic-pc, F3 stays with the applications (find next) and only the overview key is the system's
+        c.overview_open = false;
+        let mut classic = classic_router();
+        assert_eq!(
+            dbg(&press(&mut classic, "F3", &c)),
+            dbg(&KeyOutcome::Forward)
+        );
+        let KeyOutcome::Consumed(p) = press(&mut classic, "XF86LaunchA", &c) else {
+            panic!("XF86LaunchA under classic-pc")
+        };
+        assert_eq!(dbg(&p.ops), dbg(&vec![ShellOp::ToggleOverview]));
+    }
+
+    #[test]
     fn shortcut_map_becomes_key_bindings() {
         let mut map = cupertino_input::ShortcutMap::defaults();
         assert!(map

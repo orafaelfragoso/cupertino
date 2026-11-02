@@ -5,7 +5,7 @@
 //! rule and what a click or key asks for. Drawing is in `render::paint_app_grid`.
 //!
 //! Coordinates are top-down points in the grid's layer: the output above the dock bar, whose
-//! exclusive zone stands for the reference's dock extent `d`, with the menu bar's strip covered.
+//! exclusive zone stands for the layout's dock extent `d`, with the menu bar's strip covered.
 
 use cupertino_animation::CubicBezier;
 use cupertino_wm::geometry::{Point, Rect};

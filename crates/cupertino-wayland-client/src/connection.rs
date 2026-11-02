@@ -1777,21 +1777,23 @@ impl State {
         let (Some(surface), Some(t)) = (self.key_focus, &self.translator) else {
             return;
         };
-        if let Some(code) = self.repeat.due(now) {
+        if let Some((code, count)) = self.repeat.due(now) {
             let k = t.translate(code);
             let time = self.input_time(now);
-            self.events.push(Event::Keyboard {
-                surface,
-                time,
-                event: KeyboardEvent::Key {
-                    code,
-                    pressed: true,
-                    repeat: true,
-                    keysym: k.keysym,
-                    character: k.character,
-                    mods: k.mods,
-                },
-            });
+            for _ in 0..count {
+                self.events.push(Event::Keyboard {
+                    surface,
+                    time,
+                    event: KeyboardEvent::Key {
+                        code,
+                        pressed: true,
+                        repeat: true,
+                        keysym: k.keysym,
+                        character: k.character,
+                        mods: k.mods,
+                    },
+                });
+            }
         }
     }
 

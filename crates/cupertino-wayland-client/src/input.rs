@@ -455,6 +455,9 @@ impl Translator {
 
 /// Repeat rates above this many keys per second are clamped to it.
 const MAX_REPEAT_RATE: u64 = 1000;
+/// The most repeats one late wake-up delivers: a caller busy for a few intervals keeps the rate, one that stalled
+/// longer starts the repeat over instead of typing the whole stall at once (our choice).
+const MAX_CATCH_UP: u32 = 8;
 
 /// Client-side key repeat from `wl_keyboard.repeat_info`: one key repeats at a time, the last one pressed.
 #[derive(Debug, Default)]
@@ -500,16 +503,22 @@ impl Repeat {
         self.held.map(|(_, at)| at)
     }
 
-    /// The key to repeat when a repeat came due by `now`; repeats missed while the caller was late are dropped.
-    pub(crate) fn due(&mut self, now: Instant) -> Option<u32> {
+    /// The key to repeat and how many repeats came due by `now`. The repeats keep to the rate however late the
+    /// caller is: those that came due while it was busy come at once, at most [`MAX_CATCH_UP`], after which the
+    /// repeat starts over one interval from `now`.
+    pub(crate) fn due(&mut self, now: Instant) -> Option<(u32, u32)> {
         let (Some((_, interval)), Some((code, at))) = (self.timing, self.held.as_mut()) else {
             return None;
         };
-        if *at > now {
-            return None;
+        let mut count = 0;
+        while *at <= now && count < MAX_CATCH_UP {
+            *at += interval;
+            count += 1;
         }
-        *at = now + interval;
-        Some(*code)
+        if *at <= now {
+            *at = now + interval;
+        }
+        (count > 0).then_some((*code, count))
     }
 }
 
@@ -593,7 +602,7 @@ mod tests {
         );
         t.press(KEY_A, &mut r, t0);
         assert_eq!(
-            r.due(t0 + Duration::from_secs(1)),
+            r.due(t0 + Duration::from_secs(1)).map(|(code, _)| code),
             Some(KEY_A),
             "a typed on its own repeats"
         );
@@ -807,12 +816,12 @@ mod tests {
         let t0 = Instant::now();
         r.press(KEY_A, t0);
         assert_eq!(r.due(t0 + Duration::from_millis(599)), None);
-        assert_eq!(r.due(t0 + Duration::from_millis(600)), Some(KEY_A));
+        assert_eq!(r.due(t0 + Duration::from_millis(600)), Some((KEY_A, 1)));
         assert_eq!(r.deadline(), Some(t0 + Duration::from_millis(640)));
-        // 640 and 680 were missed: one repeat, and the next one interval after it
-        assert_eq!(r.due(t0 + Duration::from_millis(690)), Some(KEY_A));
+        // 640 and 680 came due while the caller was busy: both come now, and the next keeps to the interval
+        assert_eq!(r.due(t0 + Duration::from_millis(690)), Some((KEY_A, 2)));
         assert_eq!(r.due(t0 + Duration::from_millis(690)), None);
-        assert_eq!(r.deadline(), Some(t0 + Duration::from_millis(730)));
+        assert_eq!(r.deadline(), Some(t0 + Duration::from_millis(720)));
         r.release(KEY_ENTER);
         assert!(r.deadline().is_some());
         r.release(KEY_A);
@@ -828,8 +837,33 @@ mod tests {
         r.set_info(i32::MAX, 0);
         let t0 = Instant::now();
         r.press(KEY_A, t0);
-        assert_eq!(r.due(t0 + Duration::from_secs(1)), Some(KEY_A));
-        assert_eq!(r.due(t0 + Duration::from_secs(1)), None);
-        assert_eq!(r.deadline(), Some(t0 + Duration::from_millis(1001)));
+        assert_eq!(r.due(t0), Some((KEY_A, 1)));
+        assert_eq!(r.deadline(), Some(t0 + Duration::from_millis(1)));
+    }
+
+    #[test]
+    fn a_caller_busy_longer_than_the_interval_still_gets_the_reported_rate() {
+        let mut r = Repeat::default();
+        r.set_info(25, 600);
+        let t0 = Instant::now();
+        r.press(KEY_A, t0);
+        // a text field that takes 100 ms to handle each key looks again every 100 ms for 2.6 s
+        let repeats: u32 = (1..=26)
+            .filter_map(|i| r.due(t0 + Duration::from_millis(100 * i)))
+            .map(|(_, count)| count)
+            .sum();
+        // 25 per second after the 600 ms delay: at 600, 640, ..., 2600 ms
+        assert_eq!(repeats, 51);
+    }
+
+    #[test]
+    fn a_stalled_caller_gets_a_bounded_burst_and_the_repeat_starts_over() {
+        let mut r = Repeat::default();
+        r.set_info(25, 600);
+        let t0 = Instant::now();
+        r.press(KEY_A, t0);
+        let woke = t0 + Duration::from_secs(5);
+        assert_eq!(r.due(woke), Some((KEY_A, MAX_CATCH_UP)));
+        assert_eq!(r.deadline(), Some(woke + Duration::from_millis(40)));
     }
 }

@@ -24,6 +24,33 @@ fn screenshot(d: &mut Desktop, name: &str) -> image::RgbaImage {
 }
 
 #[test]
+fn a_window_closing_after_a_reset_fades_out_from_a_capture_of_the_new_context() {
+    let mut d = Desktop::new(1.0);
+    d.state.fx.cfg.closing = true;
+    d.window();
+    d.at(3000);
+    let id = d.state.wm.key_window().unwrap();
+    d.state.refresh_snapshot(id);
+    assert!(d.state.fx.snapshot_age(id, d.state.now()).is_finite());
+
+    headless::simulate_gpu_reset(&mut d.state).unwrap();
+    assert!(d.state.fx.snapshot_age(id, d.state.now()).is_infinite());
+
+    d.clients.clear();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while d.state.wm.windows().count() != 0 {
+        d.pump();
+        assert!(Instant::now() < deadline, "the window did not close");
+    }
+    assert_eq!(d.state.fx.closing.len(), 1, "the window fades out");
+    assert_eq!(
+        d.state.render.as_ref().unwrap().snapshots.live(),
+        1,
+        "its ghost is a capture made with the new renderer"
+    );
+}
+
+#[test]
 fn a_window_survives_a_gpu_reset_and_is_drawn_again_from_its_buffer() {
     let mut d = Desktop::new(1.0);
     d.window();

@@ -167,6 +167,12 @@ impl Effects {
         self.snapshots.remove(&id);
     }
 
+    /// Drops every stored snapshot and closing ghost: their textures belong to a rendering context that is gone.
+    pub fn drop_snapshots(&mut self) {
+        self.snapshots.clear();
+        self.closing.clear();
+    }
+
     pub fn has_ghost(&self, id: WindowId) -> bool {
         self.closing.iter().any(|c| c.id == id)
     }

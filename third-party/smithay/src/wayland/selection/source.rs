@@ -26,6 +26,11 @@ impl SelectionSource {
     pub fn mime_types(&self) -> Vec<String> {
         self.provider.mime_types()
     }
+
+    /// The protocol object that provides the data. Its client is the one that set the selection.
+    pub fn provider(&self) -> &SelectionSourceProvider {
+        &self.provider
+    }
 }
 
 /// Provider of the selection data.

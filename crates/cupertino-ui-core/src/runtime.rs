@@ -229,6 +229,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         self
     }
 
+    /// The theme every window is drawn with.
+    pub fn theme(&self) -> &Arc<ThemeTokens> {
+        &self.options.theme
+    }
+
     /// Draw every window with `theme` from now on. Text is measured and laid out again; focus and input-method
     /// compositions stay. A theme equal to the current one changes nothing.
     pub fn set_theme(&mut self, theme: Arc<ThemeTokens>) {

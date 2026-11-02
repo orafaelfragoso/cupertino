@@ -221,11 +221,27 @@ impl Cupertino {
                 .set
                 .presentation(o.0, now)
                 .map_or(1.0, |b| b.visible);
+            // the title bar revealed below a full-screen window's bar keeps it, so the pointer can reach its buttons
+            let titlebar_bottom = self
+                .windows
+                .iter()
+                .filter(|e| self.wm.window(e.id).is_some_and(|w| w.output == o.0))
+                .filter_map(|e| {
+                    e.revealed_titlebar(
+                        &self.menu_bars,
+                        &self.decor,
+                        self.config.window.decorations,
+                        o.0,
+                        now,
+                    )
+                })
+                .map(|r| r.y + r.h - o.1.y)
+                .fold(0.0, f64::max);
             let bar = cupertino_wm::Rect::new(
                 o.1.x,
                 o.1.y,
                 o.1.w,
-                self.config.shell.menu_bar_height * shown.max(0.5),
+                (self.config.shell.menu_bar_height * shown.max(0.5)).max(titlebar_bottom),
             );
             self.bar_edge.set_hold_region(Some(Self::input_rect(bar)));
         }

@@ -6,7 +6,50 @@ Read this first:
 
 - **No repository is published yet.** `build-repo` writes the tree of a repository; nothing uploads it, and the upload waits for decisions about the host and the signing key.
 - **The key is not in the source tree.** The `cupertino-keyring` package is built with a public key file that the release job passes in.
-- **The installer and the live image do not install `cupertino-keyring`.** A machine installed from the [USB image](install-usb.md) has no `[cupertino]` repository in its `pacman.conf` (the installer removes the live image's copy) and does not have `cupertino-rollback` until the keyring package is installed by hand.
+- **A machine installed from the [USB image](install-usb.md) updates from its own repository.** The installer installs `cupertino-keyring` and replaces the live image's `[cupertino]` repository with a local one. The next section describes it; the sections after it describe the published-repository tools.
+
+## Local updates on an installed machine
+
+Nothing is published. The installed `pacman.conf` has `[cupertino]` with `Server = file:///var/lib/cupertino/repo` and `SigLevel = Required DatabaseOptional`: every package must carry a valid signature, and the database may be unsigned only because it is empty until the first release is built. `cupertino-keyring` makes pacman trust the Cupertino key. `/var/lib/cupertino/repo` and `/var/lib/cupertino/archive` belong to the user the installer created.
+
+### Make the signing key (once)
+
+Do this on the machine that builds the releases, with a USB drive mounted for the master key:
+
+```sh
+packaging/keyring/local-release keygen --master-home /path/on/usb/cupertino-master-gnupg
+```
+
+`gpg` asks for a passphrase for the master key. The master key stays in that directory on the drive. Back it up and unplug it; keep it offline. The command puts the signing subkey (valid one year) and `PUBLIC.asc` in `~/.config/cupertino/signing`. Copy that directory to the key USB as `cupertino-signing`, next to the master home, so a new install can get it back. It holds the secret signing subkey: treat the copy as a secret. To build an ISO that trusts the key, set it when you build:
+
+```sh
+CUPERTINO_KEYRING_KEY=~/.config/cupertino/signing/PUBLIC.asc scripts/build-iso.sh
+```
+
+### After a new install: restore the signing key
+
+A fresh install has the public key (through `cupertino-keyring`) but not the subkey that signs, and `local-release` stops with "no signing key" until `~/.config/cupertino/signing` exists. Copy the `cupertino-signing` directory that you saved from the key USB (see above) to `~/.config/cupertino/signing`. Only the signing subkey and `PUBLIC.asc` go there; the master key stays on the drive. `local-release` refuses a signing home that holds the master secret key.
+
+The subkey can sign for any repository that pacman trusts the master key for, so keep `~/.config/cupertino/signing` private. When the subkey expires, add a new one on the drive; `local-release` does not do this.
+
+### Update
+
+From a checkout with the change committed:
+
+```sh
+packaging/keyring/local-release
+sudo pacman -Syu
+```
+
+`local-release` builds the committed `HEAD` in the pinned Arch image. The `pkgrel` is the number of commits, so every commit is an update. It signs the packages and the database with the subkey and writes `repo/` and `archive/` under `/var/lib/cupertino`. Uncommitted changes are not built.
+
+### What pacman refuses
+
+pacman installs only packages signed by the Cupertino key. It refuses a package that is unsigned, one that was changed after it was signed (tampered), and one signed by another key. `packaging/ci/test-local-repo.sh` checks these three refusals against a throwaway key, along with keygen, an empty first-boot database, and install and update from a `file://` repository. It was not run for this page.
+
+To go back, use `sudo cupertino-rollback VERSION` (see [Roll back](#roll-back)).
+
+If `pacman-key --populate cupertino` failed during the install, the installer printed a warning; run it once after the first boot.
 
 ## What is there
 

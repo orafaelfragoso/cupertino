@@ -16,7 +16,31 @@ only a tag ruleset restricting who can create `v*` tags closes the hole.
 | `cupertino-rollback` | `/usr/bin/cupertino-rollback` | `sudo cupertino-rollback VERSION` installs `cupertino` and `cupertino-data` of that version |
 | `cupertino-save-previous`, `cupertino-previous.hook` | `/usr/share/libalpm/scripts/`, `/usr/share/libalpm/hooks/` | before an upgrade, copies the installed packages and their `.sig` into `/var/lib/cupertino/previous/` (`root:root 0700`, the last release only) |
 | `build-repo` | not installed | `build-repo --packages DIR --key FPR --url BASE_URL --out DIR [--archive-from DIR] [--keep N]` signs the built packages, runs `repo-add --sign`, adds the release to the archive (pruned to N, default 5) and writes the whole tree to a new directory: `repo/`, `archive/`, `cupertino.conf` (the `[cupertino]` section), `cupertino-rollback.conf`, `SHA256SUMS` and its detached signature `SHA256SUMS.sig`. Every package taken from `--archive-from` is copied into `archive/` first and verified there, so the source is read once and the bytes checked are the bytes published; it must verify with gpg and be signed under the primary key of `--key` (one valid signature, none bad, expired or revoked); otherwise `repo/` and `archive/` are removed and nothing is published. It uploads nothing: upload the packages and their `.sig` first and the database files last. The key is read from `GNUPGHOME`; the URL is `https://` (`http://127.0.0.1` for tests) |
+| `build-keyring` | not installed | `build-keyring PUBLIC_KEY_FILE OUT_DIR` builds `cupertino-keyring` in the pinned Arch image |
+| `local-release` | not installed | `local-release keygen` makes the key; `local-release` builds the checkout, signs it and installs it into `/var/lib/cupertino` (see "Local updates") |
 | `archive-prune` | not installed | `archive-prune DIR [N]` keeps the newest N (default 5) versions of each package in the archive directory, with their signatures |
+
+## Local updates (the installed machine hosts its own signed repository)
+
+Nothing is published. The installed system has `[cupertino]` with `Server = file:///var/lib/cupertino/repo` and
+`SigLevel = Required DatabaseOptional` (package signatures are required; the database may be unsigned only because the first
+boot starts with an empty one), and `cupertino-keyring` trusts the Cupertino key.
+
+1. **Once, with the USB drive mounted:** `packaging/keyring/local-release keygen --master-home /path/on/usb/cupertino-master-gnupg`.
+   gpg asks for a passphrase for the master key. The master key stays in that directory on the drive: back it up, and unplug
+   it. The signing subkey (valid one year) and `PUBLIC.asc` land in `~/.config/cupertino/signing`. Build the ISO with
+   `CUPERTINO_KEYRING_KEY=~/.config/cupertino/signing/PUBLIC.asc scripts/build-iso.sh`, so that the installed system trusts it.
+2. **Each update:** from a checkout with the change committed, run `packaging/keyring/local-release`. It builds the committed
+   HEAD in the pinned Arch image (`pkgrel` = number of commits, so every commit is an update), signs the packages and the
+   database with the subkey and writes `repo/` and `archive/` under `/var/lib/cupertino`. Then `sudo pacman -Syu`.
+   `local-release` refuses a signing home that holds the master secret key.
+3. **Roll back:** `sudo cupertino-rollback VERSION` (cache, `previous/`, or the archive).
+
+The subkey can sign for any repository pacman trusts the master for; keep `~/.config/cupertino/signing` private. When the
+subkey expires, rerun the key steps by adding a new subkey on the drive (not covered by `local-release`).
+
+`packaging/ci/test-local-repo.sh` (docker, throwaway key, 10 checks) runs this flow: keygen, an empty first-boot database,
+install and update from a `file://` repository, and the refusal of a tampered, an unsigned and a foreign-signed package.
 
 ## Rollback rules
 

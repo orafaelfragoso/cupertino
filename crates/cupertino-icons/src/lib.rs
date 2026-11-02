@@ -535,7 +535,7 @@ fn placeholder(px: u32, color: Option<[u8; 4]>) -> tiny_skia::Pixmap {
     let px = px.max(1);
     let mut pm = tiny_skia::Pixmap::new(px, px).expect("a non-empty square");
     let side = px as f32;
-    let inset = side * 0.1;
+    let inset = (side * 0.1).round();
     let r = side * 0.2;
     let mut pb = tiny_skia::PathBuilder::new();
     let (x0, y0, x1, y1) = (inset, inset, side - inset, side - inset);

@@ -418,7 +418,7 @@ pub struct PointerSettings {
     /// entry uses the hardware database's, else 1000.
     pub mouse_dpi: std::collections::BTreeMap<String, u32>,
     /// Speed-dependent mouse acceleration (default on); off gives a constant gain by `mouse_speed`, per
-    /// count of a 400 dpi mouse and scaled by the real resolution (a negative speed passes counts through).
+    /// count of a 1000 dpi mouse and scaled by the real resolution (a negative speed passes counts through).
     pub mouse_acceleration: bool,
     /// On touchpads, content follows the fingers (default on).
     pub natural_scrolling: bool,

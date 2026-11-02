@@ -1548,46 +1548,46 @@ mod tests {
     #[test]
     fn pointer_devices_follow_the_settings() {
         let cfg = PointerSettings::default();
-        // 60 counts in one nominal period on a 400 dpi mouse, default table at the default speed: gain
+        // 60 counts in one nominal period on a typical 1000 dpi mouse, default table at the default speed: gain
         // 1.30798… px per count (design value)
-        let at_400 = MouseIdentity {
+        let at_1000 = MouseIdentity {
             key: Some("046d:c077:Mouse".into()),
             name: "Mouse".into(),
-            hwdb_dpi: Some("*400".into()),
+            hwdb_dpi: Some("*1000".into()),
         };
-        let mut mouse = PointerDevice::with_identity(false, &cfg, at_400.clone());
+        let mut mouse = PointerDevice::with_identity(false, &cfg, at_1000.clone());
         assert!(
             (mouse.accelerate((60.0, 0.0).into(), 1_000).x - 60.0 * 1.3079891292521268).abs()
                 < 1e-9
         );
-        // a stored resolution wins over the database's: 1600 dpi moves a quarter of the counts' inches
+        // a stored resolution wins over the database's: 4000 dpi moves a quarter of the counts' inches
         let stored = PointerSettings {
-            mouse_dpi: [("046d:c077:Mouse".to_string(), 1600)].into(),
+            mouse_dpi: [("046d:c077:Mouse".to_string(), 4000)].into(),
             ..cfg.clone()
         };
-        let mut same_hand = PointerDevice::with_identity(false, &stored, at_400);
-        let at_1600 = same_hand.accelerate((240.0, 0.0).into(), 1_000).x;
+        let mut same_hand = PointerDevice::with_identity(false, &stored, at_1000);
+        let at_4000 = same_hand.accelerate((240.0, 0.0).into(), 1_000).x;
         assert!(
-            (at_1600 - 60.0 * 1.3079891292521268).abs() < 1e-9,
-            "{at_1600}"
+            (at_4000 - 60.0 * 1.3079891292521268).abs() < 1e-9,
+            "{at_4000}"
         );
-        // acceleration off: a constant gain per count of a 400 dpi mouse
+        // acceleration off: a constant gain per count of a 1000 dpi mouse
         let flat = PointerSettings {
             mouse_acceleration: false,
             mouse_speed: 2.0,
             ..cfg.clone()
         };
-        let mut flat_400 = PointerDevice::with_identity(
+        let mut flat_1000 = PointerDevice::with_identity(
             false,
             &flat,
             MouseIdentity {
                 key: None,
                 name: String::new(),
-                hwdb_dpi: Some("400".into()),
+                hwdb_dpi: Some("1000".into()),
             },
         );
         assert_eq!(
-            flat_400.accelerate((5.0, -3.0).into(), 0),
+            flat_1000.accelerate((5.0, -3.0).into(), 0),
             (10.0, -6.0).into()
         );
         // Touchpads time their events: four report periods late is a quarter of the speed.

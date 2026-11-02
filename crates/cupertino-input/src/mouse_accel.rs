@@ -6,6 +6,10 @@
 //! 8000 reports a second. The time comes from the event timestamps, over a short window so that a mouse whose
 //! reports carry one or two counts still gives a steady speed.
 //!
+//! The design's curves take every count as one of a [`DEFAULT_RESOLUTION_DPI`] mouse. A mouse of [`DEFAULT_MOUSE_DPI`],
+//! a typical one, moves as the design moves it: the curve gets the hand's speed times [`DESIGN_SPEED_PER_HAND_SPEED`],
+//! the inches the design reads from the counts of one real inch of that mouse.
+//!
 //! The resolution of a device is, in this order, the one the user stored for it, the default entry of the hardware
 //! database's `MOUSE_DPI` property, and [`DEFAULT_MOUSE_DPI`]. A mouse cannot tell the host that its own dpi button
 //! was pressed, so the stored value is how the user tells it.
@@ -18,6 +22,9 @@ use crate::pointer::{
 
 /// Resolution assumed for a mouse nothing is known about.
 pub const DEFAULT_MOUSE_DPI: f64 = 1000.0;
+/// Speed the curve gets per inch per second of the hand: the design reads one real inch of a [`DEFAULT_MOUSE_DPI`] mouse
+/// as this many inches of a [`DEFAULT_RESOLUTION_DPI`] one.
+pub const DESIGN_SPEED_PER_HAND_SPEED: f64 = DEFAULT_MOUSE_DPI / DEFAULT_RESOLUTION_DPI;
 /// Reports are summed over this long, in µs: one report of the slowest mice (125 Hz).
 const WINDOW_US: u64 = 8_000;
 /// After this long without motion the next report starts a new movement, in µs.
@@ -85,7 +92,7 @@ impl MouseAccel {
     }
 
     /// Linear scaling by `setting` (acceleration off): a setting of 0 uses [`LINEAR_MINIMUM`], a negative one passes
-    /// counts through. A gain of 1 is one pixel per count of a [`DEFAULT_RESOLUTION_DPI`] device.
+    /// counts through. A gain of 1 is one pixel per count of a [`DEFAULT_MOUSE_DPI`] device.
     pub fn linear(setting: f64, dpi: f64) -> Self {
         let mode = match setting {
             s if s < 0.0 => Mode::Off,
@@ -109,7 +116,7 @@ impl MouseAccel {
         let curve = match &self.mode {
             Mode::Off => return (dx, dy),
             Mode::Linear(gain) => {
-                let scale = gain * DEFAULT_RESOLUTION_DPI / self.dpi;
+                let scale = gain * DEFAULT_MOUSE_DPI / self.dpi;
                 return (dx * scale, dy * scale);
             }
             Mode::Curve(curve) => curve,
@@ -144,7 +151,7 @@ impl MouseAccel {
             _ => (moved / self.dpi / (span_us.max(MIN_SPAN_US) / 1e6)).max(MIN_SPEED),
         };
         self.last_speed = Some(inches_per_second);
-        let output = curve.output_speed(inches_per_second);
+        let output = curve.output_speed(inches_per_second * DESIGN_SPEED_PER_HAND_SPEED);
         let gain = output * PIXELS_PER_INCH / (inches_per_second * self.dpi);
         (dx * gain, dy * gain)
     }
@@ -176,6 +183,12 @@ mod tests {
     }
 
     #[test]
+    fn a_typical_mouse_crosses_a_2560_point_screen_in_under_four_inches_of_a_moderate_hand() {
+        let per_inch = travel(2.0, DEFAULT_MOUSE_DPI, 100) / 2.0;
+        assert!(per_inch * 4.0 > 2560.0, "{per_inch} points per inch");
+    }
+
+    #[test]
     fn the_same_hand_speed_travels_the_same_at_any_dpi_and_report_rate() {
         let reference = travel(5.0, 400.0, 125);
         assert!(reference > 400.0, "{reference}");
@@ -190,15 +203,16 @@ mod tests {
 
     #[test]
     fn a_faster_hand_travels_further_per_inch_than_a_slower_one() {
-        let slow = travel(1.0, 1000.0, 1000) / 1.0;
-        let fast = travel(20.0, 1000.0, 1000) / 20.0;
+        let slow = travel(0.2, 1000.0, 100) / 0.2;
+        let fast = travel(5.0, 1000.0, 100) / 5.0;
         assert!(fast > 2.0 * slow, "{fast} {slow}");
     }
 
     #[test]
     fn the_first_report_takes_one_period_of_the_nominal_rate_like_the_design() {
-        // 60 counts at 400 dpi in one 1/67 s period: gain 1.30798… px per count at the default speed
-        let mut mouse = MouseAccel::new(Some(default_curve(0.6875)), 400.0);
+        // 60 counts of a typical mouse in one 1/67 s period move as the design moves 60 counts: gain 1.30798… px per
+        // count at the default speed
+        let mut mouse = MouseAccel::new(Some(default_curve(0.6875)), DEFAULT_MOUSE_DPI);
         let (x, y) = mouse.accelerate(60.0, 0.0, 1_000);
         assert!((x - 60.0 * 1.3079891292521268).abs() < 1e-9, "{x}");
         assert_eq!(y, 0.0);
@@ -231,8 +245,8 @@ mod tests {
         .0;
         // pixels per count of a steady 1 count/ms at 1000 dpi, then with a duplicated timestamp: a batch moves the
         // speed by a few per cent, not by the factor a lone short gap would give
-        assert!((steady - 0.2083).abs() < 1e-4, "{steady}");
-        assert!((batched - 0.2191).abs() < 1e-4, "{batched}");
+        assert!((steady - 0.6663).abs() < 1e-4, "{steady}");
+        assert!((batched - 0.6771).abs() < 1e-4, "{batched}");
     }
 
     #[test]
@@ -254,14 +268,14 @@ mod tests {
     #[test]
     fn linear_scaling_follows_the_resolution() {
         let at = |dpi| MouseAccel::linear(2.0, dpi).accelerate(5.0, -3.0, 0);
-        assert_eq!(at(400.0), (10.0, -6.0));
-        assert_eq!(at(800.0), (5.0, -3.0));
+        assert_eq!(at(1000.0), (10.0, -6.0));
+        assert_eq!(at(2000.0), (5.0, -3.0));
         assert_eq!(
             MouseAccel::linear(-1.0, 800.0).accelerate(5.0, -3.0, 0),
             (5.0, -3.0)
         );
         assert_eq!(
-            MouseAccel::linear(0.0, 400.0).accelerate(10.0, 0.0, 0),
+            MouseAccel::linear(0.0, 1000.0).accelerate(10.0, 0.0, 0),
             (1.0, 0.0)
         );
     }

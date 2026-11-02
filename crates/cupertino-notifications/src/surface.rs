@@ -31,6 +31,9 @@ pub const CENTRE_HEADER_HEIGHT: f64 = 36.0;
 /// Clear button: height 24 and 12 pt label padding like the banner action buttons (approximate role, values).
 pub const CLEAR_BUTTON_HEIGHT: f64 = 24.0;
 pub const CLEAR_BUTTON_PADDING: f64 = 12.0;
+/// The Clear button sits as far inside the header's right edge as from its top and bottom: 6 pt, concentric with
+/// the panel's corner.
+pub const CLEAR_BUTTON_INSET: f64 = (CENTRE_HEADER_HEIGHT - CLEAR_BUTTON_HEIGHT) / 2.0;
 /// Clear menu metrics: item height 22, edge padding 5, minimum width 150, radius 6 (section 1).
 pub const MENU_ITEM_HEIGHT: f64 = 22.0;
 pub const MENU_EDGE_PADDING: f64 = 5.0;
@@ -39,7 +42,8 @@ pub const MENU_RADIUS: f64 = 6.0;
 /// Horizontal padding of a menu label inside its item (approximate).
 pub const MENU_LABEL_PADDING: f64 = 12.0;
 
-/// Header row of the open list: the title at the left edge of the cards, the Clear button at their right edge.
+/// Header row of the open list, a panel as wide as the cards: the title at the card padding from its left edge, the
+/// Clear button [`CLEAR_BUTTON_INSET`] inside its right edge.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CentreHeader {
     /// Row rectangle.
@@ -53,8 +57,8 @@ pub fn centre_header(layout: &StackLayout, surface: Size, clear_width: f64) -> C
     let x = surface.width - layout.right_margin - layout.width;
     let row = Rect::new(x, layout.top_inset, layout.width, CENTRE_HEADER_HEIGHT);
     let clear = Rect::new(
-        row.max_x() - clear_width,
-        row.y() + (CENTRE_HEADER_HEIGHT - CLEAR_BUTTON_HEIGHT) / 2.0,
+        row.max_x() - CLEAR_BUTTON_INSET - clear_width,
+        row.y() + CLEAR_BUTTON_INSET,
         clear_width,
         CLEAR_BUTTON_HEIGHT,
     );
@@ -356,18 +360,18 @@ mod tests {
     }
 
     #[test]
-    fn the_clear_button_sits_at_the_right_edge_of_the_cards_and_its_menu_drops_below_it() {
+    fn the_clear_button_sits_6_pt_inside_the_header_and_its_menu_drops_below_it() {
         let header = centre_header(&StackLayout::default(), Size::new(376.0, 800.0), 60.0);
         assert_eq!(header.row, Rect::new(16.0, 40.0, 344.0, 36.0));
-        assert_eq!(header.clear, Rect::new(300.0, 46.0, 60.0, 24.0));
+        assert_eq!(header.clear, Rect::new(294.0, 46.0, 60.0, 24.0));
         let menu = clear_menu(header.clear, 2, 120.0);
         // 120 + 24 + 10 = 154 wide, 2 * 22 + 10 = 54 high, right edges aligned
-        assert_eq!(menu.panel, Rect::new(206.0, 74.0, 154.0, 54.0));
+        assert_eq!(menu.panel, Rect::new(200.0, 74.0, 154.0, 54.0));
         assert_eq!(
             menu.rows,
             vec![
-                Rect::new(211.0, 79.0, 144.0, 22.0),
-                Rect::new(211.0, 101.0, 144.0, 22.0)
+                Rect::new(205.0, 79.0, 144.0, 22.0),
+                Rect::new(205.0, 101.0, 144.0, 22.0)
             ]
         );
     }

@@ -12,16 +12,15 @@ Changes on `main` since `v0.1.0-rc4`.
 - An app can ask to receive the system shortcuts. A release chord that no configuration can remove gives them back, and a notice stays visible while the app holds them.
 - Two modifier profiles, Cupertino and classic PC. System shortcuts match the physical key, with a table for each profile.
 - Under the classic PC profile, tapping `Super` alone opens the launcher (a gesture or a mouse-keys key cancels the tap), `Super+Down` restores a tiled or zoomed window before it minimizes, `Ctrl+Tab` moves between key views in text views, the menu bar shows PC key names, and `Ctrl` is the command key in Settings and in text fields.
-
 - Dead keys and the compose key type their characters, and key repeat skips a key that typed inside a compose sequence. The keyboard layout comes from the one localed holds at login, and a compose key can be set in `keyboard.conf`.
 - Touch input from `wl_touch` reaches the window the touch went down on.
 - Natural scrolling can be set per device, and the mouse wheel has its own setting. A pointer button carries the modifiers held at the press.
+- A Kit window publishes its menus to the desktop's menu bar, and an item chosen there sends its message back to the app.
 
 ### Text
 
 - A character the first font lacks is drawn from another loaded font, one character at a time.
 - Emoji written with the emoji presentation selector are drawn from a colour font, and colour glyphs are cached once per size.
-
 - Mixed-direction lines are laid out in UAX 9 order, each hard line of a paragraph takes its own base direction, and the arrows and `Option+Left` and `Option+Right` move through text as it is drawn.
 - A line that is cut can end in an ellipsis, and an installed font answers only with a face that has the character or family asked for.
 - Caret and word moves lay out only the caret's line and its neighbours.
@@ -37,8 +36,9 @@ Changes on `main` since `v0.1.0-rc4`.
 - Holding `Alt` in the Window menu offers Minimize All, Zoom All, Arrange in Front and Close All, and the menu bar offers Force Quit for the current app.
 - Menu shortcuts are drawn as symbols the embedded font has, Escape included.
 - The menu bar text stays readable over the wallpaper under it, the built-in procedural wallpaper included.
-
 - The menu bar draws a scrim under its text that brings it to 4.5:1 over mid-tone wallpapers, and the wallpaper worker measures the strip under the bar.
+
+- The Dock and the window switcher show the icon a window sets for itself.
 
 ### Settings, Files and theme
 
@@ -51,9 +51,12 @@ Changes on `main` since `v0.1.0-rc4`.
 - Reduce Transparency uses the opaque neutral palette.
 - Choosing the theme that is already set changes nothing.
 - Cupertino no longer writes GTK and Qt themes or reads the GTK icon-theme setting.
-
 - Settings has Wi-Fi, Network and Bluetooth panes on NetworkManager and BlueZ, hidden when the service is missing. The Sound pane picks the output device among the PipeWire sinks, and a Privacy & Security pane has Clipboard Access.
 - Files lists removable media in the sidebar through udisks2. The sidebar works from the keyboard (`Ctrl+Tab`, the arrows, `Return` and `Primary+E`) and shows its places and eject buttons to assistive technology. Failures show as notifications, and the Trash place is followed.
+- Settings opens as a CupertinoKit window: the sidebar, a toolbar with back, forward and search, the panes' sections as Kit controls, sheets as dialogs, and its menus on the menu bar.
+- Files has a second browser window on CupertinoKit, opened beside the current one: places, toolbar, the file list as a table with sort and selection, path and status bars, the menu bar (actions it cannot do yet are disabled) and live folder updates. A sidebar item can carry a description, a busy state and a trailing button such as eject.
+- The on-screen display for volume, brightness and keyboard backlight is a CupertinoKit window on a layer surface.
+- Controls for the Control Center exist in the toolkit: module toggles, tiles, a battery meter and a level slider. The control panel does not use them yet.
 
 ### Shell and session
 
@@ -80,9 +83,8 @@ Changes on `main` since `v0.1.0-rc4`.
 - Screenshots are written in one step and never replace an existing file, and a failed write, for example on a full disk, leaves no partial file.
 - The network daemon starts without rfkill access and reports the real error. The Bluetooth daemon keeps running on a machine without Bluetooth.
 - When every `wayland-N` socket name is taken, the server uses a name of its own.
-
 - The authentication prompt: `cupertino-polkit-agent` shows a password panel over the session, starts its helper when nothing answers on polkit's socket, and tells assistive technology what it shows. It stays out of screen captures and keeps the keyboard under the lock.
-- `cupertino-portal` is the xdg-desktop-portal backend, with the appearance settings and a file chooser drawn with CupertinoKit. A portal request opens as a child of the window it names, Save As opens with its name field focused, and a filter pattern, the number of open dialogs and app text are bounded. Screen sharing works through the portal's ScreenCast: an application shares one display or one window as a PipeWire video stream after you pick the source in a chooser (shared memory only, with no restore tokens, no audio and no region source). A `portals.conf` sends ScreenCast to Cupertino and every other portal interface to the GTK backend.
+- `cupertino-portal` is the xdg-desktop-portal backend, with the appearance settings and a file chooser drawn with CupertinoKit. A portal request opens as a child of the window it names, Save As opens with its name field focused, and a filter pattern, the number of open dialogs and app text are bounded. Screen sharing works through the portal's ScreenCast: an application shares one display or one window as a PipeWire video stream after you pick the source in a chooser (shared memory only, with no restore tokens, no audio and no region source). A `portals.conf` sends Settings and FileChooser to Cupertino first and then the GTK backend, ScreenCast, AppChooser and Screenshot to Cupertino only, and every other portal interface to the GTK backend.
 - The session starts the user's default terminal, and the portal and the polkit agent start as built-in processes with one role each. Before every start of a built-in program, the session checks the file and refuses links and a shared bin directory.
 - A bad line in `login.conf` no longer stops the login manager, and `cupertino-sessiond --check-config` names ignored keys and unreadable files.
 - The volume overlay, the control panel and the Sound pane set the volume of the default PipeWire sink. The microphone mute key toggles the default source and shows the microphone overlay.
@@ -93,6 +95,9 @@ Changes on `main` since `v0.1.0-rc4`.
 - Data control is offered only to the clipboard role and to applications the person allows.
 - The server supports `xdg-foreign-unstable-v2`, `xdg_toplevel_icon_manager_v1` and `wp_single_pixel_buffer_manager_v1`. A frame holds the client buffers it was drawn from until its flip is done, and renderers create no GL fences.
 - The lock screen publishes its tree to assistive technology, with the answer to an attempt announced. The password field is protected: assistive technology gets neither its text nor its length and can't type into it. The appearance observer (`cupertino_app_effects_v1` version 5) tells whether the session is locked.
+- `CUPERTINO_DRM_DEVICE` picks the render GPU by card or render node. A card that is plugged in is read from sysfs once.
+- `cupertino-diagnose` exits 0 once its checks ran, whatever they found, and a wrong argument exits 2. A disabled `cupertino-netd` or `cupertino-btd` counts as ok while NetworkManager or BlueZ does its job.
+- The portal asks before it acts: the app chooser asks which app opens a link or a file, and the screenshot portal asks before it captures the screen.
 
 ### Security
 
@@ -108,6 +113,10 @@ Changes on `main` since `v0.1.0-rc4`.
 - About and Settings hand a launch only to their own program, and claim their bus name again if its owner left.
 - Size limits before data is used: a keymap larger than its file is refused, text from apps for the dock, window manager and menu bar is cut to 1024 bytes, menu announcements are capped, and cursor theme files and glyph images are checked before anything is allocated.
 - At most 64 backdrops per surface and 128 per app ([#48](https://github.com/orafaelfragoso/cupertino/issues/48)).
+
+### Command line
+
+- The `cupertino` command: a typed registry with help, version and JSON output, and one subcommand, `appearance assets check`, which replaces `cupertino-assets check`. Exit codes 2 to 8 name the kind of failure.
 
 ### CupertinoKit
 
@@ -127,13 +136,16 @@ Changes on `main` since `v0.1.0-rc4`.
 - Colour roles for scroll bars, dialog backdrops, links and page dots, and surface materials.
 - A window can leave out its plain background, so a menu or popover can paint its own shape.
 - A headless test window system that records and replays input, with protected text left out.
-
 - More controls: Selection, ListView and TableView (virtualised rows, keyboard and click selection, type-select, sortable and keyboard-focusable column headers), TreeView, ScrollView with overlay and always-shown scroll bars, SplitView and NavigationStack, Stepper, DisclosureButton, Badge, PageDots, Tabs, Sidebar, Tooltip, Menu, MenuItem, ContextMenu and PopUpButton, Modal, Dialog and Alert, TextBox, a multi-line TextEditor, Popover and popup windows, and WindowGroup (one window per instance).
 - Assistive technology sees list and table sizes and each row's place, a table's header and body as one table, tree levels, and the actions of its nodes. A tab controls its panel, and a tooltip describes its anchor.
 - Controls lay out on their visible chrome, and a widget's hit target can reach past its rect (the minimum target is hit-only). On a selected row, the focus ring and a tree's disclosure triangle take the selected text colour, and a list row's focus ring stays inside the row.
 - Focus: an inactive window shows no focus ring, a focus left in a hidden subtree moves to the next Tab stop, and `Escape` goes to dismissible nodes first. A sheet hides the content behind it and focuses its least destructive button.
 - Right-to-left text and password fields keep their text and caret at the leading edge, and a text field takes the environment's direction.
 - Applications start on the neutral theme without the desktop's theme data. The Editor example runs on Cupertino and on a second compositor.
+- Kit: a split view follows the window's size, a scroll view whose content fits is no Tab stop, a popover with no control focuses its dialog, an element can fill what its parent and siblings leave, and a key right after a move of the roving focus goes to the item it moved to (Return after Down in an open menu chooses the next item). An update can ask for an activation token for another application.
+- `SurfaceRoles` lets a window system give a Kit window roles from protocols it does not speak, and `kit::app::run_on` runs an app on it.
+- Assistive technology hears a table's sort order on its column header, and gets a text field's caret and selection, in characters. A selection set from the assistive technology reaches the field. `cupertino-ui-test` lists what a screen reader could not announce in a tree (`semantic_gaps`).
+- A first C interface: `libcupertinokit.so.1` with its header, symbol list and pinned struct layouts. It is a skeleton.
 
 ### Packaging and release
 
@@ -143,6 +155,7 @@ Changes on `main` since `v0.1.0-rc4`.
 - Debian packages ship stripped binaries.
 - An upgrade test installs one version and then the next for deb and rpm.
 - All three formats recommend xwayland-satellite and Xwayland. Debian does not package xwayland-satellite.
+- The Arch packages can be signed. The `cupertino-keyring` package carries the signing key, `cupertino-rollback` installs an earlier release from `/var/lib/cupertino/previous`, the package cache or an archive, a pacman hook keeps the last release, and `build-repo` writes the signed repository tree (it copies archived packages into the output and verifies the copy, pins their primary key and signs `SHA256SUMS`). The release workflow signs the packages and attaches the signed repository to the draft release; it needs the signing secret and a repository address. Nothing is published yet.
 
 ### Install image
 
@@ -164,12 +177,15 @@ Changes on `main` since `v0.1.0-rc4`.
 - A debug-only test clock for the time shown in the login screen, dock and launcher.
 - `ci/capture.sh` draws Settings, Files and Kit surfaces headless for look checks, and `ci/demo-video.sh` records a scripted desktop at 60 frames per second.
 - The vendored xkbcommon-rs tests build again.
+- A gate check fails when a library's wayland-scanner XML is not embedded in its crate. The build now regenerates protocol code when the XML changes, the layer graph is regenerated, and the contracts registry covers the portal, the polkit agent, the pairing agent and `cupertino-diagnose` (the gate runs the contracts check).
+- The lock screen's AT-SPI test subscribes to its monitor before the lock screen can send.
 
 ### Documentation
 
 - The contributor agreement and how to accept it.
 - X11 support and its limits.
 - The local changes to the vendored xkbcommon-rs.
+- Pages in the book: install from a USB stick, the `cupertino` command, `cupertino-diagnose`, portals, signed updates and rollback, displays and GPUs, what runs on CupertinoKit, and a roadmap. The daily-use guide says how a USB-installed machine starts the session and links the install page, and the CupertinoKit guide lists the published caret and selection.
 
 ## v0.1.0-rc4 — 2026-10-27
 

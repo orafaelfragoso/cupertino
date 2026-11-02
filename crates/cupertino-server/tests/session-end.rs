@@ -8,13 +8,35 @@ mod common;
 use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use common::spawn::{run_child_test, spec_dir};
+use common::spawn::{run_child_test, run_child_test_after, spec_dir, wait_after};
 use cupertino_server::backend::headless;
 use cupertino_server::logging::{self, SESSION_END_ENV, TEARDOWN_LIMIT};
 
 const CHILD: &str = "CUPERTINO_TEST_SESSION_END_CHILD";
+
+/// A child slower to start than its limit is timed from the moment it marks, not from its spawn: a loaded machine
+/// starting a child slowly fails no test.
+#[test]
+fn a_child_is_timed_from_its_mark_not_from_a_slow_start() {
+    const SLOW: &str = "CUPERTINO_TEST_SLOW_START_CHILD";
+    if let Some(mark) = std::env::var_os(SLOW) {
+        std::thread::sleep(Duration::from_millis(1500));
+        std::fs::write(mark, "").unwrap();
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mark = dir.path().join("mark");
+    let (status, took) = run_child_test_after(
+        "a_child_is_timed_from_its_mark_not_from_a_slow_start",
+        &[(SLOW, mark.as_os_str())],
+        || mark.exists(),
+        Duration::from_secs(1),
+    );
+    assert!(status.success());
+    assert!(took < Duration::from_secs(1), "{took:?} after the mark");
+}
 
 struct Hang;
 
@@ -96,8 +118,7 @@ fn the_session_command_logs_why_the_compositor_panicked_and_ends_within_five_sec
     std::fs::set_permissions(&server, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     let session = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../packaging/files/usr/bin/cupertino-session");
-    let started = Instant::now();
-    let mut child = Command::new("sh")
+    let child = Command::new("sh")
         .arg(session)
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
@@ -112,16 +133,8 @@ fn the_session_command_logs_why_the_compositor_panicked_and_ends_within_five_sec
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if started.elapsed() > Duration::from_secs(5) {
-            let _ = child.kill();
-            panic!("the session still ran after 5 s");
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
+    let end = dir.path().join("state/cupertino/session-end");
+    let (status, _) = wait_after(child, || end.exists(), Duration::from_secs(5));
     assert_eq!(status.code(), Some(101));
     let log = std::fs::read_to_string(dir.path().join("state/cupertino/session.log")).unwrap();
     let end = log.lines().last().unwrap();
@@ -139,7 +152,8 @@ const CRASH_AT: f64 = 1.0;
 
 struct Crashed {
     status: std::process::ExitStatus,
-    took: Duration,
+    /// From the crash, which writes the session-end reason first, to the end of the session.
+    after_the_crash: Duration,
     session_log: String,
     server_log: String,
 }
@@ -168,8 +182,7 @@ fn crash_the_session(how: &str) -> Option<Crashed> {
     .unwrap();
     let session = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../packaging/files/usr/bin/cupertino-session");
-    let started = Instant::now();
-    let mut child = Command::new("sh")
+    let child = Command::new("sh")
         .arg(session)
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
@@ -187,18 +200,8 @@ fn crash_the_session(how: &str) -> Option<Crashed> {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let limit = Duration::from_secs_f64(CRASH_AT) + Duration::from_secs(20);
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if started.elapsed() > limit {
-            let _ = child.kill();
-            panic!("the session still ran after {limit:?}");
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    let took = started.elapsed();
+    let end = state.join("session-end");
+    let (status, after_the_crash) = wait_after(child, || end.exists(), Duration::from_secs(20));
     let session_log = std::fs::read_to_string(state.join("session.log")).unwrap();
     let server_log = std::fs::read_to_string(state.join("server.log")).unwrap_or_default();
     if session_log.contains(headless::NO_USABLE_DEVICE)
@@ -210,18 +213,10 @@ fn crash_the_session(how: &str) -> Option<Crashed> {
     assert!(!state.join("session-end").exists());
     Some(Crashed {
         status,
-        took,
+        after_the_crash,
         session_log,
         server_log,
     })
-}
-
-/// The time from the crash to the end of the session, as an upper bound: the whole run less `CRASH_AT`, so it includes
-/// the server's start.
-fn after_the_crash(crashed: &Crashed) -> Duration {
-    crashed
-        .took
-        .saturating_sub(Duration::from_secs_f64(CRASH_AT))
 }
 
 #[test]
@@ -244,8 +239,8 @@ fn a_panic_of_the_server_leaves_its_backtrace_and_ends_the_session_within_five_s
         log.contains("cupertino_server::cli::schedule_script"),
         "the backtrace names the frames:\n{log}"
     );
-    let after = after_the_crash(&crashed);
-    eprintln!("the session ended {after:?} after the panic (upper bound)");
+    let after = crashed.after_the_crash;
+    eprintln!("the session ended {after:?} after the panic");
     assert!(after < Duration::from_secs(5), "{after:?}");
 }
 
@@ -272,8 +267,8 @@ fn an_abort_of_the_server_leaves_its_backtrace_and_ends_the_session_within_five_
         log.contains("cupertino_server::cli::schedule_script"),
         "the backtrace names the frames:\n{log}"
     );
-    let after = after_the_crash(&crashed);
-    eprintln!("the session ended {after:?} after the abort (upper bound)");
+    let after = crashed.after_the_crash;
+    eprintln!("the session ended {after:?} after the abort");
     assert!(after < Duration::from_secs(5), "{after:?}");
 }
 
@@ -296,7 +291,7 @@ fn a_stack_overflow_of_the_server_leaves_its_backtrace_and_ends_the_session_with
         log.contains("cupertino_server::cli::overflow"),
         "the backtrace names the frames"
     );
-    let after = after_the_crash(&crashed);
-    eprintln!("the session ended {after:?} after the overflow (upper bound)");
+    let after = crashed.after_the_crash;
+    eprintln!("the session ended {after:?} after the overflow");
     assert!(after < Duration::from_secs(5), "{after:?}");
 }

@@ -27,6 +27,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,10 +42,14 @@ LIVE = Path("/run/archiso")
 ARCHINSTALL_LOG = Path("/var/log/archinstall/install.log")
 RECOVERY_ENTRY = "cupertino-recovery.conf"
 REPOSITORY = "cupertino"
+# The installed system's own signed repository: packages are signed by the Cupertino key (cupertino-keyring) and must
+# verify; the database is optional only because it is empty, and unsigned, until the first local release is built.
+LOCAL_REPOSITORY = Path("/var/lib/cupertino")
+LOCAL_SECTION = f"[{REPOSITORY}]\nSigLevel = Required DatabaseOptional\nServer = file://{LOCAL_REPOSITORY}/repo\n"
 ZONEINFO = Path("/usr/share/zoneinfo")
 BASE_PACKAGES = (
     "base-devel", "bluez-utils", "chromium", "foot", "git", "github-cli", "nano", "pipewire-pulse", "rustup", "sudo",
-    "wireplumber", "xorg-xwayland", "xwayland-satellite", "cupertino", "cupertino-data",
+    "wireplumber", "xorg-xwayland", "xwayland-satellite", "cupertino", "cupertino-data", "cupertino-keyring",
 )
 CHROMIUM_FLAGS = "--ozone-platform=wayland\n"
 KERNEL = "linux"
@@ -273,6 +278,27 @@ def without_repository(pacman_conf: str, name: str = REPOSITORY) -> str:
     return "".join(kept)
 
 
+def with_local_repository(pacman_conf: str) -> str:
+    """pacman.conf with the live USB's repository replaced by the signed local one, last as before."""
+    kept = without_repository(pacman_conf).rstrip("\n")
+    return f"{kept}\n\n{LOCAL_SECTION}"
+
+
+def empty_database(path: Path) -> None:
+    """A database with no packages, so that pacman -Sy works before the first local release exists."""
+    with tarfile.open(path, "w:gz"):
+        pass
+
+
+def local_repository(target: Path, user: str) -> None:
+    root = target / LOCAL_REPOSITORY.relative_to("/")
+    for name in ("repo", "archive"):
+        (root / name).mkdir(parents=True, exist_ok=True)
+    empty_database(root / "repo/cupertino.db")
+    run("arch-chroot", str(target), "chown", "-R", f"{user}:{user}", str(LOCAL_REPOSITORY / "repo"), str(LOCAL_REPOSITORY / "archive"),
+        step="local repository", status=5)
+
+
 def effective(path: Path) -> str:
     return "".join(line for line in path.read_text().splitlines(keepends=True) if not line.lstrip().startswith("#"))
 
@@ -281,8 +307,8 @@ def live_leftovers(target: Path, user: str) -> list[str]:
     """What the live USB must not pass on to the installed system: its repository, passwordless sudo, a root
     password and other accounts."""
     found = []
-    if re.search(rf"^\s*\[{REPOSITORY}\]|TrustAll", effective(target / "etc/pacman.conf"), re.MULTILINE):
-        found.append(f"pacman.conf still has [{REPOSITORY}] or TrustAll")
+    if re.search(r"TrustAll|/opt/cupertino-repo", effective(target / "etc/pacman.conf")):
+        found.append("pacman.conf still has the live repository or TrustAll")
     sudoers = [target / "etc/sudoers", *sorted((target / "etc/sudoers.d").glob("*"))]
     found += [f"{f.relative_to(target)} has NOPASSWD" for f in sudoers if f.is_file() and "NOPASSWD" in effective(f)]
     for line in (target / "etc/shadow").read_text().splitlines():
@@ -468,7 +494,11 @@ def finish(plan: Plan) -> None:
     if plan.graphics.nvidia:
         nvidia(plan.graphics.only_nvidia)
     pacman_conf = TARGET / "etc/pacman.conf"
-    pacman_conf.write_text(without_repository(pacman_conf.read_text()))
+    pacman_conf.write_text(with_local_repository(pacman_conf.read_text()))
+    local_repository(TARGET, plan.answers.user)
+    if subprocess.run(["arch-chroot", str(TARGET), "pacman-key", "--populate", "cupertino"], capture_output=True).returncode != 0:
+        print("warning: the Cupertino key is not in the new system's pacman keyring; after the first boot run: "
+              "sudo pacman-key --populate cupertino")
     (TARGET / "var/log/archinstall/user_credentials.json").unlink(missing_ok=True)
     if leftovers := live_leftovers(TARGET, plan.answers.user):
         raise Failed(5, "live leftovers", "; ".join(leftovers))

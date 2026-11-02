@@ -175,7 +175,7 @@ where
         };
 
         let allowed =
-            Seat::<D>::from_resource(&self.seat).map_or(true, |seat| handle.allow_receive(&client, &seat));
+            Seat::<D>::from_resource(&self.seat).is_some_and(|seat| handle.allow_receive(&client, &seat));
         if !allowed {
             debug!("Denying a {object_name}.receive the compositor refused");
         } else if !self.source.contains_mime_type(&mime_type) {

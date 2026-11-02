@@ -125,10 +125,11 @@ enum Role {
         clear: Arc<AtomicBool>,
     },
     /// Record the offered types of every selection and read `want` from each offering it; read the last offer
-    /// again each time `again` is set.
+    /// again each time `again` is set, after releasing its seat when `release` is set.
     Paste {
         want: Vec<String>,
         again: Arc<AtomicBool>,
+        release: Arc<AtomicBool>,
     },
 }
 
@@ -148,6 +149,7 @@ struct ClientState {
     shm: wl_shm::WlShm,
     surface: wl_surface::WlSurface,
     attached: bool,
+    seat: wl_seat::WlSeat,
     manager: wl_data_device_manager::WlDataDeviceManager,
     device: wl_data_device::WlDataDevice,
     role: Role,
@@ -338,8 +340,11 @@ impl ClientState {
 
     /// Copy once focused and started; clear when asked; paste again when asked.
     fn act(&mut self, conn: &Connection, qh: &QueueHandle<Self>) {
-        if let Role::Paste { again, .. } = &self.role {
+        if let Role::Paste { again, release, .. } = &self.role {
             if again.swap(false, Ordering::SeqCst) {
+                if release.swap(false, Ordering::SeqCst) {
+                    self.seat.release();
+                }
                 self.paste(conn);
             }
             return;
@@ -405,6 +410,7 @@ impl TestClient {
                 shm,
                 surface,
                 attached: false,
+                seat,
                 manager,
                 device,
                 role,
@@ -495,12 +501,19 @@ fn paster(want: &[&str]) -> Role {
 
 /// A client that pastes `want` from every selection, and the flag that makes it read the last one again.
 fn repaster(want: &[&str]) -> (Role, Arc<AtomicBool>) {
-    let again = Arc::new(AtomicBool::new(false));
+    let (role, again, _) = releasing_repaster(want);
+    (role, again)
+}
+
+/// [`repaster`], with the flag that makes it release its seat before it reads again.
+fn releasing_repaster(want: &[&str]) -> (Role, Arc<AtomicBool>, Arc<AtomicBool>) {
+    let (again, release) = (Arc::default(), Arc::default());
     let role = Role::Paste {
         want: want.iter().map(|m| m.to_string()).collect(),
         again: Arc::clone(&again),
+        release: Arc::clone(&release),
     };
-    (role, again)
+    (role, again, release)
 }
 
 /// Copy text and an image in one client, let it exit, paste both in another: the server's copy serves the
@@ -716,6 +729,29 @@ fn a_locked_session_refuses_reads_of_the_clipboard() {
     assert_eq!(pasted[..2], [TEXT.to_vec(), Vec::new()]);
     assert!(pasted[2..].iter().all(|d| d == TEXT));
     assert!(!a.shared().cancelled);
+}
+
+/// A client that released its seat still holds the offer of the selection; reading it while the session is locked
+/// gets an empty pipe, as with the seat.
+#[test]
+fn a_reader_that_released_its_seat_is_refused_while_locked() {
+    let Some(mut h) = Harness::new() else { return };
+    let (role, _) = copier(&[("text/plain;charset=utf-8", TEXT)]);
+    let _a = TestClient::spawn(h.socket_path(), "org.example.copy", role);
+    h.wait_until("the copy to be read", |s| {
+        s.clipboard.is_complete() && s.clipboard.captured_types() == ["text/plain;charset=utf-8"]
+    });
+    let (role, again, release) = releasing_repaster(&["text/plain;charset=utf-8"]);
+    let b = TestClient::spawn(h.socket_path(), "org.example.paste", role);
+    h.focus("org.example.paste");
+    h.wait_until("the paste", |_| b.shared().pasted.len() == 1);
+
+    let locker = common::Client::locker(common::session_agent(&h.state));
+    h.wait_until("the lock", |_| locker.locked());
+    release.store(true, Ordering::SeqCst);
+    again.store(true, Ordering::SeqCst);
+    h.wait_until("the paste while locked", |_| b.shared().pasted.len() == 2);
+    assert_eq!(b.shared().pasted[1].1, b"");
 }
 
 /// A clipboard manager clearing the clipboard while the session is locked (a password tool's timed clear) empties it

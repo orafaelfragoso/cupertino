@@ -20,7 +20,7 @@ Not verified: how GDM treats the session on a real machine (the virtual console,
 | `Super+Space` | launcher |
 | `Super+Return` | terminal (the first of `foot`, `alacritty`, `kitty`, `wezterm` and `xterm` that is installed) |
 | `Super+Tab`, `Super+Shift+Tab` | application switcher (release `Super` to pick) |
-| `Ctrl+Up` | overview |
+| `Ctrl+Up`, `F3`, the overview key | overview (the same key closes it) |
 | `Ctrl+Left`, `Ctrl+Right`, `Ctrl+1` to `Ctrl+9` | workspaces |
 | `Super+Q`, `Super+W`, `Super+M`, `Super+H` | quit application, close window, minimize, hide application |
 | `Super+Ctrl+F`, `Super+Ctrl+Left`, `Super+Ctrl+Right` | full screen, tile left, tile right |

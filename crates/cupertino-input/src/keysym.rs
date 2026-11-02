@@ -76,6 +76,7 @@ const NAMED: &[(&str, u32)] = &[
     ("XF86AudioPrev", 0x1008ff16),
     ("XF86AudioNext", 0x1008ff17),
     ("XF86PowerOff", 0x1008ff2a),
+    ("XF86LaunchA", 0x1008ff4a),
     ("XF86Eject", 0x1008ff2c),
     ("XF86ScreenSaver", 0x1008ff2d),
     ("XF86Sleep", 0x1008ff2f),

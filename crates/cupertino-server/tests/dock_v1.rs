@@ -2455,3 +2455,28 @@ fn the_dock_gives_way_to_a_full_screen_window_in_front_and_comes_back() {
     assert!(dock_under(&h));
     assert_eq!(dock.error(), None);
 }
+
+#[test]
+fn a_panel_outside_click_catcher_still_takes_the_click_over_a_full_screen_window() {
+    let Some(mut h) = Harness::new() else { return };
+    let _app = spawn_app(h.socket_path(), "org.example.one");
+    let window = h.mapped_window(1);
+    h.state.command(Command::Fullscreen {
+        requested_by: cupertino_wm::Requester::Client,
+        window,
+        output: None,
+    });
+    h.advance(5.0);
+    h.advance(1.0);
+    assert_eq!(
+        h.state.wm.fullscreen_front(h.state.outputs[0].id),
+        Some(window)
+    );
+    let _catcher = common::Client::catcher(UnixStream::connect(h.socket_path()).unwrap());
+    let outside = (500.0, 350.0).into();
+    h.wait_until("the catcher to take a click outside its panel", |s| {
+        let window = s.window_surface_under(outside).map(|(_, s, _)| s);
+        s.surface_under(outside)
+            .is_some_and(|(s, _)| window.as_ref() != Some(&s))
+    });
+}

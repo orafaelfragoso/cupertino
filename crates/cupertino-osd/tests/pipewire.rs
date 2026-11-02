@@ -1,5 +1,5 @@
 //! The volume keys on the default PipeWire sink and the microphone key on the default source: after each press the
-//! overlay shows what `wpctl get-volume` reports.
+//! overlay shows the level stepped to, which the sink takes once the background write is done.
 
 use cupertino_osd::{
     AlsaVolume, BackendError, Backlight, Command, Controller, Kind, MemoryBacklight,
@@ -17,6 +17,18 @@ impl Backlight for Absent {
 
     fn set_level(&mut self, _: f64) -> Result<f64, BackendError> {
         Err("no backlight device".into())
+    }
+}
+
+/// The sink's volume once it is `expected`, or what it is after 5 s.
+fn sink_settles(fake: &FakeWpctl, expected: Volume) -> Volume {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let sink = fake.volume(Target::DefaultSink);
+        if sink == expected || std::time::Instant::now() > deadline {
+            return sink;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
 
@@ -52,24 +64,28 @@ fn each_volume_key_changes_the_default_sink_to_the_level_shown_and_the_microphon
         fine: true,
     };
 
-    assert_eq!(press(&mut controller, up), (Kind::Volume, 0.56));
-    assert_eq!(fake.volume(Target::DefaultSink).level, 0.56);
-    assert_eq!(press(&mut controller, up), (Kind::Volume, 0.62));
-    assert_eq!(fake.volume(Target::DefaultSink).level, 0.62);
-    assert_eq!(press(&mut controller, fine_down), (Kind::Volume, 0.61));
-    assert_eq!(fake.volume(Target::DefaultSink).level, 0.61);
+    let sink = |level| Volume {
+        level,
+        muted: false,
+    };
+    assert_eq!(press(&mut controller, up), (Kind::Volume, 0.5625));
+    assert_eq!(press(&mut controller, up), (Kind::Volume, 0.625));
+    assert_eq!(press(&mut controller, fine_down), (Kind::Volume, 0.609375));
+    assert_eq!(
+        sink_settles(&fake, sink(0.61)),
+        sink(0.61),
+        "the presses step from the level asked, not from the sink's rounded reading"
+    );
 
     assert_eq!(
         press(&mut controller, Command::ToggleMute),
         (Kind::Mute, 0.0)
     );
-    assert_eq!(
-        fake.volume(Target::DefaultSink),
-        Volume {
-            level: 0.61,
-            muted: true
-        }
-    );
+    let muted = Volume {
+        level: 0.61,
+        muted: true,
+    };
+    assert_eq!(sink_settles(&fake, muted), muted);
     assert_eq!(
         fake.volume(Target::DefaultSource),
         half,

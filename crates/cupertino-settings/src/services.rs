@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use cupertino_pipewire::{Target, Wpctl};
+use cupertino_pipewire::{LevelWriter, Target, Wpctl};
 use zbus::blocking::proxy::Builder;
 use zbus::blocking::{Connection, Proxy};
 use zbus::proxy::CacheProperties;
@@ -313,6 +313,8 @@ pub struct Services {
     mixer: Option<cupertino_alsa::Master>,
     alsa_dir: PathBuf,
     wpctl: Wpctl,
+    /// The volume slider's writes, in the background so a drag never waits for `wpctl`.
+    writer: LevelWriter,
     pipewire: bool,
     backends: Backends,
     /// The BlueZ devices whose `Pair` has not returned (the Cupertino daemon reports its own).
@@ -327,6 +329,7 @@ impl Services {
             mixer: None,
             alsa_dir: PathBuf::from(cupertino_alsa::DEVICE_DIR),
             wpctl: Wpctl::default(),
+            writer: LevelWriter::new(Wpctl::default(), Target::DefaultSink),
             pipewire: true,
             backends: Backends::default(),
             pairing: Arc::default(),
@@ -341,6 +344,7 @@ impl Services {
             mixer: None,
             alsa_dir: PathBuf::from(cupertino_alsa::DEVICE_DIR),
             wpctl: Wpctl::default(),
+            writer: LevelWriter::new(Wpctl::default(), Target::DefaultSink),
             pipewire: true,
             backends: Backends::default(),
             pairing: Arc::default(),
@@ -350,6 +354,7 @@ impl Services {
     /// Read and change the sound output through `wpctl`, else the mixer below `alsa_dir` (tests).
     pub fn with_sound(self, wpctl: Wpctl, alsa_dir: PathBuf) -> Self {
         Services {
+            writer: LevelWriter::new(wpctl.clone(), Target::DefaultSink),
             wpctl,
             alsa_dir,
             ..self
@@ -604,6 +609,7 @@ impl Services {
     /// The default PipeWire sink; when no PipeWire daemon answers, the mixer's master, which the changes after this
     /// reading then go to as well.
     pub fn volume(&mut self) -> Reading<Volume> {
+        self.writer.wait_written();
         if let Ok(sink) = self.wpctl.volume(Target::DefaultSink) {
             self.pipewire = true;
             return Reading::Ready(Volume {
@@ -694,9 +700,11 @@ impl Services {
                 self.session.checked(result).map_err(|e| failure(&e))
             }
             Call::SetVolume { level, muted } if self.pipewire => self
-                .wpctl
-                .set_level(Target::DefaultSink, *level)
-                .and_then(|()| self.wpctl.set_muted(Target::DefaultSink, *muted))
+                .writer
+                .set(cupertino_pipewire::Volume {
+                    level: *level,
+                    muted: *muted,
+                })
                 .map_err(|e| {
                     log_once(&format!("the volume could not be changed: {e}"));
                     "The volume could not be changed.".to_string()

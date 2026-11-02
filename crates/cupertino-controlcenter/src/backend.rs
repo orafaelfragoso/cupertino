@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use cupertino_alsa::{Master, OpenMode};
-use cupertino_pipewire::{Target, Wpctl};
+use cupertino_pipewire::{LevelWriter, Target, Wpctl};
 
 use crate::model::{Battery, VolumeState, WifiStatus};
 
@@ -47,7 +47,8 @@ pub trait Brightness: Send {
 /// The output volume.
 pub trait Volume: Send {
     fn read(&mut self) -> Result<VolumeState, BackendError>;
-    /// Set the level and the mute state together; returns what the output has after the change.
+    /// Set the level and the mute state together; returns the state the output takes (a background write may still
+    /// be running).
     fn set(&mut self, level: f64, muted: bool) -> Result<VolumeState, BackendError>;
 }
 
@@ -344,9 +345,11 @@ impl Volume for AlsaVolume {
 
 /// The default PipeWire sink through `wpctl`, so the slider shows the level `wpctl get-volume` reports. A read that
 /// no PipeWire daemon answers goes to the ALSA master instead, and so do the changes after it until the next read.
-#[derive(Debug)]
+/// Changes are written in the background ([`LevelWriter`]): a drag never waits for `wpctl`, and the slider keeps the
+/// level it asked for; a read waits for the last change to be written.
 pub struct SessionVolume {
     wpctl: Wpctl,
+    writer: LevelWriter,
     alsa: AlsaVolume,
     pipewire: bool,
 }
@@ -354,6 +357,7 @@ pub struct SessionVolume {
 impl SessionVolume {
     pub fn new(wpctl: Wpctl, alsa: AlsaVolume) -> Self {
         Self {
+            writer: LevelWriter::new(wpctl.clone(), Target::DefaultSink),
             wpctl,
             alsa,
             pipewire: true,
@@ -361,6 +365,7 @@ impl SessionVolume {
     }
 
     fn sink(&self) -> Result<VolumeState, BackendError> {
+        self.writer.wait_written();
         let sink = self.wpctl.volume(Target::DefaultSink)?;
         Ok(VolumeState {
             level: sink.level,
@@ -387,9 +392,10 @@ impl Volume for SessionVolume {
         if !self.pipewire {
             return self.alsa.set(level, muted);
         }
-        self.wpctl.set_level(Target::DefaultSink, level)?;
-        self.wpctl.set_muted(Target::DefaultSink, muted)?;
-        self.sink()
+        let level = level.clamp(0.0, 1.0);
+        self.writer
+            .set(cupertino_pipewire::Volume { level, muted })?;
+        Ok(VolumeState { level, muted })
     }
 }
 
@@ -422,6 +428,11 @@ mod tests {
             muted: true,
         };
         assert_eq!(volume.set(0.3, true).unwrap(), after);
+        assert_eq!(
+            volume.read().unwrap(),
+            after,
+            "a read follows the last change"
+        );
         assert_eq!(
             fake.volume(Target::DefaultSink),
             cupertino_pipewire::Volume {

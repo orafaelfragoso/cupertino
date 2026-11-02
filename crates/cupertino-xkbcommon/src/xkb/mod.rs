@@ -218,7 +218,8 @@ impl Context {
 /// The compiled tables of one keymap plus the symbol lists of every level, so symbol queries can hand out slices.
 struct KeymapData {
     engine: rs::Keymap,
-    /// Per keycode, the symbol list of each level of each layout that has symbols.
+    /// Per keycode, the symbol list of each level of each layout that has symbols, and its capitalised form where
+    /// that differs.
     level_syms: BTreeMap<u32, Vec<Box<[Keysym]>>>,
 }
 
@@ -247,6 +248,11 @@ impl Keymap {
                                 format!("keycode {code}, layout {layout}, level {level}: {err}")
                             })?;
                     if !syms.is_empty() {
+                        let upper: Box<[Keysym]> =
+                            syms.iter().map(rs::keysym::keysym_to_upper).collect();
+                        if upper[..] != syms[..] {
+                            lists.push(upper);
+                        }
                         lists.push(syms.into_boxed_slice());
                     }
                 }
@@ -568,10 +574,22 @@ impl State {
         u32::from(changed.bits())
     }
 
-    /// The keysyms of the key in the current state, without the capitalisation or control transformations.
+    /// The keysyms of the key in the current state with capitalisation applied, as libxkbcommon does since 1.9.
     pub fn key_get_syms(&self, key: Keycode) -> &[Keysym] {
-        self.keymap
-            .level_syms(key.raw(), &self.engine.key_get_syms(key.raw()))
+        let mut syms = self.engine.key_get_syms(key.raw());
+        if self.caps_applies(key) {
+            for sym in &mut syms {
+                *sym = rs::keysym::keysym_to_upper(sym);
+            }
+        }
+        self.keymap.level_syms(key.raw(), &syms)
+    }
+
+    /// Whether Caps Lock is active and the key's type did not consume it.
+    fn caps_applies(&self, key: Keycode) -> bool {
+        let lock = self.keymap.mod_get_index(MOD_NAME_CAPS);
+        self.mod_index_is_active(lock, STATE_MODS_EFFECTIVE)
+            && self.engine.mod_index_is_consumed(key.raw(), widen(lock)) == Ok(false)
     }
 
     /// The single keysym of the key in the current state with capitalisation applied; `NoSymbol` if the key has

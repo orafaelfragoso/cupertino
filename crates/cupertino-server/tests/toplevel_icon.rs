@@ -1,6 +1,7 @@
 //! A window that sets its own icon with `xdg_toplevel_icon_v1` (a theme name and a square `wl_shm` buffer) has
 //! a copy of that icon on its window entry once it commits: a name that could be a path and a buffer over the size
-//! cap are refused, and the copy outlives the client's buffer. Against a headless compositor; tests skip (pass)
+//! cap are refused, the copy outlives the client's buffer, and the client may destroy the icon and then its
+//! buffers before that commit. Against a headless compositor; tests skip (pass)
 //! when no EGL device is available.
 
 mod common;
@@ -169,14 +170,24 @@ fn shm_buffer(
     (buffer, file)
 }
 
+/// What the client does with its icon objects after `set_icon`.
+#[derive(Clone, Copy, PartialEq)]
+enum Then {
+    Keep,
+    /// Clear the buffers' memory once the server has handled the first commit.
+    Overwrite,
+    /// Destroy the icon, then its buffers, before the first commit, in one batch of requests.
+    Destroy,
+}
+
 /// A client whose window sets an icon with a theme name and one buffer per side of `sides` before its first
-/// commit; with `overwrite` it clears the icon buffers' memory once the server has handled that commit.
+/// commit, then does `then`.
 struct App {
     stop: Arc<AtomicBool>,
 }
 
 impl App {
-    fn spawn(socket: PathBuf, name: &'static str, sides: &'static [i32], overwrite: bool) -> App {
+    fn spawn(socket: PathBuf, name: &'static str, sides: &'static [i32], then: Then) -> App {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         std::thread::spawn(move || {
@@ -204,12 +215,18 @@ impl App {
                 icon.add_buffer(b, 1);
             }
             icons.set_icon(&toplevel, Some(&icon));
+            if then == Then::Destroy {
+                icon.destroy();
+                for (b, _) in &icon_buffers {
+                    b.destroy();
+                }
+            }
             surface.commit();
             let mut client = Window {
                 buffer: shm_buffer(&shm, 200, &qh).0,
                 surface,
             };
-            if overwrite {
+            if then == Then::Overwrite {
                 queue.roundtrip(&mut client).unwrap();
                 for (_, file) in &icon_buffers {
                     file.write_all_at(&vec![0; file.metadata().unwrap().len() as usize], 0)
@@ -246,7 +263,7 @@ fn mapped_icon(h: &mut Harness) -> Arc<WindowIcon> {
 #[test]
 fn a_window_keeps_a_copy_of_the_icon_it_sets_for_itself() {
     let Some(mut h) = Harness::new() else { return };
-    let _app = App::spawn(h.socket_path(), ICON_NAME, &[16, ICON_SIZE], false);
+    let _app = App::spawn(h.socket_path(), ICON_NAME, &[16, ICON_SIZE], Then::Keep);
     let icon = mapped_icon(&mut h);
     assert_eq!(icon.name.as_deref(), Some(ICON_NAME));
     let image = icon.image.as_ref().expect("the largest buffer is copied");
@@ -255,9 +272,18 @@ fn a_window_keeps_a_copy_of_the_icon_it_sets_for_itself() {
 }
 
 #[test]
+fn a_window_that_destroys_its_icon_and_then_the_buffers_before_committing_maps_with_its_icon() {
+    let Some(mut h) = Harness::new() else { return };
+    let _app = App::spawn(h.socket_path(), ICON_NAME, &[ICON_SIZE], Then::Destroy);
+    let icon = mapped_icon(&mut h);
+    assert_eq!(icon.name.as_deref(), Some(ICON_NAME));
+    assert_eq!(icon.image.as_ref().map(|i| i.size), Some(ICON_SIZE as u32));
+}
+
+#[test]
 fn the_copy_does_not_follow_the_client_memory_after_the_commit() {
     let Some(mut h) = Harness::new() else { return };
-    let _app = App::spawn(h.socket_path(), ICON_NAME, &[ICON_SIZE], true);
+    let _app = App::spawn(h.socket_path(), ICON_NAME, &[ICON_SIZE], Then::Overwrite);
     let icon = mapped_icon(&mut h);
     for _ in 0..20 {
         headless::step(&mut h.state, &mut h.event_loop, Duration::from_millis(5)).unwrap();
@@ -278,7 +304,12 @@ fn the_copy_does_not_follow_the_client_memory_after_the_commit() {
 #[test]
 fn a_name_that_could_be_a_path_is_refused() {
     let Some(mut h) = Harness::new() else { return };
-    let _app = App::spawn(h.socket_path(), "../../etc/passwd", &[ICON_SIZE], false);
+    let _app = App::spawn(
+        h.socket_path(),
+        "../../etc/passwd",
+        &[ICON_SIZE],
+        Then::Keep,
+    );
     let icon = mapped_icon(&mut h);
     assert_eq!(icon.name, None);
     assert!(icon.image.is_some(), "the image is kept");
@@ -298,7 +329,7 @@ const MANY: [i32; MAX_ICON_BUFFERS + 1] = {
 #[test]
 fn only_the_first_buffers_are_looked_at_and_only_the_largest_of_them_is_copied() {
     let Some(mut h) = Harness::new() else { return };
-    let _app = App::spawn(h.socket_path(), ICON_NAME, &MANY, false);
+    let _app = App::spawn(h.socket_path(), ICON_NAME, &MANY, Then::Keep);
     let icon = mapped_icon(&mut h);
     let image = icon.image.as_ref().expect("an icon image is kept");
     assert_eq!(image.size, MAX_ICON_BUFFERS as u32);
@@ -309,12 +340,12 @@ fn a_buffer_over_the_size_cap_is_refused() {
     let Some(mut h) = Harness::new() else { return };
     let over = MAX_ICON_PIXELS + 1;
     let sides: &'static [i32] = Box::leak(Box::new([ICON_SIZE, over]));
-    let _app = App::spawn(h.socket_path(), ICON_NAME, sides, false);
+    let _app = App::spawn(h.socket_path(), ICON_NAME, sides, Then::Keep);
     let icon = mapped_icon(&mut h);
     assert_eq!(icon.image.as_ref().map(|i| i.size), Some(ICON_SIZE as u32));
 
     let Some(mut h) = Harness::new() else { return };
     let only_over: &'static [i32] = Box::leak(Box::new([over]));
-    let _app = App::spawn(h.socket_path(), ICON_NAME, only_over, false);
+    let _app = App::spawn(h.socket_path(), ICON_NAME, only_over, Then::Keep);
     assert_eq!(mapped_icon(&mut h).image, None);
 }

@@ -959,6 +959,11 @@ fn the_sound_pane_reads_and_sets_the_default_pipewire_sink() {
     let no_cards = tempfile::tempdir().unwrap();
     let mut services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE))
         .with_sound(Wpctl::new(fake.program()), no_cards.path().to_path_buf());
+    // a reading asked for after a change behind the worker's back, and done
+    let read_again = |services: &mut Services| {
+        services.volume();
+        services.wait_sound();
+    };
     assert_eq!(
         services.volume(),
         Reading::Ready(Volume {
@@ -973,15 +978,23 @@ fn the_sound_pane_reads_and_sets_the_default_pipewire_sink() {
         })
         .unwrap();
     assert_eq!(
-        fake.volume(Target::DefaultSink),
-        Node {
+        services.volume(),
+        Reading::Ready(Volume {
             level: 0.25,
             muted: true
-        }
+        }),
+        "a reading shows the change asked at once"
     );
+    let quiet = Node {
+        level: 0.25,
+        muted: true,
+    };
+    services.wait_sound();
+    assert_eq!(fake.volume(Target::DefaultSink), quiet);
     assert_eq!(fake.volume(Target::DefaultSource), half);
 
     fake.set_sinks(&[(52, "Speakers"), (53, "Headphones")], 52);
+    read_again(&mut services);
     assert_eq!(
         services
             .outputs()
@@ -992,9 +1005,11 @@ fn the_sound_pane_reads_and_sets_the_default_pipewire_sink() {
     );
     services.call(&Call::SetOutput(53)).unwrap();
     assert_eq!(fake.default_sink(), 53);
+    services.wait_sound();
     assert!(services.outputs()[1].default);
 
     fake.set_running(false);
+    read_again(&mut services);
     assert_eq!(
         services.volume(),
         Reading::Unavailable("No sound output is available".into()),

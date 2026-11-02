@@ -81,20 +81,22 @@ class PortalsConfTest(unittest.TestCase):
                     self.assertIn(f'xdg-desktop-portal-{backend}', packages)
 
 
-class DbusFloorTest(unittest.TestCase):
-    FLOOR = '1.16'
+class RuntimeFloorTest(unittest.TestCase):
+    """dbus 1.16 passes the caller's ProcessFD (dbus-broker does from 34); PipeWire 1.4 follows a screencast resize."""
 
-    def test_every_format_requires_a_dbus_that_provides_the_caller_process_fd(self):
+    def test_every_format_requires_the_floors(self):
         meta = tomllib.loads((release.ROOT / 'crates/cupertino-server/Cargo.toml').read_text())['package']['metadata']
-        arch = {
-            recipe: re.findall(r"'(dbus[^']*)'", re.search(r'^\s+depends=\((.*?)\)', (
-                release.ROOT / recipe).read_text(), re.M | re.S).group(1))
-            for recipe in ('packaging/arch/cupertino/PKGBUILD', 'packaging/arch/cupertino-git/PKGBUILD')
-        }
-        deb = [d.strip() for d in meta['deb']['depends'].split(',') if d.strip().startswith('dbus')]
-        self.assertEqual(deb, [f'dbus (>= {self.FLOOR})'])
-        self.assertEqual(meta['generate-rpm']['requires']['dbus'], f'>= {self.FLOOR}')
-        self.assertEqual(arch, {recipe: [f'dbus>={self.FLOOR}'] for recipe in arch})
+        deb = [d.strip() for d in meta['deb']['depends'].split(',')]
+        rpm = meta['generate-rpm']['requires']
+        self.assertIn('dbus (>= 1.16)', deb)
+        self.assertIn('pipewire (>= 1.4)', deb)
+        self.assertEqual(rpm['dbus'], '>= 1.16')
+        self.assertEqual(rpm['pipewire-libs'], '>= 1.4')
+        for recipe in ('packaging/arch/cupertino/PKGBUILD', 'packaging/arch/cupertino-git/PKGBUILD'):
+            with self.subTest(recipe):
+                depends = re.search(r'^\s+depends=\((.*?)\)', (release.ROOT / recipe).read_text(), re.M | re.S).group(1)
+                self.assertIn("'dbus>=1.16'", depends)
+                self.assertIn("'pipewire>=1:1.4'", depends)
 
 
 class TagTest(unittest.TestCase):

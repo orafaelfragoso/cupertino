@@ -1,0 +1,329 @@
+mods Shift,Lock,Control,Mod1,Mod2,Mod3,Mod4,Mod5,NumLock,Alt,LevelThree,Super,LevelFive,Meta,Hyper,ScrollLock
+layouts German
+leds Caps Lock,Num Lock,Scroll Lock,Compose,Kana,Sleep,Suspend,Mute,Misc,Mail,Charging,Shift Lock,Group 2,Mouse Keys
+keycodes 9..=255
+key 9 ESC repeats=true layouts=1 | g0 levels=1 l0=Escape
+key 10 AE01 repeats=true layouts=1 | g0 levels=4 l0=1 l1=exclam
+key 11 AE02 repeats=true layouts=1 | g0 levels=4 l0=2 l1=quotedbl
+key 12 AE03 repeats=true layouts=1 | g0 levels=4 l0=3 l1=section
+key 13 AE04 repeats=true layouts=1 | g0 levels=4 l0=4 l1=dollar
+key 14 AE05 repeats=true layouts=1 | g0 levels=4 l0=5 l1=percent
+key 15 AE06 repeats=true layouts=1 | g0 levels=4 l0=6 l1=ampersand
+key 16 AE07 repeats=true layouts=1 | g0 levels=4 l0=7 l1=slash
+key 17 AE08 repeats=true layouts=1 | g0 levels=4 l0=8 l1=parenleft
+key 18 AE09 repeats=true layouts=1 | g0 levels=4 l0=9 l1=parenright
+key 19 AE10 repeats=true layouts=1 | g0 levels=4 l0=0 l1=equal
+key 20 AE11 repeats=true layouts=1 | g0 levels=5 l0=ssharp l1=question
+key 21 AE12 repeats=true layouts=1 | g0 levels=4 l0=dead_acute l1=dead_grave
+key 22 BKSP repeats=true layouts=1 | g0 levels=2 l0=BackSpace l1=BackSpace
+key 23 TAB repeats=true layouts=1 | g0 levels=2 l0=Tab l1=ISO_Left_Tab
+key 24 AD01 repeats=true layouts=1 | g0 levels=4 l0=q l1=Q
+key 25 AD02 repeats=true layouts=1 | g0 levels=4 l0=w l1=W
+key 26 AD03 repeats=true layouts=1 | g0 levels=4 l0=e l1=E
+key 27 AD04 repeats=true layouts=1 | g0 levels=4 l0=r l1=R
+key 28 AD05 repeats=true layouts=1 | g0 levels=4 l0=t l1=T
+key 29 AD06 repeats=true layouts=1 | g0 levels=4 l0=z l1=Z
+key 30 AD07 repeats=true layouts=1 | g0 levels=4 l0=u l1=U
+key 31 AD08 repeats=true layouts=1 | g0 levels=4 l0=i l1=I
+key 32 AD09 repeats=true layouts=1 | g0 levels=4 l0=o l1=O
+key 33 AD10 repeats=true layouts=1 | g0 levels=4 l0=p l1=P
+key 34 AD11 repeats=true layouts=1 | g0 levels=4 l0=udiaeresis l1=Udiaeresis
+key 35 AD12 repeats=true layouts=1 | g0 levels=4 l0=plus l1=asterisk
+key 36 RTRN repeats=true layouts=1 | g0 levels=1 l0=Return
+key 37 LCTL repeats=false layouts=1 | g0 levels=1 l0=Control_L
+key 38 AC01 repeats=true layouts=1 | g0 levels=4 l0=a l1=A
+key 39 AC02 repeats=true layouts=1 | g0 levels=4 l0=s l1=S
+key 40 AC03 repeats=true layouts=1 | g0 levels=4 l0=d l1=D
+key 41 AC04 repeats=true layouts=1 | g0 levels=4 l0=f l1=F
+key 42 AC05 repeats=true layouts=1 | g0 levels=4 l0=g l1=G
+key 43 AC06 repeats=true layouts=1 | g0 levels=4 l0=h l1=H
+key 44 AC07 repeats=true layouts=1 | g0 levels=4 l0=j l1=J
+key 45 AC08 repeats=true layouts=1 | g0 levels=4 l0=k l1=K
+key 46 AC09 repeats=true layouts=1 | g0 levels=4 l0=l l1=L
+key 47 AC10 repeats=true layouts=1 | g0 levels=4 l0=odiaeresis l1=Odiaeresis
+key 48 AC11 repeats=true layouts=1 | g0 levels=4 l0=adiaeresis l1=Adiaeresis
+key 49 TLDE repeats=true layouts=1 | g0 levels=4 l0=dead_circumflex l1=degree
+key 50 LFSH repeats=false layouts=1 | g0 levels=1 l0=Shift_L
+key 51 BKSL repeats=true layouts=1 | g0 levels=4 l0=numbersign l1=apostrophe
+key 52 AB01 repeats=true layouts=1 | g0 levels=4 l0=y l1=Y
+key 53 AB02 repeats=true layouts=1 | g0 levels=4 l0=x l1=X
+key 54 AB03 repeats=true layouts=1 | g0 levels=4 l0=c l1=C
+key 55 AB04 repeats=true layouts=1 | g0 levels=4 l0=v l1=V
+key 56 AB05 repeats=true layouts=1 | g0 levels=4 l0=b l1=B
+key 57 AB06 repeats=true layouts=1 | g0 levels=4 l0=n l1=N
+key 58 AB07 repeats=true layouts=1 | g0 levels=4 l0=m l1=M
+key 59 AB08 repeats=true layouts=1 | g0 levels=4 l0=comma l1=semicolon
+key 60 AB09 repeats=true layouts=1 | g0 levels=4 l0=period l1=colon
+key 61 AB10 repeats=true layouts=1 | g0 levels=4 l0=minus l1=underscore
+key 62 RTSH repeats=false layouts=1 | g0 levels=1 l0=Shift_R
+key 63 KPMU repeats=true layouts=1 | g0 levels=5 l0=KP_Multiply l1=KP_Multiply
+key 64 LALT repeats=false layouts=1 | g0 levels=1 l0=Alt_L
+key 65 SPCE repeats=true layouts=1 | g0 levels=1 l0=space
+key 66 CAPS repeats=false layouts=1 | g0 levels=1 l0=Caps_Lock
+key 67 FK01 repeats=true layouts=1 | g0 levels=5 l0=F1 l1=F1
+key 68 FK02 repeats=true layouts=1 | g0 levels=5 l0=F2 l1=F2
+key 69 FK03 repeats=true layouts=1 | g0 levels=5 l0=F3 l1=F3
+key 70 FK04 repeats=true layouts=1 | g0 levels=5 l0=F4 l1=F4
+key 71 FK05 repeats=true layouts=1 | g0 levels=5 l0=F5 l1=F5
+key 72 FK06 repeats=true layouts=1 | g0 levels=5 l0=F6 l1=F6
+key 73 FK07 repeats=true layouts=1 | g0 levels=5 l0=F7 l1=F7
+key 74 FK08 repeats=true layouts=1 | g0 levels=5 l0=F8 l1=F8
+key 75 FK09 repeats=true layouts=1 | g0 levels=5 l0=F9 l1=F9
+key 76 FK10 repeats=true layouts=1 | g0 levels=5 l0=F10 l1=F10
+key 77 NMLK repeats=false layouts=1 | g0 levels=1 l0=Num_Lock
+key 78 SCLK repeats=false layouts=1 | g0 levels=1 l0=Scroll_Lock
+key 79 KP7 repeats=true layouts=1 | g0 levels=2 l0=KP_Home l1=KP_7
+key 80 KP8 repeats=true layouts=1 | g0 levels=2 l0=KP_Up l1=KP_8
+key 81 KP9 repeats=true layouts=1 | g0 levels=2 l0=KP_Prior l1=KP_9
+key 82 KPSU repeats=true layouts=1 | g0 levels=5 l0=KP_Subtract l1=KP_Subtract
+key 83 KP4 repeats=true layouts=1 | g0 levels=2 l0=KP_Left l1=KP_4
+key 84 KP5 repeats=true layouts=1 | g0 levels=2 l0=KP_Begin l1=KP_5
+key 85 KP6 repeats=true layouts=1 | g0 levels=2 l0=KP_Right l1=KP_6
+key 86 KPAD repeats=true layouts=1 | g0 levels=5 l0=KP_Add l1=KP_Add
+key 87 KP1 repeats=true layouts=1 | g0 levels=2 l0=KP_End l1=KP_1
+key 88 KP2 repeats=true layouts=1 | g0 levels=2 l0=KP_Down l1=KP_2
+key 89 KP3 repeats=true layouts=1 | g0 levels=2 l0=KP_Next l1=KP_3
+key 90 KP0 repeats=true layouts=1 | g0 levels=2 l0=KP_Insert l1=KP_0
+key 91 KPDL repeats=true layouts=1 | g0 levels=2 l0=KP_Delete l1=KP_Separator
+key 92 LVL3 repeats=false layouts=1 | g0 levels=1 l0=ISO_Level3_Shift
+key 93 ZEHA repeats=true layouts=1 | g0 levels=2 l0=F24 l1=XF86TouchpadToggle
+key 94 LSGT repeats=true layouts=1 | g0 levels=4 l0=less l1=greater
+key 95 FK11 repeats=true layouts=1 | g0 levels=5 l0=F11 l1=F11
+key 96 FK12 repeats=true layouts=1 | g0 levels=5 l0=F12 l1=F12
+key 97 AB11 repeats=false layouts=0
+key 98 KATA repeats=true layouts=1 | g0 levels=1 l0=Katakana
+key 99 HIRA repeats=true layouts=1 | g0 levels=1 l0=Hiragana
+key 100 HENK repeats=true layouts=1 | g0 levels=1 l0=Henkan_Mode
+key 101 HKTG repeats=true layouts=1 | g0 levels=1 l0=Hiragana_Katakana
+key 102 MUHE repeats=true layouts=1 | g0 levels=1 l0=Muhenkan
+key 103 JPCM repeats=false layouts=0
+key 104 KPEN repeats=true layouts=1 | g0 levels=1 l0=KP_Enter
+key 105 RCTL repeats=false layouts=1 | g0 levels=1 l0=Control_R
+key 106 KPDV repeats=true layouts=1 | g0 levels=5 l0=KP_Divide l1=KP_Divide
+key 107 PRSC repeats=true layouts=1 | g0 levels=2 l0=Print l1=Sys_Req
+key 108 RALT repeats=false layouts=1 | g0 levels=1 l0=ISO_Level3_Shift
+key 109 LNFD repeats=true layouts=1 | g0 levels=1 l0=Linefeed
+key 110 HOME repeats=true layouts=1 | g0 levels=1 l0=Home
+key 111 UP repeats=true layouts=1 | g0 levels=1 l0=Up
+key 112 PGUP repeats=true layouts=1 | g0 levels=1 l0=Prior
+key 113 LEFT repeats=true layouts=1 | g0 levels=1 l0=Left
+key 114 RGHT repeats=true layouts=1 | g0 levels=1 l0=Right
+key 115 END repeats=true layouts=1 | g0 levels=1 l0=End
+key 116 DOWN repeats=true layouts=1 | g0 levels=1 l0=Down
+key 117 PGDN repeats=true layouts=1 | g0 levels=1 l0=Next
+key 118 INS repeats=true layouts=1 | g0 levels=1 l0=Insert
+key 119 DELE repeats=true layouts=1 | g0 levels=1 l0=Delete
+key 120 I120 repeats=false layouts=0
+key 121 MUTE repeats=true layouts=1 | g0 levels=1 l0=XF86AudioMute
+key 122 VOL- repeats=true layouts=1 | g0 levels=1 l0=XF86AudioLowerVolume
+key 123 VOL+ repeats=true layouts=1 | g0 levels=1 l0=XF86AudioRaiseVolume
+key 124 POWR repeats=true layouts=1 | g0 levels=1 l0=XF86PowerOff
+key 125 KPEQ repeats=true layouts=1 | g0 levels=1 l0=KP_Equal
+key 126 I126 repeats=true layouts=1 | g0 levels=1 l0=plusminus
+key 127 PAUS repeats=true layouts=1 | g0 levels=2 l0=Pause l1=Break
+key 128 I128 repeats=true layouts=1 | g0 levels=1 l0=XF86LaunchA
+key 129 I129 repeats=true layouts=1 | g0 levels=2 l0=KP_Decimal l1=KP_Decimal
+key 130 HNGL repeats=true layouts=1 | g0 levels=1 l0=Hangul
+key 131 HJCV repeats=true layouts=1 | g0 levels=1 l0=Hangul_Hanja
+key 132 AE13 repeats=false layouts=0
+key 133 LWIN repeats=false layouts=1 | g0 levels=1 l0=Super_L
+key 134 RWIN repeats=false layouts=1 | g0 levels=1 l0=Super_R
+key 135 COMP repeats=true layouts=1 | g0 levels=1 l0=Menu
+key 136 STOP repeats=true layouts=1 | g0 levels=1 l0=Cancel
+key 137 AGAI repeats=true layouts=1 | g0 levels=1 l0=Redo
+key 138 PROP repeats=true layouts=1 | g0 levels=1 l0=SunProps
+key 139 UNDO repeats=true layouts=1 | g0 levels=1 l0=Undo
+key 140 FRNT repeats=true layouts=1 | g0 levels=1 l0=SunFront
+key 141 COPY repeats=true layouts=1 | g0 levels=1 l0=XF86Copy
+key 142 OPEN repeats=true layouts=1 | g0 levels=1 l0=XF86Open
+key 143 PAST repeats=true layouts=1 | g0 levels=1 l0=XF86Paste
+key 144 FIND repeats=true layouts=1 | g0 levels=1 l0=Find
+key 145 CUT repeats=true layouts=1 | g0 levels=1 l0=XF86Cut
+key 146 HELP repeats=true layouts=1 | g0 levels=1 l0=Help
+key 147 I147 repeats=true layouts=1 | g0 levels=1 l0=XF86MenuKB
+key 148 I148 repeats=true layouts=1 | g0 levels=1 l0=XF86Calculator
+key 149 I149 repeats=false layouts=0
+key 150 I150 repeats=true layouts=1 | g0 levels=1 l0=XF86Sleep
+key 151 I151 repeats=true layouts=1 | g0 levels=1 l0=XF86WakeUp
+key 152 I152 repeats=true layouts=1 | g0 levels=1 l0=XF86Explorer
+key 153 I153 repeats=true layouts=1 | g0 levels=1 l0=XF86Send
+key 154 I154 repeats=false layouts=0
+key 155 I155 repeats=true layouts=1 | g0 levels=1 l0=XF86Xfer
+key 156 I156 repeats=true layouts=1 | g0 levels=1 l0=XF86Launch1
+key 157 I157 repeats=true layouts=1 | g0 levels=1 l0=XF86Launch2
+key 158 I158 repeats=true layouts=1 | g0 levels=1 l0=XF86WWW
+key 159 I159 repeats=true layouts=1 | g0 levels=1 l0=XF86DOS
+key 160 I160 repeats=true layouts=1 | g0 levels=1 l0=XF86ScreenSaver
+key 161 I161 repeats=true layouts=1 | g0 levels=1 l0=XF86RotateWindows
+key 162 I162 repeats=true layouts=1 | g0 levels=1 l0=XF86TaskPane
+key 163 I163 repeats=true layouts=1 | g0 levels=1 l0=XF86Mail
+key 164 I164 repeats=true layouts=1 | g0 levels=1 l0=XF86Favorites
+key 165 I165 repeats=true layouts=1 | g0 levels=1 l0=XF86MyComputer
+key 166 I166 repeats=true layouts=1 | g0 levels=1 l0=XF86Back
+key 167 I167 repeats=true layouts=1 | g0 levels=1 l0=XF86Forward
+key 168 I168 repeats=false layouts=0
+key 169 I169 repeats=true layouts=1 | g0 levels=1 l0=XF86Eject
+key 170 I170 repeats=true layouts=1 | g0 levels=1 l0=XF86Eject
+key 171 I171 repeats=true layouts=1 | g0 levels=1 l0=XF86AudioNext
+key 172 I172 repeats=true layouts=1 | g0 levels=2 l0=XF86AudioPlay l1=XF86AudioPause
+key 173 I173 repeats=true layouts=1 | g0 levels=1 l0=XF86AudioPrev
+key 174 I174 repeats=true layouts=1 | g0 levels=2 l0=XF86AudioStop l1=XF86Eject
+key 175 I175 repeats=true layouts=1 | g0 levels=1 l0=XF86AudioRecord
+key 176 I176 repeats=true layouts=1 | g0 levels=1 l0=XF86AudioRewind
+key 177 I177 repeats=true layouts=1 | g0 levels=1 l0=XF86Phone
+key 178 I178 repeats=false layouts=0
+key 179 I179 repeats=true layouts=1 | g0 levels=1 l0=XF86Tools
+key 180 I180 repeats=true layouts=1 | g0 levels=1 l0=XF86HomePage
+key 181 I181 repeats=true layouts=1 | g0 levels=1 l0=XF86Reload
+key 182 I182 repeats=true layouts=1 | g0 levels=1 l0=XF86Close
+key 183 I183 repeats=false layouts=0
+key 184 I184 repeats=false layouts=0
+key 185 I185 repeats=true layouts=1 | g0 levels=1 l0=XF86ScrollUp
+key 186 I186 repeats=true layouts=1 | g0 levels=1 l0=XF86ScrollDown
+key 187 I187 repeats=true layouts=1 | g0 levels=1 l0=parenleft
+key 188 I188 repeats=true layouts=1 | g0 levels=1 l0=parenright
+key 189 I189 repeats=true layouts=1 | g0 levels=1 l0=XF86New
+key 190 I190 repeats=true layouts=1 | g0 levels=1 l0=Redo
+key 191 FK13 repeats=true layouts=1 | g0 levels=1 l0=XF86Tools
+key 192 FK14 repeats=true layouts=1 | g0 levels=1 l0=XF86Launch5
+key 193 FK15 repeats=true layouts=1 | g0 levels=1 l0=XF86Launch6
+key 194 FK16 repeats=true layouts=1 | g0 levels=1 l0=XF86Launch7
+key 195 FK17 repeats=true layouts=1 | g0 levels=1 l0=XF86Launch8
+key 196 FK18 repeats=true layouts=1 | g0 levels=1 l0=XF86Launch9
+key 197 FK19 repeats=true layouts=1 | g0 levels=1 l0=F19
+key 198 FK20 repeats=true layouts=1 | g0 levels=1 l0=XF86AudioMicMute
+key 199 FK21 repeats=true layouts=1 | g0 levels=1 l0=XF86TouchpadToggle
+key 200 FK22 repeats=true layouts=1 | g0 levels=1 l0=XF86TouchpadOn
+key 201 FK23 repeats=true layouts=1 | g0 levels=2 l0=XF86TouchpadOff l1=XF86Assistant
+key 202 FK24 repeats=true layouts=1 | g0 levels=2 l0=F24 l1=XF86TouchpadToggle
+key 203 LVL5 repeats=false layouts=1 | g0 levels=1 l0=ISO_Level5_Shift
+key 204 ALT repeats=false layouts=1 | g0 levels=2 l0=- l1=Alt_L
+key 205 META repeats=false layouts=1 | g0 levels=2 l0=- l1=Meta_L
+key 206 SUPR repeats=false layouts=1 | g0 levels=2 l0=- l1=Super_L
+key 207 HYPR repeats=false layouts=1 | g0 levels=2 l0=- l1=Hyper_L
+key 208 I208 repeats=true layouts=1 | g0 levels=1 l0=XF86AudioPlay
+key 209 I209 repeats=true layouts=1 | g0 levels=1 l0=XF86AudioPause
+key 210 I210 repeats=true layouts=1 | g0 levels=1 l0=XF86Launch3
+key 211 I211 repeats=true layouts=1 | g0 levels=1 l0=XF86Launch4
+key 212 I212 repeats=true layouts=1 | g0 levels=1 l0=XF86LaunchB
+key 213 I213 repeats=true layouts=1 | g0 levels=1 l0=XF86Suspend
+key 214 I214 repeats=true layouts=1 | g0 levels=1 l0=XF86Close
+key 215 I215 repeats=true layouts=1 | g0 levels=1 l0=XF86AudioPlay
+key 216 I216 repeats=true layouts=1 | g0 levels=1 l0=XF86AudioForward
+key 217 I217 repeats=true layouts=1 | g0 levels=1 l0=XF86AudioBassBoost
+key 218 I218 repeats=true layouts=1 | g0 levels=1 l0=Print
+key 219 I219 repeats=false layouts=0
+key 220 I220 repeats=true layouts=1 | g0 levels=1 l0=XF86WebCam
+key 221 I221 repeats=true layouts=1 | g0 levels=1 l0=XF86AudioPreset
+key 222 I222 repeats=false layouts=0
+key 223 I223 repeats=true layouts=1 | g0 levels=1 l0=XF86Mail
+key 224 I224 repeats=true layouts=1 | g0 levels=1 l0=XF86Messenger
+key 225 I225 repeats=true layouts=1 | g0 levels=1 l0=XF86Search
+key 226 I226 repeats=true layouts=1 | g0 levels=1 l0=XF86Go
+key 227 I227 repeats=true layouts=1 | g0 levels=1 l0=XF86Finance
+key 228 I228 repeats=true layouts=1 | g0 levels=1 l0=XF86Game
+key 229 I229 repeats=true layouts=1 | g0 levels=1 l0=XF86Shop
+key 230 I230 repeats=false layouts=0
+key 231 I231 repeats=true layouts=1 | g0 levels=1 l0=Cancel
+key 232 I232 repeats=true layouts=1 | g0 levels=1 l0=XF86MonBrightnessDown
+key 233 I233 repeats=true layouts=1 | g0 levels=1 l0=XF86MonBrightnessUp
+key 234 I234 repeats=true layouts=1 | g0 levels=1 l0=XF86AudioMedia
+key 235 I235 repeats=true layouts=1 | g0 levels=1 l0=XF86Display
+key 236 I236 repeats=true layouts=1 | g0 levels=1 l0=XF86KbdLightOnOff
+key 237 I237 repeats=true layouts=1 | g0 levels=1 l0=XF86KbdBrightnessDown
+key 238 I238 repeats=true layouts=1 | g0 levels=1 l0=XF86KbdBrightnessUp
+key 239 I239 repeats=true layouts=1 | g0 levels=1 l0=XF86Send
+key 240 I240 repeats=true layouts=1 | g0 levels=1 l0=XF86Reply
+key 241 I241 repeats=true layouts=1 | g0 levels=1 l0=XF86MailForward
+key 242 I242 repeats=true layouts=1 | g0 levels=1 l0=XF86Save
+key 243 I243 repeats=true layouts=1 | g0 levels=1 l0=XF86Documents
+key 244 I244 repeats=true layouts=1 | g0 levels=1 l0=XF86Battery
+key 245 I245 repeats=true layouts=1 | g0 levels=1 l0=XF86Bluetooth
+key 246 I246 repeats=true layouts=1 | g0 levels=1 l0=XF86WLAN
+key 247 I247 repeats=true layouts=1 | g0 levels=1 l0=XF86UWB
+key 248 I248 repeats=false layouts=0
+key 249 I249 repeats=true layouts=1 | g0 levels=1 l0=XF86Next_VMode
+key 250 I250 repeats=true layouts=1 | g0 levels=1 l0=XF86Prev_VMode
+key 251 I251 repeats=true layouts=1 | g0 levels=1 l0=XF86MonBrightnessCycle
+key 252 I252 repeats=true layouts=1 | g0 levels=1 l0=XF86BrightnessAuto
+key 253 I253 repeats=true layouts=1 | g0 levels=1 l0=XF86DisplayOff
+key 254 I254 repeats=true layouts=1 | g0 levels=1 l0=XF86WWAN
+key 255 I255 repeats=true layouts=1 | g0 levels=1 l0=XF86RFKill
+seq shift
+  init changed=0x0 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  down 42 changed=0x9 dep=0x1 lat=0x0 lock=0x0 eff=0x1 grp=0 active=[Shift] leds=[] a=A/"A"/one=A q=Q/"Q"/one=Q apostrophe=Adiaeresis/"Ä"/one=Adiaeresis 2=quotedbl/"\""/one=quotedbl grave=degree/"°"/one=degree semicolon=Odiaeresis/"Ö"/one=Odiaeresis
+  down 30 changed=0x0 dep=0x1 lat=0x0 lock=0x0 eff=0x1 grp=0 active=[Shift] leds=[] a=A/"A"/one=A q=Q/"Q"/one=Q apostrophe=Adiaeresis/"Ä"/one=Adiaeresis 2=quotedbl/"\""/one=quotedbl grave=degree/"°"/one=degree semicolon=Odiaeresis/"Ö"/one=Odiaeresis
+  up 30 changed=0x0 dep=0x1 lat=0x0 lock=0x0 eff=0x1 grp=0 active=[Shift] leds=[] a=A/"A"/one=A q=Q/"Q"/one=Q apostrophe=Adiaeresis/"Ä"/one=Adiaeresis 2=quotedbl/"\""/one=quotedbl grave=degree/"°"/one=degree semicolon=Odiaeresis/"Ö"/one=Odiaeresis
+  up 42 changed=0x9 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+seq ctrl
+  init changed=0x0 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  down 29 changed=0x9 dep=0x4 lat=0x0 lock=0x0 eff=0x4 grp=0 active=[Control] leds=[] a=a/"\u{1}"/one=a q=q/"\u{11}"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"\0"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  down 30 changed=0x0 dep=0x4 lat=0x0 lock=0x0 eff=0x4 grp=0 active=[Control] leds=[] a=a/"\u{1}"/one=a q=q/"\u{11}"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"\0"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  up 30 changed=0x0 dep=0x4 lat=0x0 lock=0x0 eff=0x4 grp=0 active=[Control] leds=[] a=a/"\u{1}"/one=a q=q/"\u{11}"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"\0"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  up 29 changed=0x9 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+seq alt
+  init changed=0x0 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  down 56 changed=0x9 dep=0x8 lat=0x0 lock=0x0 eff=0x8 grp=0 active=[Mod1] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  down 30 changed=0x0 dep=0x8 lat=0x0 lock=0x0 eff=0x8 grp=0 active=[Mod1] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  up 30 changed=0x0 dep=0x8 lat=0x0 lock=0x0 eff=0x8 grp=0 active=[Mod1] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  up 56 changed=0x9 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+seq altgr
+  init changed=0x0 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  down 100 changed=0x9 dep=0x80 lat=0x0 lock=0x0 eff=0x80 grp=0 active=[Mod5] leds=[] a=ae/"æ"/one=ae q=at/"@"/one=at apostrophe=dead_circumflex/""/one=dead_circumflex 2=twosuperior/"²"/one=twosuperior grave=U2032/"′"/one=U2032 semicolon=dead_doubleacute/""/one=dead_doubleacute
+  down 16 changed=0x0 dep=0x80 lat=0x0 lock=0x0 eff=0x80 grp=0 active=[Mod5] leds=[] a=ae/"æ"/one=ae q=at/"@"/one=at apostrophe=dead_circumflex/""/one=dead_circumflex 2=twosuperior/"²"/one=twosuperior grave=U2032/"′"/one=U2032 semicolon=dead_doubleacute/""/one=dead_doubleacute
+  up 16 changed=0x0 dep=0x80 lat=0x0 lock=0x0 eff=0x80 grp=0 active=[Mod5] leds=[] a=ae/"æ"/one=ae q=at/"@"/one=at apostrophe=dead_circumflex/""/one=dead_circumflex 2=twosuperior/"²"/one=twosuperior grave=U2032/"′"/one=U2032 semicolon=dead_doubleacute/""/one=dead_doubleacute
+  down 40 changed=0x0 dep=0x80 lat=0x0 lock=0x0 eff=0x80 grp=0 active=[Mod5] leds=[] a=ae/"æ"/one=ae q=at/"@"/one=at apostrophe=dead_circumflex/""/one=dead_circumflex 2=twosuperior/"²"/one=twosuperior grave=U2032/"′"/one=U2032 semicolon=dead_doubleacute/""/one=dead_doubleacute
+  up 40 changed=0x0 dep=0x80 lat=0x0 lock=0x0 eff=0x80 grp=0 active=[Mod5] leds=[] a=ae/"æ"/one=ae q=at/"@"/one=at apostrophe=dead_circumflex/""/one=dead_circumflex 2=twosuperior/"²"/one=twosuperior grave=U2032/"′"/one=U2032 semicolon=dead_doubleacute/""/one=dead_doubleacute
+  up 100 changed=0x9 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+seq ctrl-alt
+  init changed=0x0 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  down 29 changed=0x9 dep=0x4 lat=0x0 lock=0x0 eff=0x4 grp=0 active=[Control] leds=[] a=a/"\u{1}"/one=a q=q/"\u{11}"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"\0"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  down 56 changed=0x9 dep=0xc lat=0x0 lock=0x0 eff=0xc grp=0 active=[Control,Mod1] leds=[] a=a/"\u{1}"/one=a q=q/"\u{11}"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"\0"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  down 30 changed=0x0 dep=0xc lat=0x0 lock=0x0 eff=0xc grp=0 active=[Control,Mod1] leds=[] a=a/"\u{1}"/one=a q=q/"\u{11}"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"\0"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  up 30 changed=0x0 dep=0xc lat=0x0 lock=0x0 eff=0xc grp=0 active=[Control,Mod1] leds=[] a=a/"\u{1}"/one=a q=q/"\u{11}"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"\0"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  up 56 changed=0x9 dep=0x4 lat=0x0 lock=0x0 eff=0x4 grp=0 active=[Control] leds=[] a=a/"\u{1}"/one=a q=q/"\u{11}"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"\0"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  up 29 changed=0x9 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+seq super
+  init changed=0x0 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  down 125 changed=0x9 dep=0x40 lat=0x0 lock=0x0 eff=0x40 grp=0 active=[Mod4] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  down 30 changed=0x0 dep=0x40 lat=0x0 lock=0x0 eff=0x40 grp=0 active=[Mod4] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  up 30 changed=0x0 dep=0x40 lat=0x0 lock=0x0 eff=0x40 grp=0 active=[Mod4] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  up 125 changed=0x9 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+seq capslock
+  init changed=0x0 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  down 58 changed=0x10d dep=0x2 lat=0x0 lock=0x2 eff=0x2 grp=0 active=[Lock] leds=[Caps Lock] a=A/"A"/one=A q=Q/"Q"/one=Q apostrophe=Adiaeresis/"Ä"/one=Adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=Odiaeresis/"Ö"/one=Odiaeresis
+  up 58 changed=0x1 dep=0x0 lat=0x0 lock=0x2 eff=0x2 grp=0 active=[Lock] leds=[Caps Lock] a=A/"A"/one=A q=Q/"Q"/one=Q apostrophe=Adiaeresis/"Ä"/one=Adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=Odiaeresis/"Ö"/one=Odiaeresis
+  down 30 changed=0x0 dep=0x0 lat=0x0 lock=0x2 eff=0x2 grp=0 active=[Lock] leds=[Caps Lock] a=A/"A"/one=A q=Q/"Q"/one=Q apostrophe=Adiaeresis/"Ä"/one=Adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=Odiaeresis/"Ö"/one=Odiaeresis
+  up 30 changed=0x0 dep=0x0 lat=0x0 lock=0x2 eff=0x2 grp=0 active=[Lock] leds=[Caps Lock] a=A/"A"/one=A q=Q/"Q"/one=Q apostrophe=Adiaeresis/"Ä"/one=Adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=Odiaeresis/"Ö"/one=Odiaeresis
+  down 42 changed=0x9 dep=0x1 lat=0x0 lock=0x2 eff=0x3 grp=0 active=[Shift,Lock] leds=[Caps Lock] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=quotedbl/"\""/one=quotedbl grave=degree/"°"/one=degree semicolon=odiaeresis/"ö"/one=odiaeresis
+  down 30 changed=0x0 dep=0x1 lat=0x0 lock=0x2 eff=0x3 grp=0 active=[Shift,Lock] leds=[Caps Lock] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=quotedbl/"\""/one=quotedbl grave=degree/"°"/one=degree semicolon=odiaeresis/"ö"/one=odiaeresis
+  up 30 changed=0x0 dep=0x1 lat=0x0 lock=0x2 eff=0x3 grp=0 active=[Shift,Lock] leds=[Caps Lock] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=quotedbl/"\""/one=quotedbl grave=degree/"°"/one=degree semicolon=odiaeresis/"ö"/one=odiaeresis
+  up 42 changed=0x9 dep=0x0 lat=0x0 lock=0x2 eff=0x2 grp=0 active=[Lock] leds=[Caps Lock] a=A/"A"/one=A q=Q/"Q"/one=Q apostrophe=Adiaeresis/"Ä"/one=Adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=Odiaeresis/"Ö"/one=Odiaeresis
+  down 58 changed=0x1 dep=0x2 lat=0x0 lock=0x2 eff=0x2 grp=0 active=[Lock] leds=[Caps Lock] a=A/"A"/one=A q=Q/"Q"/one=Q apostrophe=Adiaeresis/"Ä"/one=Adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=Odiaeresis/"Ö"/one=Odiaeresis
+  up 58 changed=0x10d dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  down 30 changed=0x0 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  up 30 changed=0x0 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+seq numlock
+  init changed=0x0 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  down 69 changed=0x10d dep=0x10 lat=0x0 lock=0x10 eff=0x10 grp=0 active=[Mod2] leds=[Num Lock] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  up 69 changed=0x1 dep=0x0 lat=0x0 lock=0x10 eff=0x10 grp=0 active=[Mod2] leds=[Num Lock] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  down 79 changed=0x0 dep=0x0 lat=0x0 lock=0x10 eff=0x10 grp=0 active=[Mod2] leds=[Num Lock] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  up 79 changed=0x0 dep=0x0 lat=0x0 lock=0x10 eff=0x10 grp=0 active=[Mod2] leds=[Num Lock] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  down 69 changed=0x1 dep=0x10 lat=0x0 lock=0x10 eff=0x10 grp=0 active=[Mod2] leds=[Num Lock] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  up 69 changed=0x10d dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  down 79 changed=0x0 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  up 79 changed=0x0 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+seq shift-altgr
+  init changed=0x0 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  down 42 changed=0x9 dep=0x1 lat=0x0 lock=0x0 eff=0x1 grp=0 active=[Shift] leds=[] a=A/"A"/one=A q=Q/"Q"/one=Q apostrophe=Adiaeresis/"Ä"/one=Adiaeresis 2=quotedbl/"\""/one=quotedbl grave=degree/"°"/one=degree semicolon=Odiaeresis/"Ö"/one=Odiaeresis
+  down 100 changed=0x9 dep=0x81 lat=0x0 lock=0x0 eff=0x81 grp=0 active=[Shift,Mod5] leds=[] a=AE/"Æ"/one=AE q=Greek_OMEGA/"Ω"/one=Greek_OMEGA apostrophe=dead_caron/""/one=dead_caron 2=oneeighth/"⅛"/one=oneeighth grave=U2033/"″"/one=U2033 semicolon=dead_belowdot/""/one=dead_belowdot
+  down 16 changed=0x0 dep=0x81 lat=0x0 lock=0x0 eff=0x81 grp=0 active=[Shift,Mod5] leds=[] a=AE/"Æ"/one=AE q=Greek_OMEGA/"Ω"/one=Greek_OMEGA apostrophe=dead_caron/""/one=dead_caron 2=oneeighth/"⅛"/one=oneeighth grave=U2033/"″"/one=U2033 semicolon=dead_belowdot/""/one=dead_belowdot
+  up 16 changed=0x0 dep=0x81 lat=0x0 lock=0x0 eff=0x81 grp=0 active=[Shift,Mod5] leds=[] a=AE/"Æ"/one=AE q=Greek_OMEGA/"Ω"/one=Greek_OMEGA apostrophe=dead_caron/""/one=dead_caron 2=oneeighth/"⅛"/one=oneeighth grave=U2033/"″"/one=U2033 semicolon=dead_belowdot/""/one=dead_belowdot
+  up 100 changed=0x9 dep=0x1 lat=0x0 lock=0x0 eff=0x1 grp=0 active=[Shift] leds=[] a=A/"A"/one=A q=Q/"Q"/one=Q apostrophe=Adiaeresis/"Ä"/one=Adiaeresis 2=quotedbl/"\""/one=quotedbl grave=degree/"°"/one=degree semicolon=Odiaeresis/"Ö"/one=Odiaeresis
+  up 42 changed=0x9 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+mask
+  mask 0x1,0x0,0x0,0 changed=0x9 dep=0x1 lat=0x0 lock=0x0 eff=0x1 grp=0 active=[Shift] leds=[] a=A/"A"/one=A q=Q/"Q"/one=Q apostrophe=Adiaeresis/"Ä"/one=Adiaeresis 2=quotedbl/"\""/one=quotedbl grave=degree/"°"/one=degree semicolon=Odiaeresis/"Ö"/one=Odiaeresis
+  mask 0x0,0x0,0x2,0 changed=0x10d dep=0x0 lat=0x0 lock=0x2 eff=0x2 grp=0 active=[Lock] leds=[Caps Lock] a=A/"A"/one=A q=Q/"Q"/one=Q apostrophe=Adiaeresis/"Ä"/one=Adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=Odiaeresis/"Ö"/one=Odiaeresis
+  mask 0x4,0x0,0x0,0 changed=0x10d dep=0x4 lat=0x0 lock=0x0 eff=0x4 grp=0 active=[Control] leds=[] a=a/"\u{1}"/one=a q=q/"\u{11}"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"\0"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  mask 0x0,0x0,0x0,1 changed=0x9 dep=0x0 lat=0x0 lock=0x0 eff=0x0 grp=0 active=[] leds=[] a=a/"a"/one=a q=q/"q"/one=q apostrophe=adiaeresis/"ä"/one=adiaeresis 2=2/"2"/one=2 grave=dead_circumflex/""/one=dead_circumflex semicolon=odiaeresis/"ö"/one=odiaeresis
+  mask 0x80,0x0,0x0,0 changed=0x9 dep=0x80 lat=0x0 lock=0x0 eff=0x80 grp=0 active=[Mod5] leds=[] a=ae/"æ"/one=ae q=at/"@"/one=at apostrophe=dead_circumflex/""/one=dead_circumflex 2=twosuperior/"²"/one=twosuperior grave=U2032/"′"/one=U2032 semicolon=dead_doubleacute/""/one=dead_doubleacute

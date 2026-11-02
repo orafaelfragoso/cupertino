@@ -90,7 +90,7 @@ class RuntimeFloorTest(unittest.TestCase):
         rpm = meta['generate-rpm']['requires']
         self.assertIn('dbus (>= 1.16)', deb)
         self.assertIn('pipewire (>= 1.4)', deb)
-        self.assertEqual(rpm['dbus'], '>= 1.16')
+        self.assertEqual(rpm['dbus'], '>= 1:1.16')
         self.assertEqual(rpm['pipewire-libs'], '>= 1.4')
         for recipe in ('packaging/arch/cupertino/PKGBUILD', 'packaging/arch/cupertino-git/PKGBUILD'):
             with self.subTest(recipe):

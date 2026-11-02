@@ -12,6 +12,12 @@ client's drag (wl_data_offer.receive during a drag or after its drop); a refused
 pipe, and a read whose seat is gone is refused. `SelectionSource::provider` and the re-exported `SelectionSourceProvider`
 name the protocol object that set a selection.
 
+### Bugfixes
+
+Removing a `wl_shm` buffer destruction hook removed another hook of that buffer instead of the given one. A
+client that destroyed its `xdg_toplevel_icon_v1` and then a buffer it had added to it got the `no_buffer`
+protocol error and was disconnected.
+
 ## 0.7.0
 
 ### Breaking changes

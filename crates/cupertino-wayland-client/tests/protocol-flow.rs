@@ -146,6 +146,13 @@ enum Control {
     /// The seat loses its touch screen.
     DropTouch,
     TypeKey(u32),
+    /// The key pressed by `TypeKey` goes up.
+    ReleaseKey(u32),
+    /// Key repeat at `rate` per second after `delay` ms.
+    RepeatInfo {
+        rate: i32,
+        delay: i32,
+    },
     Offer(Vec<&'static str>),
     /// Configure the layer surface this many times in a row, each a pixel wider.
     LayerConfigures(u32),
@@ -1434,6 +1441,14 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
             keyboard.enter(serial, &surface, Vec::new());
             keyboard.key(serial + 1, 777, code, wl_keyboard::KeyState::Pressed);
         }
+        Control::ReleaseKey(code) => {
+            let serial = mock.serial();
+            let keyboard = mock.keyboard.as_ref().unwrap();
+            keyboard.key(serial, 778, code, wl_keyboard::KeyState::Released);
+        }
+        Control::RepeatInfo { rate, delay } => {
+            mock.keyboard.as_ref().unwrap().repeat_info(rate, delay);
+        }
         Control::Offer(types) => {
             let device = mock.data_device.as_ref().unwrap();
             let offer = device
@@ -2190,6 +2205,49 @@ fn pointer_and_key_input_arrive_typed_on_the_focused_window() {
         _ => None,
     });
     assert!((777..1777).contains(&enter), "{enter}");
+}
+
+#[test]
+fn a_key_released_while_the_client_was_busy_repeats_no_more() {
+    let (mut conn, control, _seen) = connect(Globals {
+        seat: true,
+        ..Globals::core()
+    });
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    control
+        .send(Control::RepeatInfo {
+            rate: 25,
+            delay: 100,
+        })
+        .unwrap();
+    control.send(Control::TypeKey(KEY_A)).unwrap();
+    wait_for(&mut conn, &mut stash, |e| match e {
+        Event::Keyboard {
+            event: KeyboardEvent::Key { code: KEY_A, .. },
+            ..
+        } => Some(()),
+        _ => None,
+    });
+    control.send(Control::ReleaseKey(KEY_A)).unwrap();
+    // busy past the delay and several intervals, with the release unread in the socket
+    std::thread::sleep(Duration::from_millis(500));
+    let events = conn.wait(Some(Duration::ZERO)).unwrap();
+    let keys: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Keyboard {
+                event:
+                    KeyboardEvent::Key {
+                        pressed, repeat, ..
+                    },
+                ..
+            } => Some((*pressed, *repeat)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(keys, [(false, false)]);
 }
 
 #[test]

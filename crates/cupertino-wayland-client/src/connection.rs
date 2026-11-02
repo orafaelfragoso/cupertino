@@ -1300,12 +1300,15 @@ impl Connection {
     /// after each read from the compositor, maybe with no event, once everything read is dispatched, so extensions
     /// find what their objects received.
     pub fn wait(&mut self, timeout: Option<Duration>) -> Result<Vec<Event>, Error> {
+        // read what arrived while the caller was busy first: a key released meanwhile ends its repeat before the
+        // repeats due since are counted
+        let woken = self.block(Some(Duration::ZERO))?;
         self.queue.dispatch_pending(&mut self.state)?;
         self.state.repeat_keys(Instant::now());
         self.animate_cursor()?;
         self.state.pump_reads();
         self.state.update_scales();
-        if self.state.events.is_empty() && self.state.fault.is_none() {
+        if self.state.events.is_empty() && self.state.fault.is_none() && !woken {
             // a key repeat, the next image of an animated cursor or a clipboard read giving up earlier than the
             // caller's timeout ends the wait first
             let now = Instant::now();
@@ -1348,8 +1351,8 @@ impl Connection {
         }
     }
 
-    /// Poll the connection and the wake channel once and read what is ready.
-    fn block(&mut self, timeout: Option<Duration>) -> Result<(), Error> {
+    /// Poll the connection and the wake channel once and read what is ready; true when a [`Waker`] woke the loop.
+    fn block(&mut self, timeout: Option<Duration>) -> Result<bool, Error> {
         let guard = loop {
             match self.queue.prepare_read() {
                 Some(guard) => break guard,
@@ -1408,7 +1411,7 @@ impl Connection {
                 }
             }
         }
-        Ok(())
+        Ok(wake_ready)
     }
 }
 
@@ -1777,21 +1780,23 @@ impl State {
         let (Some(surface), Some(t)) = (self.key_focus, &self.translator) else {
             return;
         };
-        if let Some(code) = self.repeat.due(now) {
+        if let Some((code, count)) = self.repeat.due(now) {
             let k = t.translate(code);
             let time = self.input_time(now);
-            self.events.push(Event::Keyboard {
-                surface,
-                time,
-                event: KeyboardEvent::Key {
-                    code,
-                    pressed: true,
-                    repeat: true,
-                    keysym: k.keysym,
-                    character: k.character,
-                    mods: k.mods,
-                },
-            });
+            for _ in 0..count {
+                self.events.push(Event::Keyboard {
+                    surface,
+                    time,
+                    event: KeyboardEvent::Key {
+                        code,
+                        pressed: true,
+                        repeat: true,
+                        keysym: k.keysym,
+                        character: k.character,
+                        mods: k.mods,
+                    },
+                });
+            }
         }
     }
 

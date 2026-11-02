@@ -82,6 +82,7 @@ warn  portals.conf        no cupertino-portals.conf: xdg-desktop-portal picks th
 | `portals.service` | `xdg-desktop-portal.service` (user) is active. Runs only in a session. |
 | `services.login`, `services.network`, `services.power`, `services.bluetooth` | The system units `cupertino-login`, `cupertino-netd`, `cupertino-powerd` and `cupertino-btd`. |
 | `services.session_target`, `services.pipewire` | The user units `cupertino-session.target` and `pipewire.service`. Run only in a session. |
+| `crash.gpu_reset` | The GPU resets the server recorded in `session.log`. `warn` when there was one, `ok` when there was none. Facts: `resets`, `remade` (how many ended with a new renderer, as `N of M`), `last_time`, `last_gpu`, `last_reason` and `last_outcome`. The fix says how to investigate: give the JSON form and the `server.log` lines of that time to an AI assistant or the driver's bug tracker (see [A GPU reset](daily-use.md#a-gpu-reset)). |
 | `crash.last` | How the last session in `session.log` ended. `warn` when it was not a normal end or a stop by the session. Facts name how many ended badly, the last bad end, and the first panic or fatal-signal line of `server.log` and `server.log.1`. |
 | `logs.paths` | Where `session.log`, `server.log` and `server.log.1` are, with their sizes, and the journal command for the login unit. |
 

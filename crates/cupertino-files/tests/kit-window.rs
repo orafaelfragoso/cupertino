@@ -274,6 +274,7 @@ fn the_folder_is_listed_by_name_under_its_columns_and_read_as_a_table() {
         ["Name", "Date Modified", "Size", "Kind"]
     );
     assert_eq!(run.rows(), ["a.txt", "b.txt", "Notes"]);
+    run.driver.look(run.window, "files-browser").unwrap();
 }
 
 #[test]

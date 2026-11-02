@@ -1514,6 +1514,7 @@ mod tests {
 
         let answer = post(1, ask(Kind::Save, folder.path()));
         let (mut driver, window) = start();
+        driver.look(window, "portal-file-chooser").unwrap();
         let spec = driver.window_system_mut().spec(window).unwrap().clone();
         assert_eq!(spec.title, "Export");
         let runtime = driver.runtime();
@@ -1681,6 +1682,7 @@ mod tests {
         };
         let answer = consent(6, Some("Drawing"));
         let window = show(&mut driver);
+        driver.look(window, "portal-screenshot-consent").unwrap();
         let spec = driver.window_system_mut().spec(window).unwrap().clone();
         assert_eq!(spec.title, "Screenshot");
         let names = shown(&driver, window);

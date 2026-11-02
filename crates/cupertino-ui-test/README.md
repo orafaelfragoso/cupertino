@@ -25,3 +25,23 @@ lifecycle state through the headless helpers (for example, `configure` registers
 the configure event), and repeat clipboard requests through the driver before delivering their replies. Raw event
 injection alone does not recreate outstanding configure or clipboard requests. Snapshots and presented frames are
 available through the runtime and window system; the inspector formats the same snapshots.
+
+## Look checks
+
+`TestDriver::look(window, name)` writes the window as `<name>-<appearance>@<scale>x.png` for a person to compare with
+a reference, and does nothing unless `CUPERTINO_LOOK_DIR` names a folder, so an ordinary test run writes no file.
+`CUPERTINO_LOOK_SCALE` sets the backing scale (2 when unset) and `CUPERTINO_LOOK_APPEARANCES` the appearances,
+comma-separated from `light`, `dark`, `light-hc` and `dark-hc` (`light,dark` when unset). Each picture uses the
+Cupertino theme of `data/theme` with the window's own preferences in that appearance; afterwards the window has its
+theme back at scale 1. `look_into(dir, window, name, scale, appearances)` does the same without the environment.
+
+The portal's file chooser and screenshot consent, the Files browser window and every Settings pane call it from
+their tests. One command writes all of them at 2x, light and dark:
+
+```sh
+CUPERTINO_LOOK_DIR=/tmp/look cargo test -p cupertino-portal -p cupertino-files -p cupertino-settings \
+  --features cupertino-portal/app,cupertino-files/app,cupertino-settings/app
+```
+
+Add `CUPERTINO_LOOK_APPEARANCES=light,dark,light-hc,dark-hc` for the high-contrast pictures too. The pictures use
+the test's placeholder icons, not the asset pack's.

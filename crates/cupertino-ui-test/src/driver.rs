@@ -21,8 +21,8 @@ pub enum DriverError {
 /// Drives the production runtime at explicit times and records input before it is routed. Each platform event
 /// gets its own runtime turn, so focus changes affect the next event even when inputs share a timestamp.
 pub struct TestDriver<A: Application> {
-    runtime: Runtime<A, HeadlessWindowSystem>,
-    clock: ManualClock,
+    pub(crate) runtime: Runtime<A, HeadlessWindowSystem>,
+    pub(crate) clock: ManualClock,
     trace: Trace,
     clipboard_reads: HashMap<ClipboardToken, bool>,
 }

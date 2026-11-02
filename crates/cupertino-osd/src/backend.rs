@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use cupertino_alsa::{Master, OpenMode};
-use cupertino_pipewire::{LevelWriter, Target, Wpctl};
+use cupertino_pipewire::{Target, VolumeWorker, Wpctl};
 
 /// Why an effect failed; shown to the user as a log line, never as an overlay.
 pub type BackendError = Box<dyn std::error::Error + Send + Sync>;
@@ -226,11 +226,11 @@ pub const KNOWN_FOR: Duration = Duration::from_millis(500);
 
 /// The default PipeWire sink through `wpctl`, so the overlay shows the level `wpctl get-volume` reports. A read that
 /// no PipeWire daemon answers goes to the ALSA master instead, and so do the changes after it until the next read.
-/// Changes are written in the background ([`LevelWriter`]) and the level reached is the one asked; for [`KNOWN_FOR`]
+/// Changes are written in the background ([`VolumeWorker`]) and the level reached is the one asked; for [`KNOWN_FOR`]
 /// after a reading or a change the state is the known one.
 pub struct SessionVolume {
     wpctl: Wpctl,
-    writer: LevelWriter,
+    worker: VolumeWorker,
     alsa: AlsaVolume,
     pipewire: bool,
     known: Option<(VolumeState, Instant)>,
@@ -239,7 +239,7 @@ pub struct SessionVolume {
 impl SessionVolume {
     pub fn new(wpctl: Wpctl, alsa: AlsaVolume) -> Self {
         Self {
-            writer: LevelWriter::new(wpctl.clone(), Target::DefaultSink),
+            worker: VolumeWorker::new(wpctl.clone(), Target::DefaultSink),
             wpctl,
             alsa,
             pipewire: true,
@@ -249,7 +249,7 @@ impl SessionVolume {
 
     fn write(&mut self, state: VolumeState) -> Result<(), BackendError> {
         self.known = Some((state, Instant::now()));
-        Ok(self.writer.set(cupertino_pipewire::Volume {
+        Ok(self.worker.set(cupertino_pipewire::Volume {
             level: state.level,
             muted: state.muted,
         })?)
@@ -261,7 +261,7 @@ impl Volume for SessionVolume {
         if let Some((state, _)) = self.known.filter(|(_, at)| at.elapsed() < KNOWN_FOR) {
             return Ok(state);
         }
-        self.writer.wait_written();
+        self.worker.wait_idle();
         match self.wpctl.volume(Target::DefaultSink) {
             Ok(sink) => {
                 self.pipewire = true;
@@ -330,7 +330,7 @@ mod tests {
         );
         assert_eq!(volume.set_level(0.5625).unwrap(), 0.5625, "the level asked");
         volume.set_muted(true).unwrap();
-        volume.writer.wait_written();
+        volume.worker.wait_idle();
         assert_eq!(fake.volume(Target::DefaultSink), node(0.56, true));
         assert_eq!(fake.volume(Target::DefaultSource), node(1.0, false));
     }

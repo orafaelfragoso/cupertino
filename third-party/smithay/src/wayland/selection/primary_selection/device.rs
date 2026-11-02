@@ -68,6 +68,15 @@ where
 
                 let source = source.map(SelectionSourceProvider::Primary);
 
+                if crate::wayland::selection::refused(
+                    handler,
+                    SelectionTarget::Primary,
+                    source.as_ref(),
+                    &seat,
+                ) {
+                    return;
+                }
+
                 handler.new_selection(
                     SelectionTarget::Primary,
                     source.clone().map(|provider| SelectionSource { provider }),

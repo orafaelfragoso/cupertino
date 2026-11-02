@@ -14,5 +14,5 @@ debug = 1
 [patch.crates-io]
 # Pure-Rust replacement for the C-binding crate of the same name (no libxkbcommon)
 xkbcommon = { path = "crates/cupertino-xkbcommon" }
-# The crates.io release 0.7.0, vendored unchanged so the server can carry fixes to it
+# The crates.io release 0.7.0, vendored with the server's fixes to it (the selection veto)
 smithay = { path = "third-party/smithay" }

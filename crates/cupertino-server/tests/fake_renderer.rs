@@ -362,12 +362,14 @@ fn a_lost_rendering_context_is_recorded_for_the_session_and_a_hung_teardown_is_c
     }
     let dir = tempfile::tempdir().unwrap();
     let end = dir.path().join("session-end");
-    let (status, _) = common::spawn::run_child_test(
+    // timed from the loss, which writes the reason: starting a compositor with a window is not what is measured
+    let (status, _) = common::spawn::run_child_test_after(
         "a_lost_rendering_context_is_recorded_for_the_session_and_a_hung_teardown_is_cut_short",
         &[
             (CHILD, std::ffi::OsStr::new("1")),
             (cupertino_server::logging::SESSION_END_ENV, end.as_os_str()),
         ],
+        || end.exists(),
         cupertino_server::logging::TEARDOWN_LIMIT + Duration::from_secs(3),
     );
     assert_eq!(status.code(), Some(1));

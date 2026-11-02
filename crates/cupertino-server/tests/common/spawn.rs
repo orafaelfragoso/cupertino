@@ -5,7 +5,7 @@
 //! `CUPERTINO_SPEC_DIR`, so every such spawn starts from [`cleared`], which always sets it.
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 /// The theme files of the checkout.
@@ -25,11 +25,25 @@ pub fn cleared(binary: impl AsRef<OsStr>, home: &Path) -> Command {
     command
 }
 
+/// How long a child of [`wait_after`] may take to get to what is timed. Its own limit is for a child that hangs
+/// on the way; how fast a loaded machine starts it is not what the tests measure.
+const SETUP_LIMIT: Duration = Duration::from_secs(60);
+
 /// Runs the test `name` of this test binary in a child with `env` set, and returns how the child ended and when. A
 /// child that still runs after `limit` is killed and the calling test fails.
 pub fn run_child_test(
     name: &str,
     env: &[(&str, &OsStr)],
+    limit: Duration,
+) -> (ExitStatus, Duration) {
+    run_child_test_after(name, env, || true, limit)
+}
+
+/// [`run_child_test`], timed by [`wait_after`].
+pub fn run_child_test_after(
+    name: &str,
+    env: &[(&str, &OsStr)],
+    started: impl Fn() -> bool,
     limit: Duration,
 ) -> (ExitStatus, Duration) {
     let mut command = Command::new(std::env::current_exe().unwrap());
@@ -40,16 +54,35 @@ pub fn run_child_test(
     for (key, value) in env {
         command.env(key, value);
     }
-    let started = Instant::now();
-    let mut child = command.spawn().unwrap();
+    wait_after(command.spawn().unwrap(), started, limit)
+}
+
+/// Waits for `child`, timed from the first moment `started` holds, not from the spawn: how the child ended and how long
+/// after `started`. A child still running `limit` after it, or [`SETUP_LIMIT`] after the call without it, is killed and
+/// the calling test fails.
+pub fn wait_after(
+    mut child: Child,
+    started: impl Fn() -> bool,
+    limit: Duration,
+) -> (ExitStatus, Duration) {
+    let spawned = Instant::now();
+    let mut since = None;
     loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            return (status, started.elapsed());
+        if since.is_none() && started() {
+            since = Some(Instant::now());
         }
-        if started.elapsed() > limit {
+        if let Some(status) = child.try_wait().unwrap() {
+            return (status, since.unwrap_or(spawned).elapsed());
+        }
+        let late = match since {
+            Some(at) => (at.elapsed() > limit).then(|| format!("{limit:?} after it started")),
+            None => (spawned.elapsed() > SETUP_LIMIT)
+                .then(|| format!("{SETUP_LIMIT:?} without starting")),
+        };
+        if let Some(late) = late {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("the child test {name} still ran after {limit:?}");
+            panic!("the child still ran {late}");
         }
         std::thread::sleep(Duration::from_millis(20));
     }

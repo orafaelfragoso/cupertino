@@ -190,7 +190,11 @@ impl MenuBarSet {
     }
 
     pub fn set_fullscreen(&mut self, id: OutputId, fullscreen: bool, now: f64) -> Vec<BarEvent> {
-        let Some(o) = self.outputs.get_mut(&id) else {
+        let Some(o) = self
+            .outputs
+            .get_mut(&id)
+            .filter(|o| o.fullscreen != fullscreen)
+        else {
             return Vec::new();
         };
         let before = Self::hidden_target_of(&self.cfg, o);
@@ -423,6 +427,21 @@ impl MenuBarSet {
             animating: o.visible.is_animating(now) || o.inactive.is_animating(now),
         })
     }
+
+    /// Where the title bar (`height` points) of the full-screen window of `id` shows: below the bar it is revealed
+    /// with, sliding in and out as one piece. `None` while hidden, and when the bar does not auto-hide there.
+    pub fn fullscreen_titlebar(&self, id: OutputId, height: f64, now: f64) -> Option<Rect> {
+        let o = self.outputs.get(&id)?;
+        if !o.fullscreen || !Self::hidden_target_of(&self.cfg, o) {
+            return None;
+        }
+        let visible = o.visible.value(now).clamp(0.0, 1.0);
+        if visible <= 0.0 {
+            return None;
+        }
+        let top = o.rect.y - (o.height + height) * (1.0 - visible) + o.height;
+        Some(Rect::new(o.rect.x, top, o.rect.w, height))
+    }
 }
 
 #[cfg(test)]
@@ -517,6 +536,49 @@ mod tests {
         assert_eq!(s.next_deadline(), Some(4.3));
         assert_eq!(s.tick(4.31), vec![BarEvent::Hidden { output: O1 }]);
         assert_eq!(s.presentation(O1, 8.0).unwrap().visible, 0.0);
+    }
+
+    #[test]
+    fn restating_full_screen_keeps_the_bar_revealed() {
+        let mut s = two();
+        s.set_fullscreen(O1, true, 0.0);
+        s.set_revealed(O1, true, 1.0);
+        assert!(s.set_fullscreen(O1, true, 1.1).is_empty());
+        assert!(s.is_revealed(O1));
+        assert_eq!(s.presentation(O1, 3.0).unwrap().visible, 1.0);
+    }
+
+    #[test]
+    fn the_full_screen_title_bar_slides_in_below_the_revealed_bar() {
+        let mut s = two();
+        assert_eq!(
+            s.fullscreen_titlebar(O1, 38.0, 0.0),
+            None,
+            "not full screen"
+        );
+        s.set_fullscreen(O1, true, 0.0);
+        assert_eq!(
+            s.fullscreen_titlebar(O1, 38.0, 2.0),
+            None,
+            "hidden with the bar"
+        );
+        s.set_revealed(O1, true, 2.0);
+        let mid = s.fullscreen_titlebar(O1, 38.0, 2.1).unwrap();
+        let bar = s.presentation(O1, 2.1).unwrap().rect;
+        assert!(
+            mid.y < 24.0 && mid.y <= bar.y + bar.h,
+            "no gap below the sliding bar"
+        );
+        assert_eq!(
+            s.fullscreen_titlebar(O1, 38.0, 5.0),
+            Some(Rect::new(0.0, 24.0, 1920.0, 38.0))
+        );
+        s.set_auto_hide(AutoHide::Never, 6.0);
+        assert_eq!(
+            s.fullscreen_titlebar(O1, 38.0, 9.0),
+            None,
+            "the bar stays, so does the content"
+        );
     }
 
     #[test]

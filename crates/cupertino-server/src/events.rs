@@ -1106,8 +1106,10 @@ impl Cupertino {
                 content,
                 local,
             }) => {
-                // a client-decorated window has no button group of ours
-                let server_side = self.entry(*id).is_some_and(|e| e.server_side);
+                // a client-decorated window has no button group of ours, but in full screen
+                let server_side = self
+                    .entry(*id)
+                    .is_some_and(|e| e.server_side || e.fullscreen);
                 let group = server_side
                     && (matches!(hit, Hit::Button(_))
                         || self.decor.group_hovered(*style, *content, *local));

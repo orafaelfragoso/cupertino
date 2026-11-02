@@ -264,53 +264,128 @@ fn unit_states_map_to_statuses_and_a_missing_manager_skips() {
         .contains("is not installed"));
 }
 
+/// `services.network` for netd's (active, file) state and NetworkManager's, `None` when systemd has no answer for it.
+fn network(netd: (&str, &str), network_manager: Option<(&str, &str)>) -> (Status, String) {
+    let mut fixture = Fixture::new().unit_file("cupertino-netd.service", netd.0, netd.1);
+    if let Some((active, file)) = network_manager {
+        fixture = fixture.unit_file("NetworkManager.service", active, file);
+    }
+    let check = find(&fixture.run(Area::Services), "services.network").clone();
+    (check.status, check.summary)
+}
+
 #[test]
-fn a_disabled_daemon_is_ok_while_the_distribution_service_does_its_job() {
-    let fixture = Fixture::new()
-        .unit_file("cupertino-netd.service", "inactive", "disabled")
-        .unit("NetworkManager.service", "active")
-        // masked counts as disabled, and BlueZ is enabled but stopped by its condition without an adapter
-        .unit_file("cupertino-btd.service", "inactive", "masked")
-        .unit("bluetooth.service", "inactive");
-    let checks = fixture.run(Area::Services);
-    let network = find(&checks, "services.network");
-    assert_eq!(
-        (network.status, network.summary.as_str()),
+fn a_daemon_in_any_off_state_is_ok_while_the_distribution_service_does_its_job() {
+    let running = Some(("active", "enabled"));
+    let ok = |summary: &str| (Status::Ok, summary.to_owned());
+    for (netd, expected) in [
         (
-            Status::Ok,
-            "cupertino-netd.service is disabled: managed by NetworkManager"
-        )
+            ("inactive", "static"),
+            ok("cupertino-netd.service is inactive (static): managed by NetworkManager"),
+        ),
+        (
+            ("inactive", "indirect"),
+            ok("cupertino-netd.service is inactive (indirect): managed by NetworkManager"),
+        ),
+        (
+            ("inactive", "disabled"),
+            ok("cupertino-netd.service is inactive (disabled): managed by NetworkManager"),
+        ),
+        (
+            ("inactive", "masked"),
+            ok("cupertino-netd.service is inactive (masked): managed by NetworkManager"),
+        ),
+        (
+            ("inactive", "enabled"),
+            ok("cupertino-netd.service is inactive (enabled): managed by NetworkManager"),
+        ),
+        (
+            ("failed", "static"),
+            ok("cupertino-netd.service is failed (static): managed by NetworkManager"),
+        ),
+        (
+            ("inactive", ""),
+            ok("cupertino-netd.service is inactive: managed by NetworkManager"),
+        ),
+        (
+            (NOT_FOUND, ""),
+            ok("cupertino-netd.service is not installed: managed by NetworkManager"),
+        ),
+        (("active", "static"), ok("cupertino-netd.service is active")),
+    ] {
+        assert_eq!(network(netd, running), expected, "{netd:?}");
+    }
+    assert_eq!(
+        network(("inactive", "static"), Some(("activating", "enabled"))),
+        ok("cupertino-netd.service is inactive (static): managed by NetworkManager")
     );
-    let bluetooth = find(&checks, "services.bluetooth");
+}
+
+#[test]
+fn bluez_enabled_but_stopped_without_an_adapter_does_the_bluetooth_job() {
+    let fixture = Fixture::new()
+        .unit_file("cupertino-btd.service", "inactive", "static")
+        .unit_file("bluetooth.service", "inactive", "enabled");
+    let bluetooth = find(&fixture.run(Area::Services), "services.bluetooth").clone();
     assert_eq!(
         (bluetooth.status, bluetooth.summary.as_str()),
         (
             Status::Ok,
-            "cupertino-btd.service is disabled: managed by BlueZ"
+            "cupertino-btd.service is inactive (static): managed by BlueZ"
         )
     );
 }
 
 #[test]
-fn a_disabled_daemon_warns_when_nothing_does_its_job() {
-    let fixture = Fixture::new()
-        .unit_file("cupertino-netd.service", "inactive", "disabled")
-        .unit_file("NetworkManager.service", "inactive", "disabled")
-        .unit_file("cupertino-btd.service", "inactive", "disabled")
-        .unit_file("bluetooth.service", NOT_FOUND, "")
-        // nothing takes over power profiles, so a disabled powerd still warns
-        .unit_file("cupertino-powerd.service", "inactive", "disabled");
-    let checks = fixture.run(Area::Services);
-    for id in ["services.network", "services.bluetooth", "services.power"] {
-        assert_eq!(find(&checks, id).status, Status::Warn, "{id}");
-    }
-    let enabled = Fixture::new()
-        .unit("cupertino-netd.service", "inactive")
-        .unit("NetworkManager.service", "active");
-    assert_eq!(
-        find(&enabled.run(Area::Services), "services.network").status,
-        Status::Warn
+fn an_off_daemon_warns_when_nothing_does_its_job() {
+    let unserved = (
+        Status::Warn,
+        "cupertino-netd.service is inactive: the network menu and settings cannot change anything"
+            .to_owned(),
     );
+    for network_manager in [
+        Some(("inactive", "disabled")),
+        Some(("inactive", "static")),
+        Some(("failed", "enabled")),
+        Some((NOT_FOUND, "")),
+        None,
+    ] {
+        assert_eq!(
+            network(("inactive", "static"), network_manager),
+            unserved,
+            "{network_manager:?}"
+        );
+    }
+    assert_eq!(
+        network(("failed", "static"), Some(("inactive", "disabled"))),
+        (
+            Status::Fail,
+            "cupertino-netd.service is failed: the network menu and settings cannot change anything".to_owned()
+        )
+    );
+    let fixture = Fixture::new()
+        .unit_file("cupertino-btd.service", "inactive", "static")
+        .unit_file("bluetooth.service", NOT_FOUND, "")
+        // nothing takes over power profiles, so an off powerd still warns
+        .unit_file("cupertino-powerd.service", "inactive", "static");
+    let checks = fixture.run(Area::Services);
+    for (id, summary) in [
+        (
+            "services.bluetooth",
+            "cupertino-btd.service is inactive: no Bluetooth menu",
+        ),
+        (
+            "services.power",
+            "cupertino-powerd.service is inactive: no battery or power profile information",
+        ),
+    ] {
+        let check = find(&checks, id);
+        assert_eq!(
+            (check.status, check.summary.as_str()),
+            (Status::Warn, summary),
+            "{id}"
+        );
+    }
 }
 
 #[test]

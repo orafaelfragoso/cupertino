@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use cupertino_devices::preflight;
 
-use crate::{Area, Check, Scope, Sources, Status};
+use crate::{Area, Check, Scope, Sources, Status, Unit};
 
 /// The longest log line a check quotes.
 const QUOTE_LIMIT: usize = 300;
@@ -460,19 +460,26 @@ fn unit(
             format!("{manager} cannot be asked about {name}"),
         );
     };
-    // an installation may leave a Cupertino daemon off and let the distribution's service do its job; that service may
-    // be enabled yet stopped by a unit condition, as BlueZ is on a machine without a Bluetooth adapter
+    // an installation may leave a Cupertino daemon off and let the distribution's service do its job, whatever the
+    // daemon's unit file state; that service may be enabled yet stopped by a unit condition, as BlueZ is on a machine
+    // without a Bluetooth adapter
     if let Some((service, by)) = replaced_by {
-        let replacement = (sources.unit_state)(scope, service);
-        if unit.active == "inactive"
-            && matches!(unit.file.as_str(), "disabled" | "masked")
-            && replacement.is_some_and(|r| r.active == "active" || r.file == "enabled")
-        {
+        let serves = |r: Unit| {
+            matches!(r.active.as_str(), "active" | "activating" | "reloading")
+                || r.active == "inactive"
+                    && matches!(r.file.as_str(), "enabled" | "enabled-runtime")
+        };
+        if unit.active != "active" && (sources.unit_state)(scope, service).is_some_and(serves) {
+            let state = match (unit.active.as_str(), unit.file.as_str()) {
+                (crate::NOT_FOUND, _) => "not installed".to_owned(),
+                (active, "") => active.to_owned(),
+                (active, file) => format!("{active} ({file})"),
+            };
             return Check::new(
                 id,
                 area,
                 Status::Ok,
-                format!("{name} is disabled: managed by {by}"),
+                format!("{name} is {state}: managed by {by}"),
             );
         }
     }

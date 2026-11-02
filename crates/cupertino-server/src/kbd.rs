@@ -439,7 +439,7 @@ impl KeyboardSettings {
         };
         let level3 = self
             .level3_option(compose_on_ralt)
-            .filter(|_| self.system_sources().next().is_some());
+            .filter(|_| !self.xkb_names().0.is_empty());
         let compose = self.compose.map(|key| match key {
             ComposeKey::Off => None,
             ComposeKey::RightAlt => Some("compose:ralt"),
@@ -501,10 +501,14 @@ impl KeyboardSettings {
         }
     }
 
-    /// Comma separated xkb layout and variant lists for `XkbConfig` of the system layouts among the sources (empty
-    /// without configured system layouts).
+    /// Comma separated xkb layout and variant lists for `XkbConfig` of the system layouts among the sources. Without
+    /// system layouts (no `input_sources` and an unset system layout) the keymap is US under the `cupertino` profile,
+    /// with its alternate symbols as for a US source, and xkb's default (empty names) under `classic-pc`.
     pub fn xkb_names(&self) -> (String, String) {
         let system: Vec<&SourceSpec> = self.system_sources().collect();
+        if system.is_empty() && self.profile != "classic-pc" {
+            return ("us".into(), "mac".into());
+        }
         let layouts = system
             .iter()
             .map(|s| s.layout.as_str())
@@ -967,9 +971,12 @@ mod tests {
     fn the_system_options_keep_their_compose_key_and_lose_their_layout_switching_keys() {
         let mut s = KeyboardSettings::default();
         s.system.options = "grp:alt_shift_toggle, grp_led:scroll,compose:menu".into();
-        assert_eq!(s.xkb_options(), "grp_led:scroll,compose:menu");
+        assert_eq!(
+            s.xkb_options(),
+            "grp_led:scroll,compose:menu,lv3:alt_switch"
+        );
         s.compose = Some(ComposeKey::Off);
-        assert_eq!(s.xkb_options(), "grp_led:scroll");
+        assert_eq!(s.xkb_options(), "grp_led:scroll,lv3:alt_switch");
     }
 
     #[test]
@@ -1130,11 +1137,20 @@ mod tests {
     }
 
     #[test]
-    fn no_sources_are_no_xkb_names() {
-        assert_eq!(
-            KeyboardSettings::default().xkb_names(),
-            (String::new(), String::new())
-        );
+    fn without_a_system_layout_either_alt_key_types_the_alternate_symbols_of_us() {
+        const LEFT_ALT: u32 = 56;
+        const RIGHT_ALT: u32 = 100;
+        const TWO: u32 = 3;
+        let s = KeyboardSettings::default();
+        assert_eq!(s.xkb_names(), ("us".to_string(), "mac".to_string()));
+        assert_eq!(s.xkb_options(), "lv3:alt_switch");
+        assert_eq!(typed(&s, &[LEFT_ALT, TWO]).last().unwrap(), "trademark");
+        assert_eq!(typed(&s, &[RIGHT_ALT, TWO]).last().unwrap(), "trademark");
+
+        let mut pc = KeyboardSettings::default();
+        assert!(apply(&mut pc, "modifier_profile = classic-pc").is_empty());
+        assert_eq!(pc.xkb_names(), (String::new(), String::new()));
+        assert_eq!(pc.xkb_options(), "");
     }
 
     #[test]

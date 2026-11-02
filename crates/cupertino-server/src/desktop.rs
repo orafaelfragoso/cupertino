@@ -170,6 +170,25 @@ impl DesktopIndex {
             })
             .or_else(|| by(&|e| e.id.to_lowercase().rsplit('.').next() == Some(id.as_str())))
     }
+
+    /// The application whose `Exec` program or `StartupWMClass` is the file name of `program`: the entry with that ID when
+    /// there is one, else the only such entry; several entries for one program name none of them.
+    pub fn for_program(&self, program: &Path) -> Option<&DesktopEntry> {
+        let name = program.file_name()?.to_str()?;
+        let runs = |e: &&DesktopEntry| {
+            e.startup_wm_class == name
+                || exec_command(&e.exec).first().is_some_and(|p| {
+                    Path::new(p).file_name().and_then(|n| n.to_str()) == Some(name)
+                })
+        };
+        let mut found = self.entries.iter().filter(runs);
+        let first = found.next()?;
+        let rest: Vec<&DesktopEntry> = found.collect();
+        if rest.is_empty() {
+            return Some(first);
+        }
+        std::iter::once(first).chain(rest).find(|e| e.id == name)
+    }
 }
 
 /// Human readable application name for the menu bar: the desktop entry's name, else the last
@@ -249,6 +268,36 @@ mod tests {
         assert!(idx.find("nothing").is_none());
         assert_eq!(display_name(&idx, "foot"), "Foot");
         assert_eq!(display_name(&idx, "org.example.editor"), "Editor");
+    }
+
+    #[test]
+    fn a_program_names_its_one_entry_or_the_entry_of_its_name() {
+        let entry = |id: &str, exec: &str| {
+            parse_entry(
+                id,
+                Path::new("x"),
+                &format!("[Desktop Entry]\nName={id}\nExec={exec}\n"),
+            )
+            .unwrap()
+        };
+        let idx = DesktopIndex {
+            entries: vec![
+                entry("org.gnome.Nautilus", "nautilus --new-window %U"),
+                entry("chromium", "chromium %U"),
+                entry("chromium-incognito", "/usr/bin/chromium --incognito"),
+                entry("python-a", "python3 a.py"),
+                entry("python-b", "python3 b.py"),
+            ],
+        };
+        let id = |p: &str| idx.for_program(Path::new(p)).map(|e| e.id.as_str());
+        assert_eq!(id("/usr/bin/nautilus"), Some("org.gnome.Nautilus"));
+        assert_eq!(id("/usr/lib/chromium/chromium"), Some("chromium"));
+        assert_eq!(
+            id("/usr/bin/python3"),
+            None,
+            "two programs share the interpreter"
+        );
+        assert_eq!(id("/usr/bin/foot"), None);
     }
 
     #[test]

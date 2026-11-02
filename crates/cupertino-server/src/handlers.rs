@@ -506,11 +506,12 @@ delegate_xdg_toplevel_icon!(Cupertino);
 
 /// What the server decided about an activation token when it was made: its creation time on the
 /// model clock and whether it may activate at all (made by the server, or by a client for an input
-/// event it got while it had the keyboard focus).
-#[derive(Clone, Copy, Debug)]
+/// event it got while it had the keyboard focus), and the application it launches when its maker named one.
+#[derive(Clone, Debug)]
 pub struct TokenGrant {
     pub created: f64,
     pub valid: bool,
+    pub app_id: Option<String>,
 }
 
 impl Cupertino {
@@ -558,6 +559,7 @@ impl Cupertino {
         data.user_data.insert_if_missing(|| TokenGrant {
             created: self.now(),
             valid: true,
+            app_id: None,
         });
         self.xdg_activation_state
             .create_external_token(data)
@@ -590,6 +592,7 @@ impl XdgActivationHandler for Cupertino {
         data.user_data.insert_if_missing(|| TokenGrant {
             created: self.now(),
             valid,
+            app_id: data.app_id.clone().filter(|id| !id.is_empty()),
         });
         // a token that names an application is a launch (launchers, file managers and GTK's
         // launch context set the id): the docks bounce its tile before its first window maps
@@ -609,10 +612,11 @@ impl XdgActivationHandler for Cupertino {
         surface: WlSurface,
     ) {
         self.xdg_activation_state.remove_token(&token);
-        let grant = *data
+        let grant = data
             .user_data
             .get::<TokenGrant>()
-            .expect("every token gets its grant when it is made");
+            .expect("every token gets its grant when it is made")
+            .clone();
         self.activate_surface(&surface, grant);
     }
 }
@@ -641,13 +645,14 @@ impl Cupertino {
         let grant = token
             .as_ref()
             .and_then(|t| self.xdg_activation_state.data_for_token(t))
-            .and_then(|d| d.user_data.get::<TokenGrant>().copied());
+            .and_then(|d| d.user_data.get::<TokenGrant>().cloned());
         if let Some(token) = &token {
             self.xdg_activation_state.remove_token(token);
         }
         let grant = grant.unwrap_or(TokenGrant {
             created: self.now(),
             valid: false,
+            app_id: None,
         });
         self.activate_surface(surface, grant);
     }

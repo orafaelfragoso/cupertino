@@ -304,7 +304,7 @@ fn session(channel: &mut Channel) -> Result<u8> {
                     uid: account.uid,
                     gid: account.gid,
                 },
-                reader::resolve(reader::READERS),
+                reader::resolve(reader::READERS).as_deref(),
                 runtime.into(),
                 bus.as_deref(),
                 leader as u32,

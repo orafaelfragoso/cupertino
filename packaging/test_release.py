@@ -81,6 +81,22 @@ class PortalsConfTest(unittest.TestCase):
                     self.assertIn(f'xdg-desktop-portal-{backend}', packages)
 
 
+class DbusFloorTest(unittest.TestCase):
+    FLOOR = '1.16'
+
+    def test_every_format_requires_a_dbus_that_provides_the_caller_process_fd(self):
+        meta = tomllib.loads((release.ROOT / 'crates/cupertino-server/Cargo.toml').read_text())['package']['metadata']
+        arch = {
+            recipe: re.findall(r"'(dbus[^']*)'", re.search(r'^\s+depends=\((.*?)\)', (
+                release.ROOT / recipe).read_text(), re.M | re.S).group(1))
+            for recipe in ('packaging/arch/cupertino/PKGBUILD', 'packaging/arch/cupertino-git/PKGBUILD')
+        }
+        deb = [d.strip() for d in meta['deb']['depends'].split(',') if d.strip().startswith('dbus')]
+        self.assertEqual(deb, [f'dbus (>= {self.FLOOR})'])
+        self.assertEqual(meta['generate-rpm']['requires']['dbus'], f'>= {self.FLOOR}')
+        self.assertEqual(arch, {recipe: [f'dbus>={self.FLOOR}'] for recipe in arch})
+
+
 class TagTest(unittest.TestCase):
     def test_a_release_and_a_release_candidate_give_the_arch_pkgver(self):
         self.assertEqual(release.release_version('v0.1.0'), '0.1.0')

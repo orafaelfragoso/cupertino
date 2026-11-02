@@ -108,7 +108,7 @@ on-screen display, screenshots, window manager, lock and login screens, a file m
 services (login manager, network, Bluetooth, power) are installed disabled."""
 section = "x11"
 priority = "optional"
-depends = "$auto, cupertino-data (>= 0.1.0), dbus, systemd, polkitd, xdg-desktop-portal, xkb-data, shared-mime-info, adwaita-icon-theme, libegl1, libegl-mesa0"
+depends = "$auto, cupertino-data (>= 0.1.0), dbus (>= 1.16), systemd, polkitd, xdg-desktop-portal, xkb-data, shared-mime-info, adwaita-icon-theme, libegl1, libegl-mesa0"
 recommends = "xdg-desktop-portal-gtk, libgl1-mesa-dri, libwayland-client0, libwayland-egl1, libxkbcommon0, xwayland"
 suggests = "foot, iwd"
 maintainer-scripts = "../../packaging/debian/scripts"
@@ -226,7 +226,7 @@ assets = [
 
 [package.metadata.generate-rpm.requires]
 cupertino-data = ">= 0.1.0"
-dbus = "*"
+dbus = ">= 1.16"
 systemd = "*"
 polkit = "*"
 xdg-desktop-portal = "*"

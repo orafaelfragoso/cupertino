@@ -770,6 +770,7 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                                 value: mapping::magnification_value(
                                     settings.magnification(),
                                     settings.large_size(),
+                                    settings.tile_size(),
                                 ),
                                 stops: None,
                                 marks: &mapping::MAGNIFICATION_MARKS,
@@ -1881,11 +1882,21 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
             folder: index_of(value) == 0,
         }],
         ControlId::DockSize => {
+            let magnified = mapping::magnification_value(
+                settings.magnification(),
+                settings.large_size(),
+                settings.tile_size(),
+            );
             settings.dock.tile_size = Some(mapping::dock_px(fraction_of(value)));
+            // the magnification keeps its place on its slider, so it stays larger than the new tiles
+            if magnified > 0.0 {
+                settings.dock.large_size =
+                    mapping::magnification(magnified, settings.tile_size()).1;
+            }
             store(File::Dock)
         }
         ControlId::Magnification => {
-            let (on, large) = mapping::magnification(fraction_of(value));
+            let (on, large) = mapping::magnification(fraction_of(value), settings.tile_size());
             settings.dock.magnification = Some(on);
             if large.is_some() {
                 settings.dock.large_size = large;
@@ -2465,7 +2476,19 @@ mod tests {
         );
         assert_eq!(
             (s.dock.magnification, s.dock.large_size),
-            (Some(true), Some(30.0))
+            (Some(true), Some(79.0)),
+            "the Small mark magnifies the 72 pt tiles"
+        );
+        change(
+            ControlId::DockSize,
+            Value::Fraction(1.0),
+            &mut s,
+            &Live::default(),
+        );
+        assert_eq!(
+            (s.dock.tile_size, s.dock.large_size),
+            (Some(128.0), Some(128.0)),
+            "a larger dock keeps the magnified size at least its own"
         );
         change(
             ControlId::HotCorner(Trigger::CornerBottomRight),

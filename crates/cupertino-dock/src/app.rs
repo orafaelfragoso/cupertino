@@ -141,6 +141,9 @@ struct Grid {
     presenter: ShmPresenter,
     backdrop: Backdrop,
     layout: Option<GridLayout>,
+    /// The first frame was presented.
+    drawn: bool,
+    cache: render::GridCache,
 }
 
 /// The open overview's chrome: the layout model and its overlay surface over the whole output
@@ -1515,15 +1518,10 @@ impl App {
                 output: Some(self.output),
                 layer: Layer::Overlay,
                 anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
-                // the server fills both axes within the exclusive zones, so the dock bar stays visible; the top band keeps the
-                // menu bar visible, whose reservation is not a layer zone
+                // the server fills both axes within the exclusive zones, so the dock bar stays visible; the menu bar's
+                // reservation is not a layer zone, so the grid covers the bar
                 size: (0, 0),
-                margin: Margin {
-                    top: app_grid::TOP_BAND as i32,
-                    right: 0,
-                    bottom: 0,
-                    left: 0,
-                },
+                margin: Margin::default(),
                 exclusive_zone: 0,
                 keyboard: KeyboardInteractivity::Exclusive,
             },
@@ -1536,6 +1534,8 @@ impl App {
             layer,
             backdrop,
             layout: None,
+            drawn: false,
+            cache: render::GridCache::default(),
         });
         Ok(())
     }
@@ -1626,7 +1626,7 @@ impl App {
 
     /// One frame of the grid; a finished exit removes the surface. Nothing before the server sized it.
     fn draw_grid(&mut self) -> Result<()> {
-        let now = self.now();
+        let (start, now) = (self.start, self.now());
         let Some(grid) = self.grid.as_mut() else {
             return Ok(());
         };
@@ -1637,19 +1637,24 @@ impl App {
         if grid.grid.is_gone(now) {
             return self.drop_grid();
         }
-        let alpha = grid.grid.visual(now).alpha;
+        let visual = grid.grid.visual(now);
         grid.backdrop
             .set_shape(&GRect::new(0.0, 0.0, layout.width, layout.height), 0.0)?;
-        grid.backdrop.set_alpha(alpha)?;
+        grid.backdrop.set_alpha(visual.alpha)?;
+        grid.presenter.set_zoom(visual.scale);
         let view = GridView {
             grid: &grid.grid,
             layout: &layout,
             now,
         };
-        let (icons, labels) = (&mut self.icons, &mut self.labels);
+        let (icons, labels, cache) = (&mut self.icons, &mut self.labels, &mut grid.cache);
         grid.presenter.draw(&mut self.conn, None, |pixmap, scale| {
-            render::paint_app_grid(pixmap, scale.factor() as f32, &view, icons, labels)
+            render::paint_app_grid(pixmap, scale.factor() as f32, &view, icons, labels, cache)
         })?;
+        if !grid.drawn {
+            grid.drawn = true;
+            grid.grid.restart_entry(start.elapsed().as_secs_f64());
+        }
         if grid.grid.animating(now) {
             grid.presenter.request_redraw();
         }

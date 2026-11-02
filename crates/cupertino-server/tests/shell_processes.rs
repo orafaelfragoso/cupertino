@@ -1148,7 +1148,7 @@ fn the_dock_process_draws_the_switcher_panel_while_the_switch_is_open() {
 }
 
 /// The application grid is the dock process's alone: the forwarded action makes it map a keyboard-exclusive overlay
-/// surface over the output below its 30 pt top band and above the dock bar, and draw it; Escape, delivered to that surface,
+/// surface over the output, the menu bar included, above the dock bar, and draw it; Escape, delivered to that surface,
 /// removes it after the exit animation.
 #[test]
 fn the_dock_process_opens_the_app_grid_on_the_action_and_escape_closes_it() {
@@ -1192,11 +1192,11 @@ fn the_dock_process_opens_the_app_grid_on_the_action_and_escape_closes_it() {
     let geometry = layer_geometry(&server.state, GRID).expect("the grid is mapped");
     assert_eq!(
         (geometry.loc.x, geometry.loc.y, geometry.size.w),
-        (0, 30, OUTPUT.0),
-        "the grid starts below the 30 pt top band, full width"
+        (0, 0, OUTPUT.0),
+        "the grid covers the menu bar, full width"
     );
     assert!(
-        geometry.size.h < OUTPUT.1 - 30,
+        geometry.size.h < OUTPUT.1,
         "and stops above the dock bar: {geometry:?}"
     );
     server

@@ -66,7 +66,8 @@ WALLPAPERS = json.loads((ROOT / 'packaging/data/wallpapers.json').read_text())['
 NAMES = {'runtime': 'cupertino', 'data': 'cupertino-data'}
 # Licence texts of the crates linked into the binaries, beside the GPL text (arch and rpm; the deb copyright file holds them).
 LICENSE_TEXTS = (('MPL-2.0', 'crates/cupertino-geometry/LICENSE'), ('MIT', 'crates/cupertino-xkbcommon/LICENSE'),
-                 ('libxkbcommon', 'third-party/xkbcommon-rs/LICENSE'), ('OFL.txt', 'crates/cupertino-assets/fonts/OFL.txt'))
+                 ('libxkbcommon', 'third-party/xkbcommon-rs/LICENSE'), ('smithay', 'third-party/smithay/LICENSE.txt'),
+                 ('OFL.txt', 'crates/cupertino-assets/fonts/OFL.txt'))
 # Registry crates that carry licensed input without a licence file: the build script of smithay compiles bindings
 # generated from these files, whose leading comment holds the Khronos licence and copyright notice.
 EMBEDDED_NOTICES = {'khronos_api': ('api_egl/api/egl.xml', 'api/xml/gl.xml')}

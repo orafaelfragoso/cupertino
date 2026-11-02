@@ -123,7 +123,7 @@ pub fn header_press(header: &CentreHeader, menu: Option<&ClearMenu>, p: Point) -
 /// size for a collapsed group, whose cards behind come from [`GroupStack::cards`]. Rows follow
 /// each other with no spacing, each [`GroupStack::height`] tall: the card,
 /// 8 pt per stacked row and the 6 pt bottom padding of its last visible card (the 6 pt gap between cards and groups). Rows are placed below the
-/// header row until the next one's visible cards would pass the bottom margin.
+/// header panel, the same gap apart, until the next one's visible cards would pass the bottom margin.
 pub fn centre_cards(
     rows: impl IntoIterator<Item = (u32, f64, usize)>,
     stack: &GroupStack,
@@ -131,7 +131,7 @@ pub fn centre_cards(
     surface: Size,
 ) -> Vec<(u32, Rect)> {
     let x = surface.width - layout.right_margin - layout.width;
-    let mut y = layout.top_inset + CENTRE_HEADER_HEIGHT;
+    let mut y = layout.top_inset + CENTRE_HEADER_HEIGHT + stack.bottom_padding;
     let mut cards = Vec::new();
     for (id, height, count) in rows {
         if y + stack.visible_height(height, count) > surface.height - CENTRE_BOTTOM_MARGIN {
@@ -223,12 +223,12 @@ mod tests {
             &layout,
             Size::new(376.0, 330.0),
         );
-        // 76 + 100 = 176; next 182 + 100 = 282 <= 318; third 288 + 100 = 388 > 318
+        // 82 + 100 = 182; next 188 + 100 = 288 <= 318; third 294 + 100 = 394 > 318
         assert_eq!(
             cards,
             vec![
-                (7, Rect::new(16.0, 76.0, 344.0, 100.0)),
-                (6, Rect::new(16.0, 182.0, 344.0, 100.0))
+                (7, Rect::new(16.0, 82.0, 344.0, 100.0)),
+                (6, Rect::new(16.0, 188.0, 344.0, 100.0))
             ]
         );
     }
@@ -245,8 +245,8 @@ mod tests {
         assert_eq!(
             cards,
             vec![
-                (2, Rect::new(16.0, 76.0, 344.0, 60.0)),
-                (1, Rect::new(16.0, 142.0, 344.0, 80.0))
+                (2, Rect::new(16.0, 82.0, 344.0, 60.0)),
+                (1, Rect::new(16.0, 148.0, 344.0, 80.0))
             ]
         );
     }
@@ -264,17 +264,17 @@ mod tests {
         assert_eq!(
             cards,
             vec![
-                (3, Rect::new(16.0, 76.0, 344.0, 86.0)),
-                (1, Rect::new(16.0, 184.0, 344.0, 60.0))
+                (3, Rect::new(16.0, 82.0, 344.0, 86.0)),
+                (1, Rect::new(16.0, 190.0, 344.0, 60.0))
             ]
         );
-        // its stacked rows end 76 + 86 + 16 = 178, inside the 800 − 12 limit; at a 189 pt surface they do not fit
+        // its stacked rows end 82 + 86 + 16 = 184, inside the 800 − 12 limit; at a 195 pt surface they do not fit
         assert_eq!(
-            centre_cards([(3, 86.0, 3)], &stack, &layout, Size::new(376.0, 189.0)),
+            centre_cards([(3, 86.0, 3)], &stack, &layout, Size::new(376.0, 195.0)),
             Vec::new()
         );
         assert_eq!(
-            centre_cards([(3, 86.0, 3)], &stack, &layout, Size::new(376.0, 190.0)).len(),
+            centre_cards([(3, 86.0, 3)], &stack, &layout, Size::new(376.0, 196.0)).len(),
             1
         );
     }

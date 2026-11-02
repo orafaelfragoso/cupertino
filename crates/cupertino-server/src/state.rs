@@ -1634,12 +1634,19 @@ impl Cupertino {
         let now = self.now();
         let rel = pos - Point::from((out.rect.x, out.rect.y));
         let origin = Point::<f64, Logical>::from((out.rect.x, out.rect.y));
+        let covered = crate::render::scene::top_layer_covered(&self.wm, &self.shell, out.id);
         let layer_hit = |layers: &[Layer]| {
             let map = layer_map_for_output(&out.output);
             // every surface of a layer, topmost first: one whose box holds the point but whose input region does not
             // (an overlay strip with an empty region) must not hide the surfaces below it
             for l in layers {
                 for surface in crate::authorization::layers_stacked(&map, *l).rev() {
+                    if *l == Layer::Top
+                        && covered
+                        && !self.menu_bars.has_surface(surface.wl_surface())
+                    {
+                        continue;
+                    }
                     let geo = map.layer_geometry(surface)?;
                     // a menu bar is offset while it hides or reveals
                     let shift = Point::<f64, Logical>::from((

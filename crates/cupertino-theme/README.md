@@ -33,6 +33,8 @@ let recipe = theme.recipe(Appearance::Light, "Sidebar", &MaterialOptions::defaul
 `Appearance::{Light, Dark, LightHighContrast, DarkHighContrast}`, keyed `light`, `dark`, `light-high-contrast` and
 `dark-high-contrast` in the data. Colour names are kebab-case (`window-background`, `control-accent-blue`). High-contrast
 colour catalogs are partial, so missing names fall back to the matching normal-contrast appearance.
+`light-high-contrast` has its own `window-rim` and `window-rim-2x`, [0,0,0,127] like `dark-high-contrast`'s
+(approximated), so its rims are dark strokes instead of the light appearance's white one.
 `Appearance::of_session(dark, increase_contrast) is the appearance a shell process draws with, from the session's dark
 flag and its Increase Contrast option.
 

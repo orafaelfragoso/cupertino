@@ -61,6 +61,7 @@ pub mod shell_connection;
 pub mod shell_ctl;
 pub mod shell_v1;
 pub mod shortcut_inhibit;
+pub mod software_render;
 pub mod state;
 pub mod supervisor;
 pub mod toplevel_icon;

@@ -325,6 +325,45 @@ fn a_machine_without_a_gpu_fails_the_gpu_check() {
 }
 
 #[test]
+fn a_session_with_only_a_software_renderer_warns_until_another_session_starts() {
+    let fixture = Fixture::new();
+    let start = "2026-11-02 08:59:59 starting\n";
+    let software = "2026-11-02 09:00:00 only a software renderer is available: gpu=/dev/dri/card1; the CPU draws \
+                    the desktop\n";
+    let end =
+        "2026-11-02 10:00:00 the compositor was stopped by the session (status 143) after 3600 s\n";
+    let renderer = |log: &str| {
+        fixture.state("session.log", log);
+        find(&fixture.run(Area::Gpu), "gpu.renderer").clone()
+    };
+
+    for log in [
+        format!("{start}{software}"),
+        format!("{end}{start}{software}{end}"),
+    ] {
+        let check = renderer(&log);
+        assert_eq!(check.status, Status::Warn, "{log}");
+        assert_eq!(
+            check.summary,
+            "the last session had only a software renderer on /dev/dri/card1: the CPU draws the desktop"
+        );
+        assert_eq!(fact(&check, "time"), "2026-11-02 09:00:00");
+        assert_eq!(fact(&check, "gpu"), "/dev/dri/card1");
+    }
+    for log in [
+        format!("{start}{software}{end}{start}"),
+        format!("{start}{software}{end}2026-11-02 10:05:00 starting with a limit of 600 s\n"),
+    ] {
+        let check = renderer(&log);
+        assert_eq!(
+            (check.status, check.summary.as_str()),
+            (Status::Ok, "the last session rendered on a GPU"),
+            "{log}"
+        );
+    }
+}
+
+#[test]
 fn the_json_form_names_every_field() {
     let fixture = Fixture::new();
     fixture.state("session.log", "");

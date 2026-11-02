@@ -23,25 +23,34 @@ const CRASH_MARKS: [&str; 2] = ["panic: ", "fatal signal "];
 /// What the server writes to `session.log` after its time when the GPU was reset (`cupertino_server::gpu_reset`).
 const GPU_RESET_MARK: &str = " the GPU was reset: gpu=";
 
+/// What the server writes to `session.log` after its time when it renders without a GPU
+/// (`cupertino_server::software_render`).
+const SOFTWARE_RENDER_MARK: &str = " only a software renderer is available: gpu=";
+
 pub fn gpu(sources: &Sources) -> Vec<Check> {
+    vec![driver(sources), renderer(sources)]
+}
+
+/// The primary GPU's driver and what it needs (`cupertino_devices::preflight`).
+fn driver(sources: &Sources) -> Check {
     let report = match preflight::run(&sources.sysfs) {
         Ok(Some(report)) => report,
         Ok(None) => {
-            return vec![Check::new(
+            return Check::new(
                 "gpu.driver",
                 Area::Gpu,
                 Status::Fail,
                 "no GPU found: /sys/class/drm lists no card",
             )
-            .fix("check `lspci -k` for a display controller and its kernel driver")]
+            .fix("check `lspci -k` for a display controller and its kernel driver")
         }
         Err(e) => {
-            return vec![Check::new(
+            return Check::new(
                 "gpu.driver",
                 Area::Gpu,
                 Status::Fail,
                 format!("listing GPUs: {e}"),
-            )]
+            )
         }
     };
     let status = if !report.problems.is_empty() {
@@ -80,7 +89,56 @@ pub fn gpu(sources: &Sources) -> Vec<Check> {
     if !fixes.is_empty() {
         check = check.fix(fixes.join("; "));
     }
-    vec![check]
+    check
+}
+
+/// Whether the last session, or the one running, rendered with a software renderer, as `session.log` says: no session
+/// started after its line.
+fn renderer(sources: &Sources) -> Check {
+    let Some(text) = sources
+        .state_dir()
+        .and_then(|state| fs::read_to_string(state.join("session.log")).ok())
+    else {
+        return Check::new(
+            "gpu.renderer",
+            Area::Gpu,
+            Status::Skip,
+            "no session has run yet (no session.log)",
+        );
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    let software = lines
+        .iter()
+        .rposition(|line| line.contains(SOFTWARE_RENDER_MARK))
+        .filter(|&at| !lines[at + 1..].iter().any(|line| session_start(line)))
+        .and_then(|at| lines[at].split_once(SOFTWARE_RENDER_MARK));
+    let Some((time, rest)) = software else {
+        return Check::new(
+            "gpu.renderer",
+            Area::Gpu,
+            Status::Ok,
+            "the last session rendered on a GPU",
+        );
+    };
+    let gpu = rest.split_once(';').map_or(rest, |(gpu, _)| gpu);
+    Check::new(
+        "gpu.renderer",
+        Area::Gpu,
+        Status::Warn,
+        format!("the last session had only a software renderer on {gpu}: the CPU draws the desktop"),
+    )
+    .fact("time", time.trim())
+    .fact("gpu", gpu)
+    .fix(
+        "install the GPU's Mesa driver, or give a virtual machine a GPU with 3D (virtio-vga-gl or virtio-gpu-gl)",
+    )
+}
+
+/// A line `cupertino-session` writes before it starts the compositor: `<date> <time> starting`, with a limit or not.
+fn session_start(line: &str) -> bool {
+    line.splitn(3, ' ')
+        .nth(2)
+        .is_some_and(|rest| rest == "starting" || rest.starts_with("starting with a limit of "))
 }
 
 pub fn session(sources: &Sources) -> Vec<Check> {

@@ -83,11 +83,6 @@ pub fn record(gpu: &str, reason: &str, recovery: &Result<(), String>) {
 }
 
 fn line(time: &str, gpu: &str, reason: &str, outcome: &str) -> String {
-    let clean = |s: &str| {
-        s.chars()
-            .map(|c| if c.is_control() { ' ' } else { c })
-            .collect::<String>()
-    };
     format!(
         "{time} {LOG_MARK} gpu={} reason={}; {}\n",
         clean(gpu),
@@ -96,7 +91,14 @@ fn line(time: &str, gpu: &str, reason: &str, outcome: &str) -> String {
     )
 }
 
-fn append(path: &Path, line: &str) -> std::io::Result<()> {
+/// `s` with its control characters as spaces, so it stays one line of `session.log`.
+pub(crate) fn clean(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
+pub(crate) fn append(path: &Path, line: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))?;
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -106,7 +108,7 @@ fn append(path: &Path, line: &str) -> std::io::Result<()> {
 }
 
 /// `$XDG_STATE_HOME/cupertino`, else `~/.local/state/cupertino`, where `cupertino-session` keeps `session.log`.
-fn state_dir() -> Option<PathBuf> {
+pub(crate) fn state_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
@@ -115,7 +117,7 @@ fn state_dir() -> Option<PathBuf> {
 }
 
 /// The local time as `cupertino-session` writes it, `YYYY-MM-DD HH:MM:SS`; empty when the C library cannot tell.
-fn local_now() -> String {
+pub(crate) fn local_now() -> String {
     // SAFETY: `time` with a null pointer only returns the time; `localtime_r` writes the zeroed `tm` it is given.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     let now = unsafe { libc::time(std::ptr::null_mut()) };

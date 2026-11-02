@@ -1,6 +1,7 @@
 //! A popup of an application window with a material backdrop is drawn over that material (a
 //! context menu's backdrop), against a headless compositor. The client opens its window and popup
-//! the way the shell processes do. Tests skip (pass) when no EGL device is available.
+//! the way the shell processes do; a window's own material is drawn while it minimizes. Tests skip (pass) when no
+//! EGL device is available.
 
 mod common;
 
@@ -20,6 +21,7 @@ use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
 use cupertino_server::events::BTN_LEFT;
 use cupertino_server::Cupertino;
+use cupertino_wm::{Command, Rect};
 use smithay::backend::input::ButtonState;
 use smithay::input::pointer::CursorImageStatus;
 use smithay::reexports::calloop::EventLoop;
@@ -48,6 +50,10 @@ struct Harness {
 
 impl Harness {
     fn new() -> Option<Harness> {
+        Self::with_config(Config::default())
+    }
+
+    fn with_config(config: Config) -> Option<Harness> {
         let event_loop: EventLoop<'static, Cupertino> =
             EventLoop::try_new().expect("creating the event loop");
         let display: Display<Cupertino> = Display::new().expect("creating the Wayland display");
@@ -55,7 +61,7 @@ impl Harness {
             display,
             event_loop.handle(),
             event_loop.get_signal(),
-            Config::default(),
+            config,
             true,
             &cupertino_assets::Assets::builtin(),
         )
@@ -90,6 +96,17 @@ impl Harness {
         PathBuf::from(dir).join(self.state.socket_name.as_ref().unwrap())
     }
 
+    fn step(&mut self, n: usize) {
+        for _ in 0..n {
+            headless::step(
+                &mut self.state,
+                &mut self.event_loop,
+                Duration::from_millis(5),
+            )
+            .unwrap();
+        }
+    }
+
     fn screenshot(&mut self) -> image::RgbaImage {
         let path = std::env::temp_dir().join(format!(
             "cupertino-test-{}-window-popup.png",
@@ -111,6 +128,8 @@ struct Window {
     window_xdg: xdg_surface::XdgSurface,
     /// The size of the latest toplevel configure, `SIZE` while the server leaves the size to the client.
     size: (i32, i32),
+    /// The byte value of every channel of the window's buffer.
+    fill: u8,
     popup: Option<(wl_surface::WlSurface, xdg_surface::XdgSurface)>,
     press_serial: Option<u32>,
 }
@@ -201,7 +220,7 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for Window {
     }
 }
 
-/// The window is drawn white and the popup transparent on every configure.
+/// The window is drawn in its fill and the popup transparent on every configure.
 impl Dispatch<xdg_surface::XdgSurface, ()> for Window {
     fn event(
         state: &mut Self,
@@ -216,7 +235,7 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for Window {
         };
         xdg.ack_configure(serial);
         if *xdg == state.window_xdg {
-            state.draw(&state.window, state.size, 255, qh);
+            state.draw(&state.window, state.size, state.fill, qh);
         } else if let Some((surface, _)) = state.popup.as_ref().filter(|(_, p)| p == xdg) {
             let (_, _, w, h) = POPUP;
             state.draw(surface, (w as i32, h as i32), 0, qh);
@@ -265,14 +284,15 @@ impl Dispatch<wl_pointer::WlPointer, ()> for Window {
     }
 }
 
-/// A client with one white unified window that opens a popup with a `Menu` material backdrop once it has
-/// had a button press (the popup needs an input serial).
+/// A client with one unified window. A white one opens a popup with a `Menu` material backdrop once it has had a
+/// button press (the popup needs an input serial); a `Sidebar` one is transparent over a backdrop of that material
+/// covering it, as the Files sidebar is.
 struct App {
     stop: Arc<AtomicBool>,
 }
 
 impl App {
-    fn spawn(socket: PathBuf) -> App {
+    fn spawn(socket: PathBuf, sidebar: bool) -> App {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         std::thread::spawn(move || {
@@ -297,21 +317,27 @@ impl App {
             let decoration = decorations.get_toplevel_decoration(&toplevel, &qh, ());
             decoration.set_mode(zxdg_toplevel_decoration_v1::Mode::ServerSide);
             effects.set_titlebar_style(&window, TitlebarStyle::Unified);
+            let mut backdrop = sidebar.then(|| {
+                let b: CupertinoBackdropV1 = effects.get_backdrop(&window, &qh, ());
+                b.set_material("Sidebar".into());
+                b.set_shape(0, 0, SIZE.0 as i32, SIZE.1 as i32, 10.0);
+                b
+            });
             window.commit();
             let mut client = Window {
                 shm: globals.bind(&qh, 1..=1, ()).unwrap(),
                 window,
                 window_xdg: window_xdg.clone(),
                 size: (SIZE.0 as i32, SIZE.1 as i32),
+                fill: if sidebar { 0 } else { 255 },
                 popup: None,
                 press_serial: None,
             };
-            let mut backdrop = None;
             while !flag.load(Ordering::SeqCst) {
                 if queue.roundtrip(&mut client).is_err() {
                     break;
                 }
-                if let (Some(serial), None) = (client.press_serial, &client.popup) {
+                if let (Some(serial), None, false) = (client.press_serial, &client.popup, sidebar) {
                     let (x, y, w, h) = POPUP;
                     let (x, y, w, h) = (x as i32, y as i32, w as i32, h as i32);
                     let positioner = wm_base.create_positioner(&qh, ());
@@ -351,7 +377,7 @@ impl Drop for App {
 fn a_window_popup_draws_its_material_over_the_window_and_only_there() {
     let Some(mut h) = Harness::new() else { return };
     h.state.cursor_status = CursorImageStatus::Hidden;
-    let _app = App::spawn(h.socket_path());
+    let _app = App::spawn(h.socket_path(), false);
     h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
     let t = h.state.now() + 5.0;
     let time = t;
@@ -386,5 +412,70 @@ fn a_window_popup_draws_its_material_over_the_window_and_only_there() {
     assert!(
         inside[..3].iter().all(|c| *c < 250),
         "the popup's material darkens the white window under it: {inside:?}"
+    );
+}
+
+#[test]
+fn a_minimizing_window_keeps_its_material_where_it_is_otherwise_transparent() {
+    let mut config = Config::default();
+    config.effects.minimize = Some(cupertino_effects::MinimizeKind::Scale);
+    // the translucent fill that stands in for a material without the material pass
+    let fill: [f64; 3] = if config.is_dark() {
+        [0.12, 0.12, 0.14]
+    } else {
+        [0.96, 0.96, 0.98]
+    };
+    let Some(mut h) = Harness::with_config(config) else {
+        return;
+    };
+    h.state.cursor_status = CursorImageStatus::Hidden;
+    let _app = App::spawn(h.socket_path(), true);
+    h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
+    let t0 = h.state.now() + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, t0);
+    h.state.tick();
+    h.step(20);
+    let id = h.state.wm.key_window().expect("a key window");
+    let frame = h.state.wm.window(id).unwrap().geometry();
+    let centre = (
+        (frame.x + frame.w / 2.0) as u32,
+        (frame.y + frame.h / 2.0) as u32,
+    );
+    let at_rest = h.screenshot().get_pixel(centre.0, centre.1).0;
+    h.state.command(Command::Minimize {
+        window: id,
+        target: Some(Rect::new(
+            frame.x + frame.w / 2.0 - 24.0,
+            f64::from(OUTPUT.1) - 60.0,
+            48.0,
+            48.0,
+        )),
+    });
+    common::set_time(&mut h.state, &mut h.event_loop, t0 + 0.02);
+    h.state.tick();
+    h.step(3);
+    let minimizing = h.screenshot().get_pixel(centre.0, centre.1).0;
+    common::set_time(&mut h.state, &mut h.event_loop, t0 + 3.0);
+    h.state.tick();
+    h.step(5);
+    assert!(h.state.wm.window(id).unwrap().state().is_minimized());
+    let behind = h.screenshot().get_pixel(centre.0, centre.1).0;
+    let differs =
+        |a: [u8; 4], b: [u8; 4]| a[..3].iter().zip(&b[..3]).any(|(x, y)| x.abs_diff(*y) > 24);
+    assert!(
+        differs(at_rest, behind),
+        "at rest the material covers the desktop: {at_rest:?} over {behind:?}"
+    );
+    let stand_in: Vec<u8> = fill
+        .iter()
+        .zip(&behind[..3])
+        .map(|(f, b)| (f * 255.0 * 0.78 + f64::from(*b) * 0.22).round() as u8)
+        .collect();
+    assert!(
+        minimizing[..3]
+            .iter()
+            .zip(&stand_in)
+            .all(|(x, y)| x.abs_diff(*y) <= 8),
+        "while minimizing the window draws its material's fill over the desktop: {minimizing:?}, expected {stand_in:?} over {behind:?}"
     );
 }

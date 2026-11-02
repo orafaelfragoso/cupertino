@@ -937,7 +937,14 @@ pub fn capture_window(
         corner: None,
     };
     let deco = window_decorations(p, entry, &plan, active);
-    let pieces = window_elements(p, entry, &plan, active, shadow, deco);
+    // a material samples what lies below it and keeps the target's alpha, so on the clear snapshot it would
+    // leave its area transparent: the fallback fill stands in
+    let pieces = window_elements(p, entry, &plan, active, shadow, deco)
+        .into_iter()
+        .map(|piece| match piece {
+            Piece::Material(m) => fallback_fill(p, m.kind, m.index, m.rect, m.radius, m.opacity),
+            piece => piece,
+        });
     let mut stack = Composition::new(p.scale);
     stack.extend(SceneLayer::Windows, pieces);
     let composed = stack.finish(p);

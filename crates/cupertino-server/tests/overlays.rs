@@ -563,7 +563,7 @@ fn the_system_layouts_become_the_input_sources_with_their_options_and_the_set_co
     assert_eq!(sources, ["us", "br(abnt2)"]);
     assert_eq!(
         h.state.config.keyboard.xkb_options(),
-        "grp_led:scroll,compose:ralt"
+        "grp_led:scroll,lv3:lalt_switch,compose:ralt"
     );
     const KEY_RIGHTALT: u32 = 100;
     const KEY_COMPOSE: u32 = 127;
@@ -1187,7 +1187,7 @@ fn a_decoded_layout_source_replaces_the_keymap_while_it_is_current() {
     let decoded = format!("decoded:{}", layout.display());
     let id = decoded.clone();
     let Some(mut h) = Harness::with_config(move |c| {
-        c.keyboard.sources = ["us", decoded.as_str()]
+        c.keyboard.sources = ["us(basic)", decoded.as_str()]
             .iter()
             .map(|s| SourceSpec::parse(s).unwrap())
             .collect()
@@ -1199,7 +1199,7 @@ fn a_decoded_layout_source_replaces_the_keymap_while_it_is_current() {
         "the generated keymap is ready at startup"
     );
     let e = Keycode::new(18 + 8);
-    // the third level (right Alt) of the E key: dead acute in the test layout, nothing in the system "us" layout
+    // the third level of the E key: dead acute in the test layout, nothing in the system "us(basic)" layout
     let alt_sym = |h: &mut Harness| {
         let kb = h.state.seat.get_keyboard().unwrap();
         kb.with_xkb_state(&mut h.state, |ctx| {

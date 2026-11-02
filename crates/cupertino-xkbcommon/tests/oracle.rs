@@ -159,7 +159,7 @@ fn data_release() -> Result<usize, String> {
         })
 }
 
-fn compile(layout: &str, variant: &str) -> xkb::Keymap {
+fn compile(layout: &str, variant: &str, options: &str) -> xkb::Keymap {
     let context = xkb::Context::new(xkb::CONTEXT_NO_ENVIRONMENT_NAMES);
     xkb::Keymap::new_from_names(
         &context,
@@ -167,7 +167,7 @@ fn compile(layout: &str, variant: &str) -> xkb::Keymap {
         "pc105",
         layout,
         variant,
-        None,
+        (!options.is_empty()).then(|| options.to_string()),
         xkb::KEYMAP_COMPILE_NO_FLAGS,
     )
     .expect("the layout compiles")
@@ -385,7 +385,7 @@ fn assert_same(actual: &str, expected: &str, what: &str) {
     );
 }
 
-fn check_layout(layout: &str, variant: &str, recordings: [&str; RECORDED.len()]) {
+fn check_layout(layout: &str, variant: &str, options: &str, recordings: [&str; RECORDED.len()]) {
     let Some(release) = recorded_release() else {
         return;
     };
@@ -400,8 +400,9 @@ fn check_layout(layout: &str, variant: &str, recordings: [&str; RECORDED.len()])
         .map(|line| format!("{line}\n"))
         .collect();
     let expected = expected.as_str();
-    let keymap = compile(layout, variant);
-    assert_same(&dump(&keymap), expected, &format!("{layout}({variant})"));
+    let keymap = compile(layout, variant, options);
+    let what = format!("{layout}({variant}) [{options}]");
+    assert_same(&dump(&keymap), expected, &what);
 
     // the text we serialise parses back into a keymap that answers the same
     let text = keymap.get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1);
@@ -416,28 +417,34 @@ fn check_layout(layout: &str, variant: &str, recordings: [&str; RECORDED.len()])
     assert_same(
         &dump(&reparsed),
         expected,
-        &format!("{layout}({variant}) after get_as_string"),
+        &format!("{what} after get_as_string"),
     );
 }
 
 #[test]
 fn us_matches_libxkbcommon() {
-    check_layout("us", "", recordings!("us.txt"));
+    check_layout("us", "", "", recordings!("us.txt"));
 }
 
 #[test]
 fn us_intl_matches_libxkbcommon() {
-    check_layout("us", "intl", recordings!("us-intl.txt"));
+    check_layout("us", "intl", "", recordings!("us-intl.txt"));
+}
+
+/// The US source of the server's `cupertino` profile: both Alt keys select the alternate symbols.
+#[test]
+fn us_mac_with_both_alt_keys_matches_libxkbcommon() {
+    check_layout("us", "mac", "lv3:alt_switch", recordings!("us-mac-alt.txt"));
 }
 
 #[test]
 fn de_matches_libxkbcommon() {
-    check_layout("de", "", recordings!("de.txt"));
+    check_layout("de", "", "", recordings!("de.txt"));
 }
 
 #[test]
 fn br_matches_libxkbcommon() {
-    check_layout("br", "", recordings!("br.txt"));
+    check_layout("br", "", "", recordings!("br.txt"));
 }
 
 #[test]

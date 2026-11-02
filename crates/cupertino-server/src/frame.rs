@@ -591,7 +591,8 @@ impl Cupertino {
     /// The tail of a frame of output `idx` that failed to draw. The screen still shows the frame before it, so nothing
     /// is reported as shown, but no client waits on a frame that never comes, and the output stays due for another try
     /// one `refresh` later: a failing output is retried, and its clients called back, at the display rate. A lost
-    /// rendering context ends the session instead, so the session manager can start a new one.
+    /// rendering context is survived by a backend that can make a new renderer ([`crate::gpu_reset`]); elsewhere it ends the session,
+    /// so the session manager can start a new one.
     pub fn frame_failed(
         &mut self,
         idx: usize,
@@ -600,10 +601,13 @@ impl Cupertino {
         error: &dyn RenderFailure,
     ) {
         if error.failure() == Failure::ContextLost {
-            crate::logging::session_ends(&format!("the rendering context was lost ({error})"), 1);
-            tracing::error!(error = %error, "the rendering context is lost: ending the session");
-            self.rendering_lost = Some(error.to_string());
-            self.running = false;
+            if self.gpu_recovers {
+                self.gpu_reset
+                    .get_or_insert_with(|| format!("the rendering context was lost ({error})"));
+                self.send_frames(idx, time);
+                return;
+            }
+            self.end_for_lost_context(&error.to_string());
             return;
         }
         self.send_frames(idx, time);
@@ -613,6 +617,14 @@ impl Cupertino {
         } else {
             tracing::debug!(error = %error, count, "rendering the frame failed again");
         }
+    }
+
+    /// Ends the session because the rendering context is lost for `why` and cannot be made again.
+    pub fn end_for_lost_context(&mut self, why: &str) {
+        crate::logging::session_ends(&format!("the rendering context was lost ({why})"), 1);
+        tracing::error!(error = %why, "the rendering context is lost: ending the session");
+        self.rendering_lost = Some(why.to_owned());
+        self.running = false;
     }
 
     /// Whether output `idx` may draw at `time`: not before the retry time of a frame that failed.

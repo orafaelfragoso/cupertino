@@ -55,6 +55,7 @@ use super::copy::{self, FrameCopy, Unsupported, Via};
 use super::input;
 use super::Backend;
 use crate::displays::{edid, HeadCaps, HeadId, HeadInfo, HeadMode, HeadOp};
+use crate::gpu_reset::Loss;
 use crate::render::gles::{Gles, GlesCompletion, GlesResources, GlesTarget, RenderError};
 use crate::render::scene::RenderResources;
 use crate::schedule::{Overdue, PresentationId};
@@ -1142,15 +1143,14 @@ fn render_outputs(state: &mut Cupertino) {
     let mut unsupported = Vec::new();
     if let Backend::Udev(u) = &mut backend {
         if !(u.paused || u.asleep) {
-            let reset = crate::gpu_reset::status(u.renderer())
-                .map(str::to_owned)
-                .or_else(|| state.gpu_reset.take())
+            let loss = crate::gpu_reset::status(u.renderer())
+                .or_else(|| state.gpu_reset.take().map(Loss::Reset))
                 .or_else(|| {
                     u.renderer_lost
-                        .then(|| "the rendering context was lost".to_owned())
+                        .then(|| Loss::Reset("the rendering context was lost".to_owned()))
                 });
-            if let Some(reason) = reset {
-                if !recover_gpu(state, u, &reason) {
+            if let Some(loss) = loss {
+                if !recover_gpu(state, u, &loss) {
                     state.backend = Some(backend);
                     return;
                 }
@@ -1194,15 +1194,16 @@ fn render_outputs(state: &mut Cupertino) {
     }
 }
 
-/// The GPU was reset for `reason`: every card gets a new context and renderer on its EGL display, its displays' buffers
-/// and copies are made again, and so is every GPU object of the scene; client buffers are imported again by the next
-/// frame. Whether the session goes on: too many resets in a row, or a renderer that cannot be made, end it.
-fn recover_gpu(state: &mut Cupertino, u: &mut UdevBackend, reason: &str) -> bool {
+/// The rendering context was lost (`loss`): every card gets a new context and renderer on its EGL display, its displays'
+/// buffers and copies are made again, and so is every GPU object of the scene; client buffers are imported again by the
+/// next frame. Whether the session goes on: too many resets in a row, or a renderer that cannot be made, end it.
+fn recover_gpu(state: &mut Cupertino, u: &mut UdevBackend, loss: &Loss) -> bool {
+    let reason = loss.reason();
     let gpu = u
         .render_node
         .dev_path()
         .map_or_else(|| u.render_node.to_string(), |p| p.display().to_string());
-    let recovery = if state.gpu_resets.allow(Instant::now()) {
+    let recovery = if state.gpu_resets.allow(loss, Instant::now()) {
         new_renderers(state, u).map_err(|e| format!("{e:#}"))
     } else {
         Err("the GPU was reset too often within a minute".to_owned())

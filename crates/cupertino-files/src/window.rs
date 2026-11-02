@@ -38,7 +38,7 @@ use cupertino_geometry::Rect as GeoRect;
 use cupertino_ui_text::TextBuffer;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-use tiny_skia::{PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{PathBuilder, Pixmap, Rect as SkRect, Stroke, Transform};
 
 /// Window chrome metrics.
 pub mod metrics {
@@ -86,6 +86,9 @@ pub mod metrics {
     pub const FOCUS_RING_RADIUS_EXTRA: f64 = 3.0;
     /// Smallest sidebar: its minimum thickness; overlay scrollers add nothing.
     pub const SIDEBAR_MIN: f64 = sidebar::MIN_WIDTH_BASE;
+    /// The strip centred on the sidebar's separator that drags it: narrower than a 24 pt target so the content's
+    /// leading edge stays reachable. Approximate, as the toolkit's split view.
+    pub const DIVIDER_ZONE: f64 = 6.0;
     /// Smallest browser area, its scroll-view content insets are taken as zero (approximate).
     pub const BROWSER_MIN: (f64, f64) = (316.0, 100.0);
     /// Smallest window content: the minimum sidebar, the divider, the minimum browser and the toolbar..
@@ -215,6 +218,8 @@ pub enum Hit {
     Titlebar,
     /// Sidebar or separators without a control.
     Chrome,
+    /// The separator between the sidebar and the browser, which drags the sidebar's width.
+    Divider,
 }
 
 /// The width of the toolbar search field: its resting width, or [`window::SEARCH_GROWTH`] times that while it has the keyboard
@@ -304,13 +309,22 @@ impl WindowLayout {
     /// [`WindowLayout::new`] with the search field `search_width` wide: it grows to the left, and the toolbar drops items
     /// as it does for a narrow window when they no longer fit.
     pub fn with_search(size: Size, places: &[Place], bars: Bars, search_width: f64) -> Self {
+        Self::with_sidebar(size, places, bars, search_width, sidebar::DEFAULT_WIDTH)
+    }
+
+    /// [`WindowLayout::with_search`] with the sidebar `sidebar_width` wide as far as [`sidebar_width`] allows.
+    pub fn with_sidebar(
+        size: Size,
+        places: &[Place],
+        bars: Bars,
+        search_width: f64,
+        sidebar_width: f64,
+    ) -> Self {
         let item_size = |item: ToolbarItem| match item {
             ToolbarItem::Search => (search_width, window::TOOLBAR_SEARCH_FIELD.1),
             other => other.size(),
         };
-        // the sidebar gives way to the browser minimum down to its own minimum
-        let sidebar_w = (size.w - m::SEPARATOR - m::BROWSER_MIN.0)
-            .clamp(m::SIDEBAR_MIN, sidebar::DEFAULT_WIDTH);
+        let sidebar_w = self::sidebar_width(sidebar_width, size.w);
         let right = sidebar_w + m::SEPARATOR;
         let toolbar = Rect::new(right, 0.0, (size.w - right).max(0.0), m::TOOLBAR_HEIGHT);
         let content_y = m::TOOLBAR_HEIGHT + m::SEPARATOR;
@@ -423,6 +437,9 @@ impl WindowLayout {
 
     /// The control or region under `p` (window points), not looking into the content.
     fn chrome_hit(&self, p: Point) -> Option<Hit> {
+        if (p.x - (self.sidebar.right() + m::SEPARATOR / 2.0)).abs() <= m::DIVIDER_ZONE / 2.0 {
+            return Some(Hit::Divider);
+        }
         let controls = [(self.back, Hit::Back), (self.forward, Hit::Forward)];
         if let Some((_, hit)) = controls.iter().find(|(r, _)| r.contains(p)) {
             return Some(*hit);
@@ -446,6 +463,15 @@ impl WindowLayout {
         }
         (!self.content.contains(p)).then_some(Hit::Chrome)
     }
+}
+
+/// The sidebar's width for the `wanted` one in a window `window_width` wide: whole points, at least its minimum, and at
+/// most what leaves the browser its minimum, which it gives way to when the window narrows.
+pub fn sidebar_width(wanted: f64, window_width: f64) -> f64 {
+    wanted
+        .round()
+        .min((window_width - m::SEPARATOR - m::BROWSER_MIN.0).floor())
+        .max(m::SIDEBAR_MIN)
 }
 
 /// The folders the path bar shows for `dir`, outermost first, with their names. The chain starts at the file system
@@ -925,6 +951,8 @@ pub struct WindowPainter {
     editor_text: Option<(Rect, Vec<f64>)>,
     /// The search field's text area, the x of each of its caret positions and the scroll it was drawn with.
     search_text: Option<(Rect, Vec<f64>, f64)>,
+    /// The sidebar's width as the person dragged it; [`sidebar_width`] fits it to the window.
+    pub sidebar_width: f64,
 }
 
 impl WindowPainter {
@@ -936,6 +964,7 @@ impl WindowPainter {
             list: ListViewSettings::default(),
             editor_text: None,
             search_text: None,
+            sidebar_width: sidebar::DEFAULT_WIDTH,
         }
     }
 
@@ -990,7 +1019,8 @@ impl WindowPainter {
         scale: f32,
     ) -> Frame {
         self.renderer.text.set_scale(scale);
-        let window = WindowLayout::with_search(size, places, bars, search_width);
+        let window =
+            WindowLayout::with_sidebar(size, places, bars, search_width, self.sidebar_width);
         let path = match &window.path_bar {
             Some(bar) => {
                 let chain = path_chain(dir, places);
@@ -1092,7 +1122,13 @@ impl WindowPainter {
     ) {
         self.renderer.text.set_scale(scale);
         let w = &frame.window;
-        // the sidebar is left clear: the server draws its material below the surface
+        // the sidebar is left clear: the server draws its material below the surface. Right of it every pixel is
+        // opaque, or what is behind the window shows through the 1 pt separators and through the edges a fractional
+        // scale leaves between fills
+        let opaque = (w.sidebar.right() as f32 * scale).floor();
+        if let Some(base) = SkRect::from_ltrb(opaque, 0.0, pm.width() as f32, pm.height() as f32) {
+            pm.fill_rect(base, &paint(pal.background), Transform::identity(), None);
+        }
         fill_rect(pm, &w.toolbar, scale, strip(state, pal));
         self.paint_sidebar(pm, scale, w, state, pal);
         fill_rect(
@@ -2253,6 +2289,137 @@ mod tests {
         assert_eq!(icons.step(Some(0), 30, Move::Down), Some(columns));
         assert_eq!(icons.step(Some(columns), 30, Move::Up), Some(0));
         assert_eq!(icons.step(Some(0), 30, Move::Left), None);
+    }
+
+    #[test]
+    fn the_sidebar_takes_a_dragged_width_within_its_minimum_and_the_browsers() {
+        assert_eq!(sidebar_width(260.4, 920.0), 260.0);
+        assert_eq!(sidebar_width(40.0, 920.0), m::SIDEBAR_MIN);
+        // the browser keeps its minimum: 920 - 1 - 316
+        assert_eq!(sidebar_width(900.0, 920.0), 603.0);
+        // a narrower window takes the room from the sidebar, down to its minimum
+        assert_eq!(sidebar_width(260.0, 500.0), 183.0);
+        assert_eq!(sidebar_width(260.0, 300.0), m::SIDEBAR_MIN);
+
+        let size = Size { w: 920.0, h: 436.0 };
+        let l = WindowLayout::with_sidebar(
+            size,
+            &places(),
+            Bars::HIDDEN,
+            window::TOOLBAR_SEARCH_FIELD.0,
+            260.0,
+        );
+        assert_eq!(l.sidebar.w, 260.0);
+        assert_eq!((l.toolbar.x, l.content.x), (261.0, 261.0));
+        assert_eq!(l.places[0].right(), 260.0 - m::SIDEBAR_ROW_INSET);
+
+        let mut painter = WindowPainter::new(crate::render::renderer());
+        painter.sidebar_width = 260.0;
+        let frame = painter.frame(
+            size,
+            &places(),
+            Bars::HIDDEN,
+            window::TOOLBAR_SEARCH_FIELD.0,
+            Path::new("/home/ada"),
+            ViewMode::Icons,
+            &[],
+            0.0,
+            1.0,
+        );
+        // the separator's strip drags it, over the toolbar and the content alike
+        for (x, y) in [
+            (260.5, 300.0),
+            (258.0, 300.0),
+            (263.0, 300.0),
+            (260.5, 20.0),
+        ] {
+            assert_eq!(frame.hit(Point { x, y }), Hit::Divider, "at {x},{y}");
+        }
+        assert_eq!(frame.hit(Point { x: 255.0, y: 300.0 }), Hit::Chrome);
+        assert_eq!(frame.hit(Point { x: 266.0, y: 300.0 }), Hit::Empty);
+    }
+
+    #[test]
+    fn right_of_the_sidebar_every_pixel_is_opaque() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("a.txt"), b"x").unwrap();
+        let mut browser = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            PathBuf::from("/nonexistent/recently-used.xbel"),
+            None,
+            Arc::new(|| {}),
+        )
+        .unwrap();
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while browser.entries().is_empty() {
+            assert!(
+                std::time::Instant::now() < end,
+                "timed out listing the folder"
+            );
+            browser.poll();
+        }
+        let places = places();
+        let size = Size { w: 920.0, h: 436.0 };
+        let shown = Bars {
+            path: true,
+            status: true,
+        };
+        for (mode, bars, scale) in [
+            (ViewMode::Icons, Bars::HIDDEN, 1.0),
+            (ViewMode::List, shown, 1.0),
+            (ViewMode::Icons, shown, 1.5),
+            (ViewMode::List, Bars::HIDDEN, 2.0),
+        ] {
+            let mut painter = WindowPainter::new(crate::render::renderer());
+            let frame = painter.frame(
+                size,
+                &places,
+                bars,
+                window::TOOLBAR_SEARCH_FIELD.0,
+                d.path(),
+                mode,
+                browser.outline(),
+                0.0,
+                scale,
+            );
+            let (w, h) = (
+                (size.w as f32 * scale) as u32,
+                (size.h as f32 * scale) as u32,
+            );
+            let mut pm = Pixmap::new(w, h).unwrap();
+            let state = WindowState {
+                browser: &browser,
+                places: &places,
+                mode,
+                active: true,
+                search: &TextBuffer::new(),
+                search_focused: false,
+                search_caret: false,
+                title: "Here",
+                now: SystemTime::now(),
+                edit: None,
+                edit_caret: false,
+                drop_target: None,
+                increase_contrast: false,
+                marquee: None,
+                status: "1 item",
+                sidebar_focus: None,
+            };
+            painter.paint(&mut pm, scale, &frame, &state, &Palette::builtin(true));
+            // the material is only under the sidebar: a translucent pixel right of it shows what is behind the window
+            let sidebar = (frame.window.sidebar.right() as f32 * scale) as u32;
+            let clear: Vec<(u32, u32)> = (0..h)
+                .flat_map(|y| (sidebar..w).map(move |x| (x, y)))
+                .filter(|&(x, y)| pm.pixel(x, y).unwrap().alpha() < 255)
+                .collect();
+            assert!(
+                clear.is_empty(),
+                "{mode:?} at {scale}x: {} translucent pixels, the first at {:?}",
+                clear.len(),
+                clear.first()
+            );
+        }
     }
 
     #[test]

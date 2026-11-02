@@ -43,7 +43,7 @@ by type; a symbolic link gets the alias badge; `Renderer::new` and `FileIcons::n
 standard places (drawn with the `symbol.* place glyphs, tinted with the accent colour: the tint and the 16 pt size are
 approximate, the design's sidebar symbol colour is not known) and a 52 pt toolbar: back / forward and the folder's name, then the view-mode popup, Group By (disabled until), Tags, the Action (…) popup and the 112 × 22 pt search field (Action and search sizes, the others take the arrange popup's and the share button's sizes, the order, gaps and glyphs are approximate; items give way right to left of importance when the toolbar narrows). The title is 15 pt (the unified toolbar's Title3 style, its weight approximate). A 1 pt line runs under the strip and under the list header, as a screenshot shows (approximate; kept over 's reading that the automatic separator shows no line at rest); the column header is part of the strip and takes its fill (the resting colour ). The window uses the unified title bar style
 (`TitlebarStyle::Unified`): its surface is the whole window, the sidebar runs the full height under the window control buttons over
-the server's `Sidebar` material (a backdrop), and the server draws only the buttons. The toolbar strip moves the window
+the server's `Sidebar` material (a backdrop), and the server draws only the buttons. Right of the sidebar the surface is opaque, so nothing behind the window shows through the separators or the edges a fractional scale leaves between fills. The toolbar strip moves the window
 (`xdg_toplevel.move`) and a double click zooms it. Changes on disk appear live.
 
 The sidebar lists the design's default Favorites, Recents, Applications, Desktop, Documents and Downloads (the nearby-sharing
@@ -138,6 +138,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | click on the name of the only selected item, or Rename | edit the name in place in a shared text field (`cupertino-ui-text`'s `TextBuffer`: caret with blink, word and line moves, Shift selection, click, double and triple click, drag, copy, cut and paste, undo): the name without its extension is selected; Return commits, Escape cancels; a name that exists is refused (never replaced) and an invalid one keeps the editor open |
 | click a removable row that is not mounted / its eject button, File › Eject, Super+E | mount it and go there / eject its drive (above) |
 | Ctrl+Tab, then Up / Down, Home / End, Return, Super+E, Escape | the sidebar's keyboard navigation (above) |
+| press the separator right of the sidebar and drag | resize the sidebar (the pointer shows the east-west resize cursor within 3 pt of it): at least 128 pt, at most what leaves the browser its minimum; the width lasts while the app runs |
 | press an item and move 5 pt | drag the selection onto a folder of the window or a place of the sidebar: moves there (Alt copies, Super moves, copy across volumes, a clash renames the arrival `name copy`); onto the trash place it is trashed; Escape cancels. The folder or place under the pointer that takes the drop is marked with the accent; under Increase Contrast it is also outlined in the label colour |
 
 ## Design
@@ -180,7 +181,7 @@ Values live in `metrics.rs`.
 | Icon view | 64 pt icons (16–512), grid spacing 54 (1–100), 12 pt text (10–16), label below; cell = icon + 12.5 % padding, label width interpolated by the spacing, 1–2 lines |
 | List view | 16 pt icons (16–32), 13 pt text, row = max(icon, font line) + 4 with no intercell spacing, a 20 pt pitch, 15 pt indentation; kinds are the design's type descriptions, capitalised |
 | Column view | 245 pt columns (min 100), 312 pt preview column |
-| Chrome | sidebar 200 pt default, 128 pt minimum, rows 24/28/32 pt; unified toolbar 52 pt; status bar 20 pt, path bar 28 pt |
+| Chrome | sidebar 200 pt default, 128 pt minimum, 6 pt drag zone on its separator (approximate), rows 24/28/32 pt; unified toolbar 52 pt; status bar 20 pt, path bar 28 pt |
 | Timing | spring-loading delay 0.5 s; sidebar toggle 0.3 s, slow motion ×10; type-select reset after max(2 s, 2 × key-repeat delay) |
 | Selection look | icon bubble: the icon enlarged by its longest side / 16, that radius, quaternary label fill, white 50 % border of min(2, trunc(padding)), the same in an inactive window; the label pill is the accent (grey when inactive). Rubber band: quaternary label fill, 1 pt tertiary label border, square corners |
 | Context menu | item 22 pt, separator 11 pt, 5 pt edge padding, 6 pt corner radius, 4 pt highlight inset 5 pt, 13 pt text; title at 15 pt, 14 pt trailing padding; submenu 5 pt over its parent, first row level with the parent's, after 0.2 s; arrow keys stop at the ends. Entry order from the design's descriptor table |

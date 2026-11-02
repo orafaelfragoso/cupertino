@@ -411,6 +411,17 @@ pub(crate) fn bus(address: Option<&str>) -> zbus::Result<zbus::connection::Build
     }
 }
 
+/// The credentials the bus gives for `conn` itself; `None` when it does not answer.
+async fn own_credentials(conn: &zbus::Connection) -> Option<ConnectionCredentials> {
+    let own = conn.unique_name()?.clone();
+    zbus::fdo::DBusProxy::new(conn)
+        .await
+        .ok()?
+        .get_connection_credentials(own.into())
+        .await
+        .ok()
+}
+
 async fn worker(
     address: Option<String>,
     rx: async_channel::Receiver<Job>,
@@ -425,6 +436,13 @@ async fn worker(
             return;
         }
     };
+    if let Some(notice) = own_credentials(&conn)
+        .await
+        .as_ref()
+        .and_then(cupertino_peer::process_fd_notice)
+    {
+        tracing::warn!("{notice}: the menu bar's menus are not shown");
+    }
     while let Ok(job) = rx.recv().await {
         let conn = conn.clone();
         let what = match job {

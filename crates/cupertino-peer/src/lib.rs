@@ -449,6 +449,15 @@ pub fn same_instance(a: &Identified, b: &Identified, proc_root: &Path) -> bool {
     first == second && !a.process.has_exited() && !b.process.has_exited()
 }
 
+/// What a service logs once at start when the bus gives no `ProcessFD` for its own connection: every caller
+/// [`Caller::from_process_fd`] judges is then refused, and nothing else says why.
+pub const NO_PROCESS_FD: &str = "the bus gives no ProcessFD (dbus 1.16 or later does): every caller that must be named by its process descriptor is refused";
+
+/// [`NO_PROCESS_FD`] when `own`, the credentials the bus gives for a connection of this process, holds no `ProcessFD`.
+pub fn process_fd_notice(own: &ConnectionCredentials) -> Option<&'static str> {
+    own.process_fd().is_none().then_some(NO_PROCESS_FD)
+}
+
 /// The caller behind `sender` on `connection`.
 pub async fn identify(connection: &zbus::Connection, sender: &UniqueName<'_>) -> Caller {
     let Ok(proxy) = zbus::fdo::DBusProxy::new(connection).await else {
@@ -867,6 +876,15 @@ mod tests {
             Caller::from_process_fd(&credentials, Path::new("/proc")),
             Caller::Process(_)
         ));
+    }
+
+    #[test]
+    fn a_bus_that_gives_no_process_descriptor_is_named_with_the_version_it_needs() {
+        let bare = ConnectionCredentials::default().set_process_id(std::process::id());
+        assert_eq!(process_fd_notice(&bare), Some(NO_PROCESS_FD));
+        assert!(NO_PROCESS_FD.contains("dbus 1.16"));
+        let held = ConnectionCredentials::default().set_process_fd(own_pidfd().into());
+        assert_eq!(process_fd_notice(&held), None);
     }
 
     #[test]

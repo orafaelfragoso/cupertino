@@ -1634,16 +1634,14 @@ fn the_login_process_connects_and_exits_outside_a_login_session() {
         return;
     };
     let mut login = real_process("cupertino-login", &bus);
-    login.command = vec![
+    let program = login.command.pop().unwrap();
+    login.command.extend([
         "sh".into(),
         "-c".into(),
         "exec \"$0\" 2>\"$1\"".into(),
-        shell_bin_dir()
-            .join("cupertino-login")
-            .display()
-            .to_string(),
+        program,
         log.display().to_string(),
-    ];
+    ]);
     let Some(mut server) = Server::start(vec![login], true) else {
         return;
     };

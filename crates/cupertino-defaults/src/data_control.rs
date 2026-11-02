@@ -330,6 +330,11 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
+    /// `ls` by the path of its file: some systems link `/usr/bin/ls` to a multi-call binary.
+    fn system_program() -> PathBuf {
+        std::fs::canonicalize("/usr/bin/ls").unwrap()
+    }
+
     #[test]
     fn entries_are_read_by_path_or_pin_and_bad_lines_allow_nothing() {
         let (conf, problems) = DataControlConf::parse(
@@ -375,7 +380,7 @@ mod tests {
         std::fs::write(&program, "").unwrap();
         let conf = DataControlConf {
             allowed: vec![
-                Entry::for_program(Path::new("/usr/bin/ls")).unwrap(),
+                Entry::for_program(&system_program()).unwrap(),
                 Entry::for_program(&program).unwrap(),
             ],
         };
@@ -440,9 +445,9 @@ mod tests {
             "a changed file is not allowed"
         );
 
-        let system = Path::new("/usr/bin/ls");
-        let by_path = Entry::for_program(system).unwrap();
-        assert!(by_path.allows_file(&std::fs::metadata(system).unwrap()));
+        let system = system_program();
+        let by_path = Entry::for_program(&system).unwrap();
+        assert!(by_path.allows_file(&std::fs::metadata(&system).unwrap()));
         let user_owned = Entry {
             program: program.clone(),
             pin: None,
@@ -583,7 +588,10 @@ mod tests {
 
     fn store_ok(path: &Path) {
         DataControlConf {
-            allowed: vec![Entry::for_program(Path::new("/usr/bin/ls")).unwrap()],
+            allowed: vec![Entry {
+                program: "/usr/bin/ls".into(),
+                pin: None,
+            }],
         }
         .store(path)
         .unwrap();

@@ -54,7 +54,9 @@ mod tests {
 
     #[test]
     fn a_program_of_the_system_only_root_can_change_and_one_of_the_user_others_can() {
-        assert!(only_root_can_change(Path::new("/usr/bin/env")));
+        assert!(only_root_can_change(
+            &std::fs::canonicalize("/usr/bin/env").unwrap()
+        ));
         let dir = tempfile::tempdir().unwrap();
         let program = dir.path().join("program");
         std::fs::write(&program, "").unwrap();

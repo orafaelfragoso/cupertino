@@ -100,9 +100,12 @@ jobs:
   # the built-in assets alone. The second leg runs the tests as the Arch package's check() does: binaries compiled with
   # the installed theme directory, which does not exist here, and CUPERTINO_SPEC_DIR pointing at the checkout. A test
   # that starts a binary with a cleared environment and does not pass CUPERTINO_SPEC_DIR fails only there.
+  # Ubuntu 26.04, not 24.04: the tests need a dbus-daemon that gives the caller's ProcessFD (24.04's 1.14 does not, and
+  # the server and sessiond check a caller only through it) and a PipeWire on which a screencast stream follows a resize
+  # (24.04's 1.0 never streams the new size). Every distribution the packages target ships newer versions of both.
   check:
     name: check${{ matrix.package-env && ' (package build environment)' || '' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     strategy:
       fail-fast: false

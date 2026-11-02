@@ -20,6 +20,7 @@ outside one.
 | Id | Status |
 |---|---|
 | `gpu.driver` | the primary GPU's driver, and what it needs before a compositor takes the display (`cupertino_devices::preflight`): `fail` for a problem (nvidia-drm without `modeset=1`, no GPU), `warn` for a warning (no nvidia GBM backend, no driver bound) |
+| `gpu.renderer` | the last session's line in `session.log` saying it rendered with a software renderer (`cupertino_server::software_render`): `warn` when the last or the running session did, that is when no `starting` line of `cupertino-session` follows it; facts: its time and GPU; `skip` without a `session.log` |
 | `session.logind` | logind's record of `XDG_SESSION_ID`: `ok` for an active wayland session; facts: class, PAM service, VT, seat |
 | `session.desktop` | `XDG_CURRENT_DESKTOP` names Cupertino; `skip` otherwise |
 | `session.wayland` | the compositor answers on `WAYLAND_DISPLAY` (a connect to the socket); `fail` when nothing does |

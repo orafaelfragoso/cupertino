@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Build and sign a Cupertino release from this checkout into the local repository of this machine. Nothing is published.
+#
+#   local-release keygen [--master-home DIR] [--signing-home DIR] [--no-passphrase]
+#   local-release [--signing-home DIR] [--repo-root DIR] [--packages DIR]
+#
+# keygen   makes the Cupertino key: a certify-only master key in --master-home (put it on the offline USB drive; the default
+#          is ./cupertino-master-gnupg) and a signing subkey, valid for a year, copied without the master into
+#          --signing-home (default ~/.config/cupertino/signing). The public key is written to PUBLIC.asc in --signing-home:
+#          that file goes into the ISO (CUPERTINO_KEYRING_KEY=PATH scripts/build-iso.sh) and into cupertino-keyring. Without
+#          --no-passphrase gpg asks for a passphrase for the master key.
+# release  builds the committed HEAD of this checkout into packages in the pinned Arch image (pkgrel is the number of
+#          commits, so that every new commit is an update), builds cupertino-keyring from the public key, signs the packages
+#          and the database with the subkey (packaging/keyring/build-repo) and installs the tree into --repo-root (default
+#          /var/lib/cupertino): repo/ is what pacman reads, archive/ keeps the last five releases. Then: sudo pacman -Syu.
+#          --packages DIR skips the build and signs the *.pkg.tar.zst already in DIR (cupertino-keyring is built unless DIR has it).
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+die() { echo "local-release: $*" >&2; exit 1; }
+signing_home=${XDG_CONFIG_HOME:-$HOME/.config}/cupertino/signing
+repo_root=/var/lib/cupertino
+packages=
+
+keygen() {
+    local master_home=./cupertino-master-gnupg g fpr
+    g=(gpg --quiet)
+    while [ "$#" -gt 0 ]; do
+        case $1 in
+        --master-home) master_home=${2:?}; shift ;;
+        --signing-home) signing_home=${2:?}; shift ;;
+        --no-passphrase) g=(gpg --quiet --batch --pinentry-mode loopback --passphrase '') ;;
+        *) die "unknown keygen option $1" ;;
+        esac
+        shift
+    done
+    [ ! -e "$master_home" ] && [ ! -e "$signing_home" ] || die "$master_home or $signing_home exists; keygen never overwrites a key"
+    mkdir -p -m 700 "$master_home" "$signing_home"
+    g+=(--homedir "$master_home")
+    "${g[@]}" --quick-gen-key 'Cupertino Packages <packages@cupertino.invalid>' ed25519 cert never
+    fpr=$(gpg --homedir "$master_home" --with-colons --list-keys | awk -F: '$1 == "fpr" { print $10; exit }')
+    "${g[@]}" --quick-add-key "$fpr" ed25519 sign 1y
+    "${g[@]}" --export-secret-subkeys "$fpr" | gpg --homedir "$signing_home" --batch --quiet --import 2>/dev/null ||
+        die 'could not copy the signing subkey'
+    gpg --homedir "$signing_home" --armor --export "$fpr" >"$signing_home/PUBLIC.asc"
+    echo "master key $fpr is in $master_home: keep it offline and back it up"
+    echo "signing subkey and PUBLIC.asc: $signing_home"
+}
+
+if [ "${1:-}" = keygen ]; then
+    shift
+    keygen "$@"
+    exit
+fi
+
+while [ "$#" -gt 0 ]; do
+    [ "$#" -ge 2 ] || die 'every option takes a value'
+    case $1 in
+    --signing-home) signing_home=$2 ;;
+    --repo-root) repo_root=$2 ;;
+    --packages) packages=$2 ;;
+    *) die "unknown option $1" ;;
+    esac
+    shift 2
+done
+case $repo_root in /*) ;; *) die '--repo-root is an absolute path' ;; esac
+export GNUPGHOME=$signing_home
+[ -f "$signing_home/PUBLIC.asc" ] || die "no signing key in $signing_home; run: local-release keygen"
+if gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "sec" && $15 != "#" { found = 1 } END { exit !found }'; then
+    die "$signing_home holds the master secret key; it belongs on the offline drive"
+fi
+sub=$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "ssb" { want = ($12 ~ /s/ && $15 != "#"); next } want && $1 == "fpr" { print $10; exit }')
+[ -n "$sub" ] || die "no usable signing subkey in $signing_home"
+{ [ -w "$repo_root/repo" ] && [ -w "$repo_root/archive" ]; } ||
+    die "$repo_root/repo and $repo_root/archive must exist and belong to you (the installer makes them)"
+
+mkdir -p "$HOME/.cache/cupertino-release"
+work=$(mktemp -d "$HOME/.cache/cupertino-release/work.XXXXXX")
+trap 'rm -rf "$work"' EXIT
+mkdir "$work/sign"
+if [ -z "$packages" ]; then
+    root=$(git -C "$here" rev-parse --show-toplevel)
+    mkdir "$work/pkgs"
+    CUPERTINO_PKGREL=$(git -C "$root" rev-list --count HEAD) "$root/packaging/ci/build-in-container.sh" arch "$work/pkgs"
+    cp "$work/pkgs"/*.pkg.tar.zst "$work/sign/"
+else
+    cp "$packages"/*.pkg.tar.zst "$work/sign/"
+fi
+if ! compgen -G "$work/sign/cupertino-keyring-*.pkg.tar.zst" >/dev/null; then
+    "$here/build-keyring" "$signing_home/PUBLIC.asc" "$work/sign" >/dev/null
+fi
+
+sh "$here/build-repo" --packages "$work/sign" --key "$sub" --url "file://$repo_root" --out "$work/out" \
+    --archive-from "$repo_root/archive" >/dev/null
+
+# Packages first, the database last, so that pacman never reads a database that names a missing file.
+cp -f "$work/out/archive/"* "$repo_root/archive/"
+for f in "$repo_root/archive/"*; do
+    [ -e "$work/out/archive/$(basename "$f")" ] || rm -f "$f"
+done
+cp -f "$work/out/repo/"*.pkg.tar.zst "$work/out/repo/"*.pkg.tar.zst.sig "$repo_root/repo/"
+for f in "$repo_root/repo/"*.pkg.tar.zst "$repo_root/repo/"*.pkg.tar.zst.sig; do
+    [ -e "$work/out/repo/$(basename "$f")" ] || rm -f "$f"
+done
+for f in cupertino.db cupertino.db.sig cupertino.files cupertino.files.sig cupertino.db.tar.zst.sig; do
+    [ -e "$work/out/repo/$f" ] || continue
+    cp -f "$work/out/repo/$f" "$repo_root/repo/.$f.new"
+    mv -f "$repo_root/repo/.$f.new" "$repo_root/repo/$f"
+done
+echo "released into $repo_root/repo: $(cd "$repo_root/repo" && ls ./*.pkg.tar.zst | tr '\n' ' ')"
+echo 'update with: sudo pacman -Syu'

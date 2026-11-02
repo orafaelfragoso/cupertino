@@ -26,10 +26,10 @@ installer refuses any other archinstall version, because the configuration forma
 | Services | one owner per bus name: NetworkManager (network), `bluetooth.service` (BlueZ), `cupertino-powerd` (UPower; the `upower` package is not installed). `cupertino-netd` and `cupertino-btd` are installed but not enabled |
 | System | PipeWire, `foot`, `xwayland-satellite` |
 | Apps | Chromium (native Wayland: `~/.config/chromium-flags.conf` holds `--ozone-platform=wayland`), `git`, `base-devel`, `rustup`, `github-cli` |
-| Cupertino | `cupertino` and `cupertino-data` from the USB's `[cupertino]` repository, which is then taken out of the new `pacman.conf` |
+| Cupertino | `cupertino`, `cupertino-data` and `cupertino-keyring` from the USB's `[cupertino]` repository, which is then replaced in the new `pacman.conf` by the machine's own signed repository (`Server = file:///var/lib/cupertino/repo`, `SigLevel = Required DatabaseOptional`, an empty database until the first release is built) |
 
 Before it unmounts the disk, the installer fails if the new system still has anything of the live USB: the `[cupertino]`
-repository or `TrustAll` in `pacman.conf`, `NOPASSWD` in a sudoers file, a root password, or an account other than the
+live repository (`/opt/cupertino-repo`) or `TrustAll` in `pacman.conf`, `NOPASSWD` in a sudoers file, a root password, or an account other than the
 one asked for. A QEMU answers file's `extra_packages` and `kernel_args` (such as `qemu-guest-agent` and
 `console=ttyS0`) are installed as asked; the questions never add them.
 
@@ -58,3 +58,10 @@ and optionally `hostname`, `keyboard`, `extra_packages` and `kernel_args`. The d
 - No disk encryption.
 - One kernel (linux): a kernel or driver update that breaks booting is undone from the USB (`arch-chroot`, `pacman -U`).
 - No polkit agent in the package yet, so administrator actions go through `sudo` in a terminal.
+
+## Updates on the installed system
+
+`/var/lib/cupertino/repo` and `/var/lib/cupertino/archive` belong to the new user. To update Cupertino from a checkout:
+`packaging/keyring/local-release` (see `packaging/keyring/README.md`), then `sudo pacman -Syu`. pacman accepts only packages
+signed by the Cupertino key. The installer runs `pacman-key --populate cupertino` in the new system; if that fails it
+prints a warning and you run it after the first boot.

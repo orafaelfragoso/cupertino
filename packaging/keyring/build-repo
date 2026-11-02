@@ -15,7 +15,7 @@
 # Packages taken from --archive-from must already be signed under the same primary key (gpg VALIDSIG). They are copied into
 # OUT/archive first and verified there, never in the source; on a failure OUT/repo and OUT/archive are removed. There is no upload. Upload the packages and their .sig first and the database files last, so that a client never sees a
 # database that names a missing file. The key comes from GNUPGHOME (or --gnupghome DIR); the release job loads the signing
-# subkey into a temporary GNUPGHOME and never holds the master key. BASE_URL is https://, or http://127.0.0.1 for tests.
+# subkey into a temporary GNUPGHOME and never holds the master key. BASE_URL is https://, file:///PATH for the local repository of one machine, or http://127.0.0.1 for tests.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -50,8 +50,8 @@ esac
 [ "${#key}" -ge 16 ] || die 'the key is a fingerprint or long key id, not a short one'
 case $keep in '' | *[!0-9]* | 0) die 'N is a positive whole number' ;; esac
 case $url in
-https://?* | http://127.0.0.1 | http://127.0.0.1[:/]*) ;;
-*) die 'the URL is https://HOST/PATH (http://127.0.0.1 only for tests)' ;;
+https://?* | http://127.0.0.1 | http://127.0.0.1[:/]* | file:///?*) ;;
+*) die 'the URL is https://HOST/PATH, file:///PATH for a local repository (http://127.0.0.1 only for tests)' ;;
 esac
 case $url in *[[:space:]\'\"\\]*) die 'the URL has a space or a quote' ;; esac
 url=${url%/}

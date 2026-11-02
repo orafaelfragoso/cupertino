@@ -6,11 +6,11 @@
 //! This file regenerates the same text with this crate and compares it with the recording line by line.
 //!
 //! The keymaps are compiled from the xkeyboard-config data on the machine, and what they contain (the order of the
-//! virtual modifiers, key tables) changes between its releases, in libxkbcommon as in this crate. The recordings are
-//! only comparable with the release they were made with, `tests/fixtures/xkb-data.txt`; on any other data the layout
-//! tests are skipped with a message naming both versions, and fail instead when `CUPERTINO_XKB_DATA_REQUIRED=1` (CI and
-//! the gate). `XKB_CONFIG_ROOT` points the tests at another copy of the data, which is how CI gets the recorded release
-//! on a distribution that ships another one.
+//! virtual modifiers, key tables) changes between its releases, in libxkbcommon as in this crate. Each recorded release
+//! has its own set, `tests/fixtures/<release>/`, and `tests/fixtures/xkb-data.txt` tells the releases apart; on any
+//! other data the layout tests are skipped with a message naming the releases, and fail instead when
+//! `CUPERTINO_XKB_DATA_REQUIRED=1` (CI and the gate). `XKB_CONFIG_ROOT` points the tests at another copy of the data,
+//! which is how CI gets a recorded release on a distribution that ships another one.
 
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
@@ -44,8 +44,18 @@ fn syms(s: &[xkb::Keysym]) -> String {
 /// The parts of the data a compile reads, relative to the data root.
 const DATA_PARTS: [&str; 5] = ["compat", "keycodes", "symbols", "types", "rules/evdev"];
 const DEFAULT_DATA_ROOT: &str = "/usr/share/X11/xkb";
-/// Line of `xkb-data.txt` for the release the recordings were made with.
-const RECORDED_MARK: &str = "recorded";
+/// The releases with a set of recordings, `fixtures/<release>/`.
+const RECORDED: [&str; 2] = ["2.48", "2.49"];
+
+/// The recordings of one layout file, in the order of [`RECORDED`].
+macro_rules! recordings {
+    ($file:literal) => {
+        [
+            include_str!(concat!("fixtures/2.48/", $file)),
+            include_str!(concat!("fixtures/2.49/", $file)),
+        ]
+    };
+}
 
 fn data_files(path: &Path, out: &mut Vec<PathBuf>) {
     if path.is_dir() {
@@ -104,25 +114,26 @@ fn overriding_data_dirs() -> Vec<String> {
     dirs
 }
 
-/// Whether the data the keymaps are compiled from is the release the recordings were made with. On other data the
-/// comparison means nothing: the caller skips with a message, or the test fails when `CUPERTINO_XKB_DATA_REQUIRED=1`.
-fn recorded_data() -> bool {
-    let Some(problem) = data_mismatch() else {
-        return true;
+/// The index in [`RECORDED`] of the release the keymaps are compiled from. On other data the comparison means nothing:
+/// the caller skips with a message, or the test fails when `CUPERTINO_XKB_DATA_REQUIRED=1`.
+fn recorded_release() -> Option<usize> {
+    let problem = match data_release() {
+        Ok(index) => return Some(index),
+        Err(problem) => problem,
     };
     assert!(
         std::env::var("CUPERTINO_XKB_DATA_REQUIRED").as_deref() != Ok("1"),
         "{problem}"
     );
     eprintln!("SKIPPED: {problem}; set CUPERTINO_XKB_DATA_REQUIRED=1 to fail instead");
-    false
+    None
 }
 
-/// Why the data the keymaps are compiled from is not the release the recordings were made with, if it is not.
-fn data_mismatch() -> Option<String> {
+/// The index in [`RECORDED`] of the release the keymaps are compiled from, or why it is none of them.
+fn data_release() -> Result<usize, String> {
     let overriding = overriding_data_dirs();
     if !overriding.is_empty() {
-        return Some(format!(
+        return Err(format!(
             "{} would override the xkeyboard-config data the recordings were made with: move it away for this test, \
              or point XDG_CONFIG_HOME, HOME and XKB_CONFIG_EXTRA_PATH at empty directories",
             overriding.join(", ")
@@ -130,30 +141,22 @@ fn data_mismatch() -> Option<String> {
     }
     let root = std::env::var("XKB_CONFIG_ROOT").unwrap_or_else(|_| DEFAULT_DATA_ROOT.into());
     let found = data_fingerprint(Path::new(&root));
-    let mut recorded = None;
-    let mut known = None;
-    for line in include_str!("fixtures/xkb-data.txt").lines() {
-        let mut fields = line.split_whitespace();
-        let (Some(fingerprint), Some(version)) = (fields.next(), fields.next()) else {
-            continue;
-        };
-        if fields.next() == Some(RECORDED_MARK) {
-            recorded = Some(version);
-        }
-        if fingerprint == found {
-            known = Some(version);
-        }
-    }
-    let recorded = recorded.expect("xkb-data.txt marks the recorded release");
-    (known != Some(recorded)).then(|| {
-        format!(
-            "the recordings were made with xkeyboard-config {recorded}, but the data in {root} is {} (fingerprint \
-             {found}); install xkeyboard-config {recorded} or point XKB_CONFIG_ROOT at a copy of it",
-            known.map_or("an unlisted release".to_string(), |v| format!(
-                "xkeyboard-config {v}"
-            )),
-        )
-    })
+    let known = include_str!("fixtures/xkb-data.txt")
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .find_map(|(fingerprint, version)| (fingerprint == found).then_some(version.trim()));
+    known
+        .and_then(|version| RECORDED.iter().position(|recorded| *recorded == version))
+        .ok_or_else(|| {
+            let recorded = RECORDED.join(" and ");
+            format!(
+                "the recordings were made with xkeyboard-config {recorded}, but the data in {root} is {} (fingerprint \
+                 {found}); install one of them or point XKB_CONFIG_ROOT at a copy",
+                known.map_or("an unlisted release".to_string(), |v| format!(
+                    "xkeyboard-config {v}"
+                )),
+            )
+        })
 }
 
 fn compile(layout: &str, variant: &str) -> xkb::Keymap {
@@ -382,10 +385,11 @@ fn assert_same(actual: &str, expected: &str, what: &str) {
     );
 }
 
-fn check_layout(layout: &str, variant: &str, recorded: &str) {
-    if !recorded_data() {
+fn check_layout(layout: &str, variant: &str, recordings: [&str; RECORDED.len()]) {
+    let Some(release) = recorded_release() else {
         return;
-    }
+    };
+    let recorded = recordings[release];
     let skipped: Vec<String> = KNOWN_DIFFERENT_KEYS
         .iter()
         .map(|kc| format!("key {kc} "))
@@ -418,22 +422,22 @@ fn check_layout(layout: &str, variant: &str, recorded: &str) {
 
 #[test]
 fn us_matches_libxkbcommon() {
-    check_layout("us", "", include_str!("fixtures/us.txt"));
+    check_layout("us", "", recordings!("us.txt"));
 }
 
 #[test]
 fn us_intl_matches_libxkbcommon() {
-    check_layout("us", "intl", include_str!("fixtures/us-intl.txt"));
+    check_layout("us", "intl", recordings!("us-intl.txt"));
 }
 
 #[test]
 fn de_matches_libxkbcommon() {
-    check_layout("de", "", include_str!("fixtures/de.txt"));
+    check_layout("de", "", recordings!("de.txt"));
 }
 
 #[test]
 fn br_matches_libxkbcommon() {
-    check_layout("br", "", include_str!("fixtures/br.txt"));
+    check_layout("br", "", recordings!("br.txt"));
 }
 
 #[test]

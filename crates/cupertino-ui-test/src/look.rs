@@ -188,7 +188,7 @@ impl<A: Application> TestDriver<A> {
             .ok_or(LookError::NoFrame(window))?;
         let mut pixels = frame.pixels.clone();
         if frame.format == PixelFormat::Rgba8 {
-            for px in pixels.chunks_exact_mut(4) {
+            for px in pixels.as_chunks_mut::<4>().0 {
                 let a = u16::from(px[3]);
                 for c in &mut px[..3] {
                     *c = ((u16::from(*c) * a + 127) / 255) as u8;

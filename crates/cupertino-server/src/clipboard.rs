@@ -16,6 +16,11 @@
 //! of the client that sets it. A clipboard manager (data control) sets it without focus; its selection is
 //! then attributed to the focused client, and a copy is taken over if that client exits first (the
 //! content is the same; the manager sees its source cancelled).
+//!
+//! While the session is locked only the lock's client may set or read the clipboard and the primary
+//! selection: every other source is cancelled and every other read gets an empty pipe, through
+//! `wl_data_device`, the primary selection and both data controls. The selection from before the lock stays
+//! with its owner. A clear still goes through, so a password tool's timed clear works while locked.
 
 use std::os::fd::OwnedFd;
 use std::sync::Arc;
@@ -27,14 +32,11 @@ use smithay::reexports::rustix;
 use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::{DisplayHandle, Resource};
 use smithay::wayland::selection::data_device::{
-    clear_data_device_selection, current_data_device_selection_userdata,
     request_data_device_client_selection, set_data_device_selection,
 };
-use smithay::wayland::selection::primary_selection::{
-    clear_primary_selection, PrimarySelectionState,
-};
+use smithay::wayland::selection::primary_selection::PrimarySelectionState;
 use smithay::wayland::selection::{ext_data_control, wlr_data_control};
-use smithay::wayland::selection::{SelectionSource, SelectionTarget};
+use smithay::wayland::selection::{SelectionSource, SelectionSourceProvider, SelectionTarget};
 use smithay::{delegate_data_control, delegate_ext_data_control};
 
 use crate::state::Cupertino;
@@ -139,6 +141,17 @@ impl Clipboard {
     pub fn is_complete(&self) -> bool {
         self.queue.is_empty() && self.reading.is_none()
     }
+}
+
+/// The client that set `source`, while it is connected.
+pub fn source_client(source: &SelectionSource) -> Option<ClientId> {
+    let client = match source.provider() {
+        SelectionSourceProvider::DataDevice(source) => source.client(),
+        SelectionSourceProvider::Primary(source) => source.client(),
+        SelectionSourceProvider::WlrDataControl(source) => source.client(),
+        SelectionSourceProvider::ExtDataControl(source) => source.client(),
+    };
+    client.map(|client| client.id())
 }
 
 /// Write `data` to the paste's pipe without blocking the loop.
@@ -321,50 +334,6 @@ impl Cupertino {
         let mime_types = snapshot.mime_types();
         tracing::info!(types = ?mime_types, "the clipboard's client exited; the server keeps its content");
         set_data_device_selection(&self.display_handle, &self.seat, mime_types, snapshot);
-    }
-
-    /// The server's copy of the current clipboard: the kept snapshot, or the owner's types when all of them were read.
-    fn clipboard_copy(&self) -> Option<Arc<Snapshot>> {
-        match current_data_device_selection_userdata(&self.seat) {
-            Some(snapshot) => Some(snapshot.clone()),
-            None if self.clipboard.owner.is_some()
-                && self.clipboard.is_complete()
-                && !self.clipboard.captured.is_empty() =>
-            {
-                Some(Arc::new(Snapshot::from_captured(
-                    self.clipboard.captured.clone(),
-                )))
-            }
-            None => None,
-        }
-    }
-
-    /// A selection was set or cleared while the session is locked: nobody may. Once smithay has made it current, the
-    /// clipboard goes back to the server's copy of what it was (which also cancels the refused source); a primary
-    /// selection, which the server does not copy, is cleared.
-    pub fn clipboard_refuse_set_while_locked(&mut self, ty: SelectionTarget) {
-        let kept = (ty == SelectionTarget::Clipboard).then(|| self.clipboard_copy());
-        self.loop_handle.insert_idle(move |state| {
-            if !state.session_lock.is_active() {
-                return;
-            }
-            match kept {
-                Some(Some(snapshot)) => {
-                    state.clipboard_forget();
-                    set_data_device_selection(
-                        &state.display_handle,
-                        &state.seat,
-                        snapshot.mime_types(),
-                        snapshot,
-                    );
-                }
-                Some(None) => {
-                    state.clipboard_forget();
-                    clear_data_device_selection(&state.display_handle, &state.seat);
-                }
-                None => clear_primary_selection(&state.display_handle, &state.seat),
-            }
-        });
     }
 
     /// Serve a paste of the kept clipboard from its snapshot (the selection's user data).

@@ -127,7 +127,7 @@ where
         self: Arc<Self>,
         dh: &Handle,
         handle: &mut D,
-        _: ClientId,
+        client: ClientId,
         msg: Message<ObjectId, OwnedFd>,
     ) -> Option<Arc<dyn ObjectData<D>>> {
         let dh = DisplayHandle::from(dh.clone());
@@ -174,7 +174,11 @@ where
             }
         };
 
-        if !self.source.contains_mime_type(&mime_type) {
+        let allowed =
+            Seat::<D>::from_resource(&self.seat).map_or(true, |seat| handle.allow_receive(&client, &seat));
+        if !allowed {
+            debug!("Denying a {object_name}.receive the compositor refused");
+        } else if !self.source.contains_mime_type(&mime_type) {
             debug!("Denying a {object_name}.receive with invalid mime type");
         } else {
             match &self.source {

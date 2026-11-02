@@ -386,17 +386,32 @@ impl SelectionHandler for Cupertino {
     /// The server's copy of a clipboard whose client has gone (`clipboard.rs`).
     type SelectionUserData = std::sync::Arc<Snapshot>;
 
+    // a clear is not asked for, so it goes through while locked: a password tool's timed clear must not leave the
+    // password behind
+    fn allow_selection(
+        &mut self,
+        _ty: smithay::wayland::selection::SelectionTarget,
+        source: &smithay::wayland::selection::SelectionSource,
+        _seat: &Seat<Self>,
+    ) -> bool {
+        crate::clipboard::source_client(source)
+            .is_some_and(|client| self.session_lock.allows_selection(&client))
+    }
+
+    fn allow_receive(
+        &mut self,
+        client: &smithay::reexports::wayland_server::backend::ClientId,
+        _seat: &Seat<Self>,
+    ) -> bool {
+        self.session_lock.allows_selection(client)
+    }
+
     fn new_selection(
         &mut self,
         ty: smithay::wayland::selection::SelectionTarget,
         source: Option<smithay::wayland::selection::SelectionSource>,
         seat: Seat<Self>,
     ) {
-        // a clear is allowed while locked: a password tool's timed clear must not leave the password behind
-        if source.is_some() && self.session_lock.is_active() {
-            self.clipboard_refuse_set_while_locked(ty);
-            return;
-        }
         self.clipboard_selection_changed(ty, source.as_ref(), &seat);
     }
 

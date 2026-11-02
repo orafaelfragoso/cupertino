@@ -50,6 +50,15 @@ where
 
                 let source = source.map(SelectionSourceProvider::WlrDataControl);
 
+                if crate::wayland::selection::refused(
+                    handler,
+                    SelectionTarget::Clipboard,
+                    source.as_ref(),
+                    &seat,
+                ) {
+                    return;
+                }
+
                 handler.new_selection(
                     SelectionTarget::Clipboard,
                     source.clone().map(|provider| SelectionSource { provider }),
@@ -72,6 +81,15 @@ where
                     .insert_if_missing(|| RefCell::new(SeatData::<D::SelectionUserData>::new()));
 
                 let source = source.map(SelectionSourceProvider::WlrDataControl);
+
+                if crate::wayland::selection::refused(
+                    handler,
+                    SelectionTarget::Primary,
+                    source.as_ref(),
+                    &seat,
+                ) {
+                    return;
+                }
 
                 handler.new_selection(
                     SelectionTarget::Primary,

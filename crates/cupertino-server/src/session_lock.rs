@@ -72,6 +72,16 @@ impl SessionLock {
         !matches!(self.state, LockState::Unlocked)
     }
 
+    /// Whether `client` may set or read the clipboard and the primary selection: any client while unlocked, only
+    /// the lock's own client while locked.
+    pub fn allows_selection(&self, client: &ClientId) -> bool {
+        !self.is_active()
+            || self
+                .owner()
+                .and_then(Resource::client)
+                .is_some_and(|owner| owner.id() == *client)
+    }
+
     /// The lock object of the client that holds the lock, while that client lives.
     fn owner(&self) -> Option<&ExtSessionLockV1> {
         match &self.state {

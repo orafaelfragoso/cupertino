@@ -366,7 +366,7 @@ impl Cupertino {
         let e = &mut self.windows[i];
         e.titlebar = style;
         if e.server_side {
-            e.insets = insets;
+            e.decor_insets = insets;
         }
     }
 

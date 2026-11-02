@@ -792,6 +792,13 @@ impl Wm {
             }
             return;
         }
+        if matches!(
+            w.state(),
+            LifecycleState::EnterFullScreen | LifecycleState::FullScreen
+        ) {
+            self.exit_fullscreen_window(id, now, out);
+            return;
+        }
         // unzooming above stays allowed, so disabling zoom cannot trap a zoomed window
         if !w.can_zoom() {
             return;

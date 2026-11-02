@@ -166,7 +166,7 @@ pub fn placed_plan(
     corner: f64,
 ) -> WindowPlan {
     let geo = entry.window.geometry();
-    let ins = entry.insets;
+    let ins = entry.insets();
     WindowPlan {
         visual: rect,
         scale_x: rect.w / (f64::from(geo.size.w) + ins.horizontal()).max(1.0),
@@ -201,7 +201,7 @@ pub fn plan_for(
     }
     let animating = w.lifecycle.is_animating(now);
     let geo = entry.window.geometry();
-    let ins = entry.insets;
+    let ins = entry.insets();
     let size = (
         f64::from(geo.size.w) + ins.horizontal(),
         f64::from(geo.size.h) + ins.vertical(),
@@ -653,7 +653,7 @@ fn window_elements(
     let mut out: Vec<Piece> = Vec::new();
     let scale = Scale::from(p.scale);
     let geo = entry.window.geometry();
-    let ins = entry.insets;
+    let ins = entry.insets();
     let style = p.config.window;
     let visual_local = local(plan.visual, &p.rect);
     let v_phys = to_physical_rect(visual_local, scale);
@@ -769,7 +769,7 @@ fn builtin_decorations(
     active: bool,
 ) -> Vec<Piece> {
     let geo = entry.window.geometry();
-    let ins = entry.insets;
+    let ins = entry.insets();
     let (fw, fh) = (
         f64::from(geo.size.w) + ins.horizontal(),
         f64::from(geo.size.h) + ins.vertical(),
@@ -896,7 +896,7 @@ fn window_decorations(
     active: bool,
 ) -> Vec<Piece> {
     let mut out = Vec::new();
-    if entry.server_side && p.config.window.decorations {
+    if entry.server_side && !entry.fullscreen && p.config.window.decorations {
         out.extend(builtin_decorations(p, entry, plan, active));
     }
     out
@@ -989,7 +989,7 @@ fn minimize_elements(
     let kind = p.fx.cfg.minimize?;
     p.res.mesh.as_ref()?;
     let geo = entry.window.geometry();
-    let ins = entry.insets;
+    let ins = entry.insets();
     let natural = Rect::new(
         pres.frame.x + slide,
         pres.frame.y,
@@ -1474,7 +1474,7 @@ fn overview(p: &mut SceneParams<'_>, stack: &mut Composition) -> bool {
             continue;
         };
         let geo = entry.window.geometry();
-        let ins = entry.insets;
+        let ins = entry.insets();
         let frame = pw.frame;
         let plan = WindowPlan {
             visual: frame,

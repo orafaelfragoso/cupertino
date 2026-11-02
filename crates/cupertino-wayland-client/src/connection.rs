@@ -1910,9 +1910,10 @@ impl Dispatch<WlOutput, OutputId> for State {
                 flags: WEnum::Value(flags),
                 width,
                 height,
-                ..
+                refresh,
             } if flags.contains(wl_output::Mode::Current) => {
                 pending.mode = u32::try_from(width).ok().zip(u32::try_from(height).ok());
+                pending.refresh_mhz = u32::try_from(refresh).ok().filter(|r| *r > 0);
             }
             wl_output::Event::Geometry {
                 physical_width,

@@ -12,6 +12,7 @@ pub mod clipboard;
 pub mod controls;
 pub mod form;
 pub mod geom;
+pub mod hardware;
 pub mod history;
 #[cfg(feature = "app")]
 pub mod inflight;

@@ -873,7 +873,15 @@ fn without_a_network_or_bluetooth_service_their_panes_hide_from_the_sidebar_and_
     let backends = services.detect();
     assert_eq!(backends, Backends::default());
     let hidden = backends.hidden();
-    assert_eq!(hidden, [PaneId::Wifi, PaneId::Network, PaneId::Bluetooth]);
+    assert_eq!(
+        hidden,
+        [
+            PaneId::Wifi,
+            PaneId::Network,
+            PaneId::Bluetooth,
+            PaneId::Trackpad
+        ]
+    );
     assert_eq!(sidebar::groups(&hidden)[0], [PaneId::Battery]);
     assert!(search("wi-fi", &hidden)
         .iter()
@@ -882,7 +890,10 @@ fn without_a_network_or_bluetooth_service_their_panes_hide_from_the_sidebar_and_
 
     // a service that starts later brings its pane back; the Cupertino daemon wins over NetworkManager's name it claims
     let (_nm, _log) = serve_nm(&bus);
-    assert_eq!(services.detect().hidden(), [PaneId::Bluetooth]);
+    assert_eq!(
+        services.detect().hidden(),
+        [PaneId::Bluetooth, PaneId::Trackpad]
+    );
     let _netd = bus
         .blocking_builder()
         .name("org.cupertino.Network1")
@@ -895,6 +906,7 @@ fn without_a_network_or_bluetooth_service_their_panes_hide_from_the_sidebar_and_
         Backends {
             network: Some(NetworkBackend::Cupertino),
             bluetooth: Some(BluetoothBackend::BlueZ),
+            ..Backends::default()
         }
     );
     assert!(matches!(services.bluetooth(None), Reading::Ready(_)));

@@ -70,6 +70,8 @@ pub struct OutputInfo {
     pub scale: Scale,
     /// The current mode in device pixels.
     pub mode: Option<(u32, u32)>,
+    /// The current mode's refresh rate in millihertz; `None` when the compositor gives none.
+    pub refresh_mhz: Option<u32>,
     /// The logical position and size; `None` without [`crate::Capability::OutputLayout`] or before the compositor
     /// reported both.
     pub geometry: Option<OutputGeometry>,
@@ -125,6 +127,7 @@ impl OutputBuilder {
             transform: OutputTransform::Normal,
             scale: Scale::ONE,
             mode: None,
+            refresh_mhz: None,
             geometry: None,
         };
         Self {

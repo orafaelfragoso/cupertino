@@ -18,12 +18,12 @@ use cupertino_wm::{OutputId, Presentation, Rect, WindowId, Wm};
 use smithay::backend::renderer::element::Element;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::CommitCounter;
-use smithay::desktop::{layer_map_for_output, PopupManager};
+use smithay::desktop::{layer_map_for_output, LayerSurface, PopupManager};
 use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Point, Scale};
 use smithay::wayland::seat::WaylandFocus;
-use smithay::wayland::shell::wlr_layer::Layer;
+use smithay::wayland::shell::wlr_layer::{Anchor, Layer};
 
 use super::compose::SnapshotKeep;
 use super::compose::{
@@ -1078,6 +1078,18 @@ fn dock_edge(target: Rect, screen: &Rect) -> DockEdge {
     }
 }
 
+/// The layer-shell `top` surfaces of `output` that [`give_way`] do so to a full-screen window in front of it: the dock
+/// and panels are neither drawn nor hit while it covers the output, except in the overview.
+pub fn top_layer_covered(wm: &Wm, shell: &crate::shell::Shell, output: OutputId) -> bool {
+    !shell.overview_open() && wm.fullscreen_front(output).is_some()
+}
+
+/// Whether the `top` surface gives way to a full-screen window: all but a menu bar and a surface over the whole output,
+/// such as the outside-click catcher of the launcher or Control Center, which must still take the click that closes them.
+pub fn gives_way(surface: &LayerSurface, menu_bars: &crate::menu_bar::MenuBars) -> bool {
+    !menu_bars.has_surface(surface.wl_surface()) && surface.cached_state().anchor != Anchor::all()
+}
+
 /// Minimize / restore through the effect mesh: the window is captured at its natural size and
 /// drawn through the warp, funnel or scale mesh towards the dock tile.
 fn minimize_elements(
@@ -1178,9 +1190,13 @@ fn layer_elements(p: &mut SceneParams<'_>, layer: Layer, captures: &mut Vec<Piec
     let map = layer_map_for_output(p.output);
     let scale = Scale::from(p.scale);
     let mut out: Vec<Piece> = Vec::new();
+    let covered = layer == Layer::Top && top_layer_covered(p.wm, p.shell, p.output_id);
     // later surfaces are drawn on top of earlier ones
     for surface in crate::authorization::layers_stacked(&map, layer).rev() {
         if p.for_capture && crate::authorization::is_prompt(surface.wl_surface()) {
+            continue;
+        }
+        if covered && gives_way(surface, p.menu_bars) {
             continue;
         }
         let Some(geo) = map.layer_geometry(surface) else {

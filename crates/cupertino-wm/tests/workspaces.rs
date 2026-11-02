@@ -210,6 +210,30 @@ fn fullscreen_gets_workspace_after_current_and_is_removed_on_exit() {
 }
 
 #[test]
+fn a_full_screen_window_covers_its_output_only_while_it_is_in_front() {
+    let mut h = H::new();
+    let w = h.map("a");
+    let other = h.map("b");
+    h.cmd(Command::Fullscreen {
+        requested_by: Requester::Client,
+        window: w,
+        output: None,
+    });
+    assert_eq!(h.wm.fullscreen_front(OUT), None, "still entering");
+    h.settle();
+    assert_eq!(h.wm.fullscreen_front(OUT), Some(w));
+    h.cmd(Command::FocusWindow { window: other });
+    h.settle();
+    assert_eq!(h.wm.fullscreen_front(OUT), None, "another window in front");
+    h.cmd(Command::FocusWindow { window: w });
+    h.settle();
+    assert_eq!(h.wm.fullscreen_front(OUT), Some(w));
+    h.cmd(Command::ExitFullscreen { window: w });
+    h.settle();
+    assert_eq!(h.wm.fullscreen_front(OUT), None);
+}
+
+#[test]
 fn fullscreen_window_closing_removes_its_workspace_and_returns() {
     let mut h = H::new();
     let a = h.map("a");

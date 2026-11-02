@@ -100,7 +100,12 @@ impl BannerPalette {
             ),
             fill: get(SemanticColor::SystemFill, [0.5, 0.5, 0.5, 0.2]),
             fill_secondary: get(SemanticColor::SecondarySystemFill, [0.5, 0.5, 0.5, 0.16]),
-            rim: get(SemanticColor::WindowRim, [1.0, 1.0, 1.0, 0.35]),
+            // the high-contrast appearances edge every panel with the container border
+            rim: if appearance.is_high_contrast() {
+                get(SemanticColor::ContainerBorder, [0.0, 0.0, 0.0, 0.5])
+            } else {
+                get(SemanticColor::WindowRim, [1.0, 1.0, 1.0, 0.35])
+            },
             accent: sys(SemanticColor::SystemBlue),
             link: get(SemanticColor::Link, [0.0, 0.4, 0.9, 1.0]),
             fallback_background: [window[0], window[1], window[2], 0.92],
@@ -1342,6 +1347,18 @@ mod tests {
             .semantic(Appearance::Dark, SemanticColor::Label)
             .unwrap();
         assert_eq!(p.label, label.to_array());
+        let token = |a, c| theme.tokens.semantic(a, c).unwrap().to_array();
+        for a in [Appearance::LightHighContrast, Appearance::DarkHighContrast] {
+            assert_eq!(
+                BannerPalette::from_theme(&theme, a).rim,
+                token(a, SemanticColor::ContainerBorder),
+                "{a:?}: panels edged with the container border"
+            );
+        }
+        assert_eq!(
+            BannerPalette::from_theme(&theme, Appearance::Dark).rim,
+            token(Appearance::Dark, SemanticColor::WindowRim)
+        );
         let p = BannerPalette::from_theme(&theme, Appearance::Light);
         assert_eq!(
             p.link,

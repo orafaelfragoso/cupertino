@@ -7,9 +7,10 @@
 //!
 //! The keymaps are compiled from the xkeyboard-config data on the machine, and what they contain (the order of the
 //! virtual modifiers, key tables) changes between its releases, in libxkbcommon as in this crate. The recordings are
-//! only comparable with the release they were made with, `tests/fixtures/xkb-data.txt`; any other data fails every
-//! test with a message naming both versions. `XKB_CONFIG_ROOT` points the tests at another copy of the data, which is
-//! how CI gets the recorded release on a distribution that ships another one.
+//! only comparable with the release they were made with, `tests/fixtures/xkb-data.txt`; on any other data the layout
+//! tests are skipped with a message naming both versions, and fail instead when `CUPERTINO_XKB_DATA_REQUIRED=1` (CI and
+//! the gate). `XKB_CONFIG_ROOT` points the tests at another copy of the data, which is how CI gets the recorded release
+//! on a distribution that ships another one.
 
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
@@ -103,15 +104,30 @@ fn overriding_data_dirs() -> Vec<String> {
     dirs
 }
 
-/// Fails unless the data the keymaps are compiled from is the release the recordings were made with.
-fn check_data_version() {
-    let overriding = overriding_data_dirs();
+/// Whether the data the keymaps are compiled from is the release the recordings were made with. On other data the
+/// comparison means nothing: the caller skips with a message, or the test fails when `CUPERTINO_XKB_DATA_REQUIRED=1`.
+fn recorded_data() -> bool {
+    let Some(problem) = data_mismatch() else {
+        return true;
+    };
     assert!(
-        overriding.is_empty(),
-        "{} would override the xkeyboard-config data the recordings were made with: move it away for this test, or \
-         point XDG_CONFIG_HOME, HOME and XKB_CONFIG_EXTRA_PATH at empty directories",
-        overriding.join(", ")
+        std::env::var("CUPERTINO_XKB_DATA_REQUIRED").as_deref() != Ok("1"),
+        "{problem}"
     );
+    eprintln!("SKIPPED: {problem}; set CUPERTINO_XKB_DATA_REQUIRED=1 to fail instead");
+    false
+}
+
+/// Why the data the keymaps are compiled from is not the release the recordings were made with, if it is not.
+fn data_mismatch() -> Option<String> {
+    let overriding = overriding_data_dirs();
+    if !overriding.is_empty() {
+        return Some(format!(
+            "{} would override the xkeyboard-config data the recordings were made with: move it away for this test, \
+             or point XDG_CONFIG_HOME, HOME and XKB_CONFIG_EXTRA_PATH at empty directories",
+            overriding.join(", ")
+        ));
+    }
     let root = std::env::var("XKB_CONFIG_ROOT").unwrap_or_else(|_| DEFAULT_DATA_ROOT.into());
     let found = data_fingerprint(Path::new(&root));
     let mut recorded = None;
@@ -129,19 +145,18 @@ fn check_data_version() {
         }
     }
     let recorded = recorded.expect("xkb-data.txt marks the recorded release");
-    assert_eq!(
-        known,
-        Some(recorded),
-        "the recordings were made with xkeyboard-config {recorded}, but the data in {root} is {} (fingerprint {found}); \
-         install xkeyboard-config {recorded} or point XKB_CONFIG_ROOT at a copy of it",
-        known.map_or("an unlisted release".to_string(), |v| format!(
-            "xkeyboard-config {v}"
-        )),
-    );
+    (known != Some(recorded)).then(|| {
+        format!(
+            "the recordings were made with xkeyboard-config {recorded}, but the data in {root} is {} (fingerprint \
+             {found}); install xkeyboard-config {recorded} or point XKB_CONFIG_ROOT at a copy of it",
+            known.map_or("an unlisted release".to_string(), |v| format!(
+                "xkeyboard-config {v}"
+            )),
+        )
+    })
 }
 
 fn compile(layout: &str, variant: &str) -> xkb::Keymap {
-    check_data_version();
     let context = xkb::Context::new(xkb::CONTEXT_NO_ENVIRONMENT_NAMES);
     xkb::Keymap::new_from_names(
         &context,
@@ -368,6 +383,9 @@ fn assert_same(actual: &str, expected: &str, what: &str) {
 }
 
 fn check_layout(layout: &str, variant: &str, recorded: &str) {
+    if !recorded_data() {
+        return;
+    }
     let skipped: Vec<String> = KNOWN_DIFFERENT_KEYS
         .iter()
         .map(|kc| format!("key {kc} "))

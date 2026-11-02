@@ -185,6 +185,7 @@ jobs:
           # Required backends must fail tests instead of allowing a skip.
           CUPERTINO_EGL_REQUIRED: "1"
           CUPERTINO_DBUS_REQUIRED: "1"
+          CUPERTINO_XKB_DATA_REQUIRED: "1"
         run: cargo nextest run --workspace --all-features --no-fail-fast
       - name: Doctests
         run: cargo test --workspace --all-features --doc

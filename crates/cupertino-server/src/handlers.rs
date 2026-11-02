@@ -770,6 +770,7 @@ impl XdgShellHandler for Cupertino {
                 Default::default()
             },
             fullscreen: false,
+            shrink: Default::default(),
         });
     }
 

@@ -43,7 +43,7 @@ fn an_idle_desktop_has_nothing_due_within_a_second() {
 /// What `Cupertino::tick` calls, each audited for how the loop wakes for it (Shared/cupertino/prism/row236-tick-audit.md):
 /// an event, a frame (`animating`), or a deadline in `next_tick_deadline`. A call added to the tick fails this test until
 /// it is audited the same way and listed here; otherwise its time-driven work would run up to a second late.
-const AUDITED: [&str; 22] = [
+const AUDITED: [&str; 23] = [
     "crate::acquire_waits::sweep(",
     "self.apply_effects(",
     "self.forget_gone_processes(",
@@ -56,6 +56,7 @@ const AUDITED: [&str; 22] = [
     "self.refresh_snapshot(",
     "self.request_redraw(",
     "self.seat.get_keyboard(",
+    "self.send_deferred_configures(",
     "self.tick_display_power(",
     "self.tick_force_quit(",
     "self.tick_hung(",

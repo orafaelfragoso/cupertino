@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use cupertino_render_api::{Completion as _, RenderStatus, Renderer};
 use cupertino_wm::OutputId;
 use smithay::backend::allocator::gbm::GbmDevice;
@@ -55,7 +55,8 @@ pub struct HeadlessDisplay {
 }
 
 fn renderer_from_display(display: &EGLDisplay) -> Result<GlesRenderer> {
-    let context = EGLContext::new(display).map_err(|e| anyhow!("creating the EGL context: {e}"))?;
+    let context = EGLContext::new_with_reset_notification(display, None)
+        .map_err(|e| anyhow!("creating the EGL context: {e}"))?;
     // Safety: the context was created for this display and is only used by this renderer.
     unsafe { super::gles_renderer(context) }.map_err(|e| anyhow!("creating the GLES renderer: {e}"))
 }
@@ -200,6 +201,32 @@ pub fn remove_display(state: &mut Cupertino, head: HeadId) -> Result<()> {
     }
     state.disconnect_head(head);
     Ok(())
+}
+
+/// What the udev backend does after a GPU reset ([`crate::gpu_reset`]), for tests: a new context and renderer on the same
+/// EGL display, new output textures and every GPU object of the scene made again. The old renderer is dropped, so
+/// nothing drawn with it survives.
+pub fn simulate_gpu_reset(state: &mut Cupertino) -> Result<()> {
+    let Some(Backend::Headless(h)) = state.backend.as_mut() else {
+        bail!("not the headless backend");
+    };
+    let display = h.renderer.egl_context().display().clone();
+    h.renderer = renderer_from_display(&display)?;
+    for target in &mut h.targets {
+        let mode = state
+            .displays
+            .head(target.head)
+            .context("the head of an output")?
+            .state
+            .mode;
+        target.texture = target_texture(&mut h.renderer, mode)?;
+    }
+    let Some(Backend::Headless(mut h)) = state.backend.take() else {
+        unreachable!("checked above");
+    };
+    let rebuilt = state.rebuild_render(&mut h.renderer);
+    state.backend = Some(Backend::Headless(h));
+    rebuilt
 }
 
 fn target_texture(renderer: &mut GlesRenderer, mode: HeadMode) -> Result<GlesTexture> {

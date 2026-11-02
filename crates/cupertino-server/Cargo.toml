@@ -219,6 +219,7 @@ assets = [
   { source = "crates/cupertino-geometry/LICENSE", dest = "/usr/share/licenses/cupertino/MPL-2.0", mode = "644" },
   { source = "crates/cupertino-xkbcommon/LICENSE", dest = "/usr/share/licenses/cupertino/MIT", mode = "644" },
   { source = "third-party/xkbcommon-rs/LICENSE", dest = "/usr/share/licenses/cupertino/libxkbcommon", mode = "644" },
+  { source = "third-party/smithay/LICENSE.txt", dest = "/usr/share/licenses/cupertino/smithay", mode = "644" },
   { source = "crates/cupertino-assets/fonts/OFL.txt", dest = "/usr/share/licenses/cupertino/OFL.txt", mode = "644" },
   { source = "packaging/licenses/THIRD-PARTY-LICENSES", dest = "/usr/share/licenses/cupertino/THIRD-PARTY-LICENSES", mode = "644" },
 ]

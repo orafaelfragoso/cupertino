@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use cupertino_alsa::{Master, OpenMode};
-use cupertino_pipewire::{Target, Wpctl};
+use cupertino_pipewire::{Target, VolumeWorker, Wpctl};
 
 use crate::model::{Battery, VolumeState, WifiStatus};
 
@@ -47,7 +47,8 @@ pub trait Brightness: Send {
 /// The output volume.
 pub trait Volume: Send {
     fn read(&mut self) -> Result<VolumeState, BackendError>;
-    /// Set the level and the mute state together; returns what the output has after the change.
+    /// Set the level and the mute state together; returns the state the output takes (a background write may still
+    /// be running).
     fn set(&mut self, level: f64, muted: bool) -> Result<VolumeState, BackendError>;
 }
 
@@ -344,39 +345,48 @@ impl Volume for AlsaVolume {
 
 /// The default PipeWire sink through `wpctl`, so the slider shows the level `wpctl get-volume` reports. A read that
 /// no PipeWire daemon answers goes to the ALSA master instead, and so do the changes after it until the next read.
-#[derive(Debug)]
+/// The sink is read and written in the background ([`VolumeWorker`]): a drag or the panel's periodic reading never
+/// waits for `wpctl`. A read gives the last reading done (asking for the next one), or the level asked since; only the
+/// first, before any reading is done, waits for `wpctl`.
 pub struct SessionVolume {
     wpctl: Wpctl,
+    worker: VolumeWorker,
     alsa: AlsaVolume,
     pipewire: bool,
 }
 
 impl SessionVolume {
     pub fn new(wpctl: Wpctl, alsa: AlsaVolume) -> Self {
+        let worker = VolumeWorker::new(wpctl.clone(), Target::DefaultSink);
+        worker.request_read(false);
         Self {
             wpctl,
+            worker,
             alsa,
             pipewire: true,
         }
     }
 
-    fn sink(&self) -> Result<VolumeState, BackendError> {
-        let sink = self.wpctl.volume(Target::DefaultSink)?;
-        Ok(VolumeState {
-            level: sink.level,
-            muted: sink.muted,
-        })
+    fn sink(&self) -> Option<cupertino_pipewire::Volume> {
+        self.worker.request_read(false);
+        match self.worker.latest() {
+            Some(reading) => reading.volume.ok(),
+            None => self.wpctl.volume(Target::DefaultSink).ok(),
+        }
     }
 }
 
 impl Volume for SessionVolume {
     fn read(&mut self) -> Result<VolumeState, BackendError> {
         match self.sink() {
-            Ok(sink) => {
+            Some(sink) => {
                 self.pipewire = true;
-                Ok(sink)
+                Ok(VolumeState {
+                    level: sink.level,
+                    muted: sink.muted,
+                })
             }
-            Err(_) => {
+            None => {
                 self.pipewire = false;
                 self.alsa.read()
             }
@@ -387,9 +397,10 @@ impl Volume for SessionVolume {
         if !self.pipewire {
             return self.alsa.set(level, muted);
         }
-        self.wpctl.set_level(Target::DefaultSink, level)?;
-        self.wpctl.set_muted(Target::DefaultSink, muted)?;
-        self.sink()
+        let level = level.clamp(0.0, 1.0);
+        self.worker
+            .set(cupertino_pipewire::Volume { level, muted })?;
+        Ok(VolumeState { level, muted })
     }
 }
 
@@ -423,6 +434,12 @@ mod tests {
         };
         assert_eq!(volume.set(0.3, true).unwrap(), after);
         assert_eq!(
+            volume.read().unwrap(),
+            after,
+            "a read follows the last change"
+        );
+        volume.worker.wait_idle();
+        assert_eq!(
             fake.volume(Target::DefaultSink),
             cupertino_pipewire::Volume {
                 level: 0.3,
@@ -432,11 +449,15 @@ mod tests {
         assert_eq!(fake.volume(Target::DefaultSource), half);
 
         fake.set_running(false);
+        volume.read().unwrap();
+        volume.worker.wait_idle();
         assert!(
             volume.read().is_err(),
-            "no ALSA card below the scratch directory"
+            "the reading asked for failed, and there is no ALSA card below the scratch directory"
         );
         fake.set_running(true);
+        volume.read().ok();
+        volume.worker.wait_idle();
         assert_eq!(volume.read().unwrap(), after);
     }
 

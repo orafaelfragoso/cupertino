@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use cupertino_pipewire::{Target, Wpctl};
+use cupertino_pipewire::{Target, VolumeWorker, Wpctl};
 use zbus::blocking::proxy::Builder;
 use zbus::blocking::{Connection, Proxy};
 use zbus::proxy::CacheProperties;
@@ -319,6 +319,9 @@ pub struct Services {
     mixer: Option<cupertino_alsa::Master>,
     alsa_dir: PathBuf,
     wpctl: Wpctl,
+    /// The sink's readings and the slider's writes, in the background so neither a drag nor the pane's refresh waits
+    /// for `wpctl`.
+    worker: VolumeWorker,
     pipewire: bool,
     backends: Backends,
     /// The BlueZ devices whose `Pair` has not returned (the Cupertino daemon reports its own).
@@ -335,6 +338,7 @@ impl Services {
             mixer: None,
             alsa_dir: PathBuf::from(cupertino_alsa::DEVICE_DIR),
             wpctl: Wpctl::default(),
+            worker: sound_worker(&Wpctl::default()),
             pipewire: true,
             backends: Backends::default(),
             pairing: Arc::default(),
@@ -350,6 +354,7 @@ impl Services {
             mixer: None,
             alsa_dir: PathBuf::from(cupertino_alsa::DEVICE_DIR),
             wpctl: Wpctl::default(),
+            worker: sound_worker(&Wpctl::default()),
             pipewire: true,
             backends: Backends::default(),
             pairing: Arc::default(),
@@ -368,10 +373,16 @@ impl Services {
     /// Read and change the sound output through `wpctl`, else the mixer below `alsa_dir` (tests).
     pub fn with_sound(self, wpctl: Wpctl, alsa_dir: PathBuf) -> Self {
         Services {
+            worker: sound_worker(&wpctl),
             wpctl,
             alsa_dir,
             ..self
         }
+    }
+
+    /// Wait until the sound changes asked are written and the readings asked for are done (tests).
+    pub fn wait_sound(&self) {
+        self.worker.wait_idle();
     }
 
     // ---- reading ---------------------------------------------------------------------------------------------------
@@ -666,8 +677,17 @@ impl Services {
 
     /// The default PipeWire sink; when no PipeWire daemon answers, the mixer's master, which the changes after this
     /// reading then go to as well.
+    /// After the first, a reading is the worker's last, and the next is asked for in the background.
     pub fn volume(&mut self) -> Reading<Volume> {
-        if let Ok(sink) = self.wpctl.volume(Target::DefaultSink) {
+        self.worker.request_read(true);
+        let sink = match self.worker.latest() {
+            Some(read) => read.volume,
+            None => self
+                .wpctl
+                .volume(Target::DefaultSink)
+                .map_err(|e| e.to_string()),
+        };
+        if let Ok(sink) = sink {
             self.pipewire = true;
             return Reading::Ready(Volume {
                 level: sink.level,
@@ -691,11 +711,16 @@ impl Services {
     }
 
     /// The PipeWire sinks, in `wpctl status` order; none when the volume is not on PipeWire or `wpctl` does not answer.
+    /// After the first reading, the sinks of the worker's last one; none until the worker has listed them.
     pub fn outputs(&mut self) -> Vec<Output> {
         if !self.pipewire {
             return Vec::new();
         }
-        match self.wpctl.sinks() {
+        let sinks = match self.worker.latest() {
+            Some(read) => read.sinks.unwrap_or_else(|| Ok(Vec::new())),
+            None => self.wpctl.sinks().map_err(|e| e.to_string()),
+        };
+        match sinks {
             Ok(sinks) => sinks
                 .into_iter()
                 .map(|s| Output {
@@ -757,9 +782,11 @@ impl Services {
                 self.session.checked(result).map_err(|e| failure(&e))
             }
             Call::SetVolume { level, muted } if self.pipewire => self
-                .wpctl
-                .set_level(Target::DefaultSink, *level)
-                .and_then(|()| self.wpctl.set_muted(Target::DefaultSink, *muted))
+                .worker
+                .set(cupertino_pipewire::Volume {
+                    level: *level,
+                    muted: *muted,
+                })
                 .map_err(|e| {
                     log_once(&format!("the volume could not be changed: {e}"));
                     "The volume could not be changed.".to_string()
@@ -776,10 +803,14 @@ impl Services {
                     log_once(&format!("the volume could not be changed: {e}"));
                     "The volume could not be changed.".to_string()
                 }),
-            Call::SetOutput(id) => self.wpctl.set_default_sink(*id).map_err(|e| {
-                log_once(&format!("the sound output could not be changed: {e}"));
-                "The sound output could not be changed.".to_string()
-            }),
+            Call::SetOutput(id) => {
+                let changed = self.wpctl.set_default_sink(*id);
+                self.worker.request_read(true);
+                changed.map_err(|e| {
+                    log_once(&format!("the sound output could not be changed: {e}"));
+                    "The sound output could not be changed.".to_string()
+                })
+            }
             Call::SetBrightness(level) => system(self, POWER_NAME, POWER_PATH, POWER_NAME, &|p| {
                 let max: u32 = p.call("GetMaxBrightness", &())?;
                 let raw = ((level.clamp(0.0, 1.0) * f64::from(max)).round() as u32).clamp(BRIGHTNESS_FLOOR.min(max), max);
@@ -1041,4 +1072,11 @@ fn bt_device(d: &HashMap<String, OwnedValue>) -> Option<BtDevice> {
         connected: flag("Connected")?,
         pairing: flag("Pairing")?,
     })
+}
+
+/// The default sink's worker, its first reading (with the sinks) already asked for.
+fn sound_worker(wpctl: &Wpctl) -> VolumeWorker {
+    let worker = VolumeWorker::new(wpctl.clone(), Target::DefaultSink);
+    worker.request_read(true);
+    worker
 }

@@ -11,6 +11,9 @@ use std::time::{Duration, Instant};
 
 #[cfg(any(test, feature = "fake"))]
 pub mod fake;
+mod worker;
+
+pub use worker::{Reading, VolumeWorker};
 
 /// The program run when no other is given.
 pub const WPCTL: &str = "wpctl";

@@ -100,7 +100,12 @@ impl BannerPalette {
             ),
             fill: get(SemanticColor::SystemFill, [0.5, 0.5, 0.5, 0.2]),
             fill_secondary: get(SemanticColor::SecondarySystemFill, [0.5, 0.5, 0.5, 0.16]),
-            rim: get(SemanticColor::WindowRim, [1.0, 1.0, 1.0, 0.35]),
+            // the high-contrast appearances edge every panel with the container border
+            rim: if appearance.is_high_contrast() {
+                get(SemanticColor::ContainerBorder, [0.0, 0.0, 0.0, 0.5])
+            } else {
+                get(SemanticColor::WindowRim, [1.0, 1.0, 1.0, 0.35])
+            },
             accent: sys(SemanticColor::SystemBlue),
             link: get(SemanticColor::Link, [0.0, 0.4, 0.9, 1.0]),
             fallback_background: [window[0], window[1], window[2], 0.92],
@@ -420,6 +425,43 @@ fn paint(c: Rgba) -> Paint<'static> {
     };
     p.set_color(skia_color(c, 1.0));
     p
+}
+
+/// The platter outline inside `rect` (device pixels): the cards, the centre header and the Clear menu share it, so
+/// each panel keeps an edge against a like panel below it.
+fn stroke_rim(
+    pm: &mut Pixmap,
+    rect: Rect,
+    radius_px: f64,
+    corner_style: CornerStyle,
+    style: &BannerStyle,
+    scale: f32,
+) {
+    if style.rim_width <= 0.0 {
+        return;
+    }
+    let half = 0.5;
+    let inner = Rect::new(
+        rect.x() + half,
+        rect.y() + half,
+        rect.width() - 2.0 * half,
+        rect.height() - 2.0 * half,
+    );
+    let Some(path) = rounded_path(inner, Radii::uniform(radius_px - half), corner_style, 1.0)
+    else {
+        return;
+    };
+    let stroke = Stroke {
+        width: (style.rim_width as f32 * scale.max(1.0)).max(1.0),
+        ..Stroke::default()
+    };
+    pm.stroke_path(
+        &path,
+        &paint(style.palette.rim),
+        &stroke,
+        Transform::identity(),
+        None,
+    );
 }
 
 fn fill_rounded(
@@ -752,7 +794,8 @@ impl BannerRenderer {
             .fold(0.0, f64::max)
     }
 
-    /// Header row of the open list at `scale`: the title (bold 22) at the left edge and the
+    /// Header row of the open list at `scale`, on its material panel with the card rim: the title (bold 22) at the
+    /// card padding from the left edge and the
     /// Clear button at the right edge. The pixmap covers `header.row`.
     pub fn render_header(
         &mut self,
@@ -769,10 +812,19 @@ impl BannerRenderer {
         .expect("non-empty header");
         let label = self.style.palette.label;
         let baseline = self.centred_baseline(CENTRE_TITLE_SIZE, row.height());
+        let edge = Rect::new(0.0, 0.0, f64::from(pm.width()), f64::from(pm.height()));
+        stroke_rim(
+            &mut pm,
+            edge,
+            self.style.corner_radius * sc,
+            self.style.corner_style,
+            &self.style,
+            scale,
+        );
         self.draw_text(
             &mut pm,
             CENTRE_TITLE,
-            0.0,
+            self.style.padding,
             baseline,
             CENTRE_TITLE_SIZE,
             CENTRE_TITLE_WEIGHT,
@@ -838,6 +890,15 @@ impl BannerRenderer {
             CornerStyle::continuous(),
             self.style.palette.fallback_background,
             sc,
+        );
+        let edge = Rect::new(0.0, 0.0, f64::from(pm.width()), f64::from(pm.height()));
+        stroke_rim(
+            &mut pm,
+            edge,
+            MENU_RADIUS * sc,
+            CornerStyle::continuous(),
+            &self.style,
+            scale,
         );
         for (i, (row, text)) in menu.rows.iter().zip(labels).enumerate() {
             let local = Rect::new(
@@ -1128,30 +1189,14 @@ impl BannerRenderer {
                 scale,
             );
         }
-        if s.rim_width > 0.0 {
-            let half = 0.5;
-            let rect = Rect::new(
-                origin.0 as f64 + half,
-                origin.1 as f64 + half,
-                bw as f64 - 2.0 * half,
-                bh as f64 - 2.0 * half,
-            );
-            if let Some(path) =
-                rounded_path(rect, Radii::uniform(radius_px - half), s.corner_style, 1.0)
-            {
-                let stroke = Stroke {
-                    width: (s.rim_width as f32 * scale.max(1.0)).max(1.0),
-                    ..Stroke::default()
-                };
-                pm.stroke_path(
-                    &path,
-                    &paint(s.palette.rim),
-                    &stroke,
-                    Transform::identity(),
-                    None,
-                );
-            }
-        }
+        stroke_rim(
+            &mut pm,
+            Rect::new(origin.0 as f64, origin.1 as f64, bw as f64, bh as f64),
+            radius_px,
+            s.corner_style,
+            &s,
+            scale,
+        );
         if opts.hovered {
             let c = layout.close.translate(ox, oy);
             fill_rounded(
@@ -1217,16 +1262,17 @@ mod tests {
         Notification::from_input(1, NotifyInput::new("Mail", summary, body), 0.0)
     }
 
-    fn ink_columns(pm: &Pixmap, x0: u32, x1: u32) -> usize {
+    fn ink_columns_in(pm: &Pixmap, x0: u32, x1: u32, rows: std::ops::Range<u32>) -> usize {
         (x0..x1)
             .filter(|&x| {
-                (0..pm.height()).any(|y| pm.pixels()[(y * pm.width() + x) as usize].alpha() > 0)
+                rows.clone()
+                    .any(|y| pm.pixels()[(y * pm.width() + x) as usize].alpha() > 0)
             })
             .count()
     }
 
     #[test]
-    fn header_draws_the_title_at_the_left_and_the_clear_button_at_the_right() {
+    fn header_insets_the_title_by_the_card_padding_and_the_clear_button_by_6_pt() {
         let mut r = renderer();
         let w = r.clear_button_width();
         let header = crate::surface::centre_header(
@@ -1236,13 +1282,36 @@ mod tests {
         );
         let pm = r.render_header(&header, false, 2.0);
         assert_eq!((pm.width(), pm.height()), (688, 72));
-        // title ink in the left, nothing between the title and the button, button fill at the right edge
-        assert!(ink_columns(&pm, 0, 300) > 100, "title");
-        assert_eq!(ink_columns(&pm, 480, 688 - (w * 2.0) as u32 - 2), 0, "gap");
+        // at 2x, between the 32 px corners, where the rim is only the panel's left and right edges
+        let (rows, button) = (32..40, (w * 2.0) as u32);
+        let ink = |x0: u32, x1: u32| ink_columns_in(&pm, x0, x1, rows.clone());
+        assert_eq!(ink(2, 24), 0, "12 pt free left of the title");
+        assert!(ink(24, 300) > 100, "title");
+        assert_eq!(ink(480, 676 - button - 2), 0, "gap");
         assert!(
-            ink_columns(&pm, 688 - (w * 2.0) as u32, 688) as f64 > w * 2.0 * 0.9,
+            ink(676 - button, 676) as f64 > f64::from(button) * 0.9,
             "button"
         );
+        assert_eq!(ink(678, 686), 0, "6 pt free right of the button");
+        assert!(
+            ink(0, 2) > 0 && ink(686, 688) > 0,
+            "the rim edges the panel"
+        );
+    }
+
+    #[test]
+    fn the_clear_menu_has_the_card_rim() {
+        let mut r = renderer();
+        let header = crate::surface::centre_header(
+            &crate::center::StackLayout::default(),
+            Size::new(376.0, 800.0),
+            60.0,
+        );
+        let menu = crate::surface::clear_menu(header.clear, 1, 120.0);
+        let pm = r.render_clear_menu(&menu, &["All Notifications"], None, 1.0);
+        let (mid, w) = (pm.height() / 2, pm.width());
+        let at = |x: u32| pm.pixels()[(mid * w + x) as usize];
+        assert_ne!(at(0), at(3), "the edge differs from the panel inside it");
     }
 
     #[test]
@@ -1278,6 +1347,18 @@ mod tests {
             .semantic(Appearance::Dark, SemanticColor::Label)
             .unwrap();
         assert_eq!(p.label, label.to_array());
+        let token = |a, c| theme.tokens.semantic(a, c).unwrap().to_array();
+        for a in [Appearance::LightHighContrast, Appearance::DarkHighContrast] {
+            assert_eq!(
+                BannerPalette::from_theme(&theme, a).rim,
+                token(a, SemanticColor::ContainerBorder),
+                "{a:?}: panels edged with the container border"
+            );
+        }
+        assert_eq!(
+            BannerPalette::from_theme(&theme, Appearance::Dark).rim,
+            token(Appearance::Dark, SemanticColor::WindowRim)
+        );
         let p = BannerPalette::from_theme(&theme, Appearance::Light);
         assert_eq!(
             p.link,

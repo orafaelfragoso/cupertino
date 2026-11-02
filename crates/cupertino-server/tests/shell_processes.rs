@@ -699,6 +699,45 @@ fn the_real_shell_processes_work_with_the_server() {
     );
 }
 
+/// The open centre's header row sits on the material even with no notification, so its title and Clear button read
+/// on any wallpaper in either appearance.
+#[test]
+fn the_open_notification_centre_puts_its_header_on_the_material() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let Some(mut server) = Server::start(vec![real_process("cupertino-notifications", &bus)], true)
+    else {
+        return;
+    };
+    let answer = ask_notification_server(&bus);
+    server.wait_until("the notification server to answer", |_| {
+        answer.try_recv().is_ok()
+    });
+    let conn = zbus::block_on(
+        zbus::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .build(),
+    )
+    .unwrap();
+    zbus::block_on(conn.call_method(
+        Some("org.cupertino.NotificationCenter1"),
+        "/org/cupertino/NotificationCenter1",
+        Some("org.cupertino.NotificationCenter1"),
+        "ToggleCentre",
+        &(),
+    ))
+    .unwrap();
+
+    let output = server.state.outputs.first().unwrap().output.clone();
+    server.wait_until("the centre to put a backdrop behind its header", |_| {
+        cupertino_server::app_effects_v1::layer_backdrops(&output)
+            .iter()
+            .any(|b| b.material == "Menu" && b.area.size.h == 36.0)
+    });
+}
+
 /// The centre puts a backdrop on every visible card and one on the Clear menu, all on one surface: a long history must
 /// not end the process's connection.
 #[test]

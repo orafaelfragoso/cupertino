@@ -59,6 +59,7 @@ use crate::gpu_reset::Loss;
 use crate::render::gles::{Gles, GlesCompletion, GlesResources, GlesTarget, RenderError};
 use crate::render::scene::RenderResources;
 use crate::schedule::{Overdue, PresentationId};
+use crate::software_render;
 use crate::state::Cupertino;
 
 const CLEAR: Color32F = Color32F::new(0.05, 0.05, 0.07, 1.0);
@@ -332,6 +333,17 @@ fn open_card(session: &LogindSession, path: &Path) -> Result<Opened> {
     })
 }
 
+/// The GPUs other than `gpu` that can render, in their order.
+fn others(
+    gpus: &[cupertino_devices::Gpu],
+    gpu: &cupertino_devices::Gpu,
+) -> Vec<cupertino_devices::Gpu> {
+    gpus.iter()
+        .filter(|g| g.device != gpu.device && g.render_node.is_some())
+        .cloned()
+        .collect()
+}
+
 /// The connector-name prefix of `gpu`'s displays: none on the primary card, its name on another one.
 fn card_prefix(gpu: &cupertino_devices::Gpu, primary: &cupertino_devices::Gpu) -> String {
     if gpu.device == primary.device {
@@ -579,9 +591,27 @@ pub fn run(
         .map(|w| std::fs::canonicalize(&w).unwrap_or(w));
     let (gpu, choice) = cupertino_devices::select_render(gpus.clone(), wanted.as_deref())
         .context("no GPU found")?;
-    if let cupertino_devices::RenderChoice::Unmatched(wanted) = choice {
-        tracing::warn!(wanted = %wanted.display(), "CUPERTINO_DRM_DEVICE names no GPU; the primary one renders");
-    }
+    // a card named by CUPERTINO_DRM_DEVICE renders even in software; another one with a hardware renderer is
+    // preferred to the primary one's software renderer
+    let rest = match choice {
+        cupertino_devices::RenderChoice::Named => Vec::new(),
+        cupertino_devices::RenderChoice::Primary => others(&gpus, &gpu),
+        cupertino_devices::RenderChoice::Unmatched(wanted) => {
+            tracing::warn!(wanted = %wanted.display(), "CUPERTINO_DRM_DEVICE names no GPU; the primary one renders");
+            others(&gpus, &gpu)
+        }
+    };
+    let (gpu, opened) = software_render::choose(
+        gpu,
+        rest,
+        |gpu| {
+            open_card(
+                &session,
+                gpu.device.devnode().context("the GPU has no device file")?,
+            )
+        },
+        |opened| opened.software,
+    )?;
     let gpu_path = gpu
         .device
         .devnode()
@@ -592,16 +622,12 @@ pub fn run(
         .devnum()
         .context("the GPU has no device number")?;
     tracing::info!(path = %gpu_path.display(), seat = %seat, "rendering on this GPU");
+    if opened.software {
+        software_render::record(&gpu_path.display().to_string());
+    }
 
     let node = DrmNode::from_path(&gpu_path)
         .map_err(|e| anyhow!("drm node for {}: {e}", gpu_path.display()))?;
-    let opened = open_card(&session, &gpu_path)?;
-    if opened.software {
-        return Err(anyhow!(
-            "only a software renderer is available on {}",
-            gpu_path.display()
-        ));
-    }
     let mut renderer = opened.renderer;
     state.render = Some(RenderResources::new(&mut renderer)?);
     super::init_buffers(state, &renderer);

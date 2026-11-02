@@ -916,7 +916,9 @@ mod tests {
         let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
         for pane in crate::sidebar::rows(&[]) {
             let dir = tempfile::tempdir().unwrap();
-            let (driver, window) = start(dir.path(), pane);
+            let (mut driver, window) = start(dir.path(), pane);
+            let name = format!("settings-{pane:?}").to_lowercase();
+            driver.look(window, &name).unwrap();
             let snapshot = driver.runtime().snapshot(window).unwrap();
             let tree = AccessibilityUpdate {
                 window,

@@ -30,6 +30,10 @@ layer change:
 cargo run -q -p cupertino-layers -- --graph > crates/cupertino-layers/graph/layers.dot
 ```
 
+The test leaves out the two count lines (`// N crates, M internal dependencies` and `// per layer: ...`). A branch
+keeps main's count lines as they are, and the merge queue regenerates the snapshot after each merge, so two branches
+that each add a crate do not conflict on them.
+
 ## Design
 
 All rules are constants in `src/lib.rs`; nothing is read from a configuration file.

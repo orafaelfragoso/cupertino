@@ -408,11 +408,8 @@ impl Drop for TestClient {
     }
 }
 
-/// A press in one client's window starts a drag of text; moving onto another client's window and releasing there
-/// drops it: the target was offered the text, read it whole, and the source saw the copy performed and finished.
-#[test]
-fn text_dragged_from_one_client_drops_into_another() {
-    let Some(mut h) = Harness::new() else { return };
+/// A drag of text from the source's window held over the target's window, which chose to copy it.
+fn drag_held_over_the_target(h: &mut Harness) -> (TestClient, TestClient) {
     // the wide source and the tall target cross, so each has an end the other cannot cover, whichever is on top
     let target = TestClient::spawn(h.socket_path(), Role::Target, TARGET_SIZE);
     h.wait_until("the target window", |s| {
@@ -452,6 +449,15 @@ fn text_dragged_from_one_client_drops_into_another() {
             .iter()
             .any(|e| e == "action DndAction(Copy)")
     });
+    (source, target)
+}
+
+/// A press in one client's window starts a drag of text; moving onto another client's window and releasing there
+/// drops it: the target was offered the text, read it whole, and the source saw the copy performed and finished.
+#[test]
+fn text_dragged_from_one_client_drops_into_another() {
+    let Some(mut h) = Harness::new() else { return };
+    let (source, target) = drag_held_over_the_target(&mut h);
     h.state.pointer_button(BTN_LEFT, ButtonState::Released, 0);
     h.wait_until("the drop to finish", |_| {
         source.log().source.last().map(String::as_str) == Some("finished")
@@ -468,4 +474,18 @@ fn text_dragged_from_one_client_drops_into_another() {
             "finished".to_string(),
         ]
     );
+}
+
+/// The session locks while a drag is held over another client's window: the lock ends the drag, and the target, which
+/// had accepted the text, is not given it.
+#[test]
+fn a_drag_held_when_the_session_locks_gives_the_target_nothing() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_source, target) = drag_held_over_the_target(&mut h);
+    let locker = common::Client::locker(common::session_agent(&h.state));
+    h.wait_until("the lock", |_| locker.locked());
+    h.wait_until("the target to read the drop", |_| {
+        target.log().dropped.is_some()
+    });
+    assert_eq!(target.log().dropped.as_deref(), Some(&b""[..]));
 }

@@ -7,7 +7,7 @@ The ISO and the installer have not been booted on real hardware yet. The command
 You need:
 
 - a UEFI machine (the image has no BIOS boot mode),
-- a USB stick larger than the ISO (the size of the first image is not measured yet),
+- a USB stick larger than the ISO (the first image is 2,244,831,232 bytes, 2.1 GiB),
 - a network connection during the install, because the installer downloads the Arch packages.
 
 ## Build or download the image

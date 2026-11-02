@@ -236,6 +236,11 @@ pub struct WindowEntry {
 }
 
 impl WindowEntry {
+    /// The style of the title bar revealed over a full-screen window: standard, with a background of its own: a
+    /// unified bar is drawn over the client's toolbar, which stays at the top of the output under the menu bar.
+    pub const REVEALED_TITLEBAR: cupertino_decorations::TitlebarStyle =
+        cupertino_decorations::TitlebarStyle::Standard;
+
     /// The space the decorations take now: none while the window is full screen.
     pub fn insets(&self) -> crate::config::Insets {
         if self.fullscreen {
@@ -271,7 +276,7 @@ impl WindowEntry {
             .decorations()
             .config
             .metrics
-            .titlebar_height(self.titlebar);
+            .titlebar_height(Self::REVEALED_TITLEBAR);
         bars.set.fullscreen_titlebar(output, height, now)
     }
 
@@ -1526,6 +1531,7 @@ impl Cupertino {
             {
                 let content = (strip.w, strip.h);
                 let local = (pos.x - strip.x, pos.y - strip.y);
+                let style = WindowEntry::REVEALED_TITLEBAR;
                 let hit = match self.decor.hit_test(style, content, local, false) {
                     hit @ cupertino_decorations::Hit::Button(_) => hit,
                     _ => cupertino_decorations::Hit::None,

@@ -347,7 +347,7 @@ impl Cupertino {
         self.keep_release_chord_typeable();
         let (kb, level3) = (
             self.config.keyboard.layout_keyboard,
-            self.config.keyboard.layout_level3,
+            self.config.keyboard.decoded_level3(),
         );
         for spec in self.config.keyboard.sources.clone() {
             let Some(path) = spec.decoded.as_ref() else {

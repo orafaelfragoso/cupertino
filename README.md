@@ -44,7 +44,7 @@ Known problems and how to report them: [Trying Cupertino](docs/src/trying.md).
 | `Super+Space` | launcher |
 | `Super+Tab`, `Super+Shift+Tab` | application switcher (release `Super` to pick) |
 | `Super+Return` | terminal |
-| `Ctrl+Up` | overview |
+| `Ctrl+Up`, `F3`, the overview key | overview (the same key closes it) |
 | `Ctrl+Left`, `Ctrl+Right`, `Ctrl+1` to `Ctrl+9` | workspaces |
 | `Super+Q`, `Super+W`, `Super+M`, `Super+H` | quit application, close window, minimize, hide application |
 | `Super+Ctrl+F`, `Super+Ctrl+Left`, `Super+Ctrl+Right` | full screen, tile left, tile right |

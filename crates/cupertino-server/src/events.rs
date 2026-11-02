@@ -92,6 +92,8 @@ pub struct PointerDevice {
     scroll_count: cupertino_input::ScrollCounter,
     /// A finger scroll gesture is under way: its next event is a `Changed`, not a `Began`.
     scrolling: bool,
+    /// The device has moved, scrolled or clicked: a keyboard's or a receiver's unused pointer interface never does.
+    used: bool,
 }
 
 impl PointerDevice {
@@ -140,12 +142,18 @@ impl PointerDevice {
             scroll,
             scroll_count: cupertino_input::ScrollCounter::default(),
             scrolling: false,
+            used: false,
         }
     }
 
-    /// The `Mice` entry of this device, for a mouse that has a key.
+    /// Note that the device moved, scrolled or clicked; true the first time.
+    pub fn note_use(&mut self) -> bool {
+        !std::mem::replace(&mut self.used, true)
+    }
+
+    /// The `Mice` entry of this device, for a used mouse that has a key.
     pub fn mouse_entry(&self, cfg: &PointerSettings) -> Option<crate::quit::MouseEntry> {
-        if self.touchpad {
+        if self.touchpad || !self.used {
             return None;
         }
         let key = self.identity.key.clone()?;
@@ -161,7 +169,10 @@ impl PointerDevice {
 
     /// Take new tracking settings: the device starts over as [`PointerDevice::new`] made it.
     pub fn reconfigure(&mut self, cfg: &PointerSettings) {
-        *self = Self::with_identity(self.touchpad, cfg, self.identity.clone());
+        *self = Self {
+            used: self.used,
+            ..Self::with_identity(self.touchpad, cfg, self.identity.clone())
+        };
     }
 
     /// Accelerated delta for unaccelerated `delta` at `usec`.
@@ -313,9 +324,6 @@ impl Cupertino {
                     device.id(),
                     PointerDevice::with_identity(touchpad, &self.config.pointer, identity),
                 );
-                if !touchpad {
-                    self.publish_session_settings();
-                }
             }
             InputEvent::DeviceRemoved { device } => {
                 if self.pointer_devices.remove(&device.id()).is_some() {
@@ -764,7 +772,19 @@ impl Cupertino {
         })
     }
 
+    /// A mouse is listed in `Mice` from its first motion, scroll or click on.
+    fn pointer_device_used(&mut self, id: &str) {
+        if self
+            .pointer_devices
+            .get_mut(id)
+            .is_some_and(|device| !device.touchpad && device.note_use())
+        {
+            self.publish_session_settings();
+        }
+    }
+
     fn on_pointer_motion<B: InputBackend>(&mut self, evt: B::PointerMotionEvent) {
+        self.pointer_device_used(&evt.device().id());
         // Devices announced by the backend get the design curves; others keep the backend's delta.
         let delta = match self.pointer_devices.get_mut(&evt.device().id()) {
             Some(dev) => dev.accelerate(evt.delta_unaccel(), evt.time()),
@@ -921,6 +941,7 @@ impl Cupertino {
     }
 
     fn on_pointer_button<B: InputBackend>(&mut self, evt: B::PointerButtonEvent) {
+        self.pointer_device_used(&evt.device().id());
         self.pointer_button(evt.button_code(), evt.state(), evt.time_msec());
     }
 
@@ -1219,6 +1240,7 @@ impl Cupertino {
     }
 
     fn on_pointer_axis<B: InputBackend>(&mut self, evt: B::PointerAxisEvent) {
+        self.pointer_device_used(&evt.device().id());
         let both =
             |read: &dyn Fn(Axis) -> Option<f64>| [read(Axis::Horizontal), read(Axis::Vertical)];
         let input = AxisInput {
@@ -1544,6 +1566,33 @@ impl Cupertino {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pointer_device_is_listed_as_a_mouse_from_its_first_use_on() {
+        let cfg = PointerSettings::default();
+        let mut device = PointerDevice::with_identity(
+            false,
+            &cfg,
+            MouseIdentity {
+                key: Some("1a2c:0001:Keyboard".into()),
+                name: "Keyboard".into(),
+                hwdb_dpi: None,
+            },
+        );
+        assert_eq!(device.mouse_entry(&cfg), None);
+        assert!(device.note_use());
+        assert!(!device.note_use());
+        device.reconfigure(&cfg);
+        assert_eq!(
+            device.mouse_entry(&cfg),
+            Some(crate::quit::MouseEntry {
+                key: "1a2c:0001:Keyboard".into(),
+                name: "Keyboard".into(),
+                dpi: 1000,
+                stored: false,
+            })
+        );
+    }
 
     #[test]
     fn pointer_devices_follow_the_settings() {

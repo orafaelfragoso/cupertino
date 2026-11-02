@@ -30,6 +30,11 @@ fn mouse(key: &str, name: &str, hwdb_dpi: Option<&str>, cfg: &Config) -> Pointer
     )
 }
 
+fn used(mut device: PointerDevice) -> PointerDevice {
+    device.note_use();
+    device
+}
+
 #[test]
 fn the_mice_property_lists_the_mice_with_their_resolution_and_follows_the_config() {
     let Some(bus) = PrivateBus::start() else {
@@ -66,14 +71,24 @@ fn the_mice_property_lists_the_mice_with_their_resolution_and_follows_the_config
             data_control: None,
         },
     );
-    // two mice, one with a stored resolution, and a touchpad that is not listed
+    // two mice, one with a stored resolution; a keyboard's pointer interface that never moved and a touchpad are not
+    // listed
     state.pointer_devices.insert(
         "event3".into(),
-        mouse("046d:c077:Mouse A", "Mouse A", Some("400 *800"), &config),
+        used(mouse(
+            "046d:c077:Mouse A",
+            "Mouse A",
+            Some("400 *800"),
+            &config,
+        )),
     );
     state.pointer_devices.insert(
         "event4".into(),
-        mouse("1234:5678:Mouse B", "Mouse B", None, &config),
+        used(mouse("1234:5678:Mouse B", "Mouse B", None, &config)),
+    );
+    state.pointer_devices.insert(
+        "event7".into(),
+        mouse("1a2c:0001:Keyboard", "Keyboard", None, &config),
     );
     state.pointer_devices.insert(
         "event5".into(),

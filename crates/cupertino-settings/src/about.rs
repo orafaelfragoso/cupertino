@@ -151,18 +151,7 @@ pub fn display_value(display: &Display<'_>) -> Option<String> {
     if w == 0 || h == 0 {
         return None;
     }
-    let identification: Vec<String> = [display.make, display.model]
-        .into_iter()
-        .filter_map(present)
-        .map(|s| capped(s, MAX_IDENTIFICATION_CHARS))
-        .collect();
-    let title = if identification.is_empty() {
-        present(display.description)
-            .or(present(display.name))?
-            .to_owned()
-    } else {
-        identification.join(" ")
-    };
+    let title = display_title(display)?;
     let size = display
         .physical_size_mm
         .map(|(w, h)| f64::from(w).hypot(f64::from(h)) / MM_PER_INCH)
@@ -170,12 +159,50 @@ pub fn display_value(display: &Display<'_>) -> Option<String> {
         .filter(|inches| PLAUSIBLE_DIAGONAL.contains(inches))
         .map(|inches| format!(" {}-inch", decimals(inches, 1)))
         .unwrap_or_default();
-    let scale = (display.scale * SCALE_STEPS).round() / SCALE_STEPS;
     let nb = NARROW_NO_BREAK_SPACE;
     Some(format!(
-        "{title}{size} {w}{nb}×{nb}{h} @{nb}{}x",
-        decimals(scale, 2)
+        "{title}{size} {} @{nb}{}",
+        mode_text(display.mode),
+        scale_text(display.scale)
     ))
+}
+
+/// The display's make and model, else its description, else its connector name; `None` without any.
+pub fn display_title(display: &Display<'_>) -> Option<String> {
+    let identification: Vec<String> = [display.make, display.model]
+        .into_iter()
+        .filter_map(present)
+        .map(|s| capped(s, MAX_IDENTIFICATION_CHARS))
+        .collect();
+    if identification.is_empty() {
+        present(display.description)
+            .or(present(display.name))
+            .map(str::to_owned)
+    } else {
+        Some(identification.join(" "))
+    }
+}
+
+/// "W × H", joined by narrow no-break spaces.
+pub fn mode_text((w, h): (u32, u32)) -> String {
+    let nb = NARROW_NO_BREAK_SPACE;
+    format!("{w}{nb}×{nb}{h}")
+}
+
+/// "2x", "1.25x": on the fractional-scale grid, at most two decimals.
+pub fn scale_text(scale: f64) -> String {
+    format!(
+        "{}x",
+        decimals((scale * SCALE_STEPS).round() / SCALE_STEPS, 2)
+    )
+}
+
+/// "60 Hz", "59.95 Hz" from millihertz.
+pub fn refresh_text(millihertz: u32) -> String {
+    format!(
+        "{}{NO_BREAK_SPACE}Hz",
+        decimals(f64::from(millihertz) / 1000.0, 2)
+    )
 }
 
 /// `text` trimmed, `None` when nothing is left.

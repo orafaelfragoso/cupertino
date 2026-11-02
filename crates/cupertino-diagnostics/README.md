@@ -29,6 +29,7 @@ outside one.
 | `services.login`, `services.network`, `services.power`, `services.bluetooth` | `cupertino-login`, `cupertino-netd`, `cupertino-powerd`, `cupertino-btd` (system): `ok` active, `fail` failed, `warn` inactive or not installed, `skip` when systemd cannot be asked. `cupertino-netd` and `cupertino-btd` are also `ok` when disabled and inactive while `NetworkManager.service` or `bluetooth.service` is active or enabled (BlueZ stays inactive without an adapter), which does their job; a masked daemon counts as disabled |
 | `services.session_target`, `services.pipewire` | `cupertino-session.target` and `pipewire.service` (user); in a session only |
 | `crash.last` | the last end in `session.log`: `warn` when it was not a normal end or a stop by the session; facts: how many ended badly, the last bad end, and the first panic or fatal-signal line of `server.log` and `server.log.1` |
+| `crash.gpu_reset` | the GPU resets the server recorded in `session.log` (it makes a new renderer and the clients stay connected): `warn` when there was one; facts: how many, after how many it made a new renderer, and the last one's time, GPU, reason and outcome. Its `fix` says how to investigate one: the JSON form and the `server.log` lines of that time, for an AI assistant or the driver's bug tracker; not run without a `session.log` |
 | `logs.paths` | where `session.log`, `server.log` and `server.log.1` are, with their sizes, and the journal unit |
 
 ## JSON

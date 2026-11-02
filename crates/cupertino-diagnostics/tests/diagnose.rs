@@ -180,6 +180,36 @@ fn a_crash_is_the_last_end_with_its_server_log_line() {
     let last = find(&checks, "crash.last");
     assert_eq!(last.status, Status::Ok, "{last:?}");
     assert_eq!(fact(last, "ended_badly"), "1 of 2 sessions");
+    assert_eq!(find(&checks, "crash.gpu_reset").status, Status::Ok);
+}
+
+#[test]
+fn gpu_resets_are_counted_and_the_last_one_is_told_in_parts() {
+    let fixture = Fixture::new();
+    fixture.state(
+        "session.log",
+        "2026-11-01 20:00:00 starting\n\
+         2026-11-01 20:05:00 the GPU was reset: gpu=/dev/dri/card1 reason=another program caused it; renderer remade, the \
+         clients stayed connected\n\
+         2026-11-01 20:06:00 the GPU was reset: gpu=/dev/dri/card1 reason=the rendering context was lost (EGL: \
+         context lost); renderer not remade (EGL context: bad alloc), the session ends\n\
+         2026-11-01 20:06:01 the compositor ended with status 1 after 360 s\n",
+    );
+    let checks = fixture.run(Area::Crash);
+    let reset = find(&checks, "crash.gpu_reset");
+    assert_eq!(reset.status, Status::Warn);
+    assert_eq!(
+        reset.summary,
+        "the GPU was reset 2 times, the last at 2026-11-01 20:06:00: renderer not remade (EGL context: bad alloc), the \
+         session ends"
+    );
+    assert_eq!(fact(reset, "remade"), "1 of 2");
+    assert_eq!(fact(reset, "last_gpu"), "/dev/dri/card1");
+    assert_eq!(
+        fact(reset, "last_reason"),
+        "the rendering context was lost (EGL: context lost)"
+    );
+    assert_eq!(find(&checks, "crash.last").status, Status::Warn);
 }
 
 #[test]

@@ -343,6 +343,11 @@ pub struct Cupertino {
     /// The rendering context was lost (the renderer's error) and the server ends for it: [`crate::cli::run`] then returns
     /// an error, so the session command and the display manager see a failure, not a log out.
     pub rendering_lost: Option<String>,
+    /// The backend makes a new renderer when the context is lost ([`crate::gpu_reset`]), instead of ending the session.
+    pub gpu_recovers: bool,
+    /// The context was lost, or the GPU reset, and the backend has yet to recover: why.
+    pub gpu_reset: Option<String>,
+    pub gpu_resets: crate::gpu_reset::Resets,
 
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
@@ -695,6 +700,9 @@ impl Cupertino {
             socket_name,
             running: true,
             rendering_lost: None,
+            gpu_recovers: false,
+            gpu_reset: None,
+            gpu_resets: Default::default(),
             compositor_state,
             xdg_shell_state,
             xdg_decoration_state,

@@ -406,8 +406,14 @@ fn draw_icon_of(
     opacity: f32,
 ) {
     let cfg = &session.dock.cfg;
-    let drawn = (rect.w.max(rect.h) * f64::from(scale)).ceil().max(1.0) as u32;
-    let mut icon_px = (cfg.large_size.max(cfg.tile_size) * f64::from(scale)).ceil() as u32;
+    let device = |size: f64| (size * f64::from(scale)).ceil().max(1.0) as u32;
+    let drawn = device(rect.w.max(rect.h));
+    // At the resting and the full magnified size the icon is taken at the size it is drawn at, so it is drawn 1:1
+    // and straight edges stay on whole pixels; the sizes a magnification passes through share a few rasters.
+    let mut icon_px = device(cfg.large_size.max(cfg.tile_size));
+    if drawn == device(cfg.tile_size) || drawn == icon_px {
+        icon_px = drawn;
+    }
     while icon_px > 2 * drawn {
         icon_px = icon_px.div_ceil(2);
     }
@@ -2160,6 +2166,42 @@ mod tests {
                 "({dx}, {dy}) is mid grey, not a sampled black or white: {p:?}"
             );
         }
+    }
+
+    /// A 96 px image, black left of column 40 and white from it, in a resting 48 px tile: taken at the 48 px it is
+    /// drawn at, the edge falls on a whole pixel (column 20), with no blended column.
+    #[test]
+    fn a_resting_tile_keeps_a_straight_edge_of_its_icon_sharp() {
+        let session = first_running();
+        let layout = session.dock.layout(SCREEN, 10.0);
+        let mut icons = bare_icons();
+        let split = (0..96 * 96)
+            .flat_map(|i| {
+                [if i % 96 < 40 { 0 } else { 255 }; 3]
+                    .into_iter()
+                    .chain([255])
+            })
+            .map(|v| v as u8)
+            .collect();
+        icons.window_icon(
+            [FIRST.into(), FIRST.into()],
+            DockWindowIcon {
+                id: 1,
+                name: None,
+                image: Some(WindowIconImage {
+                    size: 96,
+                    argb: split,
+                }),
+            },
+        );
+        let mut pixmap = Pixmap::new(SIZE.0, SIZE.1).unwrap();
+        paint(&mut pixmap, 1.0, &session, &layout, &mut icons, false);
+        let c = first_tile_centre(&session, &layout);
+        let blended: Vec<_> = (c.x as i32 - 20..c.x as i32 + 20)
+            .map(|x| pixmap.pixel(x as u32, c.y as u32).unwrap().red())
+            .filter(|v| (16..=239).contains(v))
+            .collect();
+        assert_eq!(blended, Vec::<u8>::new());
     }
 
     /// A grid of `n` unthemed applications on a 1440 × 790 layer (the 1440 × 900 output of the

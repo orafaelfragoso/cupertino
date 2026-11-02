@@ -330,7 +330,7 @@ impl Services {
             mixer: None,
             alsa_dir: PathBuf::from(cupertino_alsa::DEVICE_DIR),
             wpctl: Wpctl::default(),
-            worker: VolumeWorker::new(Wpctl::default(), Target::DefaultSink),
+            worker: sound_worker(&Wpctl::default()),
             pipewire: true,
             backends: Backends::default(),
             pairing: Arc::default(),
@@ -345,7 +345,7 @@ impl Services {
             mixer: None,
             alsa_dir: PathBuf::from(cupertino_alsa::DEVICE_DIR),
             wpctl: Wpctl::default(),
-            worker: VolumeWorker::new(Wpctl::default(), Target::DefaultSink),
+            worker: sound_worker(&Wpctl::default()),
             pipewire: true,
             backends: Backends::default(),
             pairing: Arc::default(),
@@ -355,11 +355,16 @@ impl Services {
     /// Read and change the sound output through `wpctl`, else the mixer below `alsa_dir` (tests).
     pub fn with_sound(self, wpctl: Wpctl, alsa_dir: PathBuf) -> Self {
         Services {
-            worker: VolumeWorker::new(wpctl.clone(), Target::DefaultSink),
+            worker: sound_worker(&wpctl),
             wpctl,
             alsa_dir,
             ..self
         }
+    }
+
+    /// Wait until the sound changes asked are written and the readings asked for are done (tests).
+    pub fn wait_sound(&self) {
+        self.worker.wait_idle();
     }
 
     // ---- reading ---------------------------------------------------------------------------------------------------
@@ -643,12 +648,13 @@ impl Services {
     }
 
     /// The PipeWire sinks, in `wpctl status` order; none when the volume is not on PipeWire or `wpctl` does not answer.
+    /// After the first reading, the sinks of the worker's last one; none until the worker has listed them.
     pub fn outputs(&mut self) -> Vec<Output> {
         if !self.pipewire {
             return Vec::new();
         }
-        let sinks = match self.worker.latest().and_then(|r| r.sinks) {
-            Some(sinks) => sinks,
+        let sinks = match self.worker.latest() {
+            Some(read) => read.sinks.unwrap_or_else(|| Ok(Vec::new())),
             None => self.wpctl.sinks().map_err(|e| e.to_string()),
         };
         match sinks {
@@ -1003,4 +1009,11 @@ fn bt_device(d: &HashMap<String, OwnedValue>) -> Option<BtDevice> {
         connected: flag("Connected")?,
         pairing: flag("Pairing")?,
     })
+}
+
+/// The default sink's worker, its first reading (with the sinks) already asked for.
+fn sound_worker(wpctl: &Wpctl) -> VolumeWorker {
+    let worker = VolumeWorker::new(wpctl.clone(), Target::DefaultSink);
+    worker.request_read(true);
+    worker
 }

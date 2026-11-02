@@ -81,6 +81,24 @@ class PortalsConfTest(unittest.TestCase):
                     self.assertIn(f'xdg-desktop-portal-{backend}', packages)
 
 
+class RuntimeFloorTest(unittest.TestCase):
+    """dbus 1.16 passes the caller's ProcessFD (dbus-broker does from 34); PipeWire 1.4 follows a screencast resize."""
+
+    def test_every_format_requires_the_floors(self):
+        meta = tomllib.loads((release.ROOT / 'crates/cupertino-server/Cargo.toml').read_text())['package']['metadata']
+        deb = [d.strip() for d in meta['deb']['depends'].split(',')]
+        rpm = meta['generate-rpm']['requires']
+        self.assertIn('dbus (>= 1.16)', deb)
+        self.assertIn('pipewire (>= 1.4)', deb)
+        self.assertEqual(rpm['dbus'], '>= 1:1.16')
+        self.assertEqual(rpm['pipewire-libs'], '>= 1.4')
+        for recipe in ('packaging/arch/cupertino/PKGBUILD', 'packaging/arch/cupertino-git/PKGBUILD'):
+            with self.subTest(recipe):
+                depends = re.search(r'^\s+depends=\((.*?)\)', (release.ROOT / recipe).read_text(), re.M | re.S).group(1)
+                self.assertIn("'dbus>=1.16'", depends)
+                self.assertIn("'pipewire>=1:1.4'", depends)
+
+
 class TagTest(unittest.TestCase):
     def test_a_release_and_a_release_candidate_give_the_arch_pkgver(self):
         self.assertEqual(release.release_version('v0.1.0'), '0.1.0')

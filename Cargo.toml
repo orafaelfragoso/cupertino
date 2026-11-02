@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
-# A path dependency inside the workspace directory would become a member; the vendored port is a plain dependency.
-exclude = ["third-party/xkbcommon-rs"]
+# A path dependency inside the workspace directory would become a member; the vendored crates are plain dependencies.
+exclude = ["third-party/xkbcommon-rs", "third-party/smithay"]
 
 [workspace.package]
 edition = "2021"
@@ -14,3 +14,5 @@ debug = 1
 [patch.crates-io]
 # Pure-Rust replacement for the C-binding crate of the same name (no libxkbcommon)
 xkbcommon = { path = "crates/cupertino-xkbcommon" }
+# The crates.io release 0.7.0, vendored unchanged so the server can carry fixes to it
+smithay = { path = "third-party/smithay" }

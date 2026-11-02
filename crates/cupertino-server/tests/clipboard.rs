@@ -92,6 +92,19 @@ impl Harness {
         PathBuf::from(dir).join(self.state.socket_name.as_ref().unwrap())
     }
 
+    /// Give the keyboard to the window of `app_id` once it maps, as a click on it does: only a process's first window
+    /// takes the focus by itself, and the test clients share one process.
+    fn focus(&mut self, app_id: &str) {
+        let window_of = |s: &Cupertino| {
+            s.wm.windows()
+                .find(|w| s.wm.app(w.app).is_some_and(|a| a.identity == app_id))
+                .map(|w| w.id)
+        };
+        self.wait_until(&format!("{app_id} to map"), |s| window_of(s).is_some());
+        let window = window_of(&self.state).unwrap();
+        self.state.focus_window_by_input(window);
+    }
+
     /// The types of the server's kept clipboard, `None` while a client (or nobody) owns it.
     fn kept(&self) -> Option<Vec<String>> {
         current_data_device_selection_userdata(&self.state.seat)
@@ -104,13 +117,19 @@ impl Harness {
 /// What a client does with the clipboard.
 #[derive(Clone)]
 enum Role {
-    /// Offer these types with their bytes once focused; clear the selection again when `clear` is set.
+    /// Offer these types with their bytes once focused and `start` is set; clear the selection again when `clear`
+    /// is set.
     Copy {
         offers: Vec<(String, Arc<Vec<u8>>)>,
+        start: Arc<AtomicBool>,
         clear: Arc<AtomicBool>,
     },
-    /// Record the offered types of every selection, and read `want` from the first one offering it.
-    Paste { want: Vec<String> },
+    /// Record the offered types of every selection and read `want` from each offering it; read the last offer
+    /// again each time `again` is set.
+    Paste {
+        want: Vec<String>,
+        again: Arc<AtomicBool>,
+    },
 }
 
 #[derive(Default)]
@@ -121,6 +140,8 @@ struct Shared {
     pasted: Vec<(String, Vec<u8>)>,
     /// The source this client set was cancelled.
     cancelled: bool,
+    /// The client had keyboard focus, so it holds a serial to set the selection with.
+    focused: bool,
 }
 
 struct ClientState {
@@ -133,6 +154,7 @@ struct ClientState {
     serial: Option<u32>,
     copied: bool,
     cleared: bool,
+    offer: Option<wl_data_offer::WlDataOffer>,
     shared: Arc<Mutex<Shared>>,
 }
 
@@ -223,6 +245,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for ClientState {
     ) {
         if let wl_keyboard::Event::Enter { serial, .. } = event {
             state.serial = Some(serial);
+            state.shared.lock().unwrap().focused = true;
         }
     }
 }
@@ -286,22 +309,9 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for ClientState {
             return;
         };
         let types = offer.data::<OfferTypes>().unwrap().lock().unwrap().clone();
-        let Role::Paste { want } = &state.role else {
-            return;
-        };
-        let mut pasted = Vec::new();
-        for mime in want.iter().filter(|m| types.contains(m)) {
-            let (read, write) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
-            offer.receive(mime.clone(), write.as_fd());
-            drop(write);
-            conn.flush().unwrap();
-            let mut data = Vec::new();
-            std::fs::File::from(read).read_to_end(&mut data).unwrap();
-            pasted.push((mime.clone(), data));
-        }
-        let mut shared = state.shared.lock().unwrap();
-        shared.offered = Some(types);
-        shared.pasted.extend(pasted);
+        state.shared.lock().unwrap().offered = Some(types);
+        state.offer = Some(offer);
+        state.paste(conn);
     }
 
     event_created_child!(ClientState, wl_data_device::WlDataDevice, [
@@ -310,12 +320,42 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for ClientState {
 }
 
 impl ClientState {
-    /// Copy once focused; clear when asked.
-    fn act(&mut self, qh: &QueueHandle<Self>) {
-        let (Role::Copy { offers, clear }, Some(serial)) = (&self.role, self.serial) else {
+    /// Read the wanted types the last offer has, as a paste does.
+    fn paste(&mut self, conn: &Connection) {
+        let (Role::Paste { want, .. }, Some(offer)) = (&self.role, &self.offer) else {
             return;
         };
-        if !self.copied {
+        let types = offer.data::<OfferTypes>().unwrap().lock().unwrap().clone();
+        let mut pasted = Vec::new();
+        for mime in want.iter().filter(|m| types.contains(m)) {
+            pasted.push((
+                mime.clone(),
+                receive(conn, |fd| offer.receive(mime.clone(), fd)),
+            ));
+        }
+        self.shared.lock().unwrap().pasted.extend(pasted);
+    }
+
+    /// Copy once focused and started; clear when asked; paste again when asked.
+    fn act(&mut self, conn: &Connection, qh: &QueueHandle<Self>) {
+        if let Role::Paste { again, .. } = &self.role {
+            if again.swap(false, Ordering::SeqCst) {
+                self.paste(conn);
+            }
+            return;
+        }
+        let (
+            Role::Copy {
+                offers,
+                start,
+                clear,
+            },
+            Some(serial),
+        ) = (&self.role, self.serial)
+        else {
+            return;
+        };
+        if !self.copied && start.load(Ordering::SeqCst) {
             self.copied = true;
             let source = self.manager.create_data_source(qh, ());
             for (mime, _) in offers {
@@ -371,13 +411,14 @@ impl TestClient {
                 serial: None,
                 copied: false,
                 cleared: false,
+                offer: None,
                 shared: shared2,
             };
             while !stop2.load(Ordering::SeqCst) {
                 if queue.roundtrip(&mut client).is_err() {
                     break;
                 }
-                client.act(&qh);
+                client.act(&conn, &qh);
                 std::thread::sleep(Duration::from_millis(5));
             }
         });
@@ -416,24 +457,50 @@ impl Drop for TestClient {
     }
 }
 
+/// Read what `request` asks to have written into a new pipe, until the writer closes it.
+fn receive(conn: &Connection, request: impl FnOnce(std::os::fd::BorrowedFd<'_>)) -> Vec<u8> {
+    let (read, write) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
+    request(write.as_fd());
+    drop(write);
+    conn.flush().unwrap();
+    let mut data = Vec::new();
+    std::fs::File::from(read).read_to_end(&mut data).unwrap();
+    data
+}
+
+/// A client that copies `offers` once focused, and the flag that makes it clear its selection.
 fn copier(offers: &[(&str, &[u8])]) -> (Role, Arc<AtomicBool>) {
-    let clear = Arc::new(AtomicBool::new(false));
-    (
-        Role::Copy {
-            offers: offers
-                .iter()
-                .map(|(m, d)| (m.to_string(), Arc::new(d.to_vec())))
-                .collect(),
-            clear: clear.clone(),
-        },
-        clear,
-    )
+    let (role, start, clear) = held_copier(offers);
+    start.store(true, Ordering::SeqCst);
+    (role, clear)
+}
+
+/// A client that copies `offers` once focused and its start flag is set, with its start and clear flags.
+fn held_copier(offers: &[(&str, &[u8])]) -> (Role, Arc<AtomicBool>, Arc<AtomicBool>) {
+    let (start, clear) = (Arc::default(), Arc::default());
+    let role = Role::Copy {
+        offers: offers
+            .iter()
+            .map(|(m, d)| (m.to_string(), Arc::new(d.to_vec())))
+            .collect(),
+        start: Arc::clone(&start),
+        clear: Arc::clone(&clear),
+    };
+    (role, start, clear)
 }
 
 fn paster(want: &[&str]) -> Role {
-    Role::Paste {
+    repaster(want).0
+}
+
+/// A client that pastes `want` from every selection, and the flag that makes it read the last one again.
+fn repaster(want: &[&str]) -> (Role, Arc<AtomicBool>) {
+    let again = Arc::new(AtomicBool::new(false));
+    let role = Role::Paste {
         want: want.iter().map(|m| m.to_string()).collect(),
-    }
+        again: Arc::clone(&again),
+    };
+    (role, again)
 }
 
 /// Copy text and an image in one client, let it exit, paste both in another: the server's copy serves the
@@ -569,43 +636,86 @@ fn the_clipboard_stays_with_its_owner_across_a_lock() {
     );
 }
 
-/// A clipboard manager (data control) that sets a selection while the session is locked has its source cancelled and
-/// the clipboard goes back to the server's copy of what it was.
+/// While the session is locked neither an application nor a clipboard manager (data control) can set the clipboard:
+/// both are refused, the manager sees its source cancelled, and after the unlock a paste gets what was copied before.
 #[test]
-fn a_selection_set_by_a_clipboard_manager_while_locked_is_cancelled() {
+fn a_locked_session_refuses_new_selections_and_the_owner_keeps_the_clipboard() {
     let Some(mut h) = Harness::new() else { return };
     let (role, _) = copier(&[("text/plain;charset=utf-8", TEXT)]);
     let a = TestClient::spawn(h.socket_path(), "org.example.copy", role);
     h.wait_until("the copy to be read", |s| {
         s.clipboard.is_complete() && s.clipboard.captured_types() == ["text/plain;charset=utf-8"]
     });
+    let (role, start, _) = held_copier(&[("text/plain;charset=utf-8", PNG)]);
+    let b = TestClient::spawn(h.socket_path(), "org.example.later", role);
+    h.focus("org.example.later");
+    h.wait_until("the second client's focus", |_| b.shared().focused);
 
     let locker = common::Client::locker(common::session_agent(&h.state));
     h.wait_until("the lock", |_| locker.locked());
-    let manager = ClipboardManager::spawn(h.socket_path(), false);
+    start.store(true, Ordering::SeqCst);
+    let manager = ClipboardManager::spawn(h.socket_path(), Manage::Set);
     h.wait_until("the manager's source to be cancelled", |_| {
         manager.cancelled()
     });
-    h.wait_until("the clipboard to be put back", |s| {
-        current_data_device_selection_userdata(&s.seat).is_some()
-    });
-    assert_eq!(
-        h.kept().unwrap().first().map(String::as_str),
-        Some("text/plain;charset=utf-8")
+    for _ in 0..40 {
+        h.step();
+    }
+    assert_eq!(h.kept(), None, "the server did not replace the clipboard");
+    assert!(
+        !a.shared().cancelled,
+        "the copying client still owns its selection"
     );
+
     locker.unlock();
     h.wait_until("the unlock", |s| !s.session_lock.is_active());
-    a.exit(&mut h);
-    let b = TestClient::spawn(
+    let c = TestClient::spawn(
         h.socket_path(),
         "org.example.paste",
-        paster(&["text/plain"]),
+        paster(&["text/plain;charset=utf-8"]),
     );
-    h.wait_until("the paste", |_| b.shared().pasted.len() == 1);
+    h.focus("org.example.paste");
+    h.wait_until("the paste", |_| c.shared().pasted.len() == 1);
     assert_eq!(
-        b.shared().pasted,
-        [("text/plain".to_string(), TEXT.to_vec())]
+        c.shared().pasted,
+        [("text/plain;charset=utf-8".to_string(), TEXT.to_vec())]
     );
+}
+
+/// While the session is locked neither an application holding an offer nor a clipboard manager can read the
+/// clipboard: each read gets an empty pipe. Before the lock and after the unlock both read what was copied.
+#[test]
+fn a_locked_session_refuses_reads_of_the_clipboard() {
+    let Some(mut h) = Harness::new() else { return };
+    let (role, _) = copier(&[("text/plain;charset=utf-8", TEXT)]);
+    let a = TestClient::spawn(h.socket_path(), "org.example.copy", role);
+    h.wait_until("the copy to be read", |s| {
+        s.clipboard.is_complete() && s.clipboard.captured_types() == ["text/plain;charset=utf-8"]
+    });
+    let (role, again) = repaster(&["text/plain;charset=utf-8"]);
+    let b = TestClient::spawn(h.socket_path(), "org.example.paste", role);
+    h.focus("org.example.paste");
+    h.wait_until("the paste", |_| b.shared().pasted.len() == 1);
+    let manager = ClipboardManager::spawn(h.socket_path(), Manage::Read);
+    assert_eq!(manager.read(&mut h), TEXT);
+
+    let locker = common::Client::locker(common::session_agent(&h.state));
+    h.wait_until("the lock", |_| locker.locked());
+    again.store(true, Ordering::SeqCst);
+    h.wait_until("the paste while locked", |_| b.shared().pasted.len() == 2);
+    assert_eq!(manager.read(&mut h), b"");
+
+    locker.unlock();
+    h.wait_until("the unlock", |s| !s.session_lock.is_active());
+    assert_eq!(manager.read(&mut h), TEXT);
+    again.store(true, Ordering::SeqCst);
+    h.wait_until("the paste after the unlock", |_| {
+        b.shared().pasted.len() >= 3
+    });
+    let pasted: Vec<Vec<u8>> = b.shared().pasted.iter().map(|(_, d)| d.clone()).collect();
+    assert_eq!(pasted[..2], [TEXT.to_vec(), Vec::new()]);
+    assert!(pasted[2..].iter().all(|d| d == TEXT));
+    assert!(!a.shared().cancelled);
 }
 
 /// A clipboard manager clearing the clipboard while the session is locked (a password tool's timed clear) empties it
@@ -625,7 +735,7 @@ fn a_clear_by_a_clipboard_manager_while_locked_empties_the_clipboard() {
 
     let locker = common::Client::locker(common::session_agent(&h.state));
     h.wait_until("the lock", |_| locker.locked());
-    let _manager = ClipboardManager::spawn(h.socket_path(), true);
+    let _manager = ClipboardManager::spawn(h.socket_path(), Manage::Clear);
     h.wait_until("the clipboard to be cleared", |s| {
         current_data_device_selection_userdata(&s.seat).is_none()
     });
@@ -660,14 +770,28 @@ fn a_clear_by_a_clipboard_manager_while_locked_empties_the_clipboard() {
     assert!(b.shared().pasted.is_empty());
 }
 
-/// A data control client that sets a selection of its own and stays until dropped.
+/// What a clipboard manager does once connected.
+#[derive(Clone, Copy)]
+enum Manage {
+    /// Set a selection of its own.
+    Set,
+    /// Clear the selection.
+    Clear,
+    /// Read UTF-8 text from the selection offered last, each time asked.
+    Read,
+}
+
+/// A data control client that sets, clears or reads the selection and stays until dropped.
 struct ClipboardManager {
     stop: Arc<AtomicBool>,
     cancelled: Arc<AtomicBool>,
+    read: Arc<AtomicBool>,
+    reads: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 
 struct ManagerState {
     cancelled: Arc<AtomicBool>,
+    offer: Option<ZwlrDataControlOfferV1>,
 }
 
 macro_rules! manager_noop {
@@ -686,13 +810,16 @@ manager_noop!(
 
 impl Dispatch<ZwlrDataControlDeviceV1, ()> for ManagerState {
     fn event(
-        _: &mut Self,
+        state: &mut Self,
         _: &ZwlrDataControlDeviceV1,
-        _: zwlr_data_control_device_v1::Event,
+        event: zwlr_data_control_device_v1::Event,
         _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        if let zwlr_data_control_device_v1::Event::Selection { id } = event {
+            state.offer = id;
+        }
     }
 
     event_created_child!(ManagerState, ZwlrDataControlDeviceV1, [
@@ -728,10 +855,15 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for ManagerState {
 }
 
 impl ClipboardManager {
-    fn spawn(socket: PathBuf, clear: bool) -> ClipboardManager {
-        let stop = Arc::new(AtomicBool::new(false));
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let (stop2, cancelled2) = (stop.clone(), cancelled.clone());
+    fn spawn(socket: PathBuf, manage: Manage) -> ClipboardManager {
+        let manager = ClipboardManager {
+            stop: Arc::default(),
+            cancelled: Arc::default(),
+            read: Arc::default(),
+            reads: Arc::default(),
+        };
+        let (stop2, cancelled2) = (manager.stop.clone(), manager.cancelled.clone());
+        let (read, reads) = (manager.read.clone(), manager.reads.clone());
         std::thread::spawn(move || {
             let conn = Connection::from_socket(UnixStream::connect(&socket).unwrap()).unwrap();
             let (globals, mut queue) = registry_queue_init::<ManagerState>(&conn).unwrap();
@@ -739,21 +871,44 @@ impl ClipboardManager {
             let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=1, ()).unwrap();
             let manager: ZwlrDataControlManagerV1 = globals.bind(&qh, 1..=2, ()).unwrap();
             let device = manager.get_data_device(&seat, &qh, ());
-            let source = manager.create_data_source(&qh, ());
-            source.offer("text/plain".into());
-            device.set_selection((!clear).then_some(&source));
+            match manage {
+                Manage::Set => {
+                    let source = manager.create_data_source(&qh, ());
+                    source.offer("text/plain".into());
+                    device.set_selection(Some(&source));
+                }
+                Manage::Clear => device.set_selection(None),
+                Manage::Read => {}
+            }
             let mut state = ManagerState {
                 cancelled: cancelled2,
+                offer: None,
             };
             while !stop2.load(Ordering::SeqCst) && queue.roundtrip(&mut state).is_ok() {
+                if let (true, Some(offer)) = (read.swap(false, Ordering::SeqCst), &state.offer) {
+                    let data = receive(&conn, |fd| {
+                        offer.receive("text/plain;charset=utf-8".into(), fd)
+                    });
+                    reads.lock().unwrap().push(data);
+                }
                 std::thread::sleep(Duration::from_millis(5));
             }
         });
-        ClipboardManager { stop, cancelled }
+        manager
     }
 
     fn cancelled(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// Read the offered text once more, as a clipboard manager polling the clipboard does, and wait for the bytes.
+    fn read(&self, h: &mut Harness) -> Vec<u8> {
+        let before = self.reads.lock().unwrap().len();
+        self.read.store(true, Ordering::SeqCst);
+        h.wait_until("the clipboard manager's read", |_| {
+            self.reads.lock().unwrap().len() > before
+        });
+        self.reads.lock().unwrap().last().unwrap().clone()
     }
 }
 

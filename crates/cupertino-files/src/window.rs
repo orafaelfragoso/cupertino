@@ -38,7 +38,7 @@ use cupertino_geometry::Rect as GeoRect;
 use cupertino_ui_text::TextBuffer;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-use tiny_skia::{PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{PathBuilder, Pixmap, Rect as SkRect, Stroke, Transform};
 
 /// Window chrome metrics.
 pub mod metrics {
@@ -1092,7 +1092,13 @@ impl WindowPainter {
     ) {
         self.renderer.text.set_scale(scale);
         let w = &frame.window;
-        // the sidebar is left clear: the server draws its material below the surface
+        // the sidebar is left clear: the server draws its material below the surface. Right of it every pixel is
+        // opaque, or what is behind the window shows through the 1 pt separators and through the edges a fractional
+        // scale leaves between fills
+        let opaque = (w.sidebar.right() as f32 * scale).floor();
+        if let Some(base) = SkRect::from_ltrb(opaque, 0.0, pm.width() as f32, pm.height() as f32) {
+            pm.fill_rect(base, &paint(pal.background), Transform::identity(), None);
+        }
         fill_rect(pm, &w.toolbar, scale, strip(state, pal));
         self.paint_sidebar(pm, scale, w, state, pal);
         fill_rect(
@@ -2253,6 +2259,86 @@ mod tests {
         assert_eq!(icons.step(Some(0), 30, Move::Down), Some(columns));
         assert_eq!(icons.step(Some(columns), 30, Move::Up), Some(0));
         assert_eq!(icons.step(Some(0), 30, Move::Left), None);
+    }
+
+    #[test]
+    fn right_of_the_sidebar_every_pixel_is_opaque() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("a.txt"), b"x").unwrap();
+        let mut browser = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            PathBuf::from("/nonexistent/recently-used.xbel"),
+            None,
+            Arc::new(|| {}),
+        )
+        .unwrap();
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while browser.entries().is_empty() {
+            assert!(
+                std::time::Instant::now() < end,
+                "timed out listing the folder"
+            );
+            browser.poll();
+        }
+        let places = places();
+        let size = Size { w: 920.0, h: 436.0 };
+        let shown = Bars {
+            path: true,
+            status: true,
+        };
+        for (mode, bars, scale) in [
+            (ViewMode::Icons, Bars::HIDDEN, 1.0),
+            (ViewMode::List, shown, 1.0),
+            (ViewMode::Icons, shown, 1.5),
+            (ViewMode::List, Bars::HIDDEN, 2.0),
+        ] {
+            let mut painter = WindowPainter::new(crate::render::renderer());
+            let frame = painter.frame(
+                size,
+                &places,
+                bars,
+                window::TOOLBAR_SEARCH_FIELD.0,
+                d.path(),
+                mode,
+                browser.outline(),
+                0.0,
+                scale,
+            );
+            let (w, h) = ((size.w as f32 * scale) as u32, (size.h as f32 * scale) as u32);
+            let mut pm = Pixmap::new(w, h).unwrap();
+            let state = WindowState {
+                browser: &browser,
+                places: &places,
+                mode,
+                active: true,
+                search: &TextBuffer::new(),
+                search_focused: false,
+                search_caret: false,
+                title: "Here",
+                now: SystemTime::now(),
+                edit: None,
+                edit_caret: false,
+                drop_target: None,
+                increase_contrast: false,
+                marquee: None,
+                status: "1 item",
+                sidebar_focus: None,
+            };
+            painter.paint(&mut pm, scale, &frame, &state, &Palette::builtin(true));
+            // the material is only under the sidebar: a translucent pixel right of it shows what is behind the window
+            let sidebar = (frame.window.sidebar.right() as f32 * scale) as u32;
+            let clear: Vec<(u32, u32)> = (0..h)
+                .flat_map(|y| (sidebar..w).map(move |x| (x, y)))
+                .filter(|&(x, y)| pm.pixel(x, y).unwrap().alpha() < 255)
+                .collect();
+            assert!(
+                clear.is_empty(),
+                "{mode:?} at {scale}x: {} translucent pixels, the first at {:?}",
+                clear.len(),
+                clear.first()
+            );
+        }
     }
 
     #[test]

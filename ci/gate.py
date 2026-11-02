@@ -50,6 +50,12 @@ GATE = [
 GATE_EXEMPT = {
     "crates/cupertino-files/src/mime.rs": {"evidence class"},
     "crates/cupertino-theme/src/evidence.rs": {"evidence class"},
+    # The vendored smithay release, unchanged: an EGL error code and comments about Rust references.
+    "third-party/smithay/src/backend/egl/ffi.rs": {"evidence class"},
+    "third-party/smithay/src/backend/renderer/element/utils/elements.rs": {"provenance wording"},
+    "third-party/smithay/src/desktop/space/utils.rs": {"provenance wording"},
+    "third-party/smithay/src/input/keyboard/mod.rs": {"provenance wording"},
+    "third-party/smithay/src/wayland/shm/mod.rs": {"provenance wording"},
 }
 
 # Third-party copyright holders whose names trip a rule; the literal is blanked before matching, the rest of the file is checked.

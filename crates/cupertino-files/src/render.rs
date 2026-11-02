@@ -364,6 +364,21 @@ pub(crate) fn fill_rect_up(pm: &mut Pixmap, r: &Rect, s: f32, up: f32, c: Rgba) 
     }
 }
 
+/// A vertical line `w` points wide from `r`'s top-left, `r.h` high, `up` whole device pixels higher, on whole device pixels:
+/// its left edge at the pixel the position falls in and at least one pixel wide. At a fractional scale its edges would
+/// otherwise fall inside pixels on both sides, a blurred line two pixels wide.
+pub(crate) fn fill_vline_up(pm: &mut Pixmap, r: &Rect, s: f32, up: f32, c: Rgba) {
+    if let Some(rr) = SkRect::from_xywh(
+        (r.x as f32 * s).floor(),
+        r.y as f32 * s - up,
+        (r.w as f32 * s).floor().max(1.0),
+        r.h as f32 * s,
+    ) {
+        written(pm, || Some(rr));
+        pm.fill_rect(rr, &paint(c), Transform::identity(), None);
+    }
+}
+
 /// Split `text` into at most `max_lines` lines no wider than `max_w`; the last line is middle-truncated.
 pub fn wrap_label(
     tr: &mut TextRenderer,
@@ -1071,7 +1086,7 @@ impl Renderer {
                 pal.text,
             );
             if c.id != ColumnId::Name {
-                fill_rect_up(
+                fill_vline_up(
                     pm,
                     &Rect::new(c.frame.x, 6.0, 1.0, lm::HEADER_HEIGHT - 12.0),
                     scale,
@@ -1523,6 +1538,52 @@ mod tests {
             std::time::SystemTime::now(),
         );
         assert!(pm.pixels().iter().any(|p| p.blue() > p.red()));
+    }
+
+    #[test]
+    fn the_list_headers_column_separators_cover_whole_device_pixels_at_a_fractional_scale() {
+        let mut r = renderer();
+        let pal = Palette::builtin(false);
+        let settings = ListViewSettings::default();
+        let size = Size { w: 640.0, h: 160.0 };
+        for scale in [1.25_f32, 1.5, 1.75] {
+            let pm = r.list_view(
+                &[],
+                &[],
+                &[],
+                true,
+                &settings,
+                SortSpec::default(),
+                size,
+                0.0,
+                None,
+                scale,
+                &pal,
+                std::time::SystemTime::now(),
+            );
+            let l = r.list_layout(&[], &settings, size.w, scale);
+            let lines: Vec<f32> = l
+                .columns
+                .iter()
+                .filter(|c| c.id != ColumnId::Name)
+                .map(|c| c.frame.x as f32 * scale)
+                .collect();
+            assert!(
+                lines.iter().any(|x| x.fract() != 0.0),
+                "a separator falls inside a pixel at {scale}x: {lines:?}"
+            );
+            let y = (lm::HEADER_HEIGHT as f32 / 2.0 * scale) as u32;
+            for x in lines {
+                let x = x.floor() as u32;
+                let at = |x: u32| pm.pixel(x, y).unwrap();
+                assert_ne!(at(x), at(x + 1), "the line at {x} at {scale}x");
+                assert_eq!(
+                    at(x - 1),
+                    at(x + 1),
+                    "the line at {x} at {scale}x is one pixel column"
+                );
+            }
+        }
     }
 
     #[test]

@@ -378,8 +378,10 @@ fn identity_of(h: &Harness, id: WindowId) -> String {
 #[test]
 fn a_window_without_an_application_id_joins_the_application_its_launch_named() {
     let Some(mut h) = Harness::new() else { return };
-    let mut data = XdgActivationTokenData::default();
-    data.app_id = Some("org.example.viewer".to_string());
+    let data = XdgActivationTokenData {
+        app_id: Some("org.example.viewer".to_string()),
+        ..Default::default()
+    };
     data.user_data.insert_if_missing(|| TokenGrant {
         created: 0.0,
         valid: true,

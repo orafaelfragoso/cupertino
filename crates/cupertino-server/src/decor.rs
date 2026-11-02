@@ -62,6 +62,8 @@ pub struct DecorInput<'a> {
     pub can_minimize: bool,
     /// The zoom button is enabled: the window is resizable and its application did not disable zoom.
     pub can_zoom: bool,
+    /// A standard title bar edge to edge across an output, without a window around it: square corners, no rim.
+    pub flush: bool,
 }
 
 pub struct Decor {
@@ -329,6 +331,7 @@ impl Decor {
                 state.enabled[2] as u64,
                 appearance,
                 input.style as u64,
+                input.flush as u64,
             ],
             &state.title,
         );
@@ -350,6 +353,9 @@ impl Decor {
         if render_tb {
             self.renders += 1;
             let pm = match input.style {
+                TitlebarStyle::Standard if input.flush => {
+                    self.deco.render_flush_titlebar(fw, scale, &state)
+                }
                 TitlebarStyle::Standard => self.deco.render_titlebar(fw, scale, &state),
                 TitlebarStyle::Unified => self.unified.render_titlebar(fw, scale, &state),
             };
@@ -519,6 +525,7 @@ mod tests {
             resizable: true,
             can_minimize: true,
             can_zoom: true,
+            flush: false,
         }
     }
 

@@ -276,6 +276,27 @@ impl Decorations {
         scale: f64,
         state: &DecorationState,
     ) -> Pixmap {
+        self.titlebar_pixmap(frame_width, scale, state, false)
+    }
+
+    /// The standard titlebar strip of [`Decorations::render_titlebar`] edge to edge across an output: square corners
+    /// and no rim.
+    pub fn render_flush_titlebar(
+        &mut self,
+        frame_width: f64,
+        scale: f64,
+        state: &DecorationState,
+    ) -> Pixmap {
+        self.titlebar_pixmap(frame_width, scale, state, true)
+    }
+
+    fn titlebar_pixmap(
+        &mut self,
+        frame_width: f64,
+        scale: f64,
+        state: &DecorationState,
+        flush: bool,
+    ) -> Pixmap {
         self.text.set_scale(scale as f32);
         let cfg = &self.config;
         let layout = self.layout(Size::new(frame_width, 0.0));
@@ -299,7 +320,7 @@ impl Decorations {
             }
             return pm;
         }
-        let r = cfg.corner_radius();
+        let r = if flush { 0.0 } else { cfg.corner_radius() };
         let fill = cfg.palette.titlebar(cfg.style, state.active);
         let (pw, ph) = (w as f64 / scale, h as f64 / scale);
         if let Some(path) = rounded_path(
@@ -324,7 +345,9 @@ impl Decorations {
                 pm.fill_rect(rect, &p, Transform::identity(), None);
             }
         }
-        self.stroke_rim(&mut pm, Size::new(pw, ph + 4.0 * r), scale);
+        if !flush {
+            self.stroke_rim(&mut pm, Size::new(pw, ph + 4.0 * r), scale);
+        }
         let cfg = &self.config;
         for b in &layout.buttons {
             draw_button(
@@ -454,6 +477,22 @@ mod tests {
             &DecorationState::default(),
         );
         assert_eq!(u.height(), 52);
+    }
+
+    #[test]
+    fn a_flush_titlebar_fills_its_top_corners() {
+        let mut d = decorations(TitlebarStyle::Standard, Appearance::Light);
+        let state = DecorationState::default();
+        let rounded = d.render_titlebar(800.0, 2.0, &state);
+        let flush = d.render_flush_titlebar(800.0, 2.0, &state);
+        assert_eq!(rgba(&rounded, 0, 0)[3], 0, "a window's corner is cut");
+        for (x, y) in [(0, 0), (1599, 0), (0, 20)] {
+            assert!(
+                near(rgba(&flush, x, y), d.config.palette.titlebar_active, 0.02),
+                "({x}, {y}) is the fill, no corner and no rim: {:?}",
+                rgba(&flush, x, y)
+            );
+        }
     }
 
     #[test]

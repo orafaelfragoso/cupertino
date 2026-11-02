@@ -213,10 +213,21 @@ pub struct WindowEntry {
     pub foreign: Option<ForeignToplevelHandle>,
     pub modal: bool,
     /// Space around the surface reserved by server-side decorations (see `WindowStyle::ssd_insets`).
-    pub insets: crate::config::Insets,
+    pub decor_insets: crate::config::Insets,
+    /// Configured full screen: the decorations are hidden and the client gets the whole frame.
+    pub fullscreen: bool,
 }
 
 impl WindowEntry {
+    /// The space the decorations take now: none while the window is full screen.
+    pub fn insets(&self) -> crate::config::Insets {
+        if self.fullscreen {
+            Default::default()
+        } else {
+            self.decor_insets
+        }
+    }
+
     /// The wl_surface of the window.
     pub fn surface(&self) -> &WlSurface {
         self.toplevel.wl_surface()
@@ -242,8 +253,14 @@ impl WindowEntry {
     }
 
     /// Apply a model configure: client size (frame minus insets), model states, activation.
-    pub fn configure(&self, frame: Rect, states: &cupertino_wm::ToplevelStates, activated: bool) {
-        let ins = self.insets;
+    pub fn configure(
+        &mut self,
+        frame: Rect,
+        states: &cupertino_wm::ToplevelStates,
+        activated: bool,
+    ) {
+        self.fullscreen = states.fullscreen;
+        let ins = self.insets();
         let size = (frame.w > ins.horizontal() && frame.h > ins.vertical()).then(|| {
             (
                 (frame.w - ins.horizontal()).round() as i32,
@@ -1109,7 +1126,7 @@ impl Cupertino {
             (true, true) => {
                 self.windows[idx].window.on_commit();
                 self.refresh_snapshot(id);
-                let (min, max) = frame_limits(self.windows[idx].insets, size_hints(surface));
+                let (min, max) = frame_limits(self.windows[idx].insets(), size_hints(surface));
                 let now = self.now();
                 let fx = self.wm.handle(
                     Command::SetSizeHints {
@@ -1156,7 +1173,7 @@ impl Cupertino {
         let identity = policy::app_identity(app_id.as_deref(), title.as_deref());
         self.windows[idx].window.on_commit();
         let geo = self.windows[idx].window.geometry();
-        let (min, max) = frame_limits(self.windows[idx].insets, size_hints(&surface));
+        let (min, max) = frame_limits(self.windows[idx].insets(), size_hints(&surface));
         // the protocol facts the window kind is chosen from (`cupertino_wm::window_kind`): parent and
         // modality; Wayland has no utility-window signal
         let parent = self.windows[idx]
@@ -1179,7 +1196,7 @@ impl Cupertino {
         } else {
             usable
         };
-        let ins = self.windows[idx].insets;
+        let ins = self.windows[idx].insets();
         let size = (geo.size.w > 0 && geo.size.h > 0).then(|| {
             Size::new(
                 geo.size.w as f64 + ins.horizontal(),
@@ -1363,13 +1380,14 @@ impl Cupertino {
                 continue;
             };
             let geo = entry.window.geometry();
-            let ins = entry.insets;
+            let ins = entry.insets();
             let origin = Point::<f64, Logical>::from((
                 plan.visual.x + ins.left - geo.loc.x as f64,
                 plan.visual.y + ins.top - geo.loc.y as f64,
             ));
             let style = entry.titlebar;
             let decorated = entry.server_side
+                && !entry.fullscreen
                 && self.config.window.decorations
                 && plan.exact
                 && (ins.top > 0.0 || style == cupertino_decorations::TitlebarStyle::Unified);
@@ -1662,12 +1680,12 @@ impl Cupertino {
                     states,
                 } => {
                     let activated = self.wm.key_window() == Some(window);
-                    if let Some(e) = self.entry(window) {
-                        let pos = self
-                            .wm
-                            .window(window)
-                            .map(|w| w.geometry())
-                            .unwrap_or_default();
+                    let pos = self
+                        .wm
+                        .window(window)
+                        .map(|w| w.geometry())
+                        .unwrap_or_default();
+                    if let Some(e) = self.windows.iter_mut().find(|e| e.id == window) {
                         e.configure(Rect::new(pos.x, pos.y, size.w, size.h), &states, activated);
                     }
                 }

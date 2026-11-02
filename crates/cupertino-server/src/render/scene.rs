@@ -44,7 +44,7 @@ use crate::cursor::CursorFrame;
 use crate::decor::{Decor, DecorInput};
 use crate::fx::{Effects, IntoGeom};
 use crate::shell::Shell;
-use crate::state::WindowEntry;
+use crate::state::{Shrink, WindowEntry};
 use crate::window_manager::Look;
 use cupertino_render_api::Renderer;
 
@@ -67,9 +67,11 @@ pub struct WindowPlan {
     pub corner: Option<f64>,
 }
 
-/// How a window is drawn at `now`: at rest the client's committed size wins (no stretch);
-/// while the model animates it, the content is scaled to the animated rectangle (frame, then the
-/// minimize collapse, then the presentation scale about the centre).
+/// How a window is drawn at `now`: at rest the client's committed size wins (no stretch); while
+/// the model animates only its frame, the content keeps its size from the frame's top-left corner,
+/// cropped to the frame (a buffer that does not reach the frame yet holds the window at its size);
+/// while it minimizes or takes a presentation scale, the content is scaled to the animated
+/// rectangle (frame, then the minimize collapse, then the scale about the centre).
 pub fn plan_window(
     pres: &Presentation,
     geometry: (f64, f64),
@@ -78,9 +80,19 @@ pub fn plan_window(
 ) -> WindowPlan {
     let (gw, gh) = (geometry.0.max(1.0), geometry.1.max(1.0));
     let f = pres.frame.translate(offset.0, offset.1);
-    let at_rest =
-        !animating && (pres.scale - 1.0).abs() < 1e-9 && pres.minimize_progress.abs() < 1e-9;
-    if at_rest {
+    let unscaled = (pres.scale - 1.0).abs() < 1e-9 && pres.minimize_progress.abs() < 1e-9;
+    if unscaled && animating && geometry.0 > 0.0 && geometry.1 > 0.0 {
+        return WindowPlan {
+            visual: Rect::new(f.x, f.y, f.w.min(gw), f.h.min(gh)),
+            scale_x: 1.0,
+            scale_y: 1.0,
+            opacity: pres.opacity.clamp(0.0, 1.0),
+            shadow: pres.shadow.clamp(0.0, 1.0),
+            exact: false,
+            corner: None,
+        };
+    }
+    if unscaled && !animating {
         let size = if geometry.0 > 0.0 && geometry.1 > 0.0 {
             (geometry.0, geometry.1)
         } else {
@@ -199,14 +211,8 @@ pub fn plan_for(
     if skips_frame_animation(w.state(), options) {
         pres.frame = w.lifecycle.target_frame();
     }
-    let animating = w.lifecycle.is_animating(now);
-    let geo = entry.window.geometry();
-    let ins = entry.insets();
-    let size = (
-        f64::from(geo.size.w) + ins.horizontal(),
-        f64::from(geo.size.h) + ins.vertical(),
-    );
-    let mut plan = plan_window(&pres, size, animating, (slide, 0.0));
+    let animating = w.lifecycle.is_animating(now) || entry.shrink != Shrink::None;
+    let mut plan = plan_window(&pres, entry.committed_size(), animating, (slide, 0.0));
     let desk = fx.show_desktop_progress(now);
     if desk > 0.0 && !w.sticky {
         if let Some(out) = wm.output(w.output) {
@@ -705,8 +711,10 @@ fn window_elements(
             style: corner_style(style.continuous_corners),
             exact: plan.exact,
         }
-    } else {
+    } else if plan.exact {
         Clip::None
+    } else {
+        Clip::Rect(output_rect(visual_local))
     };
     out.push(Piece::Tree(Box::new(Tree {
         surface: surface.clone(),
@@ -728,6 +736,11 @@ fn window_elements(
         visual_local.loc,
         plan,
     );
+    let backdrops = if plan.exact {
+        backdrops
+    } else {
+        cropped_backdrops(backdrops, visual_local)
+    };
     out.extend(backdrop_elements(p, &backdrops, alpha));
     if shadow && styled {
         out.extend(shadow_piece(p, entry.id, plan, active, plan.opacity));
@@ -760,6 +773,22 @@ fn rescaled_backdrops(
         .collect()
 }
 
+/// Backdrops of a window cropped to `visual` with the window's content: their right and bottom edges stop at its edges.
+fn cropped_backdrops(
+    backdrops: Vec<BackdropArea>,
+    visual: smithay::utils::Rectangle<f64, Logical>,
+) -> Vec<BackdropArea> {
+    let (right, bottom) = (visual.loc.x + visual.size.w, visual.loc.y + visual.size.h);
+    backdrops
+        .into_iter()
+        .filter_map(|mut b| {
+            b.area.size.w = b.area.size.w.min(right - b.area.loc.x);
+            b.area.size.h = b.area.size.h.min(bottom - b.area.loc.y);
+            (b.area.size.w > 0.0 && b.area.size.h > 0.0).then_some(b)
+        })
+        .collect()
+}
+
 /// Title bar and rim of a server-side decorated window (front to back), rescaled with the window
 /// and, for a stage placement ([`WindowPlan::corner`]), masked to its animated corners.
 fn builtin_decorations(
@@ -777,6 +806,12 @@ fn builtin_decorations(
     if fw < 1.0 || fh < 1.0 || (ins.top <= 0.0 && entry.titlebar == TitlebarStyle::Standard) {
         return Vec::new();
     }
+    // a frame animation crops the window to its frame
+    let (fw, fh) = if (plan.scale_x, plan.scale_y) == (1.0, 1.0) {
+        (fw.min(plan.visual.w), fh.min(plan.visual.h))
+    } else {
+        (fw, fh)
+    };
     let (title, resizable, can_minimize, can_zoom) =
         p.wm.window(entry.id)
             .map(|w| {
@@ -937,7 +972,14 @@ pub fn capture_window(
         corner: None,
     };
     let deco = window_decorations(p, entry, &plan, active);
-    let pieces = window_elements(p, entry, &plan, active, shadow, deco);
+    // a material samples what lies below it and keeps the target's alpha, so on the clear snapshot it would
+    // leave its area transparent: the fallback fill stands in
+    let pieces = window_elements(p, entry, &plan, active, shadow, deco)
+        .into_iter()
+        .map(|piece| match piece {
+            Piece::Material(m) => fallback_fill(p, m.kind, m.index, m.rect, m.radius, m.opacity),
+            piece => piece,
+        });
     let mut stack = Composition::new(p.scale);
     stack.extend(SceneLayer::Windows, pieces);
     let composed = stack.finish(p);
@@ -1825,15 +1867,24 @@ mod tests {
     }
 
     #[test]
-    fn animating_plan_scales_content_to_the_frame() {
-        let p = plan_window(
-            &pres(Rect::new(0.0, 0.0, 800.0, 600.0)),
+    fn a_frame_animation_crops_the_content_at_its_size() {
+        let grown = plan_window(
+            &pres(Rect::new(10.0, 20.0, 800.0, 600.0)),
             (400.0, 300.0),
             true,
             (0.0, 0.0),
         );
-        assert!(!p.exact);
-        assert_eq!((p.scale_x, p.scale_y), (2.0, 2.0));
+        assert!(!grown.exact);
+        assert_eq!((grown.scale_x, grown.scale_y), (1.0, 1.0));
+        assert_eq!(grown.visual, Rect::new(10.0, 20.0, 400.0, 300.0));
+        let shrunk = plan_window(
+            &pres(Rect::new(10.0, 20.0, 500.0, 350.0)),
+            (800.0, 600.0),
+            true,
+            (0.0, 0.0),
+        );
+        assert_eq!((shrunk.scale_x, shrunk.scale_y), (1.0, 1.0));
+        assert_eq!(shrunk.visual, Rect::new(10.0, 20.0, 500.0, 350.0));
     }
 
     #[test]

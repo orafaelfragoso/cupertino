@@ -142,6 +142,21 @@ struct ClientState {
     /// The popup, once requested: its surfaces and size.
     popup: Option<(wl_surface::WlSurface, xdg_surface::XdgSurface, (i32, i32))>,
     popup_buffer: Option<wl_buffer::WlBuffer>,
+    sizing: Sizing,
+    configured_size: Option<(i32, i32)>,
+}
+
+/// What the test client draws after a configure.
+#[derive(Clone, Copy, Default, PartialEq)]
+enum Sizing {
+    /// Its own size, once.
+    #[default]
+    Own,
+    /// The size of each configure that names one.
+    Follow,
+    /// On every configure, the size it names where that is larger, its own size where it is smaller (the size is a
+    /// hint to a floating toplevel).
+    Grow,
 }
 
 /// An opaque buffer of `size` in `color`, attached to `surface` and committed.
@@ -264,7 +279,19 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for ClientState {
             }
             let first = !state.status.lock().unwrap().configured;
             state.status.lock().unwrap().configured = true;
-            if first {
+            let wanted = state.configured_size.take();
+            let redraw = match (state.sizing, wanted) {
+                (Sizing::Follow, Some(size)) if size != state.size => {
+                    state.size = size;
+                    true
+                }
+                (Sizing::Grow, Some((w, h))) => {
+                    state.size = (state.size.0.max(w), state.size.1.max(h));
+                    true
+                }
+                _ => false,
+            };
+            if first || redraw {
                 state.attach(qh);
             }
         }
@@ -282,8 +309,12 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for ClientState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let xdg_toplevel::Event::Close = event {
-            state.status.lock().unwrap().closed = true;
+        match event {
+            xdg_toplevel::Event::Close => state.status.lock().unwrap().closed = true,
+            xdg_toplevel::Event::Configure { width, height, .. } if width > 0 && height > 0 => {
+                state.configured_size = Some((width, height));
+            }
+            _ => {}
         }
     }
 }
@@ -301,6 +332,7 @@ struct Options {
     max_size: (i32, i32),
     /// KDE appmenu address (service, path) announced before the first commit.
     menu_address: Option<(String, String)>,
+    sizing: Sizing,
 }
 
 struct TestClient {
@@ -390,6 +422,8 @@ impl TestClient {
                 buffer: None,
                 popup: None,
                 popup_buffer: None,
+                sizing: options.sizing,
+                configured_size: None,
             };
             while !s2.load(Ordering::SeqCst) && !st2.lock().unwrap().closed {
                 if queue.roundtrip(&mut client).is_err() {
@@ -702,6 +736,148 @@ fn artifact(img: &image::RgbaImage, name: &str) {
 }
 
 #[test]
+fn a_zoom_and_its_restore_keep_the_content_at_its_size_and_cover_the_frame() {
+    use cupertino_server::render::scene::plan_for;
+    let Some(mut h) = Harness::new() else { return };
+    let client = TestClient::spawn_with(
+        h.socket_path(),
+        "org.example.zoom",
+        (420, 300),
+        [255, 128, 0, 255],
+        Options {
+            sizing: Sizing::Follow,
+            ..Options::default()
+        },
+    );
+    h.wait_until("the window to be mapped", |s| s.wm.windows().count() == 1);
+    let t0 = h.state.now() + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, t0);
+    h.state.tick();
+    for _ in 0..10 {
+        h.step();
+    }
+    let id = h.state.wm.key_window().unwrap();
+    let rest = h.state.wm.window(id).unwrap().geometry();
+    let committed = |h: &Harness| h.state.entry(id).unwrap().committed_size();
+    let drawn = |h: &Harness| {
+        let entry = h.state.entry(id).unwrap();
+        let (plan, pres) = plan_for(
+            &h.state.wm,
+            entry,
+            0.0,
+            h.state.now(),
+            &h.state.fx,
+            h.state.display_options(),
+        )
+        .expect("drawn");
+        assert_eq!(
+            (plan.scale_x, plan.scale_y),
+            (1.0, 1.0),
+            "the content is never scaled: frame {:?}, client {:?}",
+            pres.frame,
+            committed(h)
+        );
+        (plan.visual, pres.frame)
+    };
+
+    h.state.command(Command::ToggleZoom { window: id });
+    common::set_time(&mut h.state, &mut h.event_loop, t0 + 0.05);
+    h.state.tick();
+    let (visual, frame) = drawn(&h);
+    assert!(frame.w > rest.w, "the frame grows: {frame:?}");
+    assert_eq!(
+        (visual.w, visual.h),
+        (rest.w, rest.h),
+        "before the client draws the zoomed size the window keeps its own"
+    );
+    h.wait_until("the client to draw the zoomed size", |s| {
+        s.entry(id).unwrap().committed_size().0 > rest.w + 1.0
+    });
+    let (visual, frame) = drawn(&h);
+    assert!(committed(&h).0 > frame.w, "the animation still runs");
+    assert_eq!(visual, frame, "the zoomed buffer is cropped to the frame");
+
+    common::set_time(&mut h.state, &mut h.event_loop, t0 + 3.0);
+    h.state.tick();
+    let zoomed = committed(&h);
+    h.state.command(Command::ToggleZoom { window: id });
+    common::set_time(&mut h.state, &mut h.event_loop, t0 + 3.15);
+    h.state.tick();
+    for _ in 0..20 {
+        h.step();
+    }
+    let (visual, frame) = drawn(&h);
+    assert_eq!(
+        committed(&h),
+        zoomed,
+        "while the frame shrinks the client keeps a size that covers it"
+    );
+    assert!(frame.w < zoomed.0 && frame.w > rest.w);
+    assert_eq!(visual, frame);
+
+    common::set_time(&mut h.state, &mut h.event_loop, t0 + 6.0);
+    h.state.tick();
+    h.wait_until("the client to draw its restored size", |s| {
+        s.entry(id).unwrap().committed_size() == (rest.w, rest.h)
+    });
+    let (visual, _) = drawn(&h);
+    assert_eq!(visual, rest);
+    drop(client);
+}
+
+#[test]
+fn a_window_that_keeps_a_larger_size_after_a_restore_is_drawn_whole_at_rest() {
+    use cupertino_server::render::scene::plan_for;
+    let Some(mut h) = Harness::new() else { return };
+    let client = TestClient::spawn_with(
+        h.socket_path(),
+        "org.example.grow",
+        (420, 300),
+        [255, 128, 0, 255],
+        Options {
+            sizing: Sizing::Grow,
+            ..Options::default()
+        },
+    );
+    h.wait_until("the window to be mapped", |s| s.wm.windows().count() == 1);
+    let t0 = h.state.now() + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, t0);
+    h.state.tick();
+    for _ in 0..10 {
+        h.step();
+    }
+    let id = h.state.wm.key_window().unwrap();
+    let rest = h.state.wm.window(id).unwrap().geometry();
+    h.state.command(Command::ToggleZoom { window: id });
+    h.wait_until("the client to draw the zoomed size", |s| {
+        s.entry(id).unwrap().committed_size().0 > rest.w + 1.0
+    });
+    common::set_time(&mut h.state, &mut h.event_loop, t0 + 3.0);
+    h.state.tick();
+    let zoomed = h.state.entry(id).unwrap().committed_size();
+    h.state.command(Command::ToggleZoom { window: id });
+    common::set_time(&mut h.state, &mut h.event_loop, t0 + 6.0);
+    h.state.tick();
+    for _ in 0..40 {
+        h.step();
+    }
+    let entry = h.state.entry(id).unwrap();
+    assert_eq!(entry.committed_size(), zoomed, "the client kept its size");
+    let (plan, _) = plan_for(
+        &h.state.wm,
+        entry,
+        0.0,
+        h.state.now(),
+        &h.state.fx,
+        h.state.display_options(),
+    )
+    .expect("drawn");
+    assert!(plan.exact, "at rest once the client answered the configure");
+    assert_eq!((plan.visual.w, plan.visual.h), zoomed);
+    drop(client);
+}
+
+#[test]
 fn minimize_collapses_the_window_towards_its_target() {
     use cupertino_server::render::scene::plan_for;
     let Some(mut h) = Harness::new() else { return };
@@ -826,7 +1002,12 @@ fn under_reduce_motion_full_screen_draws_the_new_frame_at_once() {
         h.state.display_options(),
     )
     .expect("drawn");
-    assert_eq!(reduced.visual, target);
+    let (w, h) = entry.committed_size();
+    assert_eq!(
+        reduced.visual,
+        Rect::new(target.x, target.y, target.w.min(w), target.h.min(h)),
+        "the window takes the new frame at once, its content at the size the client drew"
+    );
     drop(client);
 }
 

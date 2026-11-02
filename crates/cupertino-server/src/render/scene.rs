@@ -1078,6 +1078,12 @@ fn dock_edge(target: Rect, screen: &Rect) -> DockEdge {
     }
 }
 
+/// The layer-shell `top` surfaces of `output`, its menu bar aside, give way to a full-screen window in front of it:
+/// the dock and panels are neither drawn nor hit while it covers the output, except in the overview.
+pub fn top_layer_covered(wm: &Wm, shell: &crate::shell::Shell, output: OutputId) -> bool {
+    !shell.overview_open() && wm.fullscreen_front(output).is_some()
+}
+
 /// Minimize / restore through the effect mesh: the window is captured at its natural size and
 /// drawn through the warp, funnel or scale mesh towards the dock tile.
 fn minimize_elements(
@@ -1178,9 +1184,13 @@ fn layer_elements(p: &mut SceneParams<'_>, layer: Layer, captures: &mut Vec<Piec
     let map = layer_map_for_output(p.output);
     let scale = Scale::from(p.scale);
     let mut out: Vec<Piece> = Vec::new();
+    let covered = layer == Layer::Top && top_layer_covered(p.wm, p.shell, p.output_id);
     // later surfaces are drawn on top of earlier ones
     for surface in crate::authorization::layers_stacked(&map, layer).rev() {
         if p.for_capture && crate::authorization::is_prompt(surface.wl_surface()) {
+            continue;
+        }
+        if covered && !p.menu_bars.has_surface(surface.wl_surface()) {
             continue;
         }
         let Some(geo) = map.layer_geometry(surface) else {

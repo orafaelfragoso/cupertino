@@ -140,6 +140,14 @@ impl Wm {
             .collect()
     }
 
+    /// The full-screen window covering `output`: its front-most window on screen, when that one is full screen.
+    pub fn fullscreen_front(&self, output: OutputId) -> Option<WindowId> {
+        self.visible_windows(output)
+            .last()
+            .copied()
+            .filter(|id| self.windows[id].state() == LifecycleState::FullScreen)
+    }
+
     /// Whether a window may take input focus right now.
     pub fn focusable(&self, id: WindowId) -> bool {
         self.window_on_screen(id)

@@ -31,6 +31,9 @@ pub const CENTRE_HEADER_HEIGHT: f64 = 36.0;
 /// Clear button: height 24 and 12 pt label padding like the banner action buttons (approximate role, values).
 pub const CLEAR_BUTTON_HEIGHT: f64 = 24.0;
 pub const CLEAR_BUTTON_PADDING: f64 = 12.0;
+/// The Clear button sits as far inside the header's right edge as from its top and bottom: 6 pt, concentric with
+/// the panel's corner.
+pub const CLEAR_BUTTON_INSET: f64 = (CENTRE_HEADER_HEIGHT - CLEAR_BUTTON_HEIGHT) / 2.0;
 /// Clear menu metrics: item height 22, edge padding 5, minimum width 150, radius 6 (section 1).
 pub const MENU_ITEM_HEIGHT: f64 = 22.0;
 pub const MENU_EDGE_PADDING: f64 = 5.0;
@@ -39,7 +42,8 @@ pub const MENU_RADIUS: f64 = 6.0;
 /// Horizontal padding of a menu label inside its item (approximate).
 pub const MENU_LABEL_PADDING: f64 = 12.0;
 
-/// Header row of the open list: the title at the left edge of the cards, the Clear button at their right edge.
+/// Header row of the open list, a panel as wide as the cards: the title at the card padding from its left edge, the
+/// Clear button [`CLEAR_BUTTON_INSET`] inside its right edge.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CentreHeader {
     /// Row rectangle.
@@ -53,8 +57,8 @@ pub fn centre_header(layout: &StackLayout, surface: Size, clear_width: f64) -> C
     let x = surface.width - layout.right_margin - layout.width;
     let row = Rect::new(x, layout.top_inset, layout.width, CENTRE_HEADER_HEIGHT);
     let clear = Rect::new(
-        row.max_x() - clear_width,
-        row.y() + (CENTRE_HEADER_HEIGHT - CLEAR_BUTTON_HEIGHT) / 2.0,
+        row.max_x() - CLEAR_BUTTON_INSET - clear_width,
+        row.y() + CLEAR_BUTTON_INSET,
         clear_width,
         CLEAR_BUTTON_HEIGHT,
     );
@@ -123,7 +127,7 @@ pub fn header_press(header: &CentreHeader, menu: Option<&ClearMenu>, p: Point) -
 /// size for a collapsed group, whose cards behind come from [`GroupStack::cards`]. Rows follow
 /// each other with no spacing, each [`GroupStack::height`] tall: the card,
 /// 8 pt per stacked row and the 6 pt bottom padding of its last visible card (the 6 pt gap between cards and groups). Rows are placed below the
-/// header row until the next one's visible cards would pass the bottom margin.
+/// header panel, the same gap apart, until the next one's visible cards would pass the bottom margin.
 pub fn centre_cards(
     rows: impl IntoIterator<Item = (u32, f64, usize)>,
     stack: &GroupStack,
@@ -131,7 +135,7 @@ pub fn centre_cards(
     surface: Size,
 ) -> Vec<(u32, Rect)> {
     let x = surface.width - layout.right_margin - layout.width;
-    let mut y = layout.top_inset + CENTRE_HEADER_HEIGHT;
+    let mut y = layout.top_inset + CENTRE_HEADER_HEIGHT + stack.bottom_padding;
     let mut cards = Vec::new();
     for (id, height, count) in rows {
         if y + stack.visible_height(height, count) > surface.height - CENTRE_BOTTOM_MARGIN {
@@ -223,12 +227,12 @@ mod tests {
             &layout,
             Size::new(376.0, 330.0),
         );
-        // 76 + 100 = 176; next 182 + 100 = 282 <= 318; third 288 + 100 = 388 > 318
+        // 82 + 100 = 182; next 188 + 100 = 288 <= 318; third 294 + 100 = 394 > 318
         assert_eq!(
             cards,
             vec![
-                (7, Rect::new(16.0, 76.0, 344.0, 100.0)),
-                (6, Rect::new(16.0, 182.0, 344.0, 100.0))
+                (7, Rect::new(16.0, 82.0, 344.0, 100.0)),
+                (6, Rect::new(16.0, 188.0, 344.0, 100.0))
             ]
         );
     }
@@ -245,8 +249,8 @@ mod tests {
         assert_eq!(
             cards,
             vec![
-                (2, Rect::new(16.0, 76.0, 344.0, 60.0)),
-                (1, Rect::new(16.0, 142.0, 344.0, 80.0))
+                (2, Rect::new(16.0, 82.0, 344.0, 60.0)),
+                (1, Rect::new(16.0, 148.0, 344.0, 80.0))
             ]
         );
     }
@@ -264,17 +268,17 @@ mod tests {
         assert_eq!(
             cards,
             vec![
-                (3, Rect::new(16.0, 76.0, 344.0, 86.0)),
-                (1, Rect::new(16.0, 184.0, 344.0, 60.0))
+                (3, Rect::new(16.0, 82.0, 344.0, 86.0)),
+                (1, Rect::new(16.0, 190.0, 344.0, 60.0))
             ]
         );
-        // its stacked rows end 76 + 86 + 16 = 178, inside the 800 − 12 limit; at a 189 pt surface they do not fit
+        // its stacked rows end 82 + 86 + 16 = 184, inside the 800 − 12 limit; at a 195 pt surface they do not fit
         assert_eq!(
-            centre_cards([(3, 86.0, 3)], &stack, &layout, Size::new(376.0, 189.0)),
+            centre_cards([(3, 86.0, 3)], &stack, &layout, Size::new(376.0, 195.0)),
             Vec::new()
         );
         assert_eq!(
-            centre_cards([(3, 86.0, 3)], &stack, &layout, Size::new(376.0, 190.0)).len(),
+            centre_cards([(3, 86.0, 3)], &stack, &layout, Size::new(376.0, 196.0)).len(),
             1
         );
     }
@@ -356,18 +360,18 @@ mod tests {
     }
 
     #[test]
-    fn the_clear_button_sits_at_the_right_edge_of_the_cards_and_its_menu_drops_below_it() {
+    fn the_clear_button_sits_6_pt_inside_the_header_and_its_menu_drops_below_it() {
         let header = centre_header(&StackLayout::default(), Size::new(376.0, 800.0), 60.0);
         assert_eq!(header.row, Rect::new(16.0, 40.0, 344.0, 36.0));
-        assert_eq!(header.clear, Rect::new(300.0, 46.0, 60.0, 24.0));
+        assert_eq!(header.clear, Rect::new(294.0, 46.0, 60.0, 24.0));
         let menu = clear_menu(header.clear, 2, 120.0);
         // 120 + 24 + 10 = 154 wide, 2 * 22 + 10 = 54 high, right edges aligned
-        assert_eq!(menu.panel, Rect::new(206.0, 74.0, 154.0, 54.0));
+        assert_eq!(menu.panel, Rect::new(200.0, 74.0, 154.0, 54.0));
         assert_eq!(
             menu.rows,
             vec![
-                Rect::new(211.0, 79.0, 144.0, 22.0),
-                Rect::new(211.0, 101.0, 144.0, 22.0)
+                Rect::new(205.0, 79.0, 144.0, 22.0),
+                Rect::new(205.0, 101.0, 144.0, 22.0)
             ]
         );
     }

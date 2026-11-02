@@ -129,6 +129,8 @@ struct App {
     menu_hover: Option<usize>,
     clear_hover: bool,
     menu_backdrop: Option<Backdrop>,
+    /// The material panel behind the header row, so its title and Clear button read on any wallpaper.
+    header_backdrop: Option<Backdrop>,
     hovered: Option<u32>,
     drag: Option<Drag>,
     /// Banners of the last drawn frame, for hit testing.
@@ -215,6 +217,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         menu_hover: None,
         clear_hover: false,
         menu_backdrop: None,
+        header_backdrop: None,
         hovered: None,
         drag: None,
         placements: Vec::new(),
@@ -469,6 +472,19 @@ impl App {
             let backdrop = &self.backdrops[&item.slot];
             backdrop.set_shape(&item.rect, radius)?;
             backdrop.set_alpha(item.opacity.clamp(0.0, 1.0))?;
+        }
+        match &self.header {
+            Some(header) => {
+                if self.header_backdrop.is_none() {
+                    let backdrop = self.effects.backdrop(&self.conn, self.layer.surface())?;
+                    backdrop.set_material(BannerStyle::DEFAULT_MATERIAL);
+                    self.header_backdrop = Some(backdrop);
+                }
+                if let Some(backdrop) = &self.header_backdrop {
+                    backdrop.set_shape(&header.row, radius)?;
+                }
+            }
+            None => self.header_backdrop = None,
         }
         // the Clear menu is a panel of the same material as a card, under its own backdrop
         match &self.menu {

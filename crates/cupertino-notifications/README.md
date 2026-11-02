@@ -35,8 +35,8 @@ connection or bus failure, or the server closing the surface, ends the process w
 
 - **Surface.** One overlay layer surface anchored top, right and bottom, namespace `cupertino-notifications`, exclusive zone -1.
   Its input region covers only the visible banners (the whole surface while the list is open), so clicks elsewhere reach the
-  windows. Each banner and card gets one `cupertino_backdrop_v1` with material `Menu`; the process draws the shadow and content
-  only.
+  windows. Each banner and card, the open list's header row and its Clear menu get one `cupertino_backdrop_v1` with material
+  `Menu`; the process draws the shadow and content only.
 - **Display options.** Reduce Motion from the session observer sets `Motion::reduce_motion` (banners fade in place). Reduce
   Transparency and Increase Contrast select the opaque material and the high-contrast catalog.
 - **Input.** Hover pauses the timeout. A click runs the default action, a button its action, a link `xdg-open`. The close button
@@ -156,7 +156,7 @@ recipe through `cupertino-glass`'s CPU reference for tools and screenshots.
 | shadow opacity 0.20 / 0.25, radius 4, no offset; vibrant rim; 1 pt white inner rim | |
 | alerts skip the timer (critical urgency → alert mapping is ours) | |
 | top inset (menu bar + 16 pt), right margin 16 pt (Dock at the bottom) | |
-| centre header: title "Notification Centre" bold 22 at the cards' left edge, Clear menu button at their right edge; the open list replaces the banners on screen | |
+| centre header: a panel of the cards' material, corner radius and rim, 6 pt above the first card; title "Notification Centre" bold 22 at the card padding (12 pt) from its left edge, Clear menu button 6 pt inside its right edge, top and bottom; the open list replaces the banners on screen | |
 | Clear menu scopes: "Banners Only" (keeps pinned; offered only with both pinned and other notifications in the list) and "All Notifications" (always); panel metrics item 22, edge padding 5, minimum width 150, radius 6, row highlight radius 4 | |
 | corner radius 14 pt, platter material `Medium`, all other banner metrics | |
 | Focus rows: "For 1 hour" (3600 s), "Until this evening" from 04:00 to 17:59 else "Until tomorrow morning"; both end today 07:00 before 04:00, today 19:00 before 18:00, else tomorrow 07:00; durations clamped to 86400 s; row ids `one-hour`, `evening`, `morning` | |

@@ -158,7 +158,8 @@ impl State {
         display_height: f64,
         notify: Notify,
     ) -> Result<State> {
-        let hidden = services.detect().hidden();
+        let backends = services.detect();
+        let hidden = backends.hidden();
         let pane = if hidden.contains(&pane) {
             sidebar::rows(&hidden)[0]
         } else {
@@ -193,7 +194,10 @@ impl State {
             paths,
             settings,
             services,
-            live: Live::default(),
+            live: Live {
+                hardware: Some(backends.hardware),
+                ..Live::default()
+            },
             groups: sidebar::groups(&hidden),
             hidden,
             history: History::new(pane),
@@ -260,7 +264,9 @@ impl State {
     /// first refresh too, whatever the pane: whether there is one names the Battery row.
     pub(crate) fn refresh(&mut self, now: f64) -> Result<()> {
         self.refreshed = now;
-        let hidden = self.services.detect().hidden();
+        let backends = self.services.detect();
+        self.live.hardware = Some(backends.hardware);
+        let hidden = backends.hidden();
         if hidden != self.hidden {
             self.groups = sidebar::groups(&hidden);
             self.hidden = hidden;
@@ -286,6 +292,7 @@ impl State {
                 }
             }
             PaneId::Displays => {
+                self.live.displays = self.services.displays();
                 if self.level.is_none() {
                     self.live.brightness = self.services.brightness();
                 }

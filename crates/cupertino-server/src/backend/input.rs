@@ -1541,7 +1541,7 @@ mod tests {
     }
 
     #[test]
-    fn a_mouse_being_plugged_or_removed_changes_the_mice_property_and_is_announced() {
+    fn a_mouse_is_announced_on_its_first_motion_and_its_removal_and_an_unused_pointer_never() {
         use crate::quit::{BusOut, MouseEntry};
         let event_loop: smithay::reexports::calloop::EventLoop<'static, Cupertino> =
             smithay::reexports::calloop::EventLoop::try_new().unwrap();
@@ -1578,6 +1578,21 @@ mod tests {
         state.process_input_event::<EvdevBackend>(InputEvent::DeviceAdded {
             device: mouse.clone(),
         });
+        assert!(
+            rx.try_recv().is_err(),
+            "a pointer that has not moved, like a keyboard's, is not a mouse yet"
+        );
+        assert!(state.session_settings().mice.is_empty());
+        let motion = || InputEvent::PointerMotion {
+            event: MotionEvent {
+                stamp: Stamp {
+                    device: mouse.clone(),
+                    time_us: 1_000,
+                },
+                delta: (3.0, 0.0),
+            },
+        };
+        state.process_input_event::<EvdevBackend>(motion());
         assert_eq!(
             mice(rx.try_recv().ok()),
             vec![MouseEntry {
@@ -1590,7 +1605,11 @@ mod tests {
         state.process_input_event::<EvdevBackend>(InputEvent::DeviceAdded {
             device: pad.clone(),
         });
-        assert!(rx.try_recv().is_err(), "a touchpad is not announced");
+        state.process_input_event::<EvdevBackend>(motion());
+        assert!(
+            rx.try_recv().is_err(),
+            "a touchpad is not announced, a mouse once"
+        );
         assert_eq!(state.session_settings().mice.len(), 1);
         state.process_input_event::<EvdevBackend>(InputEvent::DeviceRemoved { device: mouse });
         assert!(mice(rx.try_recv().ok()).is_empty());

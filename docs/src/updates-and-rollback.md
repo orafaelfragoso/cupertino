@@ -20,7 +20,7 @@ Do this on the machine that builds the releases, with a USB drive mounted for th
 packaging/keyring/local-release keygen --master-home /path/on/usb/cupertino-master-gnupg
 ```
 
-`gpg` asks for a passphrase for the master key. The master key stays in that directory on the drive. Back it up and unplug it; keep it offline. The command puts the signing subkey (valid one year) and `PUBLIC.asc` in `~/.config/cupertino/signing`. To build an ISO that trusts the key, set it when you build:
+`gpg` asks for a passphrase for the master key. The master key stays in that directory on the drive. Back it up and unplug it; keep it offline. The command puts the signing subkey (valid one year) and `PUBLIC.asc` in `~/.config/cupertino/signing`. Copy that directory to the key USB as `cupertino-signing`, next to the master home, so a new install can get it back. It holds the secret signing subkey: treat the copy as a secret. To build an ISO that trusts the key, set it when you build:
 
 ```sh
 CUPERTINO_KEYRING_KEY=~/.config/cupertino/signing/PUBLIC.asc scripts/build-iso.sh
@@ -28,7 +28,8 @@ CUPERTINO_KEYRING_KEY=~/.config/cupertino/signing/PUBLIC.asc scripts/build-iso.s
 
 ### After a new install: restore the signing key
 
-A fresh install has the public key (through `cupertino-keyring`) but not the subkey that signs. Copy the `cupertino-signing` directory from the key USB to `~/.config/cupertino/signing`. Only the signing subkey and `PUBLIC.asc` go there; the master key stays on the drive. `local-release` refuses a signing home that holds the master secret key.
+A fresh install has the public key (through `cupertino-keyring`) but not the subkey that signs, and `local-release` stops with "no signing key" until `~/.config/cupertino/signing` exists. Copy the `cupertino-signing` directory that you saved from the key USB (see above) to `~/.config/cupertino/signing`. Only the signing subkey and `PUBLIC.asc` go there; the master key stays on the drive. `local-release` refuses a signing home that holds the master secret key.
+
 The subkey can sign for any repository that pacman trusts the master key for, so keep `~/.config/cupertino/signing` private. When the subkey expires, add a new one on the drive; `local-release` does not do this.
 
 ### Update
@@ -44,7 +45,7 @@ sudo pacman -Syu
 
 ### What pacman refuses
 
-pacman installs only packages signed by the Cupertino key. It refuses a package that is unsigned, one that was changed after it was signed (tampered), and one signed by another key. `packaging/ci/test-local-repo.sh` checks these three refusals against a throwaway key, along with keygen, an empty first-boot database, and install and update from a `file://` repository. I did not run it while writing this page.
+pacman installs only packages signed by the Cupertino key. It refuses a package that is unsigned, one that was changed after it was signed (tampered), and one signed by another key. `packaging/ci/test-local-repo.sh` checks these three refusals against a throwaway key, along with keygen, an empty first-boot database, and install and update from a `file://` repository. It was not run for this page.
 
 To go back, use `sudo cupertino-rollback VERSION` (see [Roll back](#roll-back)).
 

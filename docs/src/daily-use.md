@@ -81,7 +81,7 @@ To investigate a reset with an AI assistant:
 
 1. Run `cupertino-diagnose --area crash --json`. The `crash.gpu_reset` check is `warn` when `session.log` has a reset, with the facts `resets`, `remade`, `last_time`, `last_gpu`, `last_reason` and `last_outcome`.
 2. Copy the lines of `~/.local/state/cupertino/server.log` around `last_time` (`server.log.1` if the session has restarted since).
-3. Give both to an AI assistant, or to the driver's bug tracker. The Phase 7 AI service is planned and not built; until it exists, paste them by hand.
+3. Give both to an AI assistant, or to the driver's bug tracker. Paste them by hand; no Cupertino service does this yet.
 
 ## If it hangs
 

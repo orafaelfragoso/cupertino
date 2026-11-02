@@ -636,9 +636,12 @@ mod tests {
         let mine = dir.path().join("orca");
         std::fs::write(&mine, "#!/bin/sh\n").unwrap();
         let mine = mine.to_str().unwrap();
+        // the file's own path: some systems link `/usr/bin/env` to a multi-call binary
+        let env = std::fs::canonicalize("/usr/bin/env").unwrap();
+        let env = env.to_str().unwrap();
         assert_eq!(
-            resolve(&[mine, "/usr/bin/env"]),
-            Some("/usr/bin/env"),
+            resolve(&[mine, env]),
+            Some(env),
             "a file of the test's user is skipped"
         );
         assert_eq!(

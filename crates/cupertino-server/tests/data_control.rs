@@ -330,7 +330,7 @@ fn a_file_that_is_not_the_persons_alone_allows_nothing() {
     use std::os::unix::fs::PermissionsExt;
     let Some(mut h) = Harness::new() else { return };
     // the watch reports a change of the contents, so each step writes other entries
-    let ls = || Entry::for_program(Path::new("/usr/bin/ls")).unwrap();
+    let ls = || Entry::for_program(&std::fs::canonicalize("/usr/bin/ls").unwrap()).unwrap();
     store(&h.conf(), vec![this_program(), ls()]);
     std::fs::set_permissions(h.conf(), std::fs::Permissions::from_mode(0o666)).unwrap();
     h.watch();

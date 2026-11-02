@@ -218,25 +218,27 @@ mod tests {
 
     #[test]
     fn a_program_of_the_system_is_allowed_by_its_path_unless_it_is_an_interpreter() {
-        let ls = Path::new("/usr/bin/ls");
+        // by the paths of their files: some systems link these to one multi-call binary
+        let ls = &std::fs::canonicalize("/usr/bin/ls").unwrap();
         assert!(allows(&[entry(ls, None)], &running(ls)));
         assert!(
             !allows(
                 &[entry(ls, None)],
                 &Running {
                     exe: ls.to_path_buf(),
-                    image: std::fs::metadata("/usr/bin/cat").unwrap(),
+                    image: std::fs::metadata(std::env::current_exe().unwrap()).unwrap(),
                 }
             ),
             "another file runs under the path"
         );
-        let env = Path::new("/usr/bin/env");
+        let env = &std::fs::canonicalize("/usr/bin/env").unwrap();
         assert!(!allows(&[entry(env, None)], &running(env)));
     }
 
     #[test]
     fn a_running_process_is_named_by_its_program_until_it_exits() {
-        let mut child = std::process::Command::new("/usr/bin/sleep")
+        let sleep = std::fs::canonicalize("/usr/bin/sleep").unwrap();
+        let mut child = std::process::Command::new(&sleep)
             .arg("30")
             .spawn()
             .unwrap();
@@ -244,15 +246,16 @@ mod tests {
         // `spawn` can return before the kernel has switched the child's executable: `/proc` names the test binary until then
         let exe = Path::new("/proc").join(child.id().to_string()).join("exe");
         let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while std::fs::read_link(&exe).ok().as_deref() != Some(Path::new("/usr/bin/sleep")) {
+        while std::fs::read_link(&exe).ok().as_deref() != Some(sleep.as_path()) {
             assert!(
                 std::time::Instant::now() < end,
-                "the child never ran /usr/bin/sleep"
+                "the child never ran {}",
+                sleep.display()
             );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         let found = running_program(process(), Path::new("/proc")).unwrap();
-        assert_eq!(found.exe, Path::new("/usr/bin/sleep"));
+        assert_eq!(found.exe, sleep);
         let held = process();
         child.kill().unwrap();
         child.wait().unwrap();

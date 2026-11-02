@@ -833,6 +833,7 @@ fn builtin_decorations(
         resizable,
         can_minimize,
         can_zoom,
+        flush: false,
     });
     let scale = Scale::from(p.scale);
     let v_phys = to_physical_rect(local(plan.visual, &p.rect), scale);
@@ -939,12 +940,6 @@ fn revealed_titlebar(
             p.now,
         )
         .filter(|_| plan.exact)?;
-    // it fades with the bar it slides with
-    let shown = p
-        .menu_bars
-        .set
-        .presentation(p.output_id, p.now)
-        .map_or(1.0, |b| b.visible);
     let title =
         p.wm.window(entry.id)
             .map(|w| w.title.clone())
@@ -960,6 +955,7 @@ fn revealed_titlebar(
         resizable: false,
         can_minimize: false,
         can_zoom: true,
+        flush: true,
     });
     let origin = OutputPoint(cupertino_geometry::Point::new(
         strip.x - p.rect.x,
@@ -982,7 +978,7 @@ fn revealed_titlebar(
             scale_x: 1.0,
             scale_y: 1.0,
         },
-        opacity: (plan.opacity * shown) as f32,
+        opacity: plan.opacity as f32,
         clip: Clip::None,
     })))
 }

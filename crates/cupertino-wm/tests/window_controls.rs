@@ -186,6 +186,21 @@ fn the_person_cannot_full_screen_a_window_that_cannot_zoom_but_its_client_can() 
 }
 
 #[test]
+fn the_zoom_button_of_a_full_screen_window_leaves_full_screen_even_when_zoom_is_disabled() {
+    let mut h = H::new();
+    let w = h.map_at("a", Rect::new(100.0, 100.0, 600.0, 400.0));
+    h.settle();
+    disable(&mut h, w, false, true);
+    fullscreen(&mut h, w, Requester::Client);
+    assert!(h.state(w).is_fullscreen());
+
+    h.cmd(Command::ToggleZoom { window: w });
+    h.settle();
+    assert_eq!(h.state(w), LifecycleState::Normal);
+    assert!(rect_eq(h.frame(w), Rect::new(100.0, 100.0, 600.0, 400.0)));
+}
+
+#[test]
 fn the_person_cannot_full_screen_a_fixed_size_window() {
     let mut h = H::new();
     let w = h.map("a");

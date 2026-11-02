@@ -1327,6 +1327,54 @@ fn output_resize_refits_a_fullscreen_window() {
 }
 
 #[test]
+fn a_full_screen_decorated_window_hides_its_title_bar_and_the_zoom_button_restores_it() {
+    use cupertino_decorations::ButtonKind;
+    use cupertino_geometry::Size;
+
+    let Some(mut h) = Harness::new() else { return };
+    let client = TestClient::spawn_decorated(
+        h.socket_path(),
+        "org.example.fs",
+        (400, 300),
+        [10, 10, 10, 255],
+    );
+    let (id, frame) = h.mapped_window(1);
+    let sent_size = |h: &Harness| {
+        h.state
+            .entry(id)
+            .unwrap()
+            .toplevel
+            .with_pending_state(|s| s.size.map(|s| (s.w, s.h)))
+    };
+    h.state.command(Command::Fullscreen {
+        requested_by: cupertino_wm::Requester::Client,
+        window: id,
+        output: None,
+    });
+    h.advance(5.0);
+    assert_eq!(
+        sent_size(&h),
+        Some(OUTPUT),
+        "the client gets the whole output"
+    );
+    let close = h
+        .state
+        .decor
+        .decorations()
+        .layout(Size::new(OUTPUT.0 as f64, OUTPUT.1 as f64))
+        .button(ButtonKind::Close)
+        .center;
+    h.move_to(close.x, close.y);
+    assert_eq!(h.state.decor.hover_group, None, "no title bar to hover");
+
+    h.state.command(Command::ToggleZoom { window: id });
+    h.advance(5.0);
+    assert_eq!(sent_size(&h), Some((400, 300)));
+    assert_eq!(h.state.wm.window(id).unwrap().geometry(), frame);
+    drop(client);
+}
+
+#[test]
 fn touchpad_gestures_switch_workspaces_and_a_spread_without_a_dock_only_leaves_the_overview() {
     use cupertino_input::GestureEvent;
 
@@ -1613,7 +1661,7 @@ fn a_popup_over_the_resize_band_takes_the_pointer() {
         },
     );
     let (id, frame) = h.mapped_window(1);
-    let top = frame.y + h.state.entry(id).unwrap().insets.top;
+    let top = frame.y + h.state.entry(id).unwrap().insets().top;
     h.wait_until("the popup to draw", |s| {
         let p = (frame.right() - 2.0, top + 110.0).into();
         matches!(s.window_target_under(p), Some(WindowTarget::Surface { .. }))

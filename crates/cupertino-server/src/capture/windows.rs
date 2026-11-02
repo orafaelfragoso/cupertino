@@ -78,8 +78,8 @@ impl Cupertino {
             };
             let geo = entry.window.geometry();
             let (w, h) = (
-                f64::from(geo.size.w) + entry.insets.horizontal(),
-                f64::from(geo.size.h) + entry.insets.vertical(),
+                f64::from(geo.size.w) + entry.insets().horizontal(),
+                f64::from(geo.size.h) + entry.insets().vertical(),
             );
             out.push(FeedWindow {
                 identifier: handle.identifier(),

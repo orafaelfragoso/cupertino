@@ -449,8 +449,8 @@ impl Cupertino {
                 let natural = cupertino_wm::Rect::new(
                     frame.x,
                     frame.y,
-                    f64::from(geo.size.w) + entry.insets.horizontal(),
-                    f64::from(geo.size.h) + entry.insets.vertical(),
+                    f64::from(geo.size.w) + entry.insets().horizontal(),
+                    f64::from(geo.size.h) + entry.insets().vertical(),
                 );
                 capture_window(r, &mut p, entry, natural, active, 0.0, false)
             })

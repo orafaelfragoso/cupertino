@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use cupertino_assets::WallpaperFile;
 
+use crate::about;
 use crate::clipboard::{self, State};
 use crate::controls::{Control, Tile, Value, MUTE_BELOW};
 use crate::form::RowSpec;
@@ -1193,6 +1194,7 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
             let p = &settings.power;
             let key = |k| Backend::Key(File::Power, k);
             let level = match &live.battery {
+                _ if live.has_battery() == Some(false) => Vec::new(),
                 Reading::Ready(Some(b)) => {
                     let mut rows = vec![
                         row(
@@ -1327,23 +1329,54 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
             }]
         }
         PaneId::Displays => {
-            let (value, reason) = match &live.brightness {
-                Reading::Ready(b) => (*b, None),
-                other => (0.0, other.reason().map(str::to_string)),
+            let text = |label: &str, value: String| {
+                row(
+                    ControlId::Reading,
+                    label,
+                    Control::Text { value },
+                    Backend::Service("wl_output"),
+                )
             };
-            vec![Section {
-                header: header("Brightness"),
-                rows: vec![Row {
-                    disabled: reason,
-                    ..row(
+            let mut out: Vec<Section> = match &live.displays {
+                Reading::Ready(monitors) => monitors
+                    .iter()
+                    .map(|m| Section {
+                        header: Some(m.title.clone()),
+                        rows: [
+                            Some(text("Resolution", about::mode_text(m.mode))),
+                            m.refresh_mhz
+                                .map(|r| text("Refresh Rate", about::refresh_text(r))),
+                            Some(text("Scale", about::scale_text(m.scale))),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .collect(),
+                        footer: None,
+                    })
+                    .collect(),
+                other => vec![Section {
+                    header: header("Display"),
+                    rows: vec![text(
+                        "Resolution",
+                        other.reason().unwrap_or_default().to_string(),
+                    )],
+                    footer: None,
+                }],
+            };
+            // only a display with a backlight has a brightness to set
+            if let Reading::Ready(value) = live.brightness {
+                out.push(Section {
+                    header: header("Brightness"),
+                    rows: vec![row(
                         ControlId::Brightness,
                         "Brightness",
                         Control::Level { value },
                         Backend::Service("SetBrightness"),
-                    )
-                }],
-                footer: None,
-            }]
+                    )],
+                    footer: None,
+                });
+            }
+            out
         }
         PaneId::Wifi => wifi_sections(&live.wifi),
         PaneId::Network => network_sections(&live.wifi),
@@ -2298,6 +2331,79 @@ mod tests {
     }
 
     #[test]
+    fn the_displays_pane_shows_each_connected_display_and_brightness_only_with_a_backlight() {
+        use crate::live::{Monitor, Reading};
+        let monitor = Live {
+            displays: Reading::Ready(vec![Monitor {
+                title: "Studio 27".into(),
+                mode: (2560, 1440),
+                refresh_mhz: Some(59_951),
+                scale: 1.25,
+            }]),
+            brightness: Reading::Unavailable("This display has no brightness control".into()),
+            ..Live::default()
+        };
+        let shown = |live: &Live| {
+            sections(PaneId::Displays, &unset(), LIGHT, live)
+                .into_iter()
+                .map(|sec| {
+                    let rows: Vec<(String, Control)> =
+                        sec.rows.into_iter().map(|r| (r.label, r.control)).collect();
+                    (sec.header, rows)
+                })
+                .collect::<Vec<_>>()
+        };
+        let text = |label: &str, value: &str| {
+            (
+                label.to_string(),
+                Control::Text {
+                    value: value.into(),
+                },
+            )
+        };
+        assert_eq!(
+            shown(&monitor),
+            [(
+                Some("Studio 27".to_string()),
+                vec![
+                    text("Resolution", "2560\u{202f}×\u{202f}1440"),
+                    text("Refresh Rate", "59.95\u{a0}Hz"),
+                    text("Scale", "1.25x"),
+                ]
+            )]
+        );
+        let laptop = Live {
+            brightness: Reading::Ready(0.5),
+            ..monitor
+        };
+        assert_eq!(
+            shown(&laptop)[1],
+            (
+                Some("Brightness".to_string()),
+                vec![("Brightness".to_string(), Control::Level { value: 0.5 })]
+            )
+        );
+    }
+
+    #[test]
+    fn without_a_battery_of_its_own_the_battery_pane_has_no_battery_level() {
+        let live = Live {
+            hardware: Some(crate::hardware::Hardware::default()),
+            battery: crate::live::Reading::Unavailable("The power service is not running".into()),
+            ..Live::default()
+        };
+        assert_eq!(live.has_battery(), Some(false));
+        assert_eq!(
+            sections(PaneId::Battery, &unset(), LIGHT, &live)
+                .iter()
+                .flat_map(|s| &s.rows)
+                .map(|r| r.id)
+                .collect::<Vec<_>>(),
+            [ControlId::SystemSleepAc]
+        );
+    }
+
+    #[test]
     fn every_commit_has_at_most_one_effect() {
         use crate::live::{Bluetooth, BtDevice, Focus, Network, Reading, Volume, Wifi};
         let network = |ssid: &str, security: &str, saved, connected| Network {
@@ -2329,8 +2435,10 @@ mod tests {
                 muted: false,
             }),
             outputs: Vec::new(),
+            displays: Reading::Ready(Vec::new()),
             brightness: Reading::Ready(0.5),
             battery: Reading::Ready(None),
+            hardware: None,
             wifi: Reading::Ready(Wifi {
                 enabled: true,
                 networks: vec![

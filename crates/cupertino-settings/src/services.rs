@@ -5,6 +5,7 @@
 //! `cupertino-alsa` (in-process, as the control panel does, §1). Each connection is made on first use and
 //! again after a failure, so a daemon that starts later is picked up; properties are read every time, never cached.
 
+use crate::hardware::{Hardware, Sources};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -21,8 +22,8 @@ use crate::nm;
 use crate::pane::PaneId;
 
 use crate::live::{
-    display_name, Battery, BatteryState, Bluetooth, BtDevice, Device, Focus, Mouse, Network,
-    Output, Reading, Volume, Wifi,
+    display_name, Battery, BatteryState, Bluetooth, BtDevice, Device, Focus, Monitor, Mouse,
+    Network, Output, Reading, Volume, Wifi,
 };
 use crate::panes::Call;
 
@@ -280,11 +281,13 @@ pub enum BluetoothBackend {
     BlueZ,
 }
 
-/// The services on the system bus that the network and Bluetooth panes can use; a pane without one is hidden.
+/// The services on the system bus that the network and Bluetooth panes can use, and the hardware the Trackpad pane
+/// needs; a pane without them is hidden.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Backends {
     pub network: Option<NetworkBackend>,
     pub bluetooth: Option<BluetoothBackend>,
+    pub hardware: Hardware,
 }
 
 impl Backends {
@@ -296,6 +299,9 @@ impl Backends {
         }
         if self.bluetooth.is_none() {
             hidden.push(PaneId::Bluetooth);
+        }
+        if !self.hardware.touchpad {
+            hidden.push(PaneId::Trackpad);
         }
         hidden
     }
@@ -317,6 +323,8 @@ pub struct Services {
     backends: Backends,
     /// The BlueZ devices whose `Pair` has not returned (the Cupertino daemon reports its own).
     pairing: Arc<Mutex<HashSet<String>>>,
+    /// Where the hardware facts are read; `None` (tests) is a machine without a battery or a touchpad.
+    hardware: Option<Sources>,
 }
 
 impl Services {
@@ -330,6 +338,7 @@ impl Services {
             pipewire: true,
             backends: Backends::default(),
             pairing: Arc::default(),
+            hardware: Some(Sources::default()),
         }
     }
 
@@ -344,6 +353,15 @@ impl Services {
             pipewire: true,
             backends: Backends::default(),
             pairing: Arc::default(),
+            hardware: None,
+        }
+    }
+
+    /// The hardware facts read from `sources` (tests).
+    pub fn with_hardware(self, hardware: Sources) -> Self {
+        Services {
+            hardware: Some(hardware),
+            ..self
         }
     }
 
@@ -361,6 +379,12 @@ impl Services {
     /// Look up which services are on the system bus, running or activatable. `org.cupertino.Network1` comes before
     /// NetworkManager, whose name the network daemon also claims. When the bus does not answer the last answer stays.
     pub fn detect(&mut self) -> Backends {
+        self.backends.hardware = self
+            .hardware
+            .as_ref()
+            .map(Hardware::read)
+            .unwrap_or_default();
+        let hardware = self.backends.hardware;
         let result = self.system.connection().and_then(|c| {
             let bus = zbus::blocking::fdo::DBusProxy::new(c)?;
             let mut names = bus.list_names()?;
@@ -381,6 +405,7 @@ impl Services {
                 } else {
                     None
                 },
+                hardware,
             })
         });
         match self.system.checked(result) {
@@ -457,6 +482,44 @@ impl Services {
             self.session.checked(result),
             "The notification centre is not running",
         )
+    }
+
+    /// The connected displays with a current mode: one short connection asks the server.
+    pub fn displays(&self) -> Reading<Vec<Monitor>> {
+        let outputs = cupertino_wayland_client::Connection::connect()
+            .map_err(|e| e.to_string())
+            .and_then(|mut conn| {
+                conn.roundtrip().map_err(|e| e.to_string())?;
+                Ok(conn.outputs())
+            });
+        match outputs {
+            Ok(outputs) => Reading::Ready(
+                outputs
+                    .into_iter()
+                    .filter_map(|o| {
+                        let mode = o.mode?;
+                        let title = crate::about::display_title(&crate::about::Display {
+                            make: o.make.as_deref(),
+                            model: o.model.as_deref(),
+                            description: o.description.as_deref(),
+                            name: o.name.as_deref(),
+                            ..Default::default()
+                        })
+                        .unwrap_or_else(|| "Display".to_owned());
+                        Some(Monitor {
+                            title,
+                            mode,
+                            refresh_mhz: o.refresh_mhz,
+                            scale: o.effective_scale().unwrap_or_else(|| o.scale.factor()),
+                        })
+                    })
+                    .collect(),
+            ),
+            Err(e) => {
+                log_once(&format!("the displays could not be listed: {e}"));
+                Reading::Unavailable("The display server does not answer".into())
+            }
+        }
     }
 
     pub fn brightness(&mut self) -> Reading<f64> {

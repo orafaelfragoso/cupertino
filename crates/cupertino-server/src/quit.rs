@@ -22,7 +22,7 @@
 //! | `SetAccessibility(s key, s value)` | one key of `accessibility.conf` with a value as the file writes it (`reduce_motion` `on`, `color_filter` `tint 0.5`, ...): applied and stored like the key actions; an unknown key or bad value is `InvalidArgs` |
 //! | `Appearance` property `s` | `light` or `dark`, the session's appearance (with `PropertiesChanged`) |
 //! | `Accessibility` property `a{ss}` | every key of `accessibility.conf` with its value (with `PropertiesChanged`) |
-//! | `Mice` property `a(ssub)` | read-only: the connected mice (no touchpads), each as `(key, name, dpi, stored)`: the `mouse_dpi` key of `compositor.json` (`vendor:product:name`, hex ids), the device name, the resolution in use (the stored one, else the hardware database's, else 1000) and whether it is the stored one; changes with `PropertiesChanged` on a mouse being plugged or removed and on a change of `mouse_dpi` |
+//! | `Mice` property `a(ssub)` | read-only: the connected mice that have moved, scrolled or clicked (no touchpads, no keyboard's unused pointer interface), each as `(key, name, dpi, stored)`: the `mouse_dpi` key of `compositor.json` (`vendor:product:name`, hex ids), the device name, the resolution in use (the stored one, else the hardware database's, else 1000) and whether it is the stored one; changes with `PropertiesChanged` on a mouse's first use or removal and on a change of `mouse_dpi` |
 //!
 //! Which application goes first is approximate: the design walks its process list from the end, whose order was not
 //! read; most recently used first is our choice.

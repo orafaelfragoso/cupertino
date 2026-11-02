@@ -241,6 +241,18 @@ pub struct LoginScreen {
     pub saving: bool,
 }
 
+/// A connected display.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Monitor {
+    /// Make and model, else the description, else the connector name.
+    pub title: String,
+    /// The current mode in device pixels.
+    pub mode: (u32, u32),
+    pub refresh_mhz: Option<u32>,
+    /// Device pixels per logical point.
+    pub scale: f64,
+}
+
 /// Every live reading.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Live {
@@ -252,10 +264,14 @@ pub struct Live {
     pub volume: Reading<Volume>,
     /// The sound outputs, empty when there is no PipeWire daemon or none is listed.
     pub outputs: Vec<Output>,
+    /// The connected displays, as the compositor announces them.
+    pub displays: Reading<Vec<Monitor>>,
     /// The display backlight, 0 to 1 (`org.cupertino.Power1`).
     pub brightness: Reading<f64>,
     /// `None` inside: no battery (`IsPresent` false).
     pub battery: Reading<Option<Battery>>,
+    /// What the machine has, once read: it decides whether there is a battery before the power service answers.
+    pub hardware: Option<crate::hardware::Hardware>,
     pub wifi: Reading<Wifi>,
     pub bluetooth: Reading<Bluetooth>,
     /// Shown only after `CanSetSystemAccessibility` said yes at this opening of the Accessibility pane.
@@ -272,8 +288,10 @@ impl Default for Live {
             focus: Reading::Unknown,
             volume: Reading::Unknown,
             outputs: Vec::new(),
+            displays: Reading::Unknown,
             brightness: Reading::Unknown,
             battery: Reading::Unknown,
+            hardware: None,
             wifi: Reading::Unknown,
             bluetooth: Reading::Unknown,
             login_screen: None,
@@ -283,9 +301,12 @@ impl Default for Live {
 }
 
 impl Live {
-    /// Whether the machine has a battery, once known: the Battery row is titled "Energy Saver" without one.
+    /// Whether the machine has a battery, once known: the Battery row is titled "Energy Saver" without one. The
+    /// kernel's power supplies decide; the power service only when they were not read.
     pub fn has_battery(&self) -> Option<bool> {
-        self.battery.ready().map(Option::is_some)
+        self.hardware
+            .map(|h| h.battery)
+            .or_else(|| self.battery.ready().map(Option::is_some))
     }
 }
 

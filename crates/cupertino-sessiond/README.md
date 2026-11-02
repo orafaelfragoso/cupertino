@@ -152,7 +152,7 @@ writes are refused until it is opened again.
 **The machine's accessibility defaults.** The first write from a user to a file of root's, so its checks are stricter than the
 other methods':
 - The caller is the process behind the `ProcessFD` the bus daemon gives (`cupertino_peer::Caller::from_process_fd`); a daemon
-  that gives none is refused. It must be unsandboxed and run `<install root>/bin/cupertino-settings` (`/usr`, and the build's
+  that gives none (older than dbus 1.16) is refused, and the service says so once at start (`cupertino_peer::NO_PROCESS_FD`). It must be unsandboxed and run `<install root>/bin/cupertino-settings` (`/usr`, and the build's
   `CUPERTINO_INSTALL_PREFIX`), and the file it runs (stat through `/proc/<pid>/exe`) must be a regular file owned by root and
   writable by no group or other user (`service::only_root_changes`), so a program of the user's under a writable prefix is
   refused. Its session (logind `GetSessionByPID` by that process) must be the active user session of
@@ -208,7 +208,7 @@ For the login screen only, the worker makes a `SOCK_SEQPACKET` socketpair before
 descriptor 3 (`CUPERTINO_READER_FD=3`). The compositor sends `ready <socket>` once and `toggle <socket>` for Super+Alt+S from a
 keyboard (`wayland-<digits>`, at most 64 bytes, anything else refused); the worker answers a toggle `on`, `off` or `unavailable`.
 
-The reader is the first of `reader::READERS` (`/usr/bin/orca`) that only root can change, never one from `$PATH`. It runs while it
+The reader is the file of the first of `reader::READERS` (`/usr/bin/orca`) that only root can change, never one from `$PATH`; a link on the way is followed only when it is root's and in a directory only root can change (`cupertino_defaults::system::root_only_target`), so a distribution that ships orca as a link still has a reader. It runs while it
 is wanted (the machine's setting, flipped by each toggle) and the login screen is on the console: the manager sends
 `ToWorker::Shown { shown }` before its own switch to another session and after the login screen takes the console back, and
 again on every change of the seat's `ActiveSession` (logind's `PropertiesChanged`), whoever switched: shown only while the

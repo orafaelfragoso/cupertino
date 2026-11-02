@@ -9,6 +9,9 @@ nothing; the caller is the process behind its connection.
   descriptor, so caller identity there is pid-based: the pidfd is opened for its `ProcessID` (logged at debug level each time), which
   leaves a window for a reused process id that a descriptor does not. A caller with no process at all, with a process id that
   disagrees with the descriptor, that cannot be classified or that has exited is `Caller::Anonymous` and trusted with nothing. A process whose `/proc/<pid>/root` the kernel refuses (one that made itself non-dumpable) is `Caller::Unclassified`: its process id is known, but `unsandboxed()` and `require_relation` refuse it, so nothing trusts it by sandbox or relation; only a caller that knows the process by other means may accept it.
+* `process_fd_notice(own credentials)`: `NO_PROCESS_FD` when the bus gives no `ProcessFD` for a connection of this process. The
+  server (session bus) and `cupertino-sessiond` (system bus) log it once at start: `Caller::from_process_fd` then refuses every
+  caller (the menu bar shows no menus, the login screen's accessibility settings cannot be changed), which needs dbus 1.16 or later.
 * Sandboxes are told apart the way the desktop portal does it: a process with `/proc/<pid>/root/.flatpak-info` is a Flatpak,
   one whose `LinuxSecurityLabel` starts with `snap.` a Snap. `Caller::unsandboxed` refuses both and the anonymous caller
   (`Denial`).

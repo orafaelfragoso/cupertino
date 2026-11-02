@@ -13,6 +13,7 @@
 use std::ffi::CString;
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -29,12 +30,12 @@ pub const MAX_REQUEST: usize = 64;
 /// How long the reader has to end after `SIGTERM` before its group is killed.
 const STOP_GRACE: Duration = Duration::from_secs(2);
 
-/// The first of `candidates` that is a regular file only root can change, every directory above it included.
-pub fn resolve<'a>(candidates: &[&'a str]) -> Option<&'a str> {
+/// The file of the first of `candidates` that only root can change, every directory and link on the way included
+/// ([`cupertino_defaults::system::root_only_target`]).
+pub fn resolve(candidates: &[&str]) -> Option<PathBuf> {
     candidates
         .iter()
-        .copied()
-        .find(|path| cupertino_defaults::system::only_root_can_change(Path::new(path)))
+        .find_map(|path| cupertino_defaults::system::root_only_target(Path::new(path)))
 }
 
 /// The reader's `DBUS_SESSION_BUS_ADDRESS`: the greeter's user bus in `runtime`. A value PAM gave (`pam`) is used only
@@ -249,10 +250,10 @@ pub struct Reader {
 
 impl Reader {
     /// The reader of the login screen whose leader is `leader`; `runtime` is the greeter's `XDG_RUNTIME_DIR` and `bus`
-    /// the `DBUS_SESSION_BUS_ADDRESS` PAM gave, if any. `program` is a path from [`READERS`] or `None`.
+    /// the `DBUS_SESSION_BUS_ADDRESS` PAM gave, if any. `program` is the file [`resolve`] found or `None`.
     pub fn new(
         account: Account,
-        program: Option<&str>,
+        program: Option<&Path>,
         runtime: PathBuf,
         bus: Option<&str>,
         leader: u32,
@@ -261,7 +262,7 @@ impl Reader {
     ) -> Self {
         Reader {
             account,
-            program: program.and_then(|p| CString::new(p).ok()),
+            program: program.and_then(|p| CString::new(p.as_os_str().as_bytes()).ok()),
             bus: bus_address(&runtime, bus),
             runtime,
             leader,
@@ -638,11 +639,15 @@ mod tests {
         let mine = mine.to_str().unwrap();
         // the file's own path: some systems link `/usr/bin/env` to a multi-call binary
         let env = std::fs::canonicalize("/usr/bin/env").unwrap();
-        let env = env.to_str().unwrap();
         assert_eq!(
-            resolve(&[mine, env]),
-            Some(env),
+            resolve(&[mine, "/usr/bin/env"]),
+            Some(env.clone()),
             "a file of the test's user is skipped"
+        );
+        assert_eq!(
+            resolve(&[mine, "/bin/env"]),
+            Some(env),
+            "a program behind root's links is the file they lead to"
         );
         assert_eq!(
             resolve(&[mine, "orca", "/nonexistent/orca"]),
@@ -825,7 +830,7 @@ mod tests {
                 uid,
                 gid,
             },
-            script.to_str(),
+            Some(script.as_path()),
             runtime.clone(),
             None,
             leader.id(),

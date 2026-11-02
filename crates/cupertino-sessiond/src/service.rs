@@ -443,7 +443,25 @@ pub fn serve(
         )?
         .build()?;
     match connection.request_name_with_flags(BUS_NAME, RequestNameFlags::DoNotQueue.into())? {
-        RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => Ok(connection),
-        RequestNameReply::Exists | RequestNameReply::InQueue => Err(zbus::Error::NameTaken),
+        RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => {}
+        RequestNameReply::Exists | RequestNameReply::InQueue => return Err(zbus::Error::NameTaken),
     }
+    if let Some(notice) = own_credentials(&connection)
+        .as_ref()
+        .and_then(cupertino_peer::process_fd_notice)
+    {
+        eprintln!("cupertino-sessiond: {notice}: the accessibility settings of the login screen cannot be changed");
+    }
+    Ok(connection)
+}
+
+/// The credentials the bus gives for `connection` itself; `None` when it does not answer.
+fn own_credentials(
+    connection: &zbus::blocking::Connection,
+) -> Option<zbus::fdo::ConnectionCredentials> {
+    let own = connection.unique_name()?.clone();
+    zbus::blocking::fdo::DBusProxy::new(connection)
+        .ok()?
+        .get_connection_credentials(own.into())
+        .ok()
 }

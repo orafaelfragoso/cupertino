@@ -1,11 +1,12 @@
 //! The focus policy for windows that map, against a headless compositor and clients on its socket: the first window of a
 //! program the person just started comes to the front (a command typed in a terminal), unless the person has given input to
 //! another client since it connected, in which case it opens behind and a valid activation token it presents before it maps
-//! still brings it forward. Tests skip (pass) when no EGL device is available.
+//! still brings it forward; and the application a window without an application id joins. Tests skip (pass) when no EGL
+//! device is available.
 
 mod common;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -13,12 +14,15 @@ use std::time::{Duration, Instant};
 use common::Client;
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
+use cupertino_server::desktop::{parse_entry, DesktopIndex};
 use cupertino_server::events::BTN_LEFT;
+use cupertino_server::handlers::TokenGrant;
 use cupertino_server::Cupertino;
 use cupertino_wm::WindowId;
 use smithay::backend::input::ButtonState;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
+use smithay::wayland::xdg_activation::XdgActivationTokenData;
 
 fn client_count(state: &Cupertino) -> usize {
     let mut count = 0;
@@ -331,5 +335,115 @@ fn a_program_that_maps_while_the_session_is_locked_does_not_take_the_keyboard_at
         h.state.wm.key_window(),
         Some(front),
         "the keyboard goes back to the window that had it"
+    );
+}
+
+#[test]
+fn a_program_that_never_presents_its_launch_token_still_comes_forward_with_it() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_a, front) = with_front_window(&mut h);
+    advance(&mut h, 1.0);
+    // the click on a dock tile (or the launcher's Return) that launches the program, then the token made for it
+    h.click_on(front);
+    let token = h.state.server_activation_token();
+    h.state.launch_token_of = Box::new(move |_, _| Some(token.clone()));
+    let _launched = Client::toplevel_after(
+        h.socket_path(),
+        "org.example.launched",
+        Arc::new(AtomicBool::new(true)),
+        Arc::default(),
+    );
+    h.wait_until("the second window to map", |s| {
+        s.windows.iter().filter(|e| e.mapped).count() == 2
+    });
+    let new = h.newest(&[front]).unwrap();
+    assert_eq!(
+        h.state.wm.key_window(),
+        Some(new),
+        "the launch it was started with counts"
+    );
+    assert_eq!(h.state.wm.stacking_order().last(), Some(&new), "raised");
+    assert_eq!(
+        h.state.wm.front_app(),
+        Some(h.state.wm.window(new).unwrap().app),
+        "the menu bar follows"
+    );
+}
+
+fn identity_of(h: &Harness, id: WindowId) -> String {
+    let app = h.state.wm.window(id).unwrap().app;
+    h.state.wm.app(app).unwrap().identity.clone()
+}
+
+#[test]
+fn a_window_without_an_application_id_joins_the_application_its_launch_named() {
+    let Some(mut h) = Harness::new() else { return };
+    let mut data = XdgActivationTokenData::default();
+    data.app_id = Some("org.example.viewer".to_string());
+    data.user_data.insert_if_missing(|| TokenGrant {
+        created: 0.0,
+        valid: true,
+        app_id: Some("org.example.viewer".to_string()),
+    });
+    let token = h
+        .state
+        .xdg_activation_state
+        .create_external_token(data)
+        .0
+        .to_string();
+    h.state.launch_token_of = Box::new(move |_, _| Some(token.clone()));
+    let _dialog = Client::toplevel_after(
+        h.socket_path(),
+        "",
+        Arc::new(AtomicBool::new(true)),
+        Arc::default(),
+    );
+    h.wait_until("the window to map", |s| s.windows.iter().any(|e| e.mapped));
+    let id = h.newest(&[]).unwrap();
+    assert_eq!(identity_of(&h, id), "org.example.viewer");
+}
+
+#[test]
+fn a_window_without_an_application_id_joins_the_application_of_its_program() {
+    let Some(mut h) = Harness::new() else { return };
+    let viewer = "[Desktop Entry]\nType=Application\nName=Viewer\nExec=viewer %U\n";
+    h.state.desktop = DesktopIndex {
+        entries: vec![parse_entry("org.example.viewer", Path::new("x"), viewer).unwrap()],
+    };
+    h.state.executable_of = Box::new(|_, _| Some(PathBuf::from("/usr/lib/viewer/viewer")));
+    let _dialog = Client::toplevel_after(
+        h.socket_path(),
+        "",
+        Arc::new(AtomicBool::new(true)),
+        Arc::default(),
+    );
+    h.wait_until("the window to map", |s| s.windows.iter().any(|e| e.mapped));
+    let id = h.newest(&[]).unwrap();
+    assert_eq!(identity_of(&h, id), "org.example.viewer");
+}
+
+#[test]
+fn a_program_the_system_did_not_install_names_no_application() {
+    let Some(mut h) = Harness::new() else { return };
+    let test_binary = std::env::current_exe().unwrap();
+    let posing = format!(
+        "[Desktop Entry]\nType=Application\nName=Viewer\nExec={} %U\n",
+        test_binary.file_name().unwrap().to_str().unwrap()
+    );
+    h.state.desktop = DesktopIndex {
+        entries: vec![parse_entry("org.example.viewer", Path::new("x"), &posing).unwrap()],
+    };
+    let _dialog = Client::toplevel_after(
+        h.socket_path(),
+        "",
+        Arc::new(AtomicBool::new(true)),
+        Arc::default(),
+    );
+    h.wait_until("the window to map", |s| s.windows.iter().any(|e| e.mapped));
+    let id = h.newest(&[]).unwrap();
+    assert_eq!(
+        identity_of(&h, id),
+        "unknown",
+        "the test binary is the user's"
     );
 }

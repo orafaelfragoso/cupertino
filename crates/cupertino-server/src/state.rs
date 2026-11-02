@@ -518,6 +518,11 @@ pub struct Cupertino {
     gone_clients: GoneClients,
     /// The process behind a client (`crate::process::peer_process`); replaced in tests, whose clients share one process.
     pub process_of: crate::process::ProcessOf,
+    /// The program behind a client, when the system installed it (`crate::process::trusted_executable`); replaced in
+    /// tests, whose program is the test binary.
+    pub executable_of: crate::process::ExecutableOf,
+    /// The activation token a client's process was started with (`crate::process::launch_token`); replaced in tests.
+    pub launch_token_of: crate::process::LaunchTokenOf,
     /// A server move or resize waiting for the pointer to leave the drag-start box.
     pub pending_drag: Option<crate::events::PendingDrag>,
     pub cursor_status: CursorImageStatus,
@@ -830,6 +835,8 @@ impl Cupertino {
             mapped_clients: HashMap::new(),
             gone_clients: std::sync::Arc::default(),
             process_of: Box::new(crate::process::peer_process),
+            executable_of: Box::new(crate::process::trusted_executable),
+            launch_token_of: Box::new(crate::process::launch_token),
             pending_drag: None,
             cursor_status: CursorImageStatus::default_named(),
             cursor_loader,
@@ -1255,7 +1262,13 @@ impl Cupertino {
                 .unwrap();
             (d.app_id.clone(), d.title.clone())
         });
-        let identity = policy::app_identity(app_id.as_deref(), title.as_deref());
+        let launch = self.take_launch(&surface);
+        let identity = match app_id.as_deref().filter(|a| !a.is_empty()) {
+            Some(app_id) => app_id.to_string(),
+            None => self
+                .client_identity(&surface, launch.as_ref())
+                .unwrap_or_else(|| policy::app_identity(None, title.as_deref())),
+        };
         self.windows[idx].window.on_commit();
         let geo = self.windows[idx].window.geometry();
         let (min, max) = frame_limits(self.windows[idx].insets(), size_hints(&surface));
@@ -1315,7 +1328,7 @@ impl Cupertino {
         // the model turns a modal child into a sheet and places dialogs
         params.kind = cupertino_wm::window_kind(params.modal, false);
         params.output = Some(output);
-        params.activation = cupertino_wm::Activation::Policy(self.map_focus(&surface));
+        params.activation = cupertino_wm::Activation::Policy(self.map_focus(&surface, launch));
         self.windows[idx].mapped = true;
         self.apply_pending_menu_addresses(id.0, &surface);
         let handle = self
@@ -1325,6 +1338,52 @@ impl Cupertino {
         let now = self.now();
         let fx = self.wm.handle(Command::Map(params), now);
         self.apply_effects(fx);
+    }
+
+    /// The grant of the launch behind a toplevel that maps, used up: the token it presented for its surface, else the
+    /// `XDG_ACTIVATION_TOKEN` its process was started with, for a program that never presents it.
+    fn take_launch(&mut self, surface: &WlSurface) -> Option<crate::handlers::TokenGrant> {
+        if let Some(grant) = self.pending_activations.remove(&surface.id()) {
+            return Some(grant);
+        }
+        let client = surface.client()?;
+        let token = smithay::wayland::xdg_activation::XdgActivationToken::from((self
+            .launch_token_of)(
+            &self.display_handle,
+            &client,
+        )?);
+        let grant = self
+            .xdg_activation_state
+            .data_for_token(&token)?
+            .user_data
+            .get::<crate::handlers::TokenGrant>()
+            .cloned();
+        self.xdg_activation_state.remove_token(&token);
+        grant
+    }
+
+    /// The application of a toplevel that maps without an application id (Chromium's first-run dialog), from its client:
+    /// the application of another mapped window of that client, else the application its launch named, else the desktop
+    /// entry of the program it runs when the system installed that program ([`crate::process::trusted_executable`]). A
+    /// client cannot name an application this way that it could not name with `set_app_id`.
+    fn client_identity(
+        &self,
+        surface: &WlSurface,
+        launch: Option<&crate::handlers::TokenGrant>,
+    ) -> Option<String> {
+        let client = surface.client()?;
+        let sibling = self.windows.iter().filter(|e| e.mapped).find_map(|e| {
+            let same = e.surface().client().is_some_and(|c| c.id() == client.id());
+            same.then(|| self.wm.window(e.id).and_then(|w| self.wm.app(w.app)))
+                .flatten()
+                .map(|a| a.identity.clone())
+        });
+        sibling
+            .or_else(|| launch.and_then(|l| l.app_id.clone()))
+            .or_else(|| {
+                let program = (self.executable_of)(&self.display_handle, &client)?;
+                self.desktop.for_program(&program).map(|e| e.id.clone())
+            })
     }
 
     /// Forgets the first-window grant of processes whose last client that mapped a toplevel has disconnected.
@@ -1347,9 +1406,13 @@ impl Cupertino {
     }
 
     /// The facts the focus policy needs about a window that maps (`cupertino_wm::MapFocus`): whether it is its client's
-    /// first toplevel, whether the person has given input elsewhere since the client connected, and the activation token
-    /// it presented. Uses up the pending token.
-    fn map_focus(&mut self, surface: &WlSurface) -> cupertino_wm::MapFocus {
+    /// first toplevel, whether the person has given input elsewhere since the client connected, and the grant of its launch
+    /// ([`Self::take_launch`]).
+    fn map_focus(
+        &mut self,
+        surface: &WlSurface,
+        launch: Option<crate::handlers::TokenGrant>,
+    ) -> cupertino_wm::MapFocus {
         use std::sync::atomic::Ordering;
         let (first_of_client, input_elsewhere) = match surface.client() {
             Some(client) => match client.get_data::<ClientState>() {
@@ -1376,13 +1439,10 @@ impl Cupertino {
             },
             None => (false, false),
         };
-        let grant = self
-            .pending_activations
-            .remove(&surface.id())
-            .map(|g| cupertino_wm::Grant {
-                created: g.created,
-                valid: g.valid,
-            });
+        let grant = launch.map(|g| cupertino_wm::Grant {
+            created: g.created,
+            valid: g.valid,
+        });
         cupertino_wm::MapFocus {
             first_of_client,
             input_elsewhere,

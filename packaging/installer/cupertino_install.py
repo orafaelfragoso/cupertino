@@ -37,6 +37,7 @@ ARCHINSTALL_VERSION = "4.5"
 MIB = 1024**2
 GIB = 1024**3
 SMALLEST_DISK = 32 * 1000**3
+BINARY_UNITS = {10: "KiB", 20: "MiB", 30: "GiB", 40: "TiB", 50: "PiB"}
 TARGET = Path("/mnt")
 LIVE = Path("/run/archiso")
 ARCHINSTALL_LOG = Path("/var/log/archinstall/install.log")
@@ -143,7 +144,7 @@ def disks(lsblk: dict[str, object]) -> list[Disk]:
         elif any(c.get("type") in ("crypt", "lvm", "raid0", "raid1", "raid5", "raid6", "raid10") for c in children):
             refused = "in use (an open encrypted, LVM or RAID volume)"
         elif size < SMALLEST_DISK:
-            refused = f"smaller than {SMALLEST_DISK // 1000**3} GB"
+            refused = f"smaller than {SMALLEST_DISK // 1000**3} GB (decimal, {size_text(SMALLEST_DISK)})"
         partitions = tuple(
             " ".join(filter(None, [c["path"], size_text(int(c["size"])), c.get("fstype"), c.get("label")]))
             for c in device.get("children") or []
@@ -159,7 +160,15 @@ def descendants(node: dict[str, object]):
 
 
 def size_text(size: int) -> str:
-    return f"{size / 1000**3:.0f} GB" if size >= 1000**3 else f"{size / 1000**2:.0f} MB"
+    """The size as `lsblk` prints it: binary units, one decimal rounded half up and dropped when zero (931.5 GiB)."""
+    shift = next((s for s in (50, 40, 30, 20, 10) if size >= 1 << s), 0)
+    if shift == 0:
+        return f"{size} B"
+    unit = 1 << shift
+    whole, tenths = size // unit, ((size % unit) * 1000 // unit + 50) // 100
+    if tenths >= 10:
+        whole, tenths = whole + 1, 0
+    return f"{whole}{f'.{tenths}' if tenths else ''} {BINARY_UNITS[shift]}"
 
 
 def graphics(devices: list[tuple[int, int, int]]) -> Graphics:

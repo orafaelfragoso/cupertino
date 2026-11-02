@@ -60,7 +60,7 @@ sudo cmp -n "$(stat -c %s cupertino-*.iso)" cupertino-*.iso /dev/sdX
 2. Open the firmware's boot menu (the key depends on the maker) and pick the stick.
 3. The boot menu has one entry, "Cupertino live (x86_64, UEFI)", and starts it after 3 seconds. The kernel command line sets `nvidia-drm.modeset=1` and `nvidia-drm.fbdev=1`, and the image ships `nvidia-open`.
 
-The live session starts straight into Cupertino as the user `live`, with no password and no login screen. `Ctrl+Alt+F2` gives a text login on tty2: log in as `root` with no password (the `live` account is locked). The network comes from `systemd-networkd`; for Wi-Fi from a text login, use `iwctl`.
+The live session starts straight into Cupertino as the user `live`, with no password and no login screen. `Ctrl+Alt+F2` gives a text login on tty2: log in as `root` with no password (the `live` account is locked). The live system runs the same services as the installed one: NetworkManager (wired networks connect on their own; Wi-Fi from Settings or `nmtui`), BlueZ for Bluetooth, `cupertino-powerd`, `systemd-resolved` and `systemd-timesyncd`.
 
 ## Install
 

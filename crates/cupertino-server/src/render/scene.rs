@@ -939,10 +939,11 @@ fn revealed_titlebar(
             p.now,
         )
         .filter(|_| plan.exact)?;
-    let (title, can_minimize) =
+    let title =
         p.wm.window(entry.id)
-            .map(|w| (w.title.clone(), w.can_minimize()))
+            .map(|w| w.title.clone())
             .unwrap_or_default();
+    // a full-screen window does not minimize; the zoom button is its way out
     let bufs = p.decor.buffers(&DecorInput {
         id: entry.id,
         style: entry.titlebar,
@@ -951,7 +952,7 @@ fn revealed_titlebar(
         active,
         title: &title,
         resizable: false,
-        can_minimize,
+        can_minimize: false,
         can_zoom: true,
     });
     let origin = OutputPoint(cupertino_geometry::Point::new(

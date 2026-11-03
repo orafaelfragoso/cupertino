@@ -28,7 +28,7 @@ CUPERTINO_KEYRING_KEY=~/.config/cupertino/signing/PUBLIC.asc scripts/build-iso.s
 
 ### After a new install: restore the signing key
 
-A fresh install has the public key (through `cupertino-keyring`) but not the subkey that signs, and `local-release` stops with "no signing key" until `~/.config/cupertino/signing` exists. Copy the `cupertino-signing` directory that you saved from the key USB (see above) to `~/.config/cupertino/signing`. Only the signing subkey and `PUBLIC.asc` go there; the master key stays on the drive. `local-release` refuses a signing home that holds the master secret key.
+A fresh install has the public key (through `cupertino-keyring`) but not the subkey that signs, and `local-release` stops with "no signing key" until `~/.config/cupertino/signing` exists. Copy the `cupertino-signing` directory that you saved from the key USB (see above) to `~/.config/cupertino/signing`. A FAT drive does not keep file modes, so afterwards run `chmod 700 ~/.config/cupertino/signing`; otherwise `gpg` may warn about unsafe permissions. Only the signing subkey and `PUBLIC.asc` go there; the master key stays on the drive. `local-release` refuses a signing home that holds the master secret key.
 
 The subkey can sign for any repository that pacman trusts the master key for, so keep `~/.config/cupertino/signing` private. When the subkey expires, add a new one on the drive; `local-release` does not do this.
 

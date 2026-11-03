@@ -1813,7 +1813,7 @@ dependencies = [
  "image",
  "md5",
  "percent-encoding",
- "png 0.17.16",
+ "png 0.18.1",
  "rustix 1.1.5",
  "tempfile",
 ]

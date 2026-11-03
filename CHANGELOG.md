@@ -68,7 +68,7 @@ Changes on `main` since `v0.1.0-rc4`.
 - Each monitor is paced to its own refresh rate and redraws on its own.
 - When idle, the compositor sleeps until its next real deadline instead of waking every 4 ms, and child processes wake it only when they exit.
 - The CPU renderer resizes a window and opens the window switcher within one frame at 4K.
-- A failed frame keeps apps paced. A lost rendering context ends the session with an error that names it.
+- A failed frame keeps apps paced. On a display, a GPU reset makes a new renderer and the windows and clients stay; each reset is a line in `session.log` and `cupertino-diagnose` reports it as `crash.gpu_reset`. A fourth reset within a minute, or a renderer that cannot be made, ends the session with an error that names the lost context. This has run only through the offscreen test hook, not on hardware.
 - A buffer that is already ready is used without a wait or a log line.
 - A new window takes the keyboard only by the focus policy, never while you type or while the session is locked. Windows move and resize only from a real press on themselves. A process's right to focus its first window ends when its last connection closes ([#20](https://github.com/orafaelfragoso/cupertino/issues/20), [#44](https://github.com/orafaelfragoso/cupertino/issues/44)).
 - An app can bring itself forward only while it has focus or an activation token. Otherwise its dock tile bounces.
@@ -156,6 +156,8 @@ Changes on `main` since `v0.1.0-rc4`.
 - An upgrade test installs one version and then the next for deb and rpm.
 - All three formats recommend xwayland-satellite and Xwayland. Debian does not package xwayland-satellite.
 - The Arch packages can be signed. The `cupertino-keyring` package carries the signing key, `cupertino-rollback` installs an earlier release from `/var/lib/cupertino/previous`, the package cache or an archive, a pacman hook keeps the last release, and `build-repo` writes the signed repository tree (it copies archived packages into the output and verifies the copy, pins their primary key and signs `SHA256SUMS`). The release workflow signs the packages and attaches the signed repository to the draft release; it needs the signing secret and a repository address. Nothing is published yet.
+- Every package format requires dbus 1.16 or newer and PipeWire 1.4 or newer.
+- Machines installed from the USB image update from their own signed repository: `packaging/keyring/local-release` builds and signs a release, then `sudo pacman -Syu` installs it. pacman refuses an unsigned, tampered or foreign-signed package.
 
 ### Install image
 
@@ -179,6 +181,9 @@ Changes on `main` since `v0.1.0-rc4`.
 - The vendored xkbcommon-rs tests build again.
 - A gate check fails when a library's wayland-scanner XML is not embedded in its crate. The build now regenerates protocol code when the XML changes, the layer graph is regenerated, and the contracts registry covers the portal, the polkit agent, the pairing agent and `cupertino-diagnose` (the gate runs the contracts check).
 - The lock screen's AT-SPI test subscribes to its monitor before the lock screen can send.
+- The check job fetches the crates before the layer rules read the dependency graph offline, and runs on Ubuntu 26.04, where the package-environment tests pass.
+- The goldens drop the power panel scene before the lock scene, so a lock reaches the new login process.
+- The dock golden shows window icons at their resting and magnified sizes.
 
 ### Documentation
 

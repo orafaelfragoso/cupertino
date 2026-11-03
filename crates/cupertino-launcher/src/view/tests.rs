@@ -90,8 +90,8 @@ impl Host for TestHost {
         Vec::new()
     }
 
-    fn icon(&mut self, _: &ResultItem) -> Option<ImageSource> {
-        None
+    fn icon(&mut self, _: &ResultItem) -> Vec<ImageSource> {
+        Vec::new()
     }
 
     fn now(&self) -> Now {

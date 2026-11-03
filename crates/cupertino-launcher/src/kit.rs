@@ -27,8 +27,8 @@ pub trait Host {
     fn resize(&mut self, height: f64);
     /// The next frame of the appear animation, as [`Message::Frame`] with `frame`.
     fn frame(&mut self, frame: u64) -> Vec<Command<Message>>;
-    /// The image of `item`'s icon, `None` to show its kind's symbol.
-    fn icon(&mut self, item: &ResultItem) -> Option<ImageSource>;
+    /// The renditions of `item`'s icon, one per output scale it is loaded at; none to show its kind's symbol.
+    fn icon(&mut self, item: &ResultItem) -> Vec<ImageSource>;
     /// Both clocks now.
     fn now(&self) -> Now;
 }
@@ -66,7 +66,7 @@ pub struct Model {
     /// The query's revision the model last took from the field.
     pub revision: u64,
     /// Images of the shown results' icons by result id.
-    pub icons: HashMap<String, ImageSource>,
+    pub icons: HashMap<String, Vec<ImageSource>>,
     /// Where the file index is built from; `None` without file results.
     pub files: Option<FileSearchConfig>,
     /// Put the appear animation at its end at once (the server's settled test clock).
@@ -171,8 +171,9 @@ impl Model {
                 continue;
             };
             if !self.icons.contains_key(&item.id) {
-                if let Some(image) = self.host.icon(item) {
-                    self.icons.insert(item.id.clone(), image);
+                let sources = self.host.icon(item);
+                if !sources.is_empty() {
+                    self.icons.insert(item.id.clone(), sources);
                 }
             }
         }

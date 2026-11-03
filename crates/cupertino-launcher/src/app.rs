@@ -43,8 +43,8 @@ const NAMESPACE: &str = "cupertino-launcher";
 /// The appear animation's frame interval.
 const FRAME: Duration = Duration::from_micros(16_667);
 
-/// Device pixels the results' icons are loaded at: their size at scale 2, so they stay sharp on a HiDPI output.
-const ICON_PX: u32 = (ICON_SIZE as u32) * 2;
+/// Device pixels the results' icons are loaded at: their size at scales 1 to 3, so they stay sharp on every output.
+const ICON_PX: [u32; 3] = [ICON_SIZE as u32, ICON_SIZE as u32 * 2, ICON_SIZE as u32 * 3];
 
 /// Command line of the process.
 pub struct Options {
@@ -343,26 +343,32 @@ impl Host for AppHost {
         }))]
     }
 
-    fn icon(&mut self, item: &ResultItem) -> Option<ImageSource> {
-        let raster = |system: &mut SystemIcons, name| {
-            let pixmap = system.raster(name, ICON_PX);
-            image(pixmap.width(), pixmap.height(), pixmap.data())
+    fn icon(&mut self, item: &ResultItem) -> Vec<ImageSource> {
+        let system = match item.kind {
+            ItemKind::Application | ItemKind::ApplicationAction => {
+                if let Some(name) = item.icon.as_deref() {
+                    let own: Vec<ImageSource> = ICON_PX
+                        .iter()
+                        .filter_map(|&px| self.themes.load(name, px))
+                        .map(|pixmap| image(pixmap.width(), pixmap.height(), pixmap.data()))
+                        .collect();
+                    if !own.is_empty() {
+                        return own;
+                    }
+                }
+                GENERIC_APPLICATION_ICON
+            }
+            ItemKind::Folder => FOLDER_ICON,
+            ItemKind::File => DOCUMENT_ICON,
+            ItemKind::WebSearch | ItemKind::Calculator => return Vec::new(),
         };
-        match item.kind {
-            ItemKind::Application | ItemKind::ApplicationAction => Some(
-                match item
-                    .icon
-                    .as_deref()
-                    .and_then(|n| self.themes.load(n, ICON_PX))
-                {
-                    Some(pixmap) => image(pixmap.width(), pixmap.height(), pixmap.data()),
-                    None => raster(&mut self.system, GENERIC_APPLICATION_ICON),
-                },
-            ),
-            ItemKind::Folder => Some(raster(&mut self.system, FOLDER_ICON)),
-            ItemKind::File => Some(raster(&mut self.system, DOCUMENT_ICON)),
-            ItemKind::WebSearch | ItemKind::Calculator => None,
-        }
+        ICON_PX
+            .iter()
+            .map(|&px| {
+                let pixmap = self.system.raster(system, px);
+                image(pixmap.width(), pixmap.height(), pixmap.data())
+            })
+            .collect()
     }
 
     fn now(&self) -> Now {
@@ -392,47 +398,14 @@ fn listen(signals: &async_channel::Receiver<Signal>) -> Command<Message> {
     }))
 }
 
-/// A launcher without a host or a bus; [`run`] starts the process's own.
-struct Unhosted;
-
-impl Host for Unhosted {
-    fn run(&mut self, _: CommandSpec, _: Option<String>) {}
-    fn open(&mut self, _: &str) {}
-    fn index(&mut self, _: FileSearchConfig) -> Vec<Command<Message>> {
-        Vec::new()
-    }
-    fn resize(&mut self, _: f64) {}
-    fn frame(&mut self, _: u64) -> Vec<Command<Message>> {
-        Vec::new()
-    }
-    fn icon(&mut self, _: &ResultItem) -> Option<ImageSource> {
-        None
-    }
-    fn now(&self) -> Now {
-        Now {
-            mono: 0.0,
-            unix: unix_now(),
-        }
-    }
-}
-
 impl Application for App {
     type Model = App;
     type Message = Message;
     const RESIDENT: bool = true;
 
+    /// Not used: the model needs the host and the bus [`run`] sets up, and starts through `run_on`.
     fn init() -> (App, Vec<Command<Message>>) {
-        let launcher = Launcher::new(
-            LauncherConfig::default(),
-            Vec::new(),
-            cupertino_launcher::Frecency::in_memory(),
-        );
-        let app = App {
-            model: Model::new(launcher, Box::new(Unhosted)),
-            signals: async_channel::unbounded().1,
-        };
-        let first = listen(&app.signals);
-        (app, vec![first])
+        unreachable!("the launcher starts only through `run`, which hands the model to `run_on`")
     }
 
     fn update(app: &mut App, message: Message) -> Vec<Command<Message>> {

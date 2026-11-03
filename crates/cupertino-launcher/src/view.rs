@@ -250,7 +250,7 @@ pub struct PanelView<'a> {
     /// The appear animation, 0 (hidden) to 1.
     pub alpha: f64,
     /// Images of the results' icons by [`ResultItem::id`]; a result without one shows its kind's symbol.
-    pub icons: &'a HashMap<String, ImageSource>,
+    pub icons: &'a HashMap<String, Vec<ImageSource>>,
 }
 
 fn window_spec(title: &str, app_id: &str, size: Size) -> WindowSpec {
@@ -455,8 +455,8 @@ where
     M: From<Input> + Clone + 'static,
 {
     let icon = match (view.icons.get(&item.id), fallback_symbol(item.kind)) {
-        (Some(source), _) => Some(Element::new(Image {
-            sources: vec![source.clone()],
+        (Some(sources), _) => Some(Element::new(Image {
+            sources: sources.clone(),
             size: Size::new(ICON_SIZE, ICON_SIZE),
             fit: ImageFit::Contain,
             radius: 0.0,

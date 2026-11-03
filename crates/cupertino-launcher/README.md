@@ -87,7 +87,7 @@ gdbus call --session --dest org.cupertino.Launcher1 --object-path /org/cupertino
 
 Application results show the entry's own `Icon=` (an absolute path or `hicolor`; `cupertino_icons::ThemeIcons`) and the asset
 `application.generic` when it has none. Folder results are the asset `folder`, file results `document.generic` (file results
-are not typed: the launcher holds no MIME database yet); they are loaded at twice the icon size and shown as Kit images. The web
+are not typed: the launcher holds no MIME database yet); they are loaded at the icon size for scales 1, 2 and 3 and shown as Kit images, which draw the rendition that covers the output's scale. The web
 search row is Kit's `symbol.magnifyingglass` symbol in the secondary label colour, as is the symbol in front of the query. The
 calculator row has no icon. Missing assets are reported once at start and drawn as placeholders.
 

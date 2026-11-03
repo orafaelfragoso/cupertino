@@ -1,20 +1,24 @@
 //! The file-chooser, app-chooser, screen-sharing and screenshot windows: one for each open request, drawn with CupertinoKit. The D-Bus side
 //! hands its events to the [`inbox`]; [`Dialogs`] is resident and keeps running while no dialog is open.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
+use cupertino_assets::Assets;
 use cupertino_filepicker::places::{session_places, Place};
 use cupertino_filepicker::{Listing, Request};
+use cupertino_icons::ThemeIcons;
 use cupertino_kit::controls::{
-    CheckBox, ListView, SegmentedControl, Selection, SplitLayout, SplitView, TextRole,
+    CheckBox, Image, ImageFit, ImageSource, ListView, SegmentedControl, Selection, SplitLayout,
+    SplitView, TextRole,
 };
-use cupertino_kit::core::{Checked, CommandRegistry, Key, Shortcut};
+use cupertino_kit::core::{next_resource_id, Checked, CommandRegistry, Key, Shortcut};
 use cupertino_kit::geometry::{Insets, Point, Size};
 use cupertino_kit::layout::ScrollState;
 use cupertino_kit::platform::{DecorationMode, Keysym, Mods};
 use cupertino_kit::prelude::*;
+use cupertino_kit::render::{ImageResource, PixelFormat};
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
 use zbus::zvariant::OwnedObjectPath;
 
@@ -25,6 +29,9 @@ use crate::screen_cast::{self, Source};
 use crate::screenshot;
 
 const ROW_HEIGHT: f64 = 24.0;
+const ROW_ICON: f64 = 16.0;
+/// Device pixels an app's own icon is loaded at: the row icon at 1× and 2×.
+const APP_ICON_PX: [u32; 2] = [16, 32];
 const SIDEBAR_WIDTH: f64 = 180.0;
 const SAVE_AS_WIDTH: f64 = 260.0;
 const GAP: f64 = 8.0;
@@ -139,7 +146,46 @@ pub struct Model {
     open: Vec<Dialog>,
     pickers: Vec<Picker>,
     apps: Vec<AppPicker>,
+    app_icons: AppIcons,
     consents: Vec<Consent>,
+}
+
+/// The apps' own icons by the name of their `Icon=`, each name loaded once.
+struct AppIcons {
+    theme: ThemeIcons,
+    /// The renditions of a name; none when it resolves to no icon.
+    loaded: HashMap<String, Vec<ImageSource>>,
+}
+
+impl AppIcons {
+    fn load(&mut self, choices: &[app_chooser::Choice]) {
+        for name in choices.iter().filter_map(|c| c.icon.as_deref()) {
+            let theme = &mut self.theme;
+            self.loaded.entry(name.to_owned()).or_insert_with(|| {
+                APP_ICON_PX
+                    .iter()
+                    .filter_map(|&px| theme.load(name, px))
+                    .map(|pixmap| ImageSource {
+                        id: next_resource_id(),
+                        image: ImageResource {
+                            revision: 1,
+                            width: pixmap.width(),
+                            height: pixmap.height(),
+                            stride: pixmap.width() * 4,
+                            format: PixelFormat::Rgba8Premultiplied,
+                            pixels: pixmap.take().into(),
+                        },
+                    })
+                    .collect()
+            });
+        }
+    }
+
+    /// The renditions of the icon of `choice`; `None` when it has none.
+    fn of(&self, choice: &app_chooser::Choice) -> Option<Vec<ImageSource>> {
+        let sources = self.loaded.get(choice.icon.as_deref()?)?;
+        (!sources.is_empty()).then(|| sources.clone())
+    }
 }
 
 struct Dialog {
@@ -303,6 +349,7 @@ impl Model {
                     self.pickers.retain(|p| p.handle != handle)
                 }
                 Event::AppChooser(app_chooser::Event::Ask { handle, ask, reply }) => {
+                    self.app_icons.load(&ask.choices);
                     let id = self.next;
                     self.next += 1;
                     let mut picker = AppPicker {
@@ -318,6 +365,7 @@ impl Model {
                     self.apps.push(picker);
                 }
                 Event::AppChooser(app_chooser::Event::Update { handle, choices }) => {
+                    self.app_icons.load(&choices);
                     if let Some(a) = self.apps.iter_mut().find(|a| a.handle == handle) {
                         let chosen = a.chosen().map(|c| c.id.clone());
                         a.ask.choices = choices;
@@ -404,6 +452,10 @@ impl Application for Dialogs {
             open: Vec::new(),
             pickers: Vec::new(),
             apps: Vec::new(),
+            app_icons: AppIcons {
+                theme: ThemeIcons::new(&Assets::discover()),
+                loaded: HashMap::new(),
+            },
             consents: Vec::new(),
         };
         let mut commands = model.take(inbox().take());
@@ -572,7 +624,7 @@ impl Application for Dialogs {
             .iter()
             .map(|d| window(d, &model.places))
             .chain(model.pickers.iter().map(picker_window))
-            .chain(model.apps.iter().map(app_window))
+            .chain(model.apps.iter().map(|a| app_window(a, &model.app_icons)))
             .chain(model.consents.iter().map(consent_window))
             .collect()
     }
@@ -604,7 +656,17 @@ fn text(content: String, role: TextRole, secondary: bool, selected: bool) -> Ele
     })
 }
 
-fn row(symbol: &str, name: String, selected: bool) -> Element<Message> {
+fn symbol(name: &str) -> Element<Message> {
+    Element::new(Icon {
+        name: name.to_owned(),
+        size: ROW_ICON,
+        direction: Default::default(),
+        label: None,
+        tint: None,
+    })
+}
+
+fn row(icon: Element<Message>, name: String, selected: bool) -> Element<Message> {
     Element::new(Stack {
         axis: Axis::Horizontal,
         padding: Insets {
@@ -615,16 +677,7 @@ fn row(symbol: &str, name: String, selected: bool) -> Element<Message> {
         },
         spacing: 6.0,
         align: Align::Center,
-        children: vec![
-            Element::new(Icon {
-                name: symbol.to_owned(),
-                size: 16.0,
-                direction: Default::default(),
-                label: None,
-                tint: None,
-            }),
-            text(name, TextRole::Body, false, selected),
-        ],
+        children: vec![icon, text(name, TextRole::Body, false, selected)],
     })
 }
 
@@ -676,7 +729,7 @@ fn sidebar(d: &Dialog, places: &[Place]) -> Element<Message> {
         selection,
         multiple: false,
         initial: false,
-        row: Box::new(move |i, selected| row(rows[i].0, rows[i].1.clone(), selected)),
+        row: Box::new(move |i, selected| row(symbol(rows[i].0), rows[i].1.clone(), selected)),
         key: Some(Box::new(move |i| Key::from(keys[i]))),
         type_select: Some(Box::new(move |i| names[i].clone())),
         on_scroll: Box::new(move |s| Message::PlacesScroll(id, s)),
@@ -716,11 +769,11 @@ fn files(d: &Dialog) -> Element<Message> {
         row: Box::new(move |i, selected| {
             let (is_dir, name) = &rows[i];
             row(
-                if *is_dir {
+                symbol(if *is_dir {
                     "symbol.folder"
                 } else {
                     "symbol.doc"
-                },
+                }),
                 name.clone(),
                 selected,
             )
@@ -1012,7 +1065,7 @@ fn picker_window(p: &Picker) -> Window<Message> {
         selection: p.rows.clone(),
         multiple: false,
         initial: false,
-        row: Box::new(move |i, selected| row(rows[i].0, rows[i].1.clone(), selected)),
+        row: Box::new(move |i, selected| row(symbol(rows[i].0), rows[i].1.clone(), selected)),
         key: Some(Box::new(|i| Key::Int(i as u64))),
         type_select: Some(Box::new(move |i| names[i].clone())),
         on_scroll: Box::new(move |s| Message::PickerScroll(id, s)),
@@ -1117,10 +1170,12 @@ fn shortened(target: &str) -> String {
     }
 }
 
-fn app_window(a: &AppPicker) -> Window<Message> {
+fn app_window(a: &AppPicker, app_icons: &AppIcons) -> Window<Message> {
     let id = a.id;
     let names: Vec<String> = a.ask.choices.iter().map(|c| c.name.clone()).collect();
     let shown = names.clone();
+    let icons: Vec<Option<Vec<ImageSource>>> =
+        a.ask.choices.iter().map(|c| app_icons.of(c)).collect();
     let list = Element::from(ListView {
         label: "Apps".into(),
         count: names.len(),
@@ -1129,7 +1184,19 @@ fn app_window(a: &AppPicker) -> Window<Message> {
         selection: a.rows.clone(),
         multiple: false,
         initial: true,
-        row: Box::new(move |i, selected| row("symbol.applications", shown[i].clone(), selected)),
+        row: Box::new(move |i, selected| {
+            let icon = match &icons[i] {
+                Some(sources) => Element::new(Image {
+                    sources: sources.clone(),
+                    size: Size::new(ROW_ICON, ROW_ICON),
+                    fit: ImageFit::Contain,
+                    radius: 0.0,
+                    label: None,
+                }),
+                None => symbol("symbol.applications"),
+            };
+            row(icon, shown[i].clone(), selected)
+        }),
         key: Some(Box::new(|i| Key::Int(i as u64))),
         type_select: Some(Box::new(move |i| names[i].clone())),
         on_scroll: Box::new(move |s| Message::AppScroll(id, s)),
@@ -1467,6 +1534,38 @@ mod tests {
         send(driver, window, WindowEvent::Key(event, Timestamp(0)));
     }
 
+    /// A data directory whose `hicolor` theme has the icon `name`: a red square.
+    fn icon_theme(name: &str) -> tempfile::TempDir {
+        let data = tempfile::tempdir().unwrap();
+        let theme = data.path().join("icons/hicolor");
+        std::fs::create_dir_all(theme.join("scalable/apps")).unwrap();
+        std::fs::write(
+            theme.join("index.theme"),
+            "[Icon Theme]\nName=Hicolor\nDirectories=scalable/apps\n\n[scalable/apps]\nSize=16\nMinSize=8\nMaxSize=512\nType=Scalable\n",
+        )
+        .unwrap();
+        std::fs::write(
+            theme.join(format!("scalable/apps/{name}.svg")),
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="red"/></svg>"#,
+        )
+        .unwrap();
+        data
+    }
+
+    /// Whether the last frame of `window` shows the fixture's red square at the start of the row `key`.
+    fn red_icon(driver: &mut TestDriver<Dialogs>, window: WindowId, key: Key) -> bool {
+        let rect = rect_of(driver, window, &key);
+        let y = (rect.origin.y + rect.size.height / 2.0) as usize;
+        let frame = driver
+            .window_system_mut()
+            .frames(window)
+            .unwrap()
+            .last()
+            .unwrap();
+        let line = &frame.pixels[y * frame.width as usize * 4..][..ROW_HEIGHT as usize * 2 * 4];
+        line.chunks(4).any(|px| px == [255, 0, 0, 255])
+    }
+
     fn click(driver: &mut TestDriver<Dialogs>, window: WindowId, key: &'static str) {
         click_at(driver, window, Key::from(key));
     }
@@ -1511,6 +1610,8 @@ mod tests {
     #[test]
     fn a_request_opens_a_window_that_answers_it_and_the_portal_waits_with_none_open() {
         let folder = tempfile::tempdir().unwrap();
+        let data = icon_theme("org.example.Viewer");
+        std::env::set_var("XDG_DATA_DIRS", data.path());
 
         let answer = post(1, ask(Kind::Save, folder.path()));
         let (mut driver, window) = start();
@@ -1602,6 +1703,7 @@ mod tests {
         let choice = |id: &str, name: &str| app_chooser::Choice {
             id: id.to_owned(),
             name: name.to_owned(),
+            icon: Some(id.to_owned()),
         };
         let open_with = |n: u32| {
             let (sender, answer) = async_channel::bounded(1);
@@ -1623,6 +1725,15 @@ mod tests {
         };
         let answer = open_with(6);
         let window = show(&mut driver);
+        driver.look(window, "portal-app-chooser").unwrap();
+        assert!(
+            red_icon(&mut driver, window, Key::Int(0)),
+            "an icon the hicolor theme has is drawn"
+        );
+        assert!(
+            !red_icon(&mut driver, window, Key::Int(1)),
+            "an icon no theme has falls back to the applications symbol"
+        );
         let spec = driver.window_system_mut().spec(window).unwrap().clone();
         assert_eq!(spec.title, "Open With");
         let snapshot = driver.runtime().snapshot(window).unwrap();

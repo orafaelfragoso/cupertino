@@ -11,12 +11,14 @@ layer = "shell"
 [features]
 default = []
 # the `cupertino-portal` process
-app = ["dep:cupertino-kit", "dep:cupertino-protocol-app", "dep:cupertino-screencast", "dep:cupertino-wayland-client", "dep:rustix", "dep:wayland-client", "dep:wayland-protocols"]
+app = ["dep:cupertino-assets", "dep:cupertino-icons", "dep:cupertino-kit", "dep:cupertino-protocol-app", "dep:cupertino-screencast", "dep:cupertino-wayland-client", "dep:rustix", "dep:wayland-client", "dep:wayland-protocols"]
 
 [dependencies]
 async-channel = "2"
 cupertino-apps = { path = "../cupertino-apps" }
+cupertino-assets = { path = "../cupertino-assets", optional = true }
 cupertino-filepicker = { path = "../cupertino-filepicker" }
+cupertino-icons = { path = "../cupertino-icons", optional = true }
 cupertino-kit = { path = "../cupertino-kit", optional = true }
 cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
 cupertino-screencast = { path = "../cupertino-screencast", optional = true }

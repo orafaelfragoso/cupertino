@@ -1,11 +1,9 @@
 //! The `cupertino-settings` process: the settings window as a client of the server, on the first sidebar row or the
 //! pane `--pane` names. It exits when the window is closed. See the README.
 
-mod about_app;
-
 use std::process::ExitCode;
 
-use cupertino_settings::{shell, sidebar, PaneId};
+use cupertino_settings::{about_app, shell, sidebar, PaneId};
 
 const USAGE: &str = "usage: cupertino-settings [--pane PANE-ID | --about]";
 

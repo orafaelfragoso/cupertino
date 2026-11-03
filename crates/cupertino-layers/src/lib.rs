@@ -353,14 +353,6 @@ pub const EXCEPTIONS: &[Exception] = &[
         area: Area::Services,
         reason: SOUND_PANE,
     },
-    Exception {
-        from: "cupertino-settings",
-        to: "cupertino-decorations",
-        kind: Kind::Normal,
-        tracking: Tracking::Issue(46),
-        area: Area::Apps,
-        reason: APPS_DRAW,
-    },
 ];
 
 /// A dependency between two workspace crates.

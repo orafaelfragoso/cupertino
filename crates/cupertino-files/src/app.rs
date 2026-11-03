@@ -59,7 +59,7 @@ use cupertino_protocol_app::{AppEffects, AppEvent, Appearance as AppearanceObser
 use cupertino_theme::{Appearance, Theme, WindowCornerSize};
 use cupertino_ui_atspi::AtspiAdapter;
 use cupertino_ui_core::{AccessibilityAdapter, AccessibilityUpdate, Action as AccessAction};
-use cupertino_ui_menus::WindowMenus;
+use cupertino_ui_menus::{AppMenus, WindowMenus};
 use cupertino_ui_text::{KeyInput, Keymap, Response, TextBuffer, TextFieldKeys};
 use cupertino_ui_wayland::clipboard::Clipboard;
 use cupertino_ui_wayland::{copy_rects, popup, Damage, Ready, ShmPresenter};
@@ -2206,6 +2206,7 @@ impl App {
     fn publish_menus(&mut self) {
         let state = self.current_menu_state();
         self.menus = WindowMenus::publish(
+            &mut AppMenus::default(),
             &self.conn,
             &self.effects,
             self.window.toplevel.surface(),

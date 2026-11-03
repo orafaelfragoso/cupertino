@@ -576,6 +576,7 @@ fn eject_from_the_window_on_a_card_goes_home_and_ejects_its_drive() {
         home,
         card.clone(),
         vec![documents],
+        Notices::start(None),
         Some(fake.bus.connect()),
     );
     run.wait_until(|run| {

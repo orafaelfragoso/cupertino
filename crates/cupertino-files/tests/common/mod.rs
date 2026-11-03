@@ -11,12 +11,13 @@ use cupertino_assets::BUILTIN_FONT;
 use cupertino_files::kit::{prepare, Files, Start};
 use cupertino_files::notice::Notices;
 use cupertino_files::places::{Place, PlaceGroup, PlaceKind};
+use cupertino_files::trash::Trash;
 use cupertino_kit::core::{AccessibilityNode, Key, NodeId, PlaceholderIcons, Role, RuntimeOptions};
 use cupertino_kit::geometry::{Point, Rect};
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{
-    Capabilities, Mods, MouseButton, PointerEvent, Timestamp, WindowEvent, WindowId, WindowRequest,
-    WindowStates,
+    Capabilities, KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp, WindowEvent,
+    WindowId, WindowRequest, WindowStates,
 };
 use cupertino_kit::render::{CpuConfig, CpuRenderer};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
@@ -41,11 +42,13 @@ pub fn place(name: &str, path: &Path, kind: PlaceKind) -> Place {
 }
 
 impl Run {
-    /// The window on `folder` of `home`, with `places` in the sidebar and the removable media of `system`.
+    /// The window on `folder` of `home`, with `places` in the sidebar, its trash in `home/Trash`, posting to
+    /// `notices`, and the removable media of `system`.
     pub fn start(
         home: tempfile::TempDir,
         folder: PathBuf,
         places: Vec<Place>,
+        notices: Notices,
         system: Option<zbus::blocking::Connection>,
     ) -> Run {
         prepare(
@@ -54,12 +57,13 @@ impl Run {
                 places,
                 None,
                 home.path().join("recently-used.xbel"),
-                Notices::start(None),
+                notices,
                 Box::new(|| Err(std::io::Error::other("no applications in this test"))),
                 None,
                 system,
             )
-            .unwrap(),
+            .unwrap()
+            .with_trash(Trash::with_home(home.path().join("Trash"))),
         );
         let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
         let preferences = ThemePreferences {
@@ -176,6 +180,29 @@ impl Run {
                 serial: 1,
                 mods: Mods::NONE,
             }));
+        }
+    }
+
+    /// Presses and releases the key of `keysym`, which types `text`.
+    pub fn key(&mut self, keysym: u32, text: Option<char>) {
+        for pressed in [true, false] {
+            self.send(WindowEvent::Key(
+                KeyEvent {
+                    code: 0,
+                    keysym: Keysym(keysym),
+                    text: text.filter(|_| pressed),
+                    pressed,
+                    repeat: false,
+                    mods: Mods::NONE,
+                },
+                Timestamp(0),
+            ));
+        }
+    }
+
+    pub fn type_text(&mut self, text: &str) {
+        for c in text.chars() {
+            self.key(c as u32, Some(c));
         }
     }
 

@@ -1,9 +1,8 @@
 // cupertino-layers --graph
-// 79 crates, 370 internal dependencies
+// 79 crates, 364 internal dependencies
 // per layer: foundation 18, models 8, platform 9, protocol 3, transport 3, render 3, ui 13, core 1, shell 11, services 4, apps 2, tools 4
 // forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the default sink and the mixer itself until audio goes through a service
-// forbidden normal edge cupertino-settings (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden normal edge cupertino-settings (apps) -> cupertino-pipewire (platform), migration #21 exception (services): the sound pane drives the default sink and the mixer itself until audio goes through a service
 // forbidden dev edge cupertino-settings (apps) -> cupertino-pipewire (platform), migration #21 exception (services): the sound pane drives the default sink and the mixer itself until audio goes through a service
 // denied paths ui -> core, shell, services: none
@@ -318,9 +317,11 @@ digraph "layers" {
   "cupertino-polkit-agent" -> "cupertino-ui-wayland";
   "cupertino-polkit-agent" -> "cupertino-wayland-client";
   "cupertino-portal" -> "cupertino-apps";
+  "cupertino-portal" -> "cupertino-assets";
   "cupertino-portal" -> "cupertino-assets" [label="dev"];
   "cupertino-portal" -> "cupertino-defaults" [label="dev"];
   "cupertino-portal" -> "cupertino-filepicker";
+  "cupertino-portal" -> "cupertino-icons";
   "cupertino-portal" -> "cupertino-kit";
   "cupertino-portal" -> "cupertino-protocol-app";
   "cupertino-portal" -> "cupertino-screencast";
@@ -390,27 +391,19 @@ digraph "layers" {
   "cupertino-settings" -> "cupertino-alsa" [color=orange, style=dashed];
   "cupertino-settings" -> "cupertino-apps";
   "cupertino-settings" -> "cupertino-assets";
-  "cupertino-settings" -> "cupertino-capture" [label="dev"];
-  "cupertino-settings" -> "cupertino-decorations" [color=orange, style=dashed];
   "cupertino-settings" -> "cupertino-defaults";
   "cupertino-settings" -> "cupertino-filepicker";
-  "cupertino-settings" -> "cupertino-geometry";
   "cupertino-settings" -> "cupertino-icons";
-  "cupertino-settings" -> "cupertino-keyboard";
   "cupertino-settings" -> "cupertino-kit";
   "cupertino-settings" -> "cupertino-menu-model";
   "cupertino-settings" -> "cupertino-modifiers";
   "cupertino-settings" -> "cupertino-pipewire" [color=orange, style=dashed];
   "cupertino-settings" -> "cupertino-pipewire" [label="dev", color=orange, style=dashed];
-  "cupertino-settings" -> "cupertino-protocol-app";
   "cupertino-settings" -> "cupertino-test-bus" [label="dev"];
   "cupertino-settings" -> "cupertino-theme";
   "cupertino-settings" -> "cupertino-thumbnails";
   "cupertino-settings" -> "cupertino-typeahead";
-  "cupertino-settings" -> "cupertino-ui-menus";
   "cupertino-settings" -> "cupertino-ui-test" [label="dev"];
-  "cupertino-settings" -> "cupertino-ui-text";
-  "cupertino-settings" -> "cupertino-ui-wayland";
   "cupertino-settings" -> "cupertino-wayland-client";
   "cupertino-shell-client" -> "cupertino-defaults";
   "cupertino-shell-client" -> "cupertino-geometry";

@@ -29,7 +29,6 @@ use crate::panes::ControlId;
 use crate::search::{self, Hit};
 use crate::services::Services;
 use crate::settings::Paths;
-use crate::window::metrics;
 use crate::PaneId;
 use cupertino_assets::Assets;
 use state::{background_channel, Background, Result, State};
@@ -50,6 +49,45 @@ const MIN_CONTENT: f64 = 320.0;
 const SEARCH_WIDTH: f64 = 112.0;
 /// The interface width factor: 1 for English (approximate).
 const WIDTH_FACTOR: f64 = 1.0;
+
+/// Window metrics (§4.1).
+pub mod metrics {
+    /// The default content width before the scale factor and the height.
+    pub const DEFAULT_WIDTH: f64 = 715.0;
+    pub const DEFAULT_HEIGHT: f64 = 625.0;
+    /// Smallest window height: approximate (the standard panel's minimum content height, by analogy; O6).
+    pub const MIN_HEIGHT: f64 = 400.0;
+}
+
+/// The default window size at interface width factor `f`: `(ceil(715 f), 625)`.
+pub fn default_size(f: f64) -> Size {
+    Size::new((metrics::DEFAULT_WIDTH * f).ceil(), metrics::DEFAULT_HEIGHT)
+}
+
+/// The template symbols of the window's chrome; with the panes' ([`crate::pane::symbols`]) the process requires them.
+pub const CHROME_SYMBOLS: [&str; 6] = [
+    "symbol.chevron.left",
+    "symbol.chevron.right",
+    "symbol.search",
+    "symbol.xmark.circle",
+    "symbol.chevron.up.down",
+    "symbol.checkmark",
+];
+
+/// Every template symbol the window draws.
+pub fn required_symbols() -> Vec<&'static str> {
+    let mut all = crate::pane::symbols();
+    all.extend(CHROME_SYMBOLS);
+    all
+}
+
+/// The icon of an application whose icon theme has none.
+const GENERIC_APPLICATION_ICON: &str = "application.generic";
+
+/// The icons the window draws; the ones no asset pack provides are reported once on stderr.
+pub fn required_icons(assets: &Assets) -> cupertino_icons::SystemIcons {
+    cupertino_icons::SystemIcons::required(assets, &[GENERIC_APPLICATION_ICON], &required_symbols())
+}
 
 const UNSCROLLED: ScrollState = ScrollState {
     offset: Point::ZERO,
@@ -97,7 +135,7 @@ pub fn run(pane: PaneId, activation: String) -> Result<()> {
         return Ok(());
     };
     // missing icons never stop the start: they are named here and drawn as placeholders
-    crate::paint::required_icons(&Assets::discover());
+    required_icons(&Assets::discover());
     let state = State::new(
         Paths::from_env(),
         Services::new(),
@@ -521,7 +559,7 @@ impl Application for SettingsApp {
             min_trailing: MIN_CONTENT,
             on_change: Some(Box::new(Message::Split)),
         });
-        let size = crate::window::default_size(WIDTH_FACTOR);
+        let size = default_size(WIDTH_FACTOR);
         let mut windows = vec![Window {
             key: main_window(),
             spec: WindowSpec {
@@ -532,7 +570,7 @@ impl Application for SettingsApp {
                     .title(shell.state.live.has_battery())
                     .into(),
                 app_id: APP_ID.into(),
-                size: Size::new(size.w, size.h),
+                size,
                 min_size: Some(Size::new(MIN_SIDEBAR + MIN_CONTENT, metrics::MIN_HEIGHT)),
                 max_size: None,
                 decorations: DecorationMode::Preferred,
@@ -593,6 +631,27 @@ mod tests {
     const BRACKET_LEFT: u32 = 0x5b;
     const HOME: u32 = 0xff50;
     const END: u32 = 0xff57;
+
+    #[test]
+    fn the_default_size_follows_the_width_factor() {
+        let sizes: Vec<(f64, f64)> = [1.0, 1.1, 1.3]
+            .iter()
+            .map(|f| default_size(*f))
+            .map(|s| (s.width, s.height))
+            .collect();
+        assert_eq!(sizes, [(715.0, 625.0), (787.0, 625.0), (930.0, 625.0)]);
+    }
+
+    #[test]
+    fn a_missing_symbol_does_not_stop_the_start() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("manifest.json"),
+            r#"{"version": 2, "name": "empty"}"#,
+        )
+        .unwrap();
+        required_icons(&Assets::from_dirs(&[dir.path().to_path_buf()]));
+    }
 
     fn paths(dir: &Path) -> Paths {
         Paths {

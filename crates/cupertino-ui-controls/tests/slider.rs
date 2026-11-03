@@ -47,6 +47,7 @@ impl Application for Volume {
                 ticks: 3,
                 enabled: true,
                 on_change: Some(Box::new(|v| v)),
+                on_end: None,
             })
             .key("volume")],
         }))
@@ -140,4 +141,78 @@ fn tick_marks_are_dots_under_the_track_at_each_step_position() {
         "from the knob's run, end to end"
     );
     assert!(dots.iter().all(|d| d.size == Size::new(4.0, 4.0)));
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Heard {
+    Change(f64),
+    End(f64),
+}
+
+/// A brightness slider from 0 to 1 starting at 0.5 that keeps every change and end it hears, in order.
+struct Brightness;
+
+impl Application for Brightness {
+    type Model = (f64, Vec<Heard>);
+    type Message = Heard;
+
+    fn init() -> (Self::Model, Vec<Command<Heard>>) {
+        ((0.5, Vec::new()), Vec::new())
+    }
+
+    fn update((value, heard): &mut Self::Model, message: Heard) -> Vec<Command<Heard>> {
+        if let Heard::Change(v) = message {
+            *value = v;
+        }
+        heard.push(message);
+        Vec::new()
+    }
+
+    fn view((value, _): &Self::Model) -> Vec<Window<Heard>> {
+        window(Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets::ZERO,
+            spacing: 0.0,
+            align: Align::Stretch,
+            children: vec![Element::new(Slider {
+                label: "Brightness".into(),
+                value: *value,
+                min: 0.0,
+                max: 1.0,
+                step: Some(0.25),
+                style: SliderStyle::PanelLevel("symbol.sun"),
+                ticks: 0,
+                enabled: true,
+                on_change: Some(Box::new(Heard::Change)),
+                on_end: Some(Box::new(Heard::End)),
+            })
+            .key("brightness")],
+        }))
+    }
+}
+
+#[test]
+fn a_drag_ends_once_when_the_pointer_lets_go_and_a_key_change_ends_at_once() {
+    let mut h = Harness::<Brightness>::new();
+    let track = h.rect("brightness");
+    let at = |x: f64| Point::new(x, track.center().y);
+    h.pointer(PointerEvent::Motion {
+        position: at(track.max_x() - 1.0),
+    });
+    h.button(at(track.max_x() - 1.0), true);
+    h.pointer(PointerEvent::Motion {
+        position: at(track.min_x() + 1.0),
+    });
+    assert_eq!(h.model().1, [Heard::Change(1.0), Heard::Change(0.0)]);
+    h.button(at(track.min_x() + 1.0), false);
+    assert_eq!(h.model().1[2..], [Heard::End(0.0)]);
+    h.tap(RIGHT);
+    assert_eq!(h.model().1[3..], [Heard::Change(0.25), Heard::End(0.25)]);
+    h.tap(LEFT);
+    h.tap(LEFT);
+    assert_eq!(
+        h.model().1[5..],
+        [Heard::Change(0.0), Heard::End(0.0)],
+        "a key at the minimum moves nothing and ends nothing"
+    );
 }

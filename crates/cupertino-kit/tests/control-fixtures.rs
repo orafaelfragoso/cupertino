@@ -507,6 +507,7 @@ fixtures! {
         ticks: 0,
         enabled: look.enabled,
         on_change: Some(Box::new(|_| Message::Nothing)),
+        on_end: None,
     });
     slider_ticks: "slider-ticks", WIDE, INTERACTIVE, |look| Element::new(Slider {
         label: "Speed".into(),
@@ -518,6 +519,7 @@ fixtures! {
         ticks: 5,
         enabled: look.enabled,
         on_change: Some(Box::new(|_| Message::Nothing)),
+        on_end: None,
     });
     slider_level: "slider-level", WIDE, INTERACTIVE, |look| Element::new(Slider {
         label: "Brightness".into(),
@@ -529,6 +531,7 @@ fixtures! {
         ticks: 0,
         enabled: look.enabled,
         on_change: Some(Box::new(|_| Message::Nothing)),
+        on_end: None,
     });
     slider_panel_level: "slider-panel-level", WIDE, INTERACTIVE, |look| Element::new(Slider {
         label: "Display".into(),
@@ -540,6 +543,7 @@ fixtures! {
         ticks: 0,
         enabled: look.enabled,
         on_change: Some(Box::new(|_| Message::Nothing)),
+        on_end: None,
     });
     stepper: "stepper", CONTROL, INTERACTIVE, |look| Element::new(Stepper {
         label: "Copies".into(),

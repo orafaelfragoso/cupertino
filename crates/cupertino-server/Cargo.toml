@@ -57,7 +57,7 @@ cupertino-seat = { path = "../cupertino-seat", optional = true }
 async-channel = "2"
 libc = "0.2"
 resvg = { version = "0.45", default-features = false }
-tiny-skia = "0.11"
+tiny-skia = "0.12"
 wayland-backend = "0.3"
 wayland-client = "0.31"
 wayland-protocols-misc = { version = "0.3", features = ["client"] }

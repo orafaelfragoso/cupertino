@@ -1012,7 +1012,7 @@ version = "0.1.0"
 dependencies = [
  "cupertino-assets",
  "tempfile",
- "tiny-skia",
+ "tiny-skia 0.12.0",
 ]
 
 [[package]]
@@ -1042,7 +1042,7 @@ dependencies = [
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "tempfile",
- "tiny-skia",
+ "tiny-skia 0.12.0",
  "zbus",
 ]
 
@@ -1051,7 +1051,7 @@ name = "cupertino-cursor"
 version = "0.1.0"
 dependencies = [
  "tempfile",
- "tiny-skia",
+ "tiny-skia 0.12.0",
 ]
 
 [[package]]
@@ -1064,7 +1064,7 @@ dependencies = [
  "cupertino-theme",
  "swash",
  "tempfile",
- "tiny-skia",
+ "tiny-skia 0.12.0",
 ]
 
 [[package]]
@@ -1119,7 +1119,7 @@ dependencies = [
  "cupertino-wayland-client",
  "cupertino-wm",
  "tempfile",
- "tiny-skia",
+ "tiny-skia 0.12.0",
 ]
 
 [[package]]
@@ -1128,7 +1128,7 @@ version = "0.1.0"
 dependencies = [
  "cupertino-animation",
  "cupertino-geometry",
- "tiny-skia",
+ "tiny-skia 0.12.0",
 ]
 
 [[package]]
@@ -1182,7 +1182,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "tiny-skia",
+ "tiny-skia 0.12.0",
  "tree_magic_mini",
  "xattr",
  "zbus",
@@ -1224,7 +1224,7 @@ dependencies = [
  "image",
  "resvg",
  "tempfile",
- "tiny-skia",
+ "tiny-skia 0.12.0",
 ]
 
 [[package]]
@@ -1276,7 +1276,7 @@ dependencies = [
  "cupertino-ui-theme",
  "cupertino-ui-wayland",
  "tempfile",
- "tiny-skia",
+ "tiny-skia 0.12.0",
  "zbus",
 ]
 
@@ -1303,7 +1303,7 @@ dependencies = [
  "image",
  "serde_json",
  "tempfile",
- "tiny-skia",
+ "tiny-skia 0.12.0",
  "zbus",
 ]
 
@@ -1337,7 +1337,7 @@ dependencies = [
  "libc",
  "pam-client2",
  "tempfile",
- "tiny-skia",
+ "tiny-skia 0.12.0",
  "zbus",
  "zeroize",
 ]
@@ -1387,7 +1387,7 @@ dependencies = [
  "libc",
  "swash",
  "tempfile",
- "tiny-skia",
+ "tiny-skia 0.12.0",
  "zbus",
 ]
 
@@ -1437,7 +1437,7 @@ dependencies = [
  "image",
  "libc",
  "tempfile",
- "tiny-skia",
+ "tiny-skia 0.12.0",
  "zbus",
 ]
 
@@ -1511,7 +1511,7 @@ dependencies = [
  "cupertino-wayland-client",
  "libc",
  "tempfile",
- "tiny-skia",
+ "tiny-skia 0.12.0",
  "zbus",
  "zeroize",
 ]
@@ -1538,7 +1538,7 @@ dependencies = [
  "percent-encoding",
  "rustix 1.1.5",
  "tempfile",
- "tiny-skia",
+ "tiny-skia 0.12.0",
  "wayland-client",
  "wayland-protocols",
  "zbus",
@@ -1625,7 +1625,7 @@ dependencies = [
  "libc",
  "memmap2",
  "rustix 1.1.5",
- "tiny-skia",
+ "tiny-skia 0.12.0",
  "wayland-client",
  "wayland-protocols",
 ]
@@ -1686,7 +1686,7 @@ dependencies = [
  "smithay",
  "smithay-drm-extras",
  "tempfile",
- "tiny-skia",
+ "tiny-skia 0.12.0",
  "tracing",
  "tracing-subscriber",
  "wayland-backend",
@@ -1751,7 +1751,7 @@ dependencies = [
  "cupertino-wayland-client",
  "serde_json",
  "tempfile",
- "tiny-skia",
+ "tiny-skia 0.12.0",
  "zbus",
  "zeroize",
 ]
@@ -1922,7 +1922,7 @@ dependencies = [
  "cupertino-theme",
  "cupertino-ui-text",
  "image",
- "tiny-skia",
+ "tiny-skia 0.12.0",
 ]
 
 [[package]]
@@ -1937,7 +1937,7 @@ dependencies = [
  "cupertino-ui-render",
  "cupertino-ui-text",
  "cupertino-ui-theme",
- "tiny-skia",
+ "tiny-skia 0.12.0",
 ]
 
 [[package]]
@@ -1985,7 +1985,7 @@ dependencies = [
  "cupertino-wayland-client",
  "memmap2",
  "rustix 1.1.5",
- "tiny-skia",
+ "tiny-skia 0.12.0",
  "wayland-client",
  "wayland-protocols",
  "wayland-server",
@@ -4315,7 +4315,7 @@ dependencies = [
  "pico-args",
  "rgb",
  "svgtypes",
- "tiny-skia",
+ "tiny-skia 0.11.4",
  "usvg",
 ]
 
@@ -4959,7 +4959,22 @@ dependencies = [
  "cfg-if",
  "log",
  "png 0.17.16",
- "tiny-skia-path",
+ "tiny-skia-path 0.11.4",
+]
+
+[[package]]
+name = "tiny-skia"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47ffee5eaaf5527f630fb0e356b90ebdec84d5d18d937c5e440350f88c5a91ea"
+dependencies = [
+ "arrayref",
+ "arrayvec",
+ "bytemuck",
+ "cfg-if",
+ "log",
+ "png 0.18.1",
+ "tiny-skia-path 0.12.0",
 ]
 
 [[package]]
@@ -4967,6 +4982,17 @@ name = "tiny-skia-path"
 version = "0.11.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c9e7fc0c2e86a30b117d0462aa261b72b7a99b7ebd7deb3a14ceda95c5bdc93"
+dependencies = [
+ "arrayref",
+ "bytemuck",
+ "strict-num",
+]
+
+[[package]]
+name = "tiny-skia-path"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edca365c3faccca67d06593c5980fa6c57687de727a03131735bb85f01fdeeb9"
 dependencies = [
  "arrayref",
  "bytemuck",
@@ -5224,7 +5250,7 @@ dependencies = [
  "siphasher",
  "strict-num",
  "svgtypes",
- "tiny-skia-path",
+ "tiny-skia-path 0.11.4",
  "xmlwriter",
 ]
 

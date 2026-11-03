@@ -14,7 +14,7 @@ cupertino-assets = { path = "../cupertino-assets" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 image = { version = "0.25", default-features = false, features = ["png"] }
 resvg = { version = "0.45", default-features = false }
-tiny-skia = "0.11"
+tiny-skia = "0.12"
 
 [dev-dependencies]
 tempfile = "3"

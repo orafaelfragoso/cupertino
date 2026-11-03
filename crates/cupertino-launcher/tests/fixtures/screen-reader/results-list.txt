@@ -1,0 +1,17 @@
+> 'f'
+  query="f" focus=Field selected=Some("Files") scroll=0
+> 'i'
+  query="fi" focus=Field selected=Some("Files") scroll=0
+> 'r'
+  query="fir" focus=Field selected=Some("Firefox") scroll=0
+> 'e'
+  query="fire" focus=Field selected=Some("Firefox") scroll=0
+
+focus: TextInput "Search" value="fire" [focused] actions=[Focus, SetValue, SetSelection]
+Window
+  TextInput "Search" value="fire" [focused] actions=[Focus, SetValue, SetSelection]
+  List "Results" items=2
+    Group "Top Hit"
+      ListItem "Firefox", "Web Browser" item=1 [selected] actions=[Click]
+    Group "Applications"
+      ListItem "Firewall Configuration" item=2 actions=[Click]

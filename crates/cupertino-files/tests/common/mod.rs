@@ -1,0 +1,364 @@
+//! The browser window on CupertinoKit, run headless, for the tests that drive it.
+#![allow(dead_code)]
+
+use std::collections::{BTreeSet, HashMap};
+use std::num::NonZeroU32;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use cupertino_assets::BUILTIN_FONT;
+use cupertino_files::kit::{prepare, Files, Start};
+use cupertino_files::notice::Notices;
+use cupertino_files::places::{Place, PlaceGroup, PlaceKind};
+use cupertino_files::trash::Trash;
+use cupertino_kit::core::{AccessibilityNode, Key, NodeId, PlaceholderIcons, Role, RuntimeOptions};
+use cupertino_kit::geometry::{Point, Rect};
+use cupertino_kit::layout::LayoutDirection;
+use cupertino_kit::platform::{
+    Capabilities, KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp, WindowEvent,
+    WindowId, WindowRequest, WindowStates,
+};
+use cupertino_kit::render::{CpuConfig, CpuRenderer};
+use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
+use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
+use cupertino_menu_model::{ActionName, Command, Entry, Scope};
+use cupertino_theme::Theme;
+use cupertino_ui_test::{ManualClock, TestDriver};
+
+pub struct Run {
+    pub driver: TestDriver<Files>,
+    /// The window the helpers act on and read.
+    pub window: WindowId,
+    home: tempfile::TempDir,
+}
+
+pub fn place(name: &str, path: &Path, kind: PlaceKind) -> Place {
+    Place {
+        name: name.into(),
+        path: path.to_path_buf(),
+        group: PlaceGroup::Favorites,
+        kind,
+    }
+}
+
+impl Run {
+    /// The window on `folder` of `home`, with `places` in the sidebar, its trash in `home/Trash`, posting to
+    /// `notices`, and the removable media of `system`.
+    pub fn start(
+        home: tempfile::TempDir,
+        folder: PathBuf,
+        places: Vec<Place>,
+        notices: Notices,
+        system: Option<zbus::blocking::Connection>,
+    ) -> Run {
+        prepare(
+            Start::open(
+                folder,
+                places,
+                None,
+                home.path().join("recently-used.xbel"),
+                notices,
+                Box::new(|| Err(std::io::Error::other("no applications in this test"))),
+                None,
+                system,
+            )
+            .unwrap()
+            .with_trash(Trash::with_home(home.path().join("Trash"))),
+        );
+        let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
+        let preferences = ThemePreferences {
+            appearance: Appearance::Light,
+            reduce_transparency: false,
+            reduce_motion: false,
+        };
+        let theme = ThemeTokens::cupertino(&Theme::from_dir(data).unwrap(), preferences).unwrap();
+        let mut fonts = FontIndex::new();
+        fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
+        let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
+        let glyphs = Arc::clone(&text);
+        let options = RuntimeOptions {
+            theme: Arc::new(theme),
+            text,
+            icons: Arc::new(PlaceholderIcons::default()),
+            direction: LayoutDirection::Ltr,
+            node_limit: 4000,
+            renderers: Box::new(move || {
+                Box::new(CpuRenderer::new(
+                    CpuConfig {
+                        max_pixels: 1 << 22,
+                        glyph_cache_bytes: 1 << 20,
+                        image_cache_bytes: 1 << 20,
+                        font_smoothing: true,
+                    },
+                    GlyphRaster::new(Arc::clone(&glyphs)),
+                ))
+            }),
+            accessibility: None,
+            clock: Arc::new(ManualClock::new(Timestamp(0))),
+            on_window_error: None,
+        };
+        let mut driver = TestDriver::new(
+            Capabilities::default(),
+            options,
+            ManualClock::new(Timestamp(0)),
+        );
+        driver.run_until_idle(budget()).unwrap();
+        let window = driver.runtime().windows()[0].1;
+        let mut run = Run {
+            driver,
+            window,
+            home,
+        };
+        run.activate(window);
+        run
+    }
+
+    pub fn windows(&self) -> Vec<WindowId> {
+        let windows = self.driver.runtime().windows();
+        windows.into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// Make `window` the key window and the one the helpers act on.
+    pub fn activate(&mut self, window: WindowId) {
+        let active = WindowStates {
+            activated: true,
+            ..WindowStates::default()
+        };
+        self.driver
+            .window_system_mut()
+            .configure(window, None, active)
+            .unwrap();
+        self.window = window;
+        self.settle();
+    }
+
+    pub fn home(&self) -> PathBuf {
+        self.home.path().to_path_buf()
+    }
+
+    pub fn settle(&mut self) {
+        for _ in 0..8 {
+            self.driver.run_until_idle(budget()).unwrap();
+            let windows = self.windows();
+            let system = self.driver.window_system_mut();
+            let waiting: Vec<WindowId> = windows
+                .into_iter()
+                .filter(|&w| system.frame_requested(w).unwrap())
+                .collect();
+            if waiting.is_empty() {
+                return;
+            }
+            for window in waiting {
+                system.frame_ready(window, Timestamp(0)).unwrap();
+            }
+        }
+    }
+
+    pub fn send(&mut self, event: WindowEvent) {
+        self.driver
+            .window_system_mut()
+            .enqueue_window(self.window, event)
+            .unwrap();
+        self.settle();
+    }
+
+    pub fn click(&mut self, key: impl Into<Key>) {
+        let key = key.into();
+        let runtime = self.driver.runtime();
+        let id = runtime
+            .find(self.window, &key)
+            .unwrap_or_else(|| panic!("no node {key:?}"));
+        let snapshot = runtime.snapshot(self.window).unwrap();
+        let rect = snapshot.nodes.iter().find(|n| n.id == id).unwrap().rect;
+        self.click_at(rect);
+    }
+
+    /// Click the list's row that shows `name`.
+    pub fn click_row(&mut self, name: &str) {
+        let (_, rect, _) = self
+            .listed()
+            .into_iter()
+            .find(|(shown, _, _)| shown == name)
+            .unwrap_or_else(|| panic!("no row {name:?}"));
+        self.click_at(rect);
+    }
+
+    fn click_at(&mut self, rect: Rect) {
+        let position = Point::new(
+            rect.origin.x + rect.size.width / 2.0,
+            rect.origin.y + rect.size.height / 2.0,
+        );
+        let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
+        self.send(pointer(PointerEvent::Motion { position }));
+        for pressed in [true, false] {
+            self.send(pointer(PointerEvent::Button {
+                position,
+                button: MouseButton::Left,
+                pressed,
+                serial: 1,
+                mods: Mods::NONE,
+            }));
+        }
+    }
+
+    /// Presses and releases the key of `keysym`, which types `text`.
+    pub fn key(&mut self, keysym: u32, text: Option<char>) {
+        for pressed in [true, false] {
+            self.send(WindowEvent::Key(
+                KeyEvent {
+                    code: 0,
+                    keysym: Keysym(keysym),
+                    text: text.filter(|_| pressed),
+                    pressed,
+                    repeat: false,
+                    mods: Mods::NONE,
+                },
+                Timestamp(0),
+            ));
+        }
+    }
+
+    pub fn type_text(&mut self, text: &str) {
+        for c in text.chars() {
+            self.key(c as u32, Some(c));
+        }
+    }
+
+    pub fn menu(&mut self, name: &str) {
+        self.send(WindowEvent::MenuActivated(action(name)));
+    }
+
+    /// The label of the menu item that runs `name`.
+    pub fn menu_label(&self, name: &str) -> String {
+        let system = self.driver.runtime().window_system();
+        let menus = system.menus(self.window).unwrap().unwrap();
+        let command = Command::Action(action(name));
+        let item = menus
+            .bar
+            .menus
+            .iter()
+            .flat_map(|menu| menu.sections.iter().flatten())
+            .find_map(|entry| match entry {
+                Entry::Item(item) if item.command == command => Some(item.label.clone()),
+                _ => None,
+            });
+        item.unwrap_or_else(|| panic!("no menu item {name}"))
+    }
+
+    pub fn full_screen_requests(&self) -> Vec<bool> {
+        let system = self.driver.runtime().window_system();
+        let requests = system.requests(self.window).unwrap();
+        requests
+            .iter()
+            .filter_map(|request| match request {
+                WindowRequest::Fullscreen(on) => Some(*on),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The names of the accessible nodes with `role`, in tree order.
+    pub fn named(&self, role: Role) -> Vec<String> {
+        let snapshot = self.driver.runtime().snapshot(self.window).unwrap();
+        snapshot
+            .accessibility
+            .iter()
+            .filter(|(_, node)| node.role == role)
+            .filter_map(|(_, node)| node.name.clone())
+            .collect()
+    }
+
+    /// The items the list shows, by the text of each row's first cell.
+    pub fn rows(&self) -> Vec<String> {
+        self.listed().into_iter().map(|(name, _, _)| name).collect()
+    }
+
+    /// The items the list shows selected.
+    pub fn selected_rows(&self) -> Vec<String> {
+        self.listed()
+            .into_iter()
+            .filter(|(_, _, selected)| *selected)
+            .map(|(name, _, _)| name)
+            .collect()
+    }
+
+    /// Each row of the list: the text of its first cell, its bounds and whether it is selected.
+    fn listed(&self) -> Vec<(String, Rect, bool)> {
+        let snapshot = self.driver.runtime().snapshot(self.window).unwrap();
+        let nodes: HashMap<NodeId, &AccessibilityNode> = snapshot
+            .accessibility
+            .iter()
+            .map(|(id, node)| (*id, node))
+            .collect();
+        let first_text = |id: NodeId| {
+            let mut stack = vec![id];
+            while let Some(id) = stack.pop() {
+                let node = nodes[&id];
+                if node.role == Role::StaticText {
+                    return node.name.clone();
+                }
+                stack.extend(node.children.iter().rev());
+            }
+            None
+        };
+        snapshot
+            .accessibility
+            .iter()
+            .filter(|(_, node)| node.role == Role::Row)
+            .filter(|(_, node)| node.children.iter().all(|c| nodes[c].role == Role::Cell))
+            .filter_map(|(id, node)| Some((first_text(*id)?, node.bounds, node.states.selected)))
+            .collect()
+    }
+
+    /// The window's title: the last one it set, else the one it opened with.
+    pub fn title(&self) -> String {
+        let system = self.driver.runtime().window_system();
+        let set = system
+            .requests(self.window)
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|request| match request {
+                WindowRequest::SetTitle(title) => Some(title.clone()),
+                _ => None,
+            });
+        set.unwrap_or_else(|| system.spec(self.window).unwrap().title.clone())
+    }
+
+    pub fn disabled(&self) -> BTreeSet<ActionName> {
+        let menus = self
+            .driver
+            .runtime()
+            .window_system()
+            .menus(self.window)
+            .unwrap();
+        menus
+            .expect("the window publishes its menus")
+            .disabled
+            .clone()
+    }
+
+    /// Settles until `done` holds, for changes a watcher thread reports.
+    pub fn wait_until(&mut self, mut done: impl FnMut(&Run) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !done(self) {
+            assert!(Instant::now() < deadline, "the window never caught up");
+            std::thread::sleep(Duration::from_millis(10));
+            self.settle();
+        }
+    }
+}
+
+pub fn action(name: &str) -> ActionName {
+    let scope = if name == "new" {
+        Scope::App
+    } else {
+        Scope::Win
+    };
+    ActionName::new(scope, name).unwrap()
+}
+
+pub fn budget() -> NonZeroU32 {
+    NonZeroU32::new(64).unwrap()
+}

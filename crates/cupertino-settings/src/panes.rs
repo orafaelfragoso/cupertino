@@ -19,7 +19,6 @@ use cupertino_assets::WallpaperFile;
 use crate::about;
 use crate::clipboard::{self, State};
 use crate::controls::{Control, Tile, Value, MUTE_BELOW};
-use crate::form::RowSpec;
 use crate::live::{
     display_name, duration_text, BatteryState, Bluetooth, Live, LoginScreen, Mouse, Reading, Wifi,
 };
@@ -137,17 +136,6 @@ pub struct Row {
     pub icon: Option<String>,
     /// A second line under the label in secondary text, when there is no error or disabled reason.
     pub detail: Option<String>,
-}
-
-impl Row {
-    /// What the form lays out for the row.
-    pub fn spec(&self) -> RowSpec<'_> {
-        RowSpec {
-            control: &self.control,
-            error: self.error.is_some() || self.disabled.is_some() || self.detail.is_some(),
-            icon: self.icon.is_some(),
-        }
-    }
 }
 
 /// One section of a pane.

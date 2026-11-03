@@ -1,6 +1,6 @@
 //! Search (§5): an authored table per pane (title, section titles, index words; the
 //! reference indexes its panes' search terms in a system index whose ranking is not known), matched and
-//! ranked locally on every edit, and the geometry of the results popup.
+//! ranked locally on every edit.
 //!
 //! Matching: a result matches when every typed word is a prefix of a word of the entry, case- and width-insensitive
 //! with diacritics significant (the collation flags of, the word rule approximate). A hyphenated word
@@ -10,8 +10,7 @@
 //! the rest elsewhere in the pane, section title, index word; ties in sidebar order (approximate).
 
 use crate::pane::{Pane, PaneId, PANES};
-use crate::sidebar::{self, fold_width, RowSize};
-use cupertino_ui_text::TextBuffer;
+use crate::sidebar::{self, fold_width};
 
 /// Why an entry matched, best first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -136,192 +135,8 @@ pub fn search(query: &str, hidden: &[PaneId]) -> Vec<Hit> {
     hits
 }
 
-/// The most bytes the search field holds.
-pub const MAX_LEN: usize = 1024;
-
-/// The search field's text editor, the results it shows and the highlighted one.
-#[derive(Clone, Debug)]
-pub struct SearchField {
-    field: TextBuffer,
-    results: Vec<Hit>,
-    highlighted: Option<usize>,
-    /// The panes left out of the sidebar, and so of the results.
-    hidden: Vec<PaneId>,
-}
-
-impl Default for SearchField {
-    fn default() -> Self {
-        SearchField {
-            field: TextBuffer::with_max_len(MAX_LEN),
-            results: Vec::new(),
-            highlighted: None,
-            hidden: Vec::new(),
-        }
-    }
-}
-
-impl SearchField {
-    pub fn text(&self) -> &str {
-        self.field.text()
-    }
-
-    pub fn field(&self) -> &TextBuffer {
-        &self.field
-    }
-
-    pub fn results(&self) -> &[Hit] {
-        &self.results
-    }
-
-    pub fn highlighted(&self) -> Option<usize> {
-        self.highlighted
-    }
-
-    /// Whether the results popup is open: while the field has text (an empty result shows "No results").
-    pub fn is_open(&self) -> bool {
-        !self.field.is_empty()
-    }
-
-    /// Change the field with `f`; when its text changes the search runs again.
-    pub fn edit<R>(&mut self, f: impl FnOnce(&mut TextBuffer) -> R) -> R {
-        let before = self.field.text().to_string();
-        let r = f(&mut self.field);
-        if self.field.text() != before {
-            self.results = search(self.field.text(), &self.hidden);
-            self.highlighted = (!self.results.is_empty()).then_some(0);
-        }
-        r
-    }
-
-    /// Leave `hidden` out of the results from the next search on.
-    pub fn set_hidden(&mut self, hidden: &[PaneId]) {
-        self.hidden = hidden.to_vec();
-    }
-
-    /// Empty the field and close the popup.
-    pub fn clear(&mut self) {
-        *self = SearchField {
-            hidden: std::mem::take(&mut self.hidden),
-            ..SearchField::default()
-        };
-    }
-
-    /// Move the highlight by `step` rows, staying on the results.
-    pub fn step(&mut self, step: isize) {
-        if let Some(i) = self.highlighted {
-            self.highlighted = Some(i.saturating_add_signed(step).min(self.results.len() - 1));
-        }
-    }
-
-    pub fn highlight(&mut self, index: usize) {
-        if index < self.results.len() {
-            self.highlighted = Some(index);
-        }
-    }
-
-    /// Choose the highlighted result: the field empties and the popup closes.
-    pub fn choose(&mut self) -> Option<Hit> {
-        let hit = self.highlighted.map(|i| self.results[i]);
-        if hit.is_some() {
-            self.clear();
-        }
-        hit
-    }
-}
-
-/// Geometry of the results popup.
-pub mod popup {
-    use super::RowSize;
-
-    /// Size at creation: `ceil(200 f) × 100`.
-    pub fn creation_size(f: f64) -> (f64, f64) {
-        ((200.0 * f).ceil(), 100.0)
-    }
-
-    /// The popup's corner radius.
-    pub const RADIUS: f64 = 8.0;
-    /// Around the rows; between rows.
-    pub const CONTENT_PADDING: f64 = 5.0;
-    pub const ROW_SPACING: f64 = 0.0;
-    /// A group title row: 12 pt semibold, padding 10 / 5, 25 high.
-    pub const GROUP_TITLE_HEIGHT: f64 = 25.0;
-    pub const GROUP_TITLE_FONT: f64 = 12.0;
-    pub const GROUP_TITLE_PADDING: (f64, f64) = (10.0, 5.0);
-    /// A divider: 10 high with 5 pt vertical padding.
-    pub const DIVIDER_HEIGHT: f64 = 10.0;
-    /// Rows shown before the popup scrolls. approximate.
-    pub const MAX_ROWS: usize = 6;
-    /// The subtext size of a result row. approximate.
-    pub const SUBTEXT_FONT: f64 = 11.0;
-
-    /// The result row's padding (vertical, horizontal) and height: icon + 2 × vertical.
-    pub fn row_padding(size: RowSize) -> (f64, f64) {
-        match size {
-            RowSize::Small => (3.0, 5.0),
-            RowSize::Medium => (4.0, 10.0),
-            RowSize::Large => (5.0, 10.0),
-        }
-    }
-
-    pub fn row_height(size: RowSize) -> f64 {
-        size.result_icon() + 2.0 * row_padding(size).0
-    }
-
-    /// The result rows of a popup `width` wide holding `count` results (one row, "No results", for none), inside the
-    /// content padding, in popup points.
-    pub fn rows(count: usize, width: f64, size: RowSize) -> Vec<crate::Rect> {
-        let h = row_height(size);
-        (0..count.max(1))
-            .map(|i| {
-                crate::Rect::new(
-                    CONTENT_PADDING,
-                    CONTENT_PADDING + i as f64 * (h + ROW_SPACING),
-                    (width - 2.0 * CONTENT_PADDING).max(0.0),
-                    h,
-                )
-            })
-            .collect()
-    }
-
-    /// The popup's size at factor `f` for `count` results: the creation width, as many rows as there are results
-    /// (one for none) up to [`MAX_ROWS`].
-    pub fn size(f: f64, count: usize, size: RowSize) -> (f64, f64) {
-        (
-            creation_size(f).0,
-            height(&vec![Item::Row; count.max(1)], size),
-        )
-    }
-
-    /// One line of the popup.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub enum Item {
-        Row,
-        GroupTitle,
-        Divider,
-    }
-
-    /// Height of a popup holding `items`: the padding around them and their heights, rows past [`MAX_ROWS`] scrolled.
-    pub fn height(items: &[Item], size: RowSize) -> f64 {
-        let mut rows = 0;
-        let mut h = 2.0 * CONTENT_PADDING;
-        for item in items {
-            h += match item {
-                Item::Row if rows >= MAX_ROWS => continue,
-                Item::Row => {
-                    rows += 1;
-                    row_height(size)
-                }
-                Item::GroupTitle => GROUP_TITLE_HEIGHT,
-                Item::Divider => DIVIDER_HEIGHT,
-            };
-        }
-        h
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::popup::Item;
     use super::*;
 
     fn panes(query: &str) -> Vec<(PaneId, Option<&'static str>, Rank)> {
@@ -430,85 +245,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn the_field_highlights_the_first_result_and_choosing_clears_it() {
-        let mut f = SearchField::default();
-        f.edit(|t| t.insert("track"));
-        assert!(f.is_open());
-        assert_eq!(f.highlighted(), Some(0));
-        f.step(5);
-        assert_eq!(
-            f.highlighted(),
-            Some(f.results().len() - 1),
-            "the highlight stays on the results"
-        );
-        f.step(-10);
-        assert_eq!(f.highlighted(), Some(0));
-        let hit = f.choose().unwrap();
-        assert_eq!(hit.pane, PaneId::Trackpad);
-        assert_eq!((f.text(), f.is_open(), f.results().len()), ("", false, 0));
-        f.edit(|t| t.insert("z"));
-        assert!(
-            f.is_open() && f.results().is_empty() && f.choose().is_none(),
-            "no results: nothing to choose, the popup stays"
-        );
-    }
-
-    #[test]
-    fn the_search_runs_again_only_when_the_text_changes() {
-        let mut f = SearchField::default();
-        f.edit(|t| t.insert("s"));
-        assert!(f.results().len() > 1);
-        f.step(1);
-        assert_eq!(f.highlighted(), Some(1));
-        f.edit(TextBuffer::select_all);
-        assert_eq!(
-            f.highlighted(),
-            Some(1),
-            "selecting keeps the results and the highlight"
-        );
-        f.edit(|t| t.insert("Mouse"));
-        assert_eq!(f.text(), "Mouse");
-        assert_eq!(f.results()[0].pane, PaneId::Mouse);
-        assert_eq!(f.highlighted(), Some(0));
-    }
-
-    #[test]
-    fn the_popup_measures_padding_rows_titles_and_dividers() {
-        assert_eq!(popup::creation_size(1.0), (200.0, 100.0));
-        assert_eq!(popup::creation_size(1.1), (221.0, 100.0));
-        let rows: Vec<f64> = RowSize::ALL.iter().map(|s| popup::row_height(*s)).collect();
-        assert_eq!(rows, [22.0, 32.0, 42.0]);
-        assert_eq!(popup::row_padding(RowSize::Medium), (4.0, 10.0));
-        let items = [
-            Item::GroupTitle,
-            Item::Row,
-            Item::Row,
-            Item::Divider,
-            Item::GroupTitle,
-            Item::Row,
-        ];
-        assert_eq!(
-            popup::height(&items, RowSize::Medium),
-            5.0 + 25.0 + 32.0 + 32.0 + 10.0 + 25.0 + 32.0 + 5.0
-        );
-        let many = [Item::Row; 9];
-        assert_eq!(
-            popup::height(&many, RowSize::Medium),
-            10.0 + 6.0 * 32.0,
-            "rows past six scroll"
-        );
-        assert_eq!(
-            popup::size(1.0, 0, RowSize::Medium),
-            (200.0, 42.0),
-            "the No results row"
-        );
-        assert_eq!(popup::size(1.0, 2, RowSize::Medium), (200.0, 74.0));
-        assert_eq!(
-            popup::rows(2, 200.0, RowSize::Medium)[1],
-            crate::Rect::new(5.0, 37.0, 190.0, 32.0)
-        );
     }
 }

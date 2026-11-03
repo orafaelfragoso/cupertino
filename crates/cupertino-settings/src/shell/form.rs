@@ -103,6 +103,7 @@ fn control(row: &Row, open: Option<ControlId>) -> Option<Element<Message>> {
                     Some(n) => commit(Value::Index(Control::nearest_stop(v, n))),
                     None => Message::Slide(id, v),
                 })),
+                on_end: None,
             })
             .width(metrics::SLIDER_WIDTH)
         }
@@ -116,6 +117,7 @@ fn control(row: &Row, open: Option<ControlId>) -> Option<Element<Message>> {
             ticks: 0,
             enabled,
             on_change: Some(Box::new(move |v| Message::Level(id, v))),
+            on_end: None,
         })
         .width(metrics::LEVEL_WIDTH),
         Control::Button { title } => button(title, enabled, commit(Value::Index(0))),

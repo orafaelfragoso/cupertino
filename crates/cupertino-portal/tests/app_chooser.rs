@@ -29,11 +29,23 @@ struct Running {
 fn start() -> Option<Running> {
     let bus = PrivateBus::start()?;
     let applications = tempfile::tempdir().unwrap();
-    std::fs::write(
-        applications.path().join("org.example.Viewer.desktop"),
-        "[Desktop Entry]\nType=Application\nName=Document Viewer\nExec=viewer %U\n",
-    )
-    .unwrap();
+    for (id, name, icon) in [
+        (
+            "org.example.Viewer",
+            "Document Viewer",
+            "org.example.Viewer",
+        ),
+        ("org.example.Paths", "Paths", "/opt/paths/icon.png"),
+        ("org.example.Escape", "Escape", "escape\u{1b}[2J"),
+    ] {
+        std::fs::write(
+            applications.path().join(format!("{id}.desktop")),
+            format!(
+                "[Desktop Entry]\nType=Application\nName={name}\nIcon={icon}\nExec=viewer %U\n"
+            ),
+        )
+        .unwrap();
+    }
     let served = bus.connect();
     let (sender, events) = mpsc::channel();
     let sender = Mutex::new(sender);
@@ -111,10 +123,11 @@ fn error<T: std::fmt::Debug>(result: zbus::Result<T>) -> String {
     }
 }
 
-fn choice(id: &str, name: &str) -> Choice {
+fn choice(id: &str, name: &str, icon: Option<&str>) -> Choice {
     Choice {
         id: id.to_owned(),
         name: name.to_owned(),
+        icon: icon.map(str::to_owned),
     }
 }
 
@@ -149,18 +162,61 @@ fn the_chosen_app_reaches_the_caller_with_the_activation_token() {
     assert_eq!(
         ask.choices,
         [
-            choice("org.example.Viewer", "Document Viewer"),
-            choice("org.example.Draw", "org.example.Draw"),
+            choice(
+                "org.example.Viewer",
+                "Document Viewer",
+                Some("org.example.Viewer")
+            ),
+            choice("org.example.Draw", "org.example.Draw", None),
         ],
-        "an installed app shows its name, any other its id"
+        "an installed app shows its name and icon, any other its id"
     );
     assert_eq!(ask.last_choice.as_deref(), Some("org.example.Draw"));
+    assert!(!ask.wants_token, "the caller sent a token of its own");
 
-    reply.send(Answer::Chosen("org.example.Viewer".to_owned()));
+    // a dialog that made one anyway does not replace the caller's
+    reply.send(Answer::Chosen {
+        id: "org.example.Viewer".to_owned(),
+        token: Some("made-by-the-server".to_owned()),
+    });
     let (response, results) = done.recv_timeout(WAIT).unwrap().unwrap();
     assert_eq!(response, 0);
     assert_eq!(string(&results, "choice"), "org.example.Viewer");
     assert_eq!(string(&results, "activation_token"), "token-1");
+}
+
+#[test]
+fn without_a_caller_token_the_choice_carries_the_one_the_server_made() {
+    let Some(r) = start() else {
+        return missing_tool("dbus-daemon");
+    };
+    let done = call(&r.frontend, choices(), HashMap::new());
+    let Event::Ask { ask, reply, .. } = r.events.recv_timeout(WAIT).unwrap() else {
+        panic!("expected a chooser");
+    };
+    assert!(ask.wants_token);
+    reply.send(Answer::Chosen {
+        id: "org.example.Viewer".to_owned(),
+        token: Some("server-token-7".to_owned()),
+    });
+    let (response, results) = done.recv_timeout(WAIT).unwrap().unwrap();
+    assert_eq!(response, 0);
+    assert_eq!(string(&results, "choice"), "org.example.Viewer");
+    assert_eq!(string(&results, "activation_token"), "server-token-7");
+
+    // the server gave none: the app still opens, without one
+    let done = call(&r.frontend, choices(), HashMap::new());
+    let Event::Ask { reply, .. } = r.events.recv_timeout(WAIT).unwrap() else {
+        panic!("expected a chooser");
+    };
+    reply.send(Answer::Chosen {
+        id: "org.example.Draw".to_owned(),
+        token: None,
+    });
+    let (response, results) = done.recv_timeout(WAIT).unwrap().unwrap();
+    assert_eq!(response, 0);
+    assert_eq!(string(&results, "choice"), "org.example.Draw");
+    assert!(!results.contains_key("activation_token"));
 }
 
 #[test]
@@ -180,7 +236,10 @@ fn a_cancel_answers_1_and_a_choice_not_offered_answers_2_without_a_choice() {
     let Event::Ask { reply, .. } = r.events.recv_timeout(WAIT).unwrap() else {
         panic!("expected a chooser");
     };
-    reply.send(Answer::Chosen("org.example.Elsewhere".to_owned()));
+    reply.send(Answer::Chosen {
+        id: "org.example.Elsewhere".to_owned(),
+        token: Some("server-token".to_owned()),
+    });
     let (response, results) = done.recv_timeout(WAIT).unwrap().unwrap();
     assert_eq!((response, results.len()), (2, 0));
 }
@@ -206,12 +265,19 @@ fn update_choices_replaces_what_the_chooser_offers() {
     assert_eq!(
         choices,
         [
-            choice("org.example.Viewer", "Document Viewer"),
-            choice("org.example.Notes", "org.example.Notes"),
+            choice(
+                "org.example.Viewer",
+                "Document Viewer",
+                Some("org.example.Viewer")
+            ),
+            choice("org.example.Notes", "org.example.Notes", None),
         ]
     );
 
-    reply.send(Answer::Chosen("org.example.Draw".to_owned()));
+    reply.send(Answer::Chosen {
+        id: "org.example.Draw".to_owned(),
+        token: None,
+    });
     let (response, _) = done.recv_timeout(WAIT).unwrap().unwrap();
     assert_eq!(response, 2, "a choice the update took away is refused");
     assert_eq!(
@@ -219,6 +285,30 @@ fn update_choices_replaces_what_the_chooser_offers() {
         "org.freedesktop.DBus.Error.InvalidArgs",
         "no chooser is open at the handle any more"
     );
+}
+
+#[test]
+fn an_icon_with_a_path_separator_or_a_control_character_is_left_out() {
+    let Some(r) = start() else {
+        return missing_tool("dbus-daemon");
+    };
+    let done = call(
+        &r.frontend,
+        vec!["org.example.Paths", "org.example.Escape"],
+        HashMap::new(),
+    );
+    let Event::Ask { ask, reply, .. } = r.events.recv_timeout(WAIT).unwrap() else {
+        panic!("expected a chooser");
+    };
+    assert_eq!(
+        ask.choices,
+        [
+            choice("org.example.Paths", "Paths", None),
+            choice("org.example.Escape", "Escape", None),
+        ]
+    );
+    reply.send(Answer::Cancelled);
+    done.recv_timeout(WAIT).unwrap().unwrap();
 }
 
 #[test]
@@ -268,4 +358,44 @@ fn the_portal_file_and_the_portals_conf_name_the_app_chooser() {
         backends.split(';').next(),
         Some(BUS_NAME.rsplit('.').next().unwrap())
     );
+}
+
+#[test]
+fn a_cancel_and_a_close_carry_no_token() {
+    let Some(r) = start() else {
+        return missing_tool("dbus-daemon");
+    };
+    let with_token =
+        || HashMap::from([("activation_token".to_owned(), owned(Value::from("token-1")))]);
+    let done = call(&r.frontend, choices(), with_token());
+    let Event::Ask { reply, .. } = r.events.recv_timeout(WAIT).unwrap() else {
+        panic!("expected a chooser");
+    };
+    reply.send(Answer::Cancelled);
+    let (response, results) = done.recv_timeout(WAIT).unwrap().unwrap();
+    assert_eq!(response, 1);
+    assert!(results.is_empty(), "{results:?}");
+
+    let done = call(&r.frontend, choices(), with_token());
+    // the chooser stays open: its reply is kept until the close
+    let Event::Ask { handle, reply, .. } = r.events.recv_timeout(WAIT).unwrap() else {
+        panic!("expected a chooser");
+    };
+    r.frontend
+        .call_method(
+            Some(BUS_NAME),
+            handle.as_str(),
+            Some("org.freedesktop.impl.portal.Request"),
+            "Close",
+            &(),
+        )
+        .unwrap();
+    let (response, results) = done.recv_timeout(WAIT).unwrap().unwrap();
+    assert_eq!(response, 2);
+    assert!(results.is_empty(), "{results:?}");
+    let Event::Close { handle: closed } = r.events.recv_timeout(WAIT).unwrap() else {
+        panic!("expected the chooser to be taken down");
+    };
+    assert_eq!(closed, handle);
+    drop(reply);
 }

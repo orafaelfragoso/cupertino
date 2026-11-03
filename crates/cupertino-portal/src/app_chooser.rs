@@ -1,12 +1,13 @@
 //! `org.freedesktop.impl.portal.AppChooser`: `ChooseApplication` and `UpdateChoices`. A call becomes an [`Ask`] for
 //! the dialog, which answers with the app the person chose through its [`Reply`]; nothing opens unless they choose
-//! one. The call returns when the dialog answers, or when the frontend closes the request.
+//! one. The call returns when the dialog answers, or when the frontend closes the request. When the caller sent no
+//! activation token, the dialog asks the server for one for the chosen app, so the app can take the focus when it opens.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use cupertino_apps::entry::{parse_handler, Locale, Visibility};
+use cupertino_apps::entry::{parse_handler, DesktopEntry, Locale, Visibility};
 use zbus::message::Header;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 use zbus::{interface, Connection};
@@ -34,6 +35,8 @@ pub struct Choice {
     pub id: String,
     /// The name of its desktop entry, or the id when no installed entry has one.
     pub name: String,
+    /// The `Icon=` of its desktop entry when that is an icon name: one with no `/` or control character.
+    pub icon: Option<String>,
 }
 
 /// What the chooser shows.
@@ -48,13 +51,21 @@ pub struct Ask {
     pub choices: Vec<Choice>,
     /// The id of the choice the chooser opens with selected, when it is one of `choices`.
     pub last_choice: Option<String>,
+    /// Whether the chooser asks the server for an activation token for the chosen app: the caller sent none of its
+    /// own.
+    pub wants_token: bool,
 }
 
 /// How the chooser ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Answer {
-    /// The id of the chosen app.
-    Chosen(String),
+    /// The app the person chose.
+    Chosen {
+        /// Its desktop file id.
+        id: String,
+        /// The activation token the server made for it, when the [`Ask`] wanted one and the server gave one.
+        token: Option<String>,
+    },
     Cancelled,
 }
 
@@ -160,27 +171,28 @@ impl AppChooser {
     fn choices(&self, ids: &[String]) -> Vec<Choice> {
         let (locale, visibility) = (Locale::from_env(), Visibility::from_env());
         ids.iter()
-            .map(|id| Choice {
-                id: id.clone(),
-                name: self
-                    .name(id, &locale, &visibility)
-                    .unwrap_or_else(|| plain(id)),
+            .map(|id| {
+                let entry = self.entry(id, &locale, &visibility);
+                Choice {
+                    id: id.clone(),
+                    name: entry
+                        .as_ref()
+                        .map(|e| plain(&e.name))
+                        .filter(|n| !n.trim().is_empty())
+                        .unwrap_or_else(|| plain(id)),
+                    icon: entry.and_then(|e| e.icon).filter(|icon| file_name(icon)),
+                }
             })
             .collect()
     }
 
-    /// The name of `<id>.desktop` in the first application directory that has it; `None` when it is hidden or not an
-    /// application.
-    fn name(&self, id: &str, locale: &Locale, visibility: &Visibility) -> Option<String> {
+    /// `<id>.desktop` in the first application directory that has it; `None` when it is hidden or not an application.
+    fn entry(&self, id: &str, locale: &Locale, visibility: &Visibility) -> Option<DesktopEntry> {
         let text = self
             .applications
             .iter()
             .find_map(|dir| std::fs::read_to_string(dir.join(format!("{id}.desktop"))).ok())?;
-        let name = parse_handler(id, &text, locale, visibility)
-            .ok()?
-            .entry
-            .name;
-        Some(plain(&name)).filter(|n| !n.trim().is_empty())
+        Some(parse_handler(id, &text, locale, visibility).ok()?.entry)
     }
 }
 
@@ -238,6 +250,7 @@ impl AppChooser {
                 target: filename.or(uri).map(|t| plain(&t)),
                 choices: self.choices(&choices),
                 last_choice,
+                wants_token: token.is_none(),
             }),
             reply: Reply(reply),
         });
@@ -248,8 +261,10 @@ impl AppChooser {
         .await;
         request.remove().await;
         Ok(match answer {
-            Some(Some(Answer::Chosen(choice))) if pending.offers(&choice) => {
-                (Response::Success as u32, results(choice, token)?)
+            Some(Some(Answer::Chosen { id, token: made })) if pending.offers(&id) => {
+                // the caller's own token is handed on unchanged; only without one does the server's count
+                let made = made.filter(|made| token.is_none() && file_name(made));
+                (Response::Success as u32, results(id, token.or(made))?)
             }
             Some(Some(Answer::Cancelled)) => (Response::Cancelled as u32, HashMap::new()),
             Some(_) => (Response::Other as u32, HashMap::new()),
@@ -310,12 +325,21 @@ fn ids(choices: Vec<String>) -> Result<Vec<String>, PortalError> {
         .into_iter()
         .map(|id| {
             let id = text("a choice", id)?;
-            if id.is_empty() || id.contains('/') || id.chars().any(char::is_control) {
+            if !file_name(&id) {
                 return Err(invalid(format!("{id:?} is not a desktop file id")));
             }
             Ok(id)
         })
         .collect()
+}
+
+/// Whether `name` can only name a file in a directory: not empty, no longer than [`MAX_TEXT`], with no `/` or control
+/// character.
+fn file_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_TEXT
+        && !name.contains('/')
+        && !name.chars().any(char::is_control)
 }
 
 fn option<T>(options: &Options, key: &str) -> Result<Option<T>, PortalError>
@@ -338,8 +362,7 @@ fn owned(value: Value<'_>) -> Result<OwnedValue, PortalError> {
     OwnedValue::try_from(value).map_err(|e| PortalError::ZBus(e.into()))
 }
 
-/// The `results` of a chosen app. The dialog cannot ask the compositor for a token of its own, so the caller's token,
-/// when it sent one, is handed on to the chosen app.
+/// The `results` of a chosen app: its id and the activation token it opens with, when there is one.
 fn results(
     choice: String,
     token: Option<String>,

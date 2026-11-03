@@ -13,7 +13,7 @@ use cupertino_modifiers::Profile;
 use cupertino_protocol_app::{
     AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop as Material,
 };
-use cupertino_ui_menus::WindowMenus;
+use cupertino_ui_menus::{AppMenus, WindowMenus};
 use cupertino_ui_platform::{
     ActivationRequest, Backdrop, Capabilities, ClipboardData, ClipboardKind, ClipboardToken,
     ConfigureId, CursorShape, KeyEvent, Keysym, MenuDescription, PlatformError, PlatformEvent,
@@ -75,6 +75,8 @@ struct Window {
     app_id: String,
     configured: bool,
     menus: Option<ShownMenus>,
+    /// An input region to send with the next present; `Some(None)` gives the whole surface back.
+    input_region: Option<Option<Vec<Rect>>>,
 }
 
 /// A toplevel's menus as the runtime asked for them, and their publication.
@@ -137,6 +139,8 @@ pub struct WaylandWindowSystem {
     woken: Arc<AtomicBool>,
     /// The desktop's effects and the observer of the session's appearance, on a compositor that offers them.
     effects: Option<(AppEffects, AppearanceObserver)>,
+    /// The session-bus connection the windows' menus share.
+    menus: AppMenus,
     appearance: SystemAppearance,
     roles: Option<Box<dyn SurfaceRoles>>,
     /// Names the configures of surfaces with a role from [`SurfaceRoles`], which carry no serial of their own.
@@ -196,6 +200,7 @@ impl WaylandWindowSystem {
             appearance: SystemAppearance::default(),
             roles: None,
             role_configures: 0,
+            menus: AppMenus::default(),
         };
         // the compositor answers the observer at once: learn the session's appearance before the first window draws
         if system.effects.is_some() && system.conn.roundtrip().is_ok() {
@@ -294,6 +299,7 @@ impl WaylandWindowSystem {
             app_id: String::new(),
             configured: false,
             menus: None,
+            input_region: None,
         });
         id
     }
@@ -333,7 +339,11 @@ impl WaylandWindowSystem {
 
     /// Publish the menus a configured window waits to show.
     fn publish_menus(&mut self, window: WindowId) -> Result<(), PlatformError> {
-        let w = self.window(window)?;
+        let w = self
+            .windows
+            .iter()
+            .find(|w| w.id == window)
+            .ok_or(PlatformError::UnknownWindow(window))?;
         let Some(ShownMenus {
             description,
             published: Published::Waiting,
@@ -346,6 +356,7 @@ impl WaylandWindowSystem {
         }
         let menus = self.effects.as_ref().and_then(|(effects, _)| {
             WindowMenus::publish(
+                &mut self.menus,
                 &self.conn,
                 effects,
                 w.surface,
@@ -555,6 +566,11 @@ impl WaylandWindowSystem {
                 let Some(i) = on(&self.windows, surface) else {
                     return;
                 };
+                if let (KeyboardEvent::Enter | KeyboardEvent::Leave, Some(roles)) =
+                    (&event, self.roles.as_mut())
+                {
+                    roles.keyboard_focus(surface, matches!(event, KeyboardEvent::Enter));
+                }
                 let event = match event {
                     KeyboardEvent::Enter => WindowEvent::Focus(true),
                     KeyboardEvent::Leave => WindowEvent::Focus(false),
@@ -717,7 +733,9 @@ impl WindowSystem for WaylandWindowSystem {
             .and_then(|roles| roles.create(&mut self.conn, spec))
         {
             let surface = surface.map_err(platform_error)?;
-            return Ok(self.add(surface, Kind::External, None, convert::whole(spec.size)));
+            let id = self.add(surface, Kind::External, None, convert::whole(spec.size));
+            self.window_mut(id)?.input_region = spec.input_region.clone().map(Some);
+            return Ok(id);
         }
         let toplevel = self
             .conn
@@ -739,6 +757,7 @@ impl WindowSystem for WaylandWindowSystem {
         let w = self.window_mut(id)?;
         (w.min_size, w.max_size) = (spec.min_size, spec.max_size);
         w.app_id = spec.app_id.clone();
+        w.input_region = spec.input_region.clone().map(Some);
         Ok(id)
     }
 
@@ -788,6 +807,10 @@ impl WindowSystem for WaylandWindowSystem {
         let result = match request {
             WindowRequest::Backdrop(backdrop) => return self.set_backdrop(window, backdrop),
             WindowRequest::Menus(menus) => return self.set_menus(window, menus),
+            WindowRequest::SetInputRegion(region) => {
+                self.window_mut(window)?.input_region = Some(region);
+                return Ok(());
+            }
             WindowRequest::SetTitle(title) => {
                 let t = self.toplevel(window)?;
                 self.conn.set_title(t, &title)
@@ -952,6 +975,11 @@ impl WindowSystem for WaylandWindowSystem {
             width: r.width,
             height: r.height,
         }));
+        if let Some(region) = w.input_region.take() {
+            self.conn
+                .set_input_region(surface, region.as_deref())
+                .map_err(platform_error)?;
+        }
         match copy_and_present(&mut self.conn, surface, size, frame, &damage, resized)? {
             Ok(()) => {
                 let feedback = self.conn.capabilities().contains(Capability::Presentation);

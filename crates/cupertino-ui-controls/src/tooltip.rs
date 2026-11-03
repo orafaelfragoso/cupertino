@@ -96,6 +96,7 @@ impl<M: Clone + 'static> Tooltip<M> {
                 max_size: None,
                 decorations: DecorationMode::None,
                 foreign_parent: None,
+                input_region: None,
             },
             shortcuts: CommandRegistry::new(),
             on_close: None,

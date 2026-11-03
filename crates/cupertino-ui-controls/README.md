@@ -39,6 +39,9 @@ from the application's model and reports changes as messages.
   and reads as a group whose interactive parts are its children, layered over the drawing. `Grid` lays out fixed,
   auto and fraction tracks row by row; `Element::span` covers several cells, and rows past the declared ones fit
   their content.
+- **Sliders.** `on_change` reports every value a drag passes; `on_end` reports the value once the change ends, when
+  the pointer lets go or the drag is cancelled, and at once for a key or assistive technology step, so an
+  application can write a level live and commit it once.
 
 ## Not yet
 

@@ -1,0 +1,92 @@
+== centre
+-- WindowKey(Str("centre"))
+window 5
+pending messages=0 tasks=1 frames=0 animating=false next_wake=None
+focus None
+pointer_capture None
+text_input None
+layout
+  NodeId(6v3) cupertino_notifications::view::CentreRoot<kit_goldens::Message> key=None parent=None children=[NodeId(2v3), NodeId(4v3), NodeId(20v1), NodeId(21v1), NodeId(22v1)] rect=[0,0 388x226] clip=[none]
+  NodeId(2v3) cupertino_notifications::view::Place<kit_goldens::Message> key=Some(Str("header")) parent=Some(NodeId(6v3)) children=[NodeId(0v3), NodeId(1v3)] rect=[28,40 344x28] clip=[none]
+  NodeId(0v3) cupertino_ui_controls::Text key=None parent=Some(NodeId(2v3)) children=[] rect=[40,40 271.45556640625x28] clip=[none]
+  NodeId(1v3) cupertino_ui_controls::Button<kit_goldens::Message> key=Some(Str("clear")) parent=Some(NodeId(2v3)) children=[] rect=[319.45556640625,44 52.54443359375x20] clip=[none]
+  NodeId(4v3) cupertino_notifications::view::Card<kit_goldens::Message> key=Some(Str("card-4")) parent=Some(NodeId(6v3)) children=[NodeId(7v3), NodeId(19v1)] rect=[28,76 344x61] clip=[none]
+  NodeId(7v3) cupertino_ui_controls::Stack<kit_goldens::Message> key=None parent=Some(NodeId(4v3)) children=[NodeId(5v3), NodeId(3v3)] rect=[28,76 344x61] clip=[28,76 344x61]
+  NodeId(5v3) cupertino_ui_controls::Icon key=None parent=Some(NodeId(7v3)) children=[] rect=[40,88 32x32] clip=[28,76 344x61]
+  NodeId(3v3) cupertino_ui_controls::Stack<kit_goldens::Message> key=None parent=Some(NodeId(7v3)) children=[NodeId(16v1), NodeId(17v1)] rect=[82,88 278x37] clip=[28,76 344x61]
+  NodeId(16v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(3v3)) children=[] rect=[82,88 58.76025390625x15.7294921875] clip=[28,76 344x61]
+  NodeId(17v1) cupertino_ui_controls::RichText<kit_goldens::Message> key=None parent=Some(NodeId(3v3)) children=[NodeId(18v1)] rect=[82,105.7294921875 74.66748046875x15.7294921875] clip=[28,76 344x61]
+  NodeId(18v1) cupertino_ui_controls::rich_text::Body key=None parent=Some(NodeId(17v1)) children=[] rect=[82,105.7294921875 74.66748046875x15.7294921875] clip=[28,76 344x61]
+  NodeId(19v1) cupertino_notifications::view::CloseButton<kit_goldens::Message> key=Some(Str("close")) parent=Some(NodeId(4v3)) children=[] rect=[28,76 18x18] clip=[28,76 344x61]
+  NodeId(20v1) cupertino_notifications::view::Card<kit_goldens::Message> key=None parent=Some(NodeId(6v3)) children=[] rect=[48,166.09302325581396 304x53.906976744186046] clip=[none]
+  NodeId(21v1) cupertino_notifications::view::Card<kit_goldens::Message> key=None parent=Some(NodeId(6v3)) children=[] rect=[38,154.54651162790697 324x57.45348837209303] clip=[none]
+  NodeId(22v1) cupertino_notifications::view::Card<kit_goldens::Message> key=Some(Str("card-3")) parent=Some(NodeId(6v3)) children=[NodeId(23v1), NodeId(29v1)] rect=[28,143 344x61] clip=[none]
+  NodeId(23v1) cupertino_ui_controls::Stack<kit_goldens::Message> key=None parent=Some(NodeId(22v1)) children=[NodeId(24v1), NodeId(25v1)] rect=[28,143 344x61] clip=[28,143 344x61]
+  NodeId(24v1) cupertino_ui_controls::Icon key=None parent=Some(NodeId(23v1)) children=[] rect=[40,155 32x32] clip=[28,143 344x61]
+  NodeId(25v1) cupertino_ui_controls::Stack<kit_goldens::Message> key=None parent=Some(NodeId(23v1)) children=[NodeId(26v1), NodeId(27v1)] rect=[82,155 278x37] clip=[28,143 344x61]
+  NodeId(26v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(25v1)) children=[] rect=[82,155 32.931640625x15.7294921875] clip=[28,143 344x61]
+  NodeId(27v1) cupertino_ui_controls::RichText<kit_goldens::Message> key=None parent=Some(NodeId(25v1)) children=[NodeId(28v1)] rect=[82,172.7294921875 91.37451171875x15.7294921875] clip=[28,143 344x61]
+  NodeId(28v1) cupertino_ui_controls::rich_text::Body key=None parent=Some(NodeId(27v1)) children=[] rect=[82,172.7294921875 91.37451171875x15.7294921875] clip=[28,143 344x61]
+  NodeId(29v1) cupertino_notifications::view::CloseButton<kit_goldens::Message> key=Some(Str("close")) parent=Some(NodeId(22v1)) children=[] rect=[28,143 18x18] clip=[28,143 344x61]
+semantics
+  NodeId(16v1) role=StaticText name=Some("Stand-up") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[82,88 58.76025390625x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(18v1) role=StaticText name=Some("In 5 minutes") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[82,105.7294921875 74.66748046875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(19v1) role=Button name=Some("Close") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[28,76 18x18] actions=[Click] relations=[] children=[]
+  NodeId(22v1) role=Group name=Some("Mail: Third") description=Some("From the inbox; 2 more from Mail") value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[28,143 344x61] actions=[Click] relations=[] children=[NodeId(26v1), NodeId(28v1), NodeId(29v1)]
+  NodeId(26v1) role=StaticText name=Some("Third") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[82,155 32.931640625x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(28v1) role=StaticText name=Some("From the inbox") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[82,172.7294921875 91.37451171875x15.7294921875] actions=[] relations=[] children=[]
+  NodeId(29v1) role=Button name=Some("Close") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[28,143 18x18] actions=[Click] relations=[] children=[]
+  NodeId(0v3) role=StaticText name=Some("Notification Centre") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[40,40 271.45556640625x28] actions=[] relations=[] children=[]
+  NodeId(1v3) role=Button name=Some("Clear") description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[319.45556640625,44 52.54443359375x20] actions=[Click] relations=[] children=[]
+  NodeId(4v3) role=Group name=Some("Calendar: Stand-up") description=Some("In 5 minutes") value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[28,76 344x61] actions=[Click] relations=[] children=[NodeId(16v1), NodeId(18v1), NodeId(19v1)]
+  NodeId(6v3) role=List name=Some("Notification Centre") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 388x226] actions=[] relations=[] children=[NodeId(0v3), NodeId(1v3), NodeId(4v3), NodeId(22v1)]
+display
+  paint 12884901894 parent=None revision=1 bounds=[0,0 396.25x245.25] hit=[0,0 388x226] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+  paint 12884901890 parent=Some(12884901894) revision=2 bounds=[28,33.625 355.10595703125x38.05500000000001] hit=[28,40 344x28] clip=None transform=[1.0, 0.0, 0.0, 1.0, 28.0, 40.0]
+  paint 12884901888 parent=Some(12884901890) revision=3 bounds=[28,33.625 283.45556640625x34.375] hit=[40,40 271.45556640625x28] clip=None transform=[1.0, 0.0, 0.0, 1.0, 40.0, 40.0]
+    Glyphs origin=0,11.625 font=FontId(0) size=12 count=19 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
+  paint 12884901889 parent=Some(12884901890) revision=4 bounds=[316.45556640625,39.18 66.650390625x32.50000000000001] hit=[319.45556640625,42 52.54443359375x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 319.45556640625, 44.0]
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 52.54443359375, height: 20.0 } }, radius: 5.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
+    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.5, y: 0.5 }, size: Size { width: 51.54443359375, height: 19.0 } }, radius: 4.5 }, width: 1.0, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.24705882 }) }
+    Glyphs origin=10,14.68 font=FontId(1) size=13 count=5 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 0.84705883 }
+  paint 12884901892 parent=Some(12884901894) revision=5 bounds=[3.75,52.75 392.5x109.5] hit=[28,76 344x61] clip=Some(Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 61.0 } })) transform=[1.0, 0.0, 0.0, 1.0, 28.0, 76.0]
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 61.0 } }, radius: 16.0 }, paint: Solid(Color { r: 0.9254902, g: 0.9254902, b: 0.9254902, a: 1.0 }) }
+    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 61.0 } }, radius: 16.0 }, width: 0.5, paint: Solid(Color { r: 0.9019608, g: 0.9019608, b: 0.9019608, a: 1.0 }) }
+  paint 12884901895 parent=Some(12884901892) revision=6 bounds=[28,76 344x61] hit=[28,76 344x61] clip=None transform=[1.0, 0.0, 0.0, 1.0, 28.0, 76.0]
+  paint 12884901893 parent=Some(12884901895) revision=7 bounds=[40,88 32x32] hit=[40,88 32x32] clip=None transform=[1.0, 0.0, 0.0, 1.0, 40.0, 88.0]
+    Image { image: ResourceRef { id: ResourceId(_), revision: 1 }, src: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 32.0, height: 32.0 } }, dst: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 32.0, height: 32.0 } }, sampling: Linear }
+  paint 12884901891 parent=Some(12884901895) revision=8 bounds=[69,81.09375 291x50.2294921875] hit=[82,88 278x37] clip=None transform=[1.0, 0.0, 0.0, 1.0, 82.0, 88.0]
+  paint 4294967312 parent=Some(12884901891) revision=9 bounds=[69,81.09375 89.64794921875x32.5] hit=[82,88 58.76025390625x15.7294921875] clip=None transform=[1.0, 0.0, 0.0, 1.0, 82.0, 88.0]
+    Glyphs origin=0,12.59375 font=FontId(0) size=13 count=8 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
+  paint 4294967313 parent=Some(12884901891) revision=10 bounds=[69,98.8232421875 106.8056640625x32.5] hit=[82,105.7294921875 74.66748046875x15.7294921875] clip=None transform=[1.0, 0.0, 0.0, 1.0, 82.0, 105.7294921875]
+  paint 4294967314 parent=Some(4294967313) revision=11 bounds=[69,98.8232421875 106.8056640625x32.5] hit=[82,105.7294921875 74.66748046875x15.7294921875] clip=None transform=[1.0, 0.0, 0.0, 1.0, 82.0, 105.7294921875]
+    Glyphs origin=0,12.59375 font=FontId(1) size=13 count=12 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 0.49803922 }
+  paint 4294967315 parent=Some(12884901892) revision=12 bounds=[28,76 18x18] hit=[28,76 18x18] clip=None transform=[1.0, 0.0, 0.0, 1.0, 28.0, 76.0]
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 18.0, height: 18.0 } }, radius: 9.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
+    Stroke { shape: Path { verbs: [MoveTo(Point { x: 5.76, y: 5.76 }), LineTo(Point { x: 12.24, y: 12.24 }), MoveTo(Point { x: 12.24, y: 5.76 }), LineTo(Point { x: 5.76, y: 12.24 })], fill_rule: NonZero }, width: 1.5, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.49803922 }) }
+  paint 4294967316 parent=Some(12884901894) revision=13 bounds=[23.75,142.84302325581396 352.5x102.40697674418604] hit=[48,166.09302325581396 304x53.906976744186046] clip=Some(Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 304.0, height: 53.906976744186046 } })) transform=[1.0, 0.0, 0.0, 1.0, 48.0, 166.09302325581396]
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 304.0, height: 53.906976744186046 } }, radius: 16.0 }, paint: Solid(Color { r: 0.8699608, g: 0.8699608, b: 0.8699608, a: 1.0 }) }
+    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 304.0, height: 53.906976744186046 } }, radius: 16.0 }, width: 0.5, paint: Solid(Color { r: 0.9019608, g: 0.9019608, b: 0.9019608, a: 1.0 }) }
+  paint 4294967317 parent=Some(12884901894) revision=14 bounds=[13.75,131.29651162790697 372.5x105.95348837209303] hit=[38,154.54651162790697 324x57.45348837209303] clip=Some(Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 324.0, height: 57.45348837209303 } })) transform=[1.0, 0.0, 0.0, 1.0, 38.0, 154.54651162790697]
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 324.0, height: 57.45348837209303 } }, radius: 16.0 }, paint: Solid(Color { r: 0.8977255, g: 0.8977255, b: 0.8977255, a: 1.0 }) }
+    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 324.0, height: 57.45348837209303 } }, radius: 16.0 }, width: 0.5, paint: Solid(Color { r: 0.9019608, g: 0.9019608, b: 0.9019608, a: 1.0 }) }
+  paint 4294967318 parent=Some(12884901894) revision=15 bounds=[3.75,119.75 392.5x109.5] hit=[28,143 344x61] clip=Some(Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 61.0 } })) transform=[1.0, 0.0, 0.0, 1.0, 28.0, 143.0]
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 61.0 } }, radius: 16.0 }, paint: Solid(Color { r: 0.9254902, g: 0.9254902, b: 0.9254902, a: 1.0 }) }
+    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 61.0 } }, radius: 16.0 }, width: 0.5, paint: Solid(Color { r: 0.9019608, g: 0.9019608, b: 0.9019608, a: 1.0 }) }
+  paint 4294967319 parent=Some(4294967318) revision=16 bounds=[28,143 344x61] hit=[28,143 344x61] clip=None transform=[1.0, 0.0, 0.0, 1.0, 28.0, 143.0]
+  paint 4294967320 parent=Some(4294967319) revision=17 bounds=[40,155 32x32] hit=[40,155 32x32] clip=None transform=[1.0, 0.0, 0.0, 1.0, 40.0, 155.0]
+    Image { image: ResourceRef { id: ResourceId(_), revision: 1 }, src: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 32.0, height: 32.0 } }, dst: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 32.0, height: 32.0 } }, sampling: Linear }
+  paint 4294967321 parent=Some(4294967319) revision=18 bounds=[69,148.09375 291x50.2294921875] hit=[82,155 278x37] clip=None transform=[1.0, 0.0, 0.0, 1.0, 82.0, 155.0]
+  paint 4294967322 parent=Some(4294967321) revision=19 bounds=[69,148.09375 63.8193359375x32.5] hit=[82,155 32.931640625x15.7294921875] clip=None transform=[1.0, 0.0, 0.0, 1.0, 82.0, 155.0]
+    Glyphs origin=0,12.59375 font=FontId(0) size=13 count=5 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
+  paint 4294967323 parent=Some(4294967321) revision=20 bounds=[69,165.8232421875 123.27783203125x32.5] hit=[82,172.7294921875 91.37451171875x15.7294921875] clip=None transform=[1.0, 0.0, 0.0, 1.0, 82.0, 172.7294921875]
+  paint 4294967324 parent=Some(4294967323) revision=21 bounds=[69,165.8232421875 123.27783203125x32.5] hit=[82,172.7294921875 91.37451171875x15.7294921875] clip=None transform=[1.0, 0.0, 0.0, 1.0, 82.0, 172.7294921875]
+    Glyphs origin=0,12.59375 font=FontId(1) size=13 count=14 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 0.49803922 }
+  paint 4294967325 parent=Some(4294967318) revision=22 bounds=[28,143 18x18] hit=[28,143 18x18] clip=None transform=[1.0, 0.0, 0.0, 1.0, 28.0, 143.0]
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 18.0, height: 18.0 } }, radius: 9.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
+    Stroke { shape: Path { verbs: [MoveTo(Point { x: 5.76, y: 5.76 }), LineTo(Point { x: 12.24, y: 12.24 }), MoveTo(Point { x: 12.24, y: 5.76 }), LineTo(Point { x: 5.76, y: 12.24 })], fill_rule: NonZero }, width: 1.5, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.49803922 }) }
+== announced
+Polite "Mail: First" "From the inbox"
+Polite "Mail: Second" "From the inbox"
+Polite "Mail: Third" "From the inbox"
+Polite "Calendar: Stand-up" "In 5 minutes"

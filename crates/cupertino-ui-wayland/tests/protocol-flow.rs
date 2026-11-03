@@ -46,6 +46,7 @@ use wayland_server::protocol::wl_data_offer::{self, WlDataOffer};
 use wayland_server::protocol::wl_data_source::{self, WlDataSource};
 use wayland_server::protocol::wl_output::WlOutput;
 use wayland_server::protocol::wl_pointer::{self, WlPointer};
+use wayland_server::protocol::wl_region::{self, WlRegion};
 use wayland_server::protocol::wl_seat::{self, Capability, WlSeat};
 use wayland_server::protocol::wl_shm::{self, WlShm};
 use wayland_server::protocol::wl_shm_pool::{self, WlShmPool};
@@ -71,6 +72,8 @@ struct Committed {
     pixels: Pixels,
     /// The `damage_buffer` rectangles of the commit (x, y, width, height).
     damage: Vec<[i32; 4]>,
+    /// The input region set since the last commit, when one was: its rectangles, or `None` for the whole surface.
+    input_region: Option<Option<Vec<[i32; 4]>>>,
 }
 
 /// The bytes of a committed buffer.
@@ -130,6 +133,7 @@ struct SurfaceState {
     damage: Vec<[i32; 4]>,
     scale: i32,
     frames: Vec<WlCallback>,
+    input_region: Option<Option<Vec<[i32; 4]>>>,
 }
 
 type SurfaceData = Arc<Mutex<SurfaceState>>;
@@ -279,8 +283,36 @@ impl Dispatch<WlCompositor, ()> for Mock {
         _: &DisplayHandle,
         init: &mut DataInit<'_, Self>,
     ) {
-        if let wl_compositor::Request::CreateSurface { id } = request {
-            init.init(id, SurfaceData::default());
+        match request {
+            wl_compositor::Request::CreateSurface { id } => {
+                init.init(id, SurfaceData::default());
+            }
+            wl_compositor::Request::CreateRegion { id } => {
+                init.init(id, Mutex::new(Vec::new()));
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WlRegion, Mutex<Vec<[i32; 4]>>> for Mock {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &WlRegion,
+        request: wl_region::Request,
+        rects: &Mutex<Vec<[i32; 4]>>,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        if let wl_region::Request::Add {
+            x,
+            y,
+            width,
+            height,
+        } = request
+        {
+            rects.lock().unwrap().push([x, y, width, height]);
         }
     }
 }
@@ -306,6 +338,15 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
             } => s.damage.push([x, y, width, height]),
             wl_surface::Request::SetBufferScale { scale } => s.scale = scale,
             wl_surface::Request::Frame { callback } => s.frames.push(init.init(callback, ())),
+            wl_surface::Request::SetInputRegion { region } => {
+                s.input_region = Some(region.map(|r| {
+                    r.data::<Mutex<Vec<[i32; 4]>>>()
+                        .unwrap()
+                        .lock()
+                        .unwrap()
+                        .clone()
+                }));
+            }
             wl_surface::Request::Commit => {
                 let unbuffered = s.buffer.is_none();
                 if let Some(t) = state
@@ -336,6 +377,7 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
                                 b.map[start..start + (b.stride * b.height) as usize].to_vec(),
                             ),
                             damage: std::mem::take(&mut s.damage),
+                            input_region: s.input_region.take(),
                         })
                         .unwrap();
                     // like a compositor that keeps the current buffer until the next one replaces it
@@ -959,6 +1001,7 @@ fn a_frame_is_drawn_at_the_output_scale_in_wl_shm_byte_order_and_the_next_waits_
             first_pixel: [30, 20, 10, 40],
             pixels: first.pixels.clone(),
             damage: vec![[0, 0, i32::MAX, i32::MAX]],
+            input_region: None,
         }
     );
 
@@ -1333,6 +1376,7 @@ mod window_system {
                 max_size: None,
                 decorations: DecorationMode::Client,
                 foreign_parent: None,
+                input_region: None,
             })
             .unwrap();
         let kit = Kit {
@@ -1956,6 +2000,7 @@ mod window_system {
                 max_size: None,
                 decorations: DecorationMode::None,
                 foreign_parent: None,
+                input_region: None,
             })
             .unwrap();
         kit.window = w;
@@ -1985,6 +2030,87 @@ mod window_system {
 
         control.send(Control::Close).unwrap();
         kit.window_event(|e| matches!(e, WindowEvent::CloseRequested).then_some(()));
+    }
+
+    #[test]
+    fn a_windows_input_region_reaches_its_surface_with_the_next_present() {
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let (control, committed, _seen) = spawn_server(server_stream);
+        let ws = WaylandWindowSystem::new(
+            Connection::from_stream(client_stream).unwrap(),
+            Profile::cupertino(),
+        )
+        .with_roles(role::Roles::default());
+        let mut kit = Kit {
+            ws,
+            window: WindowId(0),
+            stash: VecDeque::new(),
+        };
+        let w = kit
+            .ws
+            .create_window(&WindowSpec {
+                title: "Dock".into(),
+                app_id: role::APP_ID.into(),
+                size: Size::new(10.0, 10.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::None,
+                foreign_parent: None,
+                input_region: Some(vec![Rect::new(10.0, 20.0, 100.0, 20.5)]),
+            })
+            .unwrap();
+        kit.window = w;
+        kit.window_event(|e| matches!(e, WindowEvent::Configure(_)).then_some(()));
+        let present = |kit: &mut Kit, id: u64| {
+            kit.ws.request_frame(w);
+            kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+            let outcome = kit
+                .ws
+                .present(w, &frame_sized(id, (240, 80), [0; 4], &[]), None)
+                .unwrap();
+            assert_eq!(outcome, PresentOutcome::Presented);
+            kit.pump();
+            control.send(Control::FrameDone).unwrap();
+            committed
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .input_region
+        };
+
+        assert_eq!(present(&mut kit, 1), Some(Some(vec![[10, 20, 100, 21]])));
+        assert_eq!(
+            present(&mut kit, 2),
+            None,
+            "an unchanged region is not sent again"
+        );
+        kit.ws
+            .request(w, WindowRequest::SetInputRegion(Some(Vec::new())))
+            .unwrap();
+        assert_eq!(present(&mut kit, 3), Some(Some(Vec::new())));
+        kit.ws
+            .request(w, WindowRequest::SetInputRegion(None))
+            .unwrap();
+        assert_eq!(present(&mut kit, 4), Some(None));
+    }
+
+    #[test]
+    fn a_window_without_an_input_region_never_sets_one() {
+        let (mut kit, control, committed, _seen) = mapped();
+        let w = kit.window;
+        for id in 1..=2 {
+            kit.ws.request_frame(w);
+            kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+            kit.ws.present(w, &frame(id, [0; 4], &[]), None).unwrap();
+            kit.pump();
+            control.send(Control::FrameDone).unwrap();
+            assert_eq!(
+                committed
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                    .input_region,
+                None
+            );
+        }
     }
 
     #[test]

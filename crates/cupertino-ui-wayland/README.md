@@ -51,7 +51,9 @@ frames that were not presented, and what the buffer missed, or all of it when th
 compositor is told only the frame's damage and the carried damage, or all of the window when the frame changed size.
 No free buffer, no configure yet, or a frame at another size than the latest configure asks for is `NotReady`, and the
 damage is carried (more than 64 rectangles become the whole frame). The transport acknowledges the latest configure
-with every frame. `request_frame` answers at once when no frame callback is outstanding, else with the callback; a
+with every frame. A window's input region (`WindowSpec::input_region`, then `WindowRequest::SetInputRegion`) is sent with
+the next present that follows a change, rounded outwards to whole points; a window that never sets one takes input over
+its whole surface. `request_frame` answers at once when no frame callback is outstanding, else with the callback; a
 callback nobody asked for is not reported. On a compositor with `wp_presentation`, each presented frame is reported as
 `Presented` with the time it turned visible, moved from the compositor's presentation clock onto the window system's
 clock and never later than now, or as `Discarded` when the compositor never showed it.
@@ -69,5 +71,5 @@ cargo test -p cupertino-ui-wayland
 
 Unit tests cover the pixel conversion, the damage cut, popup placement, the clipboard text, and the window system's
 conversions, input timeline and carried-damage bound. `tests/protocol-flow.rs` drives the presenter, the clipboard and
-the window system (frame pacing, carried and missed damage, a click, the clipboard, the waker, refused requests)
+the window system (frame pacing, carried and missed damage, the input region, a click, the clipboard, the waker, refused requests)
 against an in-process server.

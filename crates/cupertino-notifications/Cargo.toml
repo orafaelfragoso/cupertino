@@ -3,43 +3,47 @@ name = "cupertino-notifications"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Notification daemon model for the Cupertino compositor: org.freedesktop.Notifications server, banner stack with spring animation, grouping, history, do-not-disturb and CPU banner rendering"
+description = "Notification daemon model for the Cupertino compositor: org.freedesktop.Notifications server, banner stack with spring animation, grouping, history, do-not-disturb, and the banners and notification centre on CupertinoKit"
 
 [package.metadata.cupertino]
 layer = "shell"
 
 [features]
-default = ["dbus", "material"]
+default = ["dbus"]
 dbus = ["dep:zbus", "dep:libc", "dep:cupertino-peer"]
-material = ["dep:cupertino-glass", "dep:image"]
-# the `cupertino-notifications` process: banners and the notification centre list as a client of the server
+# the `cupertino-notifications` process: the banners and the notification centre on CupertinoKit layer surfaces
 app = [
     "dbus",
-    "dep:cupertino-protocol-app",
+    "dep:async-channel",
+    "dep:async-io",
+    "dep:cupertino-assets",
+    "dep:cupertino-icons",
+    "dep:cupertino-kit",
+    "dep:cupertino-modifiers",
     "dep:cupertino-shell-client",
     "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
 ]
 
 [dependencies]
-cupertino-assets = { path = "../cupertino-assets" }
-cupertino-icons = { path = "../cupertino-icons" }
-cupertino-theme = { path = "../cupertino-theme" }
+async-channel = { version = "2", optional = true }
+async-io = { version = "2", optional = true }
 cupertino-animation = { path = "../cupertino-animation" }
+cupertino-assets = { path = "../cupertino-assets", optional = true }
 cupertino-geometry = { path = "../cupertino-geometry" }
-cupertino-decorations = { path = "../cupertino-decorations" }
+cupertino-icons = { path = "../cupertino-icons", optional = true }
+cupertino-kit = { path = "../cupertino-kit", optional = true }
+cupertino-modifiers = { path = "../cupertino-modifiers", optional = true }
 cupertino-peer = { path = "../cupertino-peer", optional = true }
-cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
+cupertino-theme = { path = "../cupertino-theme" }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
-cupertino-glass = { path = "../cupertino-glass", optional = true }
 libc = { version = "0.2", optional = true }
-image = { version = "0.25", default-features = false, features = ["png"], optional = true }
-tiny-skia = "0.11"
 zbus = { version = "5", optional = true }
 
 [dev-dependencies]
+cupertino-ui-test = { path = "../cupertino-ui-test" }
 cupertino-test-bus = { path = "../cupertino-test-bus" }
 tempfile = "3"
 futures-lite = "2"
@@ -49,9 +53,6 @@ zbus = { version = "5", features = ["p2p"] }
 name = "cupertino-notifications"
 path = "src/main.rs"
 required-features = ["app"]
-
-[[example]]
-name = "notifications_samples"
 
 [[example]]
 name = "notification-daemon"

@@ -14,7 +14,7 @@ use cupertino_files::kit::{prepare, Files, Start};
 use cupertino_files::notice::Notices;
 use cupertino_files::places::{Place, PlaceGroup, PlaceKind};
 use cupertino_kit::core::{AccessibilityNode, Key, NodeId, PlaceholderIcons, Role, RuntimeOptions};
-use cupertino_kit::geometry::Point;
+use cupertino_kit::geometry::{Point, Rect};
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{
     Capabilities, Mods, MouseButton, PointerEvent, Timestamp, WindowEvent, WindowId, WindowRequest,
@@ -23,12 +23,13 @@ use cupertino_kit::platform::{
 use cupertino_kit::render::{CpuConfig, CpuRenderer};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
-use cupertino_menu_model::{ActionName, Scope};
+use cupertino_menu_model::{ActionName, Command, Entry, Scope};
 use cupertino_theme::Theme;
 use cupertino_ui_test::{ManualClock, TestDriver};
 
 struct Run {
     driver: TestDriver<Files>,
+    /// The window the helpers act on and read.
     window: WindowId,
     _home: tempfile::TempDir,
 }
@@ -108,21 +109,32 @@ impl Run {
         );
         driver.run_until_idle(budget()).unwrap();
         let window = driver.runtime().windows()[0].1;
-        let active = WindowStates {
-            activated: true,
-            ..WindowStates::default()
-        };
-        driver
-            .window_system_mut()
-            .configure(window, None, active)
-            .unwrap();
         let mut run = Run {
             driver,
             window,
             _home: home,
         };
-        run.settle();
+        run.activate(window);
         run
+    }
+
+    fn windows(&self) -> Vec<WindowId> {
+        let windows = self.driver.runtime().windows();
+        windows.into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// Make `window` the key window and the one the helpers act on.
+    fn activate(&mut self, window: WindowId) {
+        let active = WindowStates {
+            activated: true,
+            ..WindowStates::default()
+        };
+        self.driver
+            .window_system_mut()
+            .configure(window, None, active)
+            .unwrap();
+        self.window = window;
+        self.settle();
     }
 
     fn home(&self) -> PathBuf {
@@ -132,11 +144,18 @@ impl Run {
     fn settle(&mut self) {
         for _ in 0..8 {
             self.driver.run_until_idle(budget()).unwrap();
+            let windows = self.windows();
             let system = self.driver.window_system_mut();
-            if !system.frame_requested(self.window).unwrap() {
+            let waiting: Vec<WindowId> = windows
+                .into_iter()
+                .filter(|&w| system.frame_requested(w).unwrap())
+                .collect();
+            if waiting.is_empty() {
                 return;
             }
-            system.frame_ready(self.window, Timestamp(0)).unwrap();
+            for window in waiting {
+                system.frame_ready(window, Timestamp(0)).unwrap();
+            }
         }
     }
 
@@ -156,6 +175,22 @@ impl Run {
             .unwrap_or_else(|| panic!("no node {key:?}"));
         let snapshot = runtime.snapshot(self.window).unwrap();
         let rect = snapshot.nodes.iter().find(|n| n.id == id).unwrap().rect;
+        self.click_in(rect);
+    }
+
+    /// Click the list's row whose first cell reads `name`.
+    fn click_row(&mut self, name: &str) {
+        let snapshot = self.driver.runtime().snapshot(self.window).unwrap();
+        let cell = snapshot
+            .accessibility
+            .iter()
+            .find(|(_, node)| node.role == Role::StaticText && node.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("no row {name}"));
+        let rect = cell.1.bounds;
+        self.click_in(rect);
+    }
+
+    fn click_in(&mut self, rect: Rect) {
         let position = Point::new(
             rect.origin.x + rect.size.width / 2.0,
             rect.origin.y + rect.size.height / 2.0,
@@ -175,6 +210,35 @@ impl Run {
 
     fn menu(&mut self, name: &str) {
         self.send(WindowEvent::MenuActivated(action(name)));
+    }
+
+    /// The label of the menu item that runs `name`.
+    fn menu_label(&self, name: &str) -> String {
+        let system = self.driver.runtime().window_system();
+        let menus = system.menus(self.window).unwrap().unwrap();
+        let command = Command::Action(action(name));
+        let item = menus
+            .bar
+            .menus
+            .iter()
+            .flat_map(|menu| menu.sections.iter().flatten())
+            .find_map(|entry| match entry {
+                Entry::Item(item) if item.command == command => Some(item.label.clone()),
+                _ => None,
+            });
+        item.unwrap_or_else(|| panic!("no menu item {name}"))
+    }
+
+    fn full_screen_requests(&self) -> Vec<bool> {
+        let system = self.driver.runtime().window_system();
+        let requests = system.requests(self.window).unwrap();
+        requests
+            .iter()
+            .filter_map(|request| match request {
+                WindowRequest::Fullscreen(on) => Some(*on),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The names of the accessible nodes with `role`, in tree order.
@@ -256,7 +320,12 @@ impl Run {
 }
 
 fn action(name: &str) -> ActionName {
-    ActionName::new(Scope::Win, name).unwrap()
+    let scope = if name == "new" {
+        Scope::App
+    } else {
+        Scope::Win
+    };
+    ActionName::new(scope, name).unwrap()
 }
 
 fn budget() -> NonZeroU32 {
@@ -358,4 +427,48 @@ fn a_name_longer_than_its_column_stays_inside_its_cell() {
             );
         }
     }
+}
+
+#[test]
+fn a_folder_opens_in_a_second_window_whose_menus_act_on_it_alone() {
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    let first = run.window;
+    assert!(run.disabled().contains(&action("open-in-new-window")));
+    run.click_row("Notes");
+    assert!(!run.disabled().contains(&action("open-in-new-window")));
+    run.menu("open-in-new-window");
+    let windows = run.windows();
+    assert_eq!(windows.len(), 2);
+    run.activate(windows[1]);
+    assert_eq!(run.title(), "Notes");
+
+    run.menu("go-enclosing-folder");
+    assert_eq!(run.title(), "Documents");
+    run.menu("fullscreen");
+    assert_eq!(run.full_screen_requests(), [true]);
+    assert_eq!(run.menu_label("fullscreen"), "Exit Full Screen");
+    run.activate(first);
+    assert_eq!(run.title(), "Documents");
+    assert!(run.disabled().contains(&action("go-back")));
+    assert_eq!(run.full_screen_requests(), Vec::<bool>::new());
+    assert_eq!(run.menu_label("fullscreen"), "Enter Full Screen");
+
+    run.menu("new");
+    assert_eq!(run.windows().len(), 3);
+    run.send(WindowEvent::CloseRequested);
+    assert_eq!(run.windows().len(), 2);
+    assert!(!run.windows().contains(&first));
+}
+
+#[test]
+fn full_screen_asks_the_platform_and_the_menu_follows() {
+    let mut run = Run::new();
+    assert_eq!(run.menu_label("fullscreen"), "Enter Full Screen");
+    run.menu("fullscreen");
+    assert_eq!(run.full_screen_requests(), [true]);
+    assert_eq!(run.menu_label("fullscreen"), "Exit Full Screen");
+    run.menu("fullscreen");
+    assert_eq!(run.full_screen_requests(), [true, false]);
+    assert_eq!(run.menu_label("fullscreen"), "Enter Full Screen");
 }

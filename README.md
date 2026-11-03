@@ -4,7 +4,7 @@
 [![Licence: GPL-3.0-or-later](https://img.shields.io/badge/licence-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-book-informational.svg)](https://orafaelfragoso.github.io/cupertino/)
 
-Cupertino is a Wayland compositor and desktop shell for Linux, written in Rust on [Smithay](https://github.com/Smithay/smithay). It gives you a quiet, consistent desktop: translucent materials, soft shadows, spring animations, a dock, a menu bar, a launcher, notifications, a control panel, a file manager, a settings app, a lock screen and a session manager.
+Cupertino is an Arch-based Linux distribution with its own Wayland desktop, written in Rust on [Smithay](https://github.com/Smithay/smithay): it installs from a USB stick, and its updates are signed packages that can be rolled back. It gives you a quiet, consistent desktop: translucent materials, soft shadows, spring animations, a dock, a menu bar, a launcher, notifications, a control panel, a file manager, a settings app, a lock screen and a session manager.
 
 **Status: early release (0.x).** It runs nested inside another Wayland session and on a TTY. The TTY backend has run in a virtual machine, not yet on real hardware; treat it as experimental. Interfaces and configuration files can still change between releases. The [changelog](CHANGELOG.md) lists what changed in the current candidate.
 

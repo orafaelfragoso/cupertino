@@ -7,6 +7,7 @@ mod view;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::io;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -19,8 +20,10 @@ use cupertino_menu_model::ActionName;
 
 use crate::browser::{Activation, Browser};
 use crate::menu_bar::{self, MenuAction, MenuState};
+use crate::name_edit::NameEdit;
 use crate::notice::{self, Action, Notices};
 use crate::open::{open_command, OpenError};
+use crate::operations;
 use crate::places::Place;
 use crate::settings::ColumnId;
 use crate::trash::Trash;
@@ -39,6 +42,7 @@ pub struct Start {
     /// What opens a file: the session's associations, read at each open so changed defaults apply at once.
     applications: Box<dyn Fn() -> io::Result<MimeApps>>,
     terminal: Option<Vec<String>>,
+    trash: Trash,
 }
 
 impl Start {
@@ -71,7 +75,13 @@ impl Start {
             notices,
             applications,
             terminal,
+            trash: Trash::new(),
         })
+    }
+
+    /// The window moving items to `trash` and putting them back from it, in place of the session's trash.
+    pub fn with_trash(self, trash: Trash) -> Start {
+        Start { trash, ..self }
     }
 }
 
@@ -94,7 +104,7 @@ pub struct Model {
     notices: Notices,
     applications: Box<dyn Fn() -> io::Result<MimeApps>>,
     terminal: Option<Vec<String>>,
-    trash_files: PathBuf,
+    trash: Trash,
     path_bar: bool,
     status_bar: bool,
     /// The free space of the folder's file system, for the status bar.
@@ -106,6 +116,19 @@ pub struct Model {
     split: SplitLayout,
     /// When the dates of the list were last worded.
     now: SystemTime,
+    /// The name being edited in place.
+    rename: Option<Rename>,
+    /// A folder just made, whose name is edited once the list shows it.
+    rename_when_listed: Option<PathBuf>,
+}
+
+/// An item's name edited in its row of the list.
+struct Rename {
+    edit: NameEdit,
+    path: PathBuf,
+    revision: u64,
+    /// What the field selects when it opens: the name without its extension, in bytes.
+    selection: Range<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -119,6 +142,14 @@ pub enum Message {
     Sort((usize, SortOrder)),
     Search(TextChange),
     Menu(ActionName),
+    /// The text of the name being edited changed.
+    NameChanged(TextChange),
+    /// Return in the name being edited: rename the item.
+    NameSubmitted,
+    /// Escape in the name being edited: keep the old name.
+    NameCancelled,
+    /// The name field is in the window: give it the keyboard.
+    FocusName,
     Scroll(ScrollState),
     SidebarScroll(ScrollState),
     Split(SplitLayout),
@@ -139,16 +170,10 @@ const NO_SCROLL: ScrollState = ScrollState {
 };
 
 /// Menu items the window does not do yet; they are shown disabled.
-const NOT_YET: [MenuAction; 13] = [
+const NOT_YET: [MenuAction; 7] = [
     MenuAction::View(ViewMode::Icons),
     MenuAction::NewWindow,
-    MenuAction::NewFolder,
-    MenuAction::NewFolderWithSelection,
     MenuAction::OpenInNewWindow,
-    MenuAction::MoveToTrash,
-    MenuAction::PutBack,
-    MenuAction::Rename,
-    MenuAction::Duplicate,
     MenuAction::MakeAlias,
     MenuAction::ShowOriginal,
     MenuAction::Eject,
@@ -178,7 +203,7 @@ impl Application for Files {
             notices: start.notices,
             applications: start.applications,
             terminal: start.terminal,
-            trash_files: Trash::new().home_trash().join("files"),
+            trash: start.trash,
             path_bar: false,
             status_bar: false,
             available: None,
@@ -191,6 +216,8 @@ impl Application for Files {
                 collapsed: None,
             },
             now: SystemTime::now(),
+            rename: None,
+            rename_when_listed: None,
         };
         model.entered();
         let commands = vec![woken(&model.woken)];
@@ -207,7 +234,9 @@ impl Application for Files {
                 if polled.changed {
                     model.now = SystemTime::now();
                 }
-                return vec![woken(&model.woken)];
+                let mut commands = model.listed();
+                commands.push(woken(&model.woken));
+                return commands;
             }
             Message::Place(index) => {
                 if let Some(folder) = model.places.get(index).and_then(Place::folder) {
@@ -221,6 +250,10 @@ impl Application for Files {
                 model
                     .browser
                     .select(indices, selection.anchor(), selection.cursor());
+                let renamed = model.rename_index();
+                if renamed.is_some() && model.browser.selection().indices().ne(renamed) {
+                    model.end_rename();
+                }
             }
             Message::Open(index) => {
                 if !model.browser.selection().contains(index) {
@@ -243,6 +276,19 @@ impl Application for Files {
             Message::Menu(name) => {
                 if let Some(action) = MenuAction::from_name(&name) {
                     return model.menu(action);
+                }
+            }
+            Message::NameChanged(change) => {
+                if let Some(rename) = model.rename.as_mut() {
+                    rename.edit.field_mut().set_text(&change.text);
+                    rename.revision = change.revision;
+                }
+            }
+            Message::NameSubmitted => model.end_rename(),
+            Message::NameCancelled => model.rename = None,
+            Message::FocusName => {
+                if model.rename.is_some() {
+                    return vec![Command::Focus(Key::from(view::NAME_FIELD))];
                 }
             }
             Message::Scroll(scroll) => model.scroll = scroll,
@@ -295,6 +341,8 @@ impl Model {
     /// A new folder starts at the top, its search cleared and its free space read.
     fn entered(&mut self) {
         self.scroll = NO_SCROLL;
+        self.rename = None;
+        self.rename_when_listed = None;
         if !self.search.is_empty() {
             self.search.clear();
             self.search_revision += 1;
@@ -314,6 +362,64 @@ impl Model {
 
     fn failed(&self, action: Action, items: &[&Path], error: &dyn std::fmt::Display) {
         self.notices.post(notice::failure(action, items, error));
+    }
+
+    /// Report the items of `results` that failed as one notice, worded by the first failure.
+    fn failed_some<'a, T, E: std::fmt::Display>(
+        &self,
+        action: Action,
+        results: impl IntoIterator<Item = (&'a PathBuf, Result<T, E>)>,
+    ) {
+        let mut failed = Vec::new();
+        let mut first = None;
+        for (path, result) in results {
+            if let Err(e) = result {
+                failed.push(path.as_path());
+                first.get_or_insert(e);
+            }
+        }
+        if let Some(e) = first {
+            self.failed(action, &failed, &e);
+        }
+    }
+
+    fn selected_paths(&self) -> Vec<PathBuf> {
+        let entries = self.browser.entries();
+        self.browser
+            .selection()
+            .indices()
+            .filter_map(|i| entries.get(i))
+            .map(|e| e.path.clone())
+            .collect()
+    }
+
+    /// Move the selected items to the trash; the listing drops them when the watcher reports it.
+    fn trash_selection(&self) {
+        let paths = self.selected_paths();
+        self.failed_some(
+            Action::Trash,
+            paths.iter().map(|path| (path, self.trash.trash(path))),
+        );
+    }
+
+    /// Put the selected items of the trash back where they came from.
+    fn put_back(&self) {
+        let paths = self.selected_paths();
+        let listed = match self.trash.list() {
+            Ok(listed) => listed,
+            Err(e) => {
+                let items: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+                return self.failed(Action::PutBack, &items, &e);
+            }
+        };
+        let restored = paths.iter().map(|path| {
+            let restored = match listed.iter().find(|item| item.file_path() == *path) {
+                Some(item) => self.trash.restore(item).map_err(|e| e.to_string()),
+                None => Err("The Trash has no record of where it came from".to_string()),
+            };
+            (path, restored)
+        });
+        self.failed_some(Action::PutBack, restored);
     }
 
     /// Go into the selected folder, or open the selected files with their default applications.
@@ -360,21 +466,115 @@ impl Model {
             MenuAction::Back => self.step(Step::Back),
             MenuAction::Forward => self.step(Step::Forward),
             MenuAction::EnclosingFolder => self.step(Step::Parent),
+            MenuAction::MoveToTrash => self.trash_selection(),
+            MenuAction::PutBack => self.put_back(),
+            MenuAction::NewFolder => match operations::new_folder(self.browser.dir()) {
+                Ok(path) => self.rename_new_folder(path),
+                Err(e) => self.failed(Action::NewFolder, &[], &e),
+            },
+            MenuAction::NewFolderWithSelection => {
+                let paths = self.selected_paths();
+                match operations::new_folder_with(self.browser.dir(), &paths) {
+                    Ok(path) => self.rename_new_folder(path),
+                    Err(e) => {
+                        let items: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+                        self.failed(Action::MoveIntoNewFolder, &items, &e);
+                    }
+                }
+            }
+            MenuAction::Rename => {
+                let first = self.browser.selection().indices().next();
+                if let Some(index) = first {
+                    return self.begin_rename(index);
+                }
+            }
+            MenuAction::Duplicate => {
+                let paths = self.selected_paths();
+                let duplicated = operations::duplicate(&paths);
+                self.failed_some(Action::Duplicate, paths.iter().zip(duplicated));
+            }
             MenuAction::View(_)
             | MenuAction::NewWindow
-            | MenuAction::NewFolder
-            | MenuAction::NewFolderWithSelection
             | MenuAction::OpenInNewWindow
-            | MenuAction::MoveToTrash
-            | MenuAction::PutBack
-            | MenuAction::Rename
-            | MenuAction::Duplicate
             | MenuAction::MakeAlias
             | MenuAction::ShowOriginal
             | MenuAction::Eject
             | MenuAction::FullScreen => {}
         }
         Vec::new()
+    }
+
+    /// A folder was made: the list selects it when it shows it, and its name is edited then.
+    fn rename_new_folder(&mut self, path: PathBuf) {
+        self.browser.select_when_appears(path.clone());
+        self.rename_when_listed = Some(path);
+    }
+
+    /// Edit the name of item `index` in its row, if it is the only selected item. The field is focused once the
+    /// window shows it.
+    fn begin_rename(&mut self, index: usize) -> Vec<Command<Message>> {
+        let selection = self.browser.selection();
+        if selection.len() != 1 || !selection.contains(index) {
+            return Vec::new();
+        }
+        let Some(entry) = self.browser.entries().get(index) else {
+            return Vec::new();
+        };
+        let edit = NameEdit::new(index, &entry.name, entry.is_dir);
+        let revision = self.rename.as_ref().map_or(0, |r| r.revision + 1);
+        self.rename = Some(Rename {
+            selection: edit.field().selection(),
+            edit,
+            path: entry.path.clone(),
+            revision,
+        });
+        vec![Command::Perform(Box::pin(async { Message::FocusName }))]
+    }
+
+    /// The row of the name being edited.
+    fn rename_index(&self) -> Option<usize> {
+        self.rename.as_ref().map(|r| r.edit.index())
+    }
+
+    /// Commit the edited name. A name that is not valid is reported and the field stays open. A rename that changes
+    /// the extension is not confirmed (there is no dialog to ask in).
+    fn end_rename(&mut self) {
+        let Some(rename) = self.rename.take() else {
+            return;
+        };
+        match rename.edit.commit() {
+            Ok(None) => {}
+            Ok(Some(name)) => match operations::rename_item(&rename.path, &name) {
+                Ok(path) => self.browser.select_when_appears(path),
+                Err(e) => self.failed(Action::Rename, &[&rename.path], &e),
+            },
+            Err(e) => {
+                self.notices.post(notice::bad_name(rename.edit.text(), &e));
+                self.rename = Some(rename);
+            }
+        }
+    }
+
+    /// The list changed: the name being edited follows its item, and a folder just made starts its rename.
+    fn listed(&mut self) -> Vec<Command<Message>> {
+        let entries = self.browser.entries();
+        if let Some(rename) = self.rename.as_mut() {
+            match entries.iter().position(|e| e.path == rename.path) {
+                Some(index) => rename.edit.set_index(index),
+                None => self.rename = None,
+            }
+        }
+        let made = self
+            .rename_when_listed
+            .as_ref()
+            .and_then(|path| entries.iter().position(|e| &e.path == path));
+        match made {
+            Some(index) => {
+                self.rename_when_listed = None;
+                self.begin_rename(index)
+            }
+            None => Vec::new(),
+        }
     }
 
     fn menu_state(&self) -> MenuState {
@@ -389,7 +589,7 @@ impl Model {
             count: selected.len(),
             all_folders: !selected.is_empty() && selected.iter().all(|e| e.is_dir),
             single_link: matches!(selected.as_slice(), [e] if e.kind == crate::Kind::Symlink),
-            in_trash: self.browser.dir() == self.trash_files,
+            in_trash: self.browser.dir() == self.trash.home_trash().join("files"),
             path_bar: self.path_bar,
             status_bar: self.status_bar,
             full_screen: false,

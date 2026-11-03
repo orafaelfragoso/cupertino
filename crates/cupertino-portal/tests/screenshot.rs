@@ -6,9 +6,12 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use cupertino_portal::request::FRONTEND;
-use cupertino_portal::screenshot::{Answer, Event, Output, Screenshot, Shoot};
+use cupertino_portal::screenshot::{
+    Answer, Event, Failure, Output, Screenshot, Shoot, MAX_ATTEMPTS,
+};
 use cupertino_portal::{BUS_NAME, PORTAL_PATH};
 use cupertino_test_bus::{missing_tool, PrivateBus, WAIT};
 use percent_encoding::percent_decode_str;
@@ -233,20 +236,93 @@ fn closing_the_request_takes_the_window_down_and_answers_2() {
     assert!(r.shoots.try_recv().is_err());
 }
 
-#[test]
-fn a_capture_that_fails_answers_2_and_writes_nothing() {
-    let Some(r) = start() else {
-        return missing_tool("dbus-daemon");
-    };
+/// Ask for a screenshot and grant it.
+fn granted(r: &Running) -> mpsc::Receiver<Call> {
     let done = screenshot(&r.frontend, HashMap::new());
     let Event::Ask { reply, .. } = r.events.recv_timeout(WAIT).unwrap() else {
         panic!("expected a consent window");
     };
     reply.send(Answer::Granted);
+    done
+}
+
+fn passing() -> Failure {
+    Failure::Passing("copying a display failed: BufferConstraints".to_owned())
+}
+
+#[test]
+fn a_capture_that_fails_once_is_taken_again() {
+    let Some(r) = start() else {
+        return missing_tool("dbus-daemon");
+    };
+    let done = granted(&r);
+    r.shoots
+        .recv_timeout(WAIT)
+        .unwrap()
+        .shot
+        .send(Err(passing()));
     let shoot = r.shoots.recv_timeout(WAIT).unwrap();
-    shoot.shot.send(Err("a display went away".to_owned()));
+    shoot.shot.send(Ok(vec![display((0, 0), (64, 48), 200)]));
+    let (response, results) = answered(done);
+    assert_eq!(response, 0);
+    assert!(results.contains_key("uri"));
+    assert_eq!(std::fs::read_dir(&r.pictures).unwrap().count(), 1);
+}
+
+#[test]
+fn a_capture_that_keeps_failing_answers_2_after_the_last_attempt_and_writes_nothing() {
+    let Some(r) = start() else {
+        return missing_tool("dbus-daemon");
+    };
+    let done = granted(&r);
+    for _ in 0..MAX_ATTEMPTS {
+        r.shoots
+            .recv_timeout(WAIT)
+            .unwrap()
+            .shot
+            .send(Err(passing()));
+    }
     let (response, results) = answered(done);
     assert_eq!((response, results.len()), (2, 0));
+    assert!(r.shoots.try_recv().is_err(), "no attempt past the bound");
+    assert!(!r.pictures.exists());
+}
+
+#[test]
+fn a_capture_that_cannot_pass_answers_2_at_once_and_writes_nothing() {
+    let Some(r) = start() else {
+        return missing_tool("dbus-daemon");
+    };
+    let done = granted(&r);
+    let shoot = r.shoots.recv_timeout(WAIT).unwrap();
+    shoot.shot.send(Err(Failure::Lasting(
+        "the capture offers neither XRGB8888 nor ARGB8888 shm buffers".to_owned(),
+    )));
+    let (response, results) = answered(done);
+    assert_eq!((response, results.len()), (2, 0));
+    assert!(r.shoots.try_recv().is_err(), "not taken again");
+    assert!(!r.pictures.exists());
+}
+
+#[test]
+fn closing_the_request_during_the_capture_answers_2_and_takes_nothing_again() {
+    let Some(r) = start() else {
+        return missing_tool("dbus-daemon");
+    };
+    let done = granted(&r);
+    let shoot = r.shoots.recv_timeout(WAIT).unwrap();
+    r.frontend
+        .call_method(
+            Some(BUS_NAME),
+            HANDLE,
+            Some("org.freedesktop.impl.portal.Request"),
+            "Close",
+            &(),
+        )
+        .unwrap();
+    assert_eq!(answered(done).0, 2);
+    shoot.shot.send(Err(passing()));
+    assert!(r.shoots.recv_timeout(Duration::from_millis(500)).is_err());
     assert!(!r.pictures.exists());
 }
 

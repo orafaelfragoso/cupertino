@@ -10,7 +10,7 @@ use cupertino_menu_model::standard::{self, Features};
 use cupertino_menu_model::ActionName;
 use cupertino_modifiers::Profile;
 use cupertino_test_bus::PrivateBus;
-use cupertino_ui_menus::{Activation, DbusProperties, Exporter, WindowId};
+use cupertino_ui_menus::{Activation, AppMenus, DbusProperties, Exporter, WindowExport, WindowId};
 use zbus::blocking::proxy::SignalIterator;
 use zbus::blocking::{Connection, Proxy};
 use zbus::message::Message;
@@ -440,4 +440,131 @@ fn changes_are_signalled_to_the_reader_alone() {
         .unwrap();
     our_changes.next().unwrap();
     assert!(overheard.recv_timeout(Duration::from_millis(300)).is_err());
+}
+
+/// The unique names on `bus`, as `ListNames` gives them.
+fn unique_names(bus: &PrivateBus) -> usize {
+    let names: Vec<String> = Proxy::new(
+        &bus.connect(),
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+    )
+    .unwrap()
+    .call("ListNames", &())
+    .unwrap();
+    // without the connection that asked
+    names.iter().filter(|n| n.starts_with(':')).count() - 1
+}
+
+/// Three windows of one application, each waking its own channel.
+struct Windows {
+    windows: Vec<(WindowExport, DbusProperties, mpsc::Receiver<()>)>,
+    reader: Connection,
+}
+
+fn three_windows(bus: &PrivateBus) -> Windows {
+    let address = bus.address.clone();
+    let mut apps = AppMenus::on(move || {
+        zbus::blocking::connection::Builder::address(address.as_str())
+            .map(|b| b.method_timeout(WAIT))
+    });
+    let windows: Vec<_> = (0..3)
+        .map(|_| {
+            let (woken, wakes) = mpsc::channel();
+            let export = apps
+                .open(
+                    "org.example.Notes",
+                    Box::new(Profile::cupertino()),
+                    move || {
+                        let _ = woken.send(());
+                    },
+                )
+                .unwrap();
+            let props = export
+                .export(&standard::menu_bar("Notes", &features()))
+                .unwrap();
+            (export, props, wakes)
+        })
+        .collect();
+    let reader = bus.connect();
+    windows[0]
+        .0
+        .set_reader(Some(reader.unique_name().unwrap().as_str()))
+        .unwrap();
+    Windows { windows, reader }
+}
+
+fn activate_at(reader: &Connection, props: &DbusProperties, name: &str) -> zbus::Result<()> {
+    let platform_data: HashMap<&str, Value<'_>> = HashMap::new();
+    Proxy::new(
+        reader,
+        props.unique_bus_name.clone(),
+        props.window_object_path.clone(),
+        "org.gtk.Actions",
+    )
+    .unwrap()
+    .call::<_, _, ()>("Activate", &(name, Vec::<Value<'_>>::new(), platform_data))
+}
+
+/// The actions chosen in each window once window `at` was woken.
+fn chosen(w: &Windows, at: usize) -> Vec<Vec<String>> {
+    w.windows[at].2.recv_timeout(WAIT).unwrap();
+    w.windows
+        .iter()
+        .map(|(export, _, _)| export.activations().map(|a| a.action.full()).collect())
+        .collect()
+}
+
+#[test]
+fn the_windows_of_an_application_share_one_connection_and_each_has_its_own_objects() {
+    let bus = private_bus!();
+    let before = unique_names(&bus);
+    let w = three_windows(&bus);
+    assert_eq!(
+        unique_names(&bus),
+        before + 2,
+        "the exporter and the reader"
+    );
+
+    let props: Vec<&DbusProperties> = w.windows.iter().map(|(_, p, _)| p).collect();
+    assert!(props
+        .iter()
+        .all(|p| p.unique_bus_name == props[0].unique_bus_name));
+    assert_eq!(
+        props
+            .iter()
+            .map(|p| p.window_object_path.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "/org/example/Notes/window/1",
+            "/org/example/Notes/window/2",
+            "/org/example/Notes/window/3"
+        ]
+    );
+
+    activate_at(&w.reader, props[1], "save").unwrap();
+    assert_eq!(
+        chosen(&w, 1),
+        [vec![], vec!["win.save".to_string()], vec![]]
+    );
+}
+
+#[test]
+fn a_closed_window_takes_only_its_own_objects_and_app_actions_go_to_the_newest_window() {
+    let bus = private_bus!();
+    let mut w = three_windows(&bus);
+    let (first, first_props, _) = w.windows.remove(0);
+    drop(first);
+
+    assert!(activate_at(&w.reader, &first_props, "save").is_err());
+    activate_at(&w.reader, &w.windows[0].1, "save").unwrap();
+    assert_eq!(chosen(&w, 0), [vec!["win.save".to_string()], vec![]]);
+
+    let app = DbusProperties {
+        window_object_path: first_props.application_object_path.clone(),
+        ..first_props
+    };
+    activate_at(&w.reader, &app, "quit").unwrap();
+    assert_eq!(chosen(&w, 1), [vec![], vec!["app.quit".to_string()]]);
 }

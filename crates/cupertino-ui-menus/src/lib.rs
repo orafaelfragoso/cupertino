@@ -7,8 +7,9 @@
 //! the active modifier profile, so the menus are exported again when it changes ([`Exporter::set_modifier_map`]).
 //! The objects answer only the menu bar the compositor names (`cupertino_app_menu_v1.menu_reader`,
 //! [`Exporter::set_reader`]), and their signals go to it alone: any other peer is refused with `AccessDenied`, as is
-//! every peer while there is no reader.
+//! every peer while there is no reader. An application's windows share one connection ([`AppMenus`]).
 
+mod app;
 mod objects;
 mod window;
 mod wire;
@@ -16,6 +17,7 @@ mod wire;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
+pub use app::{AppMenus, WindowExport};
 use cupertino_menu_model::{ActionName, MenuBar, Scope};
 use cupertino_modifiers::ModifierMap;
 use objects::{action_changes, Actions, Menus, OnActivate, Reader};

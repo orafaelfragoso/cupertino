@@ -3,7 +3,7 @@ name = "cupertino-settings"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Settings application without a toolkit: pane table, sidebar, navigation history, search, window layout and painter, and the `cupertino-settings` process"
+description = "Settings application on CupertinoKit: pane table, sidebar, navigation history, search, the panes and their controls, and the `cupertino-settings` process"
 
 [package.metadata.cupertino]
 layer = "apps"
@@ -13,9 +13,6 @@ layer = "apps"
 app = [
     "dep:async-io",
     "dep:cupertino-kit",
-    "dep:cupertino-protocol-app",
-    "dep:cupertino-ui-menus",
-    "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
     "dep:zbus",
     "dep:cupertino-alsa",
@@ -25,7 +22,6 @@ app = [
 
 [dependencies]
 cupertino-menu-model = { path = "../cupertino-menu-model" }
-cupertino-ui-menus = { path = "../cupertino-ui-menus", optional = true }
 cupertino-kit = { path = "../cupertino-kit", optional = true }
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-apps = { path = "../cupertino-apps" }
@@ -35,17 +31,10 @@ cupertino-thumbnails = { path = "../cupertino-thumbnails" }
 cupertino-typeahead = { path = "../cupertino-typeahead" }
 cupertino-icons = { path = "../cupertino-icons" }
 cupertino-theme = { path = "../cupertino-theme" }
-cupertino-decorations = { path = "../cupertino-decorations" }
-cupertino-geometry = { path = "../cupertino-geometry" }
-cupertino-keyboard = { path = "../cupertino-keyboard" }
-cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-modifiers = { path = "../cupertino-modifiers" }
-cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
-cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 cupertino-alsa = { path = "../cupertino-alsa", optional = true }
 cupertino-pipewire = { path = "../cupertino-pipewire", optional = true }
-tiny-skia = "0.12"
 zeroize = "1"
 async-channel = { version = "2", optional = true }
 async-io = { version = "2", optional = true }
@@ -53,7 +42,6 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 
 [dev-dependencies]
 cupertino-pipewire = { path = "../cupertino-pipewire", features = ["fake"] }
-cupertino-capture = { path = "../cupertino-capture" }
 cupertino-test-bus = { path = "../cupertino-test-bus" }
 cupertino-ui-test = { path = "../cupertino-ui-test" }
 tempfile = "3"
@@ -63,10 +51,3 @@ serde_json = "1"
 name = "cupertino-settings"
 path = "src/main.rs"
 required-features = ["app"]
-
-[[bench]]
-name = "frame"
-harness = false
-
-[[example]]
-name = "settings_capture"

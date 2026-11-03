@@ -938,6 +938,7 @@ fn wallpaper(width: u32, height: u32) -> Pixmap {
         let middle = Point::from_xy(center[0] * w, center[1] * h);
         let shader = RadialGradient::new(
             middle,
+            0.0,
             middle,
             reach * h,
             stops,
@@ -968,6 +969,7 @@ fn wallpaper(width: u32, height: u32) -> Pixmap {
     ];
     let vignette = RadialGradient::new(
         middle,
+        0.0,
         middle,
         w.hypot(h) / 2.0,
         stops,
@@ -1029,6 +1031,7 @@ impl Canvas<'_> {
         ];
         let shader = RadialGradient::new(
             middle,
+            0.0,
             middle,
             self.px(outer),
             stops,

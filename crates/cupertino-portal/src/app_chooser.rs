@@ -1,6 +1,7 @@
 //! `org.freedesktop.impl.portal.AppChooser`: `ChooseApplication` and `UpdateChoices`. A call becomes an [`Ask`] for
 //! the dialog, which answers with the app the person chose through its [`Reply`]; nothing opens unless they choose
-//! one. The call returns when the dialog answers, or when the frontend closes the request.
+//! one. The call returns when the dialog answers, or when the frontend closes the request. When the caller sent no
+//! activation token, the dialog asks the server for one for the chosen app, so the app can take the focus when it opens.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -50,13 +51,21 @@ pub struct Ask {
     pub choices: Vec<Choice>,
     /// The id of the choice the chooser opens with selected, when it is one of `choices`.
     pub last_choice: Option<String>,
+    /// Whether the chooser asks the server for an activation token for the chosen app: the caller sent none of its
+    /// own.
+    pub wants_token: bool,
 }
 
 /// How the chooser ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Answer {
-    /// The id of the chosen app.
-    Chosen(String),
+    /// The app the person chose.
+    Chosen {
+        /// Its desktop file id.
+        id: String,
+        /// The activation token the server made for it, when the [`Ask`] wanted one and the server gave one.
+        token: Option<String>,
+    },
     Cancelled,
 }
 
@@ -241,6 +250,7 @@ impl AppChooser {
                 target: filename.or(uri).map(|t| plain(&t)),
                 choices: self.choices(&choices),
                 last_choice,
+                wants_token: token.is_none(),
             }),
             reply: Reply(reply),
         });
@@ -251,8 +261,10 @@ impl AppChooser {
         .await;
         request.remove().await;
         Ok(match answer {
-            Some(Some(Answer::Chosen(choice))) if pending.offers(&choice) => {
-                (Response::Success as u32, results(choice, token)?)
+            Some(Some(Answer::Chosen { id, token: made })) if pending.offers(&id) => {
+                // the caller's own token is handed on unchanged; only without one does the server's count
+                let made = made.filter(|made| token.is_none() && file_name(made));
+                (Response::Success as u32, results(id, token.or(made))?)
             }
             Some(Some(Answer::Cancelled)) => (Response::Cancelled as u32, HashMap::new()),
             Some(_) => (Response::Other as u32, HashMap::new()),
@@ -350,8 +362,7 @@ fn owned(value: Value<'_>) -> Result<OwnedValue, PortalError> {
     OwnedValue::try_from(value).map_err(|e| PortalError::ZBus(e.into()))
 }
 
-/// The `results` of a chosen app. The dialog cannot ask the compositor for a token of its own, so the caller's token,
-/// when it sent one, is handed on to the chosen app.
+/// The `results` of a chosen app: its id and the activation token it opens with, when there is one.
 fn results(
     choice: String,
     token: Option<String>,

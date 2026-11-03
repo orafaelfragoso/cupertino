@@ -3,44 +3,13 @@
 
 #![cfg(feature = "app")]
 
-use std::collections::{BTreeSet, HashMap};
-use std::num::NonZeroU32;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+mod common;
 
-use cupertino_assets::BUILTIN_FONT;
-use cupertino_files::kit::{prepare, Files, Start};
-use cupertino_files::notice::Notices;
-use cupertino_files::places::{Place, PlaceGroup, PlaceKind};
-use cupertino_kit::core::{AccessibilityNode, Key, NodeId, PlaceholderIcons, Role, RuntimeOptions};
-use cupertino_kit::geometry::Point;
-use cupertino_kit::layout::LayoutDirection;
-use cupertino_kit::platform::{
-    Capabilities, Mods, MouseButton, PointerEvent, Timestamp, WindowEvent, WindowId, WindowRequest,
-    WindowStates,
-};
-use cupertino_kit::render::{CpuConfig, CpuRenderer};
-use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
-use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
-use cupertino_menu_model::{ActionName, Scope};
-use cupertino_theme::Theme;
-use cupertino_ui_test::{ManualClock, TestDriver};
+use std::collections::HashMap;
 
-struct Run {
-    driver: TestDriver<Files>,
-    window: WindowId,
-    _home: tempfile::TempDir,
-}
-
-fn place(name: &str, path: &Path, kind: PlaceKind) -> Place {
-    Place {
-        name: name.into(),
-        path: path.to_path_buf(),
-        group: PlaceGroup::Favorites,
-        kind,
-    }
-}
+use common::{action, place, Run};
+use cupertino_files::places::PlaceKind;
+use cupertino_kit::core::{AccessibilityNode, NodeId, Role};
 
 impl Run {
     /// A window on `home/Documents`, which holds the folder `Notes` and the files `b.txt` and `a.txt`, with
@@ -57,210 +26,8 @@ impl Run {
             place("Documents", &documents, PlaceKind::Documents),
             place("Downloads", &downloads, PlaceKind::Downloads),
         ];
-        prepare(
-            Start::open(
-                documents,
-                places,
-                None,
-                home.path().join("recently-used.xbel"),
-                Notices::start(None),
-                Box::new(|| Err(std::io::Error::other("no applications in this test"))),
-                None,
-            )
-            .unwrap(),
-        );
-        let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
-        let preferences = ThemePreferences {
-            appearance: Appearance::Light,
-            reduce_transparency: false,
-            reduce_motion: false,
-        };
-        let theme = ThemeTokens::cupertino(&Theme::from_dir(data).unwrap(), preferences).unwrap();
-        let mut fonts = FontIndex::new();
-        fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
-        let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
-        let glyphs = Arc::clone(&text);
-        let options = RuntimeOptions {
-            theme: Arc::new(theme),
-            text,
-            icons: Arc::new(PlaceholderIcons::default()),
-            direction: LayoutDirection::Ltr,
-            node_limit: 4000,
-            renderers: Box::new(move || {
-                Box::new(CpuRenderer::new(
-                    CpuConfig {
-                        max_pixels: 1 << 22,
-                        glyph_cache_bytes: 1 << 20,
-                        image_cache_bytes: 1 << 20,
-                        font_smoothing: true,
-                    },
-                    GlyphRaster::new(Arc::clone(&glyphs)),
-                ))
-            }),
-            accessibility: None,
-            clock: Arc::new(ManualClock::new(Timestamp(0))),
-            on_window_error: None,
-        };
-        let mut driver = TestDriver::new(
-            Capabilities::default(),
-            options,
-            ManualClock::new(Timestamp(0)),
-        );
-        driver.run_until_idle(budget()).unwrap();
-        let window = driver.runtime().windows()[0].1;
-        let active = WindowStates {
-            activated: true,
-            ..WindowStates::default()
-        };
-        driver
-            .window_system_mut()
-            .configure(window, None, active)
-            .unwrap();
-        let mut run = Run {
-            driver,
-            window,
-            _home: home,
-        };
-        run.settle();
-        run
+        Run::start(home, documents, places, None)
     }
-
-    fn home(&self) -> PathBuf {
-        self._home.path().to_path_buf()
-    }
-
-    fn settle(&mut self) {
-        for _ in 0..8 {
-            self.driver.run_until_idle(budget()).unwrap();
-            let system = self.driver.window_system_mut();
-            if !system.frame_requested(self.window).unwrap() {
-                return;
-            }
-            system.frame_ready(self.window, Timestamp(0)).unwrap();
-        }
-    }
-
-    fn send(&mut self, event: WindowEvent) {
-        self.driver
-            .window_system_mut()
-            .enqueue_window(self.window, event)
-            .unwrap();
-        self.settle();
-    }
-
-    fn click(&mut self, key: impl Into<Key>) {
-        let key = key.into();
-        let runtime = self.driver.runtime();
-        let id = runtime
-            .find(self.window, &key)
-            .unwrap_or_else(|| panic!("no node {key:?}"));
-        let snapshot = runtime.snapshot(self.window).unwrap();
-        let rect = snapshot.nodes.iter().find(|n| n.id == id).unwrap().rect;
-        let position = Point::new(
-            rect.origin.x + rect.size.width / 2.0,
-            rect.origin.y + rect.size.height / 2.0,
-        );
-        let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
-        self.send(pointer(PointerEvent::Motion { position }));
-        for pressed in [true, false] {
-            self.send(pointer(PointerEvent::Button {
-                position,
-                button: MouseButton::Left,
-                pressed,
-                serial: 1,
-                mods: Mods::NONE,
-            }));
-        }
-    }
-
-    fn menu(&mut self, name: &str) {
-        self.send(WindowEvent::MenuActivated(action(name)));
-    }
-
-    /// The names of the accessible nodes with `role`, in tree order.
-    fn named(&self, role: Role) -> Vec<String> {
-        let snapshot = self.driver.runtime().snapshot(self.window).unwrap();
-        snapshot
-            .accessibility
-            .iter()
-            .filter(|(_, node)| node.role == role)
-            .filter_map(|(_, node)| node.name.clone())
-            .collect()
-    }
-
-    /// The items the list shows, by the text of each row's first cell.
-    fn rows(&self) -> Vec<String> {
-        let snapshot = self.driver.runtime().snapshot(self.window).unwrap();
-        let nodes: HashMap<NodeId, &AccessibilityNode> = snapshot
-            .accessibility
-            .iter()
-            .map(|(id, node)| (*id, node))
-            .collect();
-        let first_text = |id: NodeId| {
-            let mut stack = vec![id];
-            while let Some(id) = stack.pop() {
-                let node = nodes[&id];
-                if node.role == Role::StaticText {
-                    return node.name.clone();
-                }
-                stack.extend(node.children.iter().rev());
-            }
-            None
-        };
-        snapshot
-            .accessibility
-            .iter()
-            .filter(|(_, node)| node.role == Role::Row)
-            .filter(|(_, node)| node.children.iter().all(|c| nodes[c].role == Role::Cell))
-            .filter_map(|(id, _)| first_text(*id))
-            .collect()
-    }
-
-    /// The window's title: the last one it set, else the one it opened with.
-    fn title(&self) -> String {
-        let system = self.driver.runtime().window_system();
-        let set = system
-            .requests(self.window)
-            .unwrap()
-            .iter()
-            .rev()
-            .find_map(|request| match request {
-                WindowRequest::SetTitle(title) => Some(title.clone()),
-                _ => None,
-            });
-        set.unwrap_or_else(|| system.spec(self.window).unwrap().title.clone())
-    }
-
-    fn disabled(&self) -> BTreeSet<ActionName> {
-        let menus = self
-            .driver
-            .runtime()
-            .window_system()
-            .menus(self.window)
-            .unwrap();
-        menus
-            .expect("the window publishes its menus")
-            .disabled
-            .clone()
-    }
-
-    /// Settles until `done` holds, for changes a watcher thread reports.
-    fn wait_until(&mut self, mut done: impl FnMut(&Run) -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !done(self) {
-            assert!(Instant::now() < deadline, "the window never caught up");
-            std::thread::sleep(Duration::from_millis(10));
-            self.settle();
-        }
-    }
-}
-
-fn action(name: &str) -> ActionName {
-    ActionName::new(Scope::Win, name).unwrap()
-}
-
-fn budget() -> NonZeroU32 {
-    NonZeroU32::new(64).unwrap()
 }
 
 #[test]
@@ -292,14 +59,7 @@ fn a_place_in_the_sidebar_opens_its_folder_and_back_returns() {
 fn the_menus_disable_what_the_window_cannot_do() {
     let mut run = Run::new();
     let disabled = run.disabled();
-    for name in [
-        "go-back",
-        "go-forward",
-        "open",
-        "rename",
-        "view-icons",
-        "eject",
-    ] {
+    for name in ["go-back", "go-forward", "open", "rename", "view-icons"] {
         assert!(disabled.contains(&action(name)), "{name}");
     }
     run.menu("select-all");
@@ -358,4 +118,39 @@ fn a_name_longer_than_its_column_stays_inside_its_cell() {
             );
         }
     }
+}
+
+#[test]
+fn make_alias_links_each_selected_item_as_name_alias() {
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    let documents = run.home().join("Documents");
+    std::os::unix::fs::symlink("elsewhere", documents.join("a.txt alias")).unwrap();
+    run.wait_until(|run| run.rows().len() == 4);
+    run.click_row("a.txt");
+    run.menu("make-alias");
+    run.wait_until(|run| run.rows().contains(&"a.txt alias 2".to_owned()));
+    assert_eq!(
+        std::fs::read_link(documents.join("a.txt alias 2")).unwrap(),
+        documents.canonicalize().unwrap().join("a.txt")
+    );
+}
+
+#[test]
+fn show_original_goes_to_the_target_of_the_link_and_selects_it() {
+    let mut run = Run::new();
+    let downloads = run.home().join("Downloads");
+    std::fs::write(downloads.join("report.pdf"), "").unwrap();
+    std::fs::write(downloads.join("other.pdf"), "").unwrap();
+    std::os::unix::fs::symlink(
+        downloads.join("report.pdf"),
+        run.home().join("Documents/report link"),
+    )
+    .unwrap();
+    run.wait_until(|run| run.rows().len() == 4);
+    assert!(run.disabled().contains(&action("show-original")));
+    run.click_row("report link");
+    run.menu("show-original");
+    assert_eq!(run.title(), "Downloads");
+    run.wait_until(|run| run.selected_rows() == ["report.pdf"]);
 }

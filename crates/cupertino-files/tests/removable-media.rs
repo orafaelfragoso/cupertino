@@ -2,13 +2,17 @@
 //! which file systems are listed, the calls a mount and an eject make in order, and what a failure reports.
 #![cfg(feature = "app")]
 
+mod common;
+
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cupertino_files::notice::Notices;
+use cupertino_files::places::{window_title, PlaceKind};
 use cupertino_files::udisks::{Device, Report, Volumes, MANAGER_PATH, UDISKS_NAME};
+use cupertino_kit::core::Key;
 use cupertino_test_bus::{missing_tool, PrivateBus};
 use zbus::blocking::Connection;
 use zbus::object_server::SignalEmitter;
@@ -549,6 +553,46 @@ fn eject_unmounts_every_file_system_of_the_drive_then_ejects_it_or_powers_it_off
         ]
     );
     assert!(fake.log().iter().all(|l| !l.starts_with("Notify")));
+}
+
+#[test]
+fn eject_from_the_window_on_a_card_goes_home_and_ejects_its_drive() {
+    let Some(fake) = Fake::start() else { return };
+    let home = tempfile::tempdir().unwrap();
+    let card = home.path().join("CARD");
+    std::fs::create_dir(&card).unwrap();
+    fake.drive("card", "", "", true);
+    fake.block(
+        "sdc1",
+        Some("card"),
+        Some(card.to_str().unwrap()),
+        Block {
+            label: "CARD",
+            ..Block::default()
+        },
+    );
+    let documents = common::place("Documents", home.path(), PlaceKind::Documents);
+    let mut run = common::Run::start(
+        home,
+        card.clone(),
+        vec![documents],
+        Some(fake.bus.connect()),
+    );
+    run.wait_until(|run| {
+        let runtime = run.driver.runtime();
+        runtime.find(run.window, &Key::from("place-CARD")).is_some()
+    });
+    assert!(!run.disabled().contains(&common::action("eject")));
+
+    run.menu("eject");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while fake.log().len() < 2 {
+        assert!(Instant::now() < deadline, "log {:?}", fake.log());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(fake.log(), ["Unmount sdc1 0", "Eject card 0"]);
+    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from);
+    assert_eq!(run.title(), window_title(&home, &[]));
 }
 
 #[test]

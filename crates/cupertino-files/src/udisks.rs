@@ -4,10 +4,10 @@
 //! may ask through the session's authentication agent; Files never asks for a password itself. A call that fails is
 //! reported as one notification ([`notice`]); a prompt the person dismissed is not.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
@@ -20,6 +20,7 @@ use zbus::MatchRule;
 
 use crate::natural::compare_names;
 use crate::notice::{escape, shown, Notice, Notices};
+use crate::places::Place;
 use crate::render::human_size;
 
 pub const UDISKS_NAME: &str = "org.freedesktop.UDisks2";
@@ -306,6 +307,81 @@ impl Volumes {
             );
             let _ = self.sender.send(Report::Done { object });
         }
+    }
+}
+
+/// The removable media a window lists: the devices udisks last reported and those a call is under way on.
+#[derive(Debug, Default)]
+pub struct Media {
+    devices: Vec<Device>,
+    busy: HashSet<OwnedObjectPath>,
+}
+
+impl Media {
+    /// Take `report`; the folder a finished mount goes to.
+    pub fn take(&mut self, report: Report) -> Option<PathBuf> {
+        match report {
+            Report::Devices(devices) => {
+                self.busy
+                    .retain(|object| devices.iter().any(|d| &d.object == object));
+                self.devices = devices;
+                None
+            }
+            Report::Mounted { object, at } => {
+                self.busy.remove(&object);
+                Some(at)
+            }
+            Report::Done { object } => {
+                let drive = self
+                    .devices
+                    .iter()
+                    .find(|d| d.object == object)
+                    .map(|d| d.drive.clone());
+                let devices = &self.devices;
+                self.busy.retain(|o| {
+                    *o != object
+                        && !devices
+                            .iter()
+                            .any(|d| &d.object == o && Some(&d.drive) == drive.as_ref())
+                });
+                None
+            }
+        }
+    }
+
+    /// The sidebar's rows of the devices, in order.
+    pub fn places(&self) -> impl Iterator<Item = Place> + '_ {
+        self.devices
+            .iter()
+            .map(|d| Place::removable(&d.name, d.mount.as_deref(), self.busy.contains(&d.object)))
+    }
+
+    /// Whether a device is mounted on `dir` or a folder holding it.
+    pub fn holds(&self, dir: &Path) -> bool {
+        self.devices
+            .iter()
+            .filter_map(|d| d.mount.as_deref())
+            .any(|m| dir.starts_with(m))
+    }
+
+    /// Start the eject of the drive of device `index`: the device and the drive's mounted file systems, busy from
+    /// now on, for [`Volumes::eject`]; `None` while a call on the device is under way.
+    pub fn eject(&mut self, index: usize) -> Option<(Device, Vec<Device>)> {
+        let device = self
+            .devices
+            .get(index)
+            .filter(|d| !self.busy.contains(&d.object))?
+            .clone();
+        let filesystems: Vec<Device> = self
+            .devices
+            .iter()
+            .filter(|d| d.drive == device.drive && d.mount.is_some())
+            .cloned()
+            .collect();
+        self.busy
+            .extend(filesystems.iter().map(|d| d.object.clone()));
+        self.busy.insert(device.object.clone());
+        Some((device, filesystems))
     }
 }
 

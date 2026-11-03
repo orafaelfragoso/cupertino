@@ -13,7 +13,7 @@ use cupertino_modifiers::Profile;
 use cupertino_protocol_app::{
     AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop as Material,
 };
-use cupertino_ui_menus::WindowMenus;
+use cupertino_ui_menus::{AppMenus, WindowMenus};
 use cupertino_ui_platform::{
     ActivationRequest, Backdrop, Capabilities, ClipboardData, ClipboardKind, ClipboardToken,
     ConfigureId, CursorShape, KeyEvent, Keysym, MenuDescription, PlatformError, PlatformEvent,
@@ -137,6 +137,8 @@ pub struct WaylandWindowSystem {
     woken: Arc<AtomicBool>,
     /// The desktop's effects and the observer of the session's appearance, on a compositor that offers them.
     effects: Option<(AppEffects, AppearanceObserver)>,
+    /// The session-bus connection the windows' menus share.
+    menus: AppMenus,
     appearance: SystemAppearance,
     roles: Option<Box<dyn SurfaceRoles>>,
     /// Names the configures of surfaces with a role from [`SurfaceRoles`], which carry no serial of their own.
@@ -196,6 +198,7 @@ impl WaylandWindowSystem {
             appearance: SystemAppearance::default(),
             roles: None,
             role_configures: 0,
+            menus: AppMenus::default(),
         };
         // the compositor answers the observer at once: learn the session's appearance before the first window draws
         if system.effects.is_some() && system.conn.roundtrip().is_ok() {
@@ -333,7 +336,11 @@ impl WaylandWindowSystem {
 
     /// Publish the menus a configured window waits to show.
     fn publish_menus(&mut self, window: WindowId) -> Result<(), PlatformError> {
-        let w = self.window(window)?;
+        let w = self
+            .windows
+            .iter()
+            .find(|w| w.id == window)
+            .ok_or(PlatformError::UnknownWindow(window))?;
         let Some(ShownMenus {
             description,
             published: Published::Waiting,
@@ -346,6 +353,7 @@ impl WaylandWindowSystem {
         }
         let menus = self.effects.as_ref().and_then(|(effects, _)| {
             WindowMenus::publish(
+                &mut self.menus,
                 &self.conn,
                 effects,
                 w.surface,

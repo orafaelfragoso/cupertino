@@ -126,10 +126,42 @@ pub enum Request {
     Dismiss,
 }
 
+/// Who holds the card's keyboard. The card takes the exclusive keyboard whenever the panel is shown (the catcher
+/// exists), gives it back when the fade starts, and a shown card that loses the keyboard to another surface, such as
+/// the launcher, dismisses the panel. A leave that answers the card giving the keyboard back is not a dismissal.
+#[derive(Debug, Default)]
+struct CardKeyboard {
+    /// The card heard the keyboard enter since it last asked for it.
+    entered: bool,
+}
+
+impl CardKeyboard {
+    /// The catcher opened: the panel is shown again, so the card wants the keyboard.
+    fn shown(&mut self) -> KeyboardInteractivity {
+        self.entered = false;
+        KeyboardInteractivity::Exclusive
+    }
+
+    /// The catcher went with the start of the fade: the card gives the keyboard back.
+    fn hiding(&mut self) -> KeyboardInteractivity {
+        self.entered = false;
+        KeyboardInteractivity::None
+    }
+
+    /// The card took or lost the keyboard; what the panel has to do about it.
+    fn focus(&mut self, focused: bool) -> Option<Request> {
+        if focused {
+            self.entered = true;
+            return None;
+        }
+        std::mem::take(&mut self.entered).then_some(Request::Dismiss)
+    }
+}
+
 /// Gives the panel's windows their layer surfaces on `output`. The card: the overlay layer, top right below the menu
 /// bar, with the exclusive keyboard while it is shown, so it is the key window as soon as it opens. The catcher: the
 /// top layer under it, over the whole output. The card's window opens with the panel and closes after its fade, so
-/// a hidden panel takes no input. Hears the session lock for the application.
+/// a hidden panel takes no input. Hears the session lock and the card losing the keyboard for the application.
 struct PanelRoles {
     shell: LayerShell,
     output: OutputId,
@@ -138,6 +170,7 @@ struct PanelRoles {
     requests: async_channel::Sender<Request>,
     card: Option<LayerSurface>,
     catcher: Option<LayerSurface>,
+    keyboard: CardKeyboard,
 }
 
 impl PanelRoles {
@@ -204,9 +237,15 @@ impl SurfaceRoles for PanelRoles {
         };
         let surface = layer.surface();
         if spec.app_id == APP_ID {
+            // the card opens with the exclusive keyboard
+            self.keyboard.shown();
             self.card = Some(layer);
         } else {
             self.catcher = Some(layer);
+            // a toggle during the fade shows the panel again in the same card, which gave its keyboard back
+            if let Some(card) = &self.card {
+                card.set_keyboard_interactivity(self.keyboard.shown());
+            }
         }
         Some(Ok(surface))
     }
@@ -245,8 +284,18 @@ impl SurfaceRoles for PanelRoles {
         {
             self.catcher = None;
             if let Some(card) = &self.card {
-                card.set_keyboard_interactivity(KeyboardInteractivity::None);
+                card.set_keyboard_interactivity(self.keyboard.hiding());
             }
+        }
+    }
+
+    /// Another surface took the keyboard from the shown card: the panel goes, as when it stops being the key window.
+    fn keyboard_focus(&mut self, surface: SurfaceId, focused: bool) {
+        if !self.card.as_ref().is_some_and(|l| l.surface() == surface) {
+            return;
+        }
+        if let Some(request) = self.keyboard.focus(focused) {
+            let _ = self.requests.send_blocking(request);
         }
     }
 }
@@ -432,10 +481,159 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         requests: sender,
         card: None,
         catcher: None,
+        keyboard: CardKeyboard::default(),
     });
     cupertino_kit::app::run_on::<Panel>(
         system,
         start(Controller::new(backends(options)), requests),
     )?;
     Err("a surface of the control panel was closed".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cupertino_controlcenter::model::Module;
+
+    fn panel() -> Panel {
+        let options = Options {
+            fake_backends: true,
+            alsa_card: None,
+        };
+        start(
+            Controller::new(backends(&options)),
+            async_channel::unbounded().1,
+        )
+        .0
+    }
+
+    fn app_ids(model: &Panel) -> Vec<String> {
+        Panel::view(model)
+            .into_iter()
+            .map(|w| w.spec.app_id)
+            .collect()
+    }
+
+    fn timer(commands: &[Command<Message>]) -> bool {
+        commands.iter().any(|c| matches!(c, Command::Perform(_)))
+    }
+
+    #[test]
+    fn a_toggle_shows_the_card_over_the_catcher() {
+        let mut model = panel();
+        assert!(app_ids(&model).is_empty(), "a hidden panel has no window");
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        assert_eq!(app_ids(&model), [CATCHER_APP_ID, APP_ID]);
+    }
+
+    #[test]
+    fn a_dismissal_fades_the_card_without_the_catcher() {
+        let mut model = panel();
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        let commands = Panel::update(&mut model, Message::Input(Input::Dismiss));
+        assert_eq!(app_ids(&model), [APP_ID]);
+        assert!(timer(&commands), "the fade's next frame is scheduled");
+    }
+
+    #[test]
+    fn the_lock_dismisses_a_shown_panel() {
+        let mut model = panel();
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        Panel::update(&mut model, Message::Request(Request::Dismiss));
+        assert_eq!(app_ids(&model), [APP_ID]);
+        assert_eq!(model.controller.phase(model.now()), Phase::Hiding);
+    }
+
+    #[test]
+    fn the_lock_leaves_a_hidden_panel_hidden() {
+        let mut model = panel();
+        Panel::update(&mut model, Message::Request(Request::Dismiss));
+        assert!(app_ids(&model).is_empty());
+    }
+
+    #[test]
+    fn a_toggle_during_the_fade_shows_the_panel_again_and_escape_still_dismisses_it() {
+        let mut model = panel();
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        Panel::update(&mut model, Message::Input(Input::Dismiss));
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        assert_eq!(app_ids(&model), [CATCHER_APP_ID, APP_ID]);
+        // what Escape on the card sends
+        Panel::update(&mut model, Message::Input(Input::Dismiss));
+        assert_eq!(model.controller.phase(model.now()), Phase::Hiding);
+    }
+
+    #[test]
+    fn the_card_ignores_input_while_it_fades() {
+        let mut model = panel();
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        let off = model.controller.controls().tile(Module::Bluetooth);
+        Panel::update(&mut model, Message::Input(Input::Press(Module::Bluetooth)));
+        let before = model.controller.controls().tile(Module::Bluetooth);
+        assert_ne!(before, off, "a press on the shown card switches Bluetooth");
+        Panel::update(&mut model, Message::Input(Input::Dismiss));
+        Panel::update(&mut model, Message::Input(Input::Press(Module::Bluetooth)));
+        assert_eq!(model.controller.controls().tile(Module::Bluetooth), before);
+    }
+
+    #[test]
+    fn the_fade_ends_with_no_window_on_the_timer() {
+        let mut model = panel();
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        Panel::update(&mut model, Message::Input(Input::Dismiss));
+        // a second later, the fade is over
+        model.start -= Duration::from_secs(1);
+        let current = model.timer;
+        Panel::update(&mut model, Message::Timer(current));
+        assert!(app_ids(&model).is_empty());
+    }
+
+    #[test]
+    fn a_stale_timer_is_ignored() {
+        let mut model = panel();
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        let stale = model.timer;
+        Panel::update(&mut model, Message::Input(Input::Dismiss));
+        assert_ne!(model.timer, stale, "each schedule starts a new timer");
+        let current = model.timer;
+        assert!(Panel::update(&mut model, Message::Timer(stale)).is_empty());
+        assert_eq!(model.timer, current, "nothing is scheduled again");
+    }
+
+    #[test]
+    fn the_card_asks_for_the_keyboard_whenever_it_is_shown_and_gives_it_back_for_the_fade() {
+        let mut keyboard = CardKeyboard::default();
+        assert_eq!(keyboard.shown(), KeyboardInteractivity::Exclusive);
+        assert_eq!(keyboard.hiding(), KeyboardInteractivity::None);
+        assert_eq!(
+            keyboard.shown(),
+            KeyboardInteractivity::Exclusive,
+            "a toggle during the fade takes the keyboard again"
+        );
+    }
+
+    #[test]
+    fn losing_the_keyboard_while_shown_dismisses_the_panel() {
+        let mut keyboard = CardKeyboard::default();
+        keyboard.shown();
+        assert_eq!(keyboard.focus(true), None);
+        assert_eq!(keyboard.focus(false), Some(Request::Dismiss));
+        assert_eq!(keyboard.focus(false), None, "one leave, one dismissal");
+    }
+
+    #[test]
+    fn giving_the_keyboard_back_for_the_fade_is_not_a_dismissal() {
+        let mut keyboard = CardKeyboard::default();
+        keyboard.shown();
+        keyboard.focus(true);
+        keyboard.hiding();
+        assert_eq!(keyboard.focus(false), None);
+        // the leave can come after a toggle during the fade has asked for the keyboard again
+        keyboard.focus(true);
+        keyboard.hiding();
+        keyboard.shown();
+        assert_eq!(keyboard.focus(false), None);
+        assert_eq!(keyboard.focus(true), None);
+        assert_eq!(keyboard.focus(false), Some(Request::Dismiss));
+    }
 }

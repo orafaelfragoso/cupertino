@@ -22,6 +22,12 @@ pub trait SurfaceRoles {
     fn destroyed(&mut self, surface: SurfaceId) {
         let _ = surface;
     }
+
+    /// `surface`, one of the application's windows, took (`focused`) or lost the keyboard focus; heard before the
+    /// window's own focus event.
+    fn keyboard_focus(&mut self, surface: SurfaceId, focused: bool) {
+        let _ = (surface, focused);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

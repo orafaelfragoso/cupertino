@@ -32,6 +32,8 @@ const ESCAPE: u32 = 0xff1b;
 
 thread_local! {
     static CONTROLS: Cell<bool> = const { Cell::new(true) };
+    /// Show the catcher instead of the card.
+    static CATCHER: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Every backend answering, as `--fake-backends` does, with focus mode on; with or without a battery.
@@ -72,7 +74,11 @@ impl Application for Shown {
     }
 
     fn view((controls, _): &Self::Model) -> Vec<Window<Input>> {
-        vec![view::panel(controls, 1.0, |input| input)]
+        if CATCHER.get() {
+            vec![view::catcher(|input| input)]
+        } else {
+            vec![view::panel(controls, 1.0, |input| input)]
+        }
     }
 }
 
@@ -98,7 +104,22 @@ struct Run {
 impl Run {
     /// The card in `theme` on a desktop that offers materials, configured, active and drawn.
     fn start(theme: ThemeTokens, battery: bool) -> Self {
+        Self::open(theme, battery, false, None)
+    }
+
+    /// The catcher, configured over a 400 x 300 output.
+    fn catcher() -> Self {
+        Self::open(
+            tokens(Appearance::Light, false),
+            false,
+            true,
+            Some(Size::new(400.0, 300.0)),
+        )
+    }
+
+    fn open(theme: ThemeTokens, battery: bool, catcher: bool, size: Option<Size>) -> Self {
         CONTROLS.set(battery);
+        CATCHER.set(catcher);
         let mut fonts = FontIndex::new();
         fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
         let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
@@ -137,7 +158,7 @@ impl Run {
         };
         driver
             .window_system_mut()
-            .configure(window, None, active)
+            .configure(window, size, active)
             .unwrap();
         let mut run = Self { driver, window };
         run.settle();
@@ -169,9 +190,13 @@ impl Run {
     }
 
     fn button(&mut self, position: Point, pressed: bool) {
+        self.press(position, MouseButton::Left, pressed);
+    }
+
+    fn press(&mut self, position: Point, button: MouseButton, pressed: bool) {
         self.pointer(PointerEvent::Button {
             position,
-            button: MouseButton::Left,
+            button,
             pressed,
             serial: 1,
             mods: Mods::NONE,
@@ -373,4 +398,46 @@ fn escape_dismisses_the_panel() {
     let mut run = Run::start(tokens(Appearance::Light, false), false);
     run.key(ESCAPE);
     assert_eq!(run.heard(), [Input::Dismiss]);
+}
+
+#[test]
+fn a_left_or_right_press_on_the_catcher_dismisses_the_panel() {
+    for button in [MouseButton::Left, MouseButton::Right] {
+        let mut run = Run::catcher();
+        let at = Point::new(40.0, 250.0);
+        run.pointer(PointerEvent::Motion { position: at });
+        run.press(at, button, true);
+        assert_eq!(run.heard(), [Input::Dismiss], "{button:?}");
+        run.press(at, button, false);
+        assert_eq!(
+            run.heard(),
+            [Input::Dismiss],
+            "{button:?}: the release says nothing"
+        );
+    }
+}
+
+#[test]
+fn other_buttons_and_the_pointer_moving_over_the_catcher_do_not() {
+    let mut run = Run::catcher();
+    let at = Point::new(40.0, 250.0);
+    run.pointer(PointerEvent::Motion { position: at });
+    for button in [MouseButton::Middle, MouseButton::Back, MouseButton::Forward] {
+        run.press(at, button, true);
+        run.press(at, button, false);
+    }
+    run.pointer(PointerEvent::Leave);
+    assert_eq!(run.heard(), []);
+}
+
+#[test]
+fn the_catcher_covers_the_output_and_draws_nothing() {
+    let shown = view::catcher::<()>(|_| ());
+    assert_eq!(shown.spec.app_id, view::CATCHER_APP_ID);
+    assert_eq!(
+        shown.spec.size,
+        Size::ZERO,
+        "the layer surface takes the output's size"
+    );
+    assert_eq!(shown.background, WindowBackground::None);
 }

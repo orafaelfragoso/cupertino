@@ -194,6 +194,7 @@ impl<const COUNT: usize> Application for VirtualList<COUNT> {
                 max_size: None,
                 decorations: DecorationMode::Preferred,
                 foreign_parent: None,
+                input_region: None,
             },
             shortcuts: CommandRegistry::new(),
             on_close: None,

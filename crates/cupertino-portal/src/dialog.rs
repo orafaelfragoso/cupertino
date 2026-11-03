@@ -1046,6 +1046,7 @@ fn window(d: &Dialog, places: &[Place]) -> Window<Message> {
             max_size: None,
             decorations: DecorationMode::Preferred,
             foreign_parent: crate::wayland_parent(&ask.parent_window).map(str::to_owned),
+            input_region: None,
         },
         shortcuts: CommandRegistry::new(),
         on_close: Some(Message::Cancel(id)),
@@ -1154,6 +1155,7 @@ fn picker_window(p: &Picker) -> Window<Message> {
             max_size: None,
             decorations: DecorationMode::Preferred,
             foreign_parent: crate::wayland_parent(&p.ask.parent_window).map(str::to_owned),
+            input_region: None,
         },
         // Return is the default button once a row is picked, and Escape cancels, wherever the focus is
         shortcuts: CommandRegistry::new()
@@ -1291,6 +1293,7 @@ fn app_window(a: &AppPicker, app_icons: &AppIcons) -> Window<Message> {
             max_size: None,
             decorations: DecorationMode::Preferred,
             foreign_parent: crate::wayland_parent(&a.ask.parent_window).map(str::to_owned),
+            input_region: None,
         },
         // Return opens the selected app and Escape cancels, wherever the focus is
         shortcuts: CommandRegistry::new()
@@ -1385,6 +1388,7 @@ fn consent_window(c: &Consent) -> Window<Message> {
             max_size: None,
             decorations: DecorationMode::Preferred,
             foreign_parent: crate::wayland_parent(&c.ask.parent_window).map(str::to_owned),
+            input_region: None,
         },
         // Escape cancels wherever the focus is; Return has no shortcut, so a key meant for the app never consents
         shortcuts: CommandRegistry::new().with(

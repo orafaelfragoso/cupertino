@@ -47,6 +47,7 @@ pub(super) fn window(model: &Model) -> Window<Message> {
             max_size: None,
             decorations: DecorationMode::Preferred,
             foreign_parent: None,
+            input_region: None,
         },
         shortcuts: shortcuts(model),
         on_close: None,

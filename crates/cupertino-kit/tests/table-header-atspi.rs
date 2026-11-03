@@ -82,6 +82,7 @@ impl Application for Files {
                 max_size: None,
                 decorations: cupertino_kit::platform::DecorationMode::Preferred,
                 foreign_parent: None,
+                input_region: None,
             },
             shortcuts: cupertino_kit::core::CommandRegistry::new(),
             on_close: None,

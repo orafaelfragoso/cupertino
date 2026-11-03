@@ -18,8 +18,8 @@ use cupertino_kit::core::{AccessibilityNode, Key, NodeId, PlaceholderIcons, Role
 use cupertino_kit::geometry::Point;
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{
-    Capabilities, Mods, MouseButton, PointerEvent, Timestamp, WindowEvent, WindowId, WindowRequest,
-    WindowStates,
+    Capabilities, KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp, WindowEvent,
+    WindowId, WindowRequest, WindowStates,
 };
 use cupertino_kit::render::{CpuConfig, CpuRenderer};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
@@ -226,6 +226,29 @@ impl Run {
         }
     }
 
+    /// Presses and releases the key of `keysym`, which types `text`.
+    fn key(&mut self, keysym: u32, text: Option<char>) {
+        for pressed in [true, false] {
+            self.send(WindowEvent::Key(
+                KeyEvent {
+                    code: 0,
+                    keysym: Keysym(keysym),
+                    text: text.filter(|_| pressed),
+                    pressed,
+                    repeat: false,
+                    mods: Mods::NONE,
+                },
+                Timestamp(0),
+            ));
+        }
+    }
+
+    fn type_text(&mut self, text: &str) {
+        for c in text.chars() {
+            self.key(c as u32, Some(c));
+        }
+    }
+
     fn menu(&mut self, name: &str) {
         self.send(WindowEvent::MenuActivated(action(name)));
     }
@@ -358,7 +381,36 @@ fn the_menus_disable_what_the_window_cannot_do() {
     run.menu("select-all");
     let disabled = run.disabled();
     assert!(!disabled.contains(&action("open")));
-    assert!(disabled.contains(&action("rename")), "not yet");
+    assert!(!disabled.contains(&action("duplicate")));
+    assert!(disabled.contains(&action("rename")), "one item at a time");
+}
+
+#[test]
+fn a_new_folder_is_named_in_its_row_and_a_duplicate_sits_next_to_its_file() {
+    const RETURN: u32 = 0xff0d;
+    let mut run = Run::new();
+    let documents = run.home().join("Documents");
+    run.wait_until(|run| run.rows().len() == 3);
+    run.menu("new-folder");
+    run.wait_until(|run| {
+        let runtime = run.driver.runtime();
+        runtime.find(run.window, &Key::from("name-field")).is_some()
+    });
+    run.type_text("Projects");
+    run.key(RETURN, None);
+    assert!(documents.join("Projects").is_dir());
+    assert!(!documents.join("untitled folder").exists());
+    run.wait_until(|run| run.rows().contains(&"Projects".to_owned()));
+
+    run.type_text("b");
+    run.menu("duplicate");
+    assert_eq!(std::fs::read(documents.join("b copy.txt")).unwrap(), b"bb");
+    let mut names: Vec<String> = std::fs::read_dir(&documents)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["Notes", "Projects", "a.txt", "b copy.txt", "b.txt"]);
 }
 
 #[test]

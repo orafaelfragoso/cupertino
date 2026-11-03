@@ -1,8 +1,24 @@
-# Cupertino
+<p align="center">
+  <img src="docs/src/images/cupertino-banner.jpg" alt="Cupertino: an Arch-based Linux distribution with its own Wayland desktop" width="100%">
+</p>
 
-[![CI](https://github.com/orafaelfragoso/cupertino/actions/workflows/ci.yml/badge.svg)](https://github.com/orafaelfragoso/cupertino/actions/workflows/ci.yml)
-[![Licence: GPL-3.0-or-later](https://img.shields.io/badge/licence-GPL--3.0--or--later-blue.svg)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-book-informational.svg)](https://orafaelfragoso.github.io/cupertino/)
+<p align="center">
+  <a href="https://github.com/orafaelfragoso/cupertino/actions/workflows/ci.yml"><img src="https://github.com/orafaelfragoso/cupertino/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-GPL--3.0--or--later-blue.svg" alt="Licence: GPL-3.0-or-later"></a>
+  <a href="https://orafaelfragoso.github.io/cupertino/"><img src="https://img.shields.io/badge/docs-book-informational.svg" alt="Documentation"></a>
+  <img src="https://img.shields.io/badge/based%20on-Arch%20Linux-1793d1.svg" alt="Based on Arch Linux">
+  <img src="https://img.shields.io/badge/written%20in-Rust-dea584.svg" alt="Written in Rust">
+</p>
+
+<p align="center">
+  <a href="https://orafaelfragoso.github.io/cupertino/"><strong>Documentation</strong></a> ·
+  <a href="docs/src/install-usb.md"><strong>Install from a USB stick</strong></a> ·
+  <a href="#try-it-in-one-minute"><strong>Try it</strong></a> ·
+  <a href="CHANGELOG.md"><strong>Changelog</strong></a> ·
+  <a href="CONTRIBUTING.md"><strong>Contributing</strong></a>
+</p>
+
+# Cupertino
 
 Cupertino is an Arch-based Linux distribution with its own Wayland desktop, written in Rust on [Smithay](https://github.com/Smithay/smithay): it installs from a USB stick, and its updates are signed packages that can be rolled back. It gives you a quiet, consistent desktop: translucent materials, soft shadows, spring animations, a dock, a menu bar, a launcher, notifications, a control panel, a file manager, a settings app, a lock screen and a session manager.
 

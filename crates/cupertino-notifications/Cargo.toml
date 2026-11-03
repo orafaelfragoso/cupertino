@@ -36,7 +36,7 @@ cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = tr
 cupertino-glass = { path = "../cupertino-glass", optional = true }
 libc = { version = "0.2", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
-tiny-skia = "0.11"
+tiny-skia = "0.12"
 zbus = { version = "5", optional = true }
 
 [dev-dependencies]

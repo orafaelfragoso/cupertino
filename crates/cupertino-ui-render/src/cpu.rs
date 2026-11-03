@@ -880,6 +880,7 @@ fn skia_paint(paint: &Paint) -> Option<tiny_skia::Paint<'static>> {
             let c = Point::from_xy(center.x as f32, center.y as f32);
             RadialGradient::new(
                 c,
+                0.0,
                 c,
                 *radius as f32,
                 stops(s)?,

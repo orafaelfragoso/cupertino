@@ -13,9 +13,7 @@ layer = "apps"
 app = [
     "dep:async-io",
     "dep:cupertino-kit",
-    "dep:cupertino-protocol-app",
     "dep:cupertino-ui-menus",
-    "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
     "dep:zbus",
     "dep:cupertino-alsa",
@@ -40,8 +38,6 @@ cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-keyboard = { path = "../cupertino-keyboard" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-modifiers = { path = "../cupertino-modifiers" }
-cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
-cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 cupertino-alsa = { path = "../cupertino-alsa", optional = true }
 cupertino-pipewire = { path = "../cupertino-pipewire", optional = true }

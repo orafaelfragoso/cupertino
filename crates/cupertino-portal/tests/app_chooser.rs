@@ -29,11 +29,23 @@ struct Running {
 fn start() -> Option<Running> {
     let bus = PrivateBus::start()?;
     let applications = tempfile::tempdir().unwrap();
-    std::fs::write(
-        applications.path().join("org.example.Viewer.desktop"),
-        "[Desktop Entry]\nType=Application\nName=Document Viewer\nExec=viewer %U\n",
-    )
-    .unwrap();
+    for (id, name, icon) in [
+        (
+            "org.example.Viewer",
+            "Document Viewer",
+            "org.example.Viewer",
+        ),
+        ("org.example.Paths", "Paths", "/opt/paths/icon.png"),
+        ("org.example.Escape", "Escape", "escape\u{1b}[2J"),
+    ] {
+        std::fs::write(
+            applications.path().join(format!("{id}.desktop")),
+            format!(
+                "[Desktop Entry]\nType=Application\nName={name}\nIcon={icon}\nExec=viewer %U\n"
+            ),
+        )
+        .unwrap();
+    }
     let served = bus.connect();
     let (sender, events) = mpsc::channel();
     let sender = Mutex::new(sender);
@@ -111,10 +123,11 @@ fn error<T: std::fmt::Debug>(result: zbus::Result<T>) -> String {
     }
 }
 
-fn choice(id: &str, name: &str) -> Choice {
+fn choice(id: &str, name: &str, icon: Option<&str>) -> Choice {
     Choice {
         id: id.to_owned(),
         name: name.to_owned(),
+        icon: icon.map(str::to_owned),
     }
 }
 
@@ -149,10 +162,14 @@ fn the_chosen_app_reaches_the_caller_with_the_activation_token() {
     assert_eq!(
         ask.choices,
         [
-            choice("org.example.Viewer", "Document Viewer"),
-            choice("org.example.Draw", "org.example.Draw"),
+            choice(
+                "org.example.Viewer",
+                "Document Viewer",
+                Some("org.example.Viewer")
+            ),
+            choice("org.example.Draw", "org.example.Draw", None),
         ],
-        "an installed app shows its name, any other its id"
+        "an installed app shows its name and icon, any other its id"
     );
     assert_eq!(ask.last_choice.as_deref(), Some("org.example.Draw"));
 
@@ -206,8 +223,12 @@ fn update_choices_replaces_what_the_chooser_offers() {
     assert_eq!(
         choices,
         [
-            choice("org.example.Viewer", "Document Viewer"),
-            choice("org.example.Notes", "org.example.Notes"),
+            choice(
+                "org.example.Viewer",
+                "Document Viewer",
+                Some("org.example.Viewer")
+            ),
+            choice("org.example.Notes", "org.example.Notes", None),
         ]
     );
 
@@ -219,6 +240,30 @@ fn update_choices_replaces_what_the_chooser_offers() {
         "org.freedesktop.DBus.Error.InvalidArgs",
         "no chooser is open at the handle any more"
     );
+}
+
+#[test]
+fn an_icon_with_a_path_separator_or_a_control_character_is_left_out() {
+    let Some(r) = start() else {
+        return missing_tool("dbus-daemon");
+    };
+    let done = call(
+        &r.frontend,
+        vec!["org.example.Paths", "org.example.Escape"],
+        HashMap::new(),
+    );
+    let Event::Ask { ask, reply, .. } = r.events.recv_timeout(WAIT).unwrap() else {
+        panic!("expected a chooser");
+    };
+    assert_eq!(
+        ask.choices,
+        [
+            choice("org.example.Paths", "Paths", None),
+            choice("org.example.Escape", "Escape", None),
+        ]
+    );
+    reply.send(Answer::Cancelled);
+    done.recv_timeout(WAIT).unwrap().unwrap();
 }
 
 #[test]

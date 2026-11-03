@@ -42,6 +42,7 @@ pub struct Start {
     /// What opens a file: the session's associations, read at each open so changed defaults apply at once.
     applications: Box<dyn Fn() -> io::Result<MimeApps>>,
     terminal: Option<Vec<String>>,
+    trash: Trash,
 }
 
 impl Start {
@@ -74,7 +75,13 @@ impl Start {
             notices,
             applications,
             terminal,
+            trash: Trash::new(),
         })
+    }
+
+    /// The window moving items to `trash` and putting them back from it, in place of the session's trash.
+    pub fn with_trash(self, trash: Trash) -> Start {
+        Start { trash, ..self }
     }
 }
 
@@ -97,7 +104,7 @@ pub struct Model {
     notices: Notices,
     applications: Box<dyn Fn() -> io::Result<MimeApps>>,
     terminal: Option<Vec<String>>,
-    trash_files: PathBuf,
+    trash: Trash,
     path_bar: bool,
     status_bar: bool,
     /// The free space of the folder's file system, for the status bar.
@@ -163,12 +170,10 @@ const NO_SCROLL: ScrollState = ScrollState {
 };
 
 /// Menu items the window does not do yet; they are shown disabled.
-const NOT_YET: [MenuAction; 9] = [
+const NOT_YET: [MenuAction; 7] = [
     MenuAction::View(ViewMode::Icons),
     MenuAction::NewWindow,
     MenuAction::OpenInNewWindow,
-    MenuAction::MoveToTrash,
-    MenuAction::PutBack,
     MenuAction::MakeAlias,
     MenuAction::ShowOriginal,
     MenuAction::Eject,
@@ -198,7 +203,7 @@ impl Application for Files {
             notices: start.notices,
             applications: start.applications,
             terminal: start.terminal,
-            trash_files: Trash::new().home_trash().join("files"),
+            trash: start.trash,
             path_bar: false,
             status_bar: false,
             available: None,
@@ -359,6 +364,64 @@ impl Model {
         self.notices.post(notice::failure(action, items, error));
     }
 
+    /// Report the items of `results` that failed as one notice, worded by the first failure.
+    fn failed_some<'a, T, E: std::fmt::Display>(
+        &self,
+        action: Action,
+        results: impl IntoIterator<Item = (&'a PathBuf, Result<T, E>)>,
+    ) {
+        let mut failed = Vec::new();
+        let mut first = None;
+        for (path, result) in results {
+            if let Err(e) = result {
+                failed.push(path.as_path());
+                first.get_or_insert(e);
+            }
+        }
+        if let Some(e) = first {
+            self.failed(action, &failed, &e);
+        }
+    }
+
+    fn selected_paths(&self) -> Vec<PathBuf> {
+        let entries = self.browser.entries();
+        self.browser
+            .selection()
+            .indices()
+            .filter_map(|i| entries.get(i))
+            .map(|e| e.path.clone())
+            .collect()
+    }
+
+    /// Move the selected items to the trash; the listing drops them when the watcher reports it.
+    fn trash_selection(&self) {
+        let paths = self.selected_paths();
+        self.failed_some(
+            Action::Trash,
+            paths.iter().map(|path| (path, self.trash.trash(path))),
+        );
+    }
+
+    /// Put the selected items of the trash back where they came from.
+    fn put_back(&self) {
+        let paths = self.selected_paths();
+        let listed = match self.trash.list() {
+            Ok(listed) => listed,
+            Err(e) => {
+                let items: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+                return self.failed(Action::PutBack, &items, &e);
+            }
+        };
+        let restored = paths.iter().map(|path| {
+            let restored = match listed.iter().find(|item| item.file_path() == *path) {
+                Some(item) => self.trash.restore(item).map_err(|e| e.to_string()),
+                None => Err("The Trash has no record of where it came from".to_string()),
+            };
+            (path, restored)
+        });
+        self.failed_some(Action::PutBack, restored);
+    }
+
     /// Go into the selected folder, or open the selected files with their default applications.
     fn open_selection(&mut self) {
         let Activation { folder, files } = self.browser.activation();
@@ -403,6 +466,8 @@ impl Model {
             MenuAction::Back => self.step(Step::Back),
             MenuAction::Forward => self.step(Step::Forward),
             MenuAction::EnclosingFolder => self.step(Step::Parent),
+            MenuAction::MoveToTrash => self.trash_selection(),
+            MenuAction::PutBack => self.put_back(),
             MenuAction::NewFolder => match operations::new_folder(self.browser.dir()) {
                 Ok(path) => self.rename_new_folder(path),
                 Err(e) => self.failed(Action::NewFolder, &[], &e),
@@ -431,43 +496,12 @@ impl Model {
             MenuAction::View(_)
             | MenuAction::NewWindow
             | MenuAction::OpenInNewWindow
-            | MenuAction::MoveToTrash
-            | MenuAction::PutBack
             | MenuAction::MakeAlias
             | MenuAction::ShowOriginal
             | MenuAction::Eject
             | MenuAction::FullScreen => {}
         }
         Vec::new()
-    }
-
-    fn selected_paths(&self) -> Vec<PathBuf> {
-        let entries = self.browser.entries();
-        self.browser
-            .selection()
-            .indices()
-            .filter_map(|i| entries.get(i))
-            .map(|e| e.path.clone())
-            .collect()
-    }
-
-    /// Report the items of `results` that failed as one notification, worded by the first failure.
-    fn failed_some<'a, T, E: std::fmt::Display>(
-        &self,
-        action: Action,
-        results: impl IntoIterator<Item = (&'a PathBuf, Result<T, E>)>,
-    ) {
-        let mut failed = Vec::new();
-        let mut first = None;
-        for (path, result) in results {
-            if let Err(e) = result {
-                failed.push(path.as_path());
-                first.get_or_insert(e);
-            }
-        }
-        if let Some(e) = first {
-            self.failed(action, &failed, &e);
-        }
     }
 
     /// A folder was made: the list selects it when it shows it, and its name is edited then.
@@ -555,7 +589,7 @@ impl Model {
             count: selected.len(),
             all_folders: !selected.is_empty() && selected.iter().all(|e| e.is_dir),
             single_link: matches!(selected.as_slice(), [e] if e.kind == crate::Kind::Symlink),
-            in_trash: self.browser.dir() == self.trash_files,
+            in_trash: self.browser.dir() == self.trash.home_trash().join("files"),
             path_bar: self.path_bar,
             status_bar: self.status_bar,
             full_screen: false,

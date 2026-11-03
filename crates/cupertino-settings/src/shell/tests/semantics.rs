@@ -2,16 +2,22 @@
 //! from the accessibility tree the window builds headless. The panes that show only with a network or Bluetooth
 //! service, or with a touchpad, open against fake daemons on a private bus and a fake sysfs.
 
-use std::collections::HashMap;
-
 use cupertino_filepicker::Mode;
 use cupertino_ui_test::{semantic_outline, unannounced};
-use zbus::zvariant::{ObjectPath, OwnedValue, Value as Variant};
 
 use super::*;
 use crate::clipboard::App;
 use crate::hardware::Sources;
 use crate::sheet::Prompt;
+
+// the fake daemons live with the integration tests, outside `src`
+mod fakes {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fakes/semantics.rs"
+    ));
+}
+use fakes::{FakeBluetooth, FakeNetwork};
 
 fn tree(driver: &TestDriver<SettingsApp>, window: WindowId) -> AccessibilityUpdate {
     let snapshot = driver.runtime().snapshot(window).unwrap();
@@ -235,100 +241,6 @@ fn a_committed_switch_reads_its_new_state() {
 }
 
 // ---- the panes of a service or a device ----------------------------------------------------------------------
-
-struct FakeNetwork;
-
-#[zbus::interface(name = "org.cupertino.Network1")]
-impl FakeNetwork {
-    #[zbus(property)]
-    fn wireless_enabled(&self) -> bool {
-        true
-    }
-
-    #[zbus(property)]
-    fn devices(&self) -> Vec<(u32, String, String, String, String, String, String)> {
-        let device = |index, name: &str, kind: &str, ssid: &str, address: &str| {
-            let text = |s: &str| s.to_owned();
-            let state = text("connected");
-            (
-                index,
-                text(name),
-                text(kind),
-                state,
-                text(ssid),
-                String::new(),
-                text(address),
-            )
-        };
-        vec![
-            device(1, "eth0", "ethernet", "", "10.0.0.3"),
-            device(2, "wlan0", "wifi", "home", "10.0.0.2"),
-        ]
-    }
-
-    #[zbus(property)]
-    fn state(&self) -> String {
-        "connected".into()
-    }
-
-    fn get_networks(&self) -> Vec<(String, i32, String, bool, bool)> {
-        vec![
-            ("home".into(), -40, "wpa2".into(), true, true),
-            ("cafe".into(), -70, "open".into(), false, false),
-        ]
-    }
-
-    fn scan(&self) {}
-}
-
-fn bt_device(id: &str, name: &str, paired: bool) -> HashMap<String, OwnedValue> {
-    let v = |x: Variant<'_>| x.try_to_owned().unwrap();
-    HashMap::from([
-        ("Id".to_string(), v(Variant::from(id))),
-        ("Address".to_string(), v(Variant::from("00:11:22:33:44:55"))),
-        ("Name".to_string(), v(Variant::from(name))),
-        ("Icon".to_string(), v(Variant::from("input-keyboard"))),
-        ("Paired".to_string(), v(Variant::from(paired))),
-        ("Connected".to_string(), v(Variant::from(paired))),
-        ("Pairing".to_string(), v(Variant::from(false))),
-    ])
-}
-
-struct FakeBluetooth;
-
-#[zbus::interface(name = "org.cupertino.Bluetooth1")]
-impl FakeBluetooth {
-    #[zbus(property)]
-    fn available(&self) -> bool {
-        true
-    }
-
-    #[zbus(property)]
-    fn powered(&self) -> bool {
-        true
-    }
-
-    #[zbus(property)]
-    fn discovering(&self) -> bool {
-        false
-    }
-
-    #[zbus(property)]
-    fn devices(&self) -> Vec<HashMap<String, OwnedValue>> {
-        vec![
-            bt_device("hp", "Headphones", true),
-            bt_device("kb", "Keyboard", false),
-        ]
-    }
-
-    fn start_discovery(&self) {}
-
-    fn stop_discovery(&self) {}
-
-    fn register_agent(&self, _path: ObjectPath<'_>) {}
-
-    fn unregister_agent(&self) {}
-}
 
 #[test]
 fn the_network_bluetooth_and_trackpad_panes_read_their_controls_by_role_name_value_and_state() {

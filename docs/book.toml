@@ -5,4 +5,5 @@ language = "en"
 src = "src"
 
 [output.html]
+site-url = "/cupertino/"
 git-repository-url = "https://github.com/orafaelfragoso/cupertino"

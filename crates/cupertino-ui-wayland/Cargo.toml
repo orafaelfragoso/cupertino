@@ -19,7 +19,7 @@ cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-wayland-client = { path = "../cupertino-wayland-client" }
 rustix = { version = "1", features = ["time"] }
-tiny-skia = "0.11"
+tiny-skia = "0.12"
 
 # the integration test runs a minimal protocol server in-process
 [dev-dependencies]

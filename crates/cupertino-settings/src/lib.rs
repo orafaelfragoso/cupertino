@@ -5,6 +5,8 @@
 
 pub mod about;
 #[cfg(feature = "app")]
+pub mod about_app;
+#[cfg(feature = "app")]
 pub mod agent;
 #[cfg(feature = "app")]
 pub mod bluez;

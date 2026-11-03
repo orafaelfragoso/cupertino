@@ -248,6 +248,9 @@ pub struct Slider<M> {
     pub ticks: u32,
     pub enabled: bool,
     pub on_change: Option<Handler<f64, M>>,
+    /// Asked with the value when a change ends: the pointer lets go after a drag, or a key or assistive technology
+    /// moved the value.
+    pub on_end: Option<Handler<f64, M>>,
 }
 
 /// A number stepped by an up and a down arrow, as beside a field; one Tab stop. The arrow that would pass a limit is

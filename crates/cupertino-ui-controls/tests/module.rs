@@ -98,6 +98,7 @@ impl Application for Panel {
                     ticks: 0,
                     enabled: true,
                     on_change: Some(Box::new(Message::Brightness)),
+                    on_end: None,
                 })
                 .key("display"),
                 battery(0.0).key("empty"),

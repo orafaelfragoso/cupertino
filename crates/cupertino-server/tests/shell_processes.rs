@@ -612,16 +612,12 @@ fn the_real_shell_processes_work_with_the_server() {
     let Some(mut server) = Server::start(procs, true) else {
         return;
     };
-    // the overlay, the control panel and the launcher map their surfaces at start and keep running to the end; the
-    // launcher draws its hidden panel at once
-    server.wait_until(
-        "the overlay, the control panel and the launcher to map",
-        |s| {
-            layer_geometry(s, "cupertino-osd").is_some()
-                && layer_geometry(s, "cupertino-controlcenter").is_some()
-                && committed_buffer(s, "cupertino-launcher").is_some()
-        },
-    );
+    // the overlay and the launcher map their surfaces at start, the launcher drawing its hidden panel at once; the
+    // control panel maps none until it opens. All three keep running to the end
+    server.wait_until("the overlay and the launcher to map", |s| {
+        layer_geometry(s, "cupertino-osd").is_some()
+            && committed_buffer(s, "cupertino-launcher").is_some()
+    });
     let panels = [
         "cupertino-osd",
         "cupertino-controlcenter",

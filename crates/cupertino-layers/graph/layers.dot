@@ -1,5 +1,5 @@
 // cupertino-layers --graph
-// 79 crates, 370 internal dependencies
+// 79 crates, 372 internal dependencies
 // per layer: foundation 18, models 8, platform 9, protocol 3, transport 3, render 3, ui 13, core 1, shell 11, services 4, apps 2, tools 4
 // forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the default sink and the mixer itself until audio goes through a service
@@ -130,16 +130,18 @@ digraph "layers" {
   "cupertino-capture" -> "cupertino-assets";
   "cupertino-cli" -> "cupertino-assets";
   "cupertino-controlcenter" -> "cupertino-alsa";
-  "cupertino-controlcenter" -> "cupertino-assets";
-  "cupertino-controlcenter" -> "cupertino-decorations";
+  "cupertino-controlcenter" -> "cupertino-assets" [label="dev"];
   "cupertino-controlcenter" -> "cupertino-geometry";
-  "cupertino-controlcenter" -> "cupertino-icons";
+  "cupertino-controlcenter" -> "cupertino-kit";
+  "cupertino-controlcenter" -> "cupertino-modifiers";
   "cupertino-controlcenter" -> "cupertino-pipewire";
   "cupertino-controlcenter" -> "cupertino-pipewire" [label="dev"];
   "cupertino-controlcenter" -> "cupertino-protocol-app";
   "cupertino-controlcenter" -> "cupertino-shell-client";
   "cupertino-controlcenter" -> "cupertino-test-bus" [label="dev"];
   "cupertino-controlcenter" -> "cupertino-theme";
+  "cupertino-controlcenter" -> "cupertino-theme" [label="dev"];
+  "cupertino-controlcenter" -> "cupertino-ui-test" [label="dev"];
   "cupertino-controlcenter" -> "cupertino-ui-wayland";
   "cupertino-controlcenter" -> "cupertino-wayland-client";
   "cupertino-decorations" -> "cupertino-assets";

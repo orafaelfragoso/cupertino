@@ -167,6 +167,7 @@ impl Application for Controls {
                 ticks,
                 enabled,
                 on_change: None,
+                on_end: None,
             })
         };
         window(

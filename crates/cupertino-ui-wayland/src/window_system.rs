@@ -563,6 +563,11 @@ impl WaylandWindowSystem {
                 let Some(i) = on(&self.windows, surface) else {
                     return;
                 };
+                if let (KeyboardEvent::Enter | KeyboardEvent::Leave, Some(roles)) =
+                    (&event, self.roles.as_mut())
+                {
+                    roles.keyboard_focus(surface, matches!(event, KeyboardEvent::Enter));
+                }
                 let event = match event {
                     KeyboardEvent::Enter => WindowEvent::Focus(true),
                     KeyboardEvent::Leave => WindowEvent::Focus(false),

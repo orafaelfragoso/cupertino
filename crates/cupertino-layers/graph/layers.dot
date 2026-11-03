@@ -402,7 +402,6 @@ digraph "layers" {
   "cupertino-settings" -> "cupertino-modifiers";
   "cupertino-settings" -> "cupertino-pipewire" [color=orange, style=dashed];
   "cupertino-settings" -> "cupertino-pipewire" [label="dev", color=orange, style=dashed];
-  "cupertino-settings" -> "cupertino-protocol-app";
   "cupertino-settings" -> "cupertino-test-bus" [label="dev"];
   "cupertino-settings" -> "cupertino-theme";
   "cupertino-settings" -> "cupertino-thumbnails";
@@ -410,7 +409,6 @@ digraph "layers" {
   "cupertino-settings" -> "cupertino-ui-menus";
   "cupertino-settings" -> "cupertino-ui-test" [label="dev"];
   "cupertino-settings" -> "cupertino-ui-text";
-  "cupertino-settings" -> "cupertino-ui-wayland";
   "cupertino-settings" -> "cupertino-wayland-client";
   "cupertino-shell-client" -> "cupertino-defaults";
   "cupertino-shell-client" -> "cupertino-geometry";

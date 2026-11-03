@@ -332,6 +332,43 @@ impl About {
             rows,
         }
     }
+
+    /// A Displays row before Kernel for each connected display with a current mode: one short connection asks the
+    /// server.
+    #[cfg(feature = "app")]
+    pub fn read_displays(&mut self) -> Result<(), cupertino_wayland_client::Error> {
+        let mut conn = cupertino_wayland_client::Connection::connect()?;
+        conn.roundtrip()?;
+        for output in conn.outputs() {
+            let Some(mode) = output.mode else { continue };
+            let display = Display {
+                make: output.make.as_deref(),
+                model: output.model.as_deref(),
+                description: output.description.as_deref(),
+                name: output.name.as_deref(),
+                mode,
+                physical_size_mm: output.physical_size_mm,
+                scale: output
+                    .effective_scale()
+                    .unwrap_or_else(|| output.scale.factor()),
+            };
+            if let Some(value) = display_value(&display) {
+                let before_kernel = self
+                    .rows
+                    .iter()
+                    .position(|r| r.label == "Kernel")
+                    .unwrap_or(self.rows.len());
+                self.rows.insert(
+                    before_kernel,
+                    Row {
+                        label: "Displays",
+                        value,
+                    },
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 fn version(package: &str, commit: Option<&str>) -> String {

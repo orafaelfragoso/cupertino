@@ -1278,26 +1278,24 @@ dependencies = [
 name = "cupertino-launcher"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
+ "async-io",
  "cupertino-animation",
  "cupertino-apps",
  "cupertino-assets",
- "cupertino-decorations",
  "cupertino-defaults",
- "cupertino-geometry",
- "cupertino-glass",
  "cupertino-icons",
- "cupertino-keyboard",
- "cupertino-protocol-app",
+ "cupertino-kit",
+ "cupertino-modifiers",
  "cupertino-shell-client",
  "cupertino-test-bus",
  "cupertino-theme",
+ "cupertino-ui-test",
  "cupertino-ui-text",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
- "image",
  "serde_json",
  "tempfile",
- "tiny-skia",
  "zbus",
 ]
 

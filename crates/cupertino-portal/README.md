@@ -90,17 +90,19 @@ OpenURI needs the person to pick or confirm one. The window is the consent: noth
   with no icon, an icon that does not resolve, or an `Icon=` with a `/` or a control character shows the applications
   symbol. `last_choice` opens selected when it is one of `choices`. Open is the default button: Return opens the
   selected app, and Escape cancels.
-- The answer is `0` with `choice` and, when the caller sent one, its `activation_token` handed on; Cancel or closing
-  the window is `1`; `Close` on the request takes the window down and answers `2`. An answer that is not one of the
-  choices offered at that moment is `2` with no `choice`.
+- The answer is `0` with `choice` and an `activation_token`: the caller's own, handed on unchanged, when it sent one;
+  else one the window asks the server for when the person opens the app, made for that key press or click and naming
+  the chosen app, so the app may take the focus (and the Dock bounces its tile). When the server gives none the answer
+  has no `activation_token`. Cancel or closing the window is `1`; `Close` on the request takes the window down and
+  answers `2`; neither carries a token. An answer that is not one of the choices offered at that moment is `2` with
+  no `choice`.
 - `UpdateChoices` replaces the list of the open window at `handle`; the selection stays on its app while that app is
   still offered. Any other handle is `InvalidArgs`.
 - The same callers and bounds as the file chooser apply: only the frontend calls, at most 16 windows and 4 for one app
   id, at most 256 choices, an id with a `/` or a control character is refused, and shown text loses control and
   bidirectional-override characters.
 
-Known limitations: an `Icon=` that is an absolute path is not shown, and no new activation token is made for the chosen
-app.
+Known limitations: an `Icon=` that is an absolute path is not shown.
 
 ## Screenshot
 

@@ -1,4 +1,4 @@
-//! Minimal geometry of the window layout (points, y down), the file manager's (`cupertino-files::geom`).
+//! Minimal geometry of the sheets' layout (points, y down), the file manager's (`cupertino-files::geom`).
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Point {

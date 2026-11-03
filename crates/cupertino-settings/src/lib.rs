@@ -1,7 +1,6 @@
-//! The settings application without a toolkit: the pane table and the sidebar
-//! order ([`pane`], [`sidebar`]), navigation history ([`history`]), the keyboard ([`keys`]), search ([`search`]), the
-//! window layout ([`window`]) and its painter ([`paint`]). The `cupertino-settings` process (feature `app`) puts the
-//! window on the server.
+//! The settings application: the pane table and the sidebar
+//! order ([`pane`], [`sidebar`]), navigation history ([`history`]), search ([`search`]) and the panes ([`panes`]). The
+//! `cupertino-settings` process (feature `app`) draws the window with CupertinoKit (`shell`).
 
 pub mod about;
 #[cfg(feature = "app")]
@@ -12,7 +11,6 @@ pub mod agent;
 pub mod bluez;
 pub mod clipboard;
 pub mod controls;
-pub mod form;
 pub mod geom;
 pub mod hardware;
 pub mod history;
@@ -20,14 +18,11 @@ pub mod history;
 pub mod inflight;
 #[cfg(feature = "app")]
 pub mod instance;
-pub mod keys;
 pub mod live;
 pub mod mapping;
-pub mod menu;
 pub mod menu_bar;
 #[cfg(feature = "app")]
 pub mod nm;
-pub mod paint;
 pub mod pane;
 pub mod panes;
 pub mod search;
@@ -38,7 +33,6 @@ pub mod sheet;
 #[cfg(feature = "app")]
 pub mod shell;
 pub mod sidebar;
-pub mod window;
 
 pub use geom::{Point, Rect, Size};
 pub use pane::PaneId;

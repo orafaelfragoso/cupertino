@@ -1519,6 +1519,7 @@ dependencies = [
  "cupertino-assets",
  "cupertino-defaults",
  "cupertino-filepicker",
+ "cupertino-icons",
  "cupertino-kit",
  "cupertino-protocol-app",
  "cupertino-screencast",

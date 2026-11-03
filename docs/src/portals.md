@@ -16,7 +16,7 @@ The routing file `cupertino-portals.conf` sends Settings and FileChooser to Cupe
 
 ## App chooser (OpenURI)
 
-A window titled "Open “NAME” with:" lists the apps offered, by the name of their desktop entry. Return opens the selected app, Escape cancels. Nothing opens unless you choose an app. The window opens with the app the caller named as its last choice selected, if it is on the list. Limits: each row shows a generic applications symbol, not the app's own icon, and no new activation token is made for the chosen app.
+A window titled "Open “NAME” with:" lists the apps offered, by the name of their desktop entry. Return opens the selected app, Escape cancels. Nothing opens unless you choose an app. The window opens with the app the caller named as its last choice selected, if it is on the list. Each row shows the app's own icon, or a generic applications symbol when the app has none. Limits: an app whose icon is given as a file path shows the generic symbol, and no new activation token is made for the chosen app.
 
 ## Screenshot
 

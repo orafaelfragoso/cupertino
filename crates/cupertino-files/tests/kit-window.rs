@@ -6,13 +6,14 @@
 use std::collections::{BTreeSet, HashMap};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cupertino_assets::BUILTIN_FONT;
 use cupertino_files::kit::{prepare, Files, Start};
 use cupertino_files::notice::Notices;
 use cupertino_files::places::{Place, PlaceGroup, PlaceKind};
+use cupertino_files::trash::{encode_path, Trash};
 use cupertino_kit::core::{AccessibilityNode, Key, NodeId, PlaceholderIcons, Role, RuntimeOptions};
 use cupertino_kit::geometry::Point;
 use cupertino_kit::layout::LayoutDirection;
@@ -24,13 +25,54 @@ use cupertino_kit::render::{CpuConfig, CpuRenderer};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_menu_model::{ActionName, Scope};
+use cupertino_test_bus::{missing_tool, PrivateBus};
 use cupertino_theme::Theme;
 use cupertino_ui_test::{ManualClock, TestDriver};
+use zbus::blocking::Connection;
+use zbus::zvariant::OwnedValue;
 
 struct Run {
     driver: TestDriver<Files>,
     window: WindowId,
     _home: tempfile::TempDir,
+}
+
+/// A notification service that hands on the summary and body of each notification.
+struct Notifications(Mutex<mpsc::Sender<String>>);
+
+#[zbus::interface(name = "org.freedesktop.Notifications")]
+impl Notifications {
+    #[allow(clippy::too_many_arguments)]
+    fn notify(
+        &self,
+        _app_name: String,
+        _replaces_id: u32,
+        _app_icon: String,
+        summary: String,
+        body: String,
+        _actions: Vec<String>,
+        _hints: HashMap<String, OwnedValue>,
+        _expire_timeout: i32,
+    ) -> u32 {
+        let _ = self.0.lock().unwrap().send(format!("{summary} / {body}"));
+        1
+    }
+}
+
+fn notifications(bus: &PrivateBus) -> (Connection, mpsc::Receiver<String>) {
+    let (sent, received) = mpsc::channel();
+    let service = bus
+        .blocking_builder()
+        .name("org.freedesktop.Notifications")
+        .unwrap()
+        .serve_at(
+            "/org/freedesktop/Notifications",
+            Notifications(Mutex::new(sent)),
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+    (service, received)
 }
 
 fn place(name: &str, path: &Path, kind: PlaceKind) -> Place {
@@ -44,30 +86,41 @@ fn place(name: &str, path: &Path, kind: PlaceKind) -> Place {
 
 impl Run {
     /// A window on `home/Documents`, which holds the folder `Notes` and the files `b.txt` and `a.txt`, with
-    /// Documents and Downloads in the sidebar.
+    /// Documents and Downloads in the sidebar and its trash in `home/Trash`.
     fn new() -> Run {
+        Run::with(false, Notices::start(None))
+    }
+
+    /// The window of [`Run::new`] posting to `notices`, with the trash's folder as a place after Downloads when
+    /// `trash_listed`.
+    fn with(trash_listed: bool, notices: Notices) -> Run {
         let home = tempfile::tempdir().unwrap();
         let documents = home.path().join("Documents");
         let downloads = home.path().join("Downloads");
+        let trash = home.path().join("Trash");
         std::fs::create_dir_all(documents.join("Notes")).unwrap();
         std::fs::create_dir_all(&downloads).unwrap();
         std::fs::write(documents.join("b.txt"), "bb").unwrap();
         std::fs::write(documents.join("a.txt"), "a").unwrap();
-        let places = vec![
+        let mut places = vec![
             place("Documents", &documents, PlaceKind::Documents),
             place("Downloads", &downloads, PlaceKind::Downloads),
         ];
+        if trash_listed {
+            places.push(place("Trash", &trash.join("files"), PlaceKind::Trash));
+        }
         prepare(
             Start::open(
                 documents,
                 places,
                 None,
                 home.path().join("recently-used.xbel"),
-                Notices::start(None),
+                notices,
                 Box::new(|| Err(std::io::Error::other("no applications in this test"))),
                 None,
             )
-            .unwrap(),
+            .unwrap()
+            .with_trash(Trash::with_home(trash)),
         );
         let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
         let preferences = ThemePreferences {
@@ -377,6 +430,56 @@ fn the_bars_show_the_path_and_the_item_count() {
     let texts = run.named(Role::StaticText);
     assert!(texts.iter().any(|t| t.starts_with("3 items")), "{texts:?}");
     assert!(texts.contains(&"Documents".to_owned()), "{texts:?}");
+}
+
+#[test]
+fn items_moved_to_the_trash_are_put_back_where_they_were() {
+    let mut run = Run::with(true, Notices::start(None));
+    run.wait_until(|run| run.rows().len() == 3);
+    let a = run.home().join("Documents/a.txt");
+    let trash = run.home().join("Trash");
+    run.menu("select-all");
+    run.menu("move-to-trash");
+    run.wait_until(|run| run.rows().is_empty());
+    let info = std::fs::read_to_string(trash.join("info/a.txt.trashinfo")).unwrap();
+    let path = format!("[Trash Info]\nPath={}\n", encode_path(&a.to_string_lossy()));
+    assert!(info.starts_with(&path), "{info}");
+    assert_eq!(
+        std::fs::read_to_string(trash.join("files/a.txt")).unwrap(),
+        "a"
+    );
+    assert!(!a.exists());
+
+    run.click("place-Trash");
+    assert_eq!(run.title(), "Trash");
+    run.wait_until(|run| run.rows().len() == 3);
+    run.menu("select-all");
+    assert!(!run.disabled().contains(&action("put-back")));
+    run.menu("put-back");
+    run.wait_until(|run| run.rows().is_empty());
+    assert_eq!(std::fs::read_to_string(&a).unwrap(), "a");
+    assert!(run.home().join("Documents/Notes").is_dir());
+    assert!(!trash.join("info/a.txt.trashinfo").exists());
+}
+
+#[test]
+fn items_that_cannot_go_to_the_trash_stay_and_are_reported_in_one_notice() {
+    let Some(bus) = PrivateBus::start() else {
+        missing_tool("dbus-daemon");
+        return;
+    };
+    let (_service, received) = notifications(&bus);
+    let mut run = Run::with(false, Notices::start(Some(bus.connect())));
+    run.wait_until(|run| run.rows().len() == 3);
+    std::fs::write(run.home().join("Trash"), "").unwrap();
+    run.menu("select-all");
+    run.menu("move-to-trash");
+    assert_eq!(
+        received.recv_timeout(Duration::from_secs(5)).unwrap(),
+        "3 items couldn't be moved to the Trash / File exists."
+    );
+    assert!(received.recv_timeout(Duration::from_millis(200)).is_err());
+    assert_eq!(run.rows(), ["a.txt", "b.txt", "Notes"]);
 }
 
 #[test]

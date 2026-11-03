@@ -59,6 +59,12 @@ Maintainers (and a CI check, once it is enabled) reject files and strings that s
 - Keep commits tidy; we squash on merge when the history is noisy.
 - A maintainer reviews every change. Expect questions about tests and about where numbers come from.
 
+## CI and releases
+
+A pull request runs `gate` and then what its diff needs: a docs-only change (`docs/`, top-level Markdown, the licence, the issue and pull request templates) builds the book; any other change runs fmt, deny, the lint and test build (`check`), the Weston test and the golden scenes. **CI result** is the check that must pass to merge. A push to `main` runs only the quick jobs, because its pull request ran the rest.
+
+Every night, if `main` changed, **Nightly** runs every job, including `check` in the package build environment, and builds and install-tests the Arch packages. A tag `vX.Y.Z-rcN` makes a release candidate: the full CI, the Arch packages, signing and a draft prerelease. A tag `vX.Y.Z` makes the final release, with the Debian and Fedora packages and the ISO. A maintainer publishes the draft by hand. The **ISO** workflow builds an image from any branch or tag when run from the Actions tab.
+
 ## Issues
 
 Include the version or commit, the backend (`--winit`, `--udev`), your compositor if nested, and the output of the failing command. For crashes include the log of the failing process (`cupertino-server` prints the shell process that exited).

@@ -1287,6 +1287,7 @@ dependencies = [
  "cupertino-icons",
  "cupertino-kit",
  "cupertino-modifiers",
+ "cupertino-protocol-app",
  "cupertino-shell-client",
  "cupertino-test-bus",
  "cupertino-theme",

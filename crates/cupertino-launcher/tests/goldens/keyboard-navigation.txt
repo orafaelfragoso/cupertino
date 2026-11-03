@@ -16,7 +16,7 @@
   query="Firefo" focus=Field selected=Some("Firefox") scroll=0
 
 window 1
-pending messages=0 tasks=0 frames=0 animating=false next_wake=Some(500000000)
+pending messages=0 tasks=1 frames=0 animating=false next_wake=Some(500000000)
 focus Some(NodeId(3v1))
 pointer_capture None
 text_input Some(NodeId(3v1))

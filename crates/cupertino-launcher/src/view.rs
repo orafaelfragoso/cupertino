@@ -314,13 +314,15 @@ where
     }
 }
 
-/// The window kept mapped while the panel is hidden: one transparent point that takes no input.
-pub fn hidden_window<M: Clone + 'static>() -> Window<M> {
+/// The window kept mapped while the panel is hidden: one transparent point that takes no input. Each `generation`
+/// is a new window; when the server closes one (its output went away) `on_close` arrives and the model asks for the
+/// next generation, which the server puts on an output still there.
+pub fn hidden_window<M: Clone + 'static>(generation: u64, on_close: M) -> Window<M> {
     Window {
-        key: WindowKey(Key::from("hidden")),
+        key: WindowKey(Key::from(format!("hidden-{generation}"))),
         spec: window_spec("Launcher", HIDDEN_APP_ID, Size::new(1.0, 1.0)),
         shortcuts: CommandRegistry::new(),
-        on_close: None,
+        on_close: Some(on_close),
         background: WindowBackground::None,
         content: empty(),
         popup: None,

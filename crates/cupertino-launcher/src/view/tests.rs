@@ -41,6 +41,18 @@ thread_local! {
     static HOST: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// The height the model last gave the shown panel.
     static HEIGHT: RefCell<Option<f64>> = const { RefCell::new(None) };
+    /// Messages a test sends the model as the session would (`Toggle` from the bus, `Locked` from the server).
+    static INBOX: RefCell<Option<(async_channel::Sender<Message>, async_channel::Receiver<Message>)>> =
+        const { RefCell::new(None) };
+}
+
+/// Waits for the next message of [`INBOX`].
+fn listen() -> Command<Message> {
+    let inbox = INBOX.with_borrow(|inbox| inbox.as_ref().map(|(_, r)| r.clone()));
+    let inbox = inbox.expect("the test app started");
+    Command::Perform(Box::pin(async move {
+        inbox.recv().await.unwrap_or(Message::Unheard)
+    }))
 }
 
 fn log(entry: String) {
@@ -103,12 +115,19 @@ impl Application for TestApp {
         HEIGHT.set(None);
         let mut model = Model::new(test_launcher(), Box::new(TestHost));
         model.settled = true;
-        let commands = kit::update(&mut model, Message::Toggle);
+        INBOX.set(Some(async_channel::unbounded()));
+        let mut commands = kit::update(&mut model, Message::Toggle);
+        commands.push(listen());
         (model, commands)
     }
 
     fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
-        kit::update(model, message)
+        let inbox = matches!(message, Message::Toggle | Message::Locked);
+        let mut commands = kit::update(model, message);
+        if inbox {
+            commands.push(listen());
+        }
+        commands
     }
 
     fn view(model: &Model) -> Vec<Window<Message>> {
@@ -195,6 +214,23 @@ impl Run {
             .into_iter()
             .find(|(k, _)| *k == WindowKey(Key::from(key)))
             .map(|(_, id)| id)
+    }
+
+    /// The window kept mapped while the panel is hidden, of the model's current generation.
+    fn hidden(&self) -> Option<WindowId> {
+        let key = WindowKey(Key::from(format!("hidden-{}", self.model().hidden)));
+        self.driver
+            .runtime()
+            .windows()
+            .into_iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, id)| id)
+    }
+
+    /// Delivers `message` to the model as the session would, and settles.
+    fn deliver(&mut self, message: Message) {
+        INBOX.with_borrow(|inbox| inbox.as_ref().unwrap().0.try_send(message).unwrap());
+        self.settle();
     }
 
     fn panel(&self) -> WindowId {
@@ -525,7 +561,7 @@ fn the_search_field_takes_the_keyboard_when_the_panel_opens() {
     assert_eq!(field.1.name.as_deref(), Some(PLACEHOLDER));
     assert_eq!(snapshot.focus, Some(field.0), "the field has the keyboard");
     assert!(run.window("catcher").is_some());
-    assert!(run.window("hidden").is_none());
+    assert!(run.hidden().is_none());
     run.fixtures("search-field");
 }
 
@@ -591,10 +627,7 @@ fn return_launches_the_selection_with_its_token_and_closes() {
     run.key("Return", RETURN_CODE, RETURN);
     assert!(!run.model().panel.is_visible());
     assert!(run.window("panel").is_none() && run.window("catcher").is_none());
-    assert!(
-        run.window("hidden").is_some(),
-        "the hidden window stays mapped"
-    );
+    assert!(run.hidden().is_some(), "the hidden window stays mapped");
     let host = HOST.with_borrow(Clone::clone);
     assert_eq!(host.len(), 1, "{host:?}");
     assert!(
@@ -612,7 +645,7 @@ fn escape_clears_the_query_and_then_closes() {
     assert!(run.model().panel.is_visible());
     run.key("Escape", ESCAPE_CODE, ESCAPE);
     assert!(!run.model().panel.is_visible());
-    assert!(run.window("hidden").is_some());
+    assert!(run.hidden().is_some());
 }
 
 #[test]
@@ -644,7 +677,7 @@ fn a_press_outside_the_panel_closes_it() {
     let catcher = run.window("catcher").unwrap();
     run.click(catcher, Point::new(10.0, 650.0));
     assert!(!run.model().panel.is_visible());
-    assert!(run.window("hidden").is_some());
+    assert!(run.hidden().is_some());
 }
 
 #[test]
@@ -654,7 +687,7 @@ fn the_panel_closes_when_its_window_loses_the_keyboard() {
     // the keyboard's leave, as the Wayland window system reports it
     run.send(panel, WindowEvent::Focus(false));
     assert!(!run.model().panel.is_visible());
-    assert!(run.window("hidden").is_some());
+    assert!(run.hidden().is_some());
 }
 
 #[test]
@@ -683,7 +716,37 @@ fn a_panel_window_the_server_closes_hides_the_panel() {
     run.send(panel, WindowEvent::CloseRequested);
     assert!(!run.model().panel.is_visible());
     assert!(run.window("panel").is_none());
-    assert!(run.window("hidden").is_some());
+    assert!(run.hidden().is_some());
+}
+
+#[test]
+fn a_hidden_window_the_server_closes_is_opened_again() {
+    let mut run = Run::new();
+    let panel = run.panel();
+    run.send(panel, WindowEvent::CloseRequested);
+    let hidden = run.hidden().expect("the hidden window is mapped");
+    // its output went away
+    run.send(hidden, WindowEvent::CloseRequested);
+    assert!(!run.driver.runtime().exited(), "the launcher keeps running");
+    let again = run.hidden().expect("a new hidden window is mapped");
+    assert_ne!(again, hidden);
+    assert!(!run.driver.window_system_mut().windows().contains(&hidden));
+    // and the panel still opens
+    run.deliver(Message::Toggle);
+    assert!(run.model().panel.is_visible());
+}
+
+#[test]
+fn locking_the_session_closes_the_panel() {
+    let mut run = Run::new();
+    run.type_text("fire");
+    run.deliver(Message::Locked);
+    assert!(!run.model().panel.is_visible());
+    assert!(run.window("panel").is_none() && run.window("catcher").is_none());
+    assert!(run.hidden().is_some());
+    // a lock while hidden changes nothing
+    run.deliver(Message::Locked);
+    assert!(!run.model().panel.is_visible());
 }
 
 fn key_event(keysym: u32, text: Option<char>, mods: Mods) -> KeyEvent {

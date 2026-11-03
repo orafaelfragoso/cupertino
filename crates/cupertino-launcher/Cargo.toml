@@ -18,6 +18,7 @@ app = [
     "dep:cupertino-defaults",
     "dep:cupertino-icons",
     "dep:cupertino-modifiers",
+    "dep:cupertino-protocol-app",
     "dep:cupertino-shell-client",
     "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
@@ -34,6 +35,7 @@ cupertino-defaults = { path = "../cupertino-defaults", optional = true }
 cupertino-icons = { path = "../cupertino-icons", optional = true }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-modifiers = { path = "../cupertino-modifiers", optional = true }
+cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
@@ -42,6 +44,7 @@ serde_json = "1"
 zbus = { version = "5", default-features = false, features = ["async-io"], optional = true }
 
 [dev-dependencies]
+async-channel = "2"
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-test-bus = { path = "../cupertino-test-bus" }
 cupertino-theme = { path = "../cupertino-theme" }

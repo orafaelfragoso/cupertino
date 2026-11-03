@@ -46,17 +46,21 @@ that `LauncherRoles` gives it, none of them on an output, so the server puts the
 * the catcher: top layer, over the whole output, below the panel; a press on it closes the panel;
 * while the panel is hidden, one transparent point that takes no input, so the process always has a mapped surface.
 
-Opening the panel closes the hidden window and opens the panel and the catcher; closing it does the reverse. A window the server
-closes (its output went away) closes the panel. The margin of the panel is computed from the first output's height, since the
-output the server picks is not known before the configure.
+Opening the panel closes the hidden window and opens the panel and the catcher; closing it does the reverse. A panel or catcher
+window the server closes (its output went away) closes the panel; a hidden window it closes is replaced by a new one
+(`Message::Remap`, a new window key), which the server puts on an output still there, so the process keeps running. The panel's
+margin is first guessed from the first output's height, since the output the server picks is not known before the configure; the
+catcher's configure gives the height of the output both were put on, and `LauncherRoles` corrects the margin
+(`LayerSurface::set_margin`) when it differs, before the panel's first frame commits it.
 
 **Input and dismissal.** The query is Kit's `TextField`, which has the keyboard while the panel is open. The panel's own keys never
 reach it: the panel's root widget takes them in the capture phase (`panel::takes_key`, with Kit's key event translated by
 `view::panel_key`: named keys by keysym, typing by the layout's character, command chords by the lower-case letter) and the model
 runs them through `Panel::handle_key`. Every other key edits the field, which reports the query back. Hover selects a row, a click on
 a row activates it, and `Escape` clears the query and then closes. The panel also closes when its window loses the keyboard (another
-window took it), on a press outside the panel and after a launch. The launch history is written when the
-panel closes.
+window took it), on a press outside the panel, after a launch, and when the session locks: `LauncherRoles` sees the server's
+`cupertino_app_effects_v1` session-lock event (which Kit passes only to the accessibility adapter) and sends the model
+`Message::Locked`. The launch history is written when the panel closes.
 
 **Launching.** `Activation::Run` asks Kit for an `xdg-activation` token for the panel window (`Command::ActivationToken`, with the
 entry's desktop id), and starts the command with `XDG_ACTIVATION_TOKEN` / `DESKTOP_STARTUP_ID` when the token arrives. A copy

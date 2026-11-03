@@ -21,6 +21,7 @@ use cupertino_launcher::view::{
 };
 use cupertino_launcher::{Launcher, LauncherConfig};
 use cupertino_modifiers::Profile;
+use cupertino_protocol_app::AppEvent;
 use cupertino_shell_client::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
     ShellEvent,
@@ -78,6 +79,8 @@ impl Options {
 #[derive(Default)]
 struct Surfaces {
     panel: Option<LayerSurface>,
+    /// The panel's top margin as last asked for.
+    panel_margin: i32,
     catcher: Option<LayerSurface>,
     hidden: Option<LayerSurface>,
 }
@@ -97,6 +100,22 @@ impl Surfaces {
 struct LauncherRoles {
     shell: LayerShell,
     surfaces: Rc<RefCell<Surfaces>>,
+    /// Where a session lock is told to the model (the window system tells it only to the accessibility adapter).
+    signals: async_channel::Sender<Signal>,
+}
+
+/// What reaches the model from outside the window system.
+#[derive(Clone, Copy, Debug)]
+enum Signal {
+    /// `org.cupertino.Launcher1.Toggle`.
+    Toggle,
+    /// The session was locked.
+    Locked,
+}
+
+/// The panel's top margin on an output `height` points tall.
+fn top_margin(height: f64) -> i32 {
+    (height * TOP_FRACTION).round() as i32
 }
 
 impl LauncherRoles {
@@ -126,7 +145,7 @@ impl LauncherRoles {
                     Layer::Overlay,
                     Anchor::Top,
                     (WIDTH as u32, spec.size.height.ceil() as u32),
-                    (height * TOP_FRACTION).round() as i32,
+                    top_margin(height),
                     KeyboardInteractivity::Exclusive,
                 )
             }
@@ -164,7 +183,10 @@ impl SurfaceRoles for LauncherRoles {
         let surface = layer.surface();
         let mut surfaces = self.surfaces.borrow_mut();
         match spec.app_id.as_str() {
-            APP_ID => surfaces.panel = Some(layer),
+            APP_ID => {
+                surfaces.panel_margin = config.margin.top;
+                surfaces.panel = Some(layer);
+            }
             CATCHER_APP_ID => surfaces.catcher = Some(layer),
             _ => {
                 // the hidden window never takes the pointer
@@ -178,15 +200,39 @@ impl SurfaceRoles for LauncherRoles {
     }
 
     fn event(&mut self, event: &ExtensionEvent) -> Option<RoleEvent> {
-        let surfaces = self.surfaces.borrow();
+        if let Some(AppEvent::SessionLock { locked: true }) = event.downcast_ref::<AppEvent>() {
+            // not a role event: the window system still tells the accessibility adapter
+            let _ = self.signals.try_send(Signal::Locked);
+            return None;
+        }
+        let surfaces = &mut *self.surfaces.borrow_mut();
         match *event.downcast_ref::<ShellEvent>()? {
             ShellEvent::Configure { surface, size } => {
                 let layer = surfaces.all().find(|l| l.surface() == surface)?;
                 // a configure without a size closes the window, which the model answers
-                Some(match layer.configured(size) {
-                    Ok(size) => RoleEvent::Configure { surface, size },
-                    Err(_) => RoleEvent::Closed(surface),
-                })
+                let size = match layer.configured(size) {
+                    Ok(size) => size,
+                    Err(_) => return Some(RoleEvent::Closed(surface)),
+                };
+                // the catcher covers the output the server put both on: its height places the panel, whose margin
+                // guessed from the first output, before the panel's first frame commits it
+                if surfaces
+                    .catcher
+                    .as_ref()
+                    .is_some_and(|c| c.surface() == surface)
+                {
+                    let margin = top_margin(f64::from(size.1));
+                    if let Some(panel) = &surfaces.panel {
+                        if margin != surfaces.panel_margin {
+                            panel.set_margin(Margin {
+                                top: margin,
+                                ..Margin::default()
+                            });
+                            surfaces.panel_margin = margin;
+                        }
+                    }
+                }
+                Some(RoleEvent::Configure { surface, size })
             }
             // their output went away
             ShellEvent::Closed(surface) if surfaces.all().any(|l| l.surface() == surface) => {
@@ -327,19 +373,22 @@ impl Host for AppHost {
     }
 }
 
-/// The model and the channel `Toggle` arrives on.
+/// The model and the channel `Toggle` and the session lock arrive on.
 pub struct App {
     model: Model,
-    toggles: async_channel::Receiver<()>,
+    signals: async_channel::Receiver<Signal>,
 }
 
-fn listen(toggles: &async_channel::Receiver<()>) -> Command<Message> {
-    let toggles = toggles.clone();
+fn listen(signals: &async_channel::Receiver<Signal>) -> Command<Message> {
+    let signals = signals.clone();
     Command::Perform(Box::pin(async move {
-        toggles
+        signals
             .recv()
             .await
-            .map_or(Message::Unheard, |()| Message::Toggle)
+            .map_or(Message::Unheard, |signal| match signal {
+                Signal::Toggle => Message::Toggle,
+                Signal::Locked => Message::Locked,
+            })
     }))
 }
 
@@ -380,17 +429,17 @@ impl Application for App {
         );
         let app = App {
             model: Model::new(launcher, Box::new(Unhosted)),
-            toggles: async_channel::unbounded().1,
+            signals: async_channel::unbounded().1,
         };
-        let first = listen(&app.toggles);
+        let first = listen(&app.signals);
         (app, vec![first])
     }
 
     fn update(app: &mut App, message: Message) -> Vec<Command<Message>> {
-        let toggled = matches!(message, Message::Toggle);
+        let signalled = matches!(message, Message::Toggle | Message::Locked);
         let mut commands = kit::update(&mut app.model, message);
-        if toggled {
-            commands.push(listen(&app.toggles));
+        if signalled {
+            commands.push(listen(&app.signals));
         }
         commands
     }
@@ -422,9 +471,10 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     } else {
         None
     };
-    let (sender, toggles) = async_channel::unbounded();
+    let (sender, signals) = async_channel::unbounded();
+    let toggles = sender.clone();
     let _control = control::serve(zbus::connection::Builder::session()?, move || {
-        let _ = sender.send_blocking(());
+        let _ = toggles.send_blocking(Signal::Toggle);
     })
     .map_err(|e| match e {
         zbus::Error::NameTaken => "another launcher owns org.cupertino.Launcher1".into(),
@@ -434,6 +484,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let system = system.with_roles(LauncherRoles {
         shell,
         surfaces: Rc::clone(&surfaces),
+        signals: sender,
     });
     let assets = Assets::discover();
     let host = AppHost {
@@ -449,8 +500,8 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let mut model = Model::new(Launcher::from_system(config), Box::new(host));
     model.files = files;
     model.settled = cupertino_shell_client::test_clock::motion_settled();
-    let app = App { model, toggles };
-    let first = listen(&app.toggles);
+    let app = App { model, signals };
+    let first = listen(&app.signals);
     cupertino_kit::app::run_on::<App>(system, (app, vec![first]))?;
     Err("the launcher's surfaces were closed".into())
 }

@@ -48,6 +48,10 @@ pub enum Message {
     IndexFailed,
     /// Nothing will send [`Message::Toggle`] any more: the process ends.
     Unheard,
+    /// The session was locked: a shown panel closes, and the launch history is written.
+    Locked,
+    /// The server closed the hidden window (its output went away): a new one is opened, on an output still there.
+    Remap,
 }
 
 impl From<Input> for Message {
@@ -76,6 +80,8 @@ pub struct Model {
     next_launch: u64,
     /// The animation frame that counts; an older one is ignored when it arrives.
     frame: u64,
+    /// The hidden window's generation: each one is a new window, so one the server closed is not kept.
+    pub hidden: u64,
 }
 
 impl Model {
@@ -95,6 +101,7 @@ impl Model {
             pending: HashMap::new(),
             next_launch: 0,
             frame: 0,
+            hidden: 0,
         }
     }
 
@@ -312,6 +319,15 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             eprintln!("cupertino-launcher: the file index was not built");
             Vec::new()
         }
+        Message::Locked if model.panel.is_visible() => {
+            model.hide();
+            Vec::new()
+        }
+        Message::Locked => Vec::new(),
+        Message::Remap => {
+            model.hidden += 1;
+            Vec::new()
+        }
         Message::Unheard => {
             eprintln!("cupertino-launcher: the bus interface stopped");
             vec![Command::Exit]
@@ -324,7 +340,7 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
 /// The shown panel and its catcher, or the window kept mapped while it is hidden.
 pub fn view(model: &Model) -> Vec<Window<Message>> {
     if !model.panel.is_visible() {
-        return vec![view::hidden_window()];
+        return vec![view::hidden_window(model.hidden, Message::Remap)];
     }
     let panel = PanelView {
         panel: &model.panel,

@@ -13,7 +13,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 rustix = { version = "1", features = ["fs"] }
 png = "0.17"
 percent-encoding = "2"
-md5 = "0.7"
+md5 = "0.8"
 
 [dev-dependencies]
 tempfile = "3"

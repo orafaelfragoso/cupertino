@@ -336,8 +336,7 @@ fn the_network_bluetooth_and_trackpad_panes_read_their_controls_by_role_name_val
 // ---- sheets ---------------------------------------------------------------------------------------------------
 
 /// The whole tree of the window with `sheet` up: the sheet alone, a modal dialog over a content no reader reaches.
-fn sheet_reads(dir: &Path, sheet: Sheet) -> Vec<String> {
-    let what = sheet.title();
+fn sheet_reads(dir: &Path, sheet: Sheet, what: &str) -> Vec<String> {
     let (driver, window) = start_with(dir, PaneId::Wifi, Some(sheet));
     let tree = tree(&driver, window);
     let mut gaps = semantic_gaps(&tree);
@@ -466,7 +465,7 @@ fn each_sheet_is_a_modal_dialog_that_reads_its_title_message_field_and_buttons()
         ),
     ];
     for (sheet, expected) in sheets {
-        assert_eq!(sheet_reads(dir.path(), sheet), lines(expected));
+        assert_eq!(sheet_reads(dir.path(), sheet, expected[1]), lines(expected));
     }
 
     // the choosers list the folder's entries their mode shows, under the folder's path
@@ -506,6 +505,9 @@ fn each_sheet_is_a_modal_dialog_that_reads_its_title_message_field_and_buttons()
     ];
     for (mode, expected) in choosers {
         let sheet = Sheet::picker(pictures.path(), mode);
-        assert_eq!(sheet_reads(dir.path(), sheet), lines(&expected), "{mode:?}");
+        assert_eq!(
+            sheet_reads(dir.path(), sheet, expected[1]),
+            lines(&expected)
+        );
     }
 }

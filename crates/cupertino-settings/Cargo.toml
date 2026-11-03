@@ -45,7 +45,7 @@ cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 cupertino-alsa = { path = "../cupertino-alsa", optional = true }
 cupertino-pipewire = { path = "../cupertino-pipewire", optional = true }
-tiny-skia = "0.11"
+tiny-skia = "0.12"
 zeroize = "1"
 async-channel = { version = "2", optional = true }
 async-io = { version = "2", optional = true }

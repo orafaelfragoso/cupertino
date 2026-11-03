@@ -6,7 +6,8 @@
 # publishing it is a manual step in the GitHub UI. The `sign` job runs only after `source` has checked that the tag is on main, and holds
 # the signing subkey (secret CUPERTINO_SIGNING_KEY of the `signing` environment, v* tags only; never the master, and not in
 # `release`, so `publish` never has it) and has read-only permissions; without the secret or the variable
-# CUPERTINO_REPO_URL (the https base of the repository) it fails, and then no draft is created.
+# CUPERTINO_REPO_URL (the https base of the repository) it fails, and then no draft is created. A final release also builds
+# the ISO (iso.yml) and attaches it; a release candidate does not (run the ISO workflow by hand on the tag to test one).
 name: Release
 on:
   push:
@@ -23,6 +24,13 @@ env:
 jobs:
   verify:
     uses: ./.github/workflows/ci.yml
+    with:
+      full: true
+
+  iso:
+    needs: verify
+    if: ${{ !contains(github.ref_name, '-rc') }}
+    uses: ./.github/workflows/iso.yml
 
   source:
     needs: verify
@@ -116,7 +124,8 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [source, packages, sign]
+    needs: [source, packages, sign, iso]
+    if: ${{ !cancelled() && needs.sign.result == 'success' && (needs.iso.result == 'success' || needs.iso.result == 'skipped') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -136,6 +145,11 @@ jobs:
         with:
           name: signed
           path: signed
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.iso.result == 'success'
+        with:
+          name: iso
+          path: dist
       - name: Write SHA256SUMS and create the draft release
         env:
           GH_TOKEN: ${{ github.token }}

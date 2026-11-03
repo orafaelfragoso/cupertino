@@ -62,6 +62,7 @@ fn wallpaper(w: u32, h: u32, dark: bool) -> Pixmap {
         let (cx, cy, r) = (cx * w as f32, cy * h as f32, r * h as f32);
         let shader = RadialGradient::new(
             Point::from_xy(cx, cy),
+            0.0,
             Point::from_xy(cx, cy),
             r,
             vec![

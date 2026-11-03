@@ -8,7 +8,7 @@ use cupertino_files::access::{window_tree, PlaceKeys, WindowView};
 use cupertino_files::geom::Size;
 use cupertino_files::places::{standard_places, Place};
 use cupertino_files::window::{Bars, WindowLayout};
-use cupertino_ui_test::semantic_gaps;
+use cupertino_ui_test::{semantic_gaps, semantic_outline};
 
 #[test]
 fn every_node_of_a_files_window_is_named() {
@@ -59,4 +59,40 @@ fn every_node_of_a_files_window_is_named() {
         );
         assert_eq!(semantic_gaps(&tree), Vec::<String>::new(), "{bars:?}");
     }
+}
+
+#[test]
+fn the_sidebar_reads_its_places_by_role_name_and_state() {
+    let media = tempfile::tempdir().unwrap();
+    let backup = media.path().join("Backup");
+    fs::create_dir_all(&backup).unwrap();
+    let places = vec![
+        Place::removable("Backup Disk", Some(&backup), false),
+        Place::removable("32 GB Volume", None, false),
+        Place::removable("Camera Card", Some(Path::new("/run/media/u/CARD")), true),
+    ];
+    let mut keys = PlaceKeys::default();
+    let keys: Vec<u32> = places.iter().map(|p| keys.key(&p.name)).collect();
+    let layout = WindowLayout::new(Size { w: 920.0, h: 436.0 }, &places, Bars::HIDDEN);
+    let tree = window_tree(&WindowView {
+        title: "Backup",
+        layout: &layout,
+        places: &places,
+        keys: &keys,
+        dir: &backup,
+        sidebar_focus: Some(2),
+    });
+    assert_eq!(
+        semantic_outline(&tree),
+        [
+            "Window \"Backup\"",
+            "  List \"Sidebar\" 3 items",
+            "    Group \"Locations\"",
+            "      ListItem \"Backup Disk\" focusable selected",
+            "        Button \"Eject Backup Disk\"",
+            "      ListItem \"32 GB Volume\" focusable",
+            "      ListItem \"Camera Card\" focusable focused busy",
+        ],
+        "the folder shown is selected, the focused row focused, a busy file system busy, and only a mounted one ejects"
+    );
 }

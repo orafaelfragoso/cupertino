@@ -564,6 +564,8 @@ impl Application for SettingsApp {
 
 #[cfg(test)]
 mod tests {
+    mod semantics;
+
     use std::num::NonZeroU32;
     use std::path::Path;
     use std::sync::Arc;
@@ -626,11 +628,21 @@ mod tests {
         pane: PaneId,
         sheet: Option<Sheet>,
     ) -> (TestDriver<SettingsApp>, WindowId) {
+        let services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
+        start_on(dir, pane, sheet, services)
+    }
+
+    /// [`start_with`] whose window reaches `services`.
+    fn start_on(
+        dir: &Path,
+        pane: PaneId,
+        sheet: Option<Sheet>,
+        services: Services,
+    ) -> (TestDriver<SettingsApp>, WindowId) {
         let (wake, woken) = async_channel::bounded(1);
         let (notify, background) = background_channel(move || {
             let _ = wake.try_send(());
         });
-        let services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
         let mut state = State::new(paths(dir), services, pane, 1080.0, notify).unwrap();
         state.sheet = sheet;
         launch(Start {

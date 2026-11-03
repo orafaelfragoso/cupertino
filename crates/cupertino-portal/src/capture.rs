@@ -32,7 +32,7 @@ use wayland_protocols::ext::image_copy_capture::v1::client::ext_image_copy_captu
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::screen_cast::{Capture as Request, CursorMode, Running, Source, Started, Stream};
-use crate::screenshot::{self, Output, Shoot, Shot};
+use crate::screenshot::{self, Failure, Output, Shoot, Shot};
 
 /// The name of every stream's node.
 const NODE_NAME: &str = "cupertino-screencast";
@@ -769,7 +769,12 @@ impl Capture {
             .iter()
             .position(|s| s.copies.is_empty() && s.due <= now)
         {
-            self.end_still(i, Some("there is no display to capture".to_owned()));
+            self.end_still(
+                i,
+                Some(Failure::Lasting(
+                    "there is no display to capture".to_owned(),
+                )),
+            );
         }
     }
 
@@ -806,11 +811,11 @@ impl Capture {
                 }
                 if let Err(reason) = copy_frame(&self.shm, &self.qh, copy, constraints, Part(id, n))
                 {
-                    self.end_still(i, Some(reason));
+                    self.end_still(i, Some(Failure::Lasting(reason)));
                 }
             }
             ext_image_copy_capture_session_v1::Event::Stopped => {
-                self.end_still(i, Some("a display went away".to_owned()))
+                self.end_still(i, Some(Failure::Passing("a display went away".to_owned())))
             }
             _ => {}
         }
@@ -842,8 +847,12 @@ impl Capture {
                 copying.buffer.destroy();
                 copying.pool.destroy();
                 let Some(image) = image else {
-                    return self
-                        .end_still(i, Some("a display's copy could not be read".to_owned()));
+                    return self.end_still(
+                        i,
+                        Some(Failure::Lasting(
+                            "a display's copy could not be read".to_owned(),
+                        )),
+                    );
                 };
                 copy.image = Some(image);
                 if self.stills[i].copies.iter().all(|c| c.image.is_some()) {
@@ -851,14 +860,24 @@ impl Capture {
                 }
             }
             ext_image_copy_capture_frame_v1::Event::Failed { reason } => {
-                self.end_still(i, Some(format!("copying a display failed: {reason:?}")))
+                let why = format!("copying a display failed: {reason:?}");
+                self.end_still(
+                    i,
+                    Some(match reason {
+                        WEnum::Value(
+                            ext_image_copy_capture_frame_v1::FailureReason::BufferConstraints
+                            | ext_image_copy_capture_frame_v1::FailureReason::Stopped,
+                        ) => Failure::Passing(why),
+                        _ => Failure::Lasting(why),
+                    }),
+                )
             }
             _ => {}
         }
     }
 
     /// End screenshot `i` and answer it: with every display's image, or with `failed`.
-    fn end_still(&mut self, i: usize, failed: Option<String>) {
+    fn end_still(&mut self, i: usize, failed: Option<Failure>) {
         let still = self.stills.remove(i);
         let mut outputs = Vec::new();
         for copy in still.copies {
@@ -878,7 +897,7 @@ impl Capture {
             }
         }
         still.shot.send(match failed {
-            Some(reason) => Err(reason),
+            Some(failure) => Err(failure),
             None => Ok(outputs),
         });
     }

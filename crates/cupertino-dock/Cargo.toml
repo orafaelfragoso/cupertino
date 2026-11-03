@@ -39,7 +39,7 @@ cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-theme = { path = "../cupertino-theme", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
-tiny-skia = { version = "0.11", optional = true }
+tiny-skia = { version = "0.12", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

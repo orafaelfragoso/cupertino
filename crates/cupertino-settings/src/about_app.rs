@@ -240,6 +240,7 @@ impl Application for AboutApp {
                 max_size: Some(size),
                 decorations: DecorationMode::Preferred,
                 foreign_parent: None,
+                input_region: None,
             },
             shortcuts: shortcuts(),
             on_close: Some(Message::Close),

@@ -75,6 +75,8 @@ struct Window {
     app_id: String,
     configured: bool,
     menus: Option<ShownMenus>,
+    /// An input region to send with the next present; `Some(None)` gives the whole surface back.
+    input_region: Option<Option<Vec<Rect>>>,
 }
 
 /// A toplevel's menus as the runtime asked for them, and their publication.
@@ -297,6 +299,7 @@ impl WaylandWindowSystem {
             app_id: String::new(),
             configured: false,
             menus: None,
+            input_region: None,
         });
         id
     }
@@ -730,7 +733,9 @@ impl WindowSystem for WaylandWindowSystem {
             .and_then(|roles| roles.create(&mut self.conn, spec))
         {
             let surface = surface.map_err(platform_error)?;
-            return Ok(self.add(surface, Kind::External, None, convert::whole(spec.size)));
+            let id = self.add(surface, Kind::External, None, convert::whole(spec.size));
+            self.window_mut(id)?.input_region = spec.input_region.clone().map(Some);
+            return Ok(id);
         }
         let toplevel = self
             .conn
@@ -752,6 +757,7 @@ impl WindowSystem for WaylandWindowSystem {
         let w = self.window_mut(id)?;
         (w.min_size, w.max_size) = (spec.min_size, spec.max_size);
         w.app_id = spec.app_id.clone();
+        w.input_region = spec.input_region.clone().map(Some);
         Ok(id)
     }
 
@@ -801,6 +807,10 @@ impl WindowSystem for WaylandWindowSystem {
         let result = match request {
             WindowRequest::Backdrop(backdrop) => return self.set_backdrop(window, backdrop),
             WindowRequest::Menus(menus) => return self.set_menus(window, menus),
+            WindowRequest::SetInputRegion(region) => {
+                self.window_mut(window)?.input_region = Some(region);
+                return Ok(());
+            }
             WindowRequest::SetTitle(title) => {
                 let t = self.toplevel(window)?;
                 self.conn.set_title(t, &title)
@@ -965,6 +975,11 @@ impl WindowSystem for WaylandWindowSystem {
             width: r.width,
             height: r.height,
         }));
+        if let Some(region) = w.input_region.take() {
+            self.conn
+                .set_input_region(surface, region.as_deref())
+                .map_err(platform_error)?;
+        }
         match copy_and_present(&mut self.conn, surface, size, frame, &damage, resized)? {
             Ok(()) => {
                 let feedback = self.conn.capabilities().contains(Capability::Presentation);

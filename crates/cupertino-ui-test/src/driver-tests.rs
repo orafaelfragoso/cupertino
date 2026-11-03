@@ -39,6 +39,7 @@ impl Application for Fields {
                 max_size: None,
                 decorations: DecorationMode::Client,
                 foreign_parent: None,
+                input_region: None,
             },
             shortcuts: CommandRegistry::new(),
             on_close: None,

@@ -575,6 +575,7 @@ impl Application for SettingsApp {
                 max_size: None,
                 decorations: DecorationMode::Preferred,
                 foreign_parent: None,
+                input_region: None,
             },
             shortcuts: shortcuts(),
             on_close: None,

@@ -277,16 +277,16 @@ mod tests {
             max: 1.0,
             step: None,
         });
-        let mut password = node(Role::PasswordInput, Some("Password"), &[]);
-        password.value = Some(AccessibleValue::Protected);
-        password.states.focused = true;
+        let mut secure_field = node(Role::PasswordInput, Some("Password"), &[]);
+        secure_field.value = Some(AccessibleValue::Protected);
+        secure_field.states.focused = true;
         let t = tree(vec![
             (1, node(Role::Window, Some("Downloads"), &[2, 4, 5, 6])),
             (2, list),
             (3, home),
             (4, wifi),
             (5, volume),
-            (6, password),
+            (6, secure_field),
         ]);
         assert_eq!(
             semantic_outline(&t),

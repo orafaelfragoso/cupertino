@@ -14,13 +14,16 @@ use cupertino_kit::geometry::{Insets, Size};
 use cupertino_kit::layout::{
     Align, Axis, Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec, Track,
 };
-use cupertino_kit::platform::{DecorationMode, Keysym, Mods, MouseButton, PointerEvent, WindowSpec};
+use cupertino_kit::platform::{
+    DecorationMode, Keysym, Mods, MouseButton, PointerEvent, WindowSpec,
+};
 use cupertino_kit::text::{AttributedText, FontWeight, TextStyle};
 use cupertino_kit::theme::Surface;
 
 use crate::layout::{
     card_size, BATTERY_GAP, CARD_RADIUS, COLUMN, COMPACT_HEIGHT, FIRST_ROW_HEIGHT, GRID_ROWS,
-    PADDING, ROW_HEIGHT, ROW_SPACING, SLIDER_BOTTOM_INSET, SLIDER_SIDE_INSET, SLIDER_TOP_INSET, SPACING,
+    PADDING, ROW_HEIGHT, ROW_SPACING, SLIDER_BOTTOM_INSET, SLIDER_SIDE_INSET, SLIDER_TOP_INSET,
+    SPACING,
 };
 use crate::model::{speaker_icon, Battery, Controls, Module, Slider, TileState};
 

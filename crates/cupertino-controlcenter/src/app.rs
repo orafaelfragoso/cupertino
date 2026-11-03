@@ -238,7 +238,11 @@ impl SurfaceRoles for PanelRoles {
     fn destroyed(&mut self, surface: SurfaceId) {
         if self.card.as_ref().is_some_and(|l| l.surface() == surface) {
             self.card = None;
-        } else if self.catcher.as_ref().is_some_and(|l| l.surface() == surface) {
+        } else if self
+            .catcher
+            .as_ref()
+            .is_some_and(|l| l.surface() == surface)
+        {
             self.catcher = None;
             if let Some(card) = &self.card {
                 card.set_keyboard_interactivity(KeyboardInteractivity::None);
@@ -388,11 +392,7 @@ impl Application for Panel {
                 view::catcher(input),
                 view::panel(controls, model.controller.opacity(now), input),
             ],
-            Phase::Hiding => vec![view::panel(
-                controls,
-                model.controller.opacity(now),
-                input,
-            )],
+            Phase::Hiding => vec![view::panel(controls, model.controller.opacity(now), input)],
         }
     }
 }

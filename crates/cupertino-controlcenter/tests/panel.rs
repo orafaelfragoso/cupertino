@@ -8,7 +8,9 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use cupertino_assets::BUILTIN_FONT;
-use cupertino_controlcenter::model::{Battery, Controls, Module, Reading, Slider, VolumeState, WifiStatus};
+use cupertino_controlcenter::model::{
+    Battery, Controls, Module, Reading, Slider, VolumeState, WifiStatus,
+};
 use cupertino_controlcenter::view::{self, Input};
 use cupertino_kit::core::{
     Application, Command, PlaceholderIcons, Role, RuntimeOptions, Window, WindowBackground,
@@ -250,7 +252,9 @@ fn check(scene: &str, appearance: Appearance, reduce_transparency: bool) {
         std::fs::create_dir_all(dir).unwrap();
         actual.save_png(&png).unwrap();
         std::fs::write(&txt, &text).unwrap();
-        panic!("{scene}: re-recorded; review the diff and run again without CUPERTINO_UPDATE_GOLDENS");
+        panic!(
+            "{scene}: re-recorded; review the diff and run again without CUPERTINO_UPDATE_GOLDENS"
+        );
     }
     let expected_text = std::fs::read_to_string(&txt).unwrap();
     if let Some(difference) = Inspector::first_difference(&expected_text, &text) {

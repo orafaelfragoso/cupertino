@@ -1,139 +1,365 @@
-//! Glue between the server, the menu controllers and the session bus: one bar per output, its
-//! popups, input routing and timers. The decisions live in the library modules (`feed`,
-//! `routing`, `popups`, `raster`); this file only connects them to the toolkit.
+//! Glue between the server, the menu controllers and the session bus on CupertinoKit: one bar per output, drawn by
+//! [`view`], whose window gets its layer surface, its menu-bar object and its backdrop from [`BarRoles`]. The shell's
+//! events, the session bus, `menubar.conf` and the timers arrive as messages. The decisions live in the library
+//! modules (`feed`, `routing`, `controller`); this file only connects them to the toolkit.
 
 use cupertino_apps::launch::{self, Launch, OPEN_COMMAND};
 use cupertino_apps::{Locale, MimeApps, MimeDatabase, Visibility, XdgDirs};
 use cupertino_assets::Assets;
+use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_defaults::menubar::MenuBarSettings;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
-use cupertino_geometry::Rect as GRect;
 use cupertino_icons::{SystemIcons, ThemeIcons};
+use cupertino_kit::core::{Application, Command, Window};
+use cupertino_kit::geometry::{Rect as GRect, Size};
+use cupertino_kit::platform::{KeyEvent, Keysym, Mods, WindowSpec};
+use cupertino_kit::text::{KeyInput, Keymap, TextSystem};
 use cupertino_menubar::clock::{clock_text, local_time, next_tick, separators_off, ClockSettings};
 use cupertino_menubar::controller::{MenuController, Mode, Outcome};
 use cupertino_menubar::desktop::app_name;
-use cupertino_menubar::extras::{self, ExtraAction, ExtraKind, Extras, SessionAction};
+use cupertino_menubar::extras::{self, ExtraAction, Extras, SessionAction};
 use cupertino_menubar::extras_bus::{ExtrasBus, SessionAgent};
-use cupertino_menubar::feed::{
-    status_icon, status_icon_px, BarFeed, Shared, StatusState, TintedIcon,
-};
-use cupertino_menubar::geom::{Point, Rect};
-use cupertino_menubar::layout::{BarMetrics, MenuMetrics, SlotKey};
-use cupertino_menubar::popups::{self, PopupOp};
-use cupertino_menubar::raster::{BarText, BarTone, MenuPalette, Style, POPUP_RADIUS};
+use cupertino_menubar::feed::{status_icon, status_icon_px, BarFeed, Shared, StatusState};
+use cupertino_menubar::geom::Rect;
+use cupertino_menubar::layout::{BarMetrics, SlotKey};
 use cupertino_menubar::recent::RecentSources;
 use cupertino_menubar::routing::{self, menu_key, Action, Context};
+use cupertino_menubar::tone::BarTone;
+use cupertino_menubar::view::{self, BarFont, BarId, BarPointer, BarScene, Input, KitMeasure};
 use cupertino_menubar::worker::{self, Worker};
+use cupertino_modifiers::{Modifier, Physical, Profile};
 use cupertino_protocol_app::{AppEffects, Backdrop};
 use cupertino_shell_client::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
-    MenuBar, Session as SessionObserver, SessionChange, SessionState, Shell, ShellEvent,
+    MenuBar, MenuBarUpdate, Session as SessionObserver, SessionChange, SessionState, Shell,
+    ShellEvent,
 };
 use cupertino_theme::Theme;
-use cupertino_ui_text::{KeyInput, Keymap};
-use cupertino_ui_wayland::{popup, Ready, ShmPresenter};
+use cupertino_ui_wayland::{RoleEvent, SurfaceRoles, WaylandWindowSystem};
 use cupertino_wayland_client::{
-    Button, Connection, Event, KeyboardEvent, OutputGeometry, OutputId, PointerEvent, Popup,
-    SurfaceId, TokenRequest,
+    Connection, Error as WaylandError, Event, ExtensionEvent, OutputGeometry, OutputId, SurfaceId,
 };
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::rc::Rc;
 use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 /// Role of the surfaces for the server (`wlr-layer-shell` namespace).
-/// Opacity factor of an item symbol whose radio is off or has no link. approximate (the design does not say).
-const DIMMED_ALPHA: f32 = 0.4;
-
 const NAMESPACE: &str = "cupertino-menubar";
 
 /// The name the process reports problems under.
 const PROCESS: &str = "cupertino-menubar";
 
-/// The popup surface of one open menu level.
-struct PopupSurface {
-    popup: Popup,
-    presenter: ShmPresenter,
-    backdrop: Backdrop,
-    /// On whole points, in the coordinates of the bar surface.
-    rect: Rect,
+/// The scale status icons are loaded at: sharp on outputs up to it, scaled down on the others.
+const ICON_SCALE: f64 = 2.0;
+
+/// The keysyms of the Alt keys, which show the alternates of the open menus' items while held.
+const ALT_L: Keysym = Keysym(0xffe9);
+const ALT_R: Keysym = Keysym(0xffea);
+
+/// The shell objects of one bar, made by the roles when its window opens and dropped with the bar.
+struct BarSurface {
+    bar: BarId,
+    output: OutputId,
+    layer: Option<LayerSurface>,
+    menu_bar: Option<MenuBar>,
+    backdrop: Option<Backdrop>,
+}
+
+/// The shell objects of every bar, shared by the roles that make them and the model that uses them.
+#[derive(Default)]
+struct Surfaces {
+    bars: Vec<BarSurface>,
+}
+
+impl Surfaces {
+    fn get(&self, bar: BarId) -> Option<&BarSurface> {
+        self.bars.iter().find(|s| s.bar == bar)
+    }
+
+    fn of_surface(&self, surface: SurfaceId) -> Option<&BarSurface> {
+        self.bars
+            .iter()
+            .find(|s| s.layer.as_ref().is_some_and(|l| l.surface() == surface))
+    }
+}
+
+/// What the shell told the roles about a bar, for the model.
+#[derive(Clone, Debug)]
+pub enum ShellMessage {
+    /// The bar's menu-bar object exists, with what its version offers.
+    Created {
+        bar: BarId,
+        edits: bool,
+        force_quits: bool,
+    },
+    Configured {
+        bar: BarId,
+        width: u32,
+    },
+    MenuBar {
+        bar: BarId,
+        update: Box<MenuBarUpdate>,
+    },
+    Keyboard {
+        bar: BarId,
+        focused: bool,
+    },
+    Session(SessionChange),
+    Outputs(Vec<(OutputId, OutputGeometry)>),
+}
+
+/// A source whose receiver has something to drain.
+#[derive(Clone, Copy, Debug)]
+pub enum Wake {
+    Worker,
+    Extras,
+    Conf,
+}
+
+/// Gives each bar's window its layer surface along the top of its output, the output's menu-bar object and the bar's
+/// material. Hears the shell's events for the model.
+struct BarRoles {
+    layer_shell: LayerShell,
+    effects: AppEffects,
+    shell: Shell,
+    _observer: SessionObserver,
+    observed: SessionState,
+    surfaces: Rc<RefCell<Surfaces>>,
+    /// The bar's height, in whole points.
+    height: u32,
+    events: async_channel::Sender<ShellMessage>,
+}
+
+impl BarRoles {
+    fn send(&self, message: ShellMessage) {
+        // the receiver is gone only while the process exits
+        let _ = self.events.send_blocking(message);
+    }
+
+    fn create_bar(
+        &mut self,
+        conn: &mut Connection,
+        bar: BarId,
+    ) -> std::result::Result<SurfaceId, WaylandError> {
+        let gone = || WaylandError::Protocol("the menu bar's output is gone");
+        let output = self.surfaces.borrow().get(bar).ok_or_else(gone)?.output;
+        let layer = self
+            .layer_shell
+            .layer_surface(
+                conn,
+                &LayerSurfaceConfig {
+                    namespace: NAMESPACE.to_string(),
+                    output: Some(output),
+                    layer: Layer::Top,
+                    anchor: Anchor::Top | Anchor::Left | Anchor::Right,
+                    size: (0, self.height),
+                    margin: Margin::default(),
+                    // the server reserves the bar's space
+                    exclusive_zone: 0,
+                    keyboard: KeyboardInteractivity::None,
+                },
+            )
+            .map_err(|e| match e {
+                cupertino_shell_client::Error::Transport(e) => e,
+                _ => gone(),
+            })?;
+        let surface = layer.surface();
+        let menu_bar = self
+            .shell
+            .menu_bar(conn, surface, output)
+            .map_err(|_| gone())?;
+        let backdrop = self.effects.backdrop(conn, surface)?;
+        backdrop.set_material("MenuBar");
+        self.send(ShellMessage::Created {
+            bar,
+            edits: menu_bar.can_edit(),
+            force_quits: menu_bar.can_force_quit_app(),
+        });
+        let mut surfaces = self.surfaces.borrow_mut();
+        let entry = surfaces
+            .bars
+            .iter_mut()
+            .find(|s| s.bar == bar)
+            .ok_or_else(gone)?;
+        entry.layer = Some(layer);
+        entry.menu_bar = Some(menu_bar);
+        entry.backdrop = Some(backdrop);
+        Ok(surface)
+    }
+}
+
+impl SurfaceRoles for BarRoles {
+    fn create(
+        &mut self,
+        conn: &mut Connection,
+        spec: &WindowSpec,
+    ) -> Option<std::result::Result<SurfaceId, WaylandError>> {
+        let bar = BarId::of(&spec.app_id)?;
+        Some(self.create_bar(conn, bar))
+    }
+
+    fn event(&mut self, event: &ExtensionEvent) -> Option<RoleEvent> {
+        if let Some(change) = self.observed.apply(event) {
+            self.send(ShellMessage::Session(change));
+            // the window system follows the appearance and the lock too
+            return None;
+        }
+        match event.downcast_ref::<ShellEvent>()? {
+            &ShellEvent::Configure { surface, size } => {
+                let surfaces = self.surfaces.borrow();
+                let bar = surfaces.of_surface(surface)?;
+                let layer = bar.layer.as_ref()?;
+                // a configure without a size closes the window
+                let Ok(size) = layer.configured(size) else {
+                    return Some(RoleEvent::Closed(surface));
+                };
+                if let Some(backdrop) = &bar.backdrop {
+                    let rect = GRect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1));
+                    if let Err(e) = backdrop.set_shape(&rect, 0.0) {
+                        eprintln!("{PROCESS}: cannot shape the bar's material: {e}");
+                    }
+                }
+                let message = ShellMessage::Configured {
+                    bar: bar.bar,
+                    width: size.0,
+                };
+                drop(surfaces);
+                self.send(message);
+                Some(RoleEvent::Configure { surface, size })
+            }
+            &ShellEvent::Closed(surface) => {
+                self.surfaces.borrow().of_surface(surface)?;
+                Some(RoleEvent::Closed(surface))
+            }
+            ShellEvent::MenuBar { surface, update } => {
+                let bar = self.surfaces.borrow().of_surface(*surface)?.bar;
+                self.send(ShellMessage::MenuBar {
+                    bar,
+                    update: update.clone(),
+                });
+                None
+            }
+            // the bar has no dock, and the session's requests are for the session agent
+            _ => None,
+        }
+    }
+
+    fn keyboard_focus(&mut self, surface: SurfaceId, focused: bool) {
+        let bar = self.surfaces.borrow().of_surface(surface).map(|s| s.bar);
+        if let Some(bar) = bar {
+            self.send(ShellMessage::Keyboard { bar, focused });
+        }
+    }
+
+    fn outputs_changed(&mut self, conn: &Connection) {
+        self.send(ShellMessage::Outputs(described_outputs(conn)));
+    }
+}
+
+/// The outputs the server has described; one it has not described yet gets its bar when it has.
+fn described_outputs(conn: &Connection) -> Vec<(OutputId, OutputGeometry)> {
+    conn.outputs()
+        .into_iter()
+        .filter_map(|o| Some((o.id, o.geometry?)))
+        .collect()
 }
 
 /// The bar of one output.
 struct Bar {
+    id: BarId,
     output: OutputId,
     geometry: OutputGeometry,
-    layer: LayerSurface,
-    presenter: ShmPresenter,
     /// Width of the surface from its last configure.
     width: u32,
-    menu_bar: MenuBar,
-    backdrop: Backdrop,
     controller: MenuController,
-    text: BarText,
     feed: BarFeed,
-    /// One per open menu level, the first a popup of the bar.
-    popups: Vec<PopupSurface>,
     keyboard: KeyboardInteractivity,
-    /// A surface of this bar (the bar or one of its menus) has the keyboard.
-    has_keyboard: bool,
-    scale: f64,
+    /// The bar's own surface has the keyboard.
+    focused: bool,
+    /// Alt is held on a surface of the bar.
+    alt: bool,
     /// The lightness of the wallpaper under the bar, from the server; `None` before it is known.
     backdrop_lightness: Option<u16>,
     /// The palette of the bar's strip.
     tone: BarTone,
 }
 
-/// What a surface of the process is.
-#[derive(Clone, Copy)]
-enum Part {
-    Bar,
-    Popup(usize),
+impl Bar {
+    /// A surface of this bar has the keyboard: the bar, or one of its menus, which take it with their grab.
+    fn has_keyboard(&self) -> bool {
+        self.focused || self.controller.is_open()
+    }
 }
 
-struct App {
-    conn: Connection,
-    layer_shell: LayerShell,
-    effects: AppEffects,
-    shell: Shell,
-    _observer: SessionObserver,
-    /// The session's appearance (for the text palette).
-    observed: SessionState,
+/// The session bus, the system services and the configuration behind the bars.
+struct Services {
     worker: Worker,
     events: Receiver<worker::Event>,
-    style: Style,
-    text: BarText,
+    extras: ExtrasBus,
+    extras_events: Receiver<Extras>,
+    /// Reports of the watch on `menubar.conf`; the watch lives as long as the process (`None` without one).
+    conf_changes: Receiver<WatchEvent>,
+    _conf_watch: Option<ConfigWatcher>,
+    /// Where Recent Items is read from; `None` when the session's directories are not known.
+    recent: Option<RecentSources>,
+}
+
+pub struct App {
+    surfaces: Rc<RefCell<Surfaces>>,
+    shell: async_channel::Receiver<ShellMessage>,
+    wakes: async_channel::Receiver<Wake>,
+    services: Services,
     shared: Shared,
     bars: Vec<Bar>,
+    /// The outputs the server described last.
+    outputs: Vec<OutputId>,
+    text: Arc<TextSystem>,
+    font: BarFont,
+    metrics: BarMetrics,
+    height: f64,
+    display: DisplayOptions,
     icons: ThemeIcons,
-    /// The template symbols of the extras.
-    symbols: SystemIcons,
     data_dirs: Vec<PathBuf>,
     start: Instant,
     clock: ClockSettings,
     /// `menubar.conf` as last read, the last good values of the next read.
     conf: MenuBarSettings,
-    /// Reports of the watch on `menubar.conf`; the watch lives as long as the process (`None` without one).
-    conf_changes: Receiver<WatchEvent>,
-    _conf_watch: Option<ConfigWatcher>,
     /// Unix seconds at which the clock text is due again.
     next_clock: f64,
     /// The minute of the last reading of the extras' services.
     extras_minute: Option<i64>,
-    extras: ExtrasBus,
-    extras_events: Receiver<Extras>,
-    /// Identifies the next bar's menu in the shared sources.
-    next_key: u64,
-    /// Launches waiting for their activation token, by request.
-    pending: HashMap<TokenRequest, Launch>,
-    /// Where Recent Items is read from; `None` when the session's directories are not known.
-    recent: Option<RecentSources>,
+    /// Numbers the next bar.
+    next_bar: u64,
+    /// Launches waiting for their activation token, by number.
+    pending: HashMap<u64, Launch>,
+    next_launch: u64,
     /// The editing chords of the Help menu's search field.
     keymap: Keymap,
+    /// The timer that counts; one scheduled before it is ignored when it fires.
+    timer: u64,
+    /// When the timer that counts fires; `None` while none is scheduled.
+    timer_due: Option<Instant>,
+}
+
+#[derive(Clone, Debug)]
+pub enum Message {
+    Shell(ShellMessage),
+    Input(Input),
+    Wake(Wake),
+    Timer(u64),
+    Token {
+        launch: u64,
+        token: Option<String>,
+    },
+    /// The roles or the bus threads are gone.
+    Unheard,
 }
 
 /// `menubar.conf` from the configuration directory (`CUPERTINO_MENUBAR_CONFIG` overrides the path); every key unset
@@ -146,7 +372,7 @@ fn load_conf(last_good: Option<&MenuBarSettings>) -> Result<MenuBarSettings> {
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     for problem in problems {
         eprintln!(
-            "cupertino-menubar: {} line {}: {}",
+            "{PROCESS}: {} line {}: {}",
             path.display(),
             problem.line,
             problem.message
@@ -155,25 +381,24 @@ fn load_conf(last_good: Option<&MenuBarSettings>) -> Result<MenuBarSettings> {
     Ok(settings)
 }
 
-/// Watch `menubar.conf`; its changes wake the loop. A watch that cannot be set up is reported: the file then applies at
-/// the next start.
-fn watch_conf(conn: &Connection) -> (Option<ConfigWatcher>, Receiver<WatchEvent>) {
+/// Watch `menubar.conf`; its changes wake the application. A watch that cannot be set up is reported: the file then
+/// applies at the next start.
+fn watch_conf(wakes: async_channel::Sender<Wake>) -> (Option<ConfigWatcher>, Receiver<WatchEvent>) {
     let (tx, rx) = std::sync::mpsc::channel();
     let Some(path) = MenuBarSettings::path() else {
         return (None, rx);
     };
-    let waker = conn.waker();
     let watch = ConfigWatcher::new(vec![path.clone()], move |event| {
-        // the receiver is gone only while the process exits
+        // the receivers are gone only while the process exits
         if tx.send(event).is_ok() {
-            waker.wake();
+            let _ = wakes.send_blocking(Wake::Conf);
         }
     });
     match watch {
         Ok(w) => (Some(w), rx),
         Err(e) => {
             eprintln!(
-                "cupertino-menubar: cannot watch {}: {e}; changes apply at the next start",
+                "{PROCESS}: cannot watch {}: {e}; changes apply at the next start",
                 path.display()
             );
             (None, rx)
@@ -186,30 +411,45 @@ pub fn run() -> Result<std::convert::Infallible> {
     let assets = Assets::discover();
     let theme = Theme::load()?;
     let conf = load_conf(None)?;
-    let bar = BarMetrics {
+    let metrics = BarMetrics {
         height: theme.shapes.menu_bar_height,
         selection_corner_radius: theme.shapes.menu_bar_selection_corner_radius,
         ..BarMetrics::default()
     };
-    let text = BarText::new(theme.tokens.typography(), &assets)?;
+    let font = BarFont::new(theme.tokens.typography());
+    // the extras' symbols are drawn by the toolkit from the same packs; a missing one is reported now
+    let _ = SystemIcons::required(&assets, &[], &extras::SYMBOL_NAMES);
+    let keymap = Keymap::new(
+        cupertino_keyboard::binding::user_profile(),
+        cupertino_keyboard::binding::load_default().0,
+    );
 
-    let mut conn = Connection::connect()?;
-    let layer_shell = LayerShell::bind(&mut conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
-    let effects = AppEffects::bind(&mut conn).ok_or("the server lacks cupertino_app_effects_v1")?;
-    let shell = Shell::bind(&mut conn).ok_or("the server lacks cupertino_shell_v1")?;
-    let (observer, observed, early) = shell.observe(&mut conn)?;
-    let (conf_watch, conf_changes) = watch_conf(&conn);
-    let style = Style {
-        palette: MenuPalette::new(observed.dark),
-        bar,
-        menu: MenuMetrics::default(),
-    };
+    let mut system = WaylandWindowSystem::connect(keymap.profile().clone())
+        .map_err(|e| format!("cannot connect to the Wayland display: {e:?}"))?;
+    let conn = system.connection();
+    let layer_shell = LayerShell::bind(conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
+    let effects = AppEffects::bind(conn).ok_or("the server lacks cupertino_app_effects_v1")?;
+    let shell = Shell::bind(conn).ok_or("the server lacks cupertino_shell_v1")?;
+    let (observer, mut observed, early) = shell.observe(conn)?;
+    for event in early {
+        if let Event::Extension(event) = event {
+            observed.apply(&event);
+        }
+    }
+    let outputs = described_outputs(conn);
+
+    let (wake, wakes) = async_channel::unbounded();
+    let (conf_watch, conf_changes) = watch_conf(wake.clone());
     let session = zbus::block_on(zbus::Connection::session())
         .map_err(|e| format!("cannot connect to the session bus: {e}"))?;
-    let waker = conn.waker();
-    let (worker, events) = Worker::start(session.clone(), move || waker.wake())?;
-    let waker = conn.waker();
-    let (extras, extras_events) = ExtrasBus::start(session, move || waker.wake());
+    let waker = wake.clone();
+    let (worker, events) = Worker::start(session.clone(), move || {
+        let _ = waker.send_blocking(Wake::Worker);
+    })?;
+    let waker = wake.clone();
+    let (extras, extras_events) = ExtrasBus::start(session, move || {
+        let _ = waker.send_blocking(Wake::Extras);
+    });
     let recent = match XdgDirs::from_env() {
         Ok(dirs) => Some(RecentSources::new(
             &dirs,
@@ -221,58 +461,102 @@ pub fn run() -> Result<std::convert::Infallible> {
             None
         }
     };
-    let mut app = App {
-        conn,
+
+    let surfaces = Rc::new(RefCell::new(Surfaces::default()));
+    let (shell_events, shell_messages) = async_channel::unbounded();
+    let system = system.with_roles(BarRoles {
         layer_shell,
         effects,
         shell,
         _observer: observer,
         observed,
-        worker,
-        events,
-        style,
-        text,
+        surfaces: Rc::clone(&surfaces),
+        height: metrics.height.ceil() as u32,
+        events: shell_events,
+    });
+    let mut app = App {
+        surfaces,
+        shell: shell_messages,
+        wakes,
+        services: Services {
+            worker,
+            events,
+            extras,
+            extras_events,
+            conf_changes,
+            _conf_watch: conf_watch,
+            recent,
+        },
         shared: Shared::default(),
         bars: Vec::new(),
+        outputs: Vec::new(),
+        text: cupertino_kit::app::options()?.text,
+        font,
+        height: metrics.height,
+        metrics,
+        display: observed.display,
         icons: ThemeIcons::new(&assets),
-        symbols: SystemIcons::required(&assets, &[], &extras::SYMBOL_NAMES),
         data_dirs: cupertino_defaults::data_dirs(),
         start: Instant::now(),
         clock: conf.clock,
         conf,
-        conf_changes,
-        _conf_watch: conf_watch,
         next_clock: f64::NEG_INFINITY,
         extras_minute: None,
-        extras,
-        extras_events,
-        next_key: 0,
+        next_bar: 0,
         pending: HashMap::new(),
-        recent,
-        keymap: Keymap::new(
-            cupertino_keyboard::binding::user_profile(),
-            cupertino_keyboard::binding::load_default().0,
-        ),
+        next_launch: 0,
+        keymap,
+        timer: 0,
+        timer_due: None,
     };
-    app.reconcile_outputs()?;
-    for event in early {
-        app.handle(event)?;
-    }
-    let mut timeout = app.housekeeping()?;
-    loop {
-        app.present()?;
-        for event in app.conn.wait(timeout)? {
-            app.handle(event)?;
-        }
-        app.sync_alt()?;
-        app.drain_worker()?;
-        app.reload_conf();
-        timeout = app.housekeeping()?;
-    }
+    let mut commands = vec![listen_shell(&app.shell), listen_wakes(&app.wakes)];
+    commands.extend(app.outputs(outputs));
+    commands.extend(app.housekeeping());
+    cupertino_kit::app::run_on::<App>(system, (app, commands))?;
+    Err("the menu bar's connection or bus went away".into())
 }
 
-fn geometry_rect(r: Rect) -> GRect {
-    GRect::new(r.x, r.y, r.w, r.h)
+fn listen_shell(shell: &async_channel::Receiver<ShellMessage>) -> Command<Message> {
+    let shell = shell.clone();
+    Command::Perform(Box::pin(async move {
+        shell.recv().await.map_or(Message::Unheard, Message::Shell)
+    }))
+}
+
+fn listen_wakes(wakes: &async_channel::Receiver<Wake>) -> Command<Message> {
+    let wakes = wakes.clone();
+    Command::Perform(Box::pin(async move {
+        wakes.recv().await.map_or(Message::Unheard, Message::Wake)
+    }))
+}
+
+/// The modifiers of `key` on the keys that carry them, as the search field's chords are written.
+fn key_input(key: &KeyEvent, profile: &Profile) -> KeyInput {
+    let held: Vec<Physical> = [
+        (Mods::SHIFT, Modifier::Shift),
+        (Mods::CTRL, Modifier::Ctrl),
+        (Mods::ALT, Modifier::Alt),
+        (Mods::PRIMARY, Modifier::Primary),
+    ]
+    .into_iter()
+    .filter(|(mods, _)| key.mods.contains(*mods))
+    .map(|(_, role)| profile.physical_for(role))
+    .collect();
+    let has = |p: Physical| held.contains(&p);
+    KeyInput::new(
+        key.code,
+        has(Physical::Shift),
+        has(Physical::Ctrl),
+        has(Physical::Alt),
+        has(Physical::Super),
+        key.text,
+    )
+}
+
+/// Ends the application after a failure; the server restarts the process.
+fn fail(e: impl std::fmt::Display) -> Vec<Command<Message>> {
+    eprintln!("{PROCESS}: {e}");
+    vec![Command::Exit]
 }
 
 impl App {
@@ -281,73 +565,49 @@ impl App {
         self.start.elapsed().as_secs_f64()
     }
 
-    fn locate(&self, surface: SurfaceId) -> Option<(usize, Part)> {
-        self.bars.iter().enumerate().find_map(|(i, b)| {
-            if b.layer.surface() == surface {
-                Some((i, Part::Bar))
-            } else {
-                b.popups
-                    .iter()
-                    .position(|p| p.popup.surface() == surface)
-                    .map(|level| (i, Part::Popup(level)))
-            }
-        })
+    fn index(&self, bar: BarId) -> Option<usize> {
+        self.bars.iter().position(|b| b.id == bar)
+    }
+
+    fn menu_bar<R>(&self, bar: BarId, f: impl FnOnce(&MenuBar) -> R) -> Option<R> {
+        self.surfaces
+            .borrow()
+            .get(bar)
+            .and_then(|s| s.menu_bar.as_ref())
+            .map(f)
     }
 
     // ---- outputs -------------------------------------------------------------------------
 
-    /// Create the bars of new outputs, drop those of outputs that went away and follow the geometry
-    /// of the others.
-    fn reconcile_outputs(&mut self) -> Result<()> {
-        let outputs = self.conn.outputs();
-        let mut i = 0;
-        while i < self.bars.len() {
-            if outputs.iter().any(|o| o.id == self.bars[i].output) {
-                i += 1;
-            } else {
-                self.destroy_bar(i)?;
-            }
+    /// Create the bars of new outputs, drop those of outputs that went away and follow the geometry of the others.
+    fn outputs(&mut self, outputs: Vec<(OutputId, OutputGeometry)>) -> Vec<Command<Message>> {
+        let mut commands = Vec::new();
+        self.outputs = outputs.iter().map(|(o, _)| *o).collect();
+        let gone: Vec<BarId> = self
+            .bars
+            .iter()
+            .filter(|b| !outputs.iter().any(|(o, _)| *o == b.output))
+            .map(|b| b.id)
+            .collect();
+        for bar in gone {
+            commands.extend(self.destroy_bar(bar));
         }
-        for info in outputs {
-            // an output the server has not described yet gets its bar when it has
-            let Some(geometry) = info.geometry else {
-                continue;
-            };
-            match self.bars.iter().position(|b| b.output == info.id) {
-                Some(i) => {
-                    if self.bars[i].geometry != geometry {
-                        self.bars[i].geometry = geometry;
-                        self.set_screen(i);
-                        self.sync_popups(i)?;
-                    }
+        for (output, geometry) in outputs {
+            match self.bars.iter().position(|b| b.output == output) {
+                Some(i) if self.bars[i].geometry != geometry => {
+                    self.bars[i].geometry = geometry;
+                    self.set_screen(i);
                 }
-                None => self.create_bar(info.id, geometry)?,
+                Some(_) => {}
+                None => commands.extend(self.create_bar(output, geometry)),
             }
         }
-        Ok(())
+        commands
     }
 
-    fn create_bar(&mut self, output: OutputId, geometry: OutputGeometry) -> Result<()> {
-        let layer = self.layer_shell.layer_surface(
-            &mut self.conn,
-            &LayerSurfaceConfig {
-                namespace: NAMESPACE.to_string(),
-                output: Some(output),
-                layer: Layer::Top,
-                anchor: Anchor::Top | Anchor::Left | Anchor::Right,
-                size: (0, self.style.bar.height.ceil() as u32),
-                margin: Margin::default(),
-                // the server reserves the bar's space
-                exclusive_zone: 0,
-                keyboard: KeyboardInteractivity::None,
-            },
-        )?;
-        let menu_bar = self.shell.menu_bar(&self.conn, layer.surface(), output)?;
-        let edits = menu_bar.can_edit();
-        let force_quits = menu_bar.can_force_quit_app();
-        let backdrop = self.effects.backdrop(&self.conn, layer.surface())?;
-        backdrop.set_material("MenuBar");
-        let text = self.text.for_output();
+    fn create_bar(&mut self, output: OutputId, geometry: OutputGeometry) -> Vec<Command<Message>> {
+        let id = BarId(self.next_bar);
+        self.next_bar += 1;
         let mut controller = MenuController::new(
             Rect::new(
                 0.0,
@@ -355,49 +615,60 @@ impl App {
                 f64::from(geometry.width),
                 f64::from(geometry.height),
             ),
-            Box::new(text.clone()),
+            Box::new(KitMeasure {
+                text: Arc::clone(&self.text),
+                font: self.font,
+            }),
         );
-        controller.bar_metrics = self.style.bar.clone();
+        controller.bar_metrics = self.metrics.clone();
         controller.menu_metrics.shortcut_style = self.shared.chords.style();
-        let key = self.next_key;
-        self.next_key += 1;
+        self.surfaces.borrow_mut().bars.push(BarSurface {
+            bar: id,
+            output,
+            layer: None,
+            menu_bar: None,
+            backdrop: None,
+        });
         self.bars.push(Bar {
+            id,
             output,
             geometry,
-            presenter: ShmPresenter::new(layer.surface()),
-            layer,
             width: geometry.width,
-            menu_bar,
-            backdrop,
             controller,
-            text,
-            feed: BarFeed::new(key, edits, force_quits),
-            popups: Vec::new(),
+            // the menu-bar object tells what it offers when the window opens
+            feed: BarFeed::new(id.0, false, false),
             keyboard: KeyboardInteractivity::None,
-            has_keyboard: false,
-            scale: 1.0,
+            focused: false,
+            alt: false,
             backdrop_lightness: None,
             tone: BarTone::Appearance,
         });
         if self.bars.len() == 1 {
-            self.worker.send(worker::Request::AppMenuRegistrar(true))?;
+            if let Err(e) = self
+                .services
+                .worker
+                .send(worker::Request::AppMenuRegistrar(true))
+            {
+                return fail(e);
+            }
         }
-        Ok(())
+        Vec::new()
     }
 
-    fn destroy_bar(&mut self, i: usize) -> Result<()> {
-        let mut bar = self.bars.remove(i);
+    /// Drop a bar; its window closes with it, after its shell objects.
+    fn destroy_bar(&mut self, bar: BarId) -> Vec<Command<Message>> {
+        self.bars.retain(|b| b.id != bar);
+        self.surfaces.borrow_mut().bars.retain(|s| s.bar != bar);
         if self.bars.is_empty() {
-            self.worker.send(worker::Request::AppMenuRegistrar(false))?;
+            if let Err(e) = self
+                .services
+                .worker
+                .send(worker::Request::AppMenuRegistrar(false))
+            {
+                return fail(e);
+            }
         }
-        while let Some(popup) = bar.popups.pop() {
-            drop(popup.backdrop);
-            self.conn.destroy(popup.popup.surface())?;
-        }
-        drop(bar.backdrop);
-        drop(bar.menu_bar);
-        self.conn.destroy(bar.layer.surface())?;
-        Ok(())
+        Vec::new()
     }
 
     /// The screen the controller lays menus out on: the bar's width and the output's height.
@@ -411,276 +682,233 @@ impl App {
         ));
     }
 
-    // ---- events --------------------------------------------------------------------------
+    // ---- shell ---------------------------------------------------------------------------
 
-    fn handle(&mut self, event: Event) -> Result<()> {
-        match event {
-            Event::Frame(frame) => {
-                if let Some(presenter) =
-                    presenters(&mut self.bars).find(|p| p.surface() == frame.surface)
-                {
-                    presenter.frame_done();
-                }
-            }
-            Event::PopupConfigure { popup, configure } => {
-                if let Some(presenter) =
-                    presenters(&mut self.bars).find(|p| p.surface() == popup.surface())
-                {
-                    presenter.configured((configure.width, configure.height));
-                }
-            }
-            Event::PopupDone(popup) => {
-                // the server dismissed the grab: the menus are over
-                if let Some((i, _)) = self.locate(popup.surface()) {
-                    let outcome = self.bars[i].controller.close();
-                    self.apply(i, outcome)?;
-                }
-            }
-            Event::Pointer { surface, event, .. } => self.pointer(surface, event)?,
-            Event::Keyboard {
-                surface,
-                event:
-                    KeyboardEvent::Key {
-                        code,
-                        pressed: true,
-                        character,
-                        mods,
-                        ..
-                    },
-                ..
+    fn shell_message(&mut self, message: ShellMessage) -> Vec<Command<Message>> {
+        match message {
+            ShellMessage::Created {
+                bar,
+                edits,
+                force_quits,
             } => {
-                if let Some((i, _)) = self.locate(surface) {
-                    let now = self.now();
-                    let key = menu_key(code);
-                    let input =
-                        KeyInput::new(code, mods.shift, mods.ctrl, mods.alt, mods.logo, character);
-                    let controller = &mut self.bars[i].controller;
-                    let outcome =
-                        match controller.search_key(key, &mut self.keymap, input, Instant::now()) {
-                            Some(outcome) => Some(outcome),
-                            None => key.map(|key| controller.key(key, now)),
-                        };
-                    if let Some(outcome) = outcome {
-                        self.apply(i, outcome)?;
-                    }
+                if let Some(i) = self.index(bar) {
+                    self.bars[i].feed = BarFeed::new(bar.0, edits, force_quits);
                 }
+                Vec::new()
             }
-            Event::Keyboard {
-                surface,
-                event: KeyboardEvent::Enter,
-                ..
-            } => {
-                if let Some((i, part)) = self.locate(surface) {
-                    self.bars[i].has_keyboard = true;
-                    if matches!(part, Part::Bar) {
-                        let outcome = self.bars[i].controller.keyboard_arrived();
-                        self.apply(i, outcome)?;
-                    }
-                }
+            ShellMessage::Configured { bar, width } => {
+                let Some(i) = self.index(bar) else {
+                    return Vec::new();
+                };
+                self.bars[i].width = width;
+                self.set_screen(i);
+                Vec::new()
             }
-            Event::Keyboard {
-                surface,
-                event: KeyboardEvent::Leave,
-                ..
-            } => {
-                if let Some((i, _)) = self.locate(surface) {
-                    self.bars[i].has_keyboard = false;
-                }
-                // the bar held the keyboard for the shortcut and lost it to something else
-                if let Some((i, Part::Bar)) = self.locate(surface) {
+            ShellMessage::MenuBar { bar, update } => match self.index(bar) {
+                Some(i) => self.menu_bar_update(i, &update),
+                None => Vec::new(),
+            },
+            ShellMessage::Keyboard { bar, focused } => {
+                let Some(i) = self.index(bar) else {
+                    return Vec::new();
+                };
+                self.bars[i].focused = focused;
+                if focused {
+                    let outcome = self.bars[i].controller.keyboard_arrived();
+                    self.apply(i, outcome)
+                } else {
+                    self.bars[i].alt = false;
+                    // the bar held the keyboard for the shortcut and lost it to something else
                     if self.bars[i].controller.mode() == Mode::TitleFocus {
                         let outcome = self.bars[i].controller.close();
-                        self.apply(i, outcome)?;
+                        self.apply(i, outcome)
+                    } else {
+                        self.sync_alt(i)
                     }
                 }
             }
-            Event::OutputsChanged => self.reconcile_outputs()?,
-            Event::ActivationToken { request, token } => self.complete_launch(request, &token),
-            Event::Extension(event) => match self.observed.apply(&event) {
-                Some(SessionChange::Appearance { dark }) => {
-                    self.style.palette = MenuPalette::new(dark);
-                    let display = self.observed.display;
-                    for bar in &mut self.bars {
-                        bar.tone = BarTone::fresh(bar.backdrop_lightness, display);
-                    }
-                    self.redraw_all();
-                }
-                // the bar's and the menus' materials follow the options in the server; the text palette has no
-                // recorded contrast variant, and a solid bar keeps the appearance's
-                Some(SessionChange::DisplayOptions(display)) => {
-                    for bar in &mut self.bars {
-                        let tone = BarTone::fresh(bar.backdrop_lightness, display);
-                        if tone != bar.tone {
-                            bar.tone = tone;
-                            bar.presenter.request_redraw();
-                        }
-                    }
-                }
-                // the server draws the lock screen: only the menus this process owns have to go
-                Some(SessionChange::Lock { locked: true }) => {
-                    for i in 0..self.bars.len() {
-                        let outcome = self.bars[i].controller.close();
-                        self.apply(i, outcome)?;
-                    }
-                }
-                Some(SessionChange::Lock { locked: false }) => {}
-                None => match event.downcast_ref::<ShellEvent>() {
-                    Some(&ShellEvent::Configure { surface, size }) => {
-                        if let Some((i, Part::Bar)) = self.locate(surface) {
-                            let bar = &mut self.bars[i];
-                            let size = bar.layer.configured(size)?;
-                            bar.presenter.configured(size);
-                            bar.width = size.0;
-                            self.set_screen(i);
-                            self.sync_popups(i)?;
-                        }
-                    }
-                    Some(&ShellEvent::Closed(surface)) => {
-                        if let Some((i, Part::Bar)) = self.locate(surface) {
-                            let output = self.bars[i].output;
-                            self.destroy_bar(i)?;
-                            if self.conn.outputs().iter().any(|o| o.id == output) {
-                                return Err("the server closed the menu bar of an output that is still present"
-                                    .into());
-                            }
-                        }
-                    }
-                    Some(ShellEvent::MenuBar { surface, update }) => {
-                        if let Some((i, Part::Bar)) = self.locate(*surface) {
-                            let data_dirs = &self.data_dirs;
-                            self.bars[i]
-                                .feed
-                                .apply(update, &mut self.shared, |id| app_name(id, data_dirs));
-                            if let Some(lightness) = update.backdrop_lightness {
-                                let bar = &mut self.bars[i];
-                                let scrim = bar.tone.scrim(bar.backdrop_lightness);
-                                bar.backdrop_lightness = Some(lightness);
-                                let tone = bar.tone.next(Some(lightness), self.observed.display);
-                                if tone != bar.tone || tone.scrim(Some(lightness)) != scrim {
-                                    bar.tone = tone;
-                                    bar.presenter.request_redraw();
-                                }
-                            }
-                            if let Some(agent) = update.session_agent {
-                                self.extras.session_agent(match agent {
-                                    cupertino_shell_client::SessionAgent::None => {
-                                        SessionAgent::None
-                                    }
-                                    cupertino_shell_client::SessionAgent::Process(pid) => {
-                                        SessionAgent::Process(pid)
-                                    }
-                                    cupertino_shell_client::SessionAgent::Any => SessionAgent::Any,
-                                })?;
-                            }
-                            if update.shortcuts.is_some() {
-                                let style = self.shared.chords.style();
-                                for bar in &mut self.bars {
-                                    bar.controller.menu_metrics.shortcut_style = style;
-                                }
-                            }
-                            if update.engage {
-                                let outcome = self.bars[i].controller.focus_bar();
-                                self.apply(i, outcome)?;
-                            }
-                            if update.engage_help {
-                                let bar = &mut self.bars[i];
-                                let outcome = bar.controller.focus_help_search(bar.has_keyboard);
-                                self.apply(i, outcome)?;
-                            }
-                            self.refresh()?;
-                        }
-                    }
-                    Some(ShellEvent::Dock { .. }) => {
-                        return Err("a dock event arrived but this process has no dock".into())
-                    }
-                    // the session's requests are for the session agent
-                    _ => {}
-                },
-            },
-            // the scale is read when polling the presenters; the bar has no window and no clipboard
-            _ => {}
-        }
-        Ok(())
-    }
-
-    /// Draw every surface that can take a frame, until none can. A bar whose scale changed measures its menus at
-    /// the new one before anything is drawn.
-    fn present(&mut self) -> Result<()> {
-        loop {
-            let (mut scaled, mut ready) = (Vec::new(), Vec::new());
-            for presenter in presenters(&mut self.bars) {
-                loop {
-                    match presenter.poll(&self.conn)? {
-                        Ready::ScaleChanged(scale) => scaled.push((presenter.surface(), scale)),
-                        Ready::Draw => break ready.push(presenter.surface()),
-                        Ready::Idle => break,
-                    }
-                }
-            }
-            if scaled.is_empty() && ready.is_empty() {
-                return Ok(());
-            }
-            for (surface, scale) in scaled {
-                if let Some((i, Part::Bar)) = self.locate(surface) {
-                    // menus are measured at the scale they are drawn at
-                    self.bars[i].scale = scale.factor();
-                    self.bars[i].text.set_scale(self.bars[i].scale);
-                    self.set_screen(i);
-                    self.sync_popups(i)?;
-                    self.reload_icons();
-                }
-            }
-            for surface in ready {
-                self.draw(surface)?;
-            }
+            ShellMessage::Session(change) => self.session(change),
+            ShellMessage::Outputs(outputs) => self.outputs(outputs),
         }
     }
 
-    fn pointer(&mut self, surface: SurfaceId, event: PointerEvent) -> Result<()> {
-        let Some((i, part)) = self.locate(surface) else {
-            return Ok(());
-        };
-        // the controller works in bar-surface coordinates; a popup's events are relative to its corner
-        let origin = match part {
-            Part::Bar => (0.0, 0.0),
-            Part::Popup(level) => (
-                self.bars[i].popups[level].rect.x,
-                self.bars[i].popups[level].rect.y,
-            ),
-        };
-        let at = |p: cupertino_geometry::Point| Point::new(p.x + origin.0, p.y + origin.1);
+    fn session(&mut self, change: SessionChange) -> Vec<Command<Message>> {
+        match change {
+            // the toolkit follows the appearance; the bar's tone is chosen afresh in it
+            SessionChange::Appearance { .. } => {
+                for bar in &mut self.bars {
+                    bar.tone = BarTone::fresh(bar.backdrop_lightness, self.display);
+                }
+                Vec::new()
+            }
+            // the bar's and the menus' materials follow the options in the server; a solid bar keeps the appearance's
+            // text
+            SessionChange::DisplayOptions(display) => {
+                self.display = display;
+                for bar in &mut self.bars {
+                    bar.tone = BarTone::fresh(bar.backdrop_lightness, display);
+                }
+                Vec::new()
+            }
+            // the server draws the lock screen: only the menus this process owns have to go
+            SessionChange::Lock { locked: true } => {
+                let mut commands = Vec::new();
+                for i in 0..self.bars.len() {
+                    let outcome = self.bars[i].controller.close();
+                    commands.extend(self.apply(i, outcome));
+                }
+                commands
+            }
+            SessionChange::Lock { locked: false } => Vec::new(),
+        }
+    }
+
+    fn menu_bar_update(&mut self, i: usize, update: &MenuBarUpdate) -> Vec<Command<Message>> {
+        let data_dirs = &self.data_dirs;
+        self.bars[i]
+            .feed
+            .apply(update, &mut self.shared, |id| app_name(id, data_dirs));
+        if let Some(lightness) = update.backdrop_lightness {
+            let bar = &mut self.bars[i];
+            bar.backdrop_lightness = Some(lightness);
+            bar.tone = bar.tone.next(Some(lightness), self.display);
+        }
+        if let Some(agent) = update.session_agent {
+            let agent = match agent {
+                cupertino_shell_client::SessionAgent::None => SessionAgent::None,
+                cupertino_shell_client::SessionAgent::Process(pid) => SessionAgent::Process(pid),
+                cupertino_shell_client::SessionAgent::Any => SessionAgent::Any,
+            };
+            if let Err(e) = self.services.extras.session_agent(agent) {
+                return fail(e);
+            }
+        }
+        if update.shortcuts.is_some() {
+            let style = self.shared.chords.style();
+            for bar in &mut self.bars {
+                bar.controller.menu_metrics.shortcut_style = style;
+            }
+        }
+        let mut commands = Vec::new();
+        if update.engage {
+            let outcome = self.bars[i].controller.focus_bar();
+            commands.extend(self.apply(i, outcome));
+        }
+        if update.engage_help {
+            let bar = &mut self.bars[i];
+            let outcome = bar.controller.focus_help_search(bar.has_keyboard());
+            commands.extend(self.apply(i, outcome));
+        }
+        commands.extend(self.refresh());
+        commands
+    }
+
+    // ---- input ---------------------------------------------------------------------------
+
+    fn input(&mut self, input: Input) -> Vec<Command<Message>> {
         let now = self.now();
-        let outcome = match event {
-            PointerEvent::Enter(p) | PointerEvent::Motion(p) => {
-                self.bars[i].controller.pointer_move(at(p), now)
+        match input {
+            Input::Pointer { bar, pointer } => {
+                let Some(i) = self.index(bar) else {
+                    return Vec::new();
+                };
+                let controller = &mut self.bars[i].controller;
+                let outcomes = match pointer {
+                    BarPointer::Move(p) => vec![controller.pointer_move(p, now)],
+                    BarPointer::Press(p) => vec![controller.pointer_press(p, now)],
+                    BarPointer::Release(p) => vec![controller.pointer_release(p, now)],
+                    BarPointer::Click(p) => vec![
+                        controller.pointer_move(p, now),
+                        controller.pointer_press(p, now),
+                        controller.pointer_release(p, now),
+                    ],
+                };
+                outcomes
+                    .into_iter()
+                    .flat_map(|outcome| self.apply(i, outcome))
+                    .collect()
             }
-            PointerEvent::Button {
-                button: Button::Left,
-                pressed: true,
-                position,
-            } => self.bars[i].controller.pointer_press(at(position), now),
-            PointerEvent::Button {
-                button: Button::Left,
-                pressed: false,
-                position,
-            } => self.bars[i].controller.pointer_release(at(position), now),
-            // the controller keeps its selection until the pointer shows up elsewhere
-            PointerEvent::Leave | PointerEvent::Button { .. } | PointerEvent::Scroll { .. } => {
-                return Ok(())
+            Input::Key { bar, key } => {
+                let Some(i) = self.index(bar) else {
+                    return Vec::new();
+                };
+                self.bars[i].alt = match key.keysym {
+                    ALT_L | ALT_R => key.pressed,
+                    _ => key.mods.contains(Mods::ALT),
+                };
+                let mut commands = self.sync_alt(i);
+                if !key.pressed {
+                    return commands;
+                }
+                let input = key_input(&key, self.keymap.profile());
+                let code = menu_key(key.code);
+                let controller = &mut self.bars[i].controller;
+                let outcome =
+                    match controller.search_key(code, &mut self.keymap, input, Instant::now()) {
+                        Some(outcome) => Some(outcome),
+                        None => code.map(|code| controller.key(code, now)),
+                    };
+                if let Some(outcome) = outcome {
+                    commands.extend(self.apply(i, outcome));
+                }
+                commands
             }
-        };
-        self.apply(i, outcome)
+            Input::Dismissed(bar) => match self.index(bar) {
+                // the server dismissed the grab: the menus are over
+                Some(i) => {
+                    let outcome = self.bars[i].controller.close();
+                    self.apply(i, outcome)
+                }
+                None => Vec::new(),
+            },
+            Input::Closed(bar) => {
+                let Some(i) = self.index(bar) else {
+                    return Vec::new();
+                };
+                let output = self.bars[i].output;
+                let mut commands = self.destroy_bar(bar);
+                if self.outputs.contains(&output) {
+                    commands.extend(fail(
+                        "the server closed the menu bar of an output that is still present",
+                    ));
+                }
+                commands
+            }
+        }
+    }
+
+    /// Show the alternates of the open menus' items while Alt is held on a surface of their bar.
+    fn sync_alt(&mut self, i: usize) -> Vec<Command<Message>> {
+        let bar = &mut self.bars[i];
+        let held = bar.alt && bar.has_keyboard();
+        let outcome = bar.controller.set_alt(held);
+        if outcome.effects.is_empty() {
+            Vec::new()
+        } else {
+            self.apply(i, outcome)
+        }
     }
 
     // ---- bus -----------------------------------------------------------------------------
 
+    fn wake(&mut self, wake: Wake) -> Vec<Command<Message>> {
+        match wake {
+            Wake::Worker => self.drain_worker(),
+            Wake::Extras => self.drain_extras(),
+            Wake::Conf => {
+                self.reload_conf();
+                Vec::new()
+            }
+        }
+    }
+
     /// Apply the changes of `menubar.conf`: the file is read again with the current values as the last good ones, and a
     /// new clock setting redraws the clock now. A file that cannot be read keeps the current values (reported).
     fn reload_conf(&mut self) {
-        while let Ok(event) = self.conf_changes.try_recv() {
+        while let Ok(event) = self.services.conf_changes.try_recv() {
             match event {
                 WatchEvent::Error(e) => {
-                    eprintln!("cupertino-menubar: watching menubar.conf failed: {e}")
+                    eprintln!("{PROCESS}: watching menubar.conf failed: {e}")
                 }
                 WatchEvent::Changed(_) => match load_conf(Some(&self.conf)) {
                     Ok(conf) => {
@@ -690,41 +918,43 @@ impl App {
                             self.next_clock = f64::NEG_INFINITY;
                         }
                     }
-                    Err(e) => eprintln!("cupertino-menubar: {e}; the clock keeps its settings"),
+                    Err(e) => eprintln!("{PROCESS}: {e}; the clock keeps its settings"),
                 },
             }
         }
     }
 
-    fn drain_worker(&mut self) -> Result<()> {
+    fn drain_worker(&mut self) -> Vec<Command<Message>> {
         loop {
-            let event = match self.events.try_recv() {
+            let event = match self.services.events.try_recv() {
                 Ok(event) => event,
                 Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => return Err(worker::WorkerGone.into()),
+                Err(TryRecvError::Disconnected) => return fail(worker::WorkerGone),
             };
             match event {
                 worker::Event::Layout { source, root } => self.shared.apply_layout(&source, root),
                 worker::Event::LayoutFailed { source } => self.shared.layout_failed(&source),
                 worker::Event::StatusUpdated { item, menu } => {
-                    let px = self.icon_px();
+                    let px = status_icon_px(ICON_SCALE);
                     let icons = &mut self.icons;
-                    let icon = status_icon(&item, px, |name, px| icons.load(name, px));
+                    let icon = status_icon(&item, px, |name, px| icons.load(name, px))
+                        .map(|pixmap| view::icon_image(&pixmap));
                     self.shared.set_status(StatusState {
                         item: *item,
                         icon,
                         menu,
                     });
-                    self.redraw_all();
                 }
-                worker::Event::StatusRemoved { id } => {
-                    self.shared.remove_status(&id);
-                    self.redraw_all();
-                }
+                worker::Event::StatusRemoved { id } => self.shared.remove_status(&id),
             }
         }
+        self.refresh()
+    }
+
+    fn drain_extras(&mut self) -> Vec<Command<Message>> {
+        let mut commands = Vec::new();
         loop {
-            match self.extras_events.try_recv() {
+            match self.services.extras_events.try_recv() {
                 Ok(extras) => {
                     // the session agent went away: the system menu's session items would do nothing, so it closes
                     let agent_gone = self.shared.extras.loses_session(&extras);
@@ -734,79 +964,34 @@ impl App {
                             if let Some(outcome) =
                                 self.bars[i].controller.close_slot(&SlotKey::System)
                             {
-                                self.apply(i, outcome)?;
+                                commands.extend(self.apply(i, outcome));
                             }
                         }
                     }
-                    self.reload_extra_icons();
-                    self.redraw_all();
                 }
                 Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => return Err(worker::WorkerGone.into()),
+                Err(TryRecvError::Disconnected) => return fail(worker::WorkerGone),
             }
         }
-        self.refresh()
-    }
-
-    /// Draw the extras' symbols in the light and the dark palette's text colour (dimmed ones at [`DIMMED_ALPHA`]); each
-    /// bar draws the one of its tone.
-    fn reload_extra_icons(&mut self) {
-        let px = self.icon_px();
-        let symbols = &mut self.symbols;
-        let extras = &self.shared.extras;
-        self.shared.extra_icons = ExtraKind::ORDER
-            .into_iter()
-            .filter_map(|kind| {
-                let glyph = extras.glyph(kind)?;
-                let mut tint = |dark: bool| {
-                    let text = MenuPalette::new(dark).text;
-                    let color = [
-                        text[0],
-                        text[1],
-                        text[2],
-                        if glyph.dimmed {
-                            text[3] * DIMMED_ALPHA
-                        } else {
-                            text[3]
-                        },
-                    ];
-                    symbols.symbol(glyph.symbol, px, color).clone()
-                };
-                let icon = TintedIcon {
-                    light_text: tint(true),
-                    dark_text: tint(false),
-                };
-                Some((kind, Some(icon)))
-            })
-            .collect();
-    }
-
-    /// Device pixels of status icons: sharp on the sharpest output.
-    fn icon_px(&self) -> u32 {
-        status_icon_px(self.bars.iter().map(|b| b.scale).fold(1.0, f64::max))
-    }
-
-    fn reload_icons(&mut self) {
-        let px = self.icon_px();
-        for status in &mut self.shared.status {
-            let icons = &mut self.icons;
-            status.icon = status_icon(&status.item, px, |name, px| icons.load(name, px));
-        }
-        self.reload_extra_icons();
+        commands.extend(self.refresh());
+        commands
     }
 
     // ---- content and timers --------------------------------------------------------------
 
     /// Give every bar the content its feed describes, load menus it needs and forget the rest.
-    fn refresh(&mut self) -> Result<()> {
+    fn refresh(&mut self) -> Vec<Command<Message>> {
+        let mut commands = Vec::new();
         for i in 0..self.bars.len() {
             let content = self.bars[i].feed.content(&self.shared);
             if self.bars[i].controller.content() != &content {
                 let outcome = self.bars[i].controller.set_content(content);
-                self.apply(i, outcome)?;
+                commands.extend(self.apply(i, outcome));
             }
             if let Some(request) = self.bars[i].feed.request_layout(&mut self.shared) {
-                self.worker.send(request)?;
+                if let Err(e) = self.services.worker.send(request) {
+                    return fail(e);
+                }
             }
         }
         let in_use: Vec<_> = self
@@ -815,13 +1000,14 @@ impl App {
             .map(|b| b.feed.source(&self.shared))
             .collect();
         self.shared.prune_layouts(&in_use);
-        Ok(())
+        commands
     }
 
-    /// Update the clock, read the extras' services once a minute, run due menu timers and return how long the loop may
-    /// sleep.
-    fn housekeeping(&mut self) -> Result<Option<Duration>> {
-        let unix = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs_f64();
+    /// Update the clock, read the extras' services once a minute, run due menu timers and schedule the timer for the
+    /// next of them.
+    fn housekeeping(&mut self) -> Vec<Command<Message>> {
+        let mut commands = Vec::new();
+        let unix = unix_now();
         if unix >= self.next_clock {
             self.next_clock = next_tick(unix, &self.clock);
             self.shared.clock = clock_text(
@@ -829,13 +1015,15 @@ impl App {
                 &self.clock,
                 separators_off(unix),
             );
-            self.refresh()?;
+            commands.extend(self.refresh());
         }
         // the services announce their changes; the duration rows change with the hour and announce nothing
         let minute = (unix / 60.0).floor() as i64;
         if self.extras_minute != Some(minute) {
             self.extras_minute = Some(minute);
-            self.extras.refresh()?;
+            if let Err(e) = self.services.extras.refresh() {
+                return fail(e);
+            }
         }
         let now = self.now();
         let mut next = Duration::from_secs_f64((self.next_clock - unix).max(0.0));
@@ -846,37 +1034,55 @@ impl App {
                 .is_some_and(|d| d <= now)
             {
                 let outcome = self.bars[i].controller.tick(now);
-                self.apply(i, outcome)?;
+                commands.extend(self.apply(i, outcome));
             }
             if let Some(deadline) = self.bars[i].controller.next_deadline() {
                 next = next.min(Duration::from_secs_f64((deadline - now).max(0.0)));
             }
         }
-        Ok(Some(next))
+        let due = Instant::now() + next;
+        if self.timer_due.is_none_or(|scheduled| due < scheduled) {
+            self.timer += 1;
+            self.timer_due = Some(due);
+            let timer = self.timer;
+            commands.push(Command::Perform(Box::pin(async move {
+                async_io::Timer::at(due).await;
+                Message::Timer(timer)
+            })));
+        }
+        commands
     }
 
     // ---- launches ------------------------------------------------------------------------
 
-    /// Fetch an activation token for a launch from bar `i`; it starts when the token arrives.
-    fn begin_launch(&mut self, i: usize, launch: Launch) {
-        match self
-            .conn
-            .request_activation_token(self.bars[i].layer.surface(), None)
-        {
-            Ok(request) => {
-                self.pending.insert(request, launch);
-            }
-            Err(e) => eprintln!("{PROCESS}: cannot launch {}: {e}", launch_name(&launch)),
+    /// Ask for an activation token for a launch from bar `bar`; it starts when the token arrives.
+    fn begin_launch(&mut self, bar: BarId, launch: Launch) -> Command<Message> {
+        let number = self.next_launch;
+        self.next_launch += 1;
+        self.pending.insert(number, launch);
+        Command::ActivationToken {
+            window: bar.window(),
+            app_id: None,
+            on_token: Box::new(move |token| Message::Token {
+                launch: number,
+                token,
+            }),
         }
     }
 
     /// Start the launch that waited for `token` (it uses the token to take the focus).
-    fn complete_launch(&mut self, request: TokenRequest, token: &str) {
-        let Some(launch) = self.pending.remove(&request) else {
-            eprintln!("{PROCESS}: an activation token arrived for no launch");
+    fn complete_launch(&mut self, number: u64, token: Option<String>) {
+        let Some(launch) = self.pending.remove(&number) else {
             return;
         };
-        match launch.command(token) {
+        let Some(token) = token else {
+            eprintln!(
+                "{PROCESS}: no activation token for {}",
+                launch_name(&launch)
+            );
+            return;
+        };
+        match launch.command(&token) {
             Some(spec) if spec.terminal => eprintln!(
                 "{PROCESS}: {} runs in a terminal, and the menu bar has none",
                 launch_name(&launch)
@@ -888,38 +1094,37 @@ impl App {
         }
     }
 
-    /// Open `file` from bar `i` with the default application of its type, or through [`OPEN_COMMAND`] when no
+    /// Open `file` from bar `bar` with the default application of its type, or through [`OPEN_COMMAND`] when no
     /// installed application handles it. The associations are read at each open, so changed defaults apply at once.
-    fn open_document(&mut self, i: usize, file: &Path) {
+    fn open_document(&mut self, bar: BarId, file: &Path) -> Option<Command<Message>> {
         let apps = XdgDirs::from_env().and_then(|dirs| {
             let db = MimeDatabase::load(&dirs.all_data_dirs()).map_err(|e| e.to_string())?;
             MimeApps::load(&dirs, db, &Locale::from_env(), &Visibility::from_env())
                 .map_err(|e| e.to_string())
         });
         match apps.map(|apps| launch::open_with_default(&apps, file)) {
-            Ok(Some(launch)) => self.begin_launch(i, launch),
+            Ok(Some(launch)) => return Some(self.begin_launch(bar, launch)),
             Ok(None) => {
-                let mut command = Command::new(OPEN_COMMAND);
+                let mut command = std::process::Command::new(OPEN_COMMAND);
                 command.arg(file);
                 launch::spawn(PROCESS, command);
             }
             Err(e) => eprintln!("{PROCESS}: cannot open {}: {e}", file.display()),
         }
+        None
     }
 
     /// Read Recent Items for the system menu that is opening; the bars show it at their next refresh.
     fn read_recent_items(&mut self) {
-        if let Some(sources) = &self.recent {
-            let now = unix_now();
-            self.shared.recent = sources.read(now);
+        if let Some(sources) = &self.services.recent {
+            self.shared.recent = sources.read(unix_now());
         }
     }
 
     /// Clear Menu: Recent Items lists only what is used from now on.
     fn clear_recent_items(&mut self) {
-        if let Some(sources) = &self.recent {
-            let now = unix_now();
-            if let Err(e) = sources.clear(now) {
+        if let Some(sources) = &self.services.recent {
+            if let Err(e) = sources.clear(unix_now()) {
                 eprintln!("{PROCESS}: cannot write {}: {e}", sources.cleared.display());
             }
             self.shared.recent = Default::default();
@@ -928,8 +1133,8 @@ impl App {
 
     // ---- effects -------------------------------------------------------------------------
 
-    /// Carry out what the controller of bar `i` asked for, then bring popups and keyboard in line.
-    fn apply(&mut self, i: usize, outcome: Outcome) -> Result<()> {
+    /// Carry out what the controller of bar `i` asked for, then bring the keyboard in line.
+    fn apply(&mut self, i: usize, outcome: Outcome) -> Vec<Command<Message>> {
         let actions: Vec<Action> = {
             let bar = &self.bars[i];
             let cx = Context {
@@ -944,120 +1149,70 @@ impl App {
                 .filter_map(|e| routing::resolve(e, &cx))
                 .collect()
         };
+        let bar = self.bars[i].id;
+        let mut commands = Vec::new();
         for action in actions {
             match action {
-                Action::Redraw => self.redraw(i),
-                Action::SetMenuOpen(open) => self.bars[i].menu_bar.set_menu_open(open),
-                Action::Request(request) => self.worker.send(request)?,
-                Action::WindowCommand(command) => self.bars[i].menu_bar.window_command(command),
-                Action::MoveToWorkspace(workspace) => {
-                    self.bars[i].menu_bar.move_to_workspace(workspace)
+                // the windows show the controller as it is after each update
+                Action::Redraw => {}
+                Action::SetMenuOpen(open) => {
+                    self.menu_bar(bar, |m| m.set_menu_open(open));
                 }
-                Action::ActivateWindow(id) => self.bars[i].menu_bar.activate_window(id),
-                Action::Edit(action) => self.bars[i].menu_bar.edit(action),
-                Action::ForceQuitApp(app_id) => self.bars[i].menu_bar.force_quit_app(&app_id),
-                Action::Launch(launch) => self.begin_launch(i, launch),
-                Action::OpenDocument(file) => self.open_document(i, &file),
+                Action::Request(request) => {
+                    if let Err(e) = self.services.worker.send(request) {
+                        return fail(e);
+                    }
+                }
+                Action::WindowCommand(command) => {
+                    self.menu_bar(bar, |m| m.window_command(command));
+                }
+                Action::MoveToWorkspace(workspace) => {
+                    self.menu_bar(bar, |m| m.move_to_workspace(workspace));
+                }
+                Action::ActivateWindow(id) => {
+                    self.menu_bar(bar, |m| m.activate_window(id));
+                }
+                Action::Edit(action) => {
+                    self.menu_bar(bar, |m| m.edit(action));
+                }
+                Action::ForceQuitApp(app_id) => {
+                    self.menu_bar(bar, |m| m.force_quit_app(&app_id));
+                }
+                Action::Launch(launch) => commands.push(self.begin_launch(bar, launch)),
+                Action::OpenDocument(file) => commands.extend(self.open_document(bar, &file)),
                 Action::SystemMenuOpening {
                     refresh_capabilities,
                 } => {
                     self.read_recent_items();
                     if refresh_capabilities {
-                        self.bars[i].menu_bar.session_action(client_session_action(
-                            SessionAction::RefreshCapabilities,
-                        ));
+                        self.menu_bar(bar, |m| {
+                            m.session_action(client_session_action(
+                                SessionAction::RefreshCapabilities,
+                            ))
+                        });
                     }
                 }
                 Action::ClearRecentItems => self.clear_recent_items(),
                 Action::ShowAbout => {
-                    eprintln!("cupertino-menubar: about requested (there is no about panel yet)")
+                    eprintln!("{PROCESS}: about requested (there is no about panel yet)")
                 }
-                Action::Extra(ExtraAction::Session(action)) => self.bars[i]
-                    .menu_bar
-                    .session_action(client_session_action(action)),
-                Action::Extra(action) => self.extras.act(action)?,
+                Action::Extra(ExtraAction::Session(action)) => {
+                    self.menu_bar(bar, |m| m.session_action(client_session_action(action)));
+                }
+                Action::Extra(action) => {
+                    if let Err(e) = self.services.extras.act(action) {
+                        return fail(e);
+                    }
+                }
             }
         }
-        self.sync_popups(i)?;
         self.sync_keyboard(i);
-        Ok(())
+        commands
     }
 
-    /// Show the alternates of the open menus' items while Alt is held on a surface of their bar: the bar has the keyboard
-    /// while its menus are open, so the modifiers it was last sent are the ones held.
-    fn sync_alt(&mut self) -> Result<()> {
-        let alt = self.conn.modifiers().alt;
-        for i in 0..self.bars.len() {
-            let held = alt && self.bars[i].has_keyboard;
-            let outcome = self.bars[i].controller.set_alt(held);
-            if !outcome.effects.is_empty() {
-                self.apply(i, outcome)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Make the popup surfaces of bar `i` match the open menu levels.
-    fn sync_popups(&mut self, i: usize) -> Result<()> {
-        let desired: Vec<Rect> = self.bars[i]
-            .controller
-            .levels()
-            .iter()
-            .map(|l| popups::snap(l.layout.rect))
-            .collect();
-        let current: Vec<Rect> = self.bars[i].popups.iter().map(|p| p.rect).collect();
-        for op in popups::plan(&current, &desired) {
-            match op {
-                PopupOp::Destroy { level } => {
-                    let popup = self.bars[i]
-                        .popups
-                        .pop()
-                        .filter(|_| level == self.bars[i].popups.len())
-                        .ok_or("popups are destroyed deepest first")?;
-                    drop(popup.backdrop);
-                    self.conn.destroy(popup.popup.surface())?;
-                }
-                PopupOp::Create { level, rect } => {
-                    let bar = &self.bars[i];
-                    let parent = if level == 0 {
-                        bar.layer.surface()
-                    } else {
-                        bar.popups[level - 1].popup.surface()
-                    };
-                    let popup = self
-                        .conn
-                        .popup(parent, &popup::placement(&geometry_rect(rect), true)?)?;
-                    let backdrop = self.effects.backdrop(&self.conn, popup.surface())?;
-                    backdrop.set_material("Menu");
-                    self.bars[i].popups.push(PopupSurface {
-                        popup,
-                        presenter: ShmPresenter::new(popup.surface()),
-                        backdrop,
-                        rect: desired[level],
-                    });
-                }
-                PopupOp::Reposition { level, rect } => {
-                    self.conn.reposition_popup(
-                        self.bars[i].popups[level].popup,
-                        &popup::placement(&geometry_rect(rect), true)?,
-                    )?;
-                }
-            }
-        }
-        // the grab ended with the last menu, and a destroyed surface is told no leave: the keyboard comes back to the
-        // bar only with a new enter
-        if self.bars[i].popups.is_empty() && !current.is_empty() {
-            self.bars[i].has_keyboard = false;
-        }
-        for (popup, rect) in self.bars[i].popups.iter_mut().zip(desired) {
-            popup.rect = rect;
-        }
-        Ok(())
-    }
-
-    /// The bar takes the keyboard exclusively while a title is focused by the shortcut (the server
-    /// gives a layer the keyboard only for exclusive interactivity); open menus get it through
-    /// their popup grab.
+    /// The bar takes the keyboard exclusively while a title is focused by the shortcut (the server gives a layer the
+    /// keyboard only for exclusive interactivity); open menus get it through their popup grab. The change applies with
+    /// the bar's next frame, which the title's highlight brings.
     fn sync_keyboard(&mut self, i: usize) {
         let bar = &mut self.bars[i];
         let wanted = if bar.controller.mode() == Mode::TitleFocus {
@@ -1067,88 +1222,73 @@ impl App {
         };
         if bar.keyboard != wanted {
             bar.keyboard = wanted;
-            bar.layer.set_keyboard_interactivity(wanted);
-            // the change applies with the next commit
-            bar.presenter.request_redraw();
-        }
-    }
-
-    // ---- drawing -------------------------------------------------------------------------
-
-    fn redraw(&mut self, i: usize) {
-        let bar = &mut self.bars[i];
-        bar.presenter.request_redraw();
-        for popup in &mut bar.popups {
-            popup.presenter.request_redraw();
-        }
-    }
-
-    fn redraw_all(&mut self) {
-        (0..self.bars.len()).for_each(|i| self.redraw(i));
-    }
-
-    fn draw(&mut self, surface: SurfaceId) -> Result<()> {
-        // the surface may be gone since it was found ready
-        let Some((i, part)) = self.locate(surface) else {
-            return Ok(());
-        };
-        let bar = &mut self.bars[i];
-        let presenter = match part {
-            Part::Bar => &bar.presenter,
-            Part::Popup(level) => &bar.popups[level].presenter,
-        };
-        let (width, height) = presenter
-            .size()
-            .ok_or("a surface was ready to draw before its first configure")?;
-        let size = GRect::new(0.0, 0.0, f64::from(width), f64::from(height));
-        match part {
-            Part::Bar => {
-                bar.backdrop.set_shape(&size, 0.0)?;
-                let (c, text, tone, style, shared) = (
-                    &bar.controller,
-                    &bar.text,
-                    bar.tone,
-                    &self.style,
-                    &self.shared,
-                );
-                let scrim = tone.scrim(bar.backdrop_lightness);
-                bar.presenter.draw(&mut self.conn, None, |pm, scale| {
-                    style.paint_bar(
-                        text,
-                        pm,
-                        c.layout(),
-                        c.content(),
-                        c.highlighted_slot(),
-                        tone,
-                        scrim,
-                        shared,
-                        scale.factor(),
-                    )
-                })?;
-            }
-            Part::Popup(level) => {
-                // a level that closed since stays blank until its surface is destroyed
-                let Some(open) = bar.controller.levels().get(level) else {
-                    return Ok(());
-                };
-                let popup = &mut bar.popups[level];
-                popup.backdrop.set_shape(&size, POPUP_RADIUS)?;
-                let (text, style, origin) = (&bar.text, &self.style, (popup.rect.x, popup.rect.y));
-                let field = bar.controller.search_field();
-                popup.presenter.draw(&mut self.conn, None, |pm, scale| {
-                    style.paint_popup(
-                        text,
-                        pm,
-                        &open.layout,
-                        open.selected,
-                        field,
-                        origin,
-                        scale.factor(),
-                    )
-                })?;
+            if let Some(layer) = self
+                .surfaces
+                .borrow()
+                .get(bar.id)
+                .and_then(|s| s.layer.as_ref())
+            {
+                layer.set_keyboard_interactivity(wanted);
             }
         }
-        Ok(())
+    }
+}
+
+impl Application for App {
+    type Model = App;
+    type Message = Message;
+    const RESIDENT: bool = true;
+
+    fn init() -> (App, Vec<Command<Message>>) {
+        unreachable!("the menu bar starts only through `run`, which hands the model to `run_on`")
+    }
+
+    fn update(app: &mut App, message: Message) -> Vec<Command<Message>> {
+        let mut commands = match message {
+            Message::Shell(message) => {
+                let mut commands = app.shell_message(message);
+                commands.push(listen_shell(&app.shell));
+                commands
+            }
+            Message::Input(input) => app.input(input),
+            Message::Wake(wake) => {
+                let mut commands = app.wake(wake);
+                commands.push(listen_wakes(&app.wakes));
+                commands
+            }
+            Message::Timer(timer) if timer == app.timer => {
+                app.timer_due = None;
+                Vec::new()
+            }
+            Message::Timer(_) => return Vec::new(),
+            Message::Token { launch, token } => {
+                app.complete_launch(launch, token);
+                Vec::new()
+            }
+            Message::Unheard => fail("the roles or the bus threads are gone"),
+        };
+        commands.extend(app.housekeeping());
+        commands
+    }
+
+    fn view(app: &App) -> Vec<Window<Message>> {
+        app.bars
+            .iter()
+            .flat_map(|bar| {
+                view::windows(
+                    &BarScene {
+                        bar: bar.id,
+                        controller: &bar.controller,
+                        shared: &app.shared,
+                        font: app.font,
+                        tone: bar.tone,
+                        scrim: bar.tone.scrim(bar.backdrop_lightness),
+                        size: Size::new(f64::from(bar.width), app.height),
+                    },
+                    Message::Input,
+                )
+            })
+            .collect()
     }
 }
 
@@ -1166,16 +1306,6 @@ fn launch_name(launch: &Launch) -> String {
         Launch::App(app) => app.id.clone(),
         Launch::Open { app, file } => format!("{} with {}", file.display(), app.id),
     }
-}
-
-/// Every presenter of the bars: each bar's, then those of its open menu levels.
-fn presenters(bars: &mut [Bar]) -> impl Iterator<Item = &mut ShmPresenter> {
-    bars.iter_mut().flat_map(|bar| {
-        let Bar {
-            presenter, popups, ..
-        } = bar;
-        std::iter::once(presenter).chain(popups.iter_mut().map(|p| &mut p.presenter))
-    })
 }
 
 fn client_session_action(action: SessionAction) -> cupertino_shell_client::SessionAction {

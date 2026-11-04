@@ -1,15 +1,18 @@
 # What runs on CupertinoKit
 
-CupertinoKit is the toolkit that Cupertino's own apps are moving onto. This page says which of them draw their windows with it on `main`, and which do not yet. A program counts as on Kit here when its `Cargo.toml` depends on `cupertino-kit`.
+CupertinoKit is the toolkit that Cupertino's own apps are moving onto. This page says which of them draw their windows with it on `main`, and which do not yet. Assessed at `0a928c70` on 2026-11-04. A program counts as migrated only when its normal entry point draws through Kit. A dependency or a parallel implementation alone does not complete migration.
 
 | Program | On Kit today | Not on Kit yet |
 |---|---|---|
 | `cupertino-osd` | The whole overlay: a Kit window on a layer surface for volume, brightness and keyboard backlight. | |
-| `cupertino-settings` | The Settings window: sidebar, back and forward toolbar with the search field, the panes' sections as Kit controls, sheets as dialogs, and menus on the desktop's menu bar. | The roadmap lists more work on Settings. |
-| `cupertino-files` | A browser window, started beside the existing one: the sidebar, the toolbar, the file list as a table, the path and status bars, the menu bar and live folder updates. | Menu items the Kit window cannot do yet are disabled. The existing window stays until the Kit one does everything it does. |
+| `cupertino-settings` | The Settings window: sidebar, back and forward toolbar with the search field, the panes' sections as Kit controls, sheets as dialogs, and menus on the desktop's menu bar. | The old painter and window modules are deleted; full app accessibility acceptance remains open. |
+| `cupertino-files` | A parallel browser implementation: sidebar, toolbar, list and icon views, path and status bars, menus, live folder updates, file operations and multiple windows. | Menu items the Kit window cannot do yet are disabled. The existing window stays until the Kit one does everything it does. |
 | `cupertino-portal` | Its dialogs (file chooser, screen cast chooser, app chooser, screenshot consent). See [Portals](portals.md). | |
 | `cupertino-controlcenter` | The whole panel: a Kit window on a layer surface with module toggles, tiles, the battery meter and level sliders. | |
-| Dock, menu bar, launcher, notifications, login and lock screen | | All of them. |
+| `cupertino-menubar` | Bar and menus on Kit layer surfaces. | Outside-click dismissal on empty bar space has an open review finding. |
+| `cupertino-launcher` | Search panel, catcher and hidden windows on Kit layer surfaces. | See the crate README for interaction and styling limits. |
+| `cupertino-notifications` | Banners and notification centre on Kit layer surfaces. | Material, body layout and centre scrolling still have review findings. |
+| Dock, login and lock screen, screenshot UI, window-manager UI | | Normal entry points still use their existing drawing paths. |
 
 ## The OSD
 

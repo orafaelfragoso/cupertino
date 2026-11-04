@@ -6,6 +6,13 @@ Notable changes to Cupertino, newest first. The project is pre-1.0: interfaces a
 
 Changes on `main` since `v0.1.0-rc4`.
 
+### Phase assessment
+
+- The roadmap records all seven phases and the separate daily-driver gate. Phases 1–3 have recorded completion audits; phases 4–6 remain incomplete, and AI and voice have not started.
+- Settings About uses Kit, and the old Settings painter and window modules are deleted (#69, #92). The parallel Files Kit window adds file operations (#70, #71, #73), multiple windows (#76) and an icon view (#95); the binary still starts its existing window.
+- Portal app icons, activation and screenshot retry are merged (#74, #91, #75). Kit menus share one session-bus connection per app (#72), and app and portal accessibility checks were expanded (#93).
+- Release builds sign the ISO checksum and reject a public key that differs from the checked-in primary fingerprint. Local ISO builds still write an unsigned checksum. Public-key distribution remains open.
+
 ### Input
 
 - Apps such as games and virtual machines can lock or confine the pointer, also when they draw in a subsurface. A notice shows while an app holds the pointer, and `Super+Escape` releases it for the whole app.
@@ -56,7 +63,7 @@ Changes on `main` since `v0.1.0-rc4`.
 - Settings opens as a CupertinoKit window: the sidebar, a toolbar with back, forward and search, the panes' sections as Kit controls, sheets as dialogs, and its menus on the menu bar.
 - Files has a second browser window on CupertinoKit, opened beside the current one: places, toolbar, the file list as a table with sort and selection, path and status bars, the menu bar (actions it cannot do yet are disabled) and live folder updates. A sidebar item can carry a description, a busy state and a trailing button such as eject.
 - The on-screen display for volume, brightness and keyboard backlight is a CupertinoKit window on a layer surface.
-- Controls for the Control Center exist in the toolkit: module toggles, tiles, a battery meter and a level slider. The control panel does not use them yet.
+- Control Center now draws through CupertinoKit with module toggles, tiles, a battery meter and level sliders (#88). Launcher (#90), menu bar (#96), and notification banners and centre (#89) also use Kit. Notification cards currently use opaque fills and one-line bodies; centre scrolling remains open.
 
 ### Shell and session
 

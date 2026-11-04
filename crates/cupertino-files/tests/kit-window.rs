@@ -14,6 +14,7 @@ use cupertino_files::notice::Notices;
 use cupertino_files::places::PlaceKind;
 use cupertino_files::trash::encode_path;
 use cupertino_kit::core::{AccessibilityNode, Key, NodeId, Role};
+use cupertino_kit::platform::WindowEvent;
 use cupertino_test_bus::{missing_tool, PrivateBus};
 use cupertino_ui_test::{semantic_gaps, semantic_outline, whole_tree};
 use zbus::blocking::Connection;
@@ -134,7 +135,9 @@ fn a_new_folder_is_named_in_its_row_and_a_duplicate_sits_next_to_its_file() {
     run.menu("new-folder");
     run.wait_until(|run| {
         let runtime = run.driver.runtime();
-        runtime.find(run.window, &Key::from("name-field")).is_some()
+        runtime
+            .find(run.window, &Key::from("name-field/0"))
+            .is_some()
     });
     run.type_text("Projects");
     run.key(RETURN, None);
@@ -380,4 +383,77 @@ fn show_original_goes_to_the_target_of_the_link_and_selects_it() {
     run.menu("show-original");
     assert_eq!(run.title(), "Downloads");
     run.wait_until(|run| run.selected_rows() == ["report.pdf"]);
+}
+
+#[test]
+fn a_folder_opens_in_a_second_window_whose_menus_act_on_it_alone() {
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    let first = run.window;
+    assert!(run.disabled().contains(&action("open-in-new-window")));
+    run.click_row("Notes");
+    assert!(!run.disabled().contains(&action("open-in-new-window")));
+    run.menu("open-in-new-window");
+    let windows = run.windows();
+    assert_eq!(windows.len(), 2);
+    run.activate(windows[1]);
+    assert_eq!(run.title(), "Notes");
+
+    run.menu("go-enclosing-folder");
+    assert_eq!(run.title(), "Documents");
+    run.menu("fullscreen");
+    assert_eq!(run.full_screen_requests(), [true]);
+    assert_eq!(run.menu_label("fullscreen"), "Exit Full Screen");
+    run.activate(first);
+    assert_eq!(run.title(), "Documents");
+    assert!(run.disabled().contains(&action("go-back")));
+    assert_eq!(run.full_screen_requests(), Vec::<bool>::new());
+    assert_eq!(run.menu_label("fullscreen"), "Enter Full Screen");
+
+    run.menu("new");
+    assert_eq!(run.windows().len(), 3);
+    run.send(WindowEvent::CloseRequested);
+    assert_eq!(run.windows().len(), 2);
+    assert!(!run.windows().contains(&first));
+}
+
+#[test]
+fn a_name_edited_in_one_window_does_not_take_the_keyboard_from_another() {
+    const RETURN: u32 = 0xff0d;
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    let first = run.window;
+    run.click_row("Notes");
+    run.menu("open-in-new-window");
+    run.activate(first);
+    run.click_row("a.txt");
+    run.menu("rename");
+    run.wait_until(|run| {
+        let runtime = run.driver.runtime();
+        runtime.find(first, &Key::from("name-field/0")).is_some()
+    });
+
+    let second = run.windows()[1];
+    run.activate(second);
+    run.menu("new-folder");
+    run.wait_until(|run| {
+        let runtime = run.driver.runtime();
+        runtime.find(second, &Key::from("name-field/1")).is_some()
+    });
+    run.type_text("Projects");
+    run.key(RETURN, None);
+    assert!(run.home().join("Documents/Notes/Projects").is_dir());
+    assert!(run.home().join("Documents/a.txt").exists());
+}
+
+#[test]
+fn full_screen_asks_the_platform_and_the_menu_follows() {
+    let mut run = Run::new();
+    assert_eq!(run.menu_label("fullscreen"), "Enter Full Screen");
+    run.menu("fullscreen");
+    assert_eq!(run.full_screen_requests(), [true]);
+    assert_eq!(run.menu_label("fullscreen"), "Exit Full Screen");
+    run.menu("fullscreen");
+    assert_eq!(run.full_screen_requests(), [true, false]);
+    assert_eq!(run.menu_label("fullscreen"), "Enter Full Screen");
 }

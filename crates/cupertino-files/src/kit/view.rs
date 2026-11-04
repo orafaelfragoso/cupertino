@@ -1,17 +1,17 @@
-//! What the window shows for its [`Model`].
+//! What a browser window shows for its [`BrowserWindow`].
 
 use cupertino_kit::controls::{
     Column, ColumnWidth, NavigationStack, Selection, Sidebar, SidebarItem, SidebarSection,
     SortOrder, Spacer, SplitView, Stack, TableView, Text, TextField, TextRole,
 };
-use cupertino_kit::core::{CommandRegistry, Key, Menus, Shortcut, WindowBackground, WindowKey};
+use cupertino_kit::core::{CommandRegistry, Key, Menus, Shortcut, WindowBackground};
 use cupertino_kit::geometry::{Insets, Size};
 use cupertino_kit::layout::{Align, Axis};
 use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowSpec};
 use cupertino_kit::prelude::*;
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
 
-use super::{Message, Model, COLUMNS};
+use super::{window_key, BrowserWindow, Event, Message, Session, COLUMNS};
 use crate::metrics::{list_view, sidebar, window as window_metrics};
 use crate::places::{window_title, PlaceGroup};
 use crate::render::{human_size, relative_date};
@@ -22,8 +22,11 @@ use crate::{mime, Entry, SortKey};
 pub(super) const SIDEBAR_WIDTH: f64 = sidebar::DEFAULT_WIDTH;
 /// A list row: the icon size over the row padding, as the list view's rows.
 const ROW_HEIGHT: f64 = list_view::ICON_SIZE_DEFAULT as f64 + list_view::ROW_PADDING;
-/// The key of the field that edits an item's name in its row.
-pub(super) const NAME_FIELD: &str = "name-field";
+/// The key of the field that edits an item's name in its row of window `id`; one per window, as focus goes to the
+/// first window holding the key.
+pub(super) fn name_field_key(id: u64) -> Key {
+    Key::from(format!("name-field/{id}"))
+}
 const ESCAPE: Keysym = Keysym(0xff1b);
 const BAR_INSETS: Insets = Insets {
     top: 4.0,
@@ -32,13 +35,13 @@ const BAR_INSETS: Insets = Insets {
     right: metrics::PATH_BAR_INSET,
 };
 
-pub(super) fn window(model: &Model) -> Window<Message> {
-    let browser = &model.browser;
-    let title = window_title(browser.dir(), &model.places);
-    let state = model.menu_state();
+pub(super) fn window(session: &Session, id: u64, win: &BrowserWindow) -> Window<Message> {
+    let browser = &win.browser;
+    let title = window_title(browser.dir(), &session.places);
+    let state = win.menu_state(session);
     let (width, height) = window_metrics::DEFAULT_SIZE;
     Window {
-        key: WindowKey(Key::from("browser")),
+        key: window_key(id),
         spec: WindowSpec {
             title,
             app_id: super::APP_ID.into(),
@@ -49,51 +52,53 @@ pub(super) fn window(model: &Model) -> Window<Message> {
             foreign_parent: None,
             input_region: None,
         },
-        shortcuts: shortcuts(model),
-        on_close: None,
+        shortcuts: shortcuts(id, win),
+        on_close: Some(Message::Window(id, Event::Close)),
         background: WindowBackground::Theme,
         popup: None,
         menus: Some(Menus {
             bar: crate::menu_bar::menu_bar(&state),
-            disabled: model.disabled(&state),
-            on_activate: Box::new(Message::Menu),
+            disabled: BrowserWindow::disabled(&state),
+            on_activate: send(id, Event::Menu),
         }),
         content: Element::from(SplitView {
             label: "Sidebar".into(),
             axis: Axis::Horizontal,
-            leading: places(model),
-            trailing: content(model),
-            layout: model.split,
+            leading: places(session, id, win),
+            trailing: content(session, id, win),
+            layout: win.split,
             min_leading: metrics::SIDEBAR_MIN,
             min_trailing: metrics::BROWSER_MIN.0,
-            on_change: Some(Box::new(Message::Split)),
+            on_change: Some(send(id, Event::Split)),
         })
         .key("browser"),
     }
 }
 
 /// Escape ends a rename without renaming, once the field has passed the key on.
-fn shortcuts(model: &Model) -> CommandRegistry<Message> {
+fn shortcuts(id: u64, win: &BrowserWindow) -> CommandRegistry<Message> {
     let registry = CommandRegistry::new();
-    match model.rename {
+    match win.rename {
         Some(_) => registry.with(
             Shortcut {
                 mods: Mods::NONE,
                 keysym: ESCAPE,
             },
-            Message::NameCancelled,
+            Message::Window(id, Event::NameCancelled),
         ),
         None => registry,
     }
 }
 
-fn places(model: &Model) -> Element<Message> {
-    let dir = model.browser.dir();
+fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
+    let dir = win.browser.dir();
     let groups = [PlaceGroup::Favorites, PlaceGroup::Locations];
     // the sidebar counts its items across its sections, in this order
     let shown: Vec<usize> = groups
         .iter()
-        .flat_map(|&group| (0..model.places.len()).filter(move |&i| model.places[i].group == group))
+        .flat_map(|&group| {
+            (0..session.places.len()).filter(move |&i| session.places[i].group == group)
+        })
         .collect();
     let sections = groups
         .into_iter()
@@ -101,7 +106,7 @@ fn places(model: &Model) -> Element<Message> {
             title: Some(group.title().into()),
             items: shown
                 .iter()
-                .map(|&i| &model.places[i])
+                .map(|&i| &session.places[i])
                 .filter(|p| p.group == group)
                 .map(|p| SidebarItem {
                     key: Key::from(format!("place-{}", p.name)),
@@ -117,39 +122,39 @@ fn places(model: &Model) -> Element<Message> {
         .collect();
     let selected = shown
         .iter()
-        .position(|&i| model.places[i].folder() == Some(dir));
+        .position(|&i| session.places[i].folder() == Some(dir));
     Element::from(Sidebar {
         label: "Sidebar".into(),
         sections,
         selected,
-        scroll: model.sidebar_scroll,
-        on_scroll: Box::new(Message::SidebarScroll),
-        on_select: Some(Box::new(move |row| Message::Place(shown[row]))),
+        scroll: win.sidebar_scroll,
+        on_scroll: send(id, Event::SidebarScroll),
+        on_select: Some(send(id, move |row| Event::Place(shown[row]))),
         on_accessory: None,
     })
     .key("places")
 }
 
-fn content(model: &Model) -> Element<Message> {
-    let history = model.browser.history();
+fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
+    let history = win.browser.history();
     let mut children = vec![Element::from(NavigationStack {
-        content: list(model),
-        toolbar: toolbar(model),
+        content: list(session, id, win),
+        toolbar: toolbar(session, id, win),
         can_go_back: history.back_target().is_some(),
         can_go_forward: history.forward_target().is_some(),
-        on_navigate: Some(Box::new(Message::Navigate)),
+        on_navigate: Some(send(id, Event::Navigate)),
     })
     .key("navigation")
     .fill()];
-    if model.path_bar {
-        children.push(path_bar(model));
+    if win.path_bar {
+        children.push(path_bar(session, win));
     }
-    if model.status_bar {
+    if win.status_bar {
         children.push(
             bar(vec![
                 Element::new(Spacer { min: 0.0 }),
                 text(
-                    status_text(model.browser.item_count(), model.available),
+                    status_text(win.browser.item_count(), win.available),
                     TextRole::Caption,
                     true,
                 ),
@@ -168,10 +173,10 @@ fn content(model: &Model) -> Element<Message> {
     .fill()
 }
 
-fn toolbar(model: &Model) -> Vec<Element<Message>> {
+fn toolbar(session: &Session, id: u64, win: &BrowserWindow) -> Vec<Element<Message>> {
     vec![
         text(
-            window_title(model.browser.dir(), &model.places),
+            window_title(win.browser.dir(), &session.places),
             TextRole::Section,
             false,
         )
@@ -182,11 +187,11 @@ fn toolbar(model: &Model) -> Vec<Element<Message>> {
         Element::new(TextField {
             label: "Search".into(),
             placeholder: "Search".into(),
-            value: model.search.clone(),
-            revision: model.search_revision,
+            value: win.search.clone(),
+            revision: win.search_revision,
             purpose: ContentPurpose::Normal,
             enabled: true,
-            on_change: Some(Box::new(Message::Search)),
+            on_change: Some(send(id, Event::Search)),
             on_submit: None,
             selection: None,
             initial: false,
@@ -196,8 +201,8 @@ fn toolbar(model: &Model) -> Vec<Element<Message>> {
     ]
 }
 
-fn list(model: &Model) -> Element<Message> {
-    let browser = &model.browser;
+fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
+    let browser = &win.browser;
     let defaults = default_columns();
     let columns = COLUMNS
         .iter()
@@ -224,15 +229,15 @@ fn list(model: &Model) -> Element<Message> {
             };
             (column, order)
         });
-    let now = model.now;
+    let now = win.now;
     let rows: Vec<[String; 4]> = browser
         .entries()
         .iter()
         .map(|e| COLUMNS.map(|id| cell_text(e, id, now)))
         .collect();
     let names: Vec<String> = browser.entries().iter().map(|e| e.name.clone()).collect();
-    let label = window_title(browser.dir(), &model.places);
-    let rename = model.rename.as_ref().map(|r| {
+    let label = window_title(browser.dir(), &session.places);
+    let rename = win.rename.as_ref().map(|r| {
         (
             r.edit.index(),
             r.edit.text().to_owned(),
@@ -244,17 +249,17 @@ fn list(model: &Model) -> Element<Message> {
         label,
         columns,
         sort,
-        on_sort: Some(Box::new(Message::Sort)),
+        on_sort: Some(send(id, Event::Sort)),
         count: rows.len(),
         row_height: ROW_HEIGHT,
-        scroll: model.scroll,
+        scroll: win.scroll,
         selection: selection(browser.selection()),
         multiple: true,
         cell: Box::new(move |row, column, selected| {
             if let Some((_, value, revision, selection)) =
                 rename.as_ref().filter(|r| r.0 == row && column == 0)
             {
-                return name_field(value.clone(), *revision, selection.clone());
+                return name_field(id, value.clone(), *revision, selection.clone());
             }
             // a stack that fills the cell gives the text its width, so a long one ends in an ellipsis
             Element::new(Stack {
@@ -275,14 +280,19 @@ fn list(model: &Model) -> Element<Message> {
             .fill()
         }),
         type_select: Some(Box::new(move |row| names[row].clone())),
-        on_scroll: Box::new(Message::Scroll),
-        on_select: Some(Box::new(Message::Select)),
-        on_activate: Some(Box::new(Message::Open)),
+        on_scroll: send(id, Event::Scroll),
+        on_select: Some(send(id, Event::Select)),
+        on_activate: Some(send(id, Event::Open)),
     })
     .key("items")
 }
 
-fn name_field(value: String, revision: u64, selection: std::ops::Range<usize>) -> Element<Message> {
+fn name_field(
+    id: u64,
+    value: String,
+    revision: u64,
+    selection: std::ops::Range<usize>,
+) -> Element<Message> {
     Element::new(TextField {
         label: "Name".into(),
         placeholder: String::new(),
@@ -290,17 +300,17 @@ fn name_field(value: String, revision: u64, selection: std::ops::Range<usize>) -
         revision,
         purpose: ContentPurpose::Normal,
         enabled: true,
-        on_change: Some(Box::new(Message::NameChanged)),
-        on_submit: Some(Message::NameSubmitted),
+        on_change: Some(send(id, Event::NameChanged)),
+        on_submit: Some(Message::Window(id, Event::NameSubmitted)),
         selection: Some(selection),
         initial: false,
     })
-    .key(NAME_FIELD)
+    .key(name_field_key(id))
     .fill()
 }
 
-fn path_bar(model: &Model) -> Element<Message> {
-    let chain = path_chain(model.browser.dir(), &model.places);
+fn path_bar(session: &Session, win: &BrowserWindow) -> Element<Message> {
+    let chain = path_chain(win.browser.dir(), &session.places);
     let last = chain.len().saturating_sub(1);
     let children = chain
         .into_iter()
@@ -312,6 +322,11 @@ fn path_bar(model: &Model) -> Element<Message> {
         })
         .collect();
     bar(children).key("path-bar")
+}
+
+/// A handler that sends `event` of the window `id`.
+fn send<T>(id: u64, event: impl Fn(T) -> Event + 'static) -> Box<dyn Fn(T) -> Message> {
+    Box::new(move |value| Message::Window(id, event(value)))
 }
 
 fn bar(children: Vec<Element<Message>>) -> Element<Message> {

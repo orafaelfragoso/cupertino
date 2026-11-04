@@ -1,7 +1,8 @@
-//! The browser window on CupertinoKit: the sidebar's places, the folder as a list, the path and status bars and the
-//! menus of the desktop's menu bar, over the toolkit-free [`Browser`]. It takes the place of the window in
-//! `main.rs` once it does all that window does.
+//! The browser window on CupertinoKit: the sidebar's places, the folder as a list or a grid of icons, the path and
+//! status bars and the menus of the desktop's menu bar, over the toolkit-free [`Browser`]. It takes the place of the
+//! window in `main.rs` once it does all that window does.
 
+mod grid;
 mod view;
 
 use std::cell::RefCell;
@@ -117,6 +118,8 @@ pub struct Model {
     /// Where a window on a file system it ejects goes.
     home: PathBuf,
     trash: Trash,
+    /// How the folder is shown.
+    view: ViewMode,
     path_bar: bool,
     status_bar: bool,
     /// The free space of the folder's file system, for the status bar.
@@ -182,8 +185,7 @@ const NO_SCROLL: ScrollState = ScrollState {
 };
 
 /// Menu items the window does not do yet; they are shown disabled.
-const NOT_YET: [MenuAction; 4] = [
-    MenuAction::View(ViewMode::Icons),
+const NOT_YET: [MenuAction; 3] = [
     MenuAction::NewWindow,
     MenuAction::OpenInNewWindow,
     MenuAction::FullScreen,
@@ -217,6 +219,7 @@ impl Application for Files {
             media: Media::default(),
             home: std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from),
             trash: start.trash,
+            view: ViewMode::List,
             path_bar: false,
             status_bar: false,
             available: None,
@@ -585,6 +588,10 @@ impl Model {
                 if let Some(place) = removable_holding(self.browser.dir(), &self.places) {
                     self.eject(place);
                 }
+            }
+            MenuAction::View(view) if view != self.view => {
+                self.view = view;
+                self.scroll.offset = cupertino_kit::geometry::Point::ZERO;
             }
             MenuAction::View(_)
             | MenuAction::NewWindow

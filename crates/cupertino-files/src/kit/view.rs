@@ -1,8 +1,10 @@
 //! What the window shows for its [`Model`].
 
+use std::rc::Rc;
+
 use cupertino_kit::controls::{
-    Column, ColumnWidth, NavigationStack, Selection, Sidebar, SidebarItem, SidebarSection,
-    SortOrder, Spacer, SplitView, Stack, TableView, Text, TextField, TextRole,
+    Column, ColumnWidth, NavigationStack, ScrollView, Scroller, Selection, Sidebar, SidebarItem,
+    SidebarSection, SortOrder, Spacer, SplitView, Stack, TableView, Text, TextField, TextRole,
 };
 use cupertino_kit::core::{CommandRegistry, Key, Menus, Shortcut, WindowBackground, WindowKey};
 use cupertino_kit::geometry::{Insets, Size};
@@ -11,12 +13,14 @@ use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowSpec};
 use cupertino_kit::prelude::*;
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
 
+use super::grid::{self, IconGrid, Item};
 use super::{Message, Model, COLUMNS};
+use crate::layout::icon::{self, Flow, FontMetrics, IconParams, SectionSpec};
 use crate::metrics::{list_view, sidebar, window as window_metrics};
 use crate::places::{window_title, PlaceGroup};
 use crate::render::{human_size, relative_date};
-use crate::settings::{default_columns, ColumnId};
-use crate::window::{metrics, path_chain, status_text};
+use crate::settings::{default_columns, ColumnId, IconViewSettings};
+use crate::window::{metrics, path_chain, status_text, ViewMode};
 use crate::{mime, Entry, SortKey};
 
 pub(super) const SIDEBAR_WIDTH: f64 = sidebar::DEFAULT_WIDTH;
@@ -25,6 +29,9 @@ const ROW_HEIGHT: f64 = list_view::ICON_SIZE_DEFAULT as f64 + list_view::ROW_PAD
 /// The key of the field that edits an item's name in its row.
 pub(super) const NAME_FIELD: &str = "name-field";
 const ESCAPE: Keysym = Keysym(0xff1b);
+/// The icons of a folder and of a file in the grid.
+const FOLDER_SYMBOL: &str = "symbol.folder";
+const DOCUMENT_SYMBOL: &str = "symbol.document";
 const BAR_INSETS: Insets = Insets {
     top: 4.0,
     left: metrics::PATH_BAR_INSET,
@@ -133,7 +140,10 @@ fn places(model: &Model) -> Element<Message> {
 fn content(model: &Model) -> Element<Message> {
     let history = model.browser.history();
     let mut children = vec![Element::from(NavigationStack {
-        content: list(model),
+        content: match model.view {
+            ViewMode::List => list(model),
+            ViewMode::Icons => icons(model),
+        },
         toolbar: toolbar(model),
         can_go_back: history.back_target().is_some(),
         can_go_forward: history.forward_target().is_some(),
@@ -280,6 +290,76 @@ fn list(model: &Model) -> Element<Message> {
         on_activate: Some(Box::new(Message::Open)),
     })
     .key("items")
+}
+
+/// The folder as a grid of icons with their names, at the icon view's default settings, as wide as its viewport.
+fn icons(model: &Model) -> Element<Message> {
+    let browser = &model.browser;
+    let settings = IconViewSettings::default();
+    let text_size = f64::from(settings.text_size);
+    let params = IconParams::new(
+        settings.icon_size,
+        settings.grid_spacing,
+        settings.text_size,
+        settings.label_on_bottom,
+        settings.show_item_info,
+        FontMetrics::estimate(text_size),
+    );
+    let entries = browser.entries();
+    let layout = icon::layout(
+        &params,
+        model.scroll.viewport.width,
+        &[SectionSpec {
+            title: None,
+            count: entries.len(),
+        }],
+        Flow::Leading,
+    );
+    let items: Rc<[Item]> = entries
+        .iter()
+        .map(|e| Item {
+            name: e.name.clone(),
+            symbol: if e.is_dir {
+                FOLDER_SYMBOL
+            } else {
+                DOCUMENT_SYMBOL
+            },
+        })
+        .collect();
+    let rename = model.rename.as_ref().map(|r| {
+        (
+            r.edit.index(),
+            r.edit.text().to_owned(),
+            r.revision,
+            r.selection.clone(),
+        )
+    });
+    let names = Rc::clone(&items);
+    let content = Element::new(IconGrid {
+        label: window_title(browser.dir(), &model.places),
+        layout: Rc::new(layout),
+        params,
+        items,
+        scroll: model.scroll,
+        selection: selection(browser.selection()),
+        name: Box::new(
+            move |index, selected| match rename.as_ref().filter(|r| r.0 == index) {
+                Some((_, value, revision, selection)) => {
+                    name_field(value.clone(), *revision, selection.clone())
+                }
+                None => grid::name(names[index].name.clone(), text_size, selected),
+            },
+        ),
+    });
+    Element::from(ScrollView {
+        content,
+        state: model.scroll,
+        horizontal: false,
+        vertical: true,
+        scroller: Scroller::Overlay,
+        on_scroll: Box::new(Message::Scroll),
+    })
+    .key("icons")
 }
 
 fn name_field(value: String, revision: u64, selection: std::ops::Range<usize>) -> Element<Message> {

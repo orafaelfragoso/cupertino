@@ -24,7 +24,8 @@ use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_menu_model::{ActionName, Scope};
 use cupertino_theme::Theme;
-use cupertino_ui_test::{ManualClock, TestDriver};
+use cupertino_ui_test::{Inspector, ManualClock, TestDriver};
+use tiny_skia::Pixmap;
 
 pub struct Run {
     pub driver: TestDriver<Files>,
@@ -185,6 +186,11 @@ impl Run {
 
     /// Presses and releases the key of `keysym`, which types `text`.
     pub fn key(&mut self, keysym: u32, text: Option<char>) {
+        self.key_with(keysym, text, Mods::NONE);
+    }
+
+    /// Presses and releases the key of `keysym` with `mods` held.
+    pub fn key_with(&mut self, keysym: u32, text: Option<char>, mods: Mods) {
         for pressed in [true, false] {
             self.send(WindowEvent::Key(
                 KeyEvent {
@@ -193,7 +199,7 @@ impl Run {
                     text: text.filter(|_| pressed),
                     pressed,
                     repeat: false,
-                    mods: Mods::NONE,
+                    mods,
                 },
                 Timestamp(0),
             ));
@@ -263,6 +269,55 @@ impl Run {
             .collect()
     }
 
+    /// The items the icon grid shows, by name, and whether each is selected.
+    pub fn icons(&self) -> Vec<(String, bool)> {
+        self.icon_cells()
+            .into_iter()
+            .map(|(name, _, selected)| (name, selected))
+            .collect()
+    }
+
+    /// The names of the items the icon grid shows selected.
+    pub fn selected_icons(&self) -> Vec<String> {
+        self.icons()
+            .into_iter()
+            .filter(|(_, selected)| *selected)
+            .map(|(name, _)| name)
+            .collect()
+    }
+
+    /// Click the icon grid's item named `name`.
+    pub fn click_icon(&mut self, name: &str) {
+        let (_, rect, _) = self
+            .icon_cells()
+            .into_iter()
+            .find(|(shown, _, _)| shown == name)
+            .unwrap_or_else(|| panic!("no icon {name:?}"));
+        self.click_at(rect);
+    }
+
+    /// Each item of the icon grid, the list named as the window: its name, bounds and whether it is selected.
+    fn icon_cells(&self) -> Vec<(String, Rect, bool)> {
+        let snapshot = self.driver.runtime().snapshot(self.window).unwrap();
+        let nodes: HashMap<NodeId, &AccessibilityNode> = snapshot
+            .accessibility
+            .iter()
+            .map(|(id, node)| (*id, node))
+            .collect();
+        let title = self.title();
+        let Some(grid) = nodes
+            .values()
+            .find(|n| n.role == Role::List && n.name.as_deref() == Some(title.as_str()))
+        else {
+            return Vec::new();
+        };
+        grid.children
+            .iter()
+            .map(|id| nodes[id])
+            .filter_map(|n| Some((n.name.clone()?, n.bounds, n.states.selected)))
+            .collect()
+    }
+
     /// The window's title: the last one it set, else the one it opened with.
     pub fn title(&self) -> String {
         let system = self.driver.runtime().window_system();
@@ -289,6 +344,68 @@ impl Run {
             .expect("the window publishes its menus")
             .disabled
             .clone()
+    }
+
+    /// Compares the last frame and the focus and accessibility tree with `tests/goldens/<scene>.png` and `.txt`.
+    /// Pixels may differ by at most 2/255 per channel and are compared on x86_64 only, as the renderer's own baselines
+    /// are. `CUPERTINO_UPDATE_GOLDENS=1` re-records the scene and then fails, so the variable can never pass a run.
+    pub fn check_golden(&mut self, scene: &str) {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/goldens");
+        let (png, txt) = (format!("{dir}/{scene}.png"), format!("{dir}/{scene}.txt"));
+        let snapshot = self.driver.runtime().snapshot(self.window).unwrap();
+        let dump = Inspector::default().dump(&snapshot);
+        let focus = dump.lines().find(|l| l.starts_with("focus ")).unwrap();
+        let mut text = format!("{focus}\n");
+        for line in dump
+            .lines()
+            .skip_while(|l| *l != "semantics")
+            .skip(1)
+            .take_while(|l| *l != "display")
+        {
+            text.push_str(line);
+            text.push('\n');
+        }
+        let frame = self
+            .driver
+            .window_system_mut()
+            .frames(self.window)
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone();
+        let mut actual = Pixmap::new(frame.width, frame.height).unwrap();
+        actual.data_mut().copy_from_slice(&frame.pixels);
+        if std::env::var("CUPERTINO_UPDATE_GOLDENS").as_deref() == Ok("1") {
+            std::fs::create_dir_all(dir).unwrap();
+            actual.save_png(&png).unwrap();
+            std::fs::write(&txt, &text).unwrap();
+            panic!("{scene}: re-recorded; review the diff and run again without CUPERTINO_UPDATE_GOLDENS");
+        }
+        let expected_text = std::fs::read_to_string(&txt).unwrap();
+        if let Some(difference) = Inspector::first_difference(&expected_text, &text) {
+            panic!("{scene}: the semantics differ: {difference}");
+        }
+        if !cfg!(target_arch = "x86_64") {
+            eprintln!("SKIPPED: {scene} pixels are measured on x86_64 only");
+            return;
+        }
+        let expected = Pixmap::load_png(&png).unwrap();
+        assert_eq!(
+            (expected.width(), expected.height()),
+            (actual.width(), actual.height()),
+            "{scene}: the frame's size"
+        );
+        let off = expected
+            .data()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(actual.data().as_chunks::<4>().0)
+            .position(|(e, a)| e.iter().zip(a.iter()).any(|(x, y)| x.abs_diff(*y) > 2));
+        if let Some(i) = off {
+            let (x, y) = (i % actual.width() as usize, i / actual.width() as usize);
+            panic!("{scene}: differs at ({x}, {y})");
+        }
     }
 
     /// Settles until `done` holds, for changes a watcher thread reports.

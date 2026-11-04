@@ -1070,6 +1070,41 @@ fn the_menu_bar_process_owns_the_app_menu_registrar_only_while_it_has_a_bar() {
     server.wait_until("the registrar to be released", |_| !owned());
 }
 
+/// Unplugging a display closes its bar before its output goes: the menu bar process drops that bar and keeps running.
+#[test]
+fn the_menu_bar_process_outlives_an_unplugged_display() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let Some(mut server) = Server::start(vec![real_process("cupertino-menubar", &bus)], true)
+    else {
+        return;
+    };
+    let display = headless::HeadlessDisplay {
+        name: "headless-2".into(),
+        size: (800, 600),
+        physical_mm: (0, 0),
+    };
+    let head = headless::add_display(&mut server.state, &display, None).unwrap();
+    server.wait_until("a bar on each display", |s| {
+        s.outputs.len() == 2
+            && s.outputs.iter().all(|o| {
+                layer_map_for_output(&o.output)
+                    .layers()
+                    .any(|l| l.namespace() == "cupertino-menubar")
+            })
+    });
+    let pid = server.state.supervisor.pid_of("cupertino-menubar");
+    headless::remove_display(&mut server.state, head).unwrap();
+    let end = Instant::now() + THROTTLE * 2;
+    while Instant::now() < end {
+        server.step();
+    }
+    assert_eq!(server.state.supervisor.pid_of("cupertino-menubar"), pid);
+    assert!(committed_buffer(&server.state, "cupertino-menubar").is_some());
+}
+
 /// The switcher's panel is the dock process's: after the show delay it commits a panel-sized
 /// buffer on its overlay surface centred on the output (whatever the dock bar and the menu bar reserve), and a
 /// commit removes the surface after the fade. The application has no desktop entry and no icon of its own, so its tile

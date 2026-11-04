@@ -28,6 +28,11 @@ pub trait SurfaceRoles {
     fn keyboard_focus(&mut self, surface: SurfaceId, focused: bool) {
         let _ = (surface, focused);
     }
+
+    /// The compositor added, removed or described anew one of its outputs ([`Connection::outputs`]).
+    fn outputs_changed(&mut self, conn: &Connection) {
+        let _ = conn;
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

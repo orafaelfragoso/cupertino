@@ -45,8 +45,9 @@ for effect in out.effects {
 ## Running
 
 Feature `app` builds the binary: a client of the display server that shows one menu bar per output and opens its menus as
-popups. It runs on `cupertino-wayland-client` (popups with a grab), `cupertino-shell-client` (layer surfaces and the menu-bar
-role) and `cupertino-protocol-app` (backdrops), with a `cupertino-ui-wayland` presenter per bar and per open menu level. The
+popups. It is a CupertinoKit application (`cupertino-kit`, `src/view.rs`): each bar is a Kit window whose layer surface,
+menu-bar object and `MenuBar` backdrop come from `cupertino-shell-client` and `cupertino-protocol-app` through its surface
+roles, and each open menu level is a Kit popup with a grab, on the `Menu` material, placed where the controller laid it out. The
 server starts it from its `"shell"` configuration and restarts it after a failure; `cupertino-server`'s
 `tests/shell_processes.rs` runs the real binary, including a menu popup opened, dismissed by a click outside and opened again.
 
@@ -186,11 +187,11 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
 - **Session.** The labels follow the appearance the server announces over `cupertino_session_v1`, read at start and redrawn on
   every change. The material follows it in the server. On `locked` the bars close every open menu and title focus.
 - **Backdrop.** From shell version 14 the server sends each bar the lightness of its output's wallpaper under the strip
-  (`backdrop_luminance`, CIE L*/100 in thousandths), and each bar picks its own tone (`raster::BarTone`): dark text at
+  (`backdrop_luminance`, CIE L*/100 in thousandths), and each bar picks its own tone (`tone::BarTone`): dark text at
   550 and above, light text at 450 and below, the last tone held in between. The first value, and the first after the
   appearance or the display options changed, is decided afresh, splitting the band at 500. What follows the tone: the
-  labels, the application name, the clock, the system mark, the control panel glyph, the extras' symbols (each tinted
-  in both text colours when the icons load, and drawn in the one of the bar's tone), the dot of a status item without
+  labels, the application name, the clock, the system mark, the control panel glyph, the extras' symbols (drawn by the
+  toolkit in the text colour of the bar's tone), the dot of a status item without
   an icon and the open title's highlight. What keeps the appearance: the menus and the screen capture indicator's
   indigo. Third-party status items keep their own icons. Before the first value, below version 14, and while Increase
   Contrast or Reduce Transparency makes the bar solid, the whole bar keeps the appearance's palette. Over a mid-tone
@@ -270,7 +271,7 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   type-ahead timeout, the backdrop thresholds (550 and 450, split at 500 when decided afresh), what the tone covers, and the
   scrim's target (4.6:1, against the 4.5:1 of normal text) and cap (0.25).
 
-**Text.** The `ui` font is a variable font whose optical size follows the point size, so every `TextRenderer` owner calls `set_scale` with the output scale before it draws and measures (`BarText` sets it from the output's scale on every measure and draw): text is laid out in points at the same optical size it is drawn with, at every output scale.
+**Text.** The controller measures with the toolkit's text system (`view::KitMeasure`), the one the windows draw with, so the slots and rows it lays out hold the text the windows draw, at every output scale.
 
 ## Open issues
 
@@ -288,5 +289,7 @@ cargo clippy -p cupertino-menubar --all-targets
 | Test | Proves |
 |---|---|
 | `tests/dbus_integration.rs` | Fake DBusMenu, StatusNotifier and GMenuModel peers work against the clients and services, on a private bus from `cupertino-test-bus` (a `dbus-daemon` child that dies with its test). It skips with a message when `dbus-daemon` is not installed. |
-| `src/raster.rs` tests (feature `app`) | The bar's text reaches 4.5:1 with its scrim at every lightness from 0 to 1000 for every tone it can hold there, and through each appearance's `MenuBar` colour ops (from `cupertino-glass`, a dev-dependency) for every wallpaper grey; no scrim outside the mid band or on the appearance's palette; the scrim values at 500 and 549; the bar paints its scrim over the whole surface. |
+| `src/tone.rs` tests | The bar's text reaches 4.5:1 with its scrim at every lightness from 0 to 1000 for every tone it can hold there, and through each appearance's `MenuBar` colour ops (from `cupertino-glass`, a dev-dependency) for every wallpaper grey; no scrim outside the mid band or on the appearance's palette; the scrim values at 500 and 549. |
+| `tests/app-menus.rs` (feature `app`) | The menus Files and Settings publish with `cupertino-ui-menus`, read by the bar's worker over a private bus, open from their title and choose an item: the application hears that item's action. It builds the menus from `cupertino_files::menu_bar` and `cupertino_settings::menu_bar` themselves, so it needs these two apps-layer crates as dev-dependencies, which are the layer graph's dev-only exceptions for this crate. |
+| `tests/bar-view.rs` (feature `app`) | The bar, the bar with the File menu open, and the open menu as CupertinoKit draws them match the goldens in `tests/goldens`: the frame at 1x (x86_64 only, within 2/255 a channel) and its focus and accessibility tree. A press on a title opens its menu as a popup of the bar, and a click on a row chooses the row's item. |
 | `tests/extras_bus.rs` (feature `app`) | Stand-ins for the network, power, Bluetooth and notification services, served on one bus used as both system and session bus. Checks what the extras read, that joining an open network calls `Connect` without a passphrase and is read back, and that a service leaving the bus hides its item. |

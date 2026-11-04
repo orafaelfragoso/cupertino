@@ -34,6 +34,11 @@ impl TextMeasure for MonoMeasure {
     }
 }
 
+/// Edge of a status item icon in points. approximate.
+pub const STATUS_ICON_PT: f64 = 16.0;
+/// Diameter of the privacy indicator dot attached to a menu-bar item (6 pt).
+pub const PRIVACY_DOT_PT: f64 = 6.0;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct BarMetrics {
     /// Bar height. approximate 24 pt (22 pt in legacy documentation; larger on displays with a

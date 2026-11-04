@@ -1,6 +1,6 @@
 # Architecture
 
-Cupertino is a Wayland desktop that depends on no other userspace library or policy daemon of the Linux desktop stack for what it does itself. Every part ships on its own: the server boots a desktop, and the dock, menu bar, launcher and the rest install separately.
+Cupertino is a Wayland desktop with separate compositor, shell, applications and services. The ISO and installer ship NetworkManager and BlueZ for network and Bluetooth service. Settings selects those backends when Cupertino's own daemons are absent. The in-tree daemons remain development implementations; replacing the shipped services requires feature parity, including enterprise Wi-Fi, VPN and captive-portal handling for networking.
 
 ## What we own, speak and keep
 
@@ -8,7 +8,7 @@ Cupertino is a Wayland desktop that depends on no other userspace library or pol
 |---|---|---|
 | Own | Userspace libraries and policy daemons | device discovery, input, seat handling, keymaps, network, Bluetooth and power daemons, notification and tray services |
 | Speak | Wire protocols, implemented in Rust without a C library | Wayland; the D-Bus interfaces apps call (notifications, status items, menus); kernel interfaces (DRM/KMS, evdev, netlink, nl80211, Bluetooth management sockets, sysfs) |
-| Keep | External, each behind one crate boundary | the kernel; Mesa GPU drivers; the D-Bus broker; Smithay for Wayland protocol handling; iwd for Wi-Fi authentication; PipeWire for application audio and screen-sharing streams |
+| Keep | External, each behind one crate boundary | the kernel; Mesa GPU drivers; the D-Bus broker; Smithay for Wayland protocol handling; NetworkManager and BlueZ in the installed distribution; iwd when using cupertino-netd; PipeWire for application audio and screen-sharing streams |
 
 ## Processes
 
@@ -49,18 +49,18 @@ A crate's layer is declared in its manifest (`[package.metadata.cupertino] layer
 
 | Layer | Crates | May depend on |
 |---|---|---|
-| `foundation` | cupertino-animation, -apps, -assets, -capture, -defaults, -filepicker, -geometry, -glyph, -icons, -key-bindings, -keyboard, -menu-model, -modifiers, -test-bus, -theme, -thumbnails, -typeahead, xkbcommon | `foundation` |
-| `models` (pure logic, no I/O) | cupertino-displays, -effects, -input, -overview, -render-api, -scene, -stage, -wm | `foundation`, `models` |
-| `platform` (kernel interfaces, and the PipeWire boundary) | cupertino-alsa, -bluetooth, -devices, -evdev, -netlink, -peer, -pipewire, -seat | `foundation`, `platform` |
-| `protocol` | cupertino-app-protocols, -login-ipc, -protocols | `foundation`, `protocol` |
-| `transport` | cupertino-protocol-app, -shell-client, -wayland-client | `foundation`, `platform`, `protocol`, `transport` |
-| `render` | cupertino-cursor, -decorations, -glass | `foundation`, `platform`, `render` |
-| `ui` (the toolkit) | cupertino-kit, -ui-controls, -ui-core, -ui-layout, -ui-menus, -ui-platform, -ui-render, -ui-test, -ui-text, -ui-theme, -ui-wayland | `foundation`, `protocol`, `transport`, `ui` |
-| `core` | cupertino-server | `foundation`, `models`, `platform`, `protocol`, `render` |
-| `shell` | cupertino-controlcenter, -dock, -launcher, -login, -menubar, -notifications, -osd, -screenshot, -windowmanager | `foundation`, `models`, `platform`, `protocol`, `transport`, `render`, `ui` |
-| `services` | cupertino-btd, -netd, -powerd, -sessiond | `foundation`, `models`, `platform`, `protocol`, `services` |
-| `apps` | cupertino-files, -settings | `foundation`, `models`, `protocol`, `transport`, `ui` |
-| `tools` | cupertino-layers, -testclient | all but `core`, `shell`, `services`, `apps` |
+| `foundation` | `cupertino-animation`, `cupertino-apps`, `cupertino-assets`, `cupertino-capture`, `cupertino-defaults`, `cupertino-filepicker`, `cupertino-geometry`, `cupertino-glyph`, `cupertino-icons`, `cupertino-key-bindings`, `cupertino-keyboard`, `cupertino-menu-model`, `cupertino-modifiers`, `cupertino-test-bus`, `cupertino-theme`, `cupertino-thumbnails`, `cupertino-typeahead`, `xkbcommon` | `foundation` |
+| `models` (pure logic, no I/O) | `cupertino-displays`, `cupertino-effects`, `cupertino-input`, `cupertino-overview`, `cupertino-render-api`, `cupertino-scene`, `cupertino-stage`, `cupertino-wm` | `foundation`, `models` |
+| `platform` (kernel interfaces, and the PipeWire boundary) | `cupertino-alsa`, `cupertino-bluetooth`, `cupertino-devices`, `cupertino-evdev`, `cupertino-netlink`, `cupertino-peer`, `cupertino-pipewire`, `cupertino-screencast`, `cupertino-seat` | `foundation`, `platform` |
+| `protocol` | `cupertino-app-protocols`, `cupertino-login-ipc`, `cupertino-protocols` | `foundation`, `protocol` |
+| `transport` | `cupertino-protocol-app`, `cupertino-shell-client`, `cupertino-wayland-client` | `foundation`, `platform`, `protocol`, `transport` |
+| `render` | `cupertino-cursor`, `cupertino-decorations`, `cupertino-glass` | `foundation`, `platform`, `render` |
+| `ui` (the toolkit) | `cupertino-kit`, `cupertino-ui-abi`, `cupertino-ui-atspi`, `cupertino-ui-controls`, `cupertino-ui-core`, `cupertino-ui-layout`, `cupertino-ui-menus`, `cupertino-ui-platform`, `cupertino-ui-render`, `cupertino-ui-test`, `cupertino-ui-text`, `cupertino-ui-theme`, `cupertino-ui-wayland` | `foundation`, `protocol`, `transport`, `ui` |
+| `core` | `cupertino-server` | `foundation`, `models`, `platform`, `protocol`, `render` |
+| `shell` | `cupertino-controlcenter`, `cupertino-dock`, `cupertino-launcher`, `cupertino-login`, `cupertino-menubar`, `cupertino-notifications`, `cupertino-osd`, `cupertino-polkit-agent`, `cupertino-portal`, `cupertino-screenshot`, `cupertino-windowmanager` | `foundation`, `models`, `platform`, `protocol`, `transport`, `render`, `ui` |
+| `services` | `cupertino-btd`, `cupertino-netd`, `cupertino-powerd`, `cupertino-sessiond` | `foundation`, `models`, `platform`, `protocol`, `services` |
+| `apps` | `cupertino-files`, `cupertino-settings` | `foundation`, `models`, `protocol`, `transport`, `ui` |
+| `tools` | `cupertino-cli`, `cupertino-diagnostics`, `cupertino-layers`, `cupertino-testclient` | all but `core`, `shell`, `services`, `apps` |
 
 `shell`, `services`, `apps` and `tools` crates never depend on `core` or on each other. Each shell component is one crate: its pure model plus a binary behind an `app` feature. Only `cupertino-server` and `cupertino-seat` (which implements Smithay's session trait) depend on Smithay. The `xkbcommon` package of the workspace is `cupertino-xkbcommon`, a pure-Rust drop-in for the C-binding crate, selected through `[patch.crates-io]`.
 
@@ -80,7 +80,7 @@ Three checks keep it complete:
 
 `ci/contracts.py` also fails when the number of entries with `test_owner: unknown` changes from the count it records, so the number can only go down. The checker's own tests run with `python3 -I ci/test_contracts.py`. The run-time test skips with a message when the machine has no EGL device; CI sets `CUPERTINO_EGL_REQUIRED=1`, which makes that a failure. The registry records the state of the code; it does not grant access. The D-Bus scan covers interfaces that Cupertino serves, not the interfaces it calls on other services.
 
-## Replacing the Linux stack
+## In-tree Linux interfaces
 
 | Replaces | Component | Kernel interface |
 |---|---|---|
@@ -90,13 +90,13 @@ Three checks keep it complete:
 | xkbcommon | `cupertino-xkbcommon` over `xkbcommon-rs` (vendored in `third-party/`) | none |
 | alsa-lib | `cupertino-alsa` | `/dev/snd/controlC*` ioctls |
 | UPower, backlight helpers | `cupertino-powerd` | `/sys/class/power_supply`, `/sys/class/backlight`, lid switch over evdev |
-| NetworkManager | `cupertino-netd` | rtnetlink, nl80211; iwd for authentication |
-| BlueZ daemon | `cupertino-btd` | Bluetooth management socket, L2CAP |
+| NetworkManager (development alternative) | `cupertino-netd` | rtnetlink, nl80211; iwd for authentication |
+| BlueZ daemon (development alternative) | `cupertino-btd` | Bluetooth management socket, L2CAP |
 
 ## Known limits
 
 - X11 programs need `xwayland-satellite` (0.8 or later) and `Xwayland` installed; without them the session serves Wayland clients only. Drag and drop between X11 and Wayland programs and per-output scales for X11 windows depend on the satellite (it uses one scale for all X11 windows), and none of it has been tested with real applications on hardware.
-- The settings setters on `org.cupertino.Session1` trust any client on the same user's session bus (see `SECURITY.md`).
-- The TTY backend has run in a virtual machine, not on real hardware.
+- `org.cupertino.Session1` authorizes mutating calls by process identity. Settings changes require the trusted Settings executable, the supervised session agent or the server. Application quitting requires the session agent or server. This does not make arbitrary same-user code a security boundary (see `SECURITY.md`).
+- VM evidence covers the TTY backend. The full real-hardware acceptance matrix remains open; see [Roadmap](roadmap.md).
 - Audio is not owned: applications use PipeWire. The volume overlay, the control panel and the Sound pane change the default
   PipeWire sink through `cupertino-pipewire` (WirePlumber's `wpctl`), and the ALSA mixer only when no PipeWire daemon answers.

@@ -28,7 +28,7 @@ Out of scope: problems in third-party software that Cupertino runs or depends on
 
 - Privileged work stays in the daemons. They authorise a caller by its D-Bus peer credentials and by whether it is the active seat user.
 - Secrets typed into the login screen are zeroed after use and never printed in debug output.
-- **Known limitation:** the settings setters on the session bus (`org.cupertino.Session1`) trust any client on the same user's session bus. A sandboxed application with access to that bus can change appearance and accessibility settings. The planned fix is to check the caller's user id; reports about this limitation are welcome but known.
+- Mutating calls on `org.cupertino.Session1` check the caller's process identity. Settings setters accept the trusted Settings executable, the supervised session agent or the server. Quit and force-quit calls require the session agent or server. Sandboxed and unclassified callers are refused unless they are a supervised agent. The checks are in `crates/cupertino-server/src/caller.rs` and `quit.rs`; tests cover authorization and refusals.
 
 ## Disclosure
 

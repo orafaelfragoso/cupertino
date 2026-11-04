@@ -688,10 +688,10 @@ What is open for using Cupertino every day, as of this file. Nothing here has a 
 * **NVIDIA.** Explicit sync (the release point is signalled once the flip of the last frame drawn from the buffer is done) has not run on NVIDIA. Lock, unlock, sleep and resume, and log out, restart and shut down through logind, are not run on hardware either.
 * **GPU reset.** On a display the server makes a new renderer and the windows stay (*GPU reset* below); recovery from a real reset has not been run on hardware.
 * **Portals.** `cupertino-portal` serves the appearance settings, the file chooser, the app chooser that asks which app opens a link or a file, screen sharing and screenshots (`data/cupertino.portal`). Screen sharing shares one display or one window for each request as a PipeWire stream, in shared memory only, with no restore tokens, no cursor metadata, no region source and no audio; it has not been run with a browser on a real session. A screenshot asks the person first and saves every display as one PNG; there is no colour picking.
-* **Authentication prompt.** The polkit agent is built and tested but is not in the packaged binaries, so an installed session does not start it.
+* **Authentication prompt.** `cupertino-polkit-agent` is in the packaged binaries and the session starts it. Hardware acceptance of administrator prompts remains open.
 * **Audio.** The volume and mute keys change the default PipeWire sink and the microphone mute key toggles the default source (*Volume and brightness overlay*). With no PipeWire daemon, volume and mute fall back to the ALSA master mixer.
 * **X11 applications.** Started through `xwayland-satellite`; the server tests use a fake satellite, and the real one is checked in a QEMU guest only (`ci/vm/x11_apps.py`: scale 2, clipboard both ways). Outputs of different scales give every X11 window the smallest one.
-* **Terminal.** No terminal is shipped, and the launcher falls back to `xterm`.
+* **Terminal.** The ISO and installer ship `foot`. Other installations need a supported terminal on `PATH`.
 * **Crash recovery.** A server crash ends the session and returns to the display manager; windows are not reopened.
 * **Long runs.** `ci/soak.py` is the soak run (server memory, open descriptors and frame pacing every minute); no result from the hardware is recorded here.
 * **Input methods.** An input method framework (fcitx5, ibus) cannot attach; the input-method global is given only to the compositor's own accent bridge.

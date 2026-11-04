@@ -96,10 +96,10 @@ To investigate a reset with an AI assistant:
 The server's README has the full list under "Daily-driver known limits". The ones to expect in a first week:
 
 - A real session on the NVIDIA driver with GDM has not been run yet, and explicit sync has not run on NVIDIA.
-- The portal backend serves the appearance settings, the file chooser and screen sharing. A video call shares one display or one window at a time, chosen again on each share (nothing is remembered), without sound. There is no screenshot portal interface.
+- The portal backend serves the appearance settings, the file chooser and screen sharing. A video call shares one display or one window at a time, chosen again on each share (nothing is remembered), without sound. The screenshot portal asks for consent and retries a failed capture; colour picking is not implemented.
 - The volume and mute keys change the default PipeWire output and the microphone mute key toggles the default input. With no PipeWire daemon, volume and mute fall back to the ALSA master mixer.
 - X11 apps run through `xwayland-satellite`. Scale 2 and the clipboard were checked in a virtual machine only. With monitors of different scales, every X11 window gets the smallest scale.
-- No terminal is shipped; the launcher falls back to `xterm`.
+- The ISO and installer ship `foot`. Other installations need one of the terminals listed under keyboard shortcuts.
 - A server crash ends the session; windows are not reopened.
 
 To report a bug, see [Trying Cupertino](trying.md).

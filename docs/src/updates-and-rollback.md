@@ -4,8 +4,8 @@ This page describes the pieces on `main` that sign Cupertino's Arch packages, up
 
 Read this first:
 
-- **No repository is published yet.** `build-repo` writes the tree of a repository; nothing uploads it, and the upload waits for decisions about the host and the signing key.
-- **The key is not in the source tree.** The `cupertino-keyring` package is built with a public key file that the release job passes in.
+- **No repository is published yet.** `build-repo` writes the tree of a repository; nothing uploads it. The current distribution uses a local repository; public hosting remains deferred.
+- **The public key is supplied separately.** The expected primary fingerprint is in `packaging/keyring/release-key.fpr`; `check-key` rejects a different key. The `cupertino-keyring` package is built with that public key. Secret keys never belong in the source tree.
 - **A machine installed from the [USB image](install-usb.md) updates from its own repository.** The installer installs `cupertino-keyring` and replaces the live image's `[cupertino]` repository with a local one. The next section describes it; the sections after it describe the published-repository tools.
 
 ## Local updates on an installed machine

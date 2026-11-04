@@ -21,7 +21,7 @@ use cupertino_kit::render::{Paint, PaintOp, Shape};
 use cupertino_kit::text::{AttributedText, TextStyle};
 use cupertino_kit::theme::{ColorRole, InteractionVariant, StateVariant};
 
-use super::Message;
+use super::{Event as WindowEvent, Message};
 use crate::geom::{self, Direction};
 use crate::layout::icon::{IconLayout, IconParams};
 
@@ -86,6 +86,8 @@ pub(super) struct Item {
 
 /// The content of the grid's scroll view: as tall as every cell, holding the cells that are built.
 pub(super) struct IconGrid {
+    /// The id of the window the grid's messages are for.
+    pub window: u64,
     /// The accessible name.
     pub label: String,
     pub layout: Rc<IconLayout>,
@@ -181,17 +183,17 @@ impl IconGrid {
     }
 
     fn pick(&self) -> Pick {
-        let selection = self.selection.clone();
+        let (window, selection) = (self.window, self.selection.clone());
         Rc::new(move |index| {
             let mut next = selection.clone();
             next.select_only(index);
-            (next != selection).then_some(Message::Select(next))
+            (next != selection).then_some(Message::Window(window, WindowEvent::Select(next)))
         })
     }
 
     fn select(&self, next: Selection, cx: &mut EventCx<'_, Message>) {
         if next != self.selection {
-            cx.emit(Message::Select(next));
+            cx.emit(Message::Window(self.window, WindowEvent::Select(next)));
         }
     }
 
@@ -242,7 +244,7 @@ impl IconGrid {
             RETURN | KP_ENTER if plain => {
                 return match self.cursor() {
                     Some(c) => {
-                        cx.emit(Message::Open(c));
+                        cx.emit(Message::Window(self.window, WindowEvent::Open(c)));
                         Propagation::Stop
                     }
                     None => Propagation::Continue,

@@ -137,11 +137,12 @@ impl std::error::Error for WorkerGone {}
 enum Work {
     Request(Request),
     Watcher(WatcherEvent),
-    /// A GTK exporter's menus loaded: the task that forwards its `Changed` signals, when they could be followed, and
-    /// how many loads came before this one.
+    /// A GTK exporter's menus loaded, with their tree: the task that forwards its `Changed` signals, when they could be
+    /// followed, and how many loads came before this one.
     GtkLoaded {
         props: GtkMenuProps,
         client: Box<GtkMenuClient>,
+        items: Vec<MenuItem>,
         follow: Option<zbus::Task<()>>,
         reloads: u8,
     },
@@ -275,9 +276,15 @@ async fn run(
             Work::GtkLoaded {
                 props,
                 client,
+                items,
                 follow,
                 reloads,
             } => {
+                // sent once the client is kept, so an item chosen from the tree finds its action
+                out.emit(Event::Layout {
+                    source: MenuSource::Gtk(props.clone()),
+                    root: MenuItem::submenu(0, "", items),
+                });
                 gtk.insert(props.clone(), *client);
                 if reloads == 0 {
                     match follow {
@@ -292,7 +299,7 @@ async fn run(
                 reloading.remove(&props);
                 if missed.remove(&props) && reloads < GTK_RELOADS {
                     reloading.insert(props.clone());
-                    reload_gtk(&conn, &out, &tx, props, reloads + 1);
+                    reload_gtk(&conn, &tx, props, reloads + 1);
                 }
             }
             Work::GtkChanged(props, change, applied) => {
@@ -341,25 +348,21 @@ async fn run(
 /// Load the menus of `props` again, after changes came while they loaded.
 fn reload_gtk(
     conn: &Connection,
-    out: &Out,
     tx: &async_channel::Sender<Work>,
     props: GtkMenuProps,
     reloads: u8,
 ) {
-    let (conn, out, tx) = (conn.clone(), out.clone(), tx.clone());
+    let (conn, tx) = (conn.clone(), tx.clone());
     conn.executor()
         .clone()
         .spawn(
             async move {
                 match GtkMenuClient::load(&conn, &props).await {
                     Ok((client, items)) => {
-                        out.emit(Event::Layout {
-                            source: MenuSource::Gtk(props.clone()),
-                            root: MenuItem::submenu(0, "", items),
-                        });
                         let loaded = Work::GtkLoaded {
                             props,
                             client: Box::new(client),
+                            items,
                             follow: None,
                             reloads,
                         };
@@ -533,14 +536,11 @@ fn handle(
                     };
                     match loaded {
                         Ok((client, items)) => {
-                            out.emit(Event::Layout {
-                                source: MenuSource::Gtk(props.clone()),
-                                root: MenuItem::submenu(0, "", items),
-                            });
                             // the process drops its end only when it exits
                             let loaded = Work::GtkLoaded {
                                 props,
                                 client: Box::new(client),
+                                items,
                                 follow,
                                 reloads: 0,
                             };

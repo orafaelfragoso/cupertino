@@ -6,7 +6,7 @@ mod grid;
 mod view;
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -16,6 +16,7 @@ use std::time::SystemTime;
 use cupertino_apps::{launch, MimeApps, MimeDatabase};
 use cupertino_kit::controls::{Navigation, Selection, SortOrder, SplitLayout, TextChange};
 use cupertino_kit::layout::ScrollState;
+use cupertino_kit::platform::WindowRequest;
 use cupertino_kit::prelude::*;
 use cupertino_menu_model::ActionName;
 use zbus::blocking::Connection;
@@ -36,7 +37,7 @@ use crate::SortSpec;
 /// Identifier of the window for the server, as the desktop entry names it.
 pub const APP_ID: &str = "cupertino-files";
 
-/// What a window opens with; [`Start::open`] lists the folder before the toolkit runs.
+/// What the first window opens with; [`Start::open`] lists the folder before the toolkit runs.
 pub struct Start {
     browser: Browser,
     woken: async_channel::Receiver<()>,
@@ -45,7 +46,10 @@ pub struct Start {
     /// What opens a file: the session's associations, read at each open so changed defaults apply at once.
     applications: Box<dyn Fn() -> io::Result<MimeApps>>,
     terminal: Option<Vec<String>>,
+    types: Option<Arc<MimeDatabase>>,
+    recents: PathBuf,
     volumes: Option<Volumes>,
+    media_woken: async_channel::Receiver<()>,
     trash: Trash,
 }
 
@@ -63,17 +67,13 @@ impl Start {
         terminal: Option<Vec<String>>,
         system: Option<Connection>,
     ) -> io::Result<Start> {
-        let (wake, woken) = async_channel::bounded(1);
-        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-            // a wake already waiting covers this change too
-            let _ = wake.try_send(());
-        });
+        let (media_wake, media_woken) = wake_channel();
         let volumes = system.and_then(|system| {
-            Volumes::watch(system, notices.clone(), Arc::clone(&wake))
+            Volumes::watch(system, notices.clone(), media_wake)
                 .map_err(|e| eprintln!("cupertino-files: no removable media: {e}"))
                 .ok()
         });
-        let browser = Browser::open(folder, SortSpec::default(), recents, types, wake)?;
+        let (browser, woken) = open_browser(folder, types.clone(), recents.clone())?;
         Ok(Start {
             browser,
             woken,
@@ -81,15 +81,39 @@ impl Start {
             notices,
             applications,
             terminal,
+            types,
+            recents,
             volumes,
+            media_woken,
             trash: Trash::new(),
         })
     }
 
-    /// The window moving items to `trash` and putting them back from it, in place of the session's trash.
+    /// The windows moving items to `trash` and putting them back from it, in place of the session's trash.
     pub fn with_trash(self, trash: Trash) -> Start {
         Start { trash, ..self }
     }
+}
+
+/// What a model calls when it has changes waiting, and what wakes then.
+fn wake_channel() -> (Arc<dyn Fn() + Send + Sync>, async_channel::Receiver<()>) {
+    let (wake, woken) = async_channel::bounded(1);
+    let wake = Arc::new(move || {
+        // a wake already waiting covers this change too
+        let _ = wake.try_send(());
+    });
+    (wake, woken)
+}
+
+/// The browser of `folder`, and what wakes when its model has changes waiting.
+fn open_browser(
+    folder: PathBuf,
+    types: Option<Arc<MimeDatabase>>,
+    recents: PathBuf,
+) -> io::Result<(Browser, async_channel::Receiver<()>)> {
+    let (wake, woken) = wake_channel();
+    let browser = Browser::open(folder, SortSpec::default(), recents, types, wake)?;
+    Ok((browser, woken))
 }
 
 thread_local! {
@@ -101,25 +125,38 @@ pub fn prepare(start: Start) {
     START.with(|s| *s.borrow_mut() = Some(start));
 }
 
-/// The application of one browser window. [`prepare`] gives it its folder first.
+/// The application of the browser windows. [`prepare`] gives the first its folder.
 pub struct Files;
 
 pub struct Model {
-    browser: Browser,
-    woken: async_channel::Receiver<()>,
+    /// The open windows, by the id their messages carry.
+    windows: BTreeMap<u64, BrowserWindow>,
+    next_window: u64,
+    session: Session,
+}
+
+/// What every window shares.
+struct Session {
     places: Vec<Place>,
+    /// The places before the removable media's.
+    standard_places: usize,
     notices: Notices,
     applications: Box<dyn Fn() -> io::Result<MimeApps>>,
     terminal: Option<Vec<String>>,
+    types: Option<Arc<MimeDatabase>>,
+    recents: PathBuf,
     volumes: Option<Volumes>,
+    media_woken: async_channel::Receiver<()>,
     media: Media,
-    /// The places before the removable media's.
-    standard_places: usize,
-    /// Where a window on a file system it ejects goes.
+    /// Where a window on a file system that goes away goes.
     home: PathBuf,
     trash: Trash,
-    /// How the folder is shown.
-    view: ViewMode,
+}
+
+/// One browser window.
+struct BrowserWindow {
+    browser: Browser,
+    woken: async_channel::Receiver<()>,
     path_bar: bool,
     status_bar: bool,
     /// The free space of the folder's file system, for the status bar.
@@ -135,6 +172,10 @@ pub struct Model {
     rename: Option<Rename>,
     /// A folder just made, whose name is edited once the list shows it.
     rename_when_listed: Option<PathBuf>,
+    /// What the window last asked the compositor for.
+    full_screen: bool,
+    /// How the folder is shown.
+    view: ViewMode,
 }
 
 /// An item's name edited in its row of the list.
@@ -148,6 +189,14 @@ struct Rename {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Message {
+    /// The removable media have reports waiting.
+    Media,
+    /// An event of the window with this id.
+    Window(u64, Event),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Event {
     /// The folder's model has changes waiting.
     Woken,
     Place(usize),
@@ -168,6 +217,7 @@ pub enum Message {
     Scroll(ScrollState),
     SidebarScroll(ScrollState),
     Split(SplitLayout),
+    Close,
 }
 
 /// The list's columns, in order.
@@ -184,19 +234,16 @@ const NO_SCROLL: ScrollState = ScrollState {
     viewport: cupertino_kit::geometry::Size::ZERO,
 };
 
-/// Menu items the window does not do yet; they are shown disabled.
-const NOT_YET: [MenuAction; 3] = [
-    MenuAction::NewWindow,
-    MenuAction::OpenInNewWindow,
-    MenuAction::FullScreen,
-];
-
-fn woken(receiver: &async_channel::Receiver<()>) -> Command<Message> {
+fn woken(receiver: &async_channel::Receiver<()>, message: Message) -> Command<Message> {
     let receiver = receiver.clone();
     Command::Perform(Box::pin(async move {
         let _ = receiver.recv().await;
-        Message::Woken
+        message
     }))
+}
+
+fn window_key(window: u64) -> WindowKey {
+    WindowKey(Key::from(format!("browser/{window}")))
 }
 
 impl Application for Files {
@@ -208,18 +255,65 @@ impl Application for Files {
             .with(|s| s.borrow_mut().take())
             .expect("kit::prepare runs before Files starts");
         let mut model = Model {
-            browser: start.browser,
-            woken: start.woken,
-            standard_places: start.places.len(),
-            places: start.places,
-            notices: start.notices,
-            applications: start.applications,
-            terminal: start.terminal,
-            volumes: start.volumes,
-            media: Media::default(),
-            home: std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from),
-            trash: start.trash,
-            view: ViewMode::List,
+            windows: BTreeMap::new(),
+            next_window: 0,
+            session: Session {
+                standard_places: start.places.len(),
+                places: start.places,
+                notices: start.notices,
+                applications: start.applications,
+                terminal: start.terminal,
+                types: start.types,
+                recents: start.recents,
+                volumes: start.volumes,
+                media_woken: start.media_woken,
+                media: Media::default(),
+                home: std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from),
+                trash: start.trash,
+            },
+        };
+        let mut commands = vec![model.add_window(start.browser, start.woken)];
+        if model.session.volumes.is_some() {
+            commands.push(woken(&model.session.media_woken, Message::Media));
+        }
+        (model, commands)
+    }
+
+    fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
+        match message {
+            Message::Media => model.follow_media(),
+            Message::Window(id, event) => model.window_event(id, event),
+        }
+    }
+
+    fn view(model: &Model) -> Vec<Window<Message>> {
+        model
+            .windows
+            .iter()
+            .map(|(&id, window)| view::window(&model.session, id, window))
+            .collect()
+    }
+}
+
+enum Step {
+    Back,
+    Forward,
+    Parent,
+}
+
+impl Model {
+    /// Show `browser` in a window of its own.
+    fn add_window(
+        &mut self,
+        browser: Browser,
+        woken: async_channel::Receiver<()>,
+    ) -> Command<Message> {
+        let id = self.next_window;
+        self.next_window += 1;
+        let wake = self::woken(&woken, Message::Window(id, Event::Woken));
+        let mut window = BrowserWindow {
+            browser,
+            woken,
             path_bar: false,
             status_bar: false,
             available: None,
@@ -234,113 +328,313 @@ impl Application for Files {
             now: SystemTime::now(),
             rename: None,
             rename_when_listed: None,
+            full_screen: false,
+            view: ViewMode::List,
         };
-        model.entered();
-        let commands = vec![woken(&model.woken)];
-        (model, commands)
+        window.entered();
+        self.windows.insert(id, window);
+        wake
     }
 
-    fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
-        match message {
-            Message::Woken => {
-                model.follow_media();
-                let polled = model.browser.poll();
+    /// Open a window on each of `folders`.
+    fn open_windows(&mut self, folders: Vec<PathBuf>) -> Vec<Command<Message>> {
+        let mut commands = Vec::new();
+        for folder in folders {
+            let session = &self.session;
+            match open_browser(
+                folder.clone(),
+                session.types.clone(),
+                session.recents.clone(),
+            ) {
+                Ok((browser, woken)) => commands.push(self.add_window(browser, woken)),
+                Err(e) => session.failed(Action::Open, &[&folder], &e),
+            }
+        }
+        commands
+    }
+
+    fn window_event(&mut self, id: u64, event: Event) -> Vec<Command<Message>> {
+        let session = &self.session;
+        // a window's last wake can come after it closed
+        let Some(window) = self.windows.get_mut(&id) else {
+            return Vec::new();
+        };
+        match event {
+            Event::Woken => {
+                let polled = window.browser.poll();
                 for error in polled.errors {
                     eprintln!("cupertino-files: {error}");
                 }
                 if polled.changed {
-                    model.now = SystemTime::now();
+                    window.now = SystemTime::now();
                 }
-                let mut commands = model.listed();
-                commands.push(woken(&model.woken));
+                let mut commands = window.listed(id);
+                commands.push(woken(&window.woken, Message::Window(id, Event::Woken)));
                 return commands;
             }
-            Message::Place(index) => {
-                if let Some(folder) = model.places.get(index).and_then(Place::folder) {
-                    model.go(folder.to_path_buf());
+            Event::Place(index) => {
+                if let Some(folder) = session.places.get(index).and_then(Place::folder) {
+                    window.go(folder.to_path_buf(), session);
                 }
             }
-            Message::Navigate(Navigation::Back) => model.step(Step::Back),
-            Message::Navigate(Navigation::Forward) => model.step(Step::Forward),
-            Message::Select(selection) => {
+            Event::Navigate(Navigation::Back) => window.step(Step::Back, session),
+            Event::Navigate(Navigation::Forward) => window.step(Step::Forward, session),
+            Event::Select(selection) => {
                 let indices = selection.ranges().iter().flat_map(Clone::clone);
-                model
+                window
                     .browser
                     .select(indices, selection.anchor(), selection.cursor());
-                let renamed = model.rename_index();
-                if renamed.is_some() && model.browser.selection().indices().ne(renamed) {
-                    model.end_rename();
+                let renamed = window.rename_index();
+                if renamed.is_some() && window.browser.selection().indices().ne(renamed) {
+                    window.end_rename(session);
                 }
             }
-            Message::Open(index) => {
-                if !model.browser.selection().contains(index) {
-                    model.browser.select([index], Some(index), Some(index));
+            Event::Open(index) => {
+                if !window.browser.selection().contains(index) {
+                    window.browser.select([index], Some(index), Some(index));
                 }
-                model.open_selection();
+                window.open_selection(session);
             }
-            Message::Sort((column, order)) => {
-                if let Some(id) = COLUMNS.get(column) {
-                    model
+            Event::Sort((column, order)) => {
+                if let Some(column) = COLUMNS.get(column) {
+                    window
                         .browser
-                        .set_sort(id.sort_key(), order == SortOrder::Ascending);
+                        .set_sort(column.sort_key(), order == SortOrder::Ascending);
                 }
             }
-            Message::Search(change) => {
-                model.browser.set_filter(&change.text);
-                model.search = change.text;
-                model.search_revision = change.revision;
+            Event::Search(change) => {
+                window.browser.set_filter(&change.text);
+                window.search = change.text;
+                window.search_revision = change.revision;
             }
-            Message::Menu(name) => {
+            Event::Menu(name) => {
                 if let Some(action) = MenuAction::from_name(&name) {
-                    return model.menu(action);
+                    return self.menu(id, action);
                 }
             }
-            Message::NameChanged(change) => {
-                if let Some(rename) = model.rename.as_mut() {
+            Event::NameChanged(change) => {
+                if let Some(rename) = window.rename.as_mut() {
                     rename.edit.field_mut().set_text(&change.text);
                     rename.revision = change.revision;
                 }
             }
-            Message::NameSubmitted => model.end_rename(),
-            Message::NameCancelled => model.rename = None,
-            Message::FocusName => {
-                if model.rename.is_some() {
-                    return vec![Command::Focus(Key::from(view::NAME_FIELD))];
+            Event::NameSubmitted => window.end_rename(session),
+            Event::NameCancelled => window.rename = None,
+            Event::FocusName => {
+                if window.rename.is_some() {
+                    return vec![Command::Focus(view::name_field_key(id))];
                 }
             }
-            Message::Scroll(scroll) => model.scroll = scroll,
-            Message::SidebarScroll(scroll) => model.sidebar_scroll = scroll,
-            Message::Split(split) => model.split = split,
+            Event::Scroll(scroll) => window.scroll = scroll,
+            Event::SidebarScroll(scroll) => window.sidebar_scroll = scroll,
+            Event::Split(split) => window.split = split,
+            Event::Close => {
+                self.windows.remove(&id);
+            }
         }
         Vec::new()
     }
 
-    fn view(model: &Model) -> Vec<Window<Message>> {
-        vec![view::window(model)]
+    /// Do `action` of the menus of the window `id`.
+    fn menu(&mut self, id: u64, action: MenuAction) -> Vec<Command<Message>> {
+        let Some(window) = self.windows.get_mut(&id) else {
+            return Vec::new();
+        };
+        let session = &self.session;
+        match action {
+            MenuAction::NewWindow => {
+                let folder = window.browser.dir().to_path_buf();
+                return self.open_windows(vec![folder]);
+            }
+            MenuAction::OpenInNewWindow => {
+                let browser = &window.browser;
+                let folders = browser
+                    .selection()
+                    .indices()
+                    .filter_map(|i| browser.entries().get(i))
+                    .filter(|e| e.is_dir)
+                    .map(|e| e.path.clone())
+                    .collect();
+                return self.open_windows(folders);
+            }
+            MenuAction::CloseWindow => {
+                self.windows.remove(&id);
+            }
+            MenuAction::FullScreen => {
+                window.full_screen = !window.full_screen;
+                return vec![Command::Window(
+                    window_key(id),
+                    WindowRequest::Fullscreen(window.full_screen),
+                )];
+            }
+            MenuAction::Eject => {
+                if let Some(place) = removable_holding(window.browser.dir(), &session.places) {
+                    self.eject(place);
+                }
+            }
+            MenuAction::Open => window.open_selection(session),
+            MenuAction::SelectAll => window.browser.select_all(),
+            MenuAction::SortBy(key, ascending) => window.browser.set_sort(key, ascending),
+            MenuAction::TogglePathBar => window.path_bar = !window.path_bar,
+            MenuAction::ToggleStatusBar => window.status_bar = !window.status_bar,
+            MenuAction::Back => window.step(Step::Back, session),
+            MenuAction::Forward => window.step(Step::Forward, session),
+            MenuAction::EnclosingFolder => window.step(Step::Parent, session),
+            MenuAction::MoveToTrash => window.trash_selection(session),
+            MenuAction::PutBack => window.put_back(session),
+            MenuAction::NewFolder => match operations::new_folder(window.browser.dir()) {
+                Ok(path) => window.rename_new_folder(path),
+                Err(e) => session.failed(Action::NewFolder, &[], &e),
+            },
+            MenuAction::NewFolderWithSelection => {
+                let paths = window.selected_paths();
+                match operations::new_folder_with(window.browser.dir(), &paths) {
+                    Ok(path) => window.rename_new_folder(path),
+                    Err(e) => {
+                        let items: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+                        session.failed(Action::MoveIntoNewFolder, &items, &e);
+                    }
+                }
+            }
+            MenuAction::Rename => {
+                let first = window.browser.selection().indices().next();
+                if let Some(index) = first {
+                    return window.begin_rename(id, index);
+                }
+            }
+            MenuAction::Duplicate => {
+                let paths = window.selected_paths();
+                let duplicated = operations::duplicate(&paths);
+                session.failed_some(Action::Duplicate, paths.iter().zip(duplicated));
+            }
+            MenuAction::MakeAlias => {
+                let paths = window.selected_paths();
+                let made = paths.iter().map(|p| (p, operations::make_alias(p)));
+                session.failed_some(Action::MakeAlias, made);
+            }
+            MenuAction::ShowOriginal => window.show_original(session),
+            MenuAction::View(view) if view != window.view => {
+                window.view = view;
+                window.scroll.offset = cupertino_kit::geometry::Point::ZERO;
+            }
+            MenuAction::View(_) => {}
+        }
+        Vec::new()
+    }
+
+    /// Take what the removable media reported: the rows follow the devices, a window on a file system that went away
+    /// goes home, and a finished mount goes to its folder in the first window.
+    fn follow_media(&mut self) -> Vec<Command<Message>> {
+        let session = &mut self.session;
+        let Some(volumes) = &session.volumes else {
+            return Vec::new();
+        };
+        let reports = volumes.poll();
+        if !reports.is_empty() {
+            let held: Vec<bool> = self
+                .windows
+                .values()
+                .map(|w| removable_holding(w.browser.dir(), &session.places).is_some())
+                .collect();
+            let mut mounted = reports
+                .into_iter()
+                .filter_map(|r| session.media.take(r))
+                .last();
+            session.show_media();
+            for (window, held) in self.windows.values_mut().zip(held) {
+                if let Some(at) = mounted.take() {
+                    window.go(at, session);
+                } else if held && !session.media.holds(window.browser.dir()) {
+                    window.go(session.home.clone(), session);
+                }
+            }
+        }
+        vec![woken(&session.media_woken, Message::Media)]
+    }
+
+    /// Eject the drive of the removable file system of place `index`: the windows on its file systems go home first,
+    /// so they hold none of them.
+    fn eject(&mut self, index: usize) {
+        let session = &mut self.session;
+        let Some((device, filesystems)) = index
+            .checked_sub(session.standard_places)
+            .and_then(|i| session.media.eject(i))
+        else {
+            return;
+        };
+        let mounts: Vec<&Path> = filesystems
+            .iter()
+            .filter_map(|d| d.mount.as_deref())
+            .collect();
+        for window in self.windows.values_mut() {
+            if mounts.iter().any(|m| window.browser.dir().starts_with(m)) {
+                window.go(session.home.clone(), session);
+            }
+        }
+        if let Some(volumes) = &session.volumes {
+            volumes.eject(&device, filesystems);
+        }
+        session.show_media();
     }
 }
 
-enum Step {
-    Back,
-    Forward,
-    Parent,
-}
+impl Session {
+    fn failed(&self, action: Action, items: &[&Path], error: &dyn std::fmt::Display) {
+        self.notices.post(notice::failure(action, items, error));
+    }
 
-impl Model {
-    fn go(&mut self, to: PathBuf) {
-        match self.browser.go(to.clone()) {
-            Ok(()) => self.entered(),
-            Err(e) => self.failed(Action::Open, &[&to], &e),
+    /// Report the items of `results` that failed as one notice, worded by the first failure.
+    fn failed_some<'a, T, E: std::fmt::Display>(
+        &self,
+        action: Action,
+        results: impl IntoIterator<Item = (&'a PathBuf, Result<T, E>)>,
+    ) {
+        let mut failed = Vec::new();
+        let mut first = None;
+        for (path, result) in results {
+            if let Err(e) = result {
+                failed.push(path.as_path());
+                first.get_or_insert(e);
+            }
+        }
+        if let Some(e) = first {
+            self.failed(action, &failed, &e);
         }
     }
 
-    fn step(&mut self, step: Step) {
+    fn show_media(&mut self) {
+        self.places.truncate(self.standard_places);
+        self.places.extend(self.media.places());
+    }
+
+    fn launch(&self, apps: &MimeApps, path: &Path) {
+        match open_command(apps, path, false, self.terminal.as_deref()) {
+            Ok(spec) => {
+                launch::spawn(APP_ID, spec.to_command());
+            }
+            Err(OpenError::NoApplication { .. }) => {
+                self.failed(Action::Open, &[path], &"No application is set to open it")
+            }
+            Err(e) => self.failed(Action::Open, &[path], &e),
+        }
+    }
+}
+
+impl BrowserWindow {
+    fn go(&mut self, to: PathBuf, session: &Session) {
+        match self.browser.go(to.clone()) {
+            Ok(()) => self.entered(),
+            Err(e) => session.failed(Action::Open, &[&to], &e),
+        }
+    }
+
+    fn step(&mut self, step: Step, session: &Session) {
         let target = match step {
             Step::Back => self.browser.history().back_target(),
             Step::Forward => self.browser.history().forward_target(),
             Step::Parent => self.browser.dir().parent(),
         }
-        .map(|p| crate::places::window_title(p, &self.places));
+        .map(|p| crate::places::window_title(p, &session.places));
         let outcome = match step {
             Step::Back => self.browser.back(),
             Step::Forward => self.browser.forward(),
@@ -349,7 +643,7 @@ impl Model {
         match outcome {
             Ok(true) => self.entered(),
             Ok(false) => {}
-            Err(e) => self
+            Err(e) => session
                 .notices
                 .post(notice::unopened(target.as_deref().unwrap_or_default(), &e)),
         }
@@ -377,29 +671,6 @@ impl Model {
         };
     }
 
-    fn failed(&self, action: Action, items: &[&Path], error: &dyn std::fmt::Display) {
-        self.notices.post(notice::failure(action, items, error));
-    }
-
-    /// Report the items of `results` that failed as one notice, worded by the first failure.
-    fn failed_some<'a, T, E: std::fmt::Display>(
-        &self,
-        action: Action,
-        results: impl IntoIterator<Item = (&'a PathBuf, Result<T, E>)>,
-    ) {
-        let mut failed = Vec::new();
-        let mut first = None;
-        for (path, result) in results {
-            if let Err(e) = result {
-                failed.push(path.as_path());
-                first.get_or_insert(e);
-            }
-        }
-        if let Some(e) = first {
-            self.failed(action, &failed, &e);
-        }
-    }
-
     fn selected_paths(&self) -> Vec<PathBuf> {
         let entries = self.browser.entries();
         self.browser
@@ -411,194 +682,71 @@ impl Model {
     }
 
     /// Go to the folder of the selected link's target and select the target.
-    fn show_original(&mut self) {
+    fn show_original(&mut self, session: &Session) {
         let Some(link) = self.selected_paths().into_iter().next() else {
             return;
         };
         let target = match std::fs::canonicalize(&link) {
             Ok(target) => target,
-            Err(e) => return self.failed(Action::ShowOriginal, &[&link], &e),
+            Err(e) => return session.failed(Action::ShowOriginal, &[&link], &e),
         };
         let Some(parent) = target.parent().map(Path::to_path_buf) else {
             return;
         };
-        self.go(parent.clone());
+        self.go(parent.clone(), session);
         if self.browser.dir() == parent {
             self.browser.select_when_appears(target);
         }
     }
 
-    /// Take what the removable media reported: the rows follow the devices, a window on a file system that went away
-    /// goes home, and a finished mount goes to its folder.
-    fn follow_media(&mut self) {
-        let Some(volumes) = &self.volumes else {
-            return;
-        };
-        let reports = volumes.poll();
-        if reports.is_empty() {
-            return;
-        }
-        let held = removable_holding(self.browser.dir(), &self.places).is_some();
-        let mounted = reports
-            .into_iter()
-            .filter_map(|r| self.media.take(r))
-            .last();
-        self.show_media();
-        if let Some(at) = mounted {
-            self.go(at);
-        } else if held && !self.media.holds(self.browser.dir()) {
-            self.go(self.home.clone());
-        }
-    }
-
-    fn show_media(&mut self) {
-        self.places.truncate(self.standard_places);
-        self.places.extend(self.media.places());
-    }
-
-    /// Eject the drive of the removable file system of place `index`: a window on one of its file systems goes home
-    /// first, so it holds none of them.
-    fn eject(&mut self, index: usize) {
-        let Some((device, filesystems)) = index
-            .checked_sub(self.standard_places)
-            .and_then(|i| self.media.eject(i))
-        else {
-            return;
-        };
-        if filesystems
-            .iter()
-            .filter_map(|d| d.mount.as_deref())
-            .any(|m| self.browser.dir().starts_with(m))
-        {
-            self.go(self.home.clone());
-        }
-        if let Some(volumes) = &self.volumes {
-            volumes.eject(&device, filesystems);
-        }
-        self.show_media();
-    }
-
     /// Move the selected items to the trash; the listing drops them when the watcher reports it.
-    fn trash_selection(&self) {
+    fn trash_selection(&self, session: &Session) {
         let paths = self.selected_paths();
-        self.failed_some(
+        session.failed_some(
             Action::Trash,
-            paths.iter().map(|path| (path, self.trash.trash(path))),
+            paths.iter().map(|path| (path, session.trash.trash(path))),
         );
     }
 
     /// Put the selected items of the trash back where they came from.
-    fn put_back(&self) {
+    fn put_back(&self, session: &Session) {
         let paths = self.selected_paths();
-        let listed = match self.trash.list() {
+        let listed = match session.trash.list() {
             Ok(listed) => listed,
             Err(e) => {
                 let items: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-                return self.failed(Action::PutBack, &items, &e);
+                return session.failed(Action::PutBack, &items, &e);
             }
         };
         let restored = paths.iter().map(|path| {
             let restored = match listed.iter().find(|item| item.file_path() == *path) {
-                Some(item) => self.trash.restore(item).map_err(|e| e.to_string()),
+                Some(item) => session.trash.restore(item).map_err(|e| e.to_string()),
                 None => Err("The Trash has no record of where it came from".to_string()),
             };
             (path, restored)
         });
-        self.failed_some(Action::PutBack, restored);
+        session.failed_some(Action::PutBack, restored);
     }
 
     /// Go into the selected folder, or open the selected files with their default applications.
-    fn open_selection(&mut self) {
+    fn open_selection(&mut self, session: &Session) {
         let Activation { folder, files } = self.browser.activation();
         if !files.is_empty() {
-            match (self.applications)() {
+            match (session.applications)() {
                 Ok(apps) => {
                     for path in files {
-                        self.launch(&apps, &path);
+                        session.launch(&apps, &path);
                     }
                 }
                 Err(e) => {
                     let items: Vec<&Path> = files.iter().map(PathBuf::as_path).collect();
-                    self.failed(Action::Open, &items, &e);
+                    session.failed(Action::Open, &items, &e);
                 }
             }
         }
         if let Some(folder) = folder {
-            self.go(folder);
+            self.go(folder, session);
         }
-    }
-
-    fn launch(&self, apps: &MimeApps, path: &Path) {
-        match open_command(apps, path, false, self.terminal.as_deref()) {
-            Ok(spec) => {
-                launch::spawn(APP_ID, spec.to_command());
-            }
-            Err(OpenError::NoApplication { .. }) => {
-                self.failed(Action::Open, &[path], &"No application is set to open it")
-            }
-            Err(e) => self.failed(Action::Open, &[path], &e),
-        }
-    }
-
-    fn menu(&mut self, action: MenuAction) -> Vec<Command<Message>> {
-        match action {
-            MenuAction::Open => self.open_selection(),
-            MenuAction::CloseWindow => return vec![Command::Exit],
-            MenuAction::SelectAll => self.browser.select_all(),
-            MenuAction::SortBy(key, ascending) => self.browser.set_sort(key, ascending),
-            MenuAction::TogglePathBar => self.path_bar = !self.path_bar,
-            MenuAction::ToggleStatusBar => self.status_bar = !self.status_bar,
-            MenuAction::Back => self.step(Step::Back),
-            MenuAction::Forward => self.step(Step::Forward),
-            MenuAction::EnclosingFolder => self.step(Step::Parent),
-            MenuAction::MoveToTrash => self.trash_selection(),
-            MenuAction::PutBack => self.put_back(),
-            MenuAction::NewFolder => match operations::new_folder(self.browser.dir()) {
-                Ok(path) => self.rename_new_folder(path),
-                Err(e) => self.failed(Action::NewFolder, &[], &e),
-            },
-            MenuAction::NewFolderWithSelection => {
-                let paths = self.selected_paths();
-                match operations::new_folder_with(self.browser.dir(), &paths) {
-                    Ok(path) => self.rename_new_folder(path),
-                    Err(e) => {
-                        let items: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-                        self.failed(Action::MoveIntoNewFolder, &items, &e);
-                    }
-                }
-            }
-            MenuAction::Rename => {
-                let first = self.browser.selection().indices().next();
-                if let Some(index) = first {
-                    return self.begin_rename(index);
-                }
-            }
-            MenuAction::Duplicate => {
-                let paths = self.selected_paths();
-                let duplicated = operations::duplicate(&paths);
-                self.failed_some(Action::Duplicate, paths.iter().zip(duplicated));
-            }
-            MenuAction::MakeAlias => {
-                let paths = self.selected_paths();
-                let made = paths.iter().map(|p| (p, operations::make_alias(p)));
-                self.failed_some(Action::MakeAlias, made);
-            }
-            MenuAction::ShowOriginal => self.show_original(),
-            MenuAction::Eject => {
-                if let Some(place) = removable_holding(self.browser.dir(), &self.places) {
-                    self.eject(place);
-                }
-            }
-            MenuAction::View(view) if view != self.view => {
-                self.view = view;
-                self.scroll.offset = cupertino_kit::geometry::Point::ZERO;
-            }
-            MenuAction::View(_)
-            | MenuAction::NewWindow
-            | MenuAction::OpenInNewWindow
-            | MenuAction::FullScreen => {}
-        }
-        Vec::new()
     }
 
     /// A folder was made: the list selects it when it shows it, and its name is edited then.
@@ -607,9 +755,9 @@ impl Model {
         self.rename_when_listed = Some(path);
     }
 
-    /// Edit the name of item `index` in its row, if it is the only selected item. The field is focused once the
-    /// window shows it.
-    fn begin_rename(&mut self, index: usize) -> Vec<Command<Message>> {
+    /// Edit the name of item `index` in its row, if it is the only selected item. The field of the window `id` is
+    /// focused once the window shows it.
+    fn begin_rename(&mut self, id: u64, index: usize) -> Vec<Command<Message>> {
         let selection = self.browser.selection();
         if selection.len() != 1 || !selection.contains(index) {
             return Vec::new();
@@ -625,7 +773,9 @@ impl Model {
             path: entry.path.clone(),
             revision,
         });
-        vec![Command::Perform(Box::pin(async { Message::FocusName }))]
+        vec![Command::Perform(Box::pin(async move {
+            Message::Window(id, Event::FocusName)
+        }))]
     }
 
     /// The row of the name being edited.
@@ -635,7 +785,7 @@ impl Model {
 
     /// Commit the edited name. A name that is not valid is reported and the field stays open. A rename that changes
     /// the extension is not confirmed (there is no dialog to ask in).
-    fn end_rename(&mut self) {
+    fn end_rename(&mut self, session: &Session) {
         let Some(rename) = self.rename.take() else {
             return;
         };
@@ -643,17 +793,20 @@ impl Model {
             Ok(None) => {}
             Ok(Some(name)) => match operations::rename_item(&rename.path, &name) {
                 Ok(path) => self.browser.select_when_appears(path),
-                Err(e) => self.failed(Action::Rename, &[&rename.path], &e),
+                Err(e) => session.failed(Action::Rename, &[&rename.path], &e),
             },
             Err(e) => {
-                self.notices.post(notice::bad_name(rename.edit.text(), &e));
+                session
+                    .notices
+                    .post(notice::bad_name(rename.edit.text(), &e));
                 self.rename = Some(rename);
             }
         }
     }
 
-    /// The list changed: the name being edited follows its item, and a folder just made starts its rename.
-    fn listed(&mut self) -> Vec<Command<Message>> {
+    /// The list of the window `id` changed: the name being edited follows its item, and a folder just made starts
+    /// its rename.
+    fn listed(&mut self, id: u64) -> Vec<Command<Message>> {
         let entries = self.browser.entries();
         if let Some(rename) = self.rename.as_mut() {
             match entries.iter().position(|e| e.path == rename.path) {
@@ -668,13 +821,13 @@ impl Model {
         match made {
             Some(index) => {
                 self.rename_when_listed = None;
-                self.begin_rename(index)
+                self.begin_rename(id, index)
             }
             None => Vec::new(),
         }
     }
 
-    fn menu_state(&self) -> MenuState {
+    fn menu_state(&self, session: &Session) -> MenuState {
         let selected: Vec<_> = self
             .browser
             .selection()
@@ -686,32 +839,30 @@ impl Model {
             count: selected.len(),
             all_folders: !selected.is_empty() && selected.iter().all(|e| e.is_dir),
             single_link: matches!(selected.as_slice(), [e] if e.kind == crate::Kind::Symlink),
-            in_trash: self.browser.dir() == self.trash.home_trash().join("files"),
+            in_trash: self.browser.dir() == session.trash.home_trash().join("files"),
             path_bar: self.path_bar,
             status_bar: self.status_bar,
-            full_screen: false,
+            full_screen: self.full_screen,
             can_go_back: history.back_target().is_some(),
             can_go_forward: history.forward_target().is_some(),
             has_parent: !self.browser.is_virtual() && self.browser.dir().parent().is_some(),
-            eject: removable_holding(self.browser.dir(), &self.places)
-                .filter(|&i| self.places[i].ejectable())
-                .map(|i| self.places[i].name.clone()),
+            eject: removable_holding(self.browser.dir(), &session.places)
+                .filter(|&i| session.places[i].ejectable())
+                .map(|i| session.places[i].name.clone()),
         }
     }
 
     /// The actions the menus show but the window cannot do now.
-    fn disabled(&self, state: &MenuState) -> BTreeSet<ActionName> {
+    fn disabled(state: &MenuState) -> BTreeSet<ActionName> {
         menu_bar::enabled(state)
             .into_iter()
             .filter(|(_, enabled)| !enabled)
-            .map(|(action, _)| action)
-            .chain(NOT_YET)
-            .map(|action| action.name())
+            .map(|(action, _)| action.name())
             .collect()
     }
 }
 
-/// Open the window on `start` and serve it until it closes.
+/// Open the window on `start` and serve it until the last window closes.
 pub fn run(start: Start) -> Result<(), cupertino_kit::app::AppError> {
     prepare(start);
     cupertino_kit::app::run::<Files>()

@@ -22,13 +22,14 @@ use cupertino_kit::platform::{
 use cupertino_kit::render::{CpuConfig, CpuRenderer};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
-use cupertino_menu_model::{ActionName, Scope};
+use cupertino_menu_model::{ActionName, Command, Entry, Scope};
 use cupertino_theme::Theme;
 use cupertino_ui_test::{Inspector, ManualClock, TestDriver};
 use tiny_skia::Pixmap;
 
 pub struct Run {
     pub driver: TestDriver<Files>,
+    /// The window the helpers act on and read.
     pub window: WindowId,
     home: tempfile::TempDir,
 }
@@ -105,21 +106,32 @@ impl Run {
         );
         driver.run_until_idle(budget()).unwrap();
         let window = driver.runtime().windows()[0].1;
-        let active = WindowStates {
-            activated: true,
-            ..WindowStates::default()
-        };
-        driver
-            .window_system_mut()
-            .configure(window, None, active)
-            .unwrap();
         let mut run = Run {
             driver,
             window,
             home,
         };
-        run.settle();
+        run.activate(window);
         run
+    }
+
+    pub fn windows(&self) -> Vec<WindowId> {
+        let windows = self.driver.runtime().windows();
+        windows.into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// Make `window` the key window and the one the helpers act on.
+    pub fn activate(&mut self, window: WindowId) {
+        let active = WindowStates {
+            activated: true,
+            ..WindowStates::default()
+        };
+        self.driver
+            .window_system_mut()
+            .configure(window, None, active)
+            .unwrap();
+        self.window = window;
+        self.settle();
     }
 
     pub fn home(&self) -> PathBuf {
@@ -129,11 +141,18 @@ impl Run {
     pub fn settle(&mut self) {
         for _ in 0..8 {
             self.driver.run_until_idle(budget()).unwrap();
+            let windows = self.windows();
             let system = self.driver.window_system_mut();
-            if !system.frame_requested(self.window).unwrap() {
+            let waiting: Vec<WindowId> = windows
+                .into_iter()
+                .filter(|&w| system.frame_requested(w).unwrap())
+                .collect();
+            if waiting.is_empty() {
                 return;
             }
-            system.frame_ready(self.window, Timestamp(0)).unwrap();
+            for window in waiting {
+                system.frame_ready(window, Timestamp(0)).unwrap();
+            }
         }
     }
 
@@ -214,6 +233,35 @@ impl Run {
 
     pub fn menu(&mut self, name: &str) {
         self.send(WindowEvent::MenuActivated(action(name)));
+    }
+
+    /// The label of the menu item that runs `name`.
+    pub fn menu_label(&self, name: &str) -> String {
+        let system = self.driver.runtime().window_system();
+        let menus = system.menus(self.window).unwrap().unwrap();
+        let command = Command::Action(action(name));
+        let item = menus
+            .bar
+            .menus
+            .iter()
+            .flat_map(|menu| menu.sections.iter().flatten())
+            .find_map(|entry| match entry {
+                Entry::Item(item) if item.command == command => Some(item.label.clone()),
+                _ => None,
+            });
+        item.unwrap_or_else(|| panic!("no menu item {name}"))
+    }
+
+    pub fn full_screen_requests(&self) -> Vec<bool> {
+        let system = self.driver.runtime().window_system();
+        let requests = system.requests(self.window).unwrap();
+        requests
+            .iter()
+            .filter_map(|request| match request {
+                WindowRequest::Fullscreen(on) => Some(*on),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The names of the accessible nodes with `role`, in tree order.
@@ -420,7 +468,12 @@ impl Run {
 }
 
 pub fn action(name: &str) -> ActionName {
-    ActionName::new(Scope::Win, name).unwrap()
+    let scope = if name == "new" {
+        Scope::App
+    } else {
+        Scope::Win
+    };
+    ActionName::new(scope, name).unwrap()
 }
 
 pub fn budget() -> NonZeroU32 {

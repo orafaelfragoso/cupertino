@@ -692,11 +692,16 @@ impl WaylandWindowSystem {
                 };
                 (i, WindowEvent::Discarded { frame })
             }
+            Event::OutputsChanged => {
+                if let Some(roles) = self.roles.as_mut() {
+                    roles.outputs_changed(&self.conn);
+                }
+                return;
+            }
             // the platform has no events for these yet: drags wait for the platform's drag events
-            Event::OutputsChanged
-            | Event::PopupRepositioned { .. }
-            | Event::Drag { .. }
-            | Event::DragSource { .. } => return,
+            Event::PopupRepositioned { .. } | Event::Drag { .. } | Event::DragSource { .. } => {
+                return
+            }
         };
         let window = self.windows[i].id;
         out.push(PlatformEvent::Window { window, event });

@@ -1,53 +1,34 @@
-//! Glue between the notification model, the D-Bus server and the toolkit surface: draws the
-//! banners and the list, requests one backdrop per card and routes pointer and key input.
-//! The layout and routing decisions live in `cupertino_notifications::surface`.
+//! Glue between the notification model, the D-Bus server and CupertinoKit: the windows of
+//! `cupertino_notifications::view` get their layer surfaces from [`NotificationRoles`], the bus wakes the
+//! application's loop through a channel, and timers pace the banners' lifetimes and animations.
 
-use cupertino_assets::{AssetError, Assets};
-use cupertino_geometry::{Point, Rect, Size};
+use cupertino_kit::core::{Application, Command, Window};
+use cupertino_kit::platform::WindowSpec;
+use cupertino_modifiers::Profile;
 use cupertino_notifications::dbus::{Server, ServerOptions};
-use cupertino_notifications::render::{
-    BannerHit, BannerImage, BannerRenderer, BannerStyle, Layers, RenderOptions,
+use cupertino_notifications::view::{
+    self, banner_key, centre_key, HostAction, Input, Ui, CENTRE_TITLE, SHADOW_MARGIN,
 };
-use cupertino_notifications::surface::{
-    banner_press, card_at, card_press, centre_cards, centre_header, clear_menu, header_press,
-    input_region, local_to, surface_width, BannerPress, CardPress, CentreHeader, ClearMenu,
-    HeaderPress, MENU_RADIUS,
-};
-use cupertino_notifications::{
-    CenterConfig, ClearScope, GroupStack, Notification, Placement, SwipeOutcome, Wakeup,
-};
-use cupertino_protocol_app::{AppEffects, Backdrop};
+use cupertino_notifications::{CenterConfig, StackLayout, Wakeup};
+use cupertino_protocol_app::AppEvent;
 use cupertino_shell_client::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
-    Session, SessionChange, SessionState, Shell, ShellEvent,
+    ShellEvent,
 };
-use cupertino_theme::{Appearance, Theme};
-use cupertino_ui_wayland::{Ready, ShmPresenter};
-use cupertino_wayland_client::{
-    key, Button, Connection, Event, KeyboardEvent, PointerEvent, TokenRequest, Waker,
-};
-use std::collections::{HashMap, HashSet};
+use cupertino_theme::Theme;
+use cupertino_ui_wayland::{RoleEvent, SurfaceRoles, WaylandWindowSystem};
+use cupertino_wayland_client::{Connection, Error as WaylandError, ExtensionEvent, SurfaceId};
+use std::collections::HashMap;
 use std::error::Error;
-use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
-use tiny_skia::{PixmapPaint, Transform};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-/// Role of the surface for the server (`wlr-layer-shell` namespace).
+/// Role of the surfaces for the server (`wlr-layer-shell` namespace).
 const NAMESPACE: &str = "cupertino-notifications";
 
-/// Banners below this opacity are neither drawn nor given a backdrop.
-const MIN_OPACITY: f64 = 0.002;
-
-/// Shadow and content; the material is the server's backdrop.
-const LAYERS: Layers = Layers {
-    shadow: true,
-    background: false,
-    content: true,
-};
+/// The animations' frame interval.
+const FRAME: Duration = Duration::from_micros(16_667);
 
 /// Command line of the process.
 pub struct Options {
@@ -71,175 +52,6 @@ impl Options {
     }
 }
 
-/// What a card of the surface shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum Slot {
-    /// A banner of the stack.
-    Banner(u32),
-    /// A card of the notification centre list.
-    Card(u32),
-}
-
-/// A card to draw this frame.
-struct Item {
-    slot: Slot,
-    rect: Rect,
-    opacity: f64,
-    hovered: bool,
-    note: Notification,
-}
-
-/// A press on a banner body that may turn into a swipe; the model decides click versus swipe.
-struct Drag {
-    id: u32,
-    start_x: f64,
-}
-
-/// A model action that needs the activation token still being fetched.
-enum Pending {
-    Activate(u32),
-    Invoke(u32, String),
-}
-
-/// What decides whether a rendered card can be reused: id, revision, hover, size and scale.
-type Signature = (u32, u32, bool, u64, u64, u32);
-
-struct App {
-    conn: Connection,
-    effects: AppEffects,
-    _session: Session,
-    session: SessionState,
-    theme: Theme,
-    assets: Assets,
-    layer: LayerSurface,
-    presenter: ShmPresenter,
-    server: Server,
-    renderer: BannerRenderer,
-    /// Set by the `ToggleCentre` D-Bus call.
-    toggle: Arc<AtomicBool>,
-    centre_open: bool,
-    /// Cards of the open list in surface coordinates.
-    cards: Vec<(u32, Rect)>,
-    centre_hover: Option<u32>,
-    /// Header row of the open list (title and Clear button), set by the last draw.
-    header: Option<CentreHeader>,
-    /// Whether the Clear menu is open, and its geometry and scopes from the last draw.
-    menu_open: bool,
-    menu: Option<(ClearMenu, Vec<ClearScope>)>,
-    menu_hover: Option<usize>,
-    clear_hover: bool,
-    menu_backdrop: Option<Backdrop>,
-    /// The material panel behind the header row, so its title and Clear button read on any wallpaper.
-    header_backdrop: Option<Backdrop>,
-    hovered: Option<u32>,
-    drag: Option<Drag>,
-    /// Banners of the last drawn frame, for hit testing.
-    placements: Vec<Placement>,
-    backdrops: HashMap<Slot, Backdrop>,
-    images: HashMap<Slot, (Signature, BannerImage)>,
-    pending: HashMap<TokenRequest, Pending>,
-    seen_revision: u64,
-}
-
-/// The renderer for the session's appearance and display options.
-fn banner_renderer(
-    theme: &Theme,
-    assets: &Assets,
-    session: &SessionState,
-) -> std::result::Result<BannerRenderer, AssetError> {
-    let appearance = Appearance::of_session(session.dark, session.display.increase_contrast);
-    BannerRenderer::new(
-        BannerStyle::from_theme(theme, appearance, session.display.reduce_transparency),
-        assets,
-    )
-}
-
-/// Connect, claim the bus names and serve until the connection or the bus fails.
-pub fn run(options: &Options) -> Result<std::convert::Infallible> {
-    let assets = Assets::discover();
-    let theme = Theme::load()?;
-    let mut conn = Connection::connect()?;
-    let layer_shell = LayerShell::bind(&mut conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
-    let effects = AppEffects::bind(&mut conn).ok_or("the server lacks cupertino_app_effects_v1")?;
-    let shell = Shell::bind(&mut conn).ok_or("the server lacks cupertino_shell_v1")?;
-    let (session_observer, session, early) = shell.observe(&mut conn)?;
-    let renderer = banner_renderer(&theme, &assets, &session)?;
-    let mut center_config = CenterConfig::from_theme(&theme);
-    // banners fade instead of sliding while the session reduces motion
-    center_config.motion.reduce_motion = session.display.reduce_motion;
-    // the shadow margins do not depend on the appearance, so the surface keeps its width when it changes
-    let width = surface_width(
-        &center_config.layout,
-        &center_config.swipe,
-        f64::from(renderer.style.shadow.margins_px(1.0).left),
-    );
-
-    let waker = conn.waker();
-    let server = start_server(options, center_config, &waker)?;
-    let toggle = Arc::new(AtomicBool::new(false));
-    let (flag, wake) = (toggle.clone(), waker);
-    server.serve_centre_control(move || {
-        flag.store(true, Ordering::SeqCst);
-        wake.wake();
-    })?;
-    // full height at the right edge, over the menu bar's zone (the model insets the stack itself)
-    let layer = layer_shell.layer_surface(
-        &mut conn,
-        &LayerSurfaceConfig {
-            namespace: NAMESPACE.to_string(),
-            output: None,
-            layer: Layer::Overlay,
-            anchor: Anchor::Top | Anchor::Right | Anchor::Bottom,
-            size: (width as u32, 0),
-            margin: Margin::default(),
-            exclusive_zone: -1,
-            keyboard: KeyboardInteractivity::None,
-        },
-    )?;
-    let mut app = App {
-        presenter: ShmPresenter::new(layer.surface()),
-        conn,
-        effects,
-        _session: session_observer,
-        session,
-        theme,
-        assets,
-        layer,
-        server,
-        renderer,
-        toggle,
-        centre_open: false,
-        cards: Vec::new(),
-        centre_hover: None,
-        header: None,
-        menu_open: false,
-        menu: None,
-        menu_hover: None,
-        clear_hover: false,
-        menu_backdrop: None,
-        header_backdrop: None,
-        hovered: None,
-        drag: None,
-        placements: Vec::new(),
-        backdrops: HashMap::new(),
-        images: HashMap::new(),
-        pending: HashMap::new(),
-        seen_revision: 0,
-    };
-    for event in early {
-        app.handle(event)?;
-    }
-    let mut timeout = None;
-    loop {
-        app.present()?;
-        for event in app.conn.wait(timeout)? {
-            app.handle(event)?;
-        }
-        timeout = app.housekeeping()?;
-    }
-}
-
-/// Start the `org.freedesktop.Notifications` server; model changes from the bus wake the loop.
 /// Another notification daemon owns `org.freedesktop.Notifications` and `--replace` was not given. This process has
 /// nothing wrong: it leaves the name to the daemon that has it, and does not fail, so the server does not restart it.
 #[derive(Debug)]
@@ -261,20 +73,158 @@ fn start_error(e: zbus::Error) -> Box<dyn Error> {
     }
 }
 
-fn start_server(options: &Options, config: CenterConfig, waker: &Waker) -> Result<Server> {
-    let wake = waker.clone();
-    let opts = ServerOptions {
-        config,
-        wake: Some(Box::new(move || wake.wake())),
-        replace_existing: options.replace_existing,
-        ..ServerOptions::default()
-    };
-    Server::start(opts).map_err(start_error)
+/// What the bus thread and the surface roles tell the application's loop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Note {
+    /// The model changed on the bus.
+    Changed,
+    /// `ToggleCentre` was called.
+    Toggle,
+    /// The session was locked: the server draws the lock screen, only the open centre has to go.
+    Locked,
+    /// The session's reduce-motion option.
+    ReduceMotion(bool),
+}
+
+/// Gives the windows of the process their layer surfaces on the overlay layer, at the right edge of the output the
+/// server chooses: a banner's at the top, as tall as its window, taking the pointer only on its card at rest; the
+/// centre's from top to bottom, with the keyboard while it is open (Escape closes it).
+struct NotificationRoles {
+    shell: LayerShell,
+    layout: StackLayout,
+    layers: HashMap<SurfaceId, LayerSurface>,
+    notes: async_channel::Sender<Note>,
+}
+
+impl NotificationRoles {
+    fn config(&self, spec: &WindowSpec) -> LayerSurfaceConfig {
+        let (width, height) = (
+            spec.size.width.ceil() as u32,
+            spec.size.height.ceil() as u32,
+        );
+        let centre = spec.title == CENTRE_TITLE;
+        LayerSurfaceConfig {
+            namespace: NAMESPACE.to_string(),
+            output: None,
+            layer: Layer::Overlay,
+            anchor: if centre {
+                Anchor::Top | Anchor::Right | Anchor::Bottom
+            } else {
+                Anchor::Top | Anchor::Right
+            },
+            size: (width, if centre { 0 } else { height }),
+            margin: Margin {
+                top: if centre {
+                    0
+                } else {
+                    (self.layout.top_inset - SHADOW_MARGIN).max(0.0) as i32
+                },
+                ..Margin::default()
+            },
+            exclusive_zone: -1,
+            keyboard: if centre {
+                KeyboardInteractivity::Exclusive
+            } else {
+                KeyboardInteractivity::None
+            },
+        }
+    }
+}
+
+impl SurfaceRoles for NotificationRoles {
+    fn create(
+        &mut self,
+        conn: &mut Connection,
+        spec: &WindowSpec,
+    ) -> Option<std::result::Result<SurfaceId, WaylandError>> {
+        if spec.app_id != view::APP_ID {
+            return None;
+        }
+        let layer = match self.shell.layer_surface(conn, &self.config(spec)) {
+            Ok(layer) => layer,
+            Err(cupertino_shell_client::Error::Transport(e)) => return Some(Err(e)),
+            Err(_) => {
+                return Some(Err(WaylandError::Protocol(
+                    "the notification surface's output is gone",
+                )))
+            }
+        };
+        let surface = layer.surface();
+        self.layers.insert(surface, layer);
+        Some(Ok(surface))
+    }
+
+    fn event(&mut self, event: &ExtensionEvent) -> Option<RoleEvent> {
+        // the toolkit follows the appearance and the lock itself; the model needs the lock and reduce motion too
+        match event.downcast_ref::<AppEvent>() {
+            Some(AppEvent::SessionLock { locked: true }) => {
+                let _ = self.notes.try_send(Note::Locked);
+                return None;
+            }
+            Some(AppEvent::DisplayOptions(options)) => {
+                let _ = self
+                    .notes
+                    .try_send(Note::ReduceMotion(options.reduce_motion));
+                return None;
+            }
+            _ => {}
+        }
+        match *event.downcast_ref::<ShellEvent>()? {
+            ShellEvent::Configure { surface, size } => {
+                let layer = self.layers.get(&surface)?;
+                Some(match layer.configured(size) {
+                    Ok(size) => RoleEvent::Configure { surface, size },
+                    Err(_) => RoleEvent::Closed(surface),
+                })
+            }
+            ShellEvent::Closed(surface) if self.layers.contains_key(&surface) => {
+                Some(RoleEvent::Closed(surface))
+            }
+            _ => None,
+        }
+    }
+
+    fn destroyed(&mut self, surface: SurfaceId) {
+        self.layers.remove(&surface);
+    }
+}
+
+/// A model action that waits for an activation token.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Pending {
+    Activate(u32),
+    Invoke(u32, String),
+}
+
+pub struct Notifications {
+    server: Server,
+    ui: Ui,
+    notes: async_channel::Receiver<Note>,
+    sender: async_channel::Sender<Note>,
+    /// The timer that counts; one scheduled before it is ignored when it fires.
+    timer: u64,
+}
+
+#[derive(Clone, Debug)]
+pub enum Message {
+    Input(Input),
+    Note(Note),
+    Timer(u64),
+    Token(Pending, Option<String>),
+    /// The bus thread and the roles are gone.
+    Unheard,
+}
+
+fn listen(notes: &async_channel::Receiver<Note>) -> Command<Message> {
+    let notes = notes.clone();
+    Command::Perform(Box::pin(async move {
+        notes.recv().await.map_or(Message::Unheard, Message::Note)
+    }))
 }
 
 /// Open a link of a notification body with the default handler.
 fn open_link(href: &str) {
-    match Command::new("xdg-open").arg(href).spawn() {
+    match std::process::Command::new("xdg-open").arg(href).spawn() {
         Ok(mut child) => {
             // reap the child without blocking the loop
             std::thread::spawn(move || {
@@ -287,491 +237,189 @@ fn open_link(href: &str) {
     }
 }
 
-impl App {
-    fn handle(&mut self, event: Event) -> Result<()> {
-        match event {
-            Event::Frame(_) => self.presenter.frame_done(),
-            Event::Pointer { event, .. } => self.pointer(event)?,
-            Event::Keyboard {
-                event:
-                    KeyboardEvent::Key {
-                        code: key::ESCAPE,
-                        pressed: true,
-                        ..
-                    },
-                ..
-            } if self.centre_open => {
-                if self.menu_open {
-                    self.menu_open = false;
-                    self.presenter.request_redraw();
-                } else {
-                    self.toggle_centre();
-                }
-            }
-            Event::ActivationToken { request, token } => self.complete(request, token),
-            Event::Extension(event) => match self.session.apply(&event) {
-                Some(SessionChange::Appearance { .. } | SessionChange::DisplayOptions(_)) => {
-                    // layouts and rendered cards belong to the style they were made with
-                    self.renderer = banner_renderer(&self.theme, &self.assets, &self.session)?;
-                    self.server.center().config.motion.reduce_motion =
-                        self.session.display.reduce_motion;
-                    self.images.clear();
-                    self.presenter.request_redraw();
-                }
-                // the server draws the lock screen: only the open list has to go
-                Some(SessionChange::Lock { locked: true }) if self.centre_open => {
-                    self.toggle_centre()
-                }
-                Some(SessionChange::Lock { .. }) => {}
-                None => match event.downcast_ref::<ShellEvent>() {
-                    Some(&ShellEvent::Configure { size, .. }) => {
-                        self.presenter.configured(self.layer.configured(size)?);
-                    }
-                    Some(ShellEvent::Closed(_)) => {
-                        return Err("the server closed the notification surface".into())
-                    }
-                    _ => {}
-                },
-            },
-            // the surface follows the output the server chose for it; it has no popups
-            _ => {}
-        }
-        Ok(())
-    }
-
-    /// Draw while the presenter can take a frame.
-    fn present(&mut self) -> Result<()> {
-        loop {
-            match self.presenter.poll(&self.conn)? {
-                Ready::Idle => return Ok(()),
-                // a draw follows every scale change
-                Ready::ScaleChanged(_) => {}
-                Ready::Draw => self.draw()?,
-            }
-        }
-    }
-
-    /// Expire and animate the model, send its signals, handle `ToggleCentre` and ask for a
-    /// frame when something changed. Returns how long the loop may sleep.
-    fn housekeeping(&mut self) -> Result<Option<Duration>> {
-        if self.toggle.swap(false, Ordering::SeqCst) {
-            self.toggle_centre();
-        }
+impl Notifications {
+    /// Expire and animate the model, send its signals, and set the timer for its next change.
+    fn housekeeping(&mut self) -> Vec<Command<Message>> {
         let now = self.server.now();
-        let (revision, wakeup) = {
+        let wakeup = {
             let mut c = self.server.center();
             c.tick(now);
-            (c.revision(), c.next_wakeup(now))
+            c.next_wakeup(now)
         };
-        self.server.flush_events()?;
-        if revision != self.seen_revision || wakeup == Some(Wakeup::Frame) {
-            self.seen_revision = revision;
-            self.presenter.request_redraw();
+        if let Err(e) = self.server.flush_events() {
+            eprintln!("cupertino-notifications: cannot send the signals: {e}");
         }
-        Ok(match wakeup {
-            Some(Wakeup::At(t)) => Some(Duration::from_secs_f64((t - now).max(0.0))),
-            // frame callbacks drive the animation
-            Some(Wakeup::Frame) | None => None,
+        self.timer += 1;
+        let wait = match wakeup {
+            Some(Wakeup::Frame) => FRAME,
+            Some(Wakeup::At(t)) => Duration::from_secs_f64((t - now).max(0.0)),
+            None => return Vec::new(),
+        };
+        let timer = self.timer;
+        vec![Command::Perform(Box::pin(async move {
+            async_io::Timer::after(wait).await;
+            Message::Timer(timer)
+        }))]
+    }
+
+    /// Ask for the activation token the action hands to the application; `None` when the notification is gone.
+    fn token(&self, pending: Pending) -> Option<Command<Message>> {
+        let id = match pending {
+            Pending::Activate(id) | Pending::Invoke(id, _) => id,
+        };
+        let c = self.server.center();
+        let n = c.get(id)?;
+        let window = if self.ui.centre_open {
+            centre_key()
+        } else {
+            banner_key(n)
+        };
+        Some(Command::ActivationToken {
+            window,
+            app_id: n.desktop_entry.clone(),
+            on_token: Box::new(move |token| Message::Token(pending, token)),
         })
     }
 
-    /// Open or close the list. While it is open the surface takes the keyboard (Escape closes).
-    fn toggle_centre(&mut self) {
-        self.centre_open = !self.centre_open;
-        self.centre_hover = None;
-        self.menu_open = false;
-        self.clear_hover = false;
-        if !self.centre_open {
-            self.cards.clear();
-        }
-        let mode = if self.centre_open {
-            KeyboardInteractivity::Exclusive
-        } else {
-            KeyboardInteractivity::None
-        };
-        self.layer.set_keyboard_interactivity(mode);
-        self.presenter.request_redraw();
-    }
-
-    /// Lay out this frame's banners and cards, sync their backdrops and the input region, and
-    /// draw them.
-    fn draw(&mut self) -> Result<()> {
+    fn input(&mut self, input: Input) -> Vec<Command<Message>> {
         let now = self.server.now();
-        let (width, height) = self.presenter.size().ok_or("drawn before its configure")?;
-        let surface_size = Size::new(f64::from(width), f64::from(height));
-        let mut items = Vec::new();
-        {
-            let mut c = self.server.center();
-            c.tick(now);
-            self.placements = c.placements(surface_size, &mut self.renderer, now);
-            // the open list replaces the banners on screen; they stay in the model and in the list
-            for pl in self.placements.iter().filter(|_| !self.centre_open) {
-                if let Some(note) = c.get(pl.id).cloned() {
-                    items.push(Item {
-                        slot: Slot::Banner(pl.id),
-                        rect: pl.rect,
-                        opacity: pl.opacity,
-                        hovered: pl.hovered,
-                        note,
-                    });
-                }
+        let action = view::apply(&mut self.server.center(), &mut self.ui, input, now);
+        match action {
+            Some(HostAction::Activate(id)) => {
+                self.token(Pending::Activate(id)).into_iter().collect()
             }
-            if self.centre_open {
-                let layout = c.config.layout.clone();
-                let history: Vec<Notification> = c.history().into_iter().cloned().collect();
-                let renderer = &mut self.renderer;
-                let scopes = c.clear_scopes();
-                let header = centre_header(&layout, surface_size, renderer.clear_button_width());
-                let labels: Vec<&str> = scopes.iter().map(|s| s.label()).collect();
-                self.menu = self.menu_open.then(|| {
-                    (
-                        clear_menu(header.clear, scopes.len(), renderer.widest_label(&labels)),
-                        scopes,
-                    )
-                });
-                self.header = Some(header);
-                self.cards = centre_cards(
-                    history
-                        .iter()
-                        .map(|n| (n.id, renderer.layout_cached(n, layout.width).size.height, 1)),
-                    &GroupStack::default(),
-                    &layout,
-                    surface_size,
-                );
-                for (id, rect) in &self.cards {
-                    let note = history
-                        .iter()
-                        .find(|n| n.id == *id)
-                        .expect("card of a history entry")
-                        .clone();
-                    items.push(Item {
-                        slot: Slot::Card(*id),
-                        rect: *rect,
-                        opacity: 1.0,
-                        hovered: self.centre_hover == Some(*id),
-                        note,
-                    });
-                }
+            Some(HostAction::Invoke(id, key)) => {
+                self.token(Pending::Invoke(id, key)).into_iter().collect()
             }
+            Some(HostAction::OpenLink(href)) => {
+                open_link(&href);
+                Vec::new()
+            }
+            None => Vec::new(),
         }
-        if !self.centre_open {
-            self.header = None;
-            self.menu = None;
-        }
-        items.retain(|i| i.opacity > MIN_OPACITY);
-        let live: HashSet<Slot> = items.iter().map(|i| i.slot).collect();
-        self.backdrops.retain(|slot, _| live.contains(slot));
-        self.images.retain(|slot, _| live.contains(slot));
-        let radius = self.renderer.style.corner_radius;
-        for item in &items {
-            if !self.backdrops.contains_key(&item.slot) {
-                let backdrop = self.effects.backdrop(&self.conn, self.layer.surface())?;
-                backdrop.set_material(BannerStyle::DEFAULT_MATERIAL);
-                self.backdrops.insert(item.slot, backdrop);
-            }
-            let backdrop = &self.backdrops[&item.slot];
-            backdrop.set_shape(&item.rect, radius)?;
-            backdrop.set_alpha(item.opacity.clamp(0.0, 1.0))?;
-        }
-        match &self.header {
-            Some(header) => {
-                if self.header_backdrop.is_none() {
-                    let backdrop = self.effects.backdrop(&self.conn, self.layer.surface())?;
-                    backdrop.set_material(BannerStyle::DEFAULT_MATERIAL);
-                    self.header_backdrop = Some(backdrop);
-                }
-                if let Some(backdrop) = &self.header_backdrop {
-                    backdrop.set_shape(&header.row, radius)?;
-                }
-            }
-            None => self.header_backdrop = None,
-        }
-        // the Clear menu is a panel of the same material as a card, under its own backdrop
-        match &self.menu {
-            Some((menu, _)) => {
-                if self.menu_backdrop.is_none() {
-                    let backdrop = self.effects.backdrop(&self.conn, self.layer.surface())?;
-                    backdrop.set_material(BannerStyle::DEFAULT_MATERIAL);
-                    self.menu_backdrop = Some(backdrop);
-                }
-                if let Some(backdrop) = &self.menu_backdrop {
-                    backdrop.set_shape(&menu.panel, MENU_RADIUS)?;
-                }
-            }
-            None => self.menu_backdrop = None,
-        }
-        let banners: Vec<Rect> = items
-            .iter()
-            .filter(|i| matches!(i.slot, Slot::Banner(_)))
-            .map(|i| i.rect)
-            .collect();
-        self.conn.set_input_region(
-            self.layer.surface(),
-            Some(&input_region(&banners, self.centre_open, surface_size)),
-        )?;
-
-        let (renderer, images) = (&mut self.renderer, &mut self.images);
-        let (header, menu, clear_hover, menu_hover) =
-            (self.header, &self.menu, self.clear_hover, self.menu_hover);
-        self.presenter.draw(&mut self.conn, None, |pixmap, scale| {
-            let factor = scale.factor() as f32;
-            if let Some(header) = &header {
-                let image = renderer.render_header(header, clear_hover || menu.is_some(), factor);
-                let (x, y) = (
-                    (header.row.x() * f64::from(factor)).round() as i32,
-                    (header.row.y() * f64::from(factor)).round() as i32,
-                );
-                pixmap.draw_pixmap(
-                    x,
-                    y,
-                    image.as_ref(),
-                    &PixmapPaint::default(),
-                    Transform::identity(),
-                    None,
-                );
-            }
-            for item in &items {
-                let layout = renderer
-                    .layout_cached(&item.note, item.rect.width())
-                    .clone();
-                let signature: Signature = (
-                    item.note.id,
-                    item.note.revision,
-                    item.hovered,
-                    layout.size.width.to_bits(),
-                    layout.size.height.to_bits(),
-                    factor.to_bits(),
-                );
-                if images
-                    .get(&item.slot)
-                    .is_none_or(|(sig, _)| *sig != signature)
-                {
-                    let image = renderer.render(
-                        &item.note,
-                        &layout,
-                        &RenderOptions {
-                            scale: factor,
-                            hovered: item.hovered,
-                            backdrop: None,
-                            layers: LAYERS,
-                        },
-                    );
-                    images.insert(item.slot, (signature, image));
-                }
-                let (_, image) = &images[&item.slot];
-                let [left, top, ..] = image.margins;
-                let x = (item.rect.x() * f64::from(factor)).round() as i32 - left as i32;
-                let y = (item.rect.y() * f64::from(factor)).round() as i32 - top as i32;
-                let paint = PixmapPaint {
-                    opacity: item.opacity.clamp(0.0, 1.0) as f32,
-                    ..PixmapPaint::default()
-                };
-                pixmap.draw_pixmap(
-                    x,
-                    y,
-                    image.pixmap.as_ref(),
-                    &paint,
-                    Transform::identity(),
-                    None,
-                );
-            }
-            if let Some((menu, scopes)) = menu {
-                let labels: Vec<&str> = scopes.iter().map(|s| s.label()).collect();
-                let image = renderer.render_clear_menu(menu, &labels, menu_hover, factor);
-                let (x, y) = (
-                    (menu.panel.x() * f64::from(factor)).round() as i32,
-                    (menu.panel.y() * f64::from(factor)).round() as i32,
-                );
-                pixmap.draw_pixmap(
-                    x,
-                    y,
-                    image.as_ref(),
-                    &PixmapPaint::default(),
-                    Transform::identity(),
-                    None,
-                );
-            }
-        })?;
-        Ok(())
     }
 
-    fn pointer(&mut self, event: PointerEvent) -> Result<()> {
-        let now = self.server.now();
-        match event {
-            PointerEvent::Enter(p) | PointerEvent::Motion(p) => self.motion(p, now)?,
-            PointerEvent::Leave => {
-                if self.drag.is_none() {
-                    self.hovered = None;
-                    self.server.center().set_hover(None, now);
-                }
-                self.centre_hover = None;
-                self.presenter.request_redraw();
-            }
-            PointerEvent::Button {
-                button: Button::Left,
-                pressed: true,
-                position,
-            } => self.press(position, now)?,
-            PointerEvent::Button {
-                button: Button::Left,
-                pressed: false,
-                ..
-            } => self.release(now)?,
-            PointerEvent::Button { .. } | PointerEvent::Scroll { .. } => {}
-        }
-        Ok(())
-    }
-
-    /// Hover over a card or a banner (hover pauses the timeout); an active drag swipes.
-    fn motion(&mut self, p: Point, now: f64) -> Result<()> {
-        if self.centre_open {
-            let clear_hover = self.header.is_some_and(|h| h.clear.contains(p));
-            let menu_hover = self
-                .menu
-                .as_ref()
-                .and_then(|(m, _)| m.rows.iter().position(|r| r.contains(p)));
-            if clear_hover != self.clear_hover || menu_hover != self.menu_hover {
-                self.clear_hover = clear_hover;
-                self.menu_hover = menu_hover;
-                self.presenter.request_redraw();
-            }
-            let under = card_at(&self.cards, p).map(|(id, _)| id);
-            if under != self.centre_hover {
-                self.centre_hover = under;
-                self.presenter.request_redraw();
-            }
-            if under.is_some() {
-                return Ok(());
-            }
-        }
-        if let Some(d) = &self.drag {
-            self.server
-                .center()
-                .swipe_update(d.id, p.x - d.start_x, now);
-            self.presenter.request_redraw();
-            return Ok(());
-        }
-        let under = self.server.center().banner_at(p);
-        if under != self.hovered {
-            self.hovered = under;
-            self.server.center().set_hover(under, now);
-            self.presenter.request_redraw();
-        }
-        Ok(())
-    }
-
-    fn press(&mut self, p: Point, now: f64) -> Result<()> {
-        if self.centre_open {
-            let menu = self.menu.as_ref().map(|(m, _)| m);
-            let press = self
-                .header
-                .map_or(HeaderPress::Elsewhere, |h| header_press(&h, menu, p));
-            match press {
-                HeaderPress::ToggleMenu => self.menu_open = !self.menu_open,
-                HeaderPress::Choose(i) => {
-                    let scope = self.menu.as_ref().expect("a menu was pressed").1[i];
-                    self.server.center().clear_scope(scope, now);
-                    self.menu_open = false;
-                }
-                HeaderPress::CloseMenu => self.menu_open = false,
-                HeaderPress::Elsewhere => {}
-            }
-            if press != HeaderPress::Elsewhere {
-                self.presenter.request_redraw();
-                return Ok(());
-            }
-            if let Some((id, rect)) = card_at(&self.cards, p) {
-                match card_press(self.hit(id, rect, p, true)) {
-                    CardPress::Clear => {
-                        self.server.center().clear(id, now);
-                    }
-                    CardPress::Invoke(key) => self.begin_activation(Pending::Invoke(id, key))?,
-                    CardPress::OpenLink(href) => open_link(&href),
-                    CardPress::Activate => {
-                        self.begin_activation(Pending::Activate(id))?;
-                        self.toggle_centre();
-                    }
-                }
-                self.presenter.request_redraw();
-                return Ok(());
-            }
-            // a press outside the cards closes the list and is then handled as a press on the banners
-            self.toggle_centre();
-        }
-        let Some(id) = self.server.center().banner_at(p) else {
-            return Ok(());
-        };
-        let Some((rect, hovered)) = self
-            .placements
-            .iter()
-            .find(|pl| pl.id == id)
-            .map(|pl| (pl.rect, pl.hovered))
-        else {
-            return Ok(());
-        };
-        match banner_press(self.hit(id, rect, p, hovered)) {
-            BannerPress::Dismiss => self.server.center().dismiss_banner(id, now),
-            BannerPress::Invoke(key) => self.begin_activation(Pending::Invoke(id, key))?,
-            BannerPress::OpenLink(href) => open_link(&href),
-            BannerPress::BeginSwipe => {
-                self.server.center().swipe_begin(id, now);
-                self.drag = Some(Drag { id, start_x: p.x });
-            }
-        }
-        self.presenter.request_redraw();
-        Ok(())
-    }
-
-    fn release(&mut self, now: f64) -> Result<()> {
-        let Some(d) = self.drag.take() else {
-            return Ok(());
-        };
-        let outcome = self.server.center().swipe_end(d.id, now);
-        match outcome {
-            SwipeOutcome::Click => self.begin_activation(Pending::Activate(d.id))?,
-            SwipeOutcome::Dismissed | SwipeOutcome::Cancelled => {}
-        }
-        self.presenter.request_redraw();
-        Ok(())
-    }
-
-    /// What a press at `p` on the card `id` at `rect` hit; nothing when the notification is gone.
-    fn hit(&mut self, id: u32, rect: Rect, p: Point, close_visible: bool) -> BannerHit {
-        let Some(note) = self.server.center().get(id).cloned() else {
-            return BannerHit::None;
-        };
-        self.renderer
-            .layout_cached(&note, rect.width())
-            .hit(local_to(rect, p), close_visible)
-    }
-
-    /// Fetch an activation token for the click; the action runs when it arrives.
-    fn begin_activation(&mut self, pending: Pending) -> Result<()> {
-        let request = self
-            .conn
-            .request_activation_token(self.layer.surface(), None)?;
-        self.pending.insert(request, pending);
-        Ok(())
-    }
-
-    /// Run the action that waited for `token`; the signals carry it to the application.
-    fn complete(&mut self, request: TokenRequest, token: String) {
-        let pending = self
-            .pending
-            .remove(&request)
-            .expect("token for a request this process made");
+    /// Run the action that waited for the token; the signals carry it to the application.
+    fn complete(&mut self, pending: Pending, token: Option<String>) {
         let now = self.server.now();
         let mut c = self.server.center();
         // the notification may have expired while the token was fetched: nothing to run then
         match pending {
             Pending::Activate(id) => {
-                c.activate(id, Some(token), now);
+                c.activate(id, token, now);
+                // a click on a card of the centre closes it, now that its window gave the token
+                self.ui = Ui::default();
             }
             Pending::Invoke(id, key) => {
-                c.invoke_action(id, &key, Some(token), now);
+                c.invoke_action(id, &key, token, now);
             }
         }
     }
+}
+
+fn start(options: &Options) -> Result<(Notifications, Vec<Command<Message>>)> {
+    let mut config = CenterConfig::from_theme(&Theme::load()?);
+    // the toolkit's first frame has the session's options; the roles report changes
+    config.motion.reduce_motion = false;
+    let (sender, notes) = async_channel::unbounded();
+    let wake = sender.clone();
+    let server = Server::start(ServerOptions {
+        config,
+        wake: Some(Box::new(move || {
+            let _ = wake.try_send(Note::Changed);
+        })),
+        replace_existing: options.replace_existing,
+        ..ServerOptions::default()
+    })
+    .map_err(start_error)?;
+    let toggle = sender.clone();
+    server.serve_centre_control(move || {
+        let _ = toggle.try_send(Note::Toggle);
+    })?;
+    let first = listen(&notes);
+    Ok((
+        Notifications {
+            server,
+            ui: Ui::default(),
+            notes,
+            sender,
+            timer: 0,
+        },
+        vec![first],
+    ))
+}
+
+impl Application for Notifications {
+    type Model = Notifications;
+    type Message = Message;
+    const RESIDENT: bool = true;
+
+    /// The process's daemon on the session bus; [`run`] starts it with the command line's options.
+    fn init() -> (Notifications, Vec<Command<Message>>) {
+        start(&Options {
+            replace_existing: false,
+        })
+        .unwrap_or_else(|e| panic!("cupertino-notifications: {e}"))
+    }
+
+    fn update(model: &mut Notifications, message: Message) -> Vec<Command<Message>> {
+        let mut commands = match message {
+            Message::Input(input) => model.input(input),
+            Message::Note(note) => {
+                match note {
+                    Note::Changed => {}
+                    Note::Toggle => {
+                        model.ui = Ui {
+                            centre_open: !model.ui.centre_open,
+                            menu_open: false,
+                        }
+                    }
+                    Note::Locked => model.ui = Ui::default(),
+                    Note::ReduceMotion(on) => {
+                        model.server.center().config.motion.reduce_motion = on
+                    }
+                }
+                vec![listen(&model.notes)]
+            }
+            Message::Timer(timer) if timer != model.timer => return Vec::new(),
+            Message::Timer(_) => Vec::new(),
+            Message::Token(pending, token) => {
+                model.complete(pending, token);
+                Vec::new()
+            }
+            Message::Unheard => {
+                eprintln!("cupertino-notifications: the bus thread stopped");
+                return vec![Command::Exit];
+            }
+        };
+        commands.extend(model.housekeeping());
+        commands
+    }
+
+    fn view(model: &Notifications) -> Vec<Window<Message>> {
+        let now = model.server.now();
+        view::windows(&mut model.server.center(), &model.ui, now, Message::Input)
+    }
+}
+
+/// Connect, claim the bus names and serve until the connection or the bus fails.
+pub fn run(options: &Options) -> Result<std::convert::Infallible> {
+    let start = start(options)?;
+    let mut system = WaylandWindowSystem::connect(Profile::cupertino())
+        .map_err(|e| format!("cannot connect to the Wayland display: {e:?}"))?;
+    let conn = system.connection();
+    let shell = LayerShell::bind(conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
+    let layout = start.0.server.center().config.layout.clone();
+    // the roles send on the bus thread's channel
+    let sender = start.0.sender.clone();
+    let system = system.with_roles(NotificationRoles {
+        shell,
+        layout,
+        layers: HashMap::new(),
+        notes: sender,
+    });
+    cupertino_kit::app::run_on::<Notifications>(system, start)?;
+    Err("the notification surfaces were closed".into())
 }
 
 #[cfg(test)]

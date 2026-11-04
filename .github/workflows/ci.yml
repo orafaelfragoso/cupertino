@@ -1,6 +1,6 @@
 name: CI
 
-# Pull requests and main run clippy and the workspace tests; the CodeQL workflow scans Rust only.
+# Pull requests and main run separate clippy and workspace test jobs.
 # Release tags run the additional policy, docs, dependency, format, layer, default-feature, Weston and golden checks,
 # and repeat the tests in the package build environment. Nightly calls use the ordinary checks.
 # "CI result" remains the aggregate required check and fails when any job that ran failed.
@@ -108,15 +108,70 @@ jobs:
       # Without --all: only the workspace members, not the vendored third-party crate.
       - run: cargo fmt --check
 
-  # Lint, layer rules and the whole test suite on one build, with no CUPERTINO_* variable set: the tests must pass on
+  # Clippy builds every target with warnings treated as errors; the release also checks layers and default features.
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The image's Android SDK, .NET, Haskell and CodeQL are never used here and take about 30 GB of the 72 GB disk;
+      # the build and its cache need the room.
+      - name: Free disk space
+        run: |
+          df -h .
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h .
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libgbm-dev libpam0g-dev dbus libgl1-mesa-dri libegl1 xkb-data zstd \
+            clang libclang-dev libpipewire-0.3-dev pipewire
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: clippy
+      # the layer rules' MPL closure reads the whole dependency graph with cargo metadata --offline
+      - run: cargo fetch --locked
+      # the layer rules build one small crate: a broken rule fails here before the long lint build
+      - name: Layer rules
+        if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
+        run: cargo run -p cupertino-layers
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # The lint build and the tests enable every feature of every crate at once, so a crate that only builds with
+      # another crate's features (or its own optional ones) passes them. Each package is checked on its own here, with
+      # its default features and only the dependencies it names.
+      - name: Default features, one package at a time
+        if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          packages=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
+          [ -n "$packages" ] || { echo "::error::cargo metadata listed no packages"; exit 1; }
+          failed=()
+          for package in $packages; do
+            cargo check -p "$package" || failed+=("$package")
+          done
+          if [ "${#failed[@]}" -ne 0 ]; then
+            echo "::error::does not build with its default features: ${failed[*]}"
+            exit 1
+          fi
+
+  # The whole test suite runs with no CUPERTINO_* variable set: the tests must pass on
   # the built-in assets alone. The second leg runs the tests as the Arch package's check() does: binaries compiled with
   # the installed theme directory, which does not exist here, and CUPERTINO_SPEC_DIR pointing at the checkout. A test
   # that starts a binary with a cleared environment and does not pass CUPERTINO_SPEC_DIR fails only there.
   # Ubuntu 26.04, not 24.04: the tests need a dbus-daemon that gives the caller's ProcessFD (24.04's 1.14 does not, and
   # the server and sessiond check a caller only through it) and a PipeWire on which a screencast stream follows a resize
   # (24.04's 1.0 never streams the new size). Every distribution the packages target ships newer versions of both.
-  check:
-    name: Clippy and tests${{ matrix.package-env && ' (package build environment)' || '' }}
+  tests:
+    name: Tests${{ matrix.package-env && ' (package build environment)' || '' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     strategy:
@@ -146,7 +201,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
         with:
           toolchain: stable
-          components: clippy
       - name: The package build environment
         if: matrix.package-env
         run: |
@@ -154,35 +208,8 @@ jobs:
           echo "CUPERTINO_SPEC_DIR=$GITHUB_WORKSPACE/data/theme" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: package-env-${{ matrix.package-env }}
-      # the layer rules' MPL closure reads the whole dependency graph with cargo metadata --offline
+          key: tests-package-env-${{ matrix.package-env }}
       - run: cargo fetch --locked
-      # the layer rules build one small crate: a broken rule fails here before the long lint build
-      - name: Layer rules
-        if: inputs.full == true && startsWith(github.ref, 'refs/tags/v') && !matrix.package-env
-        run: cargo run -p cupertino-layers
-      - name: Clippy
-        if: "!matrix.package-env"
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      # The lint build and the tests enable every feature of every crate at once, so a crate that only builds with
-      # another crate's features (or its own optional ones) passes them. Each package is checked on its own here, with
-      # its default features and only the dependencies it names.
-      - name: Default features, one package at a time
-        if: inputs.full == true && startsWith(github.ref, 'refs/tags/v') && !matrix.package-env
-        shell: bash
-        run: |
-          packages=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
-          [ -n "$packages" ] || { echo "::error::cargo metadata listed no packages"; exit 1; }
-          failed=()
-          for package in $packages; do
-            cargo check -p "$package" || failed+=("$package")
-          done
-          if [ "${#failed[@]}" -ne 0 ]; then
-            echo "::error::does not build with its default features: ${failed[*]}"
-            exit 1
-          fi
-      - name: Disk after the lint build
-        run: df -h .
       # The keymap oracle's recordings are only valid for the xkeyboard-config releases they were made with
       # (crates/cupertino-xkbcommon/tests/fixtures/xkb-data.txt), and the runner's distribution ships another. This is
       # one of those releases' package (byte-identical data), verified against a pinned checksum.
@@ -241,7 +268,7 @@ jobs:
 
   # The headless golden scenes. Their baselines are valid only on the renderer of ci/goldens/Dockerfile (an image pinned
   # by digest, with Mesa from one Debian snapshot), so the job runs ci/goldens.sh, which fails on any other renderer. The
-  # check job skips these tests (they are ignored there).
+  # tests job skips these tests (they are ignored there).
   goldens:
     if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -254,7 +281,7 @@ jobs:
   result:
     name: CI result
     if: always()
-    needs: [gate, docs, deny, fmt, check, weston, goldens]
+    needs: [gate, docs, deny, fmt, clippy, tests, weston, goldens]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

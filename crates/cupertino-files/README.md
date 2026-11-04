@@ -259,3 +259,7 @@ and require the frames to differ only inside the reported areas.
   full screen, or refuses it, the menu still offers Exit Full Screen, and the next choice asks for the state the window
   is already in. A finished mount goes to the first window open, not the one that asked; Open in New Window opens as many
   windows as there are selected folders.
+* The Kit window's icon view (`kit::grid`) scrolls back to the top when the view changes, so the selection can be out of
+  sight. A name is clipped at the cell's width, with no ellipsis and no second line (the existing view wraps to
+  `icon_view::LABEL_LINES_MAX`), and each rebuild lays out every item of the folder. Under the headless symbol theme the
+  folder and document icons are placeholder squares.

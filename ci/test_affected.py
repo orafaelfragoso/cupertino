@@ -34,10 +34,23 @@ class AffectedTests(unittest.TestCase):
                 self.assertEqual(affected(self.packages, [path]), sorted(p.name for p in self.packages))
 
     def test_docs_only_selects_nothing(self) -> None:
-        self.assertEqual(affected(self.packages, ["docs/src/index.md", "README.md"]), [])
+        paths = ["docs/src/index.md", "README.md", "SECURITY.md", ".github/ISSUE_TEMPLATE/bug.yml",
+                 "crates/app/README.md", "crates/cupertino-server/README.md"]
+        self.assertEqual(affected(self.packages, paths), [])
+
+    def test_docs_do_not_hide_code_changes(self) -> None:
+        paths = ["crates/app/README.md", "crates/consumer/src/lib.rs"]
+        for changed in (paths, list(reversed(paths))):
+            with self.subTest(changed=changed):
+                self.assertEqual(affected(self.packages, changed), ["consumer"])
 
     def test_markdown_fixture_inside_crate_is_not_skipped(self) -> None:
-        self.assertEqual(affected(self.packages, ["crates/consumer/tests/fixture.md"]), ["consumer"])
+        for path in ("crates/consumer/tests/fixture.md", "crates/consumer/tests/README.md"):
+            with self.subTest(path=path):
+                self.assertEqual(affected(self.packages, [path]), ["consumer"])
+
+    def test_protocol_contract_selects_server_tests(self) -> None:
+        self.assertEqual(affected(self.packages, ["docs/architecture/contracts.yaml"]), ["cupertino-server"])
 
     def test_rename_selects_both_sides(self) -> None:
         self.assertEqual(affected(self.packages, ["crates/consumer/old.rs", "crates/unrelated/new.rs"]),

@@ -48,7 +48,11 @@ def affected(packages: list[Package], changed: list[str]) -> list[str]:
             return sorted(names)
         owner = next((p for p in packages if path.startswith(p.directory + "/")), None)
         if owner is not None:
-            selected.add(owner.name)
+            # Only the crate's own README is documentation; nested Markdown can be a test fixture.
+            if path != owner.directory + "/README.md":
+                selected.add(owner.name)
+        elif path == "docs/architecture/contracts.yaml":
+            selected.add("cupertino-server")
         elif path.startswith(("docs/", ".github/ISSUE_TEMPLATE/")) or ("/" not in path and path.endswith(".md")):
             continue
         else:

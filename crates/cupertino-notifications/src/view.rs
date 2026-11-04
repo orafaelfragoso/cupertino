@@ -15,7 +15,8 @@
 use std::fmt::Debug;
 
 use cupertino_kit::controls::{
-    Button, ButtonRole, ButtonStyle, Icon, IconDirection, RichText, Stack, Text, TextLink, TextRole,
+    Button, ButtonRole, ButtonStyle, Icon, IconDirection, RichText, Spacer, Stack, Text, TextLink,
+    TextRole,
 };
 use cupertino_kit::core::{
     Action, Change, CommandRegistry, Element, Event, EventCx, Key, Live, MeasureCx, PaintCx, Phase,
@@ -68,9 +69,11 @@ pub const MAX_BUTTONS: usize = 3;
 pub const CLOSE_DIAMETER: f64 = 18.0;
 /// Outline of a card: 0.5 pt.
 pub const OUTLINE_WIDTH: f64 = 0.5;
-/// The centre's header row (title and Clear) and the gap under it.
-pub const HEADER_HEIGHT: f64 = 28.0;
-pub const HEADER_GAP: f64 = 8.0;
+/// The centre's header panel (title and Clear), the gap under it (the one between groups) and the Clear button's inset
+/// from the panel's right edge.
+pub const HEADER_HEIGHT: f64 = 36.0;
+pub const HEADER_GAP: f64 = 6.0;
+pub const HEADER_TRAILING: f64 = 6.0;
 /// The Clear menu's width and row height.
 pub const MENU_WIDTH: f64 = 180.0;
 pub const MENU_ROW: f64 = 28.0;
@@ -330,14 +333,16 @@ fn centre_window<M: Clone + 'static>(
     let mut children = Vec::new();
     let groups = center.groups();
     let scopes = center.clear_scopes();
-    let mut header = vec![Element::new(Text {
-        content: plain(CENTRE_TITLE, FontWeight::SEMIBOLD),
-        role: TextRole::Section,
-        wrap: false,
-        secondary: false,
-        selected: false,
-    })
-    .fill()];
+    let mut header = vec![
+        Element::new(Text {
+            content: plain(CENTRE_TITLE, FontWeight::SEMIBOLD),
+            role: TextRole::Section,
+            wrap: false,
+            secondary: false,
+            selected: false,
+        }),
+        Element::new(Spacer::default()),
+    ];
     if !scopes.is_empty() {
         header.push(
             Element::new(Button {
@@ -351,13 +356,27 @@ fn centre_window<M: Clone + 'static>(
             .key("clear"),
         );
     }
+    let header_rect = Rect::new(x, y, layout.width, HEADER_HEIGHT);
+    // the panel keeps the title readable on any wallpaper
+    children.push(Element::new(Card {
+        id: 0,
+        rect: header_rect,
+        opacity: 1.0,
+        brightness: 0.0,
+        name: String::new(),
+        description: String::new(),
+        live: None,
+        clickable: false,
+        map,
+        children: Vec::new(),
+    }));
     children.push(
         Element::new(Place {
-            rect: Rect::new(x, y, layout.width, HEADER_HEIGHT),
+            rect: header_rect,
             axis: Axis::Horizontal,
             padding: Insets {
                 left: PADDING,
-                right: 0.0,
+                right: HEADER_TRAILING,
                 top: 0.0,
                 bottom: 0.0,
             },

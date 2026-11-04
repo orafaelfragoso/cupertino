@@ -22,6 +22,8 @@ A window titled "Open “NAME” with:" lists the apps offered, by the name of t
 
 A window says "NAME wants to take a screenshot of your screen." Nothing is preselected, and no key takes the screenshot, so a key typed for the app cannot consent. Escape cancels. After you agree, the window gets 300 ms to leave the screen, then one frame of each display is joined into one PNG, without the pointer. The file goes to your Pictures folder (`XDG_PICTURES_DIR`, else `~/Pictures`) as `Screenshot DATE at TIME.png`, with ` (2)`, ` (3)` added when the name is taken. It is created new, never replaces a file, and only you can read it.
 
+After consent, capture has at most three attempts, with a 100 ms delay before retrying a transient failure (#75). A permanent failure is returned to the requesting application.
+
 Limits: the whole screen only (no window or area), no pointer in the image, no colour picker (`PickColor` always answers that it was cancelled), and a rotated display is not turned upright.
 
 ## Limits that apply to all of them

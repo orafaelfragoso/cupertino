@@ -26,18 +26,19 @@ Cupertino is an Arch-based Linux distribution with its own Wayland desktop, writ
 
 ## Status
 
-Work is grouped in six phases. As of 2026-11-01:
+Work is grouped in seven phases. Assessed on 2026-11-04 against merged commit `0a928c70`:
 
 | Phase | State |
 |---|---|
 | 1. Baseline and trust | Done |
 | 2. Transport and scene | Done |
 | 3. CupertinoKit core | Done |
-| 4. Apps and portals | Started: Settings, the on-screen display and a second Files window run on CupertinoKit; the portal backend serves settings, file choosing, screen sharing, the app chooser and screenshots |
+| 4. Apps and portals | In progress: Settings, OSD, Control Center, launcher, menu bar and notifications use Kit; Files has a parallel Kit window; five portal interfaces exist |
 | 5. Command line, diagnostics, SDK | Started: the `cupertino` command with one subcommand, `cupertino-diagnose`, a first C interface |
-| 6. Hardware and distribution | Started: you can install from a USB stick; signed packages and rollback exist but nothing is published yet |
+| 6. Hardware and distribution | In progress: ISO, installer, signed packages and rollback exist; hardware acceptance and transactional updates remain open |
+| 7. AI and voice | Not started |
 
-The TTY backend has run in a virtual machine and the install image has not been booted yet, so a first install is the test. The [book](docs/src/roadmap.md) has the roadmap, and [Install from a USB stick](docs/src/install-usb.md) the steps.
+The live ISO and TTY backend have VM evidence. The full hardware matrix and installed-system acceptance remain open. The [book](docs/src/roadmap.md) has the roadmap, and [Install from a USB stick](docs/src/install-usb.md) the steps.
 
 Cupertino serves Wayland clients. X11 programs run through [`xwayland-satellite`](https://github.com/Supreeeme/xwayland-satellite) when it is installed, started at the first X11 program. Fedora pulls it in as a recommended dependency; Arch lists it as optional (install it with pacman); Debian does not package it, so the Debian package recommends only Xwayland, and X11 programs stay off until you install `xwayland-satellite` yourself.
 

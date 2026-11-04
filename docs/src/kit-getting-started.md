@@ -35,7 +35,7 @@ checkout and was run on the commit this page was written against.
 
 ## Build and run the examples
 
-The three examples live in `crates/cupertino-kit/examples`. Each opens a window on the session's display and runs until
+The four examples live in `crates/cupertino-kit/examples`. Each opens a window on the session's display and runs until
 you close it.
 
 | Example | What it shows | Command |
@@ -43,8 +43,9 @@ you close it.
 | Counter | A number and two buttons that change it | `cargo run -p cupertino-kit --example counter` |
 | Forms | A sign-in form: a name, a password and a choice | `cargo run -p cupertino-kit --example forms` |
 | Virtual List | 50,000 two-line rows in a scrolling list with multiple selection, a status line, and a button that reverses the order and keeps the selection | `cargo run -p cupertino-kit --example virtual-list` |
+| Editor | Text editing, selection and undo | `cargo run -p cupertino-kit --example editor` |
 
-Build all three without running them:
+Build all four without running them:
 
 ```bash
 cargo build -p cupertino-kit --examples
@@ -57,9 +58,7 @@ them.
 ## Check the examples without a display
 
 `cargo test -p cupertino-kit` drives the examples with input on the headless window system and compares their traces and
-tree dumps with files in `crates/cupertino-kit/tests/goldens/`. `CUPERTINO_UPDATE_GOLDENS=1` rewrites them. At this
-commit it passes: 8 unit tests, 2 in `assistive-technology`, 6 in `examples` (1 timing matrix is ignored; run it with
-`--release --ignored --nocapture`), and 1 in `virtual-list-memory`.
+tree dumps with files in `crates/cupertino-kit/tests/goldens/`. `CUPERTINO_UPDATE_GOLDENS=1` rewrites them. The timing matrix is ignored in a normal run; run it with `--release --ignored --nocapture`. Test counts change as the toolkit grows; use the command output for the checked-out commit.
 
 ## Accessibility
 

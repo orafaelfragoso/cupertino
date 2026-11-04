@@ -61,6 +61,7 @@ pub(crate) const LIGHT: Palette<Source> = Palette {
         (SwitchThumbGlyph, Rgba([115, 115, 115, 255])),
         (PanelTrack, Rgba([232, 232, 232, 255])),
         (PanelTrackBorder, Rgba([0, 0, 0, 26])),
+        (QuaternaryLabel, Token("quaternary-label")),
     ],
     states: StateColors {
         emphasized_border: Rgba([0, 0, 0, 96]),
@@ -118,6 +119,7 @@ pub(crate) const DARK: Palette<Source> = Palette {
         (SwitchThumbGlyph, Rgba([115, 115, 115, 255])),
         (PanelTrack, Rgba([35, 35, 35, 255])),
         (PanelTrackBorder, Rgba([0, 0, 0, 0])),
+        (QuaternaryLabel, Token("quaternary-label")),
     ],
     states: StateColors {
         emphasized_border: Rgba([255, 255, 255, 96]),

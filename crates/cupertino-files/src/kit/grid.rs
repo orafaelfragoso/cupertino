@@ -19,11 +19,12 @@ use cupertino_kit::layout::{
 use cupertino_kit::platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp};
 use cupertino_kit::render::{Paint, PaintOp, Shape};
 use cupertino_kit::text::{AttributedText, TextStyle};
-use cupertino_kit::theme::{ColorRole, InteractionVariant, StateVariant};
+use cupertino_kit::theme::{Color, ColorRole, InteractionVariant, StateVariant};
 
 use super::{Event as WindowEvent, Message};
 use crate::geom::{self, Direction};
 use crate::layout::icon::{IconLayout, IconParams};
+use crate::metrics::selection as sel;
 
 const RETURN: Keysym = Keysym(0xff0d);
 const KP_ENTER: Keysym = Keysym(0xff8d);
@@ -42,8 +43,7 @@ const SHIFTED_A: Keysym = Keysym(0x41);
 const OVERSCAN: f64 = 200.0;
 /// How long typed letters add to one search (1 s).
 const TYPE_SELECT_NS: u64 = 1_000_000_000;
-/// Corner radius of the highlight behind a selected icon and behind its name (approximate).
-const ICON_RADIUS: f64 = 5.0;
+/// Corner radius of the highlight behind a selected name (approximate).
 const NAME_RADIUS: f64 = 4.0;
 /// Room between a selected name and the ends of its highlight (approximate).
 const NAME_INSETS: Insets = Insets {
@@ -512,21 +512,32 @@ impl Widget<Message> for Cell {
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let theme = cx.env().theme.clone();
+        // the bubble: the icon grown by its padding, which is also its radius, in the same colour in an active and an
+        // inactive window, with a white border
+        let pad = self.icon.size.width.max(self.icon.size.height) / sel::BUBBLE_DIVISOR;
+        let bubble = self.icon.outset(pad);
         if self.selected {
-            let variant = StateVariant {
-                window_active: cx.window_active(),
-                ..StateVariant::NORMAL
-            };
             if let Some(color) = theme
                 .colors
-                .get(ColorRole::SecondarySelectedControlFill, variant)
+                .get(ColorRole::QuaternaryLabel, StateVariant::NORMAL)
             {
                 cx.push(PaintOp::Fill {
                     shape: Shape::RoundedRect {
-                        rect: self.icon,
-                        radius: ICON_RADIUS,
+                        rect: bubble,
+                        radius: pad,
                     },
                     paint: Paint::Solid(color),
+                });
+            }
+            let border = pad.trunc().min(sel::BUBBLE_BORDER_MAX);
+            if border >= 1.0 {
+                cx.push(PaintOp::Stroke {
+                    shape: Shape::RoundedRect {
+                        rect: bubble.outset(-border / 2.0),
+                        radius: (pad - border / 2.0).max(0.0),
+                    },
+                    paint: Paint::Solid(Color::new(1.0, 1.0, 1.0, sel::BUBBLE_BORDER_ALPHA)),
+                    width: border,
                 });
             }
         }
@@ -538,8 +549,8 @@ impl Widget<Message> for Cell {
             {
                 cx.push(PaintOp::Stroke {
                     shape: Shape::RoundedRect {
-                        rect: self.icon.outset(ring.outset + ring.width / 2.0),
-                        radius: ICON_RADIUS + ring.radius_extra,
+                        rect: bubble.outset(ring.outset + ring.width / 2.0),
+                        radius: pad + ring.radius_extra,
                     },
                     paint: Paint::Solid(color),
                     width: ring.width,

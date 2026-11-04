@@ -1,12 +1,10 @@
 name: CI
 
-# Pull requests and main run separate clippy and workspace test jobs.
+# Pull requests run separate clippy and test jobs for affected crates and their dependents.
 # Release tags run the additional policy, docs, dependency, format, layer, default-feature, Weston and golden checks,
-# and repeat the tests in the package build environment. Nightly calls use the ordinary checks.
+# and repeat the full test suite in the package build environment. Main has no CI runs.
 # "CI result" remains the aggregate required check and fails when any job that ran failed.
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_call:
     inputs:
@@ -30,6 +28,36 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
+  selection:
+    name: Affected crates
+    if: github.event_name == 'pull_request' || (inputs.full == true && startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      packages: ${{ steps.select.outputs.packages }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
+        with:
+          toolchain: stable
+      - run: python3 -I ci/test_affected.py
+      - id: select
+        env:
+          RELEASE: ${{ inputs.full == true && startsWith(github.ref, 'refs/tags/v') }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$RELEASE" = true ]; then
+            packages=$(python3 -I ci/affected.py full)
+          else
+            packages=$(python3 -I ci/affected.py select "$PR_BASE" "$PR_HEAD")
+          fi
+          echo "packages=$packages" >> "$GITHUB_OUTPUT"
+          echo "Selected crates: $packages" >> "$GITHUB_STEP_SUMMARY"
+
   # Source policy: no provenance text, no vendor names, no forbidden or binary files except the pinned built-in font.
   gate:
     if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
@@ -110,11 +138,14 @@ jobs:
 
   # Clippy builds every target with warnings treated as errors; the release also checks layers and default features.
   clippy:
+    needs: selection
+    if: needs.selection.outputs.packages != '[]'
     name: Clippy
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
+      CUPERTINO_CI_PACKAGES: ${{ needs.selection.outputs.packages }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The image's Android SDK, .NET, Haskell and CodeQL are never used here and take about 30 GB of the 72 GB disk;
@@ -144,7 +175,7 @@ jobs:
         if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
         run: cargo run -p cupertino-layers
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: python3 -I ci/affected.py run clippy
       # The lint build and the tests enable every feature of every crate at once, so a crate that only builds with
       # another crate's features (or its own optional ones) passes them. Each package is checked on its own here, with
       # its default features and only the dependencies it names.
@@ -171,6 +202,8 @@ jobs:
   # the server and sessiond check a caller only through it) and a PipeWire on which a screencast stream follows a resize
   # (24.04's 1.0 never streams the new size). Every distribution the packages target ships newer versions of both.
   tests:
+    needs: selection
+    if: needs.selection.outputs.packages != '[]'
     name: Tests${{ matrix.package-env && ' (package build environment)' || '' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 60
@@ -183,6 +216,7 @@ jobs:
       # The test binaries each link the whole workspace: with line tables the build took 12 GB of the runner's disk
       # and ran it out of space; without debug information it takes 4 GB. Panics still name file and line.
       CARGO_PROFILE_DEV_DEBUG: "0"
+      CUPERTINO_CI_PACKAGES: ${{ needs.selection.outputs.packages }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The image's Android SDK, .NET, Haskell and CodeQL are never used here and take about 30 GB of the 72 GB disk;
@@ -232,9 +266,9 @@ jobs:
           CUPERTINO_EGL_REQUIRED: "1"
           CUPERTINO_DBUS_REQUIRED: "1"
           CUPERTINO_XKB_DATA_REQUIRED: "1"
-        run: cargo nextest run --workspace --all-features --no-fail-fast
+        run: python3 -I ci/affected.py run tests
       - name: Doctests
-        run: cargo test --workspace --all-features --doc
+        run: python3 -I ci/affected.py run doctests
       - name: Disk after the tests
         if: always()
         run: df -h . && du -sh target
@@ -280,8 +314,8 @@ jobs:
 
   result:
     name: CI result
-    if: always()
-    needs: [gate, docs, deny, fmt, clippy, tests, weston, goldens]
+    if: always() && (github.event_name == 'pull_request' || (inputs.full == true && startsWith(github.ref, 'refs/tags/v')))
+    needs: [selection, gate, docs, deny, fmt, clippy, tests, weston, goldens]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

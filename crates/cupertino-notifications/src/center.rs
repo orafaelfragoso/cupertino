@@ -265,15 +265,9 @@ impl Default for CenterConfig {
             history_limit: 200,
             critical_bypasses_dnd: true,
             swipe_removes_from_centre: false,
-            capabilities: [
-                "actions",
-                "body",
-                "body-markup",
-                "icon-static",
-                "persistence",
-            ]
-            .map(String::from)
-            .to_vec(),
+            capabilities: ["actions", "body", "body-markup", "persistence"]
+                .map(String::from)
+                .to_vec(),
         }
     }
 }
@@ -690,8 +684,12 @@ impl NotificationCenter {
                 e.closed_signalled = false;
                 e.in_centre = in_centre;
                 match &mut e.banner {
-                    // shown again in place: the timer restarts, the banner does not slide again
+                    // shown again in place: the timer restarts, the banner does not slide again; a swipe in
+                    // progress ends, as the banner's window may be made again for the new height
                     Some(b) if matches!(b.phase, Phase::Visible { .. }) => {
+                        if b.drag.take().is_some() {
+                            b.offset = Track::Still(0.0);
+                        }
                         b.lifetime = lifetime;
                         b.deadline = deadline;
                         b.phase = Phase::Visible { shown_at: now };

@@ -4,10 +4,8 @@
 //!   do-not-disturb, hover hold, swipe-to-dismiss). No threads, no clocks.
 //! * [`markup`]: the body markup subset of the notification specification.
 //! * [`notification`]: data types of a notification and of the `Notify` arguments.
-//! * [`platter`]: material and shadow parameters of the banner platter.
-//! * [`render`]: banner layout and CPU rendering with `tiny-skia` and `cosmic-text`.
 //! * [`stack`]: geometry of a collapsed group in the notification centre.
-//! * [`surface`]: layout, input region and press routing of the layer surface of the `cupertino-notifications` binary.
+//! * [`view`]: the banners and the notification centre as CupertinoKit windows, and the user's input on them.
 //! * `dbus` (feature `dbus`): the `org.freedesktop.Notifications` server on `zbus`.
 //!
 //! Colours and typography come from `cupertino-theme`.
@@ -20,10 +18,8 @@ pub mod dbus;
 pub mod focus;
 pub mod markup;
 pub mod notification;
-pub mod platter;
-pub mod render;
 pub mod stack;
-pub mod surface;
+pub mod view;
 
 pub use center::{
     ActivateOutcome, BannerMeasure, CenterConfig, ClearScope, DndMode, Event, FixedHeight, Group,

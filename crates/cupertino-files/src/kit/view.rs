@@ -22,8 +22,11 @@ use crate::{mime, Entry, SortKey};
 pub(super) const SIDEBAR_WIDTH: f64 = sidebar::DEFAULT_WIDTH;
 /// A list row: the icon size over the row padding, as the list view's rows.
 const ROW_HEIGHT: f64 = list_view::ICON_SIZE_DEFAULT as f64 + list_view::ROW_PADDING;
-/// The key of the field that edits an item's name in its row.
-pub(super) const NAME_FIELD: &str = "name-field";
+/// The key of the field that edits an item's name in its row of window `id`; one per window, as focus goes to the
+/// first window holding the key.
+pub(super) fn name_field_key(id: u64) -> Key {
+    Key::from(format!("name-field/{id}"))
+}
 const ESCAPE: Keysym = Keysym(0xff1b);
 const BAR_INSETS: Insets = Insets {
     top: 4.0,
@@ -302,7 +305,7 @@ fn name_field(
         selection: Some(selection),
         initial: false,
     })
-    .key(NAME_FIELD)
+    .key(name_field_key(id))
     .fill()
 }
 

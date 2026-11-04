@@ -421,7 +421,7 @@ impl Model {
             Event::NameCancelled => window.rename = None,
             Event::FocusName => {
                 if window.rename.is_some() {
-                    return vec![Command::Focus(Key::from(view::NAME_FIELD))];
+                    return vec![Command::Focus(view::name_field_key(id))];
                 }
             }
             Event::Scroll(scroll) => window.scroll = scroll,

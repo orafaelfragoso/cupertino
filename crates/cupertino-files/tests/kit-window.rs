@@ -134,7 +134,9 @@ fn a_new_folder_is_named_in_its_row_and_a_duplicate_sits_next_to_its_file() {
     run.menu("new-folder");
     run.wait_until(|run| {
         let runtime = run.driver.runtime();
-        runtime.find(run.window, &Key::from("name-field")).is_some()
+        runtime
+            .find(run.window, &Key::from("name-field/0"))
+            .is_some()
     });
     run.type_text("Projects");
     run.key(RETURN, None);
@@ -320,6 +322,35 @@ fn a_folder_opens_in_a_second_window_whose_menus_act_on_it_alone() {
     run.send(WindowEvent::CloseRequested);
     assert_eq!(run.windows().len(), 2);
     assert!(!run.windows().contains(&first));
+}
+
+#[test]
+fn a_name_edited_in_one_window_does_not_take_the_keyboard_from_another() {
+    const RETURN: u32 = 0xff0d;
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    let first = run.window;
+    run.click_row("Notes");
+    run.menu("open-in-new-window");
+    run.activate(first);
+    run.click_row("a.txt");
+    run.menu("rename");
+    run.wait_until(|run| {
+        let runtime = run.driver.runtime();
+        runtime.find(first, &Key::from("name-field/0")).is_some()
+    });
+
+    let second = run.windows()[1];
+    run.activate(second);
+    run.menu("new-folder");
+    run.wait_until(|run| {
+        let runtime = run.driver.runtime();
+        runtime.find(second, &Key::from("name-field/1")).is_some()
+    });
+    run.type_text("Projects");
+    run.key(RETURN, None);
+    assert!(run.home().join("Documents/Notes/Projects").is_dir());
+    assert!(run.home().join("Documents/a.txt").exists());
 }
 
 #[test]

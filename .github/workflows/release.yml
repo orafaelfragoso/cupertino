@@ -100,7 +100,8 @@ jobs:
           if-no-files-found: error
 
   sign:
-    needs: [source, packages]
+    needs: [source, packages, iso]
+    if: ${{ !cancelled() && needs.source.result == 'success' && needs.packages.result == 'success' && (needs.iso.result == 'success' || needs.iso.result == 'skipped') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: signing
@@ -112,15 +113,30 @@ jobs:
         with:
           name: packages-arch
           path: arch
-      - name: Sign the Arch packages and write the repository tree
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.iso.result == 'success'
+        with:
+          name: iso
+          path: iso
+      - name: Sign the Arch packages and the ISO checksum, and write the repository tree
         env:
           CUPERTINO_SIGNING_KEY: ${{ secrets.CUPERTINO_SIGNING_KEY }}
           CUPERTINO_REPO_URL: ${{ vars.CUPERTINO_REPO_URL }}
-        run: bash packaging/ci/sign-release.sh arch "$CUPERTINO_REPO_URL" signed
+          HAS_ISO: ${{ needs.iso.result == 'success' }}
+        run: |
+          iso=()
+          if [ "$HAS_ISO" = true ]; then iso=(iso); fi
+          bash packaging/ci/sign-release.sh arch "$CUPERTINO_REPO_URL" signed "${iso[@]}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: signed
           path: signed/tree/**
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: needs.iso.result == 'success'
+        with:
+          name: signed-iso
+          path: signed/iso/**
           if-no-files-found: error
 
   publish:
@@ -149,6 +165,11 @@ jobs:
         if: needs.iso.result == 'success'
         with:
           name: iso
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.iso.result == 'success'
+        with:
+          name: signed-iso
           path: dist
       - name: Write SHA256SUMS and create the draft release
         env:

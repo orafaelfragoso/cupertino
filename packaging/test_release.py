@@ -99,6 +99,70 @@ class RuntimeFloorTest(unittest.TestCase):
                 self.assertIn("'pipewire>=1:1.4'", depends)
 
 
+class ReleaseKeyRootTest(unittest.TestCase):
+    """The ISO carries the key every install trusts, so the release signs it and the build takes only the checked-in key."""
+    KEYRING = release.ROOT / 'packaging/keyring'
+
+    @staticmethod
+    def gpg(home, *args):
+        return subprocess.run(['gpg', '--batch', '--quiet', '--pinentry-mode', 'loopback', '--passphrase', '', *args],
+                              env={'GNUPGHOME': str(home), 'PATH': '/usr/bin:/bin'}, capture_output=True, text=True, check=True).stdout
+
+    def make_key(self, home, name):
+        self.gpg(home, '--quick-gen-key', f'{name} <{name}@example.invalid>', 'ed25519', 'cert', '1d')
+        listing = self.gpg(home, '--with-colons', '--list-keys', name)
+        fpr = next(line.split(':')[9] for line in listing.splitlines() if line.startswith('fpr'))
+        self.gpg(home, '--quick-add-key', fpr, 'ed25519', 'sign', '1d')
+        return fpr
+
+    def check(self, key, fpr_file):
+        return subprocess.run([self.KEYRING / 'check-key', key, fpr_file], capture_output=True, text=True)
+
+    @unittest.skipUnless(shutil.which('gpg'), 'needs gpg')
+    def test_only_the_key_with_the_checked_in_fingerprint_is_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp, 'home')
+            home.mkdir(mode=0o700)
+            release_fpr = self.make_key(home, 'release')
+            other_fpr = self.make_key(home, 'other')
+            files = {}
+            for name, args in {
+                'release': ['--armor', '--export', release_fpr],
+                'both': ['--armor', '--export', release_fpr, other_fpr],
+                'other': ['--armor', '--export', other_fpr],
+                'secret': ['--armor', '--export-secret-keys', release_fpr],
+            }.items():
+                files[name] = Path(tmp, f'{name}.asc')
+                files[name].write_text(self.gpg(home, *args))
+            fpr_file = Path(tmp, 'fpr')
+            fpr_file.write_text(release_fpr + '\n')
+            self.assertEqual(self.check(files['release'], fpr_file).returncode, 0)
+            for name, reason in {'other': 'not the release key', 'both': '2 primary keys', 'secret': 'secret key'}.items():
+                with self.subTest(name):
+                    result = self.check(files[name], fpr_file)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn(reason, result.stderr)
+
+    def test_the_build_checks_the_embedded_key_against_the_tree(self):
+        fingerprint = (self.KEYRING / 'release-key.fpr').read_text()
+        self.assertRegex(fingerprint, r'^[0-9A-F]{40}\n$')
+        self.assertIn('"$root/packaging/keyring/check-key" "$keyring_key"', (release.ROOT / 'scripts/build-iso.sh').read_text())
+
+    def job_needs(self, job):
+        text = (release.ROOT / '.github/workflows/release.yml').read_text()
+        block = re.search(rf'^  {job}:\n(.*?)(?=^  \w[\w-]*:\n|\Z)', text, re.M | re.S).group(1)
+        return block, re.search(r'needs: \[(.*?)\]', block).group(1).split(', ')
+
+    def test_the_sign_job_waits_for_the_iso_and_signs_its_checksum(self):
+        block, needs = self.job_needs('sign')
+        self.assertIn('iso', needs)
+        self.assertIn("needs.iso.result == 'skipped'", block)
+        self.assertIn('name: iso', block)
+        self.assertIn('signed-iso', block)
+        publish, _ = self.job_needs('publish')
+        self.assertIn('name: signed-iso', publish)
+
+
 class TagTest(unittest.TestCase):
     def test_a_release_and_a_release_candidate_give_the_arch_pkgver(self):
         self.assertEqual(release.release_version('v0.1.0'), '0.1.0')

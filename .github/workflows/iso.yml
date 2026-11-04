@@ -3,7 +3,8 @@
 # from the Actions tab on any branch or tag to try a candidate on hardware.
 #
 # The installed system trusts the release key: its public half (PUBLIC.asc from packaging/keyring/local-release keygen) is
-# the repository variable CUPERTINO_KEYRING_PUBLIC_KEY. Without it the build stops before anything runs.
+# the repository variable CUPERTINO_KEYRING_PUBLIC_KEY. Without it the build stops before anything runs, and the build refuses a
+# key whose fingerprint is not packaging/keyring/release-key.fpr. The release workflow signs the image's checksum.
 name: ISO
 
 on:

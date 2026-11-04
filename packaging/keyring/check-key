@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Refuse a public key file that is not the Cupertino release key:
+#
+#   check-key PUBLIC_KEY_FILE [FINGERPRINT_FILE]
+#
+# The installed system trusts the key the ISO carries, so the key that goes into an ISO must be the one whose primary
+# fingerprint is checked into the tree (release-key.fpr beside this script, unless FINGERPRINT_FILE is given). The file must
+# hold exactly one primary key, and it must be that one; a second key beside it would be trusted as well. Needs gpg; it
+# reads the file without touching any keyring.
+set -euo pipefail
+
+[ "$#" -ge 1 ] && [ "$#" -le 2 ] || { echo 'usage: check-key PUBLIC_KEY_FILE [FINGERPRINT_FILE]' >&2; exit 2; }
+key=$1
+expected_file=${2:-$(dirname "$0")/release-key.fpr}
+die() { echo "check-key: $*" >&2; exit 1; }
+[ -f "$key" ] || die "$key is not a file"
+[ -f "$expected_file" ] || die "$expected_file is not a file"
+expected=$(tr -d ' \n' <"$expected_file" | tr a-f A-F)
+[[ "$expected" =~ ^[0-9A-F]{40}$ ]] || die "$expected_file does not hold one 40-digit fingerprint"
+
+home=$(mktemp -d)
+trap 'rm -rf "$home"' EXIT
+chmod 700 "$home"
+listing=$(GNUPGHOME=$home gpg --batch --with-colons --show-keys "$key" 2>/dev/null) || die "$key is not a public key file"
+primaries=$(awk -F: '$1 == "pub" || $1 == "sec"' <<<"$listing" | wc -l)
+[ "$primaries" -eq 1 ] || die "$key holds $primaries primary keys; the release key alone is expected"
+! awk -F: '$1 == "sec" || $1 == "ssb"' <<<"$listing" | grep -q . || die "$key holds a secret key"
+actual=$(awk -F: '$1 == "fpr" { print toupper($10); exit }' <<<"$listing")
+[ "$actual" = "$expected" ] || die "the primary key in $key is $actual, not the release key $expected"

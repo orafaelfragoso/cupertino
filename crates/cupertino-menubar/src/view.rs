@@ -420,7 +420,8 @@ fn menu<M: Clone + 'static>(
         }),
         popup: Some(Popup {
             parent,
-            anchor: PopupAnchor::At(Point::new(at.x, at.y)),
+            // `At` hangs the popup off the far corner of the point's one-point square
+            anchor: PopupAnchor::At(Point::new(at.x - 1.0, at.y - 1.0)),
             grab: true,
             on_dismiss: input(Input::Dismissed(scene.bar)),
         }),

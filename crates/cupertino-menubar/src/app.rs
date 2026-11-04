@@ -10,7 +10,7 @@ use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_defaults::menubar::MenuBarSettings;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_icons::{SystemIcons, ThemeIcons};
-use cupertino_kit::core::{Application, Command, Window};
+use cupertino_kit::core::{Application, Command, RuntimeOptions, Window};
 use cupertino_kit::geometry::{Rect as GRect, Size};
 use cupertino_kit::platform::{KeyEvent, Keysym, Mods, WindowSpec};
 use cupertino_kit::text::{KeyInput, Keymap, TextSystem};
@@ -77,6 +77,9 @@ struct BarSurface {
 #[derive(Default)]
 struct Surfaces {
     bars: Vec<BarSurface>,
+    /// Every output the connection lists, as of the last batch the window system read: the model hears of a change
+    /// only after the events of that batch, a bar's close among them.
+    outputs: Vec<OutputId>,
 }
 
 impl Surfaces {
@@ -260,6 +263,7 @@ impl SurfaceRoles for BarRoles {
     }
 
     fn outputs_changed(&mut self, conn: &Connection) {
+        self.surfaces.borrow_mut().outputs = conn.outputs().into_iter().map(|o| o.id).collect();
         self.send(ShellMessage::Outputs(described_outputs(conn)));
     }
 }
@@ -319,8 +323,6 @@ pub struct App {
     services: Services,
     shared: Shared,
     bars: Vec<Bar>,
-    /// The outputs the server described last.
-    outputs: Vec<OutputId>,
     text: Arc<TextSystem>,
     font: BarFont,
     metrics: BarMetrics,
@@ -460,7 +462,10 @@ pub fn run() -> Result<std::convert::Infallible> {
         }
     };
 
-    let surfaces = Rc::new(RefCell::new(Surfaces::default()));
+    let surfaces = Rc::new(RefCell::new(Surfaces {
+        bars: Vec::new(),
+        outputs: conn.outputs().into_iter().map(|o| o.id).collect(),
+    }));
     let (shell_events, shell_messages) = async_channel::unbounded();
     let system = system.with_roles(BarRoles {
         layer_shell,
@@ -472,44 +477,46 @@ pub fn run() -> Result<std::convert::Infallible> {
         height: metrics.height.ceil() as u32,
         events: shell_events,
     });
-    let mut app = App {
-        surfaces,
-        shell: shell_messages,
-        wakes,
-        services: Services {
-            worker,
-            events,
-            extras,
-            extras_events,
-            conf_changes,
-            _conf_watch: conf_watch,
-            recent,
-        },
-        shared: Shared::default(),
-        bars: Vec::new(),
-        outputs: Vec::new(),
-        text: cupertino_kit::app::options()?.text,
-        font,
-        height: metrics.height,
-        metrics,
-        display: observed.display,
-        icons: ThemeIcons::new(&assets),
-        data_dirs: cupertino_defaults::data_dirs(),
-        start: Instant::now(),
-        clock: conf.clock,
-        conf,
-        next_clock: f64::NEG_INFINITY,
-        extras_minute: None,
-        next_bar: 0,
-        pending: HashMap::new(),
-        next_launch: 0,
-        keymap,
-        wakeup: Wakeup::default(),
+    let start = move |options: &RuntimeOptions| {
+        let mut app = App {
+            surfaces,
+            shell: shell_messages,
+            wakes,
+            services: Services {
+                worker,
+                events,
+                extras,
+                extras_events,
+                conf_changes,
+                _conf_watch: conf_watch,
+                recent,
+            },
+            shared: Shared::default(),
+            bars: Vec::new(),
+            text: Arc::clone(&options.text),
+            font,
+            height: metrics.height,
+            metrics,
+            display: observed.display,
+            icons: ThemeIcons::new(&assets),
+            data_dirs: cupertino_defaults::data_dirs(),
+            start: Instant::now(),
+            clock: conf.clock,
+            conf,
+            next_clock: f64::NEG_INFINITY,
+            extras_minute: None,
+            next_bar: 0,
+            pending: HashMap::new(),
+            next_launch: 0,
+            keymap,
+            wakeup: Wakeup::default(),
+        };
+        let mut commands = vec![listen_shell(&app.shell), listen_wakes(&app.wakes)];
+        commands.extend(app.outputs(outputs));
+        commands.extend(app.housekeeping());
+        (app, commands)
     };
-    let mut commands = vec![listen_shell(&app.shell), listen_wakes(&app.wakes)];
-    commands.extend(app.outputs(outputs));
-    commands.extend(app.housekeeping());
-    cupertino_kit::app::run_on::<App>(system, (app, commands))?;
+    cupertino_kit::app::run_on_with::<App>(system, start)?;
     Err("the menu bar's connection or bus went away".into())
 }
 
@@ -579,7 +586,6 @@ impl App {
     /// Create the bars of new outputs, drop those of outputs that went away and follow the geometry of the others.
     fn outputs(&mut self, outputs: Vec<(OutputId, OutputGeometry)>) -> Vec<Command<Message>> {
         let mut commands = Vec::new();
-        self.outputs = outputs.iter().map(|(o, _)| *o).collect();
         let gone: Vec<BarId> = self
             .bars
             .iter()
@@ -864,7 +870,7 @@ impl App {
                 };
                 let output = self.bars[i].output;
                 let mut commands = self.destroy_bar(bar);
-                if self.outputs.contains(&output) {
+                if self.surfaces.borrow().outputs.contains(&output) {
                     commands.extend(fail(
                         "the server closed the menu bar of an output that is still present",
                     ));
@@ -1239,7 +1245,9 @@ impl Application for App {
     const RESIDENT: bool = true;
 
     fn init() -> (App, Vec<Command<Message>>) {
-        unreachable!("the menu bar starts only through `run`, which hands the model to `run_on`")
+        unreachable!(
+            "the menu bar starts only through `run`, which hands the model to `run_on_with`"
+        )
     }
 
     fn update(app: &mut App, message: Message) -> Vec<Command<Message>> {

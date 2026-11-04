@@ -603,6 +603,8 @@ impl Application for SettingsApp {
 
 #[cfg(test)]
 mod tests {
+    mod semantics;
+
     use std::num::NonZeroU32;
     use std::path::Path;
     use std::sync::Arc;
@@ -671,8 +673,14 @@ mod tests {
         NonZeroU32::new(64).unwrap()
     }
 
-    /// Gaps of every Kit window, not of Settings: Kit names neither the window's root nor a navigation toolbar.
-    const KIT_GAPS: [&str; 2] = ["Window #0: no name", "Window #0 > Toolbar #1: no name"];
+    /// What a screen reader cannot announce in the window, besides the gaps of every Kit window, not of Settings: Kit
+    /// names neither the window's root nor a navigation toolbar.
+    fn kit_gaps(tree: &AccessibilityUpdate) -> Vec<String> {
+        const KIT_GAPS: [&str; 2] = ["Window #0: no name", "Window #0 > Toolbar #1: no name"];
+        let mut gaps = semantic_gaps(tree);
+        gaps.retain(|gap| !KIT_GAPS.contains(&gap.as_str()));
+        gaps
+    }
 
     /// The start is the process's, so the tests that open a window take turns.
     static WINDOW: Mutex<()> = Mutex::new(());
@@ -686,11 +694,21 @@ mod tests {
         pane: PaneId,
         sheet: Option<Sheet>,
     ) -> (TestDriver<SettingsApp>, WindowId) {
+        let services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
+        start_on(dir, pane, sheet, services)
+    }
+
+    /// [`start_with`] whose window reaches `services`.
+    fn start_on(
+        dir: &Path,
+        pane: PaneId,
+        sheet: Option<Sheet>,
+        services: Services,
+    ) -> (TestDriver<SettingsApp>, WindowId) {
         let (wake, woken) = async_channel::bounded(1);
         let (notify, background) = background_channel(move || {
             let _ = wake.try_send(());
         });
-        let services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
         let mut state = State::new(paths(dir), services, pane, 1080.0, notify).unwrap();
         state.sheet = sheet;
         launch(Start {
@@ -988,9 +1006,7 @@ mod tests {
                 removed: Vec::new(),
                 full: true,
             };
-            let mut gaps = semantic_gaps(&tree);
-            gaps.retain(|gap| !KIT_GAPS.contains(&gap.as_str()));
-            assert_eq!(gaps, Vec::<String>::new(), "{pane:?}");
+            assert_eq!(kit_gaps(&tree), Vec::<String>::new(), "{pane:?}");
         }
     }
 }

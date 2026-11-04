@@ -1422,6 +1422,8 @@ fn consent_window(c: &Consent) -> Window<Message> {
 
 #[cfg(test)]
 mod tests {
+    mod semantics;
+
     use std::num::NonZeroU32;
     use std::sync::Arc;
 
@@ -1647,9 +1649,12 @@ mod tests {
         }
     }
 
-    // one test: the inbox is the process's
+    /// The inbox is the process's, so the tests that post to it take turns.
+    static INBOX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn a_request_opens_a_window_that_answers_it_and_the_portal_waits_with_none_open() {
+        let _turn = INBOX.lock().unwrap_or_else(|e| e.into_inner());
         let folder = tempfile::tempdir().unwrap();
         let data = icon_theme("org.example.Viewer");
         std::env::set_var("XDG_DATA_DIRS", data.path());

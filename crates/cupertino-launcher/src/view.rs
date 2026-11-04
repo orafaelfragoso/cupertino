@@ -262,6 +262,7 @@ fn window_spec(title: &str, app_id: &str, size: Size) -> WindowSpec {
         max_size: None,
         decorations: DecorationMode::None,
         foreign_parent: None,
+        input_region: None,
     }
 }
 

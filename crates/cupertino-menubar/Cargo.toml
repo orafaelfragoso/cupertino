@@ -62,8 +62,8 @@ swash = "0.2.10"
 cupertino-glass = { path = "../cupertino-glass" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-ui-test = { path = "../cupertino-ui-test" }
-cupertino-files = { path = "../cupertino-files", features = ["app"] }
-cupertino-settings = { path = "../cupertino-settings", features = ["app"] }
+cupertino-files = { path = "../cupertino-files" }
+cupertino-settings = { path = "../cupertino-settings" }
 
 [[bin]]
 name = "cupertino-menubar"

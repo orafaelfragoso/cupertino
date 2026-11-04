@@ -266,6 +266,7 @@ pub fn panel<M: Clone + 'static>(controls: &Controls, alpha: f64, to: fn(Input) 
             max_size: None,
             decorations: DecorationMode::None,
             foreign_parent: None,
+            input_region: None,
         },
         shortcuts: CommandRegistry::new().with(
             Shortcut {
@@ -356,6 +357,7 @@ pub fn catcher<M: Clone + 'static>(to: fn(Input) -> M) -> Window<M> {
             max_size: None,
             decorations: DecorationMode::None,
             foreign_parent: None,
+            input_region: None,
         },
         shortcuts: CommandRegistry::new(),
         on_close: None,

@@ -43,6 +43,7 @@ pub mod recent;
 pub mod search;
 pub mod source;
 pub mod tone;
+pub mod wakeup;
 
 #[cfg(feature = "app")]
 pub mod desktop;

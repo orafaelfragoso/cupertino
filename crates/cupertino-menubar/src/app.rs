@@ -26,6 +26,7 @@ use cupertino_menubar::recent::RecentSources;
 use cupertino_menubar::routing::{self, menu_key, Action, Context};
 use cupertino_menubar::tone::BarTone;
 use cupertino_menubar::view::{self, BarFont, BarId, BarPointer, BarScene, Input, KitMeasure};
+use cupertino_menubar::wakeup::Wakeup;
 use cupertino_menubar::worker::{self, Worker};
 use cupertino_modifiers::{Modifier, Physical, Profile};
 use cupertino_protocol_app::{AppEffects, Backdrop};
@@ -342,10 +343,7 @@ pub struct App {
     next_launch: u64,
     /// The editing chords of the Help menu's search field.
     keymap: Keymap,
-    /// The timer that counts; one scheduled before it is ignored when it fires.
-    timer: u64,
-    /// When the timer that counts fires; `None` while none is scheduled.
-    timer_due: Option<Instant>,
+    wakeup: Wakeup,
 }
 
 #[derive(Clone, Debug)]
@@ -506,8 +504,7 @@ pub fn run() -> Result<std::convert::Infallible> {
         pending: HashMap::new(),
         next_launch: 0,
         keymap,
-        timer: 0,
-        timer_due: None,
+        wakeup: Wakeup::default(),
     };
     let mut commands = vec![listen_shell(&app.shell), listen_wakes(&app.wakes)];
     commands.extend(app.outputs(outputs));
@@ -1041,10 +1038,7 @@ impl App {
             }
         }
         let due = Instant::now() + next;
-        if self.timer_due.is_none_or(|scheduled| due < scheduled) {
-            self.timer += 1;
-            self.timer_due = Some(due);
-            let timer = self.timer;
+        if let Some(timer) = self.wakeup.request(due) {
             commands.push(Command::Perform(Box::pin(async move {
                 async_io::Timer::at(due).await;
                 Message::Timer(timer)
@@ -1156,6 +1150,11 @@ impl App {
                 // the windows show the controller as it is after each update
                 Action::Redraw => {}
                 Action::SetMenuOpen(open) => {
+                    if !open {
+                        // the menus took the keyboard with them: an Alt released over them never reaches the bar
+                        self.bars[i].alt = false;
+                        self.bars[i].controller.set_alt(false);
+                    }
                     self.menu_bar(bar, |m| m.set_menu_open(open));
                 }
                 Action::Request(request) => {
@@ -1256,11 +1255,12 @@ impl Application for App {
                 commands.push(listen_wakes(&app.wakes));
                 commands
             }
-            Message::Timer(timer) if timer == app.timer => {
-                app.timer_due = None;
+            Message::Timer(timer) => {
+                if !app.wakeup.fired(timer) {
+                    return Vec::new();
+                }
                 Vec::new()
             }
-            Message::Timer(_) => return Vec::new(),
             Message::Token { launch, token } => {
                 app.complete_launch(launch, token);
                 Vec::new()

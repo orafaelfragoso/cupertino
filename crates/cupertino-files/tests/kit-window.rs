@@ -17,6 +17,7 @@ use cupertino_kit::core::{AccessibilityNode, Key, NodeId, Role};
 use cupertino_kit::platform::Mods;
 use cupertino_kit::platform::WindowEvent;
 use cupertino_test_bus::{missing_tool, PrivateBus};
+use cupertino_ui_test::{semantic_gaps, semantic_outline, whole_tree};
 use zbus::blocking::Connection;
 use zbus::zvariant::OwnedValue;
 
@@ -257,6 +258,98 @@ fn a_name_longer_than_its_column_stays_inside_its_cell() {
             );
         }
     }
+}
+
+/// The window's tree as a screen reader reads it, a line a node ([`cupertino_ui_test::semantic_outline`]), with each
+/// date made today or yesterday read as `<date>`: the files were made at the start of the test.
+fn outline(run: &Run) -> Vec<String> {
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    let tree = whole_tree(run.window, snapshot.accessibility, snapshot.focus);
+    semantic_outline(&tree)
+        .into_iter()
+        .map(|line| {
+            let text = line.trim_start();
+            if text.starts_with("StaticText \"Today at ")
+                || text.starts_with("StaticText \"Yesterday at ")
+            {
+                format!("{}StaticText <date>", &line[..line.len() - text.len()])
+            } else {
+                line
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn the_window_reads_its_sidebar_toolbar_and_table_by_role_name_value_and_state() {
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    let mut gaps = semantic_gaps(&whole_tree(
+        run.window,
+        snapshot.accessibility,
+        snapshot.focus,
+    ));
+    // Kit names no window root and no toolbar, and a cell is read by its text
+    gaps.retain(|gap| {
+        !matches!(
+            gap.as_str(),
+            "Window #0: no name" | "Window #0 > Toolbar #1: no name"
+        ) && !(gap.contains(" > Cell #") && gap.ends_with(": no name"))
+    });
+    assert_eq!(gaps, Vec::<String>::new());
+    let row = |state: &str, cells: [&str; 4]| {
+        let mut lines = vec![format!("      Row{state}")];
+        for cell in cells {
+            lines.push("        Cell".to_owned());
+            lines.push(format!("          StaticText {cell}"));
+        }
+        lines
+    };
+    let window = |first: &str| {
+        let mut lines: Vec<String> = [
+            "Window",
+            "  ScrollView",
+            "    List \"Sidebar\" 2 items",
+            "      Group \"Favorites\"",
+            "        ListItem \"Documents\" focusable selected",
+            "        ListItem \"Downloads\"",
+            "  Toolbar",
+            "    Button \"Back\" disabled",
+            "    Button \"Forward\" disabled",
+            "    StaticText \"Documents\"",
+            "    TextInput \"Search\" = \"\" focusable",
+            "  Table \"Documents\" 3 items multiselectable",
+            "    Row",
+            "      ColumnHeader \"Name\" focusable",
+            "        StaticText \"Name\"",
+            "      ColumnHeader \"Date Modified\" focusable",
+            "        StaticText \"Date Modified\"",
+            "      ColumnHeader \"Size\" focusable",
+            "        StaticText \"Size\"",
+            "      ColumnHeader \"Kind\" focusable",
+            "        StaticText \"Kind\"",
+            "    ScrollView",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        lines.extend(row(
+            first,
+            ["\"a.txt\"", "<date>", "\"1 byte\"", "\"Text\""],
+        ));
+        lines.extend(row("", ["\"b.txt\"", "<date>", "\"2 bytes\"", "\"Text\""]));
+        lines.extend(row("", ["\"Notes\"", "<date>", "\"--\"", "\"Folder\""]));
+        lines.push("  Splitter \"Sidebar\" = 200 of 0..919 focusable".to_owned());
+        lines
+    };
+    assert_eq!(outline(&run), window(" focusable"), "nothing selected");
+    // a click on the first item's name selects it and takes the focus to it
+    run.click_row("a.txt");
+    assert_eq!(
+        outline(&run),
+        window(" focusable focused selected"),
+        "the clicked item reads selected and focused"
+    );
 }
 
 #[test]

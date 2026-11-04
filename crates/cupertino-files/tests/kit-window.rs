@@ -14,6 +14,7 @@ use cupertino_files::notice::Notices;
 use cupertino_files::places::PlaceKind;
 use cupertino_files::trash::encode_path;
 use cupertino_kit::core::{AccessibilityNode, Key, NodeId, Role};
+use cupertino_kit::platform::Mods;
 use cupertino_kit::platform::WindowEvent;
 use cupertino_test_bus::{missing_tool, PrivateBus};
 use cupertino_ui_test::{semantic_gaps, semantic_outline, whole_tree};
@@ -116,9 +117,10 @@ fn a_place_in_the_sidebar_opens_its_folder_and_back_returns() {
 fn the_menus_disable_what_the_window_cannot_do() {
     let mut run = Run::new();
     let disabled = run.disabled();
-    for name in ["go-back", "go-forward", "open", "rename", "view-icons"] {
+    for name in ["go-back", "go-forward", "open", "rename"] {
         assert!(disabled.contains(&action(name)), "{name}");
     }
+    assert!(!disabled.contains(&action("view-icons")));
     run.menu("select-all");
     let disabled = run.disabled();
     assert!(!disabled.contains(&action("open")));
@@ -456,4 +458,63 @@ fn full_screen_asks_the_platform_and_the_menu_follows() {
     run.menu("fullscreen");
     assert_eq!(run.full_screen_requests(), [true, false]);
     assert_eq!(run.menu_label("fullscreen"), "Enter Full Screen");
+}
+
+#[test]
+fn as_icons_shows_the_folder_as_a_grid_of_named_icons_read_as_a_list() {
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    run.menu("view-icons");
+    assert_eq!(run.rows(), Vec::<String>::new(), "the table is gone");
+    let shown = |names: &[&str]| {
+        names
+            .iter()
+            .map(|n| (n.to_string(), false))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(run.icons(), shown(&["a.txt", "b.txt", "Notes"]));
+    run.click_icon("b.txt");
+    assert_eq!(run.selected_icons(), ["b.txt"]);
+    run.check_golden("icon-view");
+    run.menu("view-list");
+    assert_eq!(run.selected_rows(), ["b.txt"], "the selection stays");
+}
+
+#[test]
+fn the_keyboard_moves_extends_and_types_to_select_in_the_icon_grid() {
+    const LEFT: u32 = 0xff51;
+    const RIGHT: u32 = 0xff53;
+    const HOME: u32 = 0xff50;
+    const END: u32 = 0xff57;
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    run.menu("view-icons");
+    run.click_icon("a.txt");
+    run.key(RIGHT, None);
+    assert_eq!(run.selected_icons(), ["b.txt"]);
+    run.key(END, None);
+    assert_eq!(run.selected_icons(), ["Notes"]);
+    run.key(HOME, None);
+    assert_eq!(run.selected_icons(), ["a.txt"]);
+    run.key(LEFT, None);
+    assert_eq!(run.selected_icons(), ["a.txt"], "the first item stays");
+    run.key_with(RIGHT, None, Mods::SHIFT);
+    run.key_with(RIGHT, None, Mods::SHIFT);
+    assert_eq!(run.selected_icons(), ["a.txt", "b.txt", "Notes"]);
+    run.type_text("b");
+    assert_eq!(run.selected_icons(), ["b.txt"]);
+}
+
+#[test]
+fn each_window_keeps_its_own_view() {
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    let first = run.window;
+    run.menu("new");
+    let second = run.windows()[1];
+    run.activate(second);
+    run.menu("view-icons");
+    assert_eq!(run.rows(), Vec::<String>::new());
+    run.activate(first);
+    assert_eq!(run.rows(), ["a.txt", "b.txt", "Notes"]);
 }

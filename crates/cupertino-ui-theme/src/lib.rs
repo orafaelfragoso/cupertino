@@ -61,10 +61,12 @@ pub enum ColorRole {
     PanelTrack,
     /// The hairline around a panel's level slider track, where the appearance draws one.
     PanelTrackBorder,
+    /// The faintest label colour, as the bubble behind a selected icon.
+    QuaternaryLabel,
 }
 
 impl ColorRole {
-    pub const ALL: [ColorRole; 37] = {
+    pub const ALL: [ColorRole; 38] = {
         use ColorRole::*;
         [
             WindowBackground,
@@ -104,6 +106,7 @@ impl ColorRole {
             SwitchThumbGlyph,
             PanelTrack,
             PanelTrackBorder,
+            QuaternaryLabel,
         ]
     };
 }

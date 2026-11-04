@@ -1,8 +1,10 @@
 //! What a browser window shows for its [`BrowserWindow`].
 
+use std::rc::Rc;
+
 use cupertino_kit::controls::{
-    Column, ColumnWidth, NavigationStack, Selection, Sidebar, SidebarItem, SidebarSection,
-    SortOrder, Spacer, SplitView, Stack, TableView, Text, TextField, TextRole,
+    Column, ColumnWidth, NavigationStack, ScrollView, Scroller, Selection, Sidebar, SidebarItem,
+    SidebarSection, SortOrder, Spacer, SplitView, Stack, TableView, Text, TextField, TextRole,
 };
 use cupertino_kit::core::{CommandRegistry, Key, Menus, Shortcut, WindowBackground};
 use cupertino_kit::geometry::{Insets, Size};
@@ -11,12 +13,14 @@ use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowSpec};
 use cupertino_kit::prelude::*;
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
 
+use super::grid::{self, IconGrid, Item};
 use super::{window_key, BrowserWindow, Event, Message, Session, COLUMNS};
+use crate::layout::icon::{self, Flow, FontMetrics, IconParams, SectionSpec};
 use crate::metrics::{list_view, sidebar, window as window_metrics};
 use crate::places::{window_title, PlaceGroup};
 use crate::render::{human_size, relative_date};
-use crate::settings::{default_columns, ColumnId};
-use crate::window::{metrics, path_chain, status_text};
+use crate::settings::{default_columns, ColumnId, IconViewSettings};
+use crate::window::{metrics, path_chain, status_text, ViewMode};
 use crate::{mime, Entry, SortKey};
 
 pub(super) const SIDEBAR_WIDTH: f64 = sidebar::DEFAULT_WIDTH;
@@ -28,6 +32,9 @@ pub(super) fn name_field_key(id: u64) -> Key {
     Key::from(format!("name-field/{id}"))
 }
 const ESCAPE: Keysym = Keysym(0xff1b);
+/// The icons of a folder and of a file in the grid.
+const FOLDER_SYMBOL: &str = "symbol.folder";
+const DOCUMENT_SYMBOL: &str = "symbol.document";
 const BAR_INSETS: Insets = Insets {
     top: 4.0,
     left: metrics::PATH_BAR_INSET,
@@ -138,7 +145,10 @@ fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
 fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
     let history = win.browser.history();
     let mut children = vec![Element::from(NavigationStack {
-        content: list(session, id, win),
+        content: match win.view {
+            ViewMode::List => list(session, id, win),
+            ViewMode::Icons => icons(session, id, win),
+        },
         toolbar: toolbar(session, id, win),
         can_go_back: history.back_target().is_some(),
         can_go_forward: history.forward_target().is_some(),
@@ -285,6 +295,77 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         on_activate: Some(send(id, Event::Open)),
     })
     .key("items")
+}
+
+/// The folder as a grid of icons with their names, at the icon view's default settings, as wide as its viewport.
+fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
+    let browser = &win.browser;
+    let settings = IconViewSettings::default();
+    let text_size = f64::from(settings.text_size);
+    let params = IconParams::new(
+        settings.icon_size,
+        settings.grid_spacing,
+        settings.text_size,
+        settings.label_on_bottom,
+        settings.show_item_info,
+        FontMetrics::estimate(text_size),
+    );
+    let entries = browser.entries();
+    let layout = icon::layout(
+        &params,
+        win.scroll.viewport.width,
+        &[SectionSpec {
+            title: None,
+            count: entries.len(),
+        }],
+        Flow::Leading,
+    );
+    let items: Rc<[Item]> = entries
+        .iter()
+        .map(|e| Item {
+            name: e.name.clone(),
+            symbol: if e.is_dir {
+                FOLDER_SYMBOL
+            } else {
+                DOCUMENT_SYMBOL
+            },
+        })
+        .collect();
+    let rename = win.rename.as_ref().map(|r| {
+        (
+            r.edit.index(),
+            r.edit.text().to_owned(),
+            r.revision,
+            r.selection.clone(),
+        )
+    });
+    let names = Rc::clone(&items);
+    let content = Element::new(IconGrid {
+        window: id,
+        label: window_title(browser.dir(), &session.places),
+        layout: Rc::new(layout),
+        params,
+        items,
+        scroll: win.scroll,
+        selection: selection(browser.selection()),
+        name: Box::new(
+            move |index, selected| match rename.as_ref().filter(|r| r.0 == index) {
+                Some((_, value, revision, selection)) => {
+                    name_field(id, value.clone(), *revision, selection.clone())
+                }
+                None => grid::name(names[index].name.clone(), text_size, selected),
+            },
+        ),
+    });
+    Element::from(ScrollView {
+        content,
+        state: win.scroll,
+        horizontal: false,
+        vertical: true,
+        scroller: Scroller::Overlay,
+        on_scroll: send(id, Event::Scroll),
+    })
+    .key("icons")
 }
 
 fn name_field(

@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Select changed workspace crates and their dependents, or run a check on that selection."""
+import argparse
+from dataclasses import dataclass
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+
+@dataclass(frozen=True)
+class Package:
+    name: str
+    directory: str
+    dependencies: frozenset[str]
+    executable: bool
+
+
+def workspace() -> list[Package]:
+    metadata = json.loads(subprocess.check_output([
+        "cargo", "metadata", "--no-deps", "--format-version", "1", "--all-features", "--locked", "--offline",
+    ]))
+    root = Path(metadata["workspace_root"])
+    members = {p["id"] for p in metadata["packages"]} & set(metadata["workspace_members"])
+    packages = [p for p in metadata["packages"] if p["id"] in members]
+    names = {p["name"] for p in packages}
+    paths = {str(Path(p["manifest_path"]).parent): p["name"] for p in packages}
+    return [Package(
+        p["name"],
+        Path(p["manifest_path"]).parent.relative_to(root).as_posix(),
+        frozenset(
+            paths[d["path"]] if d.get("path") in paths else d["name"]
+            for d in p["dependencies"]
+            if d.get("path") in paths or d["name"] in names
+        ),
+        any(set(t["kind"]) & {"bin", "example"} for t in p["targets"]),
+    ) for p in packages]
+
+
+def affected(packages: list[Package], changed: list[str]) -> list[str]:
+    """Include all dependency kinds, optional features, and compositor runtime integration tests."""
+    names = {p.name for p in packages}
+    selected: set[str] = set()
+    for path in changed:
+        if Path(path).name == "Cargo.toml":
+            print(f"Full workspace: manifest changed ({path})", file=sys.stderr)
+            return sorted(names)
+        owner = next((p for p in packages if path.startswith(p.directory + "/")), None)
+        if owner is not None:
+            selected.add(owner.name)
+        elif path.startswith(("docs/", ".github/ISSUE_TEMPLATE/")) or ("/" not in path and path.endswith(".md")):
+            continue
+        else:
+            print(f"Full workspace: shared input changed ({path})", file=sys.stderr)
+            return sorted(names)
+    dependents = {name: set() for name in names}
+    for package in packages:
+        for dependency in package.dependencies:
+            dependents[dependency].add(package.name)
+        # Server integration tests build and launch other crates' binaries and examples through cargo.
+        if package.executable and "cupertino-server" in names:
+            dependents[package.name].add("cupertino-server")
+    # Text tests include the built-in font from the assets crate without a Cargo dependency.
+    if {"cupertino-assets", "cupertino-ui-text"} <= names:
+        dependents["cupertino-assets"].add("cupertino-ui-text")
+    pending = list(selected)
+    while pending:
+        for dependent in dependents[pending.pop()] - selected:
+            selected.add(dependent)
+            pending.append(dependent)
+    return sorted(selected)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    select = commands.add_parser("select")
+    select.add_argument("base")
+    select.add_argument("head")
+    commands.add_parser("full")
+    run = commands.add_parser("run")
+    run.add_argument("check", choices=("clippy", "tests", "doctests"))
+    args = parser.parse_args()
+    if args.command == "run":
+        packages = json.loads(os.environ["CUPERTINO_CI_PACKAGES"])
+        if not isinstance(packages, list) or not packages or not all(isinstance(p, str) and p for p in packages):
+            parser.error("CUPERTINO_CI_PACKAGES must be a non-empty JSON array of package names")
+        checks = {
+            "clippy": ["clippy", "--all-targets", "--all-features"],
+            "tests": ["nextest", "run", "--all-features", "--no-fail-fast"],
+            "doctests": ["test", "--all-features", "--doc"],
+        }
+        command = ["cargo", *checks[args.check]]
+        for package in packages:
+            command.extend(["-p", package])
+        if args.check == "clippy":
+            command.extend(["--", "-D", "warnings"])
+        return subprocess.run(command, check=False).returncode
+    packages = workspace()
+    if args.command == "full":
+        selected = sorted(p.name for p in packages)
+    else:
+        paths = subprocess.check_output([
+            "git", "diff", "--name-only", "--no-renames", "-z", f"{args.base}...{args.head}",
+        ]).decode().split("\0")
+        selected = affected(packages, [p for p in paths if p])
+    print(json.dumps(selected, separators=(",", ":")))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

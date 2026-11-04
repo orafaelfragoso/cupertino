@@ -1,23 +1,17 @@
 name: CI
 
-# What runs when:
-#   pull request     gate, then by what the diff touches: docs (docs/), or fmt, deny, check, weston and goldens (code)
-#   push to main     gate, docs, fmt and deny; the pull request already ran the long jobs on the same change
-#   full (nightly.yml, release.yml)
-#                    every job, and check also in the package build environment
-# A change that only touches docs/, top-level Markdown, the licence or GitHub's issue and pull request templates is docs-only.
-# "CI result" is the one required check: a required check must not be skipped by a path filter, so the jobs are skipped by
-# conditions instead and CI result fails when any job that ran failed.
+# Pull requests run separate clippy and test jobs for affected crates and their dependents.
+# Release tags run the additional policy, docs, dependency, format, layer, default-feature, Weston and golden checks,
+# and repeat the full test suite in the package build environment. Main has no CI runs.
+# "CI result" remains the aggregate required check and fails when any job that ran failed.
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_call:
     inputs:
       full:
-        description: Run every job, and check also in the package build environment
+        description: Run additional release checks and the package build environment on a version tag
         type: boolean
-        default: true
+        default: false
 
 # One run per ref: a newer push cancels the older run. A tag run is not cancelled.
 concurrency:
@@ -34,43 +28,39 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
-  changes:
+  selection:
+    name: Affected crates
+    if: github.event_name == 'pull_request' || (inputs.full == true && startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      code: ${{ steps.diff.outputs.code }}
-      docs: ${{ steps.diff.outputs.docs }}
+      packages: ${{ steps.select.outputs.packages }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - id: diff
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
+        with:
+          toolchain: stable
+      - run: python3 -I ci/test_affected.py
+      - id: select
         env:
-          FULL: ${{ inputs.full == true }}
-          EVENT: ${{ github.event_name }}
+          RELEASE: ${{ inputs.full == true && startsWith(github.ref, 'refs/tags/v') }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
-          PUSH_BEFORE: ${{ github.event.before }}
         run: |
-          set -euo pipefail
-          everything() { echo "code=true" >> "$GITHUB_OUTPUT"; echo "docs=true" >> "$GITHUB_OUTPUT"; echo "$1" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; }
-          [ "$FULL" = true ] && everything "Full run: every job."
-          if [ "$EVENT" = pull_request ]; then range="$PR_BASE...$PR_HEAD"; else range="$PUSH_BEFORE..$GITHUB_SHA"; fi
-          base=${range%%.*}
-          if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-            everything "No base commit to compare with: every job."
+          if [ "$RELEASE" = true ]; then
+            packages=$(python3 -I ci/affected.py full)
+          else
+            packages=$(python3 -I ci/affected.py select "$PR_BASE" "$PR_HEAD")
           fi
-          files=$(git diff --name-only "$range")
-          docs_only='^(docs/|[^/]+\.md$|LICENSE$|\.github/(ISSUE_TEMPLATE/|PULL_REQUEST_TEMPLATE\.md$|dependabot\.yml$|workflows/docs\.yml$))'
-          code=false docs=false
-          if grep -qvE "$docs_only" <<<"$files"; then code=true; fi
-          if grep -qE '^docs/' <<<"$files"; then docs=true; fi
-          { echo "code=$code"; echo "docs=$docs"; } >> "$GITHUB_OUTPUT"
-          echo "Changed files: $(wc -l <<<"$files"); code: $code; docs: $docs" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "packages=$packages" >> "$GITHUB_OUTPUT"
+          echo "Selected crates: $packages" >> "$GITHUB_STEP_SUMMARY"
 
   # Source policy: no provenance text, no vendor names, no forbidden or binary files except the pinned built-in font.
   gate:
+    if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -96,8 +86,7 @@ jobs:
   # The book must build, and its internal links and anchors must resolve. mdBook and lychee are
   # pinned, and both release archives are checked against the published sha256.
   docs:
-    needs: changes
-    if: needs.changes.outputs.docs == 'true'
+    if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -125,8 +114,7 @@ jobs:
 
   # Licences, advisories, bans and sources, as set in deny.toml.
   deny:
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -136,8 +124,7 @@ jobs:
           command: check
 
   fmt:
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -149,28 +136,16 @@ jobs:
       # Without --all: only the workspace members, not the vendored third-party crate.
       - run: cargo fmt --check
 
-  # Lint, layer rules and the whole test suite on one build, with no CUPERTINO_* variable set: the tests must pass on
-  # the built-in assets alone. The second leg runs the tests as the Arch package's check() does: binaries compiled with
-  # the installed theme directory, which does not exist here, and CUPERTINO_SPEC_DIR pointing at the checkout. A test
-  # that starts a binary with a cleared environment and does not pass CUPERTINO_SPEC_DIR fails only there.
-  # Ubuntu 26.04, not 24.04: the tests need a dbus-daemon that gives the caller's ProcessFD (24.04's 1.14 does not, and
-  # the server and sessiond check a caller only through it) and a PipeWire on which a screencast stream follows a resize
-  # (24.04's 1.0 never streams the new size). Every distribution the packages target ships newer versions of both.
-  check:
-    name: check${{ matrix.package-env && ' (package build environment)' || '' }}
-    needs: changes
-    if: needs.changes.outputs.code == 'true' && (github.event_name == 'pull_request' || inputs.full == true)
+  # Clippy builds every target with warnings treated as errors; the release also checks layers and default features.
+  clippy:
+    needs: selection
+    if: needs.selection.outputs.packages != '[]'
+    name: Clippy
     runs-on: ubuntu-26.04
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        # The package build environment leg repeats the whole suite; it runs in full runs only.
-        package-env: ${{ fromJSON(inputs.full == true && '[false, true]' || '[false]') }}
     env:
-      # The test binaries each link the whole workspace: with line tables the build took 12 GB of the runner's disk
-      # and ran it out of space; without debug information it takes 4 GB. Panics still name file and line.
       CARGO_PROFILE_DEV_DEBUG: "0"
+      CUPERTINO_CI_PACKAGES: ${{ needs.selection.outputs.packages }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The image's Android SDK, .NET, Haskell and CodeQL are never used here and take about 30 GB of the 72 GB disk;
@@ -190,28 +165,22 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-      - name: The package build environment
-        if: matrix.package-env
-        run: |
-          echo "CUPERTINO_THEME_DIR=/usr/share/cupertino/theme" >> "$GITHUB_ENV"
-          echo "CUPERTINO_SPEC_DIR=$GITHUB_WORKSPACE/data/theme" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: package-env-${{ matrix.package-env }}
+          key: clippy
       # the layer rules' MPL closure reads the whole dependency graph with cargo metadata --offline
       - run: cargo fetch --locked
       # the layer rules build one small crate: a broken rule fails here before the long lint build
       - name: Layer rules
-        if: "!matrix.package-env"
+        if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
         run: cargo run -p cupertino-layers
       - name: Clippy
-        if: "!matrix.package-env"
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: python3 -I ci/affected.py run clippy
       # The lint build and the tests enable every feature of every crate at once, so a crate that only builds with
       # another crate's features (or its own optional ones) passes them. Each package is checked on its own here, with
       # its default features and only the dependencies it names.
       - name: Default features, one package at a time
-        if: "!matrix.package-env"
+        if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           packages=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
@@ -224,8 +193,57 @@ jobs:
             echo "::error::does not build with its default features: ${failed[*]}"
             exit 1
           fi
-      - name: Disk after the lint build
-        run: df -h .
+
+  # The whole test suite runs with no CUPERTINO_* variable set: the tests must pass on
+  # the built-in assets alone. The second leg runs the tests as the Arch package's check() does: binaries compiled with
+  # the installed theme directory, which does not exist here, and CUPERTINO_SPEC_DIR pointing at the checkout. A test
+  # that starts a binary with a cleared environment and does not pass CUPERTINO_SPEC_DIR fails only there.
+  # Ubuntu 26.04, not 24.04: the tests need a dbus-daemon that gives the caller's ProcessFD (24.04's 1.14 does not, and
+  # the server and sessiond check a caller only through it) and a PipeWire on which a screencast stream follows a resize
+  # (24.04's 1.0 never streams the new size). Every distribution the packages target ships newer versions of both.
+  tests:
+    needs: selection
+    if: needs.selection.outputs.packages != '[]'
+    name: Tests${{ matrix.package-env && ' (package build environment)' || '' }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # Repeat the suite in the package build environment only for releases.
+        package-env: ${{ fromJSON(inputs.full == true && startsWith(github.ref, 'refs/tags/v') && '[false, true]' || '[false]') }}
+    env:
+      # The test binaries each link the whole workspace: with line tables the build took 12 GB of the runner's disk
+      # and ran it out of space; without debug information it takes 4 GB. Panics still name file and line.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CUPERTINO_CI_PACKAGES: ${{ needs.selection.outputs.packages }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The image's Android SDK, .NET, Haskell and CodeQL are never used here and take about 30 GB of the 72 GB disk;
+      # the build and its cache need the room.
+      - name: Free disk space
+        run: |
+          df -h .
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h .
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libgbm-dev libpam0g-dev dbus libgl1-mesa-dri libegl1 xkb-data zstd \
+            clang libclang-dev libpipewire-0.3-dev pipewire
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
+        with:
+          toolchain: stable
+      - name: The package build environment
+        if: matrix.package-env
+        run: |
+          echo "CUPERTINO_THEME_DIR=/usr/share/cupertino/theme" >> "$GITHUB_ENV"
+          echo "CUPERTINO_SPEC_DIR=$GITHUB_WORKSPACE/data/theme" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: tests-package-env-${{ matrix.package-env }}
+      - run: cargo fetch --locked
       # The keymap oracle's recordings are only valid for the xkeyboard-config releases they were made with
       # (crates/cupertino-xkbcommon/tests/fixtures/xkb-data.txt), and the runner's distribution ships another. This is
       # one of those releases' package (byte-identical data), verified against a pinned checksum.
@@ -248,9 +266,9 @@ jobs:
           CUPERTINO_EGL_REQUIRED: "1"
           CUPERTINO_DBUS_REQUIRED: "1"
           CUPERTINO_XKB_DATA_REQUIRED: "1"
-        run: cargo nextest run --workspace --all-features --no-fail-fast
+        run: python3 -I ci/affected.py run tests
       - name: Doctests
-        run: cargo test --workspace --all-features --doc
+        run: python3 -I ci/affected.py run doctests
       - name: Disk after the tests
         if: always()
         run: df -h . && du -sh target
@@ -258,8 +276,7 @@ jobs:
   # The transport's simple-window on a second compositor: Weston's headless backend, which offers no decoration
   # protocol and no Cupertino protocol. These tests are ignored in the other jobs, which have no Weston.
   weston:
-    needs: changes
-    if: needs.changes.outputs.code == 'true' && (github.event_name == 'pull_request' || inputs.full == true)
+    if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -285,10 +302,9 @@ jobs:
 
   # The headless golden scenes. Their baselines are valid only on the renderer of ci/goldens/Dockerfile (an image pinned
   # by digest, with Mesa from one Debian snapshot), so the job runs ci/goldens.sh, which fails on any other renderer. The
-  # check job skips these tests (they are ignored there).
+  # tests job skips these tests (they are ignored there).
   goldens:
-    needs: changes
-    if: needs.changes.outputs.code == 'true' && (github.event_name == 'pull_request' || inputs.full == true)
+    if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -298,8 +314,8 @@ jobs:
 
   result:
     name: CI result
-    if: always()
-    needs: [changes, gate, docs, deny, fmt, check, weston, goldens]
+    if: always() && (github.event_name == 'pull_request' || (inputs.full == true && startsWith(github.ref, 'refs/tags/v')))
+    needs: [selection, gate, docs, deny, fmt, clippy, tests, weston, goldens]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

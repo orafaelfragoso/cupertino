@@ -5,7 +5,9 @@ The Cupertino package signing key and the tools for updating and rolling back fr
 `packaging/ci/sign-release.sh` (build-repo in the pinned Arch image, no network, the key on stdin) with the secret
 `CUPERTINO_SIGNING_KEY` (stored in the `signing` environment, which admits v* tags only and is used by no other job) (an armored export of the signing subkey only; a key that holds the master is refused) and the
 variable `CUPERTINO_REPO_URL`, and attaches the packages, their `.sig`, the database files and `SHA256SUMS.repo` (with `.sig`) to
-the draft release. Without the secret the job fails and no draft is made. The archive of earlier releases and `cupertino-keyring`
+the draft release. For a final release it also signs the ISO's `.sha256` (`NAME.iso.sha256.sig`, same subkey), because every install
+trusts the key the ISO carries; `build-iso.sh` runs `check-key`, which refuses a key file whose primary fingerprint is not the one
+in `release-key.fpr` (and any file with a second key). Without the secret the job fails and no draft is made. The archive of earlier releases and `cupertino-keyring`
 are not part of that job yet. Risk for Rafael and Orion: the environments have no required reviewers, so the gate is who can push a
 `v*` tag (a tagged commit runs its own `release.yml`); `source` makes the job chain fail for a tag that is not on main, but
 only a tag ruleset restricting who can create `v*` tags closes the hole.

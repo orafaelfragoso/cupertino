@@ -234,6 +234,7 @@ fn spec(title: String, size: Size) -> WindowSpec {
         max_size: None,
         decorations: DecorationMode::None,
         foreign_parent: None,
+        input_region: None,
     }
 }
 

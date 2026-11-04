@@ -4,10 +4,10 @@ use cupertino_kit::controls::{
     Column, ColumnWidth, NavigationStack, Selection, Sidebar, SidebarItem, SidebarSection,
     SortOrder, Spacer, SplitView, Stack, TableView, Text, TextField, TextRole,
 };
-use cupertino_kit::core::{CommandRegistry, Key, Menus, WindowBackground, WindowKey};
+use cupertino_kit::core::{CommandRegistry, Key, Menus, Shortcut, WindowBackground, WindowKey};
 use cupertino_kit::geometry::{Insets, Size};
 use cupertino_kit::layout::{Align, Axis};
-use cupertino_kit::platform::{DecorationMode, WindowSpec};
+use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowSpec};
 use cupertino_kit::prelude::*;
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
 
@@ -22,6 +22,9 @@ use crate::{mime, Entry, SortKey};
 pub(super) const SIDEBAR_WIDTH: f64 = sidebar::DEFAULT_WIDTH;
 /// A list row: the icon size over the row padding, as the list view's rows.
 const ROW_HEIGHT: f64 = list_view::ICON_SIZE_DEFAULT as f64 + list_view::ROW_PADDING;
+/// The key of the field that edits an item's name in its row.
+pub(super) const NAME_FIELD: &str = "name-field";
+const ESCAPE: Keysym = Keysym(0xff1b);
 const BAR_INSETS: Insets = Insets {
     top: 4.0,
     left: metrics::PATH_BAR_INSET,
@@ -44,8 +47,9 @@ pub(super) fn window(model: &Model) -> Window<Message> {
             max_size: None,
             decorations: DecorationMode::Preferred,
             foreign_parent: None,
+            input_region: None,
         },
-        shortcuts: CommandRegistry::new(),
+        shortcuts: shortcuts(model),
         on_close: None,
         background: WindowBackground::Theme,
         popup: None,
@@ -65,6 +69,21 @@ pub(super) fn window(model: &Model) -> Window<Message> {
             on_change: Some(Box::new(Message::Split)),
         })
         .key("browser"),
+    }
+}
+
+/// Escape ends a rename without renaming, once the field has passed the key on.
+fn shortcuts(model: &Model) -> CommandRegistry<Message> {
+    let registry = CommandRegistry::new();
+    match model.rename {
+        Some(_) => registry.with(
+            Shortcut {
+                mods: Mods::NONE,
+                keysym: ESCAPE,
+            },
+            Message::NameCancelled,
+        ),
+        None => registry,
     }
 }
 
@@ -213,6 +232,14 @@ fn list(model: &Model) -> Element<Message> {
         .collect();
     let names: Vec<String> = browser.entries().iter().map(|e| e.name.clone()).collect();
     let label = window_title(browser.dir(), &model.places);
+    let rename = model.rename.as_ref().map(|r| {
+        (
+            r.edit.index(),
+            r.edit.text().to_owned(),
+            r.revision,
+            r.selection.clone(),
+        )
+    });
     Element::from(TableView {
         label,
         columns,
@@ -224,6 +251,11 @@ fn list(model: &Model) -> Element<Message> {
         selection: selection(browser.selection()),
         multiple: true,
         cell: Box::new(move |row, column, selected| {
+            if let Some((_, value, revision, selection)) =
+                rename.as_ref().filter(|r| r.0 == row && column == 0)
+            {
+                return name_field(value.clone(), *revision, selection.clone());
+            }
             // a stack that fills the cell gives the text its width, so a long one ends in an ellipsis
             Element::new(Stack {
                 axis: Axis::Vertical,
@@ -248,6 +280,23 @@ fn list(model: &Model) -> Element<Message> {
         on_activate: Some(Box::new(Message::Open)),
     })
     .key("items")
+}
+
+fn name_field(value: String, revision: u64, selection: std::ops::Range<usize>) -> Element<Message> {
+    Element::new(TextField {
+        label: "Name".into(),
+        placeholder: String::new(),
+        value,
+        revision,
+        purpose: ContentPurpose::Normal,
+        enabled: true,
+        on_change: Some(Box::new(Message::NameChanged)),
+        on_submit: Some(Message::NameSubmitted),
+        selection: Some(selection),
+        initial: false,
+    })
+    .key(NAME_FIELD)
+    .fill()
 }
 
 fn path_bar(model: &Model) -> Element<Message> {

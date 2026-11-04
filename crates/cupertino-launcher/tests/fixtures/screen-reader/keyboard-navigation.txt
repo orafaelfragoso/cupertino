@@ -1,0 +1,23 @@
+> Down
+  query="fire" focus=List selected=Some("Firewall Configuration") scroll=0
+> Down
+  query="fire" focus=List selected=Some("Firewall Configuration") scroll=0
+> Super+Up
+  query="fire" focus=List selected=Some("Firefox") scroll=0
+> Super+Down
+  query="fire" focus=List selected=Some("Firewall Configuration") scroll=0
+> Up
+  query="fire" focus=List selected=Some("Firefox") scroll=0
+> Escape
+  query="fire" focus=Field selected=Some("Firefox") scroll=0
+> Tab
+  query="Firefox" focus=Field selected=Some("Firefox") scroll=0
+> Backspace
+  query="Firefo" focus=Field selected=Some("Firefox") scroll=0
+
+focus: TextInput "Search" value="Firefo" [focused] actions=[Focus, SetValue, SetSelection]
+Window
+  TextInput "Search" value="Firefo" [focused] actions=[Focus, SetValue, SetSelection]
+  List "Results" items=1
+    Group "Top Hit"
+      ListItem "Firefox", "Web Browser" item=1 [selected] actions=[Click]

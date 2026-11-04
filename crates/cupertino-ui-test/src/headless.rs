@@ -291,6 +291,7 @@ impl WindowSystem for HeadlessWindowSystem {
             max_size: None,
             decorations: cupertino_ui_platform::DecorationMode::None,
             foreign_parent: None,
+            input_region: None,
         };
         let id = self.open(window, Some(parent));
         self.window_mut(id)?.placement = Some(spec.clone());
@@ -446,6 +447,7 @@ mod tests {
             max_size: None,
             decorations: DecorationMode::Client,
             foreign_parent: None,
+            input_region: None,
         }
     }
 

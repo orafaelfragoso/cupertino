@@ -113,6 +113,21 @@ impl<M: 'static> Slider<M> {
             }
         }
     }
+
+    fn end(&self, value: f64, cx: &mut EventCx<'_, M>) {
+        if let Some(on_end) = &self.on_end {
+            cx.emit(on_end(value));
+        }
+    }
+
+    /// A key or assistive technology moves the value in one step: the change also ends there.
+    fn step_to(&self, value: f64, cx: &mut EventCx<'_, M>) {
+        let value = self.fit(value);
+        if value != self.value {
+            self.set(value, cx);
+            self.end(value, cx);
+        }
+    }
 }
 
 impl<M: 'static> Widget<M> for Slider<M> {
@@ -217,11 +232,13 @@ impl<M: 'static> Widget<M> for Slider<M> {
                 state.dragging = false;
                 cx.release_pointer();
                 cx.request_paint();
+                self.end(self.value, cx);
                 Propagation::Stop
             }
             Event::Cancel if state.dragging => {
                 state.dragging = false;
                 cx.request_paint();
+                self.end(self.value, cx);
                 Propagation::Continue
             }
             Event::Key(key, _) if self.enabled && key.pressed && cx.node() == cx.target() => {
@@ -241,7 +258,7 @@ impl<M: 'static> Widget<M> for Slider<M> {
                     END => self.max,
                     _ => return Propagation::Continue,
                 };
-                self.set(value, cx);
+                self.step_to(value, cx);
                 Propagation::Stop
             }
             Event::Action(ref request) if self.enabled => {
@@ -255,7 +272,7 @@ impl<M: 'static> Widget<M> for Slider<M> {
                     }
                     _ => return Propagation::Continue,
                 };
-                self.set(value, cx);
+                self.step_to(value, cx);
                 Propagation::Stop
             }
             _ => Propagation::Continue,

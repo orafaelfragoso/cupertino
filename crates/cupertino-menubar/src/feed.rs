@@ -7,16 +7,16 @@
 
 use crate::dbus::sni::{self, StatusItem};
 use crate::desktop::AppName;
-use crate::extras::{ExtraKind, Extras, FrontApp, SystemRow};
+use crate::extras::{ExtraGlyph, ExtraKind, Extras, FrontApp, SystemRow};
 use crate::fallback::{self, Chords, FallbackAction, WindowRow};
 use crate::item::{ItemId, MenuItem, Shortcut, ShortcutModifier};
-use crate::layout::{BarContent, StatusEntry};
+use crate::layout::{BarContent, StatusEntry, PRIVACY_DOT_PT, STATUS_ICON_PT};
 use crate::merge::{self, Export, Exporter};
-use crate::raster::{PRIVACY_DOT_PT, STATUS_ICON_PT};
 use crate::recent::RecentItems;
 use crate::source::{GtkMenuProps, KdeAppMenu, MenuSource, MenuSourceMap, WindowKey};
 use crate::worker::Request;
 use cupertino_icons::from_argb;
+use cupertino_kit::core::IconImage;
 use cupertino_shell_client::{
     AppWindow, BoundAction, GtkMenu, MenuBarUpdate, PrimaryModifier, Shortcuts, WindowMenu,
     WindowState,
@@ -32,16 +32,19 @@ pub const SCREEN_CAPTURE_SLOT: &str = "indicator:screen-capture";
 #[derive(Clone, Debug)]
 pub struct StatusState {
     pub item: StatusItem,
-    pub icon: Option<Pixmap>,
+    pub icon: Option<IconImage>,
     /// The item's DBusMenu, loaded when it was announced.
     pub menu: Option<MenuItem>,
 }
 
-/// A symbol of the bar's own items in the light and in the dark palette's text colour.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TintedIcon {
-    pub light_text: Pixmap,
-    pub dark_text: Pixmap,
+/// What a status slot draws.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StatusIcon<'a> {
+    Image(&'a IconImage),
+    /// A symbol of the bar's own items, in the text colour of the bar.
+    Symbol(ExtraGlyph),
+    /// An item without an icon.
+    Dot,
 }
 
 /// State shared by the bars of all outputs.
@@ -53,8 +56,6 @@ pub struct Shared {
     pub status: Vec<StatusState>,
     /// The bar's own items; they sit between the control panel and the other status items.
     pub extras: Extras,
-    /// Icons of the bar's own items at the size the bars draw; `None` for a name the theme lacks.
-    pub extra_icons: HashMap<ExtraKind, Option<TintedIcon>>,
     /// The server reports a screen or window capture: the indicator shows next to the control panel.
     pub screen_capture: bool,
     /// The chords of the synthetic menus, from the server's shortcuts.
@@ -88,27 +89,19 @@ impl Shared {
         self.status.retain(|s| s.item.id != id);
     }
 
-    /// The icon of the status slot `id`, a symbol of the bar's own items in the light text colour when `light_text`:
-    /// `None` when no item has the id, `Some(None)` for an item without an icon.
-    pub fn status_icon(&self, id: &str, light_text: bool) -> Option<Option<&Pixmap>> {
+    /// What the status slot `id` draws; `None` when no item has the id.
+    pub fn status_icon(&self, id: &str) -> Option<StatusIcon<'_>> {
         if let Some(kind) = ExtraKind::from_slot_id(id) {
             return self.extras.shown().contains(&kind).then(|| {
-                self.extra_icons
-                    .get(&kind)
-                    .and_then(Option::as_ref)
-                    .map(|icon| {
-                        if light_text {
-                            &icon.light_text
-                        } else {
-                            &icon.dark_text
-                        }
-                    })
+                self.extras
+                    .glyph(kind)
+                    .map_or(StatusIcon::Dot, StatusIcon::Symbol)
             });
         }
         self.status
             .iter()
             .find(|s| s.item.id == id)
-            .map(|s| s.icon.as_ref())
+            .map(|s| s.icon.as_ref().map_or(StatusIcon::Dot, StatusIcon::Image))
     }
 
     /// A menu tree arrived from an exporter. Trees nobody asked for, or that no bar uses any
@@ -979,9 +972,15 @@ mod tests {
             (menu.label.as_str(), menu.children[0].label.as_str()),
             ("Battery", "Battery 90%")
         );
-        // an item without a themed icon is drawn as a dot, one that is not shown not at all
-        assert_eq!(shared.status_icon("extra:battery", false), Some(None));
-        assert_eq!(shared.status_icon("extra:bluetooth", false), None);
+        // a shown item draws its symbol, one that is not shown nothing at all
+        assert!(matches!(
+            shared.status_icon("extra:battery"),
+            Some(StatusIcon::Symbol(ExtraGlyph {
+                symbol: "symbol.battery",
+                ..
+            }))
+        ));
+        assert_eq!(shared.status_icon("extra:bluetooth"), None);
     }
 
     #[test]

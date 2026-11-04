@@ -4,7 +4,8 @@
 #   packaging/ci/test-sign-release.sh
 #
 # Checks: no key, a key with the master secret, a second full key next to the subkey, and an empty URL each sign nothing and fail; a signing subkey alone
-# produces a tree whose database, package and SHA256SUMS signatures verify under the throwaway master.
+# produces a tree whose database, package and SHA256SUMS signatures verify under the throwaway master. With an ISO directory it
+# also signs each .iso.sha256 under the master; an ISO directory without one is refused.
 set -euo pipefail
 
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
@@ -53,4 +54,12 @@ for f in repo/cupertino-1.0-1-x86_64.pkg.tar.zst repo/cupertino.db.tar.zst repo/
 done
 (cd "$t" && sha256sum -c --quiet SHA256SUMS) || fail 'SHA256SUMS does not match the tree'
 ok 'a signing subkey alone signs the packages, the database and SHA256SUMS under the master'
+
+mkdir "$work/iso" "$work/emptyiso"
+printf '%s  %s\n' "$(printf iso | sha256sum | cut -d' ' -f1)" cupertino-test.iso >"$work/iso/cupertino-test.iso.sha256"
+refused 'an ISO directory without a checksum' "$work/o7" env CUPERTINO_SIGNING_KEY="$(cat "$work/subkey.asc")" "$S" "$work/pkgs" "$url" "$work/o7" "$work/emptyiso"
+CUPERTINO_SIGNING_KEY="$(cat "$work/subkey.asc")" "$S" "$work/pkgs" "$url" "$work/o8" "$work/iso" >/dev/null
+gpg --batch --status-fd 1 --verify "$work/o8/iso/cupertino-test.iso.sha256.sig" "$work/iso/cupertino-test.iso.sha256" 2>/dev/null | awk '$2 == "VALIDSIG" { print toupper($NF) }' | grep -qx "$master" || fail 'the ISO checksum has no valid signature under the master'
+[ ! -e "$work/o5/iso" ] || fail 'a run without an ISO directory wrote iso/'
+ok 'the ISO checksum is signed under the master; no ISO directory, no iso/'
 echo "sign-release test: $pass checks passed"

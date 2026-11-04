@@ -63,10 +63,9 @@ The script uses the release binaries in `target/release`, or `target/debug` when
 
 ## Surface captures
 
-`ci/capture.sh` draws one surface of Settings, Files or the toolkit with the app's own painter on sample data, without a display, a session bus or the server, for look checks and merge screenshots. `overview/all` runs the server headless (`session.sh`) with test windows and builds the release binaries first unless `BIN_DIR` names them:
+`ci/capture.sh` draws one surface of Files or the toolkit with the app's own painter on sample data, without a display, a session bus or the server, for look checks and merge screenshots. `overview/all` runs the server headless (`session.sh`) with test windows and builds the release binaries first unless `BIN_DIR` names them:
 
 ```bash
-ci/capture.sh settings/accessibility --login saving --scale 2
 ci/capture.sh files/sidebar --drop-place Desktop --increase-contrast --sheet
 ci/capture.sh kit                # lists the surfaces of an app
 ci/capture.sh overview/all --windows 3 --scale 2

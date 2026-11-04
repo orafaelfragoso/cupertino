@@ -130,6 +130,7 @@ impl<const FIELD: bool, const CANCEL: bool> Application for Page<FIELD, CANCEL> 
                 max_size: None,
                 decorations: DecorationMode::Preferred,
                 foreign_parent: None,
+                input_region: None,
             },
             shortcuts: CommandRegistry::new().with(
                 Shortcut {

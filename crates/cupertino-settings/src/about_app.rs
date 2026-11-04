@@ -1,313 +1,407 @@
-//! The independent About window on the public client transport.
+//! The independent About window on CupertinoKit: the system mark, the name and version, the readings of
+//! [`crate::about`] and More Info, which starts Settings.
 
-use std::error::Error;
+use std::cell::RefCell;
 use std::path::Path;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
 
-use cupertino_assets::Assets;
-use cupertino_defaults::keyboard::{KeyboardSettings, ModifierProfile};
-use cupertino_protocol_app::{AppEffects, AppEvent};
-use cupertino_settings::about::{display_value, About, Display, Row};
-use cupertino_settings::instance;
-use cupertino_settings::paint::{Painter, Palette};
-use cupertino_theme::{Appearance, Theme};
-use cupertino_ui_wayland::{Ready, ShmPresenter};
-use cupertino_wayland_client::{
-    key, Button, Capability, Connection, Decorations, Event, KeyboardEvent, PointerEvent,
-    SurfaceId, TokenRequest, ToplevelConfig,
+use cupertino_kit::controls::{Grid, Spacer, TextRole};
+use cupertino_kit::core::{
+    next_resource_id, Change, CommandRegistry, Event, EventCx, MeasureCx, PaintCx, Propagation,
+    SemanticsCx, Shortcut, Widget,
 };
+use cupertino_kit::geometry::{Insets, Rect, Size};
+use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec, Track};
+use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowRequest};
+use cupertino_kit::prelude::*;
+use cupertino_kit::render::{ImageResource, PixelFormat, ResourceId, Sampling};
+use cupertino_kit::text::{AttributedText, FontWeight, ParagraphStyle, TextStyle, TextSystem};
+use cupertino_kit::theme::{ColorRole, StateVariant, ThemeTokens};
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+use crate::about::{metrics, About, Layout};
+use crate::instance;
 
-pub fn run(activation_token: String) -> Result<()> {
-    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    let waker = std::sync::Arc::new(std::sync::OnceLock::<cupertino_wayland_client::Waker>::new());
-    let wake = waker.clone();
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+pub const APP_ID: &str = "cupertino-settings";
+const TITLE: &str = "About This Computer";
+const NAME: &str = "Cupertino";
+const MORE_INFO: &str = "More Info…";
+const ESCAPE: u32 = 0xff1b;
+const KEYPAD_ENTER: u32 = 0xff8d;
+const SPACE: u32 = 0x20;
+const W: u32 = 0x77;
+
+fn about_window() -> WindowKey {
+    WindowKey("about".into())
+}
+
+/// What [`run`] hands the application before its first frame.
+pub struct Start {
+    pub about: About,
+    /// From [`layout`], with the text system the window draws with.
+    pub layout: Layout,
+    /// Raises the window when it opens, from the process that started it.
+    pub activation: String,
+    /// The activation token of each later launch, empty when it carried none.
+    pub shown: async_channel::Receiver<String>,
+}
+
+static START: Mutex<Option<Start>> = Mutex::new(None);
+
+/// Open About, or hand the launch to the one already open, and serve it until it is closed.
+pub fn run(activation: String) -> Result<()> {
+    // A pending activation already represents all repeat launches; never queue an unbounded number of them.
+    let (show, shown) = async_channel::bounded(1);
     let on_show = move |token| {
-        // A pending activation already represents all repeat launches; never queue an unbounded number of calls.
-        if sender.try_send(token).is_ok() {
-            if let Some(waker) = wake.get() {
-                waker.wake();
-            }
-        }
+        let _ = show.try_send(token);
     };
     let Some(_instance) = instance::serve_or_hand_over(
         || instance::serve_about(zbus::connection::Builder::session()?, on_show.clone()),
-        || instance::show_about(zbus::connection::Builder::session()?, &activation_token),
+        || instance::show_about(zbus::connection::Builder::session()?, &activation),
     )?
     else {
         return Ok(());
     };
     let mut about = About::read(Path::new("/"));
-    let theme = Theme::load()?;
-    let mut painter = Painter::new(&Assets::discover())?;
-    let mut conn = Connection::connect()?;
-    assert!(waker.set(conn.waker()).is_ok(), "the waker is set once");
-    let effects = AppEffects::bind(&mut conn).ok_or("the server lacks cupertino_app_effects_v1")?;
-    let _appearance = effects.appearance(&conn);
-    conn.roundtrip()?;
-    let mut events = conn.wait(Some(Duration::ZERO))?;
-    let mut dark = false;
-    let mut contrast = false;
-    for output in conn.outputs() {
-        let Some(mode) = output.mode else { continue };
-        let display = Display {
-            make: output.make.as_deref(),
-            model: output.model.as_deref(),
-            description: output.description.as_deref(),
-            name: output.name.as_deref(),
-            mode,
-            physical_size_mm: output.physical_size_mm,
-            scale: output
-                .effective_scale()
-                .unwrap_or_else(|| output.scale.factor()),
-        };
-        if let Some(value) = display_value(&display) {
-            let before_kernel = about
-                .rows
-                .iter()
-                .position(|r| r.label == "Kernel")
-                .unwrap_or(about.rows.len());
-            about.rows.insert(
-                before_kernel,
-                Row {
-                    label: "Displays",
-                    value,
-                },
-            );
-        }
-    }
-    let layout = painter.about_layout(&about);
-    let size = layout.size();
-    let window = conn.toplevel(&ToplevelConfig {
-        app_id: "cupertino-settings".into(),
-        title: "About This Computer".into(),
-        min_size: Some(size),
-        max_size: Some(size),
-        decorations: Decorations::Server,
-        foreign_parent: None,
-    })?;
-    let mut presenter = ShmPresenter::new(window.surface());
-    if !activation_token.is_empty() {
-        unless_unsupported(conn.activate_with_token(window, &activation_token))?;
-    }
-    let mut pressed = false;
-    let mut info_request = None;
-    let unraised_info = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    loop {
-        for event in events {
-            match event {
-                Event::Configure { configure, .. } => {
-                    if configure.decorations != Decorations::Server {
-                        return Err("the server refused server-side decorations".into());
-                    }
-                    presenter.configured(size);
-                }
-                Event::Frame(_) => presenter.frame_done(),
-                Event::Close(_) => return Ok(()),
-                Event::Keyboard {
-                    event:
-                        KeyboardEvent::Key {
-                            code,
-                            pressed: true,
-                            mods,
-                            repeat,
-                            ..
-                        },
-                    ..
-                } => {
-                    if code == key::ESCAPE {
-                        return Ok(());
-                    }
-                    let path = KeyboardSettings::path();
-                    let primary = primary_is_ctrl(path.as_deref());
-                    let command = if primary {
-                        mods.ctrl && !mods.logo
-                    } else {
-                        mods.logo && !mods.ctrl
-                    };
-                    if code == 17 && command && !mods.alt && !mods.shift {
-                        return Ok(());
-                    }
-                    if !repeat
-                        && !mods.ctrl
-                        && !mods.logo
-                        && !mods.alt
-                        && matches!(code, key::ENTER | key::KEYPAD_ENTER | key::SPACE)
-                        && info_request.is_none()
-                    {
-                        info_request =
-                            more_info_request(&mut conn, window.surface(), &unraised_info)?;
-                    }
-                }
-                Event::Pointer {
-                    event:
-                        PointerEvent::Button {
-                            button: Button::Left,
-                            pressed: down,
-                            position,
-                        },
-                    ..
-                } => {
-                    let inside = layout.button.contains(cupertino_settings::Point {
-                        x: position.x,
-                        y: position.y,
-                    });
-                    let activate = !down && pressed && inside;
-                    pressed = down && inside;
-                    presenter.request_redraw();
-                    if activate && info_request.is_none() {
-                        info_request =
-                            more_info_request(&mut conn, window.surface(), &unraised_info)?;
-                    }
-                }
-                Event::Pointer {
-                    event: PointerEvent::Leave,
-                    ..
-                } => {
-                    pressed = false;
-                    presenter.request_redraw();
-                }
-                Event::ActivationToken { request, token } if info_request == Some(request) => {
-                    info_request = None;
-                    more_info(&token, || {})?;
-                }
-                Event::Extension(event) => match event.downcast_ref::<AppEvent>() {
-                    Some(AppEvent::Appearance { dark: value }) => {
-                        dark = *value;
-                        presenter.request_redraw();
-                    }
-                    Some(AppEvent::DisplayOptions(options)) => {
-                        contrast = options.increase_contrast;
-                        presenter.request_redraw();
-                    }
-                    _ => {}
-                },
-                _ => {}
-            }
-        }
-        while let Ok(token) = receiver.try_recv() {
-            unless_unsupported(if token.is_empty() {
-                conn.activate(window)
-            } else {
-                conn.activate_with_token(window, &token)
-            })?;
-        }
-        let appearance = match (dark, contrast) {
-            (false, false) => Appearance::Light,
-            (true, false) => Appearance::Dark,
-            (false, true) => Appearance::LightHighContrast,
-            (true, true) => Appearance::DarkHighContrast,
-        };
-        let palette = Palette::from_theme(&theme, appearance)?;
-        loop {
-            match presenter.poll(&conn)? {
-                Ready::ScaleChanged(_) => {}
-                Ready::Idle => break,
-                Ready::Draw => presenter.draw(&mut conn, None, |pm, scale| {
-                    painter.paint_about(pm, scale.factor() as f32, &about, &layout, &palette)
-                })?,
-            }
-        }
-        events = conn.wait(None)?;
-    }
+    about
+        .read_displays()
+        .map_err(|e| format!("cannot list the displays: {e}"))?;
+    let options = cupertino_kit::app::options()?;
+    let layout = layout(&about, &options.text, &options.theme);
+    launch(Start {
+        about,
+        layout,
+        activation,
+        shown,
+    });
+    Ok(cupertino_kit::app::run::<AboutApp>()?)
 }
 
-/// Read the command-key choice on input so changing profiles also updates the close chord live.
-fn primary_is_ctrl(path: Option<&Path>) -> bool {
-    let Some(path) = path else {
-        return false;
+/// The rows wrapped as the window's body text sets them.
+pub fn layout(about: &About, text: &TextSystem, theme: &ThemeTokens) -> Layout {
+    let body = theme.type_scale.body;
+    about.layout(|line| {
+        let style = TextStyle {
+            weight: FontWeight(body.weight),
+            ..TextStyle::new(body.size)
+        };
+        text.measure(
+            &AttributedText::plain(line, style),
+            &ParagraphStyle::default(),
+            None,
+        )
+        .map_or(f64::INFINITY, |size| size.width)
+    })
+}
+
+/// Hand `start` to the next [`AboutApp`] to start, as [`run`] does; for a test's window system.
+pub fn launch(start: Start) {
+    *START.lock().expect("no thread panics holding the start") = Some(start);
+}
+
+pub struct AboutApp;
+
+pub struct AboutWindow {
+    about: About,
+    layout: Layout,
+    shown: async_channel::Receiver<String>,
+    /// A More Info process is being started or runs, so a held key or repeated clicks start one.
+    more_info: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Message {
+    /// A later launch, with its activation token; `None` once no more can come.
+    Show(Option<String>),
+    MoreInfo,
+    /// The token that raises More Info, `None` when the server gives none.
+    Token(Option<String>),
+    /// The More Info process ended.
+    Ended,
+    Close,
+}
+
+fn wait(shown: &async_channel::Receiver<String>) -> Command<Message> {
+    let shown = shown.clone();
+    Command::Perform(Box::pin(
+        async move { Message::Show(shown.recv().await.ok()) },
+    ))
+}
+
+fn shortcuts() -> CommandRegistry<Message> {
+    let key = |mods, keysym| Shortcut {
+        mods,
+        keysym: Keysym(keysym),
     };
-    match KeyboardSettings::load(path, None) {
-        Ok((settings, problems)) if problems.is_empty() => {
-            settings.modifier_profile == Some(ModifierProfile::ClassicPc)
-        }
-        result => {
-            eprintln!("cupertino-settings: cannot read command-key choice from {}: {result:?}; using Super", path.display());
-            false
-        }
-    }
+    CommandRegistry::new()
+        .with(key(Mods::NONE, ESCAPE), Message::Close)
+        .with(key(Mods::PRIMARY, W), Message::Close)
+        .with(key(Mods::NONE, KEYPAD_ENTER), Message::MoreInfo)
+        .with(key(Mods::NONE, SPACE), Message::MoreInfo)
 }
 
-/// Ask for the token that raises More Info. Without activation, More Info opens at once, unraised, and only when the one
-/// opened that way has ended (`open`), so a held key or repeated clicks start one process.
-fn more_info_request(
-    conn: &mut Connection,
-    surface: SurfaceId,
-    open: &std::sync::Arc<std::sync::atomic::AtomicBool>,
-) -> Result<Option<TokenRequest>> {
-    use std::sync::atomic::Ordering::SeqCst;
-    let request =
-        unless_unsupported(conn.request_activation_token(surface, Some("cupertino-settings")))?;
-    if request.is_none() && !open.swap(true, SeqCst) {
-        let ended = open.clone();
-        if let Err(e) = more_info("", move || ended.store(false, SeqCst)) {
-            open.store(false, SeqCst);
-            return Err(e);
-        }
-    }
-    Ok(request)
-}
-
-/// Start More Info; `ended` runs when its process exits.
-fn more_info(token: &str, ended: impl FnOnce() + Send + 'static) -> Result<()> {
+/// Start More Info with `token`; the command ends with [`Message::Ended`] when its process exits.
+fn more_info(token: &str) -> Result<Command<Message>> {
     let mut child = std::process::Command::new(std::env::current_exe()?)
         .env("XDG_ACTIVATION_TOKEN", token)
         .spawn()?;
+    let (ended, exit) = async_channel::bounded(1);
     std::thread::spawn(move || {
         match child.wait() {
             Ok(status) if status.success() => {}
             Ok(status) => eprintln!("cupertino-settings: More Info exited with {status}"),
             Err(e) => eprintln!("cupertino-settings: cannot wait for More Info: {e}"),
         }
-        ended();
+        let _ = ended.try_send(());
     });
-    Ok(())
+    Ok(Command::Perform(Box::pin(async move {
+        let _ = exit.recv().await;
+        Message::Ended
+    })))
 }
 
-/// The outcome of an activation request, `None` when the compositor has no activation protocol: the window then shows
-/// without being raised.
-fn unless_unsupported<T>(
-    result: std::result::Result<T, cupertino_wayland_client::Error>,
-) -> std::result::Result<Option<T>, cupertino_wayland_client::Error> {
-    match result {
-        Ok(value) => Ok(Some(value)),
-        Err(cupertino_wayland_client::Error::Unsupported(Capability::Activation)) => Ok(None),
-        Err(e) => Err(e),
+impl Application for AboutApp {
+    type Model = AboutWindow;
+    type Message = Message;
+
+    fn init() -> (AboutWindow, Vec<Command<Message>>) {
+        let Start {
+            about,
+            layout,
+            activation,
+            shown,
+        } = START
+            .lock()
+            .expect("no thread panics holding the start")
+            .take()
+            .expect("About is launched with its start");
+        let mut commands = vec![wait(&shown)];
+        if !activation.is_empty() {
+            commands.push(Command::Window(
+                about_window(),
+                WindowRequest::Activate(Some(activation)),
+            ));
+        }
+        let window = AboutWindow {
+            about,
+            layout,
+            shown,
+            more_info: false,
+        };
+        (window, commands)
+    }
+
+    fn update(window: &mut AboutWindow, message: Message) -> Vec<Command<Message>> {
+        match message {
+            Message::Show(None) => Vec::new(),
+            Message::Show(Some(token)) => vec![
+                Command::Window(
+                    about_window(),
+                    WindowRequest::Activate((!token.is_empty()).then_some(token)),
+                ),
+                wait(&window.shown),
+            ],
+            Message::MoreInfo if window.more_info => Vec::new(),
+            Message::MoreInfo => {
+                window.more_info = true;
+                vec![Command::ActivationToken {
+                    window: about_window(),
+                    app_id: Some(APP_ID.into()),
+                    on_token: Box::new(Message::Token),
+                }]
+            }
+            Message::Token(token) => match more_info(&token.unwrap_or_default()) {
+                Ok(ended) => vec![ended],
+                Err(e) => {
+                    eprintln!("cupertino-settings: cannot start More Info: {e}");
+                    window.more_info = false;
+                    Vec::new()
+                }
+            },
+            Message::Ended => {
+                window.more_info = false;
+                Vec::new()
+            }
+            Message::Close => vec![Command::Exit],
+        }
+    }
+
+    fn view(window: &AboutWindow) -> Vec<Window<Message>> {
+        let (width, height) = window.layout.size();
+        let size = Size::new(f64::from(width), f64::from(height));
+        vec![Window {
+            key: about_window(),
+            spec: WindowSpec {
+                title: TITLE.into(),
+                app_id: APP_ID.into(),
+                size,
+                min_size: Some(size),
+                max_size: Some(size),
+                decorations: DecorationMode::Preferred,
+                foreign_parent: None,
+                input_region: None,
+            },
+            shortcuts: shortcuts(),
+            on_close: Some(Message::Close),
+            background: WindowBackground::Theme,
+            content: content(&window.about, &window.layout),
+            popup: None,
+            menus: None,
+        }]
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn text(content: &str, role: TextRole, secondary: bool) -> Element<Message> {
+    Element::new(Text {
+        content: AttributedText::plain(content, TextStyle::new(13.0)),
+        role,
+        wrap: true,
+        secondary,
+        selected: false,
+    })
+}
 
-    #[test]
-    fn malformed_keyboard_settings_keep_about_usable_with_the_standard_command_key() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("keyboard.conf");
-        assert!(!primary_is_ctrl(Some(&path)));
-        std::fs::write(&path, "modifier_profile = classic-pc\n").unwrap();
-        assert!(primary_is_ctrl(Some(&path)));
-        std::fs::write(&path, "modifier_profile = invalid\n").unwrap();
-        assert!(!primary_is_ctrl(Some(&path)));
-        assert!(!primary_is_ctrl(None));
+/// `children` stacked from the top of their cell, across it at `align`.
+fn cell(align: Align, children: Vec<Element<Message>>) -> Element<Message> {
+    Element::new(Stack {
+        axis: Axis::Vertical,
+        padding: Insets::ZERO,
+        spacing: 0.0,
+        align,
+        children,
+    })
+}
+
+/// The approved layout as a grid of fixed tracks, so every row sits where [`Layout`] put it and the window is its size.
+fn content(about: &About, layout: &Layout) -> Element<Message> {
+    use metrics::*;
+    let centre = f64::from(WIDTH) / 2.0;
+    let column = centre - COLUMN_GAP / 2.0 - PADDING;
+    let mut rows = vec![
+        Track::Fixed(NAME_Y - TOP),
+        Track::Fixed(VERSION_Y - NAME_Y),
+        Track::Fixed(ROWS_Y - VERSION_Y),
+    ];
+    let whole = |children| cell(Align::Center, children).span(3, 1);
+    let mut children = vec![
+        whole(vec![Element::new(Mark)]),
+        whole(vec![text(NAME, TextRole::Title, false)]),
+        whole(vec![text(&about.version, TextRole::Caption, true)]),
+    ];
+    let mut tops = layout.rows.iter().map(|row| row.y).skip(1);
+    for (row, value) in layout.rows.iter().zip(&about.rows) {
+        let next = tops.next().unwrap_or(layout.button.y);
+        rows.push(Track::Fixed(next - row.y));
+        let label = if row.label.is_empty() {
+            Element::new(Spacer { min: 0.0 })
+        } else {
+            cell(Align::End, vec![text(row.label, TextRole::Body, true)])
+        };
+        children.push(label);
+        children.push(Element::new(Spacer { min: 0.0 }));
+        children.push(cell(
+            Align::Start,
+            vec![text(&value.value, TextRole::Body, false)],
+        ));
+    }
+    if layout.rows.is_empty() {
+        rows.push(Track::Fixed(layout.button.y - ROWS_Y));
+        children.push(Element::new(Spacer { min: 0.0 }).span(3, 1));
+    }
+    rows.push(Track::Fixed(layout.button.h));
+    children.push(whole(vec![Element::new(Button {
+        label: MORE_INFO.into(),
+        role: ButtonRole::Default,
+        style: ButtonStyle::Bordered,
+        enabled: true,
+        busy: false,
+        on_press: Some(Message::MoreInfo),
+    })
+    .width(layout.button.w)]));
+    Element::new(Grid {
+        columns: vec![
+            Track::Fixed(column),
+            Track::Fixed(COLUMN_GAP),
+            Track::Fixed(column),
+        ],
+        rows,
+        padding: Insets::new(TOP, PADDING, BOTTOM, PADDING),
+        spacing: Size::ZERO,
+        children,
+    })
+}
+
+/// The system mark in the label colour; decorative, as the name beside it says what it is.
+struct Mark;
+
+/// The mark as last drawn: its device pixels and colour, and the image they made.
+type Drawn = RefCell<Option<((u32, [u8; 4]), ResourceId, ImageResource)>>;
+
+impl Widget<Message> for Mark {
+    type State = Drawn;
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(metrics::MARK),
+            height: SizeSpec::Fixed(metrics::MARK),
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
     }
 
-    #[test]
-    fn only_a_missing_activation_protocol_skips_the_raise() {
-        use cupertino_wayland_client::Error;
-        assert!(matches!(unless_unsupported(Ok(7)), Ok(Some(7))));
-        assert!(matches!(
-            unless_unsupported::<()>(Err(Error::Unsupported(Capability::Activation))),
-            Ok(None)
-        ));
-        assert!(matches!(
-            unless_unsupported::<()>(Err(Error::Unsupported(Capability::Clipboard))),
-            Err(Error::Unsupported(Capability::Clipboard))
-        ));
-        assert!(matches!(
-            unless_unsupported::<()>(Err(Error::Protocol("bad token"))),
-            Err(Error::Protocol(_))
-        ));
+    fn state(&self) -> Drawn {
+        RefCell::new(None)
     }
+
+    fn update(&self, _: &Self, _: &mut Drawn) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &Drawn, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(metrics::MARK, metrics::MARK),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut Drawn, _: &Event, _: &mut EventCx<'_, Message>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, drawn: &Drawn, cx: &mut PaintCx<'_>) {
+        let Some(color) = cx
+            .env()
+            .theme
+            .colors
+            .get(ColorRole::Text, StateVariant::NORMAL)
+        else {
+            return;
+        };
+        let rgba = [color.r, color.g, color.b, color.a];
+        let px = (metrics::MARK * cx.env().scale).round() as u32;
+        let key = (px, rgba.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8));
+        let mut drawn = drawn.borrow_mut();
+        if drawn.as_ref().is_none_or(|(at, ..)| *at != key) {
+            let mark = cupertino_icons::system_mark(px, rgba);
+            let image = ImageResource {
+                revision: 1,
+                width: mark.width(),
+                height: mark.height(),
+                stride: mark.width() * 4,
+                format: PixelFormat::Rgba8Premultiplied,
+                pixels: Arc::from(mark.data()),
+            };
+            *drawn = Some((key, next_resource_id(), image));
+        }
+        let (_, id, image) = drawn.as_ref().expect("drawn above");
+        let size = cx.size();
+        cx.image(
+            *id,
+            image,
+            Rect::new(0.0, 0.0, size.width, size.height),
+            Sampling::Linear,
+        );
+    }
+
+    fn semantics(&self, _: &Drawn, _: &mut SemanticsCx<'_>) {}
 }

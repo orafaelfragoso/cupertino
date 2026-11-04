@@ -32,6 +32,10 @@ pub const MAX_PENDING_PER_APP: usize = 4;
 pub const MAX_TEXT: usize = 1024;
 /// How long the consent window has to leave the screen before the displays are copied.
 pub const SETTLE: Duration = Duration::from_millis(300);
+/// A copy that fails for a reason that can pass is made at most this many times in all.
+pub const MAX_ATTEMPTS: u32 = 3;
+/// How long the displays have to settle again before a failed copy is made anew.
+pub const RETRY_AFTER: Duration = Duration::from_millis(100);
 /// The start of every file name, as the screenshot tool names its files.
 const FILE_PREFIX: &str = "Screenshot";
 /// Names tried for one second: `<name>.png`, then `<name> (2).png` up to this number.
@@ -84,11 +88,21 @@ pub struct Output {
     pub image: Pixmap,
 }
 
+/// Why the capture side could not copy the displays.
+#[derive(Debug)]
+pub enum Failure {
+    /// The displays changed under the copy: one was reconfigured or went away, or its buffer constraints changed. A
+    /// new copy may succeed.
+    Passing(String),
+    /// Copying again would fail the same way.
+    Lasting(String),
+}
+
 /// What the capture side answers to a [`Shoot`].
-pub struct Shot(pub(crate) async_channel::Sender<Result<Vec<Output>, String>>);
+pub struct Shot(pub(crate) async_channel::Sender<Result<Vec<Output>, Failure>>);
 
 impl Shot {
-    pub fn send(self, outputs: Result<Vec<Output>, String>) {
+    pub fn send(self, outputs: Result<Vec<Output>, Failure>) {
         let _ = self.0.try_send(outputs);
     }
 }
@@ -189,20 +203,36 @@ impl Screenshot {
         Some(name.unwrap_or_else(|| plain(app_id)))
     }
 
-    /// Copy every display and write them as one PNG. The frontend closing the request before the copy ends it.
+    /// Copy every display and write them as one PNG. A copy that fails for a reason that can pass is made again, up to
+    /// [`MAX_ATTEMPTS`] in all. The frontend closing the request before the copy ends it.
     async fn take(&self, request: &Exported) -> Result<PathBuf, String> {
-        let (shot, outputs) = async_channel::bounded(1);
-        (self.shoots)(Shoot {
-            due: Instant::now() + SETTLE,
-            shot: Shot(shot),
-        });
-        let outputs = futures_lite::future::or(async { Some(outputs.recv().await) }, async {
-            request.closed().await;
-            None
-        })
-        .await
-        .ok_or("the request was closed")?
-        .map_err(|_| "the capture side went away".to_owned())??;
+        let mut due = Instant::now() + SETTLE;
+        let mut attempt = 1;
+        let outputs = loop {
+            let (shot, outputs) = async_channel::bounded(1);
+            (self.shoots)(Shoot {
+                due,
+                shot: Shot(shot),
+            });
+            let outputs = futures_lite::future::or(async { Some(outputs.recv().await) }, async {
+                request.closed().await;
+                None
+            })
+            .await
+            .ok_or("the request was closed")?
+            .map_err(|_| "the capture side went away".to_owned())?;
+            match outputs {
+                Ok(outputs) => break outputs,
+                Err(Failure::Passing(reason)) if attempt < MAX_ATTEMPTS => {
+                    eprintln!(
+                        "cupertino-portal: copying the displays failed, trying again: {reason}"
+                    );
+                    attempt += 1;
+                    due = Instant::now() + RETRY_AFTER;
+                }
+                Err(Failure::Passing(reason) | Failure::Lasting(reason)) => return Err(reason),
+            }
+        };
         let dir = (self.pictures)();
         let (saved, path) = async_channel::bounded(1);
         // joining and encoding a large screen takes a while, and the bus is served meanwhile

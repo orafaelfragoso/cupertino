@@ -35,6 +35,8 @@ trap 'docker run --rm -v "$work:/w" "$image" rm -rf /w/iso-work /w/iso-out >/dev
 # The installed system trusts packages signed by this key (cupertino-keyring); the public key comes from `local-release keygen`.
 keyring_key=${CUPERTINO_KEYRING_KEY:-}
 [ -f "$keyring_key" ] || { echo 'set CUPERTINO_KEYRING_KEY to the public key file (PUBLIC.asc from packaging/keyring/local-release keygen)' >&2; exit 1; }
+# ...and only the release key whose fingerprint is in the tree (packaging/keyring/release-key.fpr), not whatever a variable holds.
+"$root/packaging/keyring/check-key" "$keyring_key"
 
 mkdir -p "$work/pkgs"
 "$root/packaging/ci/build-in-container.sh" arch "$work/pkgs"

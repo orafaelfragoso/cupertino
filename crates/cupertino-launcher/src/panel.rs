@@ -141,6 +141,32 @@ pub enum Focus {
     List,
 }
 
+/// Whether `key` with `mods` is one of the panel's keys while `focus` owns the keyboard: [`Panel::handle_key`] acts on
+/// it (or ignores it) instead of returning [`PanelEvent::Edit`]. A host that hands the field's keys to a text field of
+/// its own asks this before the field sees the key.
+pub fn takes_key(key: Key, mods: Mods, focus: Focus) -> bool {
+    if mods.only_primary()
+        && matches!(
+            key,
+            Key::Enter
+                | Key::Up
+                | Key::Down
+                | Key::Char('r' | 'b' | 'i' | 'y' | 'k' | 'l' | 'd' | ',' | 'h')
+        )
+    {
+        return true;
+    }
+    match (key, mods) {
+        (Key::Escape | Key::Enter, _) => true,
+        (Key::Char('1'..='9'), m) if m.alt => true,
+        (Key::Char(' '), m) if focus == Focus::List && !m.ctrl && !m.alt && !m.primary => true,
+        (Key::Char('n' | 'p'), m) if m.ctrl => true,
+        (Key::Backspace | Key::Delete, _) if focus == Focus::List => true,
+        (Key::Down | Key::Up | Key::PageDown | Key::PageUp | Key::Tab, _) => true,
+        _ => false,
+    }
+}
+
 /// The most bytes the query holds.
 pub const QUERY_MAX_LEN: usize = 1024;
 

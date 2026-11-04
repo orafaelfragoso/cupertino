@@ -1,0 +1,59 @@
+# ISO: the live and install image (scripts/build-iso.sh) of one commit, kept as a workflow artifact. Never on a pull
+# request or a push: the release workflow calls it for a final release and attaches the image, and it can be run by hand
+# from the Actions tab on any branch or tag to try a candidate on hardware.
+#
+# The installed system trusts the release key: its public half (PUBLIC.asc from packaging/keyring/local-release keygen) is
+# the repository variable CUPERTINO_KEYRING_PUBLIC_KEY. Without it the build stops before anything runs, and the build refuses a
+# key whose fingerprint is not packaging/keyring/release-key.fpr. The release workflow signs the image's checksum.
+name: ISO
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  iso:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The package build and mkarchiso need about 18 GB beside the checkout; the image's unused SDKs take about 30 GB.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - name: Release public key
+        env:
+          PUBLIC_KEY: ${{ vars.CUPERTINO_KEYRING_PUBLIC_KEY }}
+        run: |
+          if [ -z "$PUBLIC_KEY" ]; then
+            echo "::error::set the repository variable CUPERTINO_KEYRING_PUBLIC_KEY to the release key's PUBLIC.asc"
+            exit 1
+          fi
+          printf '%s\n' "$PUBLIC_KEY" > "$RUNNER_TEMP/PUBLIC.asc"
+      - name: Build the ISO
+        env:
+          CUPERTINO_KEYRING_KEY: ${{ runner.temp }}/PUBLIC.asc
+          # The floor protects a workstation's other work; a runner has none.
+          CUPERTINO_ISO_FLOOR_GB: '2'
+        run: scripts/build-iso.sh "$RUNNER_TEMP/iso"
+      - name: Summary
+        run: |
+          cd "$RUNNER_TEMP/iso"
+          ls -l --block-size=M -- *.iso* | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: iso
+          path: |
+            ${{ runner.temp }}/iso/*.iso
+            ${{ runner.temp }}/iso/*.iso.sha256
+            ${{ runner.temp }}/iso/*.iso.manifest
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

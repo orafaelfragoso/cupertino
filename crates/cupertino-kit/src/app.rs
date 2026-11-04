@@ -61,10 +61,20 @@ pub fn run_on<A: Application>(
     system: WaylandWindowSystem,
     start: (A::Model, Vec<Command<A::Message>>),
 ) -> Result<(), AppError> {
+    run_on_with::<A>(system, |_| start)
+}
+
+/// [`run_on`], starting from what `start` makes of the runtime's options: a model that measures text itself does so
+/// with the text system the windows draw with.
+pub fn run_on_with<A: Application>(
+    system: WaylandWindowSystem,
+    start: impl FnOnce(&RuntimeOptions) -> (A::Model, Vec<Command<A::Message>>),
+) -> Result<(), AppError> {
     // the first frame already has the session's appearance
     let (mut options, theme) = options_and_theme(start_preferences(system.appearance()))?;
     let follow = theme_for(theme, Arc::clone(&options.theme));
     options.accessibility = Some(Box::new(AtspiAdapter::muted(system.waker())));
+    let start = start(&options);
     Runtime::<A, _>::start(system, options, start)
         .with_theme_for(follow)
         .run()

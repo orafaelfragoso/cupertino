@@ -151,9 +151,14 @@ pub fn strip_width(layout: &StackLayout, swipe: &SwipeConfig) -> f64 {
     (layout.width + layout.right_margin + swipe.left_limit.abs() + SHADOW_MARGIN).ceil()
 }
 
-/// The key of a banner's window: a replaced notification may change height, so it gets a window of its own.
+/// The key of a banner's window: a replaced notification keeps its window unless its height changed, as a layer
+/// surface keeps the size it was made with.
 pub fn banner_key(n: &Notification) -> WindowKey {
-    WindowKey(Key::from(format!("banner-{}-{}", n.id, n.revision)))
+    WindowKey(Key::from(format!(
+        "banner-{}-{}",
+        n.id,
+        CardMetrics::height(n).ceil() as u32
+    )))
 }
 
 pub fn centre_key() -> WindowKey {
@@ -179,7 +184,18 @@ pub fn windows<M: Clone + 'static>(
         .filter_map(|p| {
             let n = center.get(p.id)?.clone();
             let card = Rect::new(p.rect.x(), SHADOW_MARGIN, p.rect.width(), p.rect.height());
-            Some(banner_window(&n, card, p.opacity, p.hovered, width, map))
+            // the resting card: the swipe keeps the pointer with an implicit grab, so the rest of the strip passes
+            // the pointer through to the windows under it
+            let layout = &center.config.layout;
+            let region = Rect::new(
+                width - layout.right_margin - layout.width,
+                SHADOW_MARGIN,
+                layout.width,
+                card.height(),
+            );
+            Some(banner_window(
+                &n, card, region, p.opacity, p.hovered, width, map,
+            ))
         })
         .collect()
 }
@@ -225,7 +241,7 @@ pub fn apply(
     None
 }
 
-fn spec(title: String, size: Size) -> WindowSpec {
+fn spec(title: String, size: Size, input_region: Option<Vec<Rect>>) -> WindowSpec {
     WindowSpec {
         title,
         app_id: APP_ID.to_owned(),
@@ -234,7 +250,7 @@ fn spec(title: String, size: Size) -> WindowSpec {
         max_size: None,
         decorations: DecorationMode::None,
         foreign_parent: None,
-        input_region: None,
+        input_region,
     }
 }
 
@@ -264,6 +280,7 @@ pub fn accessible_name(n: &Notification) -> String {
 fn banner_window<M: Clone + 'static>(
     n: &Notification,
     card: Rect,
+    region: Rect,
     opacity: f64,
     hovered: bool,
     width: f64,
@@ -293,7 +310,11 @@ fn banner_window<M: Clone + 'static>(
         })
         .key(format!("card-{}", n.id))],
     });
-    window(banner_key(n), spec(accessible_name(n), size), content)
+    window(
+        banner_key(n),
+        spec(accessible_name(n), size, Some(vec![region])),
+        content,
+    )
 }
 
 fn centre_window<M: Clone + 'static>(
@@ -444,7 +465,7 @@ fn centre_window<M: Clone + 'static>(
     // the height is the output's: the layer surface spans the right edge from top to bottom
     window(
         centre_key(),
-        spec(CENTRE_TITLE.to_owned(), Size::new(width, y.max(1.0))),
+        spec(CENTRE_TITLE.to_owned(), Size::new(width, y.max(1.0)), None),
         content,
     )
 }
@@ -692,12 +713,13 @@ impl<M: 'static> Widget<M> for Strip<M> {
                 state.press = None;
                 cx.release_pointer();
                 cx.emit((self.map)(Input::SwipeEnd(self.id)));
-                state.hovered = self.card.contains(position);
+                self.hover(state, self.card.contains(position), cx);
                 Propagation::Stop
             }
             Event::Cancel if state.press.is_some() => {
                 state.press = None;
                 cx.emit((self.map)(Input::SwipeCancel(self.id)));
+                self.hover(state, false, cx);
                 Propagation::Continue
             }
             _ => Propagation::Continue,

@@ -2,7 +2,6 @@
 //! `cupertino_notifications::view` get their layer surfaces from [`NotificationRoles`], the bus wakes the
 //! application's loop through a channel, and timers pace the banners' lifetimes and animations.
 
-use cupertino_geometry::Rect;
 use cupertino_kit::core::{Application, Command, Window};
 use cupertino_kit::platform::WindowSpec;
 use cupertino_modifiers::Profile;
@@ -130,18 +129,6 @@ impl NotificationRoles {
             },
         }
     }
-
-    /// The resting card of a banner's window: the swipe keeps the pointer with an implicit grab, so the rest of the
-    /// strip passes the pointer through to the windows under it.
-    fn card_region(&self, spec: &WindowSpec) -> Rect {
-        let width = spec.size.width;
-        Rect::new(
-            width - self.layout.right_margin - self.layout.width,
-            SHADOW_MARGIN,
-            self.layout.width,
-            (spec.size.height - 2.0 * SHADOW_MARGIN).max(0.0),
-        )
-    }
 }
 
 impl SurfaceRoles for NotificationRoles {
@@ -163,11 +150,6 @@ impl SurfaceRoles for NotificationRoles {
             }
         };
         let surface = layer.surface();
-        if spec.title != CENTRE_TITLE {
-            if let Err(e) = conn.set_input_region(surface, Some(&[self.card_region(spec)])) {
-                return Some(Err(e));
-            }
-        }
         self.layers.insert(surface, layer);
         Some(Ok(surface))
     }

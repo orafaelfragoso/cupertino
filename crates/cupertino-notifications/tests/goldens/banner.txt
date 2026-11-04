@@ -1,5 +1,5 @@
 == arriving, t = 0
--- WindowKey(Str("banner-1-0"))
+-- WindowKey(Str("banner-1-93"))
 window 1
 pending messages=0 tasks=1 frames=0 animating=false next_wake=None
 focus None
@@ -44,7 +44,7 @@ display
     Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.5, y: 0.5 }, size: Size { width: 53.23291015625, height: 19.0 } }, radius: 9.5 }, width: 1.0, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.24705882 }) }
     Glyphs origin=10,14.68 font=FontId(1) size=13 count=5 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 0.84705883 }
 == at rest, t = 1
--- WindowKey(Str("banner-1-0"))
+-- WindowKey(Str("banner-1-93"))
 window 1
 pending messages=0 tasks=1 frames=0 animating=false next_wake=None
 focus None
@@ -89,7 +89,7 @@ display
     Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.5, y: 0.5 }, size: Size { width: 53.23291015625, height: 19.0 } }, radius: 9.5 }, width: 1.0, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.24705882 }) }
     Glyphs origin=10,14.68 font=FontId(1) size=13 count=5 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 0.84705883 }
 == a critical banner takes over, t = 1.1
--- WindowKey(Str("banner-2-0"))
+-- WindowKey(Str("banner-2-61"))
 window 2
 pending messages=0 tasks=1 frames=0 animating=false next_wake=None
 focus None
@@ -123,7 +123,7 @@ display
   paint 4294967312 parent=Some(4294967310) revision=7 bounds=[320.2116649851325,34.8232421875 115.73681640625x32.5] hit=[333.2116649851325,41.7294921875 84.70947265625x15.7294921875] clip=None transform=[1.0, 0.0, 0.0, 1.0, 333.2116649851325, 41.7294921875]
   paint 4294967313 parent=Some(4294967312) revision=8 bounds=[320.2116649851325,34.8232421875 115.73681640625x32.5] hit=[333.2116649851325,41.7294921875 84.70947265625x15.7294921875] clip=None transform=[1.0, 0.0, 0.0, 1.0, 333.2116649851325, 41.7294921875]
     Glyphs origin=0,12.59375 font=FontId(1) size=13 count=12 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 0.49803922 }
--- WindowKey(Str("banner-1-0"))
+-- WindowKey(Str("banner-1-93"))
 window 1
 pending messages=0 tasks=1 frames=0 animating=false next_wake=None
 focus None

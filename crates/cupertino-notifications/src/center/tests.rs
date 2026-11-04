@@ -544,6 +544,21 @@ fn replacing_the_visible_banner_restarts_its_timer_without_sliding() {
 }
 
 #[test]
+fn replacing_the_visible_banner_ends_its_swipe_at_rest() {
+    let mut c = center();
+    let id = c.notify(input("app", "x"), 0.0);
+    c.swipe_begin(id, 2.0);
+    c.swipe_update(id, -10.0, 2.1);
+    let mut r = input("app", "x2");
+    r.replaces_id = id;
+    c.notify(r, 2.2);
+    assert_eq!(x_at(&mut c, 2.2), REST_X);
+    assert_eq!(c.swipe_end(id, 2.3), SwipeOutcome::Cancelled);
+    c.tick(7.2);
+    assert_eq!(closed(&mut c), vec![(id, CloseReason::Expired)]);
+}
+
+#[test]
 fn replacing_the_visible_banner_while_another_waits_shows_it_for_one_second() {
     let mut c = center();
     let id = c.notify(input("app", "x"), 0.0);

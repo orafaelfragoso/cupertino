@@ -65,7 +65,7 @@ The process owns `org.freedesktop.Notifications` on the session bus. It requests
 |---|---|
 | `Notify` | Hints `urgency`, `category`, `transient` (not kept in the centre), `resident` (stays after an action), `image-data` / `image_data` / `icon_data` (RGB/RGBA, 8 bit), `image-path`, `desktop-entry`, `suppress-sound`. Actions are `[key, label, …]`, and key `default` is the banner click action. `replaces_id` keeps the id and restarts the timeout without re-sliding. |
 | `CloseNotification` | Removes the notification from stack and centre (`NotificationClosed`, reason 3; unknown ids are ignored). |
-| `GetCapabilities` | Configurable: `actions body body-markup icon-static persistence`. |
+| `GetCapabilities` | Configurable: `actions body body-markup persistence`. `icon-static` stays off until the cards draw `image-data`. |
 | `GetServerInformation` | Name `cupertino-notifications`, spec version `1.2`. |
 | `ToggleCentre | Opens the list or closes it. Same caller check as `SetDoNotDisturb`. |
 | `SetDoNotDisturb(b) | Turns do not disturb on (until turned off) or off. The caller is checked (`cupertino-peer`): a Flatpak, a Snap or a caller the bus cannot name is refused with an `org.cupertino.Error.*` name and nothing changes; other processes of the user may call it. |

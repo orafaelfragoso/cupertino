@@ -3,7 +3,8 @@
 //! service, or with a touchpad, open against fake daemons on a private bus and a fake sysfs.
 
 use cupertino_filepicker::Mode;
-use cupertino_ui_test::{semantic_outline, unannounced};
+use cupertino_kit::core::AccessibleValue;
+use cupertino_ui_test::{semantic_outline, unannounced, whole_tree};
 
 use super::*;
 use crate::clipboard::App;
@@ -21,17 +22,27 @@ use fakes::{FakeBluetooth, FakeNetwork};
 
 fn tree(driver: &TestDriver<SettingsApp>, window: WindowId) -> AccessibilityUpdate {
     let snapshot = driver.runtime().snapshot(window).unwrap();
-    AccessibilityUpdate {
-        window,
-        root: snapshot.accessibility[0].0,
-        focus: snapshot.focus,
-        nodes: snapshot.accessibility,
-        removed: Vec::new(),
-        full: true,
-    }
+    whole_tree(window, snapshot.accessibility, snapshot.focus)
 }
 
-/// Every line of `expected` is read by a node of the window, and no node lacks a name.
+/// The nodes a screen reader would read a secret of: a password field, or a text field named as one, whose value is
+/// text.
+fn secrets_read(tree: &AccessibilityUpdate) -> Vec<String> {
+    tree.nodes
+        .iter()
+        .filter(|(_, n)| {
+            let named = n.name.as_deref().is_some_and(|name| {
+                let name = name.to_lowercase();
+                name.contains("password") || name.contains("passphrase")
+            });
+            (n.role == Role::PasswordInput || (n.role == Role::TextInput && named))
+                && matches!(n.value, Some(AccessibleValue::Text { .. }))
+        })
+        .map(|(_, n)| cupertino_ui_test::describe(n))
+        .collect()
+}
+
+/// Every line of `expected` is read by a node of the window, no node lacks a name and no secret is read out.
 fn announces(driver: &TestDriver<SettingsApp>, window: WindowId, what: &str, expected: &[&str]) {
     let tree = tree(driver, window);
     let outline = semantic_outline(&tree).join("\n");
@@ -40,9 +51,16 @@ fn announces(driver: &TestDriver<SettingsApp>, window: WindowId, what: &str, exp
         Vec::<&str>::new(),
         "{what} reads:\n{outline}"
     );
-    let mut gaps = semantic_gaps(&tree);
-    gaps.retain(|gap| !KIT_GAPS.contains(&gap.as_str()));
-    assert_eq!(gaps, Vec::<String>::new(), "{what} reads:\n{outline}");
+    assert_eq!(
+        kit_gaps(&tree),
+        Vec::<String>::new(),
+        "{what} reads:\n{outline}"
+    );
+    assert_eq!(
+        secrets_read(&tree),
+        Vec::<String>::new(),
+        "{what} reads:\n{outline}"
+    );
 }
 
 /// What every pane reads besides its content: its sidebar row selected, its title in the toolbar, the history buttons
@@ -340,9 +358,8 @@ fn the_network_bluetooth_and_trackpad_panes_read_their_controls_by_role_name_val
 fn sheet_reads(dir: &Path, sheet: Sheet, what: &str) -> Vec<String> {
     let (driver, window) = start_with(dir, PaneId::Wifi, Some(sheet));
     let tree = tree(&driver, window);
-    let mut gaps = semantic_gaps(&tree);
-    gaps.retain(|gap| !KIT_GAPS.contains(&gap.as_str()));
-    assert_eq!(gaps, Vec::<String>::new(), "{what}");
+    assert_eq!(kit_gaps(&tree), Vec::<String>::new(), "{what}");
+    assert_eq!(secrets_read(&tree), Vec::<String>::new(), "{what}");
     semantic_outline(&tree)
 }
 

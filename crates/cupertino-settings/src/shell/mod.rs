@@ -673,8 +673,14 @@ mod tests {
         NonZeroU32::new(64).unwrap()
     }
 
-    /// Gaps of every Kit window, not of Settings: Kit names neither the window's root nor a navigation toolbar.
-    const KIT_GAPS: [&str; 2] = ["Window #0: no name", "Window #0 > Toolbar #1: no name"];
+    /// What a screen reader cannot announce in the window, besides the gaps of every Kit window, not of Settings: Kit
+    /// names neither the window's root nor a navigation toolbar.
+    fn kit_gaps(tree: &AccessibilityUpdate) -> Vec<String> {
+        const KIT_GAPS: [&str; 2] = ["Window #0: no name", "Window #0 > Toolbar #1: no name"];
+        let mut gaps = semantic_gaps(tree);
+        gaps.retain(|gap| !KIT_GAPS.contains(&gap.as_str()));
+        gaps
+    }
 
     /// The start is the process's, so the tests that open a window take turns.
     static WINDOW: Mutex<()> = Mutex::new(());
@@ -1000,9 +1006,7 @@ mod tests {
                 removed: Vec::new(),
                 full: true,
             };
-            let mut gaps = semantic_gaps(&tree);
-            gaps.retain(|gap| !KIT_GAPS.contains(&gap.as_str()));
-            assert_eq!(gaps, Vec::<String>::new(), "{pane:?}");
+            assert_eq!(kit_gaps(&tree), Vec::<String>::new(), "{pane:?}");
         }
     }
 }

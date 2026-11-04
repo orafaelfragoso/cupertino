@@ -86,6 +86,7 @@ fn the_file_chooser_reads_its_places_folder_rows_and_buttons_and_enables_open_on
     );
     let opened = |driver: &TestDriver<Dialogs>| {
         let mut o = outline(driver, window);
+        assert!(o[2].starts_with("    List \"Places\" "), "{}", o[2]);
         o[2] = "    List \"Places\" 6 items".to_owned();
         o
     };
@@ -103,10 +104,12 @@ fn the_file_chooser_reads_its_places_folder_rows_and_buttons_and_enables_open_on
         "a picked file enables Open:\n{}",
         picked.join("\n")
     );
+    let row = picked
+        .iter()
+        .position(|l| l == "        StaticText \"a.txt\"")
+        .unwrap();
     assert!(
-        picked
-            .iter()
-            .any(|l| l.starts_with("      ListItem") && l.ends_with(" selected")),
+        picked[row - 1].starts_with("      ListItem") && picked[row - 1].ends_with(" selected"),
         "the picked row reads as selected:\n{}",
         picked.join("\n")
     );
@@ -116,6 +119,7 @@ fn the_file_chooser_reads_its_places_folder_rows_and_buttons_and_enables_open_on
     let answer = post(22, ask(Kind::Save, folder.path()));
     let window = show(&mut driver);
     let mut saved = outline(&driver, window);
+    assert!(saved[4].starts_with("    List \"Places\" "), "{}", saved[4]);
     saved[4] = "    List \"Places\" 6 items".to_owned();
     assert_eq!(
         saved,

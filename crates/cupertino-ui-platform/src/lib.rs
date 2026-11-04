@@ -56,6 +56,9 @@ pub struct WindowSpec {
     /// dialog the system shows for that window). Read when the window opens; an unknown handle, or a platform without
     /// the protocol, leaves the window without a parent.
     pub foreign_parent: Option<String>,
+    /// The part of the window that takes pointer input, in points; elsewhere input reaches what is below. `None` is the
+    /// whole window, an empty list none of it.
+    pub input_region: Option<Vec<Rect>>,
 }
 
 /// An edge or corner of a popup's anchor rectangle, or the direction the popup extends from it, as
@@ -131,6 +134,8 @@ pub enum WindowRequest {
     /// Publishes a toplevel's menus to the desktop's menu bar, or withdraws them with `None`. A platform without a
     /// desktop menu bar takes the request and shows nothing.
     Menus(Option<MenuDescription>),
+    /// Sets [`WindowSpec::input_region`]; it applies with the next present.
+    SetInputRegion(Option<Vec<Rect>>),
 }
 
 /// A window's menus as the desktop's menu bar shows them.

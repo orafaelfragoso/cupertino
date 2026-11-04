@@ -467,6 +467,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                             .system
                             .request(w.id, WindowRequest::SetMaxSize(spec.max_size));
                     }
+                    if w.spec.input_region != spec.input_region {
+                        let _ = self.system.request(
+                            w.id,
+                            WindowRequest::SetInputRegion(spec.input_region.clone()),
+                        );
+                    }
                     w.spec = spec;
                     w
                 }

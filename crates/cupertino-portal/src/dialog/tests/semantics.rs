@@ -226,6 +226,7 @@ fn the_app_chooser_reads_its_prompt_and_apps_with_the_last_choice_selected_and_f
                 choice("org.example.Draw", "Drawing"),
             ],
             last_choice: Some("org.example.Draw".to_owned()),
+            wants_token: false,
         }),
         reply: app_chooser::Reply(sender),
     });

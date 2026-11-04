@@ -194,6 +194,12 @@ impl LayerSurface {
         self.proxy.set_exclusive_zone(zone);
     }
 
+    /// Change the distance from the anchored edges; applies with the next commit.
+    pub fn set_margin(&self, margin: Margin) {
+        self.proxy
+            .set_margin(margin.top, margin.right, margin.bottom, margin.left);
+    }
+
     /// Move or resize: the edges it is anchored to and its size (0 across an axis anchored to both edges); applies with
     /// the next commit, after which the server configures it.
     pub fn set_placement(&mut self, anchor: Anchor, size: (u32, u32)) {

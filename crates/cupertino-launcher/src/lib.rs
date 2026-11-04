@@ -4,17 +4,15 @@
 //! * [`matcher`]: tiered fuzzy matching; [`frecency`]: persisted usage ranking.
 //! * [`calc`]: the calculator; [`files`]: bounded file search.
 //! * [`engine`]: providers, sections and activation (returns a [`CommandSpec`] for the host to run).
-//! * [`panel`]: panel state with keyboard navigation; [`render`]: panel layout and CPU rendering.
+//! * [`panel`]: panel state with keyboard navigation.
+//! * [`view`]: the panel's windows on CupertinoKit; [`kit`]: the launcher as a Kit application model, with what
+//!   needs the session behind [`kit::Host`].
 //! * feature `app`, the parts of the `cupertino-launcher` process (the panel on a layer surface as a
-//!   client of the server): [`control`] (the `org.cupertino.Launcher1` bus interface) and [`surface`]
-//!   (client key events to panel keys).
+//!   client of the server): [`control`] (the `org.cupertino.Launcher1` bus interface).
 //!
-//! No Smithay dependency. Panel metrics, material choice, keyboard semantics, the top-hit rule and the
-//! section limits are taken from the analysis;
-//! ranking scores and the remaining row metrics are approximate (authored) and configurable;
-//! colours, typography, corner and shadow values come from `cupertino-theme`.
-
-#![allow(clippy::chunks_exact_to_as_chunks)]
+//! No Smithay dependency. Panel metrics, keyboard semantics, the top-hit rule and the section limits are taken from
+//! the analysis; ranking scores and the remaining row metrics are approximate (authored) and configurable; colours,
+//! type, material and controls come from CupertinoKit's theme.
 
 pub mod calc;
 #[cfg(feature = "app")]
@@ -24,11 +22,10 @@ pub mod engine;
 pub use cupertino_apps::exec;
 pub mod files;
 pub mod frecency;
+pub mod kit;
 pub mod matcher;
 pub mod panel;
-pub mod render;
-#[cfg(feature = "app")]
-pub mod surface;
+pub mod view;
 
 pub use desktop::{DesktopAction, DesktopEntry};
 pub use engine::{

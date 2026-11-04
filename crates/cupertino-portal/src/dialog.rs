@@ -234,6 +234,8 @@ struct AppPicker {
     ask: app_chooser::Ask,
     rows: Selection,
     scroll: ScrollState,
+    /// The app chosen while its activation token is asked for; the window answers when the token arrives.
+    opening: Option<String>,
 }
 
 impl AppPicker {
@@ -275,6 +277,8 @@ pub enum Message {
     AppScroll(u64, ScrollState),
     AppSelect(u64, Selection),
     OpenWith(u64),
+    /// The activation token the server made for app chooser `0`'s choice `1`.
+    Opened(u64, String, Option<String>),
     TakeScreenshot(u64),
 }
 
@@ -359,6 +363,7 @@ impl Model {
                         ask: *ask,
                         rows: Selection::default(),
                         scroll: NO_SCROLL,
+                        opening: None,
                     };
                     let last = picker.ask.last_choice.clone();
                     picker.select(last.as_deref());
@@ -608,9 +613,37 @@ impl Application for Dialogs {
                 }
             }
             Message::OpenWith(id) => {
-                let chosen = model.app_picker(id).and_then(|a| a.chosen().cloned());
-                if let Some(choice) = chosen {
-                    model.finish_app(id, app_chooser::Answer::Chosen(choice.id));
+                let Some(a) = model.app_picker(id).filter(|a| a.opening.is_none()) else {
+                    return commands;
+                };
+                let Some(choice) = a.chosen().map(|c| c.id.clone()) else {
+                    return commands;
+                };
+                if !a.ask.wants_token {
+                    model.finish_app(
+                        id,
+                        app_chooser::Answer::Chosen {
+                            id: choice,
+                            token: None,
+                        },
+                    );
+                    return commands;
+                }
+                // made for the key or click that chose, on this window, so the server lets the app take the focus
+                a.opening = Some(choice.clone());
+                let chosen = choice.clone();
+                commands.push(Command::ActivationToken {
+                    window: app_window_key(id),
+                    app_id: Some(choice),
+                    on_token: Box::new(move |token| Message::Opened(id, chosen, token)),
+                });
+            }
+            Message::Opened(id, choice, token) => {
+                if model
+                    .app_picker(id)
+                    .is_some_and(|a| a.opening.as_deref() == Some(choice.as_str()))
+                {
+                    model.finish_app(id, app_chooser::Answer::Chosen { id: choice, token });
                 }
             }
             Message::TakeScreenshot(id) => model.finish_consent(id, screenshot::Answer::Granted),
@@ -1013,6 +1046,7 @@ fn window(d: &Dialog, places: &[Place]) -> Window<Message> {
             max_size: None,
             decorations: DecorationMode::Preferred,
             foreign_parent: crate::wayland_parent(&ask.parent_window).map(str::to_owned),
+            input_region: None,
         },
         shortcuts: CommandRegistry::new(),
         on_close: Some(Message::Cancel(id)),
@@ -1121,6 +1155,7 @@ fn picker_window(p: &Picker) -> Window<Message> {
             max_size: None,
             decorations: DecorationMode::Preferred,
             foreign_parent: crate::wayland_parent(&p.ask.parent_window).map(str::to_owned),
+            input_region: None,
         },
         // Return is the default button once a row is picked, and Escape cancels, wherever the focus is
         shortcuts: CommandRegistry::new()
@@ -1168,6 +1203,10 @@ fn shortened(target: &str) -> String {
         Some((end, _)) => format!("{}…", &target[..end]),
         None => target.to_owned(),
     }
+}
+
+fn app_window_key(id: u64) -> WindowKey {
+    WindowKey(Key::Str(format!("apps-{id}").into()))
 }
 
 fn app_window(a: &AppPicker, app_icons: &AppIcons) -> Window<Message> {
@@ -1245,7 +1284,7 @@ fn app_window(a: &AppPicker, app_icons: &AppIcons) -> Window<Message> {
         ],
     );
     Window {
-        key: WindowKey(Key::Str(format!("apps-{id}").into())),
+        key: app_window_key(id),
         spec: WindowSpec {
             title: "Open With".to_owned(),
             app_id: "org.cupertino.Portal".into(),
@@ -1254,6 +1293,7 @@ fn app_window(a: &AppPicker, app_icons: &AppIcons) -> Window<Message> {
             max_size: None,
             decorations: DecorationMode::Preferred,
             foreign_parent: crate::wayland_parent(&a.ask.parent_window).map(str::to_owned),
+            input_region: None,
         },
         // Return opens the selected app and Escape cancels, wherever the focus is
         shortcuts: CommandRegistry::new()
@@ -1348,6 +1388,7 @@ fn consent_window(c: &Consent) -> Window<Message> {
             max_size: None,
             decorations: DecorationMode::Preferred,
             foreign_parent: crate::wayland_parent(&c.ask.parent_window).map(str::to_owned),
+            input_region: None,
         },
         // Escape cancels wherever the focus is; Return has no shortcut, so a key meant for the app never consents
         shortcuts: CommandRegistry::new().with(
@@ -1710,7 +1751,7 @@ mod tests {
             name: name.to_owned(),
             icon: Some(id.to_owned()),
         };
-        let open_with = |n: u32| {
+        let open_with = |n: u32, wants_token: bool| {
             let (sender, answer) = async_channel::bounded(1);
             inbox().push(app_chooser::Event::Ask {
                 handle: handle(n),
@@ -1723,12 +1764,13 @@ mod tests {
                         choice("org.example.Draw", "Drawing"),
                     ],
                     last_choice: Some("org.example.Draw".to_owned()),
+                    wants_token,
                 }),
                 reply: app_chooser::Reply(sender),
             });
             answer
         };
-        let answer = open_with(6);
+        let answer = open_with(6, true);
         let window = show(&mut driver);
         driver.look(window, "portal-app-chooser").unwrap();
         assert!(
@@ -1752,14 +1794,21 @@ mod tests {
         }
         type_key(&mut driver, window, Keysym(0xff52), None);
         type_key(&mut driver, window, RETURN, None);
+        let app_chooser::Answer::Chosen { id, token } = answer.try_recv().unwrap() else {
+            panic!("expected a choice");
+        };
         assert_eq!(
-            answer.try_recv().unwrap(),
-            app_chooser::Answer::Chosen("org.example.Viewer".to_owned()),
+            id, "org.example.Viewer",
             "the last choice opens selected with the focus in the list, so Up moves to the app above it"
+        );
+        let token = token.expect("a token was asked for the chosen app");
+        assert!(
+            token.starts_with("headless-activation-") && token.ends_with(" for org.example.Viewer"),
+            "{token}"
         );
         assert!(driver.runtime().windows().is_empty());
 
-        let answer = open_with(7);
+        let answer = open_with(7, false);
         let window = show(&mut driver);
         inbox().push(app_chooser::Event::Update {
             handle: handle(7),
@@ -1773,6 +1822,19 @@ mod tests {
         );
         type_key(&mut driver, window, ESCAPE, None);
         assert_eq!(answer.try_recv().unwrap(), app_chooser::Answer::Cancelled);
+        assert!(driver.runtime().windows().is_empty());
+
+        let answer = open_with(8, false);
+        let window = show(&mut driver);
+        type_key(&mut driver, window, RETURN, None);
+        assert_eq!(
+            answer.try_recv().unwrap(),
+            app_chooser::Answer::Chosen {
+                id: "org.example.Draw".to_owned(),
+                token: None
+            },
+            "a caller that sent its own token gets no new one"
+        );
         assert!(driver.runtime().windows().is_empty());
 
         let consent = |n: u32, app_name: Option<&str>| {

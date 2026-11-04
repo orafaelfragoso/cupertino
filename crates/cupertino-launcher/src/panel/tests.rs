@@ -512,3 +512,49 @@ fn a_settled_appear_is_at_its_end_without_animating() {
     assert_eq!(p.progress(1.0), 0.0);
     assert!(!p.is_animating(1.0));
 }
+
+#[test]
+fn takes_key_names_exactly_the_keys_handle_key_does_not_hand_to_the_field() {
+    let keys = [
+        Key::Backspace,
+        Key::Delete,
+        Key::Left,
+        Key::Right,
+        Key::Home,
+        Key::End,
+        Key::Up,
+        Key::Down,
+        Key::PageUp,
+        Key::PageDown,
+        Key::Tab,
+        Key::Enter,
+        Key::Escape,
+    ]
+    .into_iter()
+    .chain("arbiykldhnpx ,190".chars().map(Key::Char));
+    let keys: Vec<Key> = keys.collect();
+    for focus in [Focus::Field, Focus::List] {
+        for &key in &keys {
+            for bits in 0..16u8 {
+                let mods = Mods {
+                    ctrl: bits & 1 != 0,
+                    alt: bits & 2 != 0,
+                    shift: bits & 4 != 0,
+                    primary: bits & 8 != 0,
+                };
+                let (mut p, mut l) = open();
+                type_str(&mut p, &mut l, "f");
+                if focus == Focus::List {
+                    press(&mut p, &mut l, Key::Down, Mods::NONE);
+                }
+                assert_eq!(p.focus(), focus);
+                let handled = p.handle_key(key, mods, &mut l, now(0.0)) != PanelEvent::Edit;
+                assert_eq!(
+                    takes_key(key, mods, focus),
+                    handled,
+                    "{key:?} {mods:?} with {focus:?} focus"
+                );
+            }
+        }
+    }
+}

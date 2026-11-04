@@ -1,0 +1,3 @@
+focus: TextInput "Search" value="" [focused] actions=[Focus, SetValue, SetSelection]
+Window
+  TextInput "Search" value="" [focused] actions=[Focus, SetValue, SetSelection]

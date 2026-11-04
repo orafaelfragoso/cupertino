@@ -220,6 +220,7 @@ pub fn window<M: Clone + 'static>(view: Option<View>) -> Window<M> {
             max_size: None,
             decorations: DecorationMode::None,
             foreign_parent: None,
+            input_region: None,
         },
         shortcuts: CommandRegistry::new(),
         on_close: None,

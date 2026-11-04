@@ -319,6 +319,9 @@ const APPS_DRAW: &str =
 const SOUND_PANE: &str =
     "the sound pane drives the default sink and the mixer itself until audio goes through a service";
 
+const APP_MENUS: &str =
+    "the menu bar's integration test opens and activates the menus the apps publish";
+
 /// Edges that exist today and that [`RULES`] forbid. Stale entries are errors, so the list only shrinks.
 pub const EXCEPTIONS: &[Exception] = &[
     Exception {
@@ -354,12 +357,20 @@ pub const EXCEPTIONS: &[Exception] = &[
         reason: SOUND_PANE,
     },
     Exception {
-        from: "cupertino-settings",
-        to: "cupertino-decorations",
-        kind: Kind::Normal,
-        tracking: Tracking::Issue(46),
+        from: "cupertino-menubar",
+        to: "cupertino-files",
+        kind: Kind::Dev,
+        tracking: Tracking::Permanent,
         area: Area::Apps,
-        reason: APPS_DRAW,
+        reason: APP_MENUS,
+    },
+    Exception {
+        from: "cupertino-menubar",
+        to: "cupertino-settings",
+        kind: Kind::Dev,
+        tracking: Tracking::Permanent,
+        area: Area::Apps,
+        reason: APP_MENUS,
     },
 ];
 

@@ -6,15 +6,16 @@ tiles for the modules whose service does not exist yet. A toggle, or a slider dr
 the card closes it.
 
 The crate has no Smithay dependency. The model (`model`, `layout`, `lifecycle`, `controller`), the backends (`backend`,
-`system`), the bus interface (`control`) and the CPU renderer (`render`) are separate, so a host can drive the panel without
+`system`), the bus interface (`control`) and the CupertinoKit view (`view`) are separate, so a host can drive the panel without
 the process. The `cupertino-controlcenter` process is that host for the desktop. Sizes, timings, slider rules and the battery
 glyph follow the analysis. The
 items marked or approximate below are authored and replaceable.
 
 ## Running
 
-Feature `app` builds the binary: the card on a layer surface, as a client of `cupertino-server` on `cupertino-wayland-client`,
-`cupertino-shell-client`, `cupertino-protocol-app` and a `cupertino-ui-wayland` presenter per surface.
+Feature `app` builds the binary: the card as a CupertinoKit (`cupertino-kit`) window on a layer surface, as a client of
+`cupertino-server`, as `cupertino-osd` does. `cupertino-shell-client` gives the windows their layer surfaces through the
+`SurfaceRoles` of `cupertino-ui-wayland`.
 The server starts and restarts it through the `shell` key of its configuration, and a `control-panel` key binding and hot-corner
 action call `Toggle()`. The entry is `{"name": "controlcenter", "command": ["cupertino-controlcenter"]}` in the list below.
 
@@ -32,27 +33,27 @@ cupertino-controlcenter [--fake-backends] [--alsa-card N]
 | `--fake-backends` | off | In-memory radios, volume, backlight and battery instead of the machine's. For trying the panel and for headless runs. |
 | `--alsa-card N` | the default PipeWire sink, else the best master of all cards (rule in `cupertino-alsa`) | Use the master volume of sound card `N`. |
 
-The session's display options change the look: Increase Contrast takes the high-contrast catalog and the contrast slider track,
-gray 0.459 light / 0.612 dark, and Reduce Transparency takes the opaque material. Icons are the template
-symbols of the asset directory (`symbol.*`) tinted by the palette; `Renderer::new` fails when the
-directory lacks one of `render::ICON_NAMES`, so no glyph is ever left out or substituted while drawing. The text renderer's
-optical size follows the surface scale (`TextRenderer::set_scale`, set on every render).
+The session's appearance and display options change the look through the kit's theme tokens, which the kit follows
+while the process runs: Increase Contrast takes the high-contrast catalog and Reduce Transparency the opaque material.
+The module toggles, tiles, level sliders and battery meter are the controls of `cupertino-ui-controls`, which read every
+colour and metric from the theme. Icons are the template symbols of the asset directory (`symbol.*`), loaded by the kit.
 
 ## How it works
 
-**Surface.** One overlay layer surface anchored top and right, as large as the card with a tall battery row plus its shadow
-room (330 x 430 pt), with an exclusive zone of -1 and margins that put the card 6 pt from the right edge and 6 pt below the
-bar. The bar reserves no layer zone, so the top margin adds the theme's menu bar height. The material (`render::MATERIAL`) is a
-server-rendered backdrop with the card's rectangle and 16 pt radius, and its alpha follows the fade. While hidden the surface
-stays mapped, draws nothing and has an empty input region. While shown its input region is the card. A second, transparent layer
-surface over the whole output sits just below it while the panel is shown and catches a press outside the card. While shown the
-surface asks for **exclusive** keyboard interactivity, so it is the key window as soon as it opens, from the menu bar, a shortcut
-or a hot corner (the design panel can become key). It asks for none otherwise. Another exclusive surface (the
-launcher) takes the keyboard from it, which dismisses it.
+**Windows.** `view::panel` is the card: a window of the card's size (`layout::card_size`, 298 x 370 pt, or 298 x 408 pt
+with the battery row) with `WindowBackground::Surface` on the `Menu` surface, 16 pt radius. The kit asks the server for the
+material as a backdrop, and the backdrop's alpha and the controls (one group) follow the fade. `view::catcher` is a
+transparent window with no drawing that takes a left or right press anywhere on it. The process's `PanelRoles` gives the
+card (`view::APP_ID`) an overlay layer surface anchored top and right, with an exclusive zone of -1 and margins that put the
+card 6 pt from the right edge and 6 pt below the bar. The bar reserves no layer zone, so the top margin adds the theme's menu
+bar height. The catcher (`view::CATCHER_APP_ID`) gets a top layer surface just below it, over the whole output.
 
-**Session.** The palette comes from the appearance the server announces over `cupertino_session_v1`. It is read at start, and on
-a change the renderer is rebuilt and the card drawn again. On `locked` a shown panel starts closing, as when it loses the
-keyboard.
+**Session.** A hidden panel has no window. A toggle opens the card and the catcher. A dismissal closes the catcher at once
+and fades the card, whose window closes when the fade ends. A battery that comes or goes opens the card again at its new
+size. While the panel is shown the card asks for **exclusive** keyboard interactivity, so it is the key window as soon as it
+opens, from the menu bar, a shortcut or a hot corner (the design panel can become key). It asks for it again when a toggle
+during the fade shows the panel again. It asks for none from the start of the fade. Another exclusive surface (the launcher)
+that takes the keyboard from the shown card dismisses the panel. On `locked` a shown panel starts closing too.
 
 **Dismissal.** A left or right press outside the card (mouse monitor mask `0xa`), losing the keyboard focus
 (resign-key observer) and Escape. Escape is **not** in the design: it has no cancel handler on its panel
@@ -130,37 +131,40 @@ failure. Properties are read from the service every time, never from a cache.
 | Volume writes | linear 0 to 1, mute below 0.001, throttle 16.7 ms with the latest value kept |
 | Fonts | titles system 12 medium |
 | Battery glyph | fill `clamp(round(19 * level), 2, 19) at (2, 2, w, 8) with radius 1.5, 4 pt to the percentage, red at level 0.1 or below |
-| Card shadow | opacity 0.25, radius 8, offset 4; sigma = radius / 2 |
-| Shadow room and edge | surface insets (6, 16, 16, 16); the card 6 pt from the right edge and below the bar |
+| Card shadow | none for now (see the open issues); the design's is opacity 0.25, radius 8, offset 4, sigma = radius / 2 |
+| Edge | the card 6 pt from the right edge and below the bar (`layout::EDGE_MARGIN`) |
 | Speaker glyph tiers | muted below 0.001, then thirds |
-| Card material | the `Menu` recipe (the design's has no recipe of its own in the design tokens) (`render::MATERIAL`) |
+| Card material | the `Menu` recipe (the design's has no recipe of its own in the design tokens) (`view::panel`) |
 | Opening | immediate: no open animation for the panel itself is recorded (is the module expansion spring) (`lifecycle`) |
-| Tile and toggle colours | tile background, button off, on with a white glyph; found the literals but not their roles (`render::Palette`) |
+| Tile and toggle colours | tile background, button off, on with a white glyph; found the literals but not their roles (the theme roles of `cupertino-ui-controls`' `ModuleToggle`) |
 | Tile corner radius | 12 pt (`layout::TILE_RADIUS`) |
-| Slider placement | 12 pt from the tile's sides, 10 pt from its bottom; title 8 pt from the top (`layout`, `render`) |
-| Caption size and text gaps | 10 pt (the footnote style), 8 pt between button and text (`render`) |
-| Icon names and sizes | `symbol.*` names (`render::module_icon`): Wi-Fi and Bluetooth are the names the design uses, the other tiles' symbols is not known; 18 pt in a button, 22 pt on a compact tile, 14 pt on a slider. The slider glyphs are `symbol.sun` (`sun.max.fill`) and the speaker tiers (`speaker.slash.fill`, `speaker.wave.3.fill`, names; the tiers use the static symbol with the same number of waves) |
+| Slider placement | 12 pt from the tile's sides, 10 pt from its bottom; title 8 pt from the top (`layout`) |
+| Caption size and text gaps | 10 pt (the footnote style), 8 pt between button and text (`cupertino-ui-controls`) |
+| Icon names and sizes | `symbol.*` names (`view`): Wi-Fi and Bluetooth are the names the design uses, the other tiles' symbols is not known; 18 pt in a button, 22 pt on a compact tile, 14 pt on a slider. The slider glyphs are `symbol.sun` (`sun.max.fill`) and the speaker tiers (`speaker.slash.fill`, `speaker.wave.3.fill`, names; the tiers use the static symbol with the same number of waves) |
 | Display floor | raw value 1 (a slider never turns the screen off; the design maps 0.0 to the panel's device minimum) (`system`) |
 | Brightness write throttle | the 16.7 ms of the volume (`controller::WRITE_INTERVAL`) |
 | Refresh while open | 1 s (`controller::REFRESH_INTERVAL`) |
-| Escape dismisses | not in the design (`app`) |
+| Escape dismisses | not in the design (`view::panel`) |
 | Wi-Fi tier glyph, expandable modules, toggle spring, slider spring, tick dots, low power mode colour, per-language width, right-to-left mirroring | not implemented |
 
 ## Open issues
 
+- The card has no drop shadow. The server draws shadows for windows only, not for layer surfaces, and a kit backdrop covers
+  its whole window, so shadow room on the surface would also get the material. Restoring it needs a backdrop inset (or a
+  shadow) in the app effects protocol, the kit and the server.
 
 ## Modules
 
 | Module | Content |
 |---|---|
 | `model` | `Module` (grid order), `Slider`, `Reading` (value or reason), `Controls`, `TileState`, `Battery`, `VolumeState`, `speaker_icon` |
-| `layout` | frames of the card in points, slider tracks, `Hit`, `fraction_at` |
+| `layout` | the card's metrics in points (`PANEL_WIDTH`, `PADDING`, `SPACING`, `COLUMN`, row heights, slider insets, `EDGE_MARGIN`) and `card_size` |
 | `lifecycle` | `Lifecycle`, `Phase`, `FADE_SECONDS` with injected time |
 | `backend` | the traits (`Wifi`, `Bluetooth`, `FocusMode`, `Brightness`, `Volume`, `BatteryReader`, `OverlayNotifier`), `SessionVolume`, `AlsaVolume`, `Unavailable` and the `Memory* stand-ins |
 | `system` (feature `dbus`) | `NetdWifi`, `BtdBluetooth`, `PowerdBrightness`, `PowerdBattery`, `SessionOverlay` |
 | `controller` | `Controller`: lifecycle, readings, presses, throttled slider writes, refresh timer; `Backends` |
 | `control` (feature `dbus`) | the `org.cupertino.ControlPanel1` interface (`serve`) |
-| `render` | `Palette`, `Renderer`, `surface_size`, `card_origin` |
+| `view` (feature `app`) | the CupertinoKit windows: `panel` (the card), `catcher`, `Input` (what the user did), `APP_ID`, `CATCHER_APP_ID`, `TITLE` |
 
 ## Tests
 
@@ -170,10 +174,11 @@ cargo test -p cupertino-controlcenter --features app
 
 | Test | Proves |
 |---|---|
-| Model and layout unit tests | The module order, the frames with and without the battery row, the slider track and position formula, hit testing (rows, tiles, sliders, the knob's hit frame, outside). |
+| Model and layout unit tests | The module order, the readings behind the tiles, the card's size with and without the battery row. |
 | Lifecycle unit tests | Full opacity, the linear fade over 0.238 s, reopening while hiding, at literal instants. |
 | Controller unit tests | Toggles and slider changes, the 16.7 ms write throttle, mute below 0.001, a tile disabled by a failing read or write with the reason, the overlay told after a drag, the refresh timer. |
-| Render unit tests | The slider, disabled and battery pixels. |
+| `tests/panel.rs` | The card as the kit draws it against `tests/goldens` (`shown`, `reduce-transparency`, `increase-contrast`: the 1x frame and the focus and accessibility tree of every control), its material and window per battery case, the grid frames, a switch press, a slider drag and release, Escape; the catcher dismissing on a left or right press only. |
+| Process unit tests (`src/app.rs`) | The windows per phase (card over catcher when shown, the card alone while fading, none when hidden), the lock, input ignored during the fade, a toggle during the fade then Escape, the timer generations, and the card's keyboard: asked for whenever shown, given back for the fade, and losing it while shown dismisses. |
 | `tests/control.rs` | `Toggle` against a private `dbus-daemon` with in-memory backends: it opens, then closes, the panel, and a second panel cannot take the name. |
 
 Nothing here touches a real radio, adapter, volume or backlight.

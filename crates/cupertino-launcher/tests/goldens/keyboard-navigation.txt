@@ -1,0 +1,73 @@
+> Down
+  query="fire" focus=List selected=Some("Firewall Configuration") scroll=0
+> Down
+  query="fire" focus=List selected=Some("Firewall Configuration") scroll=0
+> Super+Up
+  query="fire" focus=List selected=Some("Firefox") scroll=0
+> Super+Down
+  query="fire" focus=List selected=Some("Firewall Configuration") scroll=0
+> Up
+  query="fire" focus=List selected=Some("Firefox") scroll=0
+> Escape
+  query="fire" focus=Field selected=Some("Firefox") scroll=0
+> Tab
+  query="Firefox" focus=Field selected=Some("Firefox") scroll=0
+> Backspace
+  query="Firefo" focus=Field selected=Some("Firefox") scroll=0
+
+window 1
+pending messages=0 tasks=1 frames=0 animating=false next_wake=Some(500000000)
+focus Some(NodeId(3v1))
+pointer_capture None
+text_input Some(NodeId(3v1))
+layout
+  NodeId(0v1) cupertino_launcher::view::PanelRoot<cupertino_launcher::kit::Message> key=None parent=None children=[NodeId(1v1), NodeId(5v1), NodeId(6v1)] rect=[0,0 600x430] clip=[none]
+  NodeId(1v1) cupertino_launcher::view::Bar<cupertino_launcher::kit::Message> key=Some(Str("query-row")) parent=Some(NodeId(0v1)) children=[NodeId(2v1), NodeId(3v1)] rect=[0,0 600x52] clip=[none]
+  NodeId(2v1) cupertino_ui_controls::Icon key=None parent=Some(NodeId(1v1)) children=[] rect=[20,16 20x20] clip=[none]
+  NodeId(3v1) cupertino_ui_controls::TextField<cupertino_launcher::kit::Message> key=Some(Str("query")) parent=Some(NodeId(1v1)) children=[] rect=[52,0 528x52] clip=[none]
+  NodeId(5v1) cupertino_ui_controls::Separator key=Some(Str("separator")) parent=Some(NodeId(0v1)) children=[] rect=[0,52 600x1] clip=[none]
+  NodeId(6v1) cupertino_launcher::view::ResultList<cupertino_launcher::kit::Message> key=Some(Str("results")) parent=Some(NodeId(0v1)) children=[NodeId(7v1)] rect=[0,53 600x88] clip=[none]
+  NodeId(7v1) cupertino_launcher::view::SectionGroup<cupertino_launcher::kit::Message> key=Some(Str("section:Top Hit")) parent=Some(NodeId(6v1)) children=[NodeId(8v1), NodeId(37v1)] rect=[0,61 600x72] clip=[none]
+  NodeId(8v1) cupertino_launcher::view::Quiet<cupertino_launcher::kit::Message> key=Some(Str("heading")) parent=Some(NodeId(7v1)) children=[NodeId(9v1)] rect=[0,61 600x32] clip=[none]
+  NodeId(9v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(8v1)) children=[] rect=[20,72.48046875 41.126953125x14.51953125] clip=[none]
+  NodeId(37v1) cupertino_launcher::view::ResultRow<cupertino_launcher::kit::Message> key=Some(Str("item:app:browser.desktop")) parent=Some(NodeId(7v1)) children=[NodeId(38v1), NodeId(39v1)] rect=[0,93 600x40] clip=[none]
+  NodeId(38v1) cupertino_ui_controls::Icon key=None parent=Some(NodeId(37v1)) children=[] rect=[20,97 32x32] clip=[none]
+  NodeId(39v1) cupertino_launcher::view::Quiet<cupertino_launcher::kit::Message> key=None parent=Some(NodeId(37v1)) children=[NodeId(40v1), NodeId(41v1)] rect=[64,93 516x40] clip=[none]
+  NodeId(40v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(39v1)) children=[] rect=[64,98.48046875 42.1103515625x15.7294921875] clip=[none]
+  NodeId(41v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(39v1)) children=[] rect=[64,114.2099609375 69.4375x13.3095703125] clip=[none]
+semantics
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 600x430] actions=[] relations=[] children=[NodeId(3v1), NodeId(6v1)]
+  NodeId(3v1) role=TextInput name=Some("Search") description=None value=Text { value: "Firefo", editing: Some(TextSemantics { caret: 6, selection: 6..6 }) } states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[52,0 528x52] actions=[Focus, SetValue, SetSelection] relations=[] children=[]
+  NodeId(6v1) role=List name=Some("Results") description=None value=none items=1 states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,53 600x88] actions=[] relations=[] children=[NodeId(7v1)]
+  NodeId(7v1) role=Group name=Some("Top Hit") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,61 600x72] actions=[] relations=[] children=[NodeId(37v1)]
+  NodeId(37v1) role=ListItem name=Some("Firefox") description=Some("Web Browser") value=none index=0 states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: true, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,93 600x40] actions=[Click] relations=[] children=[]
+display
+  paint 4294967296 parent=None revision=39 bounds=[0,0 600x430] hit=[0,0 600x430] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 600.0, height: 430.0 } }, radius: 16.0 }, paint: Solid(Color { r: 0.9254902, g: 0.9254902, b: 0.9254902, a: 1.0 }) }
+  paint 4294967297 parent=Some(4294967296) revision=2 bounds=[0,0 600x52] hit=[0,0 600x52] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+  paint 4294967298 parent=Some(4294967297) revision=3 bounds=[20,16 20x20] hit=[20,16 20x20] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 16.0]
+    Image { image: ResourceRef { id: ResourceId(#0), revision: 1 }, src: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 20.0, height: 20.0 } }, dst: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 20.0, height: 20.0 } }, sampling: Linear }
+  paint 4294967299 parent=Some(4294967297) revision=77 bounds=[45,0 539x52] hit=[52,0 528x52] clip=None transform=[1.0, 0.0, 0.0, 1.0, 52.0, 0.0]
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 16.0 }, size: Size { width: 528.0, height: 20.0 } }, radius: 5.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
+    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.5, y: 16.5 }, size: Size { width: 527.0, height: 19.0 } }, radius: 4.5 }, width: 1.0, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.24705882 }) }
+    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: -3.0, y: 13.0 }, size: Size { width: 534.0, height: 26.0 } }, radius: 8.0 }, width: 2.0, paint: Solid(Color { r: 0.23137255, g: 0.6, b: 0.9882353, a: 1.0 }) }
+    PushClip(Rect(Rect { origin: Point { x: 6.0, y: 16.0 }, size: Size { width: 516.0, height: 20.0 } }))
+    Glyphs origin=6,30.68 font=FontId(0) size=13 count=6 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
+    Fill { shape: Rect(Rect { origin: Point { x: 41.3056640625, y: 18.08625 }, size: Size { width: 1.0, height: 15.7294921875 } }), paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }) }
+    PopClip
+  paint 4294967301 parent=Some(4294967296) revision=7 bounds=[0,52 600x1] hit=[0,52 600x1] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 52.0]
+    Fill { shape: Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 600.0, height: 1.0 } }), paint: Solid(Color { r: 0.9019608, g: 0.9019608, b: 0.9019608, a: 1.0 }) }
+  paint 4294967302 parent=Some(4294967296) revision=74 bounds=[0,53 600x88] hit=[0,53 600x88] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 53.0]
+  paint 4294967303 parent=Some(4294967302) revision=45 bounds=[0,61 600x74.8662109375] hit=[0,61 600x72] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 61.0]
+  paint 4294967304 parent=Some(4294967303) revision=10 bounds=[0,61 600x35.10546875] hit=[0,61 600x32] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 61.0]
+  paint 4294967305 parent=Some(4294967304) revision=11 bounds=[8,66.10546875 72.890625x30] hit=[20,72.48046875 41.126953125x14.51953125] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 72.48046875]
+    Glyphs origin=0,11.625 font=FontId(1) size=12 count=7 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 0.49803922 }
+  paint 4294967333 parent=Some(4294967303) revision=69 bounds=[0,91.57421875 600x44.2919921875] hit=[0,93 600x40] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 93.0]
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 8.0, y: 0.0 }, size: Size { width: 584.0, height: 40.0 } }, radius: 12.0 }, paint: Solid(Color { r: 0.8627451, g: 0.8627451, b: 0.8627451, a: 1.0 }) }
+  paint 4294967334 parent=Some(4294967333) revision=47 bounds=[20,97 32x32] hit=[20,97 32x32] clip=None transform=[1.0, 0.0, 0.0, 1.0, 20.0, 97.0]
+    Image { image: ResourceRef { id: ResourceId(#1), revision: 1 }, src: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 32.0, height: 32.0 } }, dst: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 32.0, height: 32.0 } }, sampling: Linear }
+  paint 4294967335 parent=Some(4294967333) revision=48 bounds=[51,91.57421875 529x44.2919921875] hit=[64,93 516x40] clip=None transform=[1.0, 0.0, 0.0, 1.0, 64.0, 93.0]
+  paint 4294967336 parent=Some(4294967335) revision=49 bounds=[51,91.57421875 74.013671875x32.5] hit=[64,98.48046875 42.1103515625x15.7294921875] clip=None transform=[1.0, 0.0, 0.0, 1.0, 64.0, 98.48046875]
+    Glyphs origin=0,12.59375 font=FontId(0) size=13 count=7 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
+  paint 4294967337 parent=Some(4294967335) revision=50 bounds=[53,108.3662109375 98.29638671875x27.5] hit=[64,114.2099609375 69.4375x13.3095703125] clip=None transform=[1.0, 0.0, 0.0, 1.0, 64.0, 114.2099609375]
+    Glyphs origin=0,10.65625 font=FontId(0) size=11 count=11 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 0.49803922 }

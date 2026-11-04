@@ -726,16 +726,28 @@ fn the_open_notification_centre_puts_its_header_on_the_material() {
     ))
     .unwrap();
 
-    let output = server.state.outputs.first().unwrap().output.clone();
-    server.wait_until("the centre to put a backdrop behind its header", |_| {
-        cupertino_server::app_effects_v1::layer_backdrops(&output)
-            .iter()
-            .any(|b| b.material == "Menu" && b.area.size.h == 36.0)
+    server.wait_until("the centre to draw a 36 pt panel behind its header", |s| {
+        header_panel_height(s) == Some(36)
     });
 }
 
-/// The centre puts a backdrop on every visible card and one on the Clear menu, all on one surface: a long history must
-/// not end the process's connection.
+/// Rows of the first opaque run down a column of the notification surface between the centre header's title and its
+/// Clear button: the header panel. `None` until the process has committed a buffer with one.
+fn header_panel_height(state: &Cupertino) -> Option<usize> {
+    let (bytes, data) = committed_buffer(state, "cupertino-notifications")?;
+    let x = (data.width as usize).checked_sub(116)?;
+    let opaque =
+        |y: usize| bytes[data.offset as usize + y * data.stride as usize + x * 4 + 3] >= 200;
+    let top = (0..data.height as usize).find(|&y| opaque(y))?;
+    Some(
+        (top..data.height as usize)
+            .take_while(|&y| opaque(y))
+            .count(),
+    )
+}
+
+/// The centre draws every visible card and the Clear menu on one surface: a long history must not end the process's
+/// connection.
 #[test]
 fn the_notification_centre_with_a_long_history_keeps_its_connection() {
     let Some(bus) = PrivateBus::start() else {
@@ -792,11 +804,8 @@ fn the_notification_centre_with_a_long_history_keeps_its_connection() {
     ))
     .unwrap();
 
-    let output = server.state.outputs.first().unwrap().output.clone();
-    let mut most = 0;
-    server.wait_until("the centre to put a backdrop behind its cards", |_| {
-        most = most.max(cupertino_server::app_effects_v1::layer_backdrops(&output).len());
-        most > 8
+    server.wait_until("the centre to draw its header", |s| {
+        header_panel_height(s) == Some(36)
     });
     let settle = Instant::now() + Duration::from_secs(2);
     while Instant::now() < settle {

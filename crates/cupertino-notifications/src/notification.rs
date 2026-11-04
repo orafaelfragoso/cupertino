@@ -2,7 +2,6 @@
 //! (`Notification`).
 
 use crate::markup::{self, Span};
-use tiny_skia::Pixmap;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Urgency {
@@ -93,14 +92,6 @@ impl ImageData {
             height: height as u32,
             rgba,
         })
-    }
-
-    pub fn to_pixmap(&self) -> Option<Pixmap> {
-        let mut pm = Pixmap::new(self.width, self.height)?;
-        for (dst, src) in pm.pixels_mut().iter_mut().zip(self.rgba.chunks_exact(4)) {
-            *dst = tiny_skia::ColorU8::from_rgba(src[0], src[1], src[2], src[3]).premultiply();
-        }
-        Some(pm)
     }
 }
 
@@ -269,8 +260,6 @@ mod tests {
             img.rgba,
             vec![1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255]
         );
-        let pm = img.to_pixmap().unwrap();
-        assert_eq!((pm.width(), pm.height()), (2, 2));
     }
 
     #[test]
@@ -282,19 +271,6 @@ mod tests {
         assert!(ImageData::from_dbus(2, 2, 4, true, 8, 4, &d).is_none());
         assert!(ImageData::from_dbus(4, 4, 16, true, 8, 4, &d[..40]).is_none());
         assert!(ImageData::from_dbus(2, 2, 8, true, 8, 4, &d).is_some());
-    }
-
-    #[test]
-    fn premultiplication_of_alpha_pixels() {
-        let img = ImageData {
-            width: 1,
-            height: 1,
-            rgba: vec![255, 0, 0, 128],
-        };
-        let pm = img.to_pixmap().unwrap();
-        let p = pm.pixels()[0];
-        assert_eq!(p.alpha(), 128);
-        assert!((p.red() as i32 - 128).abs() <= 1);
     }
 
     #[test]

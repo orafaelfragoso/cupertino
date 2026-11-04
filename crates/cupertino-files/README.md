@@ -255,3 +255,7 @@ and require the frames to differ only inside the reported areas.
 * The accessibility tree holds the sidebar only: the toolbar, the folder's items, the bars and the context menus are not
   in it yet.
 * Opening several files opens each without confirmation; a mixed selection enters the first folder only (approximate).
+* The Kit window (`kit`) does not hear the window states the compositor sets: after the compositor takes a window out of
+  full screen, or refuses it, the menu still offers Exit Full Screen, and the next choice asks for the state the window
+  is already in. A finished mount goes to the first window open, not the one that asked; Open in New Window opens as many
+  windows as there are selected folders.

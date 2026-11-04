@@ -2,7 +2,7 @@
 
 This page takes you from the ISO file to your first login. The installer erases one whole disk and installs Arch Linux with Cupertino as the only desktop. There is no dual boot. Back up your data before you start; this page has no commands for that.
 
-The ISO and the installer have not been booted on real hardware yet. The commands here match `scripts/build-iso.sh` and `packaging/installer/cupertino_install.py`; where a result is what the code does and not something observed, the page says so.
+The live ISO has VM boot evidence. The full real-hardware install, login and recovery acceptance remains open. The commands here match `scripts/build-iso.sh` and `packaging/installer/cupertino_install.py`; where a result is what the code does and not something observed, the page says so.
 
 You need:
 
@@ -12,10 +12,10 @@ You need:
 
 ## Build or download the image
 
-The ISO is built from a clean checkout of `main` with Docker and `git` installed:
+The ISO is built from a clean committed checkout with Docker and `git` installed. Supply the public release key; `packaging/keyring/check-key` rejects a different primary fingerprint:
 
 ```sh
-scripts/build-iso.sh [OUT_DIR]
+CUPERTINO_KEYRING_KEY=/path/to/PUBLIC.asc scripts/build-iso.sh [OUT_DIR]
 ```
 
 `OUT_DIR` defaults to `~/.cache/cupertino-iso`, and the build refuses to start with less than 48 GB free there. It writes three files:
@@ -26,7 +26,17 @@ scripts/build-iso.sh [OUT_DIR]
 | `cupertino-YYYY.MM.DD-COMMIT-x86_64.iso.sha256` | The output of `sha256sum` for the ISO. |
 | `cupertino-YYYY.MM.DD-COMMIT-x86_64.iso.manifest` | The commit, the archiso version, the Cupertino packages and every installed package with its version. |
 
-The image is not signed. The checksum is the only integrity check. In the folder that holds the files:
+A local build writes an unsigned checksum. The release workflow signs the ISO's `.sha256` file and attaches `.sha256.sig` to the draft release. Release-candidate tags skip the ISO job. The ISO itself does not carry a detached signature.
+
+The expected primary release-key fingerprint is `25ACA804115FFB01E53B35272FC4E6B0B511CA1A`, also stored in `packaging/keyring/release-key.fpr`. The public key is not yet committed or attached by the release workflow. Obtain the public key from the maintainer and compare its complete primary fingerprint before trusting it. A checksum without a verified signature does not authenticate a download.
+
+With that public key imported into a separate GnuPG keyring, verify the signature on the exact checksum file:
+
+```sh
+gpg --status-fd 1 --verify cupertino-YYYY.MM.DD-COMMIT-x86_64.iso.sha256.sig cupertino-YYYY.MM.DD-COMMIT-x86_64.iso.sha256
+```
+
+Require exit status 0 and a `VALIDSIG` status line whose last field equals the primary fingerprint above. A trust warning after a fresh import is expected; a missing `VALIDSIG`, a different fingerprint or a signature error means stop. Then check the ISO bytes in the folder that holds the files:
 
 ```sh
 sha256sum -c cupertino-*.iso.sha256

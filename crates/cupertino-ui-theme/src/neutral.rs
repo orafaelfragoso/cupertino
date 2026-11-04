@@ -53,6 +53,7 @@ pub(crate) const LIGHT: Palette<[u8; 4]> = Palette {
         (SwitchThumbGlyph, gray(115)),
         (PanelTrack, gray(232)),
         (PanelTrackBorder, gray(208)),
+        (QuaternaryLabel, gray(213)),
     ],
     states: StateColors {
         emphasized_border: gray(100),
@@ -108,6 +109,7 @@ pub(crate) const DARK: Palette<[u8; 4]> = Palette {
         (SwitchThumbGlyph, gray(115)),
         (PanelTrack, gray(35)),
         (PanelTrackBorder, gray(35)),
+        (QuaternaryLabel, gray(70)),
     ],
     states: StateColors {
         emphasized_border: gray(159),
@@ -164,6 +166,7 @@ pub(crate) const HIGH_CONTRAST_LIGHT: Palette<[u8; 4]> = Palette {
         (SwitchThumbGlyph, gray(60)),
         (PanelTrack, gray(117)),
         (PanelTrackBorder, gray(105)),
+        (QuaternaryLabel, gray(160)),
     ],
     states: StateColors {
         emphasized_border: BLACK,
@@ -219,6 +222,7 @@ pub(crate) const HIGH_CONTRAST_DARK: Palette<[u8; 4]> = Palette {
         (SwitchThumbGlyph, gray(200)),
         (PanelTrack, gray(156)),
         (PanelTrackBorder, gray(156)),
+        (QuaternaryLabel, gray(111)),
     ],
     states: StateColors {
         emphasized_border: WHITE,

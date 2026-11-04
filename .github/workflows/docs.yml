@@ -1,12 +1,9 @@
 name: Docs
 
 on:
-  push:
-    branches: [main]
-    paths: [docs/**, .github/workflows/docs.yml]
   workflow_dispatch:
 
-# One deployment at a time; a newer push waits instead of cancelling a deployment in progress.
+# One manual deployment at a time; wait instead of cancelling a deployment in progress.
 concurrency:
   group: pages
   cancel-in-progress: false

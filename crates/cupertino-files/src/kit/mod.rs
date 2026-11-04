@@ -1,7 +1,8 @@
-//! The browser window on CupertinoKit: the sidebar's places, the folder as a list, the path and status bars and the
-//! menus of the desktop's menu bar, over the toolkit-free [`Browser`]. It takes the place of the window in
-//! `main.rs` once it does all that window does.
+//! The browser window on CupertinoKit: the sidebar's places, the folder as a list or a grid of icons, the path and
+//! status bars and the menus of the desktop's menu bar, over the toolkit-free [`Browser`]. It takes the place of the
+//! window in `main.rs` once it does all that window does.
 
+mod grid;
 mod view;
 
 use std::cell::RefCell;
@@ -173,6 +174,8 @@ struct BrowserWindow {
     rename_when_listed: Option<PathBuf>,
     /// What the window last asked the compositor for.
     full_screen: bool,
+    /// How the folder is shown.
+    view: ViewMode,
 }
 
 /// An item's name edited in its row of the list.
@@ -230,9 +233,6 @@ const NO_SCROLL: ScrollState = ScrollState {
     content: cupertino_kit::geometry::Size::ZERO,
     viewport: cupertino_kit::geometry::Size::ZERO,
 };
-
-/// Menu items the window does not do yet; they are shown disabled.
-const NOT_YET: [MenuAction; 1] = [MenuAction::View(ViewMode::Icons)];
 
 fn woken(receiver: &async_channel::Receiver<()>, message: Message) -> Command<Message> {
     let receiver = receiver.clone();
@@ -329,6 +329,7 @@ impl Model {
             rename: None,
             rename_when_listed: None,
             full_screen: false,
+            view: ViewMode::List,
         };
         window.entered();
         self.windows.insert(id, window);
@@ -512,6 +513,10 @@ impl Model {
                 session.failed_some(Action::MakeAlias, made);
             }
             MenuAction::ShowOriginal => window.show_original(session),
+            MenuAction::View(view) if view != window.view => {
+                window.view = view;
+                window.scroll.offset = cupertino_kit::geometry::Point::ZERO;
+            }
             MenuAction::View(_) => {}
         }
         Vec::new()
@@ -852,9 +857,7 @@ impl BrowserWindow {
         menu_bar::enabled(state)
             .into_iter()
             .filter(|(_, enabled)| !enabled)
-            .map(|(action, _)| action)
-            .chain(NOT_YET)
-            .map(|action| action.name())
+            .map(|(action, _)| action.name())
             .collect()
     }
 }

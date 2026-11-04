@@ -1,7 +1,9 @@
 // cupertino-layers --graph
-// 79 crates, 366 internal dependencies
+// 79 crates, 369 internal dependencies
 // per layer: foundation 18, models 8, platform 9, protocol 3, transport 3, render 3, ui 13, core 1, shell 11, services 4, apps 2, tools 4
 // forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
+// forbidden dev edge cupertino-menubar (shell) -> cupertino-files (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
+// forbidden dev edge cupertino-menubar (shell) -> cupertino-settings (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the default sink and the mixer itself until audio goes through a service
 // forbidden normal edge cupertino-settings (apps) -> cupertino-pipewire (platform), migration #21 exception (services): the sound pane drives the default sink and the mixer itself until audio goes through a service
 // forbidden dev edge cupertino-settings (apps) -> cupertino-pipewire (platform), migration #21 exception (services): the sound pane drives the default sink and the mixer itself until audio goes through a service
@@ -256,20 +258,23 @@ digraph "layers" {
   "cupertino-menu-model" -> "cupertino-modifiers";
   "cupertino-menubar" -> "cupertino-apps";
   "cupertino-menubar" -> "cupertino-assets";
-  "cupertino-menubar" -> "cupertino-decorations";
   "cupertino-menubar" -> "cupertino-defaults";
-  "cupertino-menubar" -> "cupertino-geometry";
+  "cupertino-menubar" -> "cupertino-files" [label="dev", color=orange, style=dashed];
   "cupertino-menubar" -> "cupertino-glass" [label="dev"];
   "cupertino-menubar" -> "cupertino-icons";
   "cupertino-menubar" -> "cupertino-keyboard";
+  "cupertino-menubar" -> "cupertino-kit";
   "cupertino-menubar" -> "cupertino-menu-model";
   "cupertino-menubar" -> "cupertino-modifiers";
   "cupertino-menubar" -> "cupertino-peer";
   "cupertino-menubar" -> "cupertino-protocol-app";
+  "cupertino-menubar" -> "cupertino-settings" [label="dev", color=orange, style=dashed];
   "cupertino-menubar" -> "cupertino-shell-client";
   "cupertino-menubar" -> "cupertino-test-bus" [label="dev"];
   "cupertino-menubar" -> "cupertino-theme";
+  "cupertino-menubar" -> "cupertino-theme" [label="dev"];
   "cupertino-menubar" -> "cupertino-ui-menus" [label="dev"];
+  "cupertino-menubar" -> "cupertino-ui-test" [label="dev"];
   "cupertino-menubar" -> "cupertino-ui-text";
   "cupertino-menubar" -> "cupertino-ui-wayland";
   "cupertino-menubar" -> "cupertino-wayland-client";

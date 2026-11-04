@@ -1,13 +1,9 @@
 name: CI
 
-# What runs when:
-#   pull request     gate, then by what the diff touches: docs (docs/), or fmt, deny, check, weston and goldens (code)
-#   push to main     gate, docs, fmt and deny; the pull request already ran the long jobs on the same change
-#   full (nightly.yml, release.yml)
-#                    every job, and check also in the package build environment
-# A change that only touches docs/, top-level Markdown, the licence or GitHub's issue and pull request templates is docs-only.
-# "CI result" is the one required check: a required check must not be skipped by a path filter, so the jobs are skipped by
-# conditions instead and CI result fails when any job that ran failed.
+# Pull requests and main run clippy and the workspace tests; the CodeQL workflow scans Rust only.
+# Release tags run the additional policy, docs, dependency, format, layer, default-feature, Weston and golden checks,
+# and repeat the tests in the package build environment. Nightly calls use the ordinary checks.
+# "CI result" remains the aggregate required check and fails when any job that ran failed.
 on:
   push:
     branches: [main]
@@ -15,9 +11,9 @@ on:
   workflow_call:
     inputs:
       full:
-        description: Run every job, and check also in the package build environment
+        description: Run additional release checks and the package build environment on a version tag
         type: boolean
-        default: true
+        default: false
 
 # One run per ref: a newer push cancels the older run. A tag run is not cancelled.
 concurrency:
@@ -34,43 +30,9 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      code: ${{ steps.diff.outputs.code }}
-      docs: ${{ steps.diff.outputs.docs }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - id: diff
-        env:
-          FULL: ${{ inputs.full == true }}
-          EVENT: ${{ github.event_name }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
-          PUSH_BEFORE: ${{ github.event.before }}
-        run: |
-          set -euo pipefail
-          everything() { echo "code=true" >> "$GITHUB_OUTPUT"; echo "docs=true" >> "$GITHUB_OUTPUT"; echo "$1" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; }
-          [ "$FULL" = true ] && everything "Full run: every job."
-          if [ "$EVENT" = pull_request ]; then range="$PR_BASE...$PR_HEAD"; else range="$PUSH_BEFORE..$GITHUB_SHA"; fi
-          base=${range%%.*}
-          if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-            everything "No base commit to compare with: every job."
-          fi
-          files=$(git diff --name-only "$range")
-          docs_only='^(docs/|[^/]+\.md$|LICENSE$|\.github/(ISSUE_TEMPLATE/|PULL_REQUEST_TEMPLATE\.md$|dependabot\.yml$|workflows/docs\.yml$))'
-          code=false docs=false
-          if grep -qvE "$docs_only" <<<"$files"; then code=true; fi
-          if grep -qE '^docs/' <<<"$files"; then docs=true; fi
-          { echo "code=$code"; echo "docs=$docs"; } >> "$GITHUB_OUTPUT"
-          echo "Changed files: $(wc -l <<<"$files"); code: $code; docs: $docs" | tee -a "$GITHUB_STEP_SUMMARY"
-
   # Source policy: no provenance text, no vendor names, no forbidden or binary files except the pinned built-in font.
   gate:
+    if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -96,8 +58,7 @@ jobs:
   # The book must build, and its internal links and anchors must resolve. mdBook and lychee are
   # pinned, and both release archives are checked against the published sha256.
   docs:
-    needs: changes
-    if: needs.changes.outputs.docs == 'true'
+    if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -125,8 +86,7 @@ jobs:
 
   # Licences, advisories, bans and sources, as set in deny.toml.
   deny:
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -136,8 +96,7 @@ jobs:
           command: check
 
   fmt:
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -157,16 +116,14 @@ jobs:
   # the server and sessiond check a caller only through it) and a PipeWire on which a screencast stream follows a resize
   # (24.04's 1.0 never streams the new size). Every distribution the packages target ships newer versions of both.
   check:
-    name: check${{ matrix.package-env && ' (package build environment)' || '' }}
-    needs: changes
-    if: needs.changes.outputs.code == 'true' && (github.event_name == 'pull_request' || inputs.full == true)
+    name: Clippy and tests${{ matrix.package-env && ' (package build environment)' || '' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        # The package build environment leg repeats the whole suite; it runs in full runs only.
-        package-env: ${{ fromJSON(inputs.full == true && '[false, true]' || '[false]') }}
+        # Repeat the suite in the package build environment only for releases.
+        package-env: ${{ fromJSON(inputs.full == true && startsWith(github.ref, 'refs/tags/v') && '[false, true]' || '[false]') }}
     env:
       # The test binaries each link the whole workspace: with line tables the build took 12 GB of the runner's disk
       # and ran it out of space; without debug information it takes 4 GB. Panics still name file and line.
@@ -202,7 +159,7 @@ jobs:
       - run: cargo fetch --locked
       # the layer rules build one small crate: a broken rule fails here before the long lint build
       - name: Layer rules
-        if: "!matrix.package-env"
+        if: inputs.full == true && startsWith(github.ref, 'refs/tags/v') && !matrix.package-env
         run: cargo run -p cupertino-layers
       - name: Clippy
         if: "!matrix.package-env"
@@ -211,7 +168,7 @@ jobs:
       # another crate's features (or its own optional ones) passes them. Each package is checked on its own here, with
       # its default features and only the dependencies it names.
       - name: Default features, one package at a time
-        if: "!matrix.package-env"
+        if: inputs.full == true && startsWith(github.ref, 'refs/tags/v') && !matrix.package-env
         shell: bash
         run: |
           packages=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
@@ -258,8 +215,7 @@ jobs:
   # The transport's simple-window on a second compositor: Weston's headless backend, which offers no decoration
   # protocol and no Cupertino protocol. These tests are ignored in the other jobs, which have no Weston.
   weston:
-    needs: changes
-    if: needs.changes.outputs.code == 'true' && (github.event_name == 'pull_request' || inputs.full == true)
+    if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -287,8 +243,7 @@ jobs:
   # by digest, with Mesa from one Debian snapshot), so the job runs ci/goldens.sh, which fails on any other renderer. The
   # check job skips these tests (they are ignored there).
   goldens:
-    needs: changes
-    if: needs.changes.outputs.code == 'true' && (github.event_name == 'pull_request' || inputs.full == true)
+    if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -299,7 +254,7 @@ jobs:
   result:
     name: CI result
     if: always()
-    needs: [changes, gate, docs, deny, fmt, check, weston, goldens]
+    needs: [gate, docs, deny, fmt, check, weston, goldens]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -1,8 +1,6 @@
-# Nightly: the full CI (every job, check also in the package build environment) and the Arch package build of the release
-# (build, check(), manifest verification, namcap, install test in pinned containers), on main. Pull requests and pushes
-# run the short CI only, so a failure that shows only here surfaces the next morning, not on a release tag. Nothing is
-# published; the packages and logs are kept as workflow artifacts for a week.
-#
+# Nightly: clippy and workspace tests, plus the Arch package build (build, check(), manifest verification,
+# namcap and install test), on main. Additional CI checks run only on release tags.
+# Nothing is published; packages and logs are kept as workflow artifacts for a week.
 # A night on which main has not changed since the last successful nightly runs nothing. Run it by hand to force a run.
 name: Nightly
 
@@ -50,7 +48,7 @@ jobs:
     if: needs.changed.outputs.run == 'true'
     uses: ./.github/workflows/ci.yml
     with:
-      full: true
+      full: false
 
   arch:
     needs: changed

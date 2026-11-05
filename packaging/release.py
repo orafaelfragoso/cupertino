@@ -524,11 +524,21 @@ def release_version(tag):
     return m[1] + (m[2] or '')
 
 
+def source_text(commit, path):
+    return (ROOT / path).read_text() if commit is None else git('show', f'{commit}:{path}')
+
+
+def source_version(commit):
+    return version('cupertino-server') if commit is None else \
+        tomllib.loads(source_text(commit, 'crates/cupertino-server/Cargo.toml'))['package']['version']
+
+
 def cmd_source(args):
-    v = release_version(args.tag)
+    commit = args.commit or 'HEAD'
+    v = release_version(args.tag or f'v{source_version(args.commit)}')
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
-    tar = subprocess.run(['git', '-C', str(ROOT), 'archive', '--format=tar', f'--prefix=cupertino-{v}/', 'HEAD'],
+    tar = subprocess.run(['git', '-C', str(ROOT), 'archive', '--format=tar', f'--prefix=cupertino-{v}/', commit],
                          capture_output=True, check=True).stdout
     dest = out / f'cupertino-{v}-source.tar.xz'
     dest.write_bytes(lzma.compress(tar, preset=9))
@@ -537,13 +547,13 @@ def cmd_source(args):
 
 def cmd_pkgbuild(args):
     """Write the stable PKGBUILD with the release source archive's checksum in place of UNRELEASED."""
-    text = (ROOT / 'packaging/arch/cupertino/PKGBUILD').read_text()
+    text = source_text(args.commit, 'packaging/arch/cupertino/PKGBUILD')
     if "sha256sums=('UNRELEASED')" not in text:
         fail('packaging/arch/cupertino/PKGBUILD has no UNRELEASED checksum to fill')
     digest = hashlib.sha256(Path(args.archive).read_bytes()).hexdigest()
     text = text.replace("sha256sums=('UNRELEASED')", f"sha256sums=('{digest}')")
     if args.tag:
-        for old, new in ((f'pkgver={version("cupertino-server")}\n', f'pkgver={release_version(args.tag)}\n'),
+        for old, new in ((f'pkgver={source_version(args.commit)}\n', f'pkgver={release_version(args.tag)}\n'),
                          ('_tag=v$pkgver\n', f'_tag={args.tag}\n')):
             if text.count(old) != 1:
                 fail(f'packaging/arch/cupertino/PKGBUILD must have exactly one line {old.strip()!r}')
@@ -569,6 +579,53 @@ def cmd_verify_tag(args):
     print(f'{args.tag}: version {v}, reachable from origin/main')
 
 
+def package_files(directory, pkgver):
+    """Exactly the verified Arch runtime and data packages; never copy unrelated release inputs into an ISO."""
+    found = sorted(directory.glob('*.pkg.tar.zst'))
+    patterns = (rf'cupertino-{re.escape(pkgver)}-\d+-x86_64\.pkg\.tar\.zst',
+                rf'cupertino-data-{re.escape(pkgver)}-\d+-any\.pkg\.tar\.zst')
+    if len(found) != 2 or any(sum(bool(re.fullmatch(pattern, p.name)) for p in found) != 1 for pattern in patterns):
+        fail(f'{directory}: expected one runtime and one data package for {pkgver}')
+    if any(p.is_symlink() or not p.is_file() for p in found):
+        fail(f'{directory}: package inputs must be regular files')
+    return found
+
+
+def cmd_record_packages(args):
+    """Record provenance only after the build, manifest verification and clean-container install test succeed."""
+    directory = Path(args.directory)
+    commit = git('rev-parse', '--verify', '--end-of-options', f'{args.commit or "HEAD"}^{{commit}}')
+    pkgver = release_version(args.tag or f'v{source_version(commit)}')
+    files = package_files(directory, pkgver)
+    record = {'schema': 1, 'commit': commit, 'version': pkgver,
+              'files': {p.name: package_digest(p) for p in files}}
+    (directory / 'packages.json').write_text(json.dumps(record, indent=2, sort_keys=True) + '\n')
+
+
+def cmd_verify_packages(args):
+    directory = Path(args.directory)
+    record = json.loads((directory / 'packages.json').read_text())
+    commit = git('rev-parse', '--verify', '--end-of-options', f'{args.commit or "HEAD"}^{{commit}}')
+    pkgver = release_version(args.tag or f'v{source_version(commit)}')
+    if record.get('schema') != 1 or record.get('commit') != commit or record.get('version') != pkgver:
+        fail(f'{directory}/packages.json: packages are not from this commit and release version')
+    files = package_files(directory, pkgver)
+    actual = {p.name: package_digest(p) for p in files}
+    if actual != record.get('files'):
+        fail(f'{directory}/packages.json: package names or SHA256 digests differ')
+    destination = Path(args.copy_to)
+    destination.mkdir(parents=True, exist_ok=True)
+    for package in files:
+        shutil.copy2(package, destination / package.name)
+    shutil.copy2(directory / 'packages.json', destination / 'packages.json')
+    print(f'reused {len(files)} verified Arch packages from {record["commit"]}')
+
+
+def package_digest(path):
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     sub = p.add_subparsers(dest='command', required=True)
@@ -584,14 +641,23 @@ def main():
     c = sub.add_parser('source')
     c.add_argument('--output', required=True)
     c.add_argument('--tag')
+    c.add_argument('--commit')
     sub.add_parser('verify-tag').add_argument('tag')
     k = sub.add_parser('pkgbuild')
     k.add_argument('--tag')
+    k.add_argument('--commit')
     k.add_argument('archive')
     k.add_argument('output')
+    for name in ('record-packages', 'verify-packages'):
+        c = sub.add_parser(name)
+        c.add_argument('directory')
+        c.add_argument('--tag')
+        c.add_argument('--commit')
+    sub.choices['verify-packages'].add_argument('--copy-to', required=True)
     args = p.parse_args()
     {'install': cmd_install, 'verify': cmd_verify, 'check-metadata': cmd_check_metadata, 'source': cmd_source,
-     'verify-tag': cmd_verify_tag, 'third-party': cmd_third_party, 'pkgbuild': cmd_pkgbuild}[args.command](args)
+     'verify-tag': cmd_verify_tag, 'third-party': cmd_third_party, 'pkgbuild': cmd_pkgbuild,
+     'record-packages': cmd_record_packages, 'verify-packages': cmd_verify_packages}[args.command](args)
 
 
 if __name__ == '__main__':

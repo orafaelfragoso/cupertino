@@ -13,9 +13,11 @@ RUN sed -i \
  && apt-get -o Acquire::Check-Valid-Until=false update \
  && apt-get install -y --no-install-recommends \
       build-essential pkg-config libgbm-dev libpam0g-dev dbus libgl1-mesa-dri libegl1 libegl-mesa0 xkb-data \
-      clang libclang-dev libpipewire-0.3-dev \
+      clang libclang-dev libpipewire-0.3-dev python3 \
  && rm -rf /var/lib/apt/lists/* \
  && test -f /usr/share/glvnd/egl_vendor.d/50_mesa.json
 
 # llvmpipe picks its vector width from the CPU; the baselines are rendered at one width on every host.
 ENV LP_NATIVE_VECTOR_WIDTH=256
+# Use the installed toolchain without changing its components when the checkout is mounted.
+ENV RUSTUP_TOOLCHAIN=1.99.1

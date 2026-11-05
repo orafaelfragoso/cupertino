@@ -1,6 +1,14 @@
 //! The standard-protocol example and the CupertinoKit examples on an isolated headless compositor. Missing Mutter skips;
 //! an installed compositor that cannot start or a client that cannot present fails.
 
+#[allow(dead_code)]
+mod fixtures {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../ci/test-fixtures.rs"
+    ));
+}
+
 use std::io::Read;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::process::CommandExt;
@@ -107,19 +115,9 @@ impl Drop for Runtime {
     }
 }
 
-/// Build `example` of `package` (a no-op when current) in this test's target directory and return its path.
+/// The example artifact prepared before the test runner starts.
 fn example_binary(package: &str, example: &str) -> PathBuf {
-    let exe = std::env::current_exe().expect("test executable");
-    let profile = exe.parent().unwrap().parent().unwrap();
-    let mut build = Command::new(std::env::var_os("CARGO").expect("cargo path"));
-    build.args(["build", "-p", package, "--example", example]);
-    build.arg("--target-dir").arg(profile.parent().unwrap());
-    if profile.file_name().unwrap() == "release" {
-        build.arg("--release");
-    }
-    let status = build.status().expect("build example");
-    assert!(status.success(), "building {example}: {status}");
-    profile.join("examples").join(example)
+    fixtures::artifact(package, "example", example)
 }
 
 /// Whether `mutter` is installed; one that is installed but cannot report its version fails.

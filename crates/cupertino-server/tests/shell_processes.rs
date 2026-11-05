@@ -356,51 +356,20 @@ const BUILT_PACKAGES: [&str; 15] = [
     "cupertino-powerd",
 ];
 
-/// Build the `app` feature of the shell crates once (a no-op when current) and return the directory
-/// of the binaries. They are `[[bin]]`s of other crates behind a feature, so cargo gives this test
-/// no `CARGO_BIN_EXE_*` for them; a failing build or a missing binary fails the test.
+/// The shipped binaries prepared once before the test runner starts.
 fn shell_bin_dir() -> &'static Path {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
-        // <target>/<profile>/deps/<this test> -> <target>/<profile>
-        let profile_dir = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let mut cargo =
-            Command::new(std::env::var_os("CARGO").expect("CARGO is set by `cargo test`"));
-        cargo.arg("build");
-        for package in BUILT_PACKAGES {
-            cargo.args(["-p", package]);
-        }
-        let features: Vec<String> = BUILT_PACKAGES
-            .iter()
-            .map(|package| format!("{package}/app"))
-            .collect();
-        cargo.args(["--features", &features.join(",")]);
-        cargo.args([
-            "--target-dir",
-            profile_dir.parent().unwrap().to_str().unwrap(),
-        ]);
-        if profile_dir.file_name().unwrap() == "release" {
-            cargo.arg("--release");
-        }
-        let status = cargo.status().unwrap();
-        assert!(
-            status.success(),
-            "building the shell process binaries: {status}"
-        );
+        let mut directory = None;
         for name in BUILT_PACKAGES {
-            assert!(
-                profile_dir.join(name).is_file(),
-                "missing binary {name} in {}",
-                profile_dir.display()
-            );
+            let path = common::fixtures::artifact(name, "bin", name);
+            let parent = path.parent().unwrap().to_path_buf();
+            if let Some(expected) = &directory {
+                assert_eq!(&parent, expected, "shell fixture directories differ");
+            }
+            directory = Some(parent);
         }
-        profile_dir
+        directory.unwrap()
     })
 }
 

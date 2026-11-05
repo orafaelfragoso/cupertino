@@ -1,10 +1,10 @@
 //! Issue #5: the real Settings choice menu must not survive dismissal or navigation.
-//! Run with `cargo test -p cupertino-server --test settings-popup -- --test-threads=1`.
+//! Run through `python3 ci/build-test-fixtures.py --locked -- cargo test --locked --workspace --all-features --test settings-popup -- --test-threads=1`.
 
 mod common;
 
 use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::process::Child;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -47,27 +47,7 @@ impl Drop for Process {
 fn settings_binary() -> &'static PathBuf {
     static BINARY: OnceLock<PathBuf> = OnceLock::new();
     BINARY.get_or_init(|| {
-        let exe = std::env::current_exe().unwrap();
-        let profile = exe.parent().unwrap().parent().unwrap();
-        let mut build = Command::new(std::env::var_os("CARGO").expect("run with cargo test"));
-        build.args([
-            "build",
-            "--locked",
-            "-p",
-            "cupertino-settings",
-            "--features",
-            "app",
-            "--target-dir",
-        ]);
-        build.arg(profile.parent().unwrap());
-        if profile.file_name().unwrap() == "release" {
-            build.arg("--release");
-        }
-        assert!(
-            build.status().unwrap().success(),
-            "building the real Settings process"
-        );
-        profile.join("cupertino-settings")
+        common::fixtures::artifact("cupertino-settings", "bin", "cupertino-settings")
     })
 }
 

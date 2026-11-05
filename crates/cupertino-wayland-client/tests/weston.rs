@@ -2,6 +2,14 @@
 //! no Cupertino protocol: the window maps, draws its own frame and presents frames paced by frame callbacks. Needs
 //! `weston` on `PATH`; CI runs it in a job that installs it (`cargo nextest run --run-ignored only`).
 
+#[allow(dead_code)]
+mod fixtures {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../ci/test-fixtures.rs"
+    ));
+}
+
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -41,34 +49,9 @@ impl Drop for RuntimeDir {
     }
 }
 
-/// Build the example (a no-op when current) and return the binary; cargo gives tests no `CARGO_BIN_EXE_*` for examples.
+/// The example artifact prepared before the test runner starts.
 fn simple_window_binary() -> PathBuf {
-    // <target>/<profile>/deps/<this test> -> <target>/<profile>
-    let profile_dir = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let mut cargo = Command::new(std::env::var_os("CARGO").expect("CARGO is set by `cargo test`"));
-    cargo.args([
-        "build",
-        "-p",
-        "cupertino-wayland-client",
-        "--example",
-        "simple-window",
-        "--target-dir",
-        profile_dir.parent().unwrap().to_str().unwrap(),
-    ]);
-    if profile_dir.file_name().unwrap() == "release" {
-        cargo.arg("--release");
-    }
-    let status = cargo.status().unwrap();
-    assert!(status.success(), "building simple-window: {status}");
-    let binary = profile_dir.join("examples/simple-window");
-    assert!(binary.is_file(), "missing binary {}", binary.display());
-    binary
+    fixtures::artifact("cupertino-wayland-client", "example", "simple-window")
 }
 
 fn start_weston(runtime: &Path) -> Running {

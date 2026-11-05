@@ -1,8 +1,12 @@
 """Tests of the golden log check: `python3 -I ci/test_goldens_log.py`."""
 import os
+import hashlib
+import json
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -136,26 +140,154 @@ class RealLogTest(unittest.TestCase):
 class UpdateStatusTest(unittest.TestCase):
     """`ci/goldens.sh --update` with a fake docker that prints a complete update log and exits with a given status."""
 
-    def run_update(self, status: int) -> subprocess.CompletedProcess[str]:
-        with tempfile.TemporaryDirectory() as scratch:
-            bin_dir = Path(scratch) / "bin"
+    def run_update(self, status: int, definition: str | None, image_ids: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory(dir=Path.home()) as scratch:
+            root = Path(scratch)
+            bin_dir = root / "bin"
             bin_dir.mkdir()
-            update_log = Path(scratch) / "update.log"
+            update_log = root / "update.log"
             update_log.write_text(log([*UNIT], {DESKTOP: RECORDED_3, SHELL: RECORDED_5}))
+            source = Path(__file__).resolve().parent
+            (root / "ci/goldens").mkdir(parents=True)
+            for name in ("goldens.sh", "goldens_log.py", "goldens/Dockerfile"):
+                (root / "ci" / name).write_bytes((source / name).read_bytes())
+            script = root / "ci/goldens.sh"
+            actual = definition if definition is not None else hashlib.sha256(
+                (script.parent / "goldens/Dockerfile").read_bytes()).hexdigest()
+            arguments = root / "arguments"
+            removed = root / "removed"
             docker = bin_dir / "docker"
-            docker.write_text(f'#!/bin/sh\n[ "$1" = run ] || exit 0\ncat "{update_log}"\nexit {status}\n')
+            docker.write_text('#!/bin/sh\nif [ "$1" = image ]; then\n'
+                              'if [ "$4" = "{{.Id}}" ]; then printf "%s\\n" "$TEST_IMAGE_ID";\n'
+                              f'else echo "{actual}"; fi; exit 0; fi\n'
+                              f'if [ "$1" = rm ]; then printf "%s\\n" "$@" > "{removed}"; exit 0; fi\n'
+                              f'if [ "$1" = create ]; then printf "%s\\n" "$@" > "{arguments}"\n'
+                              'while [ "$#" -gt 0 ]; do if [ "$1" = --cidfile ]; then echo fixture-container > "$2"; break; fi; shift; done\n'
+                              'exit 0; fi\n'
+                              f'[ "$1" = start ] || exit 0\ncat "{update_log}"\nexit {status}\n')
             docker.chmod(0o755)
-            env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CUPERTINO_GOLDENS_CACHE=scratch)
-            script = Path(__file__).resolve().parent / "goldens.sh"
-            return subprocess.run(["bash", str(script), "--update"], env=env, capture_output=True, text=True)
+            env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CARGO_BUILD_JOBS="4",
+                       CUPERTINO_BUILD_LOCK_FD="test-lease")
+            env.pop("CUPERTINO_GOLDENS_CACHE", None)
+            env.pop("CUPERTINO_GOLDENS_IMAGE", None)
+            if definition is not None:
+                env["CUPERTINO_GOLDENS_IMAGE"] = "prebuilt"
+            cache = root / "target/package-build/goldens"
+            compiled_mounts = []
+            cached_source = cache / "cargo/cached-source"
+            cached_stamp = None
+            for image_id in image_ids:
+                arguments.unlink(missing_ok=True)
+                removed.unlink(missing_ok=True)
+                env["TEST_IMAGE_ID"] = image_id
+                result = subprocess.run(["bash", str(script), "--update"], env=env, capture_output=True, text=True)
+                self.assertTrue((cache / "cargo").is_dir())
+                if arguments.exists():
+                    command = arguments.read_text().splitlines()
+                    target = cache / "targets" / image_id.removeprefix("sha256:")
+                    self.assertTrue(target.is_dir())
+                    self.assertIn("CARGO_BUILD_JOBS=4", command)
+                    self.assertIn(f"{cache}/cargo:/cache/cargo", command)
+                    compiled = f"{target}:/cache/target"
+                    self.assertIn(compiled, command)
+                    compiled_mounts.append(compiled)
+                    self.assertEqual(command[command.index("python3") - 1], image_id)
+                    self.assertEqual(removed.read_text().splitlines(), ["rm", "--force", "fixture-container"])
+                    self.assertFalse(Path(command[command.index("--cidfile") + 1]).exists())
+                    if cached_source.exists():
+                        self.assertEqual(cached_source.read_text(), "downloaded once")
+                        self.assertEqual(cached_source.stat().st_mtime_ns, cached_stamp)
+                    else:
+                        cached_source.write_text("downloaded once")
+                        cached_stamp = cached_source.stat().st_mtime_ns
+                else:
+                    self.assertFalse((cache / "targets").exists())
+            if len(image_ids) > 1:
+                self.assertEqual(len(set(compiled_mounts)), len(image_ids))
+            return result
 
     def test_cargo_tests_failure_status_passes(self):
-        self.assertEqual(self.run_update(101).returncode, 0)
+        self.assertEqual(self.run_update(101, None, ("sha256:" + "a" * 64,)).returncode, 0)
 
     def test_a_killed_container_fails_with_its_status(self):
-        result = self.run_update(137)
+        result = self.run_update(137, None, ("sha256:" + "a" * 64,))
         self.assertEqual(result.returncode, 1)
         self.assertIn("goldens: the update run exited 137, not with cargo test's failure status 101", result.stderr)
+
+    def test_prebuilt_image_with_another_definition_fails(self):
+        result = self.run_update(101, "another-definition", ("sha256:" + "a" * 64,))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("image definition does not match", result.stderr)
+
+    def test_prebuilt_image_with_the_pinned_definition_passes(self):
+        dockerfile = Path(__file__).resolve().parent / "goldens/Dockerfile"
+        self.assertEqual(self.run_update(101, hashlib.sha256(dockerfile.read_bytes()).hexdigest(), ("sha256:" + "a" * 64,)).returncode, 0)
+
+    def test_changed_image_separates_compiled_outputs_and_preserves_downloads(self):
+        ids = ("sha256:" + "a" * 64, "sha256:" + "b" * 64)
+        result = self.run_update(101, None, ids)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_invalid_image_identity_is_refused_before_using_it_as_a_path(self):
+        result = self.run_update(101, None, ("sha256:../../escape",))
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("invalid content identity", result.stderr)
+
+    def test_unleased_operation_enters_outer_resource_guard(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            (root / "ci").mkdir()
+            source = Path(__file__).resolve().parent / "goldens.sh"
+            script = root / "ci/goldens.sh"
+            script.write_bytes(source.read_bytes())
+            arguments = root / "arguments.json"
+            (root / "ci/worktree-build.py").write_text(
+                f'import json, sys; from pathlib import Path; Path({str(arguments)!r}).write_text(json.dumps(sys.argv[1:])); raise SystemExit(42)\n')
+            env = dict(os.environ)
+            env.pop("CUPERTINO_BUILD_LOCK_FD", None)
+            result = subprocess.run(["bash", str(script), "--update"], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 42, result.stderr)
+            self.assertEqual(json.loads(arguments.read_text()), ["locked", "--", "bash", "ci/goldens.sh", "--update"])
+
+    def test_term_removes_container_while_attachment_ignores_signal(self):
+        with tempfile.TemporaryDirectory(prefix="cupertino-golden-signal-", dir=Path.home()) as scratch:
+            root = Path(scratch)
+            source = Path(__file__).resolve().parent
+            (root / "ci/goldens").mkdir(parents=True)
+            for name in ("goldens.sh", "goldens_log.py", "goldens/Dockerfile"):
+                (root / "ci" / name).write_bytes((source / name).read_bytes())
+            definition = hashlib.sha256((root / "ci/goldens/Dockerfile").read_bytes()).hexdigest()
+            ready = root / "ready"
+            removed = root / "removed"
+            docker = root / "docker"
+            docker.write_text('#!' + sys.executable + '\nimport signal, sys, time\nfrom pathlib import Path\n'
+                              + f'ready=Path({str(ready)!r}); removed=Path({str(removed)!r})\n'
+                              + 'action=sys.argv[1]\n'
+                              + f'if action == "image": print("sha256:" + "a" * 64 if sys.argv[4] == "{{{{.Id}}}}" else {definition!r})\n'
+                              + 'elif action == "create": Path(sys.argv[sys.argv.index("--cidfile")+1]).write_text("fixture-container")\n'
+                              + 'elif action == "rm": removed.write_text("removed")\n'
+                              + 'elif action == "start":\n'
+                              + ' signal.signal(signal.SIGTERM, signal.SIG_IGN)\n ready.write_text("ready")\n'
+                              + ' while not removed.exists(): time.sleep(0.01)\n')
+            docker.chmod(0o755)
+            env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}", CUPERTINO_GOLDENS_IMAGE="prebuilt",
+                       CUPERTINO_BUILD_LOCK_FD="test-lease")
+            env.pop("CUPERTINO_GOLDENS_CACHE", None)
+            process = subprocess.Popen(["bash", str(root / "ci/goldens.sh")], env=env,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+            try:
+                deadline = time.monotonic() + 3
+                while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(ready.exists(), "the container attachment did not start")
+                process.send_signal(signal.SIGTERM)
+                _, stderr = process.communicate(timeout=3)
+                self.assertEqual(process.returncode, 143, stderr)
+                self.assertTrue(removed.exists(), "TERM released the lease without removing the container")
+            finally:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.communicate(timeout=3)
 
 
 if __name__ == "__main__":

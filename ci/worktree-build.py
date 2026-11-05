@@ -43,11 +43,11 @@ def output(command: list[str], root: Path) -> str:
     return subprocess.check_output(command, cwd=root, text=True).strip()
 
 
-def repository(root: Path) -> Path:
+def repository(root: Path, allow_primary: bool) -> Path:
     if output(["git", "rev-parse", "--show-toplevel"], root) != str(root):
         raise ValueError("run from the worktree root")
     common = Path(output(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], root))
-    if root == common.parent:
+    if root == common.parent and not allow_primary:
         raise ValueError("use a linked worktree, not the main checkout")
     return common
 
@@ -270,7 +270,7 @@ def main() -> int:
         if name is not None and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", name) is None:
             parser.error("seed names must be 1–64 lowercase letters, digits or hyphens")
     root = Path.cwd().resolve()
-    state = repository(root) / "cupertino-build"
+    state = repository(root, args.action == "locked") / "cupertino-build"
     environ = dict(os.environ)
     if "CUPERTINO_BUILD_LOCK_FD" in environ:
         raise ValueError("nested worktree-build invocations would deadlock; wrap the outermost command only")

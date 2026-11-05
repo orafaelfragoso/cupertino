@@ -29,6 +29,26 @@ class WorktreeBuildTest(unittest.TestCase):
         BUILD.write_marker(directory, {"schema": 1, "owner": str(owner), "fingerprint": "host", "successful": False,
                                        "created": time.time(), **fields})
 
+    def test_guard_only_allows_primary_checkout_but_managed_targets_do_not(self):
+        common = self.root / ".git"
+        for allow_primary in (False, True):
+            with patch.object(BUILD, "output", side_effect=[str(self.root), str(common)]):
+                if allow_primary:
+                    self.assertEqual(BUILD.repository(self.root, True), common)
+                else:
+                    with self.assertRaisesRegex(ValueError, "linked worktree"):
+                        BUILD.repository(self.root, False)
+        command = [str(SCRIPT), "locked", "--", "python3", "-c", "print(1)"]
+        with patch.object(BUILD, "repository", return_value=common) as repository, \
+                patch.object(BUILD.Path, "cwd", return_value=self.root), \
+                patch.object(BUILD.Path, "home", return_value=self.root), patch.object(BUILD, "disk_room"), \
+                patch.object(BUILD, "child", return_value=0), patch.dict(os.environ, {}, clear=True), \
+                patch.object(sys, "argv", command):
+            self.assertEqual(BUILD.main(), 0)
+            repository.assert_called_once_with(self.root, True)
+            self.assertFalse((self.root / "target").exists())
+            self.assertFalse((common / "cupertino-build").exists())
+
     def test_low_disk_refuses_prepare_before_creating_target(self):
         with patch.object(BUILD.shutil, "disk_usage", return_value=BUILD.shutil._ntuple_diskusage(100, 90, 10)):
             with self.assertRaisesRegex(ValueError, "require 30 GiB"):

@@ -21,6 +21,7 @@ class ContainerBuild(unittest.TestCase):
         self.scratch = tempfile.TemporaryDirectory()
         self.addCleanup(self.scratch.cleanup)
         self.root = Path(self.scratch.name)
+        (self.root / 'head').write_text('a' * 40)
         (self.root / 'packaging/ci').mkdir(parents=True)
         shutil.copyfile(HERE / 'Dockerfile', self.root / 'packaging/ci/Dockerfile')
         release = self.root / 'packaging/release.py'
@@ -42,10 +43,15 @@ elif args[0] != 'record-packages':
         self.bin.mkdir()
         git = self.bin / 'git'
         git.write_text('#!' + sys.executable + '''
-import io, os, sys, tarfile
-if 'rev-parse' in sys.argv:
+import io, json, os, sys, tarfile
+from pathlib import Path
+if '--show-toplevel' in sys.argv:
     print(os.environ['TEST_ROOT'])
+elif 'rev-parse' in sys.argv:
+    print(Path(os.environ['TEST_ROOT'], 'head').read_text())
 else:
+    with open(os.environ['TEST_LOG'], 'a') as log:
+        log.write(json.dumps(['archive', sys.argv[-1]]) + '\\n')
     with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as archive:
         directory = tarfile.TarInfo('src/')
         directory.type = tarfile.DIRTYPE
@@ -63,6 +69,8 @@ with open(os.environ['TEST_LOG'], 'a') as log:
 state = Path(os.environ['TEST_ROOT']) / 'containers'
 state.mkdir(exist_ok=True)
 if args[:2] == ['buildx', 'build']:
+    if os.environ.get('TEST_HEAD_DRIFT'):
+        Path(os.environ['TEST_ROOT'], 'head').write_text('b' * 40)
     for option in args:
         if option.startswith('type=local,dest='):
             directory = Path(option.removeprefix('type=local,dest=').removesuffix(',mode=max'))
@@ -162,7 +170,8 @@ else:
     def test_test_only_needs_no_image_build_or_cargo_target(self):
         result = self.run_build(['--test-only'], {}, 'debian')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual([command[0] for command in self.commands()], ['create', 'start', 'rm'])
+        self.assertEqual([command[0] for command in self.commands() if command[0] != 'archive'],
+                         ['create', 'start', 'rm'])
         self.assertFalse((self.root / 'target/package-build').exists())
         self.assertFalse(self.cache.exists())
 
@@ -175,10 +184,21 @@ else:
         result = self.run_build([], {}, 'arch')
         self.assertEqual(result.returncode, 0, result.stderr)
         commands = self.commands()
-        record = ['release', 'record-packages', str(self.root / 'dist')]
+        record = ['release', 'record-packages', str(self.root / 'dist'), '--commit', 'a' * 40]
         self.assertIn(record, commands)
         last_start = max(index for index, command in enumerate(commands) if command[0] == 'start')
         self.assertGreater(commands.index(record), last_start)
+
+    def test_arch_source_and_provenance_stay_on_captured_commit_when_head_changes(self):
+        result = self.run_build([], {'TEST_HEAD_DRIFT': '1'}, 'arch')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / 'head').read_text(), 'b' * 40)
+        commands = self.commands()
+        self.assertIn(['archive', 'a' * 40], commands)
+        release_commands = [command for command in commands if command[0] == 'release']
+        self.assertEqual([command[1] for command in release_commands], ['source', 'pkgbuild', 'record-packages'])
+        for command in release_commands:
+            self.assertEqual(command[command.index('--commit') + 1], 'a' * 40)
 
     def test_arch_install_failure_does_not_record_packages(self):
         result = self.run_build([], {'TEST_INSTALL_FAIL': '1'}, 'arch')

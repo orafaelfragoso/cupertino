@@ -101,11 +101,12 @@ start_container() {
     active_job=$!
     wait_job
 }
-git -C "$root" archive --format=tar --prefix=src/ HEAD | tar -x -C "$work"
+source_commit=$(git -C "$root" rev-parse HEAD)
+git -C "$root" archive --format=tar --prefix=src/ "$source_commit" | tar -x -C "$work"
 if [ "$distro" = arch ] && [ "$mode" != --test-only ]; then
     mkdir "$work/src/arch-build"
-    archive=$(python3 "$root/packaging/release.py" source --output "$work/src/arch-build" ${RELEASE_TAG:+--tag "$RELEASE_TAG"})
-    python3 "$root/packaging/release.py" pkgbuild ${RELEASE_TAG:+--tag "$RELEASE_TAG"} "$archive" "$work/src/arch-build/PKGBUILD" >/dev/null
+    archive=$(python3 "$root/packaging/release.py" source --commit "$source_commit" --output "$work/src/arch-build" ${RELEASE_TAG:+--tag "$RELEASE_TAG"})
+    python3 "$root/packaging/release.py" pkgbuild --commit "$source_commit" ${RELEASE_TAG:+--tag "$RELEASE_TAG"} "$archive" "$work/src/arch-build/PKGBUILD" >/dev/null
     if [ -n "${CUPERTINO_PKGREL:-}" ]; then
         sed -i "s/^pkgrel=.*/pkgrel=$CUPERTINO_PKGREL/" "$work/src/arch-build/PKGBUILD"
     fi
@@ -365,5 +366,5 @@ else
     start_container "$container" "$dist/install-test-$distro.log"
 fi
 if [ "$distro" = arch ] && [ "$mode" = build ]; then
-    python3 "$root/packaging/release.py" record-packages "$dist" ${RELEASE_TAG:+--tag "$RELEASE_TAG"}
+    python3 "$root/packaging/release.py" record-packages "$dist" --commit "$source_commit" ${RELEASE_TAG:+--tag "$RELEASE_TAG"}
 fi

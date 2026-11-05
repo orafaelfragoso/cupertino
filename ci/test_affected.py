@@ -2,7 +2,9 @@
 from pathlib import Path
 import json
 import os
+import subprocess
 import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -74,8 +76,28 @@ class AffectedTests(unittest.TestCase):
                     patch("affected.workspace") as workspace, \
                     patch("affected.subprocess.run", return_value=SimpleNamespace(returncode=17)) as run:
                 self.assertEqual(main(), 17)
-                run.assert_called_once_with(command, check=False)
+                run.assert_called_once_with(command, check=False, pass_fds=())
                 workspace.assert_not_called()
+
+    def test_resource_lease_reaches_each_check_process(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cargo = root / "cargo"
+            cargo.write_text('#!' + sys.executable + '\nimport os, sys\n'
+                             + 'os.write(int(os.environ["CUPERTINO_BUILD_LOCK_FD"]), (sys.argv[1] + "\\n").encode())\n')
+            cargo.chmod(0o700)
+            script = Path(__file__).resolve().with_name("affected.py")
+            with (root / "lease").open("w+b") as lease:
+                descriptor = lease.fileno()
+                env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}", CUPERTINO_CI_PACKAGES='["core"]',
+                           CUPERTINO_BUILD_LOCK_FD=str(descriptor))
+                for check in ("clippy", "tests", "doctests"):
+                    with self.subTest(check=check):
+                        result = subprocess.run([sys.executable, str(script), "run", check], env=env,
+                                                pass_fds=(descriptor,), capture_output=True, text=True)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                lease.seek(0)
+                self.assertEqual(lease.read(), b"clippy\nnextest\ntest\n")
 
     def test_fixture_and_test_commands_use_the_same_expanded_package_union(self) -> None:
         packages = self.packages + [

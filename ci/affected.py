@@ -147,7 +147,11 @@ def main() -> int:
             fixture_options = [option for package in packages for option in ("--package", package)]
             command = [sys.executable, str(Path(__file__).resolve().with_name("build-test-fixtures.py")),
                        "--locked", *fixture_options, "--", *command]
-        return subprocess.run(command, check=False).returncode
+        lease = os.environ.get("CUPERTINO_BUILD_LOCK_FD")
+        inherited = () if lease is None else (int(lease),)
+        for descriptor in inherited:
+            os.fstat(descriptor)
+        return subprocess.run(command, check=False, pass_fds=inherited).returncode
     packages = workspace()
     if args.command == "full":
         selected = sorted(p.name for p in packages)

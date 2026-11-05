@@ -2,9 +2,11 @@
 import os
 import hashlib
 import json
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -157,9 +159,10 @@ class UpdateStatusTest(unittest.TestCase):
             docker = bin_dir / "docker"
             docker.write_text(f'#!/bin/sh\nif [ "$1" = image ]; then echo "{actual}"; exit 0; fi\n'
                               f'if [ "$1" = rm ]; then printf "%s\\n" "$@" > "{removed}"; exit 0; fi\n'
-                              f'[ "$1" = run ] || exit 0\nprintf "%s\\n" "$@" > "{arguments}"\n'
+                              f'if [ "$1" = create ]; then printf "%s\\n" "$@" > "{arguments}"\n'
                               'while [ "$#" -gt 0 ]; do if [ "$1" = --cidfile ]; then echo fixture-container > "$2"; break; fi; shift; done\n'
-                              f'cat "{update_log}"\nexit {status}\n')
+                              'exit 0; fi\n'
+                              f'[ "$1" = start ] || exit 0\ncat "{update_log}"\nexit {status}\n')
             docker.chmod(0o755)
             env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CARGO_BUILD_JOBS="4",
                        CUPERTINO_BUILD_LOCK_FD="test-lease")
@@ -209,6 +212,46 @@ class UpdateStatusTest(unittest.TestCase):
             result = subprocess.run(["bash", str(script), "--update"], env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 42, result.stderr)
             self.assertEqual(json.loads(arguments.read_text()), ["locked", "--", "bash", "ci/goldens.sh", "--update"])
+
+    def test_term_removes_container_while_attachment_ignores_signal(self):
+        with tempfile.TemporaryDirectory(prefix="cupertino-golden-signal-", dir=Path.home()) as scratch:
+            root = Path(scratch)
+            source = Path(__file__).resolve().parent
+            (root / "ci/goldens").mkdir(parents=True)
+            for name in ("goldens.sh", "goldens_log.py", "goldens/Dockerfile"):
+                (root / "ci" / name).write_bytes((source / name).read_bytes())
+            definition = hashlib.sha256((root / "ci/goldens/Dockerfile").read_bytes()).hexdigest()
+            ready = root / "ready"
+            removed = root / "removed"
+            docker = root / "docker"
+            docker.write_text('#!' + sys.executable + '\nimport signal, sys, time\nfrom pathlib import Path\n'
+                              + f'ready=Path({str(ready)!r}); removed=Path({str(removed)!r})\n'
+                              + 'action=sys.argv[1]\n'
+                              + f'if action == "image": print({definition!r})\n'
+                              + 'elif action == "create": Path(sys.argv[sys.argv.index("--cidfile")+1]).write_text("fixture-container")\n'
+                              + 'elif action == "rm": removed.write_text("removed")\n'
+                              + 'elif action == "start":\n'
+                              + ' signal.signal(signal.SIGTERM, signal.SIG_IGN)\n ready.write_text("ready")\n'
+                              + ' while not removed.exists(): time.sleep(0.01)\n')
+            docker.chmod(0o755)
+            env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}", CUPERTINO_GOLDENS_IMAGE="prebuilt",
+                       CUPERTINO_BUILD_LOCK_FD="test-lease")
+            env.pop("CUPERTINO_GOLDENS_CACHE", None)
+            process = subprocess.Popen(["bash", str(root / "ci/goldens.sh")], env=env,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+            try:
+                deadline = time.monotonic() + 3
+                while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(ready.exists(), "the container attachment did not start")
+                process.send_signal(signal.SIGTERM)
+                _, stderr = process.communicate(timeout=3)
+                self.assertEqual(process.returncode, 143, stderr)
+                self.assertTrue(removed.exists(), "TERM released the lease without removing the container")
+            finally:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.communicate(timeout=3)
 
 
 if __name__ == "__main__":

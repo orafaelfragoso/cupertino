@@ -55,7 +55,7 @@ if [ "$actual" != "$definition" ]; then
   echo "goldens: image definition does not match ci/goldens/Dockerfile" >&2
   exit 1
 fi
-docker run --cidfile "$cidfile" \
+docker create --cidfile "$cidfile" \
   --user "$(id -u):$(id -g)" \
   --volume "$passwd:/etc/passwd:ro" --volume "$root:/work" --volume "$cache:/cache" --workdir /work \
   --env HOME=/tmp --env CARGO_HOME=/cache/cargo --env CARGO_TARGET_DIR=/cache/target \
@@ -66,7 +66,11 @@ docker run --cidfile "$cidfile" \
   "$image" \
   python3 ci/build-test-fixtures.py --locked -- \
   cargo test --locked -p cupertino-server --test goldens -- --include-ignored --skip headless_frame_and_memory_report \
-  | tee "$log" || status=$?
+  >/dev/null
+# Waiting on an asynchronous attachment lets TERM/INT run cleanup immediately, even if the client is unresponsive.
+docker start --attach "$(cat "$cidfile")" | tee "$log" &
+attachment=$!
+wait "$attachment" || status=$?
 
 # An update records the baselines and then fails each test that recorded, so it can never pass as a comparison; the
 # log check tells those failures from any other and knows which tests must run (ci/goldens_log.py). The run must also

@@ -307,8 +307,8 @@ EOF
 
 # Each worktree and distribution owns its Cargo outputs; no global volume can mix incompatible builds.
 if [ "$mode" != --test-only ]; then
-    target="$root/target/package-build/$distro"
-    cargo_home="$target/cargo-home"
+    target_root="$root/target/package-build/$distro"
+    cargo_home="$target_root/cargo-home"
     mkdir -p "$cargo_home"
     image_key=$(sha256sum "$root/packaging/ci/Dockerfile" | cut -c1-16)
     build_image="cupertino-package-builder:$distro-$image_key"
@@ -334,6 +334,13 @@ if [ "$mode" != --test-only ]; then
     "${build[@]}" "$root/packaging/ci" &
     active_job=$!
     wait_job
+    image_id=$(docker image inspect --format '{{.Id}}' "$build_image")
+    if [[ ! "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        echo "builder image has an invalid content identity: $image_id" >&2
+        exit 1
+    fi
+    target="$target_root/targets/${image_id#sha256:}"
+    mkdir -p "$target"
     if [ -n "$cache_next" ]; then
         if [ ! -f "$cache_next/index.json" ]; then
             echo "builder cache export is incomplete: $cache_next" >&2
@@ -356,7 +363,7 @@ if [ "$mode" != --test-only ]; then
     container=$(docker create --cidfile "$work/build.cid" --name "cupertino-$distro-$(basename "$work")-build" \
         --env "CARGO_BUILD_JOBS=$jobs" --env CARGO_HOME=/cargo-home -v "$work/src:/src" -v "$dist:/dist" \
         --mount "type=bind,src=$target,dst=/src/target" \
-        --mount "type=bind,src=$cargo_home,dst=/cargo-home" "$build_image" bash -c "$build_script")
+        --mount "type=bind,src=$cargo_home,dst=/cargo-home" "$image_id" bash -c "$build_script")
     start_container "$container" ""
 fi
 if [ "$upgrade" = 1 ]; then

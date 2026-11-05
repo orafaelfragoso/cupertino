@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs the headless golden tests in the pinned image, the only renderer their baselines are valid on.
 # `ci/goldens.sh` compares; `ci/goldens.sh --update` re-records tests/fixtures/goldens (review the diff).
-# Needs docker. CUPERTINO_GOLDENS_CACHE (default target/package-build/goldens in this worktree) holds the image's cargo home and target.
+# Needs docker. CUPERTINO_GOLDENS_CACHE defaults to target/package-build/goldens in this worktree.
+# Downloads are shared; compiled targets are separated by image content identity.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -20,7 +21,7 @@ if [ -z "${CUPERTINO_BUILD_LOCK_FD:-}" ]; then
   exec python3 ci/worktree-build.py locked -- bash ci/goldens.sh "$@"
 fi
 cache="${CUPERTINO_GOLDENS_CACHE:-$root/target/package-build/goldens}"
-mkdir -p "$cache/cargo" "$cache/target"
+mkdir -p "$cache/cargo"
 jobs=()
 if [ -n "${CARGO_BUILD_JOBS:-}" ]; then
   jobs=(--env "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS")
@@ -55,15 +56,23 @@ if [ "$actual" != "$definition" ]; then
   echo "goldens: image definition does not match ci/goldens/Dockerfile" >&2
   exit 1
 fi
+image_id=$(docker image inspect --format '{{.Id}}' "$image")
+if [[ ! "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "goldens: image has an invalid content identity: $image_id" >&2
+  exit 1
+fi
+target="$cache/targets/${image_id#sha256:}"
+mkdir -p "$target"
 docker create --cidfile "$cidfile" \
   --user "$(id -u):$(id -g)" \
-  --volume "$passwd:/etc/passwd:ro" --volume "$root:/work" --volume "$cache:/cache" --workdir /work \
+  --volume "$passwd:/etc/passwd:ro" --volume "$root:/work" \
+  --volume "$cache/cargo:/cache/cargo" --volume "$target:/cache/target" --workdir /work \
   --env HOME=/tmp --env CARGO_HOME=/cache/cargo --env CARGO_TARGET_DIR=/cache/target \
   --env CARGO_INCREMENTAL=0 --env CARGO_PROFILE_DEV_DEBUG=0 \
   "${jobs[@]}" \
   --env CUPERTINO_GOLDENS_REQUIRED=1 --env "CUPERTINO_GOLDEN_MUTATE_WINDOW=${CUPERTINO_GOLDEN_MUTATE_WINDOW:-}" \
   --env "CUPERTINO_UPDATE_GOLDENS=$update" \
-  "$image" \
+  "$image_id" \
   python3 ci/build-test-fixtures.py --locked -- \
   cargo test --locked -p cupertino-server --test goldens -- --include-ignored --skip headless_frame_and_memory_report \
   >/dev/null

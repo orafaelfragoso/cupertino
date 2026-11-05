@@ -140,8 +140,8 @@ class RealLogTest(unittest.TestCase):
 class UpdateStatusTest(unittest.TestCase):
     """`ci/goldens.sh --update` with a fake docker that prints a complete update log and exits with a given status."""
 
-    def run_update(self, status: int, definition: str | None) -> subprocess.CompletedProcess[str]:
-        with tempfile.TemporaryDirectory() as scratch:
+    def run_update(self, status: int, definition: str | None, image_ids: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory(dir=Path.home()) as scratch:
             root = Path(scratch)
             bin_dir = root / "bin"
             bin_dir.mkdir()
@@ -157,7 +157,9 @@ class UpdateStatusTest(unittest.TestCase):
             arguments = root / "arguments"
             removed = root / "removed"
             docker = bin_dir / "docker"
-            docker.write_text(f'#!/bin/sh\nif [ "$1" = image ]; then echo "{actual}"; exit 0; fi\n'
+            docker.write_text('#!/bin/sh\nif [ "$1" = image ]; then\n'
+                              'if [ "$4" = "{{.Id}}" ]; then printf "%s\\n" "$TEST_IMAGE_ID";\n'
+                              f'else echo "{actual}"; fi; exit 0; fi\n'
                               f'if [ "$1" = rm ]; then printf "%s\\n" "$@" > "{removed}"; exit 0; fi\n'
                               f'if [ "$1" = create ]; then printf "%s\\n" "$@" > "{arguments}"\n'
                               'while [ "$#" -gt 0 ]; do if [ "$1" = --cidfile ]; then echo fixture-container > "$2"; break; fi; shift; done\n'
@@ -170,32 +172,66 @@ class UpdateStatusTest(unittest.TestCase):
             env.pop("CUPERTINO_GOLDENS_IMAGE", None)
             if definition is not None:
                 env["CUPERTINO_GOLDENS_IMAGE"] = "prebuilt"
-            result = subprocess.run(["bash", str(script), "--update"], env=env, capture_output=True, text=True)
-            self.assertTrue((root / "target/package-build/goldens/target").is_dir())
-            if arguments.exists():
-                command = arguments.read_text().splitlines()
-                self.assertIn("CARGO_BUILD_JOBS=4", command)
-                self.assertIn(f"{root}/target/package-build/goldens:/cache", command)
-                self.assertEqual(removed.read_text().splitlines(), ["rm", "--force", "fixture-container"])
-                self.assertFalse(Path(command[command.index("--cidfile") + 1]).exists())
+            cache = root / "target/package-build/goldens"
+            compiled_mounts = []
+            cached_source = cache / "cargo/cached-source"
+            cached_stamp = None
+            for image_id in image_ids:
+                arguments.unlink(missing_ok=True)
+                removed.unlink(missing_ok=True)
+                env["TEST_IMAGE_ID"] = image_id
+                result = subprocess.run(["bash", str(script), "--update"], env=env, capture_output=True, text=True)
+                self.assertTrue((cache / "cargo").is_dir())
+                if arguments.exists():
+                    command = arguments.read_text().splitlines()
+                    target = cache / "targets" / image_id.removeprefix("sha256:")
+                    self.assertTrue(target.is_dir())
+                    self.assertIn("CARGO_BUILD_JOBS=4", command)
+                    self.assertIn(f"{cache}/cargo:/cache/cargo", command)
+                    compiled = f"{target}:/cache/target"
+                    self.assertIn(compiled, command)
+                    compiled_mounts.append(compiled)
+                    self.assertEqual(command[command.index("python3") - 1], image_id)
+                    self.assertEqual(removed.read_text().splitlines(), ["rm", "--force", "fixture-container"])
+                    self.assertFalse(Path(command[command.index("--cidfile") + 1]).exists())
+                    if cached_source.exists():
+                        self.assertEqual(cached_source.read_text(), "downloaded once")
+                        self.assertEqual(cached_source.stat().st_mtime_ns, cached_stamp)
+                    else:
+                        cached_source.write_text("downloaded once")
+                        cached_stamp = cached_source.stat().st_mtime_ns
+                else:
+                    self.assertFalse((cache / "targets").exists())
+            if len(image_ids) > 1:
+                self.assertEqual(len(set(compiled_mounts)), len(image_ids))
             return result
 
     def test_cargo_tests_failure_status_passes(self):
-        self.assertEqual(self.run_update(101, None).returncode, 0)
+        self.assertEqual(self.run_update(101, None, ("sha256:" + "a" * 64,)).returncode, 0)
 
     def test_a_killed_container_fails_with_its_status(self):
-        result = self.run_update(137, None)
+        result = self.run_update(137, None, ("sha256:" + "a" * 64,))
         self.assertEqual(result.returncode, 1)
         self.assertIn("goldens: the update run exited 137, not with cargo test's failure status 101", result.stderr)
 
     def test_prebuilt_image_with_another_definition_fails(self):
-        result = self.run_update(101, "another-definition")
+        result = self.run_update(101, "another-definition", ("sha256:" + "a" * 64,))
         self.assertEqual(result.returncode, 1)
         self.assertIn("image definition does not match", result.stderr)
 
     def test_prebuilt_image_with_the_pinned_definition_passes(self):
         dockerfile = Path(__file__).resolve().parent / "goldens/Dockerfile"
-        self.assertEqual(self.run_update(101, hashlib.sha256(dockerfile.read_bytes()).hexdigest()).returncode, 0)
+        self.assertEqual(self.run_update(101, hashlib.sha256(dockerfile.read_bytes()).hexdigest(), ("sha256:" + "a" * 64,)).returncode, 0)
+
+    def test_changed_image_separates_compiled_outputs_and_preserves_downloads(self):
+        ids = ("sha256:" + "a" * 64, "sha256:" + "b" * 64)
+        result = self.run_update(101, None, ids)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_invalid_image_identity_is_refused_before_using_it_as_a_path(self):
+        result = self.run_update(101, None, ("sha256:../../escape",))
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("invalid content identity", result.stderr)
 
     def test_unleased_operation_enters_outer_resource_guard(self):
         with tempfile.TemporaryDirectory() as scratch:
@@ -227,7 +263,7 @@ class UpdateStatusTest(unittest.TestCase):
             docker.write_text('#!' + sys.executable + '\nimport signal, sys, time\nfrom pathlib import Path\n'
                               + f'ready=Path({str(ready)!r}); removed=Path({str(removed)!r})\n'
                               + 'action=sys.argv[1]\n'
-                              + f'if action == "image": print({definition!r})\n'
+                              + f'if action == "image": print("sha256:" + "a" * 64 if sys.argv[4] == "{{{{.Id}}}}" else {definition!r})\n'
                               + 'elif action == "create": Path(sys.argv[sys.argv.index("--cidfile")+1]).write_text("fixture-container")\n'
                               + 'elif action == "rm": removed.write_text("removed")\n'
                               + 'elif action == "start":\n'

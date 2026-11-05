@@ -78,6 +78,9 @@ if args[:2] == ['buildx', 'build']:
                 (directory / 'index.json').write_text('{}')
     if os.environ.get('TEST_BUILD_FAIL'):
         raise SystemExit(17)
+elif args[:2] == ['image', 'inspect']:
+    assert args[2:4] == ['--format', '{{.Id}}']
+    print(os.environ.get('TEST_IMAGE_ID', 'sha256:' + 'a' * 64))
 elif args[0] == 'create':
     name = args[args.index('--name') + 1]
     container = hashlib.sha256(name.encode()).hexdigest()
@@ -138,7 +141,8 @@ else:
         self.assertIn('type=local,src=' + str(current), builds[1])
         creates = [command for command in commands if command[0] == 'create']
         build_run = creates[0]
-        self.assertIn('type=bind,src=' + str(self.root / 'target/package-build/debian') + ',dst=/src/target', build_run)
+        self.assertIn('type=bind,src=' + str(self.root / 'target/package-build/debian/targets' / ('a' * 64)) + ',dst=/src/target', build_run)
+        self.assertEqual(build_run[-4], 'sha256:' + 'a' * 64)
         self.assertIn('export CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/src/target', build_run[-1])
         self.assertIn('CARGO_BUILD_JOBS=4', build_run)
         self.assertIn('CARGO_HOME=/cargo-home', build_run)
@@ -151,6 +155,35 @@ else:
         install_run = creates[1]
         self.assertIn('docker.io/library/debian@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308', install_run)
         self.assertFalse(any('cupertino-package-builder:' in argument for argument in install_run))
+
+    def test_changed_image_gets_a_private_compiled_target_and_keeps_downloads(self):
+        first_id, second_id = 'sha256:' + 'a' * 64, 'sha256:' + 'b' * 64
+        first = self.run_build([], {'TEST_IMAGE_ID': first_id}, 'debian')
+        self.assertEqual(first.returncode, 0, first.stderr)
+        cargo_home = self.root / 'target/package-build/debian/cargo-home'
+        source = cargo_home / 'cached-source'
+        source.write_text('downloaded once')
+        stamp = source.stat().st_mtime_ns
+        second = self.run_build([], {'TEST_IMAGE_ID': second_id}, 'debian')
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(source.read_text(), 'downloaded once')
+        self.assertEqual(source.stat().st_mtime_ns, stamp)
+        builds = [command for command in self.commands() if command[0] == 'create'
+                  and any(argument.endswith(',dst=/src/target') for argument in command)]
+        self.assertEqual(len(builds), 2)
+        for command, image_id in zip(builds, (first_id, second_id), strict=True):
+            target = self.root / 'target/package-build/debian/targets' / image_id.removeprefix('sha256:')
+            self.assertTrue(target.is_dir())
+            self.assertIn('type=bind,src=' + str(target) + ',dst=/src/target', command)
+            self.assertIn('type=bind,src=' + str(cargo_home) + ',dst=/cargo-home', command)
+            self.assertEqual(command[-4], image_id)
+
+    def test_invalid_image_identity_cannot_create_a_target_or_container(self):
+        result = self.run_build([], {'TEST_IMAGE_ID': 'sha256:../../escape'}, 'debian')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('invalid content identity', result.stderr)
+        self.assertFalse(any(command[0] == 'create' for command in self.commands()))
+        self.assertFalse((self.root / 'target/package-build/debian/targets').exists())
 
     def test_failed_image_export_preserves_previous_cache(self):
         self.assertEqual(self.run_build([], {}, 'debian').returncode, 0)

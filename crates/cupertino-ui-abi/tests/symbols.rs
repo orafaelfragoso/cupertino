@@ -7,9 +7,13 @@ use object::elf;
 use object::read::elf::ElfFile64;
 use object::{Object, ObjectSection, ObjectSymbol};
 
-#[path = "../../../ci/test-fixtures.rs"]
 #[allow(dead_code)]
-mod fixtures;
+mod fixtures {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../ci/test-fixtures.rs"
+    ));
+}
 
 /// Cargo's exact cdylib artifact, prepared before this test starts.
 fn library() -> PathBuf {

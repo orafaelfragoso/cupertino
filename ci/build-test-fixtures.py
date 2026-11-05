@@ -72,6 +72,10 @@ def main() -> int:
     if not args.command or args.command[0] != '--' or len(args.command) == 1:
         parser.error('provide the test command after --')
     os.environ["CARGO_INCREMENTAL"] = "0"
+    lease = os.environ.get('CUPERTINO_BUILD_LOCK_FD')
+    inherited = () if lease is None else (int(lease),)
+    for descriptor in inherited:
+        os.fstat(descriptor)
     build = [os.environ.get('CARGO', 'cargo'), 'build', '--workspace', '--all-features', '--all-targets',
              '--message-format=json-render-diagnostics']
     for flag in ('locked', 'frozen', 'release'):
@@ -83,7 +87,7 @@ def main() -> int:
             build.extend(('--' + flag, value))
     # Stream diagnostics through stderr, retaining only artifact messages rather than a potentially large build log.
     messages = []
-    with subprocess.Popen(build, cwd=ROOT, stdout=subprocess.PIPE, text=True) as cargo:
+    with subprocess.Popen(build, cwd=ROOT, stdout=subprocess.PIPE, text=True, pass_fds=inherited) as cargo:
         for line in cargo.stdout:
             message = json.loads(line)
             if message.get('reason') == 'compiler-artifact':
@@ -96,7 +100,7 @@ def main() -> int:
         raise ValueError('Cargo produced no workspace fixture artifacts')
     with tempfile.TemporaryDirectory(prefix='cupertino-test-fixtures-') as directory:
         return subprocess.run(args.command[1:], cwd=ROOT,
-                              env=fixture_environment(artifacts, Path(directory))).returncode
+                              env=fixture_environment(artifacts, Path(directory)), pass_fds=inherited).returncode
 
 
 if __name__ == '__main__':

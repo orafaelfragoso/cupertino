@@ -1,9 +1,13 @@
 //! The standard-protocol example and the CupertinoKit examples on an isolated headless compositor. Missing Mutter skips;
 //! an installed compositor that cannot start or a client that cannot present fails.
 
-#[path = "../../../ci/test-fixtures.rs"]
 #[allow(dead_code)]
-mod fixtures;
+mod fixtures {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../ci/test-fixtures.rs"
+    ));
+}
 
 use std::io::Read;
 use std::os::unix::fs::DirBuilderExt;

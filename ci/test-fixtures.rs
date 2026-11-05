@@ -1,4 +1,4 @@
-//! Exact fixture artifacts supplied by `ci/build-test-fixtures.py`, never built by individual tests.
+// Exact fixture artifacts supplied by `ci/build-test-fixtures.py`, never built by individual tests.
 use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
 

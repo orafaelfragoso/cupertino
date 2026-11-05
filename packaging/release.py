@@ -569,6 +569,51 @@ def cmd_verify_tag(args):
     print(f'{args.tag}: version {v}, reachable from origin/main')
 
 
+def package_files(directory, pkgver):
+    """Exactly the verified Arch runtime and data packages; never copy unrelated release inputs into an ISO."""
+    found = sorted(directory.glob('*.pkg.tar.zst'))
+    patterns = (rf'cupertino-{re.escape(pkgver)}-\d+-x86_64\.pkg\.tar\.zst',
+                rf'cupertino-data-{re.escape(pkgver)}-\d+-any\.pkg\.tar\.zst')
+    if len(found) != 2 or any(sum(bool(re.fullmatch(pattern, p.name)) for p in found) != 1 for pattern in patterns):
+        fail(f'{directory}: expected one runtime and one data package for {pkgver}')
+    if any(p.is_symlink() or not p.is_file() for p in found):
+        fail(f'{directory}: package inputs must be regular files')
+    return found
+
+
+def cmd_record_packages(args):
+    """Record provenance only after the build, manifest verification and clean-container install test succeed."""
+    directory = Path(args.directory)
+    pkgver = release_version(args.tag)
+    files = package_files(directory, pkgver)
+    record = {'schema': 1, 'commit': git('rev-parse', 'HEAD'), 'version': pkgver,
+              'files': {p.name: package_digest(p) for p in files}}
+    (directory / 'packages.json').write_text(json.dumps(record, indent=2, sort_keys=True) + '\n')
+
+
+def cmd_verify_packages(args):
+    directory = Path(args.directory)
+    record = json.loads((directory / 'packages.json').read_text())
+    pkgver = release_version(args.tag)
+    if record.get('schema') != 1 or record.get('commit') != git('rev-parse', 'HEAD') or record.get('version') != pkgver:
+        fail(f'{directory}/packages.json: packages are not from this commit and release version')
+    files = package_files(directory, pkgver)
+    actual = {p.name: package_digest(p) for p in files}
+    if actual != record.get('files'):
+        fail(f'{directory}/packages.json: package names or SHA256 digests differ')
+    destination = Path(args.copy_to)
+    destination.mkdir(parents=True, exist_ok=True)
+    for package in files:
+        shutil.copy2(package, destination / package.name)
+    shutil.copy2(directory / 'packages.json', destination / 'packages.json')
+    print(f'reused {len(files)} verified Arch packages from {record["commit"]}')
+
+
+def package_digest(path):
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     sub = p.add_subparsers(dest='command', required=True)
@@ -589,9 +634,15 @@ def main():
     k.add_argument('--tag')
     k.add_argument('archive')
     k.add_argument('output')
+    for name in ('record-packages', 'verify-packages'):
+        c = sub.add_parser(name)
+        c.add_argument('directory')
+        c.add_argument('--tag')
+    sub.choices['verify-packages'].add_argument('--copy-to', required=True)
     args = p.parse_args()
     {'install': cmd_install, 'verify': cmd_verify, 'check-metadata': cmd_check_metadata, 'source': cmd_source,
-     'verify-tag': cmd_verify_tag, 'third-party': cmd_third_party, 'pkgbuild': cmd_pkgbuild}[args.command](args)
+     'verify-tag': cmd_verify_tag, 'third-party': cmd_third_party, 'pkgbuild': cmd_pkgbuild,
+     'record-packages': cmd_record_packages, 'verify-packages': cmd_verify_packages}[args.command](args)
 
 
 if __name__ == '__main__':

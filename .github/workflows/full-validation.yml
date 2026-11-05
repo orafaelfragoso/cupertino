@@ -43,3 +43,43 @@ jobs:
     uses: ./.github/workflows/ci.yml
     with:
       full: true
+
+  arch-package:
+    needs: verify
+    if: needs.verify.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Free unused runner SDKs before restoring build caches
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          cache-binary: false
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: image-cache
+        with:
+          path: ${{ runner.temp }}/package-images
+          key: package-image-${{ runner.os }}-arch-${{ hashFiles('packaging/ci/Dockerfile') }}
+      - name: Build, check and install-test the Arch package upgrade
+        env:
+          CUPERTINO_BUILD_CACHE_DIR: ${{ runner.temp }}/package-images
+          CARGO_BUILD_JOBS: '4'
+        run: bash packaging/ci/build-in-container.sh arch out/arch --upgrade
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: github.ref == 'refs/heads/main' && steps.image-cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/package-images
+          key: package-image-${{ runner.os }}-arch-${{ hashFiles('packaging/ci/Dockerfile') }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: arch-package-validation
+          path: out/arch/**/*.log
+          if-no-files-found: warn
+          retention-days: 7

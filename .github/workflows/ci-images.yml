@@ -7,6 +7,7 @@ on:
     branches: [main]
     paths:
       - 'ci/goldens/Dockerfile'
+      - 'packaging/ci/Dockerfile'
       - '.github/actions/golden-image/**'
       - '.github/workflows/ci-images.yml'
 
@@ -18,8 +19,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  goldens:
+  selection:
     if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      goldens: ${{ steps.changed.outputs.goldens }}
+      packages: ${{ steps.changed.outputs.packages }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: changed
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          goldens=true
+          packages=true
+          if [ "$EVENT" != workflow_dispatch ]; then
+            if git diff --quiet "$BEFORE" HEAD -- ci/goldens/Dockerfile .github/actions/golden-image .github/workflows/ci-images.yml; then goldens=false; fi
+            if git diff --quiet "$BEFORE" HEAD -- packaging/ci/Dockerfile .github/workflows/ci-images.yml; then packages=false; fi
+          fi
+          echo "goldens=$goldens" >> "$GITHUB_OUTPUT"
+          echo "packages=$packages" >> "$GITHUB_OUTPUT"
+
+  goldens:
+    needs: selection
+    if: needs.selection.outputs.goldens == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -27,3 +55,45 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/golden-image
+
+  packages:
+    needs: selection
+    if: needs.selection.outputs.packages == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [arch, debian, fedora]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Free unused runner SDKs before restoring build caches
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cache
+        with:
+          path: ${{ runner.temp }}/package-images
+          key: package-image-${{ runner.os }}-${{ matrix.distro }}-${{ hashFiles('packaging/ci/Dockerfile') }}
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          cache-binary: false
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: packaging/ci
+          target: ${{ matrix.distro }}
+          load: true
+          tags: cupertino-package-builder:${{ matrix.distro }}-ci
+          cache-from: ${{ steps.cache.outputs.cache-hit == 'true' && format('type=local,src={0}/package-images/{1}/current', runner.temp, matrix.distro) || '' }}
+          cache-to: ${{ steps.cache.outputs.cache-hit != 'true' && format('type=local,dest={0}/package-images/{1}/generation.ci,mode=max', runner.temp, matrix.distro) || '' }}
+      - name: Select the successfully exported cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          DISTRO: ${{ matrix.distro }}
+        run: ln -s generation.ci "$RUNNER_TEMP/package-images/$DISTRO/current"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/package-images
+          key: package-image-${{ runner.os }}-${{ matrix.distro }}-${{ hashFiles('packaging/ci/Dockerfile') }}

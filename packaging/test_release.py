@@ -192,6 +192,65 @@ class TagTest(unittest.TestCase):
                 release.cmd_pkgbuild(Namespace(tag='v0.1.0-rc1', archive=archive, output=Path(tmp, 'out')))
 
 
+class PackageReuseTest(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.packages = self.root / 'packages'
+        self.packages.mkdir()
+        self.output = self.root / 'iso-input'
+        self.runtime = self.packages / 'cupertino-0.1.0-1-x86_64.pkg.tar.zst'
+        self.data = self.packages / 'cupertino-data-0.1.0-1-any.pkg.tar.zst'
+        self.runtime.write_bytes(b'verified runtime')
+        self.data.write_bytes(b'verified data')
+        patch = mock.patch.object(release, 'git', return_value='a' * 40)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.args = Namespace(directory=self.packages, tag='v0.1.0', copy_to=self.output)
+        release.cmd_record_packages(self.args)
+
+    def test_iso_receives_exact_verified_package_bytes_and_provenance(self):
+        release.cmd_verify_packages(self.args)
+        self.assertEqual({p.name for p in self.output.iterdir()},
+                         {self.runtime.name, self.data.name, 'packages.json'})
+        self.assertEqual((self.output / self.runtime.name).read_bytes(), self.runtime.read_bytes())
+
+    def test_another_commit_or_release_is_rejected_before_copying(self):
+        with mock.patch.object(release, 'git', return_value='b' * 40), \
+                self.assertRaisesRegex(SystemExit, 'not from this commit'):
+            release.cmd_verify_packages(self.args)
+        self.args.tag = 'v0.1.0-rc1'
+        with self.assertRaisesRegex(SystemExit, 'not from this commit and release version'):
+            release.cmd_verify_packages(self.args)
+        self.assertFalse(self.output.exists())
+
+    def test_changed_bytes_and_extra_packages_are_rejected_before_copying(self):
+        self.runtime.write_bytes(b'tampered')
+        with self.assertRaisesRegex(SystemExit, 'SHA256 digests differ'):
+            release.cmd_verify_packages(self.args)
+        release.cmd_record_packages(self.args)
+        (self.packages / 'unrelated.pkg.tar.zst').write_bytes(b'extra')
+        with self.assertRaisesRegex(SystemExit, 'expected one runtime and one data'):
+            release.cmd_verify_packages(self.args)
+        self.assertFalse(self.output.exists())
+
+    def test_links_and_path_traversal_in_provenance_are_rejected(self):
+        self.runtime.unlink()
+        self.runtime.symlink_to(self.data)
+        with self.assertRaisesRegex(SystemExit, 'regular files'):
+            release.cmd_verify_packages(self.args)
+        self.runtime.unlink()
+        self.runtime.write_bytes(b'verified runtime')
+        import json
+        record = self.packages / 'packages.json'
+        metadata = json.loads(record.read_text())
+        metadata['files']['../outside.pkg.tar.zst'] = metadata['files'].pop(self.runtime.name)
+        record.write_text(json.dumps(metadata))
+        with self.assertRaisesRegex(SystemExit, 'package names or SHA256 digests differ'):
+            release.cmd_verify_packages(self.args)
+
+
 GIT_RECIPE = Path(__file__).resolve().parent / 'arch/cupertino-git/PKGBUILD'
 
 

@@ -2,9 +2,13 @@
 //! no Cupertino protocol: the window maps, draws its own frame and presents frames paced by frame callbacks. Needs
 //! `weston` on `PATH`; CI runs it in a job that installs it (`cargo nextest run --run-ignored only`).
 
-#[path = "../../../ci/test-fixtures.rs"]
 #[allow(dead_code)]
-mod fixtures;
+mod fixtures {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../ci/test-fixtures.rs"
+    ));
+}
 
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the Cupertino live and install ISO from the committed HEAD of this checkout.
 #
-#   scripts/build-iso.sh [OUT_DIR]        OUT_DIR defaults to ~/.cache/cupertino-iso
+#   scripts/build-iso.sh [OUT_DIR] [--packages DIR]   OUT_DIR defaults to ~/.cache/cupertino-iso
 #
 # Packages come from packaging/ci/build-in-container.sh arch (pinned Arch image), go into a local pacman repository, and
 # mkarchiso (pinned Arch image, privileged) assembles packaging/iso around it. The Cupertino packages follow from the HEAD
@@ -11,12 +11,24 @@ set -euo pipefail
 
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 out=${1:-$HOME/.cache/cupertino-iso}
+packages=
+if [ "$#" -gt 1 ]; then
+    [ "$#" = 3 ] && [ "$2" = --packages ] || { echo 'usage: build-iso.sh [OUT_DIR] [--packages DIR]' >&2; exit 2; }
+    packages=$3
+fi
 image=docker.io/library/archlinux@sha256:3cbf69d2d5958d6a294f3722c5668e6187c4df8e00fa27f72352f0bf83e495e1
 floor_gb=${CUPERTINO_ISO_FLOOR_GB:-30}
 need_gb=$((floor_gb + 18))
 
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
+if [ -n "$packages" ]; then packages=$(cd "$packages" && pwd); fi
+if [ -z "${CUPERTINO_BUILD_LOCK_FD:-}" ]; then
+    args=("$out")
+    if [ -n "$packages" ]; then args+=(--packages "$packages"); fi
+    cd "$root"
+    exec python3 ci/worktree-build.py locked -- bash scripts/build-iso.sh "${args[@]}"
+fi
 free_gb=$(df -BG --output=avail "$out" | tail -1 | tr -dc 0-9)
 if [ "$free_gb" -lt "$need_gb" ]; then
     echo "only ${free_gb} GB free in $out; the build needs $need_gb GB (floor $floor_gb GB + 18 GB)" >&2
@@ -30,7 +42,18 @@ fi
 head=$(git -C "$root" rev-parse HEAD)
 epoch=$(git -C "$root" log -1 --format=%ct HEAD)
 work=$(mktemp -d "$out/work.XXXXXX")
-trap 'docker run --rm -v "$work:/w" "$image" rm -rf /w/iso-work /w/iso-out >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
+cleanup() {
+    cleanup_status=$?
+    if [ -s "$work/iso.cid" ]; then
+        docker rm --force "$(cat "$work/iso.cid")" >/dev/null
+    fi
+    docker run --rm -v "$work:/w" "$image" rm -rf /w/iso-work /w/iso-out >/dev/null
+    rm -rf "$work"
+    return "$cleanup_status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # The installed system trusts packages signed by this key (cupertino-keyring); the public key comes from `local-release keygen`.
 keyring_key=${CUPERTINO_KEYRING_KEY:-}
@@ -39,7 +62,13 @@ keyring_key=${CUPERTINO_KEYRING_KEY:-}
 "$root/packaging/keyring/check-key" "$keyring_key"
 
 mkdir -p "$work/pkgs"
-"$root/packaging/ci/build-in-container.sh" arch "$work/pkgs"
+tag=()
+if [ -n "${RELEASE_TAG:-}" ]; then tag=(--tag "$RELEASE_TAG"); fi
+if [ -n "$packages" ]; then
+    python3 "$root/packaging/release.py" verify-packages "$packages" "${tag[@]}" --copy-to "$work/pkgs"
+else
+    "$root/packaging/ci/build-in-container.sh" arch "$work/pkgs"
+fi
 "$root/packaging/keyring/build-keyring" "$keyring_key" "$work/pkgs" >/dev/null
 rm -rf "$work/pkgs/rev-"* "$work/pkgs"/*.log "$work/pkgs"/*.info "$work/pkgs"/*.contents "$work/pkgs/PKGBUILD"
 
@@ -56,7 +85,7 @@ cp "$work/profile/pacman.conf" "$work/profile/airootfs/etc/pacman.conf"
 mkdir -p "$work/profile/airootfs/opt/cupertino-repo"
 cp "$work/pkgs"/*.pkg.tar.zst "$work/profile/airootfs/opt/cupertino-repo/"
 
-docker run --rm --privileged -v "$work:/w" -e SOURCE_DATE_EPOCH="$epoch" -e OUT_UID="$(id -u)" -e OUT_GID="$(id -g)" "$image" bash -euc '
+docker run --cidfile "$work/iso.cid" --privileged -v "$work:/w" -e SOURCE_DATE_EPOCH="$epoch" -e OUT_UID="$(id -u)" -e OUT_GID="$(id -g)" "$image" bash -euc '
     pacman -Syu --noconfirm --needed -q archiso >/dev/null
     mkdir -p /opt/cupertino-repo
     cp /w/profile/airootfs/opt/cupertino-repo/*.pkg.tar.zst /opt/cupertino-repo/
@@ -76,6 +105,7 @@ mv "$iso" "$out/$name"
 {
     echo "head $head"
     echo "source-date-epoch $epoch"
+    cat "$work/pkgs/packages.json"
     cat "$work/archiso-version"
     ls "$work/pkgs"
     echo "installed packages:"

@@ -468,7 +468,8 @@ fn isolated(test: &str, shell: bool, work: impl FnOnce(&str)) {
         .env("LANG", "C.UTF-8")
         .env("TZ", "UTC");
     if shell {
-        child.env(common::shell::BIN_DIR_ENV, common::shell::bin_dir());
+        common::shell::bin_dir();
+        common::fixtures::forward(&mut child);
     }
     for key in [
         "CUPERTINO_UPDATE_GOLDENS",

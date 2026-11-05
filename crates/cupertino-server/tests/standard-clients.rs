@@ -8,7 +8,7 @@ mod common;
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 use common::spawn;
@@ -152,48 +152,17 @@ impl Server {
     }
 }
 
-/// Build `binary` (a no-op when current) and return its path. It belongs to another crate, so cargo gives these tests
-/// no `CARGO_BIN_EXE_*` for it.
+/// The exact example or client artifact prepared before the test runner starts.
 fn built(binary: Binary) -> PathBuf {
-    // <target>/<profile>/deps/<this test> -> <target>/<profile>
-    let profile_dir = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let (args, path): (&[&str], _) = match binary {
-        Binary::SimpleWindow => (
-            &[
-                "-p",
-                "cupertino-wayland-client",
-                "--example",
-                "simple-window",
-            ],
-            profile_dir.join("examples/simple-window"),
-        ),
-        Binary::TestClient => (
-            &["-p", "cupertino-testclient"],
-            profile_dir.join("cupertino-testclient"),
-        ),
-        Binary::Kit(example) => (
-            &["-p", "cupertino-kit", "--example", example],
-            profile_dir.join("examples").join(example),
-        ),
-    };
-    let mut cargo = Command::new(std::env::var_os("CARGO").expect("CARGO is set by `cargo test`"));
-    cargo.arg("build").args(args).args([
-        "--target-dir",
-        profile_dir.parent().unwrap().to_str().unwrap(),
-    ]);
-    if profile_dir.file_name().unwrap() == "release" {
-        cargo.arg("--release");
+    match binary {
+        Binary::SimpleWindow => {
+            common::fixtures::artifact("cupertino-wayland-client", "example", "simple-window")
+        }
+        Binary::TestClient => {
+            common::fixtures::artifact("cupertino-testclient", "bin", "cupertino-testclient")
+        }
+        Binary::Kit(example) => common::fixtures::artifact("cupertino-kit", "example", example),
     }
-    let status = cargo.status().unwrap();
-    assert!(status.success(), "building {}: {status}", path.display());
-    assert!(path.is_file(), "missing binary {}", path.display());
-    path
 }
 
 /// The app id and title of the mapped window.

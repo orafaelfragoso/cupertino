@@ -2,6 +2,9 @@
 //! lock surface, each on a thread of its own that ends, and so disconnects the client, when the handle is dropped.
 #![allow(dead_code)]
 
+#[path = "../../../../ci/test-fixtures.rs"]
+pub mod fixtures;
+
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::Write;

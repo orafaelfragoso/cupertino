@@ -1,63 +1,27 @@
-//! Real shell binaries for the golden scenes: built once with cargo, started with a cleared environment, and a private
+//! Real shell binaries for the golden scenes: prepared before the tests, started with a cleared environment, and a private
 //! session bus so no process sees the host's.
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::OnceLock;
 
 use cupertino_server::authorization::ShellRole;
 use cupertino_server::config::ShellProcess;
 
-/// Set by the parent test process for its isolated worker, whose cleared environment cannot run cargo.
-pub const BIN_DIR_ENV: &str = "CUPERTINO_GOLDEN_BIN_DIR";
-
 const BINARIES: [&str; 3] = ["cupertino-dock", "cupertino-launcher", "cupertino-login"];
 
-/// Build the `app` feature of the shell crates once (a no-op when current) and return the directory of the binaries.
+/// The shell binaries prepared once by `ci/build-test-fixtures.py` before the test runner starts.
 pub fn bin_dir() -> &'static Path {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
-        if let Some(dir) = std::env::var_os(BIN_DIR_ENV) {
-            return PathBuf::from(dir);
-        }
-        // <target>/<profile>/deps/<this test> -> <target>/<profile>
-        let profile_dir = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let mut cargo =
-            Command::new(std::env::var_os("CARGO").expect("CARGO is set by `cargo test`"));
-        cargo.args([
-            "build",
-            "-p",
-            "cupertino-dock",
-            "-p",
-            "cupertino-launcher",
-            "-p",
-            "cupertino-login",
-        ]);
-        cargo.args([
-            "--features",
-            "cupertino-dock/app,cupertino-launcher/app,cupertino-login/app",
-        ]);
-        cargo.args([
-            "--target-dir",
-            profile_dir.parent().unwrap().to_str().unwrap(),
-        ]);
-        if profile_dir.file_name().unwrap() == "release" {
-            cargo.arg("--release");
-        }
-        let status = cargo.status().unwrap();
-        assert!(
-            status.success(),
-            "building the shell process binaries: {status}"
-        );
+        let mut directory = None;
         for name in BINARIES {
-            assert!(profile_dir.join(name).is_file(), "missing binary {name}");
+            let path = super::fixtures::artifact(name, "bin", name);
+            let parent = path.parent().unwrap().to_path_buf();
+            if let Some(expected) = &directory {
+                assert_eq!(&parent, expected, "shell fixture directories differ");
+            }
+            directory = Some(parent);
         }
-        profile_dir
+        directory.unwrap()
     })
 }
 

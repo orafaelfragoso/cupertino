@@ -8,6 +8,7 @@ arch=('x86_64')
 url='https://github.com/orafaelfragoso/cupertino'
 license=('GPL-3.0-or-later' 'MPL-2.0' 'MIT' 'OFL-1.1' 'LGPL-2.1-or-later' 'MIT-CMU' 'BSD-3-Clause')
 makedepends=('git' 'cargo' 'python' 'mesa' 'libglvnd' 'pam' 'gcc-libs' 'systemd' 'dbus' 'xkeyboard-config' 'shared-mime-info' 'adwaita-icon-theme' 'clang' 'libpipewire')
+checkdepends=('cargo-nextest>=0.9.151')
 # makepkg's LTO flags would reach the C code of build dependencies only; the release profile decides for Rust. No
 # split debug package: it is ~0.9 GB of debug info for the sixteen binaries.
 options=('!lto' '!debug')
@@ -41,10 +42,12 @@ build() {
 check() {
   cd cupertino
   export CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0 CUPERTINO_THEME_DIR=/usr/share/cupertino/theme CUPERTINO_SPEC_DIR="$PWD/data/theme"
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/usr/src/debug/$pkgname --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
   # The compositor tests open a Wayland socket; the build environment has no runtime directory of its own.
   export XDG_RUNTIME_DIR="$srcdir/runtime"
   install -d -m 700 "$XDG_RUNTIME_DIR"
-  dbus-run-session -- cargo test --frozen --release --workspace --all-features --no-fail-fast
+  dbus-run-session -- python3 ci/build-test-fixtures.py --frozen --release -- cargo nextest run --frozen --release --workspace --all-features
+  cargo test --frozen --release --workspace --all-features --doc
 }
 
 package() {
@@ -59,5 +62,5 @@ package() {
           'etc/pam.d/cupertino-login' 'etc/pam.d/cupertino-session'
           'etc/pam.d/cupertino-greeter' 'etc/pam.d/cupertino-autologin')
   cd cupertino
-  python3 packaging/release.py install --format arch --package runtime --destdir "$pkgdir" --bindir target/release
+  python3 packaging/release.py install --format arch --package runtime --destdir "$pkgdir" --bindir "${CARGO_TARGET_DIR:-target}/release"
 }

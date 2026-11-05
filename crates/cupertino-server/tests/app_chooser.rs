@@ -7,7 +7,6 @@ mod common;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -96,35 +95,9 @@ impl Server {
     }
 }
 
-/// Build the `app` feature of the portal (a no-op when current) and return the binary: a `[[bin]]` of another crate
-/// behind a feature, so cargo gives this test no `CARGO_BIN_EXE_*` for it.
+/// The portal artifact prepared before the test runner starts.
 fn portal_binary() -> PathBuf {
-    // <target>/<profile>/deps/<this test> -> <target>/<profile>
-    let profile_dir = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let mut cargo = Command::new(std::env::var_os("CARGO").expect("CARGO is set by `cargo test`"));
-    cargo.args([
-        "build",
-        "-p",
-        "cupertino-portal",
-        "--features",
-        "cupertino-portal/app",
-        "--target-dir",
-        profile_dir.parent().unwrap().to_str().unwrap(),
-    ]);
-    if profile_dir.file_name().unwrap() == "release" {
-        cargo.arg("--release");
-    }
-    let status = cargo.status().unwrap();
-    assert!(status.success(), "building cupertino-portal: {status}");
-    let binary = profile_dir.join("cupertino-portal");
-    assert!(binary.is_file(), "missing binary {}", binary.display());
-    binary
+    common::fixtures::artifact("cupertino-portal", "bin", "cupertino-portal")
 }
 
 fn titled(state: &Cupertino, title: &str) -> bool {

@@ -9,7 +9,7 @@ use std::io::Write;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
@@ -411,36 +411,9 @@ fn each_export_has_a_handle_of_its_own_that_names_no_window() {
 
 // ---- cupertino-portal ------------------------------------------------------------------------------------------------
 
-/// `cupertino-portal` (a no-op build when current). It belongs to another crate, so cargo gives this test no
-/// `CARGO_BIN_EXE_*` for it.
+/// The portal artifact prepared before the test runner starts.
 fn portal_binary() -> PathBuf {
-    // <target>/<profile>/deps/<this test> -> <target>/<profile>
-    let profile_dir = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let mut cargo = Command::new(std::env::var_os("CARGO").expect("CARGO is set by `cargo test`"));
-    cargo
-        .args([
-            "build",
-            "-p",
-            "cupertino-portal",
-            "--features",
-            "app",
-            "--target-dir",
-        ])
-        .arg(profile_dir.parent().unwrap());
-    if profile_dir.file_name().unwrap() == "release" {
-        cargo.arg("--release");
-    }
-    assert!(
-        cargo.status().unwrap().success(),
-        "building cupertino-portal"
-    );
-    profile_dir.join("cupertino-portal")
+    common::fixtures::artifact("cupertino-portal", "bin", "cupertino-portal")
 }
 
 /// The portal process on the harness's display and `bus`, killed on drop, and its home folder.

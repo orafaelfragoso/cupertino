@@ -22,7 +22,16 @@ passwd="$(mktemp)"
 trap 'rm -f "$passwd"' EXIT
 printf 'root:x:0:0:root:/root:/bin/sh\ngolden:x:%s:%s:Golden User:/tmp:/bin/sh\n' "$(id -u)" "$(id -g)" >"$passwd"
 
-docker build --quiet --tag cupertino-goldens "$root/ci/goldens" >/dev/null
+definition="$(sha256sum "$root/ci/goldens/Dockerfile" | cut -d ' ' -f 1)"
+image="${CUPERTINO_GOLDENS_IMAGE:-cupertino-goldens:$definition}"
+if [ -z "${CUPERTINO_GOLDENS_IMAGE:-}" ]; then
+  docker build --quiet --tag "$image" --label "io.cupertino.goldens.definition=$definition" "$root/ci/goldens" >/dev/null
+fi
+actual="$(docker image inspect --format '{{ index .Config.Labels "io.cupertino.goldens.definition" }}' "$image")"
+if [ "$actual" != "$definition" ]; then
+  echo "goldens: image definition does not match ci/goldens/Dockerfile" >&2
+  exit 1
+fi
 log="$(mktemp)"
 trap 'rm -f "$passwd" "$log"' EXIT
 docker run --rm \
@@ -32,8 +41,9 @@ docker run --rm \
   --env CARGO_INCREMENTAL=0 --env CARGO_PROFILE_DEV_DEBUG=0 \
   --env CUPERTINO_GOLDENS_REQUIRED=1 --env "CUPERTINO_GOLDEN_MUTATE_WINDOW=${CUPERTINO_GOLDEN_MUTATE_WINDOW:-}" \
   --env "CUPERTINO_UPDATE_GOLDENS=$update" \
-  cupertino-goldens \
-  cargo test -p cupertino-server --test goldens -- --include-ignored --skip headless_frame_and_memory_report \
+  "$image" \
+  python3 ci/build-test-fixtures.py --locked -- \
+  cargo test --locked -p cupertino-server --test goldens -- --include-ignored --skip headless_frame_and_memory_report \
   | tee "$log" || status=$?
 
 # An update records the baselines and then fails each test that recorded, so it can never pass as a comparison; the

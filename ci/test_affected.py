@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from affected import Package, affected, main
+from affected import Package, affected, checks, main
 
 
 class AffectedTests(unittest.TestCase):
@@ -65,7 +65,9 @@ class AffectedTests(unittest.TestCase):
     def test_runner_selects_packages_and_propagates_failure(self) -> None:
         for check, command in (
             ("clippy", ["cargo", "clippy", "--all-targets", "--all-features", "-p", "core", "-p", "app", "--", "-D", "warnings"]),
-            ("tests", ["cargo", "nextest", "run", "--all-features", "--no-fail-fast", "-p", "core", "-p", "app"]),
+            ("tests", [sys.executable, str(Path(__file__).resolve().with_name("build-test-fixtures.py")),
+                       "--locked", "--", "cargo", "nextest", "run", "--all-features", "--no-fail-fast",
+                       "-p", "core", "-p", "app"]),
             ("doctests", ["cargo", "test", "--all-features", "--doc", "-p", "core", "-p", "app"]),
         ):
             with self.subTest(check=check), patch.object(sys, "argv", ["affected.py", "run", check]), \
@@ -82,6 +84,30 @@ class AffectedTests(unittest.TestCase):
                 main()
             self.assertEqual(error.exception.code, 2)
             run.assert_not_called()
+
+    def test_cheap_gates_follow_their_inputs(self) -> None:
+        for paths, expected in (
+            (["README.md"], set()),
+            (["docs/src/index.md"], {"docs"}),
+            (["crates/core/src/lib.rs"], {"fmt"}),
+            (["crates/core/Cargo.toml"], {"deny", "fmt", "layers"}),
+            (["crates/core/LICENSE"], {"deny", "layers"}),
+            (["third-party/library/LICENSE"], {"deny", "layers"}),
+            ([".cargo/config.toml"], {"deny", "fmt", "layers"}),
+            (["deny.toml"], {"deny"}),
+            (["rust-toolchain.toml"], {"fmt", "layers"}),
+            ([".github/workflows/ci.yml"], {"docs", "deny", "fmt", "layers"}),
+            (["ci/affected.py"], {"docs", "deny", "fmt", "layers"}),
+        ):
+            with self.subTest(paths=paths):
+                self.assertEqual({name for name, enabled in checks(paths).items() if enabled}, expected)
+
+    def test_gates_do_not_need_cargo_metadata(self) -> None:
+        with patch.object(sys, "argv", ["affected.py", "gates", "base", "head"]), \
+                patch("affected.changed_paths", return_value=["docs/src/index.md"]), \
+                patch("affected.workspace") as workspace, patch("sys.stdout"):
+            self.assertEqual(main(), 0)
+            workspace.assert_not_called()
 
 
 if __name__ == "__main__":

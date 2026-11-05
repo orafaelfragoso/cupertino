@@ -1,0 +1,45 @@
+name: Full validation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 3 * * *'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: full-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  selection:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.select.outputs.run }}
+    steps:
+      - id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = schedule ]; then
+            validated=$(gh api "repos/$GH_REPO/actions/workflows/full-validation.yml/runs?head_sha=$SHA&status=success&per_page=1" --jq '.total_count')
+            if [ "$validated" -gt 0 ]; then
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              echo "Full validation already passed for $SHA; scheduled duplicate skipped." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: selection
+    if: needs.selection.outputs.run == 'true'
+    uses: ./.github/workflows/ci.yml
+    with:
+      full: true

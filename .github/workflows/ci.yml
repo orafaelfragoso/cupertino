@@ -1,15 +1,16 @@
 name: CI
 
-# Pull requests run separate clippy and test jobs for affected crates and their dependents.
-# Release tags run the additional policy, docs, dependency, format, layer, default-feature, Weston and golden checks,
-# and repeat the full test suite in the package build environment. Main has no CI runs.
-# "CI result" remains the aggregate required check and fails when any job that ran failed.
+# Pull requests and main run policy checks plus the gates and crates affected by the change.
+# Main is the trusted cache writer; newer pushes cancel obsolete integration runs.
+# Reusable full validation also checks default features, Weston, goldens and the package environment.
 on:
   pull_request:
+  push:
+    branches: [main]
   workflow_call:
     inputs:
       full:
-        description: Run additional release checks and the package build environment on a version tag
+        description: Run every check, including the package build environment
         type: boolean
         default: false
 
@@ -30,11 +31,11 @@ env:
 jobs:
   selection:
     name: Affected crates
-    if: github.event_name == 'pull_request' || (inputs.full == true && startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       packages: ${{ steps.select.outputs.packages }}
+      checks: ${{ steps.select.outputs.checks }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -42,25 +43,28 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
         with:
-          toolchain: stable
+          toolchain: 1.99.1
       - run: python3 -I ci/test_affected.py
       - id: select
         env:
-          RELEASE: ${{ inputs.full == true && startsWith(github.ref, 'refs/tags/v') }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          FULL: ${{ inputs.full == true }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          if [ "$RELEASE" = true ]; then
+          if [ "$FULL" = true ]; then
             packages=$(python3 -I ci/affected.py full)
+            checks='{"docs":true,"deny":true,"fmt":true,"layers":true}'
           else
-            packages=$(python3 -I ci/affected.py select "$PR_BASE" "$PR_HEAD")
+            packages=$(python3 -I ci/affected.py select "$BASE" "$HEAD")
+            checks=$(python3 -I ci/affected.py gates "$BASE" "$HEAD")
           fi
           echo "packages=$packages" >> "$GITHUB_OUTPUT"
+          echo "checks=$checks" >> "$GITHUB_OUTPUT"
           echo "Selected crates: $packages" >> "$GITHUB_STEP_SUMMARY"
+          echo "Selected gates: $checks" >> "$GITHUB_STEP_SUMMARY"
 
   # Source policy: no provenance text, no vendor names, no forbidden or binary files except the pinned built-in font.
   gate:
-    if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -70,7 +74,7 @@ jobs:
       - run: python3 -I ci/test_soak.py
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
         with:
-          toolchain: stable
+          toolchain: 1.99.1
       # check-metadata and test_release read the dependency graph with cargo metadata --offline.
       - run: cargo fetch --locked
       - run: python3 -I packaging/test_release.py
@@ -79,6 +83,7 @@ jobs:
       - run: python3 -I packaging/iso/test_profile.py
       - run: python3 -I ci/test_contracts.py
       - run: python3 -I ci/test_goldens_log.py
+      - run: python3 -I ci/test-build-test-fixtures.py
       - run: python3 -I ci/gate.py .
       # The Wayland globals are compared with the registry by crates/cupertino-server/tests/contracts.rs (nextest below).
       - run: python3 -I ci/contracts.py .
@@ -86,7 +91,8 @@ jobs:
   # The book must build, and its internal links and anchors must resolve. mdBook and lychee are
   # pinned, and both release archives are checked against the published sha256.
   docs:
-    if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
+    needs: selection
+    if: fromJSON(needs.selection.outputs.checks).docs
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -114,7 +120,8 @@ jobs:
 
   # Licences, advisories, bans and sources, as set in deny.toml.
   deny:
-    if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
+    needs: selection
+    if: fromJSON(needs.selection.outputs.checks).deny
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -124,19 +131,40 @@ jobs:
           command: check
 
   fmt:
-    if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
+    needs: selection
+    if: fromJSON(needs.selection.outputs.checks).fmt
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
         with:
-          toolchain: stable
+          toolchain: 1.99.1
           components: rustfmt
       # Without --all: only the workspace members, not the vendored third-party crate.
       - run: cargo fmt --check
 
-  # Clippy builds every target with warnings treated as errors; the release also checks layers and default features.
+  # Independent of the affected Rust selection: manifest and licence changes still check the graph.
+  layers:
+    needs: selection
+    if: fromJSON(needs.selection.outputs.checks).layers
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: layers-ubuntu-26.04
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+      - run: cargo fetch --locked
+      - run: cargo run --locked -p cupertino-layers
+
+  # Clippy builds every affected target with warnings treated as errors.
   clippy:
     needs: selection
     if: needs.selection.outputs.packages != '[]'
@@ -163,24 +191,20 @@ jobs:
             clang libclang-dev libpipewire-0.3-dev pipewire
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
         with:
-          toolchain: stable
+          toolchain: 1.99.1
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: clippy
-      # the layer rules' MPL closure reads the whole dependency graph with cargo metadata --offline
+          shared-key: clippy-ubuntu-26.04
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       - run: cargo fetch --locked
-      # the layer rules build one small crate: a broken rule fails here before the long lint build
-      - name: Layer rules
-        if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
-        run: cargo run -p cupertino-layers
       - name: Clippy
         run: python3 -I ci/affected.py run clippy
       # The lint build and the tests enable every feature of every crate at once, so a crate that only builds with
       # another crate's features (or its own optional ones) passes them. Each package is checked on its own here, with
       # its default features and only the dependencies it names.
       - name: Default features, one package at a time
-        if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
+        if: inputs.full == true
         shell: bash
         run: |
           packages=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
@@ -210,8 +234,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Repeat the suite in the package build environment only for releases.
-        package-env: ${{ fromJSON(inputs.full == true && startsWith(github.ref, 'refs/tags/v') && '[false, true]' || '[false]') }}
+        # Full validation repeats the suite in the package build environment.
+        package-env: ${{ fromJSON(inputs.full == true && '[false, true]' || '[false]') }}
     env:
       # The test binaries each link the whole workspace: with line tables the build took 12 GB of the runner's disk
       # and ran it out of space; without debug information it takes 4 GB. Panics still name file and line.
@@ -234,7 +258,7 @@ jobs:
             clang libclang-dev libpipewire-0.3-dev pipewire
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
         with:
-          toolchain: stable
+          toolchain: 1.99.1
       - name: The package build environment
         if: matrix.package-env
         run: |
@@ -242,7 +266,8 @@ jobs:
           echo "CUPERTINO_SPEC_DIR=$GITHUB_WORKSPACE/data/theme" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: tests-package-env-${{ matrix.package-env }}
+          shared-key: tests-ubuntu-26.04-package-env-${{ matrix.package-env }}
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       - run: cargo fetch --locked
       # The keymap oracle's recordings are only valid for the xkeyboard-config releases they were made with
       # (crates/cupertino-xkbcommon/tests/fixtures/xkb-data.txt), and the runner's distribution ships another. This is
@@ -257,7 +282,7 @@ jobs:
           echo "XKB_CONFIG_ROOT=$RUNNER_TEMP/xkb/usr/share/xkeyboard-config-2" >> "$GITHUB_ENV"
       - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
-          tool: nextest@0.9.149
+          tool: nextest@0.9.151
           fallback: none
       # nextest enforces the per-test time limit in .config/nextest.toml; it does not run doctests.
       - name: Tests
@@ -276,7 +301,7 @@ jobs:
   # The transport's simple-window on a second compositor: Weston's headless backend, which offers no decoration
   # protocol and no Cupertino protocol. These tests are ignored in the other jobs, which have no Weston.
   weston:
-    if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
+    if: inputs.full == true
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -286,44 +311,68 @@ jobs:
       - name: System packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential weston
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libgbm-dev libpam0g-dev dbus libgl1-mesa-dri libegl1 xkb-data zstd \
+            clang libclang-dev libpipewire-0.3-dev pipewire weston
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
         with:
-          toolchain: stable
+          toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: weston
+          shared-key: weston-ubuntu-latest
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
-          tool: nextest@0.9.149
+          tool: nextest@0.9.151
           fallback: none
       - name: simple-window on Weston
-        run: cargo nextest run -p cupertino-wayland-client --run-ignored only --no-fail-fast
+        run: python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked -p cupertino-wayland-client --run-ignored only --no-fail-fast
 
   # The headless golden scenes. Their baselines are valid only on the renderer of ci/goldens/Dockerfile (an image pinned
   # by digest, with Mesa from one Debian snapshot), so the job runs ci/goldens.sh, which fails on any other renderer. The
   # tests job skips these tests (they are ignored there).
   goldens:
-    if: inputs.full == true && startsWith(github.ref, 'refs/tags/v')
+    if: inputs.full == true
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/golden-image
+        id: image
       - name: Goldens in the pinned image
+        env:
+          CUPERTINO_GOLDENS_IMAGE: ${{ steps.image.outputs.image }}
         run: ci/goldens.sh
 
   result:
     name: CI result
-    if: always() && (github.event_name == 'pull_request' || (inputs.full == true && startsWith(github.ref, 'refs/tags/v')))
-    needs: [selection, gate, docs, deny, fmt, clippy, tests, weston, goldens]
+    if: always()
+    needs: [selection, gate, docs, deny, fmt, layers, clippy, tests, weston, goldens]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
+          NEEDS: ${{ toJSON(needs) }}
+          FULL: ${{ inputs.full == true }}
         run: |
-          echo "Job results: $RESULTS"
-          if grep -qwE 'failure|cancelled' <<<"$RESULTS"; then
-            echo "::error::a CI job failed or was cancelled"
-            exit 1
-          fi
+          python3 - <<'PY'
+          import json
+          import os
+
+          needs = json.loads(os.environ["NEEDS"])
+          expected = {"selection", "gate"}
+          if needs["selection"]["result"] == "success":
+              outputs = needs["selection"]["outputs"]
+              expected.update(name for name, enabled in json.loads(outputs["checks"]).items() if enabled)
+              if json.loads(outputs["packages"]):
+                  expected.update(("clippy", "tests"))
+          if os.environ["FULL"] == "true":
+              expected.update(("docs", "deny", "fmt", "layers", "clippy", "tests", "weston", "goldens"))
+          failed = {name: job["result"] for name, job in needs.items()
+                    if job["result"] in ("failure", "cancelled") or
+                    (name in expected and job["result"] != "success")}
+          print("Expected checks:", ", ".join(sorted(expected)))
+          print("Job results:", {name: job["result"] for name, job in needs.items()})
+          if failed:
+              raise SystemExit(f"required CI jobs did not succeed: {failed}")
+          PY

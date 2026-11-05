@@ -1,5 +1,6 @@
 """Tests of the golden log check: `python3 -I ci/test_goldens_log.py`."""
 import os
+import hashlib
 import subprocess
 import sys
 import tempfile
@@ -136,26 +137,40 @@ class RealLogTest(unittest.TestCase):
 class UpdateStatusTest(unittest.TestCase):
     """`ci/goldens.sh --update` with a fake docker that prints a complete update log and exits with a given status."""
 
-    def run_update(self, status: int) -> subprocess.CompletedProcess[str]:
+    def run_update(self, status: int, definition: str | None) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as scratch:
             bin_dir = Path(scratch) / "bin"
             bin_dir.mkdir()
             update_log = Path(scratch) / "update.log"
             update_log.write_text(log([*UNIT], {DESKTOP: RECORDED_3, SHELL: RECORDED_5}))
+            script = Path(__file__).resolve().parent / "goldens.sh"
+            actual = definition if definition is not None else hashlib.sha256(
+                (script.parent / "goldens/Dockerfile").read_bytes()).hexdigest()
             docker = bin_dir / "docker"
-            docker.write_text(f'#!/bin/sh\n[ "$1" = run ] || exit 0\ncat "{update_log}"\nexit {status}\n')
+            docker.write_text(f'#!/bin/sh\nif [ "$1" = image ]; then echo "{actual}"; exit 0; fi\n'
+                              f'[ "$1" = run ] || exit 0\ncat "{update_log}"\nexit {status}\n')
             docker.chmod(0o755)
             env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CUPERTINO_GOLDENS_CACHE=scratch)
-            script = Path(__file__).resolve().parent / "goldens.sh"
+            if definition is not None:
+                env["CUPERTINO_GOLDENS_IMAGE"] = "prebuilt"
             return subprocess.run(["bash", str(script), "--update"], env=env, capture_output=True, text=True)
 
     def test_cargo_tests_failure_status_passes(self):
-        self.assertEqual(self.run_update(101).returncode, 0)
+        self.assertEqual(self.run_update(101, None).returncode, 0)
 
     def test_a_killed_container_fails_with_its_status(self):
-        result = self.run_update(137)
+        result = self.run_update(137, None)
         self.assertEqual(result.returncode, 1)
         self.assertIn("goldens: the update run exited 137, not with cargo test's failure status 101", result.stderr)
+
+    def test_prebuilt_image_with_another_definition_fails(self):
+        result = self.run_update(101, "another-definition")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("image definition does not match", result.stderr)
+
+    def test_prebuilt_image_with_the_pinned_definition_passes(self):
+        dockerfile = Path(__file__).resolve().parent / "goldens/Dockerfile"
+        self.assertEqual(self.run_update(101, hashlib.sha256(dockerfile.read_bytes()).hexdigest()).returncode, 0)
 
 
 if __name__ == "__main__":

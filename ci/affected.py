@@ -76,39 +76,67 @@ def affected(packages: list[Package], changed: list[str]) -> list[str]:
     return sorted(selected)
 
 
+def checks(changed: list[str]) -> dict[str, bool]:
+    """Select cheap gates by their inputs; workflow changes exercise every gate."""
+    workflow = any(p.startswith((".github/", "ci/")) for p in changed)
+    manifests = any(Path(p).name == "Cargo.toml" or p == "Cargo.lock" for p in changed)
+    licences = any(Path(p).name == "LICENSE" for p in changed)
+    toolchain = any(p in ("rust-toolchain.toml", "rust-toolchain", ".cargo/config.toml") for p in changed)
+    return {
+        "docs": workflow or any(p.startswith("docs/") for p in changed),
+        "deny": workflow or manifests or licences or "deny.toml" in changed or ".cargo/config.toml" in changed,
+        "fmt": workflow or toolchain or manifests or any(p.endswith(".rs") or Path(p).name in
+                                                       ("rustfmt.toml", ".rustfmt.toml") for p in changed),
+        "layers": workflow or toolchain or manifests or licences or
+                  any(p.startswith("crates/cupertino-layers/") for p in changed),
+    }
+
+
+def changed_paths(base: str, head: str) -> list[str]:
+    return [p for p in subprocess.check_output([
+        "git", "diff", "--name-only", "--no-renames", "-z", f"{base}...{head}",
+    ]).decode().split("\0") if p]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     select = commands.add_parser("select")
     select.add_argument("base")
     select.add_argument("head")
+    gates = commands.add_parser("gates")
+    gates.add_argument("base")
+    gates.add_argument("head")
     commands.add_parser("full")
     run = commands.add_parser("run")
     run.add_argument("check", choices=("clippy", "tests", "doctests"))
     args = parser.parse_args()
+    if args.command == "gates":
+        print(json.dumps(checks(changed_paths(args.base, args.head)), separators=(",", ":")))
+        return 0
     if args.command == "run":
         packages = json.loads(os.environ["CUPERTINO_CI_PACKAGES"])
         if not isinstance(packages, list) or not packages or not all(isinstance(p, str) and p for p in packages):
             parser.error("CUPERTINO_CI_PACKAGES must be a non-empty JSON array of package names")
-        checks = {
+        cargo_checks = {
             "clippy": ["clippy", "--all-targets", "--all-features"],
             "tests": ["nextest", "run", "--all-features", "--no-fail-fast"],
             "doctests": ["test", "--all-features", "--doc"],
         }
-        command = ["cargo", *checks[args.check]]
+        command = ["cargo", *cargo_checks[args.check]]
         for package in packages:
             command.extend(["-p", package])
         if args.check == "clippy":
             command.extend(["--", "-D", "warnings"])
+        elif args.check == "tests":
+            command = [sys.executable, str(Path(__file__).resolve().with_name("build-test-fixtures.py")),
+                       "--locked", "--", *command]
         return subprocess.run(command, check=False).returncode
     packages = workspace()
     if args.command == "full":
         selected = sorted(p.name for p in packages)
     else:
-        paths = subprocess.check_output([
-            "git", "diff", "--name-only", "--no-renames", "-z", f"{args.base}...{args.head}",
-        ]).decode().split("\0")
-        selected = affected(packages, [p for p in paths if p])
+        selected = affected(packages, changed_paths(args.base, args.head))
     print(json.dumps(selected, separators=(",", ":")))
     return 0
 

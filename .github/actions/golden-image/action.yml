@@ -1,0 +1,45 @@
+name: Golden renderer image
+description: Build the pinned renderer with a trusted, content-addressed layer cache
+outputs:
+  image:
+    description: Local image tagged with its Dockerfile hash
+    value: ${{ steps.definition.outputs.image }}
+runs:
+  using: composite
+  steps:
+    - id: definition
+      shell: bash
+      run: |
+        definition=$(sha256sum ci/goldens/Dockerfile | cut -d ' ' -f 1)
+        echo "hash=$definition" >> "$GITHUB_OUTPUT"
+        echo "image=cupertino-goldens:$definition" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      id: cache
+      with:
+        path: ${{ runner.temp }}/golden-buildkit
+        key: golden-image-linux-amd64-${{ steps.definition.outputs.hash }}
+    - name: Report image bootstrap
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: echo 'No matching golden image cache; building the pinned Dockerfile from source.' >> "$GITHUB_STEP_SUMMARY"
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      with:
+        cache-binary: false
+    - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: ci/goldens
+        load: true
+        tags: ${{ steps.definition.outputs.image }}
+        labels: io.cupertino.goldens.definition=${{ steps.definition.outputs.hash }}
+        cache-from: ${{ steps.cache.outputs.cache-hit == 'true' && format('type=local,src={0}/golden-buildkit', runner.temp) || '' }}
+        cache-to: type=local,dest=${{ runner.temp }}/golden-buildkit-new,mode=max
+    - name: Prepare trusted image cache
+      if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: mv "$RUNNER_TEMP/golden-buildkit-new" "$RUNNER_TEMP/golden-buildkit"
+    # A PR can consume the trusted cache but never replace it.
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.cache.outputs.cache-hit != 'true'
+      with:
+        path: ${{ runner.temp }}/golden-buildkit
+        key: golden-image-linux-amd64-${{ steps.definition.outputs.hash }}

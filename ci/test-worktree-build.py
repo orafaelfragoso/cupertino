@@ -69,7 +69,16 @@ class WorktreeBuildTest(unittest.TestCase):
         with patch.object(BUILD, "output", return_value="toolchain-two"):
             self.assertNotEqual(identity, BUILD.fingerprint(self.root, "dev", {}))
 
+    def require_reflinks(self):
+        source, destination = self.root / "probe-source", self.root / "probe-copy"
+        source.write_text("probe")
+        probe = subprocess.run(["cp", "--reflink=always", str(source), str(destination)], capture_output=True, text=True)
+        if probe.returncode and any(reason in probe.stderr for reason in ("Operation not supported", "Invalid cross-device link")):
+            self.skipTest("filesystem does not support reflink clones")
+        self.assertEqual(probe.returncode, 0, probe.stderr)
+
     def test_matching_seed_is_reflinked_and_writes_do_not_change_seed(self):
+        self.require_reflinks()
         source = self.state / "seeds" / "host"
         self.metadata(source, self.state, fingerprint="matching", created=time.time())
         (source / "artifact").write_text("before")
@@ -78,6 +87,19 @@ class WorktreeBuildTest(unittest.TestCase):
         (self.root / "target" / "artifact").write_text("after")
         self.assertEqual((source / "artifact").read_text(), "before")
         self.assertFalse(BUILD.read_marker(self.root / "target", str(self.root))["successful"])
+
+    def test_untracked_root_cargo_config_changes_compatibility(self):
+        (self.root / ".cargo").mkdir()
+        def version(command, root):
+            return "" if command[0] == "git" else "toolchain"
+        with patch.object(BUILD, "output", side_effect=version):
+            before = BUILD.fingerprint(self.root, "dev", {})
+            config = self.root / ".cargo" / "config"
+            config.write_text('[build]\nrustflags = ["--cfg=local"]\n')
+            self.assertNotEqual(before, BUILD.fingerprint(self.root, "dev", {}))
+            config.write_text('[build]\nbuild-dir = "/elsewhere"\n')
+            with self.assertRaisesRegex(ValueError, "external build directories"):
+                BUILD.fingerprint(self.root, "dev", {})
 
     def test_incompatible_or_expired_seed_refuses_before_clone(self):
         source = self.state / "seeds" / "host"
@@ -108,13 +130,19 @@ class WorktreeBuildTest(unittest.TestCase):
                                     "created": time.time()})
         with self.assertRaisesRegex(ValueError, "budget"):
             BUILD.promote(self.root, self.state, "host", "host", 0, 0)
+        self.metadata(self.state / "seeds" / "host", self.state)
+        with self.assertRaisesRegex(ValueError, "at most 1 seed"):
+            BUILD.promote(self.root, self.state, "host", "another", 12, 0)
+
+    def test_promotion_excludes_separate_container_targets(self):
+        self.require_reflinks()
+        target = self.root / "target"
+        self.metadata(target, self.root, fingerprint="host", successful=True)
         (target / "package-build").mkdir()
         (target / "package-build" / "container-artifact").write_text("do not clone")
         with patch.object(BUILD, "disk_room"), BUILD.exclusive(self.root / "lock") as lease:
             BUILD.promote(self.root, self.state, "host", "host", 12, lease)
-            self.assertFalse((self.state / "seeds" / "host" / "package-build").exists())
-            with self.assertRaisesRegex(ValueError, "at most 1 seed"):
-                BUILD.promote(self.root, self.state, "host", "another", 12, lease)
+        self.assertFalse((self.state / "seeds" / "host" / "package-build").exists())
 
     def test_cleanup_refuses_unmanaged_or_other_worktree_targets_and_symlinks(self):
         target = self.root / "target"
@@ -201,6 +229,21 @@ class WorktreeBuildTest(unittest.TestCase):
         second.stdin.write("release\n")
         second.stdin.flush()
         second.wait(timeout=10)
+
+    def test_intermediary_exit_stops_descendant_that_closed_lease(self):
+        pid_file = self.root / "descendant-pid"
+        program = (
+            "import subprocess, sys; "
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], close_fds=True); "
+            "open(sys.argv[1], 'w').write(str(child.pid))"
+        )
+        with BUILD.exclusive(self.root / "lock") as lease:
+            self.assertEqual(BUILD.child([sys.executable, "-c", program, str(pid_file)],
+                                         self.root, dict(os.environ), lease), 0)
+        pid = int(pid_file.read_text())
+        status = Path("/proc") / str(pid) / "stat"
+        if status.exists():
+            self.assertEqual(status.read_text().rsplit(")", 1)[1].split()[0], "Z")
 
     def test_running_child_keeps_lock_when_wrapper_is_killed(self):
         first = self.worker("child")

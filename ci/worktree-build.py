@@ -78,11 +78,12 @@ def fingerprint(root: Path, profile: str, environ: dict[str, str]) -> str:
               if name and (Path(name).name in {"Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml"}
                            or name.startswith(".cargo/"))}
     cargo_home = Path(environ.get("CARGO_HOME", str(Path.home() / ".cargo")))
-    for directory in [cargo_home, *[parent / ".cargo" for parent in root.parents]]:
+    for directory in [cargo_home, root / ".cargo", *[parent / ".cargo" for parent in root.parents]]:
         for name in ("config", "config.toml"):
             config = directory / name
             if config.exists():
-                inputs[str(config)] = config.read_text()
+                name = config.relative_to(root).as_posix() if config.is_relative_to(root) else str(config)
+                inputs[name] = config.read_text()
     for name, contents in inputs.items():
         if Path(name).name in {"config", "config.toml"}:
             configuration = tomllib.loads(contents)
@@ -118,6 +119,21 @@ def write_marker(directory: Path, metadata: Metadata) -> None:
     staging.replace(directory / MARKER)
 
 
+def group_running(group: int) -> bool:
+    """Ignore exited zombies when checking our Linux child process group."""
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdecimal():
+            continue
+        try:
+            fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+        except (FileNotFoundError, ProcessLookupError):
+            # Processes can exit between the directory listing and this read.
+            continue
+        if int(fields[2]) == group and fields[0] != "Z":
+            return True
+    return False
+
+
 def child(command: list[str], root: Path, environ: dict[str, str], lease: int) -> int:
     """Keep the resource lease until the whole child process group has stopped."""
     child_environment = {**environ, "CUPERTINO_BUILD_LOCK_FD": str(lease)}
@@ -125,13 +141,18 @@ def child(command: list[str], root: Path, environ: dict[str, str], lease: int) -
     try:
         return process.wait()
     finally:
-        if process.poll() is None:
+        # An intermediary may exit before a compiler/test descendant and close its inherited lease.
+        # Stop every remaining group member before the caller can release the resource guard.
+        with contextlib.suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
+        deadline = time.monotonic() + 10
+        while group_running(process.pid):
+            process.poll()
+            if time.monotonic() >= deadline:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+            time.sleep(0.05)
+        process.wait()
 
 
 def clone(source: Path, destination: Path, root: Path, lease: int) -> None:

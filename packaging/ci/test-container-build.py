@@ -97,11 +97,16 @@ elif args[0] == 'start':
             time.sleep(0.01)
     if install and os.environ.get('TEST_INSTALL_FAIL'):
         raise SystemExit(19)
+    if not install and os.environ.get('TEST_COMPILE_FAIL'):
+        raise SystemExit(31)
 elif args[:2] == ['rm', '--force']:
     if os.environ.get('TEST_REMOVE_FAIL'):
         print('cannot remove owned container', file=sys.stderr)
         raise SystemExit(23)
     (state / args[-1]).unlink()
+elif args[0] == 'run':
+    assert args[-6:-3] == ['chown', '-R', str(os.getuid()) + ':' + str(os.getgid())]
+    assert args[-3:] == ['/dist', '/src', '/cargo-home']
 else:
     raise AssertionError(args)
 ''')
@@ -144,6 +149,7 @@ else:
         self.assertIn('type=bind,src=' + str(self.root / 'target/package-build/debian/targets' / ('a' * 64)) + ',dst=/src/target', build_run)
         self.assertEqual(build_run[-4], 'sha256:' + 'a' * 64)
         self.assertIn('export CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/src/target', build_run[-1])
+        self.assertIn(' /dist /src /cargo-home\' EXIT', build_run[-1])
         self.assertIn('CARGO_BUILD_JOBS=4', build_run)
         self.assertIn('CARGO_HOME=/cargo-home', build_run)
         cargo_home = self.root / 'target/package-build/debian/cargo-home'
@@ -155,6 +161,7 @@ else:
         install_run = creates[1]
         self.assertIn('docker.io/library/debian@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308', install_run)
         self.assertFalse(any('cupertino-package-builder:' in argument for argument in install_run))
+        self.assertFalse(any(command[0] == 'run' for command in commands))
 
     def test_changed_image_gets_a_private_compiled_target_and_keeps_downloads(self):
         first_id, second_id = 'sha256:' + 'a' * 64, 'sha256:' + 'b' * 64
@@ -209,6 +216,15 @@ else:
     def test_install_failure_propagates(self):
         result = self.run_build([], {'TEST_INSTALL_FAIL': '1'}, 'debian')
         self.assertEqual(result.returncode, 19, result.stderr)
+
+    def test_failed_compilation_repairs_only_its_owned_bind_mounts(self):
+        result = self.run_build([], {'TEST_COMPILE_FAIL': '1'}, 'debian')
+        self.assertEqual(result.returncode, 31, result.stderr)
+        repairs = [command for command in self.commands() if command[0] == 'run']
+        self.assertEqual(len(repairs), 1)
+        self.assertIn(str(self.root / 'dist') + ':/dist', repairs[0])
+        self.assertIn('type=bind,src=' + str(self.root / 'target/package-build/debian/targets' / ('a' * 64)) + ',dst=/src/target', repairs[0])
+        self.assertIn('type=bind,src=' + str(self.root / 'target/package-build/debian/cargo-home') + ',dst=/cargo-home', repairs[0])
 
     def test_test_only_needs_no_image_build_or_cargo_target(self):
         result = self.run_build(['--test-only'], {}, 'debian')
@@ -282,6 +298,17 @@ else:
         removed = [command[-1] for command in commands if command[:2] == ['rm', '--force']]
         started = [command[-1] for command in commands if command[0] == 'start']
         self.assertEqual(removed, started)
+        repairs = [command for command in commands if command[0] == 'run']
+        if hold == 'build':
+            self.assertEqual(len(repairs), 1)
+            repair = repairs[0]
+            self.assertEqual(repair[1:5], ['--rm', '--network', 'none', '-v'])
+            self.assertEqual(repair[-7], 'sha256:' + 'a' * 64)
+            self.assertIn('type=bind,src=' + str(self.root / 'target/package-build/debian/cargo-home') + ',dst=/cargo-home', repair)
+            removal_index = max(index for index, command in enumerate(commands) if command[:2] == ['rm', '--force'])
+            self.assertGreater(commands.index(repair), removal_index)
+        else:
+            self.assertEqual(repairs, [])
         self.assertFalse(list((self.root / 'target').glob('container-build.*')))
 
     def test_termination_removes_only_owned_build_container(self):

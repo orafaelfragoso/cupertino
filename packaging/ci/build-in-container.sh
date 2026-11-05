@@ -54,6 +54,7 @@ work=$(mktemp -d "$root/target/container-build.XXXXXX")
 cache_next=
 cache_link=
 active_job=
+restore_ownership=0
 cleanup() {
     local status=$? cleanup_status=0 container cidfile
     trap - EXIT
@@ -73,6 +74,15 @@ cleanup() {
         fi
         # Reap the interrupted streaming/build client; its failure must not replace the original signal status.
         if wait "$active_job"; then :; fi
+    fi
+    # A forced container stop cannot run its EXIT trap; repair only this run's bind-mounted outputs.
+    if [ "$restore_ownership" = 1 ]; then
+        if ! docker run --rm --network none -v "$work/src:/src" -v "$dist:/dist" \
+            --mount "type=bind,src=$target,dst=/src/target" \
+            --mount "type=bind,src=$cargo_home,dst=/cargo-home" \
+            "$image_id" chown -R "$(id -u):$(id -g)" /dist /src /cargo-home; then
+            cleanup_status=1
+        fi
     fi
     rm -rf "$work" || cleanup_status=1
     if [ -n "$cache_next" ]; then rm -rf "$cache_next" || cleanup_status=1; fi
@@ -114,7 +124,7 @@ fi
 
 build_script=$(cat <<EOF
 set -euo pipefail
-trap 'chown -R $(id -u):$(id -g) /dist /src' EXIT
+trap 'chown -R $(id -u):$(id -g) /dist /src /cargo-home' EXIT
 cd /src
 # Packages are stripped; generating debug information only consumes build storage.
 export CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/src/target CUPERTINO_THEME_DIR=/usr/share/cupertino/theme CARGO_PROFILE_RELEASE_DEBUG=0
@@ -365,7 +375,9 @@ if [ "$mode" != --test-only ]; then
         --env "CARGO_BUILD_JOBS=$jobs" --env CARGO_HOME=/cargo-home -v "$work/src:/src" -v "$dist:/dist" \
         --mount "type=bind,src=$target,dst=/src/target" \
         --mount "type=bind,src=$cargo_home,dst=/cargo-home" "$image_id" bash -c "$build_script")
+    restore_ownership=1
     start_container "$container" ""
+    restore_ownership=0
 fi
 if [ "$upgrade" = 1 ]; then
     container=$(docker create --cidfile "$work/test.cid" --name "cupertino-$distro-$(basename "$work")-test" \

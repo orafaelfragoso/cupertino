@@ -23,21 +23,31 @@ prepare() {
   cargo fetch --locked
 }
 
+# Build and check share compiler inputs even when makepkg carries exported flags between functions.
+build_environment() {
+  # The packaged binaries are stripped; keep test compilation on the same release settings.
+  export CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0 CUPERTINO_THEME_DIR=/usr/share/cupertino/theme
+  local remap
+  for remap in "--remap-path-prefix=$srcdir=/usr/src/debug/$pkgbase" \
+               "--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"; do
+    case " ${RUSTFLAGS:-} " in
+      *" $remap "*) ;;
+      *) RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }$remap" ;;
+    esac
+  done
+  export RUSTFLAGS
+}
+
 build() {
   cd "cupertino-$pkgver"
-  # The packaged binaries are stripped; debug info only fills the build tree (15 GB with the test build) and must
-  # match check(), or the tests rebuild every dependency.
-  export CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0
-  # The installed theme directory is compiled in; no build or home path may end up in the binaries.
-  export CUPERTINO_THEME_DIR=/usr/share/cupertino/theme
-  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/usr/src/debug/$pkgbase --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
+  build_environment
   cargo build --frozen --release --workspace --all-features --bins
 }
 
 check() {
   cd "cupertino-$pkgver"
-  export CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0 CUPERTINO_THEME_DIR=/usr/share/cupertino/theme CUPERTINO_SPEC_DIR="$PWD/data/theme"
-  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/usr/src/debug/$pkgbase --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
+  build_environment
+  export CUPERTINO_SPEC_DIR="$PWD/data/theme"
   # The compositor tests open a Wayland socket; the build environment has no runtime directory of its own.
   export XDG_RUNTIME_DIR="$srcdir/runtime"
   install -d -m 700 "$XDG_RUNTIME_DIR"

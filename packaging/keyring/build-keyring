@@ -14,7 +14,8 @@ out=$(realpath "$2")
 here=$(cd "$(dirname "$0")" && pwd)
 image=docker.io/library/archlinux@sha256:3cbf69d2d5958d6a294f3722c5668e6187c4df8e00fa27f72352f0bf83e495e1
 
-scratch=$(mktemp -d)
+# Keep Docker control files beside this run's output rather than on a separately quota-limited tmpfs.
+scratch=$(mktemp -d "$out/.keyring.XXXXXX")
 active_job=
 cleanup() {
     local status=$? cleanup_status=0

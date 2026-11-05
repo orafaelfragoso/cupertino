@@ -29,7 +29,8 @@ fi
 
 # The session bus needs the caller's uid in the password database. The name is fixed: the lock screen draws it, and the
 # baseline must not depend on who runs this.
-scratch="$(mktemp -d)"
+# Docker writes the control files too; keep them on the disk checked by the build guard.
+scratch="$(mktemp -d "$cache/control.XXXXXX")"
 passwd="$scratch/passwd"
 log="$scratch/log"
 cidfile="$scratch/container.cid"

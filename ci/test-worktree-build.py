@@ -204,6 +204,12 @@ class WorktreeBuildTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 BUILD.cargo_command(["cargo", "build", flag], "dev")
 
+    def test_fixture_wrapper_cannot_override_the_managed_target_directory(self):
+        for override in (["--target-dir", "/another-worktree/target"], ["--target-dir=/another-worktree/target"]):
+            with self.subTest(override=override), self.assertRaisesRegex(ValueError, "target directory"):
+                BUILD.cargo_command(["python3", "ci/build-test-fixtures.py", *override,
+                                     "--", "cargo", "nextest", "run"], "dev")
+
     def test_failed_run_cannot_promote_and_success_records_actual_status(self):
         command = [str(SCRIPT), "run", "--profile", "dev", "--", "cargo", "build", "--workspace"]
         with patch.object(BUILD, "repository", return_value=self.state), patch.object(BUILD.Path, "cwd", return_value=self.root), \

@@ -222,6 +222,8 @@ def cargo_command(command: list[str], profile: str) -> list[str]:
         if "--" not in command[2:]:
             raise ValueError("fixture wrapper requires -- followed by a Cargo command")
         split = command.index("--")
+        if any(arg == "--target-dir" or arg.startswith("--target-dir=") for arg in command[2:split]):
+            raise ValueError("fixture target directory is managed by this wrapper")
         if any(arg.startswith(("--profile", "--release")) for arg in command[2:split]):
             raise ValueError("fixture profile is set by --profile on this wrapper")
         return command[:2] + ["--profile", profile] + command[2:split + 1] + cargo_command(command[split + 1:], profile)

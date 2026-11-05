@@ -617,7 +617,7 @@ Everything above is built in. The `ShellExtension` trait is gone; the shell proc
 
 ## Tests
 
-`cargo test -p cupertino-server` runs the unit tests in `src/` and these files in `tests/`: `clipboard.rs`, `headless.rs`, `layer_input.rs`, `pointer_buttons.rs`, `overlays.rs`, `session_lock.rs`, `app_effects_v1.rs`, `shell_roles.rs`, `shell_processes.rs`, `menu_bar_v1.rs`, `dock_v1.rs`, `session_v1.rs`, `window_manager_v1.rs`, `dbus.rs`, `window_kinds.rs`, `output_management.rs`, `pointer_output.rs`, `cursor.rs`, `capture.rs`, `scroll_v1.rs`, `live_settings.rs`. `cargo clippy --workspace --all-targets --all-features` is clean.
+From a linked worktree, `python3 ci/worktree-build.py run --profile dev -- python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --all-features -p cupertino-server` prepares the client and shell fixtures, then runs the unit tests in `src/` and these files in `tests/`: `clipboard.rs`, `headless.rs`, `layer_input.rs`, `pointer_buttons.rs`, `overlays.rs`, `session_lock.rs`, `app_effects_v1.rs`, `shell_roles.rs`, `shell_processes.rs`, `menu_bar_v1.rs`, `dock_v1.rs`, `session_v1.rs`, `window_manager_v1.rs`, `dbus.rs`, `window_kinds.rs`, `output_management.rs`, `pointer_output.rs`, `cursor.rs`, `capture.rs`, `scroll_v1.rs`, `live_settings.rs`. Use `python3 ci/worktree-build.py run --profile dev -- cargo clippy --workspace --all-targets --all-features` for the workspace lint check.
 
 Unless the harness column says otherwise, an integration test runs the compositor in-process on an offscreen EGL device with real Wayland clients and skips (pass) without an EGL device. `CUPERTINO_ARTIFACTS=dir` saves screenshots as PNG.
 

@@ -95,9 +95,11 @@ the close request exits; `--frames N` animates N frames and prints the size, sca
 ## Tests
 
 ```
-cargo test -p cupertino-wayland-client
-cargo nextest run -p cupertino-wayland-client --test mutter       # skips only when mutter is absent
-cargo nextest run -p cupertino-wayland-client --run-ignored only   # optional Weston check
+python3 ci/worktree-build.py run --profile dev -- python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --all-features -p cupertino-wayland-client
+# Mutter check; skips only when mutter is absent.
+python3 ci/worktree-build.py run --profile dev -- python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --all-features -p cupertino-wayland-client --test mutter
+# Optional Weston check.
+python3 ci/worktree-build.py run --profile dev -- python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --all-features -p cupertino-wayland-client --run-ignored only
 ```
 
 `tests/protocol-flow.rs` runs a minimal protocol server in-process: required globals, configure and ack, resize, buffer

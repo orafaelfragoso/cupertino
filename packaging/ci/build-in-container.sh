@@ -7,7 +7,7 @@
 # container compiles the workspace and makes the runtime and data packages (Arch: makepkg with check() on the release
 # source archive and the stable PKGBUILD, then namcap); release.py verifies each against the manifest. A second, fresh container of the same base installs them, checks the login-screen account, the unit
 # state, the payload and conffile preservation across a reinstall, then removes them. Packages, file lists and the
-# test log land in DIST_DIR. --test-only skips the build and install-tests the packages already in DIST_DIR. Needs docker and git; nothing is installed on the host.
+# test log land in DIST_DIR. --test-only skips the build and install-tests the packages already in DIST_DIR. Needs Docker Buildx, Python 3 and git; nothing is installed on the host.
 #
 # --upgrade packages the same build twice, as release 1 in DIST_DIR/rev-1 and as release 2 in DIST_DIR/rev-2 (no
 # second compile), then, in a fresh container, installs release 1, enables the login service, edits login.conf,
@@ -21,38 +21,46 @@ mode=${3:-build}
 upgrade=0
 [ "$mode" = --upgrade ] && upgrade=1
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
-
-# Images by digest; the Rust toolchain is fixed (Arch: the rolling distribution's rust), as are the packaging tools.
-RUST_TOOLCHAIN=1.99.1
-CARGO_DEB=3.8.0
-CARGO_GENERATE_RPM=0.21.1
+if [ "$mode" != build ] && [ "$mode" != --test-only ] && [ "$mode" != --upgrade ]; then
+    echo "$usage" >&2
+    exit 2
+fi
+# Fresh install tests retain their original distribution bases, never the dependency-filled builder images.
 case $distro in
 arch)
-    build_image=docker.io/library/archlinux@sha256:3cbf69d2d5958d6a294f3722c5668e6187c4df8e00fa27f72352f0bf83e495e1 # base-devel
-    test_image=$build_image
+    test_image=docker.io/library/archlinux@sha256:3cbf69d2d5958d6a294f3722c5668e6187c4df8e00fa27f72352f0bf83e495e1
     ;;
 debian)
-    build_image=docker.io/library/rust@sha256:931c2c0531a8b143e044f0f3914dfe802f15bb3d1955f0b657e9359327ac2ffc # 1.99.1-trixie
-    test_image=docker.io/library/debian@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308 # trixie
+    test_image=docker.io/library/debian@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308
     ;;
 fedora)
-    build_image=docker.io/library/fedora@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80 # 44
-    test_image=$build_image
+    test_image=docker.io/library/fedora@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80
     ;;
 *)
     echo "unknown distribution: $distro" >&2
     exit 2
     ;;
 esac
-
 mkdir -p "$dist"
 dist=$(cd "$dist" && pwd)
+# Hold the same lifetime lease as local Cargo work before building an image or touching a package target.
+if [ "$mode" != --test-only ] && [ -z "${CUPERTINO_BUILD_LOCK_FD:-}" ]; then
+    cd "$root"
+    exec python3 ci/worktree-build.py locked -- bash packaging/ci/build-in-container.sh "$distro" "$dist" "$mode"
+fi
 # The source copy and the Arch build tree are large; they live under the gitignored target/, not in /tmp.
 mkdir -p "$root/target"
 work=$(mktemp -d "$root/target/container-build.XXXXXX")
-trap 'rm -rf "$work"' EXIT
+cache_next=
+cache_link=
+cleanup() {
+    rm -rf "$work"
+    [ -z "$cache_next" ] || rm -rf "$cache_next"
+    [ -z "$cache_link" ] || rm -f "$cache_link"
+}
+trap cleanup EXIT
 git -C "$root" archive --format=tar --prefix=src/ HEAD | tar -x -C "$work"
-if [ "$distro" = arch ]; then
+if [ "$distro" = arch ] && [ "$mode" != --test-only ]; then
     mkdir "$work/src/arch-build"
     archive=$(python3 "$root/packaging/release.py" source --output "$work/src/arch-build" ${RELEASE_TAG:+--tag "$RELEASE_TAG"})
     python3 "$root/packaging/release.py" pkgbuild ${RELEASE_TAG:+--tag "$RELEASE_TAG"} "$archive" "$work/src/arch-build/PKGBUILD" >/dev/null
@@ -65,13 +73,11 @@ build_script=$(cat <<EOF
 set -euo pipefail
 trap 'chown -R $(id -u):$(id -g) /dist /src' EXIT
 cd /src
-export CARGO_INCREMENTAL=0 CUPERTINO_THEME_DIR=/usr/share/cupertino/theme
+export CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/src/target CUPERTINO_THEME_DIR=/usr/share/cupertino/theme
 upgrade=$upgrade
 case $distro in
 arch)
-    pacman -Syu --noconfirm --needed -q rust python mesa libglvnd pam dbus xkeyboard-config shared-mime-info gcc-libs systemd adwaita-icon-theme clang libpipewire pipewire namcap >/dev/null
-    useradd -m builder
-    chown -R builder /src/arch-build
+    chown -R builder /src/arch-build /src/target
     su builder -c 'cd /src/arch-build && makepkg --noconfirm'
     df -h /src | tee /dist/disk-after-makepkg.log
     namcap arch-build/PKGBUILD arch-build/*.pkg.tar.zst | tee /dist/namcap.log
@@ -94,16 +100,7 @@ arch)
     exit 0
     ;;
 debian)
-    apt-get update -qq
-    apt-get install -y -qq --no-install-recommends pkg-config libgbm-dev libpam0g-dev clang libclang-dev libpipewire-0.3-dev dpkg-dev >/dev/null
-    cargo install --locked --quiet --version $CARGO_DEB cargo-deb
     export CUPERTINO_ADMIN_GROUPS=sudo
-    ;;
-fedora)
-    dnf install -y -q gcc pkgconf-pkg-config mesa-libgbm-devel pam-devel clang pipewire-devel rustup rpm-build cpio python3 binutils >/dev/null
-    rustup-init -y -q --profile minimal --default-toolchain $RUST_TOOLCHAIN >/dev/null
-    . "\$HOME/.cargo/env"
-    cargo install --locked --quiet --version $CARGO_GENERATE_RPM cargo-generate-rpm
     ;;
 esac
 rustc --version
@@ -264,13 +261,57 @@ check 'login enablement removed' absent /etc/systemd/system/multi-user.target.wa
 EOF
 )
 
-# The source copy is private to this run; the target volume keeps the build between local runs.
+# Each worktree and distribution owns its Cargo outputs; no global volume can mix incompatible builds.
 if [ "$mode" != --test-only ]; then
+    target="$root/target/package-build/$distro"
+    mkdir -p "$target"
+    image_key=$(sha256sum "$root/packaging/ci/Dockerfile" | cut -c1-16)
+    build_image="cupertino-package-builder:$distro-$image_key"
+    build=(docker buildx build --load --target "$distro" --tag "$build_image")
+    if [ -n "${CUPERTINO_BUILD_CACHE_DIR:-}" ]; then
+        mkdir -p "$CUPERTINO_BUILD_CACHE_DIR/$distro"
+        cache_root=$(cd "$CUPERTINO_BUILD_CACHE_DIR/$distro" && pwd)
+        cache_next=$(mktemp -d "$cache_root/generation.XXXXXX")
+        if [ -L "$cache_root/current" ]; then
+            if [ ! -f "$cache_root/current/index.json" ]; then
+                echo "builder cache is incomplete: $cache_root/current" >&2
+                exit 1
+            fi
+            build+=(--cache-from "type=local,src=$cache_root/current")
+        elif [ -e "$cache_root/current" ]; then
+            echo "builder cache current must be a symlink: $cache_root/current" >&2
+            exit 1
+        fi
+        build+=(--cache-to "type=local,dest=$cache_next,mode=max")
+    fi
+    "${build[@]}" "$root/packaging/ci"
+    if [ -n "$cache_next" ]; then
+        if [ ! -f "$cache_next/index.json" ]; then
+            echo "builder cache export is incomplete: $cache_next" >&2
+            exit 1
+        fi
+        previous=
+        if [ -L "$cache_root/current" ]; then
+            previous=$(readlink "$cache_root/current")
+        fi
+        cache_link="$cache_root/current.new.$$"
+        ln -s "$(basename "$cache_next")" "$cache_link"
+        mv -Tf "$cache_link" "$cache_root/current"
+        cache_link=
+        cache_next=
+        # Delete only a generation owned by this cache, after the successful export was atomically published.
+        if [[ "$previous" == generation.* && "$previous" != */* ]]; then
+            rm -rf "$cache_root/$previous"
+        fi
+    fi
     docker run --rm -v "$work/src:/src" -v "$dist:/dist" \
-        --mount "type=volume,src=cupertino-$distro-target,dst=/src/target" "$build_image" bash -c "$build_script"
+        --mount "type=bind,src=$target,dst=/src/target" "$build_image" bash -c "$build_script"
 fi
 if [ "$upgrade" = 1 ]; then
     docker run --rm -v "$dist:/dist:ro" "$test_image" bash -c "$upgrade_script" bash "$distro" | tee "$dist/upgrade-test-$distro.log"
 else
     docker run --rm -v "$dist:/dist:ro" "$test_image" bash -c "$test_script" bash "$distro" | tee "$dist/install-test-$distro.log"
+fi
+if [ "$distro" = arch ] && [ "$upgrade" = 0 ]; then
+    python3 "$root/packaging/release.py" record-packages "$dist" ${RELEASE_TAG:+--tag "$RELEASE_TAG"}
 fi

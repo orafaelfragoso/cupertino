@@ -84,6 +84,25 @@ class Artifacts(unittest.TestCase):
                                     env=dict(os.environ, CARGO=str(cargo)), capture_output=True)
             self.assertEqual(result.returncode, 31, result.stderr)
 
+    def test_resource_lease_reaches_cargo_and_test_children(self):
+        with tempfile.TemporaryDirectory() as directory:
+            scratch = Path(directory)
+            cargo = scratch / 'cargo'
+            message = self.message('cupertino-testclient', 'bin', 'cupertino-testclient', str(cargo), [], False)
+            cargo.write_text('#!' + sys.executable + '\nimport os\n'
+                             + 'os.write(int(os.environ["CUPERTINO_BUILD_LOCK_FD"]), b"cargo\\n")\n'
+                             + f'print({json.dumps(message)!r})\n')
+            cargo.chmod(0o700)
+            child = 'import os; os.write(int(os.environ["CUPERTINO_BUILD_LOCK_FD"]), b"tests\\n")'
+            with (scratch / 'lease').open('w+b') as lease:
+                descriptor = lease.fileno()
+                result = subprocess.run([sys.executable, str(SCRIPT), '--locked', '--', sys.executable, '-c', child],
+                                        env=dict(os.environ, CARGO=str(cargo), CUPERTINO_BUILD_LOCK_FD=str(descriptor)),
+                                        pass_fds=(descriptor,), capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                lease.seek(0)
+                self.assertEqual(lease.read(), b'cargo\ntests\n')
+
 
 if __name__ == '__main__':
     unittest.main()

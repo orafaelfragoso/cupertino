@@ -1,5 +1,6 @@
 """Tests of affected-crate selection: python3 -I ci/test_affected.py."""
 from pathlib import Path
+import json
 import os
 import sys
 from types import SimpleNamespace
@@ -64,17 +65,44 @@ class AffectedTests(unittest.TestCase):
 
     def test_runner_selects_packages_and_propagates_failure(self) -> None:
         for check, command in (
-            ("clippy", ["cargo", "clippy", "--all-targets", "--all-features", "-p", "core", "-p", "app", "--", "-D", "warnings"]),
-            ("tests", [sys.executable, str(Path(__file__).resolve().with_name("build-test-fixtures.py")),
-                       "--locked", "--", "cargo", "nextest", "run", "--all-features", "--no-fail-fast",
-                       "-p", "core", "-p", "app"]),
+            ("clippy", ["cargo", "clippy", "--all-targets", "--all-features", "--timings", "-p", "core", "-p", "app", "--", "-D", "warnings"]),
+            ("tests", ["cargo", "nextest", "run", "--all-features", "--no-fail-fast", "--timings", "-p", "core", "-p", "app"]),
             ("doctests", ["cargo", "test", "--all-features", "--doc", "-p", "core", "-p", "app"]),
         ):
             with self.subTest(check=check), patch.object(sys, "argv", ["affected.py", "run", check]), \
                     patch.dict(os.environ, {"CUPERTINO_CI_PACKAGES": '["core","app"]'}), \
+                    patch("affected.workspace") as workspace, \
                     patch("affected.subprocess.run", return_value=SimpleNamespace(returncode=17)) as run:
                 self.assertEqual(main(), 17)
                 run.assert_called_once_with(command, check=False)
+                workspace.assert_not_called()
+
+    def test_fixture_and_test_commands_use_the_same_expanded_package_union(self) -> None:
+        packages = self.packages + [
+            Package("cupertino-kit", "crates/cupertino-kit", frozenset(), True),
+            Package("cupertino-wayland-client", "crates/cupertino-wayland-client", frozenset(), True),
+            Package("cupertino-ui-abi", "crates/cupertino-ui-abi", frozenset(), False),
+        ]
+        for selected, expected in (
+            (["cupertino-server"], ["app", "cupertino-kit", "cupertino-server", "cupertino-wayland-client"]),
+            (["cupertino-wayland-client"], ["cupertino-kit", "cupertino-wayland-client"]),
+            (["cupertino-ui-abi"], ["cupertino-ui-abi"]),
+            (["unrelated", "cupertino-server"],
+             ["app", "cupertino-kit", "cupertino-server", "cupertino-wayland-client", "unrelated"]),
+        ):
+            with self.subTest(selected=selected), patch.object(sys, "argv", ["affected.py", "run", "tests"]), \
+                    patch.dict(os.environ, {"CUPERTINO_CI_PACKAGES": json.dumps(selected)}), \
+                    patch("affected.workspace", return_value=packages), \
+                    patch("affected.subprocess.run", return_value=SimpleNamespace(returncode=17)) as run:
+                self.assertEqual(main(), 17)
+                command = run.call_args.args[0]
+                split = command.index("--")
+                self.assertEqual(command[:3], [sys.executable,
+                                              str(Path(__file__).resolve().with_name("build-test-fixtures.py")),
+                                              "--locked"])
+                self.assertEqual(command[3:split], [value for package in expected for value in ("--package", package)])
+                self.assertEqual(command[split + 1:], ["cargo", "nextest", "run", "--all-features", "--no-fail-fast", "--timings",
+                                                     *[value for package in expected for value in ("-p", package)]])
 
     def test_empty_selection_cannot_run_the_default_workspace(self) -> None:
         with patch.object(sys, "argv", ["affected.py", "run", "tests"]), \

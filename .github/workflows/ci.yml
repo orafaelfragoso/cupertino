@@ -202,6 +202,14 @@ jobs:
       - run: cargo fetch --locked
       - name: Clippy
         run: python3 -I ci/affected.py run clippy
+      - name: Clippy build timings
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: clippy-timings
+          path: target/cargo-timings/*.html
+          if-no-files-found: warn
+          retention-days: 7
       # The lint build and the tests enable every feature of every crate at once, so a crate that only builds with
       # another crate's features (or its own optional ones) passes them. Each package is checked on its own here, with
       # its default features and only the dependencies it names.
@@ -296,6 +304,14 @@ jobs:
         run: python3 -I ci/affected.py run tests
       - name: Doctests
         run: python3 -I ci/affected.py run doctests
+      - name: Test build timings
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-timings-package-env-${{ matrix.package-env }}
+          path: target/cargo-timings/*.html
+          if-no-files-found: warn
+          retention-days: 7
       - name: Disk after the tests
         if: always()
         run: df -h . && du -sh target

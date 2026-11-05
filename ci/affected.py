@@ -99,6 +99,16 @@ def changed_paths(base: str, head: str) -> list[str]:
     ]).decode().split("\0") if p]
 
 
+def fixture_packages(packages: list[Package], selected: list[str]) -> list[str]:
+    """Match the test package graph to the executables its integration fixtures launch."""
+    expanded = set(selected)
+    if "cupertino-server" in expanded:
+        expanded.update(package.name for package in packages if package.executable)
+    if "cupertino-wayland-client" in expanded:
+        expanded.add("cupertino-kit")
+    return sorted(expanded)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -119,9 +129,13 @@ def main() -> int:
         packages = json.loads(os.environ["CUPERTINO_CI_PACKAGES"])
         if not isinstance(packages, list) or not packages or not all(isinstance(p, str) and p for p in packages):
             parser.error("CUPERTINO_CI_PACKAGES must be a non-empty JSON array of package names")
+        prepare_fixtures = args.check == "tests" and bool(
+            set(packages) & {"cupertino-server", "cupertino-wayland-client", "cupertino-ui-abi"})
+        if prepare_fixtures:
+            packages = fixture_packages(workspace(), packages)
         cargo_checks = {
-            "clippy": ["clippy", "--all-targets", "--all-features"],
-            "tests": ["nextest", "run", "--all-features", "--no-fail-fast"],
+            "clippy": ["clippy", "--all-targets", "--all-features", "--timings"],
+            "tests": ["nextest", "run", "--all-features", "--no-fail-fast", "--timings"],
             "doctests": ["test", "--all-features", "--doc"],
         }
         command = ["cargo", *cargo_checks[args.check]]
@@ -129,9 +143,10 @@ def main() -> int:
             command.extend(["-p", package])
         if args.check == "clippy":
             command.extend(["--", "-D", "warnings"])
-        elif args.check == "tests":
+        elif prepare_fixtures:
+            fixture_options = [option for package in packages for option in ("--package", package)]
             command = [sys.executable, str(Path(__file__).resolve().with_name("build-test-fixtures.py")),
-                       "--locked", "--", *command]
+                       "--locked", *fixture_options, "--", *command]
         return subprocess.run(command, check=False).returncode
     packages = workspace()
     if args.command == "full":

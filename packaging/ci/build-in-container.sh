@@ -43,8 +43,8 @@ fedora)
 esac
 mkdir -p "$dist"
 dist=$(cd "$dist" && pwd)
-# Hold the same lifetime lease as local Cargo work before building an image or touching a package target.
-if [ "$mode" != --test-only ] && [ -z "${CUPERTINO_BUILD_LOCK_FD:-}" ]; then
+# Every mode stores active container ids under target/, so cleanup must hold the same lifetime lease.
+if [ -z "${CUPERTINO_BUILD_LOCK_FD:-}" ]; then
     cd "$root"
     exec python3 ci/worktree-build.py locked -- bash packaging/ci/build-in-container.sh "$distro" "$dist" "$mode"
 fi

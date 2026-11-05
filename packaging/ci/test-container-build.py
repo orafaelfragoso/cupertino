@@ -234,6 +234,20 @@ else:
         self.assertFalse((self.root / 'target/package-build').exists())
         self.assertFalse(self.cache.exists())
 
+    def test_test_only_acquires_lease_before_creating_container_control_files(self):
+        guard = self.root / 'ci/worktree-build.py'
+        guard.parent.mkdir()
+        guard.write_text('import json, os, sys\n'
+                         + 'with open(os.environ["TEST_LOG"], "a") as log:\n'
+                         + ' log.write(json.dumps(["guard", *sys.argv[1:]]) + "\\n")\n'
+                         + 'raise SystemExit(42)\n')
+        result = self.run_build(['--test-only'], {'CUPERTINO_BUILD_LOCK_FD': ''}, 'debian')
+        self.assertEqual(result.returncode, 42, result.stderr)
+        self.assertEqual(self.commands(), [['guard', 'locked', '--', 'bash', 'packaging/ci/build-in-container.sh',
+                                           'debian', str(self.root / 'dist'), '--test-only']])
+        self.assertFalse((self.root / 'target').exists())
+        self.assertFalse((self.root / 'containers').exists())
+
     def test_arch_test_only_does_not_relabel_existing_packages(self):
         result = self.run_build(['--test-only'], {}, 'arch')
         self.assertEqual(result.returncode, 0, result.stderr)

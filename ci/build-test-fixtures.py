@@ -4,7 +4,8 @@
 Usage: python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --workspace --all-features
 Pass --release, --target and --target-dir to both commands when needed. For a custom Cargo profile, pass
 --profile NAME here and --cargo-profile NAME to nextest (--profile NAME to cargo test).
-The wrapper always builds the workspace with all features, including test targets so dev-dependency features match.
+The wrapper builds all features and test targets so dev-dependency features match. Repeated --package flags limit
+preparation to the same package set as the child command; without them it prepares the workspace.
 Fixture paths are valid only while the child command runs; tests never invoke Cargo to prepare their own fixtures.
 """
 import argparse
@@ -67,6 +68,7 @@ def main() -> int:
     profile.add_argument('--profile')
     parser.add_argument('--target')
     parser.add_argument('--target-dir')
+    parser.add_argument('--package', action='append')
     parser.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if not args.command or args.command[0] != '--' or len(args.command) == 1:
@@ -76,8 +78,13 @@ def main() -> int:
     inherited = () if lease is None else (int(lease),)
     for descriptor in inherited:
         os.fstat(descriptor)
-    build = [os.environ.get('CARGO', 'cargo'), 'build', '--workspace', '--all-features', '--all-targets',
+    build = [os.environ.get('CARGO', 'cargo'), 'build', '--all-features', '--all-targets', '--timings',
              '--message-format=json-render-diagnostics']
+    if args.package is None:
+        build.append('--workspace')
+    else:
+        for package in args.package:
+            build.extend(('--package', package))
     for flag in ('locked', 'frozen', 'release'):
         if getattr(args, flag):
             build.append('--' + flag)

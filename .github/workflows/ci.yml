@@ -81,6 +81,8 @@ jobs:
       - run: python3 -I packaging/test_session.py
       - run: python3 -I packaging/installer/test_cupertino_install.py
       - run: python3 -I packaging/iso/test_profile.py
+      - run: python3 -I packaging/iso/test-build-iso.py
+      - run: python3 -I packaging/arch/test-build-environment.py
       - run: python3 -I ci/test_contracts.py
       - run: python3 -I ci/test_goldens_log.py
       - run: python3 -I ci/test-build-test-fixtures.py

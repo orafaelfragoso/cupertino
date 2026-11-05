@@ -62,8 +62,8 @@ class Artifacts(unittest.TestCase):
             self.assertEqual(env[key + '_STAMP'], f'{binary.stat().st_size}:{binary.stat().st_mtime_ns}')
             self.assertNotIn('CUPERTINO_TEST_FIXTURE_OBSOLETE', env)
             self.assertFalse(Path(env[fixtures.PREFIX + 'SESSION']).exists())
-            self.assertEqual(json.loads(log.read_text()), ['build', '--workspace', '--all-features', '--all-targets',
-                                                           '--message-format=json-render-diagnostics', '--frozen', '--release'])
+            self.assertEqual(json.loads(log.read_text()), ['build', '--all-features', '--all-targets', '--timings',
+                                                           '--message-format=json-render-diagnostics', '--workspace', '--frozen', '--release'])
 
     def test_failed_build_does_not_run_tests(self):
         with tempfile.TemporaryDirectory() as directory:

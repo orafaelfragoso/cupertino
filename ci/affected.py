@@ -80,7 +80,8 @@ def checks(changed: list[str]) -> dict[str, bool]:
     """Select cheap gates by their inputs; workflow changes exercise every gate."""
     workflow = any(p.startswith((".github/", "ci/")) for p in changed)
     manifests = any(Path(p).name == "Cargo.toml" or p == "Cargo.lock" for p in changed)
-    licences = any(Path(p).name == "LICENSE" for p in changed)
+    licences = any(Path(p).name.startswith(("LICENSE", "COPYING")) or Path(p).name == "OFL.txt" or
+                   p.startswith("packaging/licenses/") for p in changed)
     toolchain = any(p in ("rust-toolchain.toml", "rust-toolchain", ".cargo/config.toml") for p in changed)
     return {
         "docs": workflow or any(p.startswith("docs/") for p in changed),

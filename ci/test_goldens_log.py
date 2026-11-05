@@ -1,6 +1,7 @@
 """Tests of the golden log check: `python3 -I ci/test_goldens_log.py`."""
 import os
 import hashlib
+import json
 import subprocess
 import sys
 import tempfile
@@ -139,21 +140,42 @@ class UpdateStatusTest(unittest.TestCase):
 
     def run_update(self, status: int, definition: str | None) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as scratch:
-            bin_dir = Path(scratch) / "bin"
+            root = Path(scratch)
+            bin_dir = root / "bin"
             bin_dir.mkdir()
-            update_log = Path(scratch) / "update.log"
+            update_log = root / "update.log"
             update_log.write_text(log([*UNIT], {DESKTOP: RECORDED_3, SHELL: RECORDED_5}))
-            script = Path(__file__).resolve().parent / "goldens.sh"
+            source = Path(__file__).resolve().parent
+            (root / "ci/goldens").mkdir(parents=True)
+            for name in ("goldens.sh", "goldens_log.py", "goldens/Dockerfile"):
+                (root / "ci" / name).write_bytes((source / name).read_bytes())
+            script = root / "ci/goldens.sh"
             actual = definition if definition is not None else hashlib.sha256(
                 (script.parent / "goldens/Dockerfile").read_bytes()).hexdigest()
+            arguments = root / "arguments"
+            removed = root / "removed"
             docker = bin_dir / "docker"
             docker.write_text(f'#!/bin/sh\nif [ "$1" = image ]; then echo "{actual}"; exit 0; fi\n'
-                              f'[ "$1" = run ] || exit 0\ncat "{update_log}"\nexit {status}\n')
+                              f'if [ "$1" = rm ]; then printf "%s\\n" "$@" > "{removed}"; exit 0; fi\n'
+                              f'[ "$1" = run ] || exit 0\nprintf "%s\\n" "$@" > "{arguments}"\n'
+                              'while [ "$#" -gt 0 ]; do if [ "$1" = --cidfile ]; then echo fixture-container > "$2"; break; fi; shift; done\n'
+                              f'cat "{update_log}"\nexit {status}\n')
             docker.chmod(0o755)
-            env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CUPERTINO_GOLDENS_CACHE=scratch)
+            env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CARGO_BUILD_JOBS="4",
+                       CUPERTINO_BUILD_LOCK_FD="test-lease")
+            env.pop("CUPERTINO_GOLDENS_CACHE", None)
+            env.pop("CUPERTINO_GOLDENS_IMAGE", None)
             if definition is not None:
                 env["CUPERTINO_GOLDENS_IMAGE"] = "prebuilt"
-            return subprocess.run(["bash", str(script), "--update"], env=env, capture_output=True, text=True)
+            result = subprocess.run(["bash", str(script), "--update"], env=env, capture_output=True, text=True)
+            self.assertTrue((root / "target/package-build/goldens/target").is_dir())
+            if arguments.exists():
+                command = arguments.read_text().splitlines()
+                self.assertIn("CARGO_BUILD_JOBS=4", command)
+                self.assertIn(f"{root}/target/package-build/goldens:/cache", command)
+                self.assertEqual(removed.read_text().splitlines(), ["rm", "--force", "fixture-container"])
+                self.assertFalse(Path(command[command.index("--cidfile") + 1]).exists())
+            return result
 
     def test_cargo_tests_failure_status_passes(self):
         self.assertEqual(self.run_update(101, None).returncode, 0)
@@ -171,6 +193,22 @@ class UpdateStatusTest(unittest.TestCase):
     def test_prebuilt_image_with_the_pinned_definition_passes(self):
         dockerfile = Path(__file__).resolve().parent / "goldens/Dockerfile"
         self.assertEqual(self.run_update(101, hashlib.sha256(dockerfile.read_bytes()).hexdigest()).returncode, 0)
+
+    def test_unleased_operation_enters_outer_resource_guard(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            (root / "ci").mkdir()
+            source = Path(__file__).resolve().parent / "goldens.sh"
+            script = root / "ci/goldens.sh"
+            script.write_bytes(source.read_bytes())
+            arguments = root / "arguments.json"
+            (root / "ci/worktree-build.py").write_text(
+                f'import json, sys; from pathlib import Path; Path({str(arguments)!r}).write_text(json.dumps(sys.argv[1:])); raise SystemExit(42)\n')
+            env = dict(os.environ)
+            env.pop("CUPERTINO_BUILD_LOCK_FD", None)
+            result = subprocess.run(["bash", str(script), "--update"], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 42, result.stderr)
+            self.assertEqual(json.loads(arguments.read_text()), ["locked", "--", "bash", "ci/goldens.sh", "--update"])
 
 
 if __name__ == "__main__":

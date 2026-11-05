@@ -19,3 +19,5 @@ RUN sed -i \
 
 # llvmpipe picks its vector width from the CPU; the baselines are rendered at one width on every host.
 ENV LP_NATIVE_VECTOR_WIDTH=256
+# Use the installed toolchain without changing its components when the checkout is mounted.
+ENV RUSTUP_TOOLCHAIN=1.99.1

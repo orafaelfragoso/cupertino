@@ -9,6 +9,10 @@ name: ISO
 
 on:
   workflow_call:
+    inputs:
+      reuse-packages:
+        type: boolean
+        default: false
   workflow_dispatch:
 
 permissions:
@@ -37,12 +41,22 @@ jobs:
             exit 1
           fi
           printf '%s\n' "$PUBLIC_KEY" > "$RUNNER_TEMP/PUBLIC.asc"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.reuse-packages == true
+        with:
+          name: packages-arch
+          path: ${{ runner.temp }}/arch
       - name: Build the ISO
         env:
           CUPERTINO_KEYRING_KEY: ${{ runner.temp }}/PUBLIC.asc
           # The floor protects a workstation's other work; a runner has none.
           CUPERTINO_ISO_FLOOR_GB: '2'
-        run: scripts/build-iso.sh "$RUNNER_TEMP/iso"
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          REUSE_PACKAGES: ${{ inputs.reuse-packages || false }}
+        run: |
+          packages=()
+          if [ "$REUSE_PACKAGES" = true ]; then packages=(--packages "$RUNNER_TEMP/arch"); fi
+          scripts/build-iso.sh "$RUNNER_TEMP/iso" "${packages[@]}"
       - name: Summary
         run: |
           cd "$RUNNER_TEMP/iso"

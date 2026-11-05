@@ -1,13 +1,16 @@
 """Tests of affected-crate selection: python3 -I ci/test_affected.py."""
 from pathlib import Path
+import json
 import os
+import subprocess
 import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from affected import Package, affected, main
+from affected import Package, affected, checks, main
 
 
 class AffectedTests(unittest.TestCase):
@@ -64,15 +67,64 @@ class AffectedTests(unittest.TestCase):
 
     def test_runner_selects_packages_and_propagates_failure(self) -> None:
         for check, command in (
-            ("clippy", ["cargo", "clippy", "--all-targets", "--all-features", "-p", "core", "-p", "app", "--", "-D", "warnings"]),
-            ("tests", ["cargo", "nextest", "run", "--all-features", "--no-fail-fast", "-p", "core", "-p", "app"]),
+            ("clippy", ["cargo", "clippy", "--all-targets", "--all-features", "--timings", "-p", "core", "-p", "app", "--", "-D", "warnings"]),
+            ("tests", ["cargo", "nextest", "run", "--all-features", "--no-fail-fast", "--timings", "-p", "core", "-p", "app"]),
             ("doctests", ["cargo", "test", "--all-features", "--doc", "-p", "core", "-p", "app"]),
         ):
             with self.subTest(check=check), patch.object(sys, "argv", ["affected.py", "run", check]), \
                     patch.dict(os.environ, {"CUPERTINO_CI_PACKAGES": '["core","app"]'}), \
+                    patch("affected.workspace") as workspace, \
                     patch("affected.subprocess.run", return_value=SimpleNamespace(returncode=17)) as run:
                 self.assertEqual(main(), 17)
-                run.assert_called_once_with(command, check=False)
+                run.assert_called_once_with(command, check=False, pass_fds=())
+                workspace.assert_not_called()
+
+    def test_resource_lease_reaches_each_check_process(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cargo = root / "cargo"
+            cargo.write_text('#!' + sys.executable + '\nimport os, sys\n'
+                             + 'os.write(int(os.environ["CUPERTINO_BUILD_LOCK_FD"]), (sys.argv[1] + "\\n").encode())\n')
+            cargo.chmod(0o700)
+            script = Path(__file__).resolve().with_name("affected.py")
+            with (root / "lease").open("w+b") as lease:
+                descriptor = lease.fileno()
+                env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}", CUPERTINO_CI_PACKAGES='["core"]',
+                           CUPERTINO_BUILD_LOCK_FD=str(descriptor))
+                for check in ("clippy", "tests", "doctests"):
+                    with self.subTest(check=check):
+                        result = subprocess.run([sys.executable, str(script), "run", check], env=env,
+                                                pass_fds=(descriptor,), capture_output=True, text=True)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                lease.seek(0)
+                self.assertEqual(lease.read(), b"clippy\nnextest\ntest\n")
+
+    def test_fixture_and_test_commands_use_the_same_expanded_package_union(self) -> None:
+        packages = self.packages + [
+            Package("cupertino-kit", "crates/cupertino-kit", frozenset(), True),
+            Package("cupertino-wayland-client", "crates/cupertino-wayland-client", frozenset(), True),
+            Package("cupertino-ui-abi", "crates/cupertino-ui-abi", frozenset(), False),
+        ]
+        for selected, expected in (
+            (["cupertino-server"], ["app", "cupertino-kit", "cupertino-server", "cupertino-wayland-client"]),
+            (["cupertino-wayland-client"], ["cupertino-kit", "cupertino-wayland-client"]),
+            (["cupertino-ui-abi"], ["cupertino-ui-abi"]),
+            (["unrelated", "cupertino-server"],
+             ["app", "cupertino-kit", "cupertino-server", "cupertino-wayland-client", "unrelated"]),
+        ):
+            with self.subTest(selected=selected), patch.object(sys, "argv", ["affected.py", "run", "tests"]), \
+                    patch.dict(os.environ, {"CUPERTINO_CI_PACKAGES": json.dumps(selected)}), \
+                    patch("affected.workspace", return_value=packages), \
+                    patch("affected.subprocess.run", return_value=SimpleNamespace(returncode=17)) as run:
+                self.assertEqual(main(), 17)
+                command = run.call_args.args[0]
+                split = command.index("--")
+                self.assertEqual(command[:3], [sys.executable,
+                                              str(Path(__file__).resolve().with_name("build-test-fixtures.py")),
+                                              "--locked"])
+                self.assertEqual(command[3:split], [value for package in expected for value in ("--package", package)])
+                self.assertEqual(command[split + 1:], ["cargo", "nextest", "run", "--all-features", "--no-fail-fast", "--timings",
+                                                     *[value for package in expected for value in ("-p", package)]])
 
     def test_empty_selection_cannot_run_the_default_workspace(self) -> None:
         with patch.object(sys, "argv", ["affected.py", "run", "tests"]), \
@@ -82,6 +134,34 @@ class AffectedTests(unittest.TestCase):
                 main()
             self.assertEqual(error.exception.code, 2)
             run.assert_not_called()
+
+    def test_cheap_gates_follow_their_inputs(self) -> None:
+        for paths, expected in (
+            (["README.md"], set()),
+            (["docs/src/index.md"], {"docs"}),
+            (["crates/core/src/lib.rs"], {"fmt"}),
+            (["crates/core/Cargo.toml"], {"deny", "fmt", "layers"}),
+            (["crates/core/LICENSE"], {"deny", "layers"}),
+            (["third-party/library/LICENSE"], {"deny", "layers"}),
+            (["third-party/smithay/LICENSE.txt"], {"deny", "layers"}),
+            (["third-party/library/COPYING"], {"deny", "layers"}),
+            (["crates/cupertino-assets/fonts/OFL.txt"], {"deny", "layers"}),
+            (["packaging/licenses/THIRD-PARTY-LICENSES"], {"deny", "layers"}),
+            ([".cargo/config.toml"], {"deny", "fmt", "layers"}),
+            (["deny.toml"], {"deny"}),
+            (["rust-toolchain.toml"], {"fmt", "layers"}),
+            ([".github/workflows/ci.yml"], {"docs", "deny", "fmt", "layers"}),
+            (["ci/affected.py"], {"docs", "deny", "fmt", "layers"}),
+        ):
+            with self.subTest(paths=paths):
+                self.assertEqual({name for name, enabled in checks(paths).items() if enabled}, expected)
+
+    def test_gates_do_not_need_cargo_metadata(self) -> None:
+        with patch.object(sys, "argv", ["affected.py", "gates", "base", "head"]), \
+                patch("affected.changed_paths", return_value=["docs/src/index.md"]), \
+                patch("affected.workspace") as workspace, patch("sys.stdout"):
+            self.assertEqual(main(), 0)
+            workspace.assert_not_called()
 
 
 if __name__ == "__main__":

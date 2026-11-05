@@ -22,15 +22,31 @@ env:
   CARGO_INCREMENTAL: '0'
 
 jobs:
+  eligibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate the tag before starting release builds
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 packaging/release.py verify-tag "$RELEASE_TAG"
+
   verify:
+    needs: eligibility
     uses: ./.github/workflows/ci.yml
     with:
       full: true
 
   iso:
-    needs: verify
+    needs: packages
     if: ${{ !contains(github.ref_name, '-rc') }}
     uses: ./.github/workflows/iso.yml
+    with:
+      reuse-packages: true
 
   source:
     needs: verify
@@ -43,7 +59,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
         with:
-          toolchain: stable
+          toolchain: 1.99.1
       # check-metadata and test_release read the dependency graph with cargo metadata --offline.
       - run: cargo fetch --locked
       - name: Check the tag and write the source archive and PKGBUILDs
@@ -74,19 +90,31 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Report free disk space
-        run: df -h / /mnt
+      - name: Free unused runner SDKs before restoring build caches
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          cache-binary: false
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/package-images
+          key: package-image-${{ runner.os }}-${{ matrix.distro }}-${{ hashFiles('packaging/ci/Dockerfile') }}
       - name: Build, verify and install-test in pinned containers
         env:
           DISTRO: ${{ matrix.distro }}
           RELEASE_TAG: ${{ github.ref_name }}
+          CUPERTINO_BUILD_CACHE_DIR: ${{ runner.temp }}/package-images
+          CARGO_BUILD_JOBS: '4'
         run: bash packaging/ci/build-in-container.sh "$DISTRO" "out/$DISTRO"
       - name: Separate the packages from the build logs
         env:
           DISTRO: ${{ matrix.distro }}
         run: |
           mkdir -p dist logs
-          find "out/$DISTRO" -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) -exec mv -t dist {} +
+          find "out/$DISTRO" -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' -o -name packages.json \) -exec mv -t dist {} +
           mv "out/$DISTRO"/* logs/
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

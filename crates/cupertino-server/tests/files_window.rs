@@ -7,7 +7,6 @@
 mod common;
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use cupertino_server::backend::headless;
@@ -128,35 +127,9 @@ impl Drop for TempDir {
     }
 }
 
-/// Build the `app` feature of the file manager (a no-op when current) and return the binary. It is a
-/// `[[bin]]` of another crate behind a feature, so cargo gives this test no `CARGO_BIN_EXE_*` for it.
+/// The file manager artifact prepared before the test runner starts.
 fn files_binary() -> PathBuf {
-    // <target>/<profile>/deps/<this test> -> <target>/<profile>
-    let profile_dir = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let mut cargo = Command::new(std::env::var_os("CARGO").expect("CARGO is set by `cargo test`"));
-    cargo.args([
-        "build",
-        "-p",
-        "cupertino-files",
-        "--features",
-        "cupertino-files/app",
-        "--target-dir",
-        profile_dir.parent().unwrap().to_str().unwrap(),
-    ]);
-    if profile_dir.file_name().unwrap() == "release" {
-        cargo.arg("--release");
-    }
-    let status = cargo.status().unwrap();
-    assert!(status.success(), "building cupertino-files: {status}");
-    let binary = profile_dir.join("cupertino-files");
-    assert!(binary.is_file(), "missing binary {}", binary.display());
-    binary
+    common::fixtures::artifact("cupertino-files", "bin", "cupertino-files")
 }
 
 /// The file manager with `home` as its home folder and its configuration, data and system data directories inside it,

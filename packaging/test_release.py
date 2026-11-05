@@ -1,5 +1,6 @@
 """Tests of the application files and the release tags of the runtime package: `python3 -I packaging/test_release.py`."""
 import configparser
+import json
 import re
 import shutil
 import subprocess
@@ -146,7 +147,8 @@ class ReleaseKeyRootTest(unittest.TestCase):
     def test_the_build_checks_the_embedded_key_against_the_tree(self):
         fingerprint = (self.KEYRING / 'release-key.fpr').read_text()
         self.assertRegex(fingerprint, r'^[0-9A-F]{40}\n$')
-        self.assertIn('"$root/packaging/keyring/check-key" "$keyring_key"', (release.ROOT / 'scripts/build-iso.sh').read_text())
+        self.assertIn('"$source_root/packaging/keyring/check-key" "$keyring_key" "$source_root/packaging/keyring/release-key.fpr"',
+                      (release.ROOT / 'scripts/build-iso.sh').read_text())
 
     def job_needs(self, job):
         text = (release.ROOT / '.github/workflows/release.yml').read_text()
@@ -189,7 +191,102 @@ class TagTest(unittest.TestCase):
             archive = Path(tmp, 'a.tar.xz')
             archive.write_bytes(b'x')
             with self.assertRaisesRegex(SystemExit, r'exactly one line'):
-                release.cmd_pkgbuild(Namespace(tag='v0.1.0-rc1', archive=archive, output=Path(tmp, 'out')))
+                release.cmd_pkgbuild(Namespace(tag='v0.1.0-rc1', commit=None, archive=archive, output=Path(tmp, 'out')))
+
+
+class PackageReuseTest(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.packages = self.root / 'packages'
+        self.packages.mkdir()
+        self.output = self.root / 'iso-input'
+        self.runtime = self.packages / 'cupertino-0.1.0-1-x86_64.pkg.tar.zst'
+        self.data = self.packages / 'cupertino-data-0.1.0-1-any.pkg.tar.zst'
+        self.runtime.write_bytes(b'verified runtime')
+        self.data.write_bytes(b'verified data')
+        patch = mock.patch.object(release, 'git', return_value='a' * 40)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.args = Namespace(directory=self.packages, tag='v0.1.0', commit=None, copy_to=self.output)
+        release.cmd_record_packages(self.args)
+
+    def test_iso_receives_exact_verified_package_bytes_and_provenance(self):
+        release.cmd_verify_packages(self.args)
+        self.assertEqual({p.name for p in self.output.iterdir()},
+                         {self.runtime.name, self.data.name, 'packages.json'})
+        self.assertEqual((self.output / self.runtime.name).read_bytes(), self.runtime.read_bytes())
+
+    def test_another_commit_or_release_is_rejected_before_copying(self):
+        with mock.patch.object(release, 'git', return_value='b' * 40), \
+                self.assertRaisesRegex(SystemExit, 'not from this commit'):
+            release.cmd_verify_packages(self.args)
+        self.args.tag = 'v0.1.0-rc1'
+        with self.assertRaisesRegex(SystemExit, 'not from this commit and release version'):
+            release.cmd_verify_packages(self.args)
+        self.assertFalse(self.output.exists())
+
+    def test_changed_bytes_and_extra_packages_are_rejected_before_copying(self):
+        self.runtime.write_bytes(b'tampered')
+        with self.assertRaisesRegex(SystemExit, 'SHA256 digests differ'):
+            release.cmd_verify_packages(self.args)
+        release.cmd_record_packages(self.args)
+        (self.packages / 'unrelated.pkg.tar.zst').write_bytes(b'extra')
+        with self.assertRaisesRegex(SystemExit, 'expected one runtime and one data'):
+            release.cmd_verify_packages(self.args)
+        self.assertFalse(self.output.exists())
+
+    def test_links_and_path_traversal_in_provenance_are_rejected(self):
+        self.runtime.unlink()
+        self.runtime.symlink_to(self.data)
+        with self.assertRaisesRegex(SystemExit, 'regular files'):
+            release.cmd_verify_packages(self.args)
+        self.runtime.unlink()
+        self.runtime.write_bytes(b'verified runtime')
+        record = self.packages / 'packages.json'
+        metadata = json.loads(record.read_text())
+        metadata['files']['../outside.pkg.tar.zst'] = metadata['files'].pop(self.runtime.name)
+        record.write_text(json.dumps(metadata))
+        with self.assertRaisesRegex(SystemExit, 'package names or SHA256 digests differ'):
+            release.cmd_verify_packages(self.args)
+
+
+class SourceSnapshotTest(unittest.TestCase):
+    def test_source_recipe_and_package_provenance_keep_the_captured_commit(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(release, 'ROOT', Path(directory)):
+            root = Path(directory)
+            subprocess.run(['git', 'init', '-q', root], check=True)
+            manifest = root / 'crates/cupertino-server/Cargo.toml'
+            recipe = root / 'packaging/arch/cupertino/PKGBUILD'
+            manifest.parent.mkdir(parents=True)
+            recipe.parent.mkdir(parents=True)
+            manifest.write_text('[package]\nversion="0.1.0"\n')
+            recipe.write_text("pkgver=0.1.0\n_tag=v$pkgver\nsha256sums=('UNRELEASED')\n")
+            subprocess.run(['git', '-C', root, 'add', '.'], check=True)
+            commit = ['git', '-C', str(root), '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                      'commit', '-qm']
+            subprocess.run([*commit, 'captured source'], check=True)
+            captured = release.git('rev-parse', 'HEAD')
+            manifest.write_text('[package]\nversion="0.2.0"\n')
+            recipe.write_text('changed recipe\n')
+            subprocess.run(['git', '-C', root, 'add', '.'], check=True)
+            subprocess.run([*commit, 'new source'], check=True)
+            out = root / 'out'
+            release.cmd_source(Namespace(commit=captured, tag=None, output=out))
+            archive = out / 'cupertino-0.1.0-source.tar.xz'
+            self.assertTrue(archive.is_file())
+            release.cmd_pkgbuild(Namespace(commit=captured, tag='v0.1.0-rc1', archive=archive, output=out / 'PKGBUILD'))
+            self.assertIn('pkgver=0.1.0rc1\n', (out / 'PKGBUILD').read_text())
+            for name in ('cupertino-0.1.0-1-x86_64.pkg.tar.zst', 'cupertino-data-0.1.0-1-any.pkg.tar.zst'):
+                (out / name).write_bytes(b'from captured source')
+            args = Namespace(commit=captured, tag=None, directory=out, copy_to=root / 'iso')
+            release.cmd_record_packages(args)
+            self.assertEqual(json.loads((out / 'packages.json').read_text())['commit'], captured)
+            release.cmd_verify_packages(args)
+            args.commit = None
+            with self.assertRaisesRegex(SystemExit, 'not from this commit'):
+                release.cmd_verify_packages(args)
 
 
 GIT_RECIPE = Path(__file__).resolve().parent / 'arch/cupertino-git/PKGBUILD'

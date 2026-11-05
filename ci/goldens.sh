@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # Runs the headless golden tests in the pinned image, the only renderer their baselines are valid on.
 # `ci/goldens.sh` compares; `ci/goldens.sh --update` re-records tests/fixtures/goldens (review the diff).
-# Needs docker. CUPERTINO_GOLDENS_CACHE (default ~/.cache/cupertino-goldens) holds the image's cargo home and target.
+# Needs docker. CUPERTINO_GOLDENS_CACHE defaults to target/package-build/goldens in this worktree.
+# Downloads are shared; compiled targets are separated by image content identity.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-cache="${CUPERTINO_GOLDENS_CACHE:-$HOME/.cache/cupertino-goldens}"
-mkdir -p "$cache/cargo" "$cache/target"
 
 update=0
 if [ "${1:-}" = "--update" ]; then
@@ -16,25 +15,72 @@ elif [ "$#" -ne 0 ]; then
   exit 2
 fi
 
+# Serialize image builds and tests together; a caller that already owns the lease keeps it.
+if [ -z "${CUPERTINO_BUILD_LOCK_FD:-}" ]; then
+  cd "$root"
+  exec python3 ci/worktree-build.py locked -- bash ci/goldens.sh "$@"
+fi
+cache="${CUPERTINO_GOLDENS_CACHE:-$root/target/package-build/goldens}"
+mkdir -p "$cache/cargo"
+jobs=()
+if [ -n "${CARGO_BUILD_JOBS:-}" ]; then
+  jobs=(--env "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS")
+fi
+
 # The session bus needs the caller's uid in the password database. The name is fixed: the lock screen draws it, and the
 # baseline must not depend on who runs this.
-passwd="$(mktemp)"
-trap 'rm -f "$passwd"' EXIT
+# Docker writes the control files too; keep them on the disk checked by the build guard.
+scratch="$(mktemp -d "$cache/control.XXXXXX")"
+passwd="$scratch/passwd"
+log="$scratch/log"
+cidfile="$scratch/container.cid"
+cleanup() {
+  cleanup_status=$?
+  if [ -f "$cidfile" ]; then
+    docker rm --force "$(cat "$cidfile")" >/dev/null
+  fi
+  rm -r "$scratch"
+  return "$cleanup_status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 printf 'root:x:0:0:root:/root:/bin/sh\ngolden:x:%s:%s:Golden User:/tmp:/bin/sh\n' "$(id -u)" "$(id -g)" >"$passwd"
 
-docker build --quiet --tag cupertino-goldens "$root/ci/goldens" >/dev/null
-log="$(mktemp)"
-trap 'rm -f "$passwd" "$log"' EXIT
-docker run --rm \
+definition="$(sha256sum "$root/ci/goldens/Dockerfile" | cut -d ' ' -f 1)"
+image="${CUPERTINO_GOLDENS_IMAGE:-cupertino-goldens:$definition}"
+if [ -z "${CUPERTINO_GOLDENS_IMAGE:-}" ]; then
+  docker build --quiet --tag "$image" --label "io.cupertino.goldens.definition=$definition" "$root/ci/goldens" >/dev/null
+fi
+actual="$(docker image inspect --format '{{ index .Config.Labels "io.cupertino.goldens.definition" }}' "$image")"
+if [ "$actual" != "$definition" ]; then
+  echo "goldens: image definition does not match ci/goldens/Dockerfile" >&2
+  exit 1
+fi
+image_id=$(docker image inspect --format '{{.Id}}' "$image")
+if [[ ! "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "goldens: image has an invalid content identity: $image_id" >&2
+  exit 1
+fi
+target="$cache/targets/${image_id#sha256:}"
+mkdir -p "$target"
+docker create --cidfile "$cidfile" \
   --user "$(id -u):$(id -g)" \
-  --volume "$passwd:/etc/passwd:ro" --volume "$root:/work" --volume "$cache:/cache" --workdir /work \
+  --volume "$passwd:/etc/passwd:ro" --volume "$root:/work" \
+  --volume "$cache/cargo:/cache/cargo" --volume "$target:/cache/target" --workdir /work \
   --env HOME=/tmp --env CARGO_HOME=/cache/cargo --env CARGO_TARGET_DIR=/cache/target \
   --env CARGO_INCREMENTAL=0 --env CARGO_PROFILE_DEV_DEBUG=0 \
+  "${jobs[@]}" \
   --env CUPERTINO_GOLDENS_REQUIRED=1 --env "CUPERTINO_GOLDEN_MUTATE_WINDOW=${CUPERTINO_GOLDEN_MUTATE_WINDOW:-}" \
   --env "CUPERTINO_UPDATE_GOLDENS=$update" \
-  cupertino-goldens \
-  cargo test -p cupertino-server --test goldens -- --include-ignored --skip headless_frame_and_memory_report \
-  | tee "$log" || status=$?
+  "$image_id" \
+  python3 ci/build-test-fixtures.py --locked -- \
+  cargo test --locked -p cupertino-server --test goldens -- --include-ignored --skip headless_frame_and_memory_report \
+  >/dev/null
+# Waiting on an asynchronous attachment lets TERM/INT run cleanup immediately, even if the client is unresponsive.
+docker start --attach "$(cat "$cidfile")" | tee "$log" &
+attachment=$!
+wait "$attachment" || status=$?
 
 # An update records the baselines and then fails each test that recorded, so it can never pass as a comparison; the
 # log check tells those failures from any other and knows which tests must run (ci/goldens_log.py). The run must also

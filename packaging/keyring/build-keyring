@@ -14,7 +14,31 @@ out=$(realpath "$2")
 here=$(cd "$(dirname "$0")" && pwd)
 image=docker.io/library/archlinux@sha256:3cbf69d2d5958d6a294f3722c5668e6187c4df8e00fa27f72352f0bf83e495e1
 
-docker run --rm -v "$here:/keyring:ro" -v "$key:/key.asc:ro" -v "$out:/out" -e OUT_UID="$(id -u)" -e OUT_GID="$(id -g)" "$image" bash -euc '
+# Keep Docker control files beside this run's output rather than on a separately quota-limited tmpfs.
+scratch=$(mktemp -d "$out/.keyring.XXXXXX")
+active_job=
+cleanup() {
+    local status=$? cleanup_status=0
+    trap - EXIT
+    trap "" INT TERM
+    if [ -s "$scratch/container.cid" ]; then
+        if ! docker rm --force "$(cat "$scratch/container.cid")" >/dev/null; then cleanup_status=1; fi
+    fi
+    if [ -n "$active_job" ]; then
+        if kill -0 "$active_job" 2>/dev/null; then
+            kill -TERM "$active_job" || cleanup_status=1
+        fi
+        if wait "$active_job"; then :; fi
+    fi
+    if ! rm -rf "$scratch"; then cleanup_status=1; fi
+    if [ "$status" = 0 ]; then status=$cleanup_status; fi
+    exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+container=$(docker create --cidfile "$scratch/container.cid" -v "$here:/keyring:ro" -v "$key:/key.asc:ro" -v "$out:/out" -e OUT_UID="$(id -u)" -e OUT_GID="$(id -g)" "$image" bash -euc '
     pacman -Syu --noconfirm --needed -q gnupg libarchive curl fakeroot >/dev/null
     useradd -m builder
     install -d -o builder /build
@@ -23,5 +47,10 @@ docker run --rm -v "$here:/keyring:ro" -v "$key:/key.asc:ro" -v "$out:/out" -e O
     su builder -c "cd /build && CUPERTINO_KEYRING_KEY=/key.asc makepkg -f --nodeps >/dev/null"
     cp /build/cupertino-keyring-*-any.pkg.tar.zst /out/
     chown "$OUT_UID:$OUT_GID" /out/cupertino-keyring-*-any.pkg.tar.zst
-'
+')
+docker start --attach "$container" &
+active_job=$!
+if wait "$active_job"; then status=0; else status=$?; fi
+active_job=
+[ "$status" = 0 ] || exit "$status"
 ls "$out"/cupertino-keyring-*-any.pkg.tar.zst

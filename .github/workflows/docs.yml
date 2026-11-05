@@ -2,6 +2,11 @@ name: Docs
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
 
 # One manual deployment at a time; wait instead of cancelling a deployment in progress.
 concurrency:

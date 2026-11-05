@@ -2,36 +2,22 @@
 //! `libcupertinokit.so.1`, and is never unloaded. `CUPERTINO_UPDATE_GOLDENS=1` rewrites the list.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use object::elf;
 use object::read::elf::ElfFile64;
 use object::{Object, ObjectSection, ObjectSymbol};
 
-/// Builds `target/<profile>/libcupertinokit.so`, next to the `deps` directory this test runs from: a test build links
-/// the rlib and leaves the cdylib as it was. It builds with `--locked --all-features`, as the gate does; it may still
-/// build some dependencies again, so `.config/nextest.toml` gives it a longer limit.
+#[allow(dead_code)]
+mod fixtures {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../ci/test-fixtures.rs"
+    ));
+}
+
+/// Cargo's exact cdylib artifact, prepared before this test starts.
 fn library() -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    let profile_dir = exe.parent().and_then(Path::parent).unwrap();
-    let mut cargo = Command::new(std::env::var_os("CARGO").expect("CARGO is set by `cargo test`"));
-    cargo
-        .args([
-            "build",
-            "--locked",
-            "--all-features",
-            "-p",
-            "cupertino-ui-abi",
-            "--lib",
-        ])
-        .arg("--target-dir")
-        .arg(profile_dir.parent().unwrap());
-    if profile_dir.file_name().unwrap() == "release" {
-        cargo.arg("--release");
-    }
-    let status = cargo.status().unwrap();
-    assert!(status.success(), "building the library: {status}");
-    profile_dir.join("libcupertinokit.so")
+    fixtures::artifact("cupertino-ui-abi", "cdylib", "cupertinokit")
 }
 
 #[test]

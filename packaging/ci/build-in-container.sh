@@ -116,7 +116,8 @@ build_script=$(cat <<EOF
 set -euo pipefail
 trap 'chown -R $(id -u):$(id -g) /dist /src' EXIT
 cd /src
-export CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/src/target CUPERTINO_THEME_DIR=/usr/share/cupertino/theme
+# Packages are stripped; generating debug information only consumes build storage.
+export CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/src/target CUPERTINO_THEME_DIR=/usr/share/cupertino/theme CARGO_PROFILE_RELEASE_DEBUG=0
 upgrade=$upgrade
 case $distro in
 arch)

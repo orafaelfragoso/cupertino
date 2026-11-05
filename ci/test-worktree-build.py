@@ -62,12 +62,26 @@ class WorktreeBuildTest(unittest.TestCase):
         with patch.object(BUILD, "output", side_effect=version):
             identity = BUILD.fingerprint(self.root, "dev", {})
             for name in ("CUPERTINO_THEME_DIR", "CUPERTINO_SPEC_DIR", "CUPERTINO_INSTALL_PREFIX",
-                         "CUPERTINO_BUILD_COMMIT", "RUSTFLAGS", "LIBCLANG_PATH"):
+                         "CUPERTINO_BUILD_COMMIT", "RUSTFLAGS", "LIBCLANG_PATH", "PATH", "HOME",
+                         "CARGO_PROFILE_DEV_OPT_LEVEL", "CARGO_ENCODED_RUSTFLAGS", "RUSTUP_TOOLCHAIN",
+                         "CC", "CC_x86_64_unknown_linux_gnu", "TARGET_CFLAGS", "PKG_CONFIG_PATH",
+                         "BINDGEN_EXTRA_CLANG_ARGS_x86_64_unknown_linux_gnu", "CMAKE_TOOLCHAIN_FILE",
+                         "SCCACHE_DIR", "LD_LIBRARY_PATH"):
                 self.assertNotEqual(identity, BUILD.fingerprint(self.root, "dev", {name: "changed"}), name)
             self.assertNotEqual(identity, BUILD.fingerprint(self.root, "release", {}))
             self.assertEqual(identity, BUILD.fingerprint(self.root, "dev", {"PWD": "other", "CARGO_TARGET_DIR": "other"}))
         with patch.object(BUILD, "output", return_value="toolchain-two"):
             self.assertNotEqual(identity, BUILD.fingerprint(self.root, "dev", {}))
+
+    def test_session_terminal_credentials_and_fixture_lease_do_not_change_compatibility(self):
+        with patch.object(BUILD, "output", return_value="stable-toolchain"):
+            identity = BUILD.fingerprint(self.root, "dev", {})
+            for name in ("CODEX_TOOL_CALL_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODEX_APP_TOOLS_PIPE_PATH",
+                         "TERM", "COLORTERM", "GH_TOKEN", "GITHUB_TOKEN", "SSH_AUTH_SOCK",
+                         "DBUS_SESSION_BUS_ADDRESS", "XDG_SESSION_ID", "CUPERTINO_BUILD_LOCK_FD",
+                         "CUPERTINO_TEST_FIXTURE_SESSION", "CUPERTINO_TEST_FIXTURE_EXAMPLE_STAMP"):
+                with self.subTest(name=name):
+                    self.assertEqual(identity, BUILD.fingerprint(self.root, "dev", {name: "another-session"}))
 
     def require_reflinks(self):
         source, destination = self.root / "probe-source", self.root / "probe-copy"

@@ -29,6 +29,18 @@ DISK_FLOOR = 30 * 1024**3
 SEED_LIMIT = 1
 SEED_AGE = 7 * 24 * 60 * 60
 MARKER = ".cupertino-build.json"
+# Match compiler/build-tool inputs without tying snapshots to a terminal, credential or agent session.
+BUILD_ENV_NAMES = frozenset({
+    "PATH", "HOME", "CC", "CXX", "CPP", "AS", "AR", "LD", "NM", "RANLIB", "STRIP", "OBJCOPY", "OBJDUMP",
+    "CFLAGS", "CXXFLAGS", "CPPFLAGS", "ASFLAGS", "ARFLAGS", "LDFLAGS", "LIBRARY_PATH", "LD_LIBRARY_PATH",
+    "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "LIBCLANG_PATH", "CLANG_PATH", "LLVM_CONFIG_PATH",
+    "MAKE", "MAKEFLAGS", "MFLAGS", "CMAKE", "HOST", "TARGET", "OPT_LEVEL", "DEBUG", "PROFILE", "NUM_JOBS",
+})
+BUILD_ENV_PREFIXES = (
+    "CARGO_", "RUST", "CUPERTINO_", "SCCACHE_", "PKG_CONFIG", "BINDGEN_", "CMAKE_", "LLVM_", "CLANG_",
+    "CC_", "CXX_", "CPP_", "AS_", "AR_", "LD_", "NM_", "RANLIB_", "STRIP_",
+    "CFLAGS_", "CXXFLAGS_", "CPPFLAGS_", "ASFLAGS_", "ARFLAGS_", "LDFLAGS_", "HOST_", "TARGET_",
+)
 
 
 class Metadata(TypedDict):
@@ -68,7 +80,7 @@ def disk_room(path: Path) -> None:
 
 
 def fingerprint(root: Path, profile: str, environ: dict[str, str]) -> str:
-    """Conservatively match host, toolchain, profiles, config and compile-time environment.
+    """Conservatively match host, toolchain, profiles, config and known build environment inputs.
 
     Cargo still validates source/dependency freshness after a snapshot is cloned.
     Hash values rather than recording potentially private environment contents.
@@ -89,10 +101,10 @@ def fingerprint(root: Path, profile: str, environ: dict[str, str]) -> str:
             configuration = tomllib.loads(contents)
             if "build-dir" in configuration.get("build", {}) or "include" in configuration:
                 raise ValueError(f"{name}: external build directories and config includes are unsupported")
-    # Capture native tool/build-script inputs too, including future project variables.
-    # Only shell bookkeeping and the forced local destination are excluded.
     environment = {key: value for key, value in environ.items()
-                   if key not in {"PWD", "OLDPWD", "SHLVL", "_", "CARGO_TARGET_DIR", "CUPERTINO_BUILD_LOCK_FD"}}
+                   if (key in BUILD_ENV_NAMES or key.startswith(BUILD_ENV_PREFIXES))
+                   and key not in {"CARGO_TARGET_DIR", "CUPERTINO_BUILD_LOCK_FD"}
+                   and not key.startswith("CUPERTINO_TEST_FIXTURE_")}
     environment["CARGO_INCREMENTAL"] = "0"
     identity = {"schema": 1, "profile": profile, "environment": environment, "inputs": inputs,
                 "rustc": output([environ.get("RUSTC", "rustc"), "-vV"], root), "cargo": output(["cargo", "-vV"], root),

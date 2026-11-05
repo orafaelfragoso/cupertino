@@ -121,6 +121,7 @@ upgrade=$upgrade
 case $distro in
 arch)
     chown -R builder /src/arch-build /src/target
+    chown builder /cargo-home
     su builder -c 'cd /src/arch-build && makepkg --noconfirm'
     df -h /src | tee /dist/disk-after-makepkg.log
     namcap arch-build/PKGBUILD arch-build/*.pkg.tar.zst | tee /dist/namcap.log
@@ -307,7 +308,8 @@ EOF
 # Each worktree and distribution owns its Cargo outputs; no global volume can mix incompatible builds.
 if [ "$mode" != --test-only ]; then
     target="$root/target/package-build/$distro"
-    mkdir -p "$target"
+    cargo_home="$target/cargo-home"
+    mkdir -p "$cargo_home"
     image_key=$(sha256sum "$root/packaging/ci/Dockerfile" | cut -c1-16)
     build_image="cupertino-package-builder:$distro-$image_key"
     # Bound compiler parallelism in both image tool installs and the subsequent workspace build.
@@ -352,8 +354,9 @@ if [ "$mode" != --test-only ]; then
         fi
     fi
     container=$(docker create --cidfile "$work/build.cid" --name "cupertino-$distro-$(basename "$work")-build" \
-        --env "CARGO_BUILD_JOBS=$jobs" -v "$work/src:/src" -v "$dist:/dist" \
-        --mount "type=bind,src=$target,dst=/src/target" "$build_image" bash -c "$build_script")
+        --env "CARGO_BUILD_JOBS=$jobs" --env CARGO_HOME=/cargo-home -v "$work/src:/src" -v "$dist:/dist" \
+        --mount "type=bind,src=$target,dst=/src/target" \
+        --mount "type=bind,src=$cargo_home,dst=/cargo-home" "$build_image" bash -c "$build_script")
     start_container "$container" ""
 fi
 if [ "$upgrade" = 1 ]; then

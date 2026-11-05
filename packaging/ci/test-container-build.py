@@ -124,10 +124,15 @@ else:
         self.assertEqual(first.returncode, 0, first.stderr)
         current = self.cache / 'debian/current'
         old = current.resolve()
+        cached_source = self.root / 'target/package-build/debian/cargo-home/cached-source'
+        cached_source.write_bytes(b'previously unpacked dependency')
+        cached_mtime = cached_source.stat().st_mtime_ns
         second = self.run_build([], {}, 'debian')
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertNotEqual(old, current.resolve())
         self.assertFalse(old.exists())
+        self.assertEqual(cached_source.read_bytes(), b'previously unpacked dependency')
+        self.assertEqual(cached_source.stat().st_mtime_ns, cached_mtime)
         commands = self.commands()
         builds = [command for command in commands if command[:2] == ['buildx', 'build']]
         self.assertIn('type=local,src=' + str(current), builds[1])
@@ -136,6 +141,11 @@ else:
         self.assertIn('type=bind,src=' + str(self.root / 'target/package-build/debian') + ',dst=/src/target', build_run)
         self.assertIn('export CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/src/target', build_run[-1])
         self.assertIn('CARGO_BUILD_JOBS=4', build_run)
+        self.assertIn('CARGO_HOME=/cargo-home', build_run)
+        cargo_home = self.root / 'target/package-build/debian/cargo-home'
+        self.assertIn('type=bind,src=' + str(cargo_home) + ',dst=/cargo-home', build_run)
+        self.assertTrue(cargo_home.is_dir())
+        self.assertFalse(any(argument.startswith('PATH=') for argument in build_run))
         self.assertIn('CARGO_BUILD_JOBS=4', builds[0])
         self.assertFalse(list((self.root / 'containers').iterdir()))
         install_run = creates[1]
@@ -188,6 +198,9 @@ else:
         self.assertIn(record, commands)
         last_start = max(index for index, command in enumerate(commands) if command[0] == 'start')
         self.assertGreater(commands.index(record), last_start)
+        created = next(command for command in commands if command[0] == 'create')
+        self.assertIn('chown builder /cargo-home', created[-1])
+        self.assertIn('CARGO_HOME=/cargo-home', created)
 
     def test_arch_source_and_provenance_stay_on_captured_commit_when_head_changes(self):
         result = self.run_build([], {'TEST_HEAD_DRIFT': '1'}, 'arch')

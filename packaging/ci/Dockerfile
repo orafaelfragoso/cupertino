@@ -40,7 +40,7 @@ SHELL
 
 FROM docker.io/library/rust@sha256:931c2c0531a8b143e044f0f3914dfe802f15bb3d1955f0b657e9359327ac2ffc AS debian
 ARG CARGO_BUILD_JOBS=4
-ENV CARGO_INCREMENTAL=0 RUSTUP_TOOLCHAIN=1.99.1
+ENV CARGO_INCREMENTAL=0 RUSTUP_TOOLCHAIN=1.99.1 RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS
 RUN apt-get update -qq \
  && apt-get install -y -qq --no-install-recommends python3 pkg-config libgbm-dev libpam0g-dev clang \
@@ -50,7 +50,7 @@ RUN apt-get update -qq \
 
 FROM docker.io/library/fedora@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80 AS fedora
 ARG CARGO_BUILD_JOBS=4
-ENV CARGO_INCREMENTAL=0 RUSTUP_TOOLCHAIN=1.99.1
+ENV CARGO_INCREMENTAL=0 RUSTUP_TOOLCHAIN=1.99.1 RUSTUP_HOME=/root/.rustup
 ENV CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS
 ENV PATH=/root/.cargo/bin:$PATH
 RUN dnf install -y -q gcc pkgconf-pkg-config mesa-libgbm-devel pam-devel clang pipewire-devel \

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise makepkg's build/check environment without compiling Rust or starting a session bus."""
+from itertools import product
 import json
 import os
 from pathlib import Path
@@ -16,8 +17,9 @@ HERE = Path(__file__).resolve().parent
 class BuildEnvironment(unittest.TestCase):
     def test_build_and_check_share_flags_and_preserve_supplied_flags(self):
         for recipe in ('cupertino', 'cupertino-git'):
-            for supplied in ('', '-C target-cpu=x86-64-v2', 'existing-remap'):
-                with self.subTest(recipe=recipe, supplied=supplied), tempfile.TemporaryDirectory() as directory:
+            for supplied, target_mode in product(('', '-C target-cpu=x86-64-v2', 'existing-remap'),
+                                                 ('default', 'relative', 'absolute')):
+                with self.subTest(recipe=recipe, supplied=supplied, target=target_mode), tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
                     source = root / 'source'
                     source.mkdir()
@@ -41,11 +43,18 @@ with open(os.environ['TEST_LOG'], 'a') as log:
                     name = 'cupertino' if recipe == 'cupertino' else 'cupertino-git'
                     source_remap = f'--remap-path-prefix={source}=/usr/src/debug/{name}'
                     cargo_remap = f'--remap-path-prefix={root / "cargo-home"}=/cargo'
+                    target = {'default': None, 'relative': '../cargo-output',
+                              'absolute': str(root / 'cargo-output')}[target_mode]
+                    target_dir = (tree / (target if target is not None else 'target')).resolve()
+                    target_remap = f'--remap-path-prefix={target_dir}=/usr/src/debug/{name}/target'
                     flags = source_remap if supplied == 'existing-remap' else supplied
                     log = root / 'commands.jsonl'
                     env = dict(os.environ, PATH=str(commands) + os.pathsep + os.environ['PATH'],
                                TEST_LOG=str(log), CARGO_HOME=str(root / 'cargo-home'), RUSTFLAGS=flags)
                     env.pop('CUPERTINO_SPEC_DIR', None)
+                    env.pop('CARGO_TARGET_DIR', None)
+                    if target is not None:
+                        env['CARGO_TARGET_DIR'] = target
                     shell = '''set -euo pipefail
 source "$1"
 srcdir=$2
@@ -63,10 +72,11 @@ check
                     self.assertEqual(result.returncode, 0, result.stderr)
                     records = [json.loads(line) for line in log.read_text().splitlines()]
                     self.assertEqual(len(records), 6)
-                    expected = ' '.join([part for part in (flags, source_remap if flags != source_remap else '', cargo_remap) if part])
+                    expected = ' '.join([part for part in (flags, source_remap if flags != source_remap else '', cargo_remap, target_remap) if part])
                     self.assertEqual({record['env']['RUSTFLAGS'] for record in records}, {expected})
                     self.assertEqual(shlex.split(expected).count(source_remap), 1)
                     self.assertEqual(shlex.split(expected).count(cargo_remap), 1)
+                    self.assertEqual(shlex.split(expected).count(target_remap), 1)
                     for record in records:
                         self.assertEqual(record['env']['CARGO_INCREMENTAL'], '0')
                         self.assertEqual(record['env']['CARGO_PROFILE_RELEASE_DEBUG'], '0')

@@ -27,9 +27,11 @@ prepare() {
 build_environment() {
   # The packaged binaries are stripped; keep test compilation on the same release settings.
   export CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0 CUPERTINO_THEME_DIR=/usr/share/cupertino/theme
-  local remap
+  local remap target_dir
+  target_dir=$(realpath -m "${CARGO_TARGET_DIR:-target}")
   for remap in "--remap-path-prefix=$srcdir=/usr/src/debug/$pkgbase" \
-               "--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"; do
+               "--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo" \
+               "--remap-path-prefix=$target_dir=/usr/src/debug/$pkgbase/target"; do
     case " ${RUSTFLAGS:-} " in
       *" $remap "*) ;;
       *) RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }$remap" ;;

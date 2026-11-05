@@ -53,12 +53,54 @@ mkdir -p "$root/target"
 work=$(mktemp -d "$root/target/container-build.XXXXXX")
 cache_next=
 cache_link=
+active_job=
 cleanup() {
-    rm -rf "$work"
-    [ -z "$cache_next" ] || rm -rf "$cache_next"
-    [ -z "$cache_link" ] || rm -f "$cache_link"
+    local status=$? cleanup_status=0 container cidfile
+    trap - EXIT
+    trap "" INT TERM
+    # Containers are created stopped and recorded before compilation can start. Only this run's ids are removed.
+    for cidfile in "$work/build.cid" "$work/test.cid"; do
+        if [ -s "$cidfile" ]; then
+            container=$(cat "$cidfile")
+            if ! docker rm --force "$container" >/dev/null; then
+                cleanup_status=1
+            fi
+        fi
+    done
+    if [ -n "$active_job" ]; then
+        if kill -0 "$active_job" 2>/dev/null; then
+            kill -TERM "$active_job" || cleanup_status=1
+        fi
+        # Reap the interrupted streaming/build client; its failure must not replace the original signal status.
+        if wait "$active_job"; then :; fi
+    fi
+    rm -rf "$work" || cleanup_status=1
+    if [ -n "$cache_next" ]; then rm -rf "$cache_next" || cleanup_status=1; fi
+    if [ -n "$cache_link" ]; then rm -f "$cache_link" || cleanup_status=1; fi
+    if [ "$status" = 0 ]; then status=$cleanup_status; fi
+    exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+wait_job() {
+    local status
+    if wait "$active_job"; then status=0; else status=$?; fi
+    active_job=
+    return "$status"
+}
+
+start_container() {
+    local container=$1 log=$2
+    if [ -n "$log" ]; then
+        docker start --attach "$container" | tee "$log" &
+    else
+        docker start --attach "$container" &
+    fi
+    active_job=$!
+    wait_job
+}
 git -C "$root" archive --format=tar --prefix=src/ HEAD | tar -x -C "$work"
 if [ "$distro" = arch ] && [ "$mode" != --test-only ]; then
     mkdir "$work/src/arch-build"
@@ -267,7 +309,9 @@ if [ "$mode" != --test-only ]; then
     mkdir -p "$target"
     image_key=$(sha256sum "$root/packaging/ci/Dockerfile" | cut -c1-16)
     build_image="cupertino-package-builder:$distro-$image_key"
-    build=(docker buildx build --load --target "$distro" --tag "$build_image")
+    # Bound compiler parallelism in both image tool installs and the subsequent workspace build.
+    jobs=${CARGO_BUILD_JOBS:-4}
+    build=(docker buildx build --load --target "$distro" --tag "$build_image" --build-arg "CARGO_BUILD_JOBS=$jobs")
     if [ -n "${CUPERTINO_BUILD_CACHE_DIR:-}" ]; then
         mkdir -p "$CUPERTINO_BUILD_CACHE_DIR/$distro"
         cache_root=$(cd "$CUPERTINO_BUILD_CACHE_DIR/$distro" && pwd)
@@ -284,7 +328,9 @@ if [ "$mode" != --test-only ]; then
         fi
         build+=(--cache-to "type=local,dest=$cache_next,mode=max")
     fi
-    "${build[@]}" "$root/packaging/ci"
+    "${build[@]}" "$root/packaging/ci" &
+    active_job=$!
+    wait_job
     if [ -n "$cache_next" ]; then
         if [ ! -f "$cache_next/index.json" ]; then
             echo "builder cache export is incomplete: $cache_next" >&2
@@ -304,14 +350,20 @@ if [ "$mode" != --test-only ]; then
             rm -rf "$cache_root/$previous"
         fi
     fi
-    docker run --rm -v "$work/src:/src" -v "$dist:/dist" \
-        --mount "type=bind,src=$target,dst=/src/target" "$build_image" bash -c "$build_script"
+    container=$(docker create --cidfile "$work/build.cid" --name "cupertino-$distro-$(basename "$work")-build" \
+        --env "CARGO_BUILD_JOBS=$jobs" -v "$work/src:/src" -v "$dist:/dist" \
+        --mount "type=bind,src=$target,dst=/src/target" "$build_image" bash -c "$build_script")
+    start_container "$container" ""
 fi
 if [ "$upgrade" = 1 ]; then
-    docker run --rm -v "$dist:/dist:ro" "$test_image" bash -c "$upgrade_script" bash "$distro" | tee "$dist/upgrade-test-$distro.log"
+    container=$(docker create --cidfile "$work/test.cid" --name "cupertino-$distro-$(basename "$work")-test" \
+        -v "$dist:/dist:ro" "$test_image" bash -c "$upgrade_script" bash "$distro")
+    start_container "$container" "$dist/upgrade-test-$distro.log"
 else
-    docker run --rm -v "$dist:/dist:ro" "$test_image" bash -c "$test_script" bash "$distro" | tee "$dist/install-test-$distro.log"
+    container=$(docker create --cidfile "$work/test.cid" --name "cupertino-$distro-$(basename "$work")-test" \
+        -v "$dist:/dist:ro" "$test_image" bash -c "$test_script" bash "$distro")
+    start_container "$container" "$dist/install-test-$distro.log"
 fi
-if [ "$distro" = arch ] && [ "$upgrade" = 0 ]; then
+if [ "$distro" = arch ] && [ "$mode" = build ]; then
     python3 "$root/packaging/release.py" record-packages "$dist" ${RELEASE_TAG:+--tag "$RELEASE_TAG"}
 fi

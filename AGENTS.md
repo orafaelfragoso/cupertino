@@ -17,12 +17,12 @@ Short rules for any agent (and any person) who edits this repository. Details li
 
 ```bash
 export PATH=$HOME/.cargo/bin:$PATH
-CARGO_INCREMENTAL=0 cargo build --workspace
-CARGO_INCREMENTAL=0 cargo nextest run --workspace --all-features   # 2-minute limit per test, see .config/nextest.toml
-cargo test --workspace --all-features --doc
-cargo clippy --workspace --all-targets
+python3 ci/worktree-build.py run --profile dev -- cargo build --workspace
+python3 ci/worktree-build.py run --profile dev -- python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --workspace --all-features
+python3 ci/worktree-build.py run --profile dev -- cargo test --workspace --all-features --doc
+python3 ci/worktree-build.py run --profile dev -- cargo clippy --workspace --all-targets
 cargo fmt --check
-cargo run -p cupertino-layers
+python3 ci/worktree-build.py run --profile dev -- cargo run -p cupertino-layers
 ```
 
 - `cargo fmt --all --check` is clean, vendored crates in `third-party/` included; CI runs `cargo fmt` without `--all`.
@@ -38,8 +38,10 @@ Change files with a script only through `python3 ci/replace.py [--regex] [--coun
 ## Worktrees and disk
 
 - Work in your own git worktree under `~/Development/cupertino-worktrees/<name>`, on its own branch. Do not work in the main checkout. Do not push or merge unless asked.
-- One cargo target directory per worktree, copied from another with `cp --reflink=always`, with `CARGO_INCREMENTAL=0`. Delete the target directory when the work is done.
-- Check `df -h /home` first: do not start a build with less than 30 GB free. Never put target directories or large files in `/tmp`.
+- Use `python3 ci/worktree-build.py run --profile dev -- COMMAND` for local Cargo builds and the fixture wrapper above. It keeps `target/` private to this worktree, disables incremental compilation, checks a 30 GiB free-space floor and holds one per-user heavyweight-build lock for the whole child lifetime. Keep the same profile and environment throughout a target lifecycle. Do not nest this wrapper.
+- `prepare --profile dev --seed NAME` clones an explicitly promoted compatible seed with `cp --reflink=always`; incompatible toolchains, profiles, Cargo configuration or environments fail visibly. Existing unmanaged targets are never adopted. `promote --profile dev --name NAME --max-seed-gib 12` snapshots only a successful managed run. One seed per repository expires after seven days; the explicit size budget bounds its apparent size, while free space measures actual filesystem allocation.
+- Finish with `python3 ci/worktree-build.py cleanup --target --expired-seeds`. This removes only this worktree’s marked target and expired managed seeds under the same lock. It never sweeps other checkouts. For package/container scripts use `python3 ci/worktree-build.py locked -- COMMAND` once around the outermost operation; it preserves their target layout. All local heavyweight work must cooperate with this lock; raw Cargo bypasses the guard.
+- Check `df -h /home` first: do not start a build with less than 30 GiB free. Never put target directories or large files in `/tmp`. Cargo downloads remain shared in `CARGO_HOME`; the optional 2 GiB sccache pilot is documented in CONTRIBUTING.md and is not enabled by default.
 
 ## Finishing a task
 

@@ -22,13 +22,16 @@ pub mod ease;
 pub mod force_quit;
 pub mod magnify;
 pub mod menu;
+pub mod overview_kit;
 pub mod overview_ui;
 #[cfg(feature = "app")]
 pub mod render;
 pub mod session;
 pub mod switcher;
+pub mod switcher_kit;
 pub mod tile_drag;
 pub mod tiles;
+pub mod wm_kit;
 
 pub use autohide::{autohide_hide_ms, autohide_show_ms, reveal_zone, AutoHide, HideState};
 pub use bounce::{Bounce, BounceKind};

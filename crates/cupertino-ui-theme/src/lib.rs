@@ -261,6 +261,8 @@ pub enum Surface {
     Popover,
     /// A heads-up display over everything, such as the volume and brightness overlay.
     Hud,
+    /// The application switcher's panel.
+    Switcher,
 }
 
 /// How a surface paints: the compositor material to ask for, if any, and the opaque fill to paint where there is none.
@@ -292,6 +294,7 @@ impl ThemeTokens {
             Surface::Sidebar => "Sidebar",
             Surface::Menu | Surface::Popover => "Menu",
             Surface::Hud => "LoginWindowControl",
+            Surface::Switcher => "Switcher",
         };
         SurfaceLook {
             material: (!opaque).then_some(material),

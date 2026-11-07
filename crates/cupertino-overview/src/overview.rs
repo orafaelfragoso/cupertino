@@ -154,11 +154,14 @@ impl Overview {
         self.mode
     }
 
-    /// Area the windows are packed into in the current mode (below the bar in `Overview`).
+    /// Area the windows are packed into in the current mode. In `Overview` it starts below the
+    /// workspaces strip: the packing's inset then puts the thumbnails at least the strip's
+    /// [`layout_gap`](crate::BarConfig::layout_gap) below the bottom of its slots.
     pub fn layout_area(&self) -> Rect {
         match self.mode {
             OverviewMode::Overview => {
-                let top = self.cfg.bar.reserved_height();
+                let top = (self.cfg.bar.thumbnails_top() - self.cfg.layout.inset)
+                    .max(self.cfg.bar.strip_bottom());
                 Rect::new(
                     self.area.x,
                     self.area.y + top,

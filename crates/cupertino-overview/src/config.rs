@@ -8,6 +8,10 @@ use cupertino_animation::{Curve, SpringParams};
 use crate::bar::BarConfig;
 use crate::layout::LayoutParams;
 
+/// Space the overviews keep under every window for its title: the space between the window and its title and the
+/// title's row, in points (24 pt).
+pub const TITLE_SPACE: f64 = 24.0;
+
 /// Window titles fade in near the end of the open transition (approximate schedule: they start
 /// to appear once progress exceeds `start` and are fully visible at `end`).
 #[derive(Clone, Copy, Debug)]
@@ -111,7 +115,10 @@ impl OverviewConfig {
 impl Default for OverviewConfig {
     fn default() -> Self {
         Self {
-            layout: LayoutParams::default(),
+            layout: LayoutParams {
+                title_space: TITLE_SPACE,
+                ..LayoutParams::default()
+            },
             app_overview: AppOverviewConfig::default(),
             title_fade: TitleFade::default(),
             highlight: HighlightConfig::default(),

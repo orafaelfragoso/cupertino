@@ -34,6 +34,7 @@ cupertino-decorations = { path = "../cupertino-decorations", optional = true }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry", optional = true }
 cupertino-icons = { path = "../cupertino-icons", optional = true }
+cupertino-kit = { path = "../cupertino-kit" }
 cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-theme = { path = "../cupertino-theme", optional = true }
@@ -42,6 +43,10 @@ cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = tr
 tiny-skia = { version = "0.12", optional = true }
 
 [dev-dependencies]
+async-channel = "2"
+cupertino-assets = { path = "../cupertino-assets" }
+cupertino-theme = { path = "../cupertino-theme" }
+cupertino-ui-test = { path = "../cupertino-ui-test" }
 tempfile = "3"
 
 [lints.rust]

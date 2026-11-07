@@ -313,6 +313,14 @@ mod tests {
                 fill: window(Appearance::Dark)
             }
         );
+        assert_eq!(
+            look(Appearance::Light, false, Surface::Switcher).material,
+            Some("Switcher")
+        );
+        assert_eq!(
+            look(Appearance::Light, true, Surface::Switcher).material,
+            None
+        );
         let high_contrast = look(Appearance::DarkHighContrast, false, Surface::Popover);
         assert_eq!(high_contrast.material, None);
         assert_eq!(high_contrast.fill, window(Appearance::DarkHighContrast));

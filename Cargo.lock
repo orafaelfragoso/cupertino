@@ -1101,6 +1101,7 @@ version = "0.1.0"
 name = "cupertino-dock"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
  "cupertino-animation",
  "cupertino-apps",
  "cupertino-assets",
@@ -1108,10 +1109,12 @@ dependencies = [
  "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-icons",
+ "cupertino-kit",
  "cupertino-overview",
  "cupertino-protocol-app",
  "cupertino-shell-client",
  "cupertino-theme",
+ "cupertino-ui-test",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "cupertino-wm",

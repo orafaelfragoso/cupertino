@@ -23,6 +23,9 @@ pub struct BarConfig {
     /// Expand while the pointer is over the bar.
     pub expand_on_hover: bool,
     pub expand_curve: Curve,
+    /// Space kept between the bottom edge of the strip's slots, at their tallest, and the top of
+    /// the window thumbnails (20 pt).
+    pub layout_gap: f64,
 }
 
 impl Default for BarConfig {
@@ -36,6 +39,7 @@ impl Default for BarConfig {
             hover_margin: 8.0,
             expand_on_hover: true,
             expand_curve: Curve::Spring(SpringParams::from_perceptual(0.3, 0.0)),
+            layout_gap: 20.0,
         }
     }
 }
@@ -50,6 +54,19 @@ impl BarConfig {
             self.expanded_thumb_height
         };
         self.top_margin + thumb + 2.0 * self.padding
+    }
+
+    /// Distance from the top of the area to the bottom edge of the slots when the strip is
+    /// expanded, the tallest it gets. A bar that expands on hover reaches it too, so windows are
+    /// laid out below it either way and never sit under a slot.
+    pub fn strip_bottom(&self) -> f64 {
+        self.top_margin + self.padding + self.expanded_thumb_height
+    }
+
+    /// Distance from the top of the area to the highest point a window thumbnail may reach:
+    /// the strip's bottom plus [`layout_gap`](Self::layout_gap).
+    pub fn thumbnails_top(&self) -> f64 {
+        self.strip_bottom() + self.layout_gap
     }
 }
 

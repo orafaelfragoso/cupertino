@@ -135,7 +135,9 @@ fn overview_layout_avoids_the_bar_and_has_no_overlap() {
         grid4(),
     );
     let area = o.layout_area();
-    assert_eq!(area.y, o.cfg.bar.reserved_height());
+    let bar = &o.cfg.bar;
+    assert_eq!(area.y, bar.thumbnails_top() - o.cfg.layout.inset);
+    assert_eq!(bar.thumbnails_top(), bar.strip_bottom() + 20.0);
     for (i, r) in o.layout_rects().iter().enumerate() {
         assert!(
             r.y >= area.y - 1e-9
@@ -169,14 +171,20 @@ fn three_windows_under_the_menu_bar(expand_on_hover: bool) -> Overview {
 }
 
 #[test]
-fn windows_clear_a_pinned_expanded_bar_by_the_packing_inset() {
+fn windows_clear_a_pinned_expanded_bar_by_the_layout_gap() {
     let o = three_windows_under_the_menu_bar(false);
     let bar = o.bar.layout(0.0).rect;
     assert_eq!(bar.bottom(), 168.0);
+    let slots = o.bar.layout(0.0).slots[0].rect.bottom();
+    assert_eq!(slots, 156.0);
     let rects = o.layout_rects();
     assert_eq!(rects.len(), 3);
     for (i, r) in rects.iter().enumerate() {
-        assert!(r.y >= 188.0 - 1e-9, "window {i} top {} under the bar", r.y);
+        assert!(
+            r.y >= slots + 20.0 - 1e-9,
+            "window {i} top {} under the bar",
+            r.y
+        );
         assert!(!r.intersects(&bar));
         for q in &rects[i + 1..] {
             assert!(!r.intersects(q));
@@ -185,10 +193,20 @@ fn windows_clear_a_pinned_expanded_bar_by_the_packing_inset() {
 }
 
 #[test]
-fn a_bar_that_expands_on_hover_reserves_its_collapsed_height() {
-    let o = three_windows_under_the_menu_bar(true);
-    assert_eq!(o.bar.layout(0.0).rect.bottom(), 24.0 + 90.0);
-    assert_eq!(o.layout_area().y, 24.0 + 90.0);
+fn a_bar_that_expands_on_hover_keeps_the_windows_below_its_expanded_slots() {
+    let mut o = three_windows_under_the_menu_bar(true);
+    assert_eq!(
+        o.bar.layout(0.0).rect.bottom(),
+        24.0 + 90.0,
+        "collapsed band"
+    );
+    o.bar.set_expanded(true, 0.0);
+    let expanded = o.bar.layout(10.0);
+    let slots = expanded.slots[0].rect.bottom();
+    assert!((slots - (24.0 + 12.0 + 120.0)).abs() < 0.2, "{slots}");
+    for r in o.layout_rects() {
+        assert!(r.y >= slots + 20.0 - 0.2, "{r:?} under the expanded strip");
+    }
 }
 
 #[test]
@@ -685,4 +703,266 @@ fn bar_band_height_is_the_verified_90pt() {
     );
     assert_eq!(o.cfg.bar.reserved_height(), 90.0);
     assert_eq!(o.bar.layout(0.0).rect.h, 90.0);
+}
+
+/// Output modes in device pixels and the scales they run at; the overview works in points.
+const MODES: [(f64, f64); 6] = [
+    (1280.0, 800.0),
+    (1366.0, 768.0),
+    (1920.0, 1080.0),
+    (2560.0, 1440.0),
+    (2880.0, 1800.0),
+    (3840.0, 2160.0),
+];
+const SCALES: [f64; 4] = [1.0, 1.25, 1.5, 2.0];
+
+/// An edge as the output draws it: on the device pixel grid.
+fn snap(v: f64, scale: f64) -> f64 {
+    (v * scale).round() / scale
+}
+
+/// Three windows of different sizes (a large one, a medium one, a small one) at places of a
+/// desktop of `w`×`h` points, in a few arrangements.
+fn three_windows(w: f64, h: f64, arrangement: usize) -> Vec<OverviewWindow> {
+    let large = (w * 0.7, h * 0.75);
+    let medium = (w * 0.45, h * 0.5);
+    let small = (w * 0.18, h * 0.16);
+    let places = [
+        [(0.0, 24.0), (w * 0.3, h * 0.2), (w * 0.4, h * 0.35)],
+        [(w * 0.3, 24.0), (0.0, h * 0.45), (w * 0.8, h * 0.05)],
+        [(w * 0.1, h * 0.1), (w * 0.1, h * 0.1), (w * 0.1, h * 0.1)],
+        [(w * 0.25, h * 0.2), (w * 0.5, h * 0.5), (w * 0.78, h * 0.8)],
+    ][arrangement];
+    [large, medium, small]
+        .into_iter()
+        .zip(places)
+        .enumerate()
+        .map(|(i, ((sw, sh), (x, y)))| {
+            win(
+                i as u64 + 1,
+                A,
+                Rect::new(x, y, sw.min(w - x), sh.min(h - y)),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn three_windows_stay_below_the_strip_and_apart_at_every_size_and_scale() {
+    for (pw, ph) in MODES {
+        for scale in SCALES {
+            let (w, h) = (pw / scale, ph / scale);
+            // the menu bar above and a dock zone below
+            let area = Rect::new(0.0, 24.0, w, h - 24.0 - 70.0);
+            for expand_on_hover in [false, true] {
+                for arrangement in 0..4 {
+                    let mut cfg = OverviewConfig::default();
+                    cfg.bar.expand_on_hover = expand_on_hover;
+                    let mut o = Overview::new(
+                        cfg,
+                        area,
+                        OverviewMode::Overview,
+                        three_windows(w, h, arrangement),
+                    );
+                    let ids: Vec<WorkspaceId> = (1..=3).map(WorkspaceId).collect();
+                    o.set_workspaces(&ids, Some(WorkspaceId(1)));
+                    o.bar.set_expanded(true, 0.0);
+                    let strip = o.bar.layout(10.0);
+                    let strip_bottom = strip
+                        .slots
+                        .iter()
+                        .map(|s| s.rect.bottom())
+                        .chain(strip.add.map(|a| a.bottom()))
+                        .fold(0.0, f64::max);
+                    let case = format!(
+                        "{pw}×{ph} px at {scale} ({w}×{h} pt), arrangement {arrangement}, \
+                         hover {expand_on_hover}"
+                    );
+                    let rects: Vec<Rect> = o
+                        .layout_rects()
+                        .iter()
+                        .map(|r| {
+                            let (x, y) = (snap(r.x, scale), snap(r.y, scale));
+                            Rect::new(
+                                x,
+                                y,
+                                snap(r.right(), scale) - x,
+                                snap(r.bottom(), scale) - y,
+                            )
+                        })
+                        .collect();
+                    assert_eq!(rects.len(), 3, "{case}");
+                    let gap = snap(strip_bottom, scale) + o.cfg.bar.layout_gap;
+                    for (i, r) in rects.iter().enumerate() {
+                        assert!(r.w > 0.0 && r.h > 0.0, "{case}: window {i} is {r:?}");
+                        assert!(
+                            r.y >= gap - 1e-6,
+                            "{case}: window {i} {r:?} within 20 pt of the strip"
+                        );
+                        for s in strip.slots.iter().map(|s| s.rect).chain(strip.add) {
+                            assert!(
+                                !r.intersects(&s),
+                                "{case}: window {i} {r:?} over slot {s:?}"
+                            );
+                        }
+                        assert!(
+                            r.x >= area.x
+                                && r.right() <= area.right()
+                                && r.bottom() <= area.bottom(),
+                            "{case}: window {i} {r:?} outside {area:?}"
+                        );
+                        for (j, q) in rects.iter().enumerate().skip(i + 1) {
+                            assert!(
+                                !r.intersects(q),
+                                "{case}: windows {i} {r:?} and {j} {q:?} overlap"
+                            );
+                        }
+                    }
+                    // balanced: the arrangement is centred across the area
+                    let used = o
+                        .layout_rects()
+                        .iter()
+                        .copied()
+                        .reduce(|a, b| a.union(&b))
+                        .unwrap();
+                    assert!(
+                        (used.cx() - area.cx()).abs() < 1e-6,
+                        "{case}: {used:?} off centre in {area:?}"
+                    );
+                    // labels and hit testing follow the frames
+                    for (wnd, r) in o.shown_windows().iter().zip(o.layout_rects()) {
+                        assert_eq!(o.hit_test(r.center(), 10.0), Some(wnd.id), "{case}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A fixed-seed generator for the adversarial layouts below, so a failure names a case that reruns the same.
+struct Cases(u64);
+
+impl Cases {
+    /// A number in `[lo, hi)`.
+    fn range(&mut self, lo: f64, hi: f64) -> f64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        lo + (hi - lo) * ((self.0 >> 11) as f64 / (1u64 << 53) as f64)
+    }
+}
+
+/// The smallest output the overview is laid out on, in points: 1280×720 pixels at scale 2.
+const SMALLEST_OUTPUT: (f64, f64) = (640.0, 360.0);
+
+/// What the dock draws under every window: the space to its title and the title's row, in points.
+const TITLE_BAND: f64 = 24.0;
+
+/// Up to sixteen windows, among them tiny ones, very wide and very tall ones and windows on the same place, on
+/// outputs from the smallest to 4K at scale 1 and at fractional scales. Every thumbnail keeps a size, sits at least
+/// the layout gap below the expanded strip's slots, inside the area with the title space under it, and neither it
+/// nor its title space meets another window or its title, also with edges snapped to device pixels; a click on the
+/// middle of a thumbnail hits its window.
+#[test]
+fn adversarial_window_sets_keep_thumbnails_and_titles_apart_and_below_the_strip() {
+    let mut rng = Cases(0x0067);
+    for case in 0..3000 {
+        let scale: f64 = [1.0, 1.25, 1.5, 1.75, 2.0][case % 5];
+        let w = rng.range(SMALLEST_OUTPUT.0, 3840.0 / scale);
+        let h = rng.range(SMALLEST_OUTPUT.1, 2160.0 / scale);
+        let area = Rect::new(0.0, 24.0, w, h - 24.0 - 70.0);
+        let n = 1 + (rng.range(0.0, 16.0) as usize);
+        let same_place = rng.range(0.0, 1.0) < 0.1;
+        let windows: Vec<OverviewWindow> = (0..n)
+            .map(|i| {
+                let kind = rng.range(0.0, 1.0);
+                let (ww, wh) = if kind < 0.25 {
+                    // tiny
+                    (rng.range(1.0, 60.0), rng.range(1.0, 60.0))
+                } else if kind < 0.35 {
+                    // a wide, thin strip
+                    (rng.range(w * 0.5, w), rng.range(1.0, 30.0))
+                } else if kind < 0.45 {
+                    // a tall, narrow column
+                    (rng.range(1.0, 30.0), rng.range(h * 0.5, h))
+                } else {
+                    (rng.range(w * 0.1, w), rng.range(h * 0.1, h))
+                };
+                let (x, y) = if same_place {
+                    (w * 0.2, h * 0.2)
+                } else {
+                    (
+                        rng.range(-ww * 0.2, w - ww * 0.8),
+                        rng.range(24.0, h - wh * 0.8),
+                    )
+                };
+                win(i as u64 + 1, A, Rect::new(x, y, ww, wh))
+            })
+            .collect();
+        let mut cfg = OverviewConfig::default();
+        cfg.bar.expand_on_hover = case % 2 == 0;
+        let mut o = Overview::new(cfg, area, OverviewMode::Overview, windows);
+        let ids: Vec<WorkspaceId> = (1..=1 + case as u64 % 6).map(WorkspaceId).collect();
+        o.set_workspaces(&ids, Some(WorkspaceId(1)));
+        o.bar.set_expanded(true, 0.0);
+        let strip = o.bar.layout(10.0);
+        let slots: Vec<Rect> = strip
+            .slots
+            .iter()
+            .map(|s| s.rect)
+            .chain(strip.add)
+            .collect();
+        let strip_bottom = slots.iter().map(|s| s.bottom()).fold(0.0, f64::max);
+        let id = format!("case {case}: {w}×{h} pt at {scale}, {n} windows");
+        let snapped = |r: &Rect| {
+            let (x, y) = (snap(r.x, scale), snap(r.y, scale));
+            Rect::new(
+                x,
+                y,
+                snap(r.right(), scale) - x,
+                snap(r.bottom(), scale) - y,
+            )
+        };
+        let rects = o.layout_rects().to_vec();
+        assert_eq!(rects.len(), n, "{id}");
+        for (i, r) in rects.iter().enumerate() {
+            let titled = Rect::new(r.x, r.y, r.w, r.h + TITLE_BAND);
+            assert!(r.w > 0.0 && r.h > 0.0, "{id}: window {i} is {r:?}");
+            assert!(
+                r.y >= strip_bottom + o.cfg.bar.layout_gap - 1e-6,
+                "{id}: window {i} {r:?} within the gap of the strip at {strip_bottom}"
+            );
+            assert!(
+                snapped(r).y >= snap(strip_bottom, scale) + o.cfg.bar.layout_gap - 1.0 / scale,
+                "{id}: window {i} {r:?} drawn within the gap of the strip"
+            );
+            assert!(
+                r.x >= area.x - 1e-6
+                    && r.right() <= area.right() + 1e-6
+                    && titled.bottom() <= area.bottom() + 1e-6,
+                "{id}: window {i} {r:?} or its title outside {area:?}"
+            );
+            for s in &slots {
+                assert!(!r.intersects(s), "{id}: window {i} {r:?} over slot {s:?}");
+            }
+            for (j, q) in rects.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                let other = Rect::new(q.x, q.y, q.w, q.h + TITLE_BAND);
+                assert!(
+                    !titled.intersects(&other),
+                    "{id}: window {i} {r:?} or its title meets window {j} {q:?} or its title"
+                );
+                assert!(
+                    !snapped(&titled).intersects(&snapped(&other)),
+                    "{id}: windows {i} and {j} meet as drawn"
+                );
+            }
+        }
+        for (wnd, r) in o.shown_windows().iter().zip(o.layout_rects()) {
+            assert_eq!(o.hit_test(r.center(), 10.0), Some(wnd.id), "{id}");
+        }
+    }
 }

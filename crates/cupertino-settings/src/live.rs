@@ -278,6 +278,8 @@ pub struct Live {
     pub login_screen: Option<LoginScreen>,
     /// The installed applications, read when the Privacy pane shows.
     pub apps: Vec<crate::clipboard::Installed>,
+    /// A screen reader is installed (`Paths::screen_reader`): without one the Screen reader switch is disabled.
+    pub screen_reader_installed: bool,
 }
 
 impl Default for Live {
@@ -296,6 +298,7 @@ impl Default for Live {
             bluetooth: Reading::Unknown,
             login_screen: None,
             apps: Vec::new(),
+            screen_reader_installed: false,
         }
     }
 }

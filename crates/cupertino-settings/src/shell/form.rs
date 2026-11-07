@@ -2,8 +2,11 @@
 //! the [`Value`] its row commits, as the panes' model reads it.
 
 use cupertino_kit::controls::{PopUpButton, SegmentedControl, Slider, SliderStyle, TextRole};
-use cupertino_kit::core::Window;
-use cupertino_kit::geometry::Insets;
+use cupertino_kit::core::{
+    Change, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget, Window,
+};
+use cupertino_kit::geometry::{Insets, Size};
+use cupertino_kit::layout::{Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured};
 use cupertino_kit::prelude::*;
 use cupertino_kit::text::{AttributedText, TextStyle};
 
@@ -16,6 +19,8 @@ use crate::search::Hit;
 pub const ROW_GAP: f64 = 8.0;
 /// Between a form's sections, an approximate design value.
 pub const SECTION_GAP: f64 = 20.0;
+/// Between a row's label and its second line.
+const LABEL_LINE_GAP: f64 = 2.0;
 
 /// A line of `content`, none when it is empty: an empty text is a node a screen reader cannot announce.
 pub fn text(content: &str, role: TextRole) -> Option<Element<Message>> {
@@ -162,6 +167,58 @@ fn control(row: &Row, open: Option<ControlId>) -> Option<Element<Message>> {
     Some(control.key(control_key(id)))
 }
 
+/// A row's label over its second line. When the row is too narrow for it and its control, it shrinks along the row (not
+/// across it), so a long label or second line wraps instead of pushing the control past the window's edge.
+struct Label<M> {
+    lines: Vec<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for Label<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            // its own width while the row has room, down to its longest word when it has not
+            flex: Flex {
+                grow: 0.0,
+                shrink: 1.0,
+                basis: None,
+            },
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: Axis::Vertical,
+                spacing: LABEL_LINE_GAP,
+                align: Align::Stretch,
+                justify: Justify::Start,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.lines)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::ZERO,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
 fn row(row: &Row, open: Option<ControlId>) -> Element<Message> {
     let second = row
         .error
@@ -172,7 +229,10 @@ fn row(row: &Row, open: Option<ControlId>) -> Element<Message> {
         .into_iter()
         .chain(second.and_then(|s| styled(s, TextRole::Body, true)))
         .collect();
-    let mut children = vec![column(2.0, label), Element::new(Spacer::default())];
+    let mut children = vec![
+        Element::new(Label { lines: label }),
+        Element::new(Spacer::default()),
+    ];
     children.extend(control(row, open));
     Element::new(Stack {
         axis: Axis::Horizontal,

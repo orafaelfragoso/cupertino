@@ -85,6 +85,9 @@ pub struct Paths {
     pub system_accessibility: Option<PathBuf>,
     pub data_control: Option<PathBuf>,
     pub screen_sharing: Option<PathBuf>,
+    /// The installed screen reader (`installed_screen_reader`), which the session's compositor runs; `None` without one.
+    /// Settings only shows whether there is one: it never starts it.
+    pub screen_reader: Option<PathBuf>,
 }
 
 impl Paths {
@@ -99,6 +102,7 @@ impl Paths {
             system_accessibility: Some(PathBuf::from(SYSTEM_ACCESSIBILITY)),
             data_control: DataControlConf::path(),
             screen_sharing: ScreenSharingConf::path(),
+            screen_reader: cupertino_defaults::accessibility::installed_screen_reader(),
         }
     }
 

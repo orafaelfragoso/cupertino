@@ -61,7 +61,10 @@ processes on the session object. `SYSTEM_ACCESSIBILITY` (`/etc/cupertino/accessi
 same format, for the login screen and every key an account's own file does not record; `SystemAccessibility::from_text` applies only
 `SYSTEM_KEYS` (`reduce_motion`, `screen_reader_at_login`) from it and reports any other key. `screen_reader_at_login` (on or off)
 starts the login screen with its screen reader on; it is a field of `SystemAccessibility` only, so a person's file that names it
-is reported and changes nothing. `PersonalAccessibility` is a person's `accessibility.conf`: only the
+is reported and changes nothing. `screen_reader` (on or off, off by default) is the other way round: a key of a person's file
+that runs the screen reader in their session (the compositor starts it), which the machine's file cannot set.
+`SCREEN_READERS` (`/usr/bin/orca`) lists the readers either may start, and `installed_screen_reader` takes the first that only
+root can change (`system::root_only_target`), never one from `$PATH`. `PersonalAccessibility` is a person's `accessibility.conf`: only the
 keys they changed (`record`), each kept once changed even when set back to the machine's value, and `over` lays them on the
 machine's settings. A file with every key, as earlier versions wrote it, stays valid and sets them all. A key joins `SYSTEM_KEYS` only after a security review. `system::read_root_file` reads such a file only when it is a regular file of root's that no one else can write (no link followed); the compositor and `cupertino-sessiond` read the machine's files with it, and `SystemAccessibility::to_text` writes the machine's file.
 

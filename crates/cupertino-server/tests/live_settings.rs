@@ -502,6 +502,92 @@ fn the_setters_are_served_on_the_session_bus() {
     );
 }
 
+/// What Settings' Screen reader switch calls, over a private bus: `SetAccessibility("screen_reader", ...)` starts the
+/// session's reader and stops it, and the `Accessibility` property says which.
+#[test]
+fn the_screen_reader_switch_starts_and_stops_the_reader_over_the_session_bus() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: no dbus-daemon");
+        return;
+    };
+    let Some(mut h) = Harness::new() else { return };
+    h.state
+        .use_accessibility_store(h.path("accessibility.conf"))
+        .unwrap();
+    let reader = h.path("fake-reader");
+    std::fs::write(&reader, "#!/bin/sh\nexec /usr/bin/sleep 300\n").unwrap();
+    std::fs::set_permissions(&reader, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    h.state.session_reader.program = Some(reader);
+    let address = bus.address.clone();
+    let (said, heard) = std::sync::mpsc::channel::<(String, String)>();
+    let (done, next) = std::sync::mpsc::channel::<()>();
+    let client = std::thread::spawn(move || {
+        let conn = zbus::blocking::connection::Builder::address(address.as_str())
+            .unwrap()
+            .build()
+            .unwrap();
+        let proxy = zbus::blocking::proxy::Builder::<zbus::blocking::Proxy<'_>>::new(&conn)
+            .destination("org.cupertino.Session1")
+            .unwrap()
+            .path("/org/cupertino/Session1")
+            .unwrap()
+            .interface("org.cupertino.Session1")
+            .unwrap()
+            .cache_properties(zbus::proxy::CacheProperties::No)
+            .build()
+            .unwrap();
+        let end = Instant::now() + Duration::from_secs(10);
+        while proxy
+            .get_property::<std::collections::HashMap<String, String>>("Accessibility")
+            .is_err()
+        {
+            assert!(Instant::now() < end, "the session interface did not appear");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        for value in ["on", "off"] {
+            proxy
+                .call_method("SetAccessibility", &("screen_reader", value))
+                .unwrap();
+            let held: std::collections::HashMap<String, String> =
+                proxy.get_property("Accessibility").unwrap();
+            said.send((value.to_owned(), held["screen_reader"].clone()))
+                .unwrap();
+            next.recv().unwrap();
+        }
+    });
+    cupertino_server::quit::start_session_service_on(&mut h.state, Some(bus.address.clone()));
+    let mut seen = Vec::new();
+    let mut pid = None;
+    while seen.len() < 2 {
+        h.step();
+        if let Ok((value, held)) = heard.try_recv() {
+            let running = h.state.session_reader.pid();
+            if value == "on" {
+                pid = running;
+            }
+            seen.push((value, held, running.is_some()));
+            done.send(()).unwrap();
+        }
+    }
+    client.join().unwrap();
+    assert_eq!(
+        seen,
+        [
+            ("on".to_owned(), "on".to_owned(), true),
+            ("off".to_owned(), "off".to_owned(), false)
+        ]
+    );
+    let pid = pid.unwrap();
+    let end = Instant::now() + Duration::from_secs(5);
+    while Path::new(&format!("/proc/{pid}")).exists() && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        !Path::new(&format!("/proc/{pid}")).exists(),
+        "the reader ended"
+    );
+}
+
 /// SEC-04: a process of the same user that is neither the session agent nor the settings application cannot change the
 /// session, whatever it calls; the refusal has its own error name, and the properties stay readable.
 #[test]

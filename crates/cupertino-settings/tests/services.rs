@@ -46,6 +46,7 @@ fn settings(dir: &std::path::Path) -> Settings {
         system_accessibility: None,
         data_control: None,
         screen_sharing: None,
+        screen_reader: None,
     };
     Settings::load(&paths, 1080.0).expect("defaults load without files")
 }
@@ -915,6 +916,7 @@ fn the_colour_filter_button_shows_what_the_server_holds_not_the_file() {
         system_accessibility: None,
         data_control: None,
         screen_sharing: None,
+        screen_reader: None,
     };
     settings.reload(&paths).unwrap();
     settings.apply_session_accessibility(&held);

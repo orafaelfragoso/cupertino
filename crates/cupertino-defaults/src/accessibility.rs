@@ -10,6 +10,7 @@
 //! | `display_contrast` | 0 to 1 | 0 |
 //! | `color_filter` | `off`, `grayscale`, `protanopia`, `deuteranopia`, `tritanopia` or `tint <hue 0…1> | off |
 //! | `color_filter_intensity` | 0.25 to 1, or `default` | the filter's own |
+//! | `screen_reader` | `on` or `off`: the session's screen reader runs ([`installed_screen_reader`]) | off |
 //!
 //! Every option is off when its key is absent, as the design reads a missing preference as false.
 //! The contrast slider is 0 by default and accepts 0 to 1. Filter intensities are clamped to 0.25 to 1
@@ -36,9 +37,23 @@ pub const SYSTEM_ACCESSIBILITY: &str = "/etc/cupertino/accessibility.conf";
 /// The key of the machine's file that starts the screen reader with the login screen. No person's file has it, so one
 /// person's choice never reaches another's login.
 pub const SCREEN_READER_AT_LOGIN: &str = "screen_reader_at_login";
+/// The key of a person's file that runs the screen reader in their session. The machine's file cannot set it.
+pub const SCREEN_READER: &str = "screen_reader";
 /// The keys the machine's file may set: display options that cannot make the login screen unusable for someone else,
 /// and [`SCREEN_READER_AT_LOGIN`]. A key joins only after a security review.
 pub const SYSTEM_KEYS: &[&str] = &["reduce_motion", SCREEN_READER_AT_LOGIN];
+
+/// The screen readers a session may start, by absolute path, in order of preference: the login screen's and a person's
+/// session's alike. Never one from `$PATH` or from a setting.
+pub const SCREEN_READERS: &[&str] = &["/usr/bin/orca"];
+
+/// The first of [`SCREEN_READERS`] that only root can change, every directory and link on the way included
+/// ([`crate::system::root_only_target`]); `None` when no reader is installed.
+pub fn installed_screen_reader() -> Option<std::path::PathBuf> {
+    SCREEN_READERS
+        .iter()
+        .find_map(|path| crate::system::root_only_target(Path::new(path)))
+}
 
 /// Lowest filter intensity the design's reader returns.
 pub const MIN_FILTER_INTENSITY: f64 = 0.25;
@@ -154,6 +169,9 @@ pub struct AccessibilitySettings {
     pub color_filter: Option<ColorFilter>,
     /// Intensity of the colour filter; `None` uses [`ColorFilter::default_intensity`].
     pub color_filter_intensity: Option<f64>,
+    /// The session's screen reader runs. The compositor starts and stops it to match; at the login screen the machine's
+    /// [`SCREEN_READER_AT_LOGIN`] decides instead.
+    pub screen_reader: bool,
 }
 
 impl AccessibilitySettings {
@@ -186,6 +204,7 @@ impl AccessibilitySettings {
             self.color_filter_intensity
                 .map_or_else(|| "default".to_string(), |i| i.to_string()),
         ));
+        entries.push((SCREEN_READER, on(self.screen_reader)));
         entries
     }
 
@@ -213,6 +232,7 @@ impl AccessibilitySettings {
             "display_contrast" => self.display_contrast = from.display_contrast,
             "color_filter" => self.color_filter = from.color_filter,
             "color_filter_intensity" => self.color_filter_intensity = from.color_filter_intensity,
+            SCREEN_READER => self.screen_reader = from.screen_reader,
             _ => {}
         }
     }
@@ -241,6 +261,7 @@ impl AccessibilitySettings {
                     Some(fraction(value, MIN_FILTER_INTENSITY)?)
                 }
             }
+            SCREEN_READER => self.screen_reader = on(value)?,
             other => return Err(format!("unknown setting {other:?}")),
         }
         Ok(())
@@ -473,6 +494,7 @@ mod tests {
             display_contrast: 0.35,
             color_filter: Some(ColorFilter::Tint { hue: 0.125 }),
             color_filter_intensity: Some(0.75),
+            screen_reader: true,
         };
         let mut back = AccessibilitySettings::default();
         assert!(back.apply_text(&s.to_text()).is_empty());
@@ -538,6 +560,22 @@ mod tests {
             [1]
         );
         assert_eq!(personal, PersonalAccessibility::default());
+    }
+
+    #[test]
+    fn a_persons_file_runs_the_session_reader_and_the_machines_file_cannot() {
+        let (personal, errors) = PersonalAccessibility::from_text("screen_reader = on\n");
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(personal.over(&machine()).screen_reader);
+        assert_eq!(personal.to_text(), "screen_reader = on\n");
+        assert!(
+            !AccessibilitySettings::default().screen_reader,
+            "off by default"
+        );
+        let (system, errors) = SystemAccessibility::from_text("screen_reader = on\n");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(!system.settings.screen_reader);
+        assert!(!system.to_text().contains("screen_reader ="));
     }
 
     #[test]

@@ -27,7 +27,7 @@ use cupertino_menubar::layout::{BarContent, SlotKey};
 use cupertino_menubar::tone::BarTone;
 use cupertino_menubar::view::{self, BarFont, BarId, BarPointer, BarScene, Input, KitMeasure};
 use cupertino_theme::Theme;
-use cupertino_ui_test::{Inspector, ManualClock, TestDriver};
+use cupertino_ui_test::{AssistiveTechnology, Inspector, ManualClock, TestDriver};
 use tiny_skia::Pixmap;
 
 const BAR: BarId = BarId(1);
@@ -147,6 +147,11 @@ struct Run {
 
 impl Run {
     fn start() -> Self {
+        Self::start_with(None)
+    }
+
+    /// A bar whose windows a screen reader follows when `reader` is given.
+    fn start_with(reader: Option<&AssistiveTechnology>) -> Self {
         let preferences = ThemePreferences {
             appearance: Appearance::Light,
             reduce_transparency: false,
@@ -172,7 +177,7 @@ impl Run {
                     GlyphRaster::new(Arc::clone(&glyphs)),
                 ))
             }),
-            accessibility: None,
+            accessibility: reader.map(AssistiveTechnology::adapter),
             clock: Arc::new(ManualClock::new(Timestamp(0))),
             on_window_error: None,
         };
@@ -277,6 +282,28 @@ impl Run {
         let origin = cupertino_menubar::popups::snap(layout.rect);
         let r = layout.rows[layout.index_of(ItemId(id)).unwrap()].rect;
         Point::new(r.x + r.w / 2.0 - origin.x, r.y + r.h / 2.0 - origin.y)
+    }
+
+    /// The node of window `key` that a screen reader reads as `name`.
+    fn node(&self, key: &str, name: &str) -> cupertino_kit::core::NodeId {
+        let window = self
+            .window(key)
+            .unwrap_or_else(|| panic!("no window {key}"));
+        let snapshot = self.driver.runtime().snapshot(window).unwrap();
+        snapshot
+            .accessibility
+            .iter()
+            .find(|(_, n)| n.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("{key} has nothing named {name}"))
+            .0
+    }
+
+    /// Asks for `name` in window `key` to be clicked, as `reader` does, and runs until every window rests.
+    fn ask_click(&mut self, reader: &AssistiveTechnology, key: &str, name: &str) {
+        let target = self.node(key, name);
+        self.driver
+            .ask(reader, target, cupertino_kit::core::Action::Click, None);
+        self.settle();
     }
 
     fn open_file(&mut self) {
@@ -390,6 +417,26 @@ fn a_click_on_a_row_chooses_its_item() {
     run.pointer("menu-1-0", PointerEvent::Motion { position: row });
     run.button("menu-1-0", row, true);
     run.button("menu-1-0", row, false);
+    assert!(
+        run.model().effects.iter().any(|e| matches!(
+            e,
+            Effect::Activate { item, .. } if *item == ItemId(NEW_FOLDER)
+        )),
+        "New Folder is chosen: {:?}",
+        run.model().effects
+    );
+    assert_eq!(run.window("menu-1-0"), None, "choosing closes the menu");
+}
+
+#[test]
+fn a_screen_reader_opens_a_menu_by_its_title_and_chooses_a_row() {
+    let reader = AssistiveTechnology::new();
+    let mut run = Run::start_with(Some(&reader));
+    run.ask_click(&reader, "bar-1", "File");
+    assert!(run.model().controller.is_open(), "File opens");
+    let menu = run.window("menu-1-0").expect("the File menu's popup");
+    assert!(reader.tree(menu).is_some(), "the reader follows the menu");
+    run.ask_click(&reader, "menu-1-0", "New Folder");
     assert!(
         run.model().effects.iter().any(|e| matches!(
             e,

@@ -312,10 +312,6 @@ impl Exception {
     }
 }
 
-const APPS_DRAW: &str =
-    "apps paint fields, shapes, text and system icons with desktop render crates until they draw \
-                         through the toolkit (WP-10)";
-
 const SOUND_PANE: &str =
     "the sound pane drives the default sink and the mixer itself until audio goes through a service";
 
@@ -324,14 +320,6 @@ const APP_MENUS: &str =
 
 /// Edges that exist today and that [`RULES`] forbid. Stale entries are errors, so the list only shrinks.
 pub const EXCEPTIONS: &[Exception] = &[
-    Exception {
-        from: "cupertino-files",
-        to: "cupertino-decorations",
-        kind: Kind::Normal,
-        tracking: Tracking::Issue(46),
-        area: Area::Apps,
-        reason: APPS_DRAW,
-    },
     Exception {
         from: "cupertino-settings",
         to: "cupertino-alsa",

@@ -49,7 +49,7 @@ the unit's restrictions and a session must be able to run `sudo`.
 
 **PAM services.** `cupertino-greeter`: `auth` and `account` `pam_permit.so`, `session` `pam_loginuid.so` and `pam_systemd.so`.
 `cupertino-session`: `auth`, `account` and `session` include `system-local-login` (`pam_faillock`, `pam_unix`, `pam_loginuid`,
-`pam_systemd`, `pam_limits`, `pam_env`). `cupertino-autologin`: `auth` `pam_permit.so`, `account` and `session` include `system-local-login`. `cupertino-login` (the lock screen's) is unchanged. **Accounts.** `u cupertino-greeter -
+`pam_systemd`, `pam_limits`, `pam_env`), then `pam_gnome_keyring` for `auth` and `session` (see "Secret Service"). `cupertino-autologin`: `auth` `pam_permit.so`, `account` and `session` include `system-local-login`, then `pam_gnome_keyring`'s `session` line. `cupertino-login` (the lock screen's) adds `pam_gnome_keyring`'s `auth` line. **Accounts.** `u cupertino-greeter -
 "Cupertino login screen" / /usr/bin/nologin` (sysusers; home `/` because the worker's `chdir($HOME)` must not fail and the
 account has no private directory), no group.
 
@@ -239,6 +239,89 @@ channel is one socketpair end as standard input.
 A log line never holds what the screen sent. Decoding errors are logged by class (`DecodeError::class`), listed accounts by uid,
 a typed name not at all (`attempt for a typed name`: people type passwords there), and `ChannelError` / `FrameError` /
 `DecodeError` carry no message content. PAM modules log account names themselves.
+
+## Secret Service
+
+Applications keep passwords and tokens (a browser's saved passwords, a mail account, an AI provider's key) in the
+Secret Service, `org.freedesktop.secrets` on the user bus. Cupertino writes no provider of its own: the session uses
+gnome-keyring's `secrets` component and unlocks it through PAM with the password this manager's worker checks.
+
+**What an installed session had before** (Arch package and live image at `20c98802`, by reading the packages, PAM files,
+units and the session script): no package depended on a provider, and the live image listed none, so most machines had no
+`org.freedesktop.secrets` at all and libsecret clients failed or fell back to a plain store. Where gnome-keyring came in
+through another package, its socket unit and D-Bus activation started it on first use, but none of the PAM services
+called `pam_gnome_keyring` (Arch's `system-local-login` does not), so the login keyring stayed locked and the first
+application asked for the password in a separate window. Nothing locked it at logout, and the portal routing sent the
+Secret portal to the GTK backend, which has none, so sandboxed applications had no Secret portal.
+
+**The choice.** gnome-keyring, because every target distribution packages it with its PAM module, it is the provider
+libsecret clients are tested against, it brings the prompt for a locked keyring (gcr's system prompter) and a Secret
+portal backend, and Arch enables its socket unit for every user when it is installed. KeePassXC or KWallet implement the
+same interface; a user who installs one instead gets whichever takes the name first, but the packages and the tests
+target gnome-keyring.
+
+| What | Owned by |
+|---|---|
+| The daemon (`gnome-keyring-daemon --components=pkcs11,secrets`) | the gnome-keyring package: user units `gnome-keyring-daemon.socket` and `.service` (its install script runs `systemctl --global enable gnome-keyring-daemon.socket`), and D-Bus activation of `org.freedesktop.secrets`. The session starts it no other way; `cupertino-session.target` does not pull it in, so a daemon PAM started is never replaced by the socket |
+| Unlock at login | PAM service `cupertino-session`: `-auth optional pam_gnome_keyring.so` right after the stack that checks the password keeps the password the stack accepted; `-session optional pam_gnome_keyring.so auto_start`, last, after `pam_systemd` has made `XDG_RUNTIME_DIR`, hands it to the daemon through its control socket (`$XDG_RUNTIME_DIR/keyring/control`, which starts the socket-activated service) or, when nothing listens there, starts the daemon with it. Both run in the worker's single PAM transaction (`Mode::Open`), so the password never leaves PAM |
+| Auto login | PAM service `cupertino-autologin`: the session line only. There is no password, so the daemon runs locked |
+| Unlock at the lock screen | PAM service `cupertino-login` (`cupertino-login`'s lock screen): `-auth optional pam_gnome_keyring.so` after `system-auth` unlocks a running daemon with the password that unlocked the screen |
+| Lock at logout | the session command `cupertino-session` (below) |
+| The prompt for a locked keyring | gcr's system prompter (`org.gnome.keyring.SystemPrompter`, a GTK window started on demand). It is not a Cupertino surface |
+| Sandboxed applications | xdg-desktop-portal's Secret portal, routed to gnome-keyring in `cupertino-portals.conf` |
+| Packages | Arch (`cupertino`, `cupertino-git`) depends on `gnome-keyring` and `libsecret` (`secret-tool`); the live image lists both. The deb recommends `gnome-keyring`, `libpam-gnome-keyring`, `libsecret-tools`; the rpm recommends `gnome-keyring`, `gnome-keyring-pam`, `libsecret`. The `-` before each PAM line skips it silently when the module is not installed |
+
+| Case | What happens |
+|---|---|
+| First login with a password | the daemon creates the login keyring, encrypted with that password, as the default collection, unlocked |
+| Login | the keyring is unlocked before the session command starts |
+| Authentication fails | the password stack fails first (`pam_faillock`'s `authfail` ends it), so `pam_gnome_keyring` never sees a wrong password: no session, the keyring is not touched |
+| The password is accepted but is not the keyring's (changed with `passwd`, whose PAM file does not update the keyring) | the session opens with the keyring locked; the first client is refused (`IsLocked`) or its unlock opens the prompter, which asks for the keyring's own password |
+| Locked keyring | reading or storing is refused with `org.freedesktop.Secret.Error.IsLocked`, a search lists the items as locked, and `Unlock` returns a prompt. Running the prompt opens the prompter; when the person dismisses it the prompt completes as dismissed and the keyring stays locked. Nothing is unlocked without the password |
+| Auto login | locked, as above, until the person unlocks it in the prompter or unlocks the lock screen with the password |
+| Screen locked | the keyring stays unlocked, as on other desktops; unlocking the screen unlocks a keyring that was locked |
+| Fast user switching, the administrator's restart | `Mode::Verify` runs the same `auth` stack, but the worker sets no `XDG_RUNTIME_DIR` before `pam_authenticate`, so the module finds no daemon and keeps nothing: the session's keyring is not changed |
+| Logout | after the compositor ends and `cupertino-session.target` is stopped, the session command lists the provider's `Collections` and calls `Lock` on all of them through `busctl --user --auto-start=no`, so a provider that is not running is not started. It logs `locked the keyring (N collections)` in `session.log`; a path that is not `/org/freedesktop/secrets/collection/…` stops it with a log line. The daemon itself ends with the user manager, after the user's last session. A session that did not own the user manager (another graphical session of the user was active) locks nothing |
+
+Neither the password nor any secret is logged: PAM modules do not print the password, the daemon does not print values
+(the tests check its output), and the session command never reads a secret.
+
+**Hand-off to the login screen's UI** (#110 moves it to Kit). Nothing here is in UI code. The boundary is the PAM
+transaction: the greeter answers the worker's prompts through `greeter.sock` (`Answer`), and the lock screen passes the
+typed password to `cupertino_login::auth::Authenticator` (PAM service `cupertino-login`). A new UI keeps those two calls;
+it needs to know nothing about the keyring.
+
+**Seeing and deleting saved secrets.** No Cupertino window lists them yet. From a terminal in the session:
+
+```
+busctl --user get-property org.freedesktop.secrets /org/freedesktop/secrets/collection/login org.freedesktop.Secret.Collection Items
+busctl --user get-property org.freedesktop.secrets ITEM org.freedesktop.Secret.Item Label Attributes
+secret-tool search --all ATTRIBUTE VALUE      # label, attributes and the secret itself, printed on the terminal
+secret-tool clear ATTRIBUTE VALUE             # deletes every item with that attribute
+secret-tool lock --collection=/org/freedesktop/secrets/collection/login
+```
+
+Seahorse ("Passwords and Keys", not installed by the packages) shows and deletes items in a window. Removing
+`~/.local/share/keyrings/login.keyring` while logged out deletes every saved secret; the next login makes a new keyring.
+
+**Tests.** `tests/secret_service.rs` runs the real daemon on a private bus with no activatable services and a home of its
+own, started as `pam_gnome_keyring` starts it (the password on its standard input): a client stores, reads and deletes a
+secret over the D-Bus API and through `secret-tool`; a locked keyring refuses reads and writes and an unlock asks the
+system prompter (a stand-in that refuses, as a dismissed window does); a wrong or missing password leaves it locked; the
+keyring file is the account's alone; no secret is in the daemon's output. It is skipped with `SKIPPED:
+gnome-keyring-daemon is not installed` when the daemon is missing (`CUPERTINO_KEYRING_REQUIRED=1`, set in CI, fails
+instead). `packaging/test_session.py` checks the lock at logout (with a fake `busctl`, and with the real daemon when it is
+installed) and `packaging/test_release.py` the PAM lines and the packages. PAM itself is not run: that needs root.
+
+**Not verified on an installed session.** On a machine installed from the live image, as a user with a password:
+
+1. Log in at the login screen. `busctl --user get-property org.freedesktop.secrets /org/freedesktop/secrets/collection/login org.freedesktop.Secret.Collection Locked` prints `b false`; `systemctl --user status gnome-keyring-daemon.service` is active.
+2. `printf secret | secret-tool store --label=check service cupertino-check`, then `secret-tool lookup service cupertino-check` prints `secret`; save a password in Chromium and see it after a restart of the browser.
+3. Lock the screen (`Super+Ctrl+Q`), `secret-tool lock --collection=/org/freedesktop/secrets/collection/login` from an ssh login or a timer, then unlock the screen with the password: `Locked` is `b false` again.
+4. Lock the keyring again and run `secret-tool lookup service cupertino-check`: the prompter window asks for the password; Cancel makes the lookup print nothing and exit 1; the right password prints `secret`.
+5. Log out. From another login of the same user (a text console), `Locked` is `b true` and `~/.local/state/cupertino/session.log` has `locked the keyring`.
+6. With auto login on, the session starts with `Locked` `b true` and the first lookup opens the prompter.
+7. `secret-tool clear service cupertino-check`; the lookup prints nothing. `journalctl --user -b` and `session.log` hold neither the password nor `secret`.
 
 ## Security
 

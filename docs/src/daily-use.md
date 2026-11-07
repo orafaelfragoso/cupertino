@@ -49,6 +49,14 @@ To change a shortcut, add a `chord = action` line to `~/.config/cupertino/shortc
 
 Files go to the Desktop folder unless `~/.config/cupertino/screenshot.conf` sets `location` to `documents`, `pictures`, `clipboard` or a directory. The toolbar writes the file back. Screen recording is not implemented.
 
+## Saved passwords
+
+Apps keep saved passwords and tokens in the keyring: gnome-keyring, which the packages install. Logging in with your password unlocks it, and logging out locks it again. After an automatic login, or after your password was changed with `passwd`, it stays locked: the first app that needs it opens a window that asks for the keyring's password, and Cancel there refuses the app. Unlocking the lock screen with your password also unlocks the keyring.
+
+There is no Cupertino window for saved passwords yet. In a terminal, `secret-tool search --all ATTRIBUTE VALUE` shows the matching items (with their secrets), `secret-tool clear ATTRIBUTE VALUE` deletes them, and the Seahorse app ("Passwords and Keys", installed separately) lists and deletes them in a window. `cupertino-sessiond`'s README ("Secret Service") has the details and the commands that list every item.
+
+Not verified: none of this has been run in an installed session yet; the README lists the checks.
+
 ## Logs and crash reasons
 
 `cupertino-diagnose` checks the GPU driver, the session, the portal, the services and the last crash in one go, and names

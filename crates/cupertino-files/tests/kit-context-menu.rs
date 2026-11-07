@@ -291,6 +291,7 @@ fn a_large_paste_runs_beside_the_window_shows_its_progress_and_stops_without_a_h
         ["Copying “big.bin” to “Notes”"]
     );
     assert!(run.named(Role::Button).contains(&"Stop".to_owned()));
+    run.driver.look(run.window, "files-paste-progress").unwrap();
     run.menu("toggle-status-bar");
     assert!(
         run.read_aloud().iter().any(|t| t.contains("item")),

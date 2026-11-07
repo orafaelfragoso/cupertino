@@ -325,24 +325,38 @@ impl Run {
 
     /// Press the left button at `from` with `mods` held, move to `to` in a few steps and let go there.
     pub fn drag(&mut self, from: Point, to: Point, mods: Mods) {
+        self.hold(from, to, mods);
+        self.release(to, mods);
+    }
+
+    /// The first part of [`Self::drag`]: a left press at `from` with `mods` held, moved to `to` in four steps.
+    pub fn hold(&mut self, from: Point, to: Point, mods: Mods) {
         let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
-        let button = |position, pressed| {
-            pointer(PointerEvent::Button {
-                position,
-                button: MouseButton::Left,
-                pressed,
-                serial: 1,
-                mods,
-            })
-        };
         self.send(pointer(PointerEvent::Motion { position: from }));
-        self.send(button(from, true));
+        self.send(pointer(PointerEvent::Button {
+            position: from,
+            button: MouseButton::Left,
+            pressed: true,
+            serial: 1,
+            mods,
+        }));
         for step in 1..=4 {
             let t = f64::from(step) / 4.0;
             let position = Point::new(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t);
             self.send(pointer(PointerEvent::Motion { position }));
         }
-        self.send(button(to, false));
+    }
+
+    /// The left button held since [`Self::hold`] let go at `at`.
+    pub fn release(&mut self, at: Point, mods: Mods) {
+        let event = PointerEvent::Button {
+            position: at,
+            button: MouseButton::Left,
+            pressed: false,
+            serial: 1,
+            mods,
+        };
+        self.send(WindowEvent::Pointer(event, Timestamp(0)));
     }
 
     /// Click the list's row that shows `name` with `mods` held.

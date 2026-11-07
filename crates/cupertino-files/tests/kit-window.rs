@@ -593,7 +593,9 @@ fn a_band_from_empty_space_selects_the_icons_it_touches_and_modifiers_toggle_the
     );
     // clear of the divider beside the sidebar
     let empty = Point::new(frames["a.txt"].center().x - 20.0, below);
-    run.drag(empty, frames["b.txt"].center(), Mods::NONE);
+    run.hold(empty, frames["b.txt"].center(), Mods::NONE);
+    run.driver.look(run.window, "files-band-icons").unwrap();
+    run.release(frames["b.txt"].center(), Mods::NONE);
     assert_eq!(run.selected_icons(), ["a.txt", "b.txt"]);
 
     // Shift keeps what was selected and adds what the band touches
@@ -767,6 +769,9 @@ fn a_folders_triangle_and_the_arrows_open_and_close_it_in_the_list() {
         levels.contains(&(Some(2), None)),
         "todo.txt one level in: {levels:?}"
     );
+    run.driver
+        .look(run.window, "files-list-disclosure")
+        .unwrap();
 
     run.press_at(triangle, cupertino_kit::platform::MouseButton::Left);
     run.wait_until(|run| run.rows().len() == 3);
@@ -790,7 +795,18 @@ fn a_band_under_the_rows_selects_the_rows_it_crosses() {
     let notes = row_bounds(&run, "Notes");
     let b = row_bounds(&run, "b.txt");
     let under = Point::new(notes.min_x() + notes.width() / 2.0, notes.max_y() + 40.0);
-    run.drag(under, b.center(), Mods::NONE);
+    // up and across, so the band has an area
+    let corner = Point::new(b.center().x + 120.0, b.center().y);
+    run.hold(under, corner, Mods::NONE);
+    assert!(
+        run.driver
+            .runtime()
+            .find(run.window, &Key::from("band-layer"))
+            .is_some(),
+        "the band shows while it is drawn"
+    );
+    run.driver.look(run.window, "files-band-list").unwrap();
+    run.release(corner, Mods::NONE);
     assert_eq!(run.selected_rows(), ["b.txt", "Notes"]);
     run.drag(under, Point::new(under.x, notes.max_y() + 20.0), Mods::NONE);
     assert_eq!(
@@ -871,6 +887,7 @@ fn the_toolbars_view_tags_and_action_buttons_open_their_menus_below_them() {
 
     run.click_named(Role::PopUpButton, "View");
     assert!(run.context_menu().is_some(), "the View menu");
+    run.driver.look(run.window, "files-toolbar").unwrap();
     let rows = labels(&mut run);
     assert_eq!(
         rows[..2],
@@ -919,6 +936,7 @@ fn a_click_on_a_folder_of_the_path_bar_goes_to_it() {
         segments.ends_with(&["Documents".to_owned(), "Notes".to_owned()]),
         "{segments:?}"
     );
+    run.driver.look(run.window, "files-path-bar").unwrap();
     run.click_named(Role::Button, "Documents");
     run.wait_until(|run| run.title() == "Documents");
     assert_eq!(run.rows(), ["a.txt", "b.txt", "Notes"]);

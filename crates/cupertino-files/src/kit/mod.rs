@@ -1,6 +1,6 @@
 //! The browser window on CupertinoKit: the sidebar's places, the folder as a list or a grid of icons, the path and
-//! status bars and the menus of the desktop's menu bar, over the toolkit-free [`Browser`]. It takes the place of the
-//! window in `main.rs` once it does all that window does.
+//! status bars and the menus of the desktop's menu bar, over the toolkit-free [`Browser`]. It is the window `main.rs`
+//! runs.
 
 mod context;
 mod dragged;

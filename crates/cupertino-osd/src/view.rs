@@ -75,11 +75,22 @@ pub fn accessible_name(kind: Kind) -> &'static str {
     }
 }
 
+/// What the meter reads as: the overlay's name and, unless it shows a mute, the level in whole percent
+/// ("Volume 50%").
+fn meter_name(kind: Kind, level: f64) -> String {
+    let name = accessible_name(kind);
+    match kind {
+        Kind::Mute | Kind::MicrophoneMute => name.to_owned(),
+        _ => format!("{name} {}%", (level * 100.0).round()),
+    }
+}
+
 /// The meter row: the full width of the window, the meter at its design position inside it.
 #[derive(Clone, Debug, PartialEq)]
 struct Meter {
     level: f64,
-    label: &'static str,
+    /// What the meter reads as, from [`meter_name`].
+    name: String,
 }
 
 impl<M: 'static> Widget<M> for Meter {
@@ -140,8 +151,9 @@ impl<M: 'static> Widget<M> for Meter {
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(Role::ProgressIndicator);
-        cx.name(self.label.to_owned());
-        // the overlay never takes the focus, so its level is announced as it changes
+        cx.name(self.name.clone());
+        // the overlay never takes the focus, so its level is announced as it changes; a bridge announces a live node
+        // only as it appears or its name changes, which is why the name holds the level
         cx.live(Live::Polite);
         cx.value(AccessibleValue::Number {
             value: self.level,
@@ -179,7 +191,7 @@ fn content<M: 'static>(overlay: &Overlay, alpha: f64) -> Element<M> {
                 }),
                 Element::new(Meter {
                     level: overlay.level(),
-                    label,
+                    name: meter_name(overlay.kind(), overlay.level()),
                 }),
             ],
         })],
@@ -417,11 +429,23 @@ mod tests {
             .into_iter()
             .map(|a| (a.live, a.text))
             .collect();
-        assert_eq!(said, [(Live::Polite, "Volume, 0.5".to_owned())]);
+        assert_eq!(said, [(Live::Polite, "Volume 50%".to_owned())]);
         assert_eq!(
             (reader.focus(window), reader.focus_moves(window)),
             (None, 0)
         );
+    }
+
+    #[test]
+    fn the_meter_s_name_says_the_level_unless_it_shows_a_mute() {
+        assert_eq!(meter_name(Kind::Volume, 0.75), "Volume 75%");
+        assert_eq!(meter_name(Kind::Brightness, 0.0), "Brightness 0%");
+        assert_eq!(meter_name(Kind::KeyboardBrightness, 1.0), "Keyboard brightness 100%");
+        assert_eq!(meter_name(Kind::Microphone, 0.333), "Microphone 33%");
+        assert_eq!(meter_name(Kind::Mute, 0.0), "Volume muted");
+        assert_eq!(meter_name(Kind::MicrophoneMute, 0.4), "Microphone muted");
+        // a new level is a new name, which is what a bridge announces
+        assert_ne!(meter_name(Kind::Volume, 0.5), meter_name(Kind::Volume, 0.5625));
     }
 
     #[test]
@@ -437,7 +461,7 @@ mod tests {
         assert_eq!(
             meters,
             vec![(
-                Some("Volume".to_owned()),
+                Some("Volume 50%".to_owned()),
                 Some(AccessibleValue::Number {
                     value: 0.5,
                     min: 0.0,

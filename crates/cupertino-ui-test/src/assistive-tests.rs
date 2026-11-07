@@ -1,6 +1,6 @@
 use super::*;
 use cupertino_geometry::Rect;
-use cupertino_ui_core::{AccessibleStates, Role};
+use cupertino_ui_core::{AccessibleStates, AccessibleValue, Role};
 
 fn id(n: u32) -> NodeId {
     NodeId::new(n, std::num::NonZeroU32::MIN)
@@ -81,10 +81,10 @@ fn partial_updates_are_put_together_into_the_whole_tree() {
 }
 
 #[test]
-fn a_live_node_is_said_when_it_arrives_and_when_its_words_change() {
+fn a_live_node_is_said_by_its_name_when_it_arrives_and_when_it_is_renamed() {
     let at = AssistiveTechnology::new();
     let mut adapter = at.adapter();
-    let mut volume = node(Role::Slider, "Volume", &[]);
+    let mut volume = node(Role::ProgressIndicator, "Volume 50%", &[]);
     volume.live = Some(Live::Polite);
     volume.value = Some(AccessibleValue::Number {
         value: 0.5,
@@ -92,12 +92,10 @@ fn a_live_node_is_said_when_it_arrives_and_when_its_words_change() {
         max: 1.0,
         step: None,
     });
-    adapter.update(&update(
-        true,
-        None,
-        vec![(1, node(Role::Window, "OSD", &[2])), (2, volume.clone())],
-    ));
-    // the same words again are not said again
+    let window = (1, node(Role::Window, "OSD", &[2]));
+    adapter.update(&update(true, None, vec![window.clone(), (2, volume.clone())]));
+    // the same name again, a new value or a new description alone, and a whole tree that sends the node again are
+    // not said: the bridge announces only an added or renamed node
     adapter.update(&update(false, None, vec![(2, volume.clone())]));
     volume.value = Some(AccessibleValue::Number {
         value: 0.75,
@@ -105,7 +103,16 @@ fn a_live_node_is_said_when_it_arrives_and_when_its_words_change() {
         max: 1.0,
         step: None,
     });
-    adapter.update(&update(false, None, vec![(2, volume)]));
+    volume.description = Some("Speakers".into());
+    adapter.update(&update(false, None, vec![(2, volume.clone())]));
+    adapter.update(&update(true, None, vec![window.clone(), (2, volume.clone())]));
+    volume.name = Some("Volume 75%".into());
+    adapter.update(&update(false, None, vec![(2, volume.clone())]));
+    // removed, then back: a new node, said again
+    let mut gone = update(false, None, vec![(1, node(Role::Window, "OSD", &[]))]);
+    gone.removed = vec![id(2)];
+    adapter.update(&gone);
+    adapter.update(&update(false, None, vec![window, (2, volume)]));
     let said: Vec<_> = at
         .take_announcements()
         .into_iter()
@@ -114,8 +121,9 @@ fn a_live_node_is_said_when_it_arrives_and_when_its_words_change() {
     assert_eq!(
         said,
         [
-            (Live::Polite, "Volume, 0.5".to_owned()),
-            (Live::Polite, "Volume, 0.75".to_owned()),
+            (Live::Polite, "Volume 50%".to_owned()),
+            (Live::Polite, "Volume 75%".to_owned()),
+            (Live::Polite, "Volume 75%".to_owned()),
         ]
     );
     assert!(at.announcements().is_empty());

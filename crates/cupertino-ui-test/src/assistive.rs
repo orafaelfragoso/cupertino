@@ -1,5 +1,5 @@
 use cupertino_ui_core::{
-    AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, AccessibleValue, Action,
+    AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, Action,
     ActionData, ActionRequest, Live, NodeId,
 };
 use cupertino_ui_platform::WindowId;
@@ -37,8 +37,6 @@ struct Held {
     root: NodeId,
     focus: Option<NodeId>,
     nodes: HashMap<NodeId, AccessibilityNode>,
-    /// Each live node's last text, so only a change is said again.
-    live: HashMap<NodeId, String>,
     /// How many times the focus moved since the window opened.
     focus_moves: usize,
 }
@@ -107,8 +105,9 @@ impl AssistiveTechnology {
         self.lock().locked
     }
 
-    /// Everything live regions said, oldest first: each live node when it reaches the tree with something to say and
-    /// whenever what it says changes.
+    /// Everything live regions said, oldest first: each live node's name when the node reaches the tree with one and
+    /// whenever its name changes, as the AT-SPI bridge announces them. A change of value or description alone is not
+    /// said.
     pub fn announcements(&self) -> Vec<Announcement> {
         self.lock().said.clone()
     }
@@ -123,19 +122,10 @@ impl AssistiveTechnology {
     }
 }
 
-/// What a screen reader reads of a live node: its name, its description and its text or number value, in that order.
-fn spoken(node: &AccessibilityNode) -> String {
-    let value = match &node.value {
-        Some(AccessibleValue::Text { value, .. }) => Some(value.clone()),
-        Some(AccessibleValue::Number { value, .. }) => Some(value.to_string()),
-        _ => None,
-    };
-    [node.name.clone(), node.description.clone(), value]
-        .into_iter()
-        .flatten()
-        .filter(|s| !s.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join(", ")
+/// What the AT-SPI bridge announces of a live node: its name, which AccessKit sends as the announcement when the node
+/// is added or renamed.
+fn spoken(node: &AccessibilityNode) -> &str {
+    node.name.as_deref().unwrap_or("").trim()
 }
 
 impl AccessibilityAdapter for AssistiveTechnology {
@@ -158,36 +148,32 @@ impl AccessibilityAdapter for AssistiveTechnology {
             root: update.root,
             focus: update.focus,
             nodes: HashMap::new(),
-            live: HashMap::new(),
             focus_moves: 0,
         });
-        if update.full {
-            held.nodes.clear();
-        }
+        // a whole tree replaces the held one, but a node it sends again is the same node, renamed or not
+        let mut before = if update.full {
+            std::mem::take(&mut held.nodes)
+        } else {
+            HashMap::new()
+        };
         for id in &update.removed {
             held.nodes.remove(id);
-            held.live.remove(id);
         }
         let mut said = Vec::new();
         for (id, node) in &update.nodes {
-            held.nodes.insert(*id, node.clone());
-            let Some(live) = node.live else {
-                held.live.remove(id);
-                continue;
-            };
-            let text = spoken(node);
-            if held.live.get(id) != Some(&text) {
-                held.live.insert(*id, text.clone());
-                if !text.is_empty() {
+            let old = held.nodes.remove(id).or_else(|| before.remove(id));
+            if let Some(live) = node.live {
+                let text = spoken(node);
+                if !text.is_empty() && old.as_ref().is_none_or(|old| spoken(old) != text) {
                     said.push(Announcement {
                         window: update.window,
                         live,
-                        text,
+                        text: text.to_owned(),
                     });
                 }
             }
+            held.nodes.insert(*id, node.clone());
         }
-        held.live.retain(|id, _| held.nodes.contains_key(id));
         held.root = update.root;
         if held.focus != update.focus {
             held.focus_moves += 1;

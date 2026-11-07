@@ -48,8 +48,8 @@ row in a left-to-right layout, or up a column).
 bridge names it, and `assert_accessible(what)` fails with every window's outline (`semantic_outlines()`).
 
 `AssistiveTechnology` is a stand-in reader for `RuntimeOptions::accessibility`: it holds each window's tree, put
-together from whole and partial updates, records each live region's `Announcement` when it arrives and when its words
-change, counts focus moves (so a test can show an announcement did not take the focus), and keeps the window focus and
+together from whole and partial updates, records each live region's `Announcement` of its name when it arrives and when
+it is renamed (as the AT-SPI bridge announces; a new value or description alone is not said), counts focus moves (so a test can show an announcement did not take the focus), and keeps the window focus and
 the session lock. `TestDriver::ask(reader, target, action, data)` asks for an action as a reader does and wakes the
 runtime to take it.
 

@@ -412,6 +412,47 @@ fn a_click_on_a_selected_item_without_a_drag_selects_it_alone() {
     assert_eq!(browser.selected(), ["Notes"]);
 }
 
+/// A plain click on the only selected item puts the anchor back on it, as a click on any item does: a Ctrl-click that
+/// deselected another item had left the anchor there, and the next Shift-click extends from the clicked item.
+#[test]
+fn a_click_on_the_only_selected_item_moves_the_anchor_to_it() {
+    let mut browser = Browser::new(Appearance::Light);
+    let names: Vec<String> = browser.cells().into_iter().map(|(n, _, _)| n).collect();
+    let [first, middle, last] = &names[..] else {
+        panic!("three items: {names:?}");
+    };
+    let centre = |browser: &Browser, name: &str| {
+        let cell = browser.cell(name);
+        Point::new(
+            cell.origin.x + cell.size.width / 2.0,
+            cell.origin.y + cell.size.height / 3.0,
+        )
+    };
+    let click = |browser: &mut Browser, name: &str, mods: Mods| {
+        let at = centre(browser, name);
+        for pressed in [true, false] {
+            browser.pointer(PointerEvent::Button {
+                position: at,
+                button: MouseButton::Left,
+                pressed,
+                serial: 1,
+                mods,
+            });
+        }
+    };
+    click(&mut browser, first, Mods::NONE);
+    click(&mut browser, last, Mods::PRIMARY);
+    click(&mut browser, last, Mods::PRIMARY);
+    assert_eq!(browser.selected(), std::slice::from_ref(first));
+    click(&mut browser, first, Mods::NONE);
+    click(&mut browser, middle, Mods::SHIFT);
+    assert_eq!(
+        browser.selected(),
+        [first.clone(), middle.clone()],
+        "the Shift-click extends from the clicked item, not the one the Ctrl-click left"
+    );
+}
+
 /// A drag the compositor cancels (a drop nothing takes, or one the target refused) leaves the files and the selection
 /// as they were, and the window takes clicks and starts drags again as before.
 #[test]

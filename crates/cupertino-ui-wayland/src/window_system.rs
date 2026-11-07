@@ -940,14 +940,21 @@ impl WindowSystem for WaylandWindowSystem {
 
     /// The drag answers the latest button press still held in `window`'s client; one the transport refuses (no button
     /// held) fails here, and one the compositor ignores ends as [`DragProgress::Cancelled`]. A drag started while
-    /// another runs replaces it, which ends as cancelled.
+    /// another runs replaces it, which ends as cancelled. An image the transport cannot show is left out.
     fn start_drag(
         &mut self,
         window: WindowId,
         request: DragRequest,
     ) -> Result<DragToken, PlatformError> {
         let surface = self.window(window)?.surface;
-        let icon = request.image.as_ref().map(drag_icon).transpose()?;
+        // an image the transport cannot show (a side over its limit at this scale) leaves the drag without one
+        let icon = request.image.as_ref().and_then(|image| {
+            drag_icon(image)
+                .inspect_err(|e| {
+                    eprintln!("cupertino-ui-wayland: the drag goes without its image: {e:?}")
+                })
+                .ok()
+        });
         let mut actions = DragActions::empty();
         for action in &request.actions {
             actions |= match action {

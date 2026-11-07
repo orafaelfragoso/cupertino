@@ -701,6 +701,8 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
     let browser = &win.browser;
     let (params, layout) = icon_layout(win);
     let text_size = params.text_size;
+    // the whole lines the layout gives a name; a name past them ends in an ellipsis
+    let lines = icon::max_title_lines(&params).floor().max(1.0) as u32;
     let entries = browser.entries();
     let items: Rc<[Item]> = entries
         .iter()
@@ -732,7 +734,7 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
                 Some((_, value, revision, selection)) => {
                     name_field(id, value.clone(), *revision, selection.clone())
                 }
-                None => grid::name(names[index].name.clone(), text_size, selected),
+                None => grid::name(names[index].name.clone(), text_size, selected, Some(lines)),
             },
         ),
     });

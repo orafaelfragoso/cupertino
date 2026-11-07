@@ -11,8 +11,8 @@ use std::rc::Rc;
 
 use cupertino_kit::controls::{Image, ImageFit, ImageSource, Selection, Text, TextRole};
 use cupertino_kit::core::{
-    AccessibleStates, Action, Change, Element, Event, EventCx, FocusTarget, Key, MeasureCx,
-    PaintCx, Phase, Propagation, Role, SemanticsCx, Widget,
+    AccessibleStates, Action, Change, Element, Environment, Event, EventCx, FocusTarget, Key,
+    MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget,
 };
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
@@ -21,7 +21,9 @@ use cupertino_kit::layout::{
 };
 use cupertino_kit::platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp};
 use cupertino_kit::render::{Paint, PaintOp, Shape};
-use cupertino_kit::text::{AttributedText, TextStyle};
+use cupertino_kit::text::{
+    AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, TextStyle, Wrap,
+};
 use cupertino_kit::theme::{Color, ColorRole, InteractionVariant, StateVariant};
 
 use super::band::{self, Band};
@@ -949,18 +951,130 @@ impl Widget<Message> for NameBox {
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
-/// An item's name in `text_size` points, wrapping in its cell, on the selected control colour when `selected`.
-pub(super) fn name(text: String, text_size: f64, selected: bool) -> Element<Message> {
+/// An item's name in `text_size` points, wrapping in its cell, on the selected control colour when `selected`. With
+/// `max_lines` it keeps that many lines at most, the last ending in an ellipsis when the name goes on past it.
+pub(super) fn name(
+    text: String,
+    text_size: f64,
+    selected: bool,
+    max_lines: Option<u32>,
+) -> Element<Message> {
     Element::new(Highlight {
         selected,
-        children: vec![Element::new(Text {
-            content: AttributedText::plain(text, TextStyle::new(text_size as f32)),
-            role: TextRole::Body,
-            wrap: true,
-            secondary: false,
-            selected,
+        children: vec![Element::new(Name {
+            text: Text {
+                content: AttributedText::plain(text, TextStyle::new(text_size as f32)),
+                role: TextRole::Body,
+                wrap: true,
+                secondary: false,
+                selected,
+            },
+            max_lines,
         })],
     })
+}
+
+/// A wrapping body-text name, drawn as [`Text`] draws it, whose lines stop at `max_lines` with an ellipsis.
+struct Name {
+    text: Text,
+    max_lines: Option<u32>,
+}
+
+impl Name {
+    /// The name in the body role's size and weight, laid out within `width`; `None` if the fonts cannot shape it.
+    fn laid_out(&self, env: &Environment, width: f64) -> Option<ParagraphLayout> {
+        let role = env.theme.type_scale.body;
+        let mut content = self.text.content.clone();
+        for (_, style) in &mut content.runs {
+            style.size = role.size;
+            if style.weight == FontWeight::REGULAR {
+                style.weight = FontWeight(role.weight);
+            }
+        }
+        let style = ParagraphStyle {
+            align: match env.direction {
+                LayoutDirection::Ltr => TextAlign::Left,
+                LayoutDirection::Rtl => TextAlign::Right,
+            },
+            wrap: Wrap::Word,
+            max_lines: self.max_lines.map(|n| n.max(1)),
+            ellipsis: self.max_lines.is_some(),
+            ..ParagraphStyle::default()
+        };
+        let paragraph = env.text.paragraph(&content, &style).ok()?;
+        Some(paragraph.layout(width.is_finite().then_some(width as f32)))
+    }
+}
+
+impl Widget<Message> for Name {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.text != old.text || self.max_lines != old.max_lines {
+            Change::Layout
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), constraints: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
+        match self.laid_out(cx.env(), constraints.width.max()) {
+            Some(layout) => Measured {
+                size: layout.size(),
+                baseline: layout.lines().first().map(|line| line.baseline),
+            },
+            None => Measured {
+                size: Size::ZERO,
+                baseline: None,
+            },
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, Message>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let width = cx.size().width;
+        let Some(layout) = self.laid_out(cx.env(), width) else {
+            return;
+        };
+        let (role, variant) = if self.text.selected {
+            (ColorRole::ControlText, selected_variant(cx.window_active()))
+        } else {
+            (ColorRole::Text, StateVariant::NORMAL)
+        };
+        let Some(color) = cx.env().theme.colors.get(role, variant) else {
+            return;
+        };
+        // against the leading edge, as a wrapping text is
+        let x = match cx.env().direction {
+            LayoutDirection::Ltr => 0.0,
+            LayoutDirection::Rtl => {
+                width - layout.lines().first().map_or(0.0, |line| line.rect.width())
+            }
+        };
+        for line in layout.lines() {
+            for run in &line.runs {
+                cx.push(PaintOp::Glyphs {
+                    origin: Point::new(x, 0.0) + run.origin,
+                    run: run.run.clone(),
+                    color,
+                });
+            }
+        }
+    }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::StaticText);
+        cx.name(self.text.content.text.clone());
+    }
 }
 
 /// Fits its text and paints the selection behind it.

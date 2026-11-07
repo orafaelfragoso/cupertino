@@ -508,6 +508,34 @@ fn as_icons_shows_the_folder_as_a_grid_of_named_icons_read_as_a_list() {
 }
 
 #[test]
+fn a_name_too_long_for_its_cell_keeps_to_the_cells_lines() {
+    const LONG: &str =
+        "Quarterly report with a very long name that goes on and on past two lines.txt";
+    let mut run = Run::new();
+    std::fs::write(run.home().join("Documents").join(LONG), b"").unwrap();
+    run.wait_until(|run| run.rows().len() == 4);
+    run.menu("view-icons");
+    run.settle();
+    let cell = run
+        .icon_cells()
+        .into_iter()
+        .find(|(name, _, _)| name == LONG)
+        .map(|(_, rect, _)| rect)
+        .expect("the long name's cell");
+    // the name is read whole, but laid out on no more lines than its cell gives it: the last ends in an ellipsis
+    let text = run.bounds(Role::StaticText, LONG);
+    let short = run.bounds(Role::StaticText, "a.txt");
+    assert!(
+        text.max_y() <= cell.max_y() + 0.5,
+        "the name {text:?} stays in its cell {cell:?}"
+    );
+    assert!(
+        text.height() > short.height() && text.height() <= 2.0 * short.height() + 0.5,
+        "two lines: {text:?} against one: {short:?}"
+    );
+}
+
+#[test]
 fn the_keyboard_moves_extends_and_types_to_select_in_the_icon_grid() {
     const LEFT: u32 = 0xff51;
     const RIGHT: u32 = 0xff53;

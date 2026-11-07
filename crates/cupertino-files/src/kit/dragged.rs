@@ -230,7 +230,7 @@ pub(super) fn preview(grab: &Grab) -> DragPreview<Message> {
                 Rect::new(0.0, 0.0, grab.label.width, grab.label.height),
                 Insets::ZERO,
                 0.0,
-                vec![grid::name(grab.name.clone(), grab.text_size, true)],
+                vec![grid::name(grab.name.clone(), grab.text_size, true, None)],
             ),
         ],
     ));

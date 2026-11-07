@@ -458,6 +458,31 @@ fn shift_tab_visits_the_stops_tab_does_in_the_opposite_order() {
 }
 
 #[test]
+fn tab_in_an_empty_folder_walks_the_headers_and_goes_on_past_the_list() {
+    let (mut run, _) = start(Appearance::Light);
+    run.click_named(Role::ListItem, "Downloads");
+    run.wait_until(|run| run.title() == "Downloads");
+    assert_eq!(focused(&run), "ListItem \"Downloads\"");
+    let forward = walk(&mut run, false);
+    let headers: Vec<&str> = forward
+        .iter()
+        .filter_map(|s| s.strip_prefix("ColumnHeader "))
+        .collect();
+    assert_eq!(
+        headers,
+        ["\"Name\"", "\"Date Modified\"", "\"Size\"", "\"Kind\""],
+        "{forward:?}"
+    );
+    assert!(
+        !forward.iter().any(|s| s.starts_with("Row")),
+        "no row to stop on: {forward:?}"
+    );
+    let mut back = walk(&mut run, true);
+    back.reverse();
+    assert_eq!(back, forward, "Shift+Tab is Tab backwards");
+}
+
+#[test]
 fn the_keyboard_comes_back_to_what_opened_a_menu_or_a_rename() {
     let (mut run, _) = start(Appearance::Light);
 

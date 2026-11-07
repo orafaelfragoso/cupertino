@@ -176,7 +176,7 @@ transfer's progress is not announced. A selected row's text, its secondary colum
 drawn in the selected control text colour on the accent. The focus ring shows on the toolbar buttons, the path bar's
 folders and the rows under Increase Contrast. Over AT-SPI the list is a multiselectable table whose rows carry their
 selected state. The tests listen through `cupertino-ui-test`'s stand-in screen reader (`AssistiveTechnology`), and every
-settle of the test window runs the shared accessibility audit over each window open.
+settle of the test window runs the shared accessibility audit over each window open, with nothing left out.
 
 **Removable media** come from udisks2 on the system bus (`udisks`): after Trash, Locations lists every file system of a
 drive that udisks neither hides (`HintIgnore`) nor counts as the system's (`HintSystem`), with usage `filesystem`, and
@@ -325,9 +325,9 @@ Values live in `metrics.rs`.
 * Over AT-SPI the list's table offers no Selection interface (the accessibility bridge gives one only to lists and
   trees of items), so a screen reader reads the selection row by row.
 * When the node the keyboard is on goes away (the row of the folder it opens, the list swapped for the icon grid, an
-  item moved to the trash), the focus falls to its nearest surviving ancestor, which assistive technology may not see
-  (the table's rows, the items' frame) until Tab or a click moves it. Which layer fixes this is a pending decision; the
-  tests' audit leaves out only that problem.
+  item moved to the trash), the keyboard falls to its nearest surviving ancestor (the table's rows, the items' frame),
+  and assistive technology is told the focus is on the nearest node of that path it can see, such as the table, until
+  Tab or a click moves it on.
 * Removable media: disc images and network mounts are not listed.
 * Opening several files opens each without confirmation; a mixed selection enters the first folder only (approximate).
   Open in New Window opens as many windows as there are selected folders.

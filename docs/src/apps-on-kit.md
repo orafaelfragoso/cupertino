@@ -12,7 +12,8 @@ CupertinoKit is the toolkit that Cupertino's own apps are moving onto. This page
 | `cupertino-menubar` | Bar and menus on Kit layer surfaces. | Outside-click dismissal on empty bar space has an open review finding. |
 | `cupertino-launcher` | Search panel, catcher and hidden windows on Kit layer surfaces. | See the crate README for interaction and styling limits. |
 | `cupertino-notifications` | Banners and notification centre on Kit layer surfaces. | Material, body layout and centre scrolling still have review findings. |
-| Dock, login and lock screen, screenshot UI, window-manager UI | | Normal entry points still use their existing drawing paths. |
+| `cupertino-screenshot` | The overlay with its selection, window pick, size readout and crosshair, the toolbar and its Options menu, the floating thumbnail and the clipboard pixel, all Kit windows on layer surfaces. | Screen recording and markup are not implemented. |
+| Dock, login and lock screen, window-manager UI | | Normal entry points still use their existing drawing paths. |
 
 ## The OSD
 
@@ -21,6 +22,10 @@ CupertinoKit is the toolkit that Cupertino's own apps are moving onto. This page
 ## The Control Center
 
 `cupertino-controlcenter` opens below the menu bar at the top right as a Kit window on a layer surface, built from the panel controls of `cupertino-ui-controls`: module toggles, tiles, a battery meter and level sliders. It takes the keyboard while it is shown; Escape or a press outside it closes it. With Reduce Transparency or Increase Contrast it draws an opaque background. Run `cupertino-controlcenter --fake-backends` to try it without touching the machine's radios, volume and backlight. The crate's README has the details.
+
+## The screenshot tool
+
+`cupertino-screenshot` puts a Kit window on a layer surface over each output, and with the toolbar shortcut a Kit toolbar at the bottom of the first output, with its Options menu as a Kit menu. Everything works from the keyboard: Escape cancels, Space switches between selection and window pick, the arrow keys span, move and (with Alt) resize the selection or go through the windows, Return captures, and on the toolbar Tab reaches each control. Assistive technology reads what a capture would take and can capture, cancel and press every toolbar button. Escape, Close and a capture remove the overlay and the toolbar and give the keyboard back before anything is copied, so a capture never contains them. Selections are cut correctly from turned, mirrored and mixed-scale outputs. The crate's README has the details.
 
 ## Menus
 

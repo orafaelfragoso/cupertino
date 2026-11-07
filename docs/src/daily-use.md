@@ -47,7 +47,7 @@ To change a shortcut, add a `chord = action` line to `~/.config/cupertino/shortc
 | `Super+Shift+5` | the toolbar |
 | `Super+Ctrl+Shift+3`, `Super+Ctrl+Shift+4` | the screen or a selection, to the clipboard |
 
-Files go to the Desktop folder unless `~/.config/cupertino/screenshot.conf` sets `location` to `documents`, `pictures`, `clipboard` or a directory. The toolbar writes the file back. Screen recording is not implemented.
+Files go to the Desktop folder unless `~/.config/cupertino/screenshot.conf` sets `location` to `documents`, `pictures`, `clipboard` or a directory. The toolbar writes the file back. On the overlay, Escape cancels, Space switches to picking a window, the arrow keys make and move a selection (Alt with an arrow resizes it) and Return captures. Screen recording is not implemented.
 
 ## Logs and crash reasons
 

@@ -42,6 +42,17 @@ from the application's model and reports changes as messages.
   and reads as a group whose interactive parts are its children, layered over the drawing. `Grid` lays out fixed,
   auto and fraction tracks row by row; `Element::span` covers several cells, and rows past the declared ones fit
   their content.
+- **Window drag regions.** `WindowDragArea` marks its content as a drag region of the window, and the toolbar row of
+  `NavigationStack` is one, so every Kit app with a navigation toolbar gets it. A left press there that no control
+  takes starts an interactive move (`WindowRequest::Move`, answering the press) once the pointer travels more than
+  5 pt along either axis with the button held; a shorter wobble stays a click. A second press within 0.5 s of the
+  first zooms the window (`WindowRequest::Maximize`, the opposite of the last configured state), the same action the
+  compositor's own title bar takes on a double click; no setting in `cupertino-defaults` changes the double click
+  today. A move ends a pair, so the press after it is a first click. Buttons, fields and other enabled controls stop
+  their presses, so they keep them; a label, a spacer or a disabled control lets the press through to the region.
+  Touch, right and middle presses start nothing, and a fullscreen window neither moves nor zooms. The region has no
+  role and no Tab stop: keyboard users zoom with the compositor's Zoom shortcut (Super+Ctrl+Z by default) or the menu
+  bar's Window menu, tile and fill with its shortcuts, and can drag the server's title bar with the pointer as always.
 - **Sliders.** `on_change` reports every value a drag passes; `on_end` reports the value once the change ends, when
   the pointer lets go or the drag is cancelled, and at once for a key or assistive technology step, so an
   application can write a level live and commit it once.

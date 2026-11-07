@@ -43,7 +43,10 @@ process: File › New Window and Open in New Window open another beside it.
 The window is a split view: the sidebar of places, then a navigation stack whose toolbar holds back / forward, the
 folder's name (Section text, cut with an ellipsis) and the search field, over the folder in the icon view (`kit::grid`,
 laid out by `layout::icon`) or the list view (the toolkit's table: Name, Date Modified, Size, Kind; a header click
-sorts, again reverses). A window opens in the icon view. Under the folder the path bar and the status bar can be shown;
+sorts, again reverses). The toolbar is the window's drag region (Kit's `NavigationStack`, under the server's title bar):
+a drag where no control lies moves the window and a double click there zooms it, as the old window's unified bar did;
+back / forward and the search field keep their presses, and from the keyboard the compositor's Zoom shortcut
+(Super+Ctrl+Z by default) and the menu bar's Window menu zoom, minimize and tile it. A window opens in the icon view. Under the folder the path bar and the status bar can be shown;
 both are hidden by default. The path bar names the folder chain from the root (or from Trash / Recents); the status bar
 reads "N items, X available" (`statvfs` of the folder). Items wear the theme's folder and document symbols. Changes on
 disk appear live.

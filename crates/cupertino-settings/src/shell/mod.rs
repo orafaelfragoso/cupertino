@@ -1120,4 +1120,70 @@ mod tests {
             assert_eq!(kit_gaps(&tree), Vec::<String>::new(), "{pane:?}");
         }
     }
+
+    #[test]
+    fn the_toolbar_moves_the_window_on_a_drag_and_zooms_it_on_a_double_click() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let (mut driver, window) = start(dir.path(), PaneId::DesktopDock);
+        let search = driver.runtime().find(window, &Key::from("search")).unwrap();
+        let field = driver
+            .runtime()
+            .snapshot(window)
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.id == search)
+            .unwrap()
+            .rect;
+        let y = field.origin.y + field.size.height / 2.0;
+        // between the pane's title and the search field, where no toolbar item lies
+        let gap = Point::new(field.origin.x - 40.0, y);
+        let at = |time: u64, event| WindowEvent::Pointer(event, Timestamp(time));
+        let button = |position, pressed| PointerEvent::Button {
+            position,
+            button: MouseButton::Left,
+            pressed,
+            serial: 1,
+            mods: Mods::NONE,
+        };
+        let requests = |driver: &mut TestDriver<SettingsApp>| {
+            driver
+                .window_system_mut()
+                .requests(window)
+                .unwrap()
+                .to_vec()
+        };
+        // a drag on the search field selects its text
+        let inside = Point::new(field.origin.x + field.size.width / 2.0, y);
+        for (time, event) in [
+            (0, button(inside, true)),
+            (
+                1,
+                PointerEvent::Motion {
+                    position: Point::new(inside.x, y + 40.0),
+                },
+            ),
+            (2, button(Point::new(inside.x, y + 40.0), false)),
+        ] {
+            send(&mut driver, window, at(time, event));
+        }
+        assert!(!requests(&mut driver).contains(&WindowRequest::Move));
+        let to = Point::new(gap.x - 30.0, y + 30.0);
+        for (time, event) in [
+            (10_000_000_000, PointerEvent::Motion { position: gap }),
+            (10_000_000_000, button(gap, true)),
+            (10_000_000_001, PointerEvent::Motion { position: to }),
+            (10_000_000_002, button(to, false)),
+            (10_000_000_003, PointerEvent::Leave),
+        ] {
+            send(&mut driver, window, at(time, event));
+        }
+        assert!(requests(&mut driver).contains(&WindowRequest::Move));
+        for time in [20_000_000_000, 20_200_000_000] {
+            send(&mut driver, window, at(time, button(gap, true)));
+            send(&mut driver, window, at(time + 1, button(gap, false)));
+        }
+        assert!(requests(&mut driver).contains(&WindowRequest::Maximize(true)));
+    }
 }

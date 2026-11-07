@@ -7,6 +7,7 @@ mod clock;
 mod command;
 mod cx;
 mod damage;
+mod drop_target;
 mod focus;
 mod icons;
 mod layout_view;
@@ -30,6 +31,9 @@ pub use accessibility::{
 pub use clock::MonotonicClock;
 pub use command::CommandRegistry;
 pub use cx::{EventCx, FocusTarget, MeasureCx, PaintCx, SemanticsCx};
+pub use drop_target::{
+    DropHandler, DropOver, DropPlace, DropTarget, Dropped, HoverHandler, PlaceHandler,
+};
 pub use icons::{next_resource_id, IconImage, Icons, PlaceholderIcons};
 pub use paint::MAX_MATERIALS;
 pub use runtime::{

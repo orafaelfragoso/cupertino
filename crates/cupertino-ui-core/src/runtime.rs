@@ -25,11 +25,11 @@ use cupertino_geometry::{Point, Rect, Size};
 use cupertino_menu_model::ActionName;
 use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutOptions, LayoutStats};
 use cupertino_ui_platform::{
-    ActivationRequest, Backdrop, ClipboardData, ClipboardKind, ConfigureId, ConstraintAdjust,
-    DragImage, DragProgress, DragRequest, DragToken, KeyEvent, Keysym, MaterialRegion,
-    MenuDescription, PlatformError, PlatformEvent, PointerEvent, PopupEdge, PopupSpec,
-    PresentOutcome, SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest,
-    WindowSpec, WindowSystem,
+    ActivationRequest, Backdrop, ClipboardData, ClipboardKind, ClipboardToken, ConfigureId,
+    ConstraintAdjust, DragImage, DragProgress, DragRequest, DragToken, DropAction, DropToken,
+    KeyEvent, Keysym, MaterialRegion, MenuDescription, PlatformError, PlatformEvent, PointerEvent,
+    PopupEdge, PopupSpec, PresentOutcome, SystemAppearance, Timestamp, TouchEvent, WindowEvent,
+    WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, DisplayList, PaintResources, RenderError, RenderRequest, UiRenderer,
@@ -160,6 +160,8 @@ struct WindowState<M> {
     /// The error of the last frame, until one renders and presents; animations wait for that.
     failed: Option<UiError>,
     popup: Option<PopupState<M>>,
+    /// A drag from any application over the window.
+    drop: Option<drops::DropState>,
 }
 
 struct PopupState<M> {
@@ -193,6 +195,10 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     tokens: HashMap<ActivationRequest, TokenHandler<A::Message>>,
     /// What each step of a running drag turns into.
     drags: HashMap<DragToken, DragHandler<A::Message>>,
+    /// The drops whose data is being read, by read.
+    landed: HashMap<ClipboardToken, drops::Landed>,
+    /// Drops handed to their targets, finished once the turn has handled what they became.
+    finishing: Vec<(DropToken, DropAction)>,
 }
 
 impl<A: Application, W: WindowSystem> Runtime<A, W> {
@@ -224,6 +230,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             theme_for: None,
             tokens: HashMap::new(),
             drags: HashMap::new(),
+            landed: HashMap::new(),
+            finishing: Vec::new(),
         };
         for command in commands {
             runtime.command(command);
@@ -371,6 +379,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
             self.view_dirty = true;
         }
+        self.finish_drops();
         if self.view_dirty && !self.exit {
             self.view_dirty = false;
             self.view()?;
@@ -649,6 +658,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             renderer: (self.options.renderers)(),
             failed: None,
             popup: None,
+            drop: None,
         }
     }
 
@@ -747,9 +757,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
                 return Ok(());
             }
-            PlatformEvent::Clipboard { .. }
-            | PlatformEvent::ClipboardOffered { .. }
-            | PlatformEvent::Wake => return Ok(()),
+            PlatformEvent::Clipboard { token, data } => {
+                self.drop_data(token, data);
+                return Ok(());
+            }
+            PlatformEvent::ClipboardOffered { .. } | PlatformEvent::Wake => return Ok(()),
             PlatformEvent::Appearance(appearance) => {
                 if let Some(theme_for) = &mut self.theme_for {
                     let theme = theme_for(&appearance);
@@ -888,6 +900,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 return Ok(());
             }
             WindowEvent::Presented { .. } | WindowEvent::Discarded { .. } => return Ok(()),
+            WindowEvent::Drop(event) => {
+                self.drop_event(i, event);
+                return Ok(());
+            }
         }
         self.apply(i, effects);
         Ok(())
@@ -1290,6 +1306,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         }
         let mut focus_effects = Effects::default();
         let mut hold = false;
+        let laid_out = !w.prepared;
         if !w.prepared {
             let available = Constraints::tight(w.size).map_err(UiError::Layout)?;
             let result = layout(
@@ -1400,6 +1417,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             focus_effects.absorb(scroll_effects);
         }
         self.apply(i, focus_effects);
+        // what lies under a drag that stood still may have moved
+        if laid_out {
+            self.drop_over(i);
+        }
         let w = &mut self.windows[i];
         if hold {
             w.held_paints += 1;
@@ -1920,6 +1941,8 @@ fn sync_menus<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>, menus: 
         w.menus = wanted;
     }
 }
+
+mod drops;
 
 #[cfg(test)]
 mod tests;

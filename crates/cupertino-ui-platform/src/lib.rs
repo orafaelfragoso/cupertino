@@ -153,6 +153,8 @@ pub struct Backdrop {
     pub material: String,
     pub radius: f64,
     pub alpha: f64,
+    /// Where the material is, in window points, when not under the whole window.
+    pub bounds: Option<Rect>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

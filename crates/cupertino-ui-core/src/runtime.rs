@@ -1700,22 +1700,32 @@ fn route<'a, M: 'static>(
 /// Asks the window system for the material `w`'s background wants, or for none, when that changed. A platform that
 /// refuses leaves the window on its opaque fill.
 fn sync_backdrop<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>) {
-    let wanted = match w.background {
+    let shaped = match w.background {
         WindowBackground::Surface {
             surface,
             radius,
             alpha,
-        } if system.capabilities().app_effects => {
-            w.env
-                .theme
-                .surface(surface)
-                .material
-                .map(|material| Backdrop {
-                    material: material.to_owned(),
-                    radius,
-                    alpha: crate::surface_alpha(alpha),
-                })
-        }
+        } => Some((surface, None, radius, alpha)),
+        WindowBackground::SurfaceRect {
+            surface,
+            rect,
+            radius,
+            alpha,
+        } => Some((surface, Some(rect), radius, alpha)),
+        _ => None,
+    };
+    let wanted = match shaped {
+        Some((surface, bounds, radius, alpha)) if system.capabilities().app_effects => w
+            .env
+            .theme
+            .surface(surface)
+            .material
+            .map(|material| Backdrop {
+                material: material.to_owned(),
+                radius,
+                alpha: crate::surface_alpha(alpha),
+                bounds,
+            }),
         _ => None,
     };
     if wanted == w.backdrop {

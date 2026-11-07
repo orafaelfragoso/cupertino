@@ -309,9 +309,9 @@ own, started as `pam_gnome_keyring` starts it (the password on its standard inpu
 secret over the D-Bus API and through `secret-tool`; a locked keyring refuses reads and writes and an unlock asks the
 system prompter (a stand-in that refuses, as a dismissed window does); a wrong or missing password leaves it locked; the
 keyring file is the account's alone; no secret is in the daemon's output. It is skipped with `SKIPPED:
-gnome-keyring-daemon is not installed` when the daemon is missing (`CUPERTINO_KEYRING_REQUIRED=1`, set in CI, fails
-instead). `packaging/test_session.py` checks the lock at logout (with a fake `busctl`, and with the real daemon when it is
-installed) and `packaging/test_release.py` the PAM lines and the packages. PAM itself is not run: that needs root.
+gnome-keyring-daemon is not installed` when the daemon is missing, and its `secret-tool` part without `secret-tool`
+(`CUPERTINO_KEYRING_REQUIRED=1`, set in CI, fails instead). `packaging/test_session.py` checks the lock at logout (with a
+fake `busctl`, and with the real daemon when it is installed, required in CI the same way) and `packaging/test_release.py` the PAM lines and the packages. PAM itself is not run: that needs root.
 
 **Not verified on an installed session.** On a machine installed from the live image, as a user with a password:
 

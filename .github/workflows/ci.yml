@@ -78,7 +78,11 @@ jobs:
       # check-metadata and test_release read the dependency graph with cargo metadata --offline.
       - run: cargo fetch --locked
       - run: python3 -I packaging/test_release.py
+      # the session command's logout lock runs against the real keyring daemon too
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends dbus gnome-keyring
       - run: python3 -I packaging/test_session.py
+        env:
+          CUPERTINO_KEYRING_REQUIRED: "1"
       - run: python3 -I packaging/installer/test_cupertino_install.py
       - run: python3 -I packaging/iso/test_profile.py
       - run: python3 -I packaging/iso/test-build-iso.py

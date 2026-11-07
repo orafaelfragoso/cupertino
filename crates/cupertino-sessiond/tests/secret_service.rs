@@ -6,7 +6,7 @@
 //! locked (the end of a session locks it) the client is refused, and an unlock asks the system prompter, here a
 //! stand-in that records the request and refuses it as a person dismissing the prompt would. Neither the password nor
 //! a stored value appears in what the daemon prints. Skipped, with the reason, when `gnome-keyring-daemon` is not
-//! installed; `CUPERTINO_KEYRING_REQUIRED=1` fails instead.
+//! installed (its `secret-tool` part when that is not); `CUPERTINO_KEYRING_REQUIRED=1` fails instead.
 #![cfg(feature = "app")]
 
 use std::collections::HashMap;
@@ -232,7 +232,13 @@ impl Session {
 
     /// `secret-tool` (libsecret, the library browsers and mail clients use) with the session's bus and home.
     fn secret_tool(&self, args: &[&str], input: Option<&str>) -> Option<Output> {
-        let tool = installed("secret-tool")?;
+        let Some(tool) = installed("secret-tool") else {
+            assert!(
+                std::env::var("CUPERTINO_KEYRING_REQUIRED").as_deref() != Ok("1"),
+                "secret-tool missing and CUPERTINO_KEYRING_REQUIRED=1"
+            );
+            return None;
+        };
         let mut child = Command::new(tool)
             .args(args)
             .env_clear()

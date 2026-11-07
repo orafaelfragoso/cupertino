@@ -290,6 +290,7 @@ class SessionTest(unittest.TestCase):
         """gnome-keyring-daemon on a private bus with no activatable services, unlocked as PAM unlocks it at login."""
         missing = [tool for tool in ('dbus-daemon', 'gnome-keyring-daemon', 'busctl') if not shutil.which(tool)]
         if missing:
+            self.assertNotEqual(os.environ.get('CUPERTINO_KEYRING_REQUIRED'), '1', f"{', '.join(missing)} not installed")
             self.skipTest(f"{', '.join(missing)} not installed")
         # under /tmp: the bus's and the daemon's sockets must fit in a socket path
         run = Path(tempfile.mkdtemp(prefix='kr', dir='/tmp'))

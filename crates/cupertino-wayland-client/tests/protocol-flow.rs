@@ -81,6 +81,7 @@ use xkbcommon::xkb;
 
 /// Evdev codes (`linux/input-event-codes.h`).
 const BTN_LEFT: u32 = 0x110;
+const BTN_RIGHT: u32 = 0x111;
 const KEY_A: u32 = 30;
 
 /// The optional globals a test's compositor offers next to the core ones.
@@ -149,6 +150,13 @@ enum Control {
     TouchHold,
     /// The finger of `TouchHold` lifts.
     TouchUp,
+    /// A second finger touches the toplevel beside the one of `TouchHold` and stays down.
+    TouchSecondFinger,
+    /// The pointer button `button` goes down or up on the surface the pointer is on.
+    Button {
+        button: u32,
+        pressed: bool,
+    },
     /// The seat loses its pointer and keeps its keyboard.
     DropPointer,
     /// Two fingers touch the toplevel and the first moves and lifts, each step a frame.
@@ -1518,6 +1526,25 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
             touch.up(serial, 220, 0);
             touch.frame();
         }
+        Control::TouchSecondFinger => {
+            let (serial, surface) = (mock.serial(), mock.surface().clone());
+            let touch = mock.touch.as_ref().unwrap();
+            touch.down(serial, 210, &surface, 1, 9.0, 9.0);
+            touch.frame();
+        }
+        Control::Button { button, pressed } => {
+            // `Click` presses with the serial after the one it took: skip it, so this serial is a new one
+            let serial = mock.serial() + 1;
+            mock.next_serial = serial;
+            let state = if pressed {
+                wl_pointer::ButtonState::Pressed
+            } else {
+                wl_pointer::ButtonState::Released
+            };
+            let pointer = mock.pointer.as_ref().unwrap();
+            pointer.button(serial, 4250, button, state);
+            pointer.frame();
+        }
         Control::Leave => {
             let (serial, surface) = (mock.serial(), mock.surface().clone());
             let pointer = mock.pointer.as_ref().unwrap();
@@ -2431,6 +2458,115 @@ fn a_move_answers_the_touch_down_held_and_not_after_the_finger_lifts() {
             Err(Error::PermissionDenied(_))
         ));
     }
+}
+
+#[test]
+fn the_held_press_is_the_first_button_or_finger_down_and_the_device_that_pressed_last() {
+    let (mut conn, control, seen) = connect(Globals {
+        seat: true,
+        ..Globals::core()
+    });
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    let pointer_button =
+        |conn: &mut Connection, stash: &mut Stash, button: Button, pressed: bool| {
+            wait_for(conn, stash, |e| {
+                matches!(
+                    e,
+                    Event::Pointer {
+                        event: PointerEvent::Button { button: b, pressed: p, .. },
+                        ..
+                    } if *b == button && *p == pressed
+                )
+                .then_some(())
+            });
+            conn.input_serial().unwrap()
+        };
+    let held = |serial, device| Some(HeldPress { serial, device });
+    control.send(Control::Click { x: 3.0, y: 4.0 }).unwrap();
+    let left = pointer_button(&mut conn, &mut stash, Button::Left, true);
+
+    // a second button keeps the implicit grab of the first, which the compositor's grab serial names
+    control
+        .send(Control::Button {
+            button: BTN_RIGHT,
+            pressed: true,
+        })
+        .unwrap();
+    let right = pointer_button(&mut conn, &mut stash, Button::Right, true);
+    assert_ne!(right, left);
+    assert_eq!(conn.held_press(), held(left, PressDevice::Pointer));
+
+    // a finger going down while the button is held starts the touch grab, which is now the latest
+    control.send(Control::TouchHold).unwrap();
+    let down = loop {
+        if let Seen::TouchDown(serial) = next_seen(&seen) {
+            break serial;
+        }
+    };
+    let touch = |conn: &mut Connection, stash: &mut Stash, up: bool| {
+        wait_for(conn, stash, |e| match e {
+            Event::Touch {
+                event: TouchEvent::Up { .. },
+                ..
+            } => up.then_some(()),
+            Event::Touch {
+                event: TouchEvent::Down { .. },
+                ..
+            } => (!up).then_some(()),
+            _ => None,
+        })
+    };
+    touch(&mut conn, &mut stash, false);
+    assert_eq!(conn.held_press(), held(down, PressDevice::Touch));
+
+    // a second finger, and the first lifting while the second stays, keep the first finger's grab
+    control.send(Control::TouchSecondFinger).unwrap();
+    touch(&mut conn, &mut stash, false);
+    assert_eq!(conn.held_press(), held(down, PressDevice::Touch));
+    control.send(Control::TouchUp).unwrap();
+    touch(&mut conn, &mut stash, true);
+    assert_ne!(conn.input_serial(), Some(down));
+    assert_eq!(conn.held_press(), held(down, PressDevice::Touch));
+    conn.start_move(w).unwrap();
+    conn.flush().unwrap();
+    assert_eq!(next_window_gesture(&seen), Seen::Move(down));
+
+    // the second button going up leaves the first held; the touch screen going away leaves the pointer's press
+    control
+        .send(Control::Button {
+            button: BTN_RIGHT,
+            pressed: false,
+        })
+        .unwrap();
+    pointer_button(&mut conn, &mut stash, Button::Right, false);
+    assert_eq!(conn.held_press(), held(down, PressDevice::Touch));
+    control.send(Control::DropTouch).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(
+            e,
+            Event::Touch {
+                event: TouchEvent::Cancel,
+                ..
+            }
+        )
+        .then_some(())
+    });
+    assert_eq!(conn.held_press(), held(left, PressDevice::Pointer));
+    conn.start_resize(w, ResizeEdge::Right).unwrap();
+    conn.flush().unwrap();
+    assert_eq!(
+        next_window_gesture(&seen),
+        Seen::Resize {
+            serial: left,
+            edge: xdg_toplevel::ResizeEdge::Right,
+        }
+    );
+
+    control.send(Control::ButtonUp).unwrap();
+    pointer_button(&mut conn, &mut stash, Button::Left, false);
+    assert_eq!(conn.held_press(), None);
 }
 
 #[test]

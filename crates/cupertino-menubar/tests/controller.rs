@@ -271,6 +271,63 @@ fn clicking_the_open_title_closes_and_clicking_outside_closes() {
     assert!(!o.consumed);
 }
 
+/// A point of the bar that is in no slot: right of the last menu title.
+fn empty_bar_point(c: &MenuController) -> Point {
+    let layout = c.layout();
+    let y = layout.bar.y + layout.bar.h / 2.0;
+    let after = layout
+        .slots
+        .iter()
+        .filter(|s| matches!(s.key, SlotKey::Menu(_)))
+        .map(|s| s.rect.x + s.rect.w)
+        .fold(0.0, f64::max);
+    let p = Point::new(after + 10.0, y);
+    assert!(
+        layout.bar.contains(p) && layout.hit(p).is_none(),
+        "{p:?} is empty bar space"
+    );
+    p
+}
+
+#[test]
+fn a_click_on_empty_bar_space_closes_the_menu_without_choosing_and_is_consumed() {
+    for sticky in [true, false] {
+        let mut c = controller();
+        let title = slot_center(&c, &file());
+        c.pointer_press(title, 0.0);
+        if sticky {
+            c.pointer_release(title, 0.1);
+        }
+        // a row of the open menu is selected under the pointer on the way, as a hover would leave it
+        c.pointer_move(row_center(&c, 0, 10), 0.2);
+        assert!(c.is_open());
+        let empty = empty_bar_point(&c);
+        let press = c.pointer_press(empty, 1.0);
+        let release = c.pointer_release(empty, 1.1);
+        assert!(has(&press, &Effect::Closed), "sticky {sticky}: {press:?}");
+        assert!(!c.is_open() && c.open_slot().is_none());
+        assert_eq!(c.mode(), Mode::Idle);
+        for o in [&press, &release] {
+            assert!(
+                !o.effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::Activate { .. } | Effect::SlotActivated { .. })),
+                "sticky {sticky}: nothing is chosen or activated: {o:?}"
+            );
+        }
+        assert!(
+            press.consumed,
+            "sticky {sticky}: the closing press reaches no client"
+        );
+        // the next press on the empty bar does nothing at all, and the title opens its menu again
+        let o = c.pointer_press(empty, 2.0);
+        assert!(o.effects.is_empty() && !c.is_open());
+        c.pointer_release(empty, 2.1);
+        c.pointer_press(title, 3.0);
+        assert!(c.is_open());
+    }
+}
+
 #[test]
 fn button_slots_activate_on_release_over_the_same_slot() {
     let mut c = controller();

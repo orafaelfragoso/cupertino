@@ -1737,6 +1737,8 @@ fn drag_image<M: 'static>(
             window_active: true,
             background: WindowBackground::None,
             backdrop: false,
+            // nothing draws a compositor material under a drag icon, so material nodes paint their own fill
+            materials: false,
             now,
         },
     );

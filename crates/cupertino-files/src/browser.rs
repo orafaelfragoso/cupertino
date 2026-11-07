@@ -224,17 +224,28 @@ impl Browser {
     /// Bytes an unprivileged user can still write on the folder's file system (`statvfs`: available blocks times the
     /// fragment size); `None` for a virtual folder.
     pub fn available_space(&self) -> io::Result<Option<u64>> {
-        if self.is_virtual() {
+        let Some(fs) = self.file_system()? else {
             return Ok(None);
-        }
-        let dir = std::ffi::CString::new(self.dir().as_os_str().as_encoded_bytes())
-            .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
-        // SAFETY: a zeroed statvfs is a valid out value; the path is NUL-terminated and outlives the call
-        let mut fs: libc::statvfs = unsafe { std::mem::zeroed() };
-        if unsafe { libc::statvfs(dir.as_ptr(), &mut fs) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
+        };
+        // the fields are narrower on 32-bit targets
+        #[allow(clippy::unnecessary_cast)]
         Ok(Some(fs.f_bavail as u64 * fs.f_frsize as u64))
+    }
+
+    /// Whether the folder's file system is mounted read-only; see [`mounted_read_only`].
+    pub fn read_only(&self) -> io::Result<bool> {
+        match self.is_virtual() {
+            true => Ok(false),
+            false => mounted_read_only(self.dir()),
+        }
+    }
+
+    /// The folder's file system; `None` for a virtual folder.
+    fn file_system(&self) -> io::Result<Option<libc::statvfs>> {
+        match self.is_virtual() {
+            true => Ok(None),
+            false => file_system(self.dir()).map(Some),
+        }
     }
 
     pub fn dir(&self) -> &Path {
@@ -703,9 +714,57 @@ impl Browser {
     }
 }
 
+/// Whether the file system of `dir` is mounted read-only, whatever the medium under it says: a writable stick can
+/// hold a file system mounted so.
+pub fn mounted_read_only(dir: &Path) -> io::Result<bool> {
+    Ok(file_system(dir)?.f_flag & libc::ST_RDONLY != 0)
+}
+
+fn file_system(dir: &Path) -> io::Result<libc::statvfs> {
+    let dir = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes())
+        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // SAFETY: a zeroed statvfs is a valid out value; the path is NUL-terminated and outlives the call
+    let mut fs: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(dir.as_ptr(), &mut fs) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(fs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_on_a_file_system_mounted_read_only_is_told() {
+        // the folder the test mounted again, read-only, in a mount namespace of its own
+        const PROBE: &str = "FILES_READ_ONLY_PROBE";
+        if let Some(dir) = std::env::var_os(PROBE) {
+            assert!(super::mounted_read_only(Path::new(&dir)).unwrap());
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        assert!(!super::mounted_read_only(d.path()).unwrap());
+        let status = std::process::Command::new("unshare")
+            .args(["--map-root-user", "--mount", "sh", "-c"])
+            .arg(r#"mount --bind -o ro "$1" "$1" || exit 77; shift; exec "$@""#)
+            .args([std::ffi::OsStr::new("sh"), d.path().as_os_str()])
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "browser::tests::a_folder_on_a_file_system_mounted_read_only_is_told",
+            ])
+            .env(PROBE, d.path())
+            .status();
+        match status {
+            Ok(status) if status.success() => {}
+            // the test itself failed in the namespace
+            Ok(status) if status.code() == Some(101) => {
+                panic!("a read-only mount read as writable")
+            }
+            other => eprintln!("no read-only mount to try without user namespaces: {other:?}"),
+        }
+    }
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 

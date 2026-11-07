@@ -268,6 +268,8 @@ struct BrowserWindow {
     status_bar: bool,
     /// The free space of the folder's file system, for the status bar.
     available: Option<u64>,
+    /// Whether the folder's file system is mounted read-only, read with the free space.
+    mounted_read_only: bool,
     search: String,
     search_revision: u64,
     /// The search field has the keyboard.
@@ -597,6 +599,7 @@ impl Model {
             path_bar: false,
             status_bar: false,
             available: None,
+            mounted_read_only: false,
             search: String::new(),
             search_revision: 0,
             search_focused: false,
@@ -1425,6 +1428,18 @@ impl BrowserWindow {
                 None
             }
         };
+        // a folder whose file system cannot be read takes the changes, and their failures say why
+        self.mounted_read_only = self.browser.read_only().unwrap_or(false);
+    }
+
+    /// Whether the folder shown takes nothing new: its medium can't be written, or its file system is mounted
+    /// read-only.
+    fn read_only(&self, session: &Session) -> bool {
+        self.mounted_read_only
+            || session
+                .media
+                .holding(self.browser.dir())
+                .is_some_and(|d| d.read_only)
     }
 
     fn selected_paths(&self) -> Vec<PathBuf> {
@@ -1615,10 +1630,7 @@ impl BrowserWindow {
             view: self.view,
             sort: self.browser.sort(),
             in_trash,
-            read_only: session
-                .media
-                .holding(self.browser.dir())
-                .is_some_and(|d| d.read_only),
+            read_only: self.read_only(session),
             pasteboard: session.pasteboard.len(),
         }
     }
@@ -1822,10 +1834,7 @@ impl BrowserWindow {
             eject: self
                 .eject_target(session)
                 .map(|i| session.places[i].name.clone()),
-            read_only: session
-                .media
-                .holding(self.browser.dir())
-                .is_some_and(|d| d.read_only),
+            read_only: self.read_only(session),
             can_paste: !session.pasteboard.is_empty(),
         }
     }

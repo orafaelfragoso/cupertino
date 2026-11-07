@@ -311,3 +311,48 @@ fn reading_order_allows_rows_and_the_next_column_but_not_going_back() {
         ]
     );
 }
+
+#[test]
+fn a_flat_trees_places_count_within_each_level_under_its_parent_item() {
+    let item = |name: &str, level: usize, place: usize, count: usize| {
+        let mut n = control(Role::TreeItem, Some(name));
+        n.level = Some(level);
+        n.item_index = Some(place);
+        n.item_count = Some(count);
+        n
+    };
+    let t = tree(
+        vec![
+            (1, node(Role::Tree, Some("Folders"), &[2, 3, 4, 5, 6])),
+            (2, item("Documents", 1, 0, 2)),
+            (3, item("Notes", 2, 0, 1)),
+            (4, item("Pictures", 1, 1, 2)),
+            (5, item("Holidays", 2, 0, 2)),
+            (6, item("Pets", 2, 0, 2)),
+        ],
+        None,
+    );
+    assert_eq!(
+        accessibility_audit(&t),
+        ["Tree \"Folders\" > TreeItem \"Pets\": has place 0, as Tree \"Folders\" > TreeItem \"Holidays\" does"]
+    );
+}
+
+#[test]
+fn an_unnamed_item_holding_named_text_reads_that_text() {
+    let mut list = node(Role::List, Some("Fruit"), &[3]);
+    list.item_count = Some(1);
+    let mut item = control(Role::ListItem, None);
+    item.children = vec![id(4)];
+    item.item_index = Some(0);
+    let t = tree(
+        vec![
+            (1, node(Role::Window, Some("W"), &[2])),
+            (2, list),
+            (3, item),
+            (4, node(Role::StaticText, Some("Pear"), &[])),
+        ],
+        None,
+    );
+    assert_eq!(accessibility_audit(&t), Vec::<String>::new());
+}

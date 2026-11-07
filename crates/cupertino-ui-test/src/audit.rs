@@ -1,4 +1,4 @@
-use crate::semantics::{has_name, labelled, step, NAMED_BY_CONTENTS};
+use crate::semantics::{named, step, NAMED_BY_CONTENTS};
 use cupertino_geometry::Rect;
 use cupertino_ui_core::{
     AccessibilityNode, AccessibilityUpdate, AccessibleValue, Action, NodeId, Relation, Role,
@@ -87,7 +87,7 @@ pub fn accessibility_audit(update: &AccessibilityUpdate) -> Vec<String> {
         path: step(root, 0),
         ancestors: Vec::new(),
     }];
-    let mut places: HashMap<NodeId, Vec<(usize, String)>> = HashMap::new();
+    let mut places = Places::default();
     while let Some(visit) = stack.pop() {
         if !visited.insert(visit.id) {
             problems.push(format!("{}: reached twice", visit.path));
@@ -111,7 +111,7 @@ pub fn accessibility_audit(update: &AccessibilityUpdate) -> Vec<String> {
             }
         }
     }
-    let mut containers: Vec<_> = places.into_iter().collect();
+    let mut containers: Vec<_> = places.items.into_iter().collect();
     containers.sort_by_key(|(id, _)| *id);
     for (_, items) in containers {
         let mut seen: HashMap<usize, &str> = HashMap::new();
@@ -182,6 +182,14 @@ fn goes_back(from: Rect, to: Rect) -> bool {
     (same_row && left_of) || (above && !right_of)
 }
 
+/// The places items took, by the items that share a level: the container's or parent item's id.
+#[derive(Default)]
+struct Places {
+    items: HashMap<NodeId, Vec<(usize, String)>>,
+    /// In a tree whose items are siblings, the last item seen at each level of each tree.
+    last_at_level: HashMap<(NodeId, usize), NodeId>,
+}
+
 struct Visit<'a> {
     id: NodeId,
     node: &'a AccessibilityNode,
@@ -225,11 +233,11 @@ fn node_problems(
     nodes: &HashMap<NodeId, &AccessibilityNode>,
     update: &AccessibilityUpdate,
     visit: &Visit,
-    places: &mut HashMap<NodeId, Vec<(usize, String)>>,
+    places: &mut Places,
     problems: &mut Vec<String>,
 ) {
     let (node, path) = (visit.node, &visit.path);
-    let named = has_name(node) || labelled(node);
+    let named = named(nodes, node);
     let control = node.states.focusable || operated(node);
     if !named && !NAMED_BY_CONTENTS.contains(&node.role) {
         problems.push(format!("{path}: no name"));
@@ -315,7 +323,7 @@ fn item_problems(
     nodes: &HashMap<NodeId, &AccessibilityNode>,
     visit: &Visit,
     containers: &[Role],
-    places: &mut HashMap<NodeId, Vec<(usize, String)>>,
+    places: &mut Places,
     problems: &mut Vec<String>,
 ) {
     let (node, path) = (visit.node, &visit.path);
@@ -339,18 +347,37 @@ fn item_problems(
             problems.push(format!("{path}: place {place} of {count}"));
         }
         (Some(place), Some(_)) => {
-            // a tree item's place is among the items of its own level
-            let key = if node.role == Role::TreeItem {
-                visit.ancestors.last().copied().unwrap_or(*container)
-            } else {
-                *container
-            };
+            let key = level_key(nodes, visit, *container, places);
             places
+                .items
                 .entry(key)
                 .or_default()
                 .push((place, path.to_string()));
         }
     }
+}
+
+/// What an item's place counts among: a tree item's level under the same parent item, whether it is that item's child
+/// or follows it as a sibling one level deeper; any other item's container.
+fn level_key(
+    nodes: &HashMap<NodeId, &AccessibilityNode>,
+    visit: &Visit,
+    container: NodeId,
+    places: &mut Places,
+) -> NodeId {
+    if visit.node.role != Role::TreeItem {
+        return container;
+    }
+    let parent = visit.ancestors.last().copied().unwrap_or(container);
+    if nodes.get(&parent).is_some_and(|p| p.role == Role::TreeItem) {
+        return parent;
+    }
+    let level = visit.node.level.unwrap_or(1);
+    places.last_at_level.insert((container, level), visit.id);
+    level
+        .checked_sub(1)
+        .and_then(|above| places.last_at_level.get(&(container, above)).copied())
+        .unwrap_or(container)
 }
 
 #[cfg(test)]

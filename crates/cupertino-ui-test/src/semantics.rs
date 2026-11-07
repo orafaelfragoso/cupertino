@@ -5,8 +5,9 @@ use cupertino_ui_platform::WindowId;
 use std::collections::{HashMap, HashSet};
 
 /// Roles assistive technology announces by their contents, so a node of one needs no name of its own.
-pub(crate) const NAMED_BY_CONTENTS: [Role; 7] = [
+pub(crate) const NAMED_BY_CONTENTS: [Role; 8] = [
     Role::Group,
+    Role::Toolbar,
     Role::ScrollView,
     Role::ScrollBar,
     Role::Separator,
@@ -16,7 +17,8 @@ pub(crate) const NAMED_BY_CONTENTS: [Role; 7] = [
 ];
 
 /// What a screen reader could not announce in a whole tree, one line per problem in reading order: a node without a
-/// name (unless its role is named by its contents or another node labels it) and a child the tree does not hold. A line
+/// name (unless its role is named by its contents, another node labels it, or it is a list item, tree item, cell or
+/// tab holding a named child) and a child the tree does not hold. A line
 /// names the node by its path from the root, each step its role and name or, unnamed, its place among its siblings:
 /// `Window "Downloads" > List "Sidebar" > ListItem #2: no name`. Every node has a role by type.
 pub fn semantic_gaps(update: &AccessibilityUpdate) -> Vec<String> {
@@ -36,7 +38,7 @@ fn walk(
     path: String,
     gaps: &mut Vec<String>,
 ) {
-    if !has_name(node) && !labelled(node) && !NAMED_BY_CONTENTS.contains(&node.role) {
+    if !named(nodes, node) && !NAMED_BY_CONTENTS.contains(&node.role) {
         gaps.push(format!("{path}: no name"));
     }
     for (index, id) in node.children.iter().enumerate() {
@@ -50,6 +52,23 @@ fn walk(
             None => gaps.push(format!("{path} > #{index}: child {id:?} not in the tree")),
         }
     }
+}
+
+/// Items a screen reader names by the text they hold when they have no name of their own, as the AT-SPI bridge
+/// labels them by their children.
+const NAMED_BY_CHILDREN: [Role; 4] = [Role::ListItem, Role::TreeItem, Role::Cell, Role::Tab];
+
+/// Whether a screen reader has a name to read for `node`: its own, another node that labels it, or for an item of
+/// [`NAMED_BY_CHILDREN`] a child of its that has a name.
+pub(crate) fn named(nodes: &HashMap<NodeId, &AccessibilityNode>, node: &AccessibilityNode) -> bool {
+    has_name(node)
+        || labelled(node)
+        || (node.name.is_none()
+            && NAMED_BY_CHILDREN.contains(&node.role)
+            && node
+                .children
+                .iter()
+                .any(|c| nodes.get(c).is_some_and(|c| has_name(c))))
 }
 
 /// Whether another node of the tree labels this one.

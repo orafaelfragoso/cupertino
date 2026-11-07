@@ -329,7 +329,13 @@ impl Run {
         run
     }
 
+    /// Runs until every window rests, then checks that a screen reader could read every window open.
     fn settle(&mut self) {
+        self.settle_frames();
+        self.driver.assert_accessible("Login");
+    }
+
+    fn settle_frames(&mut self) {
         for _ in 0..16 {
             self.driver.run_until_idle(budget()).unwrap();
             let system = self.driver.window_system_mut();

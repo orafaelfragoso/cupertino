@@ -246,10 +246,20 @@ and require the frames to differ only inside the reported areas.
   shows the desktop entry files of one folder; opening one does not launch the application.
 * The rubber band of the list view has no reference
   it draws the icon view's band and selects the rows its span crosses (approximate).
-* Drag stays inside the window: dragging items to another application, or receiving a drag from one, needs the client
-  library to start and receive `wl_data_device` drags (it exposes neither the origin surface nor the data device), and the
-  `text/uri-list` of the items (`thumbnail::file_uri`) is not offered yet. No drag image is drawn, and a folder does not
-  spring open under a drag (`spring::SpringLoad` is not wired).
+* The existing window's drags stay inside it: it offers no `text/uri-list` to other applications and draws no drag image,
+  and a folder does not spring open under a drag (`spring::SpringLoad` is not wired).
+* The Kit window's icon view drags items out of the window (`kit::dragged`, hooked into `kit::grid`'s press, motion and
+  release and `kit`'s `Event::DragOut`): a press on an item that moves 5 pt offers the dragged files as a `text/uri-list`
+  (copy or move; the pressed item first, then the rest of the selection in the view's order) and the image follows the
+  pointer, which holds it where the press grabbed the cell. One item shows its icon and its selected name as the grid
+  draws them; several show the pressed item in front of the icons of up to two more, each 4 pt up and to the trailing
+  side, with the count in a badge on the farthest icon's corner. The image is drawn at 0.8 opacity (`dragged::OPACITY`),
+  at the window's scale rounded up. A press on an item of a selection keeps the selection, and its release without a drag
+  selects that item alone. Decisions: the window does nothing when the drag ends (the receiving application copies or
+  moves; a move is not undone here), a cancelled or refused drag takes the image away at once with no return to the
+  item, and the selection stays. Not built yet: the list view starts no drags (the table has no hook for it), the window
+  does not take drops from other applications, the drags inside the window that the existing one does (onto a folder or
+  a place) are not built, and the badge holds three digits.
 * The lock badge is not drawn, because entries carry no permission bits.
 * Removable media: encrypted containers are not listed (no unlock), and neither are disc images or network mounts.
 * The accessibility tree holds the sidebar only: the toolbar, the folder's items, the bars and the context menus are not

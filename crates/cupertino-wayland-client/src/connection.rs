@@ -76,8 +76,8 @@ use wayland_client::protocol::wl_data_device_manager::DndAction as DragActions;
 
 use crate::{
     BufferFormat, BufferLayout, Capability, CapabilitySet, ClipboardOffer, Decorations, Disconnect,
-    DragEvent, DragOffer, DragSource, DragSourceEvent, Error, Extension, KeyboardEvent, OutputInfo,
-    PixelRect, PointerEvent, Presented, ReadId, Scale, TextInputEvent, TextInputState,
+    DragEvent, DragIcon, DragOffer, DragSource, DragSourceEvent, Error, Extension, KeyboardEvent,
+    OutputInfo, PixelRect, PointerEvent, Presented, ReadId, Scale, TextInputEvent, TextInputState,
     WindowConfigure, WindowStates, WmCapabilities,
 };
 
@@ -1102,6 +1102,20 @@ impl Connection {
         contents: Vec<(String, Vec<u8>)>,
         actions: DragActions,
     ) -> Result<DragSource, Error> {
+        self.start_drag_with_icon(origin, contents, actions, None)
+    }
+
+    /// [`Connection::start_drag`] with `icon` following the pointer, its hotspot under it. The icon's surface and
+    /// buffer live until the drag drops, is cancelled or is replaced by another; a drag the compositor ignores (one
+    /// that came after the button went up) ends as [`DragSourceEvent::Cancelled`] once the release arrives, and frees
+    /// them too.
+    pub fn start_drag_with_icon(
+        &mut self,
+        origin: SurfaceId,
+        contents: Vec<(String, Vec<u8>)>,
+        actions: DragActions,
+        icon: Option<&DragIcon>,
+    ) -> Result<DragSource, Error> {
         self.state.capabilities.require(Capability::Clipboard)?;
         let serial = self
             .state
@@ -1114,10 +1128,16 @@ impl Connection {
             .data_device_manager
             .clone()
             .expect("bound with the capability");
-        let source = self
-            .state
-            .clipboard
-            .start_drag(&manager, &origin, contents, actions, serial, &qh)?;
+        let source = self.state.clipboard.start_drag(
+            &manager,
+            (&self.state.compositor, &self.state.shm),
+            &origin,
+            contents,
+            actions,
+            icon,
+            serial,
+            &qh,
+        )?;
         self.flush()?;
         Ok(source)
     }
@@ -2394,6 +2414,7 @@ impl Dispatch<WlPointer, ()> for State {
             wl_pointer::Event::Frame => state.input_clock.latest(),
             _ => None,
         };
+        let mut released_all = false;
         let found = match event {
             wl_pointer::Event::Enter {
                 serial,
@@ -2412,6 +2433,7 @@ impl Dispatch<WlPointer, ()> for State {
                 state.themed_cursor.stop();
                 state.held_buttons.clear();
                 state.press_serial = None;
+                state.clipboard.pointer_left();
                 state.pointer_tracker.leave()
             }
             wl_pointer::Event::Motion {
@@ -2440,6 +2462,7 @@ impl Dispatch<WlPointer, ()> for State {
                     state.held_buttons.retain(|b| *b != button);
                     if state.held_buttons.is_empty() {
                         state.press_serial = None;
+                        released_all = true;
                     }
                 }
                 state.pointer_tracker.button(button, pressed)
@@ -2503,6 +2526,9 @@ impl Dispatch<WlPointer, ()> for State {
                 time,
                 event,
             });
+        }
+        if released_all {
+            state.clipboard.buttons_released(&mut state.events);
         }
     }
 }

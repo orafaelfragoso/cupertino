@@ -192,6 +192,69 @@ pub enum ClipboardKind {
     Primary,
 }
 
+/// What a drop may do with the data dragged to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DropAction {
+    Copy,
+    Move,
+    /// The target asks the person which.
+    Ask,
+}
+
+/// The image that follows the pointer during a drag: `width` × `height` premultiplied RGBA pixels in rows of
+/// `width * 4` bytes, drawn at `scale` whole pixels per point, with the pointer at `hotspot`, in points from its
+/// top-left corner. Both sides are whole points at `scale`.
+#[derive(Clone, PartialEq)]
+pub struct DragImage {
+    pub width: u32,
+    pub height: u32,
+    pub scale: u32,
+    pub pixels: Vec<u8>,
+    pub hotspot: Point,
+}
+
+/// Sizes and hotspot only: the pixels are an image of what is dragged.
+impl std::fmt::Debug for DragImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DragImage")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("scale", &self.scale)
+            .field("hotspot", &self.hotspot)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A drag of data out of a window: the data in each of its MIME types, what a drop may do with it, and the image that
+/// follows the pointer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DragRequest {
+    pub data: Vec<ClipboardData>,
+    pub actions: BTreeSet<DropAction>,
+    pub image: Option<DragImage>,
+}
+
+/// Names one drag [`WindowSystem::start_drag`] started; how it goes arrives as [`PlatformEvent::Drag`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DragToken(pub u64);
+
+/// How a drag this application started goes. It ends with [`DragProgress::Finished`] or
+/// [`DragProgress::Cancelled`]; the image is gone by then, and from the drop on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DragProgress {
+    /// The MIME type the target under the pointer accepts, `None` when it accepts none.
+    Target(Option<String>),
+    /// What a drop would do now, `None` when nothing.
+    Action(Option<DropAction>),
+    /// The data was dropped and the target is reading it.
+    Dropped,
+    /// The target took the data; with [`DropAction::Move`] the source removes its own copy.
+    Finished,
+    /// No drop: the drag was released where nothing accepts it, refused by the target, cancelled, or ignored by the
+    /// compositor because the button had gone up.
+    Cancelled,
+}
+
 /// Names one activation-token request; the token arrives as [`PlatformEvent::ActivationToken`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ActivationRequest(pub u64);
@@ -368,6 +431,11 @@ pub enum PlatformEvent {
         request: ActivationRequest,
         token: Option<String>,
     },
+    /// How a drag [`WindowSystem::start_drag`] started goes.
+    Drag {
+        token: DragToken,
+        progress: DragProgress,
+    },
     /// The waker was woken.
     Wake,
     /// The session's appearance or display options, once when the window system learns them and on every change.
@@ -419,6 +487,18 @@ pub trait WindowSystem {
         window: WindowId,
         app_id: Option<&str>,
     ) -> ActivationRequest;
+    /// Starts dragging `request` out of `window`, from the pointer button held in it, with the image following the
+    /// pointer. The window then gets a pointer leave while the drag runs, and how it goes arrives as
+    /// [`PlatformEvent::Drag`]. Needs [`Capabilities::drag_and_drop`]; without it, and when no button is held, the drag
+    /// is refused.
+    fn start_drag(
+        &mut self,
+        window: WindowId,
+        request: DragRequest,
+    ) -> Result<DragToken, PlatformError> {
+        let _ = (window, request);
+        Err(PlatformError::Unsupported)
+    }
     /// Asks for a [`WindowEvent::Frame`] when the compositor wants the next frame.
     fn request_frame(&mut self, window: WindowId);
     /// Copies the frame's damage, plus whatever the chosen buffer missed since it was last used, into a buffer and

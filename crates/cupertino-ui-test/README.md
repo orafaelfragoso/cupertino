@@ -7,7 +7,9 @@ reader could not announce (no name, or a child the tree does not hold). MPL-2.0;
 `TestDriver::new` owns the production runtime and uses the supplied `ManualClock` for both runtime work and trace
 receipt timestamps, replacing `RuntimeOptions::clock`. Use `runtime()` to inspect the model, windows, focus and
 snapshots, and `window_system_mut()` to queue input, configure windows, control frame callbacks and inspect presentation.
-`advance_to` rejects backwards time. `run_until_idle(max_turns)` never advances time or waits: it reports waiting work
+`HeadlessWindowSystem::drags` lists the drags the runtime started (with `Capabilities::drag_and_drop`; without it they
+are refused); a start takes the pointer from the window with a leave, and the test enqueues each `PlatformEvent::Drag`
+step. `advance_to` rejects backwards time. `run_until_idle(max_turns)` never advances time or waits: it reports waiting work
 or an exhausted turn budget. Each queued platform event gets one runtime turn, so Tab changes focus before the next
 key is recorded even at the same timestamp. Explicit frame callbacks and tasks remain under the fixture's control.
 

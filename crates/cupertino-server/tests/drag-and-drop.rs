@@ -1,6 +1,7 @@
 //! Drag and drop between two real Wayland clients: one starts a drag of text from a button press in its window, the
-//! pointer moves onto the other's window and is released there, and the other reads the dropped text. The compositor
-//! runs in-process on an offscreen EGL device. Tests skip (pass) when no EGL device is available.
+//! pointer moves onto the other's window and is released there, and the other reads the dropped text. A drag with an
+//! icon surface shows it with the pointer at its hotspot until the drag ends. The compositor runs in-process on an
+//! offscreen EGL device. Tests skip (pass) when no EGL device is available.
 
 use std::io::{Read, Write};
 use std::os::fd::AsFd;
@@ -15,8 +16,9 @@ use cupertino_server::config::Config;
 use cupertino_server::events::BTN_LEFT;
 use cupertino_server::Cupertino;
 use smithay::backend::input::ButtonState;
+use smithay::backend::renderer::element::Element;
 use smithay::reexports::calloop::EventLoop;
-use smithay::reexports::wayland_server::Display;
+use smithay::reexports::wayland_server::{Display, Resource};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_data_device, wl_data_device_manager, wl_data_offer,
@@ -32,6 +34,9 @@ const TEXT: &[u8] = "Grüße, drag and drop".as_bytes();
 const MIME: &str = "text/plain;charset=utf-8";
 const SOURCE_SIZE: (i32, i32) = (600, 120);
 const TARGET_SIZE: (i32, i32) = (120, 500);
+/// The drag icon's size and the point of it under the pointer, in points: a size no other element of the scene has.
+const ICON_SIZE: (i32, i32) = (37, 23);
+const ICON_HOTSPOT: (i32, i32) = (9, 5);
 
 struct Harness {
     state: Cupertino,
@@ -40,6 +45,10 @@ struct Harness {
 
 impl Harness {
     fn new() -> Option<Harness> {
+        Harness::with_scale(1.0)
+    }
+
+    fn with_scale(scale: f64) -> Option<Harness> {
         let event_loop: EventLoop<'static, Cupertino> =
             EventLoop::try_new().expect("creating the event loop");
         let display: Display<Cupertino> = Display::new().expect("creating the Wayland display");
@@ -52,7 +61,7 @@ impl Harness {
             &cupertino_assets::Assets::builtin(),
         )
         .expect("creating the compositor");
-        match headless::init(&mut state, OUTPUT, 1.0) {
+        match headless::init(&mut state, OUTPUT, scale) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
                 common::egl_unavailable(format!("{e:#}"));
@@ -108,12 +117,32 @@ impl Harness {
         self.state.pointer_moved_to(at.into(), 0, None);
         self.run_for(Duration::from_millis(60));
     }
+
+    /// The physical rectangle (x, y, width, height) of each element drawn of `size` points on the output at `scale`.
+    fn drawn_of_size(&mut self, size: (i32, i32), scale: f64) -> Vec<(i32, i32, i32, i32)> {
+        let mut backend = self.state.backend.take().unwrap();
+        let elements = self.state.build_output_elements(backend.renderer(), 0);
+        self.state.backend = Some(backend);
+        let physical = (
+            (f64::from(size.0) * scale).round() as i32,
+            (f64::from(size.1) * scale).round() as i32,
+        );
+        elements
+            .iter()
+            .map(|e| e.geometry(smithay::utils::Scale::from(scale)))
+            .filter(|g| (g.size.w, g.size.h) == physical)
+            .map(|g| (g.loc.x, g.loc.y, g.size.w, g.size.h))
+            .collect()
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum Role {
     /// Starts a drag of [`TEXT`] on a button press.
     Source,
+    /// Starts a drag of [`TEXT`] on the first button press with an icon of [`ICON_SIZE`] drawn at this buffer scale,
+    /// the pointer at [`ICON_HOTSPOT`].
+    IconSource(i32),
     /// Accepts [`MIME`] for a copy and reads it on the drop.
     Target,
 }
@@ -125,10 +154,15 @@ struct Log {
     /// Target: the types offered on enter, then the drop's bytes.
     offered: Vec<String>,
     dropped: Option<Vec<u8>>,
+    /// Pointer events on the client's window: enter, leave and the buttons pressed and released, in order.
+    pointer: Vec<String>,
+    /// The protocol id of the icon surface the client gave `start_drag`.
+    icon: Option<u32>,
 }
 
 struct ClientState {
     role: Role,
+    compositor: wl_compositor::WlCompositor,
     shm: wl_shm::WlShm,
     surface: wl_surface::WlSurface,
     size: (i32, i32),
@@ -200,20 +234,29 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for ClientState {
             if !state.attached {
                 state.attached = true;
                 let (w, h) = state.size;
-                let fd =
-                    rustix::fs::memfd_create("cupertino-test", rustix::fs::MemfdFlags::CLOEXEC)
-                        .unwrap();
-                let mut file = std::fs::File::from(fd);
-                file.write_all(&vec![128u8; (w * h * 4) as usize]).unwrap();
-                let pool = state.shm.create_pool(file.as_fd(), w * h * 4, qh, ());
-                let buffer = pool.create_buffer(0, w, h, w * 4, wl_shm::Format::Argb8888, qh, ());
-                pool.destroy();
+                let buffer = shm_buffer(&state.shm, qh, (w, h), 128);
                 state.surface.attach(Some(&buffer), 0, 0);
                 state.surface.damage_buffer(0, 0, w, h);
                 state.surface.commit();
             }
         }
     }
+}
+
+/// An shm buffer of `size` pixels, every byte `value`.
+fn shm_buffer(
+    shm: &wl_shm::WlShm,
+    qh: &QueueHandle<ClientState>,
+    (w, h): (i32, i32),
+    value: u8,
+) -> wl_buffer::WlBuffer {
+    let fd = rustix::fs::memfd_create("cupertino-test", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
+    let mut file = std::fs::File::from(fd);
+    file.write_all(&vec![value; (w * h * 4) as usize]).unwrap();
+    let pool = shm.create_pool(file.as_fd(), w * h * 4, qh, ());
+    let buffer = pool.create_buffer(0, w, h, w * 4, wl_shm::Format::Argb8888, qh, ());
+    pool.destroy();
+    buffer
 }
 
 impl Dispatch<wl_pointer::WlPointer, ()> for ClientState {
@@ -225,6 +268,17 @@ impl Dispatch<wl_pointer::WlPointer, ()> for ClientState {
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
+        let entry = match &event {
+            wl_pointer::Event::Enter { .. } => "enter",
+            wl_pointer::Event::Leave { .. } => "leave",
+            wl_pointer::Event::Button {
+                state: WEnum::Value(wl_pointer::ButtonState::Pressed),
+                ..
+            } => "press",
+            wl_pointer::Event::Button { .. } => "release",
+            _ => return,
+        };
+        state.log.lock().unwrap().pointer.push(entry.into());
         let wl_pointer::Event::Button {
             serial,
             state: WEnum::Value(wl_pointer::ButtonState::Pressed),
@@ -233,6 +287,30 @@ impl Dispatch<wl_pointer::WlPointer, ()> for ClientState {
         else {
             return;
         };
+        if let (Role::IconSource(scale), false) = (state.role, state.dragging) {
+            state.dragging = true;
+            let source = state.manager.create_data_source(qh, ());
+            source.offer(MIME.into());
+            source.set_actions(wl_data_device_manager::DndAction::Copy);
+            let icon = state.compositor.create_surface(qh, ());
+            state
+                .device
+                .start_drag(Some(&source), &state.surface, Some(&icon), serial);
+            let (w, h) = (ICON_SIZE.0 * scale, ICON_SIZE.1 * scale);
+            let buffer = shm_buffer(&state.shm, qh, (w, h), 200);
+            let (hx, hy) = ICON_HOTSPOT;
+            icon.set_buffer_scale(scale);
+            if icon.version() >= 5 {
+                icon.offset(-hx, -hy);
+                icon.attach(Some(&buffer), 0, 0);
+            } else {
+                icon.attach(Some(&buffer), -hx, -hy);
+            }
+            icon.damage_buffer(0, 0, w, h);
+            icon.commit();
+            state.log.lock().unwrap().icon = Some(icon.id().protocol_id());
+            return;
+        }
         if state.role == Role::Source && !state.dragging {
             state.dragging = true;
             let source = state.manager.create_data_source(qh, ());
@@ -371,12 +449,13 @@ impl TestClient {
             let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
             let toplevel = xdg.get_toplevel(&qh, ());
             toplevel.set_app_id(match role {
-                Role::Source => "org.example.drag-source".into(),
+                Role::Source | Role::IconSource(_) => "org.example.drag-source".into(),
                 Role::Target => "org.example.drop-target".into(),
             });
             surface.commit();
             let mut client = ClientState {
                 role,
+                compositor,
                 shm,
                 surface,
                 size,
@@ -488,4 +567,93 @@ fn a_drag_held_when_the_session_locks_gives_the_target_nothing() {
         target.log().dropped.is_some()
     });
     assert_eq!(target.log().dropped.as_deref(), Some(&b""[..]));
+}
+
+/// A drag that names an icon surface: the compositor takes that surface as the drag's icon, with the pointer at the
+/// hotspot the client set with the surface's offset, and draws it there, at the output's scale, as the pointer moves.
+#[test]
+fn a_drag_icon_is_the_clients_surface_drawn_with_the_pointer_at_its_hotspot() {
+    for scale in [1, 2] {
+        let Some(mut h) = Harness::with_scale(f64::from(scale)) else {
+            return;
+        };
+        let source = TestClient::spawn(h.socket_path(), Role::IconSource(scale), SOURCE_SIZE);
+        h.wait_until("the source window", |s| {
+            s.windows.iter().filter(|w| w.mapped).count() == 1
+        });
+        h.run_for(Duration::from_millis(100));
+        let (sx, sy, sw, sh) = h.frames()[0];
+        let start = (sx + 40.0, sy + sh / 2.0);
+        h.move_to(start);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 0);
+        h.wait_until("the drag icon", |s| s.drag_icon.is_some());
+        h.run_for(Duration::from_millis(60));
+        let at = (sx + sw / 2.0, sy + sh / 2.0 + 7.0);
+        h.move_to(at);
+
+        let (icon, offset) = h.state.drag_icon.clone().unwrap();
+        assert_eq!(
+            Some(icon.id().protocol_id()),
+            source.log().icon,
+            "at {scale}x"
+        );
+        assert_eq!(
+            (offset.x, offset.y),
+            (-ICON_HOTSPOT.0, -ICON_HOTSPOT.1),
+            "at {scale}x"
+        );
+        let s = f64::from(scale);
+        let expected = (
+            ((at.0 - f64::from(ICON_HOTSPOT.0)) * s).round() as i32,
+            ((at.1 - f64::from(ICON_HOTSPOT.1)) * s).round() as i32,
+            ICON_SIZE.0 * scale,
+            ICON_SIZE.1 * scale,
+        );
+        assert_eq!(h.drawn_of_size(ICON_SIZE, s), [expected], "at {scale}x");
+    }
+}
+
+/// A drop released where nothing accepts it (the source's own window, which takes no drops) is refused: the source
+/// hears the cancel, the icon is no longer drawn, the window gets the pointer back and the next press reaches it.
+#[test]
+fn a_refused_drop_takes_the_icon_away_and_gives_the_pointer_back() {
+    let Some(mut h) = Harness::new() else { return };
+    let source = TestClient::spawn(h.socket_path(), Role::IconSource(1), SOURCE_SIZE);
+    h.wait_until("the source window", |s| {
+        s.windows.iter().filter(|w| w.mapped).count() == 1
+    });
+    h.run_for(Duration::from_millis(100));
+    let (sx, sy, _, sh) = h.frames()[0];
+    let start = (sx + 40.0, sy + sh / 2.0);
+    h.move_to(start);
+    h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 0);
+    h.wait_until("the drag icon", |s| s.drag_icon.is_some());
+    h.move_to((start.0 + 60.0, start.1));
+    h.wait_until("the pointer to leave the source for the drag", |_| {
+        source.log().pointer.last().map(String::as_str) == Some("leave")
+    });
+    assert_eq!(h.drawn_of_size(ICON_SIZE, 1.0).len(), 1);
+
+    h.state.pointer_button(BTN_LEFT, ButtonState::Released, 0);
+    h.wait_until("the cancel", |_| {
+        source.log().source.last().map(String::as_str) == Some("cancelled")
+    });
+    assert!(h.state.drag_icon.is_none());
+    assert!(h.drawn_of_size(ICON_SIZE, 1.0).is_empty());
+    h.move_to((start.0 + 70.0, start.1));
+    h.wait_until("the pointer back on the source", |_| {
+        source.log().pointer.last().map(String::as_str) == Some("enter")
+    });
+    h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 0);
+    h.state.pointer_button(BTN_LEFT, ButtonState::Released, 0);
+    h.wait_until("the next click", |_| {
+        source
+            .log()
+            .pointer
+            .ends_with(&["press".into(), "release".into()])
+    });
+    assert!(
+        h.state.drag_icon.is_none(),
+        "a press after a drag starts none"
+    );
 }

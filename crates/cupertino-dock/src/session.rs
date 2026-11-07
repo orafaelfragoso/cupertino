@@ -142,6 +142,11 @@ impl Session {
         }
     }
 
+    /// The ids of the windows the server reported, in order.
+    pub fn window_ids(&self) -> Vec<u32> {
+        self.windows.keys().copied().collect()
+    }
+
     /// A window the server reported, by its id.
     pub fn window_info(&self, id: u32) -> Option<&Window> {
         self.windows.get(&id)

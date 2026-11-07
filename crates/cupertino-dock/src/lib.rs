@@ -20,6 +20,7 @@ pub mod desktop;
 pub mod dock;
 pub mod ease;
 pub mod force_quit;
+pub mod kit;
 pub mod magnify;
 pub mod menu;
 pub mod overview_kit;
@@ -31,6 +32,7 @@ pub mod switcher;
 pub mod switcher_kit;
 pub mod tile_drag;
 pub mod tiles;
+pub mod view;
 pub mod wm_kit;
 
 pub use autohide::{autohide_hide_ms, autohide_show_ms, reveal_zone, AutoHide, HideState};

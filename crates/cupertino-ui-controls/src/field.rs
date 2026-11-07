@@ -797,6 +797,14 @@ pub struct SecureState {
     blink: Blink,
 }
 
+/// Inserts `text` in place of the selection, and whether that changed the buffer: not when [`SecureField::max_len`]
+/// left no room and nothing was selected.
+fn insert(buffer: &mut SecureBuffer, text: &str) -> bool {
+    let before = (buffer.with_secret(str::len), buffer.selection());
+    buffer.insert(text);
+    (buffer.with_secret(str::len), buffer.selection()) != before
+}
+
 impl<M: 'static> SecureField<M> {
     fn handle(
         &self,
@@ -824,8 +832,9 @@ impl<M: 'static> SecureField<M> {
             // a password takes committed text only; a composition is never held anywhere
             Event::Ime(ImeEvent::Done(batch)) if self.enabled && state.session.accepts(batch) => {
                 if let Some(commit) = &batch.commit {
-                    state.buffer.insert(commit);
-                    self.changed(&state.buffer, cx);
+                    if insert(&mut state.buffer, commit) {
+                        self.changed(&state.buffer, cx);
+                    }
                     cx.request_paint();
                 }
                 Propagation::Stop
@@ -898,10 +907,7 @@ impl<M: 'static> SecureField<M> {
             // copy, cut and every other command chord do nothing in a password field, and nothing reaches the window
             _ if command || key.mods.contains(Mods::CTRL) => false,
             _ => match key.text {
-                Some(c) if !c.is_control() => {
-                    buffer.insert(c.encode_utf8(&mut [0; 4]));
-                    true
-                }
+                Some(c) if !c.is_control() => insert(buffer, c.encode_utf8(&mut [0; 4])),
                 _ => return Propagation::Continue,
             },
         };
@@ -921,8 +927,10 @@ impl<M: 'static> Widget<M> for SecureField<M> {
     }
 
     fn state(&self) -> SecureState {
+        let mut buffer = SecureBuffer::new();
+        buffer.set_max_len(self.max_len);
         SecureState {
-            buffer: SecureBuffer::new(),
+            buffer,
             session: session(ContentPurpose::Password, true),
             hovered: false,
             scroll: Cell::new(0.0),
@@ -930,10 +938,13 @@ impl<M: 'static> Widget<M> for SecureField<M> {
         }
     }
 
-    fn update(&self, old: &Self, _: &mut SecureState) -> Change {
+    fn update(&self, old: &Self, state: &mut SecureState) -> Change {
+        state.buffer.set_max_len(self.max_len);
         if self.enabled != old.enabled
             || self.label != old.label
             || self.placeholder != old.placeholder
+            || self.busy != old.busy
+            || self.invalid != old.invalid
         {
             Change::Paint
         } else {
@@ -1000,6 +1011,8 @@ impl<M: 'static> Widget<M> for SecureField<M> {
         cx.value(AccessibleValue::Protected);
         cx.states(AccessibleStates {
             disabled: !self.enabled,
+            busy: self.busy,
+            invalid: self.invalid,
             ..AccessibleStates::default()
         });
         if self.enabled {

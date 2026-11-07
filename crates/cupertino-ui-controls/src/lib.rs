@@ -462,13 +462,39 @@ pub struct TextBox<M> {
 }
 
 /// A password field. Its text stays in the field's own buffer and reaches the application only through its handlers:
-/// `on_change` after each edit, for a form whose button submits it, and `on_submit` on Return.
+/// `on_change` after each edit, for a form whose button submits it, and `on_submit` on Return. Build it with
+/// `..SecureField::default()` after the fields you set: the default is an enabled field without a label, handlers,
+/// states or limit.
 pub struct SecureField<M> {
     pub label: String,
     pub placeholder: String,
     pub enabled: bool,
     pub on_change: Option<SecureHandler<M>>,
     pub on_submit: Option<SecureHandler<M>>,
+    /// The password is being checked: assistive technology hears that the field is busy. Typing goes on as usual.
+    pub busy: bool,
+    /// The password was refused: assistive technology hears that the field's entry is invalid. The application
+    /// clears it, usually on the next edit, and shows and says why itself.
+    pub invalid: bool,
+    /// The most bytes the field holds. Typed or input-method text past it is cut at a grapheme boundary, and a
+    /// keystroke with no room left is refused: no edit is reported and nothing is said. A lower limit keeps text
+    /// already past it.
+    pub max_len: Option<usize>,
+}
+
+impl<M> Default for SecureField<M> {
+    fn default() -> Self {
+        SecureField {
+            label: String::new(),
+            placeholder: String::new(),
+            enabled: true,
+            on_change: None,
+            on_submit: None,
+            busy: false,
+            invalid: false,
+            max_len: None,
+        }
+    }
 }
 
 pub struct Stack<M> {

@@ -690,6 +690,20 @@ fn neither_the_tree_nor_the_bus_nor_the_diagnostics_hold_a_password_being_typed(
         "the password field reads {:?}",
         field.text
     );
+    // nor its length: the field has no character to count and no caret offset to read it from
+    for property in ["CharacterCount", "CaretOffset"] {
+        let read: zbus::Result<i32> = proxy(
+            &locked.conn,
+            &locked.peer,
+            &field.path,
+            "org.a11y.atspi.Text",
+        )
+        .get_property(property);
+        assert!(
+            read.as_ref().map_or(true, |n| *n <= 0),
+            "the password field's {property} is {read:?}"
+        );
+    }
     let hold = |text: &str| text.contains(SECRET);
     for node in &nodes {
         assert!(
@@ -713,10 +727,12 @@ fn neither_the_tree_nor_the_bus_nor_the_diagnostics_hold_a_password_being_typed(
             )
         })
         .filter(|(_, member)| {
-            // typing may move the caret's state or the field's emptiness, never a text or value change
-            member
-                .as_deref()
-                .is_some_and(|m| m.contains("TextChanged") || m.contains("PropertyChange"))
+            // typing may change the field's states, never its text, its value or its caret, which would count the characters
+            member.as_deref().is_some_and(|m| {
+                m.contains("TextChanged")
+                    || m.contains("PropertyChange")
+                    || m.contains("TextCaretMoved")
+            })
         })
         .filter(|(path, _)| path.as_deref() == Some(field.path.as_str()))
         .collect();

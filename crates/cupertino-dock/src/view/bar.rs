@@ -310,7 +310,8 @@ impl<M: Clone + 'static> Widget<M> for TileNode<M> {
             cx.set_group(self.tile.opacity.clamp(0.0, 1.0) as f32, Vec::new());
         }
         paint::image(cx, &self.tile.icon, bounds);
-        if cx.is_focused() && cx.focus_visible() {
+        // the ring goes with the keyboard: a bar that gave it back keeps its focused tile but shows no ring
+        if cx.focus_visible() && cx.window_active() {
             paint::focus_ring(cx, bounds, self.tile_size * FOCUS_RADIUS);
         }
     }

@@ -4,8 +4,14 @@
 //! as it is; the surfaces that show it are [`crate::pick_overlay`].
 //!
 //! The pick is the consent: the app learns one colour, and only of a pixel the person clicked. A click counts only when
-//! its press came on the overlay once it had been up [`ARMING`](crate::consent::ARMING): a button held from before, or a click meant for what
-//! was under the pointer as the overlay appeared, picks nothing.
+//! its press and its release came on overlays that had each been on screen [`ARMING`](crate::consent::ARMING), counted
+//! from the overlay's first frame the server showed: a button held from before, or a click meant for what was under the
+//! pointer as the overlay appeared, picks nothing.
+//!
+//! Every display has an overlay for as long as the pick lasts. A display the server has that was not copied, such as
+//! one plugged in between the copy and the overlays, ends the pick before it starts ([`cover`]), and any display
+//! added, gone or moved while it runs ends it ([`layout_changed`]): a click on a display without an overlay would
+//! reach the application under it.
 
 use std::time::Instant;
 
@@ -51,17 +57,26 @@ pub struct Picking {
     pointer: Option<(f64, f64)>,
     /// A press came on the overlay while it was armed, and its release picks.
     pressed: bool,
-    arming: Arming,
+    /// The arming of each display's overlay, from its first frame on screen; `None` before it.
+    shown: Vec<Option<Arming>>,
 }
 
 impl Picking {
-    /// A pick over `displays` (as [`crate::screenshot::Shoot`] copied them), shown at `opened`.
-    pub fn new(displays: Vec<Output>, opened: Instant) -> Self {
+    /// A pick over `displays` (as [`crate::screenshot::Shoot`] copied them), none of whose overlays is on screen yet.
+    pub fn new(displays: Vec<Output>) -> Self {
         Self {
+            shown: vec![None; displays.len()],
             displays,
             pointer: None,
             pressed: false,
-            arming: Arming::new(opened),
+        }
+    }
+
+    /// The overlay of display `index` was first on screen at `at`: its arming delay starts. A later frame changes
+    /// nothing.
+    pub fn shown(&mut self, index: usize, at: Instant) {
+        if let Some(shown @ None) = self.shown.get_mut(index) {
+            *shown = Some(Arming::new(at));
         }
     }
 
@@ -84,15 +99,15 @@ impl Picking {
         self.pressed = false;
     }
 
-    /// The primary button changed state at `point` at `now`. A press counts once the overlay is armed; its release
-    /// picks the pixel under the pointer, if there is one.
+    /// The primary button changed state at `point` at `now`. A press counts once the overlay under it is armed; its
+    /// release, on an armed overlay too, picks the pixel under the pointer, if there is one.
     pub fn button(&mut self, pressed: bool, point: (f64, f64), now: Instant) -> Option<Picked> {
         self.pointer = Some(point);
         if pressed {
-            self.pressed = self.arming.armed(now);
+            self.pressed = self.armed(point, now);
             return None;
         }
-        if !std::mem::take(&mut self.pressed) {
+        if !std::mem::take(&mut self.pressed) || !self.armed(point, now) {
             return None;
         }
         self.colour_at(point).map(Picked::Colour)
@@ -103,18 +118,18 @@ impl Picking {
         Picked::Cancelled
     }
 
-    /// The display under `point` and the pixel of its image there.
-    fn under(&self, point: (f64, f64)) -> Option<(&Output, (u32, u32))> {
-        self.displays.iter().find_map(|d| {
+    /// The display under `point`, by index, and the pixel of its image there.
+    fn under(&self, point: (f64, f64)) -> Option<(usize, (u32, u32))> {
+        self.displays.iter().enumerate().find_map(|(i, d)| {
             let image = (d.image.width(), d.image.height());
-            pixel_under(placement(d), image, point).map(|pixel| (d, pixel))
+            pixel_under(placement(d), image, point).map(|pixel| (i, pixel))
         })
     }
 
     /// The colour of the pixel under `point`: sRGB, each channel in `[0, 1]`.
     pub fn colour_at(&self, point: (f64, f64)) -> Option<[f64; 3]> {
         let (display, (x, y)) = self.under(point)?;
-        let pixel = display.image.pixel(x, y)?.demultiply();
+        let pixel = self.displays[display].image.pixel(x, y)?.demultiply();
         Some([pixel.red(), pixel.green(), pixel.blue()].map(|c| f64::from(c) / 255.0))
     }
 
@@ -122,6 +137,7 @@ impl Picking {
     /// its display's edge.
     pub fn loupe(&self, point: (f64, f64)) -> Option<Vec<Option<[u8; 4]>>> {
         let (display, (cx, cy)) = self.under(point)?;
+        let display = &self.displays[display];
         let half = (LOUPE_PIXELS / 2) as i64;
         let mut cells = Vec::with_capacity((LOUPE_PIXELS * LOUPE_PIXELS) as usize);
         for dy in -half..=half {
@@ -141,9 +157,12 @@ impl Picking {
         Some(cells)
     }
 
-    /// Whether a click picks now: the overlay has been up [`ARMING`](crate::consent::ARMING).
-    pub fn armed(&self, now: Instant) -> bool {
-        self.arming.armed(now)
+    /// Whether a click at `point` picks at `now`: the overlay of the display under it has been on screen
+    /// [`ARMING`](crate::consent::ARMING).
+    pub fn armed(&self, point: (f64, f64), now: Instant) -> bool {
+        self.under(point)
+            .and_then(|(display, _)| self.shown[display])
+            .is_some_and(|arming| arming.armed(now))
     }
 
     /// Paint the overlay of display `index` into `pixmap` at `scale` device pixels per point: the display as it was
@@ -192,6 +211,32 @@ fn placement(display: &Output) -> Placement {
         position: display.position,
         size: display.size,
     }
+}
+
+/// Which of the copied `displays` the overlay on each of the server's displays now (`outputs`, where each sits) shows:
+/// the one copied where it is. `Err` when one of them has no copy, as a display plugged in since the copy: it would
+/// get no overlay, and a click there would reach the application under it, so the pick does not start.
+pub fn cover(outputs: &[Placement], displays: &[Output]) -> Result<Vec<usize>, String> {
+    outputs
+        .iter()
+        .map(|at| {
+            displays
+                .iter()
+                .position(|d| placement(d) == *at)
+                .ok_or_else(|| {
+                    format!(
+                        "the display at {:?} was not copied, so it would have no overlay",
+                        at.position
+                    )
+                })
+        })
+        .collect()
+}
+
+/// Whether the server's displays changed since the overlays went up, so the pick ends: one added, gone or moved. Each
+/// display is the id the server knows it by and where it sits, in any order.
+pub fn layout_changed<Id: PartialEq>(shown: &[(Id, Placement)], now: &[(Id, Placement)]) -> bool {
+    shown.len() != now.len() || now.iter().any(|display| !shown.contains(display))
 }
 
 /// The side of the loupe in points.
@@ -299,14 +344,19 @@ mod tests {
     }
 
     fn two(opened: Instant) -> Picking {
+        let mut picking = Picking::new(displays());
+        picking.shown(0, opened);
+        picking.shown(1, opened);
+        picking
+    }
+
+    /// A display at scale 1 and one at scale 2 to its right.
+    fn displays() -> Vec<Output> {
         let mut right = display((400, 0), (200, 150), 2, [0, 0, 255, 255]);
         // one pixel of its own, at logical (410.25, 5.25) on the scale-2 display
         right.image.pixels_mut()[10 * 400 + 20] =
             tiny_skia::ColorU8::from_rgba(255, 128, 0, 255).premultiply();
-        Picking::new(
-            vec![display((0, 0), (400, 300), 1, [255, 0, 0, 255]), right],
-            opened,
-        )
+        vec![display((0, 0), (400, 300), 1, [255, 0, 0, 255]), right]
     }
 
     #[test]
@@ -355,8 +405,83 @@ mod tests {
             None,
             "a point on no display"
         );
-        assert!(!picking.armed(opened + ARMING - Duration::from_millis(1)));
+        assert!(!picking.armed((10.0, 10.0), opened + ARMING - Duration::from_millis(1)));
         assert_eq!(picking.escape(), Picked::Cancelled);
+    }
+
+    /// Each overlay arms from its own first frame on screen, however late that comes after the pick began.
+    #[test]
+    fn an_overlay_arms_only_once_it_has_been_on_screen_for_the_delay() {
+        let began = Instant::now();
+        let mut picking = Picking::new(displays());
+        let late = began + ARMING * 3;
+        assert!(
+            !picking.armed((10.0, 10.0), late),
+            "no overlay is on screen yet, however long the pick has waited"
+        );
+        assert_eq!(picking.button(true, (10.0, 10.0), late), None);
+        assert_eq!(picking.button(false, (10.0, 10.0), late), None);
+
+        picking.shown(0, late);
+        picking.shown(0, began);
+        assert!(!picking.armed((10.0, 10.0), late), "the first frame counts");
+        assert!(picking.armed((10.0, 10.0), late + ARMING));
+        assert!(
+            !picking.armed((410.0, 5.0), late + ARMING * 2),
+            "the other display's overlay has not been shown"
+        );
+        assert_eq!(picking.button(true, (10.0, 10.0), late + ARMING), None);
+        assert_eq!(
+            picking.button(false, (410.0, 5.0), late + ARMING),
+            None,
+            "released over an overlay not yet armed"
+        );
+        picking.shown(1, late + ARMING);
+        assert_eq!(picking.button(true, (10.0, 10.0), late + ARMING * 2), None);
+        assert_eq!(
+            picking.button(false, (12.0, 10.0), late + ARMING * 2),
+            Some(Picked::Colour([1.0, 0.0, 0.0]))
+        );
+    }
+
+    #[test]
+    fn every_display_now_needs_a_copy_and_any_change_of_the_displays_ends_the_pick() {
+        let copied = displays();
+        let left = Placement {
+            position: (0, 0),
+            size: (400, 300),
+        };
+        let right = Placement {
+            position: (400, 0),
+            size: (200, 150),
+        };
+        assert_eq!(cover(&[right, left], &copied), Ok(vec![1, 0]));
+        assert_eq!(cover(&[left], &copied), Ok(vec![0]), "one unplugged");
+        let plugged = Placement {
+            position: (600, 0),
+            size: (300, 200),
+        };
+        assert!(
+            cover(&[left, right, plugged], &copied).is_err(),
+            "a display plugged in since the copy would have no overlay"
+        );
+
+        let shown = [(1, left), (2, right)];
+        assert!(!layout_changed(&shown, &[(2, right), (1, left)]));
+        assert!(
+            layout_changed(&shown, &[(1, left), (2, right), (3, plugged)]),
+            "a display plugged in"
+        );
+        assert!(layout_changed(&shown, &[(1, left)]), "a display unplugged");
+        assert!(
+            layout_changed(&shown, &[(1, left), (3, right)]),
+            "another display where one was: it has no overlay"
+        );
+        let moved = Placement {
+            position: (-200, 0),
+            ..right
+        };
+        assert!(layout_changed(&shown, &[(1, left), (2, moved)]));
     }
 
     #[test]

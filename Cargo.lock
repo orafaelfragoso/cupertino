@@ -1521,6 +1521,7 @@ dependencies = [
  "cupertino-assets",
  "cupertino-defaults",
  "cupertino-filepicker",
+ "cupertino-geometry",
  "cupertino-icons",
  "cupertino-kit",
  "cupertino-protocol-app",

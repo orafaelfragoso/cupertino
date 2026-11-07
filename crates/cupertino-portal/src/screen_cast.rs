@@ -350,12 +350,13 @@ impl Grants {
                 app_id: app_id.to_owned(),
                 display: name.clone(),
             };
-            let stored = ScreenSharingConf::load(path).and_then(|(mut conf, _)| {
+            // under the file's lock, so a Forget in Settings at the same time is neither lost nor undone
+            let stored = ScreenSharingConf::update(path, |conf| {
                 grant
                     .check()
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
                 conf.grants.push(grant);
-                conf.store(path)
+                Ok(())
             });
             match stored {
                 Ok(()) => return Some((id, Persist::Persistent)),

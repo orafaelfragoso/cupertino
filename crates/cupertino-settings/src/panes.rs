@@ -172,6 +172,10 @@ pub enum Effect {
     ConfirmUnallow { program: PathBuf, name: String },
     /// Choose an installed application (`program` false) or a program file to allow to use the clipboard.
     AskClipboardApp { program: bool },
+    /// Take the screen-sharing grant with this id out of `screen-sharing.conf`, as the file holds it now
+    /// ([`Settings::forget_grant`](crate::settings::Settings::forget_grant)): the portal adds to the file while the
+    /// pane is open, so the pane's own list is never written back.
+    ForgetGrant(String),
     /// The change is refused for this reason; nothing changed.
     Refuse(String),
 }
@@ -2309,8 +2313,9 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
                 return Vec::new();
             };
             let id = grant.id.clone();
+            // the row goes at once; the file loses the grant through the effect
             settings.screen_sharing.conf.revoke(&id);
-            store(File::ScreenSharing)
+            vec![Effect::ForgetGrant(id)]
         }
         ControlId::MouseNatural => {
             settings.compositor.mouse_natural_scrolling = Some(bool_of(value));

@@ -335,6 +335,14 @@ pub enum Command<M> {
     /// the source keeps it all. A drop the update does not end so finishes with its agreed action; given later, it is
     /// ignored.
     FinishDrop(DropToken, Option<DropAction>),
+    /// Sends `message` once `window` has presented its first frame: the compositor configured it, a frame of its
+    /// content was committed, and the compositor answered that frame's callback. At once when it already has; never
+    /// when the window closes first, when the view that follows this command has no such window, or while the
+    /// compositor sends the window no frame callback (a window it does not show).
+    OnPresented {
+        window: WindowKey,
+        message: M,
+    },
     Exit,
 }
 

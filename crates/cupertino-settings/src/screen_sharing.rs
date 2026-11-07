@@ -1,7 +1,6 @@
 //! Screen Sharing in the Privacy pane: the displays apps may share again without asking (`screen-sharing.conf`,
 //! written by the portal when the person ticks to remember a share), each with Forget.
 
-use std::io;
 use std::path::Path;
 
 use cupertino_defaults::screen_sharing::ScreenSharingConf;
@@ -18,7 +17,8 @@ pub struct Grants {
 
 impl Grants {
     /// The file at `path`. A missing file holds no grant; a refused or unreadable one is [`Grants::unreadable`]. A
-    /// line that grants nothing is dropped from the list, and from the file at the next write.
+    /// line that grants nothing is dropped from the list, and from the file at the next Forget, which reads the file
+    /// again under its lock and takes out only the grant forgotten.
     pub fn load(path: &Path) -> Self {
         match ScreenSharingConf::load(path) {
             Ok((conf, _)) => Grants {
@@ -30,17 +30,6 @@ impl Grants {
                 ..Grants::default()
             },
         }
-    }
-
-    /// Write the grants into `path`.
-    pub fn store(&self, path: &Path) -> io::Result<()> {
-        if self.unreadable.is_some() {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "the list can't be read",
-            ));
-        }
-        self.conf.store(path)
     }
 }
 

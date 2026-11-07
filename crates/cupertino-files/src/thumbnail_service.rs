@@ -3,10 +3,12 @@
 //! or create them there, decode them to pixels and call the wake function. A request no window wants any more is
 //! dropped before a worker starts it, so scrolling past a folder costs nothing.
 //!
-//! The decoded thumbnails stay in memory up to a byte budget: past it the least recently drawn go first, those no
-//! window wants before those in view. A thumbnail is made for one [`Stamp`] of its file: when the file changes, the
-//! window wants it with the new stamp and it is made again, while the old one is still drawn. A file that cannot be
-//! thumbnailed is not tried again until it changes. Nothing under the cache directory itself is thumbnailed.
+//! The decoded thumbnails stay in memory up to a byte budget: past it those no window wants go, the least recently
+//! drawn first; those in view stay, so a window showing more than the budget holds is not made again and again. A
+//! thumbnail is made for one [`Stamp`] of its file: when the file changes, the window wants it with the new stamp and
+//! it is made again, while the old one is still drawn. A file that cannot be thumbnailed, or whose decoder panics, is
+//! not tried again until it changes. Nothing under the cache directory itself is thumbnailed. Dropping the service
+//! does not wait for the files being decoded.
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -15,12 +17,12 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::SystemTime;
 
-use crate::thumbnail::{ThumbSize, Thumbnailer};
+use crate::thumbnail::{Pixels, ThumbError, ThumbSize, Thumbnailer};
 use crate::Entry;
 
 /// The types whose thumbnails are made: the formats the thumbnail cache decodes.
 pub const THUMBNAIL_TYPES: [&str; 3] = ["image/png", "image/jpeg", "image/webp"];
-/// How many bytes of decoded thumbnails a process keeps: 512 thumbnails of 128 pixels a side.
+/// How many bytes of decoded thumbnails a process keeps beyond those in view: 512 thumbnails of 128 pixels a side.
 pub const MEMORY_BUDGET: usize = 32 << 20;
 /// How many threads make thumbnails: decoding is the cost, and two keep the UI's own core free.
 pub const WORKERS: usize = 2;
@@ -132,20 +134,20 @@ impl State {
         }
     }
 
-    /// Drop ready thumbnails until they fit `budget`, the least recently drawn first and those no window wants before
-    /// those in view; `keep` stays.
+    /// Drop ready thumbnails no window wants until they fit `budget`, the least recently drawn first; `keep` stays.
+    /// Those in view stay too, past the budget: dropping one would only have it made again at the next want.
     fn evict(&mut self, budget: usize, keep: &Key) {
         while self.bytes > budget {
             let oldest = self
                 .done
                 .iter()
-                .filter(|(k, _)| *k != keep)
+                .filter(|(k, _)| *k != keep && !self.wanted(k))
                 .filter_map(|(k, d)| match d {
-                    Done::Ready { used, .. } => Some((self.wanted(k), *used, k)),
+                    Done::Ready { used, .. } => Some((*used, k)),
                     Done::Failed { .. } => None,
                 })
-                .min_by_key(|(wanted, used, _)| (*wanted, *used))
-                .map(|(_, _, k)| k.clone());
+                .min_by_key(|(used, _)| *used)
+                .map(|(_, k)| k.clone());
             let Some(key) = oldest else { break };
             if let Some(done) = self.done.remove(&key) {
                 self.bytes -= done.bytes();
@@ -154,10 +156,15 @@ impl State {
     }
 }
 
+/// What makes the thumbnail of a file for a cache size, fitted to an edge.
+type Make = dyn Fn(&Path, ThumbSize, u32) -> Result<Pixels, ThumbError> + Send + Sync;
+
 struct Shared {
     state: Mutex<State>,
     work: Condvar,
-    thumbnailer: Thumbnailer,
+    /// The cache directory, whose own files get no thumbnail.
+    root: PathBuf,
+    make: Box<Make>,
     budget: usize,
     wake: Arc<dyn Fn() + Send + Sync>,
     ids: Arc<dyn Fn() -> u64 + Send + Sync>,
@@ -176,15 +183,21 @@ impl Shared {
                     if state.stop {
                         return;
                     }
-                    if let Some(next) = state.queue.pop_front() {
-                        break next;
+                    if let Some((key, stamp)) = state.queue.pop_front() {
+                        // under the same lock, so a want meanwhile does not queue it again
+                        state.working.insert(key.clone(), stamp);
+                        break (key, stamp);
                     }
                     state = self.work.wait(state).unwrap_or_else(|e| e.into_inner());
                 }
             };
-            self.lock().working.insert(key.clone(), stamp);
             let size = ThumbSize::for_icon(f64::from(key.edge), 1.0);
-            let made = self.thumbnailer.pixels(&key.path, size, key.edge);
+            // a decoder that panics on a file fails that file and keeps the worker
+            let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                (self.make)(&key.path, size, key.edge)
+            }))
+            .map_err(|_| ())
+            .and_then(|made| made.map_err(|_| ()));
             let mut state = self.lock();
             state.working.remove(&key);
             let done = match made {
@@ -227,10 +240,25 @@ impl ThumbnailService {
         wake: Arc<dyn Fn() + Send + Sync>,
         ids: Arc<dyn Fn() -> u64 + Send + Sync>,
     ) -> ThumbnailService {
+        let root = thumbnailer.root().to_path_buf();
+        let make = Box::new(move |path: &Path, size, edge| thumbnailer.pixels(path, size, edge));
+        Self::with_make(root, make, workers, budget, wake, ids)
+    }
+
+    /// A service whose workers make each thumbnail with `make`, nothing under `root` thumbnailed.
+    fn with_make(
+        root: PathBuf,
+        make: Box<Make>,
+        workers: usize,
+        budget: usize,
+        wake: Arc<dyn Fn() + Send + Sync>,
+        ids: Arc<dyn Fn() -> u64 + Send + Sync>,
+    ) -> ThumbnailService {
         let shared = Arc::new(Shared {
             state: Mutex::new(State::default()),
             work: Condvar::new(),
-            thumbnailer,
+            root,
+            make,
             budget,
             wake,
             ids,
@@ -250,7 +278,7 @@ impl ThumbnailService {
     /// Window `window` shows `items` at `edge` device pixels, most wanted first: they are made in that order, before
     /// what other windows wait for, and what no window wants any more is not made.
     pub fn want(&self, window: u64, edge: u32, items: impl IntoIterator<Item = (PathBuf, Stamp)>) {
-        let root = self.shared.thumbnailer.root();
+        let root = &self.shared.root;
         let items: Vec<(Key, Stamp)> = items
             .into_iter()
             .filter(|(path, _)| !path.starts_with(root))
@@ -327,12 +355,12 @@ impl ThumbnailService {
 }
 
 impl Drop for ThumbnailService {
+    /// The workers stop once their current file is done, and are not waited for: a read that hangs on a stalled
+    /// network mount must not keep the application from exiting.
     fn drop(&mut self) {
         self.shared.lock().stop = true;
         self.shared.work.notify_all();
-        for worker in self.workers.drain(..) {
-            let _ = worker.join();
-        }
+        self.workers.clear();
     }
 }
 
@@ -535,6 +563,125 @@ mod tests {
         assert!(service.get(&a.0, 16).is_some());
         assert!(service.get(&c.0, 16).is_some());
         assert_eq!(service.get(&b.0, 16), None, "out of view, dropped");
+    }
+
+    /// A service with one worker whose thumbnails `make` makes, and what its wakes arrive on.
+    fn made_by(
+        make: impl Fn(&Path) -> Result<Pixels, ThumbError> + Send + Sync + 'static,
+        budget: usize,
+    ) -> (ThumbnailService, mpsc::Receiver<()>) {
+        let (tx, rx) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        let next = Arc::new(AtomicU64::new(1));
+        let service = ThumbnailService::with_make(
+            PathBuf::from("/no-cache"),
+            Box::new(move |path: &Path, _, _| make(path)),
+            1,
+            budget,
+            Arc::new(move || {
+                let _ = tx.lock().unwrap().send(());
+            }),
+            Arc::new(move || next.fetch_add(1, Ordering::Relaxed)),
+        );
+        (service, rx)
+    }
+
+    fn square(edge: u32) -> Pixels {
+        Pixels {
+            width: edge,
+            height: edge,
+            rgba: vec![9; (edge * edge * 4) as usize],
+        }
+    }
+
+    fn unchanged() -> Stamp {
+        Stamp {
+            modified: None,
+            size: 1,
+        }
+    }
+
+    #[test]
+    fn a_decoder_that_panics_fails_its_file_and_the_worker_goes_on() {
+        let (service, rx) = made_by(
+            |path| {
+                if path.ends_with("bad.png") {
+                    panic!("a decoder bug");
+                }
+                Ok(square(4))
+            },
+            MEMORY_BUDGET,
+        );
+        let (bad, good) = (PathBuf::from("/d/bad.png"), PathBuf::from("/d/good.png"));
+        service.want(0, 4, [(bad.clone(), unchanged())]);
+        settle(&service, &rx, &bad, 4);
+        assert_eq!(service.get(&bad, 4), None);
+        service.want(0, 4, [(bad.clone(), unchanged())]);
+        assert!(service.queued().is_empty(), "not tried again unchanged");
+        // the only worker is still there
+        service.want(0, 4, [(bad, unchanged()), (good.clone(), unchanged())]);
+        settle(&service, &rx, &good, 4);
+        assert!(service.get(&good, 4).is_some());
+    }
+
+    #[test]
+    fn dropping_the_service_does_not_wait_for_a_decode_that_hangs() {
+        let (hold, held) = mpsc::channel::<()>();
+        let held = Mutex::new(held);
+        let (started, starts) = mpsc::channel();
+        let started = Mutex::new(started);
+        let (service, _) = made_by(
+            move |_| {
+                let _ = started.lock().unwrap().send(());
+                // a read stalled on a network mount
+                let _ = held.lock().unwrap().recv();
+                Ok(square(4))
+            },
+            MEMORY_BUDGET,
+        );
+        service.want(0, 4, [(PathBuf::from("/mnt/slow.png"), unchanged())]);
+        starts.recv_timeout(WAIT).expect("the worker starts");
+        let (dropped, done) = mpsc::channel();
+        std::thread::spawn(move || {
+            drop(service);
+            let _ = dropped.send(());
+        });
+        done.recv_timeout(WAIT)
+            .expect("the service is dropped while the decode hangs");
+        drop(hold);
+    }
+
+    #[test]
+    fn thumbnails_in_view_stay_past_the_budget_and_are_not_made_again() {
+        let made = Arc::new(AtomicU64::new(0));
+        let count = Arc::clone(&made);
+        // room for one 4 × 4 thumbnail
+        let (service, rx) = made_by(
+            move |_| {
+                count.fetch_add(1, Ordering::Relaxed);
+                Ok(square(4))
+            },
+            4 * 4 * 4,
+        );
+        let items: Vec<(PathBuf, Stamp)> = (0..3)
+            .map(|i| (PathBuf::from(format!("/d/{i}.png")), unchanged()))
+            .collect();
+        service.want(0, 4, items.clone());
+        for (path, _) in &items {
+            settle(&service, &rx, path, 4);
+        }
+        for (path, _) in &items {
+            assert!(service.get(path, 4).is_some(), "{path:?} in view stays");
+        }
+        service.want(0, 4, items.clone());
+        assert!(service.queued().is_empty(), "nothing is made again");
+        assert_eq!(made.load(Ordering::Relaxed), 3);
+        // out of view, they go down to the budget
+        let other = (PathBuf::from("/d/other.png"), unchanged());
+        service.want(0, 4, [other.clone()]);
+        settle(&service, &rx, &other.0, 4);
+        assert_eq!(service.memory(), 4 * 4 * 4);
+        assert!(service.get(&other.0, 4).is_some());
     }
 
     #[test]

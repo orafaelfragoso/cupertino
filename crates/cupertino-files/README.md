@@ -60,8 +60,9 @@ window wants any more before a worker starts it. A worker takes the thumbnail fr
 (`$XDG_CACHE_HOME/thumbnails`, `Thumbnailer::from_env("cupertino-files")`, the rules of `cupertino-thumbnails`: valid
 for the file's modification time and size, a failure remembered under `fail/cupertino-files/`, nothing under the cache
 itself thumbnailed) or creates it there, then decodes it at 2 pixels a point (128 for the icon view's 64 pt, 32 for
-the list's 16 pt). At most 32 MiB of decoded thumbnails stay in memory: the least recently drawn go first, those out of
-view before those in it. When a picture changes on disk, the watcher's new modification time and size make it wanted
+the list's 16 pt). Beyond those in view, at most 32 MiB of decoded thumbnails stay in memory, the least recently drawn
+going first; a window showing more keeps them all rather than making them again. A decoder that panics fails its
+file, not the worker, and quitting does not wait for a decode that hangs (a stalled network mount). When a picture changes on disk, the watcher's new modification time and size make it wanted
 again; the old thumbnail shows until the new one is made, and a file that failed is tried again once it changes.
 `Start::with_file_icons` and `Start::with_thumbnails` give a window the session's icons and cache (`main.rs` does);
 without them every icon is the built-in placeholder and no thumbnail is made, which is what the tests use unless they

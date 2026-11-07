@@ -284,6 +284,51 @@ fn the_centre_replaces_the_banners_and_closing_it_brings_them_back() {
 }
 
 #[test]
+fn a_banner_s_speech_is_its_application_summary_and_shown_body_in_that_order() {
+    let m = metrics();
+    let speech = |app: &str, summary: &str, body: &str| {
+        let mut c = NotificationCenter::default();
+        let id = c.notify(NotifyInput::new(app, summary, body), 0.0);
+        let n = c.get(id).unwrap().clone();
+        banner_speech(&n, &m.card(&n, WIDTH, Fold::Banner))
+    };
+    assert_eq!(
+        speech("Mail", "Lunch", "Are you free?"),
+        "Mail: Lunch, Are you free?"
+    );
+    assert_eq!(speech("Mail", "Lunch", ""), "Mail: Lunch");
+    assert_eq!(speech("", "Lunch", "Are you free?"), "Lunch, Are you free?");
+    assert_eq!(speech("Mail", "", "Are you free?"), "Mail, Are you free?");
+    assert_eq!(speech("", "", "Are you free?"), "Are you free?");
+    // line breaks and runs of spaces are one space; markup is gone
+    assert_eq!(
+        speech(" Mail ", "Lunch\nat noon", "Are  you\n\n<b>free</b>?"),
+        "Mail: Lunch at noon, Are you free?"
+    );
+    // only what the card shows: a body past its lines ends where the card cuts it
+    let cut = speech("app", "Title", &long(400));
+    assert!(cut.ends_with('\u{2026}'), "{cut}");
+    assert!(cut.len() < long(400).len());
+}
+
+#[test]
+fn no_window_is_open_while_the_screen_is_locked() {
+    let m = metrics();
+    let mut c = NotificationCenter::default();
+    c.notify(NotifyInput::new("app", "Hello", "World"), 0.0);
+    let ui = Ui::default();
+    c.set_screen_locked(true);
+    assert!(windows::<Input>(&mut c, &ui, &m, 1.0, |i| i).is_empty());
+    let centre = Ui {
+        centre_open: true,
+        ..Ui::default()
+    };
+    assert!(windows::<Input>(&mut c, &centre, &m, 1.0, |i| i).is_empty());
+    c.set_screen_locked(false);
+    assert_eq!(windows::<Input>(&mut c, &ui, &m, 1.5, |i| i).len(), 1);
+}
+
+#[test]
 fn escape_closes_the_clear_menu_before_the_centre_and_closing_forgets_the_list_s_state() {
     let mut c = NotificationCenter::default();
     let mut ui = Ui {

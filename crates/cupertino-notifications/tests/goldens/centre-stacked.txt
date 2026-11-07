@@ -108,7 +108,7 @@ display
     Stroke { shape: Path { verbs: [MoveTo(Point { x: 5.76, y: 5.76 }), LineTo(Point { x: 12.24, y: 12.24 }), MoveTo(Point { x: 12.24, y: 5.76 }), LineTo(Point { x: 5.76, y: 12.24 })], fill_rule: NonZero }, width: 1.5, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.49803922 }) }
   paint 4294967333 parent=Some(4294967312) revision=30 bounds=[372,76 16x150] hit=[372,76 16x150] clip=None transform=[1.0, 0.0, 0.0, 1.0, 372.0, 76.0]
 == announced
-Polite "Mail: First" "From the inbox"
-Polite "Mail: Second" "From the inbox"
-Polite "Mail: Third" "From the inbox"
-Polite "Calendar: Stand-up" "In 5 minutes"
+Polite "Mail: First, From the inbox"
+Polite "Mail: Second, From the inbox"
+Polite "Mail: Third, From the inbox"
+Polite "Calendar: Stand-up, In 5 minutes"

@@ -7,7 +7,7 @@
 use crate::options::SessionOptions;
 use crate::screen::{self, FrameKey, Notifier, OutputSurface, Result, Scene};
 use cupertino_assets::Assets;
-use cupertino_login::access::{lock_tree, panel_click, panel_tree, LockView};
+use cupertino_login::access::{lock_tree, panel_click, panel_toggles, panel_tree, LockView};
 use cupertino_login::auth::{self, Authenticator};
 use cupertino_login::autostart;
 use cupertino_login::capabilities::{Answer, Capabilities, Inputs};
@@ -25,6 +25,7 @@ use cupertino_login::panel::{Action, Decision, Frames, Kind, Panel};
 use cupertino_login::power_button::{Effect, PowerButton};
 use cupertino_login::probe;
 use cupertino_login::render::{PanelView, Renderer, PASSWORD_HELP};
+use cupertino_login::restore::{self, Applications, SessionMark, Taken};
 use cupertino_login::user::User;
 use cupertino_login::{session, upower};
 use cupertino_shell_client::{
@@ -40,6 +41,8 @@ use cupertino_ui_wayland::{Ready, ShmPresenter};
 use cupertino_wayland_client::{
     Button, Connection, Event, KeyboardEvent, Modifiers, PointerEvent, SurfaceId,
 };
+use std::collections::HashSet;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
@@ -104,6 +107,10 @@ struct Quitting {
     /// What follows once no application is left.
     then: Action,
     interrupt: Option<InterruptState>,
+    /// The "Reopen windows" choice the panel was confirmed with.
+    reopen: bool,
+    /// The identities the server named as it asked each application to quit, in that order.
+    quit: Vec<String>,
 }
 
 /// The interrupt panel on screen for the application `app`.
@@ -155,6 +162,8 @@ struct App {
     logging_out: bool,
     /// The applications are being quit before a confirmed action.
     quitting: Option<Quitting>,
+    /// The file of the "Reopen windows" choice and list ([`restore`]); `None` without a state or home directory.
+    restore_path: Option<PathBuf>,
     /// Wrong passwords typed at the lock screens of this run.
     failed: FailedAttempts,
     /// `RetriesUntilHint`, see [`FailedAttempts::help_shown`].
@@ -291,7 +300,9 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
             Err(e) => Message::Failed(format!("reading ApplicationQuit: {e}")),
         })
     })?;
-    start_login_items(&logind);
+    let login_items = start_login_items(&logind);
+    let restore_path = restore::state_path_from_env();
+    reopen_applications(restore_path.as_deref(), &logind, &login_items);
     // a session the manager did not start (one on a getty, for the tests) is not known to it; that is reported, not fatal
     match manager.session_ready() {
         Ok(()) => eprintln!("cupertino-login: session announced to the session manager"),
@@ -323,6 +334,7 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
         panel: None,
         logging_out: false,
         quitting: None,
+        restore_path,
         failed: FailedAttempts::default(),
         retries_until_hint: options.retries_until_hint,
         low_battery: LowBattery::new(),
@@ -366,16 +378,24 @@ impl Wake for WakeLoop {
 }
 
 /// Start the session's login items (XDG autostart, [`autostart`]) one after the other, once per session: a restarted agent
-/// finds the run claimed and starts nothing. Problems are reported and leave the lock screen running.
-fn start_login_items(logind: &Logind) {
+/// finds the run claimed and starts nothing. Problems are reported and leave the lock screen running. Returns the IDs
+/// (file names) of the items started.
+fn start_login_items(logind: &Logind) -> HashSet<String> {
+    let mut started = HashSet::new();
     let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR").filter(|d| !d.is_empty()) else {
         eprintln!("cupertino-login: login items not started: XDG_RUNTIME_DIR is not set, so a second run cannot be told apart");
-        return;
+        return started;
     };
     match autostart::claim_run(std::path::Path::new(&runtime), logind.session_id()) {
         Ok(true) => {}
-        Ok(false) => return eprintln!("cupertino-login: login items ran already in this session"),
-        Err(e) => return eprintln!("cupertino-login: login items not started: {e}"),
+        Ok(false) => {
+            eprintln!("cupertino-login: login items ran already in this session");
+            return started;
+        }
+        Err(e) => {
+            eprintln!("cupertino-login: login items not started: {e}");
+            return started;
+        }
     }
     let config_home = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|d| !d.is_empty())
@@ -384,22 +404,78 @@ fn start_login_items(logind: &Logind) {
     let dirs = autostart::directories(config_home, std::env::var("XDG_CONFIG_DIRS").ok());
     let found = match autostart::list(&dirs) {
         Ok(found) => found,
-        Err(e) => return eprintln!("cupertino-login: login items not started: {e}"),
+        Err(e) => {
+            eprintln!("cupertino-login: login items not started: {e}");
+            return started;
+        }
     };
     let env = autostart::Environment::from_process();
     for entry in found {
         match autostart::parse(&entry.id, &entry.path, &entry.text, &env) {
-            Ok(item) => start_login_item(&item),
+            Ok(item) => {
+                if start_login_item(&item) {
+                    started.insert(item.id);
+                }
+            }
             Err(skip) => eprintln!(
                 "cupertino-login: login item skipped: {}: {skip:?}",
                 entry.id
             ),
         }
     }
+    started
 }
 
-/// Run one login item detached from the loop; its exit is reaped on a thread.
-fn start_login_item(item: &autostart::Item) {
+/// Start the applications the last session saved to reopen ([`restore`]), each once and only once: the list is emptied
+/// on disk before anything starts, and an application a login item started already is not started again.
+fn reopen_applications(
+    path: Option<&std::path::Path>,
+    logind: &Logind,
+    login_items: &HashSet<String>,
+) {
+    let Some(path) = path else {
+        return eprintln!(
+            "cupertino-login: applications not reopened: neither XDG_STATE_HOME nor HOME is set"
+        );
+    };
+    let current = SessionMark::current(logind.session_id());
+    let ids = match restore::take_at_login(path, current.as_ref()) {
+        Ok(Taken::Start(ids)) => ids,
+        Ok(Taken::Nothing) => return,
+        Ok(Taken::Disabled) => {
+            return eprintln!("cupertino-login: applications not reopened: the choice is off")
+        }
+        Ok(Taken::SameSession) => {
+            return eprintln!(
+                "cupertino-login: applications not reopened: the list was saved in this session"
+            )
+        }
+        Err(e) => {
+            return eprintln!(
+            "cupertino-login: applications not reopened: the saved list could not be emptied: {e}"
+        )
+        }
+    };
+    let report = restore::launch(
+        &ids,
+        &Applications::from_env(),
+        login_items,
+        |_, command| {
+            let mut command = command.to_command();
+            command.stdin(Stdio::null());
+            cupertino_apps::launch::spawn("cupertino-login", command)
+        },
+    );
+    for id in &report.started {
+        eprintln!("cupertino-login: application reopened: {id}");
+    }
+    for (id, skip) in &report.skipped {
+        eprintln!("cupertino-login: application not reopened: {id}: {skip:?}");
+    }
+}
+
+/// Run one login item detached from the loop; its exit is reaped on a thread. False when it did not start.
+fn start_login_item(item: &autostart::Item) -> bool {
     let mut command = Command::new(&item.argv[0]);
     command.args(&item.argv[1..]).stdin(Stdio::null());
     if let Some(dir) = &item.dir {
@@ -414,8 +490,12 @@ fn start_login_item(item: &autostart::Item) {
                     eprintln!("cupertino-login: login item {id}: {e}");
                 }
             });
+            true
         }
-        Err(e) => eprintln!("cupertino-login: login item {} did not start: {e}", item.id),
+        Err(e) => {
+            eprintln!("cupertino-login: login item {} did not start: {e}", item.id);
+            false
+        }
     }
 }
 
@@ -592,6 +672,12 @@ impl App {
     ) -> Result<()> {
         let typed = screen::typed_key(code, mods, character);
         if self.panel_surface() == Some(surface) {
+            if typed
+                .is_some_and(|typed| self.panel.as_ref().is_some_and(|p| p.panel.toggles(typed)))
+            {
+                self.toggle_reopen();
+                return Ok(());
+            }
             if let Some(decision) =
                 typed.and_then(|typed| self.panel.as_ref().and_then(|p| p.panel.press(typed)))
             {
@@ -631,6 +717,14 @@ impl App {
         };
         if let Some(position) = left_press {
             if self.panel_surface() == Some(surface) {
+                if self
+                    .panel
+                    .as_ref()
+                    .is_some_and(|p| p.frames.checkbox_at(position))
+                {
+                    self.toggle_reopen();
+                    return Ok(());
+                }
                 let decision = self
                     .panel
                     .as_ref()
@@ -971,6 +1065,7 @@ impl App {
                 kind: panel.panel.kind(),
                 seconds_left: panel.panel.seconds_left(now),
                 frames: panel.frames.clone(),
+                reopen: panel.panel.reopen(),
             };
             let renderer = &mut self.renderer;
             panel
@@ -980,7 +1075,13 @@ impl App {
                 })?;
             panel.drawn = Some(view.seconds_left);
             if self.access.is_active() {
-                let tree = panel_tree(PANEL_WINDOW, view.kind, &view.frames, view.seconds_left);
+                let tree = panel_tree(
+                    PANEL_WINDOW,
+                    view.kind,
+                    &view.frames,
+                    view.seconds_left,
+                    view.reopen,
+                );
                 self.access.window_focus(PANEL_WINDOW, true);
                 self.access.update(&tree);
             }
@@ -1049,6 +1150,14 @@ impl App {
         let mut requests = Vec::new();
         self.access.drain_actions(&mut requests);
         for request in requests {
+            let toggles = self.panel.as_ref().is_some_and(|panel| {
+                request.action == cupertino_ui_core::Action::Click
+                    && panel_toggles(&panel.frames, request.target)
+            });
+            if toggles {
+                self.toggle_reopen();
+                continue;
+            }
             let decision = self
                 .panel
                 .as_ref()
@@ -1147,8 +1256,12 @@ impl App {
                 keyboard: KeyboardInteractivity::Exclusive,
             },
         )?;
+        let reopen = self
+            .restore_path
+            .as_deref()
+            .map_or(restore::REOPEN_DEFAULT, restore::choice);
         self.panel = Some(PanelState {
-            panel: Panel::new(kind, now),
+            panel: Panel::new(kind, now, reopen),
             frames,
             presenter: ShmPresenter::new(layer.surface()),
             layer,
@@ -1158,9 +1271,19 @@ impl App {
         Ok(())
     }
 
-    /// Close the panel with `decision`; an action is carried out through logind.
+    /// Flip the panel's "Reopen windows" checkbox and draw it again (and tell assistive technology).
+    fn toggle_reopen(&mut self) {
+        if let Some(panel) = &mut self.panel {
+            panel.panel.toggle_reopen();
+            panel.drawn = None;
+            panel.presenter.request_redraw();
+        }
+    }
+
+    /// Close the panel with `decision`; an action is carried out through logind. Confirming a log out, restart or shut
+    /// down remembers the panel's "Reopen windows" choice; cancelling forgets a change to it.
     fn decide(&mut self, decision: Decision) -> Result<()> {
-        let PanelState { layer, .. } = self
+        let PanelState { layer, panel, .. } = self
             .panel
             .take()
             .expect("a decision is only made on an open panel");
@@ -1170,10 +1293,71 @@ impl App {
             Decision::Cancel => eprintln!("cupertino-login: panel cancelled"),
             Decision::Do(action) => {
                 eprintln!("cupertino-login: panel confirmed: {}", action.log_name());
-                self.carry_out(self.now(), action)?;
+                if action != Action::Sleep && panel.kind().has_checkbox() {
+                    self.remember_choice(panel.reopen());
+                }
+                self.carry_out(self.now(), action, panel.reopen())?;
             }
         }
         Ok(())
+    }
+
+    /// Store the "Reopen windows" choice, with no list yet: the list follows once the applications have quit.
+    fn remember_choice(&self, reopen: bool) {
+        let Some(path) = &self.restore_path else {
+            return;
+        };
+        match restore::save(path, reopen, Vec::new(), None) {
+            Ok(()) => eprintln!("cupertino-login: reopen windows at the next login: {reopen}"),
+            Err(e) => eprintln!("cupertino-login: the reopen choice is not saved: {e}"),
+        }
+    }
+
+    /// Save the applications that were open, for the next login, just before the session ends ([`restore`]).
+    fn save_open_applications(&self, reopen: bool, quit: &[String]) {
+        let Some(path) = &self.restore_path else {
+            return eprintln!(
+                "cupertino-login: applications not saved: neither XDG_STATE_HOME nor HOME is set"
+            );
+        };
+        let (apps, skipped) = if reopen {
+            restore::saved_list(quit.iter().map(String::as_str), &Applications::from_env())
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        for (identity, skip) in &skipped {
+            eprintln!(
+                "cupertino-login: application not saved for the next login: {identity}: {skip:?}"
+            );
+        }
+        let mark = SessionMark::current(self.logind.session_id());
+        if reopen && mark.is_none() {
+            eprintln!(
+                "cupertino-login: applications not saved: this boot and session cannot be named"
+            );
+        }
+        match restore::save(path, reopen, apps.clone(), mark) {
+            Ok(()) if reopen => eprintln!(
+                "cupertino-login: saved for the next login: {}",
+                if apps.is_empty() {
+                    "no application".to_string()
+                } else {
+                    apps.join(" ")
+                }
+            ),
+            Ok(()) => {}
+            Err(e) => eprintln!("cupertino-login: applications not saved for the next login: {e}"),
+        }
+    }
+
+    /// The session goes on after all (a refused restart or shut down): a list saved for the next login is dropped, so it
+    /// is not started after some later end of the session.
+    fn discard_saved_applications(&self) {
+        if let Some(path) = &self.restore_path {
+            if let Err(e) = restore::discard(path) {
+                eprintln!("cupertino-login: the saved applications are not dropped: {e}");
+            }
+        }
     }
 
     /// Ask the session manager to restart, shut down or sleep. A refusal (another user's session is open, an inhibitor) is
@@ -1184,6 +1368,7 @@ impl App {
             Err(e) if e.refusal().is_some() => {
                 eprintln!("cupertino-login: {action:?} refused: {e}");
                 self.logging_out = false;
+                self.discard_saved_applications();
             }
             // a session another display manager started: logind does it
             Err(e) if e.manager_absent() => self.power_through_logind(action)?,
@@ -1201,14 +1386,16 @@ impl App {
             Err(e) if e.is_refusal() => {
                 eprintln!("cupertino-login: {action:?} refused: {e}");
                 self.logging_out = false;
+                self.discard_saved_applications();
             }
             Err(e) => return Err(e.into()),
         }
         Ok(())
     }
 
-    /// Sleep at once; log out, restart and shut down after the applications have quit.
-    fn carry_out(&mut self, now: f64, action: Action) -> Result<()> {
+    /// Sleep at once; log out, restart and shut down after the applications have quit, with the "Reopen windows" choice
+    /// `reopen`.
+    fn carry_out(&mut self, now: f64, action: Action, reopen: bool) -> Result<()> {
         if action == Action::Sleep {
             return self.request_power(Power::Sleep);
         }
@@ -1218,6 +1405,8 @@ impl App {
             sequence,
             then: action,
             interrupt: None,
+            reopen,
+            quit: Vec::new(),
         });
         self.follow(now, Some(step))
     }
@@ -1235,6 +1424,7 @@ impl App {
                         Ok((app, windows)) => {
                             if !app.is_empty() {
                                 eprintln!("cupertino-login: quitting application: {app} ({windows} windows)");
+                                quitting.quit.push(app.clone());
                             }
                             step = quitting.sequence.answered(now, &app, windows);
                         }
@@ -1249,12 +1439,17 @@ impl App {
                 }
                 logout::Do::Terminate => {
                     let Quitting {
-                        then, interrupt, ..
+                        then,
+                        interrupt,
+                        reopen,
+                        quit,
+                        ..
                     } = self.quitting.take().expect("checked above");
                     if let Some(shown) = interrupt {
                         self.conn.destroy(shown.layer.surface())?;
                     }
                     eprintln!("cupertino-login: no application left: {}", then.log_name());
+                    self.save_open_applications(reopen, &quit);
                     match then {
                         Action::LogOut => self.logind.terminate_session()?,
                         Action::Restart => self.request_power(Power::Restart)?,

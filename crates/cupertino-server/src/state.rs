@@ -2122,6 +2122,7 @@ impl Cupertino {
                 ShellOp::InputSource { menu, step } => self.input_source_step(menu, step),
                 ShellOp::FocusMenuBar => self.focus_menu_bar(),
                 ShellOp::HelpSearch => self.focus_help_search(),
+                ShellOp::FocusDock => self.focus_dock(),
                 ShellOp::ToggleDockAutoHide => self.docks.toggle_auto_hide(),
                 ShellOp::ToggleStage => self.window_managers.toggle_stage(),
                 ShellOp::Exec(i) => {

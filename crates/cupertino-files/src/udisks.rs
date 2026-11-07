@@ -22,10 +22,10 @@ use zbus::message::Type;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 use zbus::MatchRule;
 
+use crate::format::human_size;
 use crate::natural::compare_names;
 use crate::notice::{escape, shown, Notice, Notices};
 use crate::places::Place;
-use crate::render::human_size;
 
 pub const UDISKS_NAME: &str = "org.freedesktop.UDisks2";
 pub const MANAGER_PATH: &str = "/org/freedesktop/UDisks2";

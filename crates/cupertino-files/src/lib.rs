@@ -1,7 +1,6 @@
 //! File manager: the core without a toolkit, and with the `app` feature the `cupertino-files`
-//! window process.
+//! window process on CupertinoKit ([`kit`]).
 //!
-//! * [`access`]: what the window tells assistive technology;
 //! * [`model`]: asynchronous directory model (batched enumeration, change watching, deltas);
 //! * [`natural`], [`sort`], [`group`]: collation, ordering and sectioning of names;
 //! * [`settings`]: per-folder view state and its store;
@@ -10,16 +9,17 @@
 //!   applications and the Open With list (`mimeapps.list`);
 //! * [`layout`]: icon, list, column and gallery layout engines with the measured metrics of
 //!   [`metrics`]; [`preview`]: quick-preview transition geometry;
-//! * [`render`]: CPU rendering of the icon and list views;
+//! * [`format`]: how sizes and dates read;
 //! * [`places`], [`recents`], [`history`], [`browser`]: the sidebar's standard places, the Recents folder, back / forward history and
-//!   the state of one browser window; [`window`]: its layout, hit testing and drawing; [`sidebar_keys`]: the sidebar's
-//!   keyboard navigation;
+//!   the state of one browser window; [`window`]: its size limits, view modes, path bar and status bar text;
+//! * [`context_menu`], [`menu_spec`], [`menu_bar`]: the rows of the context menus and the menus of the menu bar;
+//! * [`search_field`]: the toolbar search field's width;
 //! * `udisks` (feature `app`): removable media on the system bus; `notice` (feature `app`): failures as notifications.
 
-pub mod access;
 pub mod browser;
 pub mod context_menu;
 pub mod entry;
+pub mod format;
 pub mod geom;
 pub mod group;
 pub mod history;
@@ -41,11 +41,9 @@ pub mod places;
 pub mod preview;
 pub mod recents;
 pub mod rename;
-pub mod render;
 pub mod search_field;
 pub mod selection;
 pub mod settings;
-pub mod sidebar_keys;
 pub mod sort;
 pub mod spring;
 pub mod tags;

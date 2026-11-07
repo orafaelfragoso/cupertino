@@ -941,12 +941,54 @@ fn the_eject_button_unmounts_every_partition_and_the_window_goes_home() {
     assert_eq!(run.title(), window_title(&run.home(), &[]), "off the card");
 }
 
+/// Primary+E ejects the device of the sidebar row the keyboard is on, here the card picked in the sidebar while the
+/// window had shown the stick.
+#[test]
+fn primary_e_ejects_the_device_of_the_sidebar_row_the_keyboard_is_on() {
+    let Some(fake) = Fake::start() else { return };
+    let home = tempfile::tempdir().unwrap();
+    let (a, b) = (home.path().join("A"), home.path().join("B"));
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    fake.drive("card", "", "", true);
+    fake.drive("stick", "", "", false);
+    let labelled = |label| Block {
+        label,
+        ..Block::default()
+    };
+    fake.block(
+        "sdc1",
+        Some("card"),
+        Some(a.to_str().unwrap()),
+        labelled("A"),
+    );
+    fake.block(
+        "sdd1",
+        Some("stick"),
+        Some(b.to_str().unwrap()),
+        labelled("B"),
+    );
+    let mut run = kit(&fake, home, b.clone());
+    run.wait_until(|run| row(run, "A", "Removable") && row(run, "B", "Removable"));
+    assert_eq!(run.title(), "B");
+
+    run.click_named(Role::ListItem, "A");
+    assert_eq!(run.title(), "A");
+    run.key_with(0x65, Some('e'), cupertino_kit::platform::Mods::PRIMARY);
+    assert_eq!(wait_for_log(&fake, 2), ["Unmount sdc1 0", "Eject card 0"]);
+    assert_eq!(run.title(), window_title(&run.home(), &[]), "off the card");
+}
+
+/// A read-only medium takes nothing new: no new folder, nothing moved off it, and no paste though a copied file waits
+/// on the pasteboard.
 #[test]
 fn a_read_only_medium_is_described_so_and_takes_nothing_new() {
     let Some(fake) = Fake::start() else { return };
     let home = tempfile::tempdir().unwrap();
     let disc = home.path().join("DISC");
     std::fs::create_dir_all(&disc).unwrap();
+    std::fs::write(home.path().join("x.txt"), "x").unwrap();
+    let folder = home.path().to_path_buf();
     fake.drive("optical", "", "", true);
     fake.block(
         "sr0",
@@ -958,10 +1000,21 @@ fn a_read_only_medium_is_described_so_and_takes_nothing_new() {
             ..Block::default()
         },
     );
-    let mut run = kit(&fake, home, disc);
-    run.wait_until(|run| row(run, "DISC", "Removable, read-only"));
+    let mut run = kit(&fake, home, folder);
+    run.wait_until(|run| {
+        row(run, "DISC", "Removable, read-only") && run.rows().contains(&"x.txt".to_owned())
+    });
+    run.click_row("x.txt");
+    run.menu("copy");
+    assert!(
+        !run.disabled().contains(&common::action("paste")),
+        "a copied file pastes at home"
+    );
+
+    run.click_named(Role::ListItem, "DISC");
+    assert_eq!(run.title(), "DISC");
     let disabled = run.disabled();
-    for name in ["new-folder", "move-to-trash", "duplicate"] {
+    for name in ["new-folder", "move-to-trash", "duplicate", "paste"] {
         assert!(disabled.contains(&common::action(name)), "{name}");
     }
 }
@@ -1139,5 +1192,233 @@ fn a_busy_file_system_names_the_program_that_keeps_it() {
             "Unmount sdc1 0",
             "Notify Files: “CARD” wasn't ejected / “sleep” is using it. Quit it and try again. (transient Some(true))"
         ]
+    );
+}
+
+/// Set in the copy of the test binary that plays the window read over AT-SPI.
+const ATSPI_WINDOW: &str = "CUPERTINO_TEST_FILES_ATSPI_WINDOW";
+const ATSPI_ROOT: &str = "/org/a11y/atspi/accessible/root";
+/// AT-SPI's role numbers (`AtspiRole`) and state bits (`AtspiStateType`).
+const ATSPI_LIST: u32 = 31;
+const ATSPI_LIST_ITEM: u32 = 32;
+const ATSPI_PUSH_BUTTON: u32 = 43;
+const ATSPI_SELECTED: u32 = 23;
+
+struct Unpark(std::thread::Thread);
+
+impl std::task::Wake for Unpark {
+    fn wake(self: Arc<Self>) {
+        self.0.unpark();
+    }
+}
+
+/// The window read over AT-SPI: Documents shown, a mounted card `A` in the sidebar. Once the card's eject reached the
+/// fake it waits for the test to close its input and exits successfully; it fails when no eject arrives.
+fn atspi_window() {
+    use std::io::Read;
+    let fake = Fake::start().expect("a private bus for the window's udisks");
+    let home = tempfile::tempdir().unwrap();
+    let card = home.path().join("A");
+    std::fs::create_dir_all(&card).unwrap();
+    fake.drive("card", "", "", true);
+    fake.block(
+        "sdc1",
+        Some("card"),
+        Some(card.to_str().unwrap()),
+        Block {
+            label: "A",
+            ..Block::default()
+        },
+    );
+    let documents = common::place("Documents", home.path(), PlaceKind::Documents);
+    let folder = home.path().to_path_buf();
+    let waker = std::task::Waker::from(Arc::new(Unpark(std::thread::current())));
+    let host = common::Host {
+        accessibility: Some(Box::new(cupertino_ui_atspi::AtspiAdapter::new(waker))),
+        ..common::Host::default()
+    };
+    let preferences = cupertino_kit::theme::ThemePreferences {
+        appearance: cupertino_kit::theme::Appearance::Light,
+        reduce_transparency: false,
+        reduce_motion: false,
+    };
+    let mut run = common::Run::start_hosted(
+        home,
+        folder,
+        vec![documents],
+        Notices::start(None),
+        Some(fake.bus.connect()),
+        preferences,
+        |start| start,
+        host,
+    );
+    run.send(cupertino_kit::platform::WindowEvent::Focus(true));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        run.driver
+            .window_system_mut()
+            .enqueue(cupertino_kit::platform::PlatformEvent::Wake)
+            .unwrap();
+        run.settle();
+        if fake.log().iter().any(|line| line.starts_with("Eject card")) {
+            std::io::stdin().read_to_end(&mut Vec::new()).unwrap();
+            return;
+        }
+        std::thread::park_timeout(Duration::from_millis(50));
+    }
+    panic!(
+        "the eject button's click never reached udisks: {:?}",
+        fake.log()
+    );
+}
+
+struct A11yStatus;
+
+#[zbus::interface(name = "org.a11y.Status")]
+impl A11yStatus {
+    #[zbus(property)]
+    fn is_enabled(&self) -> bool {
+        true
+    }
+}
+
+/// The registry: it records which bus name embedded its application root.
+struct Socket(mpsc::Sender<String>);
+
+#[zbus::interface(name = "org.a11y.atspi.Socket")]
+impl Socket {
+    fn embed(
+        &self,
+        plug: (String, OwnedObjectPath),
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> (String, OwnedObjectPath) {
+        let _ = self.0.send(plug.0);
+        let registry = conn
+            .unique_name()
+            .map(|n| n.to_string())
+            .unwrap_or_default();
+        (registry, OwnedObjectPath::try_from(ATSPI_ROOT).unwrap())
+    }
+}
+
+fn accessible<'a>(conn: &Connection, peer: &str, path: &str) -> zbus::blocking::Proxy<'a> {
+    zbus::blocking::Proxy::new(
+        conn,
+        peer.to_owned(),
+        path.to_owned(),
+        "org.a11y.atspi.Accessible",
+    )
+    .unwrap()
+}
+
+/// The nodes under `path`, depth first, with their role and name.
+fn descendants(conn: &Connection, peer: &str, path: &str) -> Vec<(OwnedObjectPath, u32, String)> {
+    let found: zbus::Result<Vec<(String, OwnedObjectPath)>> =
+        accessible(conn, peer, path).call("GetChildren", &());
+    let mut out = Vec::new();
+    for (_, child) in found.unwrap_or_default() {
+        let node = accessible(conn, peer, child.as_str());
+        let role: u32 = node.call("GetRole", &()).unwrap();
+        let name: String = node.get_property("Name").unwrap_or_default();
+        out.push((child.clone(), role, name));
+        out.extend(descendants(conn, peer, child.as_str()));
+    }
+    out
+}
+
+/// An assistive technology reads the window's sidebar over AT-SPI as a list of its places by name, the folder shown
+/// selected and the card described as removable, and the card's eject button by its name; that button's click ejects
+/// the card.
+#[test]
+fn assistive_technology_reads_the_sidebar_over_atspi_and_its_eject_button_ejects() {
+    const NAME: &str =
+        "assistive_technology_reads_the_sidebar_over_atspi_and_its_eject_button_ejects";
+    if std::env::var_os(ATSPI_WINDOW).is_some() {
+        return atspi_window();
+    }
+    let Some(bus) = PrivateBus::start() else {
+        missing_tool("dbus-daemon");
+        return;
+    };
+    let (embedded, embeds) = mpsc::channel();
+    let _status = bus
+        .blocking_builder()
+        .name("org.a11y.Bus")
+        .unwrap()
+        .serve_at("/org/a11y/bus", A11yStatus)
+        .unwrap()
+        .build()
+        .unwrap();
+    let _registry = bus
+        .blocking_builder()
+        .name("org.a11y.atspi.Registry")
+        .unwrap()
+        .serve_at(ATSPI_ROOT, Socket(embedded))
+        .unwrap()
+        .build()
+        .unwrap();
+    let mut window = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([NAME, "--exact", "--nocapture"])
+        .env(ATSPI_WINDOW, "1")
+        .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
+        .env("AT_SPI_BUS_ADDRESS", &bus.address)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let peer = embeds
+        .recv_timeout(Duration::from_secs(20))
+        .expect("the window never embedded its root");
+    let conn = bus.connect();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let (items, eject) = loop {
+        let nodes = descendants(&conn, &peer, ATSPI_ROOT);
+        let sidebar = nodes
+            .iter()
+            .find(|(_, role, name)| *role == ATSPI_LIST && name == "Sidebar")
+            .map(|(path, _, _)| path.clone());
+        let eject = nodes
+            .iter()
+            .find(|(_, role, name)| *role == ATSPI_PUSH_BUTTON && name == "Eject A")
+            .map(|(path, _, _)| path.clone());
+        if let (Some(sidebar), Some(eject)) = (sidebar, eject) {
+            let items: Vec<(OwnedObjectPath, String)> = descendants(&conn, &peer, sidebar.as_str())
+                .into_iter()
+                .filter(|(_, role, _)| *role == ATSPI_LIST_ITEM)
+                .map(|(path, _, name)| (path, name))
+                .collect();
+            if items.iter().any(|(_, name)| name == "A") {
+                break (items, eject);
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no sidebar with the card appeared"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let names: Vec<&str> = items.iter().map(|(_, name)| name.as_str()).collect();
+    assert_eq!(names, ["Documents", "A"], "the sidebar's rows by name");
+    let read = |path: &OwnedObjectPath| {
+        let node = accessible(&conn, &peer, path.as_str());
+        let state: Vec<u32> = node.call("GetState", &()).unwrap();
+        let description: String = node.get_property("Description").unwrap_or_default();
+        (state[0] & (1 << ATSPI_SELECTED) != 0, description)
+    };
+    assert_eq!(read(&items[0].0), (true, String::new()), "the folder shown");
+    assert_eq!(read(&items[1].0), (false, "Removable".to_owned()));
+    let action = zbus::blocking::Proxy::new(
+        &conn,
+        peer.clone(),
+        eject.as_str().to_owned(),
+        "org.a11y.atspi.Action",
+    )
+    .unwrap();
+    let name: String = action.call("GetName", &(0i32,)).unwrap();
+    assert_eq!(name, "click");
+    let _: bool = action.call("DoAction", &(0i32,)).unwrap();
+    drop(window.stdin.take());
+    assert!(
+        window.wait().unwrap().success(),
+        "the eject button's click did not eject the card"
     );
 }

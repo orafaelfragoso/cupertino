@@ -1183,6 +1183,7 @@ dependencies = [
  "tree_magic_mini",
  "xattr",
  "zbus",
+ "zeroize",
 ]
 
 [[package]]

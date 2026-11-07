@@ -42,6 +42,7 @@ pub mod preview;
 pub mod recents;
 pub mod rename;
 pub mod render;
+pub mod search_field;
 pub mod selection;
 pub mod settings;
 pub mod sidebar_keys;

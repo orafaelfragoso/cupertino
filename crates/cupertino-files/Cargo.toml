@@ -19,6 +19,7 @@ app = [
     "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
     "dep:zbus",
+    "dep:zeroize",
 ]
 
 [dependencies]
@@ -54,6 +55,7 @@ mime_guess = "2"
 percent-encoding = "2"
 libc = "0.2"
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"], optional = true }
+zeroize = { version = "1", optional = true }
 
 [dev-dependencies]
 cupertino-ui-test = { path = "../cupertino-ui-test" }

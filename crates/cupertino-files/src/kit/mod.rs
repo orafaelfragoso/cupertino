@@ -2,11 +2,13 @@
 //! status bars and the menus of the desktop's menu bar, over the toolkit-free [`Browser`]. It takes the place of the
 //! window in `main.rs` once it does all that window does.
 
+mod context;
 mod grid;
+mod search;
 mod view;
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -20,17 +22,22 @@ use cupertino_kit::platform::WindowRequest;
 use cupertino_kit::prelude::*;
 use cupertino_menu_model::ActionName;
 use zbus::blocking::Connection;
+use zbus::zvariant::OwnedObjectPath;
 
 use crate::browser::{Activation, Browser};
+use crate::context_menu::{common_apps, AppChoice, Command as MenuCommand};
 use crate::menu_bar::{self, MenuAction, MenuState};
+use crate::menu_spec::{self, Background, Subject};
 use crate::name_edit::NameEdit;
 use crate::notice::{self, Action, Notices};
-use crate::open::{open_command, OpenError};
+use crate::open::{command_with, default_app_id, open_command, open_with, OpenError};
 use crate::operations;
 use crate::places::{removable_holding, Place};
+use crate::search_field::{self, SearchWidth};
 use crate::settings::ColumnId;
+use crate::tags::{self, TagColor};
 use crate::trash::Trash;
-use crate::udisks::{Media, Volumes};
+use crate::udisks::{Media, Passphrase, Report, Volumes};
 use crate::window::ViewMode;
 use crate::SortSpec;
 
@@ -51,6 +58,8 @@ pub struct Start {
     volumes: Option<Volumes>,
     media_woken: async_channel::Receiver<()>,
     trash: Trash,
+    view: ViewMode,
+    home: Option<PathBuf>,
 }
 
 impl Start {
@@ -86,12 +95,27 @@ impl Start {
             volumes,
             media_woken,
             trash: Trash::new(),
+            view: ViewMode::Icons,
+            home: None,
         })
     }
 
     /// The windows moving items to `trash` and putting them back from it, in place of the session's trash.
     pub fn with_trash(self, trash: Trash) -> Start {
         Start { trash, ..self }
+    }
+
+    /// Windows on a file system that goes away going to `home` in place of `$HOME`.
+    pub fn with_home(self, home: PathBuf) -> Start {
+        Start {
+            home: Some(home),
+            ..self
+        }
+    }
+
+    /// The windows opening in `view` in place of the icon view.
+    pub fn with_view(self, view: ViewMode) -> Start {
+        Start { view, ..self }
     }
 }
 
@@ -148,9 +172,13 @@ struct Session {
     volumes: Option<Volumes>,
     media_woken: async_channel::Receiver<()>,
     media: Media,
+    /// The window that asked for each mount or unlock under way, by the device's block.
+    mounting: HashMap<OwnedObjectPath, u64>,
     /// Where a window on a file system that goes away goes.
     home: PathBuf,
     trash: Trash,
+    /// How a new window shows its folder.
+    view: ViewMode,
 }
 
 /// One browser window.
@@ -163,6 +191,9 @@ struct BrowserWindow {
     available: Option<u64>,
     search: String,
     search_revision: u64,
+    /// The search field has the keyboard.
+    search_focused: bool,
+    search_width: SearchWidth,
     scroll: ScrollState,
     sidebar_scroll: ScrollState,
     split: SplitLayout,
@@ -174,8 +205,21 @@ struct BrowserWindow {
     rename_when_listed: Option<PathBuf>,
     /// What the window last asked the compositor for.
     full_screen: bool,
+    /// The passphrase prompt of a locked container.
+    unlock: Option<Unlock>,
     /// How the folder is shown.
     view: ViewMode,
+    /// The context menu open in the window.
+    context: Option<context::OpenMenu>,
+    /// What the latest secondary press was on, until its context menu opens: an item, or empty space.
+    pressed: Option<Option<usize>>,
+}
+
+/// The sheet that asks for a locked container's passphrase.
+struct Unlock {
+    object: OwnedObjectPath,
+    name: String,
+    passphrase: Passphrase,
 }
 
 /// An item's name edited in its row of the list.
@@ -205,7 +249,28 @@ pub enum Event {
     Open(usize),
     Sort((usize, SortOrder)),
     Search(TextChange),
+    /// Escape outside a rename while the search has text.
+    SearchCleared,
+    /// The search field took the keyboard or lost it at `now` seconds; its width animates unless `animate` is false
+    /// (reduce motion).
+    SearchFocus {
+        focused: bool,
+        now: f64,
+        animate: bool,
+    },
+    /// A frame of the search field's width change at `now` seconds.
+    SearchTick {
+        now: f64,
+        animate: bool,
+    },
     Menu(ActionName),
+    /// The activation token for opening `path`, with the application of desktop entry `with` or else its default,
+    /// arrived; `None` when the compositor gave none.
+    Launch {
+        path: PathBuf,
+        with: Option<String>,
+        token: Option<String>,
+    },
     /// The text of the name being edited changed.
     NameChanged(TextChange),
     /// Return in the name being edited: rename the item.
@@ -217,6 +282,22 @@ pub enum Event {
     Scroll(ScrollState),
     SidebarScroll(ScrollState),
     Split(SplitLayout),
+    /// A press on the accessory of the sidebar row with this key: a device's eject button.
+    Accessory(Key),
+    /// The passphrase typed in the unlock sheet.
+    Passphrase(Passphrase),
+    /// Unlock with the passphrase typed: the sheet's default button, or Return in its field.
+    Unlock,
+    UnlockCancelled,
+    /// A secondary press on the item with this index, or on empty space.
+    SecondaryPress(Option<usize>),
+    /// Open the context menu at this point of the window.
+    ContextMenu(cupertino_kit::geometry::Point),
+    /// The context menu's open submenus changed.
+    MenuOpened(Vec<usize>),
+    MenuClosed,
+    /// A row of the context menu was chosen.
+    MenuCommand(MenuCommand),
     Close,
 }
 
@@ -268,8 +349,12 @@ impl Application for Files {
                 volumes: start.volumes,
                 media_woken: start.media_woken,
                 media: Media::default(),
-                home: std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from),
+                mounting: HashMap::new(),
+                home: start.home.unwrap_or_else(|| {
+                    std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
+                }),
                 trash: start.trash,
+                view: start.view,
             },
         };
         let mut commands = vec![model.add_window(start.browser, start.woken)];
@@ -290,7 +375,14 @@ impl Application for Files {
         model
             .windows
             .iter()
-            .map(|(&id, window)| view::window(&model.session, id, window))
+            .flat_map(|(&id, window)| {
+                let menu = window
+                    .context
+                    .as_ref()
+                    .map(|menu| context::windows(id, menu));
+                std::iter::once(view::window(&model.session, id, window))
+                    .chain(menu.into_iter().flatten())
+            })
             .collect()
     }
 }
@@ -319,6 +411,8 @@ impl Model {
             available: None,
             search: String::new(),
             search_revision: 0,
+            search_focused: false,
+            search_width: SearchWidth::default(),
             scroll: NO_SCROLL,
             sidebar_scroll: NO_SCROLL,
             split: SplitLayout {
@@ -329,7 +423,10 @@ impl Model {
             rename: None,
             rename_when_listed: None,
             full_screen: false,
-            view: ViewMode::List,
+            unlock: None,
+            view: self.session.view,
+            context: None,
+            pressed: None,
         };
         window.entered();
         self.windows.insert(id, window);
@@ -354,6 +451,13 @@ impl Model {
     }
 
     fn window_event(&mut self, id: u64, event: Event) -> Vec<Command<Message>> {
+        let event = match event {
+            Event::Place(index) => return self.open_place(id, index),
+            Event::Accessory(key) => return self.accessory(&key),
+            Event::Unlock => return self.unlock(id),
+            Event::MenuCommand(command) => return self.menu_command(id, command),
+            event => event,
+        };
         let session = &self.session;
         // a window's last wake can come after it closed
         let Some(window) = self.windows.get_mut(&id) else {
@@ -372,11 +476,26 @@ impl Model {
                 commands.push(woken(&window.woken, Message::Window(id, Event::Woken)));
                 return commands;
             }
-            Event::Place(index) => {
-                if let Some(folder) = session.places.get(index).and_then(Place::folder) {
-                    window.go(folder.to_path_buf(), session);
+            Event::Place(_) | Event::Accessory(_) | Event::Unlock | Event::MenuCommand(_) => {}
+            Event::SecondaryPress(item) => {
+                // an item's press comes before the press on what holds it
+                if item.is_some() || window.pressed.is_none() {
+                    window.pressed = Some(item);
                 }
             }
+            Event::ContextMenu(at) => window.open_context(at, session),
+            Event::MenuOpened(open) => {
+                if let Some(menu) = window.context.as_mut() {
+                    menu.open = open;
+                }
+            }
+            Event::MenuClosed => window.context = None,
+            Event::Passphrase(passphrase) => {
+                if let Some(unlock) = window.unlock.as_mut() {
+                    unlock.passphrase = passphrase;
+                }
+            }
+            Event::UnlockCancelled => window.unlock = None,
             Event::Navigate(Navigation::Back) => window.step(Step::Back, session),
             Event::Navigate(Navigation::Forward) => window.step(Step::Forward, session),
             Event::Select(selection) => {
@@ -393,7 +512,7 @@ impl Model {
                 if !window.browser.selection().contains(index) {
                     window.browser.select([index], Some(index), Some(index));
                 }
-                window.open_selection(session);
+                return window.open_selection(id, session);
             }
             Event::Sort((column, order)) => {
                 if let Some(column) = COLUMNS.get(column) {
@@ -406,6 +525,25 @@ impl Model {
                 window.browser.set_filter(&change.text);
                 window.search = change.text;
                 window.search_revision = change.revision;
+                window.follow_search();
+            }
+            Event::SearchCleared => window.clear_search(),
+            Event::SearchFocus {
+                focused,
+                now,
+                animate,
+            } => {
+                window.search_focused = focused;
+                window.follow_search();
+                let toolbar = window.toolbar_width();
+                window.search_width.tick(now, toolbar, animate);
+            }
+            Event::SearchTick { now, animate } => {
+                let toolbar = window.toolbar_width();
+                window.search_width.tick(now, toolbar, animate);
+            }
+            Event::Launch { path, with, token } => {
+                session.launch(&path, with.as_deref(), token.as_deref())
             }
             Event::Menu(name) => {
                 if let Some(action) = MenuAction::from_name(&name) {
@@ -425,7 +563,11 @@ impl Model {
                     return vec![Command::Focus(view::name_field_key(id))];
                 }
             }
-            Event::Scroll(scroll) => window.scroll = scroll,
+            Event::Scroll(scroll) => {
+                window.scroll = scroll;
+                let toolbar = window.toolbar_width();
+                window.search_width.follow_toolbar(toolbar);
+            }
             Event::SidebarScroll(scroll) => window.sidebar_scroll = scroll,
             Event::Split(split) => window.split = split,
             Event::Close => {
@@ -472,7 +614,7 @@ impl Model {
                     self.eject(place);
                 }
             }
-            MenuAction::Open => window.open_selection(session),
+            MenuAction::Open => return window.open_selection(id, session),
             MenuAction::SelectAll => window.browser.select_all(),
             MenuAction::SortBy(key, ascending) => window.browser.set_sort(key, ascending),
             MenuAction::TogglePathBar => window.path_bar = !window.path_bar,
@@ -522,8 +664,52 @@ impl Model {
         Vec::new()
     }
 
+    /// Do the row `command` of the context menu of the window `id`.
+    fn menu_command(&mut self, id: u64, command: MenuCommand) -> Vec<Command<Message>> {
+        let action = match command {
+            MenuCommand::Open => MenuAction::Open,
+            MenuCommand::OpenInNewWindow => MenuAction::OpenInNewWindow,
+            MenuCommand::ShowOriginal => MenuAction::ShowOriginal,
+            MenuCommand::PutBack => MenuAction::PutBack,
+            MenuCommand::MoveToTrash => MenuAction::MoveToTrash,
+            MenuCommand::Rename => MenuAction::Rename,
+            MenuCommand::NewFolder => MenuAction::NewFolder,
+            MenuCommand::NewFolderWithSelection => MenuAction::NewFolderWithSelection,
+            MenuCommand::Duplicate => MenuAction::Duplicate,
+            MenuCommand::MakeAlias => MenuAction::MakeAlias,
+            MenuCommand::SortBy(key, ascending) => MenuAction::SortBy(key, ascending),
+            MenuCommand::SetView(view) => MenuAction::View(view),
+            MenuCommand::OpenWith(app) => {
+                let Some(window) = self.windows.get(&id) else {
+                    return Vec::new();
+                };
+                let paths = window.selected_paths();
+                return self.session.open_paths(id, paths, Some(app));
+            }
+            MenuCommand::ToggleTag(color) => {
+                if let Some(window) = self.windows.get(&id) {
+                    window.toggle_tag(color, &self.session);
+                }
+                return Vec::new();
+            }
+        };
+        let state = match self.windows.get(&id) {
+            Some(window) => window.menu_state(&self.session),
+            None => return Vec::new(),
+        };
+        // the menu bar's rules decide what the window can do now, as they do for its items
+        if menu_bar::enabled(&state)
+            .into_iter()
+            .any(|(a, enabled)| a == action && !enabled)
+        {
+            return Vec::new();
+        }
+        self.menu(id, action)
+    }
+
     /// Take what the removable media reported: the rows follow the devices, a window on a file system that went away
-    /// goes home, and a finished mount goes to its folder in the first window.
+    /// goes home, a passphrase sheet of a container that went away closes, and a finished mount goes to its folder in
+    /// the window that asked for it.
     fn follow_media(&mut self) -> Vec<Command<Message>> {
         let session = &mut self.session;
         let Some(volumes) = &session.volumes else {
@@ -536,20 +722,117 @@ impl Model {
                 .values()
                 .map(|w| removable_holding(w.browser.dir(), &session.places).is_some())
                 .collect();
-            let mut mounted = reports
-                .into_iter()
-                .filter_map(|r| session.media.take(r))
-                .last();
+            let mut arrived = Vec::new();
+            for report in reports {
+                let object = match &report {
+                    Report::Mounted { object, .. } | Report::Done { object } => {
+                        session.mounting.remove(object)
+                    }
+                    Report::Devices(_) => None,
+                };
+                if let Some(at) = session.media.take(report) {
+                    arrived.extend(object.map(|window| (window, at)));
+                }
+            }
             session.show_media();
-            for (window, held) in self.windows.values_mut().zip(held) {
-                if let Some(at) = mounted.take() {
-                    window.go(at, session);
-                } else if held && !session.media.holds(window.browser.dir()) {
+            for ((&id, window), held) in self.windows.iter_mut().zip(held) {
+                if held && !session.media.holds(window.browser.dir()) {
                     window.go(session.home.clone(), session);
+                }
+                if let Some((_, at)) = arrived.iter().rev().find(|(w, _)| *w == id) {
+                    window.go(at.clone(), session);
+                }
+                let gone = window
+                    .unlock
+                    .as_ref()
+                    .is_some_and(|u| session.media.index_of(&u.object).is_none());
+                if gone {
+                    window.unlock = None;
                 }
             }
         }
         vec![woken(&session.media_woken, Message::Media)]
+    }
+
+    /// Open place `index` in the window `id`, as a click on its row does: a folder is shown, a removable file system
+    /// that is not mounted is mounted (the window goes there once it is), a locked container asks for its passphrase,
+    /// and a row with a call under way does nothing.
+    fn open_place(&mut self, id: u64, index: usize) -> Vec<Command<Message>> {
+        let session = &mut self.session;
+        let Some(window) = self.windows.get_mut(&id) else {
+            return Vec::new();
+        };
+        let Some(place) = session.places.get(index) else {
+            return Vec::new();
+        };
+        if let Some(folder) = place.folder() {
+            let folder = folder.to_path_buf();
+            window.go(folder, session);
+            return Vec::new();
+        }
+        let Some(row) = index.checked_sub(session.standard_places) else {
+            return Vec::new();
+        };
+        match session.media.device(row) {
+            Some((device, false)) if device.locked => {
+                window.unlock = Some(Unlock {
+                    object: device.object.clone(),
+                    name: device.name.clone(),
+                    passphrase: Passphrase::default(),
+                });
+            }
+            Some((_, false)) => {
+                if let (Some(volumes), Some(device)) = (&session.volumes, session.media.start(row))
+                {
+                    session.mounting.insert(device.object.clone(), id);
+                    volumes.mount(&device);
+                    session.show_media();
+                }
+            }
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    /// Unlock the container of the passphrase sheet of the window `id` with the passphrase typed; the window goes to
+    /// what it holds once that is mounted. An empty passphrase keeps the sheet open.
+    fn unlock(&mut self, id: u64) -> Vec<Command<Message>> {
+        let session = &mut self.session;
+        let Some(window) = self.windows.get_mut(&id) else {
+            return Vec::new();
+        };
+        if window
+            .unlock
+            .as_ref()
+            .is_none_or(|u| u.passphrase.is_empty())
+        {
+            return Vec::new();
+        }
+        let Some(unlock) = window.unlock.take() else {
+            return Vec::new();
+        };
+        let started = session
+            .media
+            .index_of(&unlock.object)
+            .and_then(|row| session.media.start(row));
+        if let (Some(volumes), Some(device)) = (&session.volumes, started) {
+            session.mounting.insert(device.object.clone(), id);
+            volumes.unlock(&device, unlock.passphrase);
+            session.show_media();
+        }
+        Vec::new()
+    }
+
+    /// A press on the accessory of the sidebar row `key`: the eject button of a mounted removable file system.
+    fn accessory(&mut self, key: &Key) -> Vec<Command<Message>> {
+        let session = &self.session;
+        let row = (0..session.places.len())
+            .find(|&i| view::place_key(session, i) == *key)
+            .filter(|&i| session.places[i].ejectable());
+        if let Some(index) = row {
+            self.eject(index);
+        }
+        Vec::new()
     }
 
     /// Eject the drive of the removable file system of place `index`: the windows on its file systems go home first,
@@ -607,16 +890,73 @@ impl Session {
         self.places.extend(self.media.places());
     }
 
-    fn launch(&self, apps: &MimeApps, path: &Path) {
-        match open_command(apps, path, false, self.terminal.as_deref()) {
+    /// Open `path` with the application of desktop entry `with`, else its default one, handing it `token`. The
+    /// associations are read at each open, so changed defaults and new applications apply at once.
+    fn launch(&self, path: &Path, with: Option<&str>, token: Option<&str>) {
+        let is_dir = path.is_dir();
+        let terminal = self.terminal.as_deref();
+        let spec = (self.applications)()
+            .map_err(|e| e.to_string())
+            .and_then(|apps| match with {
+                None => open_command(&apps, path, is_dir, terminal).map_err(|e| match e {
+                    OpenError::NoApplication { .. } => "No application is set to open it".into(),
+                    e => e.to_string(),
+                }),
+                Some(id) => {
+                    let item = open_with(&apps, path, is_dir)
+                        .into_iter()
+                        .find(|item| item.entry.id == id)
+                        .ok_or_else(|| format!("{id} no longer opens it"))?;
+                    command_with(item.entry, path, terminal).map_err(|e| e.to_string())
+                }
+            });
+        match spec {
             Ok(spec) => {
+                let spec = match token {
+                    Some(token) => spec.with_activation_token(token),
+                    None => spec,
+                };
                 launch::spawn(APP_ID, spec.to_command());
-            }
-            Err(OpenError::NoApplication { .. }) => {
-                self.failed(Action::Open, &[path], &"No application is set to open it")
             }
             Err(e) => self.failed(Action::Open, &[path], &e),
         }
+    }
+
+    /// Ask the window `id` for an activation token for each of `paths`, naming the application that will open it, so
+    /// the dock shows it starting; each opens once its token comes.
+    fn open_paths(
+        &self,
+        id: u64,
+        paths: Vec<PathBuf>,
+        with: Option<String>,
+    ) -> Vec<Command<Message>> {
+        if paths.is_empty() {
+            return Vec::new();
+        }
+        let apps = match (self.applications)() {
+            Ok(apps) => apps,
+            Err(e) => {
+                let items: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+                self.failed(Action::Open, &items, &e);
+                return Vec::new();
+            }
+        };
+        paths
+            .into_iter()
+            .map(|path| {
+                let app_id = with
+                    .clone()
+                    .or_else(|| default_app_id(&apps, &path, path.is_dir()));
+                let with = with.clone();
+                Command::ActivationToken {
+                    window: window_key(id),
+                    app_id,
+                    on_token: Box::new(move |token| {
+                        Message::Window(id, Event::Launch { path, with, token })
+                    }),
+                }
+            })
+            .collect()
     }
 }
 
@@ -651,13 +991,19 @@ impl BrowserWindow {
 
     /// A new folder starts at the top, its search cleared and its free space read.
     fn entered(&mut self) {
-        self.scroll = NO_SCROLL;
+        // the viewport stays: the view keeps its size
+        self.scroll = ScrollState {
+            offset: NO_SCROLL.offset,
+            content: NO_SCROLL.content,
+            viewport: self.scroll.viewport,
+        };
         self.rename = None;
         self.rename_when_listed = None;
         if !self.search.is_empty() {
             self.search.clear();
             self.search_revision += 1;
         }
+        self.follow_search();
         self.now = SystemTime::now();
         self.available = match self.browser.available_space() {
             Ok(bytes) => bytes,
@@ -728,24 +1074,162 @@ impl BrowserWindow {
         session.failed_some(Action::PutBack, restored);
     }
 
-    /// Go into the selected folder, or open the selected files with their default applications.
-    fn open_selection(&mut self, session: &Session) {
+    /// Go into the selected folder, or open the selected files with their default applications, each once the window
+    /// `id` has its activation token.
+    fn open_selection(&mut self, id: u64, session: &Session) -> Vec<Command<Message>> {
         let Activation { folder, files } = self.browser.activation();
-        if !files.is_empty() {
-            match (session.applications)() {
-                Ok(apps) => {
-                    for path in files {
-                        session.launch(&apps, &path);
-                    }
-                }
-                Err(e) => {
-                    let items: Vec<&Path> = files.iter().map(PathBuf::as_path).collect();
-                    session.failed(Action::Open, &items, &e);
-                }
-            }
-        }
+        let commands = session.open_paths(id, files, None);
         if let Some(folder) = folder {
             self.go(folder, session);
+        }
+        commands
+    }
+
+    /// Open the context menu at `at`: of the selection after a press on an item, which it selects unless it is selected;
+    /// of the folder after a press on empty space, which clears the selection; from the keyboard, of the selection, or
+    /// of the folder without one. A name being edited is committed first.
+    fn open_context(&mut self, at: cupertino_kit::geometry::Point, session: &Session) {
+        if self.rename.is_some() {
+            self.end_rename(session);
+            if self.rename.is_some() {
+                self.pressed = None;
+                return;
+            }
+        }
+        let on_item = match self.pressed.take() {
+            Some(Some(index)) => {
+                if !self.browser.selection().contains(index) {
+                    self.browser.select([index], Some(index), Some(index));
+                }
+                true
+            }
+            Some(None) => {
+                self.browser.select(std::iter::empty(), None, None);
+                false
+            }
+            None => !self.browser.selection().is_empty(),
+        };
+        let in_trash = self.browser.dir() == session.trash.home_trash().join("files");
+        let (label, items) = if on_item {
+            let subject = self.subject(in_trash);
+            let label = subject.name.clone();
+            (
+                label,
+                menu_spec::item_menu(&subject, &self.selection_apps(session)),
+            )
+        } else {
+            let background = Background {
+                view: self.view,
+                sort: self.browser.sort(),
+                in_trash,
+            };
+            let label = crate::places::window_title(self.browser.dir(), &session.places);
+            (label, menu_spec::background_menu(&background))
+        };
+        self.context = Some(context::OpenMenu {
+            at,
+            label,
+            items,
+            open: Vec::new(),
+        });
+    }
+
+    /// What the menu of the selection depends on.
+    fn subject(&self, in_trash: bool) -> Subject {
+        let entries = self.browser.entries();
+        let selected: Vec<&crate::Entry> = self
+            .browser
+            .selection()
+            .indices()
+            .filter_map(|i| entries.get(i))
+            .collect();
+        let tags_on = TagColor::ALL
+            .into_iter()
+            .filter(|c| selected.iter().all(|e| has_tag(e, *c)))
+            .collect();
+        Subject {
+            count: selected.len(),
+            name: selected.first().map(|e| e.name.clone()).unwrap_or_default(),
+            all_folders: selected.iter().all(|e| e.is_dir),
+            single_link: selected.len() == 1 && selected[0].kind == crate::Kind::Symlink,
+            in_trash,
+            tags_on,
+        }
+    }
+
+    /// The applications that open every selected item, for Open With.
+    fn selection_apps(&self, session: &Session) -> Vec<AppChoice> {
+        let apps = match (session.applications)() {
+            Ok(apps) => apps,
+            Err(e) => {
+                eprintln!("cupertino-files: cannot read the default applications: {e}");
+                return Vec::new();
+            }
+        };
+        let entries = self.browser.entries();
+        let lists: Vec<Vec<AppChoice>> = self
+            .browser
+            .selection()
+            .indices()
+            .filter_map(|i| entries.get(i))
+            .map(|e| {
+                open_with(&apps, &e.path, e.is_dir)
+                    .into_iter()
+                    .map(|item| AppChoice {
+                        id: item.entry.id.clone(),
+                        name: item.entry.name.clone(),
+                        is_default: item.is_default,
+                    })
+                    .collect()
+            })
+            .collect();
+        common_apps(&lists)
+    }
+
+    /// Add the tag of `color` to the selected items, or take it off when every one has it; failures are reported
+    /// together.
+    fn toggle_tag(&self, color: TagColor, session: &Session) {
+        let entries = self.browser.entries();
+        let selected: Vec<&crate::Entry> = self
+            .browser
+            .selection()
+            .indices()
+            .filter_map(|i| entries.get(i))
+            .collect();
+        let all_have = selected.iter().all(|e| has_tag(e, color));
+        let paths: Vec<PathBuf> = selected.iter().map(|e| e.path.clone()).collect();
+        let changed = paths.iter().map(|path| {
+            let changed = if all_have {
+                tags::remove_tag(path, color.title())
+            } else {
+                tags::add_tag(path, color.title())
+            };
+            (path, changed)
+        });
+        session.failed_some(Action::Tag, changed);
+    }
+
+    /// End the search: the folder is listed whole again.
+    fn clear_search(&mut self) {
+        if !self.search.is_empty() {
+            self.search.clear();
+            self.search_revision += 1;
+            self.browser.set_filter("");
+        }
+        self.follow_search();
+    }
+
+    /// The search field opens while it has the keyboard or text, and rests otherwise.
+    fn follow_search(&mut self) {
+        let open = search_field::is_open(self.search_focused, &self.search);
+        self.search_width.want(open);
+    }
+
+    /// The toolbar's width: the folder view's, which spans the same pane; unbounded before the view is laid out.
+    fn toolbar_width(&self) -> f64 {
+        match self.scroll.viewport.width {
+            w if w > 0.0 => w,
+            _ => f64::INFINITY,
         }
     }
 
@@ -849,6 +1333,10 @@ impl BrowserWindow {
             eject: removable_holding(self.browser.dir(), &session.places)
                 .filter(|&i| session.places[i].ejectable())
                 .map(|i| session.places[i].name.clone()),
+            read_only: session
+                .media
+                .holding(self.browser.dir())
+                .is_some_and(|d| d.read_only),
         }
     }
 
@@ -860,6 +1348,14 @@ impl BrowserWindow {
             .map(|(action, _)| action.name())
             .collect()
     }
+}
+
+/// Whether `entry` has the tag of `color`.
+fn has_tag(entry: &crate::Entry, color: TagColor) -> bool {
+    entry
+        .tags
+        .iter()
+        .any(|t| t.eq_ignore_ascii_case(color.title()))
 }
 
 /// Open the window on `start` and serve it until the last window closes.

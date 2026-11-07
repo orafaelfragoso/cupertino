@@ -2199,6 +2199,7 @@ impl App {
             eject: removable_holding(self.browser.dir(), &self.places)
                 .filter(|&i| self.places[i].ejectable())
                 .map(|i| self.places[i].name.clone()),
+            read_only: false,
         }
     }
 

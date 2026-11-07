@@ -403,6 +403,24 @@ impl Widget<Message> for IconGrid {
                 self.select(next, cx);
                 Propagation::Stop
             }
+            // the context menu opens from what holds the grid; it learns which item was pressed first
+            Event::Pointer(
+                PointerEvent::Button {
+                    position,
+                    button: MouseButton::Right,
+                    pressed: true,
+                    ..
+                },
+                _,
+            ) => {
+                if let Some(index) = self.index_at(position, cx) {
+                    cx.emit(Message::Window(
+                        self.window,
+                        WindowEvent::SecondaryPress(Some(index)),
+                    ));
+                }
+                Propagation::Continue
+            }
             Event::Key(key, _) if key.pressed => self.key(state, &key, cx),
             _ => Propagation::Continue,
         }

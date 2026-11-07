@@ -4,6 +4,7 @@
 //!
 //! - [`access`]: what the prompt tells assistive technology.
 //! - [`agent`]: the agent on the system bus, which only polkitd may ask.
+//! - [`conversation`]: the model's effects carried out: the helper started and answered, polkitd answered.
 //! - `surfaces` (with `app`): the scrims' and the panel's layer surfaces.
 //! - [`text`]: the strings polkitd and PAM send, made safe to show.
 //! - [`helper`]: the conversation with polkit's helper.
@@ -14,6 +15,7 @@
 
 pub mod access;
 pub mod agent;
+pub mod conversation;
 pub mod helper;
 pub mod model;
 pub mod panel;

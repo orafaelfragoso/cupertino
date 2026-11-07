@@ -42,6 +42,38 @@ pub struct Request {
     pub users: Vec<User>,
 }
 
+impl Request {
+    /// The rows of the prompt's Details disclosure: the application the person used (polkitd's subject), the program
+    /// that asked polkitd (its caller) when that is another one, and the action. Both programs are the executables the
+    /// kernel names for polkitd's process ids, never what a process says about itself; a process the session's user
+    /// may not inspect (one running as root) or that is gone has no row.
+    pub fn detail_rows(&self) -> Vec<(&'static str, String)> {
+        let application = self.executable("polkit.subject-pid");
+        let program = self
+            .executable("polkit.caller-pid")
+            .filter(|program| application.as_ref() != Some(program));
+        application
+            .map(|a| ("Application", a))
+            .into_iter()
+            .chain(program.map(|p| ("Program", p)))
+            .chain([("Action", self.action.clone())])
+            .collect()
+    }
+
+    /// The executable of the process whose id is the detail `key`.
+    fn executable(&self, key: &str) -> Option<String> {
+        let pid: u32 = self
+            .details
+            .iter()
+            .find(|(k, _)| k == key)?
+            .1
+            .parse()
+            .ok()?;
+        let exe = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+        Some(shown(&exe.to_string_lossy()))
+    }
+}
+
 /// How an authentication ended for polkitd.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {

@@ -2,7 +2,6 @@
 //! prompt itself on the server's connection: a scrim on the overlay layer of every output and the panel above them,
 //! which takes the keyboard exclusively. While the session is locked or isn't the active one nothing is shown.
 
-use std::collections::HashMap;
 use std::error::Error;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -11,15 +10,15 @@ use std::time::{Duration, Instant};
 
 use cupertino_assets::Assets;
 use cupertino_polkit_agent::access::{clicked, prompt_tree};
-use cupertino_polkit_agent::agent::{self, Event as Polkit, Outcome, Reply, User};
-use cupertino_polkit_agent::helper::{Answers, Helper, HelperError, Line, Route};
+use cupertino_polkit_agent::agent::{self, Event as Polkit, User};
+use cupertino_polkit_agent::conversation::Conversation;
+use cupertino_polkit_agent::helper::{HelperError, Line, Route};
 use cupertino_polkit_agent::model::{Agent, Effect, Key};
 use cupertino_polkit_agent::panel::{
     Command, Content, Control, Frames, Panel, PanelKey, Status, View, PADDING, WIDTH,
 };
 use cupertino_polkit_agent::render::{draw_scrim, Painter, Palette};
 use cupertino_polkit_agent::surfaces;
-use cupertino_polkit_agent::text::shown;
 use cupertino_polkit_agent::users::{self, display_names};
 use cupertino_protocol_app::{AppEffects, AppEvent, Appearance as AppearanceObserver};
 use cupertino_shell_client::{Anchor, LayerShell, LayerSurface, ShellEvent};
@@ -134,12 +133,7 @@ struct App {
     reduce_motion: bool,
     locked: bool,
     active: bool,
-    agent: Agent,
-    replies: HashMap<String, Reply>,
-    routes: Vec<Route>,
-    helper: Option<(u64, Answers)>,
-    runs: u64,
-    notifier: Notifier,
+    conversation: Conversation,
     messages: Receiver<Message>,
     shown: Option<Shown>,
     access: AtspiAdapter,
@@ -190,6 +184,7 @@ pub fn run() -> Result<()> {
     );
     // Safety: `getuid` has no preconditions.
     let me = User(unsafe { libc::getuid() });
+    let helpers = std::sync::Mutex::new(notifier);
     let mut app = App {
         conn,
         layer_shell,
@@ -203,12 +198,10 @@ pub fn run() -> Result<()> {
         // until the server tells, which it does as soon as the observer is created
         locked: true,
         active,
-        agent: Agent::new(me),
-        replies: HashMap::new(),
-        routes,
-        helper: None,
-        runs: 0,
-        notifier,
+        conversation: Conversation::new(Agent::new(me), routes, move |run, line| {
+            // the thread of each helper run sends through the one notifier
+            helpers.lock().unwrap().send(Message::Helper { run, line })
+        }),
         messages,
         shown: None,
         access,
@@ -236,18 +229,6 @@ fn locale() -> String {
         .filter_map(|name| std::env::var(name).ok())
         .find(|value| !value.is_empty())
         .unwrap_or_else(|| "C".to_owned())
-}
-
-/// The program that asked: the executable of polkit's caller, a detail only.
-fn program(details: &[(String, String)]) -> Option<String> {
-    let pid: u32 = details
-        .iter()
-        .find(|(key, _)| key == "polkit.caller-pid")?
-        .1
-        .parse()
-        .ok()?;
-    let exe = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
-    Some(shown(&exe.to_string_lossy()))
 }
 
 fn panel_key(
@@ -278,7 +259,8 @@ impl App {
     }
 
     fn apply_away(&mut self) -> Result<()> {
-        let effects = self.agent.set_away(self.away());
+        let away = self.away();
+        let effects = self.conversation.agent_mut().set_away(away);
         self.apply(effects)
     }
 
@@ -390,7 +372,7 @@ impl App {
             // the server closes the panel only when it can't show it: the request is dismissed
             ShellEvent::Closed(surface) if shown.layer.surface() == surface => {
                 eprintln!("cupertino-polkit-agent: the server closed the prompt");
-                let effects = self.agent.dismiss();
+                let effects = self.conversation.agent_mut().dismiss();
                 self.apply(effects)?;
             }
             ShellEvent::Closed(surface) => {
@@ -411,38 +393,22 @@ impl App {
     fn message(&mut self, message: Message) -> Result<()> {
         match message {
             Message::Polkit(Polkit::Begin(request, reply)) => {
-                self.replies.insert(request.cookie.clone(), reply);
-                let effects = self.agent.begin(request);
-                self.apply(effects)
+                self.conversation.begin(request, reply);
+                Ok(())
             }
             Message::Polkit(Polkit::Cancel(cookie)) => {
-                let effects = self.agent.cancel(&cookie);
-                self.apply(effects)
+                self.conversation.cancel(&cookie);
+                Ok(())
             }
             Message::Helper { run, line } => {
-                if self
-                    .helper
-                    .as_ref()
-                    .is_none_or(|(current, _)| *current != run)
-                {
-                    return Ok(());
+                // a failed attempt gives the cleared field the keyboard
+                if self.conversation.is_current(run) && matches!(line, Ok(Line::Failure)) {
+                    if let Some(shown) = &mut self.shown {
+                        shown.panel.focus = Control::Field;
+                    }
                 }
-                let effects = match line {
-                    Ok(Line::Failure) => {
-                        // a failed attempt gives the cleared field the keyboard
-                        if let Some(shown) = &mut self.shown {
-                            shown.panel.focus = Control::Field;
-                        }
-                        self.agent.helper(Line::Failure)
-                    }
-                    Ok(line) => self.agent.helper(line),
-                    Err(error) => {
-                        eprintln!("cupertino-polkit-agent: the helper: {error}");
-                        self.helper = None;
-                        self.agent.helper_lost()
-                    }
-                };
-                self.apply(effects)
+                self.conversation.helper_line(run, line);
+                Ok(())
             }
             Message::Active(Ok(active)) => {
                 self.active = active;
@@ -454,85 +420,35 @@ impl App {
 
     /// Carry out what the model asks, and what that leads to.
     fn apply(&mut self, effects: Vec<Effect>) -> Result<()> {
-        let mut effects = std::collections::VecDeque::from(effects);
-        while let Some(effect) = effects.pop_front() {
-            match effect {
-                Effect::StartHelper { user, cookie } => {
-                    self.helper = None;
-                    if let Err(error) = self.start_helper(user, &cookie) {
-                        eprintln!("cupertino-polkit-agent: starting the helper: {error}");
-                        effects.extend(self.agent.helper_lost());
-                    }
-                }
-                Effect::Answer(answer) => {
-                    let sent = match &mut self.helper {
-                        Some((_, answers)) => answers.answer(&answer),
-                        None => Err(std::io::Error::other("no helper runs")),
-                    };
-                    if let Err(error) = sent {
-                        eprintln!("cupertino-polkit-agent: answering the helper: {error}");
-                        self.helper = None;
-                        effects.extend(self.agent.helper_lost());
-                    }
-                }
-                Effect::Finish { cookie, outcome } => {
-                    self.helper = None;
-                    if let Some(reply) = self.replies.remove(&cookie) {
-                        reply.send(outcome);
-                    }
-                    if outcome == Outcome::Cancelled {
-                        eprintln!("cupertino-polkit-agent: an authentication was cancelled");
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Start the helper for `user` and read its lines on a thread of its own.
-    fn start_helper(&mut self, user: User, cookie: &str) -> Result<()> {
-        let account = users::account(user).ok_or("the user is not in the password database")?;
-        let (mut lines, answers) = Helper::start(&self.routes, &account.login, cookie)?.split();
-        self.runs += 1;
-        let run = self.runs;
-        self.helper = Some((run, answers));
-        let notifier = self.notifier.clone();
-        std::thread::Builder::new()
-            .name("polkit-helper".to_owned())
-            .spawn(move || loop {
-                let line = lines.read_line();
-                let last = !matches!(
-                    line,
-                    Ok(Line::Prompt { .. } | Line::Error(_) | Line::Info(_))
-                );
-                notifier.send(Message::Helper { run, line });
-                if last {
-                    return;
-                }
-            })?;
+        self.conversation.apply(effects);
         Ok(())
     }
 
     fn command(&mut self, command: Command) -> Result<()> {
         let effects = match command {
-            Command::Field(key) => self.agent.key(key),
+            Command::Field(key) => self.conversation.agent_mut().key(key),
             Command::Authenticate => {
-                if self.agent.prompt().is_some_and(|p| p.can_answer()) {
-                    self.agent.key(Key::Return)
+                if self
+                    .conversation
+                    .agent()
+                    .prompt()
+                    .is_some_and(|p| p.can_answer())
+                {
+                    self.conversation.agent_mut().key(Key::Return)
                 } else {
                     Vec::new()
                 }
             }
-            Command::Cancel => self.agent.dismiss(),
+            Command::Cancel => self.conversation.agent_mut().dismiss(),
             Command::User { back } => {
-                let next = self.agent.prompt().and_then(|prompt| {
+                let next = self.conversation.agent().prompt().and_then(|prompt| {
                     let users = &prompt.request.users;
                     let i = users.iter().position(|u| *u == prompt.user)?;
                     let n = users.len();
                     Some(users[if back { (i + n - 1) % n } else { (i + 1) % n }])
                 });
                 match next {
-                    Some(user) => self.agent.choose_user(user),
+                    Some(user) => self.conversation.agent_mut().choose_user(user),
                     None => Vec::new(),
                 }
             }
@@ -571,7 +487,11 @@ impl App {
 
     /// Show the model's prompt, or take the prompt away when the model has none.
     fn sync(&mut self) -> Result<()> {
-        let wanted = self.agent.prompt().map(|p| p.request.cookie.clone());
+        let wanted = self
+            .conversation
+            .agent()
+            .prompt()
+            .map(|p| p.request.cookie.clone());
         if self.shown.as_ref().map(|s| &s.cookie) == wanted.as_ref() {
             return Ok(());
         }
@@ -588,7 +508,11 @@ impl App {
     }
 
     fn show(&mut self) -> Result<()> {
-        let prompt = self.agent.prompt().expect("a prompt to show");
+        let prompt = self
+            .conversation
+            .agent()
+            .prompt()
+            .expect("a prompt to show");
         let request = &prompt.request;
         let message = self.painter.wrap(&request.message, WIDTH - 2.0 * PADDING);
         let users: Vec<(User, String)> = request
@@ -603,11 +527,7 @@ impl App {
                     .collect::<Vec<_>>(),
             ))
             .collect();
-        let details = program(&request.details)
-            .map(|p| ("Program", p))
-            .into_iter()
-            .chain([("Action", request.action.clone())])
-            .collect();
+        let details = request.detail_rows();
         let cookie = request.cookie.clone();
         let panel = Panel::new(users.len() > 1);
         let frames = self.frames(&panel, message.len(), 0, 2);
@@ -708,7 +628,7 @@ impl App {
     /// Lay the panel out again for what it shows now, resize its surface when that changed, and draw it.
     fn relayout(&mut self) {
         let caps_lock = self.conn.modifiers().caps_lock;
-        let Some(prompt) = self.agent.prompt() else {
+        let Some(prompt) = self.conversation.agent().prompt() else {
             return;
         };
         let status_lines = Status::of(prompt, caps_lock).len();
@@ -776,7 +696,7 @@ impl App {
         if shown.checking.is_some() {
             shown.presenter.request_redraw();
         }
-        let Some(prompt) = self.agent.prompt() else {
+        let Some(prompt) = self.conversation.agent().prompt() else {
             return Ok(());
         };
         let caps_lock = self.conn.modifiers().caps_lock;

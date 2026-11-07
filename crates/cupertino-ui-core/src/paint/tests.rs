@@ -371,8 +371,8 @@ fn a_group_reaches_the_renderer_and_its_effects_widen_the_subtree_bounds() {
         painting.own[0], rect,
         "damage still tracks what the node itself draws"
     );
-    assert_eq!(
-        painting.blank[0], false,
+    assert!(
+        !painting.blank[0],
         "its opacity reaches its children, so it is never taken to draw nothing"
     );
 }

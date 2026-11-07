@@ -1574,6 +1574,17 @@ impl Model {
     fn changed(&mut self) -> Vec<Command<Message>> {
         let now = self.now();
         self.revision += 1;
+        // the locked session, the grid, the overview and the Force Quit dialog hold the keyboard while they are up: a
+        // Focus Dock meanwhile is dropped, not kept for when they go
+        if self.locked
+            || self.force_quit.is_some()
+            || self.grid.as_ref().is_some_and(|g| !g.grid.is_closing())
+            || self.overview.as_ref().is_some_and(|o| !o.ui.is_closing())
+        {
+            self.engaged = false;
+        }
+        // an auto-hidden bar shows while it has the keyboard
+        self.session.dock.keep_shown = self.engaged;
         if let Some(screen) = self.screen() {
             self.session.dock.pointer_moved(self.pointer, screen, now);
         }
@@ -1623,9 +1634,6 @@ impl Model {
             {
                 self.relocate(output);
             }
-        }
-        if self.locked {
-            self.engaged = false;
         }
         self.tell_host();
         self.prefill_icons();

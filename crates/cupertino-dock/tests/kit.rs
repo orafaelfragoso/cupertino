@@ -672,6 +672,82 @@ fn the_focus_dock_shortcut_gives_the_bar_the_keyboard_and_escape_gives_it_back()
     );
 }
 
+/// The grid and the Force Quit dialog hold the keyboard while they are up: a Focus Dock meanwhile is dropped, so the
+/// bar does not take the keyboard from the dialog, nor from the window the grid launched when it closes.
+#[test]
+fn the_focus_dock_shortcut_is_dropped_while_the_grid_or_the_dialog_has_the_keyboard() {
+    let mut run = Run::start();
+    let bar_took = |run: &Run| {
+        run.record
+            .borrow()
+            .keyboard
+            .iter()
+            .any(|&(part, on)| part == Part::Bar(1) && on)
+    };
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::ToggleAppGrid],
+    });
+    let grid = run.window(&format!("{GRID_APP_ID}@1")).expect("the grid");
+    run.message(Message::Sized(Sized::Grid, 1280.0, 800.0));
+    run.advance(1.0);
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Engage],
+    });
+    run.send_to(grid, WindowEvent::Focus(true));
+    run.key(grid, ESCAPE);
+    run.advance(1.0);
+    assert!(run.window(&format!("{GRID_APP_ID}@1")).is_none());
+    assert!(!bar_took(&run), "{:?}", run.record.borrow().keyboard);
+
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::ForceQuitDialog],
+    });
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Engage],
+    });
+    run.advance(1.0);
+    assert!(!bar_took(&run), "{:?}", run.record.borrow().keyboard);
+}
+
+/// An auto-hidden bar shows while Focus Dock has given it the keyboard, and hides again once it gives it back.
+#[test]
+fn the_focus_dock_shortcut_shows_an_auto_hidden_bar_until_escape() {
+    let mut run = Run::start();
+    let editor_y = |run: &mut Run| {
+        let bar = run.bar();
+        run.bounds(bar, Role::Button, "Editor").y()
+    };
+    let shown = editor_y(&mut run);
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::ToggleAutoHide],
+    });
+    for _ in 0..4 {
+        run.advance(0.5);
+    }
+    let hidden = editor_y(&mut run);
+    assert!(hidden > shown, "the bar slid out: {hidden} > {shown}");
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Engage],
+    });
+    for _ in 0..4 {
+        run.advance(0.5);
+    }
+    assert_eq!(editor_y(&mut run), shown, "the engaged bar is shown");
+    let bar = run.bar();
+    run.send_to(bar, WindowEvent::Focus(true));
+    run.key(bar, ESCAPE);
+    for _ in 0..4 {
+        run.advance(0.5);
+    }
+    assert_eq!(editor_y(&mut run), hidden, "and hides once it lets go");
+}
+
 #[test]
 fn resting_the_pointer_on_another_displays_edge_moves_the_dock_there() {
     let mut run = Run::start();

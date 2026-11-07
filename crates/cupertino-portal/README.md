@@ -94,9 +94,9 @@ ext-foreign-toplevel-list-v1).
   the consumer fixed, and carries the copy session's damage. A resized source renegotiates the stream.
 - `Session.Close` and the frontend leaving the bus stop the share. A closed window or a source that fails ends the
   share, which closes the session and emits `Closed`.
-- A display's frames arrive upright: the portal reads the copy's `transform` event and turns a buffer that is not
-  back, and a display without logical geometry is sized by its mode turned by its transform over its scale
-  (`geometry`, every `wl_output` transform tested).
+- A display without logical geometry is sized by its mode turned by its transform over its scale (`geometry`, every
+  `wl_output` transform tested). A stream's frames go out as the server copies them: the copy's `transform` event is
+  not applied to them, as it is to a screenshot or a colour pick (Cupertino's server reports every copy as not turned).
 - The same callers, bounds and sanitizing as the file chooser apply: only the frontend calls, at most 16 sessions and 4
   for one app id, and titles lose control and bidirectional-override characters.
 

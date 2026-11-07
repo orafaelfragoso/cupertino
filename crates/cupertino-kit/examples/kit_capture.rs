@@ -316,8 +316,8 @@ impl Application for Tips {
             "Tips",
             Size::new(360.0, 140.0),
             vec![
-                bubble("Move to the bin"),
-                bubble("Move the selected items to the bin, where they stay until it is emptied or they are put back"),
+                bubble("Move to the Trash"),
+                bubble("Move the selected items to the Trash, where they stay until it is emptied or they are put back"),
                 label,
             ],
         )
@@ -358,7 +358,7 @@ impl Application for Places {
             label: "Places".into(),
             sections: vec![
                 SidebarSection {
-                    title: Some("Favourites".into()),
+                    title: Some("Favorites".into()),
                     items: vec![
                         item("Home", "symbol.house"),
                         item("Desktop", "symbol.desktop"),

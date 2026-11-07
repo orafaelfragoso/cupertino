@@ -551,7 +551,7 @@ fixtures! {
     });
     // the tip's popup content, drawn in a cell of its own
     tooltip: "tooltip", CONTROL, &[State::Normal], |_| cupertino_kit::controls::Tooltip {
-        text: "Move to the bin".into(),
+        text: "Move to the Trash".into(),
         anchor: body("Trash"),
         state: cupertino_kit::controls::TooltipState::default(),
         on_change: Box::new(|_| Message::Nothing),
@@ -831,7 +831,7 @@ fixtures! {
                     items: vec![item("Recents", "clock")],
                 },
                 SidebarSection {
-                    title: Some("Favourites".into()),
+                    title: Some("Favorites".into()),
                     items: vec![item("Desktop", "menubar.dock.rectangle"), item("Documents", "doc")],
                 },
                 SidebarSection {

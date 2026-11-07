@@ -292,6 +292,8 @@ impl Waker {
             // a full channel already holds a pending wake-up
             Ok(_) => {}
             Err(e) if e.kind() == ErrorKind::WouldBlock => {}
+            // the connection is gone, so nothing waits to be woken: a task dropped after it may still wake
+            Err(e) if e.kind() == ErrorKind::BrokenPipe => {}
             Err(e) => panic!("wake channel broken: {e}"),
         }
     }
@@ -2685,5 +2687,20 @@ impl Dispatch<WlKeyboard, ()> for State {
             wl_keyboard::Event::RepeatInfo { rate, delay } => state.repeat.set_info(rate, delay),
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_wake_after_the_connection_is_gone_does_nothing() {
+        let (wake, writer) = UnixStream::pair().unwrap();
+        writer.set_nonblocking(true).unwrap();
+        let waker = Waker(Arc::new(writer));
+        waker.wake();
+        drop(wake);
+        waker.wake();
     }
 }

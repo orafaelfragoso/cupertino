@@ -134,6 +134,14 @@ bar reserve (exclusive zone -1) and uses the `Switcher` material as a server-ren
 - A running application lights the pinned tile of the same desktop entry (`Session::key_of`: tile id, entry id, `StartupWMClass`, aliases of the same entry). An application with no desktop entry cannot be matched to any pin and gets its own tile; installing a desktop entry for it (`Exec`, `Icon`, `StartupWMClass` = its `app_id`) is what merges it with a pin.
 - The label is drawn without the plus-darker blend of the real panel, so it is faint over a dark backdrop (approximate).
 
+**On Kit.** `src/switcher_kit.rs` is the same panel as a Kit window (`SwitcherSurface`, app id `cupertino-dock-switcher`):
+the model above, the `Switcher` surface material as the window background, one list item per application and the label,
+with the delay, the fade and the pointer rules unchanged. The panel is a list named "Application Switcher". Each entry is a
+list item that a screen reader can press (`switcher_activate`), and the label is a polite live region, so the selection is
+read as the keys step it (the panel never takes the keyboard). Under Reduce Transparency and Increase Contrast the
+material is opaque, and the selection and label get stronger colours. The dock process draws through Kit once its window
+system is Kit's (see Open issues); `render::paint_switcher` and the overlay in `app.rs` go then.
+
 ### Application grid
 
 Code: `src/app_grid.rs`, `render::paint_app_grid`, the `Grid` in `app.rs`. The server forwards the app-grid action (shortcut,
@@ -184,7 +192,8 @@ the dock dies. It sends the dock of its output the window set with desktop frame
 
 The dock lays the windows out with the design packing (`cupertino-overview`,: inset 20, gap 8, lift 20, tolerance 4,
 shrink 0.9, 499 passes, constants; the application mode puts minimized windows in a lower row) and answers one
-`overview_frame` per window. A changed set is laid out again and resent.
+`overview_frame` per window. A changed set is laid out again and resent. The windows start 20 pt (`BarConfig::layout_gap`)
+below the expanded workspaces bar, and the arrangement is centred in the area left (see the `cupertino-overview` README).
 
 The chrome is a keyboard-exclusive overlay surface over the whole output (namespace `cupertino-dock-overview`, exclusive zone
 -1, so surface and output coordinates agree). The server draws the dim and the windows. The chrome has:
@@ -196,6 +205,16 @@ The chrome is a keyboard-exclusive overlay surface over the whole output (namesp
 - a 13 pt title under every window (colours and sizes approximate).
 
 The chrome fades out over 0.25 s on `overview_closed`, and then the surface goes.
+
+**On Kit.** `src/overview_kit.rs` is the same chrome as a Kit window (`OverviewSurface`, app id `cupertino-dock-overview`,
+no background), with the model of `overview_ui.rs` and its layout. It is a group named "Overview" holding one button per
+slot ("Desktop n", selected when current), the hovered slot's "Remove Desktop n", "Add Desktop" and one button per window
+named by its title ("Untitled Window" without one). A screen reader presses them as the pointer would. The selected window
+takes the keyboard focus, so its title is read as the keys move the selection. Under Reduce Motion the highlight goes
+straight to the selection and the windows' frames are their final ones. Under Reduce Transparency the slots are opaque, and
+under Increase Contrast the slots get an outline, the borders and highlight are wider, and the titles sit on a plate.
+`wants_keyboard` says when the surface should be keyboard-exclusive. `render::paint_overview`, `OverviewView` and `Panel`
+go when the dock process draws through Kit.
 
 ### Hot corners and gestures
 
@@ -251,6 +270,10 @@ to another slot (approximate slack). The add slot sends `add_workspace` and the 
 - **Application grid.** Folders, edit mode and drag, the pinch spring, mouse-drag paging and the rubber band, and
   the Shift slow-motion durations.
 - **Overview.** Thumbnails of the workspaces are not drawn, and the slots are plain (approximate).
+- **Window-manager UI on Kit.** `overview_kit` and `switcher_kit` are tested headless but not yet the process's drawing
+  path: the dock's Kit model has to hold a `SwitcherSurface` and an `OverviewSurface`, give them the `switcher_*` and
+  `overview_*` events, send their requests and `overview_frame`, pass Reduce Motion, and make the overview surface
+  keyboard-exclusive while `wants_keyboard` holds. The old painters are deleted in that change.
 - **Context menus.** Deviations (approximate): the Options submenu is flattened. There is no Open at Login (no login-items
   store). Show Recents, Dock Settings, Minimize Using and the Option-key alternates are absent. Metrics and colours are the
   menu bar's. The desktop background menu has no surface to live on and is not done.
@@ -261,7 +284,7 @@ to another slot (approximate slack). The add slot sends `add_workspace` and the 
 cargo test -p cupertino-dock --features app
 ```
 
-`cargo test -p cupertino-dock --features app` runs 188 tests; without the feature the process code is skipped.
+`cargo test -p cupertino-dock --features app` runs 205 tests; without the feature the process code is skipped.
 
 | Test | Proves |
 |---|---|
@@ -271,4 +294,5 @@ cargo test -p cupertino-dock --features app
 | Animation unit tests | The bounce curves, the cosine ease and the auto-hide durations. |
 | Tile drag unit tests | The press that becomes a drag past the threshold, the held press, and the removal puff's timing. |
 | `tests/dock.rs` | Sections, orientations, hit-testing, minimize targets and drag-reorder: the grab, the gap rule, the slide, the strip and section limits, the removal gate, the dim, the settle and the removal fade. |
+| `tests/wm_surfaces.rs` | The overview and switcher on Kit, headless: three windows of different sizes clear the workspaces bar by 20 pt and each other on four outputs at scales 1, 1.25, 1.5 and 2, and hit-test to themselves; the keys, the bar's slots, add and remove, screen-reader reading and presses, the closing fade, reflow, Reduce Motion, opaque fills under Reduce Transparency and Increase Contrast; the switcher's delay, pointer and screen-reader activation, live label, step, commit and cancel fades, and a lost panel resumed. With `CUPERTINO_LOOK_DIR` set, `look_captures` writes light and dark pictures at 1× and 2×. |
 | `tests/session.rs` | Windows and tiles, the launch bounce (announced, not doubled, unannounced, not for the first list) and the refused-activation hop. |

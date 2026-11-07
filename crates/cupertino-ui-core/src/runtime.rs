@@ -17,21 +17,22 @@ use crate::task::Executor;
 use crate::tree::Tree;
 use crate::{
     AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, Application, Clock, Command,
-    Element, Environment, Event, FocusTarget, FrameSnapshot, Icons, Key, Menus, NodeId,
-    NodeSnapshot, Pending, Popup, PopupAnchor, Propagation, StepStatus, TokenHandler, UiError,
-    Window, WindowBackground, WindowKey,
+    Drag, DragHandler, DragPreview, Element, Environment, Event, FocusTarget, FrameSnapshot, Icons,
+    Key, Menus, NodeId, NodeSnapshot, Pending, Popup, PopupAnchor, Propagation, StepStatus,
+    TokenHandler, UiError, Window, WindowBackground, WindowKey,
 };
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_menu_model::ActionName;
 use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutOptions, LayoutStats};
 use cupertino_ui_platform::{
     ActivationRequest, Backdrop, ClipboardData, ClipboardKind, ConfigureId, ConstraintAdjust,
-    KeyEvent, Keysym, MenuDescription, PlatformError, PlatformEvent, PointerEvent, PopupEdge,
-    PopupSpec, PresentOutcome, SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId,
-    WindowRequest, WindowSpec, WindowSystem,
+    DragImage, DragProgress, DragRequest, DragToken, KeyEvent, Keysym, MenuDescription,
+    PlatformError, PlatformEvent, PointerEvent, PopupEdge, PopupSpec, PresentOutcome,
+    SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec,
+    WindowSystem,
 };
 use cupertino_ui_render::{
-    CpuFrame, DamageRegion, DisplayList, PaintResources, RenderRequest, UiRenderer,
+    CpuFrame, DamageRegion, DisplayList, PaintResources, RenderError, RenderRequest, UiRenderer,
 };
 use cupertino_ui_text::TextSystem;
 use cupertino_ui_theme::ThemeTokens;
@@ -186,6 +187,8 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     theme_for: Option<ThemeForAppearance>,
     /// What each activation token asked for and not yet given turns into.
     tokens: HashMap<ActivationRequest, TokenHandler<A::Message>>,
+    /// What each step of a running drag turns into.
+    drags: HashMap<DragToken, DragHandler<A::Message>>,
 }
 
 impl<A: Application, W: WindowSystem> Runtime<A, W> {
@@ -216,6 +219,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             exit: false,
             theme_for: None,
             tokens: HashMap::new(),
+            drags: HashMap::new(),
         };
         for command in commands {
             runtime.command(command);
@@ -418,7 +422,44 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
                 None => self.messages.push_back(on_token(None)),
             },
+            Command::StartDrag(drag) => self.start_drag(drag),
             Command::Exit => self.exit = true,
+        }
+    }
+
+    /// Draws the drag's image at its window's scale and starts it; a drag that cannot start is cancelled at once.
+    fn start_drag(&mut self, drag: Drag<A::Message>) {
+        let Drag {
+            window,
+            data,
+            actions,
+            image,
+            mut on_progress,
+        } = drag;
+        let Some(w) = self.windows.iter().find(|w| w.key == window) else {
+            self.messages
+                .push_back(on_progress(DragProgress::Cancelled));
+            return;
+        };
+        let (id, env, now) = (w.id, w.env.clone(), self.options.clock.now());
+        // a drag without its image is still a drag
+        let image = image.and_then(|preview| {
+            drag_image(&mut self.options, &env, preview, now)
+                .inspect_err(|e| eprintln!("cupertino-ui: the drag image was not drawn: {e:?}"))
+                .ok()
+        });
+        let request = DragRequest {
+            data,
+            actions,
+            image,
+        };
+        match self.system.start_drag(id, request) {
+            Ok(token) => {
+                self.drags.insert(token, on_progress);
+            }
+            Err(_) => self
+                .messages
+                .push_back(on_progress(DragProgress::Cancelled)),
         }
     }
 
@@ -687,6 +728,16 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             PlatformEvent::ActivationToken { request, token } => {
                 if let Some(on_token) = self.tokens.remove(&request) {
                     self.messages.push_back(on_token(token));
+                }
+                return Ok(());
+            }
+            PlatformEvent::Drag { token, progress } => {
+                let ended = matches!(progress, DragProgress::Finished | DragProgress::Cancelled);
+                if let Some(on_progress) = self.drags.get_mut(&token) {
+                    self.messages.push_back(on_progress(progress));
+                }
+                if ended {
+                    self.drags.remove(&token);
                 }
                 return Ok(());
             }
@@ -1605,6 +1656,105 @@ fn place<M: 'static>(
 fn physical(logical: f64, scale: f64) -> u32 {
     (logical * scale).round().clamp(0.0, f64::from(u32::MAX)) as u32
 }
+
+/// The image of a drag from a window with `env`: its content in a tree of its own, laid out at whole points and painted
+/// over nothing at whole pixels per point, so each side of the buffer is a whole number of points.
+fn drag_image<M: 'static>(
+    options: &mut RuntimeOptions,
+    env: &Environment,
+    preview: DragPreview<M>,
+    now: Timestamp,
+) -> Result<DragImage, UiError> {
+    let DragPreview {
+        content,
+        size,
+        hotspot,
+    } = preview;
+    let scale = if env.scale.is_finite() {
+        env.scale.ceil().clamp(1.0, f64::from(MAX_DRAG_SCALE))
+    } else {
+        1.0
+    };
+    let whole = |v: f64| {
+        if v.is_finite() {
+            v.ceil().max(1.0)
+        } else {
+            1.0
+        }
+    };
+    let size = Size::new(whole(size.width), whole(size.height));
+    let env = Environment {
+        scale,
+        ..env.clone()
+    };
+    let mut tree = Tree::new(options.node_limit);
+    let root = tree.reconcile(None, content)?;
+    let result = layout(
+        &TreeView {
+            tree: &tree,
+            env: &env,
+        },
+        root,
+        Constraints::tight(size).map_err(UiError::Layout)?,
+        &LayoutOptions {
+            direction: env.direction,
+            node_limit: options.node_limit,
+        },
+    )
+    .map_err(UiError::Layout)?;
+    let geometry = placements(&tree, root, &result, &env);
+    let painting = Painter::default().paint(
+        &tree,
+        root,
+        &geometry,
+        &PaintInput {
+            env: &env,
+            focus: None,
+            focus_visible: false,
+            window_active: true,
+            background: WindowBackground::None,
+            backdrop: false,
+            now,
+        },
+    );
+    let mut renderer = (options.renderers)();
+    let (width, height) = (physical(size.width, scale), physical(size.height, scale));
+    let id = renderer
+        .render(&RenderRequest {
+            list: &painting.list,
+            resources: &painting.resources,
+            scale,
+            width,
+            height,
+            damage: &DamageRegion::Full,
+        })
+        .map_err(UiError::Render)?;
+    let frame = renderer.frame(id).map_err(UiError::Render)?;
+    let row = width as usize * 4;
+    if (frame.width, frame.height) != (width, height)
+        || (frame.stride as usize) < row
+        || frame.pixels.len() < frame.stride as usize * height as usize
+    {
+        return Err(UiError::Render(RenderError::InvalidSize));
+    }
+    let pixels = frame
+        .pixels
+        .chunks(frame.stride as usize)
+        .take(height as usize)
+        .flat_map(|line| &line[..row])
+        .copied()
+        .collect();
+    Ok(DragImage {
+        width,
+        height,
+        scale: scale as u32,
+        pixels,
+        hotspot,
+    })
+}
+
+/// The most pixels per point a drag image is drawn at.
+const MAX_DRAG_SCALE: u32 = 4;
 
 /// A roving focus move waiting for the next frame.
 enum FocusRequest {

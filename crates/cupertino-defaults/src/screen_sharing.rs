@@ -23,9 +23,10 @@
 use std::io::{self, Read};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::conf::{ConfText, Line, Problem};
-use crate::lock::FileLock;
+use crate::lock::{FileLock, LOCK_WAIT};
 
 /// Environment variable that redirects `screen-sharing.conf`.
 pub const SCREEN_SHARING_ENV: &str = "CUPERTINO_SCREEN_SHARING_CONF";
@@ -185,12 +186,22 @@ impl ScreenSharingConf {
 
     /// Change the file at `path` with `change` while holding its lock: it is read again ([`Self::load`]), changed,
     /// and written back ([`Self::store`]) before another writer can read it. Nothing is written when the file is
-    /// refused or cannot be read, or when `change` fails; what `change` returns otherwise.
+    /// refused or cannot be read, when another writer holds the lock longer than [`LOCK_WAIT`], or when `change`
+    /// fails; what `change` returns otherwise.
     pub fn update<R>(
         path: &Path,
         change: impl FnOnce(&mut Self) -> io::Result<R>,
     ) -> io::Result<R> {
-        let _lock = FileLock::acquire(path)?;
+        Self::update_within(path, LOCK_WAIT, change)
+    }
+
+    /// [`Self::update`], waiting at most `wait` for the lock.
+    fn update_within<R>(
+        path: &Path,
+        wait: Duration,
+        change: impl FnOnce(&mut Self) -> io::Result<R>,
+    ) -> io::Result<R> {
+        let _lock = FileLock::acquire_within(path, wait)?;
         let (mut conf, _) = Self::load(path)?;
         let changed = change(&mut conf)?;
         conf.store(path)?;
@@ -311,6 +322,27 @@ mod tests {
         assert!(ScreenSharingConf::load(&link).is_err());
     }
 
+    #[test]
+    fn an_update_while_another_writer_keeps_the_lock_fails_and_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(SCREEN_SHARING_FILE);
+        ScreenSharingConf {
+            grants: vec![grant(ID, "org.example.Meeting")],
+        }
+        .store(&path)
+        .unwrap();
+        let held = FileLock::acquire(&path).unwrap();
+        let refused = ScreenSharingConf::update_within(&path, Duration::from_millis(50), |conf| {
+            conf.grants.clear();
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::TimedOut);
+        assert!(std::fs::read_to_string(&path).unwrap().contains(ID));
+        drop(held);
+        assert!(ScreenSharingConf::update(&path, |conf| Ok(conf.revoke(ID))).unwrap());
+    }
+
     /// The grant id of number `n`.
     fn numbered(n: usize) -> String {
         format!("{n:032x}")
@@ -327,6 +359,8 @@ mod tests {
         .unwrap();
         const ADDERS: usize = 8;
         const EACH: usize = 12;
+        /// How long each writer of the test waits for the lock.
+        const CONTENDED: Duration = Duration::from_secs(60);
         let start = std::sync::Arc::new(std::sync::Barrier::new(ADDERS + 1));
         let mut threads = Vec::new();
         for adder in 0..ADDERS {
@@ -334,7 +368,8 @@ mod tests {
             threads.push(std::thread::spawn(move || {
                 start.wait();
                 for n in 0..EACH {
-                    ScreenSharingConf::update(&path, |conf| {
+                    // many writers on one file wait longer for each other than two processes ever do
+                    ScreenSharingConf::update_within(&path, CONTENDED, |conf| {
                         conf.grants
                             .push(grant(&numbered(adder * EACH + n + 1), "org.example.Add"));
                         // a slow change: without the lock another writer reads the file meanwhile
@@ -349,7 +384,8 @@ mod tests {
             let (path, start) = (path.clone(), std::sync::Arc::clone(&start));
             std::thread::spawn(move || {
                 start.wait();
-                ScreenSharingConf::update(&path, |conf| Ok(conf.revoke(ID))).unwrap()
+                ScreenSharingConf::update_within(&path, CONTENDED, |conf| Ok(conf.revoke(ID)))
+                    .unwrap()
             })
         };
         for thread in threads {

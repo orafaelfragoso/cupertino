@@ -6,14 +6,25 @@
 //!
 //! The lock file is made once and left in place: removing it while another process waits on it would let the two
 //! lock different files.
+//!
+//! A taker waits at most [`LOCK_WAIT`]: the portal takes the lock while it answers on the bus and Settings while its
+//! window runs, so a holder that never lets go makes the change fail instead of stopping either.
 
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::data_control::refused;
+
+/// How long a taker waits for another holder to let go before the change fails. A holder reads and writes one small
+/// file, so only one that is stuck keeps the lock longer.
+pub const LOCK_WAIT: Duration = Duration::from_secs(2);
+
+/// How often a waiting taker tries the lock again.
+const LOCK_RETRY: Duration = Duration::from_millis(10);
 
 /// The lock of one settings file, held until it is dropped.
 #[derive(Debug)]
@@ -23,10 +34,15 @@ pub struct FileLock {
 }
 
 impl FileLock {
-    /// Wait until no other holder has the lock of the settings file at `path`, and take it. The lock file and its
-    /// directory are made when missing. `Err` when the lock file cannot be made or opened, or is not a regular file of
-    /// this user.
+    /// Wait until no other holder has the lock of the settings file at `path`, at most [`LOCK_WAIT`], and take it.
+    /// The lock file and its directory are made when missing. `Err` when the lock file cannot be made or opened, or is
+    /// not a regular file of this user, and [`io::ErrorKind::TimedOut`] when another holder kept it all that time.
     pub fn acquire(path: &Path) -> io::Result<FileLock> {
+        Self::acquire_within(path, LOCK_WAIT)
+    }
+
+    /// [`Self::acquire`], waiting at most `wait`.
+    pub fn acquire_within(path: &Path, wait: Duration) -> io::Result<FileLock> {
         let lock = lock_path(path)?;
         if let Some(dir) = lock.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir)?;
@@ -51,14 +67,25 @@ impl FileLock {
         if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } {
             return Err(refused("the lock file is not a regular file of this user"));
         }
+        let start = Instant::now();
         loop {
             // Safety: the descriptor is open for as long as `file` lives.
-            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
                 return Ok(FileLock { _file: file });
             }
             let e = io::Error::last_os_error();
-            if e.kind() != io::ErrorKind::Interrupted {
-                return Err(e);
+            match e.kind() {
+                io::ErrorKind::Interrupted => {}
+                io::ErrorKind::WouldBlock if start.elapsed() < wait => {
+                    std::thread::sleep(LOCK_RETRY)
+                }
+                io::ErrorKind::WouldBlock => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!("{} is held by another writer", lock.display()),
+                    ))
+                }
+                _ => return Err(e),
             }
         }
     }
@@ -126,6 +153,22 @@ mod tests {
         drop(held);
         took.recv_timeout(Duration::from_secs(10)).unwrap();
         waiter.join().unwrap();
+    }
+
+    #[test]
+    fn a_holder_that_never_lets_go_makes_the_taker_give_up_after_the_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("screen-sharing.conf");
+        let _held = FileLock::acquire(&path).unwrap();
+        let start = Instant::now();
+        let refused = FileLock::acquire_within(&path, BLOCKED).unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::TimedOut);
+        let waited = start.elapsed();
+        assert!(waited >= BLOCKED, "it waited the whole time: {waited:?}");
+        assert!(
+            waited < Duration::from_secs(10),
+            "and then gave up: {waited:?}"
+        );
     }
 
     #[test]

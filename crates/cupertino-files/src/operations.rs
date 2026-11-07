@@ -165,13 +165,25 @@ impl Cancel {
     }
 }
 
+/// The error a stopped transfer gives: its own type, so an interrupted call of the file system is not taken for one.
+#[derive(Debug)]
+struct Stopped;
+
+impl std::fmt::Display for Stopped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the transfer was stopped")
+    }
+}
+
+impl std::error::Error for Stopped {}
+
 fn cancelled() -> io::Error {
-    io::Error::new(io::ErrorKind::Interrupted, "the transfer was stopped")
+    io::Error::new(io::ErrorKind::Interrupted, Stopped)
 }
 
 /// Whether `error` is a transfer's stop rather than a failure: it is not reported.
 pub fn is_cancelled(error: &io::Error) -> bool {
-    error.kind() == io::ErrorKind::Interrupted
+    error.get_ref().is_some_and(|e| e.is::<Stopped>())
 }
 
 /// How far a transfer has come.
@@ -760,6 +772,17 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn only_a_stop_is_taken_for_one() {
+        assert!(is_cancelled(&cancelled()));
+        // an interrupted call of the file system is a failure the window reports
+        assert!(!is_cancelled(&io::Error::from(io::ErrorKind::Interrupted)));
+        assert!(!is_cancelled(&io::Error::new(
+            io::ErrorKind::Interrupted,
+            "interrupted"
+        )));
     }
 
     #[test]

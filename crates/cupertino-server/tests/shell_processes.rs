@@ -25,7 +25,7 @@ use cupertino_theme::Appearance;
 use cupertino_wm::Rect;
 use smithay::backend::input::{ButtonState, KeyState};
 use smithay::backend::renderer::utils::with_renderer_surface_state;
-use smithay::desktop::{layer_map_for_output, PopupManager};
+use smithay::desktop::{layer_map_for_output, PopupKind, PopupManager};
 use smithay::input::keyboard::Keycode;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
@@ -1623,6 +1623,87 @@ fn escape_on_the_screenshot_toolbar_removes_its_surfaces_and_gives_the_keyboard_
     assert!(
         !shots.exists() || std::fs::read_dir(&shots).unwrap().next().is_none(),
         "nothing was captured"
+    );
+}
+
+/// The toolbar's Options menu is a popup of a layer surface at the bottom of the output: with no room below the
+/// button the server flips it upward, whole on the output.
+#[test]
+fn the_screenshot_options_menu_opens_above_the_toolbar_on_its_output() {
+    const BTN_LEFT: u32 = 0x110;
+    let dir = TempDir::new("screenshot-menu");
+    let conf = dir.file("screenshot.conf");
+    std::fs::write(&conf, "show-thumbnail = false\n").unwrap();
+    let Some(mut server) = Server::start(Vec::new(), true) else {
+        return;
+    };
+    let binary = shell_bin_dir().join("cupertino-screenshot");
+    server.state.config.screenshot_command = vec![
+        "env".into(),
+        format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
+        binary.display().to_string(),
+    ];
+    server.state.execute_plan(ActionPlan {
+        commands: Vec::new(),
+        ops: vec![ShellOp::Screenshot(ScreenshotRequest::Toolbar)],
+    });
+    type Area = Rectangle<i32, Logical>;
+    // the toolbar and, once it is open, its menu, in output points
+    let toolbar = |s: &Cupertino| -> Option<(Area, Option<Area>)> {
+        let map = layer_map_for_output(&s.outputs.first()?.output);
+        let layer = map
+            .layers()
+            .filter(|l| l.namespace() == "cupertino-screenshot")
+            .find(|l| {
+                map.layer_geometry(l)
+                    .is_some_and(|g| g.size.w > 0 && g.size.w != OUTPUT.0)
+            })?;
+        let at = map.layer_geometry(layer)?;
+        // where the server placed the popup, relative to the toolbar
+        let menu = PopupManager::popups_for_surface(layer.wl_surface())
+            .find_map(|(popup, _)| match popup {
+                PopupKind::Xdg(p) => Some(p.with_pending_state(|s| s.geometry)),
+                _ => None,
+            })
+            .map(|g| Rectangle::new(at.loc + g.loc, g.size));
+        Some((at, menu))
+    };
+    server.wait_until("the toolbar to map", |s| toolbar(s).is_some());
+    let (bar, _) = toolbar(&server.state).unwrap();
+    // the Options button: left of Capture at the toolbar's trailing end
+    let options = (
+        f64::from(bar.loc.x + bar.size.w - 120),
+        f64::from(bar.loc.y + bar.size.h / 2),
+    );
+    server.wait_until("the toolbar to take the keyboard", |s| {
+        s.seat.get_keyboard().unwrap().current_focus().is_some()
+    });
+    // the process hears the pointer enter, then the press and the release, each before the next
+    let settle = |server: &mut Server| {
+        let until = Instant::now() + Duration::from_millis(300);
+        server.wait_until("the process to keep up", |_| Instant::now() >= until);
+    };
+    server.state.pointer_moved_to(options.into(), 10, None);
+    settle(&mut server);
+    server
+        .state
+        .pointer_button(BTN_LEFT, ButtonState::Pressed, 20);
+    settle(&mut server);
+    server
+        .state
+        .pointer_button(BTN_LEFT, ButtonState::Released, 30);
+    server.wait_until("the menu to open", |s| {
+        toolbar(s).is_some_and(|(_, menu)| menu.is_some())
+    });
+    let (bar, menu) = toolbar(&server.state).unwrap();
+    let menu = menu.unwrap();
+    // below the button it would run past the bottom of the output; flipped, it ends above the toolbar's bottom
+    assert!(
+        menu.loc.y >= 0
+            && menu.loc.y + menu.size.h <= OUTPUT.1
+            && menu.loc.y + menu.size.h <= bar.loc.y + bar.size.h
+            && menu.loc.y < bar.loc.y,
+        "the menu {menu:?} opens upward from the toolbar {bar:?}, on the output"
     );
 }
 

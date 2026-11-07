@@ -354,22 +354,24 @@ impl Settings {
 
     /// Take the screen-sharing grant `id` out of `screen-sharing.conf` and read the file again. The file is read and
     /// written under its lock ([`ScreenSharingConf::update`]) and only that grant goes: one the portal added since the
-    /// pane read the file stays. `Err` is the sentence the pane shows; nothing was written.
+    /// pane read the file stays. `Err` is the sentence the pane shows; nothing was written. Either way the pane then
+    /// shows the file as it is.
     pub fn forget_grant(&mut self, paths: &Paths, id: &str) -> Result<(), String> {
         let path = paths
             .screen_sharing
             .as_deref()
             .ok_or_else(|| StoreError::NoPath(File::ScreenSharing).to_string())?;
-        ScreenSharingConf::update(path, |conf| {
+        let forgotten = ScreenSharingConf::update(path, |conf| {
             conf.revoke(id);
             Ok(())
         })
         .map_err(|e| {
             eprintln!("cupertino-settings: the screen-sharing grant could not be forgotten: {e}");
             StoreError::Io(File::ScreenSharing, e).to_string()
-        })?;
+        });
+        // the pane took the row out at once; it shows the file as it is, so a grant not forgotten shows again
         self.reload_screen_sharing(paths);
-        Ok(())
+        forgotten
     }
 
     /// Let `program` use the clipboard: its entry ([`clipboard::entry_for`], so a link becomes its file) is added and

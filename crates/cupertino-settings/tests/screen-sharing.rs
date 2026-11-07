@@ -220,3 +220,33 @@ fn forget_keeps_a_grant_the_portal_added_after_the_pane_read_the_file() {
         "the pane shows the file as it is now"
     );
 }
+
+#[test]
+fn a_forget_that_fails_shows_the_grant_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(dir.path());
+    write(
+        &paths,
+        &format!("grant = {MEETING} org.example.Meeting display DP-1\n"),
+    );
+    let mut settings = Settings::load(&paths, 1080.0).unwrap();
+    let path = paths.screen_sharing.as_ref().unwrap();
+    // another writer keeps the file's lock for longer than Settings waits
+    let held = cupertino_defaults::lock::FileLock::acquire(path).unwrap();
+    let effects = change(
+        ControlId::ScreenSharingGrant(0),
+        Value::Index(0),
+        &mut settings,
+        &live(),
+    );
+    assert_eq!(effects, [Effect::ForgetGrant(MEETING.to_owned())]);
+    assert!(settings.forget_grant(&paths, MEETING).is_err());
+    drop(held);
+    assert!(std::fs::read_to_string(path).unwrap().contains(MEETING));
+    let shown = rows(&settings, &live());
+    assert_eq!(
+        shown[0].detail.as_deref(),
+        Some("Display DP-1"),
+        "the grant still in the file is not hidden"
+    );
+}

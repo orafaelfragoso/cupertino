@@ -1198,6 +1198,54 @@ fn the_dock_process_draws_the_switcher_panel_while_the_switch_is_open() {
 /// The application grid is the dock process's alone: the forwarded action makes it map a keyboard-exclusive overlay
 /// surface over the output, the menu bar included, above the dock bar, and draw it; Escape, delivered to that surface,
 /// removes it after the exit animation.
+/// A right click on the bar opens its menu as a popup of the bar surface. The surface is at the bottom of the output and
+/// the menu would open below what was clicked, so the server flips it above, inside the output.
+#[test]
+fn the_dock_process_opens_a_menu_above_what_was_clicked_inside_the_output() {
+    const BTN_RIGHT: u32 = 0x111;
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let Some(mut server) = Server::start(vec![real_process("cupertino-dock", &bus)], true) else {
+        return;
+    };
+    let output = server
+        .state
+        .outputs
+        .first()
+        .expect("the headless output")
+        .id;
+    server.wait_until("the dock to draw its bar", |s| {
+        s.dock_rect(output).is_some()
+    });
+    let bar = server.state.dock_rect(output).unwrap();
+    let (x, y) = (bar.x + bar.w / 2.0, bar.y + bar.h / 2.0);
+    server.state.pointer_moved_to((x, y).into(), 10, None);
+    server.step();
+    server
+        .state
+        .pointer_button(BTN_RIGHT, ButtonState::Pressed, 11);
+    server.step();
+    server
+        .state
+        .pointer_button(BTN_RIGHT, ButtonState::Released, 12);
+    server.step();
+    server.wait_until("the menu to be drawn", |s| {
+        popup_buffer_size(s, "cupertino-dock").is_some_and(|(w, h)| w > 0 && h > 0)
+    });
+    let at = popup_location(&server.state, "cupertino-dock").unwrap();
+    let (width, height) = popup_buffer_size(&server.state, "cupertino-dock").unwrap();
+    assert!(
+        at.y >= 0 && f64::from(at.y + height) <= y,
+        "the menu at {at:?}, {height} tall, is above what was clicked at y {y} on the bar at {bar:?}"
+    );
+    assert!(
+        at.x >= 0 && at.x + width <= OUTPUT.0,
+        "the menu at {at:?}, {width} wide, is inside the output"
+    );
+}
+
 #[test]
 fn the_dock_process_opens_the_app_grid_on_the_action_and_escape_closes_it() {
     const ESCAPE: u32 = 1 + 8;

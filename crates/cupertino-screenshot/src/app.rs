@@ -446,7 +446,6 @@ impl Application for App {
                         Vec::new()
                     }
                     Reply::ClipboardDone(result) => model.controller.clipboard_done(result),
-                    Reply::Failed(problem) => vec![Effect::Exit(Err(problem))],
                 };
                 commands.extend(model.effects(effects));
                 commands
@@ -505,6 +504,8 @@ pub fn run(options: &Options) -> Result<()> {
         StartMode::Toolbar => Some(Style::Interactive),
     };
     let (request_to, requests) = async_channel::unbounded();
+    // the roles go with the window system; a channel closed then would wake a loop that is gone
+    let keep_open = request_to.clone();
     let system = WaylandWindowSystem::new(conn, Profile::cupertino()).with_roles(Roles {
         shell,
         outputs: screens.iter().map(|s| s.id).collect(),
@@ -538,7 +539,9 @@ pub fn run(options: &Options) -> Result<()> {
     ];
     commands.extend(app.effects(effects));
     commands.extend(app.schedule());
-    cupertino_kit::app::run_on::<App>(system, (app, commands))?;
+    let ran = cupertino_kit::app::run_on::<App>(system, (app, commands));
+    drop(keep_open);
+    ran?;
     let outcome = result.lock().unwrap_or_else(|e| e.into_inner()).take();
     match outcome {
         Some(Ok(())) => Ok(()),

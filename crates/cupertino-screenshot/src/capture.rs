@@ -86,8 +86,6 @@ pub enum Reply {
     Offered,
     /// Another selection replaced the offer, or it could not be made.
     ClipboardDone(std::result::Result<(), String>),
-    /// The connection failed.
-    Failed(String),
 }
 
 /// The application's end of the capture thread.
@@ -107,7 +105,8 @@ impl Worker {
 }
 
 /// Start the capture thread with `capturer`; it answers on `replies` and counts the keyboard enters of the
-/// connection in `enters`. It ends when the application drops its [`Worker`] or stops listening.
+/// connection in `enters`. It ends when the application drops its [`Worker`] or stops listening, or with the
+/// connection, which the application's loop loses too and reports.
 pub fn spawn(
     mut capturer: Capturer,
     replies: async_channel::Sender<Reply>,
@@ -121,8 +120,10 @@ pub fn spawn(
         .name("cupertino-screenshot-capture".into())
         .spawn(move || {
             if let Err(e) = capturer.serve(&inbox, &woken, &replies) {
-                let _ = replies.send_blocking(Reply::Failed(e.to_string()));
+                eprintln!("cupertino-screenshot: capture thread: {e}");
             }
+            // the application's loop may already be gone with the connection; closing the channel would wake it
+            std::mem::forget(replies);
         })?;
     Ok(Worker { jobs, wake })
 }

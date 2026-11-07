@@ -21,7 +21,10 @@ from the application's model and reports changes as messages.
   snapshot. Return submits unless a composition holds it, and Escape cancels a composition first.
 - **Passwords.** `SecureField` keeps its text in a `SecureBuffer` only: no undo, copy, cut or other command chord, no
   surrounding text for the input method, a protected accessible value, and the secret reaches the application only
-  borrowed, in the submit handler. A composition is never held; only committed text goes in.
+  borrowed, in the submit handler. A composition is never held; only committed text goes in. `busy` and `invalid`
+  give assistive technology the field's busy and invalid states, which the application sets while a password is checked
+  and after it is refused. `max_len` caps the text in bytes: text past it is cut at a grapheme boundary and a key with
+  no room left is refused without an edit. Build the field with `..SecureField::default()` for the fields left out.
 - **Sidebar.** `Sidebar` lays out sections, each an optional heading over rows of an icon and a label, and keeps one
   row selected, counted over every section. The rows share one Tab stop; Up, Down, Home and End cross the sections,
   and a selection that does not change is not reported again. Assistive technology reads a list with a group per

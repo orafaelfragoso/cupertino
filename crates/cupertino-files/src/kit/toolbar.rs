@@ -35,6 +35,8 @@ const FOCUS_RING: f64 = 2.0;
 const PATH_ICON: f64 = 16.0;
 const PATH_TEXT: f32 = 11.0;
 const PATH_GAP: f64 = 4.0;
+/// How far a path bar folder's focus ring lies outside its icon and name, so it covers neither.
+const PATH_RING_OUTSET: f64 = 3.0;
 const SPACE: Keysym = Keysym(0x20);
 const RETURN: Keysym = Keysym(0xff0d);
 const KP_ENTER: Keysym = Keysym(0xff8d);
@@ -193,7 +195,7 @@ impl Widget<Message> for ToolButton {
             }
         }
         if cx.is_focused() && cx.focus_visible() {
-            focus_ring(cx);
+            focus_ring(cx, 0.0);
         }
     }
 
@@ -206,8 +208,9 @@ impl Widget<Message> for ToolButton {
     }
 }
 
-/// The keyboard focus ring inside the node's bounds, in the theme's focus indicator colour.
-fn focus_ring(cx: &mut PaintCx<'_>) {
+/// The keyboard focus ring, its outer edge `outset` points outside the node's bounds, in the theme's focus indicator
+/// colour.
+fn focus_ring(cx: &mut PaintCx<'_>, outset: f64) {
     let size = cx.size();
     let ring = cx
         .env()
@@ -215,16 +218,17 @@ fn focus_ring(cx: &mut PaintCx<'_>) {
         .colors
         .get(ColorRole::KeyboardFocusIndicator, StateVariant::NORMAL);
     if let Some(ring) = ring {
-        let half = FOCUS_RING / 2.0;
+        // the stroke is centred on its path, half of it on each side
+        let edge = FOCUS_RING / 2.0 - outset;
         cx.push(PaintOp::Stroke {
             shape: Shape::RoundedRect {
                 rect: Rect::new(
-                    half,
-                    half,
-                    size.width - FOCUS_RING,
-                    size.height - FOCUS_RING,
+                    edge,
+                    edge,
+                    size.width - 2.0 * edge,
+                    size.height - 2.0 * edge,
                 ),
-                radius: RADIUS - half,
+                radius: RADIUS - edge,
             },
             paint: Paint::Solid(ring),
             width: FOCUS_RING,
@@ -324,7 +328,7 @@ impl Widget<Message> for PathSegment {
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         if cx.is_focused() && cx.focus_visible() {
-            focus_ring(cx);
+            focus_ring(cx, PATH_RING_OUTSET);
         }
     }
 

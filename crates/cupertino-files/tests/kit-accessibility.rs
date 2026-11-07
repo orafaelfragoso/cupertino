@@ -27,8 +27,11 @@ use cupertino_kit::render::{Paint, PaintNodeId, PaintOp};
 use cupertino_kit::theme::{
     Appearance, Color, ColorRole, StateVariant, ThemePreferences, ThemeTokens,
 };
+use cupertino_test_bus::{missing_tool, PrivateBus};
 use cupertino_theme::Theme;
 use cupertino_ui_test::{describe, semantic_outline, whole_tree};
+use zbus::blocking::Connection;
+use zbus::zvariant::OwnedObjectPath;
 
 const TAB: u32 = 0xff09;
 const LEFT_TAB: u32 = 0xfe20;
@@ -76,6 +79,18 @@ fn start(appearance: Appearance) -> (Run, Assistive) {
 
 /// [`start`] with Reduce Motion on when `still`, and every transfer calling `observer`.
 fn start_with(appearance: Appearance, still: bool, observer: Option<Observer>) -> (Run, Assistive) {
+    let at = Assistive::default();
+    let run = start_hosted(appearance, still, observer, Box::new(at.clone()));
+    (run, at)
+}
+
+/// [`start_with`] read by the assistive technology `accessibility`.
+fn start_hosted(
+    appearance: Appearance,
+    still: bool,
+    observer: Option<Observer>,
+    accessibility: Box<dyn AccessibilityAdapter>,
+) -> Run {
     let home = tempfile::tempdir().unwrap();
     let documents = home.path().join("Documents");
     let downloads = home.path().join("Downloads");
@@ -93,9 +108,8 @@ fn start_with(appearance: Appearance, still: bool, observer: Option<Observer>) -
         reduce_transparency: false,
         reduce_motion: still,
     };
-    let at = Assistive::default();
     let host = Host {
-        accessibility: Some(Box::new(at.clone())),
+        accessibility: Some(accessibility),
         ..Host::default()
     };
     let configure = move |start: cupertino_files::kit::Start| match observer {
@@ -113,7 +127,7 @@ fn start_with(appearance: Appearance, still: bool, observer: Option<Observer>) -
         host,
     );
     run.wait_until(|run| run.rows().len() == 3);
-    (run, at)
+    run
 }
 
 fn nodes(run: &Run) -> HashMap<NodeId, AccessibilityNode> {
@@ -733,6 +747,9 @@ fn the_focus_ring_shows_on_the_toolbar_the_path_bar_and_a_selected_row_with_incr
             strokes(&run, first, ring),
             "{appearance:?}: the path bar folder's ring"
         );
+        if appearance == Appearance::LightHighContrast {
+            run.driver.look(run.window, "files-path-bar-focus").unwrap();
+        }
         // over the selection the ring takes the selected text colour
         run.key_with(LEFT_TAB, None, Mods::SHIFT);
         assert_eq!(focused(&run), "Row [Notes]");
@@ -780,4 +797,230 @@ fn an_empty_folder_reads_its_name_and_no_items() {
     let lines = outline(&run);
     let list = "List \"Downloads\" 0 items multiselectable".to_owned();
     assert!(lines.contains(&list), "{lines:#?}");
+}
+
+/// Set in the copy of the test binary that plays the window read over AT-SPI.
+const ATSPI_WINDOW: &str = "CUPERTINO_TEST_FILES_ATSPI_LIST";
+const ATSPI_ROOT: &str = "/org/a11y/atspi/accessible/root";
+/// AT-SPI's role numbers (`AtspiRole`) and state bits (`AtspiStateType`).
+const ATSPI_LABEL: u32 = 29;
+const ATSPI_TABLE: u32 = 55;
+const ATSPI_TABLE_ROW: u32 = 90;
+const ATSPI_MULTISELECTABLE: u32 = 18;
+const ATSPI_SELECTED: u32 = 23;
+
+struct Unpark(std::thread::Thread);
+
+impl std::task::Wake for Unpark {
+    fn wake(self: Arc<Self>) {
+        self.0.unpark();
+    }
+}
+
+/// The window read over AT-SPI: the list with `a.txt` and `b.txt` selected. Once the selection is the row a click
+/// over AT-SPI asked for, it waits for the test to close its input and exits successfully; it fails when no click
+/// arrives.
+fn atspi_window() {
+    use std::io::Read;
+    let waker = std::task::Waker::from(Arc::new(Unpark(std::thread::current())));
+    let adapter = cupertino_ui_atspi::AtspiAdapter::new(waker);
+    let mut run = start_hosted(Appearance::Light, false, None, Box::new(adapter));
+    run.send(cupertino_kit::platform::WindowEvent::Focus(true));
+    run.click_row("a.txt");
+    run.click_row_with("b.txt", Mods::SHIFT);
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
+        run.driver
+            .window_system_mut()
+            .enqueue(PlatformEvent::Wake)
+            .unwrap();
+        run.settle();
+        if run.selected_rows() == ["Notes"] {
+            std::io::stdin().read_to_end(&mut Vec::new()).unwrap();
+            return;
+        }
+        std::thread::park_timeout(Duration::from_millis(50));
+    }
+    panic!(
+        "no click over AT-SPI selected Notes: {:?}",
+        run.selected_rows()
+    );
+}
+
+struct A11yStatus;
+
+#[zbus::interface(name = "org.a11y.Status")]
+impl A11yStatus {
+    #[zbus(property)]
+    fn is_enabled(&self) -> bool {
+        true
+    }
+}
+
+/// The registry: it records which bus name embedded its application root.
+struct Socket(mpsc::Sender<String>);
+
+#[zbus::interface(name = "org.a11y.atspi.Socket")]
+impl Socket {
+    fn embed(
+        &self,
+        plug: (String, OwnedObjectPath),
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> (String, OwnedObjectPath) {
+        let _ = self.0.send(plug.0);
+        let registry = conn
+            .unique_name()
+            .map(|n| n.to_string())
+            .unwrap_or_default();
+        (registry, OwnedObjectPath::try_from(ATSPI_ROOT).unwrap())
+    }
+}
+
+fn accessible<'a>(conn: &Connection, peer: &str, path: &str) -> zbus::blocking::Proxy<'a> {
+    zbus::blocking::Proxy::new(
+        conn,
+        peer.to_owned(),
+        path.to_owned(),
+        "org.a11y.atspi.Accessible",
+    )
+    .unwrap()
+}
+
+/// The nodes under `path`, depth first, with their role and name.
+fn descendants(conn: &Connection, peer: &str, path: &str) -> Vec<(OwnedObjectPath, u32, String)> {
+    let found: zbus::Result<Vec<(String, OwnedObjectPath)>> =
+        accessible(conn, peer, path).call("GetChildren", &());
+    let mut out = Vec::new();
+    for (_, child) in found.unwrap_or_default() {
+        let node = accessible(conn, peer, child.as_str());
+        let role: u32 = node.call("GetRole", &()).unwrap();
+        let name: String = node.get_property("Name").unwrap_or_default();
+        out.push((child.clone(), role, name));
+        out.extend(descendants(conn, peer, child.as_str()));
+    }
+    out
+}
+
+/// The state bits of the node at `path`.
+fn states(conn: &Connection, peer: &str, path: &OwnedObjectPath) -> u32 {
+    let state: Vec<u32> = accessible(conn, peer, path.as_str())
+        .call("GetState", &())
+        .unwrap();
+    state[0]
+}
+
+/// An assistive technology reads the list over AT-SPI as a table that takes more than one selected row, the two rows
+/// selected as such and the third not; a click on the third over AT-SPI selects it alone.
+#[test]
+fn assistive_technology_reads_the_lists_selection_over_atspi_and_a_rows_click_selects_it() {
+    const NAME: &str =
+        "assistive_technology_reads_the_lists_selection_over_atspi_and_a_rows_click_selects_it";
+    if std::env::var_os(ATSPI_WINDOW).is_some() {
+        return atspi_window();
+    }
+    let Some(bus) = PrivateBus::start() else {
+        missing_tool("dbus-daemon");
+        return;
+    };
+    let (embedded, embeds) = mpsc::channel();
+    let _status = bus
+        .blocking_builder()
+        .name("org.a11y.Bus")
+        .unwrap()
+        .serve_at("/org/a11y/bus", A11yStatus)
+        .unwrap()
+        .build()
+        .unwrap();
+    let _registry = bus
+        .blocking_builder()
+        .name("org.a11y.atspi.Registry")
+        .unwrap()
+        .serve_at(ATSPI_ROOT, Socket(embedded))
+        .unwrap()
+        .build()
+        .unwrap();
+    let mut window = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([NAME, "--exact", "--nocapture"])
+        .env(ATSPI_WINDOW, "1")
+        .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
+        .env("AT_SPI_BUS_ADDRESS", &bus.address)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let peer = embeds
+        .recv_timeout(Duration::from_secs(20))
+        .expect("the window never embedded its root");
+    let conn = bus.connect();
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    // each row of the table by the text of its first cell
+    let (table, rows) = loop {
+        let nodes = descendants(&conn, &peer, ATSPI_ROOT);
+        let table = nodes
+            .iter()
+            .find(|(_, role, name)| *role == ATSPI_TABLE && name == "Documents")
+            .map(|(path, _, _)| path.clone());
+        if let Some(table) = table {
+            let rows: Vec<(OwnedObjectPath, String)> = nodes
+                .iter()
+                .filter(|(_, role, _)| *role == ATSPI_TABLE_ROW)
+                .filter_map(|(path, _, _)| {
+                    let under = descendants(&conn, &peer, path.as_str());
+                    let (_, _, name) = under.into_iter().find(|(_, r, _)| *r == ATSPI_LABEL)?;
+                    Some((path.clone(), name))
+                })
+                .collect();
+            let selected = rows
+                .iter()
+                .filter(|(path, _)| states(&conn, &peer, path) & (1 << ATSPI_SELECTED) != 0)
+                .count();
+            if selected == 2 {
+                break (table, rows);
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no table with two rows selected appeared"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_ne!(
+        states(&conn, &peer, &table) & (1 << ATSPI_MULTISELECTABLE),
+        0,
+        "the table takes more than one row"
+    );
+    let read: Vec<(&str, bool)> = rows
+        .iter()
+        // the header row reads its first title
+        .filter(|(_, name)| name != "Name")
+        .map(|(path, name)| {
+            let selected = states(&conn, &peer, path) & (1 << ATSPI_SELECTED) != 0;
+            (name.as_str(), selected)
+        })
+        .collect();
+    assert_eq!(
+        read,
+        [("a.txt", true), ("b.txt", true), ("Notes", false)],
+        "the rows by name and selection"
+    );
+    let notes = &rows.iter().find(|(_, name)| name == "Notes").unwrap().0;
+    let action = zbus::blocking::Proxy::new(
+        &conn,
+        peer.clone(),
+        notes.as_str().to_owned(),
+        "org.a11y.atspi.Action",
+    )
+    .unwrap();
+    let names: Vec<String> = (0..2)
+        .filter_map(|i| action.call("GetName", &(i as i32,)).ok())
+        .collect();
+    let click = names
+        .iter()
+        .position(|n| n == "click")
+        .unwrap_or_else(|| panic!("the row's actions: {names:?}"));
+    let _: bool = action.call("DoAction", &(click as i32,)).unwrap();
+    drop(window.stdin.take());
+    assert!(
+        window.wait().unwrap().success(),
+        "the row's click did not select it"
+    );
 }

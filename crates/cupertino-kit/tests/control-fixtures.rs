@@ -222,6 +222,43 @@ fn render(
         fixture.name,
         semantic_outline(&tree).join("\n")
     );
+    if let (State::Focused, Some(focus)) = (state, snapshot.focus) {
+        // the keyboard focus shows in every appearance, high contrast included: a menu item by its highlight, a text
+        // editor by its caret, any other control by a ring in the theme's colour
+        let theme = repository_theme(appearance);
+        let color = |role| theme.colors.get(role, StateVariant::NORMAL).unwrap();
+        let role = snapshot
+            .accessibility
+            .iter()
+            .find(|(id, _)| *id == focus)
+            .map(|(_, n)| n.role);
+        let mut ops = snapshot.display_list.nodes.iter().flat_map(|n| &n.ops);
+        let shows = match role {
+            Some(Role::MenuItem | Role::MenuItemCheckBox | Role::MenuItemRadio) => {
+                let highlight = color(ColorRole::SelectedControlFill);
+                ops.any(|op| matches!(op, PaintOp::Fill { paint: Paint::Solid(c), .. } if *c == highlight))
+            }
+            Some(Role::MultilineTextInput) => {
+                let text = color(ColorRole::Text);
+                ops.any(|op| {
+                    matches!(op, PaintOp::Fill { shape: Shape::Rect(r), paint: Paint::Solid(c) }
+                        if *c == text && r.size.width <= 2.0)
+                })
+            }
+            _ => {
+                let ring = color(ColorRole::KeyboardFocusIndicator);
+                ops.any(|op| {
+                    matches!(op, PaintOp::Stroke { width, paint: Paint::Solid(c), .. }
+                        if *c == ring && *width == theme.focus.width)
+                })
+            }
+        };
+        assert!(
+            shows,
+            "{} {appearance:?} {direction:?}: the keyboard focus on {role:?} does not show",
+            fixture.name
+        );
+    }
     let dump = Inspector::default().dump(&snapshot);
     let focus = dump.lines().find(|l| l.starts_with("focus ")).unwrap();
     let semantics = dump

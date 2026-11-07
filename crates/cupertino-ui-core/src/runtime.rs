@@ -119,6 +119,8 @@ struct WindowState<M> {
     active: bool,
     /// The compositor is ready for a frame.
     frame_ready: bool,
+    /// A frame of the window has been presented ([`Command::OnPresented`]).
+    presented: bool,
     /// Something changed since the last presented frame.
     dirty: bool,
     /// Layout and semantics are up to date with the tree.
@@ -193,6 +195,8 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     tokens: HashMap<ActivationRequest, TokenHandler<A::Message>>,
     /// What each step of a running drag turns into.
     drags: HashMap<DragToken, DragHandler<A::Message>>,
+    /// The messages to send once a window has presented its first frame ([`Command::OnPresented`]).
+    on_presented: Vec<(WindowKey, A::Message)>,
 }
 
 impl<A: Application, W: WindowSystem> Runtime<A, W> {
@@ -224,6 +228,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             theme_for: None,
             tokens: HashMap::new(),
             drags: HashMap::new(),
+            on_presented: Vec::new(),
         };
         for command in commands {
             runtime.command(command);
@@ -403,6 +408,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             Command::CloseWindow(key) => {
                 if let Some(i) = self.windows.iter().position(|w| w.key == key) {
                     let w = self.windows.remove(i);
+                    self.on_presented.retain(|(k, _)| *k != key);
                     self.close(w);
                 }
             }
@@ -427,6 +433,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 None => self.messages.push_back(on_token(None)),
             },
             Command::StartDrag(drag) => self.start_drag(drag),
+            Command::OnPresented { window, message } => {
+                if self.windows.iter().any(|w| w.key == window && w.presented) {
+                    self.messages.push_back(message);
+                } else {
+                    self.on_presented.push((window, message));
+                }
+            }
             Command::Exit => self.exit = true,
         }
     }
@@ -584,6 +597,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
             }
         }
+        // a message waits only for a window the view has: one closed, or never opened, presents nothing
+        let windows = &self.windows;
+        self.on_presented
+            .retain(|(key, _)| windows.iter().any(|w| &w.key == key));
         if self.windows.is_empty() && !A::RESIDENT {
             self.exit = true;
         }
@@ -621,6 +638,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             ack: None,
             active: false,
             frame_ready: false,
+            presented: false,
             dirty: true,
             prepared: false,
             focus: Focus::default(),
@@ -1235,7 +1253,19 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
         }
         self.sync_accessibility();
+        self.send_presented();
         Ok(())
+    }
+
+    /// Sends the messages waiting for windows that have now presented a frame.
+    fn send_presented(&mut self) {
+        let windows = &self.windows;
+        let (ready, waiting) = std::mem::take(&mut self.on_presented)
+            .into_iter()
+            .partition(|(key, _)| windows.iter().any(|w| &w.key == key && w.presented));
+        self.on_presented = waiting;
+        let ready: Vec<(WindowKey, A::Message)> = ready;
+        self.messages.extend(ready.into_iter().map(|(_, m)| m));
     }
 
     /// Moves each open popup whose anchor moved or whose content changed size, once the parents are laid out.
@@ -1471,6 +1501,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             PresentOutcome::Presented => {
                 w.ack = None;
                 w.frame_ready = false;
+                w.presented = true;
                 self.system.request_frame(w.id);
             }
             PresentOutcome::NotReady => {

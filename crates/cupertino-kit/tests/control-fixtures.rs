@@ -35,7 +35,7 @@ use cupertino_kit::platform::{
 use cupertino_kit::render::{ImageResource, Paint, PaintOp, PixelFormat, ResourceId, Shape};
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
 use cupertino_kit::theme::{Appearance, ColorRole, StateVariant};
-use cupertino_ui_test::Inspector;
+use cupertino_ui_test::{accessibility_audit, semantic_outline, whole_tree, Inspector};
 use std::cell::Cell;
 use support::{repository_theme, Run, TAB};
 use tiny_skia::Pixmap;
@@ -203,7 +203,21 @@ fn render(
         fixture.name
     );
     let pixels = frame.pixels.clone();
-    let dump = Inspector::default().dump(&run.snapshot());
+    let snapshot = run.snapshot();
+    let tree = whole_tree(run.window, snapshot.accessibility.clone(), snapshot.focus);
+    // a cell is an untitled window around one control
+    let problems: Vec<String> = accessibility_audit(&tree)
+        .into_iter()
+        .filter(|p| p != "Window #0: no name")
+        .collect();
+    assert_eq!(
+        problems,
+        Vec::<String>::new(),
+        "{} {appearance:?} {direction:?} {state:?} reads:\n{}",
+        fixture.name,
+        semantic_outline(&tree).join("\n")
+    );
+    let dump = Inspector::default().dump(&snapshot);
     let focus = dump.lines().find(|l| l.starts_with("focus ")).unwrap();
     let semantics = dump
         .lines()

@@ -27,6 +27,10 @@ const ARCHIVE_TYPES: [&str; 12] = [
     "application/x-cpio",
 ];
 
+/// The prefix of the shared MIME database's generic icons of office documents (`x-office-spreadsheet`, ...). A document
+/// whose format is packed in an archive is a subclass of the archive's type, but it is not drawn as an archive.
+const OFFICE_GENERIC_ICON: &str = "x-office-";
+
 /// Types of programs, matched against the type and its ancestors.
 const EXECUTABLE_TYPES: [&str; 3] = [
     "application/x-executable",
@@ -35,8 +39,8 @@ const EXECUTABLE_TYPES: [&str; 3] = [
 ];
 
 /// The semantic icon name of a file of type `mime`: `folder` for a directory, then by the kind of the type or of its
-/// nearest ancestor: PDF, image, audio, video, archive, text (scripts included: the payload has no script icon),
-/// program; every other type gets `document.generic`.
+/// nearest ancestor: PDF, image, audio, video, archive (not an office document packed in one), text (scripts
+/// included: the payload has no script icon), program; every other type gets `document.generic`.
 pub fn document_icon_name(db: &MimeDatabase, mime: &str) -> &'static str {
     let kind = |ty: &str| db.is_a(mime, ty);
     let media = |prefix: &str| db.ancestors(mime).iter().any(|a| a.starts_with(prefix));
@@ -50,7 +54,11 @@ pub fn document_icon_name(db: &MimeDatabase, mime: &str) -> &'static str {
         "document.audio"
     } else if media("video/") {
         "document.video"
-    } else if ARCHIVE_TYPES.iter().any(|t| kind(t)) {
+    } else if ARCHIVE_TYPES.iter().any(|t| kind(t))
+        && !db
+            .generic_icon(mime)
+            .is_some_and(|icon| icon.starts_with(OFFICE_GENERIC_ICON))
+    {
         "document.archive"
     } else if kind(TEXT_PLAIN) {
         "document.text"
@@ -157,9 +165,9 @@ impl FileIcons {
         }
     }
 
-    /// File icons drawn by `system`, so a test controls the host themes (the packs and nothing else, when `system` has none).
-    #[cfg(test)]
-    fn with_system(
+    /// File icons drawn by `system`, so a caller controls the host themes (the packs and nothing else, with
+    /// [`SystemIcons::without_host`]): tests and captures that must not read the icon themes of the machine.
+    pub fn with_system(
         system: SystemIcons,
         db: MimeDatabase,
         folders: HashMap<PathBuf, &'static str>,
@@ -209,7 +217,12 @@ mod tests {
         std::fs::create_dir_all(&mime).unwrap();
         std::fs::write(
             mime.join("subclasses"),
-            "application/x-shellscript application/x-executable\napplication/x-shellscript text/plain\nimage/svg+xml application/xml\napplication/xml text/plain\napplication/x-compressed-tar application/x-tar\napplication/epub+zip application/zip\n",
+            "application/x-shellscript application/x-executable\napplication/x-shellscript text/plain\nimage/svg+xml application/xml\napplication/xml text/plain\napplication/x-compressed-tar application/x-tar\napplication/epub+zip application/zip\napplication/vnd.oasis.opendocument.spreadsheet application/zip\n",
+        )
+        .unwrap();
+        std::fs::write(
+            mime.join("generic-icons"),
+            "application/vnd.oasis.opendocument.spreadsheet:x-office-spreadsheet\napplication/zip:package-x-generic\n",
         )
         .unwrap();
         MimeDatabase::load(&[root.join("data")]).unwrap()
@@ -232,6 +245,11 @@ mod tests {
         assert_eq!(name("video/mp4"), "document.video");
         assert_eq!(name("application/x-compressed-tar"), "document.archive");
         assert_eq!(name("application/epub+zip"), "document.archive");
+        assert_eq!(
+            name("application/vnd.oasis.opendocument.spreadsheet"),
+            "document.generic",
+            "an office document packed in a zip archive is not an archive"
+        );
         assert_eq!(name("text/x-rust"), "document.text");
         assert_eq!(
             name("application/x-shellscript"),

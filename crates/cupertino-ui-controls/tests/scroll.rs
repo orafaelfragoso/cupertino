@@ -288,7 +288,11 @@ fn a_key_held_with_a_command_modifier_is_left_for_the_shortcuts() {
     }
     assert_eq!(h.model().inner.offset.y, 0.0);
     h.key_event(DOWN, true, false, Mods::SHIFT);
-    assert_eq!(h.model().inner.offset.y, 40.0, "Shift is no command modifier");
+    assert_eq!(
+        h.model().inner.offset.y,
+        40.0,
+        "Shift is no command modifier"
+    );
 }
 
 fn focused_role(h: &Harness<Scrolled>) -> Role {

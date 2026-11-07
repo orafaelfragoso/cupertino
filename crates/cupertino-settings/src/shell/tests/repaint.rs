@@ -123,7 +123,7 @@ fn type_key(system: &mut HeadlessWindowSystem, window: WindowId, c: char) {
         let event = KeyEvent {
             code: 0,
             keysym: Keysym(c as u32),
-            text: Some(c).filter(|_| pressed),
+            text: pressed.then_some(c),
             pressed,
             repeat: false,
             mods: Mods::NONE,

@@ -11,12 +11,14 @@ use cupertino_ui_core::{
 };
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 use cupertino_ui_platform::{MouseButton, PointerEvent, Timestamp};
+use cupertino_ui_text::MULTI_CLICK_INTERVAL;
 
 /// How far, in points along either axis, the pointer travels from the press with the button held before the window
 /// starts to move; a shorter wobble stays a click.
 pub(crate) const DRAG_START: f64 = 5.0;
-/// The longest time between two presses on the region, in nanoseconds, that makes them a double click.
-pub(crate) const DOUBLE_CLICK: u64 = 500_000_000;
+/// The longest time between two presses on the region, in nanoseconds, that makes them a double click: the toolkit's
+/// one double click interval, which text selection also uses.
+pub(crate) const DOUBLE_CLICK: u64 = MULTI_CLICK_INTERVAL.as_nanos() as u64;
 
 /// The press being held and the last press's time.
 #[derive(Debug, Default)]

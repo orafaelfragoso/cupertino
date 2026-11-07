@@ -8,7 +8,7 @@ use crate::route::Geometry;
 use crate::tree::Tree;
 use crate::{Environment, NodeId, WindowBackground};
 use cupertino_geometry::{Point, Rect, Size};
-use cupertino_ui_platform::Timestamp;
+use cupertino_ui_platform::{MaterialRegion, Timestamp};
 use cupertino_ui_render::{
     DisplayList, Effect, Group, ImageResource, Paint, PaintNode, PaintNodeId, PaintOp,
     PaintResources, PaintRevision, PathVerb, ResourceId, Shape, Transform,
@@ -31,6 +31,22 @@ struct Painted {
     images: Vec<(ResourceId, ImageResource)>,
     /// The part of the node that showed, when its paint depended on it.
     visible: Option<Rect>,
+    /// Whether the window could show one more material when the node painted, if the node asked for one.
+    materials: Option<bool>,
+    /// The material the window shows under the node.
+    material: Option<NodeMaterial>,
+}
+
+/// The most compositor materials one window shows under its nodes ([`PaintCx::material`]); a node past them paints its
+/// own fill.
+pub const MAX_MATERIALS: usize = 32;
+
+/// The material a node asked for under itself.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct NodeMaterial {
+    pub(crate) name: &'static str,
+    pub(crate) radius: f64,
+    pub(crate) alpha: f64,
 }
 
 /// How far a blur reaches beyond the content it blurs, per unit of radius.
@@ -158,6 +174,8 @@ pub(crate) struct Painting {
     pub(crate) animating: Vec<NodeId>,
     /// The images the list draws.
     pub(crate) resources: PaintResources,
+    /// The materials the nodes asked for, in window coordinates, in paint order.
+    pub(crate) materials: Vec<MaterialRegion>,
 }
 
 pub(crate) struct PaintInput<'a> {
@@ -168,6 +186,8 @@ pub(crate) struct PaintInput<'a> {
     pub(crate) background: WindowBackground,
     /// The window system shows the material of a [`WindowBackground::Surface`], so nothing stands in for it.
     pub(crate) backdrop: bool,
+    /// The window system can show materials under nodes.
+    pub(crate) materials: bool,
     pub(crate) now: Timestamp,
 }
 
@@ -200,6 +220,7 @@ impl Painter {
         let mut resources = PaintResources::default();
         let mut seen = HashSet::with_capacity(self.nodes.len());
         let mut clips = Vec::new();
+        let mut materials = Vec::new();
         let window = geometry.get(&root).map(|p| p.rect);
         for id in tree.preorder(root) {
             let (Some(node), Some(placement)) = (tree.get(id), geometry.get(&id)) else {
@@ -228,11 +249,13 @@ impl Painter {
                 .map_or(Rect::new(0.0, 0.0, 0.0, 0.0), |shown| {
                     shown.translate(-origin.x, -origin.y)
                 });
+            let can_show = input.materials && materials.len() < MAX_MATERIALS;
             let fresh = self.nodes.get(&id).is_some_and(|p| {
                 p.source == source
                     && p.background == background
                     && p.size == size
                     && p.visible.is_none_or(|v| v == visible)
+                    && p.materials.is_none_or(|m| m == can_show)
             });
             if !fresh {
                 let mut ops = Vec::new();
@@ -275,6 +298,8 @@ impl Painter {
                 let mut animate = false;
                 let mut images = Vec::new();
                 let mut reads_visible = false;
+                let mut material = None;
+                let mut asked_material = false;
                 node.widget.paint(
                     &*node.state,
                     &mut PaintCx {
@@ -291,6 +316,9 @@ impl Painter {
                         images: &mut images,
                         visible,
                         reads_visible: &mut reads_visible,
+                        materials: can_show,
+                        material: &mut material,
+                        asked_material: &mut asked_material,
                     },
                 );
                 if animate {
@@ -309,10 +337,23 @@ impl Painter {
                         group,
                         images,
                         visible: reads_visible.then_some(visible),
+                        materials: asked_material.then_some(can_show),
+                        material,
                     },
                 );
             }
             let painted = &self.nodes[&id];
+            if let Some(material) = painted.material {
+                let shown = visible.translate(origin.x, origin.y);
+                if shown.width() > 0.0 && shown.height() > 0.0 {
+                    materials.push(MaterialRegion {
+                        material: material.name.to_owned(),
+                        rect: shown,
+                        radius: material.radius,
+                        alpha: material.alpha,
+                    });
+                }
+            }
             for (image, pixels) in &painted.images {
                 let kept = resources
                     .images
@@ -371,6 +412,7 @@ impl Painter {
             own,
             animating,
             resources,
+            materials,
         }
     }
 }

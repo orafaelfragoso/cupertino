@@ -31,6 +31,7 @@ pub use clock::MonotonicClock;
 pub use command::CommandRegistry;
 pub use cx::{EventCx, FocusTarget, MeasureCx, PaintCx, SemanticsCx};
 pub use icons::{next_resource_id, IconImage, Icons, PlaceholderIcons};
+pub use paint::MAX_MATERIALS;
 pub use runtime::{
     RendererFactory, Runtime, RuntimeOptions, ThemeForAppearance, WindowErrorHandler,
 };

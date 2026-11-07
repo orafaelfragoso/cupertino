@@ -1,6 +1,7 @@
 use crate::accessibility::{
     AccessibleStates, AccessibleValue, Action, Live, Relation, Role, SortOrder,
 };
+use crate::paint::NodeMaterial;
 use crate::route::Placement;
 use crate::widget::Change;
 use crate::{Environment, Key, NodeId, Phase};
@@ -11,6 +12,7 @@ use cupertino_ui_render::{
     Effect, Group, ImageResource, PaintOp, ResourceId, ResourceRef, Sampling,
 };
 use cupertino_ui_text::TextInputState;
+use cupertino_ui_theme::Surface;
 use std::collections::BTreeSet;
 
 pub struct MeasureCx<'a> {
@@ -257,6 +259,11 @@ pub struct PaintCx<'a> {
     pub(crate) images: &'a mut Vec<(ResourceId, ImageResource)>,
     pub(crate) visible: Rect,
     pub(crate) reads_visible: &'a mut bool,
+    /// The window can show one more material.
+    pub(crate) materials: bool,
+    pub(crate) material: &'a mut Option<NodeMaterial>,
+    /// The node called [`PaintCx::material`].
+    pub(crate) asked_material: &'a mut bool,
 }
 
 impl PaintCx<'_> {
@@ -328,6 +335,32 @@ impl PaintCx<'_> {
     /// shadow or blur of the subtree) on the result.
     pub fn set_group(&mut self, opacity: f32, effects: Vec<Effect>) {
         *self.group = Some(Group { opacity, effects });
+    }
+
+    /// Asks the compositor for the material of `surface` under this node: its whole size, cut by the clips around it,
+    /// with its corners rounded by `radius` points, at `alpha` from 0 (hidden) to 1 (opaque). A group's opacity does
+    /// not reach it, so a node that fades passes its opacity here too. Returns whether the window shows the material.
+    /// It does not without the desktop's effects, with Reduce Transparency or Increase Contrast, or past
+    /// [`MAX_MATERIALS`](crate::MAX_MATERIALS) in one window; the node then paints the surface's opaque fill
+    /// ([`ThemeTokens::surface`](cupertino_ui_theme::ThemeTokens::surface)) itself. The material lies under everything
+    /// the window paints, so a node over other content of its window paints its own fill instead.
+    pub fn material(&mut self, surface: Surface, radius: f64, alpha: f64) -> bool {
+        *self.asked_material = true;
+        let name = self.env.theme.surface(surface).material;
+        *self.material = name.filter(|_| self.materials).map(|name| NodeMaterial {
+            name,
+            radius: if radius.is_finite() {
+                radius.max(0.0)
+            } else {
+                0.0
+            },
+            alpha: if alpha.is_finite() {
+                alpha.clamp(0.0, 1.0)
+            } else {
+                1.0
+            },
+        });
+        self.material.is_some()
     }
 }
 

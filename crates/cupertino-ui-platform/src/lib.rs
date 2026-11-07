@@ -131,6 +131,9 @@ pub enum WindowRequest {
     /// Puts a compositor material under the whole window, or takes it away with `None`. Needs
     /// [`Capabilities::app_effects`].
     Backdrop(Option<Backdrop>),
+    /// Puts compositor materials under parts of the window besides its own [`Backdrop`], or takes them all away with
+    /// an empty list. Needs [`Capabilities::app_effects`].
+    Materials(Vec<MaterialRegion>),
     /// Publishes a toplevel's menus to the desktop's menu bar, or withdraws them with `None`. A platform without a
     /// desktop menu bar takes the request and shows nothing.
     Menus(Option<MenuDescription>),
@@ -151,6 +154,16 @@ pub struct MenuDescription {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Backdrop {
     pub material: String,
+    pub radius: f64,
+    pub alpha: f64,
+}
+
+/// A material of the theme data (`materials.json`) the compositor draws under one part of a window: `rect` in the
+/// window's coordinates with its corners rounded by `radius` points, at `alpha` from 0 (hidden) to 1 (opaque).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MaterialRegion {
+    pub material: String,
+    pub rect: Rect,
     pub radius: f64,
     pub alpha: f64,
 }

@@ -5,9 +5,16 @@
 //!
 //! The socket closes on `exec`, and its variable is removed before any thread or child exists. The login screen's
 //! compositor is not dumpable, so another process of the greeter's user cannot borrow the socket through `ptrace`.
+//!
+//! In a person's session the compositor runs the reader itself ([`SessionReader`]), as one of its own children, while
+//! `accessibility.conf` says `screen_reader = on`. Settings sets that key through `Session1.SetAccessibility`, and
+//! Super+Alt+S on a keyboard turns the reader on or off and stores the key the same way.
 
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
+use cupertino_peer::ProcessHandle;
 use smithay::input::keyboard::keysyms;
 
 use crate::input::Mods;
@@ -125,11 +132,11 @@ impl Cupertino {
         self.screen_reader = Some(reader);
     }
 
-    /// A key from an input device: whether it is Super+Alt+S at the login screen (or the release of its key), which the
-    /// compositor takes. A press asks the worker to toggle the reader.
+    /// A key from an input device: whether it is Super+Alt+S (or the release of its key), which the compositor takes. At
+    /// the login screen a press asks the worker to toggle the reader; in a person's session it toggles the session's.
     pub fn screen_reader_key(&mut self, code: u32, sym: u32, mods: &Mods, pressed: bool) -> bool {
         let Some(reader) = self.screen_reader.as_mut() else {
-            return false;
+            return self.session_reader_key(code, sym, mods, pressed);
         };
         if !pressed {
             return reader.down.take_if(|down| *down == code).is_some();
@@ -141,6 +148,163 @@ impl Cupertino {
         if let Some(name) = self.socket_name.clone() {
             reader.send(&format!("toggle {name}"));
         }
+        true
+    }
+}
+
+/// How long a session reader has to end after `SIGTERM` before it is killed.
+const SESSION_STOP_GRACE: Duration = Duration::from_secs(2);
+/// How often a stopping reader is checked while it has its grace.
+const SESSION_STOP_POLL: Duration = Duration::from_millis(50);
+
+/// The screen reader of a person's session: a child of the compositor, started and stopped to match the `screen_reader`
+/// key of `accessibility.conf`.
+#[derive(Debug, Default)]
+pub struct SessionReader {
+    /// The reader to start: the installed one in a session on the hardware, `None` at the login screen, in nested and
+    /// offscreen runs and when none is installed. Tests name another program.
+    pub program: Option<PathBuf>,
+    running: Option<ProcessHandle>,
+    /// The key of a chord that was pressed: its release is the compositor's too.
+    down: Option<u32>,
+}
+
+impl SessionReader {
+    /// The reader of a session that starts `program`.
+    pub fn new(program: Option<PathBuf>) -> Self {
+        SessionReader {
+            program,
+            running: None,
+            down: None,
+        }
+    }
+
+    /// Whether the reader runs now. A reader that ended by itself is forgotten.
+    pub fn is_running(&mut self) -> bool {
+        if self.running.as_ref().is_some_and(ProcessHandle::has_exited) {
+            tracing::warn!("the screen reader ended by itself");
+            self.running = None;
+        }
+        self.running.is_some()
+    }
+
+    /// The process id of the running reader.
+    pub fn pid(&mut self) -> Option<u32> {
+        self.is_running()
+            .then(|| self.running.as_ref().map(|r| r.pid))
+            .flatten()
+    }
+
+    /// Start the reader as a client of the Wayland socket `socket`: its own process group, standard input from
+    /// `/dev/null`, the compositor's environment with the session's display. A thread reaps it when it ends.
+    fn start(&mut self, socket: Option<&str>) {
+        let Some(program) = &self.program else {
+            tracing::warn!("no screen reader is installed");
+            return;
+        };
+        let mut command = std::process::Command::new(program);
+        command
+            .stdin(std::process::Stdio::null())
+            .env("XDG_SESSION_TYPE", "wayland")
+            .env("XDG_CURRENT_DESKTOP", crate::state::CURRENT_DESKTOP)
+            .env_remove("WAYLAND_SOCKET");
+        if let Some(socket) = socket {
+            command.env("WAYLAND_DISPLAY", socket);
+        }
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
+        crate::file_limit::restore_in_child(&mut command);
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                tracing::warn!(program = %program.display(), error = %e, "the screen reader cannot start");
+                return;
+            }
+        };
+        // the child is not reaped before the thread below waits for it, so its pid names it here
+        let handle = ProcessHandle::open(child.id());
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+        match handle {
+            Ok(handle) => {
+                tracing::info!(program = %program.display(), pid = handle.pid, "the screen reader started");
+                self.running = Some(handle);
+            }
+            Err(e) => tracing::warn!(error = %e, "the screen reader started but cannot be held"),
+        }
+    }
+
+    /// Ask the reader to end; a thread kills it when it is still there after [`SESSION_STOP_GRACE`].
+    fn stop(&mut self) {
+        let Some(process) = self.running.take() else {
+            return;
+        };
+        if process.send(libc::SIGTERM).is_err() {
+            return;
+        }
+        tracing::info!(pid = process.pid, "the screen reader stops");
+        std::thread::spawn(move || {
+            let end = Instant::now() + SESSION_STOP_GRACE;
+            while !process.has_exited() && Instant::now() < end {
+                std::thread::sleep(SESSION_STOP_POLL);
+            }
+            if !process.has_exited() {
+                let _ = process.send(libc::SIGKILL);
+            }
+        });
+    }
+}
+
+impl Drop for SessionReader {
+    fn drop(&mut self) {
+        if let Some(process) = self.running.take() {
+            let _ = process.send(libc::SIGTERM);
+        }
+    }
+}
+
+impl Cupertino {
+    /// Start or stop the session's reader to match `screen_reader` of `accessibility.conf`. The login screen's compositor
+    /// starts no program: its reader is the session manager's.
+    pub fn sync_screen_reader(&mut self) {
+        if self.login_screen {
+            return;
+        }
+        let wanted = self.accessibility.settings.screen_reader;
+        match (wanted, self.session_reader.is_running()) {
+            (true, false) => {
+                let socket = self.socket_name.clone();
+                self.session_reader.start(socket.as_deref());
+            }
+            (false, true) => self.session_reader.stop(),
+            _ => {}
+        }
+    }
+
+    /// Super+Alt+S in a person's session, when a reader is installed: a press turns the reader off when it runs and on
+    /// when it does not, and stores the choice in `accessibility.conf`. Whether the compositor took the key.
+    fn session_reader_key(&mut self, code: u32, sym: u32, mods: &Mods, pressed: bool) -> bool {
+        if self.login_screen || self.session_reader.program.is_none() {
+            return false;
+        }
+        if !pressed {
+            return self
+                .session_reader
+                .down
+                .take_if(|down| *down == code)
+                .is_some();
+        }
+        if !is_chord(sym, mods) {
+            return false;
+        }
+        self.session_reader.down = Some(code);
+        let on = !self.session_reader.is_running();
+        tracing::info!(on, "screen reader shortcut");
+        let mut settings = self.accessibility.settings;
+        settings.screen_reader = on;
+        self.set_accessibility(settings);
+        // the stored key may have said `on` already, for a reader that ended by itself
+        self.sync_screen_reader();
         true
     }
 }

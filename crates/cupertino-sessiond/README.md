@@ -208,7 +208,7 @@ For the login screen only, the worker makes a `SOCK_SEQPACKET` socketpair before
 descriptor 3 (`CUPERTINO_READER_FD=3`). The compositor sends `ready <socket>` once and `toggle <socket>` for Super+Alt+S from a
 keyboard (`wayland-<digits>`, at most 64 bytes, anything else refused); the worker answers a toggle `on`, `off` or `unavailable`.
 
-The reader is the file of the first of `reader::READERS` (`/usr/bin/orca`) that only root can change, never one from `$PATH`; a link on the way is followed only when it is root's and in a directory only root can change (`cupertino_defaults::system::root_only_target`), so a distribution that ships orca as a link still has a reader. It runs while it
+The reader is the file of the first of `reader::READERS` (`cupertino_defaults::accessibility::SCREEN_READERS`, `/usr/bin/orca`; a person's session runs the same one, started by its compositor) that only root can change, never one from `$PATH`; a link on the way is followed only when it is root's and in a directory only root can change (`cupertino_defaults::system::root_only_target`), so a distribution that ships orca as a link still has a reader. It runs while it
 is wanted (the machine's setting, flipped by each toggle) and the login screen is on the console: the manager sends
 `ToWorker::Shown { shown }` before its own switch to another session and after the login screen takes the console back, and
 again on every change of the seat's `ActiveSession` (logind's `PropertiesChanged`), whoever switched: shown only while the

@@ -192,6 +192,7 @@ impl Cupertino {
             self.sessions.display_options(self.display_options());
         }
         self.publish_session_settings();
+        self.sync_screen_reader();
         self.request_redraw();
     }
 }

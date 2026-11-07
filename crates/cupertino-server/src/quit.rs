@@ -333,6 +333,8 @@ impl Cupertino {
         let mut settings = self.accessibility.settings;
         settings.set(key, value).map_err(Refusal::InvalidArgs)?;
         self.set_accessibility(settings);
+        // `screen_reader = on` again starts a reader that ended by itself
+        self.sync_screen_reader();
         Ok(())
     }
 

@@ -20,7 +20,7 @@ use std::time::Duration;
 use cupertino_peer::ProcessHandle;
 
 /// The screen readers the login screen may start, by absolute path, in order of preference.
-pub const READERS: &[&str] = &["/usr/bin/orca"];
+pub const READERS: &[&str] = cupertino_defaults::accessibility::SCREEN_READERS;
 /// The leader's end of the toggle socket.
 pub const READER_FD: libc::c_int = 3;
 /// Names [`READER_FD`] in the leader's environment.

@@ -670,6 +670,11 @@ pub fn run(cli: Cli) -> Result<()> {
     if let Some(socket) = screen_reader {
         state.start_screen_reader(socket);
     }
+    // a person's session on the hardware runs its own reader; nested and offscreen runs never start one
+    if mode == Mode::Udev && !login_screen {
+        state.session_reader.program = cupertino_defaults::accessibility::installed_screen_reader();
+        state.sync_screen_reader();
+    }
     if mode != Mode::Headless || cli.dbus {
         start_dbus(&mut state);
     }

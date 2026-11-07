@@ -438,6 +438,8 @@ pub struct Cupertino {
     pub data_control_access: Arc<crate::data_control::DataControlAccess>,
     /// The login screen's toggle of its screen reader (`screen_reader`); `None` anywhere else.
     pub screen_reader: Option<crate::screen_reader::ScreenReader>,
+    /// The screen reader of a person's session (`screen_reader`), which the compositor runs itself.
+    pub session_reader: crate::screen_reader::SessionReader,
     /// The server runs the login screen: it starts no program but its shell processes and Xwayland, so no terminal, screenshot
     /// or `exec:` binding, and no process but the login screen's own descends from it.
     pub login_screen: bool,
@@ -794,6 +796,7 @@ impl Cupertino {
             wlr_data_control_state,
             data_control_access,
             screen_reader: None,
+            session_reader: crate::screen_reader::SessionReader::default(),
             login_screen: false,
             clipboard: crate::clipboard::Clipboard::default(),
             viewporter_state,

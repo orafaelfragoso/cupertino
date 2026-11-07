@@ -157,10 +157,15 @@ impl Application for Counter {
             popup: None,
             background: model.background,
             content: Element::new(row(vec![
-                Element::new(leaf("plus")).key("plus"),
+                Element::new(Leaf {
+                    drawn: true,
+                    ..leaf("plus")
+                })
+                .key("plus"),
                 Element::new(Leaf {
                     secret: true,
                     animated: true,
+                    drawn: true,
                     ..leaf("minus")
                 })
                 .key("minus"),
@@ -314,6 +319,37 @@ fn a_refused_frame_waits_for_the_window_system_and_is_drawn_whole_when_it_resume
         [DamageRegion::Full, DamageRegion::Full]
     );
     assert_eq!(rt.step(steps()).unwrap(), StepStatus::Idle);
+}
+
+#[test]
+fn a_focus_move_repaints_only_what_the_focus_changed() {
+    let (mut rt, window, damage) = start();
+    configure(&mut rt, window, 1);
+    let rect = |rt: &Rt, key: &str| {
+        let id = rt.find(window, &Key::from(key.to_owned())).unwrap();
+        let snapshot = rt.snapshot(window).unwrap();
+        snapshot.nodes.iter().find(|n| n.id == id).unwrap().rect
+    };
+    let (plus, minus) = (rect(&rt, "plus"), rect(&rt, "minus"));
+
+    key(&mut rt, window, 0xff09, Mods::NONE);
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(1)));
+    rt.step(steps()).unwrap();
+    assert_eq!(
+        damage.borrow().last(),
+        Some(&DamageRegion::Rects(vec![plus])),
+        "the row and the other button draw what they drew"
+    );
+
+    key(&mut rt, window, 0xff09, Mods::NONE);
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(2)));
+    rt.step(steps()).unwrap();
+    assert_eq!(
+        damage.borrow().last(),
+        Some(&DamageRegion::Rects(vec![plus, minus]))
+    );
 }
 
 #[test]

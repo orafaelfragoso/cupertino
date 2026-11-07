@@ -88,6 +88,10 @@ impl Fixture {
     }
 
     fn frame(&mut self, rect: Rect, clip: Option<Rect>, focus: bool) -> PaintNode {
+        self.painting(rect, clip, focus).list.nodes.remove(0)
+    }
+
+    fn painting(&mut self, rect: Rect, clip: Option<Rect>, focus: bool) -> Painting {
         let geometry = Geometry::from([(
             self.root,
             Placement {
@@ -97,7 +101,7 @@ impl Fixture {
                 own_clip: None,
             },
         )]);
-        let mut list = self.painter.paint(
+        self.painter.paint(
             &self.tree,
             self.root,
             &geometry,
@@ -111,8 +115,7 @@ impl Fixture {
                 materials: false,
                 now: Timestamp(0),
             },
-        );
-        list.list.nodes.remove(0)
+        )
     }
 }
 
@@ -368,6 +371,10 @@ fn a_group_reaches_the_renderer_and_its_effects_widen_the_subtree_bounds() {
         painting.own[0], rect,
         "damage still tracks what the node itself draws"
     );
+    assert_eq!(
+        painting.reach[0], None,
+        "its opacity reaches its children, which its own operations do not tell"
+    );
 }
 
 /// Draws one image over its whole size and counts how often it painted.
@@ -614,4 +621,135 @@ fn a_node_s_material_is_cut_to_what_shows_and_capped_per_window_and_a_refused_on
         platters,
         "every platter paints its fill when the window shows none"
     );
+}
+
+/// Whether `outer` holds all of `inner`.
+fn covers(outer: Rect, inner: Rect) -> bool {
+    outer.min_x() <= inner.min_x()
+        && outer.min_y() <= inner.min_y()
+        && outer.max_x() >= inner.max_x()
+        && outer.max_y() >= inner.max_y()
+}
+
+fn fill(rect: Rect, alpha: f32) -> PaintOp {
+    PaintOp::Fill {
+        shape: Shape::Rect(rect),
+        paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, alpha)),
+    }
+}
+
+#[test]
+fn operations_that_compare_equal_change_nothing_and_a_changed_one_changes_where_it_was_and_is() {
+    let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+    let b = Rect::new(50.0, 0.0, 10.0, 10.0);
+    let c = Rect::new(80.0, 0.0, 10.0, 10.0);
+    let old = [fill(a, 1.0), fill(b, 1.0)];
+    assert_eq!(
+        changed_region(&old, &old),
+        Some(Rect::new(0.0, 0.0, 0.0, 0.0))
+    );
+    assert_eq!(
+        changed_region(&old, &[fill(a, 1.0), fill(b, 0.5)]),
+        Some(b),
+        "the unchanged fill is not repainted"
+    );
+    assert_eq!(
+        changed_region(&old, &[fill(a, 1.0), fill(c, 1.0)]),
+        Some(b.union(&c))
+    );
+}
+
+#[test]
+fn an_operation_that_comes_or_goes_between_equal_ones_changes_only_where_it_reaches() {
+    let a = Rect::new(0.0, 0.0, 100.0, 20.0);
+    let caret = Rect::new(40.0, 4.0, 1.0, 12.0);
+    let c = Rect::new(60.0, 0.0, 10.0, 10.0);
+    let shown = [fill(a, 1.0), fill(caret, 1.0), fill(c, 1.0)];
+    let hidden = [fill(a, 1.0), fill(c, 1.0)];
+    assert_eq!(changed_region(&shown, &hidden), Some(caret));
+    assert_eq!(changed_region(&hidden, &shown), Some(caret));
+    assert_eq!(
+        changed_region(&hidden, &[fill(a, 1.0), fill(c, 1.0), fill(caret, 1.0)]),
+        Some(caret)
+    );
+    let clipped = [
+        fill(a, 1.0),
+        PaintOp::PushClip(Shape::Rect(caret)),
+        PaintOp::PopClip,
+        fill(c, 1.0),
+    ];
+    assert_eq!(
+        changed_region(&hidden, &clipped),
+        Some(a.union(&c)),
+        "a scope that comes or goes changes what paints after it"
+    );
+}
+
+#[test]
+fn a_changed_scope_or_layer_content_changes_everything_either_list_reaches() {
+    let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+    let b = Rect::new(50.0, 0.0, 10.0, 10.0);
+    let both = Some(a.union(&b));
+    let clipped = |clip: Rect| {
+        [
+            fill(a, 1.0),
+            PaintOp::PushClip(Shape::Rect(clip)),
+            fill(b, 1.0),
+            PaintOp::PopClip,
+        ]
+    };
+    assert_eq!(changed_region(&clipped(b), &clipped(a)), both);
+    let layered = |alpha: f32| {
+        [
+            fill(a, 1.0),
+            PaintOp::PushLayer {
+                opacity: 1.0,
+                effects: vec![Effect::Blur { radius: 2.0 }],
+            },
+            fill(b, alpha),
+            PaintOp::PopLayer,
+        ]
+    };
+    let spread = changed_region(&layered(1.0), &layered(0.5)).unwrap();
+    assert!(
+        covers(spread, a) && covers(spread, b),
+        "an effect spreads a change inside a layer: {spread:?}"
+    );
+}
+
+#[test]
+fn a_stroke_s_change_reaches_its_miter_joins() {
+    let a = Rect::new(10.0, 10.0, 10.0, 10.0);
+    let stroke = |alpha: f32| PaintOp::Stroke {
+        shape: Shape::Rect(a),
+        width: 2.0,
+        paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, alpha)),
+    };
+    let region = changed_region(&[stroke(1.0)], &[stroke(0.5)]).unwrap();
+    assert!(
+        covers(region, a.outset(2.0)),
+        "past the half width: {region:?}"
+    );
+}
+
+#[test]
+fn a_node_painted_again_tells_where_it_reaches_and_what_changed_in_the_window() {
+    let mut f = Fixture::new();
+    let rect = Rect::new(10.0, 20.0, 30.0, 40.0);
+    let first = f.painting(rect, None, false);
+    assert_eq!(
+        first.changed[0], None,
+        "a first paint has nothing to compare"
+    );
+    assert!(first.reach[0].is_some_and(|r| covers(r, rect)));
+    let kept = f.painting(rect, None, false);
+    assert_eq!(kept.changed[0], None, "a node that did not paint again");
+    let focused = f.painting(rect, None, true);
+    let changed = focused.changed[0].expect("painted again in place");
+    assert!(
+        covers(rect, changed) && changed.width() > 0.0,
+        "only the swatch's own fill changed: {changed:?}"
+    );
+    let cut = f.painting(rect, Some(Rect::new(0.0, 0.0, 20.0, 30.0)), false);
+    assert!(cut.reach[0].is_some_and(|r| r.max_x() <= 20.0 && r.max_y() <= 30.0));
 }

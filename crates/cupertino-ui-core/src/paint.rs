@@ -109,6 +109,95 @@ pub(crate) fn extent(ops: &[PaintOp]) -> Option<Rect> {
     layers.pop().and_then(|(_, r)| r)
 }
 
+/// How far past the half width [`extent`] allows a stroke's miter join can reach, per unit of width: the renderer's
+/// miter limit of 4 lets a join reach twice the width from the path.
+const MITER_REACH: f64 = 1.5;
+
+/// Every pixel `ops` may change, in their own coordinates: their [`extent`] with room for miter joins.
+fn reach(ops: &[PaintOp]) -> Option<Rect> {
+    let widest = ops
+        .iter()
+        .filter_map(|op| match op {
+            PaintOp::Stroke { width, .. } => Some(width.abs()),
+            _ => None,
+        })
+        .fold(0.0, f64::max);
+    extent(ops).map(|r| r.outset(widest * MITER_REACH))
+}
+
+/// Where a node's new operations can paint differently from its old ones, in its own coordinates. Operations that
+/// compare equal paint the same pixels: the ones both lists start and end with paint the same over what lies between,
+/// and between them, lists of one length change only where their differing operations were and are, and lists of two
+/// lengths only where the operations between were and are. When a clip or layer scope differs or lies between, or a
+/// change lies inside a layer (whose effects spread it), it is everything either list reaches.
+fn changed_region(old: &[PaintOp], new: &[PaintOp]) -> Option<Rect> {
+    let whole = || {
+        let (a, b) = (reach(old), reach(new));
+        a.map_or(b, |a| Some(b.map_or(a, |b| a.union(&b))))
+    };
+    let scope = |op: &PaintOp| {
+        matches!(
+            op,
+            PaintOp::PushClip(_) | PaintOp::PopClip | PaintOp::PushLayer { .. } | PaintOp::PopLayer
+        )
+    };
+    let union = |region: Option<Rect>, r: Option<Rect>| match (region, r) {
+        (Some(a), Some(b)) => Some(a.union(&b)),
+        (a, b) => a.or(b),
+    };
+    let prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+    let suffix = old[prefix..]
+        .iter()
+        .rev()
+        .zip(new[prefix..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let (was, is) = (
+        &old[prefix..old.len() - suffix],
+        &new[prefix..new.len() - suffix],
+    );
+    let mut layers = old[..prefix].iter().fold(0usize, |depth, op| match op {
+        PaintOp::PushLayer { .. } => depth + 1,
+        PaintOp::PopLayer => depth.saturating_sub(1),
+        _ => depth,
+    });
+    let mut region: Option<Rect> = None;
+    if was.len() != is.len() {
+        if layers > 0 || was.iter().chain(is).any(scope) {
+            return whole();
+        }
+        region = union(reach(was), reach(is));
+    } else {
+        for (was, is) in was.iter().zip(is) {
+            if was != is {
+                if scope(was) || scope(is) || layers > 0 {
+                    return whole();
+                }
+                region = union(region, reach(std::slice::from_ref(was)));
+                region = union(region, reach(std::slice::from_ref(is)));
+            }
+            match is {
+                PaintOp::PushLayer { .. } => layers += 1,
+                PaintOp::PopLayer => layers = layers.saturating_sub(1),
+                _ => {}
+            }
+        }
+    }
+    Some(region.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)))
+}
+
+/// `rect` in node coordinates placed at `origin` in the window and cut by `clip`.
+fn placed(rect: Option<Rect>, origin: Point, clip: Option<Rect>) -> Rect {
+    let empty = Rect::new(origin.x, origin.y, 0.0, 0.0);
+    let Some(rect) = rect.map(|r| r.translate(origin.x, origin.y)) else {
+        return empty;
+    };
+    match clip {
+        Some(clip) => rect.intersection(&clip).unwrap_or(empty),
+        None => rect,
+    }
+}
+
 fn with_effects(content: Rect, effects: &[Effect]) -> Rect {
     effects.iter().fold(content, |r, effect| match *effect {
         Effect::Blur { radius } => r.outset(radius.abs() * BLUR_REACH),
@@ -158,7 +247,7 @@ pub(crate) struct Painter {
 /// Whether paint made in `a` is paint made in `b`: the same theme, text system, icons and scale, the same direction.
 /// Compares the shared parts by identity, not `Environment`'s `==`, so an environment's owner keeps its `Arc`s across
 /// frames; one rebuilt every frame repaints every node every frame.
-fn same_environment(a: &Environment, b: &Environment) -> bool {
+pub(crate) fn same_environment(a: &Environment, b: &Environment) -> bool {
     Arc::ptr_eq(&a.theme, &b.theme)
         && Arc::ptr_eq(&a.text, &b.text)
         && Arc::ptr_eq(&a.icons, &b.icons)
@@ -170,6 +259,14 @@ pub(crate) struct Painting {
     pub(crate) list: DisplayList,
     /// What each node itself draws, in window coordinates, in the list's order; damage is tracked per node.
     pub(crate) own: Vec<Rect>,
+    /// Every pixel each node's own operations can change, in window coordinates and cut by its clip, in the list's
+    /// order; `None` for a node with a group, whose opacity reaches its children, and under a group with effects, which
+    /// spreads a node's pixels past its operations.
+    pub(crate) reach: Vec<Option<Rect>>,
+    /// For a node painted again this frame, where its new operations can paint differently from the last ones, in
+    /// window coordinates and cut by its clip (empty when nothing can); `None` when they cannot tell or the node did not
+    /// paint again.
+    pub(crate) changed: Vec<Option<Rect>>,
     /// The nodes that asked for the next frame while they painted.
     pub(crate) animating: Vec<NodeId>,
     /// The images the list draws.
@@ -221,6 +318,10 @@ impl Painter {
         let mut seen = HashSet::with_capacity(self.nodes.len());
         let mut clips = Vec::new();
         let mut materials = Vec::new();
+        let mut reaches = Vec::new();
+        let mut changes = Vec::new();
+        // the nodes under a group with effects, which spread their pixels
+        let mut spread: HashSet<NodeId> = HashSet::new();
         let window = geometry.get(&root).map(|p| p.rect);
         for id in tree.preorder(root) {
             let (Some(node), Some(placement)) = (tree.get(id), geometry.get(&id)) else {
@@ -257,6 +358,7 @@ impl Painter {
                     && p.visible.is_none_or(|v| v == visible)
                     && p.materials.is_none_or(|m| m == can_show)
             });
+            let mut changed = None;
             if !fresh {
                 let mut ops = Vec::new();
                 // the window's own background, under everything its content paints
@@ -332,6 +434,12 @@ impl Painter {
                 if animate {
                     animating.push(id);
                 }
+                changed = self
+                    .nodes
+                    .get(&id)
+                    .filter(|old| old.group == group)
+                    .and_then(|old| changed_region(&old.ops, &ops))
+                    .map(|r| placed(Some(r), origin, placement.clip));
                 self.revision += 1;
                 self.nodes.insert(
                     id,
@@ -351,6 +459,22 @@ impl Painter {
                 );
             }
             let painted = &self.nodes[&id];
+            let spreads = painted
+                .group
+                .as_ref()
+                .is_some_and(|g| !g.effects.is_empty())
+                || node.parent.is_some_and(|p| spread.contains(&p));
+            if spreads {
+                spread.insert(id);
+            }
+            // a group's opacity changes its children's pixels, which its own operations do not reach
+            if spreads || painted.group.is_some() {
+                reaches.push(None);
+                changes.push(None);
+            } else {
+                reaches.push(Some(placed(reach(&painted.ops), origin, placement.clip)));
+                changes.push(changed);
+            }
             if let Some(material) = painted.material {
                 let shown = visible.translate(origin.x, origin.y);
                 if shown.width() > 0.0 && shown.height() > 0.0 {
@@ -418,6 +542,8 @@ impl Painter {
         Painting {
             list,
             own,
+            reach: reaches,
+            changed: changes,
             animating,
             resources,
             materials,

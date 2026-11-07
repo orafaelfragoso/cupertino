@@ -2,7 +2,7 @@
 //! page dots, opened by the app-grid action the server forwards (`toggle_app_grid`). The dock owns
 //! it whole: this module holds the geometry, the
 //! show and hide animation, paging by keys, wheel and dots, the search
-//! rule and what a click or key asks for. Drawing is in `render::paint_app_grid`.
+//! rule and what a click or key asks for. The Kit view is `view/grid.rs`.
 //!
 //! Coordinates are top-down points in the grid's layer: the output above the dock bar, whose
 //! exclusive zone stands for the layout's dock extent `d`, with the menu bar's strip covered.

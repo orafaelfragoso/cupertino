@@ -13,6 +13,7 @@ use std::os::unix::fs::FileExt;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use cupertino_geometry::OutputTransform as Transform;
 use cupertino_screencast::{BufferId, Format, Frame, Notice, Offer, Pixel, Region, Screencast, Size, State, StreamId};
 use cupertino_wayland_client::{Connection, Event, OutputId, OutputInfo, OutputTransform, State as Wayland, Waker};
 use rustix::fs::{memfd_create, MemfdFlags};
@@ -31,7 +32,7 @@ use wayland_protocols::ext::image_copy_capture::v1::client::ext_image_copy_captu
 use wayland_protocols::ext::image_copy_capture::v1::client::ext_image_copy_capture_session_v1::{self, ExtImageCopyCaptureSessionV1};
 use zbus::zvariant::OwnedObjectPath;
 
-use crate::geometry::{self, Placement, Turn};
+use crate::geometry::{self, Placement};
 use crate::screen_cast::{Capture as Request, CursorMode, Running, Source, Started, Stream};
 use crate::screenshot::{self, Failure, Output, Shoot, Shot};
 
@@ -144,8 +145,8 @@ struct Copying {
 struct OutputCopy {
     position: (i32, i32),
     size: (i32, i32),
-    /// The turn the server applied to the buffer's content, from the frame's `transform` event.
-    turn: Turn,
+    /// The transform the server applied to the buffer's content, from the frame's `transform` event.
+    turn: Transform,
     source: ExtImageCaptureSourceV1,
     session: ExtImageCopyCaptureSessionV1,
     constraints: Constraints,
@@ -567,6 +568,11 @@ impl Capture {
                 let secs = (u64::from(*tv_sec_hi) << 32) | u64::from(*tv_sec_lo);
                 *pts = Some(Duration::new(secs, *tv_nsec));
             }
+            // A stream's frames are not turned upright: they go to the stream as the server copied them. Cupertino's
+            // server always copies a share's frames upright and reports them as not turned, so there is nothing to
+            // undo; a server that sent turned frames would have them streamed turned. Screenshots and colour picks do
+            // apply this event (`still_frame`).
+            ext_image_copy_capture_frame_v1::Event::Transform { .. } => {}
             ext_image_copy_capture_frame_v1::Event::Ready => {
                 frame.destroy();
                 let ready = Frame {
@@ -747,7 +753,7 @@ impl Capture {
                 still.copies.push(OutputCopy {
                     position,
                     size,
-                    turn: Turn::Normal,
+                    turn: Transform::Normal,
                     source,
                     session,
                     constraints: Constraints::default(),
@@ -823,8 +829,8 @@ impl Capture {
         match event {
             ext_image_copy_capture_frame_v1::Event::Transform { transform } => {
                 copy.turn = match transform {
-                    WEnum::Value(t) => Turn::from_wl(u32::from(*t)).unwrap_or_default(),
-                    WEnum::Unknown(v) => Turn::from_wl(*v).unwrap_or_default(),
+                    WEnum::Value(t) => Transform::from_wayland(u32::from(*t)).unwrap_or_default(),
+                    WEnum::Unknown(v) => Transform::from_wayland(*v).unwrap_or_default(),
                 }
             }
             ext_image_copy_capture_frame_v1::Event::Ready => {
@@ -997,17 +1003,17 @@ fn copy_frame(
     Ok(())
 }
 
-/// The turn of a display, as `wl_output` reports it.
-fn turn(transform: OutputTransform) -> Turn {
+/// The transform of a display, as `wl_output` reports it.
+fn turn(transform: OutputTransform) -> Transform {
     match transform {
-        OutputTransform::Normal => Turn::Normal,
-        OutputTransform::Rotated90 => Turn::Rotated90,
-        OutputTransform::Rotated180 => Turn::Rotated180,
-        OutputTransform::Rotated270 => Turn::Rotated270,
-        OutputTransform::Flipped => Turn::Flipped,
-        OutputTransform::Flipped90 => Turn::Flipped90,
-        OutputTransform::Flipped180 => Turn::Flipped180,
-        OutputTransform::Flipped270 => Turn::Flipped270,
+        OutputTransform::Normal => Transform::Normal,
+        OutputTransform::Rotated90 => Transform::Rotated90,
+        OutputTransform::Rotated180 => Transform::Rotated180,
+        OutputTransform::Rotated270 => Transform::Rotated270,
+        OutputTransform::Flipped => Transform::Flipped,
+        OutputTransform::Flipped90 => Transform::Flipped90,
+        OutputTransform::Flipped180 => Transform::Flipped180,
+        OutputTransform::Flipped270 => Transform::Flipped270,
     }
 }
 

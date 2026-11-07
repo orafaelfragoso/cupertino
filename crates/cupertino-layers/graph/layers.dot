@@ -320,6 +320,7 @@ digraph "layers" {
   "cupertino-portal" -> "cupertino-assets" [label="dev"];
   "cupertino-portal" -> "cupertino-defaults";
   "cupertino-portal" -> "cupertino-filepicker";
+  "cupertino-portal" -> "cupertino-geometry";
   "cupertino-portal" -> "cupertino-icons";
   "cupertino-portal" -> "cupertino-kit";
   "cupertino-portal" -> "cupertino-protocol-app";

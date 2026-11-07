@@ -508,6 +508,7 @@ impl State {
                     Ok(())
                 }
                 Effect::Refuse(reason) => Err(reason),
+                Effect::ForgetGrant(grant) => self.settings.forget_grant(&self.paths, &grant),
                 Effect::Store(file) => {
                     let stored = self
                         .settings
@@ -515,9 +516,6 @@ impl State {
                         .map_err(|e| e.to_string());
                     if file == File::DataControl && stored.is_ok() {
                         self.settings.reload_clipboard(&self.paths);
-                    }
-                    if file == File::ScreenSharing && stored.is_ok() {
-                        self.settings.reload_screen_sharing(&self.paths);
                     }
                     stored
                 }

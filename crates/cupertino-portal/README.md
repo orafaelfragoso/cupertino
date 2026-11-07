@@ -68,9 +68,11 @@ ext-foreign-toplevel-list-v1).
   "An application" for an empty id. It lists the displays and the windows, by title and app id, with nothing
   selected. When the app asked to persist and has an id, a check box "Let “<app>” share it again without asking" is
   offered, unticked.
-- The window takes no answer that grants for 500 ms after it opens: clicks, row picks and keys do nothing until then,
-  and a key held since before keeps doing nothing, since Return shares only on a fresh press (its repeats are
-  ignored). Share is the default button and is enabled only once armed and a row is picked; Escape cancels at once.
+- The window takes no answer that grants for 500 ms after its first frame is on screen (the frame callback that
+  answers its first committed frame; a window the server shows late starts the delay late, and one it never shows
+  stays unarmed): clicks, row picks and keys do nothing
+  until then, and a key held since before keeps doing nothing, since Return shares only on a fresh press (its
+  repeats are ignored). Share is the default button and is enabled only once armed and a row is picked; Escape cancels at once.
 - The answer to `Start` is `0` with one entry in `streams`: the node id, `source_type`, `size` (logical for a display,
   in pixels for a window) and `position` for a display. It has `persist_mode` and `restore_data` when the person
   ticked the box, else `persist_mode` 0. Cancel or closing the window is `1`; a `Close` on the request or the session
@@ -79,12 +81,15 @@ ext-foreign-toplevel-list-v1).
 - Remembering. `restore_data` is `("cupertino", 1, <grant id>)`, the id 32 random hexadecimal digits; it means
   nothing without this backend's record. A window is remembered only until the app quits (`persist_mode` 1 at most):
   its identifier lasts no longer. A display the app may keep (`persist_mode` 2) is written to `screen-sharing.conf`
-  (`cupertino-defaults::screen_sharing`, mode `0600`) as `grant = <id> <app id> display <connector>`; a transient
+  (`cupertino-defaults::screen_sharing`, mode `0600`) as `grant = <id> <app id> display <connector>`, read, changed
+  and written under an advisory `flock` on `.screen-sharing.conf.lock` beside it, which Settings' Forget takes too, so
+  neither drops nor brings back the other's change; a transient
   grant is kept in memory, at most 64. A later `SelectSources` with that `restore_data` and the same app id shares the
   same source again without a window, as long as it is still there; otherwise the window shows. The grant is the
   frontend's app id's alone: it never restores for another id or an empty one.
-- Forgetting. Settings › Privacy › Screen Sharing lists each remembered display by app, with Forget, which takes the
-  line out of the file; the next request shows the window again. A share running then goes on until it is stopped.
+- Forgetting. Settings › Privacy › Screen Sharing lists each remembered display by app, with Forget, which reads the
+  file again under its lock and takes out that one line, never writing back the list the pane read; the next request
+  shows the window again. A share running then goes on until it is stopped.
   Stopping a share from the menu bar forgets a transient grant.
 - While a share runs the portal shows a status item in the menu bar (StatusNotifierItem
   `org.kde.StatusNotifierItem-<pid>-<n>` with a `com.canonical.dbusmenu` menu, registered with
@@ -96,9 +101,12 @@ ext-foreign-toplevel-list-v1).
   the consumer fixed, and carries the copy session's damage. A resized source renegotiates the stream.
 - `Session.Close` and the frontend leaving the bus stop the share. A closed window or a source that fails ends the
   share, which closes the session and emits `Closed`.
-- A display without logical geometry is sized by its mode turned by its transform over its scale (`geometry`, every
-  `wl_output` transform tested). A stream's frames go out as the server copies them: the copy's `transform` event is
-  not applied to them, as it is to a screenshot or a colour pick (Cupertino's server reports every copy as not turned).
+- A display without logical geometry is sized by its mode turned by its transform over its scale (`geometry`, with
+  `cupertino-geometry`'s `OutputTransform`, every `wl_output` transform tested).
+- Stream frames are not turned upright. They go to the stream exactly as the server copies them, and the copy's
+  `transform` event is ignored (`capture::frame_event`), unlike a screenshot's or a colour pick's. Cupertino's server
+  always copies a share upright and reports it as not turned, so this is right on Cupertino; on a server that sends
+  turned frames a turned display would be streamed turned.
 - The same callers, bounds and sanitizing as the file chooser apply: only the frontend calls, at most 16 sessions and 4
   for one app id, and titles lose control and bidirectional-override characters.
 
@@ -142,7 +150,8 @@ captured unless the person agrees.
 - `Screenshot` shows a window, "Screenshot", that says "“<app>” wants to take a screenshot of your screen.", the app
   named and drawn by its desktop entry (`<app id>.desktop` in `$XDG_DATA_HOME/applications` and each `XDG_DATA_DIRS`
   entry), else by its id; an empty id shows as "An application". Nothing is preselected, Take Screenshot has no key
-  and is enabled only 500 ms after the window opens, so neither a key nor a click meant for the app can consent;
+  and is enabled only 500 ms after the window's first frame is on screen, so neither a key nor a click meant for the
+  app can consent;
   Escape cancels.
 - `modal`, `interactive` and `permission_store_checked` are read but change nothing: the same window shows every time,
   even when the frontend checked the permission store. `AvailableTargets` is `1` (the whole screen); a `target` other
@@ -160,7 +169,12 @@ captured unless the person agrees.
   hidden. A crosshair marks the pixel under the pointer and a loupe beside it shows the 11 × 11 pixels round it, ten
   points each, the middle one outlined; it moves to the other side of the pointer near an edge. A click picks: its
   press must come on the overlay at least 500 ms after it appeared, and its release takes the pixel under the pointer
-  then, so a button held from before or a click meant for what was under the pointer picks nothing. Escape cancels.
+  then, both on overlays on screen for at least 500 ms, counted for each overlay from the frame callback of its first
+  frame; so a button held from before or a click meant for what was under the pointer picks nothing. Escape cancels.
+- Every display has an overlay for the whole pick. The pick does not start when the server has a display that was not
+  copied (one plugged in after the copy), and any display added, unplugged or moved during the pick ends it with `2`:
+  a display without an overlay would pass a click to the app under it. A second `PickColor` while one runs answers
+  `2` at once, before any display is copied for it.
 - The pick is the consent, so no window asks first: the app learns one colour and only of a pixel the person clicked.
   The answer is `0` with `color`, `(ddd)` red, green and blue in sRGB from 0 to 1 (the display's 8-bit value over
   255); Escape is `1`; `Close` on the request takes the overlay down and answers `2`, as do displays that change

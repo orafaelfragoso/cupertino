@@ -358,41 +358,6 @@ impl Browser {
         true
     }
 
-    /// Expand or collapse row `index` (a click on its triangle); `false` when it is not a folder.
-    pub fn toggle_expanded(&mut self, index: usize) -> io::Result<bool> {
-        if self.collapse(index) {
-            return Ok(true);
-        }
-        self.expand(index)
-    }
-
-    /// Right (`expand`) or Left on the focused row of the list: Right expands a folder; Left collapses an expanded
-    /// folder, or moves the focus from an item inside one to that folder (the outline view convention).
-    /// `false` when nothing changed.
-    pub fn disclose_focus(&mut self, expand: bool) -> io::Result<bool> {
-        let Some(focus) = self.selection.focus().filter(|f| *f < self.outline.len()) else {
-            return Ok(false);
-        };
-        if expand {
-            return self.expand(focus);
-        }
-        if self.collapse(focus) {
-            self.focus_moved = true;
-            return Ok(true);
-        }
-        let level = self.outline[focus].level;
-        match (0..focus)
-            .rev()
-            .find(|&i| level > 0 && self.outline[i].level + 1 == level)
-        {
-            Some(parent) => {
-                self.move_focus(parent, false);
-                Ok(true)
-            }
-            None => Ok(false),
-        }
-    }
-
     /// Show only the folder's own items (another view than the list).
     pub fn collapse_all(&mut self) {
         if self.expanded.is_empty() {
@@ -657,25 +622,6 @@ impl Browser {
         self.selection.click_empty(mods)
     }
 
-    /// A rubber band starts on empty space with `mods` held: Shift or the primary modifier keep the selection to
-    /// toggle against, otherwise it is cleared. `true` when the selection changed.
-    pub fn rubber_band_begin(&mut self, mods: Modifiers) -> bool {
-        let changed = self.press_empty(mods);
-        self.selection.rubber_band_begin(mods);
-        changed
-    }
-
-    /// The band now touches `hits`; `true` when the selection changed.
-    pub fn rubber_band_update(&mut self, hits: &[usize], mods: Modifiers) -> bool {
-        let before = self.selection.indices().collect::<Vec<_>>();
-        self.selection.rubber_band_update(hits, mods);
-        before != self.selection.indices().collect::<Vec<_>>()
-    }
-
-    pub fn rubber_band_end(&mut self) {
-        self.selection.rubber_band_end();
-    }
-
     /// Order by `key` in the given direction (a menu choice: unlike [`Browser::sort_by`] it never reverses).
     pub fn set_sort(&mut self, key: SortKey, ascending: bool) {
         let kept = self.selection_paths();
@@ -738,18 +684,6 @@ impl Browser {
                 true
             }
             Outcome::Ignored | Outcome::NoMatch => false,
-        }
-    }
-
-    /// Tab (`reverse` false) or Shift-Tab: the next or previous item in display order.
-    pub fn tab(&mut self, reverse: bool) -> bool {
-        let len = self.entries().len();
-        match self.type_select.tab(self.selection.focus(), len, reverse) {
-            Some(i) => {
-                self.move_focus(i, false);
-                true
-            }
-            None => false,
         }
     }
 
@@ -988,8 +922,6 @@ mod tests {
 
         assert!(b.type_text("n", 10.0));
         assert_eq!(selected(&b), ["Notes.md"]);
-        assert!(b.tab(false));
-        assert_eq!(selected(&b), ["Projects"]);
         b.select_all();
         assert_eq!(b.selection().len(), 4);
     }
@@ -1062,15 +994,14 @@ mod tests {
             ]
         );
 
-        // a nested folder, then the selection inside: Left steps to the enclosing folder, then collapses it
+        // a nested folder, then the selection inside: collapsing the folder gives it the selection
         assert!(b.expand(4).unwrap());
         std::fs::write(d.path().join("Projects/cupertino/deep.rs"), b"x").unwrap();
         pump(&mut b, "the nested item", |b| b.entries().len() == 7);
         assert_eq!(b.outline()[5].level, 2);
         b.move_focus(5, false);
-        assert!(b.disclose_focus(false).unwrap());
+        assert!(b.collapse(4));
         assert_eq!(selected(&b), ["cupertino"]);
-        assert!(b.disclose_focus(false).unwrap());
         assert_eq!(
             levels(&b)[4..],
             [("cupertino", 1, false), ("plan.txt", 1, false)]
@@ -1086,10 +1017,7 @@ mod tests {
             ["Projects"],
             "the hidden selection went to the collapsed folder"
         );
-        assert!(
-            b.disclose_focus(true).unwrap(),
-            "Right expands the focused folder"
-        );
+        assert!(b.expand(3).unwrap(), "the folder expands again");
         pump(&mut b, "the items again", |b| b.entries().len() == 6);
         assert!(
             !b.outline()[4].expanded,

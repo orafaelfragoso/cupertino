@@ -42,11 +42,7 @@ pub mod window {
     pub const TOOLBAR_ITEM_GAP: f64 = 12.0;
     /// Room the folder's title keeps when the search field grows (approximate).
     pub const TITLE_MIN: f64 = 60.0;
-    pub const TOOLBAR_SHARE: (f64, f64) = (29.0, 25.0);
-    pub const TOOLBAR_PREVIEW_BUTTON: (f64, f64) = (28.0, 26.0);
     pub const TOOLBAR_ACTION_POPUP: (f64, f64) = (41.0, 24.0);
-    pub const TOOLBAR_PATH_POPUP: (f64, f64) = (46.0, 24.0);
-    pub const TOOLBAR_ARRANGE_POPUP: (f64, f64) = (44.0, 24.0);
 }
 
 /// Sidebar.
@@ -193,28 +189,8 @@ pub mod column_view {
     pub const PREVIEW_PANE_WIDTH: f64 = 250.0;
 }
 
-/// Gallery view.
-pub mod gallery {
-    /// The thumbnail strip grows its cell until the label is at least this wide (titles on)..
-    pub const MIN_TITLE_WIDTH: f64 = 90.0;
-    /// Search range for the strip spacing parameter..
-    pub const SPACING_STEP: f64 = 1.0;
-    pub const SPACING_MAX: f64 = 100.0;
-    pub const MIN_INTER_ITEM_SPACING: f64 = 5.0;
-    /// Large preview: 512 x 512 inside a 576 x 544 container (32 pt side insets).
-    pub const PREVIEW_SIZE: f64 = 512.0;
-    pub const PREVIEW_CONTAINER: (f64, f64) = (576.0, 544.0);
-}
-
 /// Timings.
 pub mod timing {
-    /// Default spring-loading delay: 668 ticks of the preference slider..
-    pub const SPRING_DELAY_DEFAULT_TICKS: i32 = 668;
-    /// Tick range of the slider..
-    pub const SPRING_TICKS_MIN: i32 = 167;
-    pub const SPRING_TICKS_MAX: i32 = 1169;
-    /// Preference value (seconds) to ticks: `ticks = (int)(seconds * 1002 + 167)..
-    pub const SPRING_TICKS_PER_SECOND: f64 = 1002.0;
     /// Sidebar toggle and splitter animation..
     pub const SIDEBAR_TOGGLE: f64 = 0.3;
     /// Slow-motion multipliers when only Shift is held..

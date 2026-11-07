@@ -2,13 +2,12 @@
 //! window process on CupertinoKit ([`kit`]).
 //!
 //! * [`model`]: asynchronous directory model (batched enumeration, change watching, deltas);
-//! * [`natural`], [`sort`], [`group`]: collation, ordering and sectioning of names;
+//! * [`natural`], [`sort`], [`group`]: collation and ordering of names, and the date buckets dates read in;
 //! * [`settings`]: per-folder view state and its store;
-//! * [`selection`], [`rename`], [`typeselect`], [`spring`]: interaction logic;
+//! * [`selection`], [`rename`], [`typeselect`]: interaction logic;
 //! * [`trash`], [`thumbnail`], [`tags`], [`mime`]: freedesktop-compliant services; [`open`]: default
 //!   applications and the Open With list (`mimeapps.list`);
-//! * [`layout`]: icon, list, column and gallery layout engines with the measured metrics of
-//!   [`metrics`]; [`preview`]: quick-preview transition geometry;
+//! * [`layout`]: icon and list layout engines with the measured metrics of [`metrics`];
 //! * [`format`]: how sizes and dates read;
 //! * [`places`], [`recents`], [`history`], [`browser`]: the sidebar's standard places, the Recents folder, back / forward history and
 //!   the state of one browser window; [`window`]: its size limits, view modes, path bar and status bar text;
@@ -38,14 +37,12 @@ pub mod notice;
 pub mod open;
 pub mod operations;
 pub mod places;
-pub mod preview;
 pub mod recents;
 pub mod rename;
 pub mod search_field;
 pub mod selection;
 pub mod settings;
 pub mod sort;
-pub mod spring;
 pub mod tags;
 pub use cupertino_thumbnails as thumbnail;
 pub mod trash;

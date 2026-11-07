@@ -492,8 +492,9 @@ impl Clipboard {
         Ok(())
     }
 
-    /// Start reading what was dropped in `mime`, the type it was accepted in, like [`Clipboard::receive_async`]; a
-    /// drag that was not dropped, or not accepted in `mime`, can't be read.
+    /// Start reading what was dropped in `mime`, the type it was accepted in, like [`Clipboard::receive_async`], except
+    /// that a drop longer than [`READ_LIMIT`] gives nothing rather than its start; a drag that was not dropped, or not
+    /// accepted in `mime`, can't be read.
     pub(crate) fn receive_drop(
         &mut self,
         conn: &Connection,
@@ -668,7 +669,9 @@ impl Clipboard {
                 match drained {
                     Drained::Open if now < read.deadline() => return true,
                     Drained::Open | Drained::Failed => None,
-                    Drained::Done => Some(std::mem::take(&mut read.bytes)),
+                    // a cut selection still pastes; a cut drop would hand over a list that ends anywhere
+                    Drained::Full if matches!(read.source, Source::Drop(_)) => None,
+                    Drained::Done | Drained::Full => Some(std::mem::take(&mut read.bytes)),
                 }
             } else {
                 None
@@ -722,8 +725,10 @@ impl Clipboard {
 enum Drained {
     /// The writer may send more.
     Open,
-    /// The writer closed the pipe, or the read reached [`READ_LIMIT`] and the rest is cut.
+    /// The writer closed the pipe.
     Done,
+    /// The read reached [`READ_LIMIT`] and the rest is cut.
+    Full,
     Failed,
 }
 
@@ -742,7 +747,7 @@ fn drain(read: &mut PendingRead) -> Drained {
             Err(_) => return Drained::Failed,
         }
     }
-    Drained::Done
+    Drained::Full
 }
 
 /// What `reader` gives until it closes, at most `limit` bytes; `None` when `deadline` passes first.
@@ -1119,6 +1124,35 @@ mod tests {
         assert_eq!(bytes.len(), LIMIT);
         drop(reader);
         assert!(feeder.join().unwrap().is_err());
+    }
+
+    #[test]
+    fn a_pending_read_tells_a_closed_pipe_from_one_cut_at_the_limit() {
+        let read = |len: usize| {
+            let (reader, mut writer) = std::io::pipe().unwrap();
+            fcntl_setfl(&reader, OFlags::NONBLOCK).unwrap();
+            let feeder = std::thread::spawn(move || writer.write_all(&vec![b'a'; len]));
+            let now = Instant::now();
+            let mut read = PendingRead {
+                id: ReadId(1),
+                source: Source::Drop(1),
+                reader,
+                bytes: Vec::new(),
+                idle: now,
+                cap: now,
+            };
+            let drained = loop {
+                match drain(&mut read) {
+                    Drained::Open => std::thread::yield_now(),
+                    drained => break drained,
+                }
+            };
+            drop(read);
+            let _ = feeder.join().unwrap();
+            drained
+        };
+        assert!(matches!(read(10), Drained::Done));
+        assert!(matches!(read(READ_LIMIT + 1), Drained::Full));
     }
 
     #[test]

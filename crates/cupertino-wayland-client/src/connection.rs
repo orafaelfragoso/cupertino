@@ -1164,8 +1164,8 @@ impl Connection {
     }
 
     /// Start reading the drop of `offer` in `mime`, the type it was accepted in; the data arrives as
-    /// [`Event::Received`], with the limits of [`Connection::receive_async`]. Before the drop, or in another type, it
-    /// is refused.
+    /// [`Event::Received`], with the limits of [`Connection::receive_async`], except that a drop past the size limit
+    /// gives `None` rather than its start. Before the drop, or in another type, it is refused.
     pub fn receive_drop(&mut self, offer: &DragOffer, mime: &str) -> Result<ReadId, Error> {
         self.state.clipboard.receive_drop(&self.conn, offer, mime)
     }

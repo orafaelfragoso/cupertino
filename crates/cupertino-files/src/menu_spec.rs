@@ -1,24 +1,21 @@
-//! What the context menus offer. Both menus are built the way the design them: a static table of 80
-//! descriptors is walked in order, each descriptor carrying the contexts it belongs to (items 1, background 2, action
-//! menu 4, sidebar 8, constrained sidebar 0x10, path bar 0x20, tags 0x40), an action, a title key and the modifiers
-//! of an alternate row; a descriptor without an action is a separator, and separators are condensed (no leading,
-//! trailing or doubled one) once the walk is done. The rows below follow that order for the two
-//! contexts a folder window has.
+//! What the context menus offer: the menu of the selected items and the menu of a folder's empty space. Each is a
+//! fixed order of rows in groups; a group ends with a separator, and separators are condensed (no leading, trailing or
+//! doubled one) once the rows are built.
 //!
-//! * Rows the design shows only for contexts this window has none of (volumes, the desktop, search results, the
-//!   sidebar, cloud items, disc images, packages, remote servers) are left out: its validation hides them as well
-//!   (derived from the descriptor contexts). * A row whose action the window cannot do yet is [`MenuItem::unavailable`]: drawn disabled with its design title,
-//!   never hidden (the backlog rows named in the README say what each needs).
-//! * Titles are the design's, from its string table. Rows that name the selection use its
-//!   one-item form with the name in curly quotes, and the many-items form with the count.
-//! * The Sort By and Group By submenus are the items of the design's arrange menu resource.
+//! * Rows for places this window has no part of (volumes, the desktop, search results, the sidebar, cloud items, disc
+//!   images, packages, remote servers) are left out.
+//! * A row whose action the window cannot do yet is [`MenuItem::unavailable`]: drawn disabled with its title, never
+//!   hidden (the backlog rows named in the README say what each needs).
+//! * Rows that name the selection use the one-item form with the name in curly quotes, and the many-items form with
+//!   the count.
+//! * The Sort By and Group By submenus list the keys a folder can be ordered and grouped by.
 
 use crate::context_menu::{AppChoice, Command, ItemKind, MenuItem, Mods};
 use crate::sort::{SortKey, SortSpec};
 use crate::tags::TagColor;
 use crate::window::ViewMode;
 
-/// Descriptor contexts.
+/// The menus a row can belong to, as bits: the selected items' menu and the empty space's.
 pub const CONTEXT_ITEMS: u32 = 1;
 pub const CONTEXT_BACKGROUND: u32 = 2;
 
@@ -105,7 +102,7 @@ pub fn item_menu(subject: &Subject, apps: &[AppChoice]) -> Vec<MenuItem> {
     let one = subject.count == 1;
     let mut rows = Vec::new();
     if !subject.in_trash {
-        // descriptor 0
+        // a new folder holding the selection; nothing is created inside the trash
         let label = if one {
             "New Folder with Selection (1 Item)".to_string()
         } else {
@@ -117,7 +114,7 @@ pub fn item_menu(subject: &Subject, apps: &[AppChoice]) -> Vec<MenuItem> {
             true,
         ));
     }
-    // descriptors 3 and 4: Open, with Open in New Window(s) while Alt is held when every item is a folder
+    // Open, with Open in New Window(s) while Alt is held when every item is a folder
     let mut open = MenuItem::command("Open", Command::Open, true);
     if subject.all_folders {
         let label = if one {
@@ -131,7 +128,7 @@ pub fn item_menu(subject: &Subject, apps: &[AppChoice]) -> Vec<MenuItem> {
         );
     }
     rows.push(open);
-    // descriptor 5: Open With, and Always Open With on Alt
+    // Open With, and Always Open With on Alt
     let enabled = !apps.is_empty();
     rows.push(
         MenuItem::submenu("Open With", open_with(apps), enabled).with_alternate(
@@ -139,7 +136,7 @@ pub fn item_menu(subject: &Subject, apps: &[AppChoice]) -> Vec<MenuItem> {
             MenuItem::submenu("Always Open With", open_with(apps), enabled),
         ),
     );
-    // descriptor 7 (links) and 11 (the trash)
+    // Show Original for a link, Put Back in the trash
     if subject.single_link {
         rows.push(MenuItem::command(
             "Show Original",
@@ -151,7 +148,7 @@ pub fn item_menu(subject: &Subject, apps: &[AppChoice]) -> Vec<MenuItem> {
         rows.push(MenuItem::command("Put Back", Command::PutBack, true));
     }
     rows.push(MenuItem::separator());
-    // descriptors 25 and 26: the trash, and its permanent delete on Alt (which asks first in the design)
+    // the trash, and a permanent delete on Alt (which is to ask first)
     if subject.in_trash {
         rows.push(MenuItem::unavailable("Delete Immediately…"));
     } else {
@@ -161,13 +158,13 @@ pub fn item_menu(subject: &Subject, apps: &[AppChoice]) -> Vec<MenuItem> {
         );
     }
     rows.push(MenuItem::separator());
-    // descriptors 39 to 41: Get Info, Show Inspector on Alt, Get Summary Info on Ctrl
+    // Get Info, Show Inspector on Alt, Get Summary Info on Ctrl
     rows.push(
         MenuItem::unavailable("Get Info")
             .with_alternate(Mods::ALT, MenuItem::unavailable("Show Inspector"))
             .with_alternate(Mods::CTRL, MenuItem::unavailable("Get Summary Info")),
     );
-    // descriptors 46 to 52
+    // what changes or makes items: Rename, Compress, Duplicate, Make Alias, Quick Preview
     rows.push(MenuItem::command("Rename", Command::Rename, one));
     rows.push(
         MenuItem::unavailable(&named(subject, "Compress “{}”", "Compress {} Items"))
@@ -193,7 +190,7 @@ pub fn item_menu(subject: &Subject, apps: &[AppChoice]) -> Vec<MenuItem> {
         ),
     );
     rows.push(MenuItem::separator());
-    // descriptors 59 and 60: Copy, Copy as Pathname on Alt; 63: Share
+    // Copy, Copy as Pathname on Alt; Share
     rows.push(
         MenuItem::command(
             &named(subject, "Copy “{}”", "Copy {} Items"),
@@ -211,7 +208,7 @@ pub fn item_menu(subject: &Subject, apps: &[AppChoice]) -> Vec<MenuItem> {
     );
     rows.push(MenuItem::submenu("Share", Vec::new(), false));
     rows.push(MenuItem::separator());
-    // descriptor 69: the tag row
+    // the tag row
     rows.push(MenuItem {
         label: "Tags…".into(),
         kind: ItemKind::TagRow {
@@ -222,12 +219,12 @@ pub fn item_menu(subject: &Subject, apps: &[AppChoice]) -> Vec<MenuItem> {
         alternates: Vec::new(),
     });
     rows.push(MenuItem::separator());
-    // descriptor 77: Quick Actions
+    // Quick Actions
     rows.push(MenuItem::submenu("Quick Actions", Vec::new(), false));
     condense(rows)
 }
 
-/// The choices of the Sort By menu, in the order of the arrange menu resource: title, key, ascending first.
+/// The choices of the Sort By menu, in menu order: title, key, ascending first.
 /// `None` for a key the window has no data for.
 pub(crate) fn sort_choices() -> [(&'static str, Option<(SortKey, bool)>); 8] {
     [
@@ -301,26 +298,26 @@ fn paste_row(can: bool) -> MenuItem {
 /// The menu of the empty space of a folder.
 pub fn background_menu(ctx: &Background) -> Vec<MenuItem> {
     let mut rows = vec![
-        // descriptor 1
+        // New Folder, which the trash does not take
         MenuItem::command("New Folder", Command::NewFolder, !ctx.in_trash),
-        // descriptors 17 to 19: Paste Item, Move Item Here on Alt, Paste Item Exactly on Shift + Alt
+        // Paste Item, Move Item Here on Alt, Paste Item Exactly on Shift + Alt
         paste_row(ctx.pasteboard > 0 && !ctx.in_trash),
         MenuItem::separator(),
     ];
-    // descriptor 27
+    // Empty Trash, in the trash only
     if ctx.in_trash {
         rows.push(MenuItem::unavailable("Empty Trash"));
     }
     rows.push(MenuItem::separator());
-    // descriptors 39 and 40
+    // Get Info, Show Inspector on Alt, Get Summary Info on Ctrl
     rows.push(
         MenuItem::unavailable("Get Info")
             .with_alternate(Mods::ALT, MenuItem::unavailable("Show Inspector"))
             .with_alternate(Mods::CTRL, MenuItem::unavailable("Get Summary Info")),
     );
     rows.push(MenuItem::separator());
-    // descriptor 71: the view modes; 72: the view-specific block (Use Groups, Group By, Sort By, Clean Up By);
-    // 73: Show View Options
+    // the view modes, then how the view groups and orders the items (Use Groups, Group By, Sort By, Clean Up By), then
+    // Show View Options
     rows.push(MenuItem {
         label: "As Icons".into(),
         kind: ItemKind::ViewRow { current: ctx.view },
@@ -337,7 +334,7 @@ pub fn background_menu(ctx: &Background) -> Vec<MenuItem> {
 }
 
 /// The toolbar's view-mode popup: the four view modes with the current one checked; Columns and Gallery are disabled until
-/// the window has those views. Titles approximate (the popup's titles is not known).
+/// the window has those views.
 pub fn view_menu(current: ViewMode) -> Vec<MenuItem> {
     vec![
         MenuItem::command("Icons", Command::SetView(ViewMode::Icons), true)
@@ -350,7 +347,7 @@ pub fn view_menu(current: ViewMode) -> Vec<MenuItem> {
 }
 
 /// The toolbar's Tags popup: a row per tag colour in the tag row's order, checked when every selected item has it, all
-/// disabled without a selection. approximate: the design opens a tag editor with a name field here.
+/// disabled without a selection; a tag editor with a name field is still to come.
 pub fn tags_menu(on: &[TagColor], has_selection: bool) -> Vec<MenuItem> {
     crate::context_menu::TAG_ROW_ORDER
         .iter()
@@ -405,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn the_item_menu_of_a_file_follows_the_descriptor_table_with_condensed_separators() {
+    fn the_item_menu_of_a_file_keeps_its_row_order_with_condensed_separators() {
         let items = item_menu(&subject(1), &apps());
         assert_eq!(
             labels(&items),
@@ -584,7 +581,7 @@ mod tests {
     }
 
     #[test]
-    fn paste_alternates_and_the_trash_row_follow_the_descriptors() {
+    fn paste_alternates_and_the_trash_row_are_offered_in_the_trash() {
         let ctx = Background {
             view: ViewMode::List,
             sort: SortSpec::default(),

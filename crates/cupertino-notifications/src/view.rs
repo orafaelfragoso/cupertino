@@ -545,7 +545,7 @@ pub fn windows<M: Clone + 'static>(
                 card.height(),
             );
             Some(banner_window(
-                &n, &layout, card, region, p.opacity, p.hovered, width, map,
+                &n, &layout, card, region, p.opacity, p.hovered, p.leaving, width, map,
             ))
         })
         .collect()
@@ -688,14 +688,17 @@ fn banner_window<M: Clone + 'static>(
     region: Rect,
     opacity: f64,
     hovered: bool,
+    leaving: bool,
     width: f64,
     map: fn(Input) -> M,
 ) -> Window<M> {
     let size = Size::new(width, card.height() + 2.0 * SHADOW_MARGIN);
-    let live = if n.urgency == Urgency::Critical {
-        Live::Assertive
-    } else {
-        Live::Polite
+    // a banner going away is no longer live: one whose window appears only as it leaves (at the unlock, or as the
+    // centre closes) is not said again
+    let live = match (leaving, n.urgency) {
+        (true, _) => None,
+        (false, Urgency::Critical) => Some(Live::Assertive),
+        (false, _) => Some(Live::Polite),
     };
     let content = Element::new(Strip {
         id: n.id,
@@ -714,7 +717,7 @@ fn banner_window<M: Clone + 'static>(
             role: Role::Group,
             index: None,
             first: false,
-            live: Some(live),
+            live,
             clickable: false,
             map,
             children: card_content(

@@ -543,6 +543,7 @@ fn a_banner_updated_in_place_is_said_again() {
     assert_eq!(run.windows().len(), 1);
 }
 
+
 #[test]
 fn a_banner_is_neither_said_nor_readable_while_the_screen_is_locked() {
     let mut run = Run::new();
@@ -569,6 +570,28 @@ fn a_banner_is_neither_said_nor_readable_while_the_screen_is_locked() {
         said.len(),
         run.windows().len(),
         "each banner shown is said once"
+    );
+}
+
+#[test]
+fn a_banner_leaving_at_the_unlock_is_not_said_again() {
+    let mut run = Run::new();
+    run.notify(mail("Lunch", "Are you free at noon?"));
+    run.step(Step::At(1.0));
+    assert_eq!(run.heard().len(), 1);
+    run.step(Step::Lock(true));
+    // a new banner takes over while locked: the one heard before the lock is still sliding out at the unlock
+    run.notify(mail("Bank", "Your sign-in code is 482913"));
+    run.step(Step::At(1.1));
+    run.step(Step::Lock(false));
+    assert_eq!(run.windows().len(), 2, "both cards are on screen");
+    assert_eq!(
+        run.heard(),
+        [(
+            Live::Polite,
+            "Mail: Bank, Your sign-in code is 482913".to_owned()
+        )],
+        "only the banner taking the screen is said, not the one going away"
     );
 }
 

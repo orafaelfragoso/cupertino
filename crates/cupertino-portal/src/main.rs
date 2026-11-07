@@ -4,10 +4,12 @@ use std::process::ExitCode;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use cupertino_defaults::screen_sharing::ScreenSharingConf;
 use cupertino_portal::app_chooser::AppChooser;
 use cupertino_portal::capture::Capture;
 use cupertino_portal::dialog::{inbox, Dialogs};
 use cupertino_portal::file_chooser::FileChooser;
+use cupertino_portal::pick_overlay::PickOverlay;
 use cupertino_portal::screen_cast::ScreenCast;
 use cupertino_portal::screenshot::{self, Screenshot};
 use cupertino_portal::settings::{Appearance, Service};
@@ -58,6 +60,15 @@ fn run() -> Result<()> {
     let mut capture = Capture::bind(&mut conn, received, shots)
         .inspect_err(|e| eprintln!("cupertino-portal: no screen sharing or screenshots: {e}"))
         .ok();
+    let (picks, picked) = mpsc::channel();
+    // without a layer shell PickColor answers that it failed
+    let mut picker = capture
+        .is_some()
+        .then(|| PickOverlay::bind(&mut conn, picked))
+        .flatten();
+    if capture.is_some() && picker.is_none() {
+        eprintln!("cupertino-portal: no colour picking: the server lacks zwlr_layer_shell_v1");
+    }
     let first = conn.wait(Some(Duration::ZERO))?;
     let mut appearance = fold(Appearance::default(), &first);
     if let Some(capture) = &mut capture {
@@ -84,20 +95,27 @@ fn run() -> Result<()> {
                 waker.wake();
             },
         )
+        .with_applications(cupertino_apps::entry::xdg_application_dirs())
+        .with_grants(ScreenSharingConf::path())
         .serve(&bus)?;
         let waker = conn.waker();
-        bus.object_server().at(
-            PORTAL_PATH,
-            Screenshot::new(
-                cupertino_apps::entry::xdg_application_dirs(),
-                screenshot::pictures,
-                |event| inbox().push(event),
-                move |shoot| {
-                    let _ = shoots.send(shoot);
-                    waker.wake();
-                },
-            ),
-        )?;
+        let mut screenshot = Screenshot::new(
+            cupertino_apps::entry::xdg_application_dirs(),
+            screenshot::pictures,
+            |event| inbox().push(event),
+            move |shoot| {
+                let _ = shoots.send(shoot);
+                waker.wake();
+            },
+        );
+        if picker.is_some() {
+            let waker = conn.waker();
+            screenshot = screenshot.with_picker(move |event| {
+                let _ = picks.send(event);
+                waker.wake();
+            });
+        }
+        bus.object_server().at(PORTAL_PATH, screenshot)?;
     }
     std::thread::Builder::new()
         .name("dialogs".to_owned())
@@ -105,6 +123,9 @@ fn run() -> Result<()> {
     bus.request_name(BUS_NAME)?;
     loop {
         let events = conn.wait(capture.as_ref().and_then(Capture::timeout))?;
+        if let Some(picker) = &mut picker {
+            picker.update(&mut conn, &events);
+        }
         if let Some(capture) = &mut capture {
             capture.update(&conn, &events);
         }

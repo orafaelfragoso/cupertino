@@ -666,6 +666,7 @@ mod tests {
             accessibility: Some(dir.join("accessibility.conf")),
             system_accessibility: None,
             data_control: Some(dir.join("data-control.conf")),
+            screen_sharing: None,
         }
     }
 

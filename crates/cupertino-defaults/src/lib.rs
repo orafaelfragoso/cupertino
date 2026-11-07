@@ -17,6 +17,7 @@ use std::path::PathBuf;
 pub mod login;
 pub mod menubar;
 pub mod power;
+pub mod screen_sharing;
 pub mod system;
 pub mod terminal;
 pub mod watch;

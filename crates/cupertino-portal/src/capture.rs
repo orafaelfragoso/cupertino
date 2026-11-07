@@ -14,7 +14,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cupertino_screencast::{BufferId, Format, Frame, Notice, Offer, Pixel, Region, Screencast, Size, State, StreamId};
-use cupertino_wayland_client::{Connection, Event, OutputId, OutputInfo, State as Wayland, Waker};
+use cupertino_wayland_client::{Connection, Event, OutputId, OutputInfo, OutputTransform, State as Wayland, Waker};
 use rustix::fs::{memfd_create, MemfdFlags};
 use tiny_skia::Pixmap;
 use wayland_client::protocol::wl_buffer::WlBuffer;
@@ -31,6 +31,7 @@ use wayland_protocols::ext::image_copy_capture::v1::client::ext_image_copy_captu
 use wayland_protocols::ext::image_copy_capture::v1::client::ext_image_copy_capture_session_v1::{self, ExtImageCopyCaptureSessionV1};
 use zbus::zvariant::OwnedObjectPath;
 
+use crate::geometry::{self, Placement, Turn};
 use crate::screen_cast::{Capture as Request, CursorMode, Running, Source, Started, Stream};
 use crate::screenshot::{self, Failure, Output, Shoot, Shot};
 
@@ -143,6 +144,8 @@ struct Copying {
 struct OutputCopy {
     position: (i32, i32),
     size: (i32, i32),
+    /// The turn the server applied to the buffer's content, from the frame's `transform` event.
+    turn: Turn,
     source: ExtImageCaptureSourceV1,
     session: ExtImageCopyCaptureSessionV1,
     constraints: Constraints,
@@ -351,13 +354,7 @@ impl Capture {
                 ) else {
                     return started.send(Err("the display went away".to_owned()));
                 };
-                let (size, position) = match info.geometry {
-                    Some(g) => ((g.width as i32, g.height as i32), (g.x, g.y)),
-                    None => {
-                        let (w, h) = info.mode.unwrap_or_default();
-                        ((w as i32, h as i32), (0, 0))
-                    }
-                };
+                let Placement { position, size } = placement(&info);
                 (
                     self.output_sources.create_source(&wl_output, &qh, Quiet),
                     Stream {
@@ -741,13 +738,7 @@ impl Capture {
                 let Some(wl_output) = conn.wl_output(info.id) else {
                     continue;
                 };
-                let (position, size) = match info.geometry {
-                    Some(g) => ((g.x, g.y), (g.width as i32, g.height as i32)),
-                    None => {
-                        let (w, h) = info.mode.unwrap_or_default();
-                        ((0, 0), (w as i32, h as i32))
-                    }
-                };
+                let Placement { position, size } = placement(info);
                 let source = self.output_sources.create_source(&wl_output, &qh, Quiet);
                 let part = Part(still.id, still.copies.len());
                 let session = self
@@ -756,6 +747,7 @@ impl Capture {
                 still.copies.push(OutputCopy {
                     position,
                     size,
+                    turn: Turn::Normal,
                     source,
                     session,
                     constraints: Constraints::default(),
@@ -829,6 +821,12 @@ impl Capture {
             return;
         };
         match event {
+            ext_image_copy_capture_frame_v1::Event::Transform { transform } => {
+                copy.turn = match transform {
+                    WEnum::Value(t) => Turn::from_wl(u32::from(*t)).unwrap_or_default(),
+                    WEnum::Unknown(v) => Turn::from_wl(*v).unwrap_or_default(),
+                }
+            }
             ext_image_copy_capture_frame_v1::Event::Ready => {
                 let Some(copying) = copy.copying.take() else {
                     return;
@@ -843,7 +841,9 @@ impl Capture {
                     .ok()
                     .and_then(|()| {
                         screenshot::from_shm(width, height, stride, &data, copying.alpha)
-                    });
+                    })
+                    // a buffer the server handed out turned is read upright, as the display shows it
+                    .and_then(|image| geometry::upright(&image, copy.turn));
                 copying.buffer.destroy();
                 copying.pool.destroy();
                 let Some(image) = image else {
@@ -997,6 +997,39 @@ fn copy_frame(
     Ok(())
 }
 
+/// The turn of a display, as `wl_output` reports it.
+fn turn(transform: OutputTransform) -> Turn {
+    match transform {
+        OutputTransform::Normal => Turn::Normal,
+        OutputTransform::Rotated90 => Turn::Rotated90,
+        OutputTransform::Rotated180 => Turn::Rotated180,
+        OutputTransform::Rotated270 => Turn::Rotated270,
+        OutputTransform::Flipped => Turn::Flipped,
+        OutputTransform::Flipped90 => Turn::Flipped90,
+        OutputTransform::Flipped180 => Turn::Flipped180,
+        OutputTransform::Flipped270 => Turn::Flipped270,
+    }
+}
+
+/// Where a display sits in the compositor's space: its logical geometry, else its mode upright over its scale at the
+/// origin, so a quarter-turned display is never taken as wide when it shows tall.
+pub fn placement(info: &OutputInfo) -> Placement {
+    match info.geometry {
+        Some(g) => Placement {
+            position: (g.x, g.y),
+            size: (g.width as i32, g.height as i32),
+        },
+        None => Placement {
+            position: (0, 0),
+            size: geometry::logical_size(
+                info.mode.unwrap_or_default(),
+                turn(info.transform),
+                info.scale.factor(),
+            ),
+        },
+    }
+}
+
 fn wl_format(pixel: Pixel) -> wl_shm::Format {
     match pixel {
         Pixel::Bgrx => wl_shm::Format::Xrgb8888,
@@ -1121,6 +1154,8 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, Part> for Wayland {
 
 #[cfg(test)]
 mod tests {
+    use cupertino_wayland_client::{OutputGeometry, Scale};
+
     use super::*;
 
     #[test]
@@ -1140,5 +1175,53 @@ mod tests {
         assert_eq!(pixels(&window, &both), [Pixel::Bgra, Pixel::Bgrx]);
         assert_eq!(pixels(&window, &[wl_shm::Format::Xrgb8888]), [Pixel::Bgrx]);
         assert!(pixels(&display, &[wl_shm::Format::Rgb565]).is_empty());
+    }
+
+    fn info(transform: OutputTransform, geometry: Option<OutputGeometry>) -> OutputInfo {
+        OutputInfo {
+            id: OutputId::from_registry_name(1),
+            name: Some("DP-1".to_owned()),
+            description: None,
+            make: None,
+            model: None,
+            physical_size_mm: None,
+            transform,
+            scale: Scale::from_integer(2).unwrap(),
+            mode: Some((3840, 2160)),
+            refresh_mhz: None,
+            geometry,
+        }
+    }
+
+    #[test]
+    fn a_display_sits_by_its_logical_geometry_else_by_its_mode_turned_over_its_scale() {
+        let at = OutputGeometry {
+            x: 1920,
+            y: 0,
+            width: 1080,
+            height: 1920,
+        };
+        assert_eq!(
+            placement(&info(OutputTransform::Rotated90, Some(at))),
+            Placement {
+                position: (1920, 0),
+                size: (1080, 1920)
+            }
+        );
+        for (transform, size) in [
+            (OutputTransform::Normal, (1920, 1080)),
+            (OutputTransform::Rotated90, (1080, 1920)),
+            (OutputTransform::Rotated180, (1920, 1080)),
+            (OutputTransform::Flipped270, (1080, 1920)),
+        ] {
+            assert_eq!(
+                placement(&info(transform, None)),
+                Placement {
+                    position: (0, 0),
+                    size
+                },
+                "{transform:?}"
+            );
+        }
     }
 }

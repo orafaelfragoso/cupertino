@@ -339,6 +339,7 @@ impl State {
         }
         if to == PaneId::Privacy {
             self.settings.reload_clipboard(&self.paths);
+            self.settings.reload_screen_sharing(&self.paths);
             let (locale, visibility) = (
                 cupertino_apps::entry::Locale::from_env(),
                 cupertino_apps::entry::Visibility::from_env(),
@@ -512,6 +513,9 @@ impl State {
                         .map_err(|e| e.to_string());
                     if file == File::DataControl && stored.is_ok() {
                         self.settings.reload_clipboard(&self.paths);
+                    }
+                    if file == File::ScreenSharing && stored.is_ok() {
+                        self.settings.reload_screen_sharing(&self.paths);
                     }
                     stored
                 }

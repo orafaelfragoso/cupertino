@@ -17,6 +17,7 @@ fn paths(dir: &std::path::Path) -> Paths {
         accessibility: Some(dir.join("accessibility.conf")),
         system_accessibility: None,
         data_control: Some(dir.join("data-control.conf")),
+        screen_sharing: None,
     }
 }
 

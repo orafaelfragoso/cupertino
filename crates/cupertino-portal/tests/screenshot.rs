@@ -8,9 +8,10 @@ use std::sync::mpsc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use cupertino_portal::pick::Picked;
 use cupertino_portal::request::FRONTEND;
 use cupertino_portal::screenshot::{
-    Answer, Event, Failure, Output, Screenshot, Shoot, MAX_ATTEMPTS,
+    Answer, Event, Failure, Output, PickEvent, Screenshot, Shoot, MAX_ATTEMPTS,
 };
 use cupertino_portal::{BUS_NAME, PORTAL_PATH};
 use cupertino_test_bus::{missing_tool, PrivateBus, WAIT};
@@ -33,11 +34,18 @@ struct Running {
     pictures: PathBuf,
     events: mpsc::Receiver<Event>,
     shoots: mpsc::Receiver<Shoot>,
+    /// What the colour picker is told; `None` when the backend has none.
+    picks: Option<mpsc::Receiver<PickEvent>>,
     frontend: Connection,
     app: Connection,
 }
 
 fn start() -> Option<Running> {
+    start_with(false)
+}
+
+/// The backend, with a colour picker when `picker`.
+fn start_with(picker: bool) -> Option<Running> {
     let bus = PrivateBus::start()?;
     let served = bus.connect();
     let home = tempfile::tempdir().unwrap();
@@ -53,22 +61,25 @@ fn start() -> Option<Running> {
     let (shoots_sender, shoots) = mpsc::channel();
     let (events_sender, shoots_sender) = (Mutex::new(events_sender), Mutex::new(shoots_sender));
     let into = pictures.clone();
-    served
-        .object_server()
-        .at(
-            PORTAL_PATH,
-            Screenshot::new(
-                vec![applications],
-                move || into.clone(),
-                move |event| {
-                    let _ = events_sender.lock().unwrap().send(event);
-                },
-                move |shoot| {
-                    let _ = shoots_sender.lock().unwrap().send(shoot);
-                },
-            ),
-        )
-        .unwrap();
+    let mut screenshot = Screenshot::new(
+        vec![applications],
+        move || into.clone(),
+        move |event| {
+            let _ = events_sender.lock().unwrap().send(event);
+        },
+        move |shoot| {
+            let _ = shoots_sender.lock().unwrap().send(shoot);
+        },
+    );
+    let mut picks = None;
+    if picker {
+        let (picks_sender, picked) = mpsc::channel();
+        picks = Some(picked);
+        screenshot = screenshot.with_picker(move |event| {
+            let _ = picks_sender.send(event);
+        });
+    }
+    served.object_server().at(PORTAL_PATH, screenshot).unwrap();
     served.request_name(BUS_NAME).unwrap();
     let frontend = bus.connect();
     frontend.request_name(FRONTEND).unwrap();
@@ -80,6 +91,7 @@ fn start() -> Option<Running> {
         pictures,
         events,
         shoots,
+        picks,
         frontend,
         app,
     })
@@ -368,19 +380,127 @@ fn only_the_frontend_may_call_and_bad_arguments_show_no_window() {
 }
 
 #[test]
-fn pick_color_is_not_served_and_shows_no_window() {
+fn pick_color_without_a_picker_answers_2_and_captures_nothing() {
     let Some(r) = start() else {
         return missing_tool("dbus-daemon");
     };
-    let (response, results) = answered(call(
-        &r.frontend,
-        "PickColor",
-        APP.to_owned(),
-        HashMap::new(),
-    ));
+    let (response, results) = answered(pick_color(&r));
     assert_eq!((response, results.len()), (2, 0));
     assert!(r.events.try_recv().is_err());
     assert!(r.shoots.try_recv().is_err());
+}
+
+fn pick_color(r: &Running) -> mpsc::Receiver<Call> {
+    call(&r.frontend, "PickColor", APP.to_owned(), HashMap::new())
+}
+
+/// Ask for a colour, copy the displays as the capture side does and take what the picker is told.
+fn picking(r: &Running) -> (mpsc::Receiver<Call>, PickEvent) {
+    let done = pick_color(r);
+    let shoot = r.shoots.recv_timeout(WAIT).unwrap();
+    assert!(
+        r.picks.as_ref().unwrap().try_recv().is_err(),
+        "the picker shows only once the displays are copied"
+    );
+    shoot.shot.send(Ok(vec![
+        display((0, 0), (64, 48), 200),
+        display((64, 0), (32, 48), 100),
+    ]));
+    let event = r.picks.as_ref().unwrap().recv_timeout(WAIT).unwrap();
+    (done, event)
+}
+
+#[test]
+fn a_picked_colour_is_answered_as_three_srgb_doubles_without_a_consent_window() {
+    let Some(r) = start_with(true) else {
+        return missing_tool("dbus-daemon");
+    };
+    let (done, event) = picking(&r);
+    let PickEvent::Pick {
+        handle,
+        displays,
+        reply,
+    } = event
+    else {
+        panic!("expected a pick");
+    };
+    assert_eq!(handle.as_str(), HANDLE);
+    let placed: Vec<_> = displays.iter().map(|d| (d.position, d.size)).collect();
+    assert_eq!(
+        placed,
+        [((0, 0), (64, 48)), ((64, 0), (32, 48))],
+        "every display"
+    );
+    reply.send(Picked::Colour([1.0, 0.5, 0.0]));
+    let (response, results) = answered(done);
+    assert_eq!(response, 0);
+    let colour = <(f64, f64, f64)>::try_from(results["color"].try_clone().unwrap()).unwrap();
+    assert_eq!(colour, (1.0, 0.5, 0.0));
+    assert_eq!(results.len(), 1, "the colour and nothing else");
+    assert!(r.events.try_recv().is_err(), "the pick is the consent");
+    assert!(!r.pictures.exists(), "nothing is written");
+}
+
+#[test]
+fn escape_in_the_picker_answers_1() {
+    let Some(r) = start_with(true) else {
+        return missing_tool("dbus-daemon");
+    };
+    let (done, event) = picking(&r);
+    let PickEvent::Pick { reply, .. } = event else {
+        panic!("expected a pick");
+    };
+    reply.send(Picked::Cancelled);
+    let (response, results) = answered(done);
+    assert_eq!((response, results.len()), (1, 0));
+}
+
+#[test]
+fn a_picker_that_fails_answers_2() {
+    let Some(r) = start_with(true) else {
+        return missing_tool("dbus-daemon");
+    };
+    let (done, event) = picking(&r);
+    drop(event);
+    let (response, results) = answered(done);
+    assert_eq!((response, results.len()), (2, 0));
+}
+
+#[test]
+fn closing_the_request_takes_the_picker_down_and_answers_2() {
+    let Some(r) = start_with(true) else {
+        return missing_tool("dbus-daemon");
+    };
+    let (done, event) = picking(&r);
+    r.frontend
+        .call_method(
+            Some(BUS_NAME),
+            HANDLE,
+            Some("org.freedesktop.impl.portal.Request"),
+            "Close",
+            &(),
+        )
+        .unwrap();
+    let PickEvent::Close { handle } = r.picks.as_ref().unwrap().recv_timeout(WAIT).unwrap() else {
+        panic!("expected the picker to close");
+    };
+    assert_eq!(handle.as_str(), HANDLE);
+    assert_eq!(answered(done).0, 2);
+    drop(event);
+}
+
+#[test]
+fn a_pick_whose_displays_cannot_be_copied_answers_2_and_shows_no_picker() {
+    let Some(r) = start_with(true) else {
+        return missing_tool("dbus-daemon");
+    };
+    let done = pick_color(&r);
+    let shoot = r.shoots.recv_timeout(WAIT).unwrap();
+    shoot
+        .shot
+        .send(Err(Failure::Lasting("no display".to_owned())));
+    assert_eq!(answered(done).0, 2);
+    assert!(r.picks.as_ref().unwrap().try_recv().is_err());
 }
 
 #[test]

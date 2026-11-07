@@ -4,6 +4,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use cupertino_assets::Assets;
 use cupertino_filepicker::places::{session_places, Place};
@@ -24,6 +25,7 @@ use zbus::zvariant::OwnedObjectPath;
 
 use crate::app_chooser;
 use crate::chooser::{Accept, Chooser};
+use crate::consent::Arming;
 use crate::file_chooser::{self, Answer, Kind, Reply};
 use crate::screen_cast::{self, Source};
 use crate::screenshot;
@@ -44,7 +46,9 @@ const BAR_INSETS: Insets = Insets {
 };
 const SIZE: Size = Size::new(720.0, 460.0);
 const PICKER_SIZE: Size = Size::new(480.0, 360.0);
-const CONSENT_SIZE: Size = Size::new(420.0, 140.0);
+const CONSENT_SIZE: Size = Size::new(420.0, 180.0);
+/// Side of the requesting app's icon in the screen-sharing and screenshot windows.
+const APP_ICON: f64 = 32.0;
 const RETURN: Keysym = Keysym(0xff0d);
 const ESCAPE: Keysym = Keysym(0xff1b);
 /// Characters of a file name or URI the app chooser's prompt shows before it ends it with an ellipsis.
@@ -116,6 +120,20 @@ impl Inbox {
     }
 }
 
+/// Arm consent window `id` once its arming delay has passed, on a thread of its own.
+fn arm(id: u64, arming: Arming) -> Command<Message> {
+    let (sender, armed) = async_channel::bounded(1);
+    let wait = arming.remaining(Instant::now());
+    std::thread::spawn(move || {
+        std::thread::sleep(wait);
+        let _ = sender.send_blocking(());
+    });
+    Command::Perform(Box::pin(async move {
+        let _ = armed.recv().await;
+        Message::Armed(id)
+    }))
+}
+
 fn woken() -> Command<Message> {
     Command::Perform(Box::pin(async {
         let _ = inbox().wake.1.recv().await;
@@ -159,7 +177,11 @@ struct AppIcons {
 
 impl AppIcons {
     fn load(&mut self, choices: &[app_chooser::Choice]) {
-        for name in choices.iter().filter_map(|c| c.icon.as_deref()) {
+        self.load_names(choices.iter().filter_map(|c| c.icon.as_deref()));
+    }
+
+    fn load_names<'a>(&mut self, names: impl IntoIterator<Item = &'a str>) {
+        for name in names {
             let theme = &mut self.theme;
             self.loaded.entry(name.to_owned()).or_insert_with(|| {
                 APP_ICON_PX
@@ -183,7 +205,12 @@ impl AppIcons {
 
     /// The renditions of the icon of `choice`; `None` when it has none.
     fn of(&self, choice: &app_chooser::Choice) -> Option<Vec<ImageSource>> {
-        let sources = self.loaded.get(choice.icon.as_deref()?)?;
+        self.named(choice.icon.as_deref()?)
+    }
+
+    /// The renditions of the icon `name`, loaded before; `None` when it resolves to none.
+    fn named(&self, name: &str) -> Option<Vec<ImageSource>> {
+        let sources = self.loaded.get(name)?;
         (!sources.is_empty()).then(|| sources.clone())
     }
 }
@@ -210,6 +237,11 @@ struct Picker {
     ask: screen_cast::Ask,
     rows: Selection,
     scroll: ScrollState,
+    /// The person ticked to let the app restore the share.
+    remember: bool,
+    /// The arming delay has passed: a row can be picked and shared.
+    armed: bool,
+    arming: Arming,
 }
 
 /// The question whether an app may take a screenshot.
@@ -218,11 +250,19 @@ struct Consent {
     handle: OwnedObjectPath,
     reply: screenshot::Reply,
     ask: screenshot::Ask,
+    /// The arming delay has passed: Take Screenshot can be pressed.
+    armed: bool,
+    arming: Arming,
 }
 
 impl Picker {
     fn chosen(&self) -> Option<&Source> {
         self.rows.cursor().and_then(|i| self.ask.sources.get(i))
+    }
+
+    /// Whether the window takes a pick: armed by its message, and the delay has passed by the clock too.
+    fn ready(&self) -> bool {
+        self.armed && self.arming.armed(Instant::now())
     }
 }
 
@@ -280,6 +320,10 @@ pub enum Message {
     /// The activation token the server made for app chooser `0`'s choice `1`.
     Opened(u64, String, Option<String>),
     TakeScreenshot(u64),
+    /// The arming delay of consent window `0` has passed.
+    Armed(u64),
+    /// The person ticked or unticked remembering the share of chooser `0`.
+    Remember(u64, bool),
 }
 
 const NO_SCROLL: ScrollState = ScrollState {
@@ -339,7 +383,11 @@ impl Model {
                 Event::ScreenCast(screen_cast::Event::Ask { handle, ask, reply }) => {
                     let id = self.next;
                     self.next += 1;
-                    // nothing is chosen until the person picks a row, so keys meant for the app cannot share
+                    self.app_icons.load_names(ask.app_icon.as_deref());
+                    // nothing is chosen until the person picks a row after the arming delay, so keys meant for the
+                    // app cannot share
+                    let arming = Arming::new(Instant::now());
+                    commands.push(arm(id, arming));
                     self.pickers.push(Picker {
                         id,
                         handle,
@@ -347,6 +395,9 @@ impl Model {
                         ask: *ask,
                         rows: Selection::default(),
                         scroll: NO_SCROLL,
+                        remember: false,
+                        armed: false,
+                        arming,
                     });
                 }
                 Event::ScreenCast(screen_cast::Event::Close { handle }) => {
@@ -383,11 +434,16 @@ impl Model {
                 Event::Screenshot(screenshot::Event::Ask { handle, ask, reply }) => {
                     let id = self.next;
                     self.next += 1;
+                    self.app_icons.load_names(ask.app_icon.as_deref());
+                    let arming = Arming::new(Instant::now());
+                    commands.push(arm(id, arming));
                     self.consents.push(Consent {
                         id,
                         handle,
                         reply,
                         ask: *ask,
+                        armed: false,
+                        arming,
                     });
                 }
                 Event::Screenshot(screenshot::Event::Close { handle }) => {
@@ -592,14 +648,31 @@ impl Application for Dialogs {
                 }
             }
             Message::PickerSelect(id, rows) => {
-                if let Some(p) = model.picker(id) {
+                // a row is not picked before the window is armed: a key typed for the app moves nothing
+                if let Some(p) = model.picker(id).filter(|p| p.ready()) {
                     p.rows = rows;
                 }
             }
             Message::Share(id) => {
-                let chosen = model.picker(id).and_then(|p| p.chosen().cloned());
-                if let Some(source) = chosen {
-                    model.finish_picker(id, screen_cast::Answer::Chosen(source));
+                let chosen = model
+                    .picker(id)
+                    .filter(|p| p.ready())
+                    .and_then(|p| Some((p.chosen()?.clone(), p.remember && p.ask.offer_remember)));
+                if let Some((source, remember)) = chosen {
+                    model.finish_picker(id, screen_cast::Answer::Chosen { source, remember });
+                }
+            }
+            Message::Remember(id, on) => {
+                if let Some(p) = model.picker(id).filter(|p| p.ready()) {
+                    p.remember = on;
+                }
+            }
+            Message::Armed(id) => {
+                if let Some(p) = model.picker(id) {
+                    p.armed = true;
+                }
+                if let Some(c) = model.consents.iter_mut().find(|c| c.id == id) {
+                    c.armed = true;
                 }
             }
             Message::AppScroll(id, scroll) => {
@@ -646,7 +719,15 @@ impl Application for Dialogs {
                     model.finish_app(id, app_chooser::Answer::Chosen { id: choice, token });
                 }
             }
-            Message::TakeScreenshot(id) => model.finish_consent(id, screenshot::Answer::Granted),
+            Message::TakeScreenshot(id) => {
+                if model
+                    .consents
+                    .iter()
+                    .any(|c| c.id == id && c.armed && c.arming.armed(Instant::now()))
+                {
+                    model.finish_consent(id, screenshot::Answer::Granted)
+                }
+            }
         }
         commands
     }
@@ -656,9 +737,19 @@ impl Application for Dialogs {
             .open
             .iter()
             .map(|d| window(d, &model.places))
-            .chain(model.pickers.iter().map(picker_window))
+            .chain(
+                model
+                    .pickers
+                    .iter()
+                    .map(|p| picker_window(p, &model.app_icons)),
+            )
             .chain(model.apps.iter().map(|a| app_window(a, &model.app_icons)))
-            .chain(model.consents.iter().map(consent_window))
+            .chain(
+                model
+                    .consents
+                    .iter()
+                    .map(|c| consent_window(c, &model.app_icons)),
+            )
             .collect()
     }
 }
@@ -1087,7 +1178,69 @@ fn source_row(source: &Source) -> (&'static str, String) {
     }
 }
 
-fn picker_window(p: &Picker) -> Window<Message> {
+/// The requesting app's icon at [`APP_ICON`], else the applications symbol.
+fn app_icon(icon: Option<&str>, app_icons: &AppIcons) -> Element<Message> {
+    match icon.and_then(|name| app_icons.named(name)) {
+        Some(sources) => Element::new(Image {
+            sources,
+            size: Size::new(APP_ICON, APP_ICON),
+            fit: ImageFit::Contain,
+            radius: 0.0,
+            label: None,
+        }),
+        None => Element::new(Icon {
+            name: "symbol.applications".to_owned(),
+            size: APP_ICON,
+            direction: Default::default(),
+            label: None,
+            tint: None,
+        }),
+    }
+    .key("app-icon")
+}
+
+/// A window's header: the requesting app's icon above `prompt`, which wraps inside the window.
+fn app_header(icon: Option<&str>, app_icons: &AppIcons, prompt: String) -> Element<Message> {
+    Element::new(Stack {
+        axis: Axis::Vertical,
+        padding: BAR_INSETS,
+        spacing: GAP,
+        align: Align::Stretch,
+        children: vec![
+            // at the leading edge, not stretched across the header
+            Element::new(Stack {
+                axis: Axis::Horizontal,
+                padding: Insets::ZERO,
+                spacing: 0.0,
+                align: Align::Center,
+                children: vec![app_icon(icon, app_icons), Element::new(Spacer { min: 0.0 })],
+            }),
+            Element::new(Text {
+                content: AttributedText::plain(prompt, TextStyle::new(13.0)),
+                role: TextRole::Body,
+                wrap: true,
+                secondary: false,
+                selected: false,
+            })
+            .key("prompt"),
+        ],
+    })
+}
+
+/// What the screen-sharing window asks: the app by its name, else an unnamed app.
+fn share_prompt(ask: &screen_cast::Ask) -> String {
+    let app = match &ask.app_name {
+        Some(name) => format!("“{name}” wants to share your screen."),
+        None => "An application wants to share your screen.".to_owned(),
+    };
+    if ask.sources.is_empty() {
+        format!("{app} There is no display or window to share.")
+    } else {
+        format!("{app} Choose a display or a window.")
+    }
+}
+
+fn picker_window(p: &Picker, app_icons: &AppIcons) -> Window<Message> {
     let id = p.id;
     let rows: Vec<(&'static str, String)> = p.ask.sources.iter().map(source_row).collect();
     let names: Vec<String> = rows.iter().map(|(_, n)| n.clone()).collect();
@@ -1104,30 +1257,27 @@ fn picker_window(p: &Picker) -> Window<Message> {
         type_select: Some(Box::new(move |i| names[i].clone())),
         on_scroll: Box::new(move |s| Message::PickerScroll(id, s)),
         on_select: Some(Box::new(move |s| Message::PickerSelect(id, s))),
-        on_activate: Some(Box::new(move |_| Message::Share(id))),
+        // Return reaches the window's shortcut, which a held key's repeats do not send
+        on_activate: None,
     })
     .key("sources");
-    let prompt = if p.ask.sources.is_empty() {
-        "There is no display or window to share.".to_owned()
-    } else {
-        "Choose a display or a window to share.".to_owned()
-    };
-    let header = Element::new(Stack {
-        axis: Axis::Vertical,
-        padding: BAR_INSETS,
-        spacing: GAP,
-        align: Align::Stretch,
-        children: vec![Element::new(Text {
-            content: AttributedText::plain(prompt, TextStyle::new(13.0)),
-            role: TextRole::Body,
-            wrap: true,
-            secondary: false,
-            selected: false,
+    let header = app_header(p.ask.app_icon.as_deref(), app_icons, share_prompt(&p.ask));
+    let remember = p.ask.offer_remember.then(|| {
+        let app = p.ask.app_name.as_deref().unwrap_or("the app");
+        Element::new(CheckBox {
+            label: format!("Let “{app}” share it again without asking"),
+            checked: if p.remember {
+                Checked::True
+            } else {
+                Checked::False
+            },
+            enabled: p.armed,
+            on_toggle: Some(Box::new(move |on: bool| Message::Remember(id, on))),
         })
-        .key("prompt")],
+        .key("remember")
     });
     let bar = bar_row(
-        Vec::new(),
+        remember.into_iter().collect(),
         vec![
             button(
                 "Cancel".to_owned(),
@@ -1139,7 +1289,7 @@ fn picker_window(p: &Picker) -> Window<Message> {
             button(
                 "Share".to_owned(),
                 ButtonRole::Default,
-                p.chosen().is_some(),
+                p.armed && p.chosen().is_some(),
                 Message::Share(id),
             )
             .key("share"),
@@ -1157,9 +1307,10 @@ fn picker_window(p: &Picker) -> Window<Message> {
             foreign_parent: crate::wayland_parent(&p.ask.parent_window).map(str::to_owned),
             input_region: None,
         },
-        // Return is the default button once a row is picked, and Escape cancels, wherever the focus is
+        // Return is the default button once a row is picked and the window is armed, and Escape cancels, wherever the
+        // focus is; only a fresh press of Return shares, never a key held since before
         shortcuts: CommandRegistry::new()
-            .with(
+            .with_fresh(
                 Shortcut {
                     mods: Mods::NONE,
                     keysym: RETURN,
@@ -1343,22 +1494,9 @@ fn consent_prompt(ask: &screenshot::Ask) -> String {
     }
 }
 
-fn consent_window(c: &Consent) -> Window<Message> {
+fn consent_window(c: &Consent, app_icons: &AppIcons) -> Window<Message> {
     let id = c.id;
-    let prompt = Element::new(Stack {
-        axis: Axis::Vertical,
-        padding: BAR_INSETS,
-        spacing: GAP,
-        align: Align::Stretch,
-        children: vec![Element::new(Text {
-            content: AttributedText::plain(consent_prompt(&c.ask), TextStyle::new(13.0)),
-            role: TextRole::Body,
-            wrap: true,
-            secondary: false,
-            selected: false,
-        })
-        .key("prompt")],
-    });
+    let prompt = app_header(c.ask.app_icon.as_deref(), app_icons, consent_prompt(&c.ask));
     let bar = bar_row(
         Vec::new(),
         vec![
@@ -1372,7 +1510,7 @@ fn consent_window(c: &Consent) -> Window<Message> {
             button(
                 "Take Screenshot".to_owned(),
                 ButtonRole::Normal,
-                true,
+                c.armed,
                 Message::TakeScreenshot(id),
             )
             .key("take"),
@@ -1577,6 +1715,28 @@ mod tests {
         send(driver, window, WindowEvent::Key(event, Timestamp(0)));
     }
 
+    /// A repeat of a key held down, as the transport sends it after the repeat delay.
+    fn repeat_key(driver: &mut TestDriver<Dialogs>, window: WindowId, keysym: Keysym) {
+        let event = KeyEvent {
+            code: 0,
+            keysym,
+            text: None,
+            pressed: true,
+            repeat: true,
+            mods: Mods::NONE,
+        };
+        send(driver, window, WindowEvent::Key(event, Timestamp(0)));
+    }
+
+    /// Wait out the arming delay of the consent window that shows, so it takes an answer.
+    fn armed(driver: &mut TestDriver<Dialogs>, window: WindowId) {
+        std::thread::sleep(crate::consent::ARMING);
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            settle(driver, window);
+        }
+    }
+
     /// A data directory whose `hicolor` theme has the icon `name`: a red square.
     fn icon_theme(name: &str) -> tempfile::TempDir {
         let data = tempfile::tempdir().unwrap();
@@ -1607,6 +1767,16 @@ mod tests {
             .unwrap();
         let line = &frame.pixels[y * frame.width as usize * 4..][..ROW_HEIGHT as usize * 2 * 4];
         line.chunks(4).any(|px| px == [255, 0, 0, 255])
+    }
+
+    /// The names the window's accessibility tree reads.
+    fn shown(driver: &TestDriver<Dialogs>, window: WindowId) -> Vec<String> {
+        let snapshot = driver.runtime().snapshot(window).unwrap();
+        snapshot
+            .accessibility
+            .iter()
+            .filter_map(|(_, n)| n.name.clone())
+            .collect()
     }
 
     fn click(driver: &mut TestDriver<Dialogs>, window: WindowId, key: &'static str) {
@@ -1706,6 +1876,8 @@ mod tests {
                 handle: handle(n),
                 ask: Box::new(screen_cast::Ask {
                     app_id: "org.example.Meeting".to_owned(),
+                    app_name: Some("Meeting".to_owned()),
+                    app_icon: Some("org.example.Viewer".to_owned()),
                     parent_window: String::new(),
                     sources: vec![
                         display.clone(),
@@ -1715,6 +1887,7 @@ mod tests {
                             app_id: "org.example.Notes".to_owned(),
                         },
                     ],
+                    offer_remember: true,
                 }),
                 reply: screen_cast::Reply(sender),
             });
@@ -1724,20 +1897,64 @@ mod tests {
         let window = show(&mut driver);
         let spec = driver.window_system_mut().spec(window).unwrap().clone();
         assert_eq!(spec.title, "Share Screen");
+        assert!(
+            red_icon(&mut driver, window, Key::from("app-icon")),
+            "the requesting app is drawn by its own icon"
+        );
+        let names = shown(&driver, window);
+        let prompt = "“Meeting” wants to share your screen. Choose a display or a window.";
+        assert!(names.iter().any(|n| n == prompt), "{names:?}");
+        type_key(&mut driver, window, Keysym(0xff54), None);
         type_key(&mut driver, window, Keysym('n' as u32), Some('n'));
         type_key(&mut driver, window, RETURN, None);
+        click_at(&mut driver, window, Key::Int(0));
+        click(&mut driver, window, "share");
+        type_key(&mut driver, window, RETURN, None);
+        assert!(
+            answer.try_recv().is_err(),
+            "keys and clicks before the window is armed pick and share nothing"
+        );
+        armed(&mut driver, window);
         click(&mut driver, window, "share");
         assert!(
             answer.try_recv().is_err(),
-            "keys typed for the app and Share with no row picked share nothing"
+            "Share with no row picked shares nothing"
         );
         click_at(&mut driver, window, Key::Int(0));
+        driver.look(window, "portal-share-screen").unwrap();
+        repeat_key(&mut driver, window, RETURN);
+        assert!(
+            answer.try_recv().is_err(),
+            "a Return held since before the window was armed shares nothing"
+        );
         type_key(&mut driver, window, RETURN, None);
         assert_eq!(
             answer.try_recv().unwrap(),
-            screen_cast::Answer::Chosen(display.clone())
+            screen_cast::Answer::Chosen {
+                source: display.clone(),
+                remember: false
+            }
         );
         assert!(driver.runtime().windows().is_empty());
+
+        let answer = share(9);
+        let window = show(&mut driver);
+        armed(&mut driver, window);
+        click_at(&mut driver, window, Key::Int(1));
+        click(&mut driver, window, "remember");
+        click(&mut driver, window, "share");
+        assert_eq!(
+            answer.try_recv().unwrap(),
+            screen_cast::Answer::Chosen {
+                source: Source::Window {
+                    identifier: "a1".to_owned(),
+                    title: "Notes".to_owned(),
+                    app_id: "org.example.Notes".to_owned(),
+                },
+                remember: true
+            },
+            "the person ticked to let the app share it again"
+        );
 
         let answer = share(5);
         let window = show(&mut driver);
@@ -1844,19 +2061,12 @@ mod tests {
                 ask: Box::new(screenshot::Ask {
                     app_id: "org.example.Draw".to_owned(),
                     app_name: app_name.map(str::to_owned),
+                    app_icon: None,
                     parent_window: String::new(),
                 }),
                 reply: screenshot::Reply(sender),
             });
             answer
-        };
-        let shown = |driver: &TestDriver<Dialogs>, window: WindowId| -> Vec<String> {
-            let snapshot = driver.runtime().snapshot(window).unwrap();
-            snapshot
-                .accessibility
-                .iter()
-                .filter_map(|(_, n)| n.name.clone())
-                .collect()
         };
         let answer = consent(6, Some("Drawing"));
         let window = show(&mut driver);
@@ -1871,13 +2081,22 @@ mod tests {
         ] {
             assert!(names.iter().any(|n| n == text), "{text:?} in {names:?}");
         }
+        let icon = rect_of(&driver, window, &Key::from("app-icon"));
         let prompt = rect_of(&driver, window, &Key::from("prompt"));
         let take = rect_of(&driver, window, &Key::from("take"));
         let separator = take.origin.y - BAR_INSETS.top - 1.0;
+        let bottom = prompt.origin.y + prompt.size.height;
         assert!(
-            (prompt.origin.y - (separator - prompt.origin.y - prompt.size.height)).abs() < 0.5,
-            "the prompt is centred in the body above the separator: {prompt:?}, separator at {separator}"
+            icon.origin.y < prompt.origin.y && (icon.origin.y - (separator - bottom)).abs() < 0.5,
+            "the app's icon and the prompt under it are centred in the body above the separator: {icon:?}, \
+             {prompt:?}, separator at {separator}"
         );
+        click(&mut driver, window, "take");
+        assert!(
+            answer.try_recv().is_err(),
+            "a click before the window is armed takes nothing"
+        );
+        armed(&mut driver, window);
         type_key(&mut driver, window, RETURN, None);
         type_key(&mut driver, window, Keysym(' ' as u32), Some(' '));
         assert!(

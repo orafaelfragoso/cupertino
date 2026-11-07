@@ -59,24 +59,51 @@ video stream (`cupertino-screencast`). It is served only when the server offers 
 ext-foreign-toplevel-list-v1).
 
 - `CreateSession` adds an `org.freedesktop.impl.portal.Session` object at the session handle. `SelectSources` takes
-  `types` (monitor, window or both) and `cursor_mode` (hidden or embedded); `multiple` and `persist_mode` are read but
-  one source is shared and nothing persists. `Start` shows a window that lists the displays and the windows, by title
-  and app id, with nothing selected. Share is the default button and is enabled only once a row is picked, so keys
-  typed for the app before the window took focus share nothing: Return then shares the picked source, and Escape
-  cancels.
+  `types` (monitor, window or both), `cursor_mode` (hidden or embedded), `persist_mode` (0, 1 or 2; another value is
+  `InvalidArgs`) and `restore_data`; `multiple` is read but one source is shared.
+- `Start` shows a window, "“<app>” wants to share your screen. Choose a display or a window.", the app named and drawn
+  by its desktop entry (`<app id>.desktop`: `Name=` and an `Icon=` that is an icon name) else shown as its id, or as
+  "An application" for an empty id. It lists the displays and the windows, by title and app id, with nothing
+  selected. When the app asked to persist and has an id, a check box "Let “<app>” share it again without asking" is
+  offered, unticked.
+- The window takes no answer that grants for 500 ms after it opens: clicks, row picks and keys do nothing until then,
+  and a key held since before keeps doing nothing, since Return shares only on a fresh press (its repeats are
+  ignored). Share is the default button and is enabled only once armed and a row is picked; Escape cancels at once.
 - The answer to `Start` is `0` with one entry in `streams`: the node id, `source_type`, `size` (logical for a display,
-  in pixels for a window) and `position` for a display, and `persist_mode` 0. Cancel or closing the window is `1`; a
-  `Close` on the request or the session while the window shows takes it down and answers `2`.
+  in pixels for a window) and `position` for a display. It has `persist_mode` and `restore_data` when the person
+  ticked the box, else `persist_mode` 0. Cancel or closing the window is `1`; a `Close` on the request or the session
+  while the window shows takes it down and answers `2`, as does the app leaving the bus (the frontend closes the
+  session).
+- Remembering. `restore_data` is `("cupertino", 1, <grant id>)`, the id 32 random hexadecimal digits; it means
+  nothing without this backend's record. A window is remembered only until the app quits (`persist_mode` 1 at most):
+  its identifier lasts no longer. A display the app may keep (`persist_mode` 2) is written to `screen-sharing.conf`
+  (`cupertino-defaults::screen_sharing`, mode `0600`) as `grant = <id> <app id> display <connector>`; a transient
+  grant is kept in memory, at most 64. A later `SelectSources` with that `restore_data` and the same app id shares the
+  same source again without a window, as long as it is still there; otherwise the window shows. The grant is the
+  frontend's app id's alone: it never restores for another id or an empty one.
+- Forgetting. Settings › Privacy › Screen Sharing lists each remembered display by app, with Forget, which takes the
+  line out of the file; the next request shows the window again. A share running then goes on until it is stopped.
+  Stopping a share from the menu bar forgets a transient grant.
+- While a share runs the portal shows a status item in the menu bar (StatusNotifierItem
+  `org.kde.StatusNotifierItem-<pid>-<n>` with a `com.canonical.dbusmenu` menu, registered with
+  `org.kde.StatusNotifierWatcher` and again whenever a watcher appears): tooltip and first menu row "“<app>” is sharing
+  “<source>”", then Stop Sharing, which ends the share and closes the session (`Closed`). The item goes when the share
+  ends for any reason. The server's privacy dot in the menu bar shows for any capture besides.
 - Frames are copied with an image copy session straight into the stream's memfds through a `wl_shm` pool, the cursor
   painted in when it is embedded. A frame is captured only while PipeWire has a free buffer, at most at the framerate
   the consumer fixed, and carries the copy session's damage. A resized source renegotiates the stream.
 - `Session.Close` and the frontend leaving the bus stop the share. A closed window or a source that fails ends the
   share, which closes the session and emits `Closed`.
+- A display without logical geometry is sized by its mode turned by its transform over its scale (`geometry`, every
+  `wl_output` transform tested). A stream's frames go out as the server copies them: the copy's `transform` event is
+  not applied to them, as it is to a screenshot or a colour pick (Cupertino's server reports every copy as not turned).
 - The same callers, bounds and sanitizing as the file chooser apply: only the frontend calls, at most 16 sessions and 4
   for one app id, and titles lose control and bidirectional-override characters.
 
-Known limitations: no restore tokens, no cursor metadata, no region source, one source for each `Start`, shared memory
-only (no dmabuf), and no audio.
+Known limitations: no cursor metadata, no region source, one source for each `Start`, shared memory only (no dmabuf),
+and no audio. A display is remembered by its connector name, so a different screen on the same connector restores
+too. The app id of an app outside a sandbox is what the frontend reads from its systemd unit; such an app runs as the
+person and could edit `screen-sharing.conf` itself, so a grant protects against sandboxed apps only.
 
 ## App chooser
 
@@ -111,28 +138,37 @@ with screen cast, only when the server offers the image capture globals. The win
 captured unless the person agrees.
 
 - `Screenshot` shows a window, "Screenshot", that says "“<app>” wants to take a screenshot of your screen.", the app
-  named by its desktop entry (`<app id>.desktop` in `$XDG_DATA_HOME/applications` and each `XDG_DATA_DIRS` entry), else
-  by its id; an empty id shows as "An application". Nothing is preselected and Take Screenshot has no key, so a key
-  typed for the app cannot consent; Escape cancels.
+  named and drawn by its desktop entry (`<app id>.desktop` in `$XDG_DATA_HOME/applications` and each `XDG_DATA_DIRS`
+  entry), else by its id; an empty id shows as "An application". Nothing is preselected, Take Screenshot has no key
+  and is enabled only 500 ms after the window opens, so neither a key nor a click meant for the app can consent;
+  Escape cancels.
 - `modal`, `interactive` and `permission_store_checked` are read but change nothing: the same window shows every time,
   even when the frontend checked the permission store. `AvailableTargets` is `1` (the whole screen); a `target` other
   than `1` is `InvalidArgs`.
 - Once the window has had 300 ms to leave the screen, one frame of each display is copied with an image copy session
-  into a memfd, without the pointer. The displays are joined as they sit, at the largest scale among them; what no
-  display covers is transparent.
+  into a memfd, without the pointer. Each is turned upright when its copy says it is turned, and the displays are joined
+  as they sit, at the largest scale among them; what no display covers is transparent.
 - The PNG goes to `XDG_PICTURES_DIR` of `user-dirs.dirs`, else `~/Pictures`, created when missing, as
   `Screenshot <date> at <time>.png` like the screenshot tool names it, then ` (2)`, ` (3)`, … when the name is taken. It
   is created new (never replacing a file) and readable by its owner only (`0600`).
 - The answer is `0` with `uri` (`file://`, escaped); Cancel or closing the window is `1`; `Close` on the request takes
   the window down and answers `2`, and so does a capture or a write that fails.
-- `PickColor` answers `2` without a window: picking a pixel needs a pointer over every display, which the portal has no
-  surface for.
+- `PickColor` lets the person pick the colour of one pixel on any display. One frame of every display is copied at once
+  and frozen under an overlay layer surface on each display (namespace `cupertino-portal-color-picker`), the pointer
+  hidden. A crosshair marks the pixel under the pointer and a loupe beside it shows the 11 × 11 pixels round it, ten
+  points each, the middle one outlined; it moves to the other side of the pointer near an edge. A click picks: its
+  press must come on the overlay at least 500 ms after it appeared, and its release takes the pixel under the pointer
+  then, so a button held from before or a click meant for what was under the pointer picks nothing. Escape cancels.
+- The pick is the consent, so no window asks first: the app learns one colour and only of a pixel the person clicked.
+  The answer is `0` with `color`, `(ddd)` red, green and blue in sRGB from 0 to 1 (the display's 8-bit value over
+  255); Escape is `1`; `Close` on the request takes the overlay down and answers `2`, as do displays that change
+  during the pick, a copy that fails, a pick while another one runs, and a server without a layer shell.
 - The same callers and bounds as the file chooser apply: only the frontend calls, at most 16 screenshots and 4 for one
   app id are pending, the app id and the parent window are at most 1024 bytes, and the app's name loses control and
   bidirectional-override characters.
 
-Known limitations: no window or area target, no pointer in the image, no colour picking, and a display's rotation is
-not undone.
+Known limitations: no window or area target and no pointer in the image. A picked colour is the copied pixel's value,
+without the display's colour profile, and the picker has no keyboard movement of the pointer.
 
 ## Installing
 

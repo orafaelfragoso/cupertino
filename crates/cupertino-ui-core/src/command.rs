@@ -2,18 +2,21 @@
 
 use crate::Shortcut;
 use cupertino_ui_platform::{KeyEvent, Keysym};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Shortcuts and the message each one sends.
 #[derive(Clone, Debug)]
 pub struct CommandRegistry<M> {
     shortcuts: HashMap<Shortcut, M>,
+    /// Shortcuts a held key's repeats do not send ([`CommandRegistry::with_fresh`]).
+    fresh: HashSet<Shortcut>,
 }
 
 impl<M> Default for CommandRegistry<M> {
     fn default() -> Self {
         Self {
             shortcuts: HashMap::new(),
+            fresh: HashSet::new(),
         }
     }
 }
@@ -32,17 +35,28 @@ impl<M: Clone> CommandRegistry<M> {
         self.shortcuts.insert(normalize(shortcut), message)
     }
 
+    /// [`CommandRegistry::with`] for a shortcut that only a fresh press sends, never the repeats of a held key: a key
+    /// pressed before a consent window could act, and held, does not answer it.
+    pub fn with_fresh(mut self, shortcut: Shortcut, message: M) -> Self {
+        let shortcut = normalize(shortcut);
+        self.fresh.insert(shortcut);
+        self.shortcuts.insert(shortcut, message);
+        self
+    }
+
     /// The message of the shortcut `key` presses, if any.
     pub fn lookup(&self, key: &KeyEvent) -> Option<M> {
         if !key.pressed {
             return None;
         }
-        self.shortcuts
-            .get(&normalize(Shortcut {
-                mods: key.mods,
-                keysym: key.keysym,
-            }))
-            .cloned()
+        let shortcut = normalize(Shortcut {
+            mods: key.mods,
+            keysym: key.keysym,
+        });
+        if key.repeat && self.fresh.contains(&shortcut) {
+            return None;
+        }
+        self.shortcuts.get(&shortcut).cloned()
     }
 }
 
@@ -104,6 +118,37 @@ mod tests {
         assert_eq!(
             registry.lookup(&key(0x7a, Mods::PRIMARY | Mods::ALT, true)),
             None
+        );
+    }
+
+    #[test]
+    fn a_fresh_shortcut_ignores_the_repeats_of_a_held_key_and_others_take_them() {
+        let enter = Shortcut {
+            mods: Mods::NONE,
+            keysym: Keysym(0xff0d),
+        };
+        let undo = Shortcut {
+            mods: Mods::PRIMARY,
+            keysym: Keysym(0x7a),
+        };
+        let registry = CommandRegistry::new()
+            .with_fresh(enter, "share")
+            .with(undo, "undo");
+        let repeat = |mut k: KeyEvent| {
+            k.repeat = true;
+            k
+        };
+        assert_eq!(
+            registry.lookup(&key(0xff0d, Mods::NONE, true)),
+            Some("share")
+        );
+        assert_eq!(
+            registry.lookup(&repeat(key(0xff0d, Mods::NONE, true))),
+            None
+        );
+        assert_eq!(
+            registry.lookup(&repeat(key(0x7a, Mods::PRIMARY, true))),
+            Some("undo")
         );
     }
 }

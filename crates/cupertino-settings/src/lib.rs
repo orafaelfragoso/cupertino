@@ -25,6 +25,7 @@ pub mod menu_bar;
 pub mod nm;
 pub mod pane;
 pub mod panes;
+pub mod screen_sharing;
 pub mod search;
 #[cfg(feature = "app")]
 pub mod services;

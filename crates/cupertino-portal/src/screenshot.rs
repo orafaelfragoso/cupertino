@@ -1,6 +1,10 @@
 //! `org.freedesktop.impl.portal.Screenshot`: `Screenshot` and `PickColor`. A screenshot becomes an [`Ask`] for the
 //! dialog, which answers through its [`Reply`]; nothing is captured unless the person agrees. The capture side then
 //! copies every display ([`Shoot`]), and the displays are joined into one PNG under the picture directory.
+//!
+//! A colour pick copies every display at once and hands the copies to the picker ([`PickEvent`]), which freezes them
+//! under an overlay until the person clicks a pixel or presses Escape ([`crate::pick`]); the app is answered the
+//! colour of that one pixel and nothing else. The pick is the consent, so no window asks first.
 
 use std::collections::HashMap;
 use std::fs::OpenOptions;
@@ -10,14 +14,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use cupertino_apps::entry::{parse_handler, Locale, Visibility};
 use cupertino_filepicker::places::parse_user_dirs;
 use tiny_skia::{BlendMode, FilterQuality, Pixmap, PixmapPaint, Transform};
 use zbus::message::Header;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 use zbus::{interface, Connection};
 
-use crate::file_chooser::{file_uri, plain};
+use crate::consent::{identify, Identity};
+use crate::file_chooser::file_uri;
+use crate::pick::Picked;
 use crate::request::{from_frontend, Exported, PortalError, Response};
 
 /// The interface version served.
@@ -47,6 +52,8 @@ pub struct Ask {
     pub app_id: String,
     /// The name of the app's desktop entry, else its id; `None` when the id is empty.
     pub app_name: Option<String>,
+    /// The icon name of the app's desktop entry, if it has one.
+    pub app_icon: Option<String>,
     /// `wayland:<handle>`, `x11:<xid>` or empty.
     pub parent_window: String,
 }
@@ -113,6 +120,28 @@ pub struct Shoot {
     pub shot: Shot,
 }
 
+/// What the colour picker is told.
+pub enum PickEvent {
+    /// Let the person pick a pixel of `displays` (copied for the call at `handle`) and answer through `reply`.
+    /// Dropping `reply` unanswered fails the call.
+    Pick {
+        handle: OwnedObjectPath,
+        displays: Vec<Output>,
+        reply: PickReply,
+    },
+    /// The frontend closed the call at `handle`: take its overlay down without answering.
+    Close { handle: OwnedObjectPath },
+}
+
+/// The picker's answer to one [`PickEvent::Pick`].
+pub struct PickReply(pub(crate) async_channel::Sender<Picked>);
+
+impl PickReply {
+    pub fn send(self, picked: Picked) {
+        let _ = self.0.try_send(picked);
+    }
+}
+
 /// The app id of each open call.
 type Calls = Arc<Mutex<HashMap<OwnedObjectPath, String>>>;
 
@@ -158,6 +187,7 @@ pub struct Screenshot {
     pictures: Box<dyn Fn() -> PathBuf + Send + Sync>,
     events: Box<dyn Fn(Event) + Send + Sync>,
     shoots: Box<dyn Fn(Shoot) + Send + Sync>,
+    picks: Option<Box<dyn Fn(PickEvent) + Send + Sync>>,
     calls: Calls,
 }
 
@@ -176,39 +206,27 @@ impl Screenshot {
             pictures: Box::new(pictures),
             events: Box::new(events),
             shoots: Box::new(shoots),
+            picks: None,
             calls: Arc::default(),
         }
     }
 
-    /// The app as the consent window names it: the name of `<app_id>.desktop` in the first application directory that
-    /// has it, else the id; `None` for an empty id.
-    fn app_name(&self, app_id: &str) -> Option<String> {
-        if app_id.is_empty() {
-            return None;
-        }
-        let file_name = !app_id.contains('/') && !app_id.chars().any(char::is_control);
-        let name = file_name
-            .then(|| {
-                self.applications.iter().find_map(|dir| {
-                    std::fs::read_to_string(dir.join(format!("{app_id}.desktop"))).ok()
-                })
-            })
-            .flatten()
-            .and_then(|text| {
-                let (locale, visibility) = (Locale::from_env(), Visibility::from_env());
-                parse_handler(app_id, &text, &locale, &visibility).ok()
-            })
-            .map(|handler| plain(&handler.entry.name))
-            .filter(|n| !n.trim().is_empty());
-        Some(name.unwrap_or_else(|| plain(app_id)))
+    /// Serve `PickColor` through the picker `picks` reaches; without one it answers 2 and shows nothing.
+    pub fn with_picker(mut self, picks: impl Fn(PickEvent) + Send + Sync + 'static) -> Self {
+        self.picks = Some(Box::new(picks));
+        self
     }
 
-    /// Copy every display and write them as one PNG. A copy that fails for a reason that can pass is made again, up to
+    /// The app as the consent window names it and draws it ([`identify`]).
+    fn identity(&self, app_id: &str) -> Identity {
+        identify(&self.applications, app_id)
+    }
+
+    /// Copy every display, once `due` has passed. A copy that fails for a reason that can pass is made again, up to
     /// [`MAX_ATTEMPTS`] in all. The frontend closing the request before the copy ends it.
-    async fn take(&self, request: &Exported) -> Result<PathBuf, String> {
-        let mut due = Instant::now() + SETTLE;
+    async fn copy(&self, request: &Exported, mut due: Instant) -> Result<Vec<Output>, String> {
         let mut attempt = 1;
-        let outputs = loop {
+        loop {
             let (shot, outputs) = async_channel::bounded(1);
             (self.shoots)(Shoot {
                 due,
@@ -222,7 +240,7 @@ impl Screenshot {
             .ok_or("the request was closed")?
             .map_err(|_| "the capture side went away".to_owned())?;
             match outputs {
-                Ok(outputs) => break outputs,
+                Ok(outputs) => return Ok(outputs),
                 Err(Failure::Passing(reason)) if attempt < MAX_ATTEMPTS => {
                     eprintln!(
                         "cupertino-portal: copying the displays failed, trying again: {reason}"
@@ -232,7 +250,12 @@ impl Screenshot {
                 }
                 Err(Failure::Passing(reason) | Failure::Lasting(reason)) => return Err(reason),
             }
-        };
+        }
+    }
+
+    /// Copy every display once the consent window has left the screen and write them as one PNG.
+    async fn take(&self, request: &Exported) -> Result<PathBuf, String> {
+        let outputs = self.copy(request, Instant::now() + SETTLE).await?;
         let dir = (self.pictures)();
         let (saved, path) = async_channel::bounded(1);
         // joining and encoding a large screen takes a while, and the bus is served meanwhile
@@ -275,10 +298,12 @@ impl Screenshot {
         let _pending = Pending::take(&self.calls, &handle, &app_id)?;
         let request = Exported::at(connection, handle.as_ref()).await?;
         let (reply, answer) = async_channel::bounded(1);
+        let identity = self.identity(&app_id);
         (self.events)(Event::Ask {
             handle: handle.clone(),
             ask: Box::new(Ask {
-                app_name: self.app_name(&app_id),
+                app_name: identity.name,
+                app_icon: identity.icon,
                 app_id,
                 parent_window,
             }),
@@ -311,21 +336,60 @@ impl Screenshot {
         Ok(answered)
     }
 
-    /// Not served: picking a pixel needs a pointer over every display, which the portal has no surface for. Copying
-    /// the screen to read one pixel the app chose would hand the app any pixel it names.
+    /// The colour of a pixel the person clicks on any display ([`crate::pick`]); 1 when they press Escape, 2 without
+    /// a picker or when the displays cannot be copied.
     async fn pick_color(
         &self,
         #[zbus(header)] header: Header<'_>,
         #[zbus(connection)] connection: &Connection,
-        _handle: OwnedObjectPath,
+        handle: OwnedObjectPath,
         app_id: String,
         parent_window: String,
+        // the pick has no option: it is always made by the person, over every display
         _options: Options,
     ) -> Result<(u32, HashMap<String, OwnedValue>), PortalError> {
         from_frontend(&header, connection).await?;
-        text("app_id", app_id)?;
+        let app_id = text("app_id", app_id)?;
         text("parent_window", parent_window)?;
-        Ok((Response::Other as u32, HashMap::new()))
+        let Some(picks) = &self.picks else {
+            return Ok((Response::Other as u32, HashMap::new()));
+        };
+        let _pending = Pending::take(&self.calls, &handle, &app_id)?;
+        let request = Exported::at(connection, handle.as_ref()).await?;
+        // nothing of the portal is on screen yet, so the displays are copied at once
+        let answered = match self.copy(&request, Instant::now()).await {
+            Ok(displays) => {
+                let (reply, picked) = async_channel::bounded(1);
+                picks(PickEvent::Pick {
+                    handle: handle.clone(),
+                    displays,
+                    reply: PickReply(reply),
+                });
+                let picked =
+                    futures_lite::future::or(async { Some(picked.recv().await.ok()) }, async {
+                        request.closed().await;
+                        None
+                    })
+                    .await;
+                match picked {
+                    Some(Some(Picked::Colour(colour))) => {
+                        (Response::Success as u32, colour_results(colour)?)
+                    }
+                    Some(Some(Picked::Cancelled)) => (Response::Cancelled as u32, HashMap::new()),
+                    Some(None) => (Response::Other as u32, HashMap::new()),
+                    None => {
+                        picks(PickEvent::Close { handle });
+                        (Response::Other as u32, HashMap::new())
+                    }
+                }
+            }
+            Err(reason) => {
+                eprintln!("cupertino-portal: the colour pick for {handle} failed: {reason}");
+                (Response::Other as u32, HashMap::new())
+            }
+        };
+        request.remove().await;
+        Ok(answered)
     }
 
     #[zbus(property)]
@@ -369,6 +433,13 @@ where
 fn results(uri: String) -> Result<HashMap<String, OwnedValue>, PortalError> {
     let uri = OwnedValue::try_from(Value::from(uri)).map_err(|e| PortalError::ZBus(e.into()))?;
     Ok(HashMap::from([("uri".to_owned(), uri)]))
+}
+
+/// `color` as `(ddd)`: red, green and blue in `[0, 1]`.
+fn colour_results(colour: [f64; 3]) -> Result<HashMap<String, OwnedValue>, PortalError> {
+    let colour = OwnedValue::try_from(Value::from((colour[0], colour[1], colour[2])))
+        .map_err(|e| PortalError::ZBus(e.into()))?;
+    Ok(HashMap::from([("color".to_owned(), colour)]))
 }
 
 /// The image in a shm buffer of `width` x `height` pixels with rows `stride` bytes apart, its pixels 32-bit
@@ -625,6 +696,60 @@ mod tests {
         assert_eq!(pixel(&image, 200, 0), blue);
         assert_eq!(pixel(&image, 299, 199), blue);
         assert!(compose(&[]).is_none());
+    }
+
+    #[test]
+    fn a_turned_display_at_another_scale_is_joined_upright_where_it_sits() {
+        use crate::geometry::{turned, upright, Turn};
+        // a display at scale 1 on the left, and a quarter-turned one at scale 2 on its right: 50 x 100 points
+        let left = Output {
+            position: (0, 0),
+            size: (100, 50),
+            image: filled(100, 50, [255, 0, 0, 255]),
+        };
+        // the turned display's upright image: its top half green, its bottom half blue
+        let mut shown = filled(100, 200, [0, 0, 255, 255]);
+        shown.fill_rect(
+            tiny_skia::Rect::from_xywh(0.0, 0.0, 100.0, 100.0).unwrap(),
+            &tiny_skia::Paint {
+                shader: tiny_skia::Shader::SolidColor(tiny_skia::Color::from_rgba8(0, 255, 0, 255)),
+                ..tiny_skia::Paint::default()
+            },
+            Transform::identity(),
+            None,
+        );
+        for turn in Turn::ALL {
+            let buffer = turned(&shown, turn).unwrap();
+            let right = Output {
+                position: (100, 0),
+                size: (50, 100),
+                image: upright(&buffer, turn).unwrap(),
+            };
+            let image = compose(&[
+                Output {
+                    image: left.image.clone(),
+                    ..left
+                },
+                right,
+            ])
+            .unwrap();
+            assert_eq!((image.width(), image.height()), (300, 200), "{turn:?}");
+            assert_eq!(
+                pixel(&image, 250, 10),
+                [0, 255, 0, 255],
+                "{turn:?}: its top"
+            );
+            assert_eq!(
+                pixel(&image, 250, 190),
+                [0, 0, 255, 255],
+                "{turn:?}: its bottom"
+            );
+            assert_eq!(
+                pixel(&image, 199, 99),
+                [255, 0, 0, 255],
+                "{turn:?}: the other display"
+            );
+        }
     }
 
     #[test]

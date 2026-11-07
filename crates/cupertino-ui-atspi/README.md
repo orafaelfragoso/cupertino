@@ -30,7 +30,12 @@ let runtime = Runtime::new(system, options);
   those copies are no longer handed out: core stops sending while nothing listens.
 - **Nodes.** Roles, names, descriptions, states, bounds in window points, relations, children and values (text, number
   with its range and step, toggle) map one to one. `Separator` and `Splitter` are both AccessKit's splitter, ARIA's
-  separator.
+  separator. A list item, tree item, cell or tab without a name or label is labelled by its children, so a reader
+  speaks the text inside it (AccessKit computes a name from descendants only for buttons, links, check boxes, radio
+  buttons and menu items). An item's place and its container's count go out as AccessKit's position in set and set
+  size.
+- **Window title.** Core passes each window's title through `window_title` before its first tree and whenever it
+  changes; a root without a name of its own is published with the title as its name.
 - **Text.** An editable value is published as AccessKit text runs: one per line, ending with its line break, split in
   runs of at most 255 characters on one line (AccessKit counts a run's characters in a byte). A character is a grapheme
   cluster; a word takes the spaces after it. The caret and selection core sends in bytes become a text selection in the
@@ -73,7 +78,7 @@ password and protected-value defences, the action filter, and activation and dea
 `tests/atspi.rs` starts a private `dbus-daemon` (skipped when it is not installed) that serves a fake
 `org.a11y.Status` and AT-SPI registry. The application runs in a copy of the test binary, started with the bus
 addresses AccessKit reads from its environment. Acting as an assistive technology, the test reads the window and its
-nodes with their roles and names, checks that the password's text is empty, tries to type into it, and clicks OK: only
+nodes with their roles and names (the untitled root by the window's title, an unnamed list item by its text), checks that the password's text is empty, tries to type into it, and clicks OK: only
 the Click reaches the application. In a text field it reads the caret and selection in characters, sets a selection
 that reaches the application in bytes, and hears the caret and selection events of the update that shows it; the
 password field takes no selection. With accessibility off, the application never embeds its root.

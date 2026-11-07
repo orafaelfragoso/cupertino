@@ -48,7 +48,8 @@ Contrast the HUD surface takes no material and paints the theme's opaque window 
 takes no input and the server hides it while the session is locked, so a lock needs no reaction.
 
 **Accessibility.** The window is named after the overlay ("Volume", "Volume muted", "Brightness", "Keyboard brightness",
-"Microphone", "Microphone muted"), and the meter is a progress indicator of that name with the level from 0 to 1.
+"Microphone", "Microphone muted"), and the meter is a progress indicator of that name with the level from 0 to 1. The
+meter is a polite live region, so a screen reader says each new level without the overlay taking the focus.
 
 **Timing.** Commands from the bus thread arrive on a channel the application listens to. A timer fires at the end of the
 hold, then once a frame (1/60 s) through the fade; a new command replaces the pending timer.

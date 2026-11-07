@@ -29,7 +29,10 @@ from the application's model and reports changes as messages.
   row selected, counted over every section. The rows share one Tab stop; Up, Down, Home and End cross the sections,
   and a selection that does not change is not reported again. Assistive technology reads a list with a group per
   heading and a selected list item per row. A row is keyed by its item's key, so its focus and accessible object stay
-  with it while rows come and go around it.
+  with it while rows come and go around it. A row's accessory (an eject button) offers a click only with
+  `on_accessory`; without it the accessory reads as disabled.
+- **Positions.** A menu item says its place among the menu's items and the menu says how many it holds, separators not
+  counted; a tab and a page dot say their place and their tab list says its count.
 - **Truncation.** A `Text` that does not wrap, and a tooltip's tip past its 300 pt text width, end in an ellipsis
   where they are cut; the accessible name keeps the whole text.
 - **Rich text.** `RichText` draws its links in the link colour over a 1 px underline 1.5 pt below the baseline. Each

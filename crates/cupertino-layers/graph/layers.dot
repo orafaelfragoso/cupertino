@@ -1,5 +1,5 @@
 // cupertino-layers --graph
-// 79 crates, 369 internal dependencies
+// 79 crates, 371 internal dependencies
 // per layer: foundation 18, models 8, platform 9, protocol 3, transport 3, render 3, ui 13, core 1, shell 11, services 4, apps 2, tools 4
 // forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-files (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
@@ -240,8 +240,10 @@ digraph "layers" {
   "cupertino-launcher" -> "cupertino-ui-text";
   "cupertino-launcher" -> "cupertino-ui-wayland";
   "cupertino-launcher" -> "cupertino-wayland-client";
+  "cupertino-login" -> "cupertino-apps";
   "cupertino-login" -> "cupertino-assets";
   "cupertino-login" -> "cupertino-decorations";
+  "cupertino-login" -> "cupertino-defaults";
   "cupertino-login" -> "cupertino-geometry";
   "cupertino-login" -> "cupertino-login-ipc";
   "cupertino-login" -> "cupertino-peer";

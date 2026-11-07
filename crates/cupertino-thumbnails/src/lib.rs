@@ -194,6 +194,11 @@ impl Thumbnailer {
         Self::new(home, app)
     }
 
+    /// The `thumbnails` directory of the cache. The standard has no thumbnails made of the files under it.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn thumb_path(&self, uri: &str, size: ThumbSize) -> PathBuf {
         self.root
             .join(size.dir())
@@ -358,6 +363,41 @@ impl Thumbnailer {
             None => self.create(path, size),
         }
     }
+
+    /// The thumbnail of `path` as straight RGBA pixels at most `edge` pixels a side: a valid cached one of `size` or
+    /// larger, else one created at `size`, shrunk to fit `edge` with its aspect ratio kept and never enlarged.
+    pub fn pixels(&self, path: &Path, size: ThumbSize, edge: u32) -> Result<Pixels, ThumbError> {
+        let thumb = match self.lookup_at_least(path, size) {
+            Some((_, p)) => p,
+            None => self.create(path, size)?,
+        };
+        let mut reader = image::ImageReader::open(&thumb)?.with_guessed_format()?;
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(ThumbSize::XXLarge.edge());
+        limits.max_image_height = Some(ThumbSize::XXLarge.edge());
+        reader.limits(limits);
+        let img = reader.decode()?;
+        let edge = edge.max(1);
+        let img = if img.width() > edge || img.height() > edge {
+            img.resize(edge, edge, FilterType::Triangle)
+        } else {
+            img
+        };
+        let rgba = img.to_rgba8();
+        Ok(Pixels {
+            width: rgba.width(),
+            height: rgba.height(),
+            rgba: rgba.into_raw(),
+        })
+    }
+}
+
+/// A decoded thumbnail: straight (not premultiplied) RGBA, row-major, `width * height * 4` bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pixels {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
 }
 
 #[cfg(test)]
@@ -427,6 +467,26 @@ mod tests {
             t.lookup_at_least(&img, ThumbSize::Normal).map(|x| x.0),
             Some(ThumbSize::Large)
         );
+    }
+
+    #[test]
+    fn pixels_come_from_the_cache_fitted_to_the_edge() {
+        let d = tempfile::tempdir().unwrap();
+        let t = Thumbnailer::new(d.path().join("cache"), "x");
+        let img = d.path().join("wide.png");
+        write_image(&img, 400, 200);
+        let px = t.pixels(&img, ThumbSize::Normal, 32).unwrap();
+        assert_eq!((px.width, px.height), (32, 16));
+        assert_eq!(px.rgba.len(), 32 * 16 * 4);
+        let cached = t
+            .lookup(&img, ThumbSize::Normal)
+            .expect("written to the cache");
+        let made = fs::metadata(&cached).unwrap().modified().unwrap();
+        // a second call reads the cached thumbnail and never enlarges it
+        let px = t.pixels(&img, ThumbSize::Normal, 512).unwrap();
+        assert_eq!((px.width, px.height), (128, 64));
+        assert_eq!(fs::metadata(&cached).unwrap().modified().unwrap(), made);
+        assert!(t.root().ends_with("cache/thumbnails"));
     }
 
     #[test]

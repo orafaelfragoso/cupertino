@@ -241,5 +241,4 @@ Values live in `metrics.rs`.
   screen, or refuses it, the menu still offers Exit Full Screen, and the next choice asks for the state the window is
   already in.
 * The icon view (`kit::grid`) scrolls back to the top when the view changes, so the selection can be out of sight. A name
-  is clipped at the cell's width, with no ellipsis and no second line, and each rebuild lays out every item of the
-  folder.
+  wraps onto two lines and is then clipped, with no ellipsis, and each rebuild lays out every item of the folder.

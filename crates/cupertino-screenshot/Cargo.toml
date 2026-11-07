@@ -3,37 +3,59 @@ name = "cupertino-screenshot"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Screenshot tool of the Cupertino compositor: full-screen, window and selection capture with the crosshair overlay, the toolbar, the floating thumbnail, timestamped PNG files and the clipboard"
+description = "Screenshot tool of the Cupertino compositor: full-screen, window and selection capture with the crosshair overlay, the toolbar, the floating thumbnail, timestamped PNG files and the clipboard, drawn by CupertinoKit"
 
 [package.metadata.cupertino]
 layer = "shell"
 
 [features]
 default = []
-# the `cupertino-screenshot` process: the overlay, toolbar and thumbnail on layer surfaces and the capture through
-# ext-image-copy-capture, as a client the server starts on a connection of its own
-app = ["dep:cupertino-protocol-app", "dep:cupertino-shell-client", "dep:cupertino-ui-wayland", "dep:cupertino-wayland-client", "dep:cupertino-protocols", "dep:wayland-client", "dep:wayland-protocols", "dep:memmap2", "dep:libc"]
+# the `cupertino-screenshot` process: the overlay, toolbar and thumbnail as CupertinoKit windows on layer surfaces and
+# the capture through ext-image-copy-capture, as a client the server starts on a connection of its own
+app = [
+    "dep:async-channel",
+    "dep:async-io",
+    "dep:cupertino-kit",
+    "dep:cupertino-modifiers",
+    "dep:cupertino-protocols",
+    "dep:cupertino-shell-client",
+    "dep:cupertino-ui-wayland",
+    "dep:cupertino-wayland-client",
+    "dep:libc",
+    "dep:memmap2",
+    "dep:wayland-client",
+    "dep:wayland-protocols",
+]
 
 [dependencies]
-cupertino-assets = { path = "../cupertino-assets" }
 cupertino-animation = { path = "../cupertino-animation" }
-cupertino-decorations = { path = "../cupertino-decorations" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }
-cupertino-theme = { path = "../cupertino-theme" }
 tiny-skia = "0.12"
-cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
+rustix = { version = "1", features = ["event", "fs"] }
+async-channel = { version = "2", optional = true }
+async-io = { version = "2", optional = true }
+cupertino-kit = { path = "../cupertino-kit", optional = true }
+cupertino-modifiers = { path = "../cupertino-modifiers", optional = true }
 cupertino-protocols = { path = "../cupertino-protocols", features = ["client"], optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 libc = { version = "0.2", optional = true }
 memmap2 = { version = "0.9", optional = true }
-rustix = { version = "1", features = ["fs"] }
 wayland-client = { version = "0.31", optional = true }
 wayland-protocols = { version = "0.32", features = ["client", "staging"], optional = true }
+
+[dev-dependencies]
+cupertino-assets = { path = "../cupertino-assets" }
+cupertino-theme = { path = "../cupertino-theme" }
+cupertino-ui-test = { path = "../cupertino-ui-test" }
 
 [[bin]]
 name = "cupertino-screenshot"
 path = "src/main.rs"
+required-features = ["app"]
+
+[[test]]
+name = "surfaces"
 required-features = ["app"]

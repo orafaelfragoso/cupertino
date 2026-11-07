@@ -1064,6 +1064,11 @@ impl WlrLayerShellHandler for Cupertino {
         }
     }
 
+    /// A layer surface's popup (a toolbar's menu, say) stays on the layer surface's output.
+    fn new_popup(&mut self, _parent: WlrLayerSurface, popup: PopupSurface) {
+        self.unconstrain_popup(&popup);
+    }
+
     fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
         let found = self.outputs.iter().map(|o| o.output.clone()).find_map(|o| {
             let map = layer_map_for_output(&o);
@@ -1182,7 +1187,7 @@ impl Cupertino {
             return;
         };
         let Some(id) = self.window_id_for_surface(&root) else {
-            // layer-shell popups are constrained to the output
+            self.unconstrain_layer_popup(popup, &kind, &root);
             return;
         };
         let Some(entry) = self.entry(id) else { return };
@@ -1204,5 +1209,30 @@ impl Cupertino {
         popup.with_pending_state(|state| {
             state.geometry = state.positioner.get_unconstrained_geometry(target);
         });
+    }
+
+    /// A popup of a layer surface, such as a toolbar's menu, is kept on the output of the layer surface (`root`): it
+    /// flips, slides or resizes as its positioner allows.
+    fn unconstrain_layer_popup(&self, popup: &PopupSurface, kind: &PopupKind, root: &WlSurface) {
+        for o in &self.outputs {
+            let map = layer_map_for_output(&o.output);
+            let Some(layer) = map.layer_for_surface(root, WindowSurfaceType::TOPLEVEL) else {
+                continue;
+            };
+            let Some(geometry) = map.layer_geometry(layer) else {
+                return;
+            };
+            // the output in the coordinates of the popup's parent
+            let mut target: Rectangle<i32, Logical> = Rectangle::new(
+                Point::from((0, 0)),
+                (o.rect.w.round() as i32, o.rect.h.round() as i32).into(),
+            );
+            target.loc -= geometry.loc;
+            target.loc -= get_popup_toplevel_coords(kind);
+            popup.with_pending_state(|state| {
+                state.geometry = state.positioner.get_unconstrained_geometry(target);
+            });
+            return;
+        }
     }
 }

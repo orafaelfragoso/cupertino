@@ -25,7 +25,9 @@ through their centres, and shrunk by `s·(r + 0.9·(1 − r))`, where `r` is the
 until no pair overlaps by more than 4 pt and the largest move is under 4 pt, or 499 passes have run. 8 pt is kept between
 windows. A packing that ends at the pass limit with windows still closer than 4 pt falls back to a grid of the work area in
 the same reading order, so thumbnails never overlap. The arrangement is then moved as a whole so its bounding box is centred
-across the work area and sits the lift above its middle: it is balanced whatever the windows' desktop places were.
+across the work area and sits the lift above its middle: it is balanced whatever the windows' desktop places were. With
+`LayoutParams::title_space` (24 pt in `OverviewConfig`, `config::TITLE_SPACE`) every window counts the space under it for
+its title in all of this, so a title never lies over another window or outside the work area.
 
 In the all-windows mode the work area starts below the workspaces strip: its top is the bottom of the strip's slots at
 their tallest (expanded, whether the strip is pinned open or expands on hover) plus `BarConfig::layout_gap`, 20 pt
@@ -50,3 +52,6 @@ keyboard navigation and title fading, and
 `three_windows_stay_below_the_strip_and_apart_at_every_size_and_scale` checks three windows of different sizes (one small)
 in four arrangements on six output modes at scales 1, 1.25, 1.5 and 2, edges snapped to device pixels: every thumbnail at
 least 20 pt below the strip, none over a slot or another thumbnail, the arrangement centred, and hit testing on each frame.
+`adversarial_window_sets_keep_thumbnails_and_titles_apart_and_below_the_strip` checks 3000 seeded cases (up to sixteen
+windows, tiny, very wide and very tall ones and windows on one place, outputs from 640×360 pt to 4K at scales 1 to 2): no
+thumbnail or title over the strip, another window or another title, or outside the area, also snapped to device pixels.

@@ -1659,6 +1659,16 @@ mod tests {
         let assets = Assets::builtin();
         LabelText::new(&Typography::default(), &assets).unwrap_or_else(|e| panic!("{e}"))
     }
+
+    /// The overview's layout keeps room under every window for its title: the gap and a line of the title with its
+    /// shadow's point fit in it, so a title is never drawn over the window below.
+    #[test]
+    fn an_overview_title_fits_the_space_the_layout_keeps_under_a_window() {
+        let space = cupertino_overview::OverviewConfig::default()
+            .layout
+            .title_space;
+        assert!(OVERVIEW_TITLE_GAP + OVERVIEW_TITLE_PT + 1.0 <= space);
+    }
     use crate::app_grid::AppEntry;
     use crate::config::DockConfig;
     use crate::desktop::DesktopIndex;

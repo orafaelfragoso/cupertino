@@ -604,3 +604,22 @@ fn title_paint(cx: &mut cupertino_kit::core::PaintCx<'_>, look: Look, title: &st
     }
     centred_text(cx, title, row, TITLE_PT, TITLE_WEIGHT, [1.0, 1.0, 1.0, 1.0]);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The model keeps room under every window for its title; the title's row stays inside it, so a title never lies
+    /// over the window below.
+    #[test]
+    fn the_title_row_fits_the_space_the_layout_keeps_under_a_window() {
+        let space = OverviewConfig::default().layout.title_space;
+        let frame = WmRect::new(10.0, 20.0, 300.0, 200.0);
+        let row = OverviewSurface::title_row(frame);
+        assert!(row.y >= frame.bottom());
+        assert!(
+            row.bottom() <= frame.bottom() + space + 1e-9,
+            "{row:?} below the {space} pt under {frame:?}"
+        );
+    }
+}

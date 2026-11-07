@@ -656,9 +656,18 @@ fn three_windows_clear_the_strip_and_each_other_at_every_size_and_scale() {
                     "{case}: title {i} under its window"
                 );
                 assert!(
-                    bottom(*t) <= area(output).bottom(),
-                    "{case}: window {i} in the area"
+                    bottom(title) <= area(output).bottom(),
+                    "{case}: window {i} and its title in the area"
                 );
+                for (j, u) in thumbnails.iter().enumerate() {
+                    let other = run.rect(window, &format!("title-{}", frames[j].0)).unwrap();
+                    if j != i {
+                        assert!(
+                            !intersects(title, *u) && !intersects(title, other),
+                            "{case}: title {i} {title:?} over window {j} {u:?} or its title"
+                        );
+                    }
+                }
             }
             let left = thumbnails
                 .iter()

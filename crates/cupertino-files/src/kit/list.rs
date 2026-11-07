@@ -428,8 +428,9 @@ impl Widget<Message> for Gestures {
 
     fn state(&self) {}
 
+    // it paints nothing, and its children and its spec tell the tree their own changes
     fn update(&self, _: &Self, _: &mut ()) -> Change {
-        Change::Layout
+        Change::None
     }
 
     fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
@@ -576,8 +577,9 @@ impl Widget<Message> for BandLayer {
 
     fn state(&self) {}
 
+    // it paints nothing, and its children and its spec tell the tree their own changes
     fn update(&self, _: &Self, _: &mut ()) -> Change {
-        Change::Layout
+        Change::None
     }
 
     fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {

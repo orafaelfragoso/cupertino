@@ -28,6 +28,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -252,8 +253,8 @@ struct Session {
     next_transfer: u64,
     places_source: Option<PlacesSource>,
     places_watch: places::PlacesWatch,
-    /// The items' icons and thumbnails.
-    icons: item_icons::ItemIcons,
+    /// The items' icons and thumbnails, shared with the list's rows, which ask for them as they show.
+    icons: Rc<item_icons::ItemIcons>,
     /// What wakes when a thumbnail is made.
     thumbnails_woken: async_channel::Receiver<()>,
     /// The items a drag out of a window carries, until it ends.
@@ -485,7 +486,11 @@ impl Application for Files {
             let types = start.types.as_deref().cloned().unwrap_or_default();
             FileIcons::builtin(types, HashMap::new())
         });
-        let icons = item_icons::ItemIcons::new(file_icons, start.thumbnails, thumbnails_wake);
+        let icons = Rc::new(item_icons::ItemIcons::new(
+            file_icons,
+            start.thumbnails,
+            thumbnails_wake,
+        ));
         let mut model = Model {
             windows: BTreeMap::new(),
             next_window: 0,

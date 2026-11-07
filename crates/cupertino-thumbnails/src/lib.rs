@@ -297,9 +297,27 @@ impl Thumbnailer {
         Ok(())
     }
 
-    /// Create the thumbnail of an image file at `size`; returns its path. A failure leaves a marker.
+    /// Whether `path` is under the cache directory, by its canonical path: the standard makes no thumbnails of
+    /// thumbnails, also when a symbolic link leads into the cache.
+    pub fn is_in_cache(&self, path: &Path) -> bool {
+        if path.starts_with(&self.root) {
+            return true;
+        }
+        match (fs::canonicalize(path), fs::canonicalize(&self.root)) {
+            (Ok(path), Ok(root)) => path.starts_with(root),
+            _ => false,
+        }
+    }
+
+    /// Create the thumbnail of an image file at `size`; returns its path. A failure leaves a marker. A file under the
+    /// cache directory itself is refused without a marker.
     pub fn create(&self, path: &Path, size: ThumbSize) -> Result<PathBuf, ThumbError> {
         let meta = fs::metadata(path)?;
+        if self.is_in_cache(path) {
+            return Err(ThumbError::Io(io::Error::other(
+                "the file is in the thumbnail cache",
+            )));
+        }
         let uri = file_uri(path);
         if self.is_known_failure(path) {
             return Err(ThumbError::KnownFailure);
@@ -521,6 +539,29 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(left.len(), 1, "no temporary file is left: {left:?}");
+    }
+
+    #[test]
+    fn a_file_reached_through_a_link_into_the_cache_gets_no_thumbnail() {
+        let d = tempfile::tempdir().unwrap();
+        let t = Thumbnailer::new(d.path().join("cache"), "x");
+        let img = d.path().join("p.png");
+        write_image(&img, 300, 300);
+        let made = t.create(&img, ThumbSize::Normal).unwrap();
+        let link = d.path().join("into-cache");
+        std::os::unix::fs::symlink(made.parent().unwrap(), &link).unwrap();
+        let through = link.join(made.file_name().unwrap());
+        assert!(t.is_in_cache(&through));
+        assert!(t.is_in_cache(&made));
+        assert!(!t.is_in_cache(&img));
+        assert!(t.create(&through, ThumbSize::Normal).is_err());
+        assert!(t.create(&made, ThumbSize::Normal).is_err());
+        assert!(!t.is_known_failure(&through), "a refusal leaves no marker");
+        assert_eq!(
+            fs::read_dir(made.parent().unwrap()).unwrap().count(),
+            1,
+            "no thumbnail of a thumbnail"
+        );
     }
 
     #[test]

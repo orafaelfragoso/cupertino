@@ -603,6 +603,7 @@ impl Application for SettingsApp {
 
 #[cfg(test)]
 mod tests {
+    mod layout;
     mod semantics;
 
     use std::num::NonZeroU32;
@@ -682,6 +683,42 @@ mod tests {
         gaps
     }
 
+    /// The runtime a test window runs on: the workspace's light theme, the built-in font and a manual clock.
+    fn runtime_options() -> RuntimeOptions {
+        let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
+        let preferences = ThemePreferences {
+            appearance: Appearance::Light,
+            reduce_transparency: false,
+            reduce_motion: false,
+        };
+        let theme = ThemeTokens::cupertino(&Theme::from_dir(data).unwrap(), preferences).unwrap();
+        let mut fonts = FontIndex::new();
+        fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
+        let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
+        let glyphs = Arc::clone(&text);
+        RuntimeOptions {
+            theme: Arc::new(theme),
+            text,
+            icons: Arc::new(PlaceholderIcons::default()),
+            direction: LayoutDirection::Ltr,
+            node_limit: 8000,
+            renderers: Box::new(move || {
+                Box::new(CpuRenderer::new(
+                    CpuConfig {
+                        max_pixels: 1 << 22,
+                        glyph_cache_bytes: 1 << 20,
+                        image_cache_bytes: 1 << 20,
+                        font_smoothing: true,
+                    },
+                    GlyphRaster::new(Arc::clone(&glyphs)),
+                ))
+            }),
+            accessibility: None,
+            clock: Arc::new(ManualClock::new(Timestamp(0))),
+            on_window_error: None,
+        }
+    }
+
     /// The start is the process's, so the tests that open a window take turns.
     static WINDOW: Mutex<()> = Mutex::new(());
 
@@ -717,38 +754,7 @@ mod tests {
             woken,
             activation: String::new(),
         });
-        let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
-        let preferences = ThemePreferences {
-            appearance: Appearance::Light,
-            reduce_transparency: false,
-            reduce_motion: false,
-        };
-        let theme = ThemeTokens::cupertino(&Theme::from_dir(data).unwrap(), preferences).unwrap();
-        let mut fonts = FontIndex::new();
-        fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
-        let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
-        let glyphs = Arc::clone(&text);
-        let options = RuntimeOptions {
-            theme: Arc::new(theme),
-            text,
-            icons: Arc::new(PlaceholderIcons::default()),
-            direction: LayoutDirection::Ltr,
-            node_limit: 8000,
-            renderers: Box::new(move || {
-                Box::new(CpuRenderer::new(
-                    CpuConfig {
-                        max_pixels: 1 << 22,
-                        glyph_cache_bytes: 1 << 20,
-                        image_cache_bytes: 1 << 20,
-                        font_smoothing: true,
-                    },
-                    GlyphRaster::new(Arc::clone(&glyphs)),
-                ))
-            }),
-            accessibility: None,
-            clock: Arc::new(ManualClock::new(Timestamp(0))),
-            on_window_error: None,
-        };
+        let options = runtime_options();
         let mut driver = TestDriver::new(
             Capabilities::default(),
             options,
@@ -768,7 +774,7 @@ mod tests {
         (driver, window)
     }
 
-    fn settle(driver: &mut TestDriver<SettingsApp>, window: WindowId) {
+    fn settle<A: Application>(driver: &mut TestDriver<A>, window: WindowId) {
         for _ in 0..8 {
             driver.run_until_idle(budget()).unwrap();
             let system = driver.window_system_mut();

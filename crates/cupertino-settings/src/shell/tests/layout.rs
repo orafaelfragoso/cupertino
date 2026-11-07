@@ -1,0 +1,314 @@
+//! Where a pane's sections lie: a footnote wider than its section wraps to as many lines as it needs, the section keeps
+//! room for every line, and the next section starts below it, at every width the window allows and at each scale.
+
+use cupertino_kit::geometry::Rect;
+use cupertino_kit::platform::DecorationMode;
+
+use super::*;
+use crate::controls::Control;
+use crate::panes::{Backend, Row, Section};
+
+/// The scales the layout is checked at.
+const SCALES: [f64; 4] = [1.0, 1.25, 1.5, 2.0];
+/// A wide window, the default width and the least, widest first.
+const WIDTHS: [f64; 3] = [1200.0, metrics::DEFAULT_WIDTH, MIN_SIDEBAR + MIN_CONTENT];
+/// A rounding slack for comparing laid-out edges.
+const SLACK: f64 = 0.5;
+
+/// Long translated-style text: long words, a hyphenated compound and no break the layout could lean on.
+const LONG_FOOTNOTE: &str = "Stimmen Sie diesen Wert auf die DPI-Einstellung Ihrer Maus ab, damit sich die \
+    Zeigergeschwindigkeit bei jeder angeschlossenen Maus gleich anfühlt, auch nach einem Neustart des Rechners \
+    oder wenn Sie zwischen verschiedenen Arbeitsplätzen wechseln.";
+
+fn switch_row(id: ControlId, label: &str) -> Row {
+    Row {
+        id,
+        label: label.into(),
+        control: Control::Switch { on: false },
+        backend: Backend::Service("Layout"),
+        error: None,
+        disabled: None,
+        icon: None,
+        detail: None,
+    }
+}
+
+/// A section with a long footnote, then another section.
+fn two_sections() -> Vec<Section> {
+    vec![
+        Section {
+            header: Some("Zeiger".into()),
+            rows: vec![switch_row(
+                ControlId::MouseAcceleration,
+                "Zeigerbeschleunigung",
+            )],
+            footer: Some(LONG_FOOTNOTE.into()),
+        },
+        Section {
+            header: Some("Scrollen".into()),
+            rows: vec![switch_row(
+                ControlId::MouseNatural,
+                "Natürliche Scrollrichtung",
+            )],
+            footer: None,
+        },
+    ]
+}
+
+static FORM: Mutex<Vec<Section>> = Mutex::new(Vec::new());
+
+/// The form of a pane alone in a window, inset as the Settings content is.
+struct FormApp;
+
+impl Application for FormApp {
+    type Model = Vec<Section>;
+    type Message = Message;
+
+    fn init() -> (Vec<Section>, Vec<Command<Message>>) {
+        (FORM.lock().unwrap().clone(), Vec::new())
+    }
+
+    fn update(_: &mut Vec<Section>, _: Message) -> Vec<Command<Message>> {
+        Vec::new()
+    }
+
+    fn view(sections: &Vec<Section>) -> Vec<Window<Message>> {
+        vec![Window {
+            key: WindowKey("form".into()),
+            spec: WindowSpec {
+                title: "Form".into(),
+                app_id: APP_ID.into(),
+                size: Size::new(MIN_CONTENT, metrics::DEFAULT_HEIGHT),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Preferred,
+                foreign_parent: None,
+                input_region: None,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            background: WindowBackground::Theme,
+            content: Element::new(Stack {
+                axis: Axis::Vertical,
+                padding: WINDOW_CONTENT_INSET,
+                spacing: 0.0,
+                align: Align::Stretch,
+                children: vec![form::pane(sections, None)],
+            }),
+            popup: None,
+            menus: None,
+        }]
+    }
+}
+
+/// Size `window` to `width` at `scale` and let it lay out.
+fn resize<A: Application>(driver: &mut TestDriver<A>, window: WindowId, width: f64, scale: f64) {
+    let active = WindowStates {
+        activated: true,
+        ..WindowStates::default()
+    };
+    let system = driver.window_system_mut();
+    system
+        .configure(
+            window,
+            Some(Size::new(width, metrics::DEFAULT_HEIGHT)),
+            active,
+        )
+        .unwrap();
+    system
+        .enqueue_window(window, WindowEvent::Scale(scale))
+        .unwrap();
+    settle(driver, window);
+}
+
+/// The laid-out bounds of the node named `name`.
+fn bounds<A: Application>(driver: &TestDriver<A>, window: WindowId, name: &str) -> Rect {
+    driver
+        .runtime()
+        .snapshot(window)
+        .unwrap()
+        .accessibility
+        .into_iter()
+        .find(|(_, n)| n.name.as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("a node named {name:?}"))
+        .1
+        .bounds
+}
+
+fn overlaps(a: &Rect, b: &Rect) -> bool {
+    a.x() < b.max_x() - SLACK
+        && b.x() < a.max_x() - SLACK
+        && a.y() < b.max_y() - SLACK
+        && b.y() < a.max_y() - SLACK
+}
+
+#[test]
+fn a_footnote_wider_than_its_section_wraps_and_the_next_section_starts_below_every_line() {
+    let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+    *FORM.lock().unwrap() = two_sections();
+    let mut driver = TestDriver::<FormApp>::new(
+        Capabilities::default(),
+        runtime_options(),
+        ManualClock::new(Timestamp(0)),
+    );
+    driver.run_until_idle(budget()).unwrap();
+    let window = driver.runtime().windows()[0].1;
+    let mut heights = Vec::new();
+    for width in [MIN_CONTENT, 500.0, 900.0] {
+        for scale in SCALES {
+            resize(&mut driver, window, width, scale);
+            let at = format!("{width} pt at {scale}x");
+            let footer = bounds(&driver, window, LONG_FOOTNOTE);
+            let row = bounds(&driver, window, "Zeigerbeschleunigung");
+            let next = bounds(&driver, window, "Scrollen");
+            let next_row = bounds(&driver, window, "Natürliche Scrollrichtung");
+            let line = row.height();
+            assert!(line > 0.0, "{at}: a laid-out row");
+            let (left, right) = (
+                WINDOW_CONTENT_INSET.left,
+                width - WINDOW_CONTENT_INSET.right,
+            );
+            assert!(
+                footer.x() >= left - SLACK && footer.max_x() <= right + SLACK,
+                "{at}: the footnote stays in the section's width, {footer:?}"
+            );
+            assert!(
+                footer.height() >= 2.0 * line - SLACK,
+                "{at}: the footnote wraps, {footer:?} for lines of {line}"
+            );
+            assert!(
+                footer.y() >= row.max_y() + form::ROW_GAP - SLACK,
+                "{at}: the footnote starts below its section's rows, {footer:?} after {row:?}"
+            );
+            assert!(
+                (next.y() - (footer.max_y() + form::SECTION_GAP)).abs() <= SLACK,
+                "{at}: the next section starts one section gap below the footnote's last line, {next:?} after {footer:?}"
+            );
+            assert!(
+                next_row.y() >= next.max_y() - SLACK && !overlaps(&footer, &next_row),
+                "{at}: the next section's rows follow its header"
+            );
+            if scale == 1.0 {
+                driver
+                    .look(window, &format!("settings-long-footnote-{width}"))
+                    .unwrap();
+            }
+            heights.push((width, scale, footer.height()));
+        }
+    }
+    for scale in SCALES {
+        let at: Vec<f64> = heights
+            .iter()
+            .filter(|(_, s, _)| *s == scale)
+            .map(|(_, _, h)| *h)
+            .collect();
+        assert!(
+            at.windows(2).all(|pair| pair[0] >= pair[1]) && at[0] > at[at.len() - 1],
+            "at {scale}x a narrower section gives the footnote more lines: {at:?}"
+        );
+    }
+}
+
+struct FakeMice;
+
+#[zbus::interface(name = "org.cupertino.Session1")]
+impl FakeMice {
+    #[zbus(property)]
+    fn mice(&self) -> Vec<(String, String, u32, bool)> {
+        vec![
+            ("1:1:Mouse".into(), "USB Optical Mouse".into(), 800, false),
+            ("2:2:Mouse".into(), "Wireless Mouse".into(), 1600, true),
+        ]
+    }
+}
+
+#[test]
+fn the_mouse_resolution_footnote_wraps_without_clipping_or_overlapping_at_every_width_and_scale() {
+    let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+        eprintln!("skipped: dbus-daemon is not available");
+        return;
+    };
+    let _session = zbus::blocking::connection::Builder::address(bus.address.as_str())
+        .unwrap()
+        .serve_at("/org/cupertino/Session1", FakeMice)
+        .unwrap()
+        .name("org.cupertino.Session1")
+        .unwrap()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let services = Services::on(Bus::address(NOWHERE), Bus::at(bus.connect()));
+    let (mut driver, window) = start_on(dir.path(), PaneId::Mouse, None, services);
+    let footnote = crate::panes::MOUSE_RESOLUTION_FOOTER;
+    for width in WIDTHS {
+        for scale in SCALES {
+            resize(&mut driver, window, width, scale);
+            let at = format!("{width} pt at {scale}x");
+            let footer = bounds(&driver, window, footnote);
+            let snapshot = driver.runtime().snapshot(window).unwrap();
+            // the pane's scroll view, right of the sidebar; the sidebar folds away at the least width
+            let page = snapshot
+                .accessibility
+                .iter()
+                .filter(|(_, n)| n.role == Role::ScrollView)
+                .map(|(_, n)| n.bounds)
+                .max_by(|a, b| a.x().total_cmp(&b.x()))
+                .expect("the pane's scroll view");
+            assert!(
+                (page.max_x() - width).abs() <= SLACK,
+                "{at}: the pane runs to the window's edge, {page:?}"
+            );
+            let content_left = page.x();
+            assert!(
+                footer.x() >= content_left + WINDOW_CONTENT_INSET.left - SLACK
+                    && footer.max_x() <= width - WINDOW_CONTENT_INSET.right + SLACK,
+                "{at}: the footnote stays in the content, {footer:?} in {page:?}"
+            );
+            let line = bounds(&driver, window, "Wireless Mouse").height();
+            let lines = (footer.height() / line).round();
+            // the wide window has room for the whole footnote on one line; from the default width on it wraps
+            let wraps = width <= metrics::DEFAULT_WIDTH;
+            assert!(
+                lines == if wraps { 2.0 } else { 1.0 } && footer.height() >= lines * line - SLACK,
+                "{at}: the footnote has room for each of its lines, {footer:?} for lines of {line}"
+            );
+            let content: Vec<(String, Rect)> = snapshot
+                .accessibility
+                .iter()
+                .filter(|(_, n)| {
+                    matches!(
+                        n.role,
+                        Role::StaticText | Role::Switch | Role::Slider | Role::PopUpButton
+                    )
+                })
+                .filter(|(_, n)| n.bounds.x() >= content_left && n.bounds.y() >= page.y())
+                .map(|(_, n)| (n.name.clone().unwrap_or_default(), n.bounds))
+                .collect();
+            for (i, (a, ra)) in content.iter().enumerate() {
+                assert!(
+                    ra.max_x() <= width + SLACK,
+                    "{at}: {a:?} is not cut off at the window's edge, {ra:?}"
+                );
+                for (b, rb) in &content[i + 1..] {
+                    assert!(
+                        !overlaps(ra, rb),
+                        "{at}: {a:?} {ra:?} and {b:?} {rb:?} overlap"
+                    );
+                }
+            }
+            let last_row = content
+                .iter()
+                .filter(|(name, _)| name != footnote)
+                .map(|(_, r)| r.max_y())
+                .fold(0.0, f64::max);
+            assert!(
+                footer.y() >= last_row - SLACK,
+                "{at}: the footnote follows the last row"
+            );
+            if width == metrics::DEFAULT_WIDTH && scale == 1.0 {
+                driver.look(window, "settings-mouse-resolution").unwrap();
+            }
+        }
+    }
+}

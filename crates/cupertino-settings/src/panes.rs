@@ -651,11 +651,13 @@ fn resolution_section(mice: &[Mouse]) -> Option<Section> {
     Some(Section {
         header: (mice.len() > 1).then(|| "Mouse resolution".to_string()),
         rows,
-        footer: Some(
-            "Match your mouse's DPI setting so tracking speed feels the same.".to_string(),
-        ),
+        footer: Some(MOUSE_RESOLUTION_FOOTER.to_string()),
     })
 }
+
+/// What the mouse resolution section's footnote says. It wraps to the content's width.
+pub const MOUSE_RESOLUTION_FOOTER: &str =
+    "Match this to your mouse's DPI setting so tracking speed feels the same on every mouse.";
 
 fn header(text: &str) -> Option<String> {
     Some(text.to_string())

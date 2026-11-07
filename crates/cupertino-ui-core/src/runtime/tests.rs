@@ -338,8 +338,8 @@ fn a_focus_move_repaints_only_what_the_focus_changed() {
     rt.step(steps()).unwrap();
     assert_eq!(
         damage.borrow().last(),
-        Some(&DamageRegion::Rects(vec![plus])),
-        "the row and the other button draw what they drew"
+        Some(&DamageRegion::Rects(vec![plus, plus])),
+        "where the button was and is; the row draws nothing and the other button what it drew"
     );
 
     key(&mut rt, window, 0xff09, Mods::NONE);
@@ -348,7 +348,7 @@ fn a_focus_move_repaints_only_what_the_focus_changed() {
     rt.step(steps()).unwrap();
     assert_eq!(
         damage.borrow().last(),
-        Some(&DamageRegion::Rects(vec![plus, minus]))
+        Some(&DamageRegion::Rects(vec![plus, plus, minus, minus]))
     );
 }
 

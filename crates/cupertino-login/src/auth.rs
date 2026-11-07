@@ -16,7 +16,7 @@ use crate::model::{AuthOutcome, Password};
 pub const SERVICE: &str = "cupertino-login";
 
 /// What the worker tells the screen.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     /// Text a PAM module printed (`PAM_TEXT_INFO`, `PAM_ERROR_MSG`) while the attempt runs.
     Notice(String),

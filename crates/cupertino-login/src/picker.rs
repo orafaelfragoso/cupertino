@@ -3,7 +3,6 @@
 
 use std::ops::Range;
 
-use crate::model::Key;
 use crate::user::User;
 
 /// Tiles per page on an output larger than [`SMALL_SCREEN`], and on one that is not (25 or 12 by
@@ -175,21 +174,13 @@ impl Picker {
     }
 }
 
-/// What a key did to the name being typed.
-#[derive(Debug, PartialEq, Eq)]
-pub enum NameKey {
-    /// The text changed, or the key did nothing.
-    Typing,
-    /// Return with a name: log in as this account.
-    Submit(String),
-    /// Escape: back to the tiles.
-    Cancel,
-}
-
-/// The name typed for the "Other…" tile.
+/// The name typed for the "Other…" tile, and for an administrator: visible characters without whitespace, at most
+/// [`MAX_NAME_BYTES`]. The text field shows it and hands every edit to [`NameEntry::set`].
 #[derive(Debug, Default)]
 pub struct NameEntry {
     text: String,
+    /// Counts the times [`NameEntry::set`] changed what was typed: the field then shows the name kept.
+    revision: u64,
 }
 
 impl NameEntry {
@@ -197,24 +188,37 @@ impl NameEntry {
         &self.text
     }
 
-    pub fn press(&mut self, key: Key) -> NameKey {
-        match key {
-            Key::Char(c)
-                if !c.is_control()
-                    && !c.is_whitespace()
-                    && self.text.len() + c.len_utf8() <= MAX_NAME_BYTES =>
-            {
-                self.text.push(c)
+    /// The revision of [`NameEntry::text`] the field shows.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// The field holds `typed`: keep its visible characters without whitespace, up to the limit. A name that differs
+    /// from what was typed gets a new revision, so the field shows what was kept.
+    pub fn set(&mut self, typed: &str) {
+        let mut kept = String::new();
+        for c in typed
+            .chars()
+            .filter(|c| !c.is_control() && !c.is_whitespace())
+        {
+            if kept.len() + c.len_utf8() > MAX_NAME_BYTES {
+                break;
             }
-            Key::Char(_) => {}
-            Key::Backspace => drop(self.text.pop()),
-            Key::Return if !self.text.is_empty() => {
-                return NameKey::Submit(std::mem::take(&mut self.text))
-            }
-            Key::Return => {}
-            Key::Escape => return NameKey::Cancel,
+            kept.push(c);
         }
-        NameKey::Typing
+        if kept != typed {
+            self.revision += 1;
+        }
+        self.text = kept;
+    }
+
+    /// Return: the name to log in as, and an empty field; `None` while the field is empty.
+    pub fn submit(&mut self) -> Option<String> {
+        if self.text.is_empty() {
+            return None;
+        }
+        self.revision += 1;
+        Some(std::mem::take(&mut self.text))
     }
 }
 
@@ -434,24 +438,27 @@ mod tests {
     #[test]
     fn the_name_for_other_takes_visible_characters_and_submits_on_return() {
         let mut entry = NameEntry::default();
-        assert_eq!(entry.press(Key::Return), NameKey::Typing);
-        for c in "ca rol".chars() {
-            entry.press(Key::Char(c));
-        }
+        assert_eq!(entry.submit(), None);
+        entry.set("ca rol\t");
         assert_eq!(entry.text(), "carol");
-        entry.press(Key::Backspace);
-        assert_eq!(entry.press(Key::Return), NameKey::Submit("caro".into()));
-        assert_eq!(entry.text(), "");
-        entry.press(Key::Char('x'));
-        assert_eq!(entry.press(Key::Escape), NameKey::Cancel);
+        assert_eq!(entry.revision(), 1, "the field shows what was kept");
+        entry.set("caro");
+        assert_eq!(
+            entry.revision(),
+            1,
+            "a name kept as typed keeps its revision"
+        );
+        assert_eq!(entry.submit(), Some("caro".into()));
+        assert_eq!((entry.text(), entry.revision()), ("", 2));
     }
 
     #[test]
     fn the_name_stops_at_the_limit() {
         let mut entry = NameEntry::default();
-        for _ in 0..MAX_NAME_BYTES + 5 {
-            entry.press(Key::Char('a'));
-        }
+        entry.set(&"a".repeat(MAX_NAME_BYTES + 5));
         assert_eq!(entry.text().len(), MAX_NAME_BYTES);
+        // a two-byte character past the limit is left out whole
+        entry.set(&format!("{}é", "a".repeat(MAX_NAME_BYTES - 1)));
+        assert_eq!(entry.text().len(), MAX_NAME_BYTES - 1);
     }
 }

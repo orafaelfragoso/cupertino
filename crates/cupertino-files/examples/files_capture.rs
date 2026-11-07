@@ -1,36 +1,38 @@
 //! The Files surfaces for look checks: `files/window`, a browser window (920 × 436 at 1×) on a sample home folder,
-//! and `files/sidebar`, the sidebar column of that window.
+//! and `files/sidebar`, the sidebar column of that window. The window is the Kit window ([`cupertino_files::kit`])
+//! drawn on the headless window system with the CPU renderer.
 //!
-//! `ci/capture.sh files/sidebar --drop-place Desktop --scale 2` (the flags are `cupertino-capture`'s)
+//! `ci/capture.sh files/window --view list --scale 2` (the flags are `cupertino-capture`'s)
 //!
-//! State flags: `--view icon|list` (default icon), `--drop-place NAME` (the sidebar place) or `--drop-item NAME` (the
-//! item), with the drop look of a drag over it, `--selected NAME` (the item, selected), `--sidebar-focus NAME` (the
-//! sidebar place, with the keyboard focus ring) and `--devices removable` (three removable file systems under
-//! Locations: "Backup Disk" mounted, "Camera Card" busy, "KINGSTON" not mounted). The
-//! home folder `avery` is made
-//! under a temporary directory with the user folders and sample files; the places are those of a session with that
-//! home on a computer named `cupertino`. File types come from the system's MIME database. The sidebar material is
-//! the server's: here a flat fill of the window background stands in for it.
+//! State flags: `--view icon|list` (default icon), `--selected NAME` (the item, selected) and `--devices removable`
+//! (three removable file systems under Locations: "Backup Disk" mounted, "Camera Card" busy, "KINGSTON" not
+//! mounted). The home folder `avery` is made under a temporary directory with the user folders and sample files; the
+//! places are those of a session with that home on a computer named `cupertino`. File types come from the system's
+//! MIME database. The list's dates read relative to the time of the capture; the sample files are dated back from it.
 
-use std::collections::HashMap;
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use cupertino_assets::Assets;
-use cupertino_capture::{App, Request, State};
-use cupertino_files::browser::Browser;
-use cupertino_files::geom::Size;
-use cupertino_files::metrics::window as window_metrics;
-use cupertino_files::places::{folder_icons, standard_places, Place};
-use cupertino_files::render::{Palette, Renderer};
-use cupertino_files::selection::Modifiers;
-use cupertino_files::sort::SortSpec;
-use cupertino_files::window::{Bars, DropOutline, ViewMode, WindowPainter, WindowState};
-use cupertino_theme::{Appearance, SemanticColor, Theme};
-use cupertino_ui_text::TextBuffer;
-use tiny_skia::{Color, IntRect, Pixmap};
+use cupertino_capture::{App, Look, Request, State};
+use cupertino_files::kit::{prepare, Files, Start};
+use cupertino_files::notice::Notices;
+use cupertino_files::places::{standard_places, Place};
+use cupertino_files::trash::Trash;
+use cupertino_files::window::ViewMode;
+use cupertino_kit::core::Role;
+use cupertino_kit::geometry::{Point, Size};
+use cupertino_kit::platform::{
+    Capabilities, Mods, MouseButton, PointerEvent, SystemAppearance, Timestamp, WindowEvent,
+    WindowId, WindowStates,
+};
+use cupertino_kit::render::PixelFormat;
+use cupertino_kit::theme::ThemeTokens;
+use cupertino_theme::Theme;
+use cupertino_ui_test::{ManualClock, TestDriver};
+use tiny_skia::{IntRect, IntSize, Pixmap};
 
 /// The sample home folder's name, the window's title.
 const HOME: &str = "avery";
@@ -63,53 +65,49 @@ const FILES: [(&str, u64, u64); 10] = [
     ("Website.md", 9_800, 3),
 ];
 
-/// The capture's clock, 2026-01-01 15:00 UTC: the sample files' ages count back from it and the list's relative
-/// dates read from it, in UTC, so a surface is the same pixels on every run.
-const NOW: Duration = Duration::from_secs(1_767_279_600);
-
-fn now() -> SystemTime {
-    SystemTime::UNIX_EPOCH + NOW
-}
-
+/// The window's size at 1×, in points.
+const WINDOW: (f64, f64) = (920.0, 436.0);
+/// The sidebar column's width, in points.
+const SIDEBAR: f64 = cupertino_files::metrics::sidebar::DEFAULT_WIDTH;
 /// How long the listing of the sample folder may take.
 const LISTING: Duration = Duration::from_secs(5);
+/// The work the runtime may do between two looks at the window.
+const TURNS: u32 = 10_000;
+/// The frames a window may ask for before it rests.
+const FRAMES: usize = 8;
 
 fn io(e: std::io::Error) -> String {
     e.to_string()
 }
 
-/// The sample home folder under `root`: the user folders (an hour old) and the sample files (sparse, with their ages),
-/// dated by the capture's clock.
+/// The sample home folder under `root`: the user folders (an hour old) and the sample files (sparse, with their ages).
 fn home(root: &Path) -> Result<PathBuf, String> {
     let home = root.join(HOME);
+    let now = SystemTime::now();
     for (_, name) in USER_DIRS {
         let dir = home.join(name);
         std::fs::create_dir_all(&dir).map_err(io)?;
         std::fs::File::open(&dir)
-            .and_then(|d| d.set_modified(now() - Duration::from_secs(3_600)))
+            .and_then(|d| d.set_modified(now - Duration::from_secs(3_600)))
             .map_err(io)?;
     }
     for (name, size, days) in FILES {
         let file = std::fs::File::create(home.join(name)).map_err(io)?;
         file.set_len(size).map_err(io)?;
-        file.set_modified(now() - Duration::from_secs(days * 86_400 + 3_600))
+        file.set_modified(now - Duration::from_secs(days * 86_400 + 3_600))
             .map_err(io)?;
     }
     Ok(home)
 }
 
 struct Capture {
-    painter: WindowPainter,
-    theme: Theme,
-    browser: Browser,
+    home: PathBuf,
     places: Vec<Place>,
-    /// The sample home folder.
-    _root: tempfile::TempDir,
+    root: tempfile::TempDir,
 }
 
 impl Capture {
-    fn new(assets: Assets) -> Result<Self, String> {
-        let theme = Theme::load().map_err(|e| e.to_string())?;
+    fn new() -> Result<Self, String> {
         let root = tempfile::tempdir().map_err(io)?;
         let home = home(root.path())?;
         let user_dirs: Vec<(String, PathBuf)> = USER_DIRS
@@ -119,42 +117,183 @@ impl Capture {
         let places = standard_places(
             &home,
             &user_dirs,
-            &root.path().join("no-trash"),
+            &root.path().join("no-trash/files"),
             None,
             "cupertino",
         );
-        let folders: HashMap<PathBuf, &'static str> = folder_icons(&home, &user_dirs, &places)
-            .into_iter()
-            .collect();
+        Ok(Capture { home, places, root })
+    }
+
+    /// The window on the sample home folder in `view` with `places`, `selected` selected, drawn in `look` at `scale`.
+    fn draw(
+        &self,
+        view: ViewMode,
+        places: Vec<Place>,
+        selected: Option<&str>,
+        look: Look,
+        scale: f32,
+        size: Size,
+    ) -> Result<Pixmap, String> {
+        let fail = |e: &dyn std::fmt::Debug| format!("the headless window system: {e:?}");
         let dirs = cupertino_apps::XdgDirs::from_env().map_err(|e| e.to_string())?;
         let types =
             cupertino_apps::MimeDatabase::load(&dirs.all_data_dirs()).map_err(|e| e.to_string())?;
-        let icons = cupertino_icons::document::FileIcons::new(&assets, types.clone(), folders);
-        let painter = WindowPainter::new(Renderer::new(icons, &assets).map_err(|e| e.to_string())?);
-        let mut browser = Browser::open(
-            home.clone(),
-            SortSpec::default(),
-            root.path().join("recently-used.xbel"),
-            Some(Arc::new(types)),
-            Arc::new(|| {}),
-        )
-        .map_err(|e| format!("listing {}: {e}", home.display()))?;
-        let end = Instant::now() + LISTING;
-        while browser.entries().len() < USER_DIRS.len() + FILES.len() {
-            if Instant::now() > end {
-                return Err(format!("listing {} took over {LISTING:?}", home.display()));
-            }
-            browser.poll();
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        Ok(Capture {
-            painter,
-            theme,
-            browser,
+        let start = Start::open(
+            self.home.clone(),
             places,
-            _root: root,
-        })
+            Some(Arc::new(types)),
+            self.root.path().join("recently-used.xbel"),
+            Notices::start(None),
+            Box::new(|| Err(std::io::Error::other("no applications in a capture"))),
+            None,
+            None,
+        )
+        .map_err(|e| format!("listing {}: {e}", self.home.display()))?
+        .with_trash(Trash::with_home(self.root.path().join("no-trash")))
+        .with_home(self.home.clone())
+        .with_view(view);
+        prepare(start);
+        let mut options = cupertino_kit::app::options().map_err(|e| e.to_string())?;
+        let preferences = cupertino_kit::app::preferences(&SystemAppearance {
+            dark: look.dark,
+            increase_contrast: look.increase_contrast,
+            reduce_transparency: look.reduce_transparency,
+            reduce_motion: false,
+        });
+        let theme = Theme::load().map_err(|e| e.to_string())?;
+        options.theme =
+            Arc::new(ThemeTokens::cupertino(&theme, preferences).map_err(|e| e.to_string())?);
+        let turns = NonZeroU32::new(TURNS).expect("a turn budget");
+        let mut driver = TestDriver::<Files>::new(
+            Capabilities::default(),
+            options,
+            ManualClock::new(Timestamp(0)),
+        );
+        driver.run_until_idle(turns).map_err(|e| fail(&e))?;
+        let window = driver.runtime().windows()[0].1;
+        let system = driver.window_system_mut();
+        system
+            .enqueue_window(window, WindowEvent::Scale(f64::from(scale)))
+            .map_err(|e| fail(&e))?;
+        let active = WindowStates {
+            activated: true,
+            ..WindowStates::default()
+        };
+        system
+            .configure(window, Some(size), active)
+            .map_err(|e| fail(&e))?;
+        // the folder is listed on a thread of its own
+        let names = |driver: &TestDriver<Files>| {
+            driver
+                .runtime()
+                .snapshot(window)
+                .map(|s| {
+                    s.accessibility
+                        .iter()
+                        .filter(|(_, n)| n.role == Role::StaticText)
+                        .filter_map(|(_, n)| n.name.clone())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        let end = Instant::now() + LISTING;
+        while !names(&driver).iter().any(|n| n == "notes.txt") {
+            if Instant::now() > end {
+                return Err(format!(
+                    "listing {} took over {LISTING:?}",
+                    self.home.display()
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+            settle(&mut driver, window, turns).map_err(|e| fail(&e))?;
+        }
+        if let Some(name) = selected {
+            let at = text_center(&driver, window, name)
+                .ok_or_else(|| format!("{name}: no item of the sample folder"))?;
+            click(&mut driver, window, at, turns).map_err(|e| fail(&e))?;
+        }
+        if !settle(&mut driver, window, turns).map_err(|e| fail(&e))? {
+            return Err("the window keeps asking for frames".into());
+        }
+        let frame = driver
+            .window_system_mut()
+            .frames(window)
+            .map_err(|e| fail(&e))?
+            .last()
+            .ok_or("the window presented no frame")?;
+        let mut pixels = frame.pixels.clone();
+        if frame.format == PixelFormat::Rgba8 {
+            for px in pixels.as_chunks_mut::<4>().0 {
+                let a = u16::from(px[3]);
+                for c in &mut px[..3] {
+                    *c = ((u16::from(*c) * a + 127) / 255) as u8;
+                }
+            }
+        }
+        let size = IntSize::from_wh(frame.width, frame.height).ok_or("the frame is empty")?;
+        Pixmap::from_vec(pixels, size)
+            .ok_or_else(|| "the frame's pixels do not fill it".to_string())
     }
+}
+
+/// Run the window and present the frames it asks for until it rests; `false` when it never does.
+fn settle(
+    driver: &mut TestDriver<Files>,
+    window: WindowId,
+    turns: NonZeroU32,
+) -> Result<bool, Box<dyn std::fmt::Debug>> {
+    for _ in 0..FRAMES {
+        driver.run_until_idle(turns).map_err(|e| Box::new(e) as _)?;
+        let system = driver.window_system_mut();
+        if !system
+            .frame_requested(window)
+            .map_err(|e| Box::new(e) as _)?
+        {
+            return Ok(true);
+        }
+        system
+            .frame_ready(window, Timestamp(0))
+            .map_err(|e| Box::new(e) as _)?;
+    }
+    Ok(false)
+}
+
+/// The middle of the text `name` in the window.
+fn text_center(driver: &TestDriver<Files>, window: WindowId, name: &str) -> Option<Point> {
+    let snapshot = driver.runtime().snapshot(window)?;
+    snapshot
+        .accessibility
+        .iter()
+        .find(|(_, n)| n.role == Role::StaticText && n.name.as_deref() == Some(name))
+        .map(|(_, n)| n.bounds.center())
+}
+
+/// A click at `at`.
+fn click(
+    driver: &mut TestDriver<Files>,
+    window: WindowId,
+    at: Point,
+    turns: NonZeroU32,
+) -> Result<(), Box<dyn std::fmt::Debug>> {
+    let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
+    let mut events = vec![pointer(PointerEvent::Motion { position: at })];
+    for pressed in [true, false] {
+        events.push(pointer(PointerEvent::Button {
+            position: at,
+            button: MouseButton::Left,
+            pressed,
+            serial: 1,
+            mods: Mods::NONE,
+        }));
+    }
+    for event in events {
+        driver
+            .window_system_mut()
+            .enqueue_window(window, event)
+            .map_err(|e| Box::new(e) as _)?;
+        driver.run_until_idle(turns).map_err(|e| Box::new(e) as _)?;
+    }
+    Ok(())
 }
 
 fn state(flag: &str, value: &str) -> State {
@@ -163,14 +302,7 @@ fn state(flag: &str, value: &str) -> State {
 
 impl App for Capture {
     const NAME: &'static str = "files";
-    const STATE_FLAGS: &'static [&'static str] = &[
-        "view",
-        "drop-place",
-        "drop-item",
-        "selected",
-        "sidebar-focus",
-        "devices",
-    ];
+    const STATE_FLAGS: &'static [&'static str] = &["view", "selected", "devices"];
 
     fn surfaces(&self) -> Vec<String> {
         vec!["window".into(), "sidebar".into()]
@@ -182,37 +314,22 @@ impl App for Capture {
                 State::new(),
                 state("view", "list"),
                 state("selected", "notes.txt"),
-                state("drop-item", "Documents"),
             ],
-            _ => vec![
-                State::new(),
-                state("drop-place", "Desktop"),
-                state("devices", "removable"),
-                vec![
-                    ("devices".to_string(), "removable".to_string()),
-                    ("sidebar-focus".to_string(), "Backup Disk".to_string()),
-                ],
-            ],
+            _ => vec![State::new(), state("devices", "removable")],
         }
     }
 
     fn capture(&mut self, r: &Request<'_>) -> Result<Pixmap, String> {
-        let mut mode = ViewMode::Icons;
-        let mut drop_target = None;
+        if !matches!(r.surface, "window" | "sidebar") {
+            return Err(format!("{}: no such surface", r.surface));
+        }
+        let mut view = ViewMode::Icons;
         let mut selected = None;
-        let mut sidebar_focus = None;
         let mut places = self.places.clone();
-        let item = |name: &str| {
-            self.browser
-                .entries()
-                .iter()
-                .position(|e| e.name == name)
-                .ok_or_else(|| format!("{name}: no item of the sample folder"))
-        };
         for (flag, value) in r.state {
             match (flag.as_str(), value.as_str()) {
-                ("view", "icon") => mode = ViewMode::Icons,
-                ("view", "list") => mode = ViewMode::List,
+                ("view", "icon") => view = ViewMode::Icons,
+                ("view", "list") => view = ViewMode::List,
                 ("view", _) => return Err(format!("--view {value}: icon or list")),
                 ("devices", "removable") => places.extend([
                     Place::removable(
@@ -224,125 +341,41 @@ impl App for Capture {
                     Place::removable("KINGSTON", None, false),
                 ]),
                 ("devices", _) => return Err(format!("--devices {value}: removable")),
-                ("drop-place", name) => {
-                    let place = self.places.iter().position(|p| p.name == name);
-                    let place = place.ok_or_else(|| format!("{name}: no sidebar place"))?;
-                    drop_target = Some(DropOutline::Place(place));
-                }
-                ("drop-item", _) if drop_target.is_some() => {
-                    return Err("--drop-place and --drop-item: one drop target at a time".into());
-                }
-                ("drop-item", name) => drop_target = Some(DropOutline::Item(item(name)?)),
-                ("sidebar-focus", name) => sidebar_focus = Some(name),
-                (_, name) => selected = Some(item(name)?),
+                (_, name) => selected = Some(name.to_string()),
             }
         }
-        let sidebar_focus = match sidebar_focus {
-            Some(name) => Some(
-                places
-                    .iter()
-                    .position(|p| p.name == name)
-                    .ok_or_else(|| format!("{name}: no sidebar place"))?,
-            ),
-            None => None,
-        };
-        let path = self.browser.dir().to_path_buf();
-        self.browser.press_empty(Modifiers::default());
-        if let Some(i) = selected {
-            let item = self.browser.entries()[i].path.clone();
-            self.browser.select_when_appears(item);
-        }
-        let (w, h) = r.size.unwrap_or(window_metrics::DEFAULT_SIZE);
-        let frame = self.painter.frame(
-            Size { w, h },
-            &places,
-            Bars::HIDDEN,
-            window_metrics::TOOLBAR_SEARCH_FIELD.0,
-            &path,
-            mode,
-            self.browser.outline(),
-            0.0,
+        let (w, h) = r.size.unwrap_or(WINDOW);
+        let pm = self.draw(
+            view,
+            places,
+            selected.as_deref(),
+            r.look,
             r.scale,
-        );
-        let pal = Palette::from_theme(
-            &self.theme,
-            if r.look.dark {
-                Appearance::Dark
-            } else {
-                Appearance::Light
-            },
-        );
-        let state = WindowState {
-            browser: &self.browser,
-            places: &places,
-            mode,
-            active: true,
-            search: &TextBuffer::new(),
-            search_focused: false,
-            search_caret: false,
-            title: HOME,
-            now: now(),
-            edit: None,
-            edit_caret: false,
-            drop_target,
-            increase_contrast: r.look.increase_contrast,
-            marquee: None,
-            status: "",
-            sidebar_focus,
-        };
-        let scale = f64::from(r.scale);
-        let mut pm = Pixmap::new((w * scale).ceil() as u32, (h * scale).ceil() as u32)
-            .ok_or_else(|| format!("{w} × {h} pt at {scale}× is too large"))?;
-        let appearance = if r.look.dark {
-            Appearance::Dark
-        } else {
-            Appearance::Light
-        };
-        let [red, green, blue, alpha] = self
-            .theme
-            .tokens
-            .semantic(appearance, SemanticColor::WindowBackground)
-            .ok_or("the theme has no window background")?
-            .to_array();
-        pm.fill(
-            Color::from_rgba(red, green, blue, alpha)
-                .ok_or("the window background is out of range")?,
-        );
-        self.painter.paint(&mut pm, r.scale, &frame, &state, &pal);
+            Size::new(w, h),
+        )?;
         if r.surface == "window" {
             return Ok(pm);
         }
-        let s = frame.window.sidebar;
-        let rect = IntRect::from_xywh(
-            (s.x * scale).round() as i32,
-            (s.y * scale).round() as i32,
-            (s.w * scale).round() as u32,
-            (s.h * scale).round() as u32,
-        )
-        .ok_or("the sidebar is empty")?;
+        let scale = f64::from(r.scale);
+        let rect = IntRect::from_xywh(0, 0, (SIDEBAR * scale).round() as u32, pm.height())
+            .ok_or("the sidebar is empty")?;
         pm.clone_rect(rect)
             .ok_or_else(|| "the sidebar is outside the window".to_string())
     }
 }
 
 fn main() -> ExitCode {
-    std::env::set_var("TZ", "UTC");
-    cupertino_capture::run(|| Capture::new(cupertino_capture::assets()?))
+    cupertino_capture::run(Capture::new)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cupertino_capture::Look;
-    use cupertino_files::render::relative_date;
 
-    #[test]
-    fn the_list_window_is_the_same_pixels_on_every_run() {
-        std::env::set_var("TZ", "UTC");
-        let state = vec![("view".to_string(), "list".to_string())];
-        let request = Request {
-            surface: "window",
-            state: &state,
+    fn request<'a>(surface: &'a str, state: &'a State) -> Request<'a> {
+        Request {
+            surface,
+            state,
             look: Look {
                 dark: false,
                 increase_contrast: false,
@@ -350,30 +383,44 @@ mod tests {
             },
             scale: 1.0,
             size: None,
-        };
-        let mut first = Capture::new(Assets::builtin()).unwrap();
-        let notes = first
-            .browser
-            .entries()
-            .iter()
-            .find(|e| e.name == "notes.txt");
-        let modified = notes.and_then(|e| e.modified).unwrap();
-        assert_eq!(relative_date(modified, now()), "Today at 14:00");
-        let documents = first
-            .browser
-            .entries()
-            .iter()
-            .find(|e| e.name == "Documents");
-        let modified = documents.and_then(|e| e.modified).unwrap();
-        assert_eq!(relative_date(modified, now()), "Today at 14:00");
-        let drawn = first.capture(&request).unwrap();
-        let again = Capture::new(Assets::builtin())
+        }
+    }
+
+    #[test]
+    fn the_list_window_is_the_same_pixels_on_every_run() {
+        let state = vec![("view".to_string(), "list".to_string())];
+        let drawn = Capture::new()
             .unwrap()
-            .capture(&request)
+            .capture(&request("window", &state))
+            .unwrap();
+        assert_eq!((drawn.width(), drawn.height()), (920, 436));
+        let again = Capture::new()
+            .unwrap()
+            .capture(&request("window", &state))
             .unwrap();
         assert!(
             drawn.data() == again.data(),
             "the second run drew other pixels"
         );
+    }
+
+    #[test]
+    fn the_sidebar_is_the_window_cut_to_its_column() {
+        let state = State::new();
+        let sidebar = Capture::new()
+            .unwrap()
+            .capture(&request("sidebar", &state))
+            .unwrap();
+        assert_eq!((sidebar.width(), sidebar.height()), (200, 436));
+    }
+
+    #[test]
+    fn an_unknown_item_is_refused_by_name() {
+        let state = vec![("selected".to_string(), "nothing.txt".to_string())];
+        let refused = Capture::new()
+            .unwrap()
+            .capture(&request("window", &state))
+            .unwrap_err();
+        assert!(refused.contains("nothing.txt"), "{refused}");
     }
 }

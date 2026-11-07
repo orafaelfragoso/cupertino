@@ -12,6 +12,7 @@ use cupertino_files::kit::{prepare, Files, Start};
 use cupertino_files::notice::Notices;
 use cupertino_files::places::{Place, PlaceGroup, PlaceKind};
 use cupertino_files::trash::Trash;
+use cupertino_files::window::ViewMode;
 use cupertino_kit::core::{AccessibilityNode, Key, NodeId, PlaceholderIcons, Role, RuntimeOptions};
 use cupertino_kit::geometry::{Point, Rect};
 use cupertino_kit::layout::LayoutDirection;
@@ -32,6 +33,8 @@ pub struct Run {
     /// The window the helpers act on and read.
     pub window: WindowId,
     home: tempfile::TempDir,
+    /// The clock's time, which frames are presented at.
+    now: Timestamp,
 }
 
 pub fn place(name: &str, path: &Path, kind: PlaceKind) -> Place {
@@ -53,6 +56,23 @@ impl Run {
         notices: Notices,
         system: Option<zbus::blocking::Connection>,
     ) -> Run {
+        let preferences = ThemePreferences {
+            appearance: Appearance::Light,
+            reduce_transparency: false,
+            reduce_motion: false,
+        };
+        Run::start_with(home, folder, places, notices, system, preferences)
+    }
+
+    /// [`Run::start`] in the theme of `preferences`.
+    pub fn start_with(
+        home: tempfile::TempDir,
+        folder: PathBuf,
+        places: Vec<Place>,
+        notices: Notices,
+        system: Option<zbus::blocking::Connection>,
+        preferences: ThemePreferences,
+    ) -> Run {
         prepare(
             Start::open(
                 folder,
@@ -65,14 +85,11 @@ impl Run {
                 system,
             )
             .unwrap()
-            .with_trash(Trash::with_home(home.path().join("Trash"))),
+            .with_trash(Trash::with_home(home.path().join("Trash")))
+            .with_home(home.path().to_path_buf())
+            .with_view(ViewMode::List),
         );
         let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
-        let preferences = ThemePreferences {
-            appearance: Appearance::Light,
-            reduce_transparency: false,
-            reduce_motion: false,
-        };
         let theme = ThemeTokens::cupertino(&Theme::from_dir(data).unwrap(), preferences).unwrap();
         let mut fonts = FontIndex::new();
         fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
@@ -110,6 +127,7 @@ impl Run {
             driver,
             window,
             home,
+            now: Timestamp(0),
         };
         run.activate(window);
         run
@@ -151,9 +169,39 @@ impl Run {
                 return;
             }
             for window in waiting {
-                system.frame_ready(window, Timestamp(0)).unwrap();
+                system.frame_ready(window, self.now).unwrap();
             }
         }
+    }
+
+    /// Move the clock on by `ms` milliseconds a frame of `step_ms` at a time, presenting the frames the windows ask
+    /// for at each.
+    pub fn frames(&mut self, ms: u64, step_ms: u64) {
+        let end = self.now.0 + ms * 1_000_000;
+        while self.now.0 < end {
+            self.now = Timestamp((self.now.0 + step_ms * 1_000_000).min(end));
+            self.driver.advance_to(self.now).unwrap();
+            self.driver.run_until_idle(budget()).unwrap();
+            let windows = self.windows();
+            let system = self.driver.window_system_mut();
+            for window in windows {
+                if system.frame_requested(window).unwrap() {
+                    system.frame_ready(window, self.now).unwrap();
+                }
+            }
+            self.driver.run_until_idle(budget()).unwrap();
+        }
+    }
+
+    /// The bounds of the accessible node with `role` and `name`.
+    pub fn bounds(&self, role: Role, name: &str) -> Rect {
+        let snapshot = self.driver.runtime().snapshot(self.window).unwrap();
+        snapshot
+            .accessibility
+            .iter()
+            .find(|(_, node)| node.role == role && node.name.as_deref() == Some(name))
+            .map(|(_, node)| node.bounds)
+            .unwrap_or_else(|| panic!("no {role:?} {name:?}"))
     }
 
     pub fn send(&mut self, event: WindowEvent) {
@@ -175,6 +223,29 @@ impl Run {
         self.click_at(rect);
     }
 
+    /// Click the accessible node with `role` and `name`.
+    pub fn click_named(&mut self, role: Role, name: &str) {
+        let rect = self.bounds(role, name);
+        self.click_at(rect);
+    }
+
+    /// Every name, value and description the window reads to assistive technology.
+    pub fn read_aloud(&self) -> Vec<String> {
+        let snapshot = self.driver.runtime().snapshot(self.window).unwrap();
+        snapshot
+            .accessibility
+            .iter()
+            .flat_map(|(_, node)| {
+                [
+                    node.name.clone(),
+                    node.description.clone(),
+                    node.value.as_ref().map(|v| format!("{v:?}")),
+                ]
+            })
+            .flatten()
+            .collect()
+    }
+
     /// Click the list's row that shows `name`.
     pub fn click_row(&mut self, name: &str) {
         let (_, rect, _) = self
@@ -186,21 +257,112 @@ impl Run {
     }
 
     fn click_at(&mut self, rect: Rect) {
-        let position = Point::new(
-            rect.origin.x + rect.size.width / 2.0,
-            rect.origin.y + rect.size.height / 2.0,
-        );
+        self.press_at(rect.center(), MouseButton::Left);
+    }
+
+    /// Press and release `button` at `position`.
+    pub fn press_at(&mut self, position: Point, button: MouseButton) {
+        self.press_with(position, button, Mods::NONE);
+    }
+
+    /// Press and release `button` at `position` with `mods` held.
+    pub fn press_with(&mut self, position: Point, button: MouseButton, mods: Mods) {
         let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
         self.send(pointer(PointerEvent::Motion { position }));
         for pressed in [true, false] {
             self.send(pointer(PointerEvent::Button {
                 position,
-                button: MouseButton::Left,
+                button,
                 pressed,
                 serial: 1,
-                mods: Mods::NONE,
+                mods,
             }));
         }
+    }
+
+    /// Click the list's row that shows `name` with `mods` held.
+    pub fn click_row_with(&mut self, name: &str, mods: Mods) {
+        let (_, rect, _) = self
+            .listed()
+            .into_iter()
+            .find(|(shown, _, _)| shown == name)
+            .unwrap_or_else(|| panic!("no row {name:?}"));
+        self.press_with(rect.center(), MouseButton::Left, mods);
+    }
+
+    /// A secondary click on the list's row that shows `name`.
+    pub fn right_click_row(&mut self, name: &str) {
+        let (_, rect, _) = self
+            .listed()
+            .into_iter()
+            .find(|(shown, _, _)| shown == name)
+            .unwrap_or_else(|| panic!("no row {name:?}"));
+        self.press_at(rect.center(), MouseButton::Right);
+    }
+
+    /// The open context menu's window.
+    pub fn context_menu(&self) -> Option<WindowId> {
+        let windows = self.driver.runtime().windows();
+        windows
+            .into_iter()
+            .find(|(key, _)| format!("{key:?}").contains("context-menu"))
+            .map(|(_, id)| id)
+    }
+
+    /// The rows of the open context menu: each label, and whether it can be chosen.
+    pub fn menu_rows(&mut self) -> Vec<(String, bool)> {
+        let menu = self.context_menu().expect("a context menu is open");
+        self.show(menu);
+        let snapshot = self.driver.runtime().snapshot(menu).unwrap();
+        snapshot
+            .accessibility
+            .iter()
+            .filter(|(_, node)| node.role == Role::MenuItem)
+            .filter_map(|(_, node)| Some((node.name.clone()?, !node.states.disabled)))
+            .collect()
+    }
+
+    /// Choose the row `label` of the open context menu.
+    pub fn choose(&mut self, label: &str) {
+        let menu = self.context_menu().expect("a context menu is open");
+        self.show(menu);
+        let window = self.window;
+        self.window = menu;
+        let rect = self.bounds(Role::MenuItem, label);
+        self.click_at(rect);
+        self.window = window;
+        self.settle();
+    }
+
+    /// Escape in the open context menu.
+    pub fn close_menu(&mut self) {
+        let menu = self.context_menu().expect("a context menu is open");
+        self.show(menu);
+        let window = self.window;
+        self.window = menu;
+        // the press closes the popup, so no release reaches it
+        self.send(WindowEvent::Key(
+            KeyEvent {
+                code: 0,
+                keysym: Keysym(0xff1b),
+                text: None,
+                pressed: true,
+                repeat: false,
+                mods: Mods::NONE,
+            },
+            Timestamp(0),
+        ));
+        self.window = window;
+        self.settle();
+    }
+
+    /// The compositor shows the popup `popup`.
+    fn show(&mut self, popup: WindowId) {
+        self.driver
+            .window_system_mut()
+            .configure(popup, None, WindowStates::default())
+            .unwrap();
+        self.settle();
     }
 
     /// Presses and releases the key of `keysym`, which types `text`.
@@ -213,7 +375,7 @@ impl Run {
         for pressed in [true, false] {
             self.send(WindowEvent::Key(
                 KeyEvent {
-                    code: 0,
+                    code: key_code(keysym),
                     keysym: Keysym(keysym),
                     text: text.filter(|_| pressed),
                     pressed,
@@ -345,7 +507,7 @@ impl Run {
     }
 
     /// Each item of the icon grid, the list named as the window: its name, bounds and whether it is selected.
-    fn icon_cells(&self) -> Vec<(String, Rect, bool)> {
+    pub fn icon_cells(&self) -> Vec<(String, Rect, bool)> {
         let snapshot = self.driver.runtime().snapshot(self.window).unwrap();
         let nodes: HashMap<NodeId, &AccessibilityNode> = snapshot
             .accessibility
@@ -457,6 +619,7 @@ impl Run {
     }
 
     /// Settles until `done` holds, for changes a watcher thread reports.
+    #[track_caller]
     pub fn wait_until(&mut self, mut done: impl FnMut(&Run) -> bool) {
         let deadline = Instant::now() + Duration::from_secs(10);
         while !done(self) {
@@ -464,6 +627,19 @@ impl Run {
             std::thread::sleep(Duration::from_millis(10));
             self.settle();
         }
+    }
+}
+
+/// The key code of the editing keys a text field reads by code (Backspace, Delete and the arrows); 0 for the others.
+fn key_code(keysym: u32) -> u32 {
+    match keysym {
+        0xff08 => 14,
+        0xffff => 111,
+        0xff51 => 105,
+        0xff52 => 103,
+        0xff53 => 106,
+        0xff54 => 108,
+        _ => 0,
     }
 }
 

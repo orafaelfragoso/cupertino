@@ -3,7 +3,7 @@
 # Files and the toolkit: the app's own painter on sample data, without a display, a session bus or the server;
 # each app's `<app>_capture` example draws, with the flags of `cupertino-capture` (crates/cupertino-capture/README.md).
 # The overview: the server headless with test windows (ci/capture-overview.sh).
-# `ci/capture.sh files/sidebar --drop-place Desktop --scale 2`; `ci/capture.sh files` lists the surfaces.
+# `ci/capture.sh files/sidebar --devices removable --scale 2`; `ci/capture.sh files` lists the surfaces.
 # Needs an asset pack (CUPERTINO_ASSET_DIR, else the user or system pack).
 set -euo pipefail
 

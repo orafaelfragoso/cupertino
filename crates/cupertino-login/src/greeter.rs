@@ -1,33 +1,38 @@
-//! The greeter: the login screen of the session manager's greeter session. One full-output layer surface per output with
-//! exclusive keyboard (there is no session to lock), the session manager in place of PAM, and three screens: the user
-//! picker, the name typed for "Other…", and the password screen of the lock screen's state machine. The manager owns the
-//! accounts, the settings and the authentication; this process draws and relays what the user types. It never ends by
-//! itself: the server restarts it if it fails.
+//! The greeter: the login screen of the session manager's greeter session, a CupertinoKit application. One full-output
+//! layer surface window per output with exclusive keyboard (there is no session to lock), the session manager in place
+//! of PAM, and three screens ([`view`]): the user picker, the name typed for "Other…", and the password screen of the
+//! lock screen's state machine. The manager owns the accounts, the settings and the authentication; this process draws
+//! and relays what the user types. It never ends by itself: the server restarts it if it fails.
+//!
+//! The authentication hand-off is [`GreeterApp::answer`]: the password the state machine hands out on submission goes,
+//! zeroed after sending, into the manager's `Answer` for the conversation it asked about; the manager runs PAM (and
+//! anything a PAM stack does with the password, such as unlocking a keyring) for the session it starts.
 
-use crate::screen::{self, FrameKey, Notifier, OutputSurface, PickerKey, Result, Scene};
-use cupertino_assets::Assets;
-use cupertino_geometry::Point;
+use crate::app::listen;
+use crate::roles::{self, Heard, LockWish, LoginRoles};
+use crate::screen::{self, Result, Timer, FRAME};
+use cupertino_kit::core::{Application, Command, Key, Window, WindowKey};
+use cupertino_kit::geometry::Size;
 use cupertino_login::hint::FailedAttempts;
-use cupertino_login::layout::Layout;
-use cupertino_login::manager::{Connection, Message, SOCKET_VARIABLE};
+use cupertino_login::manager::{Connection, Message as ManagerMessage, SOCKET_VARIABLE};
 use cupertino_login::model::{AuthOutcome, LockScreen, Password, Phase, HIDE_AFTER};
-use cupertino_login::picker::{self, Direction, Grid, NameEntry, NameKey, Picker, Tile};
-use cupertino_login::power::{Action, Menu, MenuKey};
-use cupertino_login::render::Renderer;
+use cupertino_login::picker::{self, NameEntry, Picker, Tile};
+use cupertino_login::power::{Action, Menu};
 use cupertino_login::user::User;
+use cupertino_login::view::{
+    self, Clock, Field, Input, Metrics, PickerScreen, Screen, GREETER_APP_ID, GREETER_TITLE,
+};
 use cupertino_login_ipc::{
     Account, Event as ManagerEvent, Outcome, PowerAction, PowerMenu, PowerRefusal, Request, Secret,
     UserRow, VERSION,
 };
-use cupertino_shell_client::{
-    Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurfaceConfig, Margin, ShellEvent,
-};
-use cupertino_theme::Theme;
-use cupertino_wayland_client::{
-    key, Button, Connection as Wayland, Event, KeyboardEvent, Modifiers, PointerEvent, SurfaceId,
-};
+use cupertino_modifiers::Profile;
+use cupertino_shell_client::LayerShell;
+use cupertino_ui_wayland::WaylandWindowSystem;
+use std::cell::{Cell, RefCell};
 use std::os::unix::net::UnixStream;
-use std::sync::mpsc::{self, Receiver};
+use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// The connection to the manager is tried once a second for this long when the process starts, then the process gives up and the
@@ -35,11 +40,9 @@ use std::time::{Duration, Instant};
 const CONNECT_ATTEMPTS: u32 = 30;
 const CONNECT_INTERVAL: Duration = Duration::from_secs(1);
 
-/// How long the manager may take to answer `Hello` with `Welcome` (approximate, ours).
+/// How long the manager may take to answer `Hello` with `Welcome` (approximate, ours), and how often the start looks.
 const WELCOME_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Namespace of the greeter's layer surfaces for the server.
-const NAMESPACE: &str = "login-greeter";
+const WELCOME_POLL: Duration = Duration::from_millis(10);
 
 /// The screen the greeter shows.
 enum Stage {
@@ -51,22 +54,32 @@ enum Stage {
     Password { user: User, screen: LockScreen },
 }
 
-/// What a frame shows: when it differs from the last frame drawn, redraw.
-#[derive(PartialEq)]
-enum Drawn {
-    Field(FrameKey),
-    Picker(PickerKey),
+#[derive(Clone, Debug)]
+pub enum Message {
+    Manager(Arc<ManagerEvent>),
+    /// The connection to the manager broke.
+    Broken(String),
+    Heard(Heard),
+    Input(Input),
+    Timer(u64),
+    /// The server closed a greeter surface.
+    Closed,
+    Unheard(&'static str),
 }
 
-struct App {
-    wayland: Wayland,
-    layer_shell: LayerShell,
-    renderer: Renderer,
+pub struct GreeterApp {
     connection: Connection,
+    manager: async_channel::Receiver<Message>,
+    heard: async_channel::Receiver<Heard>,
+    failure: Rc<RefCell<Option<String>>>,
     /// The password of the attempt that is open, until the manager asks for it.
     pending: Option<Password>,
-    messages: Receiver<Message>,
     start: Instant,
+    timer: Timer,
+    outputs: Vec<(u32, Size)>,
+    caps_lock: bool,
+    metrics: Metrics,
+    clock: Clock,
     picker: Picker,
     /// Whether the picker ends with "Other…", from the manager's `Welcome`.
     show_other: bool,
@@ -76,12 +89,8 @@ struct App {
     /// The power action an administrator is being asked to authorise on the name and password screens: Restart or
     /// Shut Down chosen while a user session is open.
     authorising: Option<PowerAction>,
-    /// The surface of each output.
-    surfaces: Vec<OutputSurface>,
-    /// The last frame drawn.
-    drawn: Option<Drawn>,
     /// `greeter ready` has been logged.
-    announced: bool,
+    announced: Cell<bool>,
     /// Wrong passwords typed at this greeter.
     failed: FailedAttempts,
     /// `RetriesUntilHint`, see [`FailedAttempts::help_shown`].
@@ -98,46 +107,57 @@ struct Welcome {
 }
 
 /// Wait for the manager's `Hello` and `Welcome`, the two messages that answer ours.
-fn await_welcome(messages: &Receiver<Message>) -> Result<Welcome> {
+fn await_welcome(messages: &async_channel::Receiver<Message>) -> Result<Welcome> {
+    let deadline = Instant::now() + WELCOME_TIMEOUT;
     let mut greeted = false;
     loop {
-        match messages
-            .recv_timeout(WELCOME_TIMEOUT)
-            .map_err(|_| "the session manager did not answer in time")?
-        {
-            Message::Event(ManagerEvent::Hello { version }) if version == VERSION && !greeted => {
-                greeted = true
+        let message = match messages.try_recv() {
+            Ok(message) => message,
+            Err(async_channel::TryRecvError::Empty) if Instant::now() < deadline => {
+                std::thread::sleep(WELCOME_POLL);
+                continue;
             }
-            Message::Event(ManagerEvent::Hello { version }) => {
+            Err(async_channel::TryRecvError::Empty) => {
+                return Err("the session manager did not answer in time".into())
+            }
+            Err(async_channel::TryRecvError::Closed) => {
+                return Err("the connection to the session manager closed".into())
+            }
+        };
+        let event = match message {
+            Message::Manager(event) => event,
+            Message::Broken(e) => return Err(e.into()),
+            _ => continue,
+        };
+        match &*event {
+            &ManagerEvent::Hello { version } if version == VERSION && !greeted => greeted = true,
+            &ManagerEvent::Hello { version } => {
                 return Err(format!(
                     "the session manager speaks version {version}, this screen {VERSION}"
                 )
                 .into())
             }
-            Message::Event(ManagerEvent::Welcome {
+            ManagerEvent::Welcome {
                 users,
                 show_other,
                 power,
                 will_prompt,
                 retries_until_hint,
-            }) if greeted => {
+            } if greeted => {
                 return Ok(Welcome {
-                    users,
-                    show_other,
-                    power,
-                    will_prompt,
-                    retries_until_hint,
+                    users: users.clone(),
+                    show_other: *show_other,
+                    power: *power,
+                    will_prompt: *will_prompt,
+                    retries_until_hint: *retries_until_hint,
                 })
             }
-            Message::Event(ManagerEvent::Refused { reason }) => {
+            ManagerEvent::Refused { reason } => {
                 return Err(
                     format!("the session manager refused the connection: {reason:?}").into(),
                 )
             }
-            Message::Event(_) => {
-                return Err("the session manager sent a message out of order".into())
-            }
-            Message::Broken(e) => return Err(e.into()),
+            _ => return Err("the session manager sent a message out of order".into()),
         }
     }
 }
@@ -246,18 +266,22 @@ fn refusal_text(outcome: Outcome, pam_notice: Option<&str>) -> String {
 
 /// Connect to the session manager and the server and run: the screen never ends by itself.
 pub fn run() -> Result<std::convert::Infallible> {
-    let assets = Assets::discover();
-    let theme = Theme::load()?;
-    let renderer = Renderer::new(theme.tokens.typography(), &assets)?;
-
     let socket = std::env::var(SOCKET_VARIABLE).map_err(|e| format!("{SOCKET_VARIABLE}: {e}"))?;
     let stream = connect(&socket)?;
-    let mut wayland = Wayland::connect()?;
-    let layer_shell =
-        LayerShell::bind(&mut wayland).ok_or("the server lacks zwlr_layer_shell_v1")?;
-    let (sender, messages) = mpsc::channel();
-    let notifier = Notifier::new(sender, wayland.waker());
-    let connection = Connection::spawn(stream, move |message| notifier.send(message))?;
+    let mut system = WaylandWindowSystem::connect(Profile::cupertino())
+        .map_err(|e| format!("cannot connect to the Wayland display: {e:?}"))?;
+    let conn = system.connection();
+    let layer_shell = LayerShell::bind(conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
+    let outputs = roles::outputs(conn);
+    let (sender, messages) = async_channel::unbounded();
+    let connection = Connection::spawn(stream, move |message| {
+        let message = match message {
+            ManagerMessage::Event(event) => Message::Manager(Arc::new(event)),
+            ManagerMessage::Broken(e) => Message::Broken(e.to_string()),
+        };
+        // the receiver lives as long as the application
+        let _ = sender.send_blocking(message);
+    })?;
     let welcome = await_welcome(&messages)?;
 
     let picker = Picker::new(
@@ -276,356 +300,335 @@ pub fn run() -> Result<std::convert::Infallible> {
     }
     log_power_items(power.as_ref());
 
-    let start = Instant::now();
-    let mut app = App {
-        wayland,
+    let (heard, heard_messages) = async_channel::unbounded();
+    // the greeter never locks: there is no session
+    let roles = LoginRoles::new(
         layer_shell,
-        renderer,
-        connection,
-        pending: None,
-        messages,
-        start,
-        picker,
-        show_other: welcome.show_other,
-        stage: Stage::Picking,
-        power,
-        authorising: None,
-        surfaces: Vec::new(),
-        drawn: None,
-        announced: false,
-        failed: FailedAttempts::default(),
-        retries_until_hint: welcome.retries_until_hint,
-    };
-    app.arrange_surfaces()?;
-    loop {
-        app.present()?;
-        let timeout = app.timeout()?;
-        for event in app.wayland.wait(timeout)? {
-            app.handle(event)?;
+        None,
+        None,
+        Rc::new(RefCell::new(LockWish::default())),
+        heard,
+    );
+    let system = system.with_roles(roles);
+    let failure = Rc::new(RefCell::new(None));
+    let ended = Rc::clone(&failure);
+    cupertino_kit::app::run_on_with::<GreeterApp>(system, move |runtime| {
+        let app = GreeterApp {
+            connection,
+            manager: messages,
+            heard: heard_messages,
+            failure: ended,
+            pending: None,
+            start: Instant::now(),
+            timer: Timer::default(),
+            outputs,
+            caps_lock: false,
+            metrics: Metrics::of(&runtime.text),
+            clock: screen::clock().unwrap_or_default(),
+            picker,
+            show_other: welcome.show_other,
+            stage: Stage::Picking,
+            power,
+            authorising: None,
+            announced: Cell::new(false),
+            failed: FailedAttempts::default(),
+            retries_until_hint: welcome.retries_until_hint,
+        };
+        let commands = vec![
+            listen(
+                &app.manager,
+                std::convert::identity,
+                Message::Unheard("the session manager's reader"),
+            ),
+            listen(
+                &app.heard,
+                Message::Heard,
+                Message::Unheard("the surface roles"),
+            ),
+        ];
+        (app, commands)
+    })?;
+    let reason = failure.borrow_mut().take();
+    Err(reason
+        .unwrap_or_else(|| "the greeter ended".to_owned())
+        .into())
+}
+
+impl Application for GreeterApp {
+    type Model = GreeterApp;
+    type Message = Message;
+    const RESIDENT: bool = true;
+
+    fn init() -> (GreeterApp, Vec<Command<Message>>) {
+        unreachable!("the greeter starts only through `run`, which hands the model to the runtime")
+    }
+
+    fn update(app: &mut GreeterApp, message: Message) -> Vec<Command<Message>> {
+        let now = app.now();
+        let mut commands = Vec::new();
+        let result = match message {
+            Message::Manager(event) => {
+                commands.push(listen(
+                    &app.manager,
+                    std::convert::identity,
+                    Message::Unheard("the session manager's reader"),
+                ));
+                app.manager_event(now, &event)
+            }
+            Message::Broken(e) => Err(e.into()),
+            Message::Heard(heard) => {
+                commands.push(listen(
+                    &app.heard,
+                    Message::Heard,
+                    Message::Unheard("the surface roles"),
+                ));
+                match heard {
+                    Heard::Outputs(outputs) => app.outputs = outputs,
+                    Heard::CapsLock(on) => app.caps_lock = on,
+                    _ => {}
+                }
+                Ok(())
+            }
+            Message::Input(input) => app.input(now, input, &mut commands),
+            Message::Timer(id) => {
+                app.timer.fired(id);
+                Ok(())
+            }
+            Message::Closed => Err("the server closed a surface of the greeter".into()),
+            Message::Unheard(what) => Err(format!("{what} stopped").into()),
+        };
+        let result = result.and_then(|()| {
+            if let Stage::Password { screen, .. } = &mut app.stage {
+                screen.tick(now);
+            }
+            app.clock = screen::clock()?;
+            Ok(())
+        });
+        match result {
+            Ok(()) => {
+                let wait = app.next_wakeup(now);
+                commands.extend(app.timer.schedule(now, wait, Message::Timer));
+                commands
+            }
+            Err(e) => {
+                *app.failure.borrow_mut() = Some(e.to_string());
+                vec![Command::Exit]
+            }
         }
-        app.housekeeping()?;
+    }
+
+    fn view(app: &GreeterApp) -> Vec<Window<Message>> {
+        let now = app.now();
+        let mut windows = Vec::new();
+        for &(output, size) in &app.outputs {
+            let key = WindowKey(Key::from(format!("greeter-{output}")));
+            let content = match &app.stage {
+                Stage::Picking => view::picker(
+                    &PickerScreen {
+                        size,
+                        metrics: app.metrics,
+                        clock: &app.clock,
+                        picker: &app.picker,
+                        max_per_page: app.max_per_page(),
+                        power: app.power.as_ref(),
+                    },
+                    Message::Input,
+                ),
+                Stage::Naming(entry) => view::screen(
+                    &Screen {
+                        size,
+                        metrics: app.metrics,
+                        clock: &app.clock,
+                        user: None,
+                        field: Field::Name {
+                            text: entry.text().to_owned(),
+                            revision: entry.revision(),
+                        },
+                        caps_lock: false,
+                        spinner: None,
+                        denied: false,
+                        notice: app.authorising.map(authorisation_notice),
+                        help: false,
+                        opacity: 1.0,
+                        shake: 0.0,
+                        hidden: false,
+                        power: app.power.as_ref(),
+                    },
+                    GREETER_TITLE,
+                    Message::Input,
+                ),
+                Stage::Password { user, screen } => view::screen(
+                    &Screen {
+                        size,
+                        metrics: app.metrics,
+                        clock: &app.clock,
+                        user: Some(user),
+                        field: Field::Password {
+                            generation: screen.field(),
+                            enabled: !matches!(screen.phase(), Phase::Unlocking | Phase::Unlocked),
+                        },
+                        caps_lock: app.caps_lock,
+                        spinner: screen.spinner(now),
+                        denied: screen.failure_outline(),
+                        notice: screen.notice(),
+                        help: app.failed.help_shown(&user.login, app.retries_until_hint),
+                        opacity: screen.opacity(now),
+                        shake: screen.shake(now),
+                        hidden: screen.hidden(),
+                        power: app.power.as_ref(),
+                    },
+                    GREETER_TITLE,
+                    Message::Input,
+                ),
+            };
+            windows.push(view::full_screen(
+                key.clone(),
+                format!("{GREETER_APP_ID}.{output}"),
+                GREETER_TITLE,
+                size,
+                content,
+                Some(Message::Closed),
+            ));
+            if let Some(menu) = &app.power {
+                windows.extend(view::power_menu(key, menu, Message::Input));
+            }
+        }
+        if !windows.is_empty() && !app.announced.replace(true) {
+            eprintln!("cupertino-login: greeter ready");
+        }
+        windows
     }
 }
 
-impl App {
+impl GreeterApp {
     fn now(&self) -> f64 {
         self.start.elapsed().as_secs_f64()
     }
 
-    /// How long the loop may sleep: until the password screen next changes by itself or the clock's minute turns.
-    fn timeout(&self) -> Result<Option<Duration>> {
-        let minute =
-            Duration::from_secs(60 - screen::display_unix_seconds()?.rem_euclid(60) as u64);
-        let by_screen = match &self.stage {
-            Stage::Password { screen, .. } => screen.next_wakeup(self.now()),
-            Stage::Picking | Stage::Naming(_) => None,
+    /// Seconds until the screen next changes by itself: a frame of the password screen's fades, shake or spinner, its
+    /// next change, or the clock's minute.
+    fn next_wakeup(&self, now: f64) -> Option<f64> {
+        let minute = screen::to_next_minute().unwrap_or(60.0);
+        let Stage::Password { screen, .. } = &self.stage else {
+            return Some(minute);
         };
-        Ok(Some(by_screen.map_or(minute, |s| {
-            Duration::from_secs_f64(s).min(minute)
-        })))
-    }
-
-    /// The tiles per page, from the first output the server has described.
-    fn max_per_page(&self) -> Result<usize> {
-        let geometry = self
-            .wayland
-            .outputs()
-            .into_iter()
-            .find_map(|o| o.geometry)
-            .ok_or("the server has no output")?;
-        Ok(picker::max_per_page(
-            f64::from(geometry.width),
-            f64::from(geometry.height),
-        ))
-    }
-
-    /// The frame the current stage shows now.
-    fn current(&self, now: f64) -> Result<Drawn> {
-        let menu = self.menu();
-        Ok(match &self.stage {
-            Stage::Picking => {
-                Drawn::Picker(PickerKey::new(&self.picker, self.max_per_page()?, menu)?)
-            }
-            Stage::Naming(entry) => Drawn::Field(FrameKey::name(
-                entry,
-                self.authorising.map(authorisation_notice),
-                menu,
-            )?),
-            Stage::Password { user, screen } => Drawn::Field(FrameKey::new(
-                &Scene {
-                    screen,
-                    caps_lock: self.wayland.modifiers().caps_lock,
-                    help: self.failed.help_shown(&user.login, self.retries_until_hint),
-                    power: menu,
-                },
-                now,
-            )?),
+        let opacity = screen.opacity(now);
+        let moving = (opacity > 0.0 && opacity < 1.0)
+            || matches!(screen.phase(), Phase::Failed { .. } | Phase::Unlocking)
+            || screen.spinner(now).is_some();
+        let by_screen = screen.next_wakeup(now).map_or(minute, |w| w.min(minute));
+        Some(if moving {
+            by_screen.min(FRAME)
+        } else {
+            by_screen
         })
     }
 
-    fn menu(&self) -> Option<&Menu> {
-        self.power.as_ref()
+    /// The tiles per page, from the first output the server has described.
+    fn max_per_page(&self) -> usize {
+        self.outputs
+            .first()
+            .map_or(picker::max_per_page(0.0, 0.0), |(_, size)| {
+                picker::max_per_page(size.width, size.height)
+            })
     }
 
-    fn handle(&mut self, event: Event) -> Result<()> {
-        let now = self.now();
-        match event {
-            Event::Frame(frame) => {
-                if let Some(s) = self.surface_mut(frame.surface) {
-                    s.presenter.frame_done();
-                }
-            }
-            Event::Keyboard {
-                event:
-                    KeyboardEvent::Key {
-                        code,
-                        pressed: true,
-                        mods,
-                        character,
-                        ..
-                    },
-                ..
-            } => self.press(now, code, mods, character)?,
-            Event::Pointer { surface, event, .. } => self.pointer(now, surface, event)?,
-            Event::OutputsChanged => self.arrange_surfaces()?,
-            Event::Extension(event) => match event.downcast_ref::<ShellEvent>() {
-                Some(&ShellEvent::Configure { surface, size }) => {
-                    // of a surface destroyed since
-                    if let Some(s) = self.surface_mut(surface) {
-                        s.configured(size)?;
-                    }
-                }
-                Some(ShellEvent::Closed(_)) => {
-                    return Err("the server closed a surface of the greeter".into())
-                }
-                _ => {}
-            },
-            // the screens have one fixed look and no popups
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn surface_mut(&mut self, surface: SurfaceId) -> Option<&mut OutputSurface> {
-        self.surfaces.iter_mut().find(|s| s.surface() == surface)
-    }
-
-    /// Draw every surface that can take a frame.
-    fn present(&mut self) -> Result<()> {
-        for surface in screen::ready(&self.wayland, &mut self.surfaces)? {
-            self.draw(surface)?;
-        }
-        Ok(())
-    }
-
-    /// A key went down on the screen of the current stage.
-    fn press(
+    /// What the person did on a screen.
+    fn input(
         &mut self,
         now: f64,
-        code: u32,
-        mods: Modifiers,
-        character: Option<char>,
+        input: Input,
+        commands: &mut Vec<Command<Message>>,
     ) -> Result<()> {
-        if self.power_key(code)? {
-            return Ok(());
+        match input {
+            Input::TogglePower => {
+                if let Some(menu) = &mut self.power {
+                    menu.toggle();
+                }
+                return Ok(());
+            }
+            Input::ClosePower => {
+                if let Some(menu) = &mut self.power {
+                    menu.close();
+                }
+                return Ok(());
+            }
+            Input::Power(row) => {
+                let action = self.power.as_mut().and_then(|menu| menu.activate(row));
+                return match action {
+                    Some(action) => self.perform(action),
+                    None => Ok(()),
+                };
+            }
+            _ => {}
         }
-        let typed = screen::typed_key(code, mods, character);
-        match &mut self.stage {
-            Stage::Picking => {
-                let max_per_page = self.max_per_page()?;
-                let picker = &mut self.picker;
-                match code {
-                    key::LEFT => picker.step(Direction::Left, max_per_page),
-                    key::RIGHT => picker.step(Direction::Right, max_per_page),
-                    key::UP => picker.step(Direction::Up, max_per_page),
-                    key::DOWN => picker.step(Direction::Down, max_per_page),
-                    key::ENTER | key::KEYPAD_ENTER => self.choose(now)?,
-                    _ => {}
+        match (&mut self.stage, input) {
+            (Stage::Picking, Input::Select(index)) => self.picker.select(index),
+            (Stage::Picking, Input::Choose(index)) => {
+                self.picker.select(index);
+                self.choose(now);
+            }
+            (Stage::Picking, Input::Step(direction)) => {
+                let max_per_page = self.max_per_page();
+                self.picker.step(direction, max_per_page);
+                commands.push(Command::Focus(view::tile_key(self.picker.selected_index())));
+            }
+            (Stage::Naming(entry), Input::Name(change)) => entry.set(&change.text),
+            (Stage::Naming(entry), Input::SubmitName) => {
+                if let Some(name) = entry.submit() {
+                    let mut screen = LockScreen::new(now, HIDE_AFTER);
+                    if let Some(action) = self.authorising {
+                        screen.notify(authorisation_notice(action).to_owned());
+                    }
+                    self.stage = Stage::Password {
+                        user: User::typed(name),
+                        screen,
+                    };
                 }
             }
-            Stage::Naming(entry) => {
-                let Some(typed) = typed else { return Ok(()) };
-                match entry.press(typed) {
-                    NameKey::Typing => {}
-                    NameKey::Submit(name) => {
-                        let mut screen = LockScreen::new(now, HIDE_AFTER);
-                        if let Some(action) = self.authorising {
-                            screen.notify(authorisation_notice(action).to_owned());
-                        }
-                        self.stage = Stage::Password {
-                            user: User::typed(name),
-                            screen,
-                        };
-                    }
-                    NameKey::Cancel => {
-                        self.authorising = None;
-                        self.stage = Stage::Picking;
-                    }
-                }
+            (Stage::Naming(_), Input::Escape) => {
+                self.authorising = None;
+                self.stage = Stage::Picking;
             }
-            Stage::Password { user, screen } => {
+            (Stage::Password { screen, .. }, Input::Escape) => {
                 // Escape goes back to the tiles unless an attempt is on its way to a decision
                 let deciding = matches!(
                     screen.phase(),
                     Phase::Authenticating { .. } | Phase::Unlocking | Phase::Unlocked
                 );
-                if code == key::ESCAPE && !deciding {
+                if deciding {
+                    screen.escape(now);
+                } else {
                     self.authorising = None;
                     self.stage = Stage::Picking;
-                    return Ok(());
                 }
-                match typed {
-                    Some(typed) => {
-                        if let Some(password) = screen.press(now, typed) {
-                            let request = match self.authorising {
-                                Some(action) => Request::AuthenticatePower {
+            }
+            (Stage::Password { screen, .. }, Input::Activity) => screen.activity(now),
+            (Stage::Password { screen, .. }, Input::Edited) => screen.edit(now),
+            (Stage::Password { user, screen }, Input::Submit(typed)) => {
+                if let Some(password) = screen.submit(now, typed.secret()) {
+                    let request = match self.authorising {
+                        Some(action) => Request::AuthenticatePower {
+                            name: user.login.clone(),
+                            action,
+                        },
+                        None => Request::Authenticate {
+                            account: match user.uid {
+                                Some(uid) => Account::Listed { uid },
+                                None => Account::Typed {
                                     name: user.login.clone(),
-                                    action,
                                 },
-                                None => Request::Authenticate {
-                                    account: match user.uid {
-                                        Some(uid) => Account::Listed { uid },
-                                        None => Account::Typed {
-                                            name: user.login.clone(),
-                                        },
-                                    },
-                                },
-                            };
-                            // the manager asks for the password with a prompt; until then it waits here
-                            self.pending = Some(password);
-                            self.connection.send(&request)?;
-                        }
-                    }
-                    None => screen.activity(now),
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Pointer input: the power item takes the clicks on it and on its open menu; otherwise over the tiles the pointer
-    /// selects and a click chooses, and on the other screens it is activity.
-    fn pointer(&mut self, now: f64, surface: SurfaceId, event: PointerEvent) -> Result<()> {
-        if self.power_pointer(surface, event)? {
-            return Ok(());
-        }
-        match (&mut self.stage, event) {
-            (
-                Stage::Password { screen, .. },
-                PointerEvent::Motion(_) | PointerEvent::Button { .. },
-            ) => screen.activity(now),
-            (Stage::Picking, PointerEvent::Motion(position)) => {
-                if let Some(index) = self.tile_at(surface, position)? {
-                    self.picker.select(index);
-                }
-            }
-            (
-                Stage::Picking,
-                PointerEvent::Button {
-                    button: Button::Left,
-                    pressed: true,
-                    position,
-                },
-            ) => {
-                if let Some(index) = self.tile_at(surface, position)? {
-                    self.picker.select(index);
-                    self.choose(now)?;
+                            },
+                        },
+                    };
+                    // the manager asks for the password with a prompt; until then it waits here
+                    self.pending = Some(password);
+                    self.connection.send(&request)?;
                 }
             }
             _ => {}
         }
         Ok(())
-    }
-
-    /// The layout of the output `surface` covers.
-    fn layout_of(&self, surface: SurfaceId) -> Result<Layout> {
-        let output = self
-            .surfaces
-            .iter()
-            .find(|s| s.surface() == surface)
-            .map(|s| s.output)
-            .ok_or("a pointer event on an unknown surface")?;
-        let geometry = self
-            .wayland
-            .outputs()
-            .into_iter()
-            .find(|o| o.id == output)
-            .and_then(|o| o.geometry)
-            .ok_or("the output of a surface has no geometry")?;
-        Ok(self
-            .renderer
-            .layout(f64::from(geometry.width), f64::from(geometry.height)))
-    }
-
-    /// Pointer input for the power item: a click on the glyph opens or closes the menu, a click on a row does its item,
-    /// a click elsewhere closes the menu, and the pointer over a row selects it. Returns whether the event was taken.
-    fn power_pointer(&mut self, surface: SurfaceId, event: PointerEvent) -> Result<bool> {
-        let Some(menu) = &self.power else {
-            return Ok(false);
-        };
-        let layout = self.layout_of(surface)?;
-        let rows = layout.power_menu(menu.items().len()).1;
-        let row_at = |position: Point| rows.iter().position(|row| row.contains(position));
-        let open = menu.open().is_some();
-        let menu = self.power.as_mut().ok_or("the power item is missing")?;
-        match event {
-            PointerEvent::Motion(position) if open => {
-                if let Some(row) = row_at(position) {
-                    menu.select(row);
-                }
-                Ok(true)
-            }
-            PointerEvent::Button {
-                button: Button::Left,
-                pressed: true,
-                position,
-            } if open => {
-                match row_at(position) {
-                    Some(row) => {
-                        let action = menu.activate(row);
-                        self.perform(action.ok_or("a menu row without an item")?)?;
-                    }
-                    None => menu.close(),
-                }
-                Ok(true)
-            }
-            PointerEvent::Button {
-                button: Button::Left,
-                pressed: true,
-                position,
-            } if layout.power_item.contains(position) => {
-                menu.toggle();
-                Ok(true)
-            }
-            _ => Ok(false),
-        }
-    }
-
-    /// A key while the power item exists: Tab opens or closes the menu, and an open menu takes the arrows, Return and
-    /// Escape. Returns whether the key was taken.
-    fn power_key(&mut self, code: u32) -> Result<bool> {
-        let Some(menu) = &mut self.power else {
-            return Ok(false);
-        };
-        if code == key::TAB {
-            menu.toggle();
-            return Ok(true);
-        }
-        if menu.open().is_none() {
-            return Ok(false);
-        }
-        let menu_key = match code {
-            key::UP => Some(MenuKey::Up),
-            key::DOWN => Some(MenuKey::Down),
-            key::ENTER | key::KEYPAD_ENTER => Some(MenuKey::Return),
-            key::ESCAPE => Some(MenuKey::Escape),
-            _ => None,
-        };
-        if let Some(action) = menu_key.and_then(|k| menu.press(k)) {
-            self.perform(action)?;
-        }
-        // an open menu keeps the keyboard
-        Ok(true)
     }
 
     /// Carry out a menu item. Restart and Shut Down while a user session is open would end it: they ask for an administrator's
@@ -651,109 +654,91 @@ impl App {
         Ok(())
     }
 
-    /// The index of the tile under `position` (points on `surface`), if there is one.
-    fn tile_at(&self, surface: SurfaceId, position: Point) -> Result<Option<usize>> {
-        let picker = &self.picker;
-        let max_per_page = self.max_per_page()?;
-        let page = picker.page(max_per_page);
-        let layout = self.layout_of(surface)?;
-        let frames = layout.tiles(
-            Grid::for_count(max_per_page.min(picker.tiles().len())),
-            page.len(),
-        );
-        Ok(frames
-            .iter()
-            .position(|frame| frame.contains(position))
-            .map(|i| page.start + i))
-    }
-
     /// Act on the selected tile: the password screen of its account, or the name screen of "Other…".
-    fn choose(&mut self, now: f64) -> Result<()> {
-        self.stage = match &self.picker.selected() {
+    fn choose(&mut self, now: f64) {
+        self.stage = match self.picker.selected() {
             Tile::Account(user) => Stage::Password {
                 user: user.clone(),
                 screen: LockScreen::new(now, HIDE_AFTER),
             },
             Tile::Other => Stage::Naming(NameEntry::default()),
         };
-        Ok(())
     }
 
-    /// Take what the session manager said, follow the screen's timers and redraw what changed.
-    fn housekeeping(&mut self) -> Result<()> {
-        let now = self.now();
-        while let Ok(message) = self.messages.try_recv() {
-            match message {
-                Message::Event(event) => self.manager_event(now, event)?,
-                Message::Broken(e) => return Err(e.into()),
+    /// The authentication hand-off: answer the manager's prompt with the password of the open attempt. The password is
+    /// moved into the request's secret, which is zeroed once the request is written.
+    fn answer(&mut self, conversation: u64) -> Result<bool> {
+        match self.pending.take() {
+            Some(password) => {
+                self.connection.send(&Request::Answer {
+                    conversation,
+                    secret: Secret::new(password).map_err(|e| e.to_string())?,
+                })?;
+                Ok(true)
             }
+            None => Ok(false),
         }
-        if let Stage::Password { screen, .. } = &mut self.stage {
-            screen.tick(now);
-        }
-        if self.drawn.as_ref() != Some(&self.current(now)?) {
-            for s in &mut self.surfaces {
-                s.presenter.request_redraw();
-            }
-        }
-        Ok(())
     }
 
-    /// Something the session manager said. Everything but `Reset` concerns the attempt on the password screen.
-    fn manager_event(&mut self, now: f64, event: ManagerEvent) -> Result<()> {
-        if let ManagerEvent::Reset = event {
-            eprintln!("cupertino-login: reset");
-            self.pending = None;
-            self.authorising = None;
-            self.stage = Stage::Picking;
-            return Ok(());
-        }
-        if let ManagerEvent::Users { users, will_prompt } = event {
-            // the list changed (a session started or ended): the tiles are built again; a screen being typed on stays
-            self.picker = Picker::new(users.iter().map(user_of).collect(), self.show_other)?;
-            if let Some(menu) = &mut self.power {
-                menu.set_will_prompt(will_prompt);
+    /// Something the session manager said. Everything but `Reset`, `Users` and the refusals concerns the attempt on the
+    /// password screen.
+    fn manager_event(&mut self, now: f64, event: &ManagerEvent) -> Result<()> {
+        match event {
+            ManagerEvent::Reset => {
+                eprintln!("cupertino-login: reset");
+                self.pending = None;
+                self.authorising = None;
+                self.stage = Stage::Picking;
+                return Ok(());
             }
-            log_power_items(self.power.as_ref());
-            eprintln!(
-                "cupertino-login: picker: {} users, other tile: {}, {} logged in",
-                users.len(),
-                if self.show_other { "yes" } else { "no" },
-                users.iter().filter(|row| row.logged_in).count()
-            );
-            return Ok(());
-        }
-        if let ManagerEvent::Refused { reason } = event {
-            return Err(format!("the session manager refused the connection: {reason:?}").into());
-        }
-        if let ManagerEvent::PowerRefused { reason } = event {
-            let text = power_refusal_text(reason);
-            eprintln!("cupertino-login: power action refused: {text}");
-            if let Stage::Password { screen, .. } = &mut self.stage {
-                screen.notify(text.to_owned());
+            ManagerEvent::Users { users, will_prompt } => {
+                // the list changed (a session started or ended): the tiles are built again; a screen being typed on stays
+                self.picker = Picker::new(users.iter().map(user_of).collect(), self.show_other)?;
+                if let Some(menu) = &mut self.power {
+                    menu.set_will_prompt(*will_prompt);
+                }
+                log_power_items(self.power.as_ref());
+                eprintln!(
+                    "cupertino-login: picker: {} users, other tile: {}, {} logged in",
+                    users.len(),
+                    if self.show_other { "yes" } else { "no" },
+                    users.iter().filter(|row| row.logged_in).count()
+                );
+                return Ok(());
             }
-            return Ok(());
+            ManagerEvent::Refused { reason } => {
+                return Err(
+                    format!("the session manager refused the connection: {reason:?}").into(),
+                )
+            }
+            &ManagerEvent::PowerRefused { reason } => {
+                let text = power_refusal_text(reason);
+                eprintln!("cupertino-login: power action refused: {text}");
+                if let Stage::Password { screen, .. } = &mut self.stage {
+                    screen.notify(text.to_owned());
+                }
+                return Ok(());
+            }
+            _ => {}
         }
-        let Stage::Password { user, screen } = &mut self.stage else {
+        if !matches!(self.stage, Stage::Password { .. }) {
             return Err("the session manager answered while no password was asked".into());
-        };
+        }
         match event {
             ManagerEvent::Prompt {
                 conversation,
                 echo,
                 text,
             } => {
-                if echo {
-                    screen.notify(text);
+                if *echo {
+                    if let Stage::Password { screen, .. } = &mut self.stage {
+                        screen.notify(text.clone());
+                    }
                 }
-                match self.pending.take() {
-                    Some(password) => self.connection.send(&Request::Answer {
-                        conversation,
-                        secret: Secret::new(password).map_err(|e| e.to_string())?,
-                    })?,
-                    // the password is spent: a second question is more than this screen can answer
-                    None => {
-                        self.connection.send(&Request::Cancel {})?;
+                // the password is spent: a second question is more than this screen can answer
+                if !self.answer(*conversation)? {
+                    self.connection.send(&Request::Cancel {})?;
+                    if let Stage::Password { screen, .. } = &mut self.stage {
                         screen.finish_auth(
                             now,
                             AuthOutcome::Error("authentication needs more than a password".into()),
@@ -761,7 +746,11 @@ impl App {
                     }
                 }
             }
-            ManagerEvent::Notice { text, .. } => screen.notify(text),
+            ManagerEvent::Notice { text, .. } => {
+                if let Stage::Password { screen, .. } = &mut self.stage {
+                    screen.notify(text.clone());
+                }
+            }
             ManagerEvent::Result {
                 outcome: Outcome::Accepted,
             } if self.authorising.is_some() => {
@@ -774,17 +763,19 @@ impl App {
                 // the spinner goes on until the manager shows the screen again (`Reset`)
                 eprintln!("cupertino-login: session starting");
             }
-            ManagerEvent::Result {
-                outcome: Outcome::Denied,
-            } => {
-                self.failed.record(&user.login);
-                eprintln!("cupertino-login: authentication failed");
-                screen.finish_auth(now, AuthOutcome::Denied)?;
-            }
-            ManagerEvent::Result { outcome } => {
-                let reason = refusal_text(outcome, screen.notice());
-                eprintln!("cupertino-login: authentication error: {reason}");
-                screen.finish_auth(now, AuthOutcome::Error(reason))?;
+            &ManagerEvent::Result { outcome } => {
+                let Stage::Password { user, screen } = &mut self.stage else {
+                    unreachable!("checked above");
+                };
+                if outcome == Outcome::Denied {
+                    self.failed.record(&user.login);
+                    eprintln!("cupertino-login: authentication failed");
+                    screen.finish_auth(now, AuthOutcome::Denied)?;
+                } else {
+                    let reason = refusal_text(outcome, screen.notice());
+                    eprintln!("cupertino-login: authentication error: {reason}");
+                    screen.finish_auth(now, AuthOutcome::Error(reason))?;
+                }
             }
             ManagerEvent::SessionStarting { .. } => {}
             ManagerEvent::Hello { .. } | ManagerEvent::Welcome { .. } => {
@@ -794,69 +785,6 @@ impl App {
             | ManagerEvent::Users { .. }
             | ManagerEvent::Refused { .. }
             | ManagerEvent::PowerRefused { .. } => unreachable!("handled above"),
-        }
-        Ok(())
-    }
-
-    /// Keep exactly one surface per output the server has described.
-    fn arrange_surfaces(&mut self) -> Result<()> {
-        let layer_shell = &self.layer_shell;
-        screen::arrange_surfaces(&mut self.wayland, &mut self.surfaces, |wayland, output| {
-            let layer = layer_shell.layer_surface(
-                wayland,
-                &LayerSurfaceConfig {
-                    namespace: NAMESPACE.to_string(),
-                    output: Some(output),
-                    layer: Layer::Overlay,
-                    anchor: Anchor::Top | Anchor::Right | Anchor::Bottom | Anchor::Left,
-                    size: (0, 0),
-                    margin: Margin::default(),
-                    exclusive_zone: -1,
-                    keyboard: KeyboardInteractivity::Exclusive,
-                },
-            )?;
-            Ok((layer.surface(), Some(layer)))
-        })
-    }
-
-    fn draw(&mut self, surface: SurfaceId) -> Result<()> {
-        // of a surface destroyed since
-        let Some(i) = self.surfaces.iter().position(|s| s.surface() == surface) else {
-            return Ok(());
-        };
-        let drawn = self.current(self.now())?;
-        let menu = self.power.as_ref();
-        let presenter = &mut self.surfaces[i].presenter;
-        match (&drawn, &self.stage) {
-            (Drawn::Picker(key), _) => screen::draw_picker(
-                &mut self.wayland,
-                presenter,
-                &mut self.renderer,
-                key,
-                &self.picker,
-                menu,
-            )?,
-            (Drawn::Field(key), Stage::Password { user, .. }) => screen::draw(
-                &mut self.wayland,
-                presenter,
-                &mut self.renderer,
-                key,
-                Some(user),
-                menu,
-            )?,
-            (Drawn::Field(key), _) => screen::draw(
-                &mut self.wayland,
-                presenter,
-                &mut self.renderer,
-                key,
-                None,
-                menu,
-            )?,
-        }
-        self.drawn = Some(drawn);
-        if !self.announced {
-            self.announced = true;
-            eprintln!("cupertino-login: greeter ready");
         }
         Ok(())
     }

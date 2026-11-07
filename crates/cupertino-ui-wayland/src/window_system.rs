@@ -1357,6 +1357,9 @@ impl WindowSystem for WaylandWindowSystem {
         timeout: Option<Duration>,
         events: &mut Vec<PlatformEvent>,
     ) -> Result<(), PlatformError> {
+        if let Some(roles) = self.roles.as_mut() {
+            roles.prepare(&mut self.conn);
+        }
         let ready = !self.queued.is_empty() || self.woken.load(Ordering::Acquire);
         events.append(&mut self.queued);
         let wire = self

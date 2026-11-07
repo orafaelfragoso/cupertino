@@ -9,6 +9,13 @@ compositor. `app::run_on` and `app::run_on_with` run on a window system a deskto
 `app::run_lock_screen_on_with` does the same for the lock screen, whose AT-SPI adapter the session's lock never mutes
 (`AtspiAdapter::lock_screen`). The `examples` test starts the Counter that way and compares it with `tests/goldens/counter-neutral.txt`.
 
+`file_icons::FileIcons` gives apps that list files the icon of each item's type as image renditions (1× and 2×) for
+`controls::Image`: the asset packs' and the host icon theme's icon of the type's kind or its nearest ancestor's (as
+`cupertino_icons::document::document_icon_name` maps them), then the generic document icon, then the placeholder; a
+special folder's own icon; and the alias badge of a symbolic link, drawn into the image. `discover` reads the installed
+packs and the icon theme, `without_host` a given pack alone and `builtin` the built-in assets (placeholders), for tests
+and captures. Files and the portal's file chooser draw their rows with it.
+
 Each example runs on Cupertino headless and on headless Mutter. One test per example and host asserts its app id,
 title and buffer size, and that it presents a frame (on Cupertino it also exits when its window closes). Its behaviour
 is checked by its golden: the trace of inputs, messages and models, then the Inspector dump.

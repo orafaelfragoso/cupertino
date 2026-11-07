@@ -4,11 +4,13 @@
 
 mod context;
 mod dragged;
+mod drops;
 mod grid;
 mod search;
 mod view;
 
 pub use dragged::Grab;
+pub use drops::Destination;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -184,6 +186,8 @@ struct Session {
     view: ViewMode,
     /// What Copy took last, for Paste Item and Move Item Here in any window.
     pasteboard: Vec<PathBuf>,
+    /// The items a drag out of a window carries, until it ends.
+    dragged: Vec<PathBuf>,
 }
 
 /// One browser window.
@@ -306,8 +310,17 @@ pub enum Event {
     Close,
     /// A press on items of the icon grid moved far enough to drag them out of the window.
     DragOut(Grab),
-    /// How a drag out of the window goes. The target copies or moves the files, so the window has nothing to do.
+    /// How a drag out of the window goes. The target copies or moves the files, so the window has nothing to do
+    /// but forget them once it ends.
     Dragged(DragProgress),
+    /// Files were dropped on the window, to go `to` (`None`: where nothing takes them), with the action agreed with
+    /// their source and the modifiers held.
+    Dropped {
+        to: Option<Destination>,
+        paths: Vec<PathBuf>,
+        action: cupertino_kit::platform::DropAction,
+        mods: cupertino_kit::platform::Mods,
+    },
 }
 
 /// The list's columns, in order.
@@ -365,6 +378,7 @@ impl Application for Files {
                 trash: start.trash,
                 view: start.view,
                 pasteboard: Vec::new(),
+                dragged: Vec::new(),
             },
         };
         let mut commands = vec![model.add_window(start.browser, start.woken)];
@@ -460,12 +474,80 @@ impl Model {
         commands
     }
 
+    /// Drag `grab`'s items out of window `id`, remembering them until the drag ends so the windows know their own items.
+    fn drag_out(&mut self, id: u64, grab: &Grab) -> Vec<Command<Message>> {
+        let Some(window) = self.windows.get(&id) else {
+            return Vec::new();
+        };
+        let entries = window.browser.entries();
+        self.session.dragged = grab
+            .indices
+            .iter()
+            .filter_map(|&i| Some(entries.get(i)?.path.clone()))
+            .collect();
+        vec![dragged::start(id, window_key(id), grab, entries)]
+    }
+
+    /// Put `paths` dropped on window `id` where they go: into the trash, or moved or copied into a folder as
+    /// [`drops::chosen`] says. A name the folder has is given a free copy name; the failures are reported together,
+    /// and the last item to arrive in the folder the window shows is selected.
+    fn drop_items(
+        &mut self,
+        id: u64,
+        to: &Destination,
+        paths: &[PathBuf],
+        agreed: cupertino_kit::platform::DropAction,
+        mods: cupertino_kit::platform::Mods,
+    ) {
+        let session = &self.session;
+        let dir = match to {
+            Destination::Trash => {
+                let trashed = paths.iter().map(|path| (path, session.trash.trash(path)));
+                return session.failed_some(Action::Trash, trashed);
+            }
+            Destination::Folder(dir) => dir,
+        };
+        let action = match drops::chosen(paths, to, agreed, mods) {
+            Ok(action) => action,
+            Err(e) => {
+                let items: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+                return session.failed(Action::Drop(DropAction::Move), &items, &e);
+            }
+        };
+        let placed = operations::drop_into(paths, dir, action);
+        let arrived = placed.iter().rev().find_map(|p| p.as_ref().ok()).cloned();
+        session.failed_some(Action::Drop(action), paths.iter().zip(placed));
+        if let (Some(window), Some(path)) = (self.windows.get_mut(&id), arrived) {
+            if window.browser.dir() == dir.as_path() {
+                window.browser.select_when_appears(path);
+            }
+        }
+    }
+
     fn window_event(&mut self, id: u64, event: Event) -> Vec<Command<Message>> {
         let event = match event {
             Event::Place(index) => return self.open_place(id, index),
             Event::Accessory(key) => return self.accessory(&key),
             Event::Unlock => return self.unlock(id),
             Event::MenuCommand(command) => return self.menu_command(id, command),
+            Event::DragOut(grab) => return self.drag_out(id, &grab),
+            Event::Dragged(progress) => {
+                if matches!(progress, DragProgress::Finished | DragProgress::Cancelled) {
+                    self.session.dragged.clear();
+                }
+                return Vec::new();
+            }
+            Event::Dropped {
+                to,
+                paths,
+                action,
+                mods,
+            } => {
+                if let Some(to) = to {
+                    self.drop_items(id, &to, &paths, action, mods);
+                }
+                return Vec::new();
+            }
             event => event,
         };
         let session = &self.session;
@@ -486,7 +568,13 @@ impl Model {
                 commands.push(woken(&window.woken, Message::Window(id, Event::Woken)));
                 return commands;
             }
-            Event::Place(_) | Event::Accessory(_) | Event::Unlock | Event::MenuCommand(_) => {}
+            Event::Place(_)
+            | Event::Accessory(_)
+            | Event::Unlock
+            | Event::MenuCommand(_)
+            | Event::DragOut(_)
+            | Event::Dragged(_)
+            | Event::Dropped { .. } => {}
             Event::SecondaryPress(item) => {
                 // an item's press comes before the press on what holds it
                 if item.is_some() || window.pressed.is_none() {
@@ -583,11 +671,6 @@ impl Model {
             Event::Close => {
                 self.windows.remove(&id);
             }
-            Event::DragOut(grab) => {
-                let entries = window.browser.entries();
-                return vec![dragged::start(id, window_key(id), &grab, entries)];
-            }
-            Event::Dragged(_) => {}
         }
         Vec::new()
     }

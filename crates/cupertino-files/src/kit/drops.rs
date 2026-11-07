@@ -1,0 +1,292 @@
+//! Items dropped on a window from any application, this window included. A `text/uri-list` of local files lands on a
+//! folder of the list or the grid, on a place of the sidebar, or anywhere else in the folder area on the folder shown;
+//! the Trash place, and the trash's own window, move them to the trash. The place is highlighted while the drag is
+//! over it. With neither Option nor the primary modifier held the items move within a device and are copied across
+//! devices; Option copies, the primary modifier moves. For a drag from this application the device is known while the
+//! drag moves; for one from another application the files are known only at the drop, so the drag shows a move and
+//! the drop copies what lies on another device. A folder is not dropped on itself, and a drag of this application's
+//! items over the folder holding them all lands nowhere. Folders do not spring open under a drag.
+
+use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+
+use cupertino_kit::core::{DropOver, DropPlace, DropTarget, Dropped, Key};
+use cupertino_kit::platform::{DropAction as Offered, Mods};
+use cupertino_kit::prelude::*;
+use percent_encoding::percent_decode_str;
+
+use super::{BrowserWindow, Event, Message, Session};
+use crate::operations::{self, DropAction};
+use crate::places::PlaceKind;
+
+/// The type dropped files are read in.
+pub(super) const URI_LIST: &str = "text/uri-list";
+
+/// Where dropped items go.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Destination {
+    Folder(PathBuf),
+    Trash,
+}
+
+impl Destination {
+    fn folder(&self) -> Option<&Path> {
+        match self {
+            Destination::Folder(path) => Some(path),
+            Destination::Trash => None,
+        }
+    }
+}
+
+/// The folder area `content` of window `id`, taking drops on its folders and on the folder shown.
+pub(super) fn folder(
+    session: &Session,
+    id: u64,
+    win: &BrowserWindow,
+    content: Element<Message>,
+) -> Element<Message> {
+    let folders: Rc<[Option<PathBuf>]> = win
+        .browser
+        .entries()
+        .iter()
+        .map(|e| e.is_dir.then(|| e.path.clone()))
+        .collect();
+    let here = shown(session, win.browser.dir());
+    let dragged: Rc<[PathBuf]> = session.dragged.clone().into();
+    let places = Rc::clone(&folders);
+    let target = Rc::clone(&folders);
+    let into = here.clone();
+    Element::from(DropTarget {
+        content,
+        mimes: vec![URI_LIST.into()],
+        actions: [Offered::Copy, Offered::Move].into(),
+        place: Box::new(move |over| {
+            let item = over.keys.iter().find_map(|key| match key {
+                Key::Int(i) => Some(*i),
+                _ => None,
+            });
+            let folder = item
+                .and_then(|i| Some((i, places.get(usize::try_from(i).ok()?)?.clone()?)))
+                .filter(|_| here != Some(Destination::Trash));
+            match folder {
+                Some((i, path)) => offer(
+                    over,
+                    Some(Key::Int(i)),
+                    &Destination::Folder(path),
+                    &dragged,
+                ),
+                None => offer(over, None, here.as_ref()?, &dragged),
+            }
+        }),
+        on_hover: None,
+        on_drop: Box::new(move |dropped| {
+            let to = match &dropped.place {
+                Some(Key::Int(i)) => usize::try_from(*i)
+                    .ok()
+                    .and_then(|i| target.get(i)?.clone())
+                    .map(Destination::Folder),
+                _ => into.clone(),
+            };
+            dropped_on(id, to, dropped)
+        }),
+    })
+}
+
+/// The sidebar `content` of window `id`, taking drops on the places that are folders and on the Trash.
+pub(super) fn sidebar(session: &Session, id: u64, content: Element<Message>) -> Element<Message> {
+    let places: Rc<[(Key, Destination)]> = (0..session.places.len())
+        .filter_map(|i| {
+            let place = &session.places[i];
+            let to = match place.kind {
+                PlaceKind::Trash => Destination::Trash,
+                PlaceKind::Recents => return None,
+                _ => Destination::Folder(place.folder()?.to_path_buf()),
+            };
+            Some((super::view::place_key(session, i), to))
+        })
+        .collect();
+    let dragged: Rc<[PathBuf]> = session.dragged.clone().into();
+    let target = Rc::clone(&places);
+    Element::from(DropTarget {
+        content,
+        mimes: vec![URI_LIST.into()],
+        actions: [Offered::Copy, Offered::Move].into(),
+        place: Box::new(move |over| {
+            let (key, to) = over
+                .keys
+                .iter()
+                .find_map(|key| places.iter().find(|(place, _)| place == key))?;
+            offer(over, Some(key.clone()), to, &dragged)
+        }),
+        on_hover: None,
+        on_drop: Box::new(move |dropped| {
+            let to = dropped.place.as_ref().and_then(|key| {
+                let (_, to) = target.iter().find(|(place, _)| place == key)?;
+                Some(to.clone())
+            });
+            dropped_on(id, to, dropped)
+        }),
+    })
+}
+
+/// Where a drop on the folder shown at `dir` goes: the trash's own folder trashes, Recents takes nothing.
+fn shown(session: &Session, dir: &Path) -> Option<Destination> {
+    if dir == session.trash.home_trash().join("files") {
+        return Some(Destination::Trash);
+    }
+    let recents = session
+        .places
+        .iter()
+        .any(|p| p.kind == PlaceKind::Recents && p.path == dir);
+    (!recents).then(|| Destination::Folder(dir.to_path_buf()))
+}
+
+/// The place a drag over `to` lands on, and the action it shows: none on one of this application's dragged folders,
+/// or on the folder holding all of them; the trash only when the source lets the items go.
+fn offer(
+    over: &DropOver<'_>,
+    key: Option<Key>,
+    to: &Destination,
+    dragged: &[PathBuf],
+) -> Option<DropPlace> {
+    let action = match to {
+        Destination::Trash => over
+            .actions
+            .contains(&Offered::Move)
+            .then_some(Offered::Move)?,
+        Destination::Folder(dir) => {
+            if dragged.iter().any(|p| p == dir)
+                || (!dragged.is_empty() && dragged.iter().all(|p| p.parent() == Some(dir)))
+            {
+                return None;
+            }
+            // another application's files are known only at the drop: show a move, and decide there
+            let same = dragged.is_empty() || all_on(dragged, dir).unwrap_or(false);
+            offered(action(same, over.mods))
+        }
+    };
+    Some(DropPlace { key, action })
+}
+
+/// What a drop does, by the modifiers held: Option copies, the primary modifier moves, with neither by device.
+fn action(same_device: bool, mods: Mods) -> DropAction {
+    operations::drop_action(
+        same_device,
+        mods.contains(Mods::ALT),
+        mods.contains(Mods::PRIMARY),
+    )
+}
+
+fn offered(action: DropAction) -> Offered {
+    match action {
+        DropAction::Copy => Offered::Copy,
+        DropAction::Move => Offered::Move,
+    }
+}
+
+/// Whether every one of `paths` is on the device of `dir`.
+fn all_on(paths: &[PathBuf], dir: &Path) -> std::io::Result<bool> {
+    for path in paths {
+        if !operations::same_volume(path, dir)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn dropped_on(id: u64, to: Option<Destination>, dropped: Dropped) -> Message {
+    Message::Window(
+        id,
+        Event::Dropped {
+            to,
+            paths: uri_paths(&dropped.data.bytes),
+            action: dropped.action,
+            mods: dropped.mods,
+        },
+    )
+}
+
+/// What a drop of `paths` on `to` does, given the action agreed with the source and the modifiers held: a copy when
+/// the source wanted one, else the modifiers' choice, else a move within a device and a copy across devices.
+pub(super) fn chosen(
+    paths: &[PathBuf],
+    to: &Destination,
+    agreed: Offered,
+    mods: Mods,
+) -> std::io::Result<DropAction> {
+    let Some(dir) = to.folder() else {
+        return Ok(DropAction::Move);
+    };
+    if agreed != Offered::Move {
+        return Ok(DropAction::Copy);
+    }
+    let held = mods.contains(Mods::ALT) || mods.contains(Mods::PRIMARY);
+    let same = held || all_on(paths, dir)?;
+    Ok(action(same, mods))
+}
+
+/// The local files of a `text/uri-list`: one URI a line, `#` lines being comments; URIs of other schemes and hosts
+/// are left out.
+pub(super) fn uri_paths(bytes: &[u8]) -> Vec<PathBuf> {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|uri| {
+            let rest = uri.strip_prefix("file://")?;
+            let path = rest.strip_prefix("localhost").unwrap_or(rest);
+            // the query and fragment are not part of the path
+            let path = path.split(['?', '#']).next()?;
+            path.starts_with('/').then(|| {
+                let bytes: Vec<u8> = percent_decode_str(path).collect();
+                PathBuf::from(OsString::from_vec(bytes))
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_uri_list_gives_its_local_files_decoded() {
+        let list = b"# dragged\r\nfile:///home/a/My%20Notes.txt\r\nfile://localhost/tmp/b\r\nhttps://example.org/c\r\nfile://elsewhere/d\r\n\r\nfile:///e%23f?x=1\n";
+        assert_eq!(
+            uri_paths(list),
+            [
+                PathBuf::from("/home/a/My Notes.txt"),
+                PathBuf::from("/tmp/b"),
+                PathBuf::from("/e#f"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_drop_copies_when_the_source_wanted_a_copy_and_follows_the_modifiers_and_the_device_otherwise(
+    ) {
+        let dir = std::env::temp_dir();
+        let here = Destination::Folder(dir.clone());
+        let file = vec![dir.join("absent")];
+        assert_eq!(
+            chosen(&file, &here, Offered::Copy, Mods::NONE).unwrap(),
+            DropAction::Copy
+        );
+        assert_eq!(
+            chosen(&file, &here, Offered::Move, Mods::ALT).unwrap(),
+            DropAction::Copy
+        );
+        assert_eq!(
+            chosen(&file, &here, Offered::Move, Mods::PRIMARY).unwrap(),
+            DropAction::Move
+        );
+        // a file that is gone has no device to compare
+        assert!(chosen(&file, &here, Offered::Move, Mods::NONE).is_err());
+        assert_eq!(
+            chosen(&file, &Destination::Trash, Offered::Copy, Mods::NONE).unwrap(),
+            DropAction::Move
+        );
+    }
+}

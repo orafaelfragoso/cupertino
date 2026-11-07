@@ -7,7 +7,7 @@ logic and layout metrics a native file manager (and a desktop-icon layer) needs.
 ## Usage
 
 ```sh
-cargo test -p cupertino-files --features app                    # 170+ unit tests; the Kit window run headless: 19 window, 9 context menu, 5 search and 6 drag tests; 15 removable media tests (a fake udisks2 on a private bus), 2 workflow, 3 session handler and 2 error notice tests
+cargo test -p cupertino-files --features app                    # 170+ unit tests; the Kit window run headless: 19 window, 9 context menu, 5 search, 6 drag and 7 drop tests; 15 removable media tests (a fake udisks2 on a private bus), 2 workflow, 3 session handler and 2 error notice tests
 cargo run -p cupertino-files --features app -- [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]  # the window (default $HOME), in a running session
 cargo clippy -p cupertino-files --all-targets
 ci/capture.sh files/window --view list   # a window or its sidebar on a sample home folder (crates/cupertino-capture)
@@ -70,8 +70,8 @@ Tags submenu of the seven colours (checked where every selected item has the tag
 List" and the two views that are not built, disabled. Toolkit menus cannot swap rows while a modifier is held, so an
 alternate that does something (Open in New Window, Move Item Here) is a row of its own after the row it belongs to.
 
-**Copy and paste.** The toolkit's windows take no drops, so moving or copying into a folder goes through the
-application's own pasteboard: Copy (the item menu, Edit › Copy, Primary+C) keeps the selection's paths; Paste Item
+**Copy and paste.** Besides dropping (below), moving or copying into a folder goes through the application's own
+pasteboard, the keyboard's and assistive technology's way in: Copy (the item menu, Edit › Copy, Primary+C) keeps the selection's paths; Paste Item
 (the folder menu, Edit › Paste Item, Primary+V) copies them into the folder shown and Move Item Here (Alt+Primary+V)
 moves them there and empties the pasteboard. A name that is taken gives the arrival a free one (`name copy`), a folder is
 never pasted into itself, and what arrived is selected. The pasteboard is not the session's clipboard: other
@@ -87,6 +87,21 @@ trailing side, with the count in a badge on the farthest icon's corner. The imag
 release without a drag selects that item alone. The window does nothing when the drag ends (the receiving application
 copies or moves; a move is not undone here), a cancelled or refused drag takes the image away at once with no return to
 the item, and the selection stays.
+
+**Dropping in.** The window takes a `text/uri-list` of local files dragged from any application, this one included
+(`kit::drops`, two `DropTarget`s): on a folder of the list or the icon grid, on a place of the sidebar, and anywhere
+else in the folder area on the folder shown (over a file too). The Trash place, and the folder area of the trash's own
+window, move the items to the trash, and only for a source that lets them go; Recents and the toolbar take nothing. The
+place under the drag is highlighted with the accent at 0.3 opacity in rounded corners, with a 2 pt text-colour outline
+under Increase Contrast; a background drop highlights the whole folder area. With nothing held the items move within a
+device and are copied across devices, Option copies and the primary modifier moves (`operations::drop_action`), and
+the drop goes through `operations::drop_into`, as Paste Item does: a taken name gives the arrival a free one, a folder
+never goes into itself, the failures are one notice, and what arrives in the folder shown is selected. For the window's
+own drag the device is known while the drag moves, so the pointer shows the action; another application's files are
+known only at the drop, so with nothing held the drag shows a move and the drop copies what lies on another device. The
+source hears the drop is finished only after the files are in place. A drag of the window's own items has nowhere to go
+on one of the dragged folders or in the folder holding them all. Folders do not spring open under a drag: the old
+window never wired `spring::SpringLoad` either.
 
 **Failures.** A failure of something a person did (open, a new folder, duplicate, make alias, show original, put back,
 tags, rename, a name that can't be used, copy, paste, move to the trash) is one transient notification from "Files" on
@@ -175,7 +190,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | `window`, `format` | the window's wording and metrics | `metrics`, `ViewMode`, `path_chain`, `status_text`; `human_size`, `available_size`, `relative_date` |
 | `udisks` (feature `app`) | removable media | `devices` (the listed file systems and locked containers of udisks' managed objects), `Volumes::{watch, poll, mount, unlock, eject}` → `Report`, `Media` (the listed devices and the busy ones), `Passphrase`, `holders`, `notice` (a failure's notification text) |
 | `notice` (feature `app`) | failures as notifications | `failure`, `unopened`, `bad_name` → `Notice`; `Notices::{start, post}`; `shown`, `escape` |
-| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino-ui-test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, then `run` or a `TestDriver<Files>`; `grid` (the icon view), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images) |
+| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino-ui-test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, then `run` or a `TestDriver<Files>`; `grid` (the icon view), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places and the folder shown) |
 | `main` (feature `app`) | the binary | arguments, the session's places, types, associations and buses, then `kit::run` |
 
 ### Measured defaults
@@ -215,9 +230,8 @@ Values live in `metrics.rs`.
 
 ## Open issues
 
-* The toolkit's windows take no drops: nothing can be dropped onto a folder or a place of the sidebar, from this window or
-  from another application (Copy and Paste Item stand in), and a folder does not spring open under a drag
-  (`spring::SpringLoad` is not wired). The list view starts no drags (the table has no hook for it), and the drag
+* A folder does not spring open under a drag (`spring::SpringLoad` is not wired), and a drop from another application
+  shows a move while it is held even when it will copy across devices. The list view starts no drags (the table has no hook for it), and the drag
   badge holds three digits.
 * Items wear the theme's folder and document symbols: there are no file-type icons, folder icons of the user
   directories, alias badges or thumbnails yet. Under the headless symbol theme they are placeholder squares.

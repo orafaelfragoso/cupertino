@@ -10,7 +10,7 @@ use crate::widget::{Change, Element, Propagation, Widget};
 use crate::{Event, Key};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured, Overflow, SizeSpec};
-use cupertino_ui_platform::{ClipboardData, DropAction, Mods};
+use cupertino_ui_platform::{ClipboardData, DropAction, DropToken, Mods};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_theme::{Color, ColorRole, StateVariant};
 use std::collections::BTreeSet;
@@ -75,9 +75,13 @@ pub struct DropPlace {
 
 /// Data dropped on a [`DropTarget`]: where it landed, at what point of the target, the action chosen, the keyboard
 /// modifiers held and the data in the first of the target's types the drag offered. The dragging application learns the
-/// drop is done once the turn that hands it over has updated the model, so data it moves is let go only after then.
+/// drop is done once the turn that hands it over has updated the model, so data it moves is let go only after then. It
+/// is told `action` unless the update answers [`Command::FinishDrop`](crate::Command::FinishDrop) with `token` and
+/// what was really done.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Dropped {
+    /// Names the drop to [`Command::FinishDrop`](crate::Command::FinishDrop).
+    pub token: DropToken,
     pub place: Option<Key>,
     pub position: Point,
     pub action: DropAction,

@@ -2334,12 +2334,19 @@ impl Application for Shelf {
     }
 
     fn update(model: &mut ShelfModel, message: String) -> Vec<Command<String>> {
+        let mut commands = Vec::new();
         if message.starts_with("drop ") {
             let finished = crate::test_support::DROPS_FINISHED.with(std::cell::Cell::get);
             model.finished_at_drop.push(finished);
+            // the data names what the shelf did with it, where it did not do what was agreed
+            if message.ends_with(": copied") {
+                commands.push(Command::FinishDrop(DropToken(7), Some(DropAction::Copy)));
+            } else if message.ends_with(": kept") {
+                commands.push(Command::FinishDrop(DropToken(7), None));
+            }
         }
         model.heard.push(message);
-        Vec::new()
+        commands
     }
 
     fn view(_: &ShelfModel) -> Vec<Window<String>> {
@@ -2553,6 +2560,28 @@ fn a_drop_is_read_in_the_targets_type_handed_to_it_and_finished_with_the_chosen_
     // the source hears the drop is done only after the model has it
     assert_eq!(rt.model().finished_at_drop, [0]);
     assert!(highlights(&rt, window).is_empty());
+}
+
+#[test]
+fn a_drop_finishes_with_what_the_update_says_it_did_rather_than_the_action_agreed() {
+    let (mut rt, window) = shelf();
+    let both = [DropAction::Copy, DropAction::Move];
+    for (data, done) in [("copied", Some(DropAction::Copy)), ("kept", None)] {
+        rt.window_system_mut().drop_data = Some(ClipboardData {
+            mime: URI_LIST.into(),
+            bytes: data.as_bytes().to_vec(),
+        });
+        enter(&mut rt, window, Point::new(4.0, 6.0), &both);
+        drag(&mut rt, window, DropEvent::Action(Some(DropAction::Move)));
+        drag(&mut rt, window, DropEvent::Drop);
+        assert!(rt.model().heard.last().unwrap().contains(" Move at "));
+        assert_eq!(
+            rt.window_system().drops_finished.last(),
+            Some(&(DropToken(7), done)),
+            "{data}"
+        );
+    }
+    assert_eq!(rt.window_system().drops_finished.len(), 2);
 }
 
 #[test]

@@ -316,23 +316,31 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         match (target, data) {
             (Some(target), Some(data)) => {
                 self.messages.push_back((target.on_drop)(Dropped {
+                    token: landed.token,
                     place: landed.place,
                     position: landed.position,
                     action: landed.action,
                     mods: landed.mods,
                     data,
                 }));
-                self.finishing.push((landed.token, landed.action));
+                self.finishing.push((landed.token, Some(landed.action)));
             }
             _ => self.system.finish_drop(landed.token, None),
         }
         true
     }
 
+    /// The application says what it did with the drop `token` it was handed this turn; a drop already finished is gone.
+    pub(super) fn drop_done(&mut self, token: DropToken, action: Option<DropAction>) {
+        if let Some(finishing) = self.finishing.iter_mut().find(|(t, _)| *t == token) {
+            finishing.1 = action;
+        }
+    }
+
     /// Ends the drops whose targets have handled them.
     pub(super) fn finish_drops(&mut self) {
         for (token, action) in std::mem::take(&mut self.finishing) {
-            self.system.finish_drop(token, Some(action));
+            self.system.finish_drop(token, action);
         }
     }
 }

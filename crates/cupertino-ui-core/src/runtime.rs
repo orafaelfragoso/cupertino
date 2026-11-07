@@ -197,8 +197,9 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     drags: HashMap<DragToken, DragHandler<A::Message>>,
     /// The drops whose data is being read, by read.
     landed: HashMap<ClipboardToken, drops::Landed>,
-    /// Drops handed to their targets, finished once the turn has handled what they became.
-    finishing: Vec<(DropToken, DropAction)>,
+    /// Drops handed to their targets, finished once the turn has handled what they became: with the action agreed, or
+    /// what the application said it did.
+    finishing: Vec<(DropToken, Option<DropAction>)>,
 }
 
 impl<A: Application, W: WindowSystem> Runtime<A, W> {
@@ -436,6 +437,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 None => self.messages.push_back(on_token(None)),
             },
             Command::StartDrag(drag) => self.start_drag(drag),
+            Command::FinishDrop(token, action) => self.drop_done(token, action),
             Command::Exit => self.exit = true,
         }
     }

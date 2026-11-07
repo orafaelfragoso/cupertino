@@ -45,8 +45,8 @@ use cupertino_geometry::{Point, Rect, Size};
 use cupertino_menu_model::{ActionName, MenuBar};
 use cupertino_ui_layout::{LayoutDirection, LayoutError, LayoutStats};
 use cupertino_ui_platform::{
-    ClipboardData, DragProgress, DropAction, KeyEvent, Keysym, Mods, PlatformError, PointerEvent,
-    Timestamp, TouchEvent, WindowId, WindowRequest, WindowSpec,
+    ClipboardData, DragProgress, DropAction, DropToken, KeyEvent, Keysym, Mods, PlatformError,
+    PointerEvent, Timestamp, TouchEvent, WindowId, WindowRequest, WindowSpec,
 };
 use cupertino_ui_render::{DisplayList, RenderError};
 use cupertino_ui_text::{ImeEvent, TextSystem};
@@ -330,6 +330,11 @@ pub enum Command<M> {
         on_token: TokenHandler<M>,
     },
     StartDrag(Drag<M>),
+    /// Ends the drop `token` of a [`Dropped`] with what the application did with its data, given by the update that
+    /// handles it: `Some(action)` took it so (after a move the source removes its own copy), `None` took none of it and
+    /// the source keeps it all. A drop the update does not end so finishes with its agreed action; given later, it is
+    /// ignored.
+    FinishDrop(DropToken, Option<DropAction>),
     Exit,
 }
 

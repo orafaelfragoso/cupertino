@@ -713,6 +713,30 @@ fn the_focus_dock_shortcut_is_dropped_while_the_grid_or_the_dialog_has_the_keybo
     assert!(!bar_took(&run), "{:?}", run.record.borrow().keyboard);
 }
 
+/// The minimize target goes on the bar's role, which the host has once the bar is made and sized: a target worked out
+/// before that would be lost, so it is sent when the bar is sized.
+#[test]
+fn the_minimize_target_is_sent_once_the_bar_is_sized() {
+    let mut run = Run::start();
+    let before = run.requests().len();
+    // the size the server gives the bar is the one it asked for: the output's width and the bar's extent
+    let extent = run
+        .record
+        .borrow()
+        .placements
+        .last()
+        .expect("placed")
+        .extent;
+    run.message(Message::Sized(Sized::Bar(1), OUTPUTS[0].width, extent));
+    let after: Vec<(u32, Request)> = run.requests()[before..].to_vec();
+    assert!(
+        after
+            .iter()
+            .any(|(output, r)| *output == 1 && matches!(r, Request::MinimizeTarget(_))),
+        "{after:?}"
+    );
+}
+
 /// An auto-hidden bar shows while Focus Dock has given it the keyboard, and hides again once it gives it back.
 #[test]
 fn the_focus_dock_shortcut_shows_an_auto_hidden_bar_until_escape() {

@@ -1649,7 +1649,10 @@ impl Model {
             self.placed = placement;
             self.host.place_bar(p);
         }
-        if let (Some(output), Some(screen)) = (self.output, self.screen()) {
+        if self.bar_size.is_none() {
+            // no bar yet, so no role to send it on: it goes once the bar is sized
+            self.minimize_target = None;
+        } else if let (Some(output), Some(screen)) = (self.output, self.screen()) {
             let target = (output, self.session.dock.next_minimized_slot(screen));
             if self.minimize_target != Some(target) {
                 self.minimize_target = Some(target);

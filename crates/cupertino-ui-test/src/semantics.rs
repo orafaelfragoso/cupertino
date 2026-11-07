@@ -5,7 +5,7 @@ use cupertino_ui_platform::WindowId;
 use std::collections::{HashMap, HashSet};
 
 /// Roles assistive technology announces by their contents, so a node of one needs no name of its own.
-const NAMED_BY_CONTENTS: [Role; 7] = [
+pub(crate) const NAMED_BY_CONTENTS: [Role; 7] = [
     Role::Group,
     Role::ScrollView,
     Role::ScrollBar,
@@ -36,11 +36,7 @@ fn walk(
     path: String,
     gaps: &mut Vec<String>,
 ) {
-    let labelled = node
-        .relations
-        .iter()
-        .any(|r| matches!(r, Relation::LabelledBy(_)));
-    if !has_name(node) && !labelled && !NAMED_BY_CONTENTS.contains(&node.role) {
+    if !has_name(node) && !labelled(node) && !NAMED_BY_CONTENTS.contains(&node.role) {
         gaps.push(format!("{path}: no name"));
     }
     for (index, id) in node.children.iter().enumerate() {
@@ -56,11 +52,18 @@ fn walk(
     }
 }
 
-fn has_name(node: &AccessibilityNode) -> bool {
+/// Whether another node of the tree labels this one.
+pub(crate) fn labelled(node: &AccessibilityNode) -> bool {
+    node.relations
+        .iter()
+        .any(|r| matches!(r, Relation::LabelledBy(_)))
+}
+
+pub(crate) fn has_name(node: &AccessibilityNode) -> bool {
     node.name.as_deref().is_some_and(|n| !n.trim().is_empty())
 }
 
-fn step(node: &AccessibilityNode, index: usize) -> String {
+pub(crate) fn step(node: &AccessibilityNode, index: usize) -> String {
     match &node.name {
         Some(name) if has_name(node) => format!("{:?} {name:?}", node.role),
         _ => format!("{:?} #{index}", node.role),

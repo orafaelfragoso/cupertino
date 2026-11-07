@@ -109,7 +109,7 @@ services (login manager, network, Bluetooth, power) are installed disabled."""
 section = "x11"
 priority = "optional"
 depends = "$auto, cupertino-data (>= 0.1.0), dbus (>= 1.16), pipewire (>= 1.4), systemd, polkitd, xdg-desktop-portal, xkb-data, shared-mime-info, adwaita-icon-theme, libegl1, libegl-mesa0"
-recommends = "xdg-desktop-portal-gtk, libgl1-mesa-dri, libwayland-client0, libwayland-egl1, libxkbcommon0, xwayland"
+recommends = "xdg-desktop-portal-gtk, gnome-keyring, libpam-gnome-keyring, libsecret-tools, libgl1-mesa-dri, libwayland-client0, libwayland-egl1, libxkbcommon0, xwayland"
 suggests = "foot, iwd"
 maintainer-scripts = "../../packaging/debian/scripts"
 preserve-symlinks = true
@@ -239,6 +239,9 @@ mesa-libEGL = "*"
 
 [package.metadata.generate-rpm.recommends]
 xdg-desktop-portal-gtk = "*"
+gnome-keyring = "*"
+gnome-keyring-pam = "*"
+libsecret = "*"
 mesa-dri-drivers = "*"
 libwayland-client = "*"
 libwayland-egl = "*"

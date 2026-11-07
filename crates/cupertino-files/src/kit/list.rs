@@ -1,0 +1,608 @@
+//! What the list view does beyond the toolkit's outline table: a press on empty space under the rows draws a rubber
+//! band ([`super::band`]), a double click opens a row, a press on the name of the only selected row renames it after
+//! the double-click interval ([`super::clicks`]), a press with Ctrl held opens the context menu, a press that moves
+//! drags the selected rows out of the window, and Tab and Shift+Tab select the next and the previous item by name.
+//!
+//! [`RowCell`] wraps each cell of a row and takes the presses on it; the triangle before the name takes its own, so a
+//! press on it only opens or closes the folder. [`Gestures`] holds the whole table and takes what no row took: the
+//! presses under the rows, the band's pointer, the timers and Tab. The presses' state is shared between them
+//! ([`Presses`]), as a press on one row and the next press on another count together.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use cupertino_kit::controls::Selection;
+use cupertino_kit::core::{
+    Change, Element, Event, EventCx, MeasureCx, PaintCx, Phase, Propagation, SemanticsCx, Widget,
+};
+use cupertino_kit::geometry::{Point, Rect, Size};
+use cupertino_kit::layout::{
+    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutDirection, LayoutSpec, Measured,
+    ScrollState, SizeSpec,
+};
+use cupertino_kit::platform::{Keysym, Mods, MouseButton, PointerEvent};
+
+use super::band::{self, Band};
+use super::clicks::Clicks;
+use super::grid::by_name;
+use super::{Event as WindowEvent, Message};
+use crate::metrics::{drag, list_view};
+
+/// The height of the table's column header, above its rows.
+const HEADER_HEIGHT: f64 = list_view::HEADER_HEIGHT;
+
+const TAB: Keysym = Keysym(0xff09);
+const LEFT_TAB: Keysym = Keysym(0xfe20);
+
+/// A press on a row that may become a drag.
+struct RowPress {
+    index: usize,
+    /// In window coordinates.
+    at: Point,
+    /// The rows a drag carries, the pressed one first.
+    dragged: Vec<usize>,
+    /// The selection a plain press on a selected row found, given back when the press drags: the table selects the
+    /// pressed row alone at once.
+    restore: Option<Selection>,
+    /// Where the press was from the top left corner of the row's first cell, and that cell's size.
+    offset: Point,
+    cell: Size,
+}
+
+/// The state of the list's presses, shared by its cells and its frame.
+#[derive(Default)]
+pub(super) struct Presses {
+    clicks: Clicks,
+    press: Option<RowPress>,
+    band: Option<Band>,
+}
+
+pub(super) type SharedPresses = Rc<RefCell<Presses>>;
+
+/// A row dragged out of the list: what [`super::dragged::rows`] draws.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RowGrab {
+    /// The dragged rows, the pressed one first.
+    pub indices: Vec<usize>,
+    /// Where the press was from the top left corner of the pressed row's name cell, and that cell's size.
+    pub offset: Point,
+    pub cell: Size,
+    /// The window reads right to left.
+    pub rtl: bool,
+}
+
+fn no_measure() -> Measured {
+    Measured {
+        size: Size::ZERO,
+        baseline: None,
+    }
+}
+
+/// The selection the table makes of a press on row `index` with `mods` held.
+fn pressed(selection: &Selection, index: usize, mods: Mods) -> Selection {
+    let mut next = selection.clone();
+    if mods.contains(Mods::SHIFT) {
+        next.extend_to(index);
+    } else if mods.contains(Mods::PRIMARY) {
+        next.toggle(index);
+    } else {
+        next.select_only(index);
+    }
+    next
+}
+
+/// One cell of row `index`: its presses.
+pub(super) struct RowCell {
+    pub window: u64,
+    pub index: usize,
+    /// The row's first cell, which holds its name.
+    pub name: bool,
+    pub selection: Selection,
+    pub presses: SharedPresses,
+    pub children: Vec<Element<Message>>,
+}
+
+impl RowCell {
+    fn emit(&self, event: WindowEvent, cx: &mut EventCx<'_, Message>) {
+        cx.emit(Message::Window(self.window, event));
+    }
+
+    fn press(&self, position: Point, mods: Mods, cx: &mut EventCx<'_, Message>) -> Propagation {
+        if mods.contains(Mods::CTRL) {
+            // Ctrl with a press is the secondary click
+            self.presses.borrow_mut().clicks.cancel();
+            self.emit(WindowEvent::SecondaryPress(Some(self.index)), cx);
+            self.emit(WindowEvent::ContextMenu(position), cx);
+            return Propagation::Stop;
+        }
+        let index = self.index;
+        let sole = self.selection.len() == 1 && self.selection.contains(index);
+        let plain = !mods.contains(Mods::SHIFT) && !mods.contains(Mods::PRIMARY);
+        let mut presses = self.presses.borrow_mut();
+        if presses
+            .clicks
+            .press(index, self.name, sole, plain, cx.now())
+        {
+            presses.press = None;
+            drop(presses);
+            self.emit(WindowEvent::Open(index), cx);
+            return Propagation::Stop;
+        }
+        presses.clicks.arm(cx);
+        let keep = plain && self.selection.contains(index) && self.selection.len() > 1;
+        let next = if keep {
+            self.selection.clone()
+        } else {
+            pressed(&self.selection, index, mods)
+        };
+        presses.press = next.contains(index).then(|| {
+            let rest = next.ranges().iter().flat_map(Clone::clone);
+            let bounds = cx.bounds().unwrap_or_default();
+            RowPress {
+                index,
+                at: position,
+                dragged: std::iter::once(index)
+                    .chain(rest.filter(|&i| i != index))
+                    .collect(),
+                restore: keep.then(|| self.selection.clone()),
+                offset: Point::new(position.x - bounds.min_x(), position.y - bounds.min_y()),
+                cell: bounds.size,
+            }
+        });
+        if presses.press.is_some() {
+            cx.capture_pointer();
+        }
+        // the table selects the row and the row takes the focus
+        Propagation::Continue
+    }
+
+    fn moved(&self, position: Point, cx: &mut EventCx<'_, Message>) -> Propagation {
+        let mut presses = self.presses.borrow_mut();
+        let Some(press) = presses.press.as_ref().filter(|p| p.index == self.index) else {
+            return Propagation::Continue;
+        };
+        let moved = (position.x - press.at.x).hypot(position.y - press.at.y);
+        if moved < drag::START_DISTANCE {
+            return Propagation::Stop;
+        }
+        let press = presses.press.take().expect("held above");
+        presses.clicks.cancel();
+        drop(presses);
+        cx.release_pointer();
+        if let Some(selection) = press.restore {
+            self.emit(WindowEvent::Select(selection), cx);
+        }
+        let grab = RowGrab {
+            indices: press.dragged,
+            offset: press.offset,
+            cell: press.cell,
+            rtl: cx.env().direction == LayoutDirection::Rtl,
+        };
+        self.emit(WindowEvent::DragRows(grab), cx);
+        Propagation::Stop
+    }
+}
+
+impl Widget<Message> for RowCell {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fill,
+            flex: Flex::grow(1.0),
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: Axis::Vertical,
+                spacing: 0.0,
+                align: Align::Stretch,
+                justify: Justify::Start,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<Message>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, Message>) -> Propagation {
+        if cx.phase() == Phase::Capture {
+            return Propagation::Continue;
+        }
+        match *event {
+            Event::Pointer(
+                PointerEvent::Button {
+                    position,
+                    button: MouseButton::Left,
+                    pressed: true,
+                    mods,
+                    ..
+                },
+                _,
+            ) => self.press(position, mods, cx),
+            // the context menu opens from what holds the list; it learns which row was pressed first
+            Event::Pointer(
+                PointerEvent::Button {
+                    button: MouseButton::Right,
+                    pressed: true,
+                    ..
+                },
+                _,
+            ) => {
+                self.presses.borrow_mut().clicks.cancel();
+                self.emit(WindowEvent::SecondaryPress(Some(self.index)), cx);
+                Propagation::Continue
+            }
+            Event::Pointer(PointerEvent::Motion { position }, _) => self.moved(position, cx),
+            Event::Pointer(
+                PointerEvent::Button {
+                    button: MouseButton::Left,
+                    pressed: false,
+                    ..
+                },
+                _,
+            ) => {
+                let mut presses = self.presses.borrow_mut();
+                if presses
+                    .press
+                    .as_ref()
+                    .is_some_and(|p| p.index == self.index)
+                {
+                    presses.press = None;
+                    cx.release_pointer();
+                    // a rename that came due while the button was held starts now
+                    presses.clicks.arm(cx);
+                    return Propagation::Stop;
+                }
+                Propagation::Continue
+            }
+            Event::Wake(now) => {
+                let mut presses = self.presses.borrow_mut();
+                let held = presses.press.is_some();
+                presses.clicks.wake(self.window, now, held, cx);
+                Propagation::Continue
+            }
+            Event::Cancel => {
+                let mut presses = self.presses.borrow_mut();
+                presses.press = None;
+                presses.clicks.cancel();
+                Propagation::Continue
+            }
+            _ => Propagation::Continue,
+        }
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// The list's table with what no row takes: presses under the rows, the band, the timers and Tab.
+pub(super) struct Gestures {
+    pub window: u64,
+    pub count: usize,
+    pub row_height: f64,
+    pub scroll: ScrollState,
+    pub selection: Selection,
+    /// The items' names, for Tab.
+    pub names: Rc<[String]>,
+    pub presses: SharedPresses,
+    /// The band being drawn, in the rows' content.
+    pub band: Option<Rect>,
+    pub children: Vec<Element<Message>>,
+}
+
+impl Gestures {
+    fn emit(&self, event: WindowEvent, cx: &mut EventCx<'_, Message>) {
+        cx.emit(Message::Window(self.window, event));
+    }
+
+    /// Where the rows' content starts in the window: under the header, moved up by the scroll.
+    fn content_origin(&self, cx: &EventCx<'_, Message>) -> Option<Point> {
+        let bounds = cx.bounds()?;
+        Some(Point::new(
+            bounds.min_x(),
+            bounds.min_y() + HEADER_HEIGHT - self.scroll.offset.y,
+        ))
+    }
+
+    /// The rows' part of the frame, in the window.
+    fn shown(&self, cx: &EventCx<'_, Message>) -> Option<Rect> {
+        let bounds = cx.bounds()?;
+        Some(Rect::new(
+            bounds.min_x(),
+            bounds.min_y() + HEADER_HEIGHT,
+            bounds.size.width,
+            (bounds.size.height - HEADER_HEIGHT).max(0.0),
+        ))
+    }
+
+    /// Show `band` and select the rows it crosses.
+    fn draw_band(&self, band: &Band, cx: &mut EventCx<'_, Message>) {
+        let Some(origin) = self.content_origin(cx) else {
+            return;
+        };
+        let rect = band.rect(origin);
+        let first = (rect.min_y() / self.row_height).floor().max(0.0) as usize;
+        let past = ((rect.max_y() / self.row_height).ceil().max(0.0) as usize).min(self.count);
+        let hits: Vec<usize> = (first..past).collect();
+        let next = band.select(&hits);
+        if next != self.selection {
+            self.emit(WindowEvent::Select(next), cx);
+        }
+        self.emit(WindowEvent::Band(Some(rect)), cx);
+    }
+
+    /// What the list sees before the table and its rows do, which take keys and presses for themselves: a key, a scroll
+    /// or a press anywhere (a triangle's too) cancels a pending rename, and Ctrl with a press on the rows is the
+    /// secondary click wherever it lands in a row, its triangle and margins included.
+    fn capture(&self, event: &Event, cx: &mut EventCx<'_, Message>) -> Propagation {
+        match *event {
+            Event::Key(ref key, _) if key.pressed => self.presses.borrow_mut().clicks.cancel(),
+            Event::Pointer(PointerEvent::Scroll { .. }, _) => {
+                self.presses.borrow_mut().clicks.cancel()
+            }
+            Event::Pointer(
+                PointerEvent::Button {
+                    position,
+                    button: MouseButton::Left,
+                    pressed: true,
+                    mods,
+                    ..
+                },
+                _,
+            ) => {
+                // a press on a row's name arms the rename again as it lands; a double click is still told
+                self.presses.borrow_mut().clicks.cancel();
+                if mods.contains(Mods::CTRL) && self.shown(cx).is_some_and(|s| s.contains(position))
+                {
+                    let row = self.content_origin(cx).and_then(|origin| {
+                        let row = ((position.y - origin.y) / self.row_height).floor();
+                        (row >= 0.0 && (row as usize) < self.count).then_some(row as usize)
+                    });
+                    self.emit(WindowEvent::SecondaryPress(row), cx);
+                    self.emit(WindowEvent::ContextMenu(position), cx);
+                    return Propagation::Stop;
+                }
+            }
+            _ => {}
+        }
+        Propagation::Continue
+    }
+
+    fn follow(&self, pointer: Point, cx: &mut EventCx<'_, Message>) {
+        if let Some(shown) = self.shown(cx) {
+            band::follow(self.window, self.scroll, pointer, shown, cx);
+        }
+    }
+}
+
+impl Widget<Message> for Gestures {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fill,
+            flex: Flex::grow(1.0),
+            ..LayoutSpec::new(ContainerKind::Overlay)
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<Message>> {
+        let mut children = std::mem::take(&mut self.children);
+        if let Some(rect) = self.band {
+            // the band moves with the rows, under the header
+            let top = HEADER_HEIGHT - self.scroll.offset.y;
+            let shown = Rect::new(
+                rect.min_x(),
+                rect.min_y() + top,
+                rect.width(),
+                rect.height(),
+            );
+            let clipped_top = shown.min_y().max(HEADER_HEIGHT);
+            let clipped = Rect::new(
+                shown.min_x(),
+                clipped_top,
+                shown.width(),
+                (shown.max_y() - clipped_top).max(0.0),
+            );
+            children.push(
+                Element::new(BandLayer {
+                    children: vec![band::view(clipped)],
+                })
+                .key("band-layer"),
+            );
+        }
+        children
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::Layout
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, Message>) -> Propagation {
+        if cx.phase() == Phase::Capture {
+            return self.capture(event, cx);
+        }
+        match *event {
+            // what reaches here is under the rows: no row took it
+            Event::Pointer(
+                PointerEvent::Button {
+                    position,
+                    button: MouseButton::Left,
+                    pressed: true,
+                    mods,
+                    ..
+                },
+                _,
+            ) => {
+                if !self.shown(cx).is_some_and(|s| s.contains(position)) {
+                    return Propagation::Continue;
+                }
+                if mods.contains(Mods::CTRL) {
+                    self.emit(WindowEvent::SecondaryPress(None), cx);
+                    self.emit(WindowEvent::ContextMenu(position), cx);
+                    return Propagation::Stop;
+                }
+                let Some(origin) = self.content_origin(cx) else {
+                    return Propagation::Continue;
+                };
+                let mut presses = self.presses.borrow_mut();
+                presses.clicks.press_empty();
+                let toggles = mods.contains(Mods::SHIFT) || mods.contains(Mods::PRIMARY);
+                if !toggles && !self.selection.is_empty() {
+                    self.emit(WindowEvent::Select(Selection::new([], None, None)), cx);
+                }
+                let base = if toggles {
+                    self.selection.clone()
+                } else {
+                    Selection::new([], None, None)
+                };
+                let start = Point::new(position.x - origin.x, position.y - origin.y);
+                presses.band = Some(Band::start(start, position, mods, &base));
+                cx.capture_pointer();
+                Propagation::Stop
+            }
+            Event::Pointer(PointerEvent::Motion { position }, _) => {
+                let band = {
+                    let mut presses = self.presses.borrow_mut();
+                    let Some(band) = presses.band.as_mut() else {
+                        return Propagation::Continue;
+                    };
+                    band.pointer = position;
+                    band.clone()
+                };
+                self.draw_band(&band, cx);
+                self.follow(position, cx);
+                Propagation::Stop
+            }
+            Event::Pointer(
+                PointerEvent::Button {
+                    button: MouseButton::Left,
+                    pressed: false,
+                    ..
+                },
+                _,
+            ) => {
+                if self.presses.borrow_mut().band.take().is_none() {
+                    return Propagation::Continue;
+                }
+                cx.release_pointer();
+                self.emit(WindowEvent::Band(None), cx);
+                Propagation::Stop
+            }
+            Event::Wake(now) => {
+                {
+                    let mut presses = self.presses.borrow_mut();
+                    let held = presses.press.is_some();
+                    presses.clicks.wake(self.window, now, held, cx);
+                }
+                let band = self.presses.borrow().band.clone();
+                if let Some(band) = band {
+                    // the rows moved under a still pointer: the band follows, and the scroll goes on
+                    self.draw_band(&band, cx);
+                    self.follow(band.pointer, cx);
+                }
+                Propagation::Continue
+            }
+            Event::Cancel => {
+                let mut presses = self.presses.borrow_mut();
+                presses.clicks.cancel();
+                if presses.band.take().is_some() {
+                    self.emit(WindowEvent::Band(None), cx);
+                }
+                Propagation::Continue
+            }
+            Event::Key(ref key, _) if key.pressed => {
+                self.presses.borrow_mut().clicks.cancel();
+                let mods = key.mods;
+                let plain = !mods.contains(Mods::CTRL)
+                    && !mods.contains(Mods::ALT)
+                    && !mods.contains(Mods::PRIMARY);
+                if !(plain && (key.keysym == TAB || key.keysym == LEFT_TAB)) {
+                    return Propagation::Continue;
+                }
+                let back = key.keysym == LEFT_TAB || mods.contains(Mods::SHIFT);
+                if let Some(to) = by_name(&self.names, self.selection.cursor(), back) {
+                    let mut next = self.selection.clone();
+                    next.select_only(to);
+                    if next != self.selection {
+                        self.emit(WindowEvent::Select(next), cx);
+                    }
+                    self.emit(WindowEvent::FocusRow(to), cx);
+                }
+                Propagation::Stop
+            }
+            _ => Propagation::Continue,
+        }
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// The band's layer over the table: it places the band, and lets every press through.
+struct BandLayer {
+    children: Vec<Element<Message>>,
+}
+
+impl Widget<Message> for BandLayer {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Absolute)
+    }
+
+    fn take_children(&mut self) -> Vec<Element<Message>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::Layout
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, Message>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_press_selects_as_the_table_does() {
+        let selection = Selection::new(std::iter::once(2..4), Some(3), Some(2));
+        let picked = |s: Selection| s.ranges().iter().flat_map(Clone::clone).collect::<Vec<_>>();
+        assert_eq!(picked(pressed(&selection, 6, Mods::NONE)), [6]);
+        assert_eq!(picked(pressed(&selection, 5, Mods::SHIFT)), [2, 3, 4, 5]);
+        assert_eq!(picked(pressed(&selection, 3, Mods::PRIMARY)), [2]);
+    }
+}

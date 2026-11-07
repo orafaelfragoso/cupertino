@@ -42,6 +42,8 @@ pub struct Background {
     pub view: ViewMode,
     pub sort: SortSpec,
     pub in_trash: bool,
+    /// The folder is on a file system mounted read-only, which takes nothing new.
+    pub read_only: bool,
     /// How many items Copy put on the window's pasteboard.
     pub pasteboard: usize,
 }
@@ -297,11 +299,12 @@ fn paste_row(can: bool) -> MenuItem {
 
 /// The menu of the empty space of a folder.
 pub fn background_menu(ctx: &Background) -> Vec<MenuItem> {
+    let takes_new = !ctx.in_trash && !ctx.read_only;
     let mut rows = vec![
-        // New Folder, which the trash does not take
-        MenuItem::command("New Folder", Command::NewFolder, !ctx.in_trash),
+        // New Folder, which neither the trash nor a read-only file system takes
+        MenuItem::command("New Folder", Command::NewFolder, takes_new),
         // Paste Item, Move Item Here on Alt, Paste Item Exactly on Shift + Alt
-        paste_row(ctx.pasteboard > 0 && !ctx.in_trash),
+        paste_row(ctx.pasteboard > 0 && takes_new),
         MenuItem::separator(),
     ];
     // Empty Trash, in the trash only
@@ -528,6 +531,7 @@ mod tests {
             view: ViewMode::Icons,
             sort: SortSpec::default(),
             in_trash: false,
+            read_only: false,
             pasteboard: 0,
         };
         let items = background_menu(&ctx);
@@ -581,11 +585,42 @@ mod tests {
     }
 
     #[test]
+    fn a_read_only_folder_takes_no_new_folder_and_no_paste() {
+        let ctx = Background {
+            view: ViewMode::List,
+            sort: SortSpec::default(),
+            in_trash: false,
+            read_only: true,
+            pasteboard: 1,
+        };
+        let items = background_menu(&ctx);
+        let row = |label: &str| items.iter().find(|i| i.label == label).unwrap();
+        assert!(!row("New Folder").enabled);
+        assert!(
+            !row("Paste Item").enabled,
+            "nothing is pasted onto read-only media"
+        );
+        assert!(row("Paste Item").alternates.iter().all(|(_, a)| !a.enabled));
+        let writable = background_menu(&Background {
+            read_only: false,
+            ..ctx
+        });
+        assert!(
+            writable
+                .iter()
+                .find(|i| i.label == "Paste Item")
+                .unwrap()
+                .enabled
+        );
+    }
+
+    #[test]
     fn paste_alternates_and_the_trash_row_are_offered_in_the_trash() {
         let ctx = Background {
             view: ViewMode::List,
             sort: SortSpec::default(),
             in_trash: true,
+            read_only: false,
             pasteboard: 2,
         };
         let items = background_menu(&ctx);

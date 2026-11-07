@@ -515,6 +515,18 @@ impl Media {
         Some((device, self.busy.contains(&device.object)))
     }
 
+    /// Whether the drive of device `index` has `folder` on one of its mounted file systems: an eject of that drive
+    /// unmounts them all.
+    pub fn drive_holds(&self, index: usize, folder: &Path) -> bool {
+        let Some(device) = self.devices.get(index) else {
+            return false;
+        };
+        self.devices
+            .iter()
+            .filter(|d| d.drive == device.drive)
+            .any(|d| d.mount.as_deref().is_some_and(|m| folder.starts_with(m)))
+    }
+
     /// The row of the device whose block is `object`.
     pub fn index_of(&self, object: &OwnedObjectPath) -> Option<usize> {
         self.devices.iter().position(|d| &d.object == object)

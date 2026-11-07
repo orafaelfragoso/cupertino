@@ -46,6 +46,14 @@ pub fn place(name: &str, path: &Path, kind: PlaceKind) -> Place {
     }
 }
 
+/// What the window system of a [`Run`] offers besides its windows.
+#[derive(Default)]
+pub struct Host {
+    /// Publishes the windows' accessible trees, as over AT-SPI.
+    pub accessibility: Option<Box<dyn cupertino_kit::core::AccessibilityAdapter>>,
+    pub capabilities: Capabilities,
+}
+
 impl Run {
     /// The window on `folder` of `home`, with `places` in the sidebar, its trash in `home/Trash`, posting to
     /// `notices`, and the removable media of `system`.
@@ -73,16 +81,7 @@ impl Run {
         system: Option<zbus::blocking::Connection>,
         preferences: ThemePreferences,
     ) -> Run {
-        let capabilities = Capabilities::default();
-        Run::start_on(
-            home,
-            folder,
-            places,
-            notices,
-            system,
-            preferences,
-            capabilities,
-        )
+        Run::start_configured(home, folder, places, notices, system, preferences, |s| s)
     }
 
     /// [`Run::start_with`] on a headless system with `capabilities`.
@@ -95,7 +94,59 @@ impl Run {
         preferences: ThemePreferences,
         capabilities: Capabilities,
     ) -> Run {
-        prepare(
+        let host = Host {
+            capabilities,
+            ..Host::default()
+        };
+        let configure = |s| s;
+        Run::start_hosted(
+            home,
+            folder,
+            places,
+            notices,
+            system,
+            preferences,
+            configure,
+            host,
+        )
+    }
+
+    /// [`Run::start_with`] with what `configure` makes of the window's [`Start`].
+    pub fn start_configured(
+        home: tempfile::TempDir,
+        folder: PathBuf,
+        places: Vec<Place>,
+        notices: Notices,
+        system: Option<zbus::blocking::Connection>,
+        preferences: ThemePreferences,
+        configure: impl FnOnce(Start) -> Start,
+    ) -> Run {
+        let host = Host::default();
+        Run::start_hosted(
+            home,
+            folder,
+            places,
+            notices,
+            system,
+            preferences,
+            configure,
+            host,
+        )
+    }
+
+    /// [`Run::start_configured`] on a window system that can do what `host` says.
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_hosted(
+        home: tempfile::TempDir,
+        folder: PathBuf,
+        places: Vec<Place>,
+        notices: Notices,
+        system: Option<zbus::blocking::Connection>,
+        preferences: ThemePreferences,
+        configure: impl FnOnce(Start) -> Start,
+        host: Host,
+    ) -> Run {
+        prepare(configure(
             Start::open(
                 folder,
                 places,
@@ -110,7 +161,7 @@ impl Run {
             .with_trash(Trash::with_home(home.path().join("Trash")))
             .with_home(home.path().to_path_buf())
             .with_view(ViewMode::List),
-        );
+        ));
         let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
         let theme = ThemeTokens::cupertino(&Theme::from_dir(data).unwrap(), preferences).unwrap();
         let mut fonts = FontIndex::new();
@@ -134,11 +185,12 @@ impl Run {
                     GlyphRaster::new(Arc::clone(&glyphs)),
                 ))
             }),
-            accessibility: None,
+            accessibility: host.accessibility,
             clock: Arc::new(ManualClock::new(Timestamp(0))),
             on_window_error: None,
         };
-        let mut driver = TestDriver::new(capabilities, options, ManualClock::new(Timestamp(0)));
+        let mut driver =
+            TestDriver::new(host.capabilities, options, ManualClock::new(Timestamp(0)));
         driver.run_until_idle(budget()).unwrap();
         let window = driver.runtime().windows()[0].1;
         let mut run = Run {
@@ -296,6 +348,42 @@ impl Run {
                 mods,
             }));
         }
+    }
+
+    /// Press the left button at `from` with `mods` held, move to `to` in a few steps and let go there.
+    pub fn drag(&mut self, from: Point, to: Point, mods: Mods) {
+        self.hold(from, to, mods);
+        self.release(to, mods);
+    }
+
+    /// The first part of [`Self::drag`]: a left press at `from` with `mods` held, moved to `to` in four steps.
+    pub fn hold(&mut self, from: Point, to: Point, mods: Mods) {
+        let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
+        self.send(pointer(PointerEvent::Motion { position: from }));
+        self.send(pointer(PointerEvent::Button {
+            position: from,
+            button: MouseButton::Left,
+            pressed: true,
+            serial: 1,
+            mods,
+        }));
+        for step in 1..=4 {
+            let t = f64::from(step) / 4.0;
+            let position = Point::new(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t);
+            self.send(pointer(PointerEvent::Motion { position }));
+        }
+    }
+
+    /// The left button held since [`Self::hold`] let go at `at`.
+    pub fn release(&mut self, at: Point, mods: Mods) {
+        let event = PointerEvent::Button {
+            position: at,
+            button: MouseButton::Left,
+            pressed: false,
+            serial: 1,
+            mods,
+        };
+        self.send(WindowEvent::Pointer(event, Timestamp(0)));
     }
 
     /// Click the list's row that shows `name` with `mods` held.
@@ -477,7 +565,7 @@ impl Run {
     }
 
     /// Each row of the list: the text of its first cell, its bounds and whether it is selected.
-    fn listed(&self) -> Vec<(String, Rect, bool)> {
+    pub fn listed(&self) -> Vec<(String, Rect, bool)> {
         let snapshot = self.driver.runtime().snapshot(self.window).unwrap();
         let nodes: HashMap<NodeId, &AccessibilityNode> = snapshot
             .accessibility
@@ -495,16 +583,19 @@ impl Run {
             }
             None
         };
-        snapshot
+        let mut rows = snapshot
             .accessibility
             .iter()
             .filter(|(_, node)| node.role == Role::Row)
             .filter(|(_, node)| node.children.iter().all(|c| nodes[c].role == Role::Cell))
             .filter_map(|(id, node)| Some((first_text(*id)?, node.bounds, node.states.selected)))
-            .collect()
+            .collect::<Vec<_>>();
+        // the rows in the order the list shows them
+        rows.sort_by(|a, b| a.1.min_y().total_cmp(&b.1.min_y()));
+        rows
     }
 
-    /// The items the icon grid shows, by name, and whether each is selected.
+    /// The items the icon grid shows', by name, and whether each is selected.
     pub fn icons(&self) -> Vec<(String, bool)> {
         self.icon_cells()
             .into_iter()

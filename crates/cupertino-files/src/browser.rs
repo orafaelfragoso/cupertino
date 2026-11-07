@@ -224,17 +224,28 @@ impl Browser {
     /// Bytes an unprivileged user can still write on the folder's file system (`statvfs`: available blocks times the
     /// fragment size); `None` for a virtual folder.
     pub fn available_space(&self) -> io::Result<Option<u64>> {
-        if self.is_virtual() {
+        let Some(fs) = self.file_system()? else {
             return Ok(None);
-        }
-        let dir = std::ffi::CString::new(self.dir().as_os_str().as_encoded_bytes())
-            .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
-        // SAFETY: a zeroed statvfs is a valid out value; the path is NUL-terminated and outlives the call
-        let mut fs: libc::statvfs = unsafe { std::mem::zeroed() };
-        if unsafe { libc::statvfs(dir.as_ptr(), &mut fs) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
+        };
+        // the fields are narrower on 32-bit targets
+        #[allow(clippy::unnecessary_cast)]
         Ok(Some(fs.f_bavail as u64 * fs.f_frsize as u64))
+    }
+
+    /// Whether the folder's file system is mounted read-only; see [`mounted_read_only`].
+    pub fn read_only(&self) -> io::Result<bool> {
+        match self.is_virtual() {
+            true => Ok(false),
+            false => mounted_read_only(self.dir()),
+        }
+    }
+
+    /// The folder's file system; `None` for a virtual folder.
+    fn file_system(&self) -> io::Result<Option<libc::statvfs>> {
+        match self.is_virtual() {
+            true => Ok(None),
+            false => file_system(self.dir()).map(Some),
+        }
     }
 
     pub fn dir(&self) -> &Path {
@@ -356,41 +367,6 @@ impl Browser {
         self.rebuild();
         self.restore_selection((kept, anchor, focus));
         true
-    }
-
-    /// Expand or collapse row `index` (a click on its triangle); `false` when it is not a folder.
-    pub fn toggle_expanded(&mut self, index: usize) -> io::Result<bool> {
-        if self.collapse(index) {
-            return Ok(true);
-        }
-        self.expand(index)
-    }
-
-    /// Right (`expand`) or Left on the focused row of the list: Right expands a folder; Left collapses an expanded
-    /// folder, or moves the focus from an item inside one to that folder (the outline view convention).
-    /// `false` when nothing changed.
-    pub fn disclose_focus(&mut self, expand: bool) -> io::Result<bool> {
-        let Some(focus) = self.selection.focus().filter(|f| *f < self.outline.len()) else {
-            return Ok(false);
-        };
-        if expand {
-            return self.expand(focus);
-        }
-        if self.collapse(focus) {
-            self.focus_moved = true;
-            return Ok(true);
-        }
-        let level = self.outline[focus].level;
-        match (0..focus)
-            .rev()
-            .find(|&i| level > 0 && self.outline[i].level + 1 == level)
-        {
-            Some(parent) => {
-                self.move_focus(parent, false);
-                Ok(true)
-            }
-            None => Ok(false),
-        }
     }
 
     /// Show only the folder's own items (another view than the list).
@@ -657,25 +633,6 @@ impl Browser {
         self.selection.click_empty(mods)
     }
 
-    /// A rubber band starts on empty space with `mods` held: Shift or the primary modifier keep the selection to
-    /// toggle against, otherwise it is cleared. `true` when the selection changed.
-    pub fn rubber_band_begin(&mut self, mods: Modifiers) -> bool {
-        let changed = self.press_empty(mods);
-        self.selection.rubber_band_begin(mods);
-        changed
-    }
-
-    /// The band now touches `hits`; `true` when the selection changed.
-    pub fn rubber_band_update(&mut self, hits: &[usize], mods: Modifiers) -> bool {
-        let before = self.selection.indices().collect::<Vec<_>>();
-        self.selection.rubber_band_update(hits, mods);
-        before != self.selection.indices().collect::<Vec<_>>()
-    }
-
-    pub fn rubber_band_end(&mut self) {
-        self.selection.rubber_band_end();
-    }
-
     /// Order by `key` in the given direction (a menu choice: unlike [`Browser::sort_by`] it never reverses).
     pub fn set_sort(&mut self, key: SortKey, ascending: bool) {
         let kept = self.selection_paths();
@@ -741,18 +698,6 @@ impl Browser {
         }
     }
 
-    /// Tab (`reverse` false) or Shift-Tab: the next or previous item in display order.
-    pub fn tab(&mut self, reverse: bool) -> bool {
-        let len = self.entries().len();
-        match self.type_select.tab(self.selection.focus(), len, reverse) {
-            Some(i) => {
-                self.move_focus(i, false);
-                true
-            }
-            None => false,
-        }
-    }
-
     /// What opening the selected items does: the first selected folder to go into, every selected file
     /// to open.
     pub fn activation(&self) -> Activation {
@@ -769,9 +714,57 @@ impl Browser {
     }
 }
 
+/// Whether the file system of `dir` is mounted read-only, whatever the medium under it says: a writable stick can
+/// hold a file system mounted so.
+pub fn mounted_read_only(dir: &Path) -> io::Result<bool> {
+    Ok(file_system(dir)?.f_flag & libc::ST_RDONLY != 0)
+}
+
+fn file_system(dir: &Path) -> io::Result<libc::statvfs> {
+    let dir = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes())
+        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // SAFETY: a zeroed statvfs is a valid out value; the path is NUL-terminated and outlives the call
+    let mut fs: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(dir.as_ptr(), &mut fs) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(fs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_on_a_file_system_mounted_read_only_is_told() {
+        // the folder the test mounted again, read-only, in a mount namespace of its own
+        const PROBE: &str = "FILES_READ_ONLY_PROBE";
+        if let Some(dir) = std::env::var_os(PROBE) {
+            assert!(super::mounted_read_only(Path::new(&dir)).unwrap());
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        assert!(!super::mounted_read_only(d.path()).unwrap());
+        let status = std::process::Command::new("unshare")
+            .args(["--map-root-user", "--mount", "sh", "-c"])
+            .arg(r#"mount --bind -o ro "$1" "$1" || exit 77; shift; exec "$@""#)
+            .args([std::ffi::OsStr::new("sh"), d.path().as_os_str()])
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "browser::tests::a_folder_on_a_file_system_mounted_read_only_is_told",
+            ])
+            .env(PROBE, d.path())
+            .status();
+        match status {
+            Ok(status) if status.success() => {}
+            // the test itself failed in the namespace
+            Ok(status) if status.code() == Some(101) => {
+                panic!("a read-only mount read as writable")
+            }
+            other => eprintln!("no read-only mount to try without user namespaces: {other:?}"),
+        }
+    }
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -988,8 +981,6 @@ mod tests {
 
         assert!(b.type_text("n", 10.0));
         assert_eq!(selected(&b), ["Notes.md"]);
-        assert!(b.tab(false));
-        assert_eq!(selected(&b), ["Projects"]);
         b.select_all();
         assert_eq!(b.selection().len(), 4);
     }
@@ -1062,15 +1053,14 @@ mod tests {
             ]
         );
 
-        // a nested folder, then the selection inside: Left steps to the enclosing folder, then collapses it
+        // a nested folder, then the selection inside: collapsing the folder gives it the selection
         assert!(b.expand(4).unwrap());
         std::fs::write(d.path().join("Projects/cupertino/deep.rs"), b"x").unwrap();
         pump(&mut b, "the nested item", |b| b.entries().len() == 7);
         assert_eq!(b.outline()[5].level, 2);
         b.move_focus(5, false);
-        assert!(b.disclose_focus(false).unwrap());
+        assert!(b.collapse(4));
         assert_eq!(selected(&b), ["cupertino"]);
-        assert!(b.disclose_focus(false).unwrap());
         assert_eq!(
             levels(&b)[4..],
             [("cupertino", 1, false), ("plan.txt", 1, false)]
@@ -1086,10 +1076,7 @@ mod tests {
             ["Projects"],
             "the hidden selection went to the collapsed folder"
         );
-        assert!(
-            b.disclose_focus(true).unwrap(),
-            "Right expands the focused folder"
-        );
+        assert!(b.expand(3).unwrap(), "the folder expands again");
         pump(&mut b, "the items again", |b| b.entries().len() == 6);
         assert!(
             !b.outline()[4].expanded,

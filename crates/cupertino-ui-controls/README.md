@@ -33,6 +33,11 @@ from the application's model and reports changes as messages.
   `on_accessory`; without it the accessory reads as disabled.
 - **Positions.** A menu item says its place among the menu's items and the menu says how many it holds, separators not
   counted; a tab and a page dot say their place and their tab list says its count.
+- **Outline table.** `OutlineTable` is a `TableView` whose rows form an outline, as a `TreeView`'s do: `item` gives
+  each row's level and whether it is open, its first cell comes after the indent and the disclosure triangle, and the
+  triangle, Right and Left ask `on_toggle` to open or close a row (Right on an open row and Left on a child move to its
+  first child and to its parent). `key` keys each row, so its focus and accessible object follow it while rows open
+  above it; without it a row is keyed by its index. A plain `TableView` is unchanged.
 - **Truncation.** A `Text` that does not wrap, and a tooltip's tip past its 300 pt text width, end in an ellipsis
   where they are cut; the accessible name keeps the whole text.
 - **Rich text.** `RichText` draws its links in the link colour over a 1 px underline 1.5 pt below the baseline. Each

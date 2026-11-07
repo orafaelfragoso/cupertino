@@ -7,6 +7,7 @@
 //! the drop copies what lies on another device. A folder is not dropped on itself, and a drag of this application's
 //! items over the folder holding them all lands nowhere. Folders do not spring open under a drag.
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
@@ -17,7 +18,7 @@ use cupertino_kit::platform::{DropAction as Offered, Mods};
 use cupertino_kit::prelude::*;
 use percent_encoding::percent_decode_str;
 
-use super::{BrowserWindow, Event, Message, Session};
+use super::{view, BrowserWindow, Event, Message, Session};
 use crate::operations::{self, DropAction};
 use crate::places::PlaceKind;
 
@@ -55,42 +56,69 @@ pub(super) fn folder(
         .collect();
     let here = shown(session, win.browser.dir());
     let dragged: Rc<[PathBuf]> = session.dragged.clone().into();
+    // the list keys its rows by path, so their focus follows them while folders open above; the grid by index
+    let rows: Rc<HashMap<Key, u64>> = Rc::new(
+        win.browser
+            .entries()
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (view::row_key(id, &e.path), i as u64))
+            .collect(),
+    );
     let places = Rc::clone(&folders);
     let target = Rc::clone(&folders);
+    let row_places = Rc::clone(&rows);
     let into = here.clone();
+    let read_only = read_only(session);
     Element::from(DropTarget {
         content,
         mimes: vec![URI_LIST.into()],
         actions: [Offered::Copy, Offered::Move].into(),
         place: Box::new(move |over| {
-            let item = over.keys.iter().find_map(|key| match key {
-                Key::Int(i) => Some(*i),
-                _ => None,
-            });
+            let item = item_under(over.keys, &row_places);
             let folder = item
-                .and_then(|i| Some((i, places.get(usize::try_from(i).ok()?)?.clone()?)))
+                .and_then(|(key, i)| Some((key, places.get(usize::try_from(i).ok()?)?.clone()?)))
                 .filter(|_| here != Some(Destination::Trash));
             match folder {
-                Some((i, path)) => offer(
+                Some((key, path)) => offer(
                     over,
-                    Some(Key::Int(i)),
+                    Some(key),
                     &Destination::Folder(path),
                     &dragged,
+                    &*read_only,
                 ),
-                None => offer(over, None, here.as_ref()?, &dragged),
+                None => offer(over, None, here.as_ref()?, &dragged, &*read_only),
             }
         }),
         on_hover: None,
         on_drop: Box::new(move |dropped| {
-            let to = match &dropped.place {
-                Some(Key::Int(i)) => usize::try_from(*i)
+            let item = dropped
+                .place
+                .as_ref()
+                .and_then(|key| item_under(std::slice::from_ref(key), &rows));
+            let to = match item {
+                Some((_, i)) => usize::try_from(i)
                     .ok()
                     .and_then(|i| target.get(i)?.clone())
                     .map(Destination::Folder),
-                _ => into.clone(),
+                None => into.clone(),
             };
             dropped_on(id, to, dropped)
         }),
+    })
+}
+
+/// The item under a drag among `keys`, with the key that names it: a list row by its key in `rows`, else a grid cell
+/// by its index. A row is looked for first, as the cells inside it are keyed by their column.
+fn item_under(keys: &[Key], rows: &HashMap<Key, u64>) -> Option<(Key, u64)> {
+    let row = keys
+        .iter()
+        .find_map(|key| Some((key.clone(), *rows.get(key)?)));
+    row.or_else(|| {
+        keys.iter().find_map(|key| match key {
+            Key::Int(i) => Some((key.clone(), *i)),
+            _ => None,
+        })
     })
 }
 
@@ -109,6 +137,7 @@ pub(super) fn sidebar(session: &Session, id: u64, content: Element<Message>) -> 
         .collect();
     let dragged: Rc<[PathBuf]> = session.dragged.clone().into();
     let target = Rc::clone(&places);
+    let read_only = read_only(session);
     Element::from(DropTarget {
         content,
         mimes: vec![URI_LIST.into()],
@@ -118,7 +147,7 @@ pub(super) fn sidebar(session: &Session, id: u64, content: Element<Message>) -> 
                 .keys
                 .iter()
                 .find_map(|key| places.iter().find(|(place, _)| place == key))?;
-            offer(over, Some(key.clone()), to, &dragged)
+            offer(over, Some(key.clone()), to, &dragged, &*read_only)
         }),
         on_hover: None,
         on_drop: Box::new(move |dropped| {
@@ -150,6 +179,7 @@ fn offer(
     key: Option<Key>,
     to: &Destination,
     dragged: &[PathBuf],
+    read_only: &ReadOnly,
 ) -> Option<DropPlace> {
     let action = match to {
         Destination::Trash => over
@@ -157,7 +187,8 @@ fn offer(
             .contains(&Offered::Move)
             .then_some(Offered::Move)?,
         Destination::Folder(dir) => {
-            if dragged.iter().any(|p| p == dir)
+            if read_only(dir)
+                || dragged.iter().any(|p| p == dir)
                 || (!dragged.is_empty() && dragged.iter().all(|p| p.parent() == Some(dir)))
             {
                 return None;
@@ -168,6 +199,27 @@ fn offer(
         }
     };
     Some(DropPlace { key, action })
+}
+
+/// Whether a folder takes nothing new, so no drop lands on it.
+type ReadOnly = dyn Fn(&Path) -> bool;
+
+/// [`ReadOnly`] for the session's media: a folder on a medium that can't be written, or on a file system mounted
+/// read-only.
+fn read_only(session: &Session) -> Rc<ReadOnly> {
+    let media: Vec<(PathBuf, bool)> = (0..)
+        .map_while(|i| session.media.device(i))
+        .filter_map(|(device, _)| Some((device.mount.clone()?, device.read_only)))
+        .collect();
+    Rc::new(move |dir: &Path| {
+        // the medium the folder is on is the one mounted deepest above it
+        let medium = media
+            .iter()
+            .filter(|(mount, _)| dir.starts_with(mount))
+            .max_by_key(|(mount, _)| mount.components().count())
+            .is_some_and(|&(_, read_only)| read_only);
+        medium || crate::browser::mounted_read_only(dir).unwrap_or(false)
+    })
 }
 
 /// What a drop does, by the modifiers held: Option copies, the primary modifier moves, with neither by device.
@@ -260,6 +312,43 @@ pub(super) fn uri_paths(bytes: &[u8]) -> Option<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_that_takes_nothing_new_takes_no_drop_and_the_trash_still_does() {
+        let d = tempfile::tempdir().unwrap();
+        let (disc, home) = (d.path().join("DISC"), d.path().join("home"));
+        let actions = [Offered::Copy, Offered::Move].into();
+        let over = DropOver {
+            position: cupertino_kit::geometry::Point::ZERO,
+            keys: &[],
+            mimes: &[],
+            actions: &actions,
+            mods: Mods::NONE,
+        };
+        let read_only = disc.clone();
+        let on_disc = move |dir: &Path| dir.starts_with(&read_only);
+        let dragged = [home.join("x.txt")];
+        assert_eq!(
+            offer(
+                &over,
+                None,
+                &Destination::Folder(disc.join("inner")),
+                &dragged,
+                &on_disc
+            ),
+            None,
+            "nothing lands on read-only media"
+        );
+        assert!(offer(
+            &over,
+            None,
+            &Destination::Folder(home.join("b")),
+            &dragged,
+            &on_disc
+        )
+        .is_some());
+        assert!(offer(&over, None, &Destination::Trash, &dragged, &on_disc).is_some());
+    }
 
     #[test]
     fn a_uri_list_gives_its_local_files_decoded() {

@@ -179,6 +179,7 @@ digraph "layers" {
   "cupertino-files" -> "cupertino-test-bus" [label="dev"];
   "cupertino-files" -> "cupertino-theme";
   "cupertino-files" -> "cupertino-thumbnails";
+  "cupertino-files" -> "cupertino-ui-atspi" [label="dev"];
   "cupertino-files" -> "cupertino-ui-test" [label="dev"];
   "cupertino-files" -> "cupertino-ui-text";
   "cupertino-glass" -> "cupertino-defaults";

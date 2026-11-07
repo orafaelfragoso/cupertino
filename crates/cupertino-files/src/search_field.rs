@@ -1,8 +1,8 @@
 //! The toolbar search field's width. At rest it is [`window::TOOLBAR_SEARCH_FIELD`] wide. While it has the keyboard or
 //! holds text it is open: [`window::SEARCH_GROWTH`] times that, but never more than [`window::SEARCH_MAX_SHARE`] of
-//! the toolbar, and never over the back and forward buttons or the [`window::TITLE_MIN`] the title keeps. The width
-//! changes over [`window::SEARCH_GROW_SECONDS`] with an ease-out, or at once with reduce motion. Times are seconds on
-//! the window's clock.
+//! the toolbar, and never over the back and forward buttons, the [`window::TITLE_MIN`] the title keeps or the pop-up
+//! buttons. The width changes over [`window::SEARCH_GROW_SECONDS`] with an ease-out, or at once with reduce motion.
+//! Times are seconds on the window's clock.
 
 use crate::metrics::window;
 
@@ -14,13 +14,28 @@ pub fn is_open(focused: bool, text: &str) -> bool {
     focused || !text.is_empty()
 }
 
-/// The open width in a toolbar `toolbar` points wide, whose items before the field are the back and forward buttons
-/// and the title. It is never less than the resting width; a toolbar too narrow for that drops nothing and leaves the
-/// field at rest.
+/// The width of the toolbar's pop-up buttons, View, Tags and Action, with the gap after each.
+pub fn popups() -> f64 {
+    [
+        window::TOOLBAR_VIEW_POPUP,
+        window::TOOLBAR_TAGS_POPUP,
+        window::TOOLBAR_ACTION_POPUP,
+    ]
+    .iter()
+    .map(|(w, _)| w + window::TOOLBAR_ITEM_GAP)
+    .sum()
+}
+
+/// The open width in a toolbar `toolbar` points wide, whose items before the field are the back and forward buttons,
+/// the title and the pop-up buttons. It is never less than the resting width; a toolbar too narrow for that drops
+/// nothing and leaves the field at rest.
 pub fn open_width(toolbar: f64) -> f64 {
     let (back_forward, _) = window::TOOLBAR_BACK_FORWARD;
-    let before =
-        back_forward + window::TOOLBAR_ITEM_GAP + window::TITLE_MIN + window::TOOLBAR_ITEM_GAP;
+    let before = back_forward
+        + window::TOOLBAR_ITEM_GAP
+        + window::TITLE_MIN
+        + window::TOOLBAR_ITEM_GAP
+        + popups();
     let room = toolbar - 2.0 * window::TOOLBAR_INSET - before;
     (REST * window::SEARCH_GROWTH)
         .min(toolbar * window::SEARCH_MAX_SHARE)
@@ -133,16 +148,16 @@ mod tests {
     #[test]
     fn the_open_width_is_two_and_a_half_times_the_rest_within_half_the_toolbar_and_the_title() {
         assert_eq!(open_width(WIDE), REST * 2.5);
-        // half of a 500 pt toolbar is 250, under 280
-        assert_eq!(open_width(500.0), 250.0);
-        // 340 pt: half is 170; the buttons, the title's room and the gaps leave 340 - 16 - 137 = 187
-        assert_eq!(open_width(340.0), 170.0);
-        // 260 pt: the buttons and the title leave 107, less than the rest: the field stays at rest
-        assert_eq!(open_width(260.0), REST);
+        // half of a 600 pt toolbar is 300, over 280
+        assert_eq!(open_width(600.0), 280.0);
+        // 500 pt: half is 250; the buttons, the title's room, the pop-ups and the gaps leave 500 - 16 - 137 - 150
+        assert_eq!(open_width(500.0), 197.0);
+        // 400 pt: they leave 97, less than the rest: the field stays at rest
+        assert_eq!(open_width(400.0), REST);
         for toolbar in [200.0, 300.0, 400.0, 600.0, 1000.0] {
             let w = open_width(toolbar);
             assert!((REST..=REST * 2.5).contains(&w), "{toolbar}: {w}");
-            let room = toolbar - 2.0 * window::TOOLBAR_INSET - 53.0 - 12.0 - 60.0 - 12.0;
+            let room = toolbar - 2.0 * window::TOOLBAR_INSET - 53.0 - 12.0 - 60.0 - 12.0 - 150.0;
             assert!(w <= room.max(REST), "{toolbar}: {w} passes the title");
         }
     }
@@ -202,8 +217,9 @@ mod tests {
         width.want(true);
         width.tick(0.0, WIDE, true);
         width.tick(1.0, WIDE, true);
-        width.tick(1.5, 400.0, true);
-        assert_eq!(width.width(), 200.0);
+        width.tick(1.5, 500.0, true);
+        assert_eq!(width.width(), open_width(500.0));
+        assert!(width.width() < REST * 2.5);
         assert!(!width.animating());
     }
 }

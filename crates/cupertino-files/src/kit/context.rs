@@ -14,7 +14,7 @@ use cupertino_kit::core::{
     Change, Element, Event, EventCx, Key, MeasureCx, PaintCx, Phase, Propagation, SemanticsCx,
     Widget, Window, WindowKey,
 };
-use cupertino_kit::geometry::{Point, Size};
+use cupertino_kit::geometry::Size;
 use cupertino_kit::layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured,
 };
@@ -27,8 +27,8 @@ use crate::context_menu::{ItemKind, MenuItem, TAG_ROW_ORDER, VIEW_ROW_ORDER};
 /// An open context menu of a window.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct OpenMenu {
-    /// Where it opens, in the window.
-    pub at: Point,
+    /// Where it opens: at a point of the window, or below a toolbar button.
+    pub anchor: MenuAnchor,
     /// What assistive technology calls it.
     pub label: String,
     pub items: Vec<MenuItem>,
@@ -41,7 +41,7 @@ pub(super) fn windows(id: u64, menu: &OpenMenu) -> Vec<Window<Message>> {
     let send = move |event: WindowEvent| Message::Window(id, event);
     Menu {
         parent: window_key(id),
-        anchor: MenuAnchor::At(menu.at),
+        anchor: menu.anchor.clone(),
         label: menu.label.clone(),
         items: kit_items(id, &menu.items),
         current: None,
@@ -242,6 +242,7 @@ mod tests {
             view: ViewMode::List,
             sort: SortSpec::default(),
             in_trash: false,
+            read_only: false,
             pasteboard: 0,
         });
         let rows = labels(&kit_items(0, &menu));

@@ -1,0 +1,270 @@
+//! The real Settings window, a CupertinoKit app under the server's standard title bar, against the headless server: a
+//! drag on its toolbar where no control lies moves the window through `xdg_toplevel.move`, a drag on the toolbar's
+//! search field does not, and a double click on the toolbar zooms the window and another restores it.
+//! Needs an EGL device and `dbus-daemon` for the app's private bus.
+
+mod common;
+
+use std::path::PathBuf;
+use std::process::Child;
+use std::time::{Duration, Instant};
+
+use common::spawn;
+use cupertino_server::{backend::headless, config::Config, Cupertino};
+use cupertino_test_bus::PrivateBus;
+use cupertino_wm::LifecycleState;
+use smithay::backend::input::ButtonState;
+use smithay::wayland::compositor::with_states;
+use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
+
+const TIMEOUT: Duration = Duration::from_secs(10);
+/// The window's content height at its default size; the server's title bar sits above it in the frame.
+const CONTENT_HEIGHT: f64 = 625.0;
+/// Content points in the toolbar row: between the pane's title and the search field, where no item lies, and on the
+/// search field at the row's end.
+const TOOLBAR_GAP: (f64, f64) = (520.0, 26.0);
+const SEARCH_FIELD: (f64, f64) = (650.0, 26.0);
+/// How far a drag takes the pointer, in steps the client sees one by one.
+const DRAG: (f64, f64) = (120.0, 80.0);
+const DRAG_STEPS: u32 = 8;
+/// Evdev code of the left button.
+const BTN_LEFT: u32 = 0x110;
+
+struct Process(Child);
+
+impl Drop for Process {
+    fn drop(&mut self) {
+        if self.0.try_wait().unwrap().is_none() {
+            self.0.kill().unwrap();
+        }
+        self.0.wait().unwrap();
+    }
+}
+
+struct Harness {
+    state: Cupertino,
+    event_loop: smithay::reexports::calloop::EventLoop<'static, Cupertino>,
+    app: Process,
+    bus: PrivateBus,
+    _home: tempfile::TempDir,
+    /// The height of the server's title bar over the content.
+    title_bar: f64,
+    /// The input clock in milliseconds, which the client reads double clicks with.
+    time: u32,
+}
+
+impl Harness {
+    /// `None` without an EGL device.
+    fn new() -> Option<Self> {
+        let binary = common::fixtures::artifact("cupertino-settings", "bin", "cupertino-settings");
+        let home = tempfile::tempdir().unwrap();
+        let bus = PrivateBus::start().expect("this test needs dbus-daemon");
+        let event_loop = smithay::reexports::calloop::EventLoop::try_new().unwrap();
+        let mut state = Cupertino::new(
+            smithay::reexports::wayland_server::Display::new().unwrap(),
+            event_loop.handle(),
+            event_loop.get_signal(),
+            Config::default(),
+            true,
+            &cupertino_assets::Assets::builtin(),
+        )
+        .unwrap();
+        if let Err(e) = headless::init(&mut state, (1280, 800), 1.0) {
+            common::egl_unavailable(format!("{e:#}"));
+            return None;
+        }
+        let socket = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
+            .join(state.socket_name.as_ref().unwrap());
+        let app = Process(
+            spawn::cleared(&binary, home.path())
+                .args(["--pane", "accessibility"])
+                .env("XDG_CONFIG_HOME", home.path().join("config"))
+                .env("XDG_DATA_HOME", home.path().join("data"))
+                .env("XDG_DATA_DIRS", home.path().join("share"))
+                .env("XDG_RUNTIME_DIR", home.path())
+                .env("WAYLAND_DISPLAY", socket)
+                .env("CUPERTINO_ASSET_SEARCH_PATH", "")
+                .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
+                .env("DBUS_SYSTEM_BUS_ADDRESS", &bus.address)
+                .spawn()
+                .unwrap(),
+        );
+        let mut h = Self {
+            state,
+            event_loop,
+            app,
+            bus,
+            _home: home,
+            title_bar: 0.0,
+            time: 1_000,
+        };
+        h.wait_until("the Settings window", |s| title(s) == "Accessibility");
+        h.run_for(Duration::from_millis(250));
+        h.title_bar = frame(&h.state).3 - CONTENT_HEIGHT;
+        Some(h)
+    }
+
+    fn step(&mut self) {
+        headless::step(
+            &mut self.state,
+            &mut self.event_loop,
+            Duration::from_millis(5),
+        )
+        .unwrap();
+        assert!(
+            self.app.0.try_wait().unwrap().is_none(),
+            "Settings exited unexpectedly"
+        );
+        assert!(!self.bus.has_exited(), "private bus exited unexpectedly");
+    }
+
+    fn wait_until(&mut self, what: &str, condition: impl Fn(&Cupertino) -> bool) {
+        let end = Instant::now() + TIMEOUT;
+        while Instant::now() < end {
+            self.step();
+            if condition(&self.state) {
+                return;
+            }
+        }
+        panic!(
+            "timed out waiting for {what}; frame={:?}",
+            frame(&self.state)
+        );
+    }
+
+    fn run_for(&mut self, duration: Duration) {
+        let end = Instant::now() + duration;
+        while Instant::now() < end {
+            self.step();
+        }
+    }
+
+    /// The screen point of a point in the window's content, at any size.
+    fn screen(&self, content: (f64, f64)) -> (f64, f64) {
+        let (x, y, _, _) = frame(&self.state);
+        (x + content.0, y + self.title_bar + content.1)
+    }
+
+    fn move_to(&mut self, point: (f64, f64)) {
+        self.time += 10;
+        self.state.pointer_moved_to(point.into(), self.time, None);
+        self.step();
+    }
+
+    fn button(&mut self, pressed: bool) {
+        self.time += 10;
+        let state = if pressed {
+            ButtonState::Pressed
+        } else {
+            ButtonState::Released
+        };
+        self.state.pointer_button(BTN_LEFT, state, self.time);
+        self.step();
+    }
+
+    /// Presses at `content`, travels [`DRAG`] in steps with the button held, giving the client time to answer each
+    /// step, and releases.
+    fn drag(&mut self, content: (f64, f64)) {
+        let start = self.screen(content);
+        self.move_to(start);
+        self.button(true);
+        self.run_for(Duration::from_millis(50));
+        for i in 1..=DRAG_STEPS {
+            let f = f64::from(i) / f64::from(DRAG_STEPS);
+            self.move_to((start.0 + DRAG.0 * f, start.1 + DRAG.1 * f));
+            self.run_for(Duration::from_millis(30));
+        }
+        self.button(false);
+        self.run_for(Duration::from_millis(100));
+    }
+
+    /// Two presses at `content` well within a double click.
+    fn double_click(&mut self, content: (f64, f64)) {
+        let point = self.screen(content);
+        self.move_to(point);
+        for _ in 0..2 {
+            self.button(true);
+            self.button(false);
+        }
+    }
+
+    fn state(&self) -> LifecycleState {
+        let id = self.state.windows.iter().find(|w| w.mapped).unwrap().id;
+        self.state.wm.window(id).unwrap().state()
+    }
+}
+
+/// The window's frame on screen: x, y, width and height, title bar included.
+fn frame(state: &Cupertino) -> (f64, f64, f64, f64) {
+    let window = state.windows.iter().find(|w| w.mapped).unwrap();
+    let f = state.wm.window(window.id).unwrap().geometry();
+    (f.x, f.y, f.w, f.h)
+}
+
+fn title(state: &Cupertino) -> String {
+    state
+        .windows
+        .iter()
+        .find(|w| w.mapped)
+        .and_then(|w| {
+            with_states(w.surface(), |s| {
+                s.data_map
+                    .get::<XdgToplevelSurfaceData>()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .title
+                    .clone()
+            })
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_drag_on_the_toolbar_moves_the_kit_window_and_one_on_its_search_field_does_not() {
+    let Some(mut h) = Harness::new() else {
+        return;
+    };
+    assert!(
+        h.state
+            .windows
+            .iter()
+            .find(|w| w.mapped)
+            .unwrap()
+            .server_side,
+        "the server draws the title bar above the toolbar"
+    );
+    let before = frame(&h.state);
+    h.drag(SEARCH_FIELD);
+    assert_eq!(frame(&h.state), before, "the search field took the drag");
+
+    h.drag(TOOLBAR_GAP);
+    h.wait_until("the window to follow the drag", |s| {
+        frame(s).0 > before.0 + DRAG.0 / 2.0 && frame(s).1 > before.1 + DRAG.1 / 2.0
+    });
+    let after = frame(&h.state);
+    assert_eq!(
+        (after.2, after.3),
+        (before.2, before.3),
+        "moved, not resized"
+    );
+    assert_eq!(h.state(), LifecycleState::Normal);
+}
+
+#[test]
+fn a_double_click_on_the_toolbar_zooms_the_kit_window_and_another_restores_it() {
+    let Some(mut h) = Harness::new() else {
+        return;
+    };
+    let before = frame(&h.state);
+    h.double_click(TOOLBAR_GAP);
+    h.wait_until("the window to zoom", |s| {
+        let id = s.windows.iter().find(|w| w.mapped).unwrap().id;
+        s.wm.window(id).unwrap().state() == LifecycleState::Zoomed
+    });
+    // the client hears it is maximized before the next double click asks for the other state
+    h.run_for(Duration::from_millis(500));
+    assert_eq!(h.state(), LifecycleState::Zoomed);
+    h.double_click(TOOLBAR_GAP);
+    h.wait_until("the window to restore", |s| frame(s) == before);
+}

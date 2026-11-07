@@ -2,7 +2,11 @@
 
 The settings application of the Cupertino desktop. The library holds the pane table, the sidebar order, the navigation
 history, the search, the panes and their controls; the `cupertino-settings` process (feature `app`) draws one window with
-CupertinoKit (`shell`): the sidebar beside the pane under a back and forward toolbar with the search field.
+CupertinoKit (`shell`): the sidebar beside the pane under a back and forward toolbar with the search field. The window
+has the server's title bar; its toolbar is also a drag region (Kit's `NavigationStack`): a drag between the title and the
+search field moves the window and a double click there zooms it, while the buttons and the search field keep their
+presses. From the keyboard, the compositor's Zoom shortcut (Super+Ctrl+Z by default) and the menu bar's Window menu
+zoom, minimize and tile the window.
 
 ```
 cargo test -p cupertino-settings --features app        # needs CUPERTINO_ASSET_DIR; bus tests need dbus-daemon

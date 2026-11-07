@@ -11,7 +11,7 @@ use cupertino_ui_core::{
 use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, LayoutSpec, Measured, ScrollState, SizeSpec,
 };
-use cupertino_ui_platform::{PointerEvent, ScrollSource, Timestamp, WindowEvent};
+use cupertino_ui_platform::{Mods, PointerEvent, ScrollSource, Timestamp, WindowEvent};
 use cupertino_ui_render::{PaintOp, Shape};
 use cupertino_ui_text::{AttributedText, TextStyle};
 use std::cell::Cell;
@@ -271,6 +271,24 @@ fn keys_from_a_focused_child_scroll_by_a_line_a_page_and_to_the_ends() {
     assert_eq!(h.model().inner.offset.y, 140.0);
     h.tap(HOME);
     assert_eq!(h.model().inner.offset.y, 0.0);
+}
+
+#[test]
+fn a_key_held_with_a_command_modifier_is_left_for_the_shortcuts() {
+    let mut h = harness(Setup {
+        buttons: true,
+        ..Setup::default()
+    });
+    h.tap(TAB);
+    for mods in [Mods::PRIMARY, Mods::CTRL, Mods::ALT] {
+        h.key_event(DOWN, true, false, mods);
+        h.key_event(DOWN, false, false, mods);
+        h.key_event(END, true, false, mods);
+        h.key_event(END, false, false, mods);
+    }
+    assert_eq!(h.model().inner.offset.y, 0.0);
+    h.key_event(DOWN, true, false, Mods::SHIFT);
+    assert_eq!(h.model().inner.offset.y, 40.0, "Shift is no command modifier");
 }
 
 fn focused_role(h: &Harness<Scrolled>) -> Role {

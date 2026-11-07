@@ -226,6 +226,8 @@ impl Run {
         self.home.path().to_path_buf()
     }
 
+    /// Runs until no window waits for a frame, then checks that a screen reader could read every window open.
+    #[track_caller]
     pub fn settle(&mut self) {
         for _ in 0..8 {
             self.driver.run_until_idle(budget()).unwrap();
@@ -236,12 +238,28 @@ impl Run {
                 .filter(|&w| system.frame_requested(w).unwrap())
                 .collect();
             if waiting.is_empty() {
-                return;
+                break;
             }
             for window in waiting {
                 system.frame_ready(window, self.now).unwrap();
             }
         }
+        // When the node the keyboard is on goes away (the row of a folder it opens, the list swapped for the icon
+        // grid, an item moved to the trash), the focus falls to the nearest surviving ancestor, which can be a node
+        // assistive technology does not see (the table's rows, the items' frame). Which layer gives the reader a node
+        // to read then is a pending decision; until it is made that one problem is left out, and any other fails.
+        let problems: Vec<String> = self
+            .driver
+            .accessibility_audit()
+            .into_iter()
+            .filter(|p| !(p.contains("] focus NodeId(") && p.ends_with(": not in the tree")))
+            .collect();
+        assert!(
+            problems.is_empty(),
+            "Files: a screen reader would miss:\n{}\nin:\n{}",
+            problems.join("\n"),
+            self.driver.semantic_outlines()
+        );
     }
 
     /// Move the clock on by `ms` milliseconds a frame of `step_ms` at a time, presenting the frames the windows ask

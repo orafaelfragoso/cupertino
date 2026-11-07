@@ -30,9 +30,9 @@ pub use clipboard::{
 };
 pub use configure::{Decorations, WindowConfigure, WindowStates, WmCapabilities};
 pub use connection::{
-    BufferLease, Connection, Event, ExtensionEvent, ExternalRole, FrameCallback, Popup,
-    PopupConfigure, PopupPlacement, State, SurfaceId, TokenRequest, Toplevel, ToplevelConfig,
-    Waker,
+    BufferLease, Connection, Event, ExtensionEvent, ExternalRole, FrameCallback, HeldPress, Popup,
+    PopupConfigure, PopupPlacement, PressDevice, State, SurfaceId, TokenRequest, Toplevel,
+    ToplevelConfig, Waker,
 };
 pub use cursor::CursorTheme;
 pub use error::{Disconnect, Error};

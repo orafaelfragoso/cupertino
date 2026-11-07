@@ -218,6 +218,7 @@ pub fn window<M: Clone + 'static>(view: ForceQuitView, input: fn(Input) -> M) ->
             under: Some(Box::new(move |cx| {
                 paint_body(cx, &layout, empty, &question, &question_icon)
             })),
+            frame: None,
             children,
         }),
         popup: None,

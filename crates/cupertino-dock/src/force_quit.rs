@@ -1,6 +1,6 @@
 //! The Force Quit Applications dialog: the running applications with the ones that stopped answering marked, a Force
-//! Quit button, and a second step that asks again before anything is ended. The model and the layout; drawing is in
-//! `render::paint_force_quit`, the surface is the process's (`app.rs`).
+//! Quit button, and a second step that asks again before anything is ended. The model and the layout; the Kit view
+//! is `view/force_quit.rs`, the surface is the process's (`app.rs`).
 
 use cupertino_wm::geometry::{Point, Rect};
 

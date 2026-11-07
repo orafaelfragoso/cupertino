@@ -1014,6 +1014,10 @@ impl Cupertino {
             // a move or resize the client asked for after it got the press: the client still gets the release
             self.end_model_interaction(pos, time);
         }
+        if state == ButtonState::Pressed && self.release_engaged_layer(pos, serial, time) {
+            self.consumed_buttons.push(button);
+            return;
+        }
         if state == ButtonState::Pressed && self.dismiss_popup_grab_for_press(pos, serial, time) {
             self.consumed_buttons.push(button);
             return;

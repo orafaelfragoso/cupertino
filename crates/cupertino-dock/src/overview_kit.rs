@@ -322,12 +322,36 @@ impl OverviewSurface {
     }
 
     /// The chrome's window at `now`, until its fade has finished. `output` is the output's size in points.
-    pub fn window<M: Clone + 'static>(
+    pub fn window<M, F>(&self, now: f64, output: Size, input: F) -> Option<Window<M>>
+    where
+        M: Clone + 'static,
+        F: Fn(OverviewInput) -> M + Clone + 'static,
+    {
+        self.build(now, output, input, None)
+    }
+
+    /// [`Self::window`] that sends `frame` at every frame the compositor gives the window while something in it moves
+    /// ([`Self::next_wake`]), so the caller advances the chrome with the display rather than with a timer.
+    pub fn window_with_frames<M, F>(
         &self,
         now: f64,
         output: Size,
-        input: fn(OverviewInput) -> M,
-    ) -> Option<Window<M>> {
+        input: F,
+        frame: M,
+    ) -> Option<Window<M>>
+    where
+        M: Clone + 'static,
+        F: Fn(OverviewInput) -> M + Clone + 'static,
+    {
+        let moving = self.next_wake(now).is_some();
+        self.build(now, output, input, moving.then_some(frame))
+    }
+
+    fn build<M, F>(&self, now: f64, output: Size, input: F, frame: Option<M>) -> Option<Window<M>>
+    where
+        M: Clone + 'static,
+        F: Fn(OverviewInput) -> M + Clone + 'static,
+    {
         let ui = self.ui.as_ref()?;
         if ui.is_gone(now) {
             return None;
@@ -552,8 +576,12 @@ impl OverviewSurface {
                 role: Role::Group,
                 name: TITLE.to_owned(),
                 opacity: alpha,
-                pointer: Some(Box::new(move |p| input(OverviewInput::Pointer(p)))),
+                pointer: Some(Box::new({
+                    let input = input.clone();
+                    move |p| input(OverviewInput::Pointer(p))
+                })),
                 key: Some(Box::new(move |k| input(OverviewInput::Key(k)))),
+                frame,
                 children,
             }),
             popup: None,

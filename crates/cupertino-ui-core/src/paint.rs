@@ -231,9 +231,7 @@ impl Painter {
             let background = (id == root
                 && match input.background {
                     WindowBackground::Theme => true,
-                    WindowBackground::Surface { .. } | WindowBackground::SurfaceRect { .. } => {
-                        !input.backdrop
-                    }
+                    WindowBackground::Surface { .. } => !input.backdrop,
                     WindowBackground::None => false,
                 })
             .then_some(input.background);
@@ -285,16 +283,6 @@ impl Painter {
                                 rect: bounds,
                                 radius,
                             },
-                            surface_fill(surface, alpha),
-                        ),
-                        // the window's origin is the root's
-                        WindowBackground::SurfaceRect {
-                            surface,
-                            rect,
-                            radius,
-                            alpha,
-                        } => (
-                            Shape::RoundedRect { rect, radius },
                             surface_fill(surface, alpha),
                         ),
                         _ => {

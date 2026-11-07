@@ -15,12 +15,10 @@ app = [
     "dep:async-io",
     "dep:cupertino-apps",
     "dep:cupertino-assets",
-    "dep:cupertino-decorations",
     "dep:cupertino-geometry",
     "dep:cupertino-icons",
     "dep:cupertino-modifiers",
     "dep:cupertino-shell-client",
-    "dep:cupertino-theme",
     "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
     "dep:tiny-skia",
@@ -34,14 +32,12 @@ cupertino-overview = { path = "../cupertino-overview" }
 cupertino-wm = { path = "../cupertino-wm" }
 cupertino-apps = { path = "../cupertino-apps", optional = true }
 cupertino-assets = { path = "../cupertino-assets", optional = true }
-cupertino-decorations = { path = "../cupertino-decorations", optional = true }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-geometry = { path = "../cupertino-geometry", optional = true }
 cupertino-icons = { path = "../cupertino-icons", optional = true }
 cupertino-modifiers = { path = "../cupertino-modifiers", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
-cupertino-theme = { path = "../cupertino-theme", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 tiny-skia = { version = "0.12", optional = true }

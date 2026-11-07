@@ -14,15 +14,17 @@ use cupertino_dock::actions::{ActionMap, Trigger};
 use cupertino_dock::desktop::{parse_entry, DesktopIndex};
 use cupertino_dock::kit::{
     self, DockEvent, Host, IconKey, Message, Model, OutputInfo, Part, Placement, Request, Sized,
-    SwitcherPaint,
 };
-use cupertino_dock::overview_ui::{Mode, OverviewUi};
+use cupertino_dock::overview_ui::{Mode, Workspace};
 use cupertino_dock::session::Session;
-use cupertino_dock::view::{IconSet, BAR_APP_ID, EDGE_APP_ID, FORCE_QUIT_APP_ID, GRID_APP_ID};
+use cupertino_dock::view::{
+    IconSet, BAR_APP_ID, EDGE_APP_ID, FORCE_QUIT_APP_ID, GRID_APP_ID, OVERVIEW_APP_ID,
+    SWITCHER_APP_ID,
+};
 use cupertino_dock::{Dock, DockConfig};
 use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{
-    next_resource_id, Application, Command, PlaceholderIcons, Role, RuntimeOptions, Window,
+    next_resource_id, Application, Command, Key, PlaceholderIcons, Role, RuntimeOptions, Window,
 };
 use cupertino_kit::geometry::{Point, Rect};
 use cupertino_kit::layout::LayoutDirection;
@@ -35,6 +37,7 @@ use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_theme::Theme;
 use cupertino_ui_test::{ManualClock, TestDriver};
+use cupertino_wm::geometry::Rect as WmRect;
 
 const EDITOR: &str = "org.example.Editor";
 const TERMINAL: &str = "org.example.Terminal";
@@ -75,25 +78,33 @@ thread_local! {
 struct Record {
     now: f64,
     wake: Option<u64>,
+    /// How long after each wake the model asked to be woken, in seconds.
+    wakes: Vec<f64>,
     requests: Vec<(u32, Request)>,
     placements: Vec<Placement>,
     keyboard: Vec<(Part, bool)>,
-    /// How many times the overview's image was painted.
-    overview_paints: usize,
     spawned: Vec<(Vec<String>, Option<String>)>,
     pins: Vec<Vec<String>>,
     shell: Vec<String>,
+    /// What the next read of `dock.conf` finds.
+    conf: Option<DockSettings>,
 }
 
 struct FakeHost(Rc<RefCell<Record>>);
 
-/// A solid square `px` device pixels large.
+/// A square image `px` device pixels large: a solid square with a transparent margin of a tenth of its side, as an
+/// icon leaves room around its shape.
 fn square(px: u32) -> ImageSource {
-    let pixels: Vec<u8> = [40u8, 90, 200, 255]
-        .iter()
-        .copied()
-        .cycle()
-        .take((px * px * 4) as usize)
+    let margin = px / 10;
+    let inside = |i: u32| (margin..px - margin).contains(&i);
+    let pixels: Vec<u8> = (0..px * px)
+        .flat_map(|i| {
+            if inside(i % px) && inside(i / px) {
+                [40u8, 90, 200, 255]
+            } else {
+                [0; 4]
+            }
+        })
         .collect();
     ImageSource {
         id: next_resource_id(),
@@ -112,8 +123,11 @@ impl Host for FakeHost {
     fn now(&self) -> f64 {
         self.0.borrow().now
     }
-    fn wake(&mut self, _after: f64, generation: u64) -> Vec<Command<Message>> {
-        self.0.borrow_mut().wake = Some(generation);
+    fn wake(&mut self, after: f64, generation: u64) -> Vec<Command<Message>> {
+        let mut record = self.0.borrow_mut();
+        record.wake = Some(generation);
+        record.wakes.push(after);
+        drop(record);
         Vec::new()
     }
     fn request(&mut self, output: u32, request: Request) {
@@ -138,7 +152,7 @@ impl Host for FakeHost {
         self.0.borrow_mut().pins.push(pins.to_vec());
     }
     fn read_conf(&mut self, _: &DockSettings) -> Option<DockSettings> {
-        None
+        self.0.borrow_mut().conf.take()
     }
     fn terminal(&mut self) -> Option<String> {
         None
@@ -153,20 +167,6 @@ impl Host for FakeHost {
     fn window_closed(&mut self, _: u32) {}
     fn trash_full(&mut self) -> bool {
         false
-    }
-    fn paint_switcher(&mut self, _: f64, _: &SwitcherPaint<'_>) -> Option<ImageSource> {
-        Some(square(8))
-    }
-    fn paint_overview(
-        &mut self,
-        _: f64,
-        _: (f64, f64),
-        _: &OverviewUi,
-        _: f64,
-        _: bool,
-    ) -> Option<ImageSource> {
-        self.0.borrow_mut().overview_paints += 1;
-        Some(square(8))
     }
 }
 
@@ -248,6 +248,13 @@ impl Run {
     }
 
     fn with(theme: ThemeTokens, actions: ActionMap) -> Self {
+        Self::on(theme, actions, true)
+    }
+
+    /// [`Run::with`] on a desktop that offers its materials (`app_effects`) or not, where the windows paint their fills.
+    fn on(theme: ThemeTokens, actions: ActionMap, app_effects: bool) -> Self {
+        // window ids start again with a new runtime: none of them is configured yet
+        CONFIGURED.with_borrow_mut(Vec::clear);
         let record = Rc::new(RefCell::new(Record::default()));
         let mut dock = Dock::new(DockConfig::default());
         dock.set_pinned(&[EDITOR, TERMINAL]);
@@ -288,7 +295,7 @@ impl Run {
             on_window_error: None,
         };
         let capabilities = Capabilities {
-            app_effects: true,
+            app_effects,
             ..Capabilities::default()
         };
         let driver = TestDriver::new(capabilities, options, ManualClock::new(Timestamp(0)));
@@ -775,46 +782,6 @@ fn the_focus_dock_shortcut_shows_an_auto_hidden_bar_until_escape() {
     assert_eq!(editor_y(&mut run), hidden, "and hides once it lets go");
 }
 
-/// The overview's image covers the whole output: messages that come within a frame of its last paint, as every
-/// pointer motion does, leave the next paint to the next frame instead of painting it again each time.
-#[test]
-fn the_overview_is_painted_at_most_once_a_frame() {
-    let mut run = Run::start();
-    let paints = |run: &Run| run.record.borrow().overview_paints;
-    run.message(Message::Dock {
-        output: 1,
-        events: vec![DockEvent::Overview {
-            mode: Mode::All,
-            area: cupertino_wm::geometry::Rect::new(0.0, 0.0, 1280.0, 800.0),
-            windows: vec![(
-                7,
-                cupertino_wm::geometry::Rect::new(100.0, 100.0, 400.0, 300.0),
-            )],
-            workspaces: Vec::new(),
-        }],
-    });
-    let first = paints(&run);
-    assert_eq!(first, 1, "the overview is painted as it opens");
-    for i in 0..20 {
-        run.message(Message::Dock {
-            output: 1,
-            events: vec![DockEvent::Window {
-                id: 7,
-                app_id: TERMINAL.to_owned(),
-                title: format!("shell {i}"),
-                minimized: false,
-            }],
-        });
-    }
-    assert_eq!(paints(&run), first, "not again within the frame");
-    run.advance(kit::FRAME);
-    assert_eq!(
-        paints(&run),
-        first + 1,
-        "the paint left over, at the next frame"
-    );
-}
-
 #[test]
 fn resting_the_pointer_on_another_displays_edge_moves_the_dock_there() {
     let mut run = Run::start();
@@ -887,28 +854,40 @@ fn the_window_feed_comes_from_the_bars_role_and_a_trigger_from_any() {
     );
 }
 
+/// The bar's node asks for the menu material under the bar's own rectangle, not under the whole window (which is
+/// deeper and as wide as the output); under Reduce Transparency it asks for none and paints the opaque fill.
 #[test]
 fn with_reduce_transparency_the_bar_asks_for_no_material() {
     for (reduce, material) in [(false, true), (true, false)] {
         let mut run = Run::with(tokens(reduce), ActionMap::default());
         let bar = run.bar();
-        let backdrop = run
-            .driver
-            .window_system_mut()
-            .requests(bar)
-            .unwrap()
+        let width = run.driver.window_system_mut().spec(bar).unwrap().size.width;
+        let requests = run.driver.window_system_mut().requests(bar).unwrap();
+        assert!(
+            !requests
+                .iter()
+                .any(|r| matches!(r, WindowRequest::Backdrop(Some(_)))),
+            "no material under the whole window"
+        );
+        let regions = requests
             .iter()
             .rev()
             .find_map(|r| match r {
-                WindowRequest::Backdrop(b) => Some(b.clone()),
+                WindowRequest::Materials(m) => Some(m.clone()),
                 _ => None,
             })
-            .flatten();
-        assert_eq!(backdrop.is_some(), material, "reduce transparency {reduce}");
-        if let Some(b) = backdrop {
+            .unwrap_or_default();
+        assert_eq!(
+            !regions.is_empty(),
+            material,
+            "reduce transparency {reduce}"
+        );
+        if material {
+            assert_eq!(regions.len(), 1, "{regions:?}");
+            assert_eq!(regions[0].material, "Menu");
             assert!(
-                b.bounds.is_some(),
-                "the material lies under the bar's rectangle only"
+                regions[0].rect.width() < width,
+                "the material lies under the bar's rectangle only: {regions:?}"
             );
         }
     }
@@ -1019,4 +998,738 @@ fn the_application_grid_takes_the_keyboard_filters_as_one_types_and_launches_wit
         Some((Part::Grid, false)),
         "the grid closes and gives the keyboard back"
     );
+}
+
+// ---- the bar drawn through Kit ---------------------------------------------------------------------------------
+
+/// The server's Focus Dock, on the role of `output`.
+fn engage(run: &mut Run, output: u32) {
+    run.message(Message::Dock {
+        output,
+        events: vec![DockEvent::Engage],
+    });
+}
+
+/// The rectangles of the bar's running indicators (its square marks), in window points.
+fn indicators(run: &Run, bar: WindowId) -> Vec<Rect> {
+    let snapshot = run.driver.runtime().snapshot(bar).unwrap();
+    snapshot
+        .nodes
+        .iter()
+        .filter(|n| matches!(&n.key, Some(Key::Str(k)) if k.starts_with("mark-")))
+        .map(|n| n.rect)
+        .filter(|r| r.width() == r.height())
+        .collect()
+}
+
+/// How many paint operations the tile called `name` has: its icon, and its focus ring when that shows.
+fn tile_ops(run: &Run, bar: WindowId, name: &str) -> usize {
+    let tile = centre(run.bounds(bar, Role::Button, name));
+    let snapshot = run.driver.runtime().snapshot(bar).unwrap();
+    snapshot
+        .display_list
+        .nodes
+        .iter()
+        .filter(|n| n.parent.is_some() && n.hit.width() > 0.0)
+        .find(|n| (centre(n.hit).x - tile.x).abs() < 0.5 && (centre(n.hit).y - tile.y).abs() < 0.5)
+        .unwrap_or_else(|| panic!("no paint node for {name}"))
+        .ops
+        .len()
+}
+
+/// Whether `window` asks for its next frame. [`Run::settle`] can end on a frame just handed out, so the runtime takes
+/// it first.
+fn asks_for_frames(run: &mut Run, window: WindowId) -> bool {
+    run.driver.run_until_idle(budget()).unwrap();
+    run.driver
+        .window_system_mut()
+        .frame_requested(window)
+        .unwrap()
+}
+
+/// The open context menu: a window of the runtime other than the bar with a menu in it.
+fn open_menu_window(run: &Run, bar: WindowId) -> Option<WindowId> {
+    run.driver
+        .runtime()
+        .windows()
+        .into_iter()
+        .map(|(_, id)| id)
+        .find(|&id| {
+            id != bar
+                && run
+                    .driver
+                    .runtime()
+                    .snapshot(id)
+                    .is_some_and(|s| s.accessibility.iter().any(|(_, n)| n.role == Role::Menu))
+        })
+}
+
+#[test]
+fn a_running_application_has_an_indicator_under_its_tile() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    let under = |run: &Run, mark: Rect, name: &str| {
+        let tile = run.bounds(bar, Role::Button, name);
+        (centre(mark).x - centre(tile).x).abs() < 0.5 && mark.y() >= tile.y() + tile.height()
+    };
+    let marks = indicators(&run, bar);
+    assert_eq!(marks.len(), 1, "the terminal runs: {marks:?}");
+    assert!(
+        under(&run, marks[0], "Terminal"),
+        "on the screen-edge side of its tile"
+    );
+
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Window {
+            id: 8,
+            app_id: EDITOR.to_owned(),
+            title: "notes".to_owned(),
+            minimized: false,
+        }],
+    });
+    run.advance(1.0);
+    let marks = indicators(&run, bar);
+    assert_eq!(marks.len(), 2, "{marks:?}");
+    assert!(marks.iter().any(|&m| under(&run, m, "Editor")));
+
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::WindowClosed(8)],
+    });
+    run.advance(1.0);
+    let marks = indicators(&run, bar);
+    assert_eq!(marks.len(), 1, "the editor stopped: {marks:?}");
+    assert!(under(&run, marks[0], "Terminal"));
+}
+
+/// A bounce runs on the bar's frame callbacks: the tile rises while it lasts, the model is never woken more often than
+/// its slow fallback, and the tile rests again once it ends, with no frame asked for.
+#[test]
+fn an_attention_bounce_moves_the_tile_on_frames_and_brings_it_back_to_rest() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    let y = |run: &Run| run.bounds(bar, Role::Button, "Terminal").y();
+    let rest = y(&run);
+    assert!(!asks_for_frames(&mut run, bar));
+    let woken = run.record.borrow().wakes.len();
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Attention(TERMINAL.to_owned())],
+    });
+    assert!(
+        asks_for_frames(&mut run, bar),
+        "the bounce asks for the bar's next frame"
+    );
+    let mut highest = rest;
+    for _ in 0..12 {
+        run.advance(0.05);
+        highest = highest.min(y(&run));
+    }
+    assert!(highest < rest - 4.0, "the tile rose: {highest} < {rest}");
+    let wakes = run.record.borrow().wakes[woken..].to_vec();
+    assert!(
+        wakes
+            .iter()
+            .all(|&after| after >= kit::FRAME_FALLBACK - 1e-9),
+        "no timer faster than the fallback while the frames drive it: {wakes:?}"
+    );
+    for _ in 0..4 {
+        run.advance(1.0);
+    }
+    assert_eq!(y(&run), rest, "back at rest");
+    assert!(!asks_for_frames(&mut run, bar), "and asks for no frame");
+}
+
+/// Launching from the bar bounces the tile until the application's window comes.
+#[test]
+fn a_launch_bounces_its_tile_until_the_window_comes() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    let y = |run: &Run| run.bounds(bar, Role::Button, "Editor").y();
+    let rest = y(&run);
+    run.click(bar, centre(run.bounds(bar, Role::Button, "Editor")));
+    let mut highest = rest;
+    for _ in 0..12 {
+        run.advance(0.05);
+        highest = highest.min(y(&run));
+    }
+    assert!(highest < rest - 4.0, "the tile rose: {highest} < {rest}");
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Window {
+            id: 8,
+            app_id: EDITOR.to_owned(),
+            title: "notes".to_owned(),
+            minimized: false,
+        }],
+    });
+    for _ in 0..4 {
+        run.advance(1.0);
+    }
+    assert_eq!(y(&run), rest, "the window came: the tile rests");
+}
+
+/// The tile's menu is a grabbing popup of the bar anchored to the tile itself, below it, so the server flips it above
+/// the bar at the bottom of the output.
+#[test]
+fn the_tiles_menu_is_a_popup_anchored_to_its_tile() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    let terminal = run.bounds(bar, Role::Button, "Terminal");
+    run.pointer(
+        bar,
+        PointerEvent::Enter {
+            position: centre(terminal),
+        },
+    );
+    run.button(bar, centre(terminal), MouseButton::Right, true);
+    run.button(bar, centre(terminal), MouseButton::Right, false);
+    let menu = open_menu_window(&run, bar).expect("the menu opened");
+    let system = run.driver.window_system_mut();
+    assert_eq!(system.parent(menu).unwrap(), Some(bar));
+    let spec = system.placement(menu).unwrap().expect("placed").clone();
+    assert!(
+        spec.grab,
+        "the menu takes the keyboard and closes on a press outside"
+    );
+    assert!(
+        (centre(spec.anchor_rect).x - centre(terminal).x).abs() < 0.5,
+        "centred on the tile: {:?} for {terminal:?}",
+        spec.anchor_rect
+    );
+    assert!(
+        spec.anchor_rect.y() >= terminal.y() - 0.5
+            && spec.anchor_rect.y() + spec.anchor_rect.height()
+                <= terminal.y() + terminal.height() + 0.5,
+        "{:?} for {terminal:?}",
+        spec.anchor_rect
+    );
+}
+
+/// Every Focus Dock starts on the first tile and shows the ring at once, whatever was focused when the bar last gave
+/// the keyboard back.
+#[test]
+fn every_focus_dock_starts_on_the_first_tile_with_the_ring_shown() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    run.send_to(bar, WindowEvent::Focus(true));
+    for _ in 0..2 {
+        engage(&mut run, 1);
+        assert_eq!(run.focused(bar).as_deref(), Some("Editor"));
+        assert!(
+            tile_ops(&run, bar, "Editor") > tile_ops(&run, bar, "Terminal"),
+            "the focused tile draws its ring"
+        );
+        run.key(bar, RIGHT);
+        assert_eq!(run.focused(bar).as_deref(), Some("Terminal"));
+        run.key(bar, ESCAPE);
+        assert_eq!(
+            run.record.borrow().keyboard.last().copied(),
+            Some((Part::Bar(1), false))
+        );
+    }
+}
+
+/// The focused tile going away hands the focus to a tile beside it, never to the bar itself.
+#[test]
+fn the_focus_moves_to_a_neighbour_when_its_tile_goes() {
+    let mut run = Run::start();
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Window {
+            id: 9,
+            app_id: "org.example.Viewer".to_owned(),
+            title: "picture".to_owned(),
+            minimized: false,
+        }],
+    });
+    run.advance(1.0);
+    let bar = run.bar();
+    let viewer = run
+        .nodes(bar)
+        .into_iter()
+        .filter(|n| n.0 == Role::Button)
+        .map(|n| n.1)
+        .find(|n| n != "Editor" && n != "Terminal" && n != kit::TRASH_NAME)
+        .expect("the viewer's tile");
+    run.send_to(bar, WindowEvent::Focus(true));
+    engage(&mut run, 1);
+    for _ in 0..4 {
+        if run.focused(bar).as_deref() == Some(viewer.as_str()) {
+            break;
+        }
+        run.key(bar, RIGHT);
+    }
+    assert_eq!(run.focused(bar), Some(viewer.clone()));
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::WindowClosed(9)],
+    });
+    run.advance(1.0);
+    assert!(
+        !run.nodes(bar).iter().any(|n| n.1 == viewer),
+        "the tile went"
+    );
+    let focused = run.focused(bar).expect("a tile keeps the focus");
+    assert!(
+        [kit::TRASH_NAME, "Terminal"].contains(&focused.as_str()),
+        "a neighbour: {focused}"
+    );
+    assert!(tile_ops(&run, bar, &focused) > tile_ops(&run, bar, "Editor"));
+    assert_eq!(
+        run.record.borrow().keyboard.last().copied(),
+        Some((Part::Bar(1), true)),
+        "still engaged"
+    );
+}
+
+/// The menu taking the keyboard keeps Focus Dock; the bar losing the keyboard otherwise, a menu open or not (a press
+/// outside that closes it), ends it.
+#[test]
+fn losing_the_keyboard_ends_focus_dock_except_to_its_own_menu() {
+    const MENU: u32 = 0xff67;
+    let mut run = Run::start();
+    let bar = run.bar();
+    run.send_to(bar, WindowEvent::Focus(true));
+    engage(&mut run, 1);
+    run.key(bar, MENU);
+    assert!(open_menu_window(&run, bar).is_some(), "the menu opened");
+    run.message(Message::KeyboardLeft(1));
+    assert_eq!(
+        run.record.borrow().keyboard.last().copied(),
+        Some((Part::Bar(1), true)),
+        "the menu took the keyboard: still engaged"
+    );
+    // the server gives the keyboard to a window: the bar is told it left once more, the menu still open
+    run.message(Message::KeyboardLeft(1));
+    assert_eq!(
+        run.record.borrow().keyboard.last().copied(),
+        Some((Part::Bar(1), false))
+    );
+
+    engage(&mut run, 1);
+    run.message(Message::KeyboardLeft(1));
+    assert_eq!(
+        run.record.borrow().keyboard.last().copied(),
+        Some((Part::Bar(1), false)),
+        "without a menu, any leave ends it"
+    );
+}
+
+/// With magnification off, the pointer moving over one tile changes nothing the bar draws, so the bar presents no new
+/// frame for it.
+#[test]
+fn pointer_motion_over_a_tile_presents_no_new_frame() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    let terminal = centre(run.bounds(bar, Role::Button, "Terminal"));
+    run.pointer(bar, PointerEvent::Enter { position: terminal });
+    run.advance(1.0);
+    let before = run.driver.window_system_mut().frames(bar).unwrap().len();
+    for step in 0..12 {
+        let dx = f64::from(step % 5) - 2.0;
+        let position = Point::new(terminal.x + dx, terminal.y + dx / 2.0);
+        run.pointer(bar, PointerEvent::Motion { position });
+    }
+    let after = run.driver.window_system_mut().frames(bar).unwrap().len();
+    assert_eq!(after, before, "no repaint for motion that changes nothing");
+}
+
+/// Every change the bar shows reaches the screen as a new frame of the bar's window: a running application, an
+/// attention bounce, a new output scale, Focus Dock, and a `dock.conf` that turns magnification on (only the
+/// surface's depth changes) or changes the tile size, the position or auto-hide; an
+/// output plugged in shows its strip, and the bar moved off an unplugged output shows on the next. The bar draws no
+/// revision that changes with every update, so each must change what it paints or its surface.
+#[test]
+fn every_change_the_bar_shows_presents_a_new_frame() {
+    use cupertino_defaults::dock::Position;
+    let mut run = Run::start();
+    let presented = |run: &mut Run| {
+        let bar = run.bar();
+        run.driver.window_system_mut().frames(bar).unwrap().len()
+    };
+    let check = |run: &mut Run, what: &str, change: &dyn Fn(&mut Run)| {
+        run.advance(2.0);
+        let before = presented(run);
+        change(run);
+        run.advance(2.0);
+        assert!(presented(run) > before, "{what} presents a new frame");
+    };
+    check(&mut run, "an application starting", &|run| {
+        run.message(Message::Dock {
+            output: 1,
+            events: vec![DockEvent::Window {
+                id: 8,
+                app_id: EDITOR.to_owned(),
+                title: "notes".to_owned(),
+                minimized: false,
+            }],
+        });
+    });
+    check(&mut run, "an application quitting", &|run| {
+        run.message(Message::Dock {
+            output: 1,
+            events: vec![DockEvent::WindowClosed(8)],
+        });
+    });
+    check(&mut run, "an attention bounce", &|run| {
+        run.message(Message::Dock {
+            output: 1,
+            events: vec![DockEvent::Attention(TERMINAL.to_owned())],
+        });
+    });
+    check(&mut run, "a new output scale", &|run| {
+        let bar = run.bar();
+        run.send_to(bar, WindowEvent::Scale(2.0));
+    });
+    let conf = |run: &mut Run, settings: DockSettings| {
+        run.record.borrow_mut().conf = Some(settings);
+        run.message(Message::ConfChanged);
+    };
+    // these change only the bar's surface (its depth, its keyboard interactivity), which applies with its next commit
+    let placements = run.record.borrow().placements.len();
+    check(&mut run, "magnification turned on", &|run| {
+        conf(
+            run,
+            DockSettings {
+                magnification: Some(true),
+                ..DockSettings::default()
+            },
+        );
+    });
+    assert!(
+        run.record.borrow().placements.len() > placements,
+        "the bar's depth changed"
+    );
+    check(&mut run, "Focus Dock", &|run| engage(run, 1));
+    assert_eq!(
+        run.record.borrow().keyboard.last(),
+        Some(&(Part::Bar(1), true))
+    );
+    check(&mut run, "a new tile size", &|run| {
+        conf(
+            run,
+            DockSettings {
+                tile_size: Some(40.0),
+                ..DockSettings::default()
+            },
+        );
+    });
+    check(&mut run, "a new position", &|run| {
+        conf(
+            run,
+            DockSettings {
+                tile_size: Some(40.0),
+                position: Some(Position::Left),
+                ..DockSettings::default()
+            },
+        );
+    });
+    check(&mut run, "auto-hide", &|run| {
+        conf(
+            run,
+            DockSettings {
+                tile_size: Some(40.0),
+                position: Some(Position::Left),
+                autohide: Some(true),
+                ..DockSettings::default()
+            },
+        );
+    });
+
+    // an output plugged in shows its edge strip; the bar's output unplugged moves the bar to the next one, shown there
+    let mut outputs = OUTPUTS.to_vec();
+    outputs.push(OutputInfo {
+        key: 3,
+        width: 800.0,
+        height: 600.0,
+        scale: 1.0,
+    });
+    run.message(Message::Outputs(outputs.clone()));
+    run.advance(2.0);
+    let strip = run
+        .window(&format!("{EDGE_APP_ID}@3"))
+        .expect("the new output's strip");
+    assert!(!run
+        .driver
+        .window_system_mut()
+        .frames(strip)
+        .unwrap()
+        .is_empty());
+    outputs.remove(0);
+    run.message(Message::Outputs(outputs));
+    run.advance(2.0);
+    let moved = run
+        .window(&format!("{BAR_APP_ID}@2"))
+        .expect("the bar on the next output");
+    assert!(!run
+        .driver
+        .window_system_mut()
+        .frames(moved)
+        .unwrap()
+        .is_empty());
+}
+
+// ---- the switcher and the overview through the model -----------------------------------------------------------
+
+/// The switch's panel opens on the output the server names, keyed and named for it, lists the applications by their
+/// desktop names, and a click on one asks the server to switch to it.
+#[test]
+fn the_switcher_opens_on_the_named_output_and_a_click_switches() {
+    let mut run = Run::start();
+    run.message(Message::Dock {
+        output: 2,
+        events: vec![DockEvent::Switcher {
+            output: 2,
+            apps: vec![
+                TERMINAL.to_owned(),
+                EDITOR.to_owned(),
+                "org.example.Unknown".to_owned(),
+            ],
+            selected: 1,
+        }],
+    });
+    for _ in 0..4 {
+        run.advance(0.1);
+    }
+    assert!(run.window(&format!("{SWITCHER_APP_ID}@1")).is_none());
+    let panel = run
+        .window(&format!("{SWITCHER_APP_ID}@2"))
+        .expect("the panel on the second output");
+    let names: Vec<String> = run
+        .nodes(panel)
+        .into_iter()
+        .filter(|n| n.0 == Role::Button || n.0 == Role::ListItem || n.0 == Role::Tab)
+        .map(|n| n.1)
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "Terminal") && names.iter().any(|n| n == "Editor"),
+        "{names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n == "org.example.Unknown"),
+        "an application without a desktop entry goes by its id: {names:?}"
+    );
+    let editor = run
+        .nodes(panel)
+        .into_iter()
+        .find(|n| n.1 == "Editor")
+        .unwrap()
+        .3;
+    run.click(panel, centre(editor));
+    assert!(
+        run.requests()
+            .iter()
+            .any(|(o, r)| *o == 2 && matches!(r, Request::SwitcherActivate(1))),
+        "{:?}",
+        run.requests()
+    );
+    // every role is told the switch ended; the dock takes it from the bar's
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::SwitcherClosed { committed: true }],
+    });
+    for _ in 0..10 {
+        run.advance(0.1);
+    }
+    assert!(
+        run.window(&format!("{SWITCHER_APP_ID}@2")).is_none(),
+        "the panel faded out"
+    );
+}
+
+/// The overview's chrome opens on its output, takes the keyboard while it is up, lays out the three windows and tells
+/// the server where each goes; Escape asks to close it, and once the server closes it the keyboard goes back.
+#[test]
+fn the_overview_takes_the_keyboard_and_sends_the_window_frames() {
+    let mut run = Run::start();
+    for (id, title) in [(7, "shell"), (8, "notes"), (9, "todo")] {
+        let app_id = if id == 7 { TERMINAL } else { EDITOR };
+        run.message(Message::Dock {
+            output: 1,
+            events: vec![DockEvent::Window {
+                id,
+                app_id: app_id.to_owned(),
+                title: title.to_owned(),
+                minimized: false,
+            }],
+        });
+    }
+    let before = run.requests().len();
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Overview {
+            mode: Mode::All,
+            area: WmRect::new(0.0, 0.0, 1280.0, 800.0),
+            windows: vec![
+                (7, WmRect::new(40.0, 60.0, 600.0, 400.0)),
+                (8, WmRect::new(300.0, 100.0, 700.0, 500.0)),
+                (9, WmRect::new(500.0, 200.0, 500.0, 400.0)),
+            ],
+            workspaces: vec![
+                Workspace {
+                    id: 101,
+                    current: true,
+                },
+                Workspace {
+                    id: 102,
+                    current: false,
+                },
+            ],
+        }],
+    });
+    run.advance(0.1);
+    let chrome = run
+        .window(&format!("{OVERVIEW_APP_ID}@1"))
+        .expect("the overview's chrome");
+    assert!(
+        run.record
+            .borrow()
+            .keyboard
+            .contains(&(Part::Overview(1), true)),
+        "{:?}",
+        run.record.borrow().keyboard
+    );
+    for _ in 0..10 {
+        run.advance(0.1);
+    }
+    let framed: std::collections::BTreeSet<u32> = run.requests()[before..]
+        .iter()
+        .filter_map(|(o, r)| match r {
+            Request::OverviewFrame(id, _) if *o == 1 => Some(*id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        framed,
+        [7, 8, 9].into(),
+        "every window is told where it goes"
+    );
+    run.send_to(chrome, WindowEvent::Focus(true));
+    run.key(chrome, ESCAPE);
+    assert!(
+        run.requests()
+            .iter()
+            .any(|(o, r)| *o == 1 && *r == Request::OverviewClose),
+        "{:?}",
+        run.requests()
+    );
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::OverviewClosed],
+    });
+    for _ in 0..10 {
+        run.advance(0.1);
+    }
+    assert!(run.window(&format!("{OVERVIEW_APP_ID}@1")).is_none());
+    assert_eq!(
+        run.record.borrow().keyboard.last().copied(),
+        Some((Part::Overview(1), false))
+    );
+}
+
+/// With `CUPERTINO_LOOK_DIR` set, pictures of the dock as its model drives it, light and dark at 1x and 2x: the bar with
+/// a running application, a tile's menu, the switcher panel and the overview's chrome over three windows. The desktop
+/// offers no materials here, so the windows show their opaque fills where the compositor would draw a material.
+#[test]
+fn look_captures() {
+    let Some(dir) = std::env::var_os("CUPERTINO_LOOK_DIR") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    let looks = [Appearance::Light, Appearance::Dark];
+    for scale in [1.0, 2.0] {
+        let mut run = Run::on(tokens(false), ActionMap::default(), false);
+        let bar = run.bar();
+        run.driver
+            .look_into(&dir, bar, "dock-bar", scale, &looks)
+            .unwrap();
+        let terminal = centre(run.bounds(bar, Role::Button, "Terminal"));
+        run.pointer(bar, PointerEvent::Enter { position: terminal });
+        run.button(bar, terminal, MouseButton::Right, true);
+        run.button(bar, terminal, MouseButton::Right, false);
+        let menu = open_menu_window(&run, bar).expect("the menu opened");
+        // the compositor gives a popup the size it was placed at
+        let system = run.driver.window_system_mut();
+        let size = system.placement(menu).unwrap().expect("placed").size;
+        system
+            .configure(menu, Some(size), WindowStates::default())
+            .unwrap();
+        run.settle();
+        run.driver
+            .look_into(&dir, menu, "dock-menu", scale, &looks)
+            .unwrap();
+        run.key(menu, ESCAPE);
+
+        run.message(Message::Dock {
+            output: 1,
+            events: vec![DockEvent::Switcher {
+                output: 1,
+                apps: vec![
+                    TERMINAL.to_owned(),
+                    EDITOR.to_owned(),
+                    "org.example.Viewer".to_owned(),
+                ],
+                selected: 1,
+            }],
+        });
+        for _ in 0..6 {
+            run.advance(0.1);
+        }
+        let panel = run
+            .window(&format!("{SWITCHER_APP_ID}@1"))
+            .expect("the switcher");
+        run.driver
+            .look_into(&dir, panel, "dock-switcher", scale, &looks)
+            .unwrap();
+        run.message(Message::Dock {
+            output: 1,
+            events: vec![DockEvent::SwitcherClosed { committed: false }],
+        });
+
+        for (id, title) in [(7, "shell"), (8, "Meeting Notes"), (9, "Plan")] {
+            let app_id = if id == 7 { TERMINAL } else { EDITOR };
+            run.message(Message::Dock {
+                output: 1,
+                events: vec![DockEvent::Window {
+                    id,
+                    app_id: app_id.to_owned(),
+                    title: title.to_owned(),
+                    minimized: false,
+                }],
+            });
+        }
+        run.message(Message::Dock {
+            output: 1,
+            events: vec![DockEvent::Overview {
+                mode: Mode::All,
+                area: WmRect::new(0.0, 0.0, 1280.0, 800.0),
+                windows: vec![
+                    (7, WmRect::new(40.0, 60.0, 600.0, 400.0)),
+                    (8, WmRect::new(300.0, 100.0, 700.0, 500.0)),
+                    (9, WmRect::new(500.0, 200.0, 500.0, 400.0)),
+                ],
+                workspaces: vec![
+                    Workspace {
+                        id: 101,
+                        current: true,
+                    },
+                    Workspace {
+                        id: 102,
+                        current: false,
+                    },
+                ],
+            }],
+        });
+        for _ in 0..12 {
+            run.advance(0.1);
+        }
+        let chrome = run
+            .window(&format!("{OVERVIEW_APP_ID}@1"))
+            .expect("the overview");
+        run.driver
+            .look_into(&dir, chrome, "dock-overview-three-windows", scale, &looks)
+            .unwrap();
+    }
 }

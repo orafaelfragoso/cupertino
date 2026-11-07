@@ -57,6 +57,8 @@ pub struct GridView<'a> {
     pub icons: &'a dyn Fn(&str) -> IconSet,
     /// The window's size before the server sized it: the output's.
     pub size: Size,
+    /// The grid moves by itself: the window sends [`Input::Frame`] at every frame.
+    pub ticking: bool,
 }
 
 /// Scales about the window's centre.
@@ -254,6 +256,7 @@ pub fn window<M: Clone + 'static>(view: GridView<'_>, input: fn(Input) -> M) -> 
                     );
                 }
             })),
+            frame: view.ticking.then(|| input(Input::Frame)),
             children,
         }),
         popup: None,

@@ -571,6 +571,10 @@ pub struct Cupertino {
     pub cascade: policy::Cascade,
     /// The layer surface that asked for the keyboard exclusively (layer-shell) and still has it.
     pub exclusive_layer: Option<WlSurface>,
+    /// The engaged shell layer (a dock bar, a menu bar) a press outside it took the keyboard back from
+    /// ([`Cupertino::release_engaged_layer`]): it does not take the keyboard again until it stops asking for it, or
+    /// until it is engaged again.
+    pub released_layer: Option<WlSurface>,
     pub dbus: Option<DbusHandle>,
     pub menu_protocols: MenuProtocols,
     /// The heads the backends found, their configuration and the output-management protocols.
@@ -873,6 +877,7 @@ impl Cupertino {
             window_managers: WindowManagers::new(&cupertino_stage::StageConfig::default()),
             cascade: policy::Cascade::default(),
             exclusive_layer: None,
+            released_layer: None,
             dbus: None,
             menu_protocols,
             displays,
@@ -2047,15 +2052,21 @@ impl Cupertino {
     }
 
     /// A layer surface above the windows that asks for exclusive keyboard interactivity takes the
-    /// keyboard; when it stops asking or goes away the key window gets it back.
+    /// keyboard; when it stops asking or goes away the key window gets it back. A dock bar or menu bar a press outside
+    /// it released ([`Cupertino::release_engaged_layer`]) is not given it again until it stops asking.
     ///
     /// While the session is locked only a shell process can take it: an application's layer surface must not collect
     /// what is typed at the lock screen, nor wait to take the keyboard at the unlock. The authentication prompt keeps its
     /// claim under the lock, which holds the keyboard, and gets it back at the unlock. While the authentication prompt is
     /// shown only the prompt can take it, and an open menu of another surface is closed as it does.
     pub fn layer_keyboard_exclusivity(&mut self, surface: &WlSurface, exclusive: bool) {
+        if !exclusive && self.released_layer.as_ref() == Some(surface) {
+            // the layer let go after a press outside it: its next claim is a new one
+            self.released_layer = None;
+        }
         let prompt = crate::authorization::is_prompt(surface);
         let exclusive = exclusive
+            && self.released_layer.as_ref() != Some(surface)
             && (!self.session_lock.is_active()
                 || prompt
                 || surface
@@ -2076,6 +2087,57 @@ impl Cupertino {
                 self.restore_keyboard_focus();
             }
         }
+    }
+
+    /// A press at `pos` outside the dock bar or menu bar that holds the keyboard exclusively, which it asks for only
+    /// while engaged (Focus Dock, the menu bar's keyboard mode), ends that: the layer loses the keyboard, which goes back
+    /// to the key window, and the layer answers the leave by letting go. A press on the layer or on one of its popups
+    /// keeps it. Other exclusive layers (the authentication prompt, the launcher, the overview) are left as they are,
+    /// and the lock screen never gets here.
+    ///
+    /// A menu open from the layer closes first, so the keyboard is back on the layer when it leaves and the layer is
+    /// told; the press is then consumed, as any press that closes a menu is. True when it was.
+    pub fn release_engaged_layer(
+        &mut self,
+        pos: Point<f64, Logical>,
+        serial: Serial,
+        time: u32,
+    ) -> bool {
+        let Some(layer) = self
+            .exclusive_layer
+            .clone()
+            .filter(|l| self.docks.has_surface(l) || self.menu_bars.has_surface(l))
+        else {
+            return false;
+        };
+        if self
+            .surface_under(pos)
+            .is_some_and(|(surface, _)| self.shell_surface_root(&surface) == layer)
+        {
+            return false;
+        }
+        let menus = self.popup_grab_root() == Some(&layer)
+            && self.dismiss_popup_grab_for_press(pos, serial, time);
+        self.exclusive_layer = None;
+        self.released_layer = Some(layer);
+        self.restore_keyboard_focus();
+        menus
+    }
+
+    /// The surface whose tree `surface` is in: the parent of a subsurface, the surface a popup chain grows from.
+    fn shell_surface_root(&self, surface: &WlSurface) -> WlSurface {
+        let top = |s: &WlSurface| {
+            let mut top = s.clone();
+            while let Some(parent) = smithay::wayland::compositor::get_parent(&top) {
+                top = parent;
+            }
+            top
+        };
+        let surface = top(surface);
+        self.popups
+            .find_popup(&surface)
+            .and_then(|p| smithay::desktop::find_popup_root_surface(&p).ok())
+            .map_or(surface, |root| top(&root))
     }
 
     // ---- actions ---------------------------------------------------------------------------

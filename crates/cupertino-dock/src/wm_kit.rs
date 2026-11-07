@@ -69,6 +69,9 @@ pub struct Root<M> {
     pub opacity: f64,
     pub pointer: Option<Box<dyn Fn(PointerInput) -> M>>,
     pub key: Option<Box<dyn Fn(KeyEvent) -> M>>,
+    /// Sent at every frame the compositor gives the window while it is set: what moves by itself advances with the
+    /// display's frames.
+    pub frame: Option<M>,
     pub children: Vec<Element<M>>,
 }
 
@@ -91,7 +94,11 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.opacity != old.opacity || self.name != old.name || self.role != old.role {
+        if self.opacity != old.opacity
+            || self.name != old.name
+            || self.role != old.role
+            || self.frame.is_some() != old.frame.is_some()
+        {
             Change::Paint
         } else {
             Change::None
@@ -133,6 +140,13 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
                 cx.emit(input(pointer));
                 Propagation::Stop
             }
+            Event::AnimationFrame(_) => {
+                if let Some(frame) = &self.frame {
+                    cx.emit(frame.clone());
+                    cx.request_animation_frame();
+                }
+                Propagation::Continue
+            }
             Event::Key(key, _) if cx.phase() != Phase::Bubble => match &self.key {
                 Some(input) => {
                     cx.emit(input(*key));
@@ -145,6 +159,9 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if self.frame.is_some() {
+            cx.request_animation_frame();
+        }
         if self.opacity < 1.0 {
             cx.set_group(self.opacity.clamp(0.0, 1.0) as f32, Vec::new());
         }

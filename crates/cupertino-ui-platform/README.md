@@ -11,3 +11,12 @@ whole number of pixels per point, both sides whole points, with the pointer at i
 and the drag ends with `Finished` or `Cancelled`, the latter also when the compositor ignored it. The window gets a
 pointer leave while the drag runs. The trait's default refuses with `PlatformError::Unsupported`, as does a system
 without `Capabilities::drag_and_drop`.
+
+A drag from any application, this one included, over a window arrives as `WindowEvent::Drop(DropEvent)`: `Enter` (a
+`DropToken`, the position, the MIME types offered, the `DropAction`s the source allows, a copy alone when its protocol
+has none, and the modifiers held), `Motion`, `Action` (what a drop would do now), then `Leave` or `Drop`.
+`answer_drop(token, DropAnswer)` tells the source the type the window would read there (`None` refuses), the actions it
+can do and the one it prefers; after the drop `read_drop(token, mime)` reads the data, which arrives as
+`PlatformEvent::Clipboard` with the returned `ClipboardToken`, and `finish_drop(token, Some(action))` takes it (the
+source removes its copy after a move) or `finish_drop(token, None)` refuses it. The defaults refuse with
+`Unsupported` and finish nothing.

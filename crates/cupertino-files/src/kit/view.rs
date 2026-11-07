@@ -20,6 +20,7 @@ use cupertino_kit::text::SecureBuffer;
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
 
 use super::context::Secondary;
+use super::drops;
 use super::grid::{self, IconGrid, Item};
 use super::search::{no_results, SearchSlot};
 use super::{window_key, BrowserWindow, Event, Message, Session, Unlock, COLUMNS};
@@ -171,7 +172,7 @@ fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
     let selected = shown
         .iter()
         .position(|&i| session.places[i].folder() == Some(dir));
-    Element::from(Sidebar {
+    let sidebar = Element::from(Sidebar {
         label: "Sidebar".into(),
         sections,
         selected,
@@ -180,7 +181,8 @@ fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         on_select: Some(send(id, move |row| Event::Place(shown[row]))),
         on_accessory: Some(send(id, Event::Accessory)),
     })
-    .key("places")
+    .key("places");
+    drops::sidebar(session, id, sidebar)
 }
 
 /// The key of place `index`'s row: a folder's by its name, a removable file system's by its udisks object, so a row
@@ -278,6 +280,7 @@ fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> 
         children: vec![folder.fill()],
     })
     .fill();
+    let folder = drops::folder(session, id, win, folder);
     let mut children = vec![Element::from(NavigationStack {
         content: Element::new(ContextMenu {
             content: folder,

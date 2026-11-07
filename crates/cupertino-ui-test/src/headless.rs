@@ -1,13 +1,15 @@
+use cupertino_geometry::Point;
 use cupertino_geometry::Size;
 use cupertino_ui_platform::{
     ActivationRequest, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, Configure,
-    ConfigureId, CursorShape, DragRequest, DragToken, MenuDescription, PlatformError,
-    PlatformEvent, PointerEvent, PopupSpec, PresentOutcome, Timestamp, WindowEvent, WindowId,
-    WindowRequest, WindowSpec, WindowStates, WindowSystem, WmCapabilities,
+    ConfigureId, CursorShape, DragRequest, DragToken, DropAction, DropAnswer, DropEvent, DropToken,
+    MenuDescription, Mods, PlatformError, PlatformEvent, PointerEvent, PopupSpec, PresentOutcome,
+    Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowStates, WindowSystem,
+    WmCapabilities,
 };
 use cupertino_ui_render::{CpuFrame, PixelFormat, PixelRect, RenderFrameId};
 use cupertino_ui_text::TextInputState;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::task::Waker;
 use std::time::Duration;
 
@@ -47,6 +49,37 @@ pub struct StartedDrag {
     pub request: DragRequest,
 }
 
+/// A drag from another application that a test moves over a window, and what the window answered it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IncomingDrag {
+    pub window: WindowId,
+    pub token: DropToken,
+    /// The data in each type the drag offers.
+    pub data: Vec<ClipboardData>,
+    /// What the source allows.
+    pub actions: BTreeSet<DropAction>,
+    /// Every answer the window gave, oldest first.
+    pub answers: Vec<DropAnswer>,
+    /// What a drop would do now, chosen as a compositor does from the source's actions and the last answer.
+    pub chosen: Option<DropAction>,
+    /// Whether it dropped; a drag released where the answer took nothing leaves instead.
+    pub dropped: bool,
+    /// The types read after the drop.
+    pub reads: Vec<String>,
+    /// How the window ended the drop: `Some(action)` took it, `None` refused it; unset while it runs.
+    pub finished: Option<Option<DropAction>>,
+}
+
+/// The action a compositor chooses: the window's preferred one when the source and the window allow it, else the first
+/// both allow.
+fn choose(source: &BTreeSet<DropAction>, answer: &DropAnswer) -> Option<DropAction> {
+    answer.mime.as_ref()?;
+    match answer.preferred {
+        Some(p) if source.contains(&p) && answer.actions.contains(&p) => Some(p),
+        _ => source.intersection(&answer.actions).next().copied(),
+    }
+}
+
 /// A window system with no display. Windows live in memory, every request is kept for inspection, presented
 /// frames are kept until the window is destroyed, and the only events are the ones the test enqueues.
 #[derive(Debug)]
@@ -59,6 +92,9 @@ pub struct HeadlessWindowSystem {
     queue: VecDeque<PlatformEvent>,
     clipboards: HashMap<ClipboardKind, ClipboardData>,
     drags: Vec<StartedDrag>,
+    incoming: Vec<IncomingDrag>,
+    /// The reads of drops, which a test driver does not attribute to a focused field.
+    drop_reads: HashSet<ClipboardToken>,
     accepting_frames: bool,
     pub(crate) dispatch_one: bool,
 }
@@ -80,6 +116,8 @@ impl HeadlessWindowSystem {
             queue: VecDeque::new(),
             clipboards: HashMap::new(),
             drags: Vec::new(),
+            incoming: Vec::new(),
+            drop_reads: HashSet::new(),
             accepting_frames: true,
             dispatch_one: false,
         }
@@ -277,6 +315,97 @@ impl HeadlessWindowSystem {
         &self.drags
     }
 
+    /// Starts a drag from another application over `window` at `position`, offering `data` with the `actions` its
+    /// source allows, as a compositor's enter. Its steps follow with [`Self::drag_move`], [`Self::drag_leave`] and
+    /// [`Self::drag_drop`]; what the window answers is kept in [`Self::incoming_drag`].
+    pub fn drag_enter(
+        &mut self,
+        window: WindowId,
+        position: Point,
+        data: Vec<ClipboardData>,
+        actions: BTreeSet<DropAction>,
+        mods: Mods,
+    ) -> Result<DropToken, PlatformError> {
+        self.window(window)?;
+        let token = DropToken(self.next_token);
+        self.next_token += 1;
+        let mimes = data.iter().map(|d| d.mime.clone()).collect();
+        self.incoming.push(IncomingDrag {
+            window,
+            token,
+            data,
+            actions: actions.clone(),
+            answers: Vec::new(),
+            chosen: None,
+            dropped: false,
+            reads: Vec::new(),
+            finished: None,
+        });
+        self.enqueue_window(
+            window,
+            WindowEvent::Drop(DropEvent::Enter {
+                token,
+                position,
+                mimes,
+                actions,
+                mods,
+            }),
+        )?;
+        Ok(token)
+    }
+
+    /// The drag over `window` moves to `position` with `mods` held.
+    pub fn drag_move(
+        &mut self,
+        window: WindowId,
+        position: Point,
+        mods: Mods,
+    ) -> Result<(), PlatformError> {
+        self.enqueue_window(
+            window,
+            WindowEvent::Drop(DropEvent::Motion { position, mods }),
+        )
+    }
+
+    /// The drag leaves `window`.
+    pub fn drag_leave(&mut self, window: WindowId) -> Result<(), PlatformError> {
+        self.enqueue_window(window, WindowEvent::Drop(DropEvent::Leave))
+    }
+
+    /// The drag over `window` is released. As a compositor does, a drag whose last answer took a type and an action
+    /// the source allows drops; any other leaves. Whether it dropped.
+    pub fn drag_drop(&mut self, window: WindowId) -> Result<bool, PlatformError> {
+        self.window(window)?;
+        let drag = self
+            .incoming
+            .iter_mut()
+            .rev()
+            .find(|d| d.window == window && !d.dropped && d.finished.is_none())
+            .ok_or_else(|| PlatformError::Protocol("no drag over the window".into()))?;
+        let drops = drag.chosen.is_some();
+        drag.dropped = drops;
+        if !drops {
+            drag.finished = Some(None);
+        }
+        let event = if drops {
+            DropEvent::Drop
+        } else {
+            DropEvent::Leave
+        };
+        self.enqueue_window(window, WindowEvent::Drop(event))?;
+        Ok(drops)
+    }
+
+    /// The drag `token` names, with what the window answered it.
+    pub fn incoming_drag(&self, token: DropToken) -> Option<&IncomingDrag> {
+        self.incoming.iter().find(|d| d.token == token)
+    }
+
+    /// Whether `token` reads a drop.
+    pub(crate) fn reads_drop(&self, token: ClipboardToken) -> bool {
+        self.drop_reads.contains(&token)
+    }
+
     /// Events queued and not yet dispatched.
     pub fn queued(&self) -> usize {
         self.queue.len()
@@ -376,6 +505,53 @@ impl WindowSystem for HeadlessWindowSystem {
             event: WindowEvent::Pointer(PointerEvent::Leave, Timestamp::default()),
         });
         Ok(token)
+    }
+
+    /// Keeps the answer and, when the choice of action changes, tells it as a compositor does.
+    fn answer_drop(&mut self, token: DropToken, answer: &DropAnswer) -> Result<(), PlatformError> {
+        if !self.capabilities.drag_and_drop {
+            return Err(PlatformError::Unsupported);
+        }
+        let drag = self
+            .incoming
+            .iter_mut()
+            .find(|d| d.token == token && !d.dropped && d.finished.is_none())
+            .ok_or_else(|| PlatformError::Protocol("no such drag".into()))?;
+        drag.answers.push(answer.clone());
+        let chosen = choose(&drag.actions, answer);
+        if chosen != drag.chosen {
+            drag.chosen = chosen;
+            let window = drag.window;
+            self.enqueue_window(window, WindowEvent::Drop(DropEvent::Action(chosen)))?;
+        }
+        Ok(())
+    }
+
+    /// Answers with the drag's data in `mime` with the next dispatch.
+    fn read_drop(&mut self, token: DropToken, mime: &str) -> Result<ClipboardToken, PlatformError> {
+        let drag = self
+            .incoming
+            .iter_mut()
+            .find(|d| d.token == token && d.dropped && d.finished.is_none())
+            .ok_or_else(|| PlatformError::Protocol("no such drop".into()))?;
+        drag.reads.push(mime.to_owned());
+        let data = drag.data.iter().find(|d| d.mime == mime).cloned();
+        let read = ClipboardToken(self.next_token);
+        self.next_token += 1;
+        self.drop_reads.insert(read);
+        self.queue
+            .push_back(PlatformEvent::Clipboard { token: read, data });
+        Ok(read)
+    }
+
+    fn finish_drop(&mut self, token: DropToken, action: Option<DropAction>) {
+        if let Some(drag) = self
+            .incoming
+            .iter_mut()
+            .find(|d| d.token == token && d.finished.is_none())
+        {
+            drag.finished = Some(action);
+        }
     }
 
     fn read_clipboard(&mut self, kind: ClipboardKind, mime: &str) -> ClipboardToken {

@@ -73,6 +73,28 @@ impl Run {
         system: Option<zbus::blocking::Connection>,
         preferences: ThemePreferences,
     ) -> Run {
+        let capabilities = Capabilities::default();
+        Run::start_on(
+            home,
+            folder,
+            places,
+            notices,
+            system,
+            preferences,
+            capabilities,
+        )
+    }
+
+    /// [`Run::start_with`] on a headless system with `capabilities`.
+    pub fn start_on(
+        home: tempfile::TempDir,
+        folder: PathBuf,
+        places: Vec<Place>,
+        notices: Notices,
+        system: Option<zbus::blocking::Connection>,
+        preferences: ThemePreferences,
+        capabilities: Capabilities,
+    ) -> Run {
         prepare(
             Start::open(
                 folder,
@@ -116,11 +138,7 @@ impl Run {
             clock: Arc::new(ManualClock::new(Timestamp(0))),
             on_window_error: None,
         };
-        let mut driver = TestDriver::new(
-            Capabilities::default(),
-            options,
-            ManualClock::new(Timestamp(0)),
-        );
+        let mut driver = TestDriver::new(capabilities, options, ManualClock::new(Timestamp(0)));
         driver.run_until_idle(budget()).unwrap();
         let window = driver.runtime().windows()[0].1;
         let mut run = Run {
@@ -449,6 +467,13 @@ impl Run {
             .filter(|(_, _, selected)| *selected)
             .map(|(name, _, _)| name)
             .collect()
+    }
+
+    /// The bounds of the list's row that shows `name`.
+    pub fn row_bounds(&self, name: &str) -> Rect {
+        let listed = self.listed();
+        let row = listed.into_iter().find(|(shown, _, _)| shown == name);
+        row.unwrap_or_else(|| panic!("no row {name:?}")).1
     }
 
     /// Each row of the list: the text of its first cell, its bounds and whether it is selected.

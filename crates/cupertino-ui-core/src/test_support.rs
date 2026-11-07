@@ -12,8 +12,9 @@ use cupertino_ui_layout::{
 use cupertino_ui_platform::PointerEvent;
 use cupertino_ui_platform::{
     ActivationRequest, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, ConfigureId,
-    CursorShape, DragRequest, DragToken, PlatformError, PlatformEvent, PopupSpec, PresentOutcome,
-    Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
+    CursorShape, DragRequest, DragToken, DropAction, DropAnswer, DropToken, PlatformError,
+    PlatformEvent, PopupSpec, PresentOutcome, Timestamp, WindowEvent, WindowId, WindowRequest,
+    WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, PixelFormat, RenderError, RenderFrameId, RenderRequest, UiRenderer,
@@ -314,6 +315,11 @@ impl<M: From<String> + 'static> Widget<M> for Group<M> {
     }
 }
 
+thread_local! {
+    /// How many drops the window systems of this thread have finished, for a model to read as it updates.
+    pub(crate) static DROPS_FINISHED: Cell<usize> = const { Cell::new(0) };
+}
+
 /// A window system in memory: tests queue its events and read what the runtime asked of it.
 #[derive(Default)]
 pub(crate) struct FakeSystem {
@@ -342,6 +348,14 @@ pub(crate) struct FakeSystem {
     pub(crate) drag: bool,
     /// Every drag started, with its window; the token is its place in the list, from 1.
     pub(crate) drags: Vec<(WindowId, DragRequest)>,
+    /// Every answer to a drag over a window, in order.
+    pub(crate) drop_answers: Vec<(DropToken, DropAnswer)>,
+    /// What a drop read gives; every read is answered with it at the next dispatch, `None` failing.
+    pub(crate) drop_data: Option<ClipboardData>,
+    /// Every drop read, with the type asked for.
+    pub(crate) drop_reads: Vec<(DropToken, String)>,
+    /// How each drop ended, in order.
+    pub(crate) drops_finished: Vec<(DropToken, Option<DropAction>)>,
 }
 
 impl FakeSystem {
@@ -418,6 +432,26 @@ impl WindowSystem for FakeSystem {
         }
         self.drags.push((window, request));
         Ok(DragToken(self.drags.len() as u64))
+    }
+
+    fn answer_drop(&mut self, token: DropToken, answer: &DropAnswer) -> Result<(), PlatformError> {
+        self.drop_answers.push((token, answer.clone()));
+        Ok(())
+    }
+
+    fn read_drop(&mut self, token: DropToken, mime: &str) -> Result<ClipboardToken, PlatformError> {
+        self.drop_reads.push((token, mime.to_owned()));
+        let read = ClipboardToken(1000 + self.drop_reads.len() as u64);
+        self.queue.push_back(PlatformEvent::Clipboard {
+            token: read,
+            data: self.drop_data.clone(),
+        });
+        Ok(read)
+    }
+
+    fn finish_drop(&mut self, token: DropToken, action: Option<DropAction>) {
+        self.drops_finished.push((token, action));
+        DROPS_FINISHED.with(|n| n.set(n.get() + 1));
     }
 
     fn request_frame(&mut self, window: WindowId) {

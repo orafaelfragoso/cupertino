@@ -7,6 +7,7 @@ mod clock;
 mod command;
 mod cx;
 mod damage;
+mod drop_target;
 mod focus;
 mod icons;
 mod layout_view;
@@ -30,6 +31,9 @@ pub use accessibility::{
 pub use clock::MonotonicClock;
 pub use command::CommandRegistry;
 pub use cx::{EventCx, FocusTarget, MeasureCx, PaintCx, SemanticsCx};
+pub use drop_target::{
+    DropHandler, DropOver, DropPlace, DropTarget, Dropped, HoverHandler, PlaceHandler,
+};
 pub use icons::{next_resource_id, IconImage, Icons, PlaceholderIcons};
 pub use paint::MAX_MATERIALS;
 pub use runtime::{
@@ -41,8 +45,8 @@ use cupertino_geometry::{Point, Rect, Size};
 use cupertino_menu_model::{ActionName, MenuBar};
 use cupertino_ui_layout::{LayoutDirection, LayoutError, LayoutStats};
 use cupertino_ui_platform::{
-    ClipboardData, DragProgress, DropAction, KeyEvent, Keysym, Mods, PlatformError, PointerEvent,
-    Timestamp, TouchEvent, WindowId, WindowRequest, WindowSpec,
+    ClipboardData, DragProgress, DropAction, DropToken, KeyEvent, Keysym, Mods, PlatformError,
+    PointerEvent, Timestamp, TouchEvent, WindowId, WindowRequest, WindowSpec,
 };
 use cupertino_ui_render::{DisplayList, RenderError};
 use cupertino_ui_text::{ImeEvent, TextSystem};
@@ -326,6 +330,11 @@ pub enum Command<M> {
         on_token: TokenHandler<M>,
     },
     StartDrag(Drag<M>),
+    /// Ends the drop `token` of a [`Dropped`] with what the application did with its data, given by the update that
+    /// handles it: `Some(action)` took it so (after a move the source removes its own copy), `None` took none of it and
+    /// the source keeps it all. A drop the update does not end so finishes with its agreed action; given later, it is
+    /// ignored.
+    FinishDrop(DropToken, Option<DropAction>),
     Exit,
 }
 

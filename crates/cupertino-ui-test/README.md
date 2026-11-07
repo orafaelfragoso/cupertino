@@ -9,7 +9,11 @@ receipt timestamps, replacing `RuntimeOptions::clock`. Use `runtime()` to inspec
 snapshots, and `window_system_mut()` to queue input, configure windows, control frame callbacks and inspect presentation.
 `HeadlessWindowSystem::drags` lists the drags the runtime started (with `Capabilities::drag_and_drop`; without it they
 are refused); a start takes the pointer from the window with a leave, and the test enqueues each `PlatformEvent::Drag`
-step. `advance_to` rejects backwards time. `run_until_idle(max_turns)` never advances time or waits: it reports waiting work
+step. A drag from another application is simulated with `drag_enter(window, position, data, actions, mods)` (the data
+in each type it offers), `drag_move`, `drag_leave` and `drag_drop`; as a compositor does, the system chooses the action
+from each answer (and reports `DropEvent::Action`), drops only a drag whose last answer took a type and an allowed action
+(else it leaves), and answers `read_drop` with the data. `incoming_drag(token)` (an `IncomingDrag`) keeps the answers,
+the choice, the reads and how the drop was finished; the driver records drop reads as unprotected. `advance_to` rejects backwards time. `run_until_idle(max_turns)` never advances time or waits: it reports waiting work
 or an exhausted turn budget. Each queued platform event gets one runtime turn, so Tab changes focus before the next
 key is recorded even at the same timestamp. Explicit frame callbacks and tasks remain under the fixture's control.
 

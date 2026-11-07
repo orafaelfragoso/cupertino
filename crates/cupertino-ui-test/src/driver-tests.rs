@@ -1,16 +1,18 @@
 use super::*;
 use crate::{ProtectedInput, RecordedInput, SecureInputs};
-use cupertino_geometry::Size;
+use cupertino_geometry::{Point, Size};
 use cupertino_ui_core::{
     AccessibleValue, Change, Command, CommandRegistry, Element, Event, EventCx, MeasureCx, PaintCx,
     Phase, Propagation, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
 };
+use cupertino_ui_core::{DropPlace, DropTarget};
 use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
 };
 use cupertino_ui_platform::{
     ClipboardData, DecorationMode, KeyEvent, Keysym, Mods, WindowEvent, WindowSpec, WindowStates,
 };
+use cupertino_ui_platform::{DropAction, DropAnswer};
 use cupertino_ui_render::{CpuConfig, CpuRenderer};
 use cupertino_ui_text::{FontIndex, GlyphKey, GlyphRasterizer, RasterGlyph, TextError, TextSystem};
 use cupertino_ui_theme::*;
@@ -467,4 +469,179 @@ fn clipboard_read_rejects_a_window_that_does_not_exist() {
         driver.read_clipboard(WindowId(999), ClipboardKind::Clipboard, "text/plain"),
         Err(DriverError::UnknownWindow(WindowId(999)))
     );
+}
+
+/// A window that is one drop target taking a URI list, moving by default.
+struct Bin;
+
+impl Application for Bin {
+    type Model = Vec<String>;
+    type Message = String;
+
+    fn init() -> (Self::Model, Vec<Command<String>>) {
+        (Vec::new(), Vec::new())
+    }
+    fn update(model: &mut Self::Model, message: String) -> Vec<Command<String>> {
+        model.push(message);
+        Vec::new()
+    }
+    fn view(_: &Self::Model) -> Vec<Window<String>> {
+        vec![Window {
+            key: WindowKey("bin".into()),
+            spec: WindowSpec {
+                title: "Bin".into(),
+                app_id: "test.bin".into(),
+                size: Size::new(200.0, 80.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Client,
+                foreign_parent: None,
+                input_region: None,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            background: WindowBackground::Theme,
+            popup: None,
+            content: Element::from(DropTarget {
+                content: Element::new(Empty),
+                mimes: vec!["text/uri-list".into()],
+                actions: [DropAction::Copy, DropAction::Move].into(),
+                place: Box::new(|_| {
+                    Some(DropPlace {
+                        key: None,
+                        action: DropAction::Move,
+                    })
+                }),
+                on_hover: Some(Box::new(|place| format!("over {}", place.is_some()))),
+                on_drop: Box::new(|dropped| {
+                    format!(
+                        "dropped {:?} {}",
+                        dropped.action,
+                        String::from_utf8_lossy(&dropped.data.bytes)
+                    )
+                }),
+            }),
+            menus: None,
+        }]
+    }
+}
+
+struct Empty;
+
+impl Widget<String> for Empty {
+    type State = ();
+    fn state(&self) {}
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Leaf)
+    }
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(10.0, 10.0),
+            baseline: None,
+        }
+    }
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, String>) -> Propagation {
+        Propagation::Continue
+    }
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+fn bin() -> (TestDriver<Bin>, WindowId) {
+    let capabilities = Capabilities {
+        drag_and_drop: true,
+        ..Capabilities::default()
+    };
+    let mut driver = TestDriver::new(capabilities, options(), ManualClock::new(Timestamp(10)));
+    driver.run_until_idle(budget()).unwrap();
+    let window = driver.runtime().windows()[0].1;
+    driver
+        .window_system_mut()
+        .configure(window, None, WindowStates::default())
+        .unwrap();
+    driver.run_until_idle(budget()).unwrap();
+    (driver, window)
+}
+
+#[test]
+fn a_simulated_drag_is_answered_chosen_dropped_read_and_finished_like_a_compositors() {
+    let (mut driver, window) = bin();
+    let data = vec![
+        ClipboardData {
+            mime: "text/plain".into(),
+            bytes: b"/a".to_vec(),
+        },
+        ClipboardData {
+            mime: "text/uri-list".into(),
+            bytes: b"file:///a\r\n".to_vec(),
+        },
+    ];
+    let token = driver
+        .window_system_mut()
+        .drag_enter(
+            window,
+            Point::new(5.0, 5.0),
+            data,
+            [DropAction::Copy, DropAction::Move].into(),
+            Mods::NONE,
+        )
+        .unwrap();
+    driver.run_until_idle(budget()).unwrap();
+    let drag = driver
+        .window_system_mut()
+        .incoming_drag(token)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        drag.answers,
+        [DropAnswer {
+            mime: Some("text/uri-list".into()),
+            actions: [DropAction::Copy, DropAction::Move].into(),
+            preferred: Some(DropAction::Move),
+        }]
+    );
+    assert_eq!(drag.chosen, Some(DropAction::Move));
+    assert!(driver.window_system_mut().drag_drop(window).unwrap());
+    driver.run_until_idle(budget()).unwrap();
+    let drag = driver
+        .window_system_mut()
+        .incoming_drag(token)
+        .unwrap()
+        .clone();
+    assert_eq!(drag.reads, ["text/uri-list"]);
+    assert_eq!(drag.finished, Some(Some(DropAction::Move)));
+    assert_eq!(
+        *driver.runtime().model(),
+        ["over true", "over false", "dropped Move file:///a\r\n"]
+    );
+}
+
+#[test]
+fn a_simulated_drag_of_a_type_nothing_takes_is_refused_and_leaves_at_the_release() {
+    let (mut driver, window) = bin();
+    let token = driver
+        .window_system_mut()
+        .drag_enter(
+            window,
+            Point::new(5.0, 5.0),
+            vec![ClipboardData {
+                mime: "image/png".into(),
+                bytes: vec![1, 2, 3],
+            }],
+            [DropAction::Copy].into(),
+            Mods::NONE,
+        )
+        .unwrap();
+    driver.run_until_idle(budget()).unwrap();
+    assert!(!driver.window_system_mut().drag_drop(window).unwrap());
+    driver.run_until_idle(budget()).unwrap();
+    let drag = driver.window_system_mut().incoming_drag(token).unwrap();
+    assert_eq!(drag.answers, [DropAnswer::default()]);
+    assert_eq!(drag.chosen, None);
+    assert!(drag.reads.is_empty());
+    assert_eq!(drag.finished, Some(None));
+    assert!(driver.runtime().model().is_empty());
 }

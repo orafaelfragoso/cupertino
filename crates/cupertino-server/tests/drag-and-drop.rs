@@ -12,7 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cupertino_server::backend::headless;
-use cupertino_server::config::Config;
+use cupertino_server::cli::start_shell_supervision;
+use cupertino_server::config::{Config, ShellProcess};
 use cupertino_server::events::BTN_LEFT;
 use cupertino_server::Cupertino;
 use smithay::backend::input::ButtonState;
@@ -32,8 +33,12 @@ mod common;
 const OUTPUT: (i32, i32) = (1000, 700);
 const TEXT: &[u8] = "Grüße, drag and drop".as_bytes();
 const MIME: &str = "text/plain;charset=utf-8";
+/// The type files are dragged in.
+const URI_LIST: &str = "text/uri-list";
 const SOURCE_SIZE: (i32, i32) = (600, 120);
 const TARGET_SIZE: (i32, i32) = (120, 500);
+/// The size of a source of files: taller than the file manager's window, so part of it is never under that window.
+const FILE_SOURCE_SIZE: (i32, i32) = (120, 640);
 /// The drag icon's size and the point of it under the pointer, in points: a size no other element of the scene has.
 const ICON_SIZE: (i32, i32) = (37, 23);
 const ICON_HOTSPOT: (i32, i32) = (9, 5);
@@ -49,20 +54,32 @@ impl Harness {
     }
 
     fn with_scale(scale: f64) -> Option<Harness> {
+        Harness::running(scale, Vec::new())
+    }
+
+    /// The compositor at `scale` supervising `processes`.
+    fn running(scale: f64, processes: Vec<ShellProcess>) -> Option<Harness> {
         let event_loop: EventLoop<'static, Cupertino> =
             EventLoop::try_new().expect("creating the event loop");
         let display: Display<Cupertino> = Display::new().expect("creating the Wayland display");
+        let config = Config {
+            shell_processes: processes,
+            ..Config::default()
+        };
         let mut state = Cupertino::new(
             display,
             event_loop.handle(),
             event_loop.get_signal(),
-            Config::default(),
+            config,
             true,
             &cupertino_assets::Assets::builtin(),
         )
         .expect("creating the compositor");
         match headless::init(&mut state, OUTPUT, scale) {
-            Ok(()) => Some(Harness { state, event_loop }),
+            Ok(()) => {
+                start_shell_supervision(&state, &event_loop).expect("the supervision timer");
+                Some(Harness { state, event_loop })
+            }
             Err(e) => {
                 common::egl_unavailable(format!("{e:#}"));
                 None
@@ -145,6 +162,8 @@ enum Role {
     IconSource(i32),
     /// Accepts [`MIME`] for a copy and reads it on the drop.
     Target,
+    /// Starts a drag of its payload as [`URI_LIST`], copy or move, on a button press.
+    FileSource,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -171,6 +190,8 @@ struct ClientState {
     device: wl_data_device::WlDataDevice,
     offer: Option<wl_data_offer::WlDataOffer>,
     dragging: bool,
+    /// What a source sends.
+    payload: Vec<u8>,
     log: Arc<Mutex<Log>>,
 }
 
@@ -320,6 +341,17 @@ impl Dispatch<wl_pointer::WlPointer, ()> for ClientState {
                 .device
                 .start_drag(Some(&source), &state.surface, None, serial);
         }
+        if state.role == Role::FileSource && !state.dragging {
+            state.dragging = true;
+            let source = state.manager.create_data_source(qh, ());
+            source.offer(URI_LIST.into());
+            source.set_actions(
+                wl_data_device_manager::DndAction::Copy | wl_data_device_manager::DndAction::Move,
+            );
+            state
+                .device
+                .start_drag(Some(&source), &state.surface, None, serial);
+        }
     }
 }
 
@@ -340,7 +372,7 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for ClientState {
                 dnd_action: WEnum::Value(action),
             } => format!("action {action:?}"),
             wl_data_source::Event::Send { mime_type, fd } => {
-                std::fs::File::from(fd).write_all(TEXT).unwrap();
+                std::fs::File::from(fd).write_all(&state.payload).unwrap();
                 format!("send {mime_type}")
             }
             wl_data_source::Event::DndDropPerformed => "drop performed".into(),
@@ -427,6 +459,11 @@ struct TestClient {
 
 impl TestClient {
     fn spawn(socket: PathBuf, role: Role, size: (i32, i32)) -> TestClient {
+        TestClient::sending(socket, role, size, TEXT.to_vec())
+    }
+
+    /// A client whose drag sends `payload`.
+    fn sending(socket: PathBuf, role: Role, size: (i32, i32), payload: Vec<u8>) -> TestClient {
         let stop = Arc::new(AtomicBool::new(false));
         let log: Arc<Mutex<Log>> = Arc::default();
         let (stop2, log2) = (stop.clone(), log.clone());
@@ -449,7 +486,9 @@ impl TestClient {
             let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
             let toplevel = xdg.get_toplevel(&qh, ());
             toplevel.set_app_id(match role {
-                Role::Source | Role::IconSource(_) => "org.example.drag-source".into(),
+                Role::Source | Role::IconSource(_) | Role::FileSource => {
+                    "org.example.drag-source".into()
+                }
                 Role::Target => "org.example.drop-target".into(),
             });
             surface.commit();
@@ -464,6 +503,7 @@ impl TestClient {
                 device,
                 offer: None,
                 dragging: false,
+                payload,
                 log: log2,
             };
             while !stop2.load(Ordering::SeqCst) {
@@ -655,5 +695,141 @@ fn a_refused_drop_takes_the_icon_away_and_gives_the_pointer_back() {
     assert!(
         h.state.drag_icon.is_none(),
         "a press after a drag starts none"
+    );
+}
+
+/// A scratch directory removed on drop.
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The file manager, built before the test runner starts, with `home` as its home folder and its configuration and
+/// data directories inside it, so that its sidebar does not depend on the host: `data_dirs` stands for
+/// `$XDG_DATA_DIRS`.
+fn files_process(home: &std::path::Path, data_dirs: &std::path::Path) -> ShellProcess {
+    let env = |name: &str, value: &std::path::Path| format!("{name}={}", value.display());
+    let binary = common::fixtures::artifact("cupertino-files", "bin", "cupertino-files");
+    ShellProcess {
+        name: "cupertino-files".into(),
+        command: vec![
+            "env".into(),
+            env("HOME", home),
+            env("XDG_CONFIG_HOME", &home.join(".config")),
+            env("XDG_DATA_HOME", &home.join(".local/share")),
+            env("XDG_DATA_DIRS", data_dirs),
+            binary.display().to_string(),
+        ],
+        roles: Vec::new(),
+    }
+}
+
+/// A file dragged from another client into the file manager's window, a CupertinoKit window, and released over the
+/// folder it shows moves there: the window took the URI list for a move, read it and finished the drop, and by then
+/// the file had left its folder for the one shown.
+#[test]
+fn a_file_dragged_from_another_client_into_the_file_manager_moves_into_its_folder() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("cupertino-drop-into-files-{}", std::process::id())),
+    );
+    let home = scratch.0.join("home");
+    let outside = scratch.0.join("outside");
+    let data_dirs = scratch.0.join("share");
+    for dir in [&home, &outside, &data_dirs.join("applications")] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let dragged = outside.join("dropped.txt");
+    std::fs::write(&dragged, b"dropped").unwrap();
+    let Some(mut h) = Harness::running(1.0, vec![files_process(&home, &data_dirs)]) else {
+        return;
+    };
+    h.wait_until("the file manager's window", |s| {
+        s.windows.iter().filter(|w| w.mapped).count() == 1
+    });
+    h.run_for(Duration::from_millis(500));
+    let uri = format!("file://{}\r\n", dragged.display());
+    let source = TestClient::sending(
+        h.socket_path(),
+        Role::FileSource,
+        FILE_SOURCE_SIZE,
+        uri.into_bytes(),
+    );
+    h.wait_until("the source window", |s| {
+        s.windows.iter().filter(|w| w.mapped).count() == 2
+    });
+    h.run_for(Duration::from_millis(100));
+    // the wide file manager first, then the tall source
+    let frames = h.frames();
+    let (fx, fy, fw, fh) = frames[0];
+    let (sx, sy, sw, sh) = frames[1];
+    // the part of the source below the file manager, and the empty folder area low on the trailing side
+    let below = (fy + fh, (sy + sh).min(f64::from(OUTPUT.1)));
+    let start = (sx + sw / 2.0, (below.0 + below.1) / 2.0);
+    let end = (fx + fw - 80.0, fy + fh - 60.0);
+    let inside = |(x, y, w, h): (f64, f64, f64, f64), at: (f64, f64)| {
+        (x..x + w).contains(&at.0) && (y..y + h).contains(&at.1)
+    };
+    assert!(
+        below.1 - below.0 > 20.0 && !inside(frames[1], end),
+        "each window must have a part the other leaves uncovered: files {:?}, source {:?}",
+        frames[0],
+        frames[1]
+    );
+
+    h.move_to(start);
+    h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 0);
+    h.run_for(Duration::from_millis(100));
+    for step in 1..=10 {
+        let t = f64::from(step) / 10.0;
+        h.move_to((
+            start.0 + (end.0 - start.0) * t,
+            start.1 + (end.1 - start.1) * t,
+        ));
+    }
+    let end_at = Instant::now() + Duration::from_secs(10);
+    let moved = |source: &TestClient| {
+        let log = source.log();
+        log.source.iter().any(|e| e == "action DndAction(Move)")
+    };
+    while !moved(&source) && Instant::now() < end_at {
+        h.run_for(Duration::from_millis(20));
+    }
+    assert!(
+        moved(&source),
+        "the file manager took no move: {:?}, files at {:?}, source at {:?}",
+        source.log(),
+        frames[0],
+        frames[1]
+    );
+    h.state.pointer_button(BTN_LEFT, ButtonState::Released, 0);
+    h.wait_until("the drop to finish", |_| {
+        source.log().source.last().map(String::as_str) == Some("finished")
+    });
+    // what the pointer crossed on the way may have taken or refused the type: the steps from the move on count
+    let steps: Vec<String> = source
+        .log()
+        .source
+        .iter()
+        .skip_while(|e| *e != "action DndAction(Move)")
+        .filter(|e| !e.starts_with("target "))
+        .cloned()
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            "action DndAction(Move)".to_string(),
+            "drop performed".to_string(),
+            format!("send {URI_LIST}"),
+            "finished".to_string(),
+        ]
+    );
+    assert!(!dragged.exists(), "the file left its folder");
+    assert_eq!(
+        std::fs::read(home.join("dropped.txt")).unwrap(),
+        b"dropped",
+        "the file is in the folder the window shows"
     );
 }

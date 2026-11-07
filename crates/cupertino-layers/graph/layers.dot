@@ -1,5 +1,5 @@
 // cupertino-layers --graph
-// 79 crates, 377 internal dependencies
+// 79 crates, 376 internal dependencies
 // per layer: foundation 18, models 8, platform 9, protocol 3, transport 3, render 3, ui 13, core 1, shell 11, services 4, apps 2, tools 4
 // forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-files (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
@@ -245,20 +245,19 @@ digraph "layers" {
   "cupertino-launcher" -> "cupertino-ui-wayland";
   "cupertino-launcher" -> "cupertino-wayland-client";
   "cupertino-login" -> "cupertino-apps";
-  "cupertino-login" -> "cupertino-assets";
-  "cupertino-login" -> "cupertino-decorations";
+  "cupertino-login" -> "cupertino-assets" [label="dev"];
   "cupertino-login" -> "cupertino-defaults";
   "cupertino-login" -> "cupertino-geometry";
+  "cupertino-login" -> "cupertino-kit";
   "cupertino-login" -> "cupertino-login-ipc";
+  "cupertino-login" -> "cupertino-modifiers";
   "cupertino-login" -> "cupertino-peer";
   "cupertino-login" -> "cupertino-seat";
   "cupertino-login" -> "cupertino-shell-client";
   "cupertino-login" -> "cupertino-test-bus" [label="dev"];
-  "cupertino-login" -> "cupertino-theme";
-  "cupertino-login" -> "cupertino-ui-atspi";
+  "cupertino-login" -> "cupertino-theme" [label="dev"];
   "cupertino-login" -> "cupertino-ui-atspi" [label="dev"];
-  "cupertino-login" -> "cupertino-ui-core";
-  "cupertino-login" -> "cupertino-ui-platform";
+  "cupertino-login" -> "cupertino-ui-test" [label="dev"];
   "cupertino-login" -> "cupertino-ui-wayland";
   "cupertino-login" -> "cupertino-wayland-client";
   "cupertino-menu-model" -> "cupertino-modifiers";

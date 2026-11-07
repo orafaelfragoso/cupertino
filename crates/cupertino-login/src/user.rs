@@ -1,5 +1,8 @@
 //! The user the screen is locked for or the login screen lists, and the clock text.
 
+use cupertino_kit::controls::ImageSource;
+use cupertino_kit::core::next_resource_id;
+use cupertino_kit::render::{ImageResource, PixelFormat};
 use cupertino_login_ipc::UserRow;
 use std::ffi::CStr;
 use std::fmt;
@@ -53,8 +56,8 @@ pub struct User {
     pub login: String,
     /// The full name from the account's comment field, else the account name.
     pub display: String,
-    /// The picture, when the home directory has one.
-    pub picture: Option<Pixmap>,
+    /// The picture, when the home directory has one, decoded once and named by one image id for good.
+    pub picture: Option<ImageSource>,
     /// The user id, for a row of the session manager's list: an attempt names such an account by it. `None` for a name typed at
     /// "Other…" and for the user of this process.
     pub uid: Option<u32>,
@@ -89,16 +92,15 @@ impl User {
 
     /// A row of the session manager's user list. The manager reads the picture file; it is decoded here.
     pub fn from_row(row: &UserRow) -> Result<User, UserError> {
-        let picture =
-            match &row.picture {
-                Some(picture) => Some(Pixmap::decode_png(picture.bytes()).map_err(|e| {
-                    UserError::SentPicture {
-                        login: row.login.clone(),
-                        source: Box::new(e),
-                    }
-                })?),
-                None => None,
-            };
+        let picture = match &row.picture {
+            Some(picture) => Some(source_of(&Pixmap::decode_png(picture.bytes()).map_err(
+                |e| UserError::SentPicture {
+                    login: row.login.clone(),
+                    source: Box::new(e),
+                },
+            )?)),
+            None => None,
+        };
         Ok(User {
             login: row.login.clone(),
             display: row.display_name.clone(),
@@ -117,7 +119,7 @@ struct Entry {
 }
 
 impl Entry {
-    fn into_user(self, picture: Option<Pixmap>) -> User {
+    fn into_user(self, picture: Option<ImageSource>) -> User {
         let full_name = self.gecos.split(',').next().unwrap_or("").trim();
         let display = if full_name.is_empty() {
             self.login.clone()
@@ -169,8 +171,23 @@ unsafe fn field(ptr: *const libc::c_char) -> String {
     CStr::from_ptr(ptr).to_string_lossy().into_owned()
 }
 
+/// A decoded picture as the image the screens draw: tiny-skia keeps premultiplied RGBA rows without padding.
+fn source_of(pixmap: &Pixmap) -> ImageSource {
+    ImageSource {
+        id: next_resource_id(),
+        image: ImageResource {
+            revision: 1,
+            width: pixmap.width(),
+            height: pixmap.height(),
+            stride: pixmap.width() * 4,
+            format: PixelFormat::Rgba8Premultiplied,
+            pixels: pixmap.data().into(),
+        },
+    }
+}
+
 /// The picture at `path`; `None` when there is no such file.
-fn load_picture(path: PathBuf) -> Result<Option<Pixmap>, UserError> {
+fn load_picture(path: PathBuf) -> Result<Option<ImageSource>, UserError> {
     match std::fs::metadata(&path) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(UserError::Picture {
@@ -178,7 +195,7 @@ fn load_picture(path: PathBuf) -> Result<Option<Pixmap>, UserError> {
             source: Box::new(e),
         }),
         Ok(_) => match Pixmap::load_png(&path) {
-            Ok(picture) => Ok(Some(picture)),
+            Ok(picture) => Ok(Some(source_of(&picture))),
             Err(e) => Err(UserError::Picture {
                 path,
                 source: Box::new(e),

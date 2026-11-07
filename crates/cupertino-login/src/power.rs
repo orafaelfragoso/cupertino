@@ -34,23 +34,14 @@ impl Action {
     }
 }
 
-/// A key the open menu reacts to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MenuKey {
-    Up,
-    Down,
-    Return,
-    Escape,
-}
-
-/// The power item: closed, or open with one menu row selected.
+/// The power item: its items, and whether its menu is open. The menu itself is the toolkit's: it moves its highlight with
+/// the arrows, does an item on Return or a click and closes on Escape or a press outside.
 #[derive(Debug)]
 pub struct Menu {
     items: Vec<Action>,
     /// A user session is open, so Restart and Shut Down ask for an administrator and show an ellipsis.
     will_prompt: bool,
-    /// The selected row while the menu is open.
-    open: Option<usize>,
+    open: bool,
 }
 
 impl Menu {
@@ -59,7 +50,7 @@ impl Menu {
         (!items.is_empty()).then_some(Menu {
             items,
             will_prompt: false,
-            open: None,
+            open: false,
         })
     }
 
@@ -76,47 +67,22 @@ impl Menu {
         self.will_prompt = will_prompt;
     }
 
-    /// The selected row while the menu is open.
-    pub fn open(&self) -> Option<usize> {
+    pub fn is_open(&self) -> bool {
         self.open
     }
 
-    /// Open the menu on its first row, or close it.
+    /// Open the menu, or close it.
     pub fn toggle(&mut self) {
-        self.open = match self.open {
-            Some(_) => None,
-            None => Some(0),
-        };
+        self.open = !self.open;
     }
 
     pub fn close(&mut self) {
-        self.open = None;
-    }
-
-    /// Select row `row` of an open menu, for a pointer over it.
-    pub fn select(&mut self, row: usize) {
-        assert!(row < self.items.len(), "the row exists");
-        if self.open.is_some() {
-            self.open = Some(row);
-        }
-    }
-
-    /// A key on an open menu: the arrows move the selection, Return does the selected item (and closes), Escape closes.
-    /// A closed menu takes no keys.
-    pub fn press(&mut self, key: MenuKey) -> Option<Action> {
-        let selected = self.open?;
-        match key {
-            MenuKey::Up => self.open = Some(selected.saturating_sub(1)),
-            MenuKey::Down => self.open = Some((selected + 1).min(self.items.len() - 1)),
-            MenuKey::Return => return self.activate(selected),
-            MenuKey::Escape => self.open = None,
-        }
-        None
+        self.open = false;
     }
 
     /// Do item `row` and close the menu.
     pub fn activate(&mut self, row: usize) -> Option<Action> {
-        self.open = None;
+        self.open = false;
         self.items.get(row).copied()
     }
 }
@@ -131,21 +97,18 @@ mod tests {
     }
 
     #[test]
-    fn the_menu_opens_on_the_first_row_moves_and_does_the_selected_item() {
+    fn an_item_of_the_open_menu_does_its_action_and_closes_the_menu() {
         let mut menu = Menu::new(vec![Action::Restart, Action::ShutDown, Action::Sleep]).unwrap();
-        assert_eq!(menu.open(), None);
-        // a closed menu takes no keys
-        assert_eq!(menu.press(MenuKey::Down), None);
-        assert_eq!(menu.open(), None);
+        assert!(!menu.is_open());
         menu.toggle();
-        assert_eq!(menu.open(), Some(0));
-        for _ in 0..3 {
-            menu.press(MenuKey::Down);
-        }
-        assert_eq!(menu.open(), Some(2));
-        menu.press(MenuKey::Up);
-        assert_eq!(menu.press(MenuKey::Return), Some(Action::ShutDown));
-        assert_eq!(menu.open(), None);
+        assert!(menu.is_open());
+        assert_eq!(menu.activate(1), Some(Action::ShutDown));
+        assert!(!menu.is_open());
+        assert_eq!(
+            menu.activate(7),
+            None,
+            "a row that is not there does nothing"
+        );
     }
 
     #[test]
@@ -165,13 +128,13 @@ mod tests {
     }
 
     #[test]
-    fn escape_and_a_second_toggle_close_the_menu_without_an_action() {
+    fn a_second_toggle_and_a_close_shut_the_menu_without_an_action() {
         let mut menu = Menu::new(vec![Action::Sleep]).unwrap();
         menu.toggle();
-        assert_eq!(menu.press(MenuKey::Escape), None);
-        assert_eq!(menu.open(), None);
         menu.toggle();
+        assert!(!menu.is_open());
         menu.toggle();
-        assert_eq!(menu.open(), None);
+        menu.close();
+        assert!(!menu.is_open());
     }
 }

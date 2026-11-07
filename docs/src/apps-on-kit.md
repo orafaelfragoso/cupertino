@@ -13,7 +13,8 @@ CupertinoKit is the toolkit that Cupertino's own apps are moving onto. This page
 | `cupertino-launcher` | Search panel, catcher and hidden windows on Kit layer surfaces. | See the crate README for interaction and styling limits. |
 | `cupertino-notifications` | Banners and notification centre on Kit layer surfaces. | Application icons from image data, image paths and desktop entries are not drawn yet. |
 | `cupertino-dock` | The window-manager UI: the overview chrome (workspaces bar, window titles, selection) and the application switcher panel as Kit windows (`overview_kit`, `switcher_kit`), tested headless. | The dock itself, and the dock process's drawing path for the overview and switcher: wiring them in comes with the Dock's move to Kit, which deletes the old painters. |
-| Login and lock screen, screenshot UI | | Normal entry points still use their existing drawing paths. |
+| `cupertino-login` | The lock screen (Kit windows as session-lock surfaces, one per output), the greeter's picker, name and password screens and power menu, the log out, restart, shut down and power-button panels with the "Reopen windows" checkbox, and the interrupt panel. The password field is Kit's secure field. | Real suspend, console switches and PAM logins are checked by hand (the crate README lists the checks). |
+| Screenshot UI | | Normal entry points still use their existing drawing paths. |
 
 ## The OSD
 

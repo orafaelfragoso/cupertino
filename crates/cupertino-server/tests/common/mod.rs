@@ -618,6 +618,28 @@ impl Client {
         })
     }
 
+    /// A client with one mapped toplevel of `app_id` on the seat: it records the keys its keyboard receives and the
+    /// motions and button presses of its pointer.
+    pub fn listening(socket: PathBuf, app_id: &'static str) -> Client {
+        Self::run(socket, move |queue, client, globals| {
+            let qh = queue.handle();
+            let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
+            let wm_base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).unwrap();
+            let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=7, ()).unwrap();
+            let surface = compositor.create_surface(&qh, ());
+            let xdg = wm_base.get_xdg_surface(&surface, &qh, surface.clone());
+            let toplevel = xdg.get_toplevel(&qh, ());
+            toplevel.set_app_id(app_id.to_string());
+            surface.commit();
+            queue.roundtrip(client).unwrap();
+            Setup {
+                objects: Box::new((wm_base, xdg, toplevel, surface, seat)),
+                lock: None,
+                release: None,
+            }
+        })
+    }
+
     /// A client with one mapped toplevel that asks to inhibit the compositor's keyboard shortcuts for it, and records
     /// the `active` / `inactive` events and the keys its keyboard receives.
     pub fn inhibiting(socket: PathBuf, app_id: &'static str) -> Client {

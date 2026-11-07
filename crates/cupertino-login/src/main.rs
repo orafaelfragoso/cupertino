@@ -6,6 +6,7 @@ mod app;
 mod greeter;
 mod harden;
 mod options;
+mod roles;
 mod screen;
 
 use options::{Options, USAGE};

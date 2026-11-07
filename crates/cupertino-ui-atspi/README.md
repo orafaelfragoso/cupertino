@@ -9,7 +9,7 @@ zbus 5 on async-io, no tokio). AccessKit's types stay inside the crate.
 
 | Item | Contents |
 |---|---|
-| `AtspiAdapter` | `new(waker)` takes the window system's `Waker` (`WindowSystem::waker()`); the adapter goes into `RuntimeOptions.accessibility`. `muted(waker)` starts muted until the first `session_locked`, for an application that may start while the session is locked |
+| `AtspiAdapter` | `new(waker)` takes the window system's `Waker` (`WindowSystem::waker()`); the adapter goes into `RuntimeOptions.accessibility`. `muted(waker)` starts muted until the first `session_locked`, for an application that may start while the session is locked; `lock_screen(waker)` is never muted by `session_locked`, for the application that draws the lock screen |
 
 ```rust
 let options = RuntimeOptions {
@@ -44,7 +44,8 @@ let runtime = Runtime::new(system, options);
   `SetValue` nor a selection, whatever core sent: a second defence after core's.
 - **Session lock.** While `session_locked(true)` holds, every node is sent without its live politeness, so nothing is
   announced. AccessKit announces only as a live node is added or renamed, from the node it is sent then, so neither
-  the lock nor the unlock announces anything, and the first change after the unlock speaks as usual.
+  the lock nor the unlock announces anything, and the first change after the unlock speaks as usual. The lock screen's own adapter (`lock_screen`) ignores the lock, so the
+  answer to a password attempt is announced while the session is locked.
 - **Actions.** A request from an assistive technology becomes core's `ActionRequest` (`Click`, `Focus`, `Increment`,
   `Decrement`, `Expand`, `Collapse`, `ShowMenu`, `ScrollIntoView`, `SetValue` with text or a number). It is kept only
   when its target advertised that action in its last update and it doesn't set a secret's value. It waits in a queue

@@ -22,6 +22,8 @@ pub struct AtspiAdapter {
     shared: Arc<Shared>,
     windows: HashMap<WindowId, Window>,
     muted: bool,
+    /// The application draws the lock screen itself: the session's lock never mutes it.
+    lock_screen: bool,
 }
 
 /// The most action requests waiting for the application's loop; more are dropped until it drains them, and an
@@ -113,6 +115,16 @@ impl AtspiAdapter {
             }),
             windows: HashMap::new(),
             muted: false,
+            lock_screen: false,
+        }
+    }
+
+    /// Like [`Self::new`], for the application that draws the lock screen: it is what a person hears while the session is
+    /// locked, so [`AccessibilityAdapter::session_locked`] never mutes it and the answer to an attempt is announced.
+    pub fn lock_screen(waker: Waker) -> AtspiAdapter {
+        AtspiAdapter {
+            lock_screen: true,
+            ..AtspiAdapter::new(waker)
         }
     }
 
@@ -219,7 +231,7 @@ impl AccessibilityAdapter for AtspiAdapter {
     /// AccessKit announces a live region only as it is added or renamed, from the node it is sent then, so a node sent
     /// while muted announces nothing and the next one sent after is announced as usual.
     fn session_locked(&mut self, locked: bool) {
-        self.muted = locked;
+        self.muted = locked && !self.lock_screen;
     }
 
     fn window_closed(&mut self, window: WindowId) {

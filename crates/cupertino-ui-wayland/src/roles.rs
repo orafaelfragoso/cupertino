@@ -33,6 +33,13 @@ pub trait SurfaceRoles {
     fn outputs_changed(&mut self, conn: &Connection) {
         let _ = conn;
     }
+
+    /// Called at the start of every dispatch, before the window system waits: the roles send the requests their
+    /// application asked for since (a desktop shell's session lock and unlock) and read the transport's state, such as
+    /// the keyboard's modifiers. The window system flushes what they send with its own requests.
+    fn prepare(&mut self, conn: &mut Connection) {
+        let _ = conn;
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

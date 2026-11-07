@@ -1735,7 +1735,10 @@ fn sync_backdrop<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>) {
         .request(w.id, WindowRequest::Backdrop(wanted.clone()))
         .is_ok();
     w.backdrop = wanted.filter(|_| shown);
+    // the material is shaped with the next present, which a change that paints nothing new (a material under a moved
+    // rectangle) must still bring
     w.invalidate();
+    w.damage.invalidate();
 }
 
 /// Asks the window system to publish `menus`, or to withdraw them, when they changed.

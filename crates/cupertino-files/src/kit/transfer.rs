@@ -117,6 +117,32 @@ impl Transfer {
         format!("{verb} {what} to “{}”", name(&self.dest))
     }
 
+    /// What the window says once the transfer ended, `stopped` by its Stop button or with `failures` items that could
+    /// not go: "Copied 3 items to “Documents”", "Stopped copying “a.txt” to “Documents”", "Moved 2 of 3 items to
+    /// “Documents”" or "Could not copy “a.txt” to “Documents”". The errors themselves are posted as notices.
+    pub fn ended(&self, stopped: bool, failures: usize) -> String {
+        let (done, doing, verb) = if self.moving {
+            ("Moved", "moving", "move")
+        } else {
+            ("Copied", "copying", "copy")
+        };
+        let what = match self.sources.as_slice() {
+            [one] => format!("“{}”", name(one)),
+            many => format!("{} items", many.len()),
+        };
+        let to = format!("to “{}”", name(&self.dest));
+        let total = self.sources.len();
+        if stopped {
+            format!("Stopped {doing} {what} {to}")
+        } else if failures == 0 {
+            format!("{done} {what} {to}")
+        } else if failures >= total {
+            format!("Could not {verb} {what} {to}")
+        } else {
+            format!("{done} {} of {total} items {to}", total - failures)
+        }
+    }
+
     /// From 0 to 1.
     pub fn fraction(&self) -> f64 {
         self.progress.fraction()
@@ -172,8 +198,18 @@ mod tests {
             [dest.join("a.txt"), dest.join("b.txt")]
         );
         assert_eq!(transfer.fraction(), 1.0);
+        assert_eq!(transfer.ended(false, 0), "Copied 2 items to “Documents”");
+        assert_eq!(
+            transfer.ended(false, 1),
+            "Copied 1 of 2 items to “Documents”"
+        );
+        assert_eq!(
+            transfer.ended(false, 2),
+            "Could not copy 2 items to “Documents”"
+        );
         let one = Transfer::start(8, vec![d.path().join("a.txt")], dest, true, None);
         assert_eq!(one.title(), "Moving “a.txt” to “Documents”");
+        assert_eq!(one.ended(true, 0), "Stopped moving “a.txt” to “Documents”");
     }
 
     #[test]

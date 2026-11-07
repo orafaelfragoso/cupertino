@@ -223,6 +223,7 @@ impl<M: 'static> Widget<M> for TabRow<M> {
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(Role::TabList);
         cx.name(self.label.clone());
+        cx.item_count(self.tabs.len());
         cx.roving_group();
     }
 }

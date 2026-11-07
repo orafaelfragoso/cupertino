@@ -196,6 +196,11 @@ impl Browser {
         self.filter.is_some() && self.item_count() == 0 && !self.model.is_loading()
     }
 
+    /// How many items match the search shown once the folder has been read; `None` without a search or while it is read.
+    pub fn search_results(&self) -> Option<usize> {
+        (self.filter.is_some() && !self.model.is_loading()).then(|| self.item_count())
+    }
+
     /// Show only the items whose names contain `query`, ignoring case, as a flat list; an empty query shows the folder
     /// again. approximate: the design's search field searches the whole computer by default; this one filters the
     /// folder shown. The selection stays on the items still shown.

@@ -73,6 +73,11 @@ Works:
 - Password and protected values carry no value and cannot be set from outside.
 - A text field's caret and selection, in characters, and a selection set from the assistive technology. A protected
   field publishes neither.
+- A window root without a name of its own is named by the window's title. A list item, tree item, cell or tab without
+  a name is labelled by the text inside it. Menu items, tabs and page dots say their place and how many there are.
+- Tests can check a whole window with `cupertino-ui-test`'s `accessibility_audit` (unnamed controls, missing values
+  and states, focus that does not agree with the tree, masked text, items without place or count) and drive it as a
+  screen reader would with its `AssistiveTechnology` stand-in, which also records what live regions announce.
 
 Not done:
 
@@ -84,12 +89,16 @@ Commands behind these statements:
 ```bash
 cargo test -p cupertino-ui-atspi
 cargo test -p cupertino-kit --test assistive-technology
+cargo test -p cupertino-kit --test control-fixtures
 ```
 
 The first runs the mapping and filter tests, a test of the live-region rules while the session is locked, and, when
 `dbus-daemon` is installed, tests on a private bus with a fake AT-SPI registry, one of them following a text field's
 caret and selection (without `dbus-daemon` the bus tests print `SKIPPED`).
-The second changes a form value and moves focus through assistive-technology requests. No screen reader was
+The second changes a form value and moves focus through assistive-technology requests. The third audits every
+control in each state, appearance and direction, checks that the keyboard focus shows in each appearance, high contrast
+included, and asks for every action each control offers, which must reach the application or change what a screen
+reader reads. No screen reader was
 run against the examples for this page, so how a screen reader reads them is not documented here.
 
 ## Right to left

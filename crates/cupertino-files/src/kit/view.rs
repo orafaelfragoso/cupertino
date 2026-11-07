@@ -7,8 +7,8 @@ use cupertino_menu_model::{ActionName, MenuBar};
 
 use cupertino_kit::controls::{
     Column, ColumnWidth, ContextMenu, Dialog, DialogAction, DialogButton, DialogKind, Icon,
-    IconDirection, Image, ImageFit, ImageSource, Modal, NavigationStack, OutlineTable, Progress,
-    ScrollView, Scroller, SecureField, Selection, Sidebar, SidebarAccessory, SidebarItem,
+    IconDirection, Image, ImageFit, ImageSource, MenuAnchor, Modal, NavigationStack, OutlineTable,
+    Progress, ScrollView, Scroller, SecureField, Selection, Sidebar, SidebarAccessory, SidebarItem,
     SidebarSection, SortOrder, Spacer, SplitView, Stack, TableView, Text, TextField, TextRole,
     TreeItem,
 };
@@ -21,13 +21,14 @@ use cupertino_kit::text::SecureBuffer;
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
 use cupertino_kit::theme::ColorRole;
 
+use super::announce::Announcer;
 use super::context::Secondary;
 use super::drops;
 use super::grid::{self, IconGrid, Item};
-use super::list::{Gestures, RowCell};
+use super::list::{self, Gestures, RowCell};
 use super::search::{no_results, SearchSlot};
 use super::sidebar::{Backdrop, FocusWatch, Opaque};
-use super::toolbar::{PathSegment, ToolButton};
+use super::toolbar::{PathBar, PathSegment, ToolButton};
 use super::transfer::Transfer;
 use super::{window_key, BrowserWindow, Event, Message, Popup, Session, Unlock, COLUMNS};
 use crate::format::{human_size, relative_date};
@@ -297,6 +298,12 @@ fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> 
         (ViewMode::Icons, false) => icons(session, id, win),
         (ViewMode::Icons, true) => no_results(icons(session, id, win), 0.0),
     };
+    // the window follows whether the keyboard is on the items, so a folder closed over it hands it to the folder
+    let folder = Element::new(FocusWatch {
+        on_focus: send(id, Event::ItemsFocus),
+        children: vec![folder.fill()],
+    })
+    .fill();
     // a secondary press anywhere in the folder opens a context menu: an item's cell says it was on the item first
     let folder = Element::new(Secondary {
         message: Message::Window(id, Event::SecondaryPress(None)),
@@ -336,6 +343,13 @@ fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> 
             .key("status-bar"),
         );
     }
+    children.push(
+        // each message is a node of its own, which a screen reader hears as it appears
+        Element::new(Announcer {
+            text: win.announcement.text.clone(),
+        })
+        .key(format!("announcer/{}", win.announcement.serial)),
+    );
     Element::new(Stack {
         axis: Axis::Vertical,
         padding: Insets::ZERO,
@@ -387,6 +401,10 @@ fn toolbar(session: &Session, id: u64, win: &BrowserWindow) -> Vec<Element<Messa
             symbol: symbol.into(),
             chevron,
             size: Size::new(w, h),
+            expanded: win
+                .context
+                .as_ref()
+                .is_some_and(|menu| menu.anchor == MenuAnchor::Below(popup_key(popup))),
             on_press: Message::Window(id, Event::Popup(popup)),
         })
         .key(popup_key(popup))
@@ -501,10 +519,10 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
                 align: Align::Stretch,
                 children: vec![
                     Element::new(Spacer { min: 0.0 }),
-                    text(
+                    cell_text_element(
                         cell_text(&entries[row], COLUMNS[column], now),
-                        TextRole::Body,
-                        column != 0 && !selected,
+                        column,
+                        selected,
                     ),
                     Element::new(Spacer { min: 0.0 }),
                 ],
@@ -539,6 +557,7 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         on_scroll: send(id, Event::Scroll),
         on_select: Some(send(id, Event::Select)),
         on_activate: Some(send(id, Event::Open)),
+        on_row_key: Some(Box::new(list::tab(id, names, selected.cursor()))),
     };
     let count = table.count;
     let table = Element::from(OutlineTable {
@@ -562,7 +581,6 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         row_height: ROW_HEIGHT,
         scroll: win.scroll,
         selection: selected,
-        names,
         presses,
         band: win.band,
         children: vec![table],
@@ -574,6 +592,11 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
 /// and close above it.
 pub(super) fn row_key(id: u64, path: &std::path::Path) -> Key {
     Key::from(format!("row/{id}/{}", path.display()))
+}
+
+/// The key of the icon grid's cell for item `index` in window `id`.
+pub(super) fn item_key(id: u64, index: usize) -> Key {
+    grid::cell_key(id, index)
 }
 
 /// Each row of `outline` as the table reads it: its level, whether it is open, and its place among its siblings.
@@ -785,7 +808,10 @@ fn path_bar(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message>
             std::iter::once(segment).chain(separator)
         })
         .collect();
-    bar(children).key("path-bar")
+    Element::new(PathBar {
+        children: vec![bar(children)],
+    })
+    .key("path-bar")
 }
 
 /// A running paste or move: what it does, how far it came and its Stop button.
@@ -840,6 +866,18 @@ fn text(content: String, role: TextRole, secondary: bool) -> Element<Message> {
         wrap: false,
         secondary,
         selected: false,
+    })
+}
+
+/// A list cell's text: the name in the label colour and the other columns in the secondary one, and every column of a
+/// selected row in the theme's selected control text colour, which reads on the selection's fill.
+fn cell_text_element(content: String, column: usize, selected: bool) -> Element<Message> {
+    Element::new(Text {
+        content: AttributedText::plain(content, TextStyle::new(13.0)),
+        role: TextRole::Body,
+        wrap: false,
+        secondary: column != 0,
+        selected,
     })
 }
 

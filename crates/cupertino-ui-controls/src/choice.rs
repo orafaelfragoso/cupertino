@@ -314,6 +314,7 @@ impl<M: Clone + 'static> Widget<M> for Item<M> {
         cx.name(self.label().to_owned());
         if self.look == Look::Tab {
             cx.role(Role::Tab);
+            cx.item_index(self.index);
             if self.checked() {
                 cx.relation_to(Relation::Controls, self.index as u64);
             }

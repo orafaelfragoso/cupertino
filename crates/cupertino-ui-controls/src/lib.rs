@@ -55,7 +55,7 @@ use cupertino_ui_core::{
     Checked, CommandRegistry, Element, Key, PaintCx, WindowBackground, WindowKey,
 };
 use cupertino_ui_layout::{Align, Axis, ScrollState, Track};
-use cupertino_ui_platform::WindowSpec;
+use cupertino_ui_platform::{KeyEvent, WindowSpec};
 use cupertino_ui_render::{ImageResource, ResourceId};
 use cupertino_ui_text::{AttributedText, ContentPurpose, SecureBuffer};
 use cupertino_ui_theme::ColorRole;
@@ -75,6 +75,10 @@ pub type Handler<T, M> = Box<dyn Fn(T) -> M>;
 
 /// Turns a submitted password into the application's message; the secret is only borrowed.
 pub type SecureHandler<M> = Box<dyn Fn(&SecureBuffer) -> M>;
+
+/// Turns a key the rows of a [`TableView`] did not take into the application's message, given the row the keyboard is
+/// on; `None` lets the key go on.
+pub type RowKeyHandler<M> = Box<dyn Fn(usize, &KeyEvent) -> Option<M>>;
 
 /// The type role a text is set in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -873,6 +877,10 @@ pub struct TableView<M> {
     pub on_scroll: Handler<ScrollState, M>,
     pub on_select: Option<Handler<Selection, M>>,
     pub on_activate: Option<Handler<usize, M>>,
+    /// A key that reached the rows and that the table does not take itself, given as `(row, key)` with the row the
+    /// keyboard is on: a message takes the key, `None` lets it go on, so Tab moves the focus to the next control. A key
+    /// on a column header never comes here.
+    pub on_row_key: Option<RowKeyHandler<M>>,
 }
 
 /// A [`TableView`] whose rows form an outline, as a [`TreeView`]'s do: each row's first cell comes after its indent and

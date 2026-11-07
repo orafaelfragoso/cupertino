@@ -1,12 +1,14 @@
 //! What the list view does beyond the toolkit's outline table: a press on empty space under the rows draws a rubber
 //! band ([`super::band`]), a double click opens a row, a press on the name of the only selected row renames it after
 //! the double-click interval ([`super::clicks`]), a press with Ctrl held opens the context menu, a press that moves
-//! drags the selected rows out of the window, and Tab and Shift+Tab select the next and the previous item by name.
+//! drags the selected rows out of the window, and Tab and Shift+Tab on a row select the next and the previous item by
+//! name ([`tab`]); past the last (or before the first) they move the keyboard on to the next control, so the list never
+//! holds it. Tab on a column header goes to the next header, or into the rows from the last, as any control's does.
 //!
 //! [`RowCell`] wraps each cell of a row and takes the presses on it; the triangle before the name takes its own, so a
 //! press on it only opens or closes the folder. [`Gestures`] holds the whole table and takes what no row took: the
-//! presses under the rows, the band's pointer, the timers and Tab. The presses' state is shared between them
-//! ([`Presses`]), as a press on one row and the next press on another count together.
+//! presses under the rows, the band's pointer and the timers. The presses' state is shared between them ([`Presses`]),
+//! as a press on one row and the next press on another count together.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -20,7 +22,7 @@ use cupertino_kit::layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutDirection, LayoutSpec, Measured,
     ScrollState, SizeSpec,
 };
-use cupertino_kit::platform::{Keysym, Mods, MouseButton, PointerEvent};
+use cupertino_kit::platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent};
 
 use super::band::{self, Band};
 use super::clicks::Clicks;
@@ -286,15 +288,13 @@ impl Widget<Message> for RowCell {
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
-/// The list's table with what no row takes: presses under the rows, the band, the timers and Tab.
+/// The list's table with what no row takes: presses under the rows, the band and the timers.
 pub(super) struct Gestures {
     pub window: u64,
     pub count: usize,
     pub row_height: f64,
     pub scroll: ScrollState,
     pub selection: Selection,
-    /// The items' names, for Tab.
-    pub names: Rc<[String]>,
     pub presses: SharedPresses,
     /// The band being drawn, in the rows' content.
     pub band: Option<Rect>,
@@ -326,7 +326,8 @@ impl Gestures {
         ))
     }
 
-    /// Show `band` and select the rows it crosses.
+    /// Show `band` and select the rows it crosses: the window hears of the band before its selection, so it holds the
+    /// selection's count until the band is let go.
     fn draw_band(&self, band: &Band, cx: &mut EventCx<'_, Message>) {
         let Some(origin) = self.content_origin(cx) else {
             return;
@@ -336,10 +337,10 @@ impl Gestures {
         let past = ((rect.max_y() / self.row_height).ceil().max(0.0) as usize).min(self.count);
         let hits: Vec<usize> = (first..past).collect();
         let next = band.select(&hits);
+        self.emit(WindowEvent::Band(Some(rect)), cx);
         if next != self.selection {
             self.emit(WindowEvent::Select(next), cx);
         }
-        self.emit(WindowEvent::Band(Some(rect)), cx);
     }
 
     /// What the list sees before the table and its rows do, which take keys and presses for themselves: a key, a scroll
@@ -530,26 +531,6 @@ impl Widget<Message> for Gestures {
                 }
                 Propagation::Continue
             }
-            Event::Key(ref key, _) if key.pressed => {
-                self.presses.borrow_mut().clicks.cancel();
-                let mods = key.mods;
-                let plain = !mods.contains(Mods::CTRL)
-                    && !mods.contains(Mods::ALT)
-                    && !mods.contains(Mods::PRIMARY);
-                if !(plain && (key.keysym == TAB || key.keysym == LEFT_TAB)) {
-                    return Propagation::Continue;
-                }
-                let back = key.keysym == LEFT_TAB || mods.contains(Mods::SHIFT);
-                if let Some(to) = by_name(&self.names, self.selection.cursor(), back) {
-                    let mut next = self.selection.clone();
-                    next.select_only(to);
-                    if next != self.selection {
-                        self.emit(WindowEvent::Select(next), cx);
-                    }
-                    self.emit(WindowEvent::FocusRow(to), cx);
-                }
-                Propagation::Stop
-            }
             _ => Propagation::Continue,
         }
     }
@@ -557,6 +538,40 @@ impl Widget<Message> for Gestures {
     fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// What Tab (or Shift+Tab) on a row of the list of window `window` does: it selects the next (or previous) item by
+/// `names` and gives it the keyboard ([`WindowEvent::FocusRow`]); past the last (or before the first) it leaves the
+/// key to go on to the next control. The table offers only its rows' keys, so a column header's Tab never comes here.
+pub(super) fn tab(
+    window: u64,
+    names: Rc<[String]>,
+    cursor: Option<usize>,
+) -> impl Fn(usize, &KeyEvent) -> Option<Message> {
+    move |at, key| {
+        let mods = key.mods;
+        let plain = !mods.contains(Mods::CTRL)
+            && !mods.contains(Mods::ALT)
+            && !mods.contains(Mods::PRIMARY);
+        if !(plain && (key.keysym == TAB || key.keysym == LEFT_TAB)) {
+            return None;
+        }
+        let back = key.keysym == LEFT_TAB || mods.contains(Mods::SHIFT);
+        let to = tab_to(&names, cursor, at, back)?;
+        Some(Message::Window(window, WindowEvent::FocusRow(to)))
+    }
+}
+
+/// The item Tab (or Shift+Tab, `back`) goes to by `names` from the row the keyboard is on, `at`: the one after (or
+/// before) the selection's `cursor`; with nothing selected, the first (or last) by name, or the one after (or before)
+/// it when the keyboard is on it already. `None` past the last (or before the first).
+fn tab_to(names: &[String], cursor: Option<usize>, at: usize, back: bool) -> Option<usize> {
+    let to = by_name(names, cursor, back)?;
+    let to = match cursor {
+        None if to == at => by_name(names, Some(at), back)?,
+        _ => to,
+    };
+    (to != cursor.unwrap_or(at)).then_some(to)
 }
 
 /// The band's layer over the table: it places the band, and lets every press through.
@@ -606,5 +621,25 @@ mod tests {
         assert_eq!(picked(pressed(&selection, 6, Mods::NONE)), [6]);
         assert_eq!(picked(pressed(&selection, 5, Mods::SHIFT)), [2, 3, 4, 5]);
         assert_eq!(picked(pressed(&selection, 3, Mods::PRIMARY)), [2]);
+    }
+
+    #[test]
+    fn tab_goes_on_by_name_from_the_selection_or_the_row_the_keyboard_is_on() {
+        // shown by size: b.txt, a.txt, Notes; by name: a.txt, b.txt, Notes
+        let names: Vec<String> = ["b.txt", "a.txt", "Notes"].map(str::to_owned).to_vec();
+        assert_eq!(tab_to(&names, Some(1), 1, false), Some(0), "a.txt to b.txt");
+        assert_eq!(
+            tab_to(&names, Some(0), 0, true),
+            Some(1),
+            "b.txt back to a.txt"
+        );
+        assert_eq!(tab_to(&names, Some(2), 2, false), None, "past the last");
+        assert_eq!(tab_to(&names, Some(1), 1, true), None, "before the first");
+        // nothing selected: the first by name, unless the keyboard is on it already
+        assert_eq!(tab_to(&names, None, 0, false), Some(1));
+        assert_eq!(tab_to(&names, None, 1, false), Some(0));
+        assert_eq!(tab_to(&names, None, 2, true), Some(0));
+        let one = vec!["a.txt".to_owned()];
+        assert_eq!(tab_to(&one, None, 0, false), None, "the only item is left");
     }
 }

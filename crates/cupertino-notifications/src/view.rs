@@ -19,8 +19,12 @@
 //! The windows report what the user did as [`Input`]; the host hands it to the model (see [`apply`]).
 //!
 //! A banner is a polite live region (an assertive one when it is critical), so a screen reader reads a new banner as
-//! it arrives; the cards of the centre are not live. They are the items of a list, Tab stops that Return or Space
-//! activates and Delete clears.
+//! it arrives. A bridge to assistive technology announces a live node only as it appears or is renamed, and says its
+//! name alone, so a banner is named after what it shows ([`banner_speech`]): a new banner, or one whose text changes
+//! in place, is said whole. While the screen is locked no window is open, as the lock screen hides them; a banner
+//! still on screen at the unlock appears then and is said. The cards of the centre are not live. They are the items of
+//! a list, named after their application and summary with the whole body as description, Tab stops that Return or
+//! Space activates and Delete clears.
 
 use std::collections::BTreeSet;
 use std::fmt::Debug;
@@ -507,7 +511,8 @@ pub fn centre_key() -> WindowKey {
 }
 
 /// The windows for the model at `now`: the banners on screen, or the open centre instead of them (they stay in the
-/// model and show again when it closes).
+/// model and show again when it closes). None while the screen is locked: the lock screen hides them, so assistive
+/// technology has nothing of them to read, and a banner still on screen at the unlock appears then and is announced.
 pub fn windows<M: Clone + 'static>(
     center: &mut NotificationCenter,
     ui: &Ui,
@@ -515,6 +520,9 @@ pub fn windows<M: Clone + 'static>(
     now: f64,
     map: fn(Input) -> M,
 ) -> Vec<Window<M>> {
+    if center.screen_locked() {
+        return Vec::new();
+    }
     let width = strip_width(&center.config.layout, &center.config.swipe);
     if ui.centre_open {
         return vec![centre_window(center, ui, metrics, width, map)];
@@ -537,7 +545,7 @@ pub fn windows<M: Clone + 'static>(
                 card.height(),
             );
             Some(banner_window(
-                &n, &layout, card, region, p.opacity, p.hovered, width, map,
+                &n, &layout, card, region, p.opacity, p.hovered, p.leaving, width, map,
             ))
         })
         .collect()
@@ -650,6 +658,28 @@ pub fn accessible_name(n: &Notification) -> String {
     }
 }
 
+/// What a banner is called, and so what a screen reader says as it arrives: its application, its summary and its
+/// body as the card shows them, cut where the card cuts them, each run of spaces and line breaks one space ("Mail:
+/// Lunch, Are you free at noon?"). Its buttons are its children, with names of their own.
+pub fn banner_speech(n: &Notification, layout: &CardLayout) -> String {
+    let flat = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let head = match (flat(&n.app_name), flat(&layout.summary.text)) {
+        (app, summary) if app.is_empty() => summary,
+        (app, summary) if summary.is_empty() => app,
+        (app, summary) => format!("{app}: {summary}"),
+    };
+    let body = layout
+        .body
+        .as_ref()
+        .map(|body| flat(&body.content.text))
+        .unwrap_or_default();
+    match (head.is_empty(), body.is_empty()) {
+        (_, true) => head,
+        (true, false) => body,
+        (false, false) => format!("{head}, {body}"),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn banner_window<M: Clone + 'static>(
     n: &Notification,
@@ -658,14 +688,17 @@ fn banner_window<M: Clone + 'static>(
     region: Rect,
     opacity: f64,
     hovered: bool,
+    leaving: bool,
     width: f64,
     map: fn(Input) -> M,
 ) -> Window<M> {
     let size = Size::new(width, card.height() + 2.0 * SHADOW_MARGIN);
-    let live = if n.urgency == Urgency::Critical {
-        Live::Assertive
-    } else {
-        Live::Polite
+    // a banner going away is no longer live: one whose window appears only as it leaves (at the unlock, or as the
+    // centre closes) is not said again
+    let live = match (leaving, n.urgency) {
+        (true, _) => None,
+        (false, Urgency::Critical) => Some(Live::Assertive),
+        (false, _) => Some(Live::Polite),
     };
     let content = Element::new(Strip {
         id: n.id,
@@ -677,12 +710,14 @@ fn banner_window<M: Clone + 'static>(
             opacity,
             brightness: 0.0,
             material: true,
-            name: accessible_name(n),
-            description: n.body_text(),
+            // a bridge announces a live node by its name alone, as it appears or is renamed: the name is everything
+            // the card shows in words, so a new banner and a banner whose text changes in place are said whole
+            name: banner_speech(n, layout),
+            description: String::new(),
             role: Role::Group,
             index: None,
             first: false,
-            live: Some(live),
+            live,
             clickable: false,
             map,
             children: card_content(

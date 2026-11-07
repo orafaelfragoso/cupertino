@@ -313,6 +313,7 @@ impl SwitcherSurface {
             click: None,
             look_key: "selection".into(),
             take_focus: false,
+            place: None,
             live: false,
             paint: Box::new(|cx, look| {
                 let size = cx.size();
@@ -333,6 +334,7 @@ impl SwitcherSurface {
                     role: Some(Role::ListItem),
                     look_key: format!("{app}:{}", sources.len()),
                     take_focus: false,
+                    place: Some(i),
                     live: false,
                     name,
                     states: AccessibleStates {
@@ -367,6 +369,7 @@ impl SwitcherSurface {
             role: Some(Role::StaticText),
             look_key: format!("{name}@{selected}"),
             take_focus: false,
+            place: None,
             // the panel never has the keyboard, so each step announces the selected application
             live: true,
             name: name.clone(),
@@ -414,6 +417,7 @@ impl SwitcherSurface {
             content: Element::new(Root {
                 role: Role::List,
                 name: TITLE.to_owned(),
+                items: Some(open.switcher.apps().len()),
                 opacity: alpha,
                 pointer: Some(Box::new(move |p| input(SwitcherInput::Pointer(p)))),
                 key: None,

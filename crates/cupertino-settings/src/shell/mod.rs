@@ -678,10 +678,10 @@ mod tests {
         NonZeroU32::new(64).unwrap()
     }
 
-    /// What a screen reader cannot announce in the window, besides the gaps of every Kit window, not of Settings: Kit
-    /// names neither the window's root nor a navigation toolbar.
+    /// What a screen reader cannot announce in the window, besides the root's name: Kit's tree leaves the root unnamed
+    /// and the AT-SPI bridge names it by the window's title.
     fn kit_gaps(tree: &AccessibilityUpdate) -> Vec<String> {
-        const KIT_GAPS: [&str; 2] = ["Window #0: no name", "Window #0 > Toolbar #1: no name"];
+        const KIT_GAPS: [&str; 1] = ["Window #0: no name"];
         let mut gaps = semantic_gaps(tree);
         gaps.retain(|gap| !KIT_GAPS.contains(&gap.as_str()));
         gaps
@@ -788,15 +788,17 @@ mod tests {
         (driver, window)
     }
 
+    /// Runs until the window rests, then checks that a screen reader could read every window open.
     fn settle<A: Application>(driver: &mut TestDriver<A>, window: WindowId) {
         for _ in 0..8 {
             driver.run_until_idle(budget()).unwrap();
             let system = driver.window_system_mut();
             if !system.windows().contains(&window) || !system.frame_requested(window).unwrap() {
-                return;
+                break;
             }
             system.frame_ready(window, Timestamp(0)).unwrap();
         }
+        driver.assert_accessible("Settings");
     }
 
     fn send(driver: &mut TestDriver<SettingsApp>, window: WindowId, event: WindowEvent) {

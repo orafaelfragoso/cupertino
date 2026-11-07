@@ -1745,15 +1745,17 @@ mod tests {
         window
     }
 
+    /// Runs until the window rests, then checks that a screen reader could read every window open.
     fn settle(driver: &mut TestDriver<Dialogs>, window: WindowId) {
         for _ in 0..8 {
             driver.run_until_idle(budget()).unwrap();
             let system = driver.window_system_mut();
             if !system.windows().contains(&window) || !system.frame_requested(window).unwrap() {
-                return;
+                break;
             }
             system.frame_ready(window, Timestamp(0)).unwrap();
         }
+        driver.assert_accessible("Portal dialog");
     }
 
     fn send(driver: &mut TestDriver<Dialogs>, window: WindowId, event: WindowEvent) {

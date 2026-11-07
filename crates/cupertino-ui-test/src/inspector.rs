@@ -210,6 +210,7 @@ mod tests {
                     sort: None,
                 },
             )],
+            accessibility_focus: Some(id(0)),
             display_list: DisplayList {
                 nodes: vec![PaintNode {
                     id: PaintNodeId(7),

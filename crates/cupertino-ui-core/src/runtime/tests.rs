@@ -676,6 +676,24 @@ fn a_buffer_is_sized_as_the_window_system_rounds_a_fractional_scale() {
 }
 
 #[test]
+fn the_adapter_hears_a_windows_title_before_its_first_tree_and_when_it_changes() {
+    let adapter = FakeAdapter::default();
+    let (mut rt, window, _) = start_with(|o| o.accessibility = Some(Box::new(adapter.clone())));
+    configure(&mut rt, window, 1);
+    adapter.active.set(true);
+    rt.step(steps()).unwrap();
+    rt.messages.push_back("plus".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(
+        *adapter.titles.borrow(),
+        [
+            (window, "Count 0".to_owned(), 0),
+            (window, "Count 1".to_owned(), 1)
+        ]
+    );
+}
+
+#[test]
 fn a_closed_window_is_dropped_by_the_accessibility_adapter() {
     let adapter = FakeAdapter::default();
     let (mut rt, window, _) = start_with(|o| o.accessibility = Some(Box::new(adapter.clone())));
@@ -2710,4 +2728,141 @@ fn a_drop_where_nothing_takes_it_or_whose_data_fails_is_refused() {
         [(DropToken(7), None), (DropToken(7), None)]
     );
     assert!(!rt.model().heard.iter().any(|m| m.starts_with("drop")));
+}
+
+/// A row inside a container with no role, beside a second button; `drop` takes the row away.
+struct Fallen;
+
+#[derive(Default)]
+struct FallenModel {
+    dropped: bool,
+    heard: Vec<String>,
+}
+
+impl Application for Fallen {
+    type Model = FallenModel;
+    type Message = String;
+
+    fn init() -> (FallenModel, Vec<Command<String>>) {
+        (FallenModel::default(), Vec::new())
+    }
+
+    fn update(model: &mut FallenModel, message: String) -> Vec<Command<String>> {
+        if message == "drop" {
+            model.dropped = true;
+        } else {
+            model.heard.push(message);
+        }
+        Vec::new()
+    }
+
+    fn view(model: &FallenModel) -> Vec<Window<String>> {
+        let rows = if model.dropped {
+            Vec::new()
+        } else {
+            vec![Element::new(leaf("row")).key("row")]
+        };
+        vec![Window {
+            key: WindowKey("main".into()),
+            spec: WindowSpec {
+                title: "Fallen".into(),
+                app_id: "test.fallen".into(),
+                size: Size::new(200.0, 100.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Preferred,
+                foreign_parent: None,
+                input_region: None,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            popup: None,
+            background: WindowBackground::Theme,
+            content: Element::new(row(vec![
+                Element::new(group(rows)).key("rows"),
+                Element::new(leaf("other")).key("other"),
+            ])),
+            menus: None,
+        }]
+    }
+}
+
+#[test]
+fn a_focus_that_falls_to_a_node_without_a_role_is_told_on_its_nearest_ancestor_and_keeps_the_keyboard(
+) {
+    let adapter = FakeAdapter::default();
+    adapter.active.set(true);
+    let damage = Rc::default();
+    let mut options = options(&damage);
+    options.accessibility = Some(Box::new(adapter.clone()));
+    let mut rt = Runtime::<Fallen, FakeSystem>::new(FakeSystem::default(), options);
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+    let tab = |rt: &mut Runtime<Fallen, FakeSystem>, keysym: u32| {
+        rt.window_system_mut().send(
+            window,
+            WindowEvent::Key(
+                KeyEvent {
+                    code: 0,
+                    keysym: Keysym(keysym),
+                    text: None,
+                    pressed: true,
+                    repeat: false,
+                    mods: Mods::NONE,
+                },
+                Timestamp(0),
+            ),
+        );
+        rt.step(steps()).unwrap();
+    };
+    tab(&mut rt, 0xff09);
+    let row = rt.find(window, &Key::from("row")).unwrap();
+    assert_eq!(rt.snapshot(window).unwrap().focus, Some(row));
+    assert_eq!(adapter.updates.borrow().last().unwrap().focus, Some(row));
+
+    // the row goes away: the keyboard falls to its container, which assistive technology does not see
+    rt.messages.push_back("drop".into());
+    rt.step(steps()).unwrap();
+    let rows = rt.find(window, &Key::from("rows")).unwrap();
+    let snapshot = rt.snapshot(window).unwrap();
+    let root = snapshot.nodes[0].id;
+    assert_eq!(
+        snapshot.focus,
+        Some(rows),
+        "the keyboard stays where it fell"
+    );
+    assert!(snapshot.accessibility.iter().all(|(id, _)| *id != rows));
+    assert_eq!(snapshot.accessibility_focus, Some(root));
+    let told = adapter.updates.borrow().last().unwrap().clone();
+    assert_eq!(
+        told.focus,
+        Some(root),
+        "the reader is told of a node it holds"
+    );
+    let window_node = &snapshot
+        .accessibility
+        .iter()
+        .find(|(id, _)| *id == root)
+        .unwrap()
+        .1;
+    assert!(window_node.states.focused && window_node.states.focusable);
+
+    // keys still go to the container, and Tab still goes on from where the keyboard is
+    let before = rt.model().heard.len();
+    tab(&mut rt, 0x78);
+    // the container is the key's target, as the node holding the keyboard
+    assert!(rt.model().heard[before..].contains(&"group:Target".to_owned()));
+    tab(&mut rt, 0xff09);
+    let other = rt.find(window, &Key::from("other")).unwrap();
+    assert_eq!(rt.snapshot(window).unwrap().focus, Some(other));
+    assert_eq!(adapter.updates.borrow().last().unwrap().focus, Some(other));
+    let snapshot = rt.snapshot(window).unwrap();
+    let window_node = &snapshot
+        .accessibility
+        .iter()
+        .find(|(id, _)| *id == root)
+        .unwrap()
+        .1;
+    assert!(!window_node.states.focused, "the window lets the focus go");
 }

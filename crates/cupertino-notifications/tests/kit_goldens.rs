@@ -4,15 +4,14 @@
 //! the pointer, the wheel, the touchpad and the keyboard and check the geometry of what they show.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
 use std::num::NonZeroU32;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use cupertino_assets::BUILTIN_FONT;
 use cupertino_kit::core::FrameSnapshot;
 use cupertino_kit::core::{
-    AccessibilityAdapter, AccessibilityUpdate, ActionRequest, Application, Command, Key,
-    PlaceholderIcons, RuntimeOptions, Window, WindowKey,
+    Action, Application, Command, Key, Live, PlaceholderIcons, Role, RuntimeOptions, Window,
+    WindowKey,
 };
 use cupertino_kit::geometry::Point;
 use cupertino_kit::geometry::{Rect, Size};
@@ -29,7 +28,7 @@ use cupertino_notifications::view::{
 };
 use cupertino_notifications::{CenterConfig, NotificationCenter, NotifyInput, Urgency};
 use cupertino_theme::Theme;
-use cupertino_ui_test::{Inspector, ManualClock, TestDriver};
+use cupertino_ui_test::{AssistiveTechnology, Inspector, ManualClock, TestDriver};
 
 /// What the test does to the model between frames.
 #[derive(Clone, Debug)]
@@ -38,6 +37,8 @@ enum Step {
     /// The model's clock, in seconds.
     At(f64),
     OpenCentre,
+    /// The session locks (`true`) or unlocks, as the process learns it from the server.
+    Lock(bool),
 }
 
 #[derive(Clone, Debug)]
@@ -101,6 +102,7 @@ impl Application for Scripted {
                     }
                     Step::At(t) => model.now = t,
                     Step::OpenCentre => model.ui.centre_open = true,
+                    Step::Lock(locked) => model.center.get_mut().set_screen_locked(locked),
                 }
                 model.center.get_mut().tick(model.now);
                 vec![next(&model.steps)]
@@ -132,43 +134,6 @@ impl Application for Scripted {
     }
 }
 
-/// Writes down what a screen reader would announce: each live node, when it first reaches the tree and whenever
-/// its name or description changes.
-#[derive(Clone, Default)]
-struct Announcements {
-    said: Arc<Mutex<Vec<String>>>,
-    live: Arc<Mutex<BTreeMap<String, String>>>,
-}
-
-impl AccessibilityAdapter for Announcements {
-    fn is_active(&self) -> bool {
-        true
-    }
-
-    fn window_focus(&mut self, _: WindowId, _: bool) {}
-
-    fn update(&mut self, update: &AccessibilityUpdate) {
-        for (id, node) in &update.nodes {
-            let Some(live) = node.live else {
-                continue;
-            };
-            let text = format!(
-                "{live:?} {:?} {:?}",
-                node.name.as_deref().unwrap_or(""),
-                node.description.as_deref().unwrap_or("")
-            );
-            let key = format!("{:?}/{id:?}", update.window);
-            let mut seen = self.live.lock().unwrap();
-            if seen.get(&key) != Some(&text) {
-                seen.insert(key, text.clone());
-                self.said.lock().unwrap().push(text);
-            }
-        }
-    }
-
-    fn drain_actions(&mut self, _: &mut Vec<ActionRequest>) {}
-}
-
 fn theme(reduce_transparency: bool) -> ThemeTokens {
     let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
     let preferences = ThemePreferences {
@@ -186,7 +151,9 @@ fn budget() -> NonZeroU32 {
 struct Run {
     driver: TestDriver<Scripted>,
     steps: async_channel::Sender<Step>,
-    announcements: Announcements,
+    /// The stand-in screen reader: the trees it was sent, what live regions said as the AT-SPI bridge announces
+    /// them (a live node's name, as it appears or is renamed), and the actions a test asks for.
+    reader: AssistiveTechnology,
     configured: Vec<WindowId>,
     size: Option<Size>,
 }
@@ -217,7 +184,7 @@ impl Run {
             CardMetrics::new(Arc::clone(&theme), Arc::clone(&text)),
         )));
         let glyphs = Arc::clone(&text);
-        let announcements = Announcements::default();
+        let reader = AssistiveTechnology::new();
         let options = RuntimeOptions {
             theme,
             text,
@@ -235,7 +202,7 @@ impl Run {
                     GlyphRaster::new(Arc::clone(&glyphs)),
                 ))
             }),
-            accessibility: Some(Box::new(announcements.clone())),
+            accessibility: Some(reader.adapter()),
             clock: Arc::new(ManualClock::new(Timestamp(0))),
             on_window_error: None,
         };
@@ -250,7 +217,7 @@ impl Run {
         let mut run = Run {
             driver,
             steps,
-            announcements,
+            reader,
             configured: Vec::new(),
             size: setup.size,
         };
@@ -258,8 +225,14 @@ impl Run {
         run
     }
 
-    /// Runs until nothing is left to do: new windows are configured and every frame asked for is given.
+    /// Runs until every window rests, then checks that a screen reader could read every window open.
     fn settle(&mut self) {
+        self.settle_frames();
+        self.driver.assert_accessible("Notifications");
+    }
+
+    /// Runs until nothing is left to do: new windows are configured and every frame asked for is given.
+    fn settle_frames(&mut self) {
         for _ in 0..16 {
             self.driver.run_until_idle(budget()).unwrap();
             let mut busy = false;
@@ -349,14 +322,22 @@ impl Run {
         out
     }
 
+    /// What the stand-in reader heard, oldest first, one line each: how urgently, and the words.
     fn announced(&self) -> String {
-        let said = self.announcements.said.lock().unwrap();
         let mut out = String::from("== announced\n");
-        for line in said.iter() {
-            out.push_str(line);
-            out.push('\n');
+        for said in self.reader.announcements() {
+            out.push_str(&format!("{:?} {:?}\n", said.live, said.text));
         }
         out
+    }
+
+    /// What the stand-in reader heard since the last call: how urgently, and the words.
+    fn heard(&self) -> Vec<(Live, String)> {
+        self.reader
+            .take_announcements()
+            .into_iter()
+            .map(|said| (said.live, said.text))
+            .collect()
     }
 }
 
@@ -420,14 +401,313 @@ fn a_new_banner_slides_in_and_is_announced() {
     let crossing = run.frame("a critical banner takes over, t = 1.1");
     let dump = format!("{arriving}{rest}{crossing}{}", run.announced());
     assert!(
-        dump.contains("Polite \"Mail: Lunch\" \"Are you free at noon?\""),
+        dump.contains("Polite \"Mail: Lunch, Are you free at noon?\""),
         "{dump}"
     );
     assert!(
-        dump.contains("Assertive \"Battery: Battery low\""),
+        dump.contains("Assertive \"Battery: Battery low, 5% remaining\""),
         "{dump}"
     );
     golden("banner", &dump);
+}
+
+#[test]
+fn a_screen_reader_s_click_on_a_banner_s_action_button_invokes_its_action() {
+    let mut run = Run::new();
+    run.notify(mail("Lunch", "Are you free at noon?").with_action("reply", "Reply"));
+    run.step(Step::At(1.0));
+    let window = run.only_window();
+    let reader = run.reader.clone();
+    let tree = reader.tree(window).expect("the reader holds the banner");
+    let reply = tree
+        .nodes
+        .iter()
+        .find(|(_, n)| n.role == Role::Button && n.name.as_deref() == Some("Reply"))
+        .map(|(id, _)| *id)
+        .expect("the reader reads the action button");
+    run.driver.ask(&reader, reply, Action::Click, None);
+    run.settle();
+    assert!(
+        matches!(&run.host()[..], [HostAction::Invoke(_, key)] if key == "reply"),
+        "{:?}",
+        run.host()
+    );
+}
+
+/// The words of every node of every tree the reader holds.
+fn readable(run: &Run) -> String {
+    let mut out = String::new();
+    for (_, window) in run.windows() {
+        for (_, node) in run.reader.tree(window).map(|t| t.nodes).unwrap_or_default() {
+            for words in [&node.name, &node.description].into_iter().flatten() {
+                out.push_str(words);
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn a_new_banner_says_its_application_its_title_and_its_body_but_not_its_buttons() {
+    let mut run = Run::new();
+    run.notify(
+        mail("Lunch", "Are you free\nat <b>noon</b>?")
+            .with_action("reply", "Reply")
+            .with_action("later", "Later"),
+    );
+    run.step(Step::At(1.0));
+    assert_eq!(
+        run.heard(),
+        [(
+            Live::Polite,
+            "Mail: Lunch, Are you free at noon?".to_owned()
+        )],
+        "said once, as it arrives"
+    );
+    // the buttons and the close button keep their own names, outside the banner's
+    let window = run.only_window();
+    let tree = run
+        .reader
+        .tree(window)
+        .expect("the reader holds the banner");
+    let buttons: Vec<_> = tree
+        .nodes
+        .iter()
+        .filter(|(_, n)| n.role == Role::Button)
+        .filter_map(|(_, n)| n.name.clone())
+        .collect();
+    for label in ["Reply", "Later"] {
+        assert!(buttons.iter().any(|b| b == label), "{buttons:?}");
+    }
+    let live: Vec<_> = tree
+        .nodes
+        .iter()
+        .filter(|(_, n)| n.live.is_some())
+        .collect();
+    assert_eq!(live.len(), 1, "one live node: the card");
+    assert_eq!(live[0].1.role, Role::Group);
+    // the pointer over it shows its close button: nothing new is said
+    run.pointer(
+        window,
+        PointerEvent::Motion {
+            position: Point::new(200.0, 40.0),
+        },
+    );
+    run.step(Step::At(2.0));
+    assert_eq!(run.heard(), []);
+}
+
+#[test]
+fn a_banner_updated_in_place_is_said_again() {
+    let mut run = Run::new();
+    run.notify(mail("Lunch", "Are you free at noon?"));
+    run.step(Step::At(1.0));
+    run.heard();
+    let mut update = mail("Lunch", "Can we make it one o'clock?");
+    update.replaces_id = 1;
+    run.notify(update.clone());
+    run.step(Step::At(1.5));
+    assert_eq!(
+        run.heard(),
+        [(
+            Live::Polite,
+            "Mail: Lunch, Can we make it one o'clock?".to_owned()
+        )]
+    );
+    let mut longer = mail(
+        "Lunch moved",
+        "Can we make it one o'clock? Or later?\n\nI have a call at noon.",
+    );
+    longer.replaces_id = 1;
+    run.notify(longer);
+    run.step(Step::At(2.0));
+    assert_eq!(
+        run.heard(),
+        [(
+            Live::Polite,
+            "Mail: Lunch moved, Can we make it one o'clock? Or later? I have a call at noon."
+                .to_owned()
+        )],
+        "a taller card is a new window, said as it appears"
+    );
+    // the same words again show nothing new, and say nothing new
+    let mut same = mail(
+        "Lunch moved",
+        "Can we make it one o'clock? Or later?\n\nI have a call at noon.",
+    );
+    same.replaces_id = 1;
+    run.notify(same);
+    run.step(Step::At(2.5));
+    assert_eq!(run.heard(), []);
+    assert_eq!(run.windows().len(), 1);
+}
+
+#[test]
+fn the_same_words_from_a_new_notification_are_said_again() {
+    let mut run = Run::new();
+    let words = (
+        Live::Polite,
+        "Mail: Lunch, Are you free at noon?".to_owned(),
+    );
+    run.notify(mail("Lunch", "Are you free at noon?"));
+    run.step(Step::At(1.0));
+    assert_eq!(run.heard(), std::slice::from_ref(&words));
+    // a second notification with the same words takes the screen from the first: a new banner, said as it shows
+    run.notify(mail("Lunch", "Are you free at noon?"));
+    run.step(Step::At(1.5));
+    assert_eq!(run.heard(), std::slice::from_ref(&words));
+    // and again once the screen is empty
+    for t in [7.0, 8.0] {
+        run.step(Step::At(t));
+    }
+    assert!(run.windows().is_empty());
+    run.notify(mail("Lunch", "Are you free at noon?"));
+    run.step(Step::At(8.5));
+    assert_eq!(run.heard(), [words]);
+}
+
+#[test]
+fn a_banner_is_neither_said_nor_readable_while_the_screen_is_locked() {
+    let mut run = Run::new();
+    run.notify(mail("Lunch", "Are you free at noon?"));
+    run.step(Step::At(1.0));
+    run.heard();
+    // the lock screen hides the banner on screen: its window goes
+    run.step(Step::Lock(true));
+    assert!(run.windows().is_empty());
+    run.notify(mail("Bank", "Your sign-in code is 482913"));
+    run.step(Step::At(1.5));
+    assert!(run.windows().is_empty(), "nothing shows on the lock screen");
+    assert_eq!(run.heard(), [], "nothing is said while locked");
+    assert!(!readable(&run).contains("482913"));
+    // at the unlock the banner on screen appears and is said
+    run.step(Step::Lock(false));
+    run.step(Step::At(1.6));
+    let said = run.heard();
+    assert!(
+        said.iter().any(|(_, text)| text.contains("482913")),
+        "{said:?}"
+    );
+    assert_eq!(
+        said.len(),
+        run.windows().len(),
+        "each banner shown is said once"
+    );
+}
+
+#[test]
+fn a_banner_leaving_at_the_unlock_is_not_said_again() {
+    let mut run = Run::new();
+    run.notify(mail("Lunch", "Are you free at noon?"));
+    run.step(Step::At(1.0));
+    assert_eq!(run.heard().len(), 1);
+    run.step(Step::Lock(true));
+    // a new banner takes over while locked: the one heard before the lock is still sliding out at the unlock
+    run.notify(mail("Bank", "Your sign-in code is 482913"));
+    run.step(Step::At(1.1));
+    run.step(Step::Lock(false));
+    assert_eq!(run.windows().len(), 2, "both cards are on screen");
+    assert_eq!(
+        run.heard(),
+        [(
+            Live::Polite,
+            "Mail: Bank, Your sign-in code is 482913".to_owned()
+        )],
+        "only the banner taking the screen is said, not the one going away"
+    );
+}
+
+#[test]
+fn announcing_a_banner_never_takes_the_focus() {
+    let mut run = Run::new();
+    run.notify(mail("Lunch", "Are you free at noon?").with_action("reply", "Reply"));
+    run.step(Step::At(1.0));
+    run.notify(
+        NotifyInput::new("Battery", "Battery low", "5% remaining").with_urgency(Urgency::Critical),
+    );
+    run.step(Step::At(1.1));
+    let said = run.heard();
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert_eq!(said[1].0, Live::Assertive);
+    assert_eq!(
+        run.reader.focused_window(),
+        None,
+        "no banner takes the keyboard"
+    );
+    for (_, window) in run.windows() {
+        assert_eq!(run.reader.focus(window), None);
+        assert_eq!(run.reader.focus_moves(window), 0);
+        let tree = run.reader.tree(window).unwrap();
+        assert!(
+            tree.nodes
+                .iter()
+                .all(|(_, n)| n.live.is_none() || !n.states.focusable),
+            "a banner's card is no Tab stop"
+        );
+    }
+}
+
+#[test]
+fn banners_arriving_together_are_each_said_as_they_show() {
+    let mut run = Run::new();
+    // one on screen and one waiting, which the third replaces and sends to the centre: each banner a sighted user
+    // sees is said as it shows, and the one that never shows as a banner is read in the centre
+    for app in ["Mail", "Calendar", "Messages"] {
+        run.notify(NotifyInput::new(app, "Hello", "Are you there?"));
+    }
+    let mut said = Vec::new();
+    for t in [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 6.0, 8.0] {
+        run.step(Step::At(t));
+        said.extend(run.heard());
+    }
+    assert_eq!(
+        said,
+        [
+            (Live::Polite, "Mail: Hello, Are you there?".to_owned()),
+            (Live::Polite, "Messages: Hello, Are you there?".to_owned()),
+        ]
+    );
+    run.step(Step::OpenCentre);
+    assert_eq!(run.heard(), [], "the centre's cards are not live");
+    assert!(readable(&run).contains("Calendar: Hello"));
+}
+
+#[test]
+fn the_centre_s_cards_hold_the_whole_body_for_a_reader_moving_through_the_list() {
+    let mut run = Run::new();
+    run.notify(mail("Release notes draft", RELEASE_NOTES));
+    run.step(Step::At(1.0));
+    run.notify(NotifyInput::new("Calendar", "Stand-up", "In 5 minutes"));
+    run.step(Step::At(2.5));
+    run.step(Step::OpenCentre);
+    let window = run.only_window();
+    let tree = run.reader.tree(window).unwrap();
+    let mut items: Vec<_> = tree
+        .nodes
+        .iter()
+        .filter(|(_, n)| n.role == Role::ListItem)
+        .map(|(_, n)| (n.item_index, n.name.clone(), n.description.clone(), n.live))
+        .collect();
+    items.sort_by_key(|item| item.0);
+    assert_eq!(
+        items,
+        [
+            (
+                Some(0),
+                Some("Calendar: Stand-up".to_owned()),
+                Some("In 5 minutes".to_owned()),
+                None
+            ),
+            (
+                Some(1),
+                Some("Mail: Release notes draft".to_owned()),
+                Some(RELEASE_NOTES.to_owned()),
+                None
+            ),
+        ],
+        "named for moving through the list, the whole body read on focus"
+    );
 }
 
 #[test]
@@ -639,7 +919,9 @@ fn a_banner_s_long_body_wraps_inside_its_card_and_stops_at_its_line_limit() {
     let n = model.center.borrow().get(1).unwrap().clone();
     let layout = model.metrics.card(&n, card.rect.width(), Fold::Banner);
     assert_eq!(card.rect.height(), layout.height);
-    assert!(layout.body.unwrap().content.text.ends_with('\u{2026}'));
+    let shown = layout.body.as_ref().unwrap().content.text.clone();
+    assert!(shown.ends_with('\u{2026}'));
+    let speech = view::banner_speech(&n, &layout);
     let content = card.rect.outset(-view::PADDING);
     for node in subtree(&snapshot, card.id).into_iter().skip(1) {
         if node.key.as_ref().is_some_and(|k| *k == "close".into()) {
@@ -655,15 +937,22 @@ fn a_banner_s_long_body_wraps_inside_its_card_and_stops_at_its_line_limit() {
             node.rect
         );
     }
+    // the banner says what it shows, cut where the card cuts it; the centre holds the whole message
+    let flat = shown.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert_eq!(speech, format!("Mail: Release notes draft, {flat}"));
+    assert_eq!(
+        run.heard(),
+        [(Live::Polite, speech.clone())],
+        "the banner is said as it shows"
+    );
     let semantics = &snapshot.accessibility;
     let named = semantics
         .iter()
-        .find(|(_, a)| a.name.as_deref() == Some("Mail: Release notes draft"))
-        .expect("the card is announced");
+        .find(|(_, a)| a.name.as_deref() == Some(speech.as_str()))
+        .expect("the card is named after what it shows");
     assert_eq!(
-        named.1.description.as_deref(),
-        Some(RELEASE_NOTES),
-        "assistive technology hears all of the body"
+        named.1.description, None,
+        "the body is in the name, not said twice"
     );
 }
 

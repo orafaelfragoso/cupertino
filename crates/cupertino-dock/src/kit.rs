@@ -2220,6 +2220,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                 output: open.output,
                 layout: open.layout.clone(),
                 rows,
+                entries: open.dialog.entries().len(),
                 empty: open.dialog.entries().is_empty(),
                 can_force_quit: open.dialog.can_force_quit(),
                 question,

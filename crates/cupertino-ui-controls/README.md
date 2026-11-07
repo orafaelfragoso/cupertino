@@ -29,12 +29,21 @@ from the application's model and reports changes as messages.
   row selected, counted over every section. The rows share one Tab stop; Up, Down, Home and End cross the sections,
   and a selection that does not change is not reported again. Assistive technology reads a list with a group per
   heading and a selected list item per row. A row is keyed by its item's key, so its focus and accessible object stay
-  with it while rows come and go around it.
+  with it while rows come and go around it. A row's accessory (an eject button) offers a click only with
+  `on_accessory`; without it the accessory reads as disabled.
+- **Positions.** A menu item says its place among the menu's items and the menu says how many it holds, separators not
+  counted; a tab and a page dot say their place and their tab list says its count.
 - **Outline table.** `OutlineTable` is a `TableView` whose rows form an outline, as a `TreeView`'s do: `item` gives
   each row's level and whether it is open, its first cell comes after the indent and the disclosure triangle, and the
   triangle, Right and Left ask `on_toggle` to open or close a row (Right on an open row and Left on a child move to its
   first child and to its parent). `key` keys each row, so its focus and accessible object follow it while rows open
-  above it; without it a row is keyed by its index. A plain `TableView` is unchanged.
+  above it; without it a row is keyed by its index. A plain `TableView` is unchanged. Assistive technology selects a
+  row of a list, table or tree alone with its Click action, and opens and closes a tree or outline row with Expand and
+  Collapse.
+- **Row keys.** A `TableView`'s `on_row_key` hears each key that reached its rows and that the table did not take
+  itself, with the row the keyboard is on; a message takes the key and `None` lets it go on, so Tab moves to the next
+  control. A key on a column header never comes there, so an application can give Tab in the rows its own meaning while
+  Tab and Shift+Tab still walk the headers in the order shown. `None` keeps the table as it was.
 - **Truncation.** A `Text` that does not wrap, and a tooltip's tip past its 300 pt text width, end in an ellipsis
   where they are cut; the accessible name keeps the whole text.
 - **Rich text.** `RichText` draws its links in the link colour over a 1 px underline 1.5 pt below the baseline. Each

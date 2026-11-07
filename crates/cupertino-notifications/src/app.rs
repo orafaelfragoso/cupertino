@@ -82,8 +82,9 @@ pub enum Note {
     Changed,
     /// `ToggleCentre` was called.
     Toggle,
-    /// The session was locked: the server draws the lock screen, only the open centre has to go.
-    Locked,
+    /// The session was locked (`true`) or unlocked: the server draws the lock screen and hides every other surface,
+    /// so the open centre goes and no window is open until the unlock.
+    Lock(bool),
     /// The session's reduce-motion option.
     ReduceMotion(bool),
 }
@@ -159,8 +160,8 @@ impl SurfaceRoles for NotificationRoles {
     fn event(&mut self, event: &ExtensionEvent) -> Option<RoleEvent> {
         // the toolkit follows the appearance and the lock itself; the model needs the lock and reduce motion too
         match event.downcast_ref::<AppEvent>() {
-            Some(AppEvent::SessionLock { locked: true }) => {
-                let _ = self.notes.try_send(Note::Locked);
+            Some(&AppEvent::SessionLock { locked }) => {
+                let _ = self.notes.try_send(Note::Lock(locked));
                 return None;
             }
             Some(AppEvent::DisplayOptions(options)) => {
@@ -395,7 +396,12 @@ impl Application for Notifications {
                             ..Ui::default()
                         }
                     }
-                    Note::Locked => model.ui = Ui::default(),
+                    Note::Lock(locked) => {
+                        model.server.center().set_screen_locked(locked);
+                        if locked {
+                            model.ui = Ui::default();
+                        }
+                    }
                     Note::ReduceMotion(on) => {
                         model.server.center().config.motion.reduce_motion = on
                     }

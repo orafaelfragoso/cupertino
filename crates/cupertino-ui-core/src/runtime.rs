@@ -158,6 +158,8 @@ struct WindowState<M> {
     text_input: Option<NodeId>,
     geometry: Geometry,
     accessibility: BTreeMap<NodeId, AccessibilityNode>,
+    /// The node of `accessibility` assistive technology is told holds the focus.
+    accessibility_focus: Option<NodeId>,
     /// The adapter holds this window's whole tree, so a diff is enough.
     accessible: bool,
     focusable: Vec<NodeId>,
@@ -549,6 +551,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                         let _ = self
                             .system
                             .request(w.id, WindowRequest::SetTitle(spec.title.clone()));
+                        if let Some(adapter) = &mut self.options.accessibility {
+                            if w.accessible {
+                                adapter.window_title(w.id, &spec.title);
+                            }
+                        }
                     }
                     if w.spec.min_size != spec.min_size {
                         let _ = self
@@ -691,6 +698,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             text_input: None,
             geometry: Geometry::new(),
             accessibility: BTreeMap::new(),
+            accessibility_focus: None,
             accessible: false,
             focusable: Vec::new(),
             roving_groups: Vec::new(),
@@ -1458,17 +1466,17 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 &mut self.messages,
                 now,
             ));
-            let nodes = if refocused {
-                build(
+            let (nodes, accessibility_focus) = if refocused {
+                let pass = build(
                     &self.tree,
                     root,
                     &w.geometry,
                     w.focus.node(),
                     w.env.direction,
-                )
-                .nodes
+                );
+                (pass.nodes, pass.focus)
             } else {
-                semantics.nodes
+                (semantics.nodes, semantics.focus)
             };
             if let Some(adapter) = &mut self.options.accessibility {
                 if adapter.is_active() && w.accessible {
@@ -1477,7 +1485,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                         adapter.update(&AccessibilityUpdate {
                             window: w.id,
                             root,
-                            focus: w.focus.node(),
+                            focus: accessibility_focus,
                             nodes: changed,
                             removed,
                             full: false,
@@ -1486,6 +1494,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
             }
             w.accessibility = nodes;
+            w.accessibility_focus = accessibility_focus;
             w.prepared = true;
 
             let mut scroll = geometry_events(
@@ -1619,10 +1628,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             if w.accessible || !w.prepared {
                 continue;
             }
+            adapter.window_title(w.id, &w.spec.title);
             adapter.update(&AccessibilityUpdate {
                 window: w.id,
                 root,
-                focus: w.focus.node(),
+                focus: w.accessibility_focus,
                 nodes: w
                     .accessibility
                     .iter()
@@ -1687,6 +1697,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 .iter()
                 .map(|(&id, n)| (id, n.clone()))
                 .collect(),
+            accessibility_focus: w.accessibility_focus,
             display_list: w.display_list.clone(),
             pending: self.pending(),
             layout: w.layout,

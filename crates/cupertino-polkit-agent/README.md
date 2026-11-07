@@ -36,7 +36,7 @@ above the menu bar and the dock, and the panel sits above them on the active out
 exclusively. A click on the scrim does nothing. The server keeps the prompt's surfaces out of every capture.
 
 The panel shows the lock symbol, "Authentication Required", polkit's message (at most six lines), a user pop-up when
-polkitd offers more than one user, the field, the error, PAM's information and Caps Lock, a Details disclosure, and
+polkitd offers more than one user (a collapsed pop-up button to a screen reader), the field, the error, PAM's information and Caps Lock, a Details disclosure, and
 Cancel and Authenticate. The details name the application the person used (polkitd's subject), the program that asked
 polkitd when it is another one (its caller), and the action. Both are the executables
 the kernel names for polkitd's process ids, never what a process says about itself; a process the user may not inspect
@@ -74,7 +74,8 @@ authentication without a display: a fake polkitd asks, the model and `conversati
 (`tests/fixtures/polkit-agent-helper-1`, which accepts "right"), and the test types. It checks the reason and the
 application the prompt shows, that a valid password answers polkitd, that three wrong ones are retried and then end the
 authentication, and that Escape and polkitd's cancel answer `Cancelled`. polkitd and its real helper are not run: they
-need the system bus and root.
+need the system bus and root. The panel's unit tests run `cupertino-ui-test`'s accessibility audit on every phase of
+the prompt and check that no typed password reaches its accessible tree.
 
 **Not verified on an installed session.** Logged in on a machine installed from the live image:
 

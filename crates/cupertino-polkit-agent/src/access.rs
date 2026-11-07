@@ -65,22 +65,20 @@ pub fn prompt_tree(window: WindowId, view: &View<'_>) -> AccessibilityUpdate {
         ),
     ];
     if let (Some(name), Some(frame)) = (view.user, frames.user) {
-        nodes.push((
-            PromptNode::User.id(),
-            AccessibilityNode {
-                value: Some(AccessibleValue::Text {
-                    value: name.to_owned(),
-                    editing: None,
-                }),
-                ..control(
-                    Role::PopUpButton,
-                    USER,
-                    frame,
-                    focused(Control::User),
-                    false,
-                )
-            },
-        ));
+        let mut user = control(
+            Role::PopUpButton,
+            USER,
+            frame,
+            focused(Control::User),
+            false,
+        );
+        user.value = Some(AccessibleValue::Text {
+            value: name.to_owned(),
+            editing: None,
+        });
+        // a click and the arrows step to the next user in place: a list that never opens, so it reads as collapsed
+        user.states.expanded = Some(false);
+        nodes.push((PromptNode::User.id(), user));
     }
     nodes.push((PromptNode::Field.id(), field(view, focused(Control::Field))));
     for (i, (status, frame)) in view.status.iter().zip(&frames.status).enumerate() {

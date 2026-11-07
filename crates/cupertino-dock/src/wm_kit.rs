@@ -65,6 +65,8 @@ impl Look {
 pub struct Root<M> {
     pub role: Role,
     pub name: String,
+    /// How many items the window holds when it is a list.
+    pub items: Option<usize>,
     /// The whole surface's opacity (a fade), applied once to everything it draws.
     pub opacity: f64,
     pub pointer: Option<Box<dyn Fn(PointerInput) -> M>>,
@@ -96,6 +98,7 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if self.opacity != old.opacity
             || self.name != old.name
+            || self.items != old.items
             || self.role != old.role
             || self.frame.is_some() != old.frame.is_some()
         {
@@ -170,6 +173,9 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(self.role);
         cx.name(self.name.clone());
+        if let Some(items) = self.items {
+            cx.item_count(items);
+        }
     }
 }
 
@@ -188,6 +194,8 @@ pub struct Part<M> {
     pub click: Option<M>,
     /// The model selected this part: it takes the keyboard focus, so assistive technology follows the selection.
     pub take_focus: bool,
+    /// Its place among the items of the list its window is, which a screen reader reads with the list's count.
+    pub place: Option<usize>,
     /// Its name is announced whenever it changes (the selected application's name of a panel without the keyboard).
     pub live: bool,
     /// Compared to skip a repaint; anything `paint` draws from goes in it.
@@ -217,6 +225,7 @@ impl<M: Clone + 'static> Widget<M> for Part<M> {
             || self.states != old.states
             || self.role != old.role
             || self.take_focus != old.take_focus
+            || self.place != old.place
             || self.live != old.live
         {
             Change::Paint
@@ -270,6 +279,9 @@ impl<M: Clone + 'static> Widget<M> for Part<M> {
             cx.name(self.name.clone());
         }
         cx.states(self.states);
+        if let Some(place) = self.place {
+            cx.item_index(place);
+        }
         if self.click.is_some() {
             cx.action(Action::Click);
             cx.focusable();

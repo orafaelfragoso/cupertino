@@ -4,7 +4,7 @@
 //! ready for a frame. Time comes only from the injected clock and the window system's events.
 
 use crate::command::CommandRegistry;
-use crate::cx::{Effects, Status};
+use crate::cx::{Effects, Status, WindowGesture};
 use crate::damage::DamageTracker;
 use crate::focus::{Focus, FocusChange};
 use crate::layout_view::{placements, TreeView};
@@ -117,6 +117,8 @@ struct WindowState<M> {
     configured: bool,
     ack: Option<ConfigureId>,
     active: bool,
+    /// The last configure said the window is maximized; a zoom asks for the other state.
+    maximized: bool,
     /// The compositor is ready for a frame.
     frame_ready: bool,
     /// Something changed since the last presented frame.
@@ -620,6 +622,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             configured: false,
             ack: None,
             active: false,
+            maximized: false,
             frame_ready: false,
             dirty: true,
             prepared: false,
@@ -781,6 +784,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.size = c.size.unwrap_or(w.spec.size);
                 w.ack = Some(c.id);
                 w.configured = true;
+                w.maximized = c.states.maximized;
                 w.frame_ready = true;
                 w.invalidate();
                 w.damage.invalidate();
@@ -1051,6 +1055,14 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         }
         if let Some(text) = effects.clipboard {
             Self::set_clipboard(&mut self.system, text);
+        }
+        for gesture in effects.window {
+            let request = match gesture {
+                WindowGesture::Move => WindowRequest::Move,
+                WindowGesture::Zoom => WindowRequest::Maximize(!w.maximized),
+            };
+            // a platform without the request, or a press the compositor no longer holds, leaves the window where it is
+            let _ = self.system.request(w.id, request);
         }
         w.wakes.extend(effects.wakes);
         if let Some((node, rect)) = effects.reveal {

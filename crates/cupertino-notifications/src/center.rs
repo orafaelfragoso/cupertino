@@ -598,6 +598,11 @@ impl NotificationCenter {
         self.screen_locked = locked;
     }
 
+    /// Whether the screen is locked, as the host last said ([`Self::set_screen_locked`]).
+    pub fn screen_locked(&self) -> bool {
+        self.screen_locked
+    }
+
     pub fn dnd(&self) -> DndMode {
         self.dnd
     }

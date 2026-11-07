@@ -49,12 +49,21 @@ surface, ends the process with a failure status so the server restarts it.
   (by its distance, offsets kept on whole points) and the keyboard (Up, Down, Page Up, Page Down, Home, End); Tab moves
   between the cards and their buttons and the list follows the focus. On a focused card Return, keypad Enter and Space run its
   default action and Delete or Backspace clears it; the focus then goes to the card in its place (its group's next one, else the next group's, else the one before).
-- **Session.** On `locked` an open list closes; banners expire on their own.
-- **Accessibility.** A banner is a live region named "app: summary" with its body as description: polite, assertive when
-  critical, so a screen reader reads it as it arrives, with the whole body even when the card cuts
-  it short. The centre is a group named "Notification Centre" holding a list of its cards (list items with their position);
-  its cards are not live, and a group's front card says how many more it holds. The first card takes the focus when the list
-  opens. Every card, close button and action button takes assistive technology's click, and the disclosure button reports
+- **Session.** On `locked` an open list closes and no window stays open until the unlock: the lock screen hides
+  them, so assistive technology has nothing of them to read. Banners expire on their own, a banner shown while locked
+  after `lock_screen_lifetime` (10 s); one still on screen at the unlock appears then and is announced.
+- **Accessibility.** A banner is a live region, polite or assertive when critical, so a screen reader reads it as it
+  arrives without the banner taking the focus. The AT-SPI bridge announces a live node only as it appears or is
+  renamed, and says its name alone, so the banner is named after the words it shows (`view::banner_speech`): its
+  application, summary and body, in that order, each run of spaces and line breaks one space, the body cut where the
+  card cuts it ("Mail: Lunch, Are you free at noon?"). Its buttons and close button keep their own names outside it.
+  An update in place that changes the words renames it and is said again; one that changes nothing shown says nothing.
+  Each banner a sighted user sees is said once as it shows: a waiting banner as it takes the screen, and one a newer
+  banner replaced in the waiting slot never, as it goes straight to the centre. Nothing is said or readable while the
+  session is locked (see Session); Cupertino has no setting that hides a notification's content otherwise. The centre
+  is a group named "Notification Centre" holding a list of its cards (list items with their position); its cards are
+  not live. Each is named "app: summary" with its whole body as description, read as a reader moves to it, and a
+  group's front card says how many more it holds. The first card takes the focus when the list opens. Every card, close button and action button takes assistive technology's click, and the disclosure button reports
   whether the body is unfolded.
 - **Banners.** One on screen, one waiting. A banner arriving while one is shown takes the waiting slot; a banner already waiting goes straight to the centre. Critical urgency and `expire_timeout = 0` are alerts without a timer; a waiting banner
   stays behind them. A client `expire_timeout` is honoured, capped at 60 s. A rightward release dismisses at speed
@@ -182,5 +191,5 @@ cargo test -p cupertino-notifications
 | Test | Proves |
 |---|---|
 | `tests/dbus_integration.rs` | The server against a real client on a private `dbus-daemon`. Skipped when `dbus-daemon` is not installed. |
-| `tests/kit_goldens.rs` | The Kit windows on the headless window system against the Inspector dumps in `tests/goldens/`: a banner sliding in and at rest, a critical one taking over, with the screen-reader announcements (`banner`); the centre with a stacked group (`centre-stacked`); a swipe dragged 60 pt and mid-dismissal (`swipe-dismiss`). `CUPERTINO_UPDATE_GOLDENS=1` rewrites them. Geometry and interaction: a long banner body wraps inside its card and stops at its line limit; the centre scrolls with the wheel, the touchpad and the keyboard and a click hits the card shown there; the disclosure button unfolds and folds a body; the keyboard activates and clears cards, the focus following to the card in a cleared one's place, the close button clears one and Escape closes an empty centre; each card's material region is its card and Reduce Transparency paints fills. |
-| `src/view/tests.rs` | `CardMetrics` against the built-in font: heights follow the text, wrapping, line limits and ellipsis, kept line breaks, the body byte bound, links cut at the ellipsis, buttons sharing a row, the close button inside the corner, and the `apply` of scroll, unfold, clear and close. |
+| `tests/kit_goldens.rs` | The Kit windows on the headless window system against the Inspector dumps in `tests/goldens/`: a banner sliding in and at rest, a critical one taking over, with the screen-reader announcements (`banner`); the centre with a stacked group (`centre-stacked`); a swipe dragged 60 pt and mid-dismissal (`swipe-dismiss`). `CUPERTINO_UPDATE_GOLDENS=1` rewrites them. Geometry and interaction: a long banner body wraps inside its card and stops at its line limit; the centre scrolls with the wheel, the touchpad and the keyboard and a click hits the card shown there; the disclosure button unfolds and folds a body; the keyboard activates and clears cards, the focus following to the card in a cleared one's place, the close button clears one and Escape closes an empty centre; each card's material region is its card and Reduce Transparency paints fills. Screen reader, through `cupertino-ui-test`'s stand-in reader, which announces as the AT-SPI bridge does (a live node's name, as it appears or is renamed): a new banner says its application, title and body and not its buttons; a banner updated in place is said again; nothing is said or readable while locked and the banner on screen is said at the unlock; banners arriving together are each said as they show; announcing never takes the focus; a reader's click on an action button invokes it; the centre's cards carry their whole body as description. |
+| `src/view/tests.rs` | `CardMetrics` against the built-in font: heights follow the text, wrapping, line limits and ellipsis, kept line breaks, the body byte bound, links cut at the ellipsis, buttons sharing a row, the close button inside the corner, a banner's speech (order, spacing, the cut body), no window while locked, and the `apply` of scroll, unfold, clear and close. |

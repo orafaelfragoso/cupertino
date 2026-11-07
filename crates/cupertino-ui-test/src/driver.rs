@@ -57,6 +57,78 @@ impl<A: Application> TestDriver<A> {
         &self.trace
     }
 
+    /// The [`accessibility_audit`](crate::accessibility_audit) of every window the application has open, each line
+    /// after the window's title in brackets. A root with no name of its own is named by its window's title first, as
+    /// the AT-SPI bridge names it; a window not laid out yet is skipped.
+    pub fn accessibility_audit(&self) -> Vec<String> {
+        let mut problems = Vec::new();
+        for (_, window) in self.runtime.windows() {
+            let Some(snapshot) = self.runtime.snapshot(window) else {
+                continue;
+            };
+            if snapshot.accessibility.is_empty() {
+                continue;
+            }
+            let title = self
+                .runtime
+                .window_system()
+                .spec(window)
+                .map(|s| s.title.clone())
+                .unwrap_or_default();
+            let mut tree = crate::whole_tree(window, snapshot.accessibility, snapshot.focus);
+            if let Some((_, root)) = tree.nodes.iter_mut().find(|(id, _)| *id == tree.root) {
+                if root.name.is_none() && !title.is_empty() {
+                    root.name = Some(title.clone());
+                }
+            }
+            problems.extend(
+                crate::accessibility_audit(&tree)
+                    .into_iter()
+                    .map(|p| format!("[{title}] {p}")),
+            );
+        }
+        problems
+    }
+
+    /// Every open window's [`semantic_outline`](crate::semantic_outline), after its title, for a failure message.
+    pub fn semantic_outlines(&self) -> String {
+        let mut out = String::new();
+        for (_, window) in self.runtime.windows() {
+            let Some(snapshot) = self.runtime.snapshot(window) else {
+                continue;
+            };
+            if snapshot.accessibility.is_empty() {
+                continue;
+            }
+            let title = self
+                .runtime
+                .window_system()
+                .spec(window)
+                .map(|s| s.title.clone())
+                .unwrap_or_default();
+            out.push_str(&format!("[{title}]\n"));
+            let tree = crate::whole_tree(window, snapshot.accessibility, snapshot.focus);
+            for line in crate::semantic_outline(&tree) {
+                out.push_str(&line);
+                out.push('\n');
+            }
+        }
+        out
+    }
+
+    /// Fails with every problem [`accessibility_audit`](Self::accessibility_audit) finds and the windows' outlines,
+    /// after `what`.
+    #[track_caller]
+    pub fn assert_accessible(&self, what: &str) {
+        let problems = self.accessibility_audit();
+        assert!(
+            problems.is_empty(),
+            "{what}: a screen reader would miss:\n{}\nin:\n{}",
+            problems.join("\n"),
+            self.semantic_outlines()
+        );
+    }
+
     pub fn advance_to(&mut self, at: Timestamp) -> Result<(), DriverError> {
         self.clock.advance_to(at).map_err(DriverError::Time)
     }

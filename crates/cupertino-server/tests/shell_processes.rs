@@ -1195,9 +1195,6 @@ fn the_dock_process_draws_the_switcher_panel_while_the_switch_is_open() {
     });
 }
 
-/// The application grid is the dock process's alone: the forwarded action makes it map a keyboard-exclusive overlay
-/// surface over the output, the menu bar included, above the dock bar, and draw it; Escape, delivered to that surface,
-/// removes it after the exit animation.
 /// A right click on the bar opens its menu as a popup of the bar surface. The surface is at the bottom of the output and
 /// the menu would open below what was clicked, so the server flips it above, inside the output.
 #[test]
@@ -1246,6 +1243,9 @@ fn the_dock_process_opens_a_menu_above_what_was_clicked_inside_the_output() {
     );
 }
 
+/// The application grid is the dock process's alone: the forwarded action makes it map a keyboard-exclusive overlay
+/// surface over the output, the menu bar included, above the dock bar, and draw it; Escape, delivered to that surface,
+/// removes it after the exit animation.
 #[test]
 fn the_dock_process_opens_the_app_grid_on_the_action_and_escape_closes_it() {
     const ESCAPE: u32 = 1 + 8;

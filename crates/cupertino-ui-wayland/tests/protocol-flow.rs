@@ -10,6 +10,9 @@ use cupertino_app_protocols::server::app_effects::cupertino_app_menu_v1::{
 use cupertino_app_protocols::server::app_effects::cupertino_appearance_v1::{
     CupertinoAppearanceV1, DisplayOption,
 };
+use cupertino_app_protocols::server::app_effects::cupertino_backdrop_v1::{
+    self, CupertinoBackdropV1,
+};
 use cupertino_geometry::Rect;
 use cupertino_ui_wayland::clipboard::Clipboard;
 use cupertino_ui_wayland::{rgba_to_argb8888, Ready, ShmPresenter};
@@ -125,6 +128,11 @@ enum Seen {
         menubar: String,
     },
     MenuWithdrawn,
+    /// The client made a backdrop under its window.
+    BackdropMade,
+    /// A backdrop of the window took this shape (x, y, width, height).
+    BackdropShape([i32; 4]),
+    BackdropDestroyed,
 }
 
 #[derive(Default)]
@@ -224,6 +232,10 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Mock {
                 menu.menu_bar(1);
                 state.menu = Some(menu);
             }
+            cupertino_app_effects_v1::Request::GetBackdrop { id, .. } => {
+                init.init(id, ());
+                state.seen.send(Seen::BackdropMade).unwrap();
+            }
             _ => {}
         }
     }
@@ -249,6 +261,31 @@ impl Dispatch<CupertinoAppMenuV1, ()> for Mock {
                 menubar: menubar_object_path,
             },
             cupertino_app_menu_v1::Request::Destroy => Seen::MenuWithdrawn,
+            _ => return,
+        };
+        state.seen.send(seen).unwrap();
+    }
+}
+
+impl Dispatch<CupertinoBackdropV1, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &CupertinoBackdropV1,
+        request: cupertino_backdrop_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        let seen = match request {
+            cupertino_backdrop_v1::Request::SetShape {
+                x,
+                y,
+                width,
+                height,
+                ..
+            } => Seen::BackdropShape([x, y, width, height]),
+            cupertino_backdrop_v1::Request::Destroy => Seen::BackdropDestroyed,
             _ => return,
         };
         state.seen.send(seen).unwrap();
@@ -1268,8 +1305,9 @@ mod window_system {
     use cupertino_geometry::{Point, Size};
     use cupertino_modifiers::Profile;
     use cupertino_ui_platform::{
-        ClipboardKind, DecorationMode, MenuDescription, MouseButton, PlatformEvent, PointerEvent,
-        PresentOutcome, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
+        ClipboardKind, DecorationMode, MaterialRegion, MenuDescription, MouseButton, PlatformEvent,
+        PointerEvent, PresentOutcome, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec,
+        WindowSystem,
     };
     use cupertino_ui_render::{CpuFrame, PixelFormat, PixelRect, RenderFrameId};
     use cupertino_ui_wayland::WaylandWindowSystem;
@@ -1530,6 +1568,127 @@ mod window_system {
         kit.ws.request(w, WindowRequest::Menus(None)).unwrap();
         kit.pump();
         assert_eq!(seen_menu(&seen), Seen::MenuWithdrawn);
+    }
+
+    /// The next `n` backdrop requests the server saw, once the client has sent what it queued.
+    fn backdrop_requests(kit: &mut Kit, seen: &Receiver<Seen>, n: usize) -> Vec<Seen> {
+        kit.pump();
+        let mut out = Vec::new();
+        while out.len() < n {
+            let s = seen.recv_timeout(Duration::from_secs(5)).unwrap();
+            if matches!(
+                s,
+                Seen::BackdropMade | Seen::BackdropShape(_) | Seen::BackdropDestroyed
+            ) {
+                out.push(s);
+            }
+        }
+        out
+    }
+
+    /// Each region under a window is a backdrop of `cupertino_app_effects_v1`: a shorter list keeps the first ones and
+    /// destroys the rest, and a list past the compositor's limits for one surface (64) or one client (128) is refused
+    /// before a backdrop is asked for, since the compositor would end the connection, and takes the window's away.
+    #[test]
+    fn a_window_s_materials_reuse_their_backdrops_and_a_list_past_the_compositor_s_limits_is_refused(
+    ) {
+        let (mut kit, _control, _committed, seen) = created_with(Some(5));
+        let w = kit.window;
+        let regions = |n: usize| {
+            (0..n)
+                .map(|i| MaterialRegion {
+                    material: "Menu".into(),
+                    rect: Rect::new(0.0, i as f64, 10.0, 10.0),
+                    radius: 4.0,
+                    alpha: 1.0,
+                })
+                .collect::<Vec<_>>()
+        };
+        let made = |n: usize| -> Vec<Seen> {
+            (0..n)
+                .flat_map(|i| {
+                    [
+                        Seen::BackdropMade,
+                        Seen::BackdropShape([0, i as i32, 10, 10]),
+                    ]
+                })
+                .collect()
+        };
+
+        kit.ws
+            .request(w, WindowRequest::Materials(regions(2)))
+            .unwrap();
+        assert_eq!(backdrop_requests(&mut kit, &seen, 4), made(2));
+        let mut moved = regions(1);
+        moved[0].rect = Rect::new(0.0, 5.0, 10.0, 10.0);
+        kit.ws.request(w, WindowRequest::Materials(moved)).unwrap();
+        assert_eq!(
+            backdrop_requests(&mut kit, &seen, 2),
+            [Seen::BackdropDestroyed, Seen::BackdropShape([0, 5, 10, 10])],
+            "the first backdrop takes the region and the second goes"
+        );
+
+        assert!(kit
+            .ws
+            .request(w, WindowRequest::Materials(regions(65)))
+            .is_err());
+        // what follows the refusal, up to a list that fits: the window's backdrop went and no other was made
+        kit.ws
+            .request(w, WindowRequest::Materials(regions(1)))
+            .unwrap();
+        let mut expected = vec![Seen::BackdropDestroyed];
+        expected.extend(made(1));
+        assert_eq!(backdrop_requests(&mut kit, &seen, 3), expected);
+
+        // over the client's windows: 1 + 64 + 63 is all it may hold
+        let spec = WindowSpec {
+            title: "Other".into(),
+            app_id: "org.example.Test".into(),
+            size: Size::new(100.0, 50.0),
+            min_size: None,
+            max_size: None,
+            decorations: DecorationMode::Client,
+            foreign_parent: None,
+            input_region: None,
+        };
+        let second = kit.ws.create_window(&spec).unwrap();
+        let third = kit.ws.create_window(&spec).unwrap();
+        kit.ws
+            .request(second, WindowRequest::Materials(regions(64)))
+            .unwrap();
+        assert_eq!(backdrop_requests(&mut kit, &seen, 128), made(64));
+        assert!(kit
+            .ws
+            .request(third, WindowRequest::Materials(regions(64)))
+            .is_err());
+        kit.ws
+            .request(third, WindowRequest::Materials(regions(63)))
+            .unwrap();
+        assert_eq!(
+            backdrop_requests(&mut kit, &seen, 126),
+            made(63),
+            "the refused list made no backdrop"
+        );
+        assert!(
+            kit.ws
+                .request(w, WindowRequest::Materials(regions(2)))
+                .is_err(),
+            "one more than the client may hold"
+        );
+        // closing a window gives its backdrops back
+        kit.ws.destroy(second);
+        kit.ws
+            .request(w, WindowRequest::Materials(regions(2)))
+            .unwrap();
+        let after = backdrop_requests(&mut kit, &seen, 1 + 64 + 4);
+        assert_eq!(
+            after
+                .iter()
+                .filter(|s| **s == Seen::BackdropDestroyed)
+                .count(),
+            65
+        );
+        assert_eq!(after[65..], made(2)[..]);
     }
 
     /// A compositor without app effects, or with them below version 5, can't tell the session is locked: the first

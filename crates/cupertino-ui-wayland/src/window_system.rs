@@ -49,6 +49,24 @@ enum Stall {
 /// More rectangles than this carried between presents become one for the whole frame.
 const MAX_CARRIED: usize = 64;
 
+/// The most backdrops `cupertino_app_effects_v1` lets one surface hold. The compositor ends the connection of a client
+/// that asks for more, so a request past it is refused here and the runtime paints fills instead.
+const MAX_BACKDROPS_PER_SURFACE: usize = 64;
+/// The most backdrops `cupertino_app_effects_v1` lets one client hold over all its surfaces.
+const MAX_BACKDROPS_PER_CLIENT: usize = 128;
+
+/// Whether a surface holding `on_surface` backdrops, of the `held` the client holds in all, stays within the
+/// compositor's limits.
+fn backdrops_fit(on_surface: usize, held: usize) -> bool {
+    on_surface <= MAX_BACKDROPS_PER_SURFACE && held <= MAX_BACKDROPS_PER_CLIENT
+}
+
+fn too_many_backdrops() -> PlatformError {
+    PlatformError::Protocol(format!(
+        "at most {MAX_BACKDROPS_PER_SURFACE} backdrops per surface and {MAX_BACKDROPS_PER_CLIENT} per client"
+    ))
+}
+
 struct Window {
     id: WindowId,
     surface: SurfaceId,
@@ -387,6 +405,14 @@ impl WaylandWindowSystem {
         Ok(())
     }
 
+    /// The backdrops this client holds over all its windows: their own and those under their parts.
+    fn backdrops_held(&self) -> usize {
+        self.windows
+            .iter()
+            .map(|w| w.materials.len() + usize::from(w.backdrop.is_some()))
+            .sum()
+    }
+
     fn set_backdrop(
         &mut self,
         window: WindowId,
@@ -414,6 +440,14 @@ impl WaylandWindowSystem {
                         shown.shaped = None;
                     }
                     return Ok(());
+                }
+                // the backdrop it replaces is still held while the new one is made
+                let w = self.window(window)?;
+                if !backdrops_fit(
+                    w.materials.len() + usize::from(w.backdrop.is_some()) + 1,
+                    self.backdrops_held() + 1,
+                ) {
+                    return Err(too_many_backdrops());
                 }
                 let (effects, _) = self.effects.as_ref().ok_or(PlatformError::Unsupported)?;
                 let wire = effects
@@ -444,6 +478,14 @@ impl WaylandWindowSystem {
         let surface = self.window(window)?.surface;
         if !regions.is_empty() && self.effects.is_none() {
             return Err(PlatformError::Unsupported);
+        }
+        let w = self.window(window)?;
+        let on_surface = regions.len() + usize::from(w.backdrop.is_some());
+        let others = self.backdrops_held() - w.materials.len();
+        if !backdrops_fit(on_surface, others + regions.len()) {
+            // a window the runtime falls back to fills for shows no material at all
+            self.window_mut(window)?.materials.clear();
+            return Err(too_many_backdrops());
         }
         let mut shown = std::mem::take(&mut self.window_mut(window)?.materials);
         shown.truncate(regions.len());

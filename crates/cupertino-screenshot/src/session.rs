@@ -7,6 +7,11 @@
 //! pick, Escape cancels, and Control held when the capture is committed sends it to the clipboard
 //! (usage text).
 //!
+//! From the keyboard alone: an arrow key spans a selection in the middle of the output when there is none, then moves
+//! it a point at a time (Shift: [`KEYBOARD_STEP_LARGE`] points), and with Alt it grows or shrinks the selection from
+//! its bottom-right corner; in the window pick the arrows go through the windows front to back; Return captures what
+//! the keys chose. These keys are this tool's own.
+//!
 //! Positions are global logical points; `outputs` are the outputs' rectangles in the same space.
 
 use cupertino_geometry::{Point, Rect};
@@ -14,6 +19,7 @@ use cupertino_geometry::{Point, Rect};
 use crate::pick::{self, PickWindow};
 use crate::selection::{self, Handle};
 use crate::settings::Mode;
+use crate::values::{KEYBOARD_SELECTION, KEYBOARD_STEP_LARGE};
 
 /// Which overlay the session runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +56,29 @@ pub enum Key {
     Escape,
     Space,
     Return,
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+/// The modifiers held with a key, a click or a release.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct KeyMods {
+    /// Sends the capture to the clipboard.
+    pub control: bool,
+    /// Moves or resizes in larger steps.
+    pub shift: bool,
+    /// Resizes instead of moving.
+    pub alt: bool,
+}
+
+impl KeyMods {
+    pub const NONE: KeyMods = KeyMods {
+        control: false,
+        shift: false,
+        alt: false,
+    };
 }
 
 /// The pointer the overlay shows.
@@ -83,6 +112,8 @@ pub struct Session {
     mode: Mode,
     outputs: Vec<Rect>,
     windows: Vec<PickWindow>,
+    /// The window the arrow keys chose, by index into `windows`, until the pointer moves.
+    keyboard_pick: Option<usize>,
     pointer: Option<Point>,
     /// The selection and the output it is on.
     selection: Option<(usize, Rect)>,
@@ -116,6 +147,7 @@ impl Session {
             mode,
             outputs,
             windows: Vec::new(),
+            keyboard_pick: None,
             pointer: None,
             selection,
             gesture: None,
@@ -155,15 +187,39 @@ impl Session {
 
     /// The windows on screen, front to back (the server's feed).
     pub fn set_windows(&mut self, windows: Vec<PickWindow>) {
+        let chosen = self
+            .keyboard_pick
+            .and_then(|i| self.windows.get(i))
+            .map(|w| w.identifier.clone());
+        self.keyboard_pick = chosen.and_then(|id| windows.iter().position(|w| w.identifier == id));
         self.windows = windows;
     }
 
-    /// The window the pick would take: the front-most one under the pointer, in window mode.
+    /// The windows on screen, front to back.
+    pub fn windows(&self) -> &[PickWindow] {
+        &self.windows
+    }
+
+    /// The window the pick would take, in window mode: the one the arrow keys chose, else the front-most one under the
+    /// pointer.
     pub fn picked(&self) -> Option<&PickWindow> {
         if self.mode != Mode::Window {
             return None;
         }
+        if let Some(i) = self.keyboard_pick {
+            return self.windows.get(i);
+        }
         pick::window_at(&self.windows, self.pointer?).map(|i| &self.windows[i])
+    }
+
+    /// The Options menu's timer: seconds the next capture waits. A running countdown keeps its end.
+    pub fn set_timer(&mut self, seconds: u32) {
+        self.timer = seconds;
+    }
+
+    /// Whether a timer runs before the capture.
+    pub fn counting_down(&self) -> bool {
+        self.countdown.is_some()
     }
 
     /// The pointer to show now.
@@ -215,6 +271,7 @@ impl Session {
         if self.countdown.is_none() {
             self.mode = mode;
             self.gesture = None;
+            self.keyboard_pick = None;
         }
     }
 
@@ -244,7 +301,11 @@ impl Session {
         }
         let target = match self.mode {
             Mode::Screen => Target::Screens,
-            Mode::Window => return None,
+            // the window the arrow keys chose; a click takes one under the pointer
+            Mode::Window => {
+                let i = self.keyboard_pick?;
+                Target::Window(self.windows.get(i)?.identifier.clone())
+            }
             Mode::Selection => {
                 let (output, rect) = self.selection.filter(|(_, r)| selection::capturable(r))?;
                 Target::Area { output, rect }
@@ -254,6 +315,9 @@ impl Session {
     }
 
     pub fn pointer_moved(&mut self, p: Point) {
+        if self.pointer != Some(p) {
+            self.keyboard_pick = None;
+        }
         self.pointer = Some(p);
         match self.gesture {
             Some(Gesture::Spanning { anchor, output }) => {
@@ -335,21 +399,94 @@ impl Session {
         }
     }
 
-    pub fn key(&mut self, key: Key, control: bool, now: f64) -> Option<Outcome> {
+    pub fn key(&mut self, key: Key, mods: KeyMods, now: f64) -> Option<Outcome> {
+        let idle = self.gesture.is_none() && self.countdown.is_none();
         match key {
             Key::Escape => Some(Outcome::Cancel),
-            Key::Space if self.gesture.is_none() && self.countdown.is_none() => {
+            Key::Space if idle => {
                 self.mode = match self.mode {
                     Mode::Selection => Mode::Window,
                     Mode::Window => Mode::Selection,
                     Mode::Screen => Mode::Screen,
                 };
+                self.keyboard_pick = None;
                 None
             }
-            Key::Return if self.style == Style::Interactive && self.gesture.is_none() => {
-                self.capture(control, now)
+            Key::Return if idle => match self.style {
+                Style::Interactive => self.capture(mods.control, now),
+                // the direct shortcut captures what the keys chose; the pointer captures on release
+                Style::Simple => match self.mode {
+                    Mode::Selection => {
+                        let (output, rect) =
+                            self.selection.filter(|(_, r)| selection::capturable(r))?;
+                        Some(Outcome::Capture {
+                            target: Target::Area { output, rect },
+                            clipboard: mods.control,
+                        })
+                    }
+                    Mode::Window | Mode::Screen => self.capture(mods.control, now),
+                },
+            },
+            Key::Left | Key::Right | Key::Up | Key::Down if idle => {
+                self.arrow(key, mods);
+                None
             }
-            Key::Space | Key::Return => None,
+            Key::Space | Key::Return | Key::Left | Key::Right | Key::Up | Key::Down => None,
+        }
+    }
+
+    /// An arrow key: the selection spanned, moved or resized, or the next window chosen.
+    fn arrow(&mut self, key: Key, mods: KeyMods) {
+        let step = if mods.shift { KEYBOARD_STEP_LARGE } else { 1.0 };
+        let (dx, dy) = match key {
+            Key::Left => (-step, 0.0),
+            Key::Right => (step, 0.0),
+            Key::Up => (0.0, -step),
+            _ => (0.0, step),
+        };
+        match self.mode {
+            Mode::Selection => {
+                let Some((output, rect)) = self.selection else {
+                    let output = self.pointer.and_then(|p| self.output_at(p)).unwrap_or(0);
+                    let Some(bounds) = self.outputs.get(output) else {
+                        return;
+                    };
+                    let (w, h) = (
+                        bounds.width() * KEYBOARD_SELECTION,
+                        bounds.height() * KEYBOARD_SELECTION,
+                    );
+                    let c = bounds.center();
+                    let from = Point::new(c.x - w / 2.0, c.y - h / 2.0);
+                    let to = Point::new(c.x + w / 2.0, c.y + h / 2.0);
+                    self.selection = Some((output, selection::span(from, to, bounds)));
+                    return;
+                };
+                let bounds = self.outputs[output];
+                let rect = if mods.alt {
+                    let corner = Point::new(
+                        (rect.max_x() + dx).max(rect.min_x() + 1.0),
+                        (rect.max_y() + dy).max(rect.min_y() + 1.0),
+                    );
+                    selection::resized(&rect, Handle::BottomRight, corner, &bounds)
+                } else {
+                    selection::moved(&rect, dx, dy, &bounds)
+                };
+                self.selection = Some((output, rect));
+            }
+            Mode::Window if !self.windows.is_empty() => {
+                let n = self.windows.len();
+                let forward = matches!(key, Key::Right | Key::Down);
+                let current = self
+                    .keyboard_pick
+                    .or_else(|| self.pointer.and_then(|p| pick::window_at(&self.windows, p)));
+                self.keyboard_pick = Some(match (current, forward) {
+                    (None, true) => 0,
+                    (None, false) => n - 1,
+                    (Some(i), true) => (i + 1) % n,
+                    (Some(i), false) => (i + n - 1) % n,
+                });
+            }
+            Mode::Window | Mode::Screen => {}
         }
     }
 }
@@ -424,7 +561,10 @@ mod tests {
             None
         );
         assert_eq!(s.selection(), None);
-        assert_eq!(s.key(Key::Escape, false, 0.0), Some(Outcome::Cancel));
+        assert_eq!(
+            s.key(Key::Escape, KeyMods::NONE, 0.0),
+            Some(Outcome::Cancel)
+        );
     }
 
     #[test]
@@ -440,7 +580,7 @@ mod tests {
                 frame: Rect::new(0.0, 0.0, 600.0, 400.0),
             },
         ]);
-        assert_eq!(s.key(Key::Space, false, 0.0), None);
+        assert_eq!(s.key(Key::Space, KeyMods::NONE, 0.0), None);
         assert_eq!(s.mode(), Mode::Window);
         s.pointer_moved(Point::new(60.0, 60.0));
         assert_eq!(s.picked().map(|w| w.identifier.as_str()), Some("front"));
@@ -453,13 +593,13 @@ mod tests {
             })
         );
         let mut s = simple();
-        s.key(Key::Space, false, 0.0);
+        s.key(Key::Space, KeyMods::NONE, 0.0);
         assert_eq!(
             s.button(true, Point::new(900.0, 700.0), false, 0.0),
             None,
             "no window under the pointer"
         );
-        s.key(Key::Space, false, 0.0);
+        s.key(Key::Space, KeyMods::NONE, 0.0);
         assert_eq!(s.mode(), Mode::Selection);
     }
 
@@ -488,7 +628,7 @@ mod tests {
         s.button(false, Point::new(420.0, 0.0), false, 0.0);
         assert_eq!(s.selection(), Some(Rect::new(120.0, 110.0, 300.0, 100.0)));
         assert_eq!(
-            s.key(Key::Return, false, 1.0),
+            s.key(Key::Return, KeyMods::NONE, 1.0),
             Some(Outcome::Capture {
                 target: Target::Area {
                     output: 0,
@@ -559,6 +699,143 @@ mod tests {
                 target: Target::Output(1),
                 clipboard: false
             })
+        );
+    }
+
+    const SHIFT: KeyMods = KeyMods {
+        control: false,
+        shift: true,
+        alt: false,
+    };
+    const ALT: KeyMods = KeyMods {
+        control: false,
+        shift: false,
+        alt: true,
+    };
+
+    #[test]
+    fn the_arrow_keys_span_move_and_resize_a_selection_and_return_captures_it() {
+        let mut s = simple();
+        s.pointer_moved(Point::new(1500.0, 500.0));
+        assert_eq!(s.key(Key::Right, KeyMods::NONE, 0.0), None);
+        // half of the output under the pointer, in its middle
+        assert_eq!(s.selection(), Some(Rect::new(1760.0, 270.0, 960.0, 540.0)));
+        s.key(Key::Left, KeyMods::NONE, 0.0);
+        s.key(Key::Up, SHIFT, 0.0);
+        assert_eq!(s.selection(), Some(Rect::new(1759.0, 260.0, 960.0, 540.0)));
+        s.key(Key::Left, ALT, 0.0);
+        s.key(Key::Down, SHIFT_ALT, 0.0);
+        assert_eq!(s.selection(), Some(Rect::new(1759.0, 260.0, 959.0, 550.0)));
+        // moving stops at the output's edge
+        for _ in 0..200 {
+            s.key(Key::Up, SHIFT, 0.0);
+        }
+        assert_eq!(s.selection().map(|r| r.y()), Some(0.0));
+        assert_eq!(
+            s.key(
+                Key::Return,
+                KeyMods {
+                    control: true,
+                    ..KeyMods::NONE
+                },
+                0.0
+            ),
+            Some(Outcome::Capture {
+                target: Target::Area {
+                    output: 1,
+                    rect: Rect::new(1759.0, 0.0, 959.0, 550.0)
+                },
+                clipboard: true
+            })
+        );
+    }
+
+    const SHIFT_ALT: KeyMods = KeyMods {
+        control: false,
+        shift: true,
+        alt: true,
+    };
+
+    #[test]
+    fn a_resize_from_the_keyboard_never_shrinks_the_selection_below_a_point() {
+        let mut s = Session::new(
+            Style::Interactive,
+            Mode::Selection,
+            vec![LEFT],
+            Some(Rect::new(100.0, 100.0, 3.0, 3.0)),
+            0,
+        );
+        for _ in 0..5 {
+            s.key(Key::Left, SHIFT_ALT, 0.0);
+            s.key(Key::Up, ALT, 0.0);
+        }
+        assert_eq!(s.selection(), Some(Rect::new(100.0, 100.0, 1.0, 1.0)));
+        assert!(s.key(Key::Return, KeyMods::NONE, 0.0).is_some());
+    }
+
+    #[test]
+    fn in_the_window_pick_the_arrows_go_through_the_windows_and_return_takes_the_chosen_one() {
+        let mut s = simple();
+        s.set_windows(vec![
+            PickWindow {
+                identifier: "front".into(),
+                frame: Rect::new(50.0, 50.0, 100.0, 100.0),
+            },
+            PickWindow {
+                identifier: "back".into(),
+                frame: Rect::new(0.0, 0.0, 600.0, 400.0),
+            },
+        ]);
+        s.key(Key::Space, KeyMods::NONE, 0.0);
+        assert_eq!(s.key(Key::Return, KeyMods::NONE, 0.0), None, "none chosen");
+        s.key(Key::Down, KeyMods::NONE, 0.0);
+        assert_eq!(s.picked().map(|w| w.identifier.as_str()), Some("front"));
+        s.key(Key::Down, KeyMods::NONE, 0.0);
+        s.key(Key::Down, KeyMods::NONE, 0.0);
+        s.key(Key::Up, KeyMods::NONE, 0.0);
+        assert_eq!(s.picked().map(|w| w.identifier.as_str()), Some("back"));
+        // the feed reorders the windows: the choice follows its window
+        s.set_windows(vec![
+            PickWindow {
+                identifier: "back".into(),
+                frame: Rect::new(0.0, 0.0, 600.0, 400.0),
+            },
+            PickWindow {
+                identifier: "front".into(),
+                frame: Rect::new(50.0, 50.0, 100.0, 100.0),
+            },
+        ]);
+        assert_eq!(s.picked().map(|w| w.identifier.as_str()), Some("back"));
+        assert_eq!(
+            s.key(Key::Return, KeyMods::NONE, 0.0),
+            Some(Outcome::Capture {
+                target: Target::Window("back".into()),
+                clipboard: false
+            })
+        );
+        // the pointer moving takes the pick back
+        let mut s = simple();
+        s.set_windows(vec![PickWindow {
+            identifier: "front".into(),
+            frame: Rect::new(50.0, 50.0, 100.0, 100.0),
+        }]);
+        s.key(Key::Space, KeyMods::NONE, 0.0);
+        s.key(Key::Right, KeyMods::NONE, 0.0);
+        s.pointer_moved(Point::new(900.0, 700.0));
+        assert_eq!(s.picked(), None);
+    }
+
+    #[test]
+    fn keys_wait_while_the_timer_counts_down_but_escape_still_cancels() {
+        let mut s = Session::new(Style::Interactive, Mode::Screen, vec![LEFT], None, 5);
+        s.capture(false, 0.0);
+        assert!(s.counting_down());
+        assert_eq!(s.key(Key::Return, KeyMods::NONE, 1.0), None);
+        s.key(Key::Space, KeyMods::NONE, 1.0);
+        assert_eq!(s.mode(), Mode::Screen);
+        assert_eq!(
+            s.key(Key::Escape, KeyMods::NONE, 1.0),
+            Some(Outcome::Cancel)
         );
     }
 }

@@ -660,3 +660,23 @@ fn an_assistive_click_after_an_insert_selects_the_row_it_was_asked_of() {
 fn selected_in(h: &Harness<Grocer>) -> Vec<(usize, usize)> {
     pairs(&h.model().0.selection)
 }
+
+#[test]
+fn an_assistive_click_on_a_table_row_selects_it_alone() {
+    SETUP.set(Setup {
+        count: 1000,
+        multiple: true,
+        table: true,
+        initial: false,
+    });
+    let mut h = Harness::<Listed>::assistive();
+    let third = row(&h, 2).unwrap();
+    let actions = |h: &Harness<Listed>| {
+        let nodes: HashMap<NodeId, AccessibilityNode> =
+            h.snapshot().accessibility.into_iter().collect();
+        nodes[&third].actions.clone()
+    };
+    assert_eq!(actions(&h), [Action::Click], "a table row offers Click");
+    h.ask_node(third, Action::Click);
+    assert_eq!(selected(&h), [(2, 3)]);
+}

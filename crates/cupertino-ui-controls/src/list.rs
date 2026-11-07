@@ -606,7 +606,7 @@ impl<M: 'static> Widget<M> for Rows<M> {
 
     fn take_children(&mut self) -> Vec<Element<M>> {
         let cursor = self.cursor();
-        let pick = (self.kind == Kind::List).then(|| self.pick()).flatten();
+        let pick = self.pick();
         self.built()
             .into_iter()
             .map(|index| {
@@ -724,7 +724,7 @@ struct ListRow<M> {
     cursor: bool,
     item: Option<TreeItem>,
     outline: Option<Rc<Outline<M>>>,
-    /// A list row's assistive Click.
+    /// A row's assistive Click.
     pick: Option<Pick<M>>,
     content: Vec<Element<M>>,
 }
@@ -773,8 +773,8 @@ impl<M: 'static> Widget<M> for ListRow<M> {
     }
 
     /// A press focuses the row without showing the ring or scrolling, then goes on to the list, which selects.
-    /// Assistive technology selects a list row with its Click action, and opens and closes a tree row with its Expand
-    /// and Collapse actions.
+    /// Assistive technology selects a row of a list, table or tree with its Click action, and opens and closes a tree
+    /// row with its Expand and Collapse actions.
     fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         match event {
             Event::Action(request)

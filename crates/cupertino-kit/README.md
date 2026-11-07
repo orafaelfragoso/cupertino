@@ -24,6 +24,12 @@ The Cupertino tests are in `crates/cupertino-server/tests/standard-clients.rs`, 
 `crates/cupertino-wayland-client/tests/mutter.rs` (they skip when `mutter` is not installed), and the goldens in this
 crate's `tests/examples.rs`.
 
+Windows move by their toolbar. The toolbar row of a `NavigationStack` is a window drag region: a drag where no control
+takes the press moves the window, and a double click there zooms it (maximizes it, or restores it). `WindowDragArea`
+makes any other part of a window one; `EventCx::move_window` and `EventCx::zoom_window` are the requests underneath.
+The keyboard has no move: the compositor's Zoom, Minimize and tile shortcuts and the menu bar's Window menu cover
+it (see `cupertino-ui-controls`).
+
 `ci/capture.sh kit/controls` and `kit/icons` draw the row 167a controls sheet and a grid of system symbols (`--direction rtl` mirrors them)
 headless, in light and dark at any scale (`examples/kit_capture.rs`, `crates/cupertino-capture`). `kit/counter`, `kit/forms`,
 `kit/virtual-list` and `kit/editor` draw the examples' windows as they open.

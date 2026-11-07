@@ -34,6 +34,7 @@ mod text;
 mod text_box;
 mod toggle;
 mod tooltip;
+mod window_drag;
 mod window_group;
 
 pub use editor::EditorState;
@@ -511,7 +512,9 @@ pub enum Navigation {
 
 /// A page under a 52 pt toolbar row that starts with a back and forward button group, which the model's history enables.
 /// The page takes the height the row leaves. Primary+[ and Primary+] go back and forward from anywhere in the page;
-/// Escape does not go back. The page changes at once, without a transition. Build its element with `Element::from`.
+/// Escape does not go back. The page changes at once, without a transition. The toolbar row is the window's drag
+/// region, as a [`WindowDragArea`] is: a drag on it where no control takes the press moves the window, and a double
+/// click there zooms it. Build its element with `Element::from`.
 pub struct NavigationStack<M> {
     pub content: Element<M>,
     /// Items after the button group in the toolbar row, in reading order; a [`Spacer`] pushes the ones after it to
@@ -520,6 +523,17 @@ pub struct NavigationStack<M> {
     pub can_go_back: bool,
     pub can_go_forward: bool,
     pub on_navigate: Option<Handler<Navigation, M>>,
+}
+
+/// Marks `content` as a drag region of its window, the size of the content (add `.fill()` to the element for all the
+/// room its parent gives): a left press there that no control inside takes starts an interactive move once the
+/// pointer travels 5 pt with the button held, and a second press within half a second zooms the window (maximizes it,
+/// or restores it). Buttons, fields and other controls inside keep their presses; a disabled control or a label lets
+/// the press through. The region adds no role and no Tab stop: keyboard users move and zoom windows with the
+/// compositor's shortcuts and the menu bar's Window menu. A toolbar built with [`NavigationStack`] already is one.
+/// Build its element with `Element::from`.
+pub struct WindowDragArea<M> {
+    pub content: Element<M>,
 }
 
 /// One of a split view's two panes: the leading one is at the top, or at the reading direction's start.

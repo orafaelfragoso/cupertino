@@ -1316,8 +1316,10 @@ dependencies = [
 name = "cupertino-login"
 version = "0.1.0"
 dependencies = [
+ "cupertino-apps",
  "cupertino-assets",
  "cupertino-decorations",
+ "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-login-ipc",
  "cupertino-peer",

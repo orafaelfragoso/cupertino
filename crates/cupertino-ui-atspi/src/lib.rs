@@ -46,6 +46,14 @@ struct Window {
     mirror: Arc<Mutex<Mirror>>,
 }
 
+#[derive(Default)]
+struct Titled {
+    /// The window's title, which names its root when the root has no name of its own.
+    title: Option<String>,
+    /// The root node took its name from the title.
+    root_untitled: bool,
+}
+
 /// The tree a window last sent, kept so a window that activates after core sent it can be given it whole without
 /// asking core from the executor thread.
 #[derive(Default)]
@@ -53,6 +61,7 @@ struct Mirror {
     root: Option<NodeId>,
     focus: Option<NodeId>,
     nodes: HashMap<NodeId, Published>,
+    titled: Titled,
     /// The epoch of the update that last changed the tree.
     epoch: u64,
     /// The window's AccessKit adapter is active.
@@ -179,6 +188,12 @@ impl AccessibilityAdapter for AtspiAdapter {
             }
             for (id, node) in &update.nodes {
                 let mut converted = convert::node(node);
+                if *id == update.root {
+                    m.titled.root_untitled = node.name.is_none();
+                    if let Some(title) = m.titled.title.as_deref().filter(|_| node.name.is_none()) {
+                        converted.set_label(title);
+                    }
+                }
                 if muted {
                     converted.clear_live();
                 }
@@ -232,6 +247,42 @@ impl AccessibilityAdapter for AtspiAdapter {
     /// while muted announces nothing and the next one sent after is announced as usual.
     fn session_locked(&mut self, locked: bool) {
         self.muted = locked && !self.lock_screen;
+    }
+
+    fn window_title(&mut self, window: WindowId, title: &str) {
+        let window = self.window(window);
+        let delta = {
+            let mut m = lock(&window.mirror);
+            m.titled.title = Some(title.to_owned()).filter(|t| !t.is_empty());
+            let (Some(root), true) = (m.root, m.titled.root_untitled) else {
+                return;
+            };
+            let title = m.titled.title.clone();
+            let Some(published) = m.nodes.get_mut(&root) else {
+                return;
+            };
+            match title {
+                Some(title) => published.node.set_label(title),
+                None => published.node.clear_label(),
+            }
+            TreeUpdate {
+                nodes: published.sent(root).collect(),
+                tree: None,
+                tree_id: accesskit::TreeId::ROOT,
+                focus: convert::node_id(m.focus.unwrap_or(root)),
+            }
+        };
+        let mirror = &window.mirror;
+        window.adapter.update_if_active(|| {
+            let mut m = lock(mirror);
+            match m.root.filter(|_| !m.initialized) {
+                Some(root) => {
+                    m.initialized = true;
+                    m.full(root)
+                }
+                None => delta,
+            }
+        });
     }
 
     fn window_closed(&mut self, window: WindowId) {

@@ -69,7 +69,7 @@ fn node(
     }
 }
 
-/// A window with a text label, an OK button, a password field that, like a careless core, still carries its value, and
+/// A window named only by its title, with a text label, an OK button, a password field that, like a careless core, still carries its value, and
 /// a list of 50,000 items that holds only the 40,000th, which has no name of its own but holds its text.
 fn tree() -> AccessibilityUpdate {
     AccessibilityUpdate {
@@ -79,13 +79,16 @@ fn tree() -> AccessibilityUpdate {
         nodes: vec![
             (
                 id(1),
-                node(
-                    Role::Window,
-                    "About",
-                    None,
-                    Vec::new(),
-                    vec![id(4), id(2), id(3), id(5)],
-                ),
+                AccessibilityNode {
+                    name: None,
+                    ..node(
+                        Role::Window,
+                        "",
+                        None,
+                        Vec::new(),
+                        vec![id(4), id(2), id(3), id(5)],
+                    )
+                },
             ),
             (
                 id(4),
@@ -164,6 +167,7 @@ fn application(enabled: bool) {
     let (mut sent, mut actions) = (false, Vec::new());
     while Instant::now() < deadline {
         if adapter.is_active() && !sent {
+            adapter.window_title(WINDOW, "About");
             adapter.update(&tree());
             sent = true;
         }

@@ -3,3 +3,4 @@ auth required pam_permit.so
 account include system-auth
 session include system-auth
 session include postlogin
+-session optional pam_gnome_keyring.so auto_start

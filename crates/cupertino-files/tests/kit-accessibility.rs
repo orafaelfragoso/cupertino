@@ -22,7 +22,7 @@ use cupertino_kit::core::{
     ActionData, ActionRequest, NodeId, Role,
 };
 use cupertino_kit::geometry::Point;
-use cupertino_kit::platform::{Mods, PlatformEvent, WindowId};
+use cupertino_kit::platform::{Mods, PlatformEvent, WindowId, WindowStates};
 use cupertino_kit::render::{Paint, PaintNodeId, PaintOp};
 use cupertino_kit::theme::{
     Appearance, Color, ColorRole, StateVariant, ThemePreferences, ThemeTokens,
@@ -766,6 +766,20 @@ fn a_selected_rows_text_is_drawn_in_the_selected_control_text_colour_in_every_ap
         // light and dark at the scale CUPERTINO_LOOK_SCALE asks for, when CUPERTINO_LOOK_DIR names a folder
         if appearance == Appearance::Light {
             run.driver.look(run.window, "files-selected-rows").unwrap();
+        }
+        // a window that is not the key window draws its selection's text in the inactive selection's colour
+        run.driver
+            .window_system_mut()
+            .configure(run.window, None, WindowStates::default())
+            .unwrap();
+        run.settle();
+        for text in row_texts(&run, "a.txt") {
+            assert_eq!(
+                glyph_color(&run, text),
+                get(ColorRole::SecondarySelectedControlText),
+                "{appearance:?}: {:?} of a selected row in an inactive window",
+                nodes(&run)[&text].name
+            );
         }
     }
 }

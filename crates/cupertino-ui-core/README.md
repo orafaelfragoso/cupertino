@@ -40,9 +40,15 @@ all on one thread.
   window system. Dropping the runtime cancels every task.
 - **Frames.** A step lays out every changed window, rebuilds its accessibility tree and focus, and paints when the
   compositor is ready: before the first configure nothing is drawn, the first frame acknowledges it, and later frames
-  wait for the frame callback. A node repaints only when it, its size, its focus or the window's active state changed;
-  damage is where changed nodes were and are, and a frame with no damage sends no buffer. A window that cannot be
-  laid out, rendered or presented goes to `on_window_error` and tries again, whole, on its next change or configure,
+  wait for the frame callback. A window lays out again only when a node changed size (`Change::Layout`), it was
+  resized or configured, or its environment changed; a focus move, a reveal, an animation frame or a paint-only
+  change paints on the layout it has, and a layout that does run reuses the measures of the subtrees that did not
+  change. A node repaints only when it, its size, its focus or the window's active state changed. Damage is what the
+  changed nodes' operations reached and reach, cut by their clips; a node painted again in place damages only where
+  its operations differ (the ones both lists start and end with paint the same), so a container that draws nothing
+  damages nothing and a blinking caret damages the caret. A node with a group, whose opacity reaches its children,
+  and anything under a group with effects damage their whole box. A frame with no damage sends no buffer. A window
+  that cannot be laid out, rendered or presented goes to `on_window_error` and tries again, whole, on its next change or configure,
   whatever the cause: the renderer reports a target and content too large to draw with the same error. The same error
   again is not reported again, and the window's animations ask for no frames until a frame presents. An animation
   whose current value is what fails (a blur animating down from over the renderer's limit, say) therefore stays at
@@ -76,4 +82,5 @@ all on one thread.
 ## Not yet
 
 Popups (`create_popup`), clipboard reads, and image resources in `PaintResources` are not
-wired yet. Layout runs over the whole window on every change.
+wired yet. Scrolling repaints everything the scroll view shows: the CPU renderer draws it again rather than moving
+the pixels it has.

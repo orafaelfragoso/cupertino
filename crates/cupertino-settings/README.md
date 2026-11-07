@@ -81,3 +81,24 @@ sidebar row (approximate). The desktop entry is `data/applications/cupertino-set
 | `tests/services.rs` | Against fake daemons on a private bus: the Login Screen section offered only when sessiond says yes (not on no, a failure or no sessiond), Use Mine sending only the allow-listed keys with the person's values and each refusal getting its sentence (any other failure the plain unavailable text); ST-10 (the Wi-Fi switch writes `WirelessEnabled`, the shown value is the daemon's, a saved network joins with an empty passphrase once, a refused write keeps the daemon's value and gives the error), ST-11 (paired and nearby groups, agent registration, a pairing answered and refused through the agent, Remove only after confirmation, `AgentExists` without a dialog), ST-13 (Focus rows are `FocusLifetimes` in order and call the centre), ST-19 (no daemon: the switch row disabled with the reason) |
 | `tests/instance.rs` | ST-24: `ShowPane` reaches the owner, an unknown id is `InvalidArgs`, a second owner is refused, and a second start of the binary hands its pane over and exits 0 without a display, but its activation token only to its own program; About has its own owner, takes a launch from its own program only, and a launch refuses to hand its token to an About of another program |
 | `tests/about-window.rs` | About on CupertinoKit, headless: the title, app id and fixed size; every reading read in order with a repeated label read once, More Info a button, nothing a screen reader cannot announce; labels end at the centre and no row overlaps the next; the system mark drawn in the label colour over the window background in light and dark at 2x |
+| `src/shell/tests/repaint.rs` | What an interaction repaints, from the damage of each presented frame (never its wall time): the Automatically hide switch repaints only itself while its knob slides, the Size slider only itself while it is dragged, and switching panes repaints in the sidebar only the rows the selection left and reached. `repaint_budget_report` (ignored) times them; see Frame time |
+
+## Frame time
+
+`shell::tests::repaint::repaint_budget_report` is `#[ignore]`d because it measures wall time. With the window filling
+a 3840×2160 display at scales 2, 1.5 and 1, it times every frame of switching panes, toggling a switch, dragging a
+slider, scrolling a pane (at the window's default size, the only size at which a pane is longer than the window), the
+caret's blink and typing a search, and gives p50, p95, p99, maximum, the frames over 8 ms and the damaged share of the
+window. It uses the application's renderer and node limit and keeps no copy of the frames. Run it in the release
+profile:
+
+```sh
+cargo test --release -p cupertino-settings --features app --lib -- --ignored --nocapture \
+  shell::tests::repaint::repaint_budget_report
+```
+
+`CUPERTINO_REPAINT_DIR=DIR` also writes `settings-<scale>x.md` and `settings-<scale>x.csv` (one line per frame) there,
+and `CUPERTINO_REPAINT_SCALES=2,1` measures other scales. Under `ci/worktree-build.py`, which keys its target on the
+`CUPERTINO_*` variables, build with `--no-run` and run the test binary it names under `python3 ci/worktree-build.py
+locked -- env CUPERTINO_REPAINT_DIR=DIR BINARY --ignored --nocapture shell::tests::repaint::repaint_budget_report`.
+[What runs on CupertinoKit](../../docs/src/apps-on-kit.md#frame-time) has the last results.

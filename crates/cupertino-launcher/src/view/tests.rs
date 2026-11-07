@@ -241,14 +241,14 @@ impl Run {
         self.window("panel").expect("the panel is shown")
     }
 
-    /// Runs until no window waits for a configure or a frame. New windows are configured as the server would: the
-    /// panel at the height the model gave it, the catcher over the output; a new height configures the panel again.
     /// Runs until every window rests, then checks that a screen reader could read every window open.
     fn settle(&mut self) {
         self.settle_frames();
         self.driver.assert_accessible("Launcher");
     }
 
+    /// Runs until no window waits for a configure or a frame. New windows are configured as the server would: the
+    /// panel at the height the model gave it, the catcher over the output; a new height configures the panel again.
     fn settle_frames(&mut self) {
         for _ in 0..16 {
             self.driver.run_until_idle(budget()).unwrap();

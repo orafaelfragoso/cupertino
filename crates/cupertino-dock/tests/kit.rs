@@ -319,13 +319,13 @@ impl Run {
         run
     }
 
-    /// Run until nothing is left to do, configuring every new window and drawing every requested frame.
     /// Runs until every window rests, then checks that a screen reader could read every window open.
     fn settle(&mut self) {
         self.settle_frames();
         self.driver.assert_accessible("Dock");
     }
 
+    /// Run until nothing is left to do, configuring every new window and drawing every requested frame.
     fn settle_frames(&mut self) {
         for _ in 0..32 {
             self.driver.run_until_idle(budget()).unwrap();

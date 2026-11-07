@@ -222,14 +222,14 @@ impl Run {
         run
     }
 
-    /// Run until idle, configuring each new window at its size (an overlay at its output's), and hand out the frames
-    /// asked for, a bounded number of times.
     /// Runs until every window rests, then checks that a screen reader could read every window open.
     fn settle(&mut self) {
         self.settle_frames();
         self.driver.assert_accessible("Screenshot");
     }
 
+    /// Run until idle, configuring each new window at its size (an overlay at its output's), and hand out the frames
+    /// asked for, a bounded number of times.
     fn settle_frames(&mut self) {
         for _ in 0..16 {
             self.driver.run_until_idle(budget()).unwrap();

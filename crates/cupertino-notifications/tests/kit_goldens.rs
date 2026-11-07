@@ -273,13 +273,13 @@ impl Run {
         run
     }
 
-    /// Runs until nothing is left to do: new windows are configured and every frame asked for is given.
     /// Runs until every window rests, then checks that a screen reader could read every window open.
     fn settle(&mut self) {
         self.settle_frames();
         self.driver.assert_accessible("Notifications");
     }
 
+    /// Runs until nothing is left to do: new windows are configured and every frame asked for is given.
     fn settle_frames(&mut self) {
         for _ in 0..16 {
             self.driver.run_until_idle(budget()).unwrap();

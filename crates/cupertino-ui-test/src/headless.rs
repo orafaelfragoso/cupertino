@@ -39,6 +39,8 @@ struct HeadlessWindow {
     frame_requested: bool,
     unacknowledged: Vec<ConfigureId>,
     frames: Vec<PresentedFrame>,
+    /// The window's pixels, kept up to date with each frame's damage while presented frames keep no pixels.
+    buffer: Vec<u8>,
 }
 
 /// A drag the runtime started, as the window system received it.
@@ -80,6 +82,24 @@ fn choose(source: &BTreeSet<DropAction>, answer: &DropAnswer) -> Option<DropActi
     }
 }
 
+/// Copies the damaged rows of `frame` into `buffer`, which takes the frame's size (and all of it) when its size
+/// changed.
+fn copy_damage(buffer: &mut Vec<u8>, frame: &CpuFrame) {
+    if buffer.len() != frame.pixels.len() {
+        buffer.clear();
+        buffer.extend_from_slice(&frame.pixels);
+        return;
+    }
+    let stride = frame.stride as usize;
+    for r in &frame.damage {
+        let (x0, x1) = (r.x as usize * 4, (r.x + r.width) as usize * 4);
+        for y in r.y as usize..(r.y + r.height) as usize {
+            let row = y * stride;
+            buffer[row + x0..row + x1].copy_from_slice(&frame.pixels[row + x0..row + x1]);
+        }
+    }
+}
+
 /// A window system with no display. Windows live in memory, every request is kept for inspection, presented
 /// frames are kept until the window is destroyed, and the only events are the ones the test enqueues.
 #[derive(Debug)]
@@ -96,6 +116,8 @@ pub struct HeadlessWindowSystem {
     /// The reads of drops, which a test driver does not attribute to a focused field.
     drop_reads: HashSet<ClipboardToken>,
     accepting_frames: bool,
+    /// Whether each presented frame keeps a copy of all its pixels.
+    keep_pixels: bool,
     pub(crate) dispatch_one: bool,
 }
 
@@ -119,6 +141,7 @@ impl HeadlessWindowSystem {
             incoming: Vec::new(),
             drop_reads: HashSet::new(),
             accepting_frames: true,
+            keep_pixels: true,
             dispatch_one: false,
         }
     }
@@ -150,6 +173,7 @@ impl HeadlessWindowSystem {
                 frame_requested: false,
                 unacknowledged: Vec::new(),
                 frames: Vec::new(),
+                buffer: Vec::new(),
             },
         );
         id
@@ -245,6 +269,13 @@ impl HeadlessWindowSystem {
     /// when it holds every buffer.
     pub fn set_accepting_frames(&mut self, accepting: bool) {
         self.accepting_frames = accepting;
+    }
+
+    /// While false, a presented frame keeps no pixels (its `pixels` are empty): only the damage is copied, into one
+    /// buffer per window, as a client copies a frame into its shared buffer. A timing run uses it so the copy of a
+    /// whole window per frame, which only a test makes, does not count.
+    pub fn set_keep_pixels(&mut self, keep: bool) {
+        self.keep_pixels = keep;
     }
 
     pub fn windows(&self) -> Vec<WindowId> {
@@ -597,7 +628,7 @@ impl WindowSystem for HeadlessWindowSystem {
         frame: &CpuFrame,
         configure: Option<ConfigureId>,
     ) -> Result<PresentOutcome, PlatformError> {
-        let accepting = self.accepting_frames;
+        let (accepting, keep) = (self.accepting_frames, self.keep_pixels);
         let w = self.window_mut(window)?;
         if !accepting {
             return Ok(PresentOutcome::NotReady);
@@ -612,12 +643,18 @@ impl WindowSystem for HeadlessWindowSystem {
             // Acknowledging a configure also settles every older one.
             w.unacknowledged.drain(..=at);
         }
+        let pixels = if keep {
+            frame.pixels.clone()
+        } else {
+            copy_damage(&mut w.buffer, frame);
+            Vec::new()
+        };
         w.frames.push(PresentedFrame {
             id: frame.id,
             width: frame.width,
             height: frame.height,
             format: frame.format,
-            pixels: frame.pixels.clone(),
+            pixels,
             damage: frame.damage.clone(),
             acknowledged: configure,
             shown: false,
@@ -715,6 +752,30 @@ mod tests {
         assert_eq!(
             ws.frames(window).unwrap()[0].pixels,
             [1, 2, 3, 4, 5, 6, 7, 8]
+        );
+    }
+
+    #[test]
+    fn without_kept_pixels_a_frame_copies_only_its_damage_into_the_window_buffer() {
+        let mut ws = HeadlessWindowSystem::default();
+        ws.set_keep_pixels(false);
+        let window = ws.create_window(&spec()).unwrap();
+        ws.present(window, &frame(10), None).unwrap();
+        let mut second = frame(11);
+        second.pixels = vec![9; 8];
+        second.damage = vec![PixelRect {
+            x: 1,
+            y: 0,
+            width: 1,
+            height: 1,
+        }];
+        ws.present(window, &second, None).unwrap();
+        let frames = ws.frames(window).unwrap();
+        assert!(frames.iter().all(|f| f.pixels.is_empty()));
+        assert_eq!(frames[1].damage, second.damage);
+        assert_eq!(
+            ws.window_mut(window).unwrap().buffer,
+            [1, 2, 3, 4, 9, 9, 9, 9]
         );
     }
 

@@ -7,6 +7,7 @@ mod driver;
 mod headless;
 mod inspector;
 mod look;
+pub mod repaint;
 mod semantics;
 mod trace;
 

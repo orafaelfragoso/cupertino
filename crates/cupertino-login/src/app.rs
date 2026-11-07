@@ -634,6 +634,7 @@ impl Application for SessionApp {
                         field: Field::Password {
                             generation: screen.field(),
                             enabled: screen.phase() != Phase::Unlocking,
+                            busy: screen.checking(),
                         },
                         caps_lock: app.caps_lock,
                         spinner: screen.spinner(now),

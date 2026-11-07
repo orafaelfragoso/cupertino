@@ -7,7 +7,9 @@ buffer follow.
 
 - `SecureBuffer` keeps a password in one fixed block that is zeroed on drop, on every deletion or replacement, on
   `clear` and when it grows (the text is copied to a larger block and the old one is zeroed). It has no undo history,
-  no clipboard access and no accessor except `with_secret`; the mask shows one bullet per grapheme.
+  no clipboard access and no accessor except `with_secret`; the mask shows one bullet per grapheme. `with_max_len` and
+  `set_max_len` cap it in bytes: an insertion past the cap is cut at a grapheme boundary, and text already past a new,
+  lower cap stays.
 - `Preedit`, `ImeBatch` and `Surrounding` print lengths in `Debug`, never the text.
 - `TextInputSession::state` sends a protected field's own rectangle and no text; `Surrounding::around` cuts the
   bounded window around the caret on grapheme boundaries.

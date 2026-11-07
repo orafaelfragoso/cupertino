@@ -205,6 +205,59 @@ class BypassTest(unittest.TestCase):
         self.assertEqual(attribute_case('// #[zbus::interface(name = INTERFACE)]\n'), [])
 
 
+class TestModuleTest(unittest.TestCase):
+    """A fake served by a `#[cfg(test)]` module serves nothing; the real interface beside it is still read."""
+
+    FAKE = '#[cfg(test)]\nmod tests {\n    #[zbus::interface(name = "org.cupertino.Demo1")]\n    impl Fake {}\n\n' \
+           '    #[zbus::interface(name = "org.freedesktop.portal.Fake")]\n    impl Other {}\n}\n'
+
+    def test_an_inline_test_module_fake_is_not_counted_and_the_real_interface_is(self):
+        self.assertEqual(run(INTERFACE_ENTRY + BINARY_ENTRY, {"crates/cupertino-demo/src/lib.rs": LIB + self.FAKE}), [])
+        # without the real one, only the fake is left: nothing serves the entry
+        problems = run(INTERFACE_ENTRY + BINARY_ENTRY, {"crates/cupertino-demo/src/lib.rs": self.FAKE})
+        self.assertEqual(problems, ["docs/architecture/contracts.yaml:1: org.cupertino.Demo1 is not served by any "
+                                    "crate"])
+
+    def test_an_interface_after_a_test_module_keeps_its_line(self):
+        source = self.FAKE + '\n#[zbus::interface(name = "org.freedesktop.portal.Other")]\nstruct A;\n'
+        # the fake's bus name is still checked
+        self.assertEqual(attribute_case(source), ["crates/cupertino-demo/src/lib.rs:10: D-Bus interface "
+                                                  "org.freedesktop.portal.Other has no entry in "
+                                                  "docs/architecture/contracts.yaml",
+                                                  "crates/cupertino-demo/src/lib.rs:3: bus name org.cupertino.Demo1 "
+                                                  "has no entry in docs/architecture/contracts.yaml"])
+
+    def test_the_files_of_a_test_module_are_not_counted(self):
+        fake = '#[zbus::interface(name = "org.cupertino.Demo1")]\nimpl Fake {}\n'
+        files = {"crates/cupertino-demo/src/lib.rs": LIB + "mod shell;\n",
+                 # an out-of-line test module, and the files of an inline one's children
+                 "crates/cupertino-demo/src/shell/mod.rs": "#[cfg(test)]\nmod tests;\n#[cfg(test)]\nmod fakes {\n"
+                                                         "    mod layout;\n}\n",
+                 "crates/cupertino-demo/src/shell/tests.rs": fake,
+                 "crates/cupertino-demo/src/shell/fakes/layout.rs": fake}
+        self.assertEqual(run(INTERFACE_ENTRY + BINARY_ENTRY, files), [])
+
+    def test_a_module_built_outside_tests_too_is_counted(self):
+        source = '#[cfg(any(test, feature = "demo"))]\nmod demo {\n' \
+                 '    #[zbus::interface(name = "org.freedesktop.portal.Other")]\n    impl A {}\n}\n'
+        self.assertEqual(attribute_case(source), ["crates/cupertino-demo/src/lib.rs:3: D-Bus interface "
+                                                  "org.freedesktop.portal.Other has no entry in "
+                                                  "docs/architecture/contracts.yaml"])
+
+    def test_a_test_module_that_is_not_closed_at_its_indentation_is_read(self):
+        source = '#[cfg(test)]\nmod tests {\n#[zbus::interface(name = "org.freedesktop.portal.Other")]\n' \
+                 'impl A {}  }\n'
+        self.assertEqual(attribute_case(source), ["crates/cupertino-demo/src/lib.rs:3: D-Bus interface "
+                                                  "org.freedesktop.portal.Other has no entry in "
+                                                  "docs/architecture/contracts.yaml"])
+
+    def test_a_bus_name_in_a_test_module_is_still_checked(self):
+        source = '#[cfg(test)]\nmod tests {\n    const NAME: &str = "org.cupertino.Unknown1";\n}\n'
+        self.assertEqual(attribute_case(source), ["crates/cupertino-demo/src/lib.rs:3: bus name "
+                                                  "org.cupertino.Unknown1 has no entry in "
+                                                  "docs/architecture/contracts.yaml"])
+
+
 class RatchetTest(unittest.TestCase):
     def test_a_new_unknown_scope_fails(self):
         entry = INTERFACE_ENTRY.replace("scope: public", "scope: unknown")

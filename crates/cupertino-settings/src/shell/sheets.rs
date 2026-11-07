@@ -104,6 +104,7 @@ fn body(sheet: &Sheet) -> Option<Element<Message>> {
                 on_submit: Some(Box::new(|secret| {
                     Message::Sheet(Action::Join(typed(secret)))
                 })),
+                ..SecureField::default()
             })
             .key("passphrase"),
         ),

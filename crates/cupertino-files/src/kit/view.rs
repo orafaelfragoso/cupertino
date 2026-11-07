@@ -246,6 +246,7 @@ fn unlock_sheet(id: u64, unlock: &Unlock) -> Dialog<Message> {
                 on_submit: Some(Box::new(move |_: &SecureBuffer| {
                     Message::Window(id, Event::Unlock)
                 })),
+                ..SecureField::default()
             })
             .key("passphrase"),
         ),

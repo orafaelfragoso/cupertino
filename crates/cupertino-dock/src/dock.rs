@@ -185,6 +185,8 @@ pub struct Dock {
     /// The auto-hide is driven from outside through [`Dock::set_revealed`] (an edge reveal
     /// component owns the dwell timers); `pointer_moved` then leaves it alone.
     pub autohide_external: bool,
+    /// An auto-hidden dock shows, as if the pointer were over it, while this holds (the dock has the keyboard).
+    pub keep_shown: bool,
     profile: Box<dyn MagnificationProfile>,
     apps: Vec<Tile>,
     recents: Vec<Tile>,
@@ -255,6 +257,7 @@ impl Dock {
         Self {
             autohide,
             autohide_external: false,
+            keep_shown: false,
             cfg,
             bounce: BounceConfig::default(),
             profile: Box::new(FisheyeProfile),
@@ -1014,7 +1017,7 @@ impl Dock {
         let over = pointer.is_some_and(|p| !self.is_hidden(now) && self.over_dock(&layout, p));
         if self.cfg.autohide && !self.autohide_external {
             let zone = reveal_zone(self.cfg.orientation, screen, self.cfg.reveal_thickness);
-            let hot = pointer.is_some_and(|p| over || zone.contains(p));
+            let hot = self.keep_shown || pointer.is_some_and(|p| over || zone.contains(p));
             self.autohide.update(hot, now);
         }
         if let (true, Some(p)) = (over, pointer) {

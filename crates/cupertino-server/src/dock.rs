@@ -82,6 +82,9 @@ impl WindowInfo {
 /// Shell version of `cupertino_dock_v1.window_icon`.
 const WINDOW_ICON_SINCE: u32 = 17;
 
+/// Shell version of `cupertino_dock_v1.engage`.
+const ENGAGE_SINCE: u32 = 18;
+
 /// Layer-shell namespace of the dock's switcher panel: a press there is the dock's, a press
 /// anywhere else cancels the switch.
 pub const SWITCHER_NAMESPACE: &str = "cupertino-dock-switcher";
@@ -189,6 +192,19 @@ impl Docks {
     pub fn toggle_app_grid(&self) {
         for dock in &self.docks {
             dock.resource.toggle_app_grid();
+            dock.resource.done();
+        }
+    }
+
+    /// The Focus Dock shortcut: the dock of `output`, else the first, takes the keyboard. Docks below version 18 are not
+    /// told.
+    pub fn engage(&self, output: Option<OutputId>) {
+        if let Some(dock) = output
+            .and_then(|o| self.of_output(o))
+            .or(self.docks.first())
+            .filter(|d| d.resource.version() >= ENGAGE_SINCE)
+        {
+            dock.resource.engage();
             dock.resource.done();
         }
     }
@@ -524,6 +540,18 @@ impl Cupertino {
                 .map(|w| (w.id.0 as u32, Some(w.id) == current))
                 .collect(),
         })
+    }
+
+    /// The Focus Dock shortcut: the dock of the output under the pointer takes the keyboard on its first tile, asking for
+    /// exclusive keyboard interactivity. Nothing is sent while the session is locked or a lock is pending.
+    pub fn focus_dock(&mut self) {
+        if self.session_lock.is_active() {
+            return;
+        }
+        let output = self
+            .output_at(self.pointer.current_location())
+            .map(|o| o.id);
+        self.docks.engage(output);
     }
 
     /// Send the open overview (its windows, workspaces and area) to the dock of its output. Call

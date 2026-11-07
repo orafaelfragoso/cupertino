@@ -104,6 +104,7 @@ impl Application for Forms {
                     on_submit: Some(Box::new(|secret| {
                         Message::SignIn(secret.with_secret(|s| s.chars().count()))
                     })),
+                    ..SecureField::default()
                 })
                 .key("password"),
                 remember,

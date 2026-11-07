@@ -1,5 +1,5 @@
-//! The `cupertino-dock` process: the dock on a layer surface of the first output, as a client of
-//! the server. See the README for how to run it.
+//! The `cupertino-dock` process: the dock as CupertinoKit windows on layer surfaces, starting on the first output, as
+//! a client of the server. See the README for how to run it.
 
 mod app;
 

@@ -5,10 +5,11 @@ use cupertino_geometry::{Point, Rect};
 use cupertino_wayland_client::{
     Anchor, BufferFormat, Button, Capability, ClipboardOffer, Connection, ConstraintAdjustment,
     CursorShape, CursorTheme, Decorations, DragActions, DragEvent, DragIcon, DragOffer,
-    DragSourceEvent, Error, Event, Extension, Gravity, KeyboardEvent, OutputGeometry,
+    DragSourceEvent, Error, Event, Extension, Gravity, HeldPress, KeyboardEvent, OutputGeometry,
     OutputTransform, PixelRect, PointerEvent, PopupPlacement, Preedit, Presented, PresentedKind,
-    ReadId, Scale, ScrollSource, SurfaceId, SurroundingText, TextInputDone, TextInputEvent,
-    TextInputState, Toplevel, ToplevelConfig, TouchEvent, WindowConfigure, WmCapabilities,
+    PressDevice, ReadId, ResizeEdge, Scale, ScrollSource, SurfaceId, SurroundingText,
+    TextInputDone, TextInputEvent, TextInputState, Toplevel, ToplevelConfig, TouchEvent,
+    WindowConfigure, WmCapabilities,
 };
 use std::collections::VecDeque;
 use std::io::Write;
@@ -139,6 +140,15 @@ enum Control {
     Leave,
     /// The left button, pressed by `Click`, goes up.
     ButtonUp,
+    /// The pointer moves to `(x, y)` on the surface it is on.
+    Motion {
+        x: f64,
+        y: f64,
+    },
+    /// One finger touches the toplevel and stays down; the compositor reports its serial as [`Seen::TouchDown`].
+    TouchHold,
+    /// The finger of `TouchHold` lifts.
+    TouchUp,
     /// The seat loses its pointer and keeps its keyboard.
     DropPointer,
     /// Two fingers touch the toplevel and the first moves and lifts, each step a frame.
@@ -260,6 +270,13 @@ enum Seen {
         x: i32,
         y: i32,
     },
+    Move(u32),
+    Resize {
+        serial: u32,
+        edge: xdg_toplevel::ResizeEdge,
+    },
+    /// The serial of the touch down of `Control::TouchHold`.
+    TouchDown(u32),
     /// `wl_data_device.start_drag` of a source offering `types` with `actions`.
     StartDrag {
         serial: u32,
@@ -826,9 +843,19 @@ impl Dispatch<XdgToplevel, ()> for Mock {
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
-        if let xdg_toplevel::Request::ShowWindowMenu { serial, x, y, .. } = request {
-            state.seen.send(Seen::WindowMenu { serial, x, y }).unwrap();
-        }
+        let seen = match request {
+            xdg_toplevel::Request::ShowWindowMenu { serial, x, y, .. } => {
+                Seen::WindowMenu { serial, x, y }
+            }
+            xdg_toplevel::Request::Move { serial, .. } => Seen::Move(serial),
+            xdg_toplevel::Request::Resize {
+                serial,
+                edges: wayland_server::WEnum::Value(edge),
+                ..
+            } => Seen::Resize { serial, edge },
+            _ => return,
+        };
+        state.seen.send(seen).unwrap();
     }
 }
 
@@ -1472,6 +1499,24 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
             let pointer = mock.pointer.as_ref().unwrap();
             pointer.button(serial, 4300, BTN_LEFT, wl_pointer::ButtonState::Released);
             pointer.frame();
+        }
+        Control::Motion { x, y } => {
+            let pointer = mock.pointer.as_ref().unwrap();
+            pointer.motion(4100, x, y);
+            pointer.frame();
+        }
+        Control::TouchHold => {
+            let (serial, surface) = (mock.serial(), mock.surface().clone());
+            let touch = mock.touch.as_ref().unwrap();
+            touch.down(serial, 200, &surface, 0, 5.0, 6.0);
+            touch.frame();
+            mock.seen.send(Seen::TouchDown(serial)).unwrap();
+        }
+        Control::TouchUp => {
+            let serial = mock.serial();
+            let touch = mock.touch.as_ref().unwrap();
+            touch.up(serial, 220, 0);
+            touch.frame();
         }
         Control::Leave => {
             let (serial, surface) = (mock.serial(), mock.surface().clone());
@@ -2150,6 +2195,242 @@ fn the_window_menu_answers_the_latest_click_and_capabilities_arrive_with_the_con
             minimize: true,
         })
     );
+}
+
+/// The next move, resize or window menu the compositor saw, skipping other requests.
+fn next_window_gesture(seen: &Receiver<Seen>) -> Seen {
+    loop {
+        let s = next_seen(seen);
+        if matches!(
+            s,
+            Seen::Move(_) | Seen::Resize { .. } | Seen::WindowMenu { .. }
+        ) {
+            return s;
+        }
+    }
+}
+
+#[test]
+fn a_move_resize_and_window_menu_answer_the_held_press_after_motion_and_keys() {
+    let (mut conn, control, seen) = connect(Globals {
+        seat: true,
+        ..Globals::core()
+    });
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    control.send(Control::Click { x: 3.0, y: 4.0 }).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(
+            e,
+            Event::Pointer {
+                event: PointerEvent::Button { pressed: true, .. },
+                ..
+            }
+        )
+        .then_some(())
+    });
+    let press = conn.input_serial().unwrap();
+    assert_eq!(
+        conn.held_press(),
+        Some(HeldPress {
+            serial: press,
+            device: PressDevice::Pointer,
+        })
+    );
+
+    // the pointer moves past a drag threshold and a key goes down and up before the move starts
+    control.send(Control::Motion { x: 9.0, y: 4.0 }).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(
+            e,
+            Event::Pointer {
+                event: PointerEvent::Motion(_),
+                ..
+            }
+        )
+        .then_some(())
+    });
+    control.send(Control::TypeKey(KEY_A)).unwrap();
+    control.send(Control::ReleaseKey(KEY_A)).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(
+            e,
+            Event::Keyboard {
+                event: KeyboardEvent::Key { pressed: false, .. },
+                ..
+            }
+        )
+        .then_some(())
+    });
+    assert_ne!(conn.input_serial(), Some(press));
+    assert_eq!(conn.held_press().map(|p| p.serial), Some(press));
+
+    conn.start_move(w).unwrap();
+    conn.flush().unwrap();
+    assert_eq!(next_window_gesture(&seen), Seen::Move(press));
+    conn.start_resize(w, ResizeEdge::BottomRight).unwrap();
+    conn.flush().unwrap();
+    assert_eq!(
+        next_window_gesture(&seen),
+        Seen::Resize {
+            serial: press,
+            edge: xdg_toplevel::ResizeEdge::BottomRight,
+        }
+    );
+    conn.show_window_menu(w, Point::new(1.0, 2.0)).unwrap();
+    conn.flush().unwrap();
+    assert_eq!(
+        next_window_gesture(&seen),
+        Seen::WindowMenu {
+            serial: press,
+            x: 1,
+            y: 2,
+        }
+    );
+}
+
+#[test]
+fn with_no_press_held_a_move_resize_or_window_menu_is_refused_and_not_sent() {
+    let (mut conn, control, seen) = connect(Globals {
+        seat: true,
+        ..Globals::core()
+    });
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    let refused = |conn: &mut Connection, why: &str| {
+        assert_eq!(conn.held_press(), None, "{why}");
+        assert!(
+            matches!(conn.start_move(w), Err(Error::PermissionDenied(_))),
+            "{why}: move"
+        );
+        assert!(
+            matches!(
+                conn.start_resize(w, ResizeEdge::Left),
+                Err(Error::PermissionDenied(_))
+            ),
+            "{why}: resize"
+        );
+        assert!(
+            matches!(
+                conn.show_window_menu(w, Point::new(1.0, 2.0)),
+                Err(Error::PermissionDenied(_))
+            ),
+            "{why}: window menu"
+        );
+    };
+    refused(&mut conn, "before any input");
+
+    // a key gives the client a serial, but no press
+    control.send(Control::TypeKey(KEY_A)).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(
+            e,
+            Event::Keyboard {
+                event: KeyboardEvent::Key { .. },
+                ..
+            }
+        )
+        .then_some(())
+    });
+    assert!(conn.input_serial().is_some());
+    refused(&mut conn, "after a key");
+
+    for (what, end) in [("released", Control::ButtonUp), ("left", Control::Leave)] {
+        control.send(Control::Click { x: 3.0, y: 4.0 }).unwrap();
+        wait_for(&mut conn, &mut stash, |e| {
+            matches!(
+                e,
+                Event::Pointer {
+                    event: PointerEvent::Button { pressed: true, .. },
+                    ..
+                }
+            )
+            .then_some(())
+        });
+        control.send(end).unwrap();
+        conn.roundtrip().unwrap();
+        stash.extend(conn.wait(Some(Duration::ZERO)).unwrap());
+        refused(&mut conn, what);
+    }
+
+    // none of the refused requests reached the compositor: the first it sees answers a press held now
+    control.send(Control::Click { x: 3.0, y: 4.0 }).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(
+            e,
+            Event::Pointer {
+                event: PointerEvent::Button { pressed: true, .. },
+                ..
+            }
+        )
+        .then_some(())
+    });
+    let press = conn.input_serial().unwrap();
+    conn.start_move(w).unwrap();
+    conn.flush().unwrap();
+    assert_eq!(next_window_gesture(&seen), Seen::Move(press));
+}
+
+#[test]
+fn a_move_answers_the_touch_down_held_and_not_after_the_finger_lifts() {
+    let (mut conn, control, seen) = connect(Globals {
+        seat: true,
+        ..Globals::core()
+    });
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    for end in [Control::TouchUp, Control::CancelTouch] {
+        control.send(Control::TouchHold).unwrap();
+        let down = loop {
+            if let Seen::TouchDown(serial) = next_seen(&seen) {
+                break serial;
+            }
+        };
+        wait_for(&mut conn, &mut stash, |e| {
+            matches!(
+                e,
+                Event::Touch {
+                    event: TouchEvent::Down { .. },
+                    ..
+                }
+            )
+            .then_some(())
+        });
+        control.send(Control::TypeKey(KEY_A)).unwrap();
+        wait_for(&mut conn, &mut stash, |e| {
+            matches!(
+                e,
+                Event::Keyboard {
+                    event: KeyboardEvent::Key { .. },
+                    ..
+                }
+            )
+            .then_some(())
+        });
+        assert_ne!(conn.input_serial(), Some(down));
+        assert_eq!(
+            conn.held_press(),
+            Some(HeldPress {
+                serial: down,
+                device: PressDevice::Touch,
+            })
+        );
+        conn.start_move(w).unwrap();
+        conn.flush().unwrap();
+        assert_eq!(next_window_gesture(&seen), Seen::Move(down));
+
+        control.send(end).unwrap();
+        conn.roundtrip().unwrap();
+        stash.extend(conn.wait(Some(Duration::ZERO)).unwrap());
+        assert_eq!(conn.held_press(), None);
+        assert!(matches!(
+            conn.start_move(w),
+            Err(Error::PermissionDenied(_))
+        ));
+    }
 }
 
 #[test]

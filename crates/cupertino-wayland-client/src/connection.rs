@@ -281,6 +281,23 @@ impl PartialEq for ExtensionEvent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TokenRequest(u32);
 
+/// The input device a [`HeldPress`] came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PressDevice {
+    /// A pointer button.
+    Pointer,
+    /// A finger on a touch screen.
+    Touch,
+}
+
+/// A press the seat still holds: the serial of the button press or touch down that started its implicit grab (the
+/// first of the buttons or fingers still down), which a window move, resize or window menu answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct HeldPress {
+    pub serial: u32,
+    pub device: PressDevice,
+}
+
 /// Interrupts [`Connection::wait`] from other threads.
 #[derive(Clone, Debug)]
 pub struct Waker(Arc<UnixStream>);
@@ -405,10 +422,16 @@ pub struct State {
     pointer: Option<WlPointer>,
     cursor_device: Option<WpCursorShapeDeviceV1>,
     pointer_enter_serial: Option<u32>,
-    /// The buttons held down, and the serial of the latest press among them: the implicit grab a drag starts from.
+    /// The buttons held down, and the serial of the press that started the implicit grab they hold: the first of them
+    /// pressed while none was down, which a drag, move, resize or window menu answers.
     held_buttons: Vec<u32>,
     press_serial: Option<u32>,
     touch: Option<WlTouch>,
+    /// The touch points down, and the serial of the touch down that started their implicit grab.
+    held_touches: Vec<i32>,
+    touch_press_serial: Option<u32>,
+    /// The device whose implicit grab started last, which a move answers when both are held.
+    latest_press: PressDevice,
     touch_tracker: TouchTracker,
     keyboard: Option<WlKeyboard>,
     outputs: Vec<Output>,
@@ -527,6 +550,9 @@ impl Connection {
             held_buttons: Vec::new(),
             press_serial: None,
             touch: None,
+            held_touches: Vec::new(),
+            touch_press_serial: None,
+            latest_press: PressDevice::Pointer,
             keyboard: None,
             outputs: Vec::new(),
             surfaces: Vec::new(),
@@ -830,12 +856,17 @@ impl Connection {
         Ok(())
     }
 
-    /// Start moving the window with the pointer, in answer to the latest button press (a client-drawn title bar).
+    /// Start moving the window with the pointer or finger, in answer to the press still held ([`Connection::held_press`]),
+    /// whatever pointer motion or keys came since (a client-drawn title bar). With no press held nothing is sent and the
+    /// move is [`Error::PermissionDenied`].
     pub fn start_move(&mut self, window: Toplevel) -> Result<(), Error> {
         let serial = self
             .state
-            .last_serial
-            .ok_or(Error::PermissionDenied("moving a window"))?;
+            .held_press()
+            .ok_or(Error::PermissionDenied(
+                "moving a window without a press held",
+            ))?
+            .serial;
         let seat = self
             .state
             .seat
@@ -845,13 +876,17 @@ impl Connection {
         Ok(())
     }
 
-    /// Show the compositor's window menu at `position` (window-local logical points), in answer to the latest button
-    /// press (a right click on a client-drawn title bar).
+    /// Show the compositor's window menu at `position` (window-local logical points), in answer to the press still held
+    /// ([`Connection::held_press`]: a right click on a client-drawn title bar). With no press held nothing is sent and
+    /// the menu is [`Error::PermissionDenied`].
     pub fn show_window_menu(&mut self, window: Toplevel, position: Point) -> Result<(), Error> {
         let serial = self
             .state
-            .last_serial
-            .ok_or(Error::PermissionDenied("a window menu"))?;
+            .held_press()
+            .ok_or(Error::PermissionDenied(
+                "a window menu without a press held",
+            ))?
+            .serial;
         let seat = self
             .state
             .seat
@@ -886,12 +921,16 @@ impl Connection {
         Ok(())
     }
 
-    /// Start resizing the window from `edge`, in answer to the latest button press (a client-drawn border).
+    /// Start resizing the window from `edge`, in answer to the press still held ([`Connection::held_press`]: a
+    /// client-drawn border). With no press held nothing is sent and the resize is [`Error::PermissionDenied`].
     pub fn start_resize(&mut self, window: Toplevel, edge: ResizeEdge) -> Result<(), Error> {
         let serial = self
             .state
-            .last_serial
-            .ok_or(Error::PermissionDenied("resizing a window"))?;
+            .held_press()
+            .ok_or(Error::PermissionDenied(
+                "resizing a window without a press held",
+            ))?
+            .serial;
         let seat = self
             .state
             .seat
@@ -1007,6 +1046,13 @@ impl Connection {
     /// The serial of the latest input event, for an extension request that answers one; `None` before any input.
     pub fn input_serial(&self) -> Option<u32> {
         self.state.last_serial
+    }
+
+    /// The press the seat still holds, for an extension request that must answer it: of the pointer buttons and the
+    /// fingers down, whichever started its implicit grab last. `None` once all of them are up, or after the pointer
+    /// left or the compositor cancelled the touches.
+    pub fn held_press(&self) -> Option<HeldPress> {
+        self.state.held_press()
     }
 
     /// The outputs `surface` is on, in the order it entered them.
@@ -2465,8 +2511,11 @@ impl Dispatch<WlPointer, ()> for State {
                 state.last_serial = Some(serial);
                 let pressed = button_state == ButtonState::Pressed;
                 if pressed {
+                    if state.held_buttons.is_empty() {
+                        state.press_serial = Some(serial);
+                        state.latest_press = PressDevice::Pointer;
+                    }
                     state.held_buttons.push(button);
-                    state.press_serial = Some(serial);
                 } else {
                     state.held_buttons.retain(|b| *b != button);
                     if state.held_buttons.is_empty() {
@@ -2543,7 +2592,24 @@ impl Dispatch<WlPointer, ()> for State {
 }
 
 impl State {
+    fn held_press(&self) -> Option<HeldPress> {
+        let pointer = self.press_serial.map(|serial| HeldPress {
+            serial,
+            device: PressDevice::Pointer,
+        });
+        let touch = self.touch_press_serial.map(|serial| HeldPress {
+            serial,
+            device: PressDevice::Touch,
+        });
+        match self.latest_press {
+            PressDevice::Pointer => pointer.or(touch),
+            PressDevice::Touch => touch.or(pointer),
+        }
+    }
+
     fn cancel_touches(&mut self) {
+        self.held_touches.clear();
+        self.touch_press_serial = None;
         let time = self.input_time(Instant::now());
         for (surface, event) in self.touch_tracker.cancel() {
             self.events.push(Event::Touch {
@@ -2574,6 +2640,11 @@ impl Dispatch<WlTouch, ()> for State {
                 y,
             } => {
                 state.last_serial = Some(serial);
+                if state.held_touches.is_empty() {
+                    state.touch_press_serial = Some(serial);
+                    state.latest_press = PressDevice::Touch;
+                }
+                state.held_touches.push(id);
                 let found = state
                     .surface_of(&surface)
                     .map(|s| (s, state.touch_tracker.down(id, s, Point::new(x, y))));
@@ -2584,6 +2655,10 @@ impl Dispatch<WlTouch, ()> for State {
             }
             wl_touch::Event::Up { serial, time, id } => {
                 state.last_serial = Some(serial);
+                state.held_touches.retain(|t| *t != id);
+                if state.held_touches.is_empty() {
+                    state.touch_press_serial = None;
+                }
                 (state.touch_tracker.up(id), time)
             }
             wl_touch::Event::Cancel => {

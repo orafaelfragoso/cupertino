@@ -1492,8 +1492,8 @@ fn the_screenshot_action_maps_the_overlay_and_a_drag_writes_a_png_of_the_selecti
     assert_eq!((word(16), word(20)), (200, 150));
 }
 
-/// The toolbar shortcut maps the overlay and the 628 × 104 toolbar centred 12 pt above the bottom; in the remembered
-/// screen mode, Return captures the whole output.
+/// The toolbar shortcut maps the overlay and the 560 × 48 toolbar centred 40 pt above the bottom, which takes the
+/// keyboard; in the remembered screen mode, Return captures the whole output.
 #[test]
 fn the_screenshot_toolbar_sits_at_the_bottom_and_return_captures_the_screen() {
     const ENTER: u32 = 28 + 8;
@@ -1532,12 +1532,12 @@ fn the_screenshot_toolbar_sits_at_the_bottom_and_return_captures_the_screen() {
             .find(|g| g.size.w > 0 && g.size.w != OUTPUT.0)
     };
     server.wait_until("the toolbar to map", |s| toolbar(s).is_some());
-    // (1000 − 628) / 2 and 700 − 12 − 104
+    // (1000 − 560) / 2 and 700 − 40 − 48
     assert_eq!(
         toolbar(&server.state),
-        Some(Rectangle::new((186, 584).into(), (628, 104).into()))
+        Some(Rectangle::new((220, 612).into(), (560, 48).into()))
     );
-    server.wait_until("the overlay to take the keyboard", |s| {
+    server.wait_until("the toolbar to take the keyboard", |s| {
         s.seat.get_keyboard().unwrap().current_focus().is_some()
     });
     server
@@ -1557,6 +1557,73 @@ fn the_screenshot_toolbar_sits_at_the_bottom_and_return_captures_the_screen() {
     let bytes = std::fs::read(png(&shots).unwrap()).unwrap();
     let word = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
     assert_eq!((word(16), word(20)), (OUTPUT.0 as u32, OUTPUT.1 as u32));
+}
+
+/// Escape on the toolbar takes the overlay and the toolbar away and gives the keyboard back to the window that had it,
+/// without a capture.
+#[test]
+fn escape_on_the_screenshot_toolbar_removes_its_surfaces_and_gives_the_keyboard_back() {
+    const ESCAPE: u32 = 1 + 8;
+    let dir = TempDir::new("screenshot-escape");
+    let (conf, shots) = (dir.file("screenshot.conf"), dir.file("shots"));
+    std::fs::write(
+        &conf,
+        format!("location = {}\nshow-thumbnail = false\n", shots.display()),
+    )
+    .unwrap();
+    let Some(mut server) = Server::start(Vec::new(), true) else {
+        return;
+    };
+    spawn_toplevel(
+        PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
+            .join(server.state.socket_name.as_ref().unwrap()),
+    );
+    server.wait_until("the window to map", |s| s.wm.windows().count() == 1);
+    let window = server.state.wm.windows().next().unwrap().id;
+    let surface = server.state.entry(window).unwrap().surface().clone();
+    let on_window = move |s: &Cupertino| {
+        s.seat.get_keyboard().unwrap().current_focus().as_ref() == Some(&surface)
+    };
+    server.wait_until("the keyboard on the window", on_window.clone());
+    let binary = shell_bin_dir().join("cupertino-screenshot");
+    server.state.config.screenshot_command = vec![
+        "env".into(),
+        format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
+        binary.display().to_string(),
+    ];
+    server.state.execute_plan(ActionPlan {
+        commands: Vec::new(),
+        ops: vec![ShellOp::Screenshot(ScreenshotRequest::Toolbar)],
+    });
+    let surfaces = |s: &Cupertino| {
+        let Some(output) = s.outputs.first() else {
+            return 0;
+        };
+        layer_map_for_output(&output.output)
+            .layers()
+            .filter(|l| l.namespace().starts_with("cupertino-screenshot"))
+            .count()
+    };
+    server.wait_until("the overlay and the toolbar to map", |s| surfaces(s) == 2);
+    server.wait_until("the toolbar to take the keyboard", {
+        let on_window = on_window.clone();
+        move |s: &Cupertino| {
+            !on_window(s) && s.seat.get_keyboard().unwrap().current_focus().is_some()
+        }
+    });
+    server
+        .state
+        .keyboard_event_now(Keycode::new(ESCAPE), KeyState::Pressed, 0);
+    server.step();
+    server
+        .state
+        .keyboard_event_now(Keycode::new(ESCAPE), KeyState::Released, 0);
+    server.wait_until("the surfaces to go", |s| surfaces(s) == 0);
+    server.wait_until("the keyboard back on the window", on_window);
+    assert!(
+        !shots.exists() || std::fs::read_dir(&shots).unwrap().next().is_none(),
+        "nothing was captured"
+    );
 }
 
 /// The screen-to-clipboard shortcut captures the output without an overlay and offers it as `image/png` on the

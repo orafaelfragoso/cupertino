@@ -15,12 +15,17 @@
 //! The file is the person's: it is read only when it is a regular file, not a link, owned by the reader's user and
 //! writable by no group or other user, in a directory no group or other user can write, and it is written with mode
 //! `0600`. A file that is refused restores nothing.
+//!
+//! The portal and the settings application both change the file. Each change is [`ScreenSharingConf::update`]: the
+//! file is read, changed and written while [`FileLock`] is held, so a grant one process adds is never dropped by a
+//! store the other made from an older read, and a grant forgotten stays forgotten.
 
 use std::io::{self, Read};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::conf::{ConfText, Line, Problem};
+use crate::lock::FileLock;
 
 /// Environment variable that redirects `screen-sharing.conf`.
 pub const SCREEN_SHARING_ENV: &str = "CUPERTINO_SCREEN_SHARING_CONF";
@@ -178,6 +183,20 @@ impl ScreenSharingConf {
         crate::atomic::write_atomic_private(path, text.as_bytes())
     }
 
+    /// Change the file at `path` with `change` while holding its lock: it is read again ([`Self::load`]), changed,
+    /// and written back ([`Self::store`]) before another writer can read it. Nothing is written when the file is
+    /// refused or cannot be read, or when `change` fails; what `change` returns otherwise.
+    pub fn update<R>(
+        path: &Path,
+        change: impl FnOnce(&mut Self) -> io::Result<R>,
+    ) -> io::Result<R> {
+        let _lock = FileLock::acquire(path)?;
+        let (mut conf, _) = Self::load(path)?;
+        let changed = change(&mut conf)?;
+        conf.store(path)?;
+        Ok(changed)
+    }
+
     /// The grant `id` when it was given to `app_id`.
     pub fn find(&self, id: &str, app_id: &str) -> Option<&Grant> {
         self.grants
@@ -278,8 +297,77 @@ mod tests {
 
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
         assert!(ScreenSharingConf::load(&path).is_err());
+        assert!(
+            ScreenSharingConf::update(&path, |conf| {
+                conf.grants.clear();
+                Ok(())
+            })
+            .is_err(),
+            "a refused file is not changed"
+        );
+        assert!(std::fs::read_to_string(&path).unwrap().contains(ID));
         let link = dir.path().join("link.conf");
         std::os::unix::fs::symlink(&path, &link).unwrap();
         assert!(ScreenSharingConf::load(&link).is_err());
+    }
+
+    /// The grant id of number `n`.
+    fn numbered(n: usize) -> String {
+        format!("{n:032x}")
+    }
+
+    #[test]
+    fn concurrent_updates_keep_every_grant_added_and_never_bring_back_one_forgotten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(SCREEN_SHARING_FILE);
+        ScreenSharingConf {
+            grants: vec![grant(ID, "org.example.Meeting")],
+        }
+        .store(&path)
+        .unwrap();
+        const ADDERS: usize = 8;
+        const EACH: usize = 12;
+        let start = std::sync::Arc::new(std::sync::Barrier::new(ADDERS + 1));
+        let mut threads = Vec::new();
+        for adder in 0..ADDERS {
+            let (path, start) = (path.clone(), std::sync::Arc::clone(&start));
+            threads.push(std::thread::spawn(move || {
+                start.wait();
+                for n in 0..EACH {
+                    ScreenSharingConf::update(&path, |conf| {
+                        conf.grants
+                            .push(grant(&numbered(adder * EACH + n + 1), "org.example.Add"));
+                        // a slow change: without the lock another writer reads the file meanwhile
+                        std::thread::yield_now();
+                        Ok(())
+                    })
+                    .unwrap();
+                }
+            }));
+        }
+        let forget = {
+            let (path, start) = (path.clone(), std::sync::Arc::clone(&start));
+            std::thread::spawn(move || {
+                start.wait();
+                ScreenSharingConf::update(&path, |conf| Ok(conf.revoke(ID))).unwrap()
+            })
+        };
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert!(forget.join().unwrap(), "the grant was there to forget");
+        let (conf, problems) = ScreenSharingConf::load(&path).unwrap();
+        assert!(problems.is_empty());
+        assert!(
+            conf.find(ID, "org.example.Meeting").is_none(),
+            "a forgotten grant stays forgotten"
+        );
+        for n in 1..=ADDERS * EACH {
+            assert!(
+                conf.find(&numbered(n), "org.example.Add").is_some(),
+                "grant {n} was kept"
+            );
+        }
+        assert_eq!(conf.grants.len(), ADDERS * EACH);
     }
 }

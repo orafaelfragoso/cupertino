@@ -10,6 +10,7 @@ pub mod data_control;
 pub mod displays;
 pub mod dock;
 pub mod keyboard;
+pub mod lock;
 
 use std::ffi::OsString;
 use std::path::PathBuf;

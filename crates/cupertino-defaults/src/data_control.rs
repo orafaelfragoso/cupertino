@@ -265,7 +265,11 @@ fn writable(program: &Path) -> Result<(), String> {
 
 /// Refuse a file that is not a regular file of `user` that only that user can write, or whose directory a group or other
 /// user can write.
-fn check_owned(file: &std::fs::Metadata, dir: &std::fs::Metadata, user: u32) -> io::Result<()> {
+pub(crate) fn check_owned(
+    file: &std::fs::Metadata,
+    dir: &std::fs::Metadata,
+    user: u32,
+) -> io::Result<()> {
     if !file.is_file() || file.uid() != user {
         return Err(refused("the file is not a regular file of this user"));
     }
@@ -280,7 +284,7 @@ fn check_owned(file: &std::fs::Metadata, dir: &std::fs::Metadata, user: u32) -> 
     Ok(())
 }
 
-fn refused(why: &str) -> io::Error {
+pub(crate) fn refused(why: &str) -> io::Error {
     io::Error::new(io::ErrorKind::PermissionDenied, why)
 }
 

@@ -4,6 +4,7 @@ pub mod app_chooser;
 #[cfg(feature = "app")]
 pub mod capture;
 pub mod chooser;
+pub mod consent;
 #[cfg(feature = "app")]
 pub mod dialog;
 pub mod file_chooser;
@@ -12,6 +13,7 @@ pub mod request;
 pub mod screen_cast;
 pub mod screenshot;
 pub mod settings;
+pub mod sharing;
 
 /// The name xdg-desktop-portal reaches the backend at, as `data/cupertino.portal` declares it.
 pub const BUS_NAME: &str = "org.freedesktop.impl.portal.desktop.cupertino";

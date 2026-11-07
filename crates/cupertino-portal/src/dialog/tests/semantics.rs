@@ -156,6 +156,9 @@ fn the_screen_cast_chooser_reads_its_sources_and_enables_share_on_a_pick() {
         handle: handle(23),
         ask: Box::new(screen_cast::Ask {
             app_id: "org.example.Meeting".to_owned(),
+            app_name: Some("Meeting".to_owned()),
+            app_icon: None,
+            offer_remember: false,
             parent_window: String::new(),
             sources: vec![
                 Source::Display {
@@ -173,12 +176,13 @@ fn the_screen_cast_chooser_reads_its_sources_and_enables_share_on_a_pick() {
         reply: screen_cast::Reply(sender),
     });
     let (mut driver, window) = start();
+    armed(&mut driver, window);
     reads(
         &driver,
         window,
         &[
             "Window",
-            "  StaticText \"Choose a display or a window to share.\"",
+            "  StaticText \"“Meeting” wants to share your screen. Choose a display or a window.\"",
             "  ScrollView",
             "    List \"Displays and Windows\" 2 items",
             "      ListItem focusable",
@@ -195,7 +199,7 @@ fn the_screen_cast_chooser_reads_its_sources_and_enables_share_on_a_pick() {
         window,
         &[
             "Window",
-            "  StaticText \"Choose a display or a window to share.\"",
+            "  StaticText \"“Meeting” wants to share your screen. Choose a display or a window.\"",
             "  ScrollView",
             "    List \"Displays and Windows\" 2 items",
             "      ListItem",
@@ -256,7 +260,8 @@ fn the_app_chooser_reads_its_prompt_and_apps_with_the_last_choice_selected_and_f
 }
 
 #[test]
-fn the_screenshot_consent_reads_its_prompt_and_two_buttons_with_neither_focused() {
+fn the_screenshot_consent_reads_its_prompt_and_two_buttons_with_neither_focused_and_take_armed_late(
+) {
     let _turn = INBOX.lock().unwrap_or_else(|e| e.into_inner());
     let (sender, answer) = async_channel::bounded(1);
     inbox().push(screenshot::Event::Ask {
@@ -264,11 +269,23 @@ fn the_screenshot_consent_reads_its_prompt_and_two_buttons_with_neither_focused(
         ask: Box::new(screenshot::Ask {
             app_id: "org.example.Draw".to_owned(),
             app_name: Some("Drawing".to_owned()),
+            app_icon: None,
             parent_window: String::new(),
         }),
         reply: screenshot::Reply(sender),
     });
     let (mut driver, window) = start();
+    reads(
+        &driver,
+        window,
+        &[
+            "Window",
+            "  StaticText \"“Drawing” wants to take a screenshot of your screen.\"",
+            "  Button \"Cancel\" focusable",
+            "  Button \"Take Screenshot\" disabled",
+        ],
+    );
+    armed(&mut driver, window);
     reads(
         &driver,
         window,

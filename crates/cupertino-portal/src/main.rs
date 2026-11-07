@@ -4,6 +4,7 @@ use std::process::ExitCode;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use cupertino_defaults::screen_sharing::ScreenSharingConf;
 use cupertino_portal::app_chooser::AppChooser;
 use cupertino_portal::capture::Capture;
 use cupertino_portal::dialog::{inbox, Dialogs};
@@ -84,6 +85,8 @@ fn run() -> Result<()> {
                 waker.wake();
             },
         )
+        .with_applications(cupertino_apps::entry::xdg_application_dirs())
+        .with_grants(ScreenSharingConf::path())
         .serve(&bus)?;
         let waker = conn.waker();
         bus.object_server().at(

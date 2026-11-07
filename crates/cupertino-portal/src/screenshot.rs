@@ -10,14 +10,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use cupertino_apps::entry::{parse_handler, Locale, Visibility};
 use cupertino_filepicker::places::parse_user_dirs;
 use tiny_skia::{BlendMode, FilterQuality, Pixmap, PixmapPaint, Transform};
 use zbus::message::Header;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 use zbus::{interface, Connection};
 
-use crate::file_chooser::{file_uri, plain};
+use crate::consent::{identify, Identity};
+use crate::file_chooser::file_uri;
 use crate::request::{from_frontend, Exported, PortalError, Response};
 
 /// The interface version served.
@@ -47,6 +47,8 @@ pub struct Ask {
     pub app_id: String,
     /// The name of the app's desktop entry, else its id; `None` when the id is empty.
     pub app_name: Option<String>,
+    /// The icon name of the app's desktop entry, if it has one.
+    pub app_icon: Option<String>,
     /// `wayland:<handle>`, `x11:<xid>` or empty.
     pub parent_window: String,
 }
@@ -180,27 +182,9 @@ impl Screenshot {
         }
     }
 
-    /// The app as the consent window names it: the name of `<app_id>.desktop` in the first application directory that
-    /// has it, else the id; `None` for an empty id.
-    fn app_name(&self, app_id: &str) -> Option<String> {
-        if app_id.is_empty() {
-            return None;
-        }
-        let file_name = !app_id.contains('/') && !app_id.chars().any(char::is_control);
-        let name = file_name
-            .then(|| {
-                self.applications.iter().find_map(|dir| {
-                    std::fs::read_to_string(dir.join(format!("{app_id}.desktop"))).ok()
-                })
-            })
-            .flatten()
-            .and_then(|text| {
-                let (locale, visibility) = (Locale::from_env(), Visibility::from_env());
-                parse_handler(app_id, &text, &locale, &visibility).ok()
-            })
-            .map(|handler| plain(&handler.entry.name))
-            .filter(|n| !n.trim().is_empty());
-        Some(name.unwrap_or_else(|| plain(app_id)))
+    /// The app as the consent window names it and draws it ([`identify`]).
+    fn identity(&self, app_id: &str) -> Identity {
+        identify(&self.applications, app_id)
     }
 
     /// Copy every display and write them as one PNG. A copy that fails for a reason that can pass is made again, up to
@@ -275,10 +259,12 @@ impl Screenshot {
         let _pending = Pending::take(&self.calls, &handle, &app_id)?;
         let request = Exported::at(connection, handle.as_ref()).await?;
         let (reply, answer) = async_channel::bounded(1);
+        let identity = self.identity(&app_id);
         (self.events)(Event::Ask {
             handle: handle.clone(),
             ask: Box::new(Ask {
-                app_name: self.app_name(&app_id),
+                app_name: identity.name,
+                app_icon: identity.icon,
                 app_id,
                 parent_window,
             }),

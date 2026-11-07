@@ -12,8 +12,8 @@ use cupertino_ui_layout::{
 use cupertino_ui_platform::PointerEvent;
 use cupertino_ui_platform::{
     ActivationRequest, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, ConfigureId,
-    CursorShape, PlatformError, PlatformEvent, PopupSpec, PresentOutcome, Timestamp, WindowEvent,
-    WindowId, WindowRequest, WindowSpec, WindowSystem,
+    CursorShape, DragRequest, DragToken, PlatformError, PlatformEvent, PopupSpec, PresentOutcome,
+    Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, PixelFormat, RenderError, RenderFrameId, RenderRequest, UiRenderer,
@@ -338,6 +338,10 @@ pub(crate) struct FakeSystem {
     pub(crate) effects: bool,
     /// Every activation token asked for: the window and the application named.
     pub(crate) activations: Vec<(WindowId, Option<String>)>,
+    /// Starts drags; without it every drag is refused.
+    pub(crate) drag: bool,
+    /// Every drag started, with its window; the token is its place in the list, from 1.
+    pub(crate) drags: Vec<(WindowId, DragRequest)>,
 }
 
 impl FakeSystem {
@@ -402,6 +406,18 @@ impl WindowSystem for FakeSystem {
     ) -> ActivationRequest {
         self.activations.push((window, app_id.map(str::to_owned)));
         ActivationRequest(self.activations.len() as u64)
+    }
+
+    fn start_drag(
+        &mut self,
+        window: WindowId,
+        request: DragRequest,
+    ) -> Result<DragToken, PlatformError> {
+        if !self.drag {
+            return Err(PlatformError::Unsupported);
+        }
+        self.drags.push((window, request));
+        Ok(DragToken(self.drags.len() as u64))
     }
 
     fn request_frame(&mut self, window: WindowId) {
@@ -473,6 +489,10 @@ impl UiRenderer for FakeRenderer {
         self.frame.id = RenderFrameId(self.frame.id.0 + 1);
         self.frame.width = request.width;
         self.frame.height = request.height;
+        self.frame.stride = request.width * 4;
+        self.frame
+            .pixels
+            .resize(self.frame.stride as usize * request.height as usize, 0);
         Ok(self.frame.id)
     }
 

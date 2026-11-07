@@ -13,12 +13,16 @@ use std::time::{Duration, Instant};
 use cupertino_geometry::Point;
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use rustix::fs::{fcntl_setfl, OFlags};
+use rustix::fs::{memfd_create, MemfdFlags};
 use rustix::io::Errno;
+use wayland_client::protocol::wl_buffer::WlBuffer;
+use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_data_device::{self, WlDataDevice};
 use wayland_client::protocol::wl_data_device_manager::{DndAction, WlDataDeviceManager};
 use wayland_client::protocol::wl_data_offer::{self, WlDataOffer};
 use wayland_client::protocol::wl_data_source::{self, WlDataSource};
 use wayland_client::protocol::wl_seat::WlSeat;
+use wayland_client::protocol::wl_shm::{self, WlShm};
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{
     delegate_noop, event_created_child, Connection, Dispatch, Proxy, QueueHandle,
@@ -166,11 +170,169 @@ struct IncomingDrag {
     dropped: bool,
 }
 
+/// The image that follows the pointer during a drag this client starts: premultiplied pixels in `wl_shm`'s
+/// `argb8888` (a little-endian 32-bit word, bytes B, G, R, A in memory), drawn at a whole-number buffer scale, and its
+/// hotspot, the point of the image under the pointer in the image's logical points.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DragIcon {
+    width: u32,
+    height: u32,
+    scale: u32,
+    pixels: Arc<[u8]>,
+    hotspot: (i32, i32),
+}
+
+impl DragIcon {
+    /// The widest or tallest icon in pixels: a drag image is a thumbnail of what is dragged, at most 4 MiB.
+    pub const MAX_EXTENT: u32 = 1024;
+
+    /// `width` × `height` pixels in rows of `width * 4` bytes, drawn at `scale` pixels per point, with the pointer at
+    /// `hotspot` (logical points from the image's top-left corner, rounded to whole points). `None` for an empty image,
+    /// a side over [`Self::MAX_EXTENT`], a scale of 0 or one that does not divide both sides (the protocol requires
+    /// a buffer to be a whole number of points), pixels of another length, or a hotspot that is not finite.
+    pub fn new(
+        width: u32,
+        height: u32,
+        scale: u32,
+        pixels: Vec<u8>,
+        hotspot: Point,
+    ) -> Option<DragIcon> {
+        let extent = 1..=Self::MAX_EXTENT;
+        let fits = extent.contains(&width)
+            && extent.contains(&height)
+            && scale >= 1
+            && width.is_multiple_of(scale)
+            && height.is_multiple_of(scale)
+            && pixels.len() == width as usize * height as usize * 4
+            && hotspot.x.is_finite()
+            && hotspot.y.is_finite();
+        let point = |v: f64| {
+            v.round()
+                .clamp(-f64::from(Self::MAX_EXTENT), f64::from(Self::MAX_EXTENT)) as i32
+        };
+        fits.then(|| DragIcon {
+            width,
+            height,
+            scale,
+            pixels: pixels.into(),
+            hotspot: (point(hotspot.x), point(hotspot.y)),
+        })
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn scale(&self) -> u32 {
+        self.scale
+    }
+
+    /// The point under the pointer, in whole logical points from the top-left corner.
+    pub fn hotspot(&self) -> (i32, i32) {
+        self.hotspot
+    }
+
+    pub fn pixels(&self) -> &[u8] {
+        &self.pixels
+    }
+}
+
+/// Sizes and hotspot only: the pixels are an image of what is dragged.
+impl std::fmt::Debug for DragIcon {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DragIcon")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("scale", &self.scale)
+            .field("hotspot", &self.hotspot)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The surface (role `dnd_icon`) and buffer a drag's icon is drawn with; they live until the drag drops, is
+/// cancelled, is refused or is replaced.
+#[derive(Debug)]
+struct IconSurface {
+    surface: WlSurface,
+    buffer: WlBuffer,
+}
+
+impl IconSurface {
+    /// A surface showing `icon`, not committed yet: it takes the `dnd_icon` role with `start_drag`, and
+    /// [`IconSurface::show`] commits it after that, so the compositor applies the hotspot to the icon.
+    fn new(
+        compositor: &WlCompositor,
+        shm: &WlShm,
+        icon: &DragIcon,
+        qh: &QueueHandle<State>,
+    ) -> Result<IconSurface, Error> {
+        let len = icon.pixels.len();
+        let pool_len =
+            i32::try_from(len).map_err(|_| Error::Protocol("a drag icon too large to share"))?;
+        let mut file = File::from(
+            memfd_create("cupertino-drag-icon", MemfdFlags::CLOEXEC)
+                .map_err(|e| Error::Io(e.into()))?,
+        );
+        file.write_all(&icon.pixels).map_err(Error::Io)?;
+        let pool = shm.create_pool(file.as_fd(), pool_len, qh, ());
+        let buffer = pool.create_buffer(
+            0,
+            icon.width as i32,
+            icon.height as i32,
+            (icon.width * 4) as i32,
+            wl_shm::Format::Argb8888,
+            qh,
+            (),
+        );
+        pool.destroy();
+        let surface = compositor.create_surface(qh, ());
+        Ok(IconSurface { surface, buffer })
+    }
+
+    /// Attach the buffer with the pointer at the icon's hotspot (`wl_surface.offset` from version 5, the attach offset
+    /// before) and commit.
+    fn show(&self, icon: &DragIcon) {
+        let (x, y) = icon.hotspot;
+        self.surface.set_buffer_scale(icon.scale as i32);
+        if self.surface.version() >= 5 {
+            self.surface.offset(-x, -y);
+            self.surface.attach(Some(&self.buffer), 0, 0);
+        } else {
+            self.surface.attach(Some(&self.buffer), -x, -y);
+        }
+        self.surface
+            .damage_buffer(0, 0, icon.width as i32, icon.height as i32);
+        self.surface.commit();
+    }
+
+    fn destroy(self) {
+        self.surface.destroy();
+        self.buffer.destroy();
+    }
+}
+
 #[derive(Debug)]
 struct OutgoingDrag {
     source: DragSource,
     wire: WlDataSource,
     contents: Contents,
+    icon: Option<IconSurface>,
+    /// The compositor took the drag: it moved the pointer's focus off this client's surface. Until then a release of
+    /// the press it answers means the compositor ignored it, as it does a drag that came after the release.
+    granted: bool,
+}
+
+impl OutgoingDrag {
+    fn end(self) {
+        self.wire.destroy();
+        if let Some(icon) = self.icon {
+            icon.destroy();
+        }
+    }
 }
 
 /// Contents of a selection this client set, one byte string per MIME type.
@@ -373,19 +535,30 @@ impl Clipboard {
         }
     }
 
-    /// Start dragging `contents` from `origin`, with the `actions` it allows; `serial` is that of the button press.
+    /// Start dragging `contents` from `origin`, with the `actions` it allows and `icon` following the pointer;
+    /// `serial` is that of the button press. `surfaces` makes the icon's surface and buffer.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn start_drag(
         &mut self,
         manager: &WlDataDeviceManager,
+        surfaces: (&WlCompositor, &WlShm),
         origin: &WlSurface,
         contents: Vec<(String, Vec<u8>)>,
         actions: DndAction,
+        icon: Option<&DragIcon>,
         serial: u32,
         qh: &QueueHandle<State>,
     ) -> Result<DragSource, Error> {
         let Some(device) = &self.device else {
             return Err(Error::Unsupported(crate::Capability::Clipboard));
         };
+        let icon_surface = icon
+            .map(|icon| IconSurface::new(surfaces.0, surfaces.1, icon, qh))
+            .transpose()?;
+        // the drag this one replaces goes first, with its icon
+        if let Some(old) = self.outgoing.take() {
+            old.end();
+        }
         let wire = manager.create_data_source(qh, ());
         for (mime, _) in &contents {
             wire.offer(mime.clone());
@@ -393,21 +566,49 @@ impl Clipboard {
         if wire.version() >= 3 {
             wire.set_actions(actions);
         }
-        device.start_drag(Some(&wire), origin, None, serial);
+        device.start_drag(
+            Some(&wire),
+            origin,
+            icon_surface.as_ref().map(|i| &i.surface),
+            serial,
+        );
+        if let Some((surface, icon)) = icon_surface.as_ref().zip(icon) {
+            surface.show(icon);
+        }
         self.next_drag_source += 1;
         let source = DragSource(self.next_drag_source);
         let contents = contents
             .into_iter()
             .map(|(mime, bytes)| (mime, Arc::from(bytes)))
             .collect();
-        if let Some(old) = self.outgoing.replace(OutgoingDrag {
+        self.outgoing = Some(OutgoingDrag {
             source,
             wire,
             contents,
-        }) {
-            old.wire.destroy();
-        }
+            icon: icon_surface,
+            granted: false,
+        });
         Ok(source)
+    }
+
+    /// The pointer left this client's surfaces: a drag started before was taken by the compositor.
+    pub(crate) fn pointer_left(&mut self) {
+        if let Some(drag) = &mut self.outgoing {
+            drag.granted = true;
+        }
+    }
+
+    /// The last held button went up on this client's surface. A drag the compositor never took is over: it ignored
+    /// it, so it ends here as cancelled, its source, surface and buffer destroyed.
+    pub(crate) fn buttons_released(&mut self, events: &mut Vec<Event>) {
+        if let Some(drag) = self.outgoing.take_if(|d| !d.granted) {
+            let source = drag.source;
+            drag.end();
+            events.push(Event::DragSource {
+                source,
+                event: DragSourceEvent::Cancelled,
+            });
+        }
     }
 
     /// Read what the pipes of running reads hold now, and report each read that ended at `now` to `events`.
@@ -765,9 +966,13 @@ impl Dispatch<WlDataSource, ()> for State {
         let dragged = state
             .clipboard
             .outgoing
-            .as_ref()
+            .as_mut()
             .filter(|d| d.wire == *source)
-            .map(|d| (d.source, Arc::clone(&d.contents)));
+            .map(|d| {
+                // only a drag the compositor took hears from it
+                d.granted = true;
+                (d.source, Arc::clone(&d.contents))
+            });
         if let Some((drag, contents)) = dragged {
             let event = match event {
                 wl_data_source::Event::Send { mime_type, fd } => {
@@ -791,12 +996,24 @@ impl Dispatch<WlDataSource, ()> for State {
                 wl_data_source::Event::Cancelled => DragSourceEvent::Cancelled,
                 _ => return,
             };
-            if matches!(
-                event,
-                DragSourceEvent::Finished | DragSourceEvent::Cancelled
-            ) {
-                state.clipboard.outgoing = None;
-                source.destroy();
+            match event {
+                DragSourceEvent::Finished | DragSourceEvent::Cancelled => {
+                    if let Some(drag) = state.clipboard.outgoing.take() {
+                        drag.end();
+                    }
+                }
+                // the drop ends the pointer's drag: the compositor no longer shows the icon
+                DragSourceEvent::Dropped => {
+                    if let Some(icon) = state
+                        .clipboard
+                        .outgoing
+                        .as_mut()
+                        .and_then(|d| d.icon.take())
+                    {
+                        icon.destroy();
+                    }
+                }
+                _ => {}
             }
             state.events.push(Event::DragSource {
                 source: drag,

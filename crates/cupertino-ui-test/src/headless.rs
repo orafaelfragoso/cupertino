@@ -1,9 +1,9 @@
 use cupertino_geometry::Size;
 use cupertino_ui_platform::{
     ActivationRequest, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, Configure,
-    ConfigureId, CursorShape, MenuDescription, PlatformError, PlatformEvent, PopupSpec,
-    PresentOutcome, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowStates,
-    WindowSystem, WmCapabilities,
+    ConfigureId, CursorShape, DragRequest, DragToken, MenuDescription, PlatformError,
+    PlatformEvent, PointerEvent, PopupSpec, PresentOutcome, Timestamp, WindowEvent, WindowId,
+    WindowRequest, WindowSpec, WindowStates, WindowSystem, WmCapabilities,
 };
 use cupertino_ui_render::{CpuFrame, PixelFormat, PixelRect, RenderFrameId};
 use cupertino_ui_text::TextInputState;
@@ -39,6 +39,14 @@ struct HeadlessWindow {
     frames: Vec<PresentedFrame>,
 }
 
+/// A drag the runtime started, as the window system received it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StartedDrag {
+    pub window: WindowId,
+    pub token: DragToken,
+    pub request: DragRequest,
+}
+
 /// A window system with no display. Windows live in memory, every request is kept for inspection, presented
 /// frames are kept until the window is destroyed, and the only events are the ones the test enqueues.
 #[derive(Debug)]
@@ -50,6 +58,7 @@ pub struct HeadlessWindowSystem {
     next_token: u64,
     queue: VecDeque<PlatformEvent>,
     clipboards: HashMap<ClipboardKind, ClipboardData>,
+    drags: Vec<StartedDrag>,
     accepting_frames: bool,
     pub(crate) dispatch_one: bool,
 }
@@ -70,6 +79,7 @@ impl HeadlessWindowSystem {
             next_token: 1,
             queue: VecDeque::new(),
             clipboards: HashMap::new(),
+            drags: Vec::new(),
             accepting_frames: true,
             dispatch_one: false,
         }
@@ -262,6 +272,11 @@ impl HeadlessWindowSystem {
         self.queue.front()
     }
 
+    /// The drags started so far, oldest first. The test ends each by enqueueing its [`PlatformEvent::Drag`] steps.
+    pub fn drags(&self) -> &[StartedDrag] {
+        &self.drags
+    }
+
     /// Events queued and not yet dispatched.
     pub fn queued(&self) -> usize {
         self.queue.len()
@@ -336,6 +351,31 @@ impl WindowSystem for HeadlessWindowSystem {
 
     fn set_clipboard(&mut self, kind: ClipboardKind, data: ClipboardData) {
         self.clipboards.insert(kind, data);
+    }
+
+    /// With [`Capabilities::drag_and_drop`], keeps the drag and takes the pointer from the window with a leave, as a
+    /// compositor does; without it the drag is refused.
+    fn start_drag(
+        &mut self,
+        window: WindowId,
+        request: DragRequest,
+    ) -> Result<DragToken, PlatformError> {
+        self.window(window)?;
+        if !self.capabilities.drag_and_drop {
+            return Err(PlatformError::Unsupported);
+        }
+        let token = DragToken(self.next_token);
+        self.next_token += 1;
+        self.drags.push(StartedDrag {
+            window,
+            token,
+            request,
+        });
+        self.queue.push_back(PlatformEvent::Window {
+            window,
+            event: WindowEvent::Pointer(PointerEvent::Leave, Timestamp::default()),
+        });
+        Ok(token)
     }
 
     fn read_clipboard(&mut self, kind: ClipboardKind, mime: &str) -> ClipboardToken {

@@ -40,8 +40,8 @@ use cupertino_geometry::{Point, Rect, Size};
 use cupertino_menu_model::{ActionName, MenuBar};
 use cupertino_ui_layout::{LayoutDirection, LayoutError, LayoutStats};
 use cupertino_ui_platform::{
-    KeyEvent, Keysym, Mods, PlatformError, PointerEvent, Timestamp, TouchEvent, WindowId,
-    WindowRequest, WindowSpec,
+    ClipboardData, DragProgress, DropAction, KeyEvent, Keysym, Mods, PlatformError, PointerEvent,
+    Timestamp, TouchEvent, WindowId, WindowRequest, WindowSpec,
 };
 use cupertino_ui_render::{DisplayList, RenderError};
 use cupertino_ui_text::{ImeEvent, TextSystem};
@@ -276,6 +276,31 @@ pub type Task<M> = Pin<Box<dyn Future<Output = M> + Send>>;
 /// What an activation token, or `None`, becomes in the application.
 pub type TokenHandler<M> = Box<dyn FnOnce(Option<String>) -> M + Send>;
 
+/// What each step of a drag the application started becomes in it.
+pub type DragHandler<M> = Box<dyn FnMut(DragProgress) -> M + Send>;
+
+/// A drag of data out of `window`, from the pointer button held in it: the data in each of its MIME types, what a
+/// drop may do with it, and the image that follows the pointer. Every step arrives through `on_progress`, which hears
+/// [`DragProgress::Finished`] or [`DragProgress::Cancelled`] last; a drag that cannot start (no such window, no button
+/// held, a platform without drag and drop) hears `Cancelled` at once.
+pub struct Drag<M> {
+    pub window: WindowKey,
+    pub data: Vec<ClipboardData>,
+    pub actions: BTreeSet<DropAction>,
+    pub image: Option<DragPreview<M>>,
+    pub on_progress: DragHandler<M>,
+}
+
+/// The image of a drag: `content` laid out at `size` points, rounded up to whole points, and painted over nothing at
+/// the window's scale, rounded up to whole pixels per point; the pointer is at `hotspot`, in points from its top-left
+/// corner, as where the press grabbed what is dragged. The content is drawn once, when the drag starts; it gets no
+/// events.
+pub struct DragPreview<M> {
+    pub content: Element<M>,
+    pub size: Size,
+    pub hotspot: Point,
+}
+
 /// Work an update asks the runtime to do.
 pub enum Command<M> {
     /// Runs a future on the runtime's executor and sends its output as a message.
@@ -291,6 +316,7 @@ pub enum Command<M> {
         app_id: Option<String>,
         on_token: TokenHandler<M>,
     },
+    StartDrag(Drag<M>),
     Exit,
 }
 

@@ -4,11 +4,11 @@
 use cupertino_geometry::{Point, Rect};
 use cupertino_wayland_client::{
     Anchor, BufferFormat, Button, Capability, ClipboardOffer, Connection, ConstraintAdjustment,
-    CursorShape, CursorTheme, Decorations, DragActions, DragEvent, DragOffer, DragSourceEvent,
-    Error, Event, Extension, Gravity, KeyboardEvent, OutputGeometry, OutputTransform, PixelRect,
-    PointerEvent, PopupPlacement, Preedit, Presented, PresentedKind, ReadId, Scale, ScrollSource,
-    SurfaceId, SurroundingText, TextInputDone, TextInputEvent, TextInputState, Toplevel,
-    ToplevelConfig, TouchEvent, WindowConfigure, WmCapabilities,
+    CursorShape, CursorTheme, Decorations, DragActions, DragEvent, DragIcon, DragOffer,
+    DragSourceEvent, Error, Event, Extension, Gravity, KeyboardEvent, OutputGeometry,
+    OutputTransform, PixelRect, PointerEvent, PopupPlacement, Preedit, Presented, PresentedKind,
+    ReadId, Scale, ScrollSource, SurfaceId, SurroundingText, TextInputDone, TextInputEvent,
+    TextInputState, Toplevel, ToplevelConfig, TouchEvent, WindowConfigure, WmCapabilities,
 };
 use std::collections::VecDeque;
 use std::io::Write;
@@ -56,7 +56,7 @@ use wayland_protocols_wlr::layer_shell::v1::server::zwlr_layer_surface_v1::{
     self, ZwlrLayerSurfaceV1,
 };
 use wayland_server::backend::{ClientData, ClientId, DisconnectReason};
-use wayland_server::protocol::wl_buffer::WlBuffer;
+use wayland_server::protocol::wl_buffer::{self, WlBuffer};
 use wayland_server::protocol::wl_callback::WlCallback;
 use wayland_server::protocol::wl_compositor::{self, WlCompositor};
 use wayland_server::protocol::wl_data_device::{self, WlDataDevice};
@@ -279,6 +279,16 @@ enum Seen {
     },
     Finish,
     OfferDestroyed,
+    /// The drag icon surface of the latest `start_drag` committed a buffer of `size` pixels at `scale`, the pointer at
+    /// `hotspot` in its points (the negated `wl_surface.offset`, or the attach offset).
+    IconShown {
+        size: (i32, i32),
+        scale: i32,
+        hotspot: (i32, i32),
+    },
+    /// The drag icon's surface, and the buffer it showed, were destroyed.
+    IconSurfaceDestroyed,
+    IconBufferDestroyed,
     /// `wl_pointer.set_cursor`, with whether it named a surface.
     Cursor {
         serial: u32,
@@ -292,6 +302,8 @@ struct SurfaceState {
     buffer: Option<WlBuffer>,
     scale: i32,
     frames: Vec<WlCallback>,
+    /// The sum of `wl_surface.offset` and attach offsets.
+    offset: (i32, i32),
 }
 
 type SurfaceData = Mutex<SurfaceState>;
@@ -344,6 +356,9 @@ struct Mock {
     seat: Option<WlSeat>,
     drag_offer: Option<WlDataOffer>,
     drag_source: Option<WlDataSource>,
+    /// The icon surface of the latest `start_drag`, and the buffer it showed.
+    drag_icon: Option<WlSurface>,
+    icon_buffer: Option<WlBuffer>,
 }
 
 impl Mock {
@@ -397,7 +412,26 @@ macro_rules! ignore_requests {
     )*};
 }
 
-ignore_requests!(WlBuffer => BufferData, WlCallback => (), WlKeyboard => (), WlTouch => (), WlOutput => (), WpFractionalScaleV1 => (), ZxdgOutputV1 => (), WpPresentationFeedback => ());
+ignore_requests!(WlCallback => (), WlKeyboard => (), WlTouch => (), WlOutput => (), WpFractionalScaleV1 => (), ZxdgOutputV1 => (), WpPresentationFeedback => ());
+
+impl Dispatch<WlBuffer, BufferData> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        buffer: &WlBuffer,
+        request: wl_buffer::Request,
+        _: &BufferData,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        if matches!(request, wl_buffer::Request::Destroy)
+            && state.icon_buffer.as_ref() == Some(buffer)
+        {
+            state.icon_buffer = None;
+            state.seen.send(Seen::IconBufferDestroyed).unwrap();
+        }
+    }
+}
 
 /// What a client's data source offers.
 #[derive(Default)]
@@ -544,8 +578,31 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
         init: &mut DataInit<'_, Self>,
     ) {
         let mut s = data.lock().unwrap();
+        let icon = state.drag_icon.as_ref() == Some(surface);
         match request {
-            wl_surface::Request::Attach { buffer, .. } => s.buffer = buffer,
+            wl_surface::Request::Attach { buffer, x, y } => {
+                s.buffer = buffer;
+                s.offset = (s.offset.0 + x, s.offset.1 + y);
+            }
+            wl_surface::Request::Offset { x, y } => s.offset = (s.offset.0 + x, s.offset.1 + y),
+            wl_surface::Request::Commit if icon => {
+                if let Some(buffer) = s.buffer.take() {
+                    let b = buffer.data::<BufferData>().unwrap();
+                    state
+                        .seen
+                        .send(Seen::IconShown {
+                            size: (b.width, b.height),
+                            scale: s.scale.max(1),
+                            hotspot: (-s.offset.0, -s.offset.1),
+                        })
+                        .unwrap();
+                    state.icon_buffer = Some(buffer);
+                }
+            }
+            wl_surface::Request::Destroy if icon => {
+                state.drag_icon = None;
+                state.seen.send(Seen::IconSurfaceDestroyed).unwrap();
+            }
             wl_surface::Request::SetBufferScale { scale } => s.scale = scale,
             wl_surface::Request::Frame { callback } => s.frames.push(init.init(callback, ())),
             wl_surface::Request::SetInputRegion { region } => state
@@ -1109,9 +1166,11 @@ impl Dispatch<WlDataDevice, ()> for Mock {
         if let wl_data_device::Request::StartDrag {
             source: Some(source),
             serial,
+            icon,
             ..
         } = request
         {
+            state.drag_icon = icon;
             let offered = source.data::<Mutex<SourceState>>().unwrap().lock().unwrap();
             state
                 .seen
@@ -1338,6 +1397,8 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
             seat: None,
             drag_offer: None,
             drag_source: None,
+            drag_icon: None,
+            icon_buffer: None,
         };
         let mut handle = display.handle();
         handle.insert_client(stream, Arc::new(Data)).unwrap();
@@ -4016,4 +4077,246 @@ fn touch_contacts_report_on_their_surface_until_up_and_a_cancel_or_a_lost_touch_
         });
         assert_eq!(cancel, (w.surface(), TouchEvent::Cancel));
     }
+}
+
+/// A configured window on a compositor with a seat and the clipboard, with the left button pressed in it.
+fn pressed_window() -> (Connection, Sender<Control>, Receiver<Seen>, Stash, Toplevel) {
+    let (mut conn, control, seen) = connect(Globals {
+        seat: true,
+        clipboard: true,
+        ..Globals::core()
+    });
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    press(&mut conn, &control, &mut stash);
+    (conn, control, seen, stash, w)
+}
+
+fn press(conn: &mut Connection, control: &Sender<Control>, stash: &mut Stash) {
+    control.send(Control::Click { x: 3.0, y: 4.0 }).unwrap();
+    wait_for(conn, stash, |e| {
+        matches!(
+            e,
+            Event::Pointer {
+                event: PointerEvent::Button { pressed: true, .. },
+                ..
+            }
+        )
+        .then_some(())
+    });
+}
+
+/// An icon of 8 × 6 pixels at scale 2 (4 × 3 points) with the pointer at (1.4, 2) points.
+fn icon() -> DragIcon {
+    DragIcon::new(8, 6, 2, vec![0x80; 8 * 6 * 4], Point::new(1.4, 2.0)).unwrap()
+}
+
+fn drag_contents() -> Vec<(String, Vec<u8>)> {
+    vec![("text/uri-list".to_string(), b"file:///a\r\n".to_vec())]
+}
+
+fn source_event(
+    conn: &mut Connection,
+    stash: &mut Stash,
+    source: cupertino_wayland_client::DragSource,
+) -> DragSourceEvent {
+    wait_for(conn, stash, |e| match e {
+        Event::DragSource { source: s, event } if *s == source => Some(event.clone()),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_drag_icon_must_be_whole_points_of_the_pixels_it_names() {
+    let pixels = |w: u32, h: u32| vec![0; (w * h * 4) as usize];
+    let at = Point::new(0.0, 0.0);
+    assert!(DragIcon::new(8, 6, 2, pixels(8, 6), at).is_some());
+    assert!(DragIcon::new(0, 6, 1, Vec::new(), at).is_none(), "empty");
+    assert!(
+        DragIcon::new(9, 6, 2, pixels(9, 6), at).is_none(),
+        "a half point wide"
+    );
+    assert!(
+        DragIcon::new(8, 6, 0, pixels(8, 6), at).is_none(),
+        "no scale"
+    );
+    assert!(
+        DragIcon::new(8, 6, 1, pixels(8, 5), at).is_none(),
+        "short pixels"
+    );
+    let side = DragIcon::MAX_EXTENT + 1;
+    assert!(
+        DragIcon::new(side, 1, 1, pixels(side, 1), at).is_none(),
+        "too wide"
+    );
+    assert!(DragIcon::new(8, 6, 1, pixels(8, 6), Point::new(f64::NAN, 0.0)).is_none());
+    assert_eq!(icon().hotspot(), (1, 2));
+    assert!(
+        !format!("{:?}", icon()).contains("128"),
+        "Debug leaves the pixels out"
+    );
+}
+
+/// The icon surface goes with `start_drag` and shows its buffer at its scale with the pointer at the hotspot; the drop
+/// ends the pointer's drag, so the surface and buffer go then, before the target finishes.
+#[test]
+fn a_drag_icon_is_the_start_drag_surface_at_its_hotspot_until_the_drop() {
+    let (mut conn, control, seen, mut stash, w) = pressed_window();
+    let source = conn
+        .start_drag_with_icon(
+            w.surface(),
+            drag_contents(),
+            DragActions::Copy,
+            Some(&icon()),
+        )
+        .unwrap();
+    seen_matching(&seen, |s| matches!(s, Seen::StartDrag { .. }));
+    assert_eq!(
+        seen_matching(&seen, |s| matches!(s, Seen::IconShown { .. })),
+        Seen::IconShown {
+            size: (8, 6),
+            scale: 2,
+            hotspot: (1, 2),
+        }
+    );
+    // the compositor takes the pointer for the drag
+    control.send(Control::Leave).unwrap();
+    control.send(Control::SourceDropped).unwrap();
+    assert_eq!(
+        source_event(&mut conn, &mut stash, source),
+        DragSourceEvent::Dropped
+    );
+    conn.flush().unwrap();
+    assert_eq!(
+        seen_matching(&seen, |s| matches!(s, Seen::IconSurfaceDestroyed)),
+        Seen::IconSurfaceDestroyed
+    );
+    assert_eq!(
+        seen_matching(&seen, |s| matches!(s, Seen::IconBufferDestroyed)),
+        Seen::IconBufferDestroyed
+    );
+    control.send(Control::SourceFinished).unwrap();
+    assert_eq!(
+        source_event(&mut conn, &mut stash, source),
+        DragSourceEvent::Finished
+    );
+}
+
+/// A drag cancelled by the compositor (released over nothing that accepts it, or a target that refused it) frees its
+/// icon, and the next press starts a drag as before.
+#[test]
+fn a_cancelled_drag_frees_its_icon_and_the_next_press_drags_again() {
+    let (mut conn, control, seen, mut stash, w) = pressed_window();
+    let source = conn
+        .start_drag_with_icon(
+            w.surface(),
+            drag_contents(),
+            DragActions::Move,
+            Some(&icon()),
+        )
+        .unwrap();
+    seen_matching(&seen, |s| matches!(s, Seen::IconShown { .. }));
+    control.send(Control::Leave).unwrap();
+    control.send(Control::SourceCancelled).unwrap();
+    assert_eq!(
+        source_event(&mut conn, &mut stash, source),
+        DragSourceEvent::Cancelled
+    );
+    conn.flush().unwrap();
+    seen_matching(&seen, |s| matches!(s, Seen::IconSurfaceDestroyed));
+    seen_matching(&seen, |s| matches!(s, Seen::IconBufferDestroyed));
+
+    press(&mut conn, &control, &mut stash);
+    let again = conn
+        .start_drag_with_icon(
+            w.surface(),
+            drag_contents(),
+            DragActions::Move,
+            Some(&icon()),
+        )
+        .unwrap();
+    assert_ne!(again, source);
+    seen_matching(&seen, |s| matches!(s, Seen::IconShown { .. }));
+}
+
+/// A compositor ignores a drag that reached it after the button went up: the client hears the release instead of a
+/// leave, ends the drag as cancelled and frees its icon, and the pointer goes on as before.
+#[test]
+fn a_drag_the_compositor_ignored_ends_cancelled_at_the_release_and_frees_its_icon() {
+    let (mut conn, control, seen, mut stash, w) = pressed_window();
+    let source = conn
+        .start_drag_with_icon(
+            w.surface(),
+            drag_contents(),
+            DragActions::Copy,
+            Some(&icon()),
+        )
+        .unwrap();
+    seen_matching(&seen, |s| matches!(s, Seen::IconShown { .. }));
+    control.send(Control::ButtonUp).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(
+            e,
+            Event::Pointer {
+                event: PointerEvent::Button { pressed: false, .. },
+                ..
+            }
+        )
+        .then_some(())
+    });
+    assert_eq!(
+        source_event(&mut conn, &mut stash, source),
+        DragSourceEvent::Cancelled
+    );
+    conn.flush().unwrap();
+    seen_matching(&seen, |s| matches!(s, Seen::IconSurfaceDestroyed));
+    seen_matching(&seen, |s| matches!(s, Seen::IconBufferDestroyed));
+    press(&mut conn, &control, &mut stash);
+}
+
+/// A drag taken by the compositor is not ended by a later release: only the compositor ends it.
+#[test]
+fn a_release_after_the_compositor_took_the_drag_leaves_it_running() {
+    let (mut conn, control, seen, mut stash, w) = pressed_window();
+    let source = conn
+        .start_drag_with_icon(
+            w.surface(),
+            drag_contents(),
+            DragActions::Copy,
+            Some(&icon()),
+        )
+        .unwrap();
+    seen_matching(&seen, |s| matches!(s, Seen::IconShown { .. }));
+    control.send(Control::Leave).unwrap();
+    press(&mut conn, &control, &mut stash);
+    control.send(Control::ButtonUp).unwrap();
+    conn.roundtrip().unwrap();
+    stash.extend(conn.wait(Some(Duration::ZERO)).unwrap());
+    assert!(!stash
+        .iter()
+        .any(|e| matches!(e, Event::DragSource { source: s, .. } if *s == source)));
+    control.send(Control::SourceCancelled).unwrap();
+    assert_eq!(
+        source_event(&mut conn, &mut stash, source),
+        DragSourceEvent::Cancelled
+    );
+}
+
+/// A drag started while another runs replaces it, and the old one's icon goes with it.
+#[test]
+fn a_drag_that_replaces_another_frees_the_old_icon() {
+    let (mut conn, _control, seen, _stash, w) = pressed_window();
+    conn.start_drag_with_icon(
+        w.surface(),
+        drag_contents(),
+        DragActions::Copy,
+        Some(&icon()),
+    )
+    .unwrap();
+    seen_matching(&seen, |s| matches!(s, Seen::IconShown { .. }));
+    conn.start_drag(w.surface(), drag_contents(), DragActions::Copy)
+        .unwrap();
+    seen_matching(&seen, |s| matches!(s, Seen::IconSurfaceDestroyed));
+    seen_matching(&seen, |s| matches!(s, Seen::IconBufferDestroyed));
 }

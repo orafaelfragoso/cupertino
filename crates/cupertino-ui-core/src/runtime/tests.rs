@@ -11,7 +11,8 @@ use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured, Overflow, SizeSpec,
 };
 use cupertino_ui_platform::{
-    Configure, DecorationMode, Mods, MouseButton, PointerEvent, WindowStates, WmCapabilities,
+    Configure, DecorationMode, DropAction, Mods, MouseButton, PointerEvent, WindowStates,
+    WmCapabilities,
 };
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_theme::{Color, ColorRole, ColorTokens, StateVariant, Surface};
@@ -28,6 +29,8 @@ struct Model {
     done: Vec<u32>,
     background: WindowBackground,
     tokens: Vec<Option<String>>,
+    /// Each step of a drag, as it was told.
+    drags: Vec<String>,
 }
 
 impl Application for Counter {
@@ -82,6 +85,27 @@ impl Application for Counter {
                     on_token: Box::new(|token| format!("token {}", token.unwrap_or_default())),
                 }];
             }
+            "drag" | "drag from gone" => {
+                let window = match message.as_str() {
+                    "drag" => "main",
+                    _ => "gone",
+                };
+                return vec![Command::StartDrag(Drag {
+                    window: WindowKey(window.into()),
+                    data: vec![ClipboardData {
+                        mime: "text/uri-list".into(),
+                        bytes: b"file:///a\r\n".to_vec(),
+                    }],
+                    actions: [DropAction::Copy, DropAction::Move].into(),
+                    image: Some(DragPreview {
+                        content: Element::new(leaf("ghost")),
+                        size: Size::new(30.2, 20.0),
+                        hotspot: Point::new(5.5, 4.0),
+                    }),
+                    on_progress: Box::new(|progress| format!("dragged {progress:?}")),
+                })];
+            }
+            m if m.starts_with("dragged ") => model.drags.push(m[8..].to_owned()),
             m if m.starts_with("token ") => model
                 .tokens
                 .push(Some(m[6..].to_owned()).filter(|t| !t.is_empty())),
@@ -388,6 +412,68 @@ fn an_activation_token_reaches_the_update_that_asked_and_a_gone_window_gets_none
     rt.step(steps()).unwrap();
     assert_eq!(rt.model().tokens, vec![Some("t-1".to_owned()), None]);
     assert_eq!(rt.window_system_mut().activations.len(), 1);
+}
+
+/// The image is laid out at whole points and drawn at the window's scale rounded up to whole pixels per point, with the
+/// hotspot where the update put it; the update hears each step of the drag until it ends, and nothing after.
+#[test]
+fn a_drag_draws_its_image_in_whole_points_and_pixels_and_hears_each_step_until_it_ends() {
+    let (mut rt, window, _) = start();
+    rt.window_system_mut().drag = true;
+    configure(&mut rt, window, 1);
+    rt.window_system_mut().send(window, WindowEvent::Scale(1.5));
+    rt.messages.push_back("drag".into());
+    rt.step(steps()).unwrap();
+    let (from, request) = rt.window_system_mut().drags[0].clone();
+    assert_eq!(from, window);
+    assert_eq!(request.data[0].mime, "text/uri-list");
+    assert_eq!(request.actions, [DropAction::Copy, DropAction::Move].into());
+    let image = request.image.expect("an image");
+    assert_eq!(
+        (image.width, image.height, image.scale),
+        (62, 40, 2),
+        "31 × 20 points at 2 pixels a point"
+    );
+    assert_eq!(image.hotspot, Point::new(5.5, 4.0));
+
+    let token = DragToken(1);
+    for progress in [
+        DragProgress::Target(Some("text/uri-list".into())),
+        DragProgress::Action(Some(DropAction::Move)),
+        DragProgress::Dropped,
+        DragProgress::Finished,
+        DragProgress::Cancelled,
+    ] {
+        rt.window_system_mut()
+            .queue
+            .push_back(PlatformEvent::Drag { token, progress });
+    }
+    rt.step(steps()).unwrap();
+    assert_eq!(
+        rt.model().drags,
+        [
+            "Target(Some(\"text/uri-list\"))",
+            "Action(Some(Move))",
+            "Dropped",
+            "Finished"
+        ]
+    );
+}
+
+/// A drag the platform refuses, or one from a window that is gone, is cancelled at once.
+#[test]
+fn a_drag_that_cannot_start_is_cancelled_at_once() {
+    let (mut rt, window, _) = start();
+    configure(&mut rt, window, 1);
+    rt.messages.push_back("drag".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.model().drags, ["Cancelled"]);
+
+    rt.window_system_mut().drag = true;
+    rt.messages.push_back("drag from gone".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.model().drags, ["Cancelled", "Cancelled"]);
+    assert!(rt.window_system_mut().drags.is_empty());
 }
 
 /// A window while `open`; closing it only hides it.

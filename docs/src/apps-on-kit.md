@@ -6,7 +6,7 @@ CupertinoKit is the toolkit that Cupertino's own apps are moving onto. This page
 |---|---|---|
 | `cupertino-osd` | The whole overlay: a Kit window on a layer surface for volume, brightness and keyboard backlight. | |
 | `cupertino-settings` | The Settings window: sidebar, back and forward toolbar with the search field, the panes' sections as Kit controls, sheets as dialogs, and menus on the desktop's menu bar. | The old painter and window modules are deleted; full app accessibility acceptance remains open. |
-| `cupertino-files` | A parallel browser implementation: sidebar, toolbar, list and icon views, path and status bars, menus, live folder updates, file operations and multiple windows. | Menu items the Kit window cannot do yet are disabled. The existing window stays until the Kit one does everything it does. |
+| `cupertino-files` | A parallel browser implementation: sidebar, toolbar, list and icon views, path and status bars, menus, live folder updates, file operations, multiple windows, and items dragged out of the icon view with an image of the item or a stack with its count. | Menu items the Kit window cannot do yet are disabled. The existing window stays until the Kit one does everything it does. |
 | `cupertino-portal` | Its dialogs (file chooser, screen cast chooser, app chooser, screenshot consent). See [Portals](portals.md). | |
 | `cupertino-controlcenter` | The whole panel: a Kit window on a layer surface with module toggles, tiles, the battery meter and level sliders. | |
 | `cupertino-menubar` | Bar and menus on Kit layer surfaces. | Outside-click dismissal on empty bar space has an open review finding. |

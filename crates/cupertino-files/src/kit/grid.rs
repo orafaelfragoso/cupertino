@@ -21,10 +21,11 @@ use cupertino_kit::render::{Paint, PaintOp, Shape};
 use cupertino_kit::text::{AttributedText, TextStyle};
 use cupertino_kit::theme::{Color, ColorRole, InteractionVariant, StateVariant};
 
+use super::dragged::Grab;
 use super::{Event as WindowEvent, Message};
 use crate::geom::{self, Direction};
 use crate::layout::icon::{IconLayout, IconParams};
-use crate::metrics::selection as sel;
+use crate::metrics::{drag, selection as sel};
 
 const RETURN: Keysym = Keysym(0xff0d);
 const KP_ENTER: Keysym = Keysym(0xff8d);
@@ -99,11 +100,23 @@ pub(super) struct IconGrid {
     pub name: Box<dyn Fn(usize, bool) -> Element<Message>>,
 }
 
-/// The node state of the grid: what was typed to select, and when that search ends.
+/// The node state of the grid: what was typed to select, and when that search ends; the press that may become a drag.
 #[derive(Default)]
 pub(super) struct TypeSelect {
     typed: String,
     typed_until: Option<Timestamp>,
+    press: Option<Press>,
+}
+
+/// A press on an item, held: moving [`drag::START_DISTANCE`] drags the selection, a release without moving
+/// selects the item alone when the press kept a larger selection.
+struct Press {
+    index: usize,
+    /// In window coordinates.
+    at: Point,
+    /// The selection the drag carries, the pressed item first.
+    dragged: Vec<usize>,
+    collapse: bool,
 }
 
 /// What an assistive Click on item `index` reports: the item selected alone, unless it already is.
@@ -261,6 +274,47 @@ impl IconGrid {
         Propagation::Stop
     }
 
+    /// What a drag of `press` carries, and how the pressed item's cell is laid out for its image.
+    fn grab(&self, press: &Press, cx: &EventCx<'_, Message>) -> Option<Grab> {
+        let bounds = cx.bounds()?;
+        let cell = self.layout.cells.get(press.index)?;
+        let (frame, icon, label) = (
+            rect(cell.frame),
+            rect(cell.icon_frame),
+            rect(cell.label_frame),
+        );
+        // the folder may have changed under a held press
+        if press.dragged.iter().any(|&i| i >= self.items.len()) {
+            return None;
+        }
+        let rtl = cx.env().direction == LayoutDirection::Rtl;
+        let left = if rtl {
+            bounds.size.width - frame.max_x()
+        } else {
+            frame.min_x()
+        };
+        Some(Grab {
+            indices: press.dragged.clone(),
+            name: self.items[press.index].name.clone(),
+            symbols: press
+                .dragged
+                .iter()
+                .map(|&i| self.items[i].symbol)
+                .collect(),
+            offset: Point::new(
+                press.at.x - bounds.min_x() - left,
+                press.at.y - bounds.min_y() - frame.min_y(),
+            ),
+            rtl,
+            cell: frame.size,
+            icon_top: icon.min_y() - frame.min_y(),
+            icon_size: self.params.icon_size,
+            gap: label.min_y() - icon.max_y(),
+            label: label.size,
+            text_size: self.params.text_size,
+        })
+    }
+
     /// Selects the next item whose name starts with what was typed in the last second: after the cursor for a new
     /// search, from the cursor while it goes on, wrapping around.
     fn type_select(
@@ -393,12 +447,32 @@ impl Widget<Message> for IconGrid {
                 _,
             ) => {
                 let mut next = self.selection.clone();
-                match self.index_at(position, cx) {
+                let index = self.index_at(position, cx);
+                // a plain press on a selected item keeps the selection for a drag; the release selects it alone
+                let keep = !mods.contains(Mods::SHIFT)
+                    && !mods.contains(Mods::PRIMARY)
+                    && index.is_some_and(|i| self.selection.contains(i));
+                match index {
+                    _ if keep => {}
                     Some(index) if mods.contains(Mods::SHIFT) => next.extend_to(index),
                     Some(index) if mods.contains(Mods::PRIMARY) => next.toggle(index),
                     Some(index) => next.select_only(index),
                     None if mods.contains(Mods::SHIFT) || mods.contains(Mods::PRIMARY) => {}
                     None => next = Selection::new([], None, None),
+                }
+                state.press = index.filter(|&i| next.contains(i)).map(|index| {
+                    let rest = next.ranges().iter().flat_map(Clone::clone);
+                    Press {
+                        index,
+                        at: position,
+                        dragged: std::iter::once(index)
+                            .chain(rest.filter(|&i| i != index && i < self.count()))
+                            .collect(),
+                        collapse: keep && next.len() > 1,
+                    }
+                });
+                if state.press.is_some() {
+                    cx.capture_pointer();
                 }
                 self.select(next, cx);
                 Propagation::Stop
@@ -419,6 +493,44 @@ impl Widget<Message> for IconGrid {
                         WindowEvent::SecondaryPress(Some(index)),
                     ));
                 }
+                Propagation::Continue
+            }
+            Event::Pointer(PointerEvent::Motion { position }, _) => {
+                let Some(press) = state.press.as_ref() else {
+                    return Propagation::Continue;
+                };
+                let moved = (position.x - press.at.x).hypot(position.y - press.at.y);
+                if moved < drag::START_DISTANCE {
+                    return Propagation::Stop;
+                }
+                let press = state.press.take().expect("held above");
+                cx.release_pointer();
+                if let Some(grab) = self.grab(&press, cx) {
+                    cx.emit(Message::Window(self.window, WindowEvent::DragOut(grab)));
+                }
+                Propagation::Stop
+            }
+            Event::Pointer(
+                PointerEvent::Button {
+                    button: MouseButton::Left,
+                    pressed: false,
+                    ..
+                },
+                _,
+            ) => {
+                let Some(press) = state.press.take() else {
+                    return Propagation::Continue;
+                };
+                cx.release_pointer();
+                if press.collapse {
+                    let mut next = self.selection.clone();
+                    next.select_only(press.index);
+                    self.select(next, cx);
+                }
+                Propagation::Stop
+            }
+            Event::Cancel => {
+                state.press = None;
                 Propagation::Continue
             }
             Event::Key(key, _) if key.pressed => self.key(state, &key, cx),

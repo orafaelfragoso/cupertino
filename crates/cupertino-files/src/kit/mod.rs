@@ -3,9 +3,12 @@
 //! window in `main.rs` once it does all that window does.
 
 mod context;
+mod dragged;
 mod grid;
 mod search;
 mod view;
+
+pub use dragged::Grab;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -18,7 +21,7 @@ use std::time::SystemTime;
 use cupertino_apps::{launch, MimeApps, MimeDatabase};
 use cupertino_kit::controls::{Navigation, Selection, SortOrder, SplitLayout, TextChange};
 use cupertino_kit::layout::ScrollState;
-use cupertino_kit::platform::WindowRequest;
+use cupertino_kit::platform::{DragProgress, WindowRequest};
 use cupertino_kit::prelude::*;
 use cupertino_menu_model::ActionName;
 use zbus::blocking::Connection;
@@ -299,6 +302,10 @@ pub enum Event {
     /// A row of the context menu was chosen.
     MenuCommand(MenuCommand),
     Close,
+    /// A press on items of the icon grid moved far enough to drag them out of the window.
+    DragOut(Grab),
+    /// How a drag out of the window goes. The target copies or moves the files, so the window has nothing to do.
+    Dragged(DragProgress),
 }
 
 /// The list's columns, in order.
@@ -573,6 +580,11 @@ impl Model {
             Event::Close => {
                 self.windows.remove(&id);
             }
+            Event::DragOut(grab) => {
+                let entries = window.browser.entries();
+                return vec![dragged::start(id, window_key(id), &grab, entries)];
+            }
+            Event::Dragged(_) => {}
         }
         Vec::new()
     }

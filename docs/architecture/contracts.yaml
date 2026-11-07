@@ -938,6 +938,30 @@
   source: crates/cupertino-portal/src/screenshot.rs
   source_match: "org.freedesktop.impl.portal.Screenshot"
   note: only the xdg-desktop-portal frontend calls; nothing is captured before the person agrees
+- name: org.kde.StatusNotifierItem
+  kind: dbus-interface
+  version: n/a
+  bus: session
+  bus_name: org.kde.StatusNotifierItem-<pid>-<n>
+  owner_crate: cupertino-portal
+  owner_area: services
+  scope: public
+  test_owner: crates/cupertino-portal/tests/screen_cast.rs
+  source: crates/cupertino-portal/src/sharing.rs
+  source_match: "org.kde.StatusNotifierItem"
+  note: the menu-bar item of a running screen share, one object and one bus name per share, registered with org.kde.StatusNotifierWatcher; the name is released when the share ends
+- name: com.canonical.dbusmenu
+  kind: dbus-interface
+  version: n/a
+  bus: session
+  bus_name: org.kde.StatusNotifierItem-<pid>-<n>
+  owner_crate: cupertino-portal
+  owner_area: services
+  scope: public
+  test_owner: crates/cupertino-portal/tests/screen_cast.rs
+  source: crates/cupertino-portal/src/sharing.rs
+  source_match: "com.canonical.dbusmenu"
+  note: the screen-share item's menu, at the item's path: who shares what, and Stop Sharing, which ends the share; any session peer may send its events
 - name: org.freedesktop.PolicyKit1.AuthenticationAgent
   kind: dbus-interface
   version: n/a

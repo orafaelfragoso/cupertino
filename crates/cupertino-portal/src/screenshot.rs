@@ -700,7 +700,8 @@ mod tests {
 
     #[test]
     fn a_turned_display_at_another_scale_is_joined_upright_where_it_sits() {
-        use crate::geometry::{turned, upright, Turn};
+        use crate::geometry::{turned, upright};
+        use cupertino_geometry::OutputTransform;
         // a display at scale 1 on the left, and a quarter-turned one at scale 2 on its right: 50 x 100 points
         let left = Output {
             position: (0, 0),
@@ -718,7 +719,7 @@ mod tests {
             Transform::identity(),
             None,
         );
-        for turn in Turn::ALL {
+        for turn in OutputTransform::ALL {
             let buffer = turned(&shown, turn).unwrap();
             let right = Output {
                 position: (100, 0),

@@ -32,7 +32,8 @@ all on one thread.
   pointer crosses. A captured pointer goes to its node alone until it is released; leaving the surface or the window
   losing the focus cancels it with `Event::Cancel`.
 - **Keys and focus.** Keys go to the focused node's path, then to the window's shortcuts, then Tab and Shift+Tab move
-  the focus in reading order. A focus scope (dialog, popover, menu) keeps Tab inside itself and gives the focus back
+  the focus in reading order. A shortcut registered with `CommandRegistry::with_fresh` fires only on a fresh press:
+  the repeats of a held key pass it by, so a key held since before a window opened cannot answer it. A focus scope (dialog, popover, menu) keeps Tab inside itself and gives the focus back
   when it closes, to the node focused before or its nearest surviving ancestor.
 - **Tasks.** `Command::Perform` futures run only inside a step, on the UI thread; a wake from any thread wakes the
   window system. Dropping the runtime cancels every task.

@@ -2094,23 +2094,34 @@ impl Cupertino {
     /// to the key window, and the layer answers the leave by letting go. A press on the layer or on one of its popups
     /// keeps it. Other exclusive layers (the authentication prompt, the launcher, the overview) are left as they are,
     /// and the lock screen never gets here.
-    pub fn release_engaged_layer(&mut self, pos: Point<f64, Logical>) {
+    ///
+    /// A menu open from the layer closes first, so the keyboard is back on the layer when it leaves and the layer is
+    /// told; the press is then consumed, as any press that closes a menu is. True when it was.
+    pub fn release_engaged_layer(
+        &mut self,
+        pos: Point<f64, Logical>,
+        serial: Serial,
+        time: u32,
+    ) -> bool {
         let Some(layer) = self
             .exclusive_layer
             .clone()
             .filter(|l| self.docks.has_surface(l) || self.menu_bars.has_surface(l))
         else {
-            return;
+            return false;
         };
         if self
             .surface_under(pos)
             .is_some_and(|(surface, _)| self.shell_surface_root(&surface) == layer)
         {
-            return;
+            return false;
         }
+        let menus = self.popup_grab_root() == Some(&layer)
+            && self.dismiss_popup_grab_for_press(pos, serial, time);
         self.exclusive_layer = None;
         self.released_layer = Some(layer);
         self.restore_keyboard_focus();
+        menus
     }
 
     /// The surface whose tree `surface` is in: the parent of a subsurface, the surface a popup chain grows from.

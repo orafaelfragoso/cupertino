@@ -658,3 +658,34 @@ fn a_dismissible_node_behind_hidden_content_does_not_take_escape() {
 
     assert_eq!(dismissible(&tree, root), [children[1]]);
 }
+
+#[test]
+fn a_node_holding_the_focus_says_it_can_take_focus() {
+    let (tree, root, _) = pass(Element::new(group(vec![Element::new(Alert)])));
+    let alert = tree.preorder(root)[1];
+    let geometry: Geometry = tree
+        .preorder(root)
+        .into_iter()
+        .map(|id| {
+            (
+                id,
+                Placement {
+                    rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                    target: Rect::new(0.0, 0.0, 10.0, 10.0),
+                    clip: None,
+                    own_clip: None,
+                },
+            )
+        })
+        .collect();
+    let unfocused = build(&tree, root, &geometry, None, LayoutDirection::Ltr);
+    let focused = build(&tree, root, &geometry, Some(alert), LayoutDirection::Ltr);
+    let states = |pass: &SemanticsPass| {
+        let s = pass.nodes[&alert].states;
+        (s.focusable, s.focused)
+    };
+    assert_eq!(
+        (states(&unfocused), states(&focused)),
+        ((false, false), (true, true))
+    );
+}

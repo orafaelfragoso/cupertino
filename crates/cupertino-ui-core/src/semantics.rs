@@ -129,8 +129,9 @@ pub(crate) fn build<M: 'static>(
                     semantics.value
                 };
                 let mut states = semantics.states;
-                states.focusable |= semantics.focusable;
                 states.focused = focus == Some(id);
+                // a roving item the arrows moved to holds the focus without being a Tab stop; it can still take focus
+                states.focusable |= semantics.focusable || states.focused;
                 let mut description = semantics.description;
                 if !pending.is_empty() {
                     let path = tree.path(id);

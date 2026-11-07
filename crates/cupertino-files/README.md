@@ -111,7 +111,7 @@ pasteboard, the keyboard's and assistive technology's way in: Copy (the item men
 (the folder menu, Edit › Paste Item, Primary+V) copies them into the folder shown and Move Item Here (Alt+Primary+V)
 moves them there and empties the pasteboard. A name that is taken gives the arrival a free one (`name copy`), a folder is
 never pasted into itself, and what arrived is selected. Both run beside the window (`kit::transfer`): a row under the
-folder shows the item under way and the bytes done, and its Stop button ends the transfer, removing what was half
+folder names what it copies or moves where, with a bar of the bytes done, and its Stop button ends the transfer, removing what was half
 written and leaving the rest where it was; closing the window stops its transfers the same way and waits for them. An item moved out of the trash takes its `.trashinfo` record with it; a copy
 leaves the record with the trashed item. The pasteboard is not the session's clipboard: other
 applications neither see it nor fill it.
@@ -144,8 +144,7 @@ source hears the drop is finished only after the files are in place, and with wh
 item left its place, a copy when every item was copied, and otherwise nothing (an item that failed, or one dropped on
 the folder already holding it), so a source never removes items Files did not take. A list is taken whole or not at
 all: one with a URI of another scheme or host, a relative path, a `.` or `..` step or a NUL is refused. A drag of the window's own items has nowhere to go
-on one of the dragged folders or in the folder holding them all. Folders do not spring open under a drag: the old
-window never wired `spring::SpringLoad` either.
+on one of the dragged folders or in the folder holding them all. Folders do not spring open under a drag.
 
 **Failures.** A failure of something a person did (open, a new folder, duplicate, make alias, show original, put back,
 tags, rename, a name that can't be used, copy, paste, move to the trash) is one transient notification from "Files" on
@@ -167,10 +166,12 @@ reports a change or comes to the bus. Every call runs off the window's thread.
   memory, is never in the accessibility tree, and every copy of it is cut from a service's error before the error is
   shown or written.
 * **Eject:** a mounted row has an eject button (`symbol.eject`), and File › Eject (Primary+E) acts on the file system of
-  the sidebar row the keyboard is on, else on the one the folder shown is on. Ejecting first takes the window home, then unmounts every mounted file system of the drive in
+  the sidebar row the keyboard is on, else on the one the folder shown is on, never on a drive that also holds the
+  home folder. Ejecting first takes the window home, then unmounts every mounted file system of the drive in
   order, then ejects the drive, else powers it off. It stops at the first unmount that fails.
 * **Read-only media** are described so and take nothing new: New Folder, Paste Item, Rename and the other changes are
-  disabled there.
+  disabled there, and no drop lands there. A file system mounted read-only on a writable medium (the mount's
+  `ST_RDONLY`) is taken the same way.
 * **Busy and failures:** while a call runs the row is busy and takes no other call. A failure is one transient
   notification; when a file system is busy it names the programs that keep it open (read from `/proc`). A polkit prompt
   the person dismissed is not reported.
@@ -199,7 +200,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | arrows, Home / End, Page Up / Page Down, typing; Shift / Primary click; Primary+A; a list column header | selection, type-select, select all, sort (again: reverse) |
 | press on empty space and drag (Shift / Primary: toggle) | rubber band (above) |
 | Tab / Shift+Tab | the next / previous item by name |
-| a folder's triangle, Right / Left in the list | open / close the folder in place (Primary: with every folder inside) |
+| a folder's triangle, Right / Left in the list | open / close the folder in place |
 | click the name of the only selected item and wait | rename (above) |
 | Primary+Backspace | move the selection to the trash (`$XDG_DATA_HOME/Trash`, freedesktop Trash 1.0); Put Back in the trash |
 | Shift+Primary+N, Ctrl+Primary+N, Primary+D, Ctrl+Primary+A, Primary+R | new folder (its name is edited at once), new folder with the selection, duplicate, make alias, show original |

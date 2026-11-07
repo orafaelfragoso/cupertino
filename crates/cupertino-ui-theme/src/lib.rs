@@ -263,6 +263,8 @@ pub enum Surface {
     Hud,
     /// The full-screen application grid over the desktop.
     AppGrid,
+    /// The application switcher's panel.
+    Switcher,
 }
 
 /// How a surface paints: the compositor material to ask for, if any, and the opaque fill to paint where there is none.
@@ -295,6 +297,7 @@ impl ThemeTokens {
             Surface::Menu | Surface::Popover => "Menu",
             Surface::Hud => "LoginWindowControl",
             Surface::AppGrid => "AppGrid",
+            Surface::Switcher => "Switcher",
         };
         SurfaceLook {
             material: (!opaque).then_some(material),

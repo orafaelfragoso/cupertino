@@ -41,17 +41,28 @@ for notifications, the system bus for removable media) and runs `kit::run`. Ever
 process: File › New Window and Open in New Window open another beside it.
 
 The window is a split view: the sidebar of places, then a navigation stack whose toolbar holds back / forward, the
-folder's name (Section text, cut with an ellipsis) and the search field, over the folder in the icon view (`kit::grid`,
-laid out by `layout::icon`) or the list view (the toolkit's table: Name, Date Modified, Size, Kind; a header click
-sorts, again reverses). A window opens in the icon view. Under the folder the path bar and the status bar can be shown;
-both are hidden by default. The path bar names the folder chain from the root (or from Trash / Recents); the status bar
-reads "N items, X available" (`statvfs` of the folder). Items wear the theme's folder and document symbols. Changes on
-disk appear live.
+folder's name (Section text, cut with an ellipsis), the View, Tags and Action pop-up buttons (`kit::toolbar`; each opens
+its menu below it: the view modes, the tags of the selection, the selection's context menu or the folder's) and the
+search field, over the folder in the icon view (`kit::grid`, laid out by `layout::icon`) or the list view (`kit::list`:
+the toolkit's outline table, Name, Date Modified, Size, Kind; a header click sorts, again reverses; a folder's
+disclosure triangle, Left and Right open and close it in place). A window opens in the icon view. Under the folder the
+path bar and the status bar can be shown; both are hidden by default. The path bar names the folder chain from the root
+(or from Trash / Recents), each folder with its icon, and a click on one goes there; the status bar reads "N items, X
+available" (`statvfs` of the folder, read again whenever the listing changes and after a transfer). Items wear the
+theme's folder and document symbols. Changes on disk appear live. The sidebar shows the theme's sidebar material where
+the compositor can draw it, and its opaque fill without desktop effects or under Reduce Transparency (`kit::sidebar`).
+
+**Pointer and keyboard in the views.** A press on empty space and a drag draw a rubber band (`kit::band`): the items it
+touches replace the selection, or toggle against it with Shift or Primary held at the press; near the top or bottom
+edge the view scrolls under the band. A click on the name of the only selected item edits the name after the
+double-click interval, unless a second click (which opens), a scroll or a key comes first (`kit::clicks`). Ctrl with a
+press opens the context menu; Tab and Shift+Tab select the next and previous item by name.
 
 The sidebar lists the design's default Favorites, Recents, Applications, Desktop, Documents and Downloads (the
 nearby-sharing item has no counterpart), those that exist, and the computer (the file system root, under the pretty
 host name of `/etc/machine-info`, else the host name) and Trash under Locations; names are cut at the tail. The places
-are read when the application starts. Recents is the virtual folder `recent:///`: the existing files of
+are live (`kit::places`): a change of the user directories or their configuration shows at once, and Trash comes with
+the first item trashed and leaves when the trash's folder goes. Recents is the virtual folder `recent:///`: the existing files of
 `$XDG_DATA_HOME/recently-used.xbel`, listed again whenever the file is rewritten, in the window's sort order.
 Applications is the first `applications` folder of `$XDG_DATA_DIRS`, a real folder rather than a merged virtual one
 (approximate).
@@ -74,15 +85,20 @@ alternate that does something (Open in New Window, Move Item Here) is a row of i
 application's own pasteboard: Copy (the item menu, Edit › Copy, Primary+C) keeps the selection's paths; Paste Item
 (the folder menu, Edit › Paste Item, Primary+V) copies them into the folder shown and Move Item Here (Alt+Primary+V)
 moves them there and empties the pasteboard. A name that is taken gives the arrival a free one (`name copy`), a folder is
-never pasted into itself, and what arrived is selected. The pasteboard is not the session's clipboard: other
+never pasted into itself, and what arrived is selected. Both run beside the window (`kit::transfer`): a row under the
+folder shows the item under way and the bytes done, and its Stop button ends the transfer, removing what was half
+written and leaving the rest where it was. An item moved out of the trash takes its `.trashinfo` record with it; a copy
+leaves the record with the trashed item. The pasteboard is not the session's clipboard: other
 applications neither see it nor fill it.
 
-**Dragging out.** The icon view drags items out of the window (`kit::dragged`, hooked into `kit::grid`'s press, motion
-and release and `kit`'s `Event::DragOut`): a press on an item that moves 5 pt offers the dragged files as a
+**Dragging out.** Both views drag items out of the window (`kit::dragged`, hooked into `kit::grid`'s and `kit::list`'s
+press, motion and release and `kit`'s `Event::DragOut` and `Event::DragRows`): a press on an item that moves 5 pt offers the dragged files as a
 `text/uri-list` (copy or move; the pressed item first, then the rest of the selection in the view's order) and the image
 follows the pointer, which holds it where the press grabbed the cell. One item shows its icon and its selected name as
 the grid draws them; several show the pressed item in front of the icons of up to two more, each 4 pt up and to the
-trailing side, with the count in a badge on the farthest icon's corner. The image is drawn at 0.8 opacity
+trailing side, with the count in a badge on the farthest icon's corner. A row of the list shows its name cell as the
+list draws it (icon and name, mirrored right to left), with the count in a badge after the name for several rows. The
+image is drawn at 0.8 opacity
 (`dragged::OPACITY`), at the window's scale rounded up. A press on an item of a selection keeps the selection, and its
 release without a drag selects that item alone. The window does nothing when the drag ends (the receiving application
 copies or moves; a move is not undone here), a cancelled or refused drag takes the image away at once with no return to
@@ -107,8 +123,8 @@ reports a change or comes to the bus. Every call runs off the window's thread.
   Return) unlocks and mounts what it holds, Cancel closes the sheet without a call. The passphrase is kept in zeroed
   memory, is never in the accessibility tree, and every copy of it is cut from a service's error before the error is
   shown or written.
-* **Eject:** a mounted row has an eject button (`symbol.eject`), and File › Eject (Primary+E) acts on the file system the
-  folder shown is on. Ejecting first takes the window home, then unmounts every mounted file system of the drive in
+* **Eject:** a mounted row has an eject button (`symbol.eject`), and File › Eject (Primary+E) acts on the file system of
+  the sidebar row the keyboard is on, else on the one the folder shown is on. Ejecting first takes the window home, then unmounts every mounted file system of the drive in
   order, then ejects the drive, else powers it off. It stops at the first unmount that fails.
 * **Read-only media** are described so and take nothing new: New Folder, Paste Item, Rename and the other changes are
   disabled there.
@@ -138,15 +154,21 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | Primary+1 / Primary+2 | icon / list view |
 | Alt+Primary+P / Primary+/ | show or hide the path bar / the status bar |
 | arrows, Home / End, Page Up / Page Down, typing; Shift / Primary click; Primary+A; a list column header | selection, type-select, select all, sort (again: reverse) |
+| press on empty space and drag (Shift / Primary: toggle) | rubber band (above) |
+| Tab / Shift+Tab | the next / previous item by name |
+| a folder's triangle, Right / Left in the list | open / close the folder in place (Primary: with every folder inside) |
+| click the name of the only selected item and wait | rename (above) |
 | Primary+Backspace | move the selection to the trash (`$XDG_DATA_HOME/Trash`, freedesktop Trash 1.0); Put Back in the trash |
 | Shift+Primary+N, Ctrl+Primary+N, Primary+D, Ctrl+Primary+A, Primary+R | new folder (its name is edited at once), new folder with the selection, duplicate, make alias, show original |
 | Rename in a menu | edit the name in place: the name without its extension is selected; Return commits, Escape cancels; a name that exists is refused (never replaced) and an invalid one keeps the editor open |
 | Primary+C, Primary+V, Alt+Primary+V | copy, paste item, move item here (above) |
-| right press, Menu, Shift+F10 | context menu (above) |
+| right press, Ctrl with a press, Menu, Shift+F10 | context menu (above) |
+| the toolbar's View, Tags and Action buttons | the view modes, the tags, the context menu, below the button |
+| click a folder of the path bar | go there |
 | Escape | end a rename without renaming, else clear the search |
 | click a removable row / its eject button, File › Eject, Primary+E | mount or unlock it and go there / eject its drive (above) |
 | drag the separator right of the sidebar | resize the sidebar |
-| press an item of the icon view and move 5 pt | drag the items out of the window (above) |
+| press an item of either view and move 5 pt | drag the items out of the window (above) |
 
 ## Design
 
@@ -155,27 +177,25 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | Module | Role | Main items |
 |---|---|---|
 | `model` | async directory model | `DirectoryModel::open(dir, ModelOptions)`, `poll` / `poll_timeout` → `Vec<ModelDelta>` (`Reloaded`, `LoadComplete`, `Inserted`, `Removed`, `Changed`, `Moved`, `DirectoryGone`), `enumerate_blocking`, `set_sort` |
-| `natural`, `sort`, `group` | name collation (case-, width-insensitive, numeric, localized), ordering, sectioning | `NameKey`, `compare_names`, `SortSpec { key, ascending, folders_first }`, `sort_entries`, `insertion_index`, `GroupBy`, `group_entries`, `date_bucket`, `size_bucket` |
+| `natural`, `sort`, `group` | name collation (case-, width-insensitive, numeric, localized), ordering, the date buckets dates read in | `NameKey`, `compare_names`, `SortSpec { key, ascending, folders_first }`, `sort_entries`, `insertion_index`, `date_bucket` |
 | `settings` | per-folder view state | `ViewSettings` (icon / list / column / gallery), `ViewStyle`, `default_columns`, `SettingsStore` (atomic JSON, keyed by device + inode), `FolderKey` |
-| `selection` | selection model | `Selection::{mouse_down, mouse_up, click_empty, move_focus, rubber_band_*, on_insert, on_remove, on_move}`, `Modifiers` |
-| `rename`, `typeselect`, `spring` | interaction logic | `RenameTrigger`, `validate_name`, `needs_extension_warning`, `initial_selection`, `unique_name`; `TypeSelect::{type_text, tab}`; `SpringLoad`, `ticks_from_seconds` |
+| `selection` | selection model | `Selection::{mouse_down, mouse_up, click_empty, move_focus, on_insert, on_remove, on_move}`, `Modifiers` |
+| `rename`, `typeselect` | interaction logic | `RenameTrigger`, `validate_name`, `needs_extension_warning`, `initial_selection`, `unique_name`; `TypeSelect::{type_text, tab}` |
 | `context_menu`, `menu_spec` | context menus | `menu_spec::{item_menu, background_menu, condense}` (the rows in order), `MenuItem`, `Command`, `common_apps` (the Open With list of a selection) |
 | `menu_bar`, `search_field` | the menu bar and the search field | `menu_bar(MenuState)`, `MenuAction`, `chords`, `enabled`; `SearchWidth::{want, tick, follow_toolbar, width}`, `open_width` |
-| `name_edit`, `operations` | rename in place and file changes | `NameEdit::{field, field_mut, commit}`; `rename_item` (no replace), `new_folder`, `drop_action`, `drop_into` (move or copy, `name copy` on a clash) |
-| `trash` | freedesktop Trash 1.0 | `Trash::{trash, list, restore, delete, empty, purge_older_than}`; home and mount-point trash, `.trashinfo`, `directorysizes` |
+| `name_edit`, `operations` | rename in place and file changes | `NameEdit::{field, field_mut, commit}`; `rename_item` (no replace), `new_folder`, `drop_action`, `drop_into` (move or copy, `name copy` on a clash), `transfer` (the same for a list of items, with `Progress` and a `Cancel`) |
+| `trash` | freedesktop Trash 1.0 | `Trash::{trash, list, restore, delete, empty, purge_older_than}`; home and mount-point trash, `.trashinfo`, `directorysizes`; `trashed_item`, `forget` (an item moved out of a trash) |
 | `thumbnail` | freedesktop thumbnail cache | `Thumbnailer::{lookup, lookup_at_least, create, get_or_create}`, `ThumbSize::for_icon`, `file_uri`, failure markers |
 | `tags`, `mime` | metadata | `read_tags` / `write_tags` (`user.xdg.tags`), `TagColor` (seven label colours), `parse_reference_tags`; `detect`, `kind_group`, `kind_description` |
 | `open` | opening files | `open_command` (default application of `mimeapps.list` through `cupertino-apps`; `Terminal=true` under `--terminal`), `command_with`, `open_with` (Open With list: default first, rest by name), `OpenError` |
 | `layout::icon` | icon view | `ideal_cell_size`, `max_title_lines`, `layout` (flow / justified, 32 pt section headers), `IconLayout::{hit, hits_in_rect, neighbour}`, `FreeGrid` |
 | `layout::list` | list view | `row_height`, `layout` (columns, rows with level and expanded state, disclosure, indentation), `ListLayout::{row_at, visible_rows}` |
-| `layout::column`, `layout::gallery` | column and gallery views | `column::layout`, `gallery::strip_metrics`, `gallery::layout` |
-| `preview` | quick-preview geometry | `ZoomTransition::{open, close, at}`, `resize_duration`, `panel_frame`, `fit_content` |
 | `history`, `places`, `recents` | navigation state | `History::{visit, back, forward}`; `standard_places` (Recents, Applications, Desktop, Documents, Downloads, the computer, Trash), `folder_icons`, `session_places` (`SessionPlaces`), `computer_name`, `applications_folder`; `recents::{parse_xbel, recent_entries}` (the bookmark file is read with `cupertino_apps::recent`, which `parse_xbel` and `XBEL_NAME` re-export) |
-| `browser` | one window's folder | `Browser::{open, go, back, forward, parent, poll, sort_by, press, release, move_focus, select_all, type_text, tab, activation, outline, expand, collapse, toggle_expanded, disclose_focus, collapse_all, available_space}`: model, history, the list's outline of expanded folders, selection by path across reloads, nearest-ancestor fallback for a deleted folder |
+| `browser` | one window's folder | `Browser::{open, go, back, forward, parent, poll, sort_by, press, release, move_focus, select_all, type_text, activation, outline, expand, collapse, collapse_all, available_space}`: model, history, the list's outline of expanded folders, selection by path across reloads, nearest-ancestor fallback for a deleted folder |
 | `window`, `format` | the window's wording and metrics | `metrics`, `ViewMode`, `path_chain`, `status_text`; `human_size`, `available_size`, `relative_date` |
 | `udisks` (feature `app`) | removable media | `devices` (the listed file systems and locked containers of udisks' managed objects), `Volumes::{watch, poll, mount, unlock, eject}` → `Report`, `Media` (the listed devices and the busy ones), `Passphrase`, `holders`, `notice` (a failure's notification text) |
 | `notice` (feature `app`) | failures as notifications | `failure`, `unopened`, `bad_name` → `Notice`; `Notices::{start, post}`; `shown`, `escape` |
-| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino-ui-test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, then `run` or a `TestDriver<Files>`; `grid` (the icon view), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images) |
+| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino-ui-test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, then `run` or a `TestDriver<Files>`; `grid` (the icon view), `list` (the list view's presses and band), `band` (the rubber band), `clicks` (double-click and click-to-rename), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places), `transfer` (paste and move off the window's thread), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images) |
 | `main` (feature `app`) | the binary | arguments, the session's places, types, associations and buses, then `kit::run` |
 
 ### Measured defaults
@@ -188,7 +208,7 @@ Values live in `metrics.rs`.
 | List view | 16 pt icons (16–32), 13 pt text, row = max(icon, font line) + 4 with no intercell spacing, a 20 pt pitch, 15 pt indentation; kinds are the design's type descriptions, capitalised |
 | Column view | 245 pt columns (min 100), 312 pt preview column |
 | Chrome | sidebar 200 pt default, 128 pt minimum, rows 24/28/32 pt; unified toolbar 52 pt; status bar 20 pt, path bar 28 pt; search field 112 pt at rest |
-| Timing | spring-loading delay 0.5 s; sidebar toggle 0.3 s, slow motion ×10; type-select reset after max(2 s, 2 × key-repeat delay); search field 0.2 s |
+| Timing | sidebar toggle 0.3 s, slow motion ×10; type-select reset after max(2 s, 2 × key-repeat delay); search field 0.2 s |
 | Selection look | icon bubble: the icon enlarged by its longest side / 16, that radius, quaternary label fill, white 50 % border of min(2, trunc(padding)), the same in an inactive window; the label pill is the accent (grey when inactive) |
 | Names | compare case-insensitively, numerically, width-insensitively, diacritics significant |
 
@@ -208,27 +228,24 @@ Values live in `metrics.rs`.
   views.
 * A rename that changes the extension is not confirmed (the design asks; there is no dialog here). The name editor and
   the new folder's default name numbering are approximate.
-* The collation fold table, date and size group boundaries, thumbnail-size choice, quick-preview easing/velocity and
-  disclosure width are approximate and labelled so in the source.
+* The collation fold table, date bucket boundaries, thumbnail-size choice and disclosure width are approximate and
+  labelled so in the source.
 * Only `SettingsStore`, `Trash`, `Thumbnailer`, `operations` and the tag functions write files, into caller-supplied
   locations (tests use temporary directories).
 
 ## Open issues
 
 * The toolkit's windows take no drops: nothing can be dropped onto a folder or a place of the sidebar, from this window or
-  from another application (Copy and Paste Item stand in), and a folder does not spring open under a drag
-  (`spring::SpringLoad` is not wired). The list view starts no drags (the table has no hook for it), and the drag
+  from another application (Copy and Paste Item stand in), and a folder does not spring open under a drag. The drag
   badge holds three digits.
 * Items wear the theme's folder and document symbols: there are no file-type icons, folder icons of the user
   directories, alias badges or thumbnails yet. Under the headless symbol theme they are placeholder squares.
-* The toolbar has no view, Group By, Tags or Action popups, no share, preview or path controls and no sidebar toggle;
-  the View menu and the context menus stand in for the view and the tags. The search filters the folder shown by name
-  (the design searches the computer by default); its field has no clear button.
-* A click on the name of the only selected item does not edit it; Rename is in the menus. No rubber band, and the list
-  has no disclosure triangles (`Browser`'s outline is not shown).
-* The path bar's segments are text: no icons, and a click on one does nothing.
-* The places are read once, when the application starts: Trash does not appear when the first item is trashed, nor
-  leave when its folder is removed.
+* The toolbar has no Group By popup (the window lists without sections), no share, preview or path controls and no
+  sidebar toggle. The search filters the folder shown by name (the design searches the computer by default); its field
+  has no clear button.
+* The path bar does not shorten the names of the folders above the one shown when it runs out of room.
+* The free space is read again when the listing changes and after a transfer, not when another program writes
+  elsewhere on the file system.
 * The pasteboard is the application's own, not the session's clipboard.
 * Per-folder view settings, the sidebar width and the bars' visibility are not saved.
 * Recents is listed in the window's sort order, not by last use, and opening a file does not add it to the list.

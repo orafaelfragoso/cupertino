@@ -3,8 +3,8 @@
 
 use cupertino_kit::controls::{Canvas, Icon, IconDirection, Stack};
 use cupertino_kit::core::{
-    AccessibleValue, Change, CommandRegistry, Element, Event, EventCx, Key, MeasureCx, PaintCx,
-    Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
+    AccessibleValue, Change, CommandRegistry, Element, Event, EventCx, Key, Live, MeasureCx,
+    PaintCx, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
 };
 use cupertino_kit::geometry::{Insets, Rect, Size};
 use cupertino_kit::layout::{
@@ -141,6 +141,8 @@ impl<M: 'static> Widget<M> for Meter {
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(Role::ProgressIndicator);
         cx.name(self.label.to_owned());
+        // the overlay never takes the focus, so its level is announced as it changes
+        cx.live(Live::Polite);
         cx.value(AccessibleValue::Number {
             value: self.level,
             min: 0.0,
@@ -244,7 +246,7 @@ mod tests {
     use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
     use cupertino_kit::theme::{Appearance, ThemePreferences};
     use cupertino_theme::Theme;
-    use cupertino_ui_test::{ManualClock, TestDriver};
+    use cupertino_ui_test::{AssistiveTechnology, ManualClock, TestDriver};
 
     use super::*;
 
@@ -348,6 +350,13 @@ mod tests {
     }
 
     fn start(theme: ThemeTokens) -> (TestDriver<Shown>, WindowId) {
+        let (driver, window, _) = start_heard(theme);
+        (driver, window)
+    }
+
+    /// The overlay shown with a screen reader listening.
+    fn start_heard(theme: ThemeTokens) -> (TestDriver<Shown>, WindowId, AssistiveTechnology) {
+        let reader = AssistiveTechnology::new();
         let mut fonts = FontIndex::new();
         fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
         let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
@@ -369,7 +378,7 @@ mod tests {
                     GlyphRaster::new(Arc::clone(&glyphs)),
                 ))
             }),
-            accessibility: None,
+            accessibility: Some(reader.adapter()),
             clock: Arc::new(ManualClock::new(Timestamp(0))),
             on_window_error: None,
         };
@@ -396,7 +405,23 @@ mod tests {
             }
             system.frame_ready(window, Timestamp(0)).unwrap();
         }
-        (driver, window)
+        driver.assert_accessible("OSD");
+        (driver, window, reader)
+    }
+
+    #[test]
+    fn the_level_is_announced_politely_without_taking_the_focus() {
+        let (_driver, window, reader) = start_heard(tokens(Appearance::Light, false));
+        let said: Vec<_> = reader
+            .announcements()
+            .into_iter()
+            .map(|a| (a.live, a.text))
+            .collect();
+        assert_eq!(said, [(Live::Polite, "Volume, 0.5".to_owned())]);
+        assert_eq!(
+            (reader.focus(window), reader.focus_moves(window)),
+            (None, 0)
+        );
     }
 
     #[test]

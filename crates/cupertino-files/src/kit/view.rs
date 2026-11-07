@@ -7,8 +7,8 @@ use cupertino_menu_model::{ActionName, MenuBar};
 
 use cupertino_kit::controls::{
     Column, ColumnWidth, ContextMenu, Dialog, DialogAction, DialogButton, DialogKind, Icon,
-    IconDirection, Image, ImageFit, ImageSource, Modal, NavigationStack, OutlineTable, Progress,
-    ScrollView, Scroller, SecureField, Selection, Sidebar, SidebarAccessory, SidebarItem,
+    IconDirection, Image, ImageFit, ImageSource, MenuAnchor, Modal, NavigationStack, OutlineTable,
+    Progress, ScrollView, Scroller, SecureField, Selection, Sidebar, SidebarAccessory, SidebarItem,
     SidebarSection, SortOrder, Spacer, SplitView, Stack, TableView, Text, TextField, TextRole,
     TreeItem,
 };
@@ -401,6 +401,10 @@ fn toolbar(session: &Session, id: u64, win: &BrowserWindow) -> Vec<Element<Messa
             symbol: symbol.into(),
             chevron,
             size: Size::new(w, h),
+            expanded: win
+                .context
+                .as_ref()
+                .is_some_and(|menu| menu.anchor == MenuAnchor::Below(popup_key(popup))),
             on_press: Message::Window(id, Event::Popup(popup)),
         })
         .key(popup_key(popup))

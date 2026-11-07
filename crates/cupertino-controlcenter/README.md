@@ -55,6 +55,16 @@ opens, from the menu bar, a shortcut or a hot corner (the design panel can becom
 during the fade shows the panel again. It asks for none from the start of the fade. Another exclusive surface (the launcher)
 that takes the keyboard from the shown card dismisses the panel. On `locked` a shown panel starts closing too.
 
+**Outputs.** The panel opens on the first output the server describes, chosen each time it opens with no surface left,
+and the card and the catcher stay on that output while either exists (a toggle during the fade reopens on the card's
+output). When that output goes (a display unplugged), the panel is **dismissed**, not moved: the server closes its
+surfaces, or the output leaves the list the process sees (`Request::OutputGone`), and either hides the panel at once,
+without the fade, dropping a drag in progress (`Controller::vanish`). The server takes back the card's keyboard for the
+key window. The next toggle opens the panel on an output that exists. The process does not need an output to start or to
+keep running: a toggle with no output at all opens surfaces the server closes again at once, so nothing shows. Moving the
+open panel to the remaining output was not chosen: it would need new surfaces placed while the person's attention is on
+the display change, and a dismissal is what any other loss of the panel's place does (a lock, another exclusive panel).
+
 **Dismissal.** A left or right press outside the card (mouse monitor mask `0xa`), losing the keyboard focus
 (resign-key observer) and Escape. Escape is **not** in the design: it has no cancel handler on its panel
 window. It is added here (approximate). The menu-tracking observers of the design have no
@@ -124,7 +134,7 @@ failure. Properties are read from the service every time, never from a cache.
 | Optional first row | 28 pt; used for the battery (shown only with a battery) |
 | Module order | left: Wi-Fi, Bluetooth, file sharing (the connectivity block); right: focus mode, then stage and screen mirroring (62 x 62 each); then display, sound and now playing rows (278 x 62) |
 | Fade-out | 0.238 s, linear alpha on the card and its backdrop |
-| Lifecycle | hidden, shown, hiding, hidden; a toggle while hiding reopens |
+| Lifecycle | hidden, shown, hiding, hidden; a toggle while hiding reopens; the output going hides at once |
 | Slider track | 22 pt high (minimum width 120; the panel's track is 254 pt) |
 | Slider knob travel and position | `f = clamp((x - minX - 11) / (w - 22), 0, 1); the knob's hit frame reaches 9 pt past the track on every side |
 | Slider colours | track grey 0.137 (dark) or 0.910 (light), light outline black 0.102, white fill inset 1 pt, knob about 20 pt, disabled alpha 0.30 (dark) or 0.50 |
@@ -149,6 +159,8 @@ failure. Properties are read from the service every time, never from a cache.
 
 ## Open issues
 
+- Unplugging a real display with the panel open has not been tried yet; the headless output tests cover it, and the
+  hardware check belongs to the display hot-plug acceptance (#22).
 - The card has no drop shadow. The server draws shadows for windows only, not for layer surfaces, and a kit backdrop covers
   its whole window, so shadow room on the surface would also get the material. Restoring it needs a backdrop inset (or a
   shadow) in the app effects protocol, the kit and the server.
@@ -175,11 +187,16 @@ cargo test -p cupertino-controlcenter --features app
 | Test | Proves |
 |---|---|
 | Model and layout unit tests | The module order, the readings behind the tiles, the card's size with and without the battery row. |
-| Lifecycle unit tests | Full opacity, the linear fade over 0.238 s, reopening while hiding, at literal instants. |
-| Controller unit tests | Toggles and slider changes, the 16.7 ms write throttle, mute below 0.001, a tile disabled by a failing read or write with the reason, the overlay told after a drag, the refresh timer. |
+| Lifecycle unit tests | Full opacity, the linear fade over 0.238 s, reopening while hiding, hiding at once from any phase, at literal instants. |
+| Controller unit tests | Toggles and slider changes, the 16.7 ms write throttle, mute below 0.001, a tile disabled by a failing read or write with the reason, the overlay told after a drag, the refresh timer, a vanish that hides at once, drops a drag and reads again on reopening. |
 | `tests/panel.rs` | The card as the kit draws it against `tests/goldens` (`shown`, `reduce-transparency`, `increase-contrast`: the 1x frame and the focus and accessibility tree of every control), its material and window per battery case, the grid frames, a switch press, a slider drag and release, Escape; the catcher dismissing on a left or right press only. |
-| Process unit tests (`src/app.rs`) | The windows per phase (card over catcher when shown, the card alone while fading, none when hidden), the lock, input ignored during the fade, a toggle during the fade then Escape, the timer generations, and the card's keyboard: asked for whenever shown, given back for the fade, and losing it while shown dismisses. |
+| Process unit tests (`src/app.rs`) | The windows per phase (card over catcher when shown, the card alone while fading, none when hidden), the lock, input ignored during the fade, a toggle during the fade then Escape, the timer generations, and the card's keyboard: asked for whenever shown, given back for the fade, and losing it while shown dismisses. A window the server closes, or the output going, hides the panel at once, in the shown and the fading phase, and a toggle reopens a card that acts; the opening output is the first described one and the panel hears when its output goes. |
 | `tests/control.rs` | `Toggle` against a private `dbus-daemon` with in-memory backends: it opens, then closes, the panel, and a second panel cannot take the name. |
+
+`cupertino-server`'s `tests/shell_processes.rs` runs the process with `--fake-backends` through output removal: open on an
+output that is unplugged while another remains, then on the last output, then after a display is plugged in again. Each
+time the panel's surfaces go, the keyboard goes back to the window, the process is not restarted, and the reopened card's
+Bluetooth switch and sound slider draw their new state through a refresh of the backends.
 
 Nothing here touches a real radio, adapter, volume or backlight.
 

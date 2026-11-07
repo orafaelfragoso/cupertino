@@ -49,7 +49,15 @@ popups. It is a CupertinoKit application (`cupertino-kit`, `src/view.rs`): each 
 menu-bar object and `MenuBar` backdrop come from `cupertino-shell-client` and `cupertino-protocol-app` through its surface
 roles, and each open menu level is a Kit popup with a grab, on the `Menu` material, placed where the controller laid it out. The
 server starts it from its `"shell"` configuration and restarts it after a failure; `cupertino-server`'s
-`tests/shell_processes.rs` runs the real binary, including a menu popup opened, dismissed by a click outside and opened again.
+`tests/shell_processes.rs` runs the real binary, including a menu popup opened, dismissed by a click outside and opened again,
+and dismissed by a click on empty bar space, after which the keyboard is back on the window that had it.
+
+**A click on empty bar space while a menu is open** closes the menu and does nothing else: no item is chosen and the press
+reaches no client. The server takes that press as outside the menu's grab (only the popups belong to the grab, not the bar
+they hang from), ends the grab, and the bar hears `popup_done` (`Input::Dismissed`); the keyboard goes to the key window,
+not to the bar, which asks for it only while a title is focused by the shortcut. The controller does the same for a press it
+receives on empty bar space (`Hit::Bar`). As with any outside press, a click on another title while a menu is open closes
+the menu without opening the other one; hover and Left / Right switch menus.
 
 ```sh
 cargo run -p cupertino-menubar --features app
@@ -288,6 +296,7 @@ cargo clippy -p cupertino-menubar --all-targets
 
 | Test | Proves |
 |---|---|
+| `tests/controller.rs` | The controller's pointer and key behaviour; among it, a press on empty bar space closes a sticky or press-drag menu, is consumed and chooses nothing on the press or the release. |
 | `tests/dbus_integration.rs` | Fake DBusMenu, StatusNotifier and GMenuModel peers work against the clients and services, on a private bus from `cupertino-test-bus` (a `dbus-daemon` child that dies with its test). It skips with a message when `dbus-daemon` is not installed. |
 | `src/tone.rs` tests | The bar's text reaches 4.5:1 with its scrim at every lightness from 0 to 1000 for every tone it can hold there, and through each appearance's `MenuBar` colour ops (from `cupertino-glass`, a dev-dependency) for every wallpaper grey; no scrim outside the mid band or on the appearance's palette; the scrim values at 500 and 549. |
 | `tests/app-menus.rs` (feature `app`) | The menus Files and Settings publish with `cupertino-ui-menus`, read by the bar's worker over a private bus, open from their title and choose an item: the application hears that item's action. It builds the menus from `cupertino_files::menu_bar` and `cupertino_settings::menu_bar` themselves, so it needs these two apps-layer crates as dev-dependencies, which are the layer graph's dev-only exceptions for this crate. |

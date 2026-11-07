@@ -30,6 +30,7 @@ struct State {
     said: Vec<Announcement>,
     focused_window: Option<WindowId>,
     locked: bool,
+    titles: BTreeMap<WindowId, String>,
 }
 
 struct Held {
@@ -62,12 +63,17 @@ impl AssistiveTechnology {
     }
 
     /// The whole tree the reader holds for `window`, as a full update, or `None` before the window's first update or
-    /// after it closed.
+    /// after it closed. A root without a name of its own is named by the window's title, as the AT-SPI bridge names it.
     pub fn tree(&self, window: WindowId) -> Option<AccessibilityUpdate> {
         let state = self.lock();
         let held = state.trees.get(&window)?;
         let mut nodes: Vec<(NodeId, AccessibilityNode)> =
             held.nodes.iter().map(|(id, n)| (*id, n.clone())).collect();
+        if let Some((_, root)) = nodes.iter_mut().find(|(id, _)| *id == held.root) {
+            if root.name.is_none() {
+                root.name = state.titles.get(&window).cloned();
+            }
+        }
         nodes.sort_by_key(|(id, _)| *id);
         Some(AccessibilityUpdate {
             window,
@@ -196,6 +202,7 @@ impl AccessibilityAdapter for AssistiveTechnology {
     fn window_closed(&mut self, window: WindowId) {
         let mut state = self.lock();
         state.trees.remove(&window);
+        state.titles.remove(&window);
         if state.focused_window == Some(window) {
             state.focused_window = None;
         }
@@ -203,6 +210,10 @@ impl AccessibilityAdapter for AssistiveTechnology {
 
     fn session_locked(&mut self, locked: bool) {
         self.lock().locked = locked;
+    }
+
+    fn window_title(&mut self, window: WindowId, title: &str) {
+        self.lock().titles.insert(window, title.to_owned());
     }
 }
 

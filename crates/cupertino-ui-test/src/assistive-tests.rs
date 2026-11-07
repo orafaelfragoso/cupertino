@@ -69,6 +69,13 @@ fn partial_updates_are_put_together_into_the_whole_tree() {
     );
     adapter.update(&update(false, Some(1), Vec::new()));
     assert_eq!(at.focus_moves(WindowId(1)), 1);
+    // a root without a name of its own reads the window's title
+    let mut untitled = node(Role::Window, "", &[2]);
+    untitled.name = None;
+    adapter.update(&update(false, Some(1), vec![(1, untitled)]));
+    adapter.window_title(WindowId(1), "Settings");
+    let root = at.tree(WindowId(1)).unwrap().nodes[0].1.clone();
+    assert_eq!(root.name.as_deref(), Some("Settings"));
     adapter.window_closed(WindowId(1));
     assert_eq!(at.tree(WindowId(1)), None);
 }

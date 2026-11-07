@@ -1,13 +1,18 @@
-//! The `cupertino-files` process: one browser window on a folder (the home folder when none is
-//! given) as a client of the server. It exits when the window is closed. See the README.
-
-mod app;
+//! The `cupertino-files` process: browser windows on CupertinoKit, the first on a folder (the home folder when none is
+//! given). New windows open in the same process; it exits when the last window is closed. See the README.
 
 use std::ffi::OsString;
+use std::io;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 
+use cupertino_apps::{Locale, MimeApps, MimeDatabase, Visibility, XdgDirs};
+use cupertino_files::kit::{self, Start};
+use cupertino_files::notice::Notices;
+use cupertino_files::places::{session_places, SessionPlaces};
+use cupertino_files::recents;
 use cupertino_files::trash::Trash;
 use percent_encoding::percent_decode_str;
 
@@ -92,13 +97,62 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match app::run(options.folder, options.terminal) {
+    let start = match start(options) {
+        Ok(start) => start,
+        Err(e) => {
+            eprintln!("cupertino-files: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match kit::run(start) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("cupertino-files: {e}");
             ExitCode::FAILURE
         }
     }
+}
+
+fn other(e: impl std::fmt::Display) -> io::Error {
+    io::Error::other(e.to_string())
+}
+
+/// The first window of the session: its folder listed, the session's places and file types, the Recents of the data
+/// folder, notices on the session bus and removable media on the system bus.
+fn start(options: Options) -> io::Result<Start> {
+    let dirs = XdgDirs::from_env().map_err(other)?;
+    let home =
+        PathBuf::from(std::env::var_os("HOME").ok_or_else(|| io::Error::other("HOME is not set"))?);
+    let SessionPlaces { places, .. } = session_places(&home, &dirs.data_dirs)?;
+    // one database for the Kind column and for what opens an item, so both name the same type
+    let types = Arc::new(MimeDatabase::load(&dirs.all_data_dirs()).map_err(other)?);
+    let notices = Notices::start(zbus::blocking::Connection::session().ok());
+    let system = zbus::blocking::Connection::system()
+        .map_err(|e| eprintln!("cupertino-files: no removable media: {e}"))
+        .ok();
+    Start::open(
+        options.folder.clone(),
+        places,
+        Some(types),
+        dirs.data_home.join(recents::XBEL_NAME),
+        notices,
+        Box::new(applications),
+        options.terminal,
+        system,
+    )
+    .map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            format!("cannot open {}: {e}", options.folder.display()),
+        )
+    })
+}
+
+/// The default-application resolver of the session's directories and desktops, read again at each open.
+fn applications() -> io::Result<MimeApps> {
+    let dirs = XdgDirs::from_env().map_err(other)?;
+    let db = MimeDatabase::load(&dirs.all_data_dirs()).map_err(other)?;
+    MimeApps::load(&dirs, db, &Locale::from_env(), &Visibility::from_env()).map_err(other)
 }
 
 #[cfg(test)]

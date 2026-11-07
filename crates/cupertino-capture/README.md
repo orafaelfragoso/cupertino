@@ -28,7 +28,7 @@ alone does not show the surfaces as they look.
 
 | Surface | States |
 |---|---|
-| `files/window`, `files/sidebar` (the sidebar column of the window) | `--view icon\|list`, `--drop-place NAME` (a sidebar place) or `--drop-item NAME` (an item of the folder), `--selected NAME` |
+| `files/window`, `files/sidebar` (the sidebar column of the window) | `--view icon\|list`, `--selected NAME`, `--devices removable` (a mounted, a busy and an unmounted device in the sidebar) |
 | `kit/controls` (the row 167a controls sheet), `kit/icons` (with the chevrons along the reading direction and a missing symbol's placeholder) | `--direction ltr\|rtl` |
 | `overview/all` (the server headless with test windows, `ci/capture-overview.sh`; no `--sheet`) | `--windows N` (1 to 6, default 2) |
 

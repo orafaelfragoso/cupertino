@@ -1,7 +1,6 @@
 // cupertino-layers --graph
-// 79 crates, 376 internal dependencies
+// 79 crates, 364 internal dependencies
 // per layer: foundation 18, models 8, platform 9, protocol 3, transport 3, render 3, ui 13, core 1, shell 11, services 4, apps 2, tools 4
-// forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-files (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-settings (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the default sink and the mixer itself until audio goes through a service
@@ -173,30 +172,17 @@ digraph "layers" {
   "cupertino-effects" -> "cupertino-geometry";
   "cupertino-filepicker" -> "cupertino-typeahead";
   "cupertino-files" -> "cupertino-apps";
-  "cupertino-files" -> "cupertino-assets";
+  "cupertino-files" -> "cupertino-assets" [label="dev"];
   "cupertino-files" -> "cupertino-capture" [label="dev"];
-  "cupertino-files" -> "cupertino-decorations" [color=orange, style=dashed];
   "cupertino-files" -> "cupertino-defaults";
-  "cupertino-files" -> "cupertino-geometry";
-  "cupertino-files" -> "cupertino-icons";
-  "cupertino-files" -> "cupertino-keyboard";
   "cupertino-files" -> "cupertino-kit";
   "cupertino-files" -> "cupertino-menu-model";
   "cupertino-files" -> "cupertino-modifiers";
-  "cupertino-files" -> "cupertino-protocol-app";
   "cupertino-files" -> "cupertino-test-bus" [label="dev"];
   "cupertino-files" -> "cupertino-theme";
   "cupertino-files" -> "cupertino-thumbnails";
-  "cupertino-files" -> "cupertino-typeahead";
-  "cupertino-files" -> "cupertino-ui-atspi";
-  "cupertino-files" -> "cupertino-ui-atspi" [label="dev"];
-  "cupertino-files" -> "cupertino-ui-core";
-  "cupertino-files" -> "cupertino-ui-menus";
-  "cupertino-files" -> "cupertino-ui-platform";
   "cupertino-files" -> "cupertino-ui-test" [label="dev"];
   "cupertino-files" -> "cupertino-ui-text";
-  "cupertino-files" -> "cupertino-ui-wayland";
-  "cupertino-files" -> "cupertino-wayland-client";
   "cupertino-glass" -> "cupertino-defaults";
   "cupertino-glass" -> "cupertino-geometry";
   "cupertino-glass" -> "cupertino-theme";
@@ -358,14 +344,15 @@ digraph "layers" {
   "cupertino-scene" -> "cupertino-effects";
   "cupertino-scene" -> "cupertino-geometry";
   "cupertino-screenshot" -> "cupertino-animation";
-  "cupertino-screenshot" -> "cupertino-assets";
-  "cupertino-screenshot" -> "cupertino-decorations";
+  "cupertino-screenshot" -> "cupertino-assets" [label="dev"];
   "cupertino-screenshot" -> "cupertino-defaults";
   "cupertino-screenshot" -> "cupertino-geometry";
-  "cupertino-screenshot" -> "cupertino-protocol-app";
+  "cupertino-screenshot" -> "cupertino-kit";
+  "cupertino-screenshot" -> "cupertino-modifiers";
   "cupertino-screenshot" -> "cupertino-protocols";
   "cupertino-screenshot" -> "cupertino-shell-client";
-  "cupertino-screenshot" -> "cupertino-theme";
+  "cupertino-screenshot" -> "cupertino-theme" [label="dev"];
+  "cupertino-screenshot" -> "cupertino-ui-test" [label="dev"];
   "cupertino-screenshot" -> "cupertino-ui-wayland";
   "cupertino-screenshot" -> "cupertino-wayland-client";
   "cupertino-seat" -> "cupertino-devices";

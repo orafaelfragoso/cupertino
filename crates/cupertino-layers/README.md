@@ -76,8 +76,7 @@ and a `tracking`:
 
 - `Permanent`: a reviewed edge that stays, such as a dev-only edge for tests or an approved render primitive. Today:
   none.
-- `Issue(n)`: migration debt the issue removes. Today: #46 files → decorations, #21 settings →
-  alsa.
+- `Issue(n)`: migration debt the issue removes. Today: #21 settings → alsa.
 
 An entry that no longer matches an edge of its kind is an error, so the list only shrinks. A crate without a declared
 layer, or with a layer that has no row in `RULES`, stops the check.

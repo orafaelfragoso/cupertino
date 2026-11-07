@@ -26,6 +26,9 @@ pub enum MenuAction {
     MakeAlias,
     ShowOriginal,
     Eject,
+    Copy,
+    Paste,
+    MoveHere,
     SelectAll,
     View(ViewMode),
     SortBy(SortKey, bool),
@@ -56,6 +59,10 @@ pub struct MenuState {
     pub has_parent: bool,
     /// The name of the removable file system the folder shown is on.
     pub eject: Option<String>,
+    /// The folder shown is on read-only media: nothing can be made, moved or renamed in it.
+    pub read_only: bool,
+    /// Copy put items on the pasteboard.
+    pub can_paste: bool,
 }
 
 /// The sort choices the window has data for, with their action names.
@@ -96,6 +103,9 @@ impl MenuAction {
             MakeAlias => (Scope::Win, "make-alias"),
             ShowOriginal => (Scope::Win, "show-original"),
             Eject => (Scope::Win, "eject"),
+            Copy => (Scope::Win, "copy"),
+            Paste => (Scope::Win, "paste"),
+            MoveHere => (Scope::Win, "move-here"),
             SelectAll => (Scope::Win, "select-all"),
             View(ViewMode::Icons) => (Scope::Win, "view-icons"),
             View(ViewMode::List) => (Scope::Win, "view-list"),
@@ -127,6 +137,9 @@ impl MenuAction {
             MakeAlias,
             ShowOriginal,
             Eject,
+            Copy,
+            Paste,
+            MoveHere,
             SelectAll,
             View(ViewMode::Icons),
             View(ViewMode::List),
@@ -215,7 +228,14 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
     );
     let edit = Menu::new(
         "Edit",
-        vec![vec![item("Select All", SelectAll, chord(&[Primary], "a"))]],
+        vec![
+            vec![
+                item("Copy", Copy, chord(&[Primary], "c")),
+                item("Paste Item", Paste, chord(&[Primary], "v")),
+                item("Move Item Here", MoveHere, chord(&[Alt, Primary], "v")),
+            ],
+            vec![item("Select All", SelectAll, chord(&[Primary], "a"))],
+        ],
     );
     let sort_by = Menu::new(
         "Sort By",
@@ -268,20 +288,78 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
     }
 }
 
+/// The keysym of a chord's key name: a letter or digit, or one of the named keys the menus use; `None` for another
+/// name.
+pub fn keysym(name: &str) -> Option<u32> {
+    let mut chars = name.chars();
+    if let (Some(c), None) = (chars.next(), chars.next()) {
+        return c
+            .is_ascii_alphanumeric()
+            .then(|| c.to_ascii_lowercase() as u32);
+    }
+    Some(match name {
+        "BackSpace" => 0xff08,
+        "Return" => 0xff0d,
+        "Escape" => 0xff1b,
+        "Left" => 0xff51,
+        "Up" => 0xff52,
+        "Right" => 0xff53,
+        "Down" => 0xff54,
+        "slash" => 0x2f,
+        "bracketleft" => 0x5b,
+        "bracketright" => 0x5d,
+        _ => return None,
+    })
+}
+
+/// Every item of `bar` that has a chord, with its action: the window's keys for its menus.
+pub fn chords(bar: &MenuBar) -> Vec<(Chord, MenuAction)> {
+    fn walk(menu: &Menu, out: &mut Vec<(Chord, MenuAction)>) {
+        for entry in menu.sections.iter().flatten() {
+            match entry {
+                Entry::Item(item) => {
+                    let action = match &item.command {
+                        cupertino_menu_model::Command::Action(name) => MenuAction::from_name(name),
+                        cupertino_menu_model::Command::System(_) => None,
+                    };
+                    if let (Some(chord), Some(action)) = (&item.chord, action) {
+                        out.push((chord.clone(), action));
+                    }
+                }
+                Entry::Submenu(menu) => walk(menu, out),
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&bar.app, &mut out);
+    for menu in &bar.menus {
+        walk(menu, &mut out);
+    }
+    out
+}
+
 /// Whether each item that depends on the selection or the history can be chosen in `state`.
 pub fn enabled(state: &MenuState) -> Vec<(MenuAction, bool)> {
     use MenuAction::*;
     let selected = state.count > 0;
+    let writable = !state.read_only;
     vec![
-        (NewFolderWithSelection, selected && !state.in_trash),
+        (NewFolder, writable),
+        (
+            NewFolderWithSelection,
+            selected && !state.in_trash && writable,
+        ),
         (Open, selected),
         (OpenInNewWindow, selected && state.all_folders),
-        (MoveToTrash, selected && !state.in_trash),
+        (MoveToTrash, selected && !state.in_trash && writable),
         (PutBack, selected && state.in_trash),
-        (Rename, state.count == 1 && !state.in_trash),
-        (Duplicate, selected && !state.in_trash),
-        (MakeAlias, selected && !state.in_trash),
+        (Rename, state.count == 1 && !state.in_trash && writable),
+        (Duplicate, selected && !state.in_trash && writable),
+        (MakeAlias, selected && !state.in_trash && writable),
         (ShowOriginal, state.single_link),
+        (Copy, selected),
+        (Paste, state.can_paste && !state.in_trash && writable),
+        (MoveHere, state.can_paste && !state.in_trash && writable),
         (Back, state.can_go_back),
         (Forward, state.can_go_forward),
         (EnclosingFolder, state.has_parent),
@@ -340,6 +418,10 @@ mod tests {
                 "  Make Alias win.make-alias",
                 "  Show Original win.show-original",
                 "Edit:",
+                "  Copy win.copy",
+                "  Paste Item win.paste",
+                "  Move Item Here win.move-here",
+                "  ---",
                 "  Select All win.select-all",
                 "View:",
                 "  as Icons win.view-icons",
@@ -435,9 +517,36 @@ mod tests {
     }
 
     #[test]
+    fn every_chord_names_a_key_the_window_can_bind() {
+        let bar = menu_bar(&MenuState {
+            in_trash: true,
+            eject: Some("KINGSTON".into()),
+            ..MenuState::default()
+        });
+        let chords = chords(&bar);
+        assert!(chords.len() >= 15, "{chords:?}");
+        for (chord, action) in &chords {
+            assert!(keysym(chord.key.name()).is_some(), "{action:?}: {chord:?}");
+        }
+        assert_eq!(keysym("n"), Some(0x6e));
+        assert_eq!(keysym("1"), Some(0x31));
+        assert_eq!(keysym("BackSpace"), Some(0xff08));
+        assert_eq!(keysym("F13"), None);
+        let trash = chords
+            .iter()
+            .find(|(_, action)| *action == MenuAction::MoveToTrash)
+            .unwrap();
+        assert_eq!(trash.0.key.name(), "BackSpace");
+    }
+
+    #[test]
     fn items_that_need_a_selection_are_disabled_without_one() {
         let none = enabled(&MenuState::default());
-        assert!(none.iter().all(|(_, on)| !on), "{none:?}");
+        assert!(
+            none.iter()
+                .all(|(action, on)| !on || *action == MenuAction::NewFolder),
+            "{none:?}"
+        );
         let one_folder = enabled(&MenuState {
             count: 1,
             all_folders: true,
@@ -454,5 +563,27 @@ mod tests {
             assert!(one_folder.contains(&(action, true)), "{action:?}");
         }
         assert!(one_folder.contains(&(MenuAction::PutBack, false)));
+    }
+
+    #[test]
+    fn read_only_media_take_nothing_new_and_lose_nothing() {
+        let state = MenuState {
+            count: 1,
+            has_parent: true,
+            read_only: true,
+            ..MenuState::default()
+        };
+        let on = enabled(&state);
+        for action in [
+            MenuAction::NewFolder,
+            MenuAction::NewFolderWithSelection,
+            MenuAction::MoveToTrash,
+            MenuAction::Rename,
+            MenuAction::Duplicate,
+            MenuAction::MakeAlias,
+        ] {
+            assert!(on.contains(&(action, false)), "{action:?}");
+        }
+        assert!(on.contains(&(MenuAction::Open, true)));
     }
 }

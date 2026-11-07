@@ -1,8 +1,12 @@
 //! Removable media through udisks2 on the system bus (feature `app`). The sidebar lists every file system of a drive
-//! that udisks neither hides nor counts as the system's ([`devices`]); a click mounts one, the eject button unmounts the
-//! drive's file systems and ejects or powers off the drive. The calls never set `auth.no_user_interaction`, so polkit
-//! may ask through the session's authentication agent; Files never asks for a password itself. A call that fails is
-//! reported as one notification ([`notice`]); a prompt the person dismissed is not.
+//! that udisks neither hides nor counts as the system's, and every encrypted container that is still locked
+//! ([`devices`]); a click mounts a file system, or unlocks a container with the passphrase the window asked for and
+//! mounts what it holds; the eject button unmounts the drive's file systems, locks the containers they came from and
+//! ejects or powers off the drive. The calls never set `auth.no_user_interaction`, so polkit may ask through the
+//! session's authentication agent for permission; the only secret Files asks for itself is a container's passphrase,
+//! which lives in a [`Passphrase`] that is wiped when dropped and never printed. A call that fails is reported as one
+//! notification ([`notice`]), naming the programs that keep a busy file system in use ([`holders`]); a prompt the
+//! person dismissed is not.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
@@ -18,16 +22,17 @@ use zbus::message::Type;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 use zbus::MatchRule;
 
+use crate::format::human_size;
 use crate::natural::compare_names;
 use crate::notice::{escape, shown, Notice, Notices};
 use crate::places::Place;
-use crate::render::human_size;
 
 pub const UDISKS_NAME: &str = "org.freedesktop.UDisks2";
 pub const MANAGER_PATH: &str = "/org/freedesktop/UDisks2";
 pub const BLOCK: &str = "org.freedesktop.UDisks2.Block";
 pub const FILESYSTEM: &str = "org.freedesktop.UDisks2.Filesystem";
 pub const DRIVE: &str = "org.freedesktop.UDisks2.Drive";
+pub const ENCRYPTED: &str = "org.freedesktop.UDisks2.Encrypted";
 const ERROR: &str = "org.freedesktop.UDisks2.Error.";
 /// The notification's icon: the freedesktop name the device symbol maps to first.
 const DEVICE_ICON: &str = "drive-removable-media-symbolic";
@@ -43,27 +48,69 @@ pub struct Device {
     pub mount: Option<PathBuf>,
     pub ejectable: bool,
     pub can_power_off: bool,
+    /// An encrypted container that is not unlocked: a click asks for its passphrase.
+    pub locked: bool,
+    /// The medium can't be written.
+    pub read_only: bool,
+    /// The encrypted container this file system was unlocked from, which an eject locks again.
+    pub backing: Option<OwnedObjectPath>,
+}
+
+/// A container's passphrase: wiped from memory when dropped, and never shown by `Debug`.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct Passphrase(zeroize::Zeroizing<String>);
+
+impl Passphrase {
+    pub fn new(text: &str) -> Passphrase {
+        Passphrase(zeroize::Zeroizing::new(text.to_owned()))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn text(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Passphrase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Passphrase([secret])")
+    }
 }
 
 /// The listed file systems of `objects` (udisks' managed objects), sorted by name: a block with a file system whose
-/// usage is `filesystem`, which udisks neither hides nor counts as the system's, and which belongs to a drive (a loop
-/// device belongs to none). A name is [`shown`] text.
+/// usage is `filesystem`, or an encrypted container (usage `crypto`) that is not unlocked, which udisks neither hides
+/// nor counts as the system's, and which belongs to a drive (a loop device belongs to none). An unlocked container is
+/// left out: the file system it holds is listed in its place, on the container's drive. A name is [`shown`] text.
 pub fn devices(objects: &ManagedObjects) -> Vec<Device> {
     let mut out: Vec<Device> = objects
         .iter()
         .filter_map(|(path, interfaces)| {
             let block = interfaces.get(BLOCK)?;
-            let filesystem = interfaces.get(FILESYSTEM)?;
-            if text(block, "IdUsage").as_deref() != Some("filesystem")
-                || flag(block, "HintIgnore")
-                || flag(block, "HintSystem")
-            {
+            // `None` for a locked container
+            let filesystem = match (
+                text(block, "IdUsage").as_deref(),
+                interfaces.get(FILESYSTEM),
+                interfaces.get(ENCRYPTED),
+            ) {
+                (Some("filesystem"), Some(filesystem), _) => Some(filesystem),
+                (Some("crypto"), _, Some(encrypted))
+                    if object(encrypted, "CleartextDevice").is_none() =>
+                {
+                    None
+                }
+                _ => return None,
+            };
+            if flag(block, "HintIgnore") || flag(block, "HintSystem") {
                 return None;
             }
-            let drive_path = block
-                .get("Drive")
-                .and_then(|v| OwnedObjectPath::try_from(v.try_clone().ok()?).ok())
-                .filter(|p| p.as_str() != "/")?;
+            let backing = object(block, "CryptoBackingDevice");
+            let drive_path = object(block, "Drive").or_else(|| {
+                let backing = objects.get(backing.as_ref()?)?.get(BLOCK)?;
+                object(backing, "Drive")
+            })?;
             let drive = objects.get(&drive_path)?.get(DRIVE)?;
             let vendor_model = format!(
                 "{} {}",
@@ -90,9 +137,12 @@ pub fn devices(objects: &ManagedObjects) -> Vec<Device> {
                 object: path.clone(),
                 drive: drive_path,
                 name,
-                mount: first_mount(filesystem),
+                mount: filesystem.and_then(first_mount),
                 ejectable: flag(drive, "Ejectable"),
                 can_power_off: flag(drive, "CanPowerOff"),
+                locked: filesystem.is_none(),
+                read_only: flag(block, "ReadOnly"),
+                backing,
             })
         })
         .collect();
@@ -104,6 +154,14 @@ fn text(properties: &HashMap<String, OwnedValue>, key: &str) -> Option<String> {
     properties
         .get(key)
         .and_then(|v| String::try_from(v.try_clone().ok()?).ok())
+}
+
+/// An object path property; `None` for `/`, udisks' "no object".
+fn object(properties: &HashMap<String, OwnedValue>, key: &str) -> Option<OwnedObjectPath> {
+    properties
+        .get(key)
+        .and_then(|v| OwnedObjectPath::try_from(v.try_clone().ok()?).ok())
+        .filter(|p| p.as_str() != "/")
 }
 
 fn flag(properties: &HashMap<String, OwnedValue>, key: &str) -> bool {
@@ -126,10 +184,71 @@ fn first_mount(filesystem: &HashMap<String, OwnedValue>) -> Option<PathBuf> {
 pub enum Operation {
     Mount,
     Eject,
+    Unlock,
 }
 
 /// The notification for a failed call on the device `name`; `None` when the person dismissed the polkit prompt.
 pub fn notice(operation: Operation, name: &str, e: &zbus::Error) -> Option<Notice> {
+    notice_of(operation, name, e, &[], None)
+}
+
+/// The names of the programs that hold a file or a working folder under `mount`, read from the process table at
+/// `proc` (`/proc`): sorted, each once. Processes whose table can't be read, as another user's, are left out.
+pub fn holders(proc: &Path, mount: &Path) -> Vec<String> {
+    let Ok(processes) = std::fs::read_dir(proc) else {
+        return Vec::new();
+    };
+    let under = |link: PathBuf| std::fs::read_link(link).is_ok_and(|to| to.starts_with(mount));
+    let mut names: Vec<String> = processes
+        .flatten()
+        .filter(|p| {
+            p.file_name()
+                .to_str()
+                .is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .map(|p| p.path())
+        .filter(|process| {
+            under(process.join("cwd"))
+                || std::fs::read_dir(process.join("fd"))
+                    .is_ok_and(|fds| fds.flatten().any(|fd| under(fd.path())))
+        })
+        .filter_map(|process| std::fs::read_to_string(process.join("comm")).ok())
+        .map(|name| shown(name.trim()).trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// How a busy file system's notice names the programs `holders` that use it.
+fn using(holders: &[String]) -> String {
+    let quoted = |name: &String| format!("“{}”", escape(name));
+    match holders {
+        [] => "One or more applications are using it. Quit them and try again.".to_owned(),
+        [one] => format!("{} is using it. Quit it and try again.", quoted(one)),
+        [first, second] => format!(
+            "{} and {} are using it. Quit them and try again.",
+            quoted(first),
+            quoted(second)
+        ),
+        [first, rest @ ..] => format!(
+            "{} and {} other applications are using it. Quit them and try again.",
+            quoted(first),
+            rest.len()
+        ),
+    }
+}
+
+/// [`notice`] for a file system that `holders` keep busy, and with every copy of `secret` cut from the service's
+/// words.
+fn notice_of(
+    operation: Operation,
+    name: &str,
+    e: &zbus::Error,
+    holders: &[String],
+    secret: Option<&Passphrase>,
+) -> Option<Notice> {
     let (error, message) = match e {
         zbus::Error::MethodError(error, message, _) => (Some(error.as_str()), message.as_deref()),
         _ => (None, None),
@@ -137,22 +256,27 @@ pub fn notice(operation: Operation, name: &str, e: &zbus::Error) -> Option<Notic
     let failed = match operation {
         Operation::Mount => format!("“{name}” couldn't be mounted"),
         Operation::Eject => format!("“{name}” couldn't be ejected"),
+        Operation::Unlock => format!("“{name}” couldn't be unlocked"),
     };
+    // a service text that holds the passphrase is not shown at all: one with the passphrase cut out would show where it
+    // was, which gives a short one away
+    let message = message
+        .filter(|m| secret.is_none_or(|s| s.is_empty() || !m.contains(s.text())))
+        .map(str::to_owned);
     let (summary, body) = match error.and_then(|n| n.strip_prefix(ERROR)) {
         Some("NotAuthorizedDismissed") => return None,
-        Some("DeviceBusy") => (
-            format!("“{name}” wasn't ejected"),
-            "One or more applications are using it. Quit them and try again.".to_string(),
-        ),
+        Some("DeviceBusy") => (format!("“{name}” wasn't ejected"), using(holders)),
         Some("NotAuthorizedCanObtain") => (failed, "Couldn't ask for permission.".to_string()),
         Some("NotAuthorized") => (failed, "You aren't allowed to do this.".to_string()),
         _ => (
             failed,
-            escape(&shown(
-                &message
-                    .filter(|m| !m.is_empty())
-                    .map_or_else(|| e.to_string(), str::to_string),
-            )),
+            escape(&shown(&message.filter(|m| !m.is_empty()).unwrap_or_else(
+                || match secret {
+                    // the error's own text could hold what the call sent
+                    Some(_) => "The call failed.".to_owned(),
+                    None => e.to_string(),
+                },
+            ))),
         ),
     };
     Some(Notice {
@@ -273,8 +397,37 @@ impl Volumes {
         });
     }
 
+    /// Unlock the encrypted container `device` with `passphrase`, then mount the file system it holds:
+    /// [`Report::Mounted`] for `device` follows, or a notification and [`Report::Done`].
+    pub fn unlock(&self, device: &Device, passphrase: Passphrase) {
+        let device = device.clone();
+        self.call(device.object.clone(), move |system, notices| {
+            let mounted = unlock(system, &device, &passphrase)
+                .map_err(|e| (Operation::Unlock, e))
+                .and_then(|cleartext| {
+                    mount_object(system, &cleartext).map_err(|e| (Operation::Mount, e))
+                });
+            match mounted {
+                Ok(at) => Report::Mounted {
+                    object: device.object,
+                    at,
+                },
+                Err((operation, e)) => {
+                    let secret = (operation == Operation::Unlock).then_some(&passphrase);
+                    if let Some(notice) = notice_of(operation, &device.name, &e, &[], secret) {
+                        notices.post(notice);
+                    }
+                    Report::Done {
+                        object: device.object,
+                    }
+                }
+            }
+        });
+    }
+
     /// Eject the drive of `device`: unmount `filesystems` (the drive's mounted ones) in order, stopping at the first
-    /// that fails, then eject the drive, else power it off. [`Report::Done`] for `device` follows.
+    /// that fails, lock the containers they were unlocked from, then eject the drive, else power it off.
+    /// [`Report::Done`] for `device` follows.
     pub fn eject(&self, device: &Device, filesystems: Vec<Device>) {
         let device = device.clone();
         self.call(device.object.clone(), move |system, notices| {
@@ -356,12 +509,40 @@ impl Media {
             .map(|d| Place::removable(&d.name, d.mount.as_deref(), self.busy.contains(&d.object)))
     }
 
+    /// The device of row `index` and whether a call on it is under way.
+    pub fn device(&self, index: usize) -> Option<(&Device, bool)> {
+        let device = self.devices.get(index)?;
+        Some((device, self.busy.contains(&device.object)))
+    }
+
+    /// The row of the device whose block is `object`.
+    pub fn index_of(&self, object: &OwnedObjectPath) -> Option<usize> {
+        self.devices.iter().position(|d| &d.object == object)
+    }
+
+    /// Start a mount or an unlock of device `index`: the device, busy from now on; `None` while a call on it is under
+    /// way.
+    pub fn start(&mut self, index: usize) -> Option<Device> {
+        let device = self
+            .devices
+            .get(index)
+            .filter(|d| !self.busy.contains(&d.object))?
+            .clone();
+        self.busy.insert(device.object.clone());
+        Some(device)
+    }
+
     /// Whether a device is mounted on `dir` or a folder holding it.
     pub fn holds(&self, dir: &Path) -> bool {
+        self.holding(dir).is_some()
+    }
+
+    /// The device mounted on `dir` or the folder nearest it that holds it.
+    pub fn holding(&self, dir: &Path) -> Option<&Device> {
         self.devices
             .iter()
-            .filter_map(|d| d.mount.as_deref())
-            .any(|m| dir.starts_with(m))
+            .filter(|d| d.mount.as_deref().is_some_and(|m| dir.starts_with(m)))
+            .max_by_key(|d| d.mount.as_ref().map_or(0, |m| m.components().count()))
     }
 
     /// Start the eject of the drive of device `index`: the device and the drive's mounted file systems, busy from
@@ -424,20 +605,69 @@ fn no_options() -> HashMap<&'static str, Value<'static>> {
 }
 
 fn mount(system: &Connection, device: &Device) -> zbus::Result<PathBuf> {
-    let at: String = system
-        .call_method(
+    mount_object(system, &device.object)
+}
+
+/// How long the file system of a container just unlocked may take to appear, and the wait between two tries.
+const CLEARTEXT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+const CLEARTEXT_RETRY: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Mount the file system of `object`. A block udisks has not probed yet has no file system interface: that is tried
+/// again for up to [`CLEARTEXT_WAIT`].
+fn mount_object(system: &Connection, object: &OwnedObjectPath) -> zbus::Result<PathBuf> {
+    let deadline = std::time::Instant::now() + CLEARTEXT_WAIT;
+    loop {
+        let called = system.call_method(
             Some(UDISKS_NAME),
-            device.object.as_str(),
+            object.as_str(),
             Some(FILESYSTEM),
             "Mount",
             &(no_options(),),
-        )?
-        .body()
-        .deserialize()?;
-    Ok(PathBuf::from(at))
+        );
+        match called {
+            Ok(reply) => return Ok(PathBuf::from(reply.body().deserialize::<String>()?)),
+            Err(e) if not_there_yet(&e) && std::time::Instant::now() < deadline => {
+                std::thread::sleep(CLEARTEXT_RETRY)
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }
 
-/// Unmount `filesystems`, then eject or power off the drive; the notice of a failed call.
+/// Whether `e` says the object or its file system interface is not exported (yet).
+fn not_there_yet(e: &zbus::Error) -> bool {
+    let name = match e {
+        zbus::Error::MethodError(name, _, _) => name.as_str(),
+        _ => return false,
+    };
+    matches!(
+        name,
+        "org.freedesktop.DBus.Error.UnknownInterface"
+            | "org.freedesktop.DBus.Error.UnknownMethod"
+            | "org.freedesktop.DBus.Error.UnknownObject"
+    )
+}
+
+/// Unlock the container `device` with `passphrase`; the object of the block it opens.
+fn unlock(
+    system: &Connection,
+    device: &Device,
+    passphrase: &Passphrase,
+) -> zbus::Result<OwnedObjectPath> {
+    system
+        .call_method(
+            Some(UDISKS_NAME),
+            device.object.as_str(),
+            Some(ENCRYPTED),
+            "Unlock",
+            &(passphrase.text(), no_options()),
+        )?
+        .body()
+        .deserialize()
+}
+
+/// Unmount `filesystems`, lock the containers they came from, then eject or power off the drive; the notice of a
+/// failed call, naming what keeps a busy file system in use.
 fn eject(system: &Connection, device: &Device, filesystems: &[Device]) -> Option<Notice> {
     for fs in filesystems {
         let unmounted = system.call_method(
@@ -448,7 +678,25 @@ fn eject(system: &Connection, device: &Device, filesystems: &[Device]) -> Option
             &(no_options(),),
         );
         if let Err(e) = unmounted {
-            return notice(Operation::Eject, &fs.name, &e);
+            let busy = matches!(&e, zbus::Error::MethodError(name, _, _)
+                if name.as_str().strip_prefix(ERROR) == Some("DeviceBusy"));
+            let holders = match &fs.mount {
+                Some(mount) if busy => holders(Path::new("/proc"), mount),
+                _ => Vec::new(),
+            };
+            return notice_of(Operation::Eject, &fs.name, &e, &holders, None);
+        }
+        if let Some(container) = &fs.backing {
+            let locked = system.call_method(
+                Some(UDISKS_NAME),
+                container.as_str(),
+                Some(ENCRYPTED),
+                "Lock",
+                &(no_options(),),
+            );
+            if let Err(e) = locked {
+                return notice(Operation::Eject, &fs.name, &e);
+            }
         }
     }
     let method = if device.ejectable {
@@ -557,6 +805,29 @@ mod tests {
         assert_eq!(
             link.body,
             "Error mounting /dev/sdb1 at /run/media/ada/&lt;a href=x&gt;y&lt;/a&gt;: bad superblock"
+        );
+    }
+
+    #[test]
+    fn an_unlock_failure_shows_the_service_text_only_when_it_does_not_hold_the_passphrase() {
+        let failed = |message: &str, secret: &str| {
+            notice_of(
+                Operation::Unlock,
+                "Secrets",
+                &error("org.freedesktop.UDisks2.Error.Failed", message),
+                &[],
+                Some(&Passphrase::new(secret)),
+            )
+            .unwrap()
+            .body
+        };
+        let wrong = "Error unlocking /dev/sdb1: Failed to activate device: Incorrect passphrase.";
+        assert_eq!(failed(wrong, "correct horse battery"), wrong);
+        // a short passphrase found in the text: nothing of the text is shown, so nothing tells where it was
+        assert_eq!(failed(wrong, "dev"), "The call failed.");
+        assert_eq!(
+            failed("Error unlocking /dev/sdb1: bad key hunter2", "hunter2"),
+            "The call failed."
         );
     }
 }

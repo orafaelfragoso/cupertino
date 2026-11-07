@@ -392,6 +392,15 @@ impl SurfaceRoles for DockRoles {
             Err(_) => return Some(Err(WaylandError::Protocol("no layer surface for the dock"))),
         };
         let surface = layer.surface();
+        if matches!(kind, Kind::Bar | Kind::Edge) {
+            // the server allows one dock per output, and the toolkit makes a window before it closes the one it
+            // replaces (the bar moving here, a strip where the bar was): that one gives its role up first
+            for s in self.surfaces.borrow_mut().all.iter_mut() {
+                if s.output == key {
+                    s.role = None;
+                }
+            }
+        }
         let role = match kind {
             Kind::Bar | Kind::Edge => match self.shell.dock(conn, surface, output) {
                 Ok(role) => Some(role),

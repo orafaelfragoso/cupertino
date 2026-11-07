@@ -1083,6 +1083,57 @@ fn the_menu_bar_process_outlives_an_unplugged_display() {
     assert!(committed_buffer(&server.state, "cupertino-menubar").is_some());
 }
 
+/// Each output holds one dock role, the bar's or an edge strip's. Resting the pointer on the second display's strip
+/// moves the bar there and a strip to the first display, and unplugging the display the bar is on moves it back: the
+/// process keeps running through both, so no role was asked for on an output whose old one was still held.
+#[test]
+fn the_dock_process_moves_between_displays_and_keeps_running() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let Some(mut server) = Server::start(vec![real_process("cupertino-dock", &bus)], true) else {
+        return;
+    };
+    let first = server.state.outputs[0].id;
+    server.wait_until("the dock to draw its bar", |s| s.dock_rect(first).is_some());
+    let display = headless::HeadlessDisplay {
+        name: "headless-2".into(),
+        size: (800, 600),
+        physical_mm: (0, 0),
+    };
+    let head = headless::add_display(&mut server.state, &display, None).unwrap();
+    // the strip is drawn, so the pointer resting on it has it under it
+    let strip_drawn = |s: &Cupertino, output: usize| {
+        s.outputs.get(output).is_some_and(|o| {
+            layer_map_for_output(&o.output).layers().any(|l| {
+                l.namespace() == "cupertino-dock-edge"
+                    && with_renderer_surface_state(l.wl_surface(), |r| r.buffer().is_some())
+                        .unwrap_or(false)
+            })
+        })
+    };
+    server.wait_until("an edge strip on the second display", |s| strip_drawn(s, 1));
+    let pid = server.state.supervisor.pid_of("cupertino-dock");
+    let second = server.state.outputs[1].id;
+    let rect = server.state.outputs[1].rect;
+    // the strip is the display's bottom row
+    let at = (rect.x + rect.w / 2.0, rect.y + rect.h - 0.5);
+    server.state.pointer_moved_to(at.into(), 10, None);
+    server.step();
+    server.wait_until("the bar on the second display", |s| {
+        s.dock_rect(second).is_some()
+    });
+    server.wait_until("an edge strip on the first display", |s| strip_drawn(s, 0));
+    assert_eq!(server.state.supervisor.pid_of("cupertino-dock"), pid);
+
+    headless::remove_display(&mut server.state, head).unwrap();
+    server.wait_until("the bar back on the first display", |s| {
+        s.dock_rect(first).is_some()
+    });
+    assert_eq!(server.state.supervisor.pid_of("cupertino-dock"), pid);
+}
+
 /// The switcher's panel is the dock process's: after the show delay it commits a panel-sized
 /// buffer on its overlay surface centred on the output (whatever the dock bar and the menu bar reserve), and a
 /// commit removes the surface after the fade. The application has no desktop entry and no icon of its own, so its tile

@@ -24,6 +24,9 @@ pub(crate) struct SemanticsPass {
     pub(crate) roving_items: Vec<NodeId>,
     /// The roots of hidden subtrees, in reading order.
     pub(crate) hidden: Vec<NodeId>,
+    /// The node assistive technology is told holds the focus: the focused node, or its nearest ancestor in the tree
+    /// when it has no role of its own.
+    pub(crate) focus: Option<NodeId>,
 }
 
 /// What a mounted node declares, outside a pass.
@@ -72,6 +75,7 @@ pub(crate) fn build<M: 'static>(
         roving_groups: Vec::new(),
         roving_items: Vec::new(),
         hidden: Vec::new(),
+        focus: None,
     };
     // Each fallback and where it would stand among the Tab stops, in reading order.
     let mut fallbacks = Vec::new();
@@ -225,6 +229,21 @@ pub(crate) fn build<M: 'static>(
             if let Some(node) = pass.nodes.get_mut(&id) {
                 node.states.focusable = true;
             }
+        }
+    }
+    // A focus left on a node without a role (the container of a list's rows, once the row it was on went away) is
+    // read on its nearest ancestor in the tree, which then holds it: assistive technology is never told of a focus it
+    // cannot see. The keyboard stays where it is.
+    pass.focus = focus.filter(|&n| tree.contains(n)).and_then(|n| {
+        tree.path(n)
+            .into_iter()
+            .rev()
+            .find(|a| pass.nodes.contains_key(a))
+    });
+    if pass.focus != focus {
+        if let Some(node) = pass.focus.and_then(|n| pass.nodes.get_mut(&n)) {
+            node.states.focused = true;
+            node.states.focusable = true;
         }
     }
     pass

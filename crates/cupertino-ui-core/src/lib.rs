@@ -417,6 +417,9 @@ pub struct FrameSnapshot {
     pub pointer_capture: Option<NodeId>,
     pub text_input: Option<NodeId>,
     pub accessibility: Vec<(NodeId, AccessibilityNode)>,
+    /// The node of `accessibility` assistive technology is told holds the focus: `focus`, or its nearest ancestor in
+    /// `accessibility` when `focus` has no role of its own.
+    pub accessibility_focus: Option<NodeId>,
     pub display_list: DisplayList,
     pub pending: Pending,
     /// What the window's last layout did.

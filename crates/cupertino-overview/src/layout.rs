@@ -146,7 +146,62 @@ pub fn pack(windows: &[Rect], area: Rect, p: &LayoutParams) -> Packing {
             c.1 += dy * damping;
         }
     };
+    let rects = centred(separated(rects, windows, work, p), work, p.lift);
     Packing { rects, passes }
+}
+
+/// Smallest space between two packed windows: the gap less the tolerance the packing stops at.
+fn min_space(p: &LayoutParams) -> f64 {
+    (p.gap - p.tolerance).max(0.0)
+}
+
+/// Whether `a` and `b` are closer than `space` on both axes.
+fn too_close(a: &Rect, b: &Rect, space: f64) -> bool {
+    let (a, b) = (a.inset(-space / 2.0), b.inset(-space / 2.0));
+    a.right().min(b.right()) - a.x.max(b.x) > 1e-9
+        && a.bottom().min(b.bottom()) - a.y.max(b.y) > 1e-9
+}
+
+/// The packing stopped at the pass limit with windows still closer than the gap less the
+/// tolerance: put them in a grid of the work area instead, in the reading order of where the
+/// packing left them, at one common scale, each centred in its cell. A settled packing is
+/// returned as it is.
+fn separated(rects: Vec<Rect>, windows: &[Rect], work: Rect, p: &LayoutParams) -> Vec<Rect> {
+    let space = min_space(p);
+    let n = rects.len();
+    let crowded = (0..n).any(|i| (i + 1..n).any(|j| too_close(&rects[i], &rects[j], space)));
+    if !crowded {
+        return rects;
+    }
+    let cols = (n as f64).sqrt().ceil() as usize;
+    let rows = n.div_ceil(cols);
+    let cell_w = ((work.w - p.gap * (cols - 1) as f64) / cols as f64).max(1.0);
+    let cell_h = ((work.h - p.gap * (rows - 1) as f64) / rows as f64).max(1.0);
+    let s = windows.iter().fold(p.max_scale, |s, w| {
+        s.min(cell_w / w.w.max(1.0)).min(cell_h / w.h.max(1.0))
+    });
+    let mut out = vec![Rect::default(); n];
+    for (k, i) in reading_order(&rects).into_iter().enumerate() {
+        let (col, row) = (k % cols, k / cols);
+        let cx = work.x + col as f64 * (cell_w + p.gap) + cell_w / 2.0;
+        let cy = work.y + row as f64 * (cell_h + p.gap) + cell_h / 2.0;
+        let (w, h) = (windows[i].w * s, windows[i].h * s);
+        out[i] = Rect::new(cx - w / 2.0, cy - h / 2.0, w, h);
+    }
+    out
+}
+
+/// Move the arrangement as a whole so its bounding box is centred across `work` and `lift` above
+/// its middle, kept inside `work`: the windows keep their places relative to each other, and the
+/// arrangement is balanced in the area whatever the windows' desktop places were.
+fn centred(rects: Vec<Rect>, work: Rect, lift: f64) -> Vec<Rect> {
+    let Some(used) = bounds(&rects) else {
+        return rects;
+    };
+    let x = (work.cx() - used.w / 2.0).clamp(work.x, (work.right() - used.w).max(work.x));
+    let y = (work.cy() - lift - used.h / 2.0).clamp(work.y, (work.bottom() - used.h).max(work.y));
+    let (dx, dy) = (x - used.x, y - used.y);
+    rects.into_iter().map(|r| r.translate(dx, dy)).collect()
 }
 
 /// The packed rectangles of `windows` in `area`, in input order.
@@ -270,16 +325,64 @@ mod tests {
     }
 
     #[test]
-    fn a_lone_window_keeps_its_size_and_rises_by_the_lift() {
+    fn a_lone_window_keeps_its_size_and_sits_centred_the_lift_above_the_middle() {
         let w = Rect::new(400.0, 300.0, 800.0, 600.0);
         let packing = check(&[w], AREA);
         let r = packing.rects[0];
+        let work = AREA.inset(20.0);
         assert_eq!(packing.passes, 0);
         assert_eq!((r.w, r.h), (800.0, 600.0));
-        assert!((r.cx() - w.cx()).abs() < 1e-9);
+        assert!((r.cx() - work.cx()).abs() < 1e-9, "centred across: {r:?}");
         assert!(
-            (r.cy() - (w.cy() - 20.0)).abs() < 1e-9,
-            "20 pt above its centre: {r:?}"
+            (r.cy() - (work.cy() - 20.0)).abs() < 1e-9,
+            "20 pt above the middle: {r:?}"
+        );
+    }
+
+    #[test]
+    fn the_arrangement_is_balanced_about_the_centre_of_the_area() {
+        // three windows of different sizes, all on the right of the desktop
+        let windows = [
+            Rect::new(1200.0, 100.0, 600.0, 400.0),
+            Rect::new(1400.0, 500.0, 500.0, 450.0),
+            Rect::new(1650.0, 150.0, 200.0, 150.0),
+        ];
+        let packing = check(&windows, AREA);
+        let used = bounds(&packing.rects).unwrap();
+        let work = AREA.inset(20.0);
+        assert!((used.cx() - work.cx()).abs() < 1e-6, "{used:?} in {work:?}");
+        assert!(
+            (used.cy() - (work.cy() - 20.0)).abs() < 1e-6,
+            "{used:?} in {work:?}"
+        );
+    }
+
+    #[test]
+    fn windows_still_crowded_at_the_pass_limit_are_shrunk_apart() {
+        let p = LayoutParams {
+            max_passes: 0,
+            ..LayoutParams::default()
+        };
+        let w = Rect::new(100.0, 100.0, 800.0, 600.0);
+        let packing = pack(
+            &[w, w.translate(10.0, 0.0), w.translate(0.0, 10.0)],
+            AREA,
+            &p,
+        );
+        let r = &packing.rects;
+        for i in 0..r.len() {
+            for j in i + 1..r.len() {
+                assert!(
+                    !too_close(&r[i], &r[j], min_space(&p)),
+                    "{:?} {:?}",
+                    r[i],
+                    r[j]
+                );
+            }
+        }
+        assert!(
+            (r[0].w / r[0].h - 800.0 / 600.0).abs() < 1e-9,
+            "aspect kept"
         );
     }
 

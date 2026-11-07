@@ -23,7 +23,13 @@ Window overview model with no compositor dependency.
 The display rectangle is inset by 20 pt. Windows are placed at their scaled centres 20 pt up, pushed apart along the line
 through their centres, and shrunk by `s·(r + 0.9·(1 − r))`, where `r` is the room left over the room used. The pass repeats
 until no pair overlaps by more than 4 pt and the largest move is under 4 pt, or 499 passes have run. 8 pt is kept between
-windows.
+windows. A packing that ends at the pass limit with windows still closer than 4 pt falls back to a grid of the work area in
+the same reading order, so thumbnails never overlap. The arrangement is then moved as a whole so its bounding box is centred
+across the work area and sits the lift above its middle: it is balanced whatever the windows' desktop places were.
+
+In the all-windows mode the work area starts below the workspaces strip: its top is the bottom of the strip's slots at
+their tallest (expanded, whether the strip is pinned open or expands on hover) plus `BarConfig::layout_gap`, 20 pt
+(`BarConfig::strip_bottom`, `BarConfig::thumbnails_top`).
 
 - **** the inset, the gap value, the lift, the tolerance, the shrink constant and the pass limit.
 - **** the gap's role, the start scale from the windows' bounding box, scaling about the work area's centre and the
@@ -40,4 +46,7 @@ approximate or unknown.
 
 Unit tests cover packing (containment, the gap, one common scale, the lift, the pass limit, the shrink constant idle while
 room is left, determinism), the transition and the bar. `tests/overview.rs` covers gestures, modes, reflow, selection,
-keyboard navigation and title fading.
+keyboard navigation and title fading, and
+`three_windows_stay_below_the_strip_and_apart_at_every_size_and_scale` checks three windows of different sizes (one small)
+in four arrangements on six output modes at scales 1, 1.25, 1.5 and 2, edges snapped to device pixels: every thumbnail at
+least 20 pt below the strip, none over a slot or another thumbnail, the arrangement centred, and hit testing on each frame.

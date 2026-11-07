@@ -1,6 +1,7 @@
 //! The file-chooser, app-chooser, screen-sharing and screenshot windows: one for each open request, drawn with CupertinoKit. The D-Bus side
 //! hands its events to the [`inbox`]; [`Dialogs`] is resident and keeps running while no dialog is open.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -15,6 +16,7 @@ use cupertino_kit::controls::{
     SplitView, TextRole,
 };
 use cupertino_kit::core::{next_resource_id, Checked, CommandRegistry, Key, Shortcut};
+use cupertino_kit::file_icons::FileIcons;
 use cupertino_kit::geometry::{Insets, Point, Size};
 use cupertino_kit::layout::ScrollState;
 use cupertino_kit::platform::{DecorationMode, Keysym, Mods};
@@ -120,6 +122,15 @@ impl Inbox {
     }
 }
 
+/// Start the arming delay of consent window `id`, whose window is `window`, once the window has presented its first
+/// frame: a window the server is slow to show takes no answer before the person could see it for the whole delay.
+fn arm_when_shown(id: u64, window: WindowKey) -> Command<Message> {
+    Command::OnPresented {
+        window,
+        message: Message::Shown(id),
+    }
+}
+
 /// Arm consent window `id` once its arming delay has passed, on a thread of its own.
 fn arm(id: u64, arming: Arming) -> Command<Message> {
     let (sender, armed) = async_channel::bounded(1);
@@ -165,6 +176,8 @@ pub struct Model {
     pickers: Vec<Picker>,
     apps: Vec<AppPicker>,
     app_icons: AppIcons,
+    /// The icons of the file chooser's rows, by the items' types.
+    file_icons: RefCell<FileIcons>,
     consents: Vec<Consent>,
 }
 
@@ -241,7 +254,8 @@ struct Picker {
     remember: bool,
     /// The arming delay has passed: a row can be picked and shared.
     armed: bool,
-    arming: Arming,
+    /// From the window's first presented frame; `None` before it.
+    arming: Option<Arming>,
 }
 
 /// The question whether an app may take a screenshot.
@@ -252,7 +266,14 @@ struct Consent {
     ask: screenshot::Ask,
     /// The arming delay has passed: Take Screenshot can be pressed.
     armed: bool,
-    arming: Arming,
+    /// From the window's first presented frame; `None` before it.
+    arming: Option<Arming>,
+}
+
+/// Whether a window armed by its message, whose delay started at `arming`, takes an answer now: the delay has passed
+/// by the clock too.
+fn ready(armed: bool, arming: Option<Arming>) -> bool {
+    armed && arming.is_some_and(|a| a.armed(Instant::now()))
 }
 
 impl Picker {
@@ -262,7 +283,7 @@ impl Picker {
 
     /// Whether the window takes a pick: armed by its message, and the delay has passed by the clock too.
     fn ready(&self) -> bool {
-        self.armed && self.arming.armed(Instant::now())
+        ready(self.armed, self.arming)
     }
 }
 
@@ -320,6 +341,8 @@ pub enum Message {
     /// The activation token the server made for app chooser `0`'s choice `1`.
     Opened(u64, String, Option<String>),
     TakeScreenshot(u64),
+    /// Consent window `0` has presented its first frame: its arming delay starts.
+    Shown(u64),
     /// The arming delay of consent window `0` has passed.
     Armed(u64),
     /// The person ticked or unticked remembering the share of chooser `0`.
@@ -331,6 +354,14 @@ const NO_SCROLL: ScrollState = ScrollState {
     content: Size::ZERO,
     viewport: Size::ZERO,
 };
+
+/// The session's MIME database, which types the file chooser's rows for their icons; none when it cannot be read.
+fn types() -> cupertino_apps::MimeDatabase {
+    cupertino_apps::XdgDirs::from_env()
+        .ok()
+        .and_then(|dirs| cupertino_apps::MimeDatabase::load(&dirs.all_data_dirs()).ok())
+        .unwrap_or_default()
+}
 
 fn home() -> PathBuf {
     std::env::var_os("HOME")
@@ -386,8 +417,7 @@ impl Model {
                     self.app_icons.load_names(ask.app_icon.as_deref());
                     // nothing is chosen until the person picks a row after the arming delay, so keys meant for the
                     // app cannot share
-                    let arming = Arming::new(Instant::now());
-                    commands.push(arm(id, arming));
+                    commands.push(arm_when_shown(id, picker_window_key(id)));
                     self.pickers.push(Picker {
                         id,
                         handle,
@@ -397,7 +427,7 @@ impl Model {
                         scroll: NO_SCROLL,
                         remember: false,
                         armed: false,
-                        arming,
+                        arming: None,
                     });
                 }
                 Event::ScreenCast(screen_cast::Event::Close { handle }) => {
@@ -435,15 +465,14 @@ impl Model {
                     let id = self.next;
                     self.next += 1;
                     self.app_icons.load_names(ask.app_icon.as_deref());
-                    let arming = Arming::new(Instant::now());
-                    commands.push(arm(id, arming));
+                    commands.push(arm_when_shown(id, consent_window_key(id)));
                     self.consents.push(Consent {
                         id,
                         handle,
                         reply,
                         ask: *ask,
                         armed: false,
-                        arming,
+                        arming: None,
                     });
                 }
                 Event::Screenshot(screenshot::Event::Close { handle }) => {
@@ -517,6 +546,7 @@ impl Application for Dialogs {
                 theme: ThemeIcons::new(&Assets::discover()),
                 loaded: HashMap::new(),
             },
+            file_icons: RefCell::new(FileIcons::discover(types(), HashMap::new())),
             consents: Vec::new(),
         };
         let mut commands = model.take(inbox().take());
@@ -667,6 +697,25 @@ impl Application for Dialogs {
                     p.remember = on;
                 }
             }
+            Message::Shown(id) => {
+                let arming = Arming::new(Instant::now());
+                let picker = model.picker(id).filter(|p| p.arming.is_none());
+                let shown = match picker {
+                    Some(p) => {
+                        p.arming = Some(arming);
+                        true
+                    }
+                    None => model
+                        .consents
+                        .iter_mut()
+                        .find(|c| c.id == id && c.arming.is_none())
+                        .map(|c| c.arming = Some(arming))
+                        .is_some(),
+                };
+                if shown {
+                    commands.push(arm(id, arming));
+                }
+            }
             Message::Armed(id) => {
                 if let Some(p) = model.picker(id) {
                     p.armed = true;
@@ -723,7 +772,7 @@ impl Application for Dialogs {
                 if model
                     .consents
                     .iter()
-                    .any(|c| c.id == id && c.armed && c.arming.armed(Instant::now()))
+                    .any(|c| c.id == id && ready(c.armed, c.arming))
                 {
                     model.finish_consent(id, screenshot::Answer::Granted)
                 }
@@ -736,7 +785,7 @@ impl Application for Dialogs {
         model
             .open
             .iter()
-            .map(|d| window(d, &model.places))
+            .map(|d| window(d, &model.places, &model.file_icons))
             .chain(
                 model
                     .pickers
@@ -866,13 +915,18 @@ fn sidebar(d: &Dialog, places: &[Place]) -> Element<Message> {
     .key("places")
 }
 
-fn files(d: &Dialog) -> Element<Message> {
+fn files(d: &Dialog, icons: &RefCell<FileIcons>) -> Element<Message> {
     let id = d.id;
-    let rows: Vec<(bool, String)> = d
+    let mut icons = icons.borrow_mut();
+    let rows: Vec<(Vec<ImageSource>, String)> = d
         .chooser
         .entries()
         .iter()
-        .map(|e| (e.is_dir, e.name.clone()))
+        .map(|e| {
+            let mime = icons.database().file_type(&e.path, e.is_dir).to_owned();
+            let icon = icons.images(&e.path, &mime, false, ROW_ICON);
+            (icon, e.name.clone())
+        })
         .collect();
     let names: Vec<String> = rows.iter().map(|(_, n)| n.clone()).collect();
     let keys = names.clone();
@@ -891,16 +945,15 @@ fn files(d: &Dialog) -> Element<Message> {
         multiple: d.chooser.ask().multiple,
         initial: false,
         row: Box::new(move |i, selected| {
-            let (is_dir, name) = &rows[i];
-            row(
-                symbol(if *is_dir {
-                    "symbol.folder"
-                } else {
-                    "symbol.doc"
-                }),
-                name.clone(),
-                selected,
-            )
+            let (icon, name) = &rows[i];
+            let icon = Element::new(Image {
+                sources: icon.clone(),
+                size: Size::new(ROW_ICON, ROW_ICON),
+                fit: ImageFit::Contain,
+                radius: 0.0,
+                label: None,
+            });
+            row(icon, name.clone(), selected)
         }),
         key: Some(Box::new(move |i| Key::from(keys[i].clone()))),
         type_select: Some(Box::new(move |i| names[i].clone())),
@@ -1096,14 +1149,14 @@ fn bar_row(
     })
 }
 
-fn window(d: &Dialog, places: &[Place]) -> Window<Message> {
+fn window(d: &Dialog, places: &[Place], icons: &RefCell<FileIcons>) -> Window<Message> {
     let id = d.id;
     let ask = d.chooser.ask();
     let browser = Element::from(SplitView {
         label: "Sidebar".into(),
         axis: Axis::Horizontal,
         leading: sidebar(d, places),
-        trailing: files(d),
+        trailing: files(d, icons),
         layout: d.split,
         min_leading: 120.0,
         min_trailing: 320.0,
@@ -1296,7 +1349,7 @@ fn picker_window(p: &Picker, app_icons: &AppIcons) -> Window<Message> {
         ],
     );
     Window {
-        key: WindowKey(Key::Str(format!("picker-{id}").into())),
+        key: picker_window_key(id),
         spec: WindowSpec {
             title: "Share Screen".to_owned(),
             app_id: "org.cupertino.Portal".into(),
@@ -1358,6 +1411,14 @@ fn shortened(target: &str) -> String {
 
 fn app_window_key(id: u64) -> WindowKey {
     WindowKey(Key::Str(format!("apps-{id}").into()))
+}
+
+fn picker_window_key(id: u64) -> WindowKey {
+    WindowKey(Key::Str(format!("picker-{id}").into()))
+}
+
+fn consent_window_key(id: u64) -> WindowKey {
+    WindowKey(Key::Str(format!("consent-{id}").into()))
 }
 
 fn app_window(a: &AppPicker, app_icons: &AppIcons) -> Window<Message> {
@@ -1517,7 +1578,7 @@ fn consent_window(c: &Consent, app_icons: &AppIcons) -> Window<Message> {
         ],
     );
     Window {
-        key: WindowKey(Key::Str(format!("consent-{id}").into())),
+        key: consent_window_key(id),
         spec: WindowSpec {
             title: "Screenshot".to_owned(),
             app_id: "org.cupertino.Portal".into(),
@@ -1622,6 +1683,13 @@ mod tests {
     }
 
     fn start() -> (TestDriver<Dialogs>, WindowId) {
+        let mut driver = driver();
+        let window = show(&mut driver);
+        (driver, window)
+    }
+
+    /// The dialogs on a test window system that has configured no window yet.
+    fn driver() -> TestDriver<Dialogs> {
         let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
         let preferences = ThemePreferences {
             appearance: Appearance::Light,
@@ -1654,13 +1722,11 @@ mod tests {
             clock: Arc::new(ManualClock::new(Timestamp(0))),
             on_window_error: None,
         };
-        let mut driver = TestDriver::new(
+        TestDriver::new(
             Capabilities::default(),
             options,
             ManualClock::new(Timestamp(0)),
-        );
-        let window = show(&mut driver);
-        (driver, window)
+        )
     }
 
     /// Configures the window of the request that waits.
@@ -1821,6 +1887,62 @@ mod tests {
 
     /// The inbox is the process's, so the tests that post to it take turns.
     static INBOX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A window the server shows late: the whole arming delay passes between the request and the window's first
+    /// configure, and still nothing is taken until the delay has passed again from the first frame.
+    #[test]
+    fn the_arming_delay_starts_at_the_first_frame_the_window_presents() {
+        let _turn = INBOX.lock().unwrap_or_else(|e| e.into_inner());
+        let (sender, answer) = async_channel::bounded(1);
+        inbox().push(screenshot::Event::Ask {
+            handle: handle(40),
+            ask: Box::new(screenshot::Ask {
+                app_id: "org.example.Draw".to_owned(),
+                app_name: Some("Drawing".to_owned()),
+                app_icon: None,
+                parent_window: String::new(),
+            }),
+            reply: screenshot::Reply(sender),
+        });
+        let mut driver = driver();
+        driver.run_until_idle(budget()).unwrap();
+        let window = driver.runtime().windows()[0].1;
+        // the first frame is late: more than the delay goes by with the window created but never configured
+        std::thread::sleep(crate::consent::ARMING);
+        for _ in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            driver.run_until_idle(budget()).unwrap();
+        }
+        assert!(driver
+            .window_system_mut()
+            .frames(window)
+            .unwrap()
+            .is_empty());
+
+        let active = WindowStates {
+            activated: true,
+            ..WindowStates::default()
+        };
+        driver
+            .window_system_mut()
+            .configure(window, None, active)
+            .unwrap();
+        settle(&mut driver, window);
+        assert!(!driver
+            .window_system_mut()
+            .frames(window)
+            .unwrap()
+            .is_empty());
+        click(&mut driver, window, "take");
+        type_key(&mut driver, window, RETURN, None);
+        assert!(
+            answer.try_recv().is_err(),
+            "the delay starts at the first frame, not at the request"
+        );
+        armed(&mut driver, window);
+        click(&mut driver, window, "take");
+        assert_eq!(answer.try_recv().unwrap(), screenshot::Answer::Granted);
+    }
 
     #[test]
     fn a_request_opens_a_window_that_answers_it_and_the_portal_waits_with_none_open() {

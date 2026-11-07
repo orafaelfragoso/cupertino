@@ -1,6 +1,11 @@
 //! The colour picker's surfaces: one overlay layer surface on every display, on the connection the server handed the
 //! portal, showing a [`Picking`] until the person picks or cancels. The pointer is hidden over the overlay, which draws
 //! its own crosshair. One pick runs at a time; a further one fails at once.
+//!
+//! Each overlay's arming delay starts at the frame callback of its first frame, when the server has shown it. A pick
+//! starts only when every display the server has was copied, and any display added, gone or moved while it runs ends
+//! it with a failure ([`crate::pick::cover`], [`crate::pick::layout_changed`]): no display is ever left without an
+//! overlay, where a click would reach the application under it.
 
 use std::error::Error;
 use std::sync::mpsc;
@@ -12,12 +17,13 @@ use cupertino_shell_client::{
 };
 use cupertino_ui_wayland::{Ready, ShmPresenter};
 use cupertino_wayland_client::{
-    key, Button, Connection, Event, KeyboardEvent, PointerEvent, SurfaceId,
+    key, Button, Connection, Event, KeyboardEvent, OutputId, PointerEvent, SurfaceId,
 };
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::capture::placement;
-use crate::pick::{Picked, Picking};
+use crate::geometry::Placement;
+use crate::pick::{cover, layout_changed, Picked, Picking};
 use crate::screenshot::{PickEvent, PickReply};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -39,6 +45,8 @@ struct Active {
     reply: PickReply,
     picking: Picking,
     surfaces: Vec<Surface>,
+    /// The server's displays as the overlays went up: any change ends the pick.
+    layout: Vec<(OutputId, Placement)>,
     /// The overlay the pointer was last over, which a move away from it redraws.
     pointed: Option<usize>,
 }
@@ -110,7 +118,8 @@ impl PickOverlay {
         }
     }
 
-    /// An overlay on every display of `displays` that is still where it was copied.
+    /// An overlay on every display the server has, each showing the copy made where it is; `Err` when one was not
+    /// copied ([`cover`]).
     fn open(
         &self,
         conn: &mut Connection,
@@ -119,14 +128,14 @@ impl PickOverlay {
         reply: PickReply,
     ) -> Result<Active> {
         let outputs = conn.outputs();
+        let layout: Vec<(OutputId, Placement)> = outputs
+            .iter()
+            .map(|info| (info.id, placement(info)))
+            .collect();
+        let places: Vec<Placement> = layout.iter().map(|&(_, at)| at).collect();
+        let shows = cover(&places, &displays)?;
         let mut surfaces = Vec::new();
-        for (display, copied) in displays.iter().enumerate() {
-            let Some(info) = outputs.iter().find(|info| {
-                let at = placement(info);
-                (at.position, at.size) == (copied.position, copied.size)
-            }) else {
-                continue;
-            };
+        for (info, display) in outputs.iter().zip(shows) {
             let layer = self.layer_shell.layer_surface(
                 conn,
                 &LayerSurfaceConfig {
@@ -152,14 +161,15 @@ impl PickOverlay {
             });
         }
         if surfaces.is_empty() {
-            return Err("no display is where it was copied".into());
+            return Err("the server has no display".into());
         }
         let _ = conn.flush();
         Ok(Active {
             handle,
             reply,
-            picking: Picking::new(displays, Instant::now()),
+            picking: Picking::new(displays),
             surfaces,
+            layout,
             pointed: None,
         })
     }
@@ -196,6 +206,9 @@ impl Active {
             Event::Frame(frame) => {
                 if let Some(i) = self.surface(frame.surface) {
                     self.surfaces[i].presenter.frame_done();
+                    // the server asks for a frame after it has shown the last one: the first such callback starts
+                    // the overlay's arming delay, however late the server shows it
+                    self.picking.shown(self.surfaces[i].display, Instant::now());
                 }
             }
             Event::Extension(event) => match event.downcast_ref::<ShellEvent>() {
@@ -213,15 +226,13 @@ impl Active {
                 _ => {}
             },
             Event::OutputsChanged => {
-                let outputs = conn.outputs();
-                let moved = self.surfaces.iter().any(|s| {
-                    let copied = &self.picking.displays()[s.display];
-                    !outputs.iter().any(|info| {
-                        let at = placement(info);
-                        (at.position, at.size) == (copied.position, copied.size)
-                    })
-                });
-                if moved {
+                let now: Vec<(OutputId, Placement)> = conn
+                    .outputs()
+                    .iter()
+                    .map(|info| (info.id, placement(info)))
+                    .collect();
+                // a display plugged in has no overlay, so a click there would reach the app under it: the pick ends
+                if layout_changed(&self.layout, &now) {
                     return Some(End::Fail("the displays changed".to_owned()));
                 }
             }

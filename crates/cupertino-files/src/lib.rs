@@ -5,7 +5,8 @@
 //! * [`natural`], [`sort`], [`group`]: collation, ordering and sectioning of names;
 //! * [`settings`]: per-folder view state and its store;
 //! * [`selection`], [`rename`], [`typeselect`], [`spring`]: interaction logic;
-//! * [`trash`], [`thumbnail`], [`tags`], [`mime`]: freedesktop-compliant services; [`open`]: default
+//! * [`trash`], [`thumbnail`], [`tags`], [`mime`]: freedesktop-compliant services; [`thumbnail_service`]: the
+//!   thumbnails of the items in view, made on worker threads; [`open`]: default
 //!   applications and the Open With list (`mimeapps.list`);
 //! * [`layout`]: icon, list, column and gallery layout engines with the measured metrics of
 //!   [`metrics`]; [`preview`]: quick-preview transition geometry;
@@ -48,6 +49,7 @@ pub mod sort;
 pub mod spring;
 pub mod tags;
 pub use cupertino_thumbnails as thumbnail;
+pub mod thumbnail_service;
 pub mod trash;
 pub mod typeselect;
 #[cfg(feature = "app")]

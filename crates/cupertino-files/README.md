@@ -7,7 +7,7 @@ logic and layout metrics a native file manager (and a desktop-icon layer) needs.
 ## Usage
 
 ```sh
-cargo test -p cupertino-files --features app                    # 170+ unit tests; the Kit window run headless: 19 window, 9 context menu, 5 search and 6 drag tests; 15 removable media tests (a fake udisks2 on a private bus), 2 workflow, 3 session handler and 2 error notice tests
+cargo test -p cupertino-files --features app                    # 170+ unit tests; the Kit window run headless: 19 window, 9 context menu, 5 search, 6 drag and 9 drop tests; 15 removable media tests (a fake udisks2 on a private bus), 2 workflow, 3 session handler and 2 error notice tests
 cargo run -p cupertino-files --features app -- [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]  # the window (default $HOME), in a running session
 cargo clippy -p cupertino-files --all-targets
 ci/capture.sh files/window --view list   # a window or its sidebar on a sample home folder (crates/cupertino-capture)
@@ -43,10 +43,33 @@ process: File › New Window and Open in New Window open another beside it.
 The window is a split view: the sidebar of places, then a navigation stack whose toolbar holds back / forward, the
 folder's name (Section text, cut with an ellipsis) and the search field, over the folder in the icon view (`kit::grid`,
 laid out by `layout::icon`) or the list view (the toolkit's table: Name, Date Modified, Size, Kind; a header click
-sorts, again reverses). A window opens in the icon view. Under the folder the path bar and the status bar can be shown;
+sorts, again reverses). The toolbar is the window's drag region (Kit's `NavigationStack`, under the server's title bar):
+a drag where no control lies moves the window and a double click there zooms it, as the old window's unified bar did;
+back / forward and the search field keep their presses, and from the keyboard the compositor's Zoom shortcut
+(Super+Ctrl+Z by default) and the menu bar's Window menu zoom, minimize and tile it. A window opens in the icon view. Under the folder the path bar and the status bar can be shown;
 both are hidden by default. The path bar names the folder chain from the root (or from Trash / Recents); the status bar
-reads "N items, X available" (`statvfs` of the folder). Items wear the theme's folder and document symbols. Changes on
-disk appear live.
+reads "N items, X available" (`statvfs` of the folder). Changes on disk appear live.
+
+**Item images** (`kit::item_icons`). Each item in the icon view, the list view and a drag image wears the icon of its
+type from the asset packs and the host icon theme, through the toolkit's `cupertino_kit::file_icons::FileIcons`: the
+icon of the type's kind or of its nearest ancestor's (PDF, image, audio, video, archive, text, program; an office
+document packed in a zip is not an archive), else the generic document icon, else the packs' placeholder. The home
+folder and the user directories wear their own folder icons (`places::folder_icons`), and a symbolic link the alias
+badge in its bottom-left corner. Each icon is drawn at 1× and 2× and keeps its image for the life of the process.
+A PNG, JPEG or WebP picture shows its thumbnail once it is made (a symbolic link keeps its type's icon and badge).
+`thumbnail_service::ThumbnailService` makes thumbnails on two worker threads, never on the UI thread: after each
+message a window says which items are in view or within 200 pt of it (`view::shown`), and the service drops what no
+window wants any more before a worker starts it. A worker takes the thumbnail from the freedesktop cache
+(`$XDG_CACHE_HOME/thumbnails`, `Thumbnailer::from_env("cupertino-files")`, the rules of `cupertino-thumbnails`: valid
+for the file's modification time and size, a failure remembered under `fail/cupertino-files/`, nothing under the cache
+itself thumbnailed) or creates it there, then decodes it at 2 pixels a point (128 for the icon view's 64 pt, 32 for
+the list's 16 pt). Beyond those in view, at most 32 MiB of decoded thumbnails stay in memory, the least recently drawn
+going first; a window showing more keeps them all rather than making them again. A decoder that panics fails its
+file, not the worker, and quitting does not wait for a decode that hangs (a stalled network mount). When a picture changes on disk, the watcher's new modification time and size make it wanted
+again; the old thumbnail shows until the new one is made, and a file that failed is tried again once it changes.
+`Start::with_file_icons` and `Start::with_thumbnails` give a window the session's icons and cache (`main.rs` does);
+without them every icon is the built-in placeholder and no thumbnail is made, which is what the tests use unless they
+pass a fixture pack and a temporary cache.
 
 The sidebar lists the design's default Favorites, Recents, Applications, Desktop, Documents and Downloads (the
 nearby-sharing item has no counterpart), those that exist, and the computer (the file system root, under the pretty
@@ -70,8 +93,8 @@ Tags submenu of the seven colours (checked where every selected item has the tag
 List" and the two views that are not built, disabled. Toolkit menus cannot swap rows while a modifier is held, so an
 alternate that does something (Open in New Window, Move Item Here) is a row of its own after the row it belongs to.
 
-**Copy and paste.** The toolkit's windows take no drops, so moving or copying into a folder goes through the
-application's own pasteboard: Copy (the item menu, Edit › Copy, Primary+C) keeps the selection's paths; Paste Item
+**Copy and paste.** Besides dropping (below), moving or copying into a folder goes through the application's own
+pasteboard, the keyboard's and assistive technology's way in: Copy (the item menu, Edit › Copy, Primary+C) keeps the selection's paths; Paste Item
 (the folder menu, Edit › Paste Item, Primary+V) copies them into the folder shown and Move Item Here (Alt+Primary+V)
 moves them there and empties the pasteboard. A name that is taken gives the arrival a free one (`name copy`), a folder is
 never pasted into itself, and what arrived is selected. The pasteboard is not the session's clipboard: other
@@ -80,13 +103,31 @@ applications neither see it nor fill it.
 **Dragging out.** The icon view drags items out of the window (`kit::dragged`, hooked into `kit::grid`'s press, motion
 and release and `kit`'s `Event::DragOut`): a press on an item that moves 5 pt offers the dragged files as a
 `text/uri-list` (copy or move; the pressed item first, then the rest of the selection in the view's order) and the image
-follows the pointer, which holds it where the press grabbed the cell. One item shows its icon and its selected name as
-the grid draws them; several show the pressed item in front of the icons of up to two more, each 4 pt up and to the
+follows the pointer, which holds it where the press grabbed the cell. One item shows its icon (or thumbnail) and its
+selected name as the grid draws them; several show the pressed item in front of the icons of up to two more, each 4 pt up and to the
 trailing side, with the count in a badge on the farthest icon's corner. The image is drawn at 0.8 opacity
 (`dragged::OPACITY`), at the window's scale rounded up. A press on an item of a selection keeps the selection, and its
 release without a drag selects that item alone. The window does nothing when the drag ends (the receiving application
 copies or moves; a move is not undone here), a cancelled or refused drag takes the image away at once with no return to
 the item, and the selection stays.
+
+**Dropping in.** The window takes a `text/uri-list` of local files dragged from any application, this one included
+(`kit::drops`, two `DropTarget`s): on a folder of the list or the icon grid, on a place of the sidebar, and anywhere
+else in the folder area on the folder shown (over a file too). The Trash place, and the folder area of the trash's own
+window, move the items to the trash, and only for a source that lets them go; Recents and the toolbar take nothing. The
+place under the drag is highlighted with the accent at 0.3 opacity in rounded corners, with a 2 pt text-colour outline
+under Increase Contrast; a background drop highlights the whole folder area. With nothing held the items move within a
+device and are copied across devices, Option copies and the primary modifier moves (`operations::drop_action`), and
+the drop goes through `operations::drop_into`, as Paste Item does: a taken name gives the arrival a free one, a folder
+never goes into itself, the failures are one notice, and what arrives in the folder shown is selected. For the window's
+own drag the device is known while the drag moves, so the pointer shows the action; another application's files are
+known only at the drop, so with nothing held the drag shows a move and the drop copies what lies on another device. The
+source hears the drop is finished only after the files are in place, and with what was done: a move only when every
+item left its place, a copy when every item was copied, and otherwise nothing (an item that failed, or one dropped on
+the folder already holding it), so a source never removes items Files did not take. A list is taken whole or not at
+all: one with a URI of another scheme or host, a relative path, a `.` or `..` step or a NUL is refused. A drag of the window's own items has nowhere to go
+on one of the dragged folders or in the folder holding them all. Folders do not spring open under a drag: the old
+window never wired `spring::SpringLoad` either.
 
 **Failures.** A failure of something a person did (open, a new folder, duplicate, make alias, show original, put back,
 tags, rename, a name that can't be used, copy, paste, move to the trash) is one transient notification from "Files" on
@@ -175,7 +216,8 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | `window`, `format` | the window's wording and metrics | `metrics`, `ViewMode`, `path_chain`, `status_text`; `human_size`, `available_size`, `relative_date` |
 | `udisks` (feature `app`) | removable media | `devices` (the listed file systems and locked containers of udisks' managed objects), `Volumes::{watch, poll, mount, unlock, eject}` → `Report`, `Media` (the listed devices and the busy ones), `Passphrase`, `holders`, `notice` (a failure's notification text) |
 | `notice` (feature `app`) | failures as notifications | `failure`, `unopened`, `bad_name` → `Notice`; `Notices::{start, post}`; `shown`, `escape` |
-| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino-ui-test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, then `run` or a `TestDriver<Files>`; `grid` (the icon view), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images) |
+| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino-ui-test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons` and `with_thumbnails`, then `run` or a `TestDriver<Files>`; `grid` (the icon view), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places and the folder shown), `item_icons` (items' icons and thumbnails) |
+| `thumbnail_service` | thumbnails of the items in view | `ThumbnailService::{new, want, forget, get, queued, memory}`, `Stamp`, `has_thumbnail`, `MEMORY_BUDGET`, `WORKERS` |
 | `main` (feature `app`) | the binary | arguments, the session's places, types, associations and buses, then `kit::run` |
 
 ### Measured defaults
@@ -215,12 +257,12 @@ Values live in `metrics.rs`.
 
 ## Open issues
 
-* The toolkit's windows take no drops: nothing can be dropped onto a folder or a place of the sidebar, from this window or
-  from another application (Copy and Paste Item stand in), and a folder does not spring open under a drag
-  (`spring::SpringLoad` is not wired). The list view starts no drags (the table has no hook for it), and the drag
+* A folder does not spring open under a drag (`spring::SpringLoad` is not wired), and a drop from another application
+  shows a move while it is held even when it will copy across devices. The list view starts no drags (the table has no hook for it), and the drag
   badge holds three digits.
-* Items wear the theme's folder and document symbols: there are no file-type icons, folder icons of the user
-  directories, alias badges or thumbnails yet. Under the headless symbol theme they are placeholder squares.
+* Thumbnails are made for PNG, JPEG and WebP pictures only (what `cupertino-thumbnails` decodes): no external
+  thumbnailers, so videos, PDFs and other documents show their type's icon. Thumbnails are decoded for a 2× display;
+  a 1× display draws them shrunk. The sidebar keeps the design's template symbols, as the places are not files.
 * The toolbar has no view, Group By, Tags or Action popups, no share, preview or path controls and no sidebar toggle;
   the View menu and the context menus stand in for the view and the tags. The search filters the folder shown by name
   (the design searches the computer by default); its field has no clear button.

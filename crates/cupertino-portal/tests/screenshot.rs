@@ -108,10 +108,21 @@ fn call(
     app_id: String,
     options: Results,
 ) -> mpsc::Receiver<Call> {
+    call_at(caller, HANDLE, method, app_id, options)
+}
+
+/// [`call`] for the request at `handle`.
+fn call_at(
+    caller: &Connection,
+    handle: &'static str,
+    method: &'static str,
+    app_id: String,
+    options: Results,
+) -> mpsc::Receiver<Call> {
     let caller = caller.clone();
     let (sender, done) = mpsc::channel();
     std::thread::spawn(move || {
-        let handle = ObjectPath::try_from(HANDLE).unwrap();
+        let handle = ObjectPath::try_from(handle).unwrap();
         let reply = caller
             .call_method(
                 Some(BUS_NAME),
@@ -487,6 +498,38 @@ fn closing_the_request_takes_the_picker_down_and_answers_2() {
     assert_eq!(handle.as_str(), HANDLE);
     assert_eq!(answered(done).0, 2);
     drop(event);
+}
+
+#[test]
+fn a_second_pick_during_one_is_refused_before_any_display_is_copied() {
+    let Some(r) = start_with(true) else {
+        return missing_tool("dbus-daemon");
+    };
+    let (done, event) = picking(&r);
+    let second = call_at(
+        &r.frontend,
+        "/org/freedesktop/portal/desktop/request/1_7/t2",
+        "PickColor",
+        APP.to_owned(),
+        HashMap::new(),
+    );
+    let (response, results) = answered(second);
+    assert_eq!((response, results.len()), (2, 0));
+    assert!(
+        r.shoots.try_recv().is_err(),
+        "nothing is copied for the pick refused"
+    );
+    assert!(r.picks.as_ref().unwrap().try_recv().is_err());
+
+    let PickEvent::Pick { reply, .. } = event else {
+        panic!("expected a pick");
+    };
+    reply.send(Picked::Cancelled);
+    assert_eq!(answered(done).0, 1);
+    // once the first is answered, a pick runs again
+    let (done, event) = picking(&r);
+    drop(event);
+    assert_eq!(answered(done).0, 2);
 }
 
 #[test]

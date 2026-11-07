@@ -13,7 +13,9 @@ use cupertino_files::kit::{self, Start};
 use cupertino_files::notice::Notices;
 use cupertino_files::places::{session_places, SessionPlaces};
 use cupertino_files::recents;
+use cupertino_files::thumbnail::Thumbnailer;
 use cupertino_files::trash::Trash;
+use cupertino_kit::file_icons::FileIcons;
 use percent_encoding::percent_decode_str;
 
 const USAGE: &str =
@@ -118,14 +120,19 @@ fn other(e: impl std::fmt::Display) -> io::Error {
 }
 
 /// The first window of the session: its folder listed, the session's places and file types, the Recents of the data
-/// folder, notices on the session bus and removable media on the system bus.
+/// folder, notices on the session bus, removable media on the system bus, the icons of the asset packs and the icon
+/// theme, and pictures' thumbnails in the session's thumbnail cache.
 fn start(options: Options) -> io::Result<Start> {
     let dirs = XdgDirs::from_env().map_err(other)?;
     let home =
         PathBuf::from(std::env::var_os("HOME").ok_or_else(|| io::Error::other("HOME is not set"))?);
-    let SessionPlaces { places, .. } = session_places(&home, &dirs.data_dirs)?;
-    // one database for the Kind column and for what opens an item, so both name the same type
+    let SessionPlaces {
+        places,
+        folder_icons,
+    } = session_places(&home, &dirs.data_dirs)?;
+    // one database for the Kind column, the icons and what opens an item, so all name the same type
     let types = Arc::new(MimeDatabase::load(&dirs.all_data_dirs()).map_err(other)?);
+    let icons = FileIcons::discover((*types).clone(), folder_icons.into_iter().collect());
     let notices = Notices::start(zbus::blocking::Connection::session().ok());
     let system = zbus::blocking::Connection::system()
         .map_err(|e| eprintln!("cupertino-files: no removable media: {e}"))
@@ -140,6 +147,11 @@ fn start(options: Options) -> io::Result<Start> {
         options.terminal,
         system,
     )
+    .map(|start| {
+        start
+            .with_file_icons(icons)
+            .with_thumbnails(Thumbnailer::from_env(kit::APP_ID))
+    })
     .map_err(|e| {
         io::Error::new(
             e.kind(),

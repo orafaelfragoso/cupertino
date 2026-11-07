@@ -21,7 +21,10 @@ from the application's model and reports changes as messages.
   snapshot. Return submits unless a composition holds it, and Escape cancels a composition first.
 - **Passwords.** `SecureField` keeps its text in a `SecureBuffer` only: no undo, copy, cut or other command chord, no
   surrounding text for the input method, a protected accessible value, and the secret reaches the application only
-  borrowed, in the submit handler. A composition is never held; only committed text goes in.
+  borrowed, in the submit handler. A composition is never held; only committed text goes in. `busy` and `invalid`
+  give assistive technology the field's busy and invalid states, which the application sets while a password is checked
+  and after it is refused. `max_len` caps the text in bytes: text past it is cut at a grapheme boundary and a key with
+  no room left is refused without an edit. Build the field with `..SecureField::default()` for the fields left out.
 - **Sidebar.** `Sidebar` lays out sections, each an optional heading over rows of an icon and a label, and keeps one
   row selected, counted over every section. The rows share one Tab stop; Up, Down, Home and End cross the sections,
   and a selection that does not change is not reported again. Assistive technology reads a list with a group per
@@ -39,6 +42,17 @@ from the application's model and reports changes as messages.
   and reads as a group whose interactive parts are its children, layered over the drawing. `Grid` lays out fixed,
   auto and fraction tracks row by row; `Element::span` covers several cells, and rows past the declared ones fit
   their content.
+- **Window drag regions.** `WindowDragArea` marks its content as a drag region of the window, and the toolbar row of
+  `NavigationStack` is one, so every Kit app with a navigation toolbar gets it. A left press there that no control
+  takes starts an interactive move (`WindowRequest::Move`, answering the press) once the pointer travels more than
+  5 pt along either axis with the button held; a shorter wobble stays a click. A second press within 0.5 s of the
+  first zooms the window (`WindowRequest::Maximize`, the opposite of the last configured state), the same action the
+  compositor's own title bar takes on a double click; no setting in `cupertino-defaults` changes the double click
+  today. A move ends a pair, so the press after it is a first click. Buttons, fields and other enabled controls stop
+  their presses, so they keep them; a label, a spacer or a disabled control lets the press through to the region.
+  Touch, right and middle presses start nothing, and a fullscreen window neither moves nor zooms. The region has no
+  role and no Tab stop: keyboard users zoom with the compositor's Zoom shortcut (Super+Ctrl+Z by default) or the menu
+  bar's Window menu, tile and fill with its shortcuts, and can drag the server's title bar with the pointer as always.
 - **Sliders.** `on_change` reports every value a drag passes; `on_end` reports the value once the change ends, when
   the pointer lets go or the drag is cancelled, and at once for a key or assistive technology step, so an
   application can write a level live and commit it once.

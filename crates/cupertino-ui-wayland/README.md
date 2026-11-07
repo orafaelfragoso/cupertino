@@ -64,7 +64,11 @@ the next `dispatch`. Not offered yet, so their flags are false: touch, the prima
 effects protocol, which an extension binds through `connection`. Drags go out (`drag_and_drop` with the clipboard and
 a seat): `start_drag` hands the transport the data, the actions and the image as a `DragIcon` in `wl_shm`'s byte order,
 one drag at a time (a new one cancels the last), and reports the drag source's events as `PlatformEvent::Drag`.
-Drops onto a window are not reported yet. A popup's `offset` moves
+Drags over a window (from any client, this one included) arrive as `WindowEvent::Drop` with the transport modifiers
+held; `answer_drop` accepts the type and sets the actions, `read_drop` reads the drop like a clipboard read, and
+`finish_drop` finishes it (setting the action taken first, whatever was chosen during the drag, a copy when the
+runtime took it as an ask, and refusing an action the source does not allow) or
+refuses it. At most 8 drops are kept while they are read. A popup's `offset` moves
 its anchor rectangle; `reactive` is not sent.
 
 ## Tests

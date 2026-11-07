@@ -1,5 +1,6 @@
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
+use crate::window_drag::DragState;
 use crate::{Navigation, NavigationStack};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_core::{
@@ -79,6 +80,7 @@ impl<M: Clone + 'static> From<NavigationStack<M>> for Element<M> {
                 })
             },
             role: Some(Role::Toolbar),
+            drag: true,
             children: std::iter::once(group).chain(stack.toolbar).collect(),
         });
         Element::new(Navigator {
@@ -89,15 +91,16 @@ impl<M: Clone + 'static> From<NavigationStack<M>> for Element<M> {
     }
 }
 
-/// A container with a fixed layout and nothing of its own to show.
+/// A container with a fixed layout and nothing of its own to show; with `drag`, the window's drag region.
 struct Slot<M> {
     spec: LayoutSpec,
     role: Option<Role>,
+    drag: bool,
     children: Vec<Element<M>>,
 }
 
 impl<M: 'static> Widget<M> for Slot<M> {
-    type State = ();
+    type State = DragState;
 
     fn layout(&self) -> LayoutSpec {
         self.spec.clone()
@@ -107,23 +110,29 @@ impl<M: 'static> Widget<M> for Slot<M> {
         std::mem::take(&mut self.children)
     }
 
-    fn state(&self) {}
+    fn state(&self) -> DragState {
+        DragState::default()
+    }
 
-    fn update(&self, _: &Self, _: &mut ()) -> Change {
+    fn update(&self, _: &Self, _: &mut DragState) -> Change {
         Change::None
     }
 
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+    fn measure(&self, _: &DragState, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         no_measure()
     }
 
-    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
-        Propagation::Continue
+    fn event(&self, drag: &mut DragState, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        if self.drag {
+            drag.event(event, cx)
+        } else {
+            Propagation::Continue
+        }
     }
 
-    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+    fn paint(&self, _: &DragState, _: &mut PaintCx<'_>) {}
 
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+    fn semantics(&self, _: &DragState, cx: &mut SemanticsCx<'_>) {
         if let Some(role) = self.role {
             cx.role(role);
         }

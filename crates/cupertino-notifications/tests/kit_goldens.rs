@@ -543,6 +543,29 @@ fn a_banner_updated_in_place_is_said_again() {
     assert_eq!(run.windows().len(), 1);
 }
 
+#[test]
+fn the_same_words_from_a_new_notification_are_said_again() {
+    let mut run = Run::new();
+    let words = (
+        Live::Polite,
+        "Mail: Lunch, Are you free at noon?".to_owned(),
+    );
+    run.notify(mail("Lunch", "Are you free at noon?"));
+    run.step(Step::At(1.0));
+    assert_eq!(run.heard(), std::slice::from_ref(&words));
+    // a second notification with the same words takes the screen from the first: a new banner, said as it shows
+    run.notify(mail("Lunch", "Are you free at noon?"));
+    run.step(Step::At(1.5));
+    assert_eq!(run.heard(), std::slice::from_ref(&words));
+    // and again once the screen is empty
+    for t in [7.0, 8.0] {
+        run.step(Step::At(t));
+    }
+    assert!(run.windows().is_empty());
+    run.notify(mail("Lunch", "Are you free at noon?"));
+    run.step(Step::At(8.5));
+    assert_eq!(run.heard(), [words]);
+}
 
 #[test]
 fn a_banner_is_neither_said_nor_readable_while_the_screen_is_locked() {

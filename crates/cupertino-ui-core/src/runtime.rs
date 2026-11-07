@@ -119,6 +119,8 @@ struct WindowState<M> {
     active: bool,
     /// The last configure said the window is maximized; a zoom asks for the other state.
     maximized: bool,
+    /// The last configure said the window is fullscreen; a drag region neither moves nor zooms it.
+    fullscreen: bool,
     /// The compositor is ready for a frame.
     frame_ready: bool,
     /// Something changed since the last presented frame.
@@ -623,6 +625,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             ack: None,
             active: false,
             maximized: false,
+            fullscreen: false,
             frame_ready: false,
             dirty: true,
             prepared: false,
@@ -785,6 +788,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.ack = Some(c.id);
                 w.configured = true;
                 w.maximized = c.states.maximized;
+                w.fullscreen = c.states.fullscreen;
                 w.frame_ready = true;
                 w.invalidate();
                 w.damage.invalidate();
@@ -1056,7 +1060,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         if let Some(text) = effects.clipboard {
             Self::set_clipboard(&mut self.system, text);
         }
-        for gesture in effects.window {
+        // a fullscreen window stays where it is: a maximize request would take it out of fullscreen
+        for gesture in effects.window.into_iter().filter(|_| !w.fullscreen) {
             let request = match gesture {
                 WindowGesture::Move => WindowRequest::Move,
                 WindowGesture::Zoom => WindowRequest::Maximize(!w.maximized),

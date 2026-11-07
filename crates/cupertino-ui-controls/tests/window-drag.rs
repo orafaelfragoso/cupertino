@@ -332,3 +332,44 @@ fn the_toolbar_keeps_its_one_role_and_adds_no_tab_stop() {
         "the drag area is no Tab stop"
     );
 }
+
+#[test]
+fn a_fullscreen_window_neither_moves_nor_zooms_from_its_toolbar() {
+    let mut h = harness();
+    let fullscreen = WindowStates {
+        activated: true,
+        fullscreen: true,
+        ..WindowStates::default()
+    };
+    h.rt.window_system_mut()
+        .configure(h.window, Some(Size::new(1000.0, 700.0)), fullscreen)
+        .unwrap();
+    h.settle();
+    let gap = empty_toolbar(&h);
+    drag(&mut h, gap, Point::new(0.0, 30.0), 0);
+    click(&mut h, gap, HALF_SECOND * 10);
+    click(&mut h, gap, HALF_SECOND * 10 + 1_000_000);
+    assert_eq!(moves(&h), 0, "a fullscreen window does not move");
+    assert!(
+        zooms(&h).is_empty(),
+        "a maximize request would take the window out of fullscreen"
+    );
+    // out of fullscreen, the toolbar moves and zooms the window again
+    h.rt.window_system_mut()
+        .configure(
+            h.window,
+            Some(Size::new(600.0, 300.0)),
+            WindowStates {
+                activated: true,
+                ..WindowStates::default()
+            },
+        )
+        .unwrap();
+    h.settle();
+    let gap = empty_toolbar(&h);
+    drag(&mut h, gap, Point::new(0.0, 30.0), HALF_SECOND * 20);
+    click(&mut h, gap, HALF_SECOND * 30);
+    click(&mut h, gap, HALF_SECOND * 30 + 1_000_000);
+    assert_eq!(moves(&h), 1);
+    assert_eq!(zooms(&h), vec![true]);
+}

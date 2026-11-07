@@ -249,12 +249,13 @@ impl<M> EventCx<'_, M> {
     /// Starts an interactive move of the window, in answer to the pointer press being handled: call it while that press
     /// is held, from its press or a motion after it. The window follows the pointer until the button is released; the
     /// node then gets a pointer leave, which revokes its capture. A compositor that does not hold the press any more,
-    /// or a platform without moves, leaves the window where it is.
+    /// or a platform without moves, leaves the window where it is, and so does a fullscreen window.
     pub fn move_window(&mut self) {
         self.effects.window.push(WindowGesture::Move);
     }
 
-    /// Maximizes the window, or restores it when the window system last said it is maximized.
+    /// Maximizes the window, or restores it when the window system last said it is maximized. A fullscreen window stays
+    /// as it is.
     pub fn zoom_window(&mut self) {
         self.effects.window.push(WindowGesture::Zoom);
     }

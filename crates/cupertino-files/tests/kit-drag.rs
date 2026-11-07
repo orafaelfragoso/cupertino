@@ -443,7 +443,7 @@ fn a_click_on_the_only_selected_item_moves_the_anchor_to_it() {
     click(&mut browser, first, Mods::NONE);
     click(&mut browser, last, Mods::PRIMARY);
     click(&mut browser, last, Mods::PRIMARY);
-    assert_eq!(&browser.selected(), &[first.clone()]);
+    assert_eq!(browser.selected(), std::slice::from_ref(first));
     click(&mut browser, first, Mods::NONE);
     click(&mut browser, middle, Mods::SHIFT);
     assert_eq!(

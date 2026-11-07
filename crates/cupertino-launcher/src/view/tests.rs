@@ -24,7 +24,7 @@ use cupertino_kit::render::{CpuConfig, CpuRenderer};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_theme::Theme;
-use cupertino_ui_test::{Inspector, ManualClock, TestDriver};
+use cupertino_ui_test::{AssistiveTechnology, Inspector, ManualClock, TestDriver};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -156,6 +156,8 @@ struct Run {
     panel_height: Option<f64>,
     /// Each input and what it left, for the keyboard golden.
     trace: String,
+    /// A screen reader following the windows.
+    reader: AssistiveTechnology,
 }
 
 fn active() -> WindowStates {
@@ -167,6 +169,7 @@ fn active() -> WindowStates {
 
 impl Run {
     fn new() -> Run {
+        let reader = AssistiveTechnology::new();
         let mut fonts = FontIndex::new();
         fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
         let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
@@ -188,7 +191,7 @@ impl Run {
                     GlyphRaster::new(Arc::clone(&glyphs)),
                 ))
             }),
-            accessibility: None,
+            accessibility: Some(reader.adapter()),
             clock: Arc::new(ManualClock::new(Timestamp(0))),
             on_window_error: None,
         };
@@ -202,6 +205,7 @@ impl Run {
             configured: BTreeSet::new(),
             panel_height: None,
             trace: String::new(),
+            reader,
         };
         run.settle();
         run
@@ -237,9 +241,15 @@ impl Run {
         self.window("panel").expect("the panel is shown")
     }
 
+    /// Runs until every window rests, then checks that a screen reader could read every window open.
+    fn settle(&mut self) {
+        self.settle_frames();
+        self.driver.assert_accessible("Launcher");
+    }
+
     /// Runs until no window waits for a configure or a frame. New windows are configured as the server would: the
     /// panel at the height the model gave it, the catcher over the output; a new height configures the panel again.
-    fn settle(&mut self) {
+    fn settle_frames(&mut self) {
         for _ in 0..16 {
             self.driver.run_until_idle(budget()).unwrap();
             let mut busy = false;
@@ -663,6 +673,33 @@ fn hover_selects_a_row_and_a_click_activates_it() {
         Some("Firewall Configuration")
     );
     run.click(panel, row);
+    assert!(!run.model().panel.is_visible());
+    let host = HOST.with_borrow(Clone::clone);
+    assert!(
+        host.iter().any(|h| h.contains("firewall-config")),
+        "{host:?}"
+    );
+}
+
+#[test]
+fn a_screen_reader_s_click_on_a_result_launches_it_and_closes_the_panel() {
+    let mut run = Run::new();
+    run.type_text("fire");
+    let tree = run
+        .reader
+        .tree(run.panel())
+        .expect("the reader holds the panel");
+    let row = tree
+        .nodes
+        .iter()
+        .find(|(_, n)| {
+            n.role == Role::ListItem && n.name.as_deref() == Some("Firewall Configuration")
+        })
+        .map(|(id, _)| *id)
+        .expect("the reader reads the result");
+    run.driver
+        .ask(&run.reader, row, cupertino_kit::core::Action::Click, None);
+    run.settle();
     assert!(!run.model().panel.is_visible());
     let host = HOST.with_borrow(Clone::clone);
     assert!(

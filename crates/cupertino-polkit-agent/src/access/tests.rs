@@ -178,3 +178,44 @@ fn a_click_from_assistive_technology_names_the_control_a_click_would() {
     assert_eq!(clicked(PromptNode::User.id()), Some(Control::User));
     assert_eq!(clicked(PromptNode::Field.id()), None);
 }
+
+/// The audit's findings and the secret's leaks in `update`, with its outline when there are any.
+fn audit(what: &str, update: &AccessibilityUpdate) {
+    let mut problems = cupertino_ui_test::accessibility_audit(update);
+    problems.extend(cupertino_ui_test::secret_leaks(
+        update,
+        &["hunter2", "wrong"],
+    ));
+    assert!(
+        problems.is_empty(),
+        "{what}: {problems:#?}\n{}",
+        cupertino_ui_test::semantic_outline(update).join("\n")
+    );
+}
+
+#[test]
+fn every_phase_passes_the_accessibility_audit_and_leaks_no_secret() {
+    let panel = Panel::new(false);
+    let mut agent = asking(false, vec![User(1000)]);
+    audit("asking", &tree(&agent, &panel, None));
+    typed(&mut agent, "hunter2");
+    audit("typing", &tree(&agent, &panel, None));
+    agent.key(Key::Return);
+    audit("checking", &tree(&agent, &panel, None));
+    agent.helper(Line::Failure);
+    audit("failed", &tree(&agent, &panel, None));
+    typed(&mut agent, "wrong");
+    audit("typing again", &tree(&agent, &panel, None));
+
+    let mut agent = asking(false, vec![User(1000), User(0)]);
+    let mut panel = Panel::new(true);
+    audit("with users", &tree(&agent, &panel, Some("Ada")));
+    panel.focus = Control::Details;
+    panel.details = true;
+    typed(&mut agent, "hunter2");
+    audit("details shown", &tree(&agent, &panel, Some("Ada")));
+
+    let mut clear = asking(true, vec![User(1000)]);
+    typed(&mut clear, "alice");
+    audit("asked in clear", &tree(&clear, &Panel::new(false), None));
+}

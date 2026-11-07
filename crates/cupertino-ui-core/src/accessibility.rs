@@ -201,6 +201,9 @@ pub trait AccessibilityAdapter {
     fn window_focus(&mut self, window: WindowId, focused: bool);
     fn update(&mut self, update: &AccessibilityUpdate);
     fn drain_actions(&mut self, out: &mut Vec<ActionRequest>);
+    /// The window's title, before its first whole tree and whenever it changes: an adapter names a window whose root
+    /// node has no name of its own by it, as a screen reader announces a window by its title.
+    fn window_title(&mut self, _window: WindowId, _title: &str) {}
     /// The window is gone; the adapter drops what it holds for it.
     fn window_closed(&mut self, _window: WindowId) {}
     /// The session was locked or unlocked. While it is locked the application's windows aren't shown, so the adapter

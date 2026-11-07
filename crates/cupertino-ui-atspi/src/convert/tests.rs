@@ -410,3 +410,25 @@ fn a_secret_has_no_text_runs_nor_a_selection() {
     field.value = Some(AccessibleValue::Protected);
     assert!(runs_of(&field).1.is_empty());
 }
+
+#[test]
+fn an_unnamed_item_is_labelled_by_its_children_and_a_named_one_is_not() {
+    for role in [Role::ListItem, Role::TreeItem, Role::Cell, Role::Tab] {
+        let mut item = base(role);
+        item.children = vec![id(4), id(5)];
+        assert_eq!(
+            node(&item).labelled_by(),
+            [node_id(id(4)), node_id(id(5))],
+            "{role:?}"
+        );
+        item.name = Some("Home".into());
+        assert!(node(&item).labelled_by().is_empty(), "{role:?}");
+    }
+    let mut labelled = base(Role::ListItem);
+    labelled.children = vec![id(4)];
+    labelled.relations = vec![Relation::LabelledBy(id(9))];
+    assert_eq!(node(&labelled).labelled_by(), [node_id(id(9))]);
+    let mut group = base(Role::Group);
+    group.children = vec![id(4)];
+    assert!(node(&group).labelled_by().is_empty());
+}

@@ -105,7 +105,10 @@ menu taking the keyboard as it opens.
 entry's name), "Trash", or the minimized window's title, with the actions Click and Show Menu. Its description says what
 the tile shows: "Running", "Opening", "Not responding" or "Needs attention" for an application, "Minimized window" for a window, and "Contains items" for a trash with something in it. Separators
 are separators. The menus are Kit menus, the grid's results and page dots and the Force Quit rows and buttons are named
-nodes with a Click action. The edge strips are groups named "Dock edge".
+nodes with a Click action. The Force Quit dialog reads its heading, its footer and its empty or unsaved-changes notes
+as text; its rows are a list named "Applications" whose items say their place and count, and the selected row takes
+the keyboard focus, so a screen reader follows the arrows. The switcher's entries say their place and count. The
+edge strips are groups named "Dock edge".
 
 **Reduce Motion, Reduce Transparency and Increase Contrast.** These follow the session as in the other Kit shells. With
 Reduce Transparency or Increase Contrast the theme gives the bar, the menus, the grid and the dialog an opaque fill instead

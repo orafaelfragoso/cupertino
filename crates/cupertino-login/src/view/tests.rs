@@ -329,7 +329,26 @@ impl Run {
         run
     }
 
+    /// Runs until every window rests, then checks that a screen reader could read every window open and that nothing
+    /// assistive technology was ever sent reads out the password the tests type.
     fn settle(&mut self) {
+        self.settle_frames();
+        self.driver.assert_accessible("Login");
+        let leaks: Vec<String> = self
+            .assistive
+            .updates
+            .borrow()
+            .iter()
+            .flat_map(|update| cupertino_ui_test::secret_leaks(update, &[SECRET]))
+            .collect();
+        assert_eq!(
+            leaks,
+            Vec::<String>::new(),
+            "assistive technology reads the password"
+        );
+    }
+
+    fn settle_frames(&mut self) {
         for _ in 0..16 {
             self.driver.run_until_idle(budget()).unwrap();
             let system = self.driver.window_system_mut();

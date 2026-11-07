@@ -640,6 +640,24 @@ fn a_buffer_is_sized_as_the_window_system_rounds_a_fractional_scale() {
 }
 
 #[test]
+fn the_adapter_hears_a_windows_title_before_its_first_tree_and_when_it_changes() {
+    let adapter = FakeAdapter::default();
+    let (mut rt, window, _) = start_with(|o| o.accessibility = Some(Box::new(adapter.clone())));
+    configure(&mut rt, window, 1);
+    adapter.active.set(true);
+    rt.step(steps()).unwrap();
+    rt.messages.push_back("plus".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(
+        *adapter.titles.borrow(),
+        [
+            (window, "Count 0".to_owned(), 0),
+            (window, "Count 1".to_owned(), 1)
+        ]
+    );
+}
+
+#[test]
 fn a_closed_window_is_dropped_by_the_accessibility_adapter() {
     let adapter = FakeAdapter::default();
     let (mut rt, window, _) = start_with(|o| o.accessibility = Some(Box::new(adapter.clone())));

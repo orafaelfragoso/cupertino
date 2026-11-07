@@ -312,6 +312,7 @@ digraph "layers" {
   "cupertino-polkit-agent" -> "cupertino-ui-atspi";
   "cupertino-polkit-agent" -> "cupertino-ui-core";
   "cupertino-polkit-agent" -> "cupertino-ui-platform";
+  "cupertino-polkit-agent" -> "cupertino-ui-test" [label="dev"];
   "cupertino-polkit-agent" -> "cupertino-ui-wayland";
   "cupertino-polkit-agent" -> "cupertino-wayland-client";
   "cupertino-portal" -> "cupertino-apps";

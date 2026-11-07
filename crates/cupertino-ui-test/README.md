@@ -32,6 +32,27 @@ the configure event), and repeat clipboard requests through the driver before de
 injection alone does not recreate outstanding configure or clipboard requests. Snapshots and presented frames are
 available through the runtime and window system; the inspector formats the same snapshots.
 
+## Accessibility audit
+
+`accessibility_audit(tree)` lists what a screen reader user would trip on in one whole tree: a control without a name
+(a list item, tree item, cell or tab may be named by its children, a toolbar by its contents), an action on a node that
+is not a control, a toggle, slider, spin button or progress without its value or with one out of range, a password
+field carrying text, a pop-up button that does not say whether it is open, masked characters in any name, description
+or value, a focus the tree does not hold or that the node does not take, a relation to a missing node, a control with
+no area, and a list, menu, tree or tab item outside its container, without its place or count, or sharing its place.
+`secret_leaks(tree, secrets)` lists every node whose name, description or value reads out a secret, and
+`reading_order_breaks(tree, sequence)` lists the steps of a Tab sequence that go backwards in reading order (left on a
+row in a left-to-right layout, or up a column).
+
+`TestDriver::accessibility_audit()` audits every open window, an untitled root named by the window's title as the AT-SPI
+bridge names it, and `assert_accessible(what)` fails with every window's outline (`semantic_outlines()`).
+
+`AssistiveTechnology` is a stand-in reader for `RuntimeOptions::accessibility`: it holds each window's tree, put
+together from whole and partial updates, records each live region's `Announcement` of its name when it arrives and when
+it is renamed (as the AT-SPI bridge announces; a new value or description alone is not said), counts focus moves (so a test can show an announcement did not take the focus), and keeps the window focus and
+the session lock. `TestDriver::ask(reader, target, action, data)` asks for an action as a reader does and wakes the
+runtime to take it.
+
 ## Look checks
 
 `TestDriver::look(window, name)` writes the window as `<name>-<appearance>@<scale>x.png` for a person to compare with

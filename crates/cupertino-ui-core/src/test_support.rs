@@ -546,6 +546,8 @@ pub(crate) struct FakeAdapter {
     pub(crate) updates: Rc<RefCell<Vec<AccessibilityUpdate>>>,
     pub(crate) closed: Rc<RefCell<Vec<WindowId>>>,
     pub(crate) locked: Rc<RefCell<Vec<bool>>>,
+    /// Each title it was told and the number of updates it held then.
+    pub(crate) titles: Rc<RefCell<Vec<(WindowId, String, usize)>>>,
 }
 
 impl AccessibilityAdapter for FakeAdapter {
@@ -567,6 +569,13 @@ impl AccessibilityAdapter for FakeAdapter {
 
     fn session_locked(&mut self, locked: bool) {
         self.locked.borrow_mut().push(locked);
+    }
+
+    fn window_title(&mut self, window: WindowId, title: &str) {
+        let held = self.updates.borrow().len();
+        self.titles
+            .borrow_mut()
+            .push((window, title.to_owned(), held));
     }
 }
 

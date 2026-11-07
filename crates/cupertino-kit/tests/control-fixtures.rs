@@ -24,8 +24,8 @@ use cupertino_kit::controls::{Canvas, Grid, Image, ImageFit, ImageSource, RichTe
 use cupertino_kit::controls::{Popover, TreeItem, TreeView};
 use cupertino_kit::controls::{Sidebar, SidebarAccessory, SidebarItem, SidebarSection};
 use cupertino_kit::core::{
-    Application, Checked, Command, CommandRegistry, Element, Key, Window, WindowBackground,
-    WindowKey,
+    AccessibilityNode, Action, Application, Checked, Command, CommandRegistry, Element, Key,
+    NodeId, Role, Window, WindowBackground, WindowKey,
 };
 use cupertino_kit::geometry::{Insets, Point, Size};
 use cupertino_kit::layout::{Align, Axis, LayoutDirection, ScrollState, Track};
@@ -35,7 +35,9 @@ use cupertino_kit::platform::{
 use cupertino_kit::render::{ImageResource, Paint, PaintOp, PixelFormat, ResourceId, Shape};
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
 use cupertino_kit::theme::{Appearance, ColorRole, StateVariant};
-use cupertino_ui_test::Inspector;
+use cupertino_ui_test::{
+    accessibility_audit, describe, semantic_outline, whole_tree, AssistiveTechnology, Inspector,
+};
 use std::cell::Cell;
 use support::{repository_theme, Run, TAB};
 use tiny_skia::Pixmap;
@@ -92,6 +94,8 @@ enum Message {
 
 thread_local! {
     static CELL: Cell<Option<(&'static Fixture, State)>> = const { Cell::new(None) };
+    /// How many messages the application took.
+    static HEARD: Cell<usize> = const { Cell::new(0) };
 }
 
 struct Cells;
@@ -115,6 +119,7 @@ impl Application for Cells {
     }
 
     fn update((_, look): &mut Self::Model, message: Message) -> Vec<Command<Message>> {
+        HEARD.set(HEARD.get() + 1);
         if let Message::Scroll(scroll) = message {
             look.scroll = scroll;
         }
@@ -203,7 +208,58 @@ fn render(
         fixture.name
     );
     let pixels = frame.pixels.clone();
-    let dump = Inspector::default().dump(&run.snapshot());
+    let snapshot = run.snapshot();
+    let tree = whole_tree(run.window, snapshot.accessibility.clone(), snapshot.focus);
+    // a cell is an untitled window around one control
+    let problems: Vec<String> = accessibility_audit(&tree)
+        .into_iter()
+        .filter(|p| p != "Window #0: no name")
+        .collect();
+    assert_eq!(
+        problems,
+        Vec::<String>::new(),
+        "{} {appearance:?} {direction:?} {state:?} reads:\n{}",
+        fixture.name,
+        semantic_outline(&tree).join("\n")
+    );
+    if let (State::Focused, Some(focus)) = (state, snapshot.focus) {
+        // the keyboard focus shows in every appearance, high contrast included: a menu item by its highlight, a text
+        // editor by its caret, any other control by a ring in the theme's colour
+        let theme = repository_theme(appearance);
+        let color = |role| theme.colors.get(role, StateVariant::NORMAL).unwrap();
+        let role = snapshot
+            .accessibility
+            .iter()
+            .find(|(id, _)| *id == focus)
+            .map(|(_, n)| n.role);
+        let mut ops = snapshot.display_list.nodes.iter().flat_map(|n| &n.ops);
+        let shows = match role {
+            Some(Role::MenuItem | Role::MenuItemCheckBox | Role::MenuItemRadio) => {
+                let highlight = color(ColorRole::SelectedControlFill);
+                ops.any(|op| matches!(op, PaintOp::Fill { paint: Paint::Solid(c), .. } if *c == highlight))
+            }
+            Some(Role::MultilineTextInput) => {
+                let text = color(ColorRole::Text);
+                ops.any(|op| {
+                    matches!(op, PaintOp::Fill { shape: Shape::Rect(r), paint: Paint::Solid(c) }
+                        if *c == text && r.size.width <= 2.0)
+                })
+            }
+            _ => {
+                let ring = color(ColorRole::KeyboardFocusIndicator);
+                ops.any(|op| {
+                    matches!(op, PaintOp::Stroke { width, paint: Paint::Solid(c), .. }
+                        if *c == ring && *width == theme.focus.width)
+                })
+            }
+        };
+        assert!(
+            shows,
+            "{} {appearance:?} {direction:?}: the keyboard focus on {role:?} does not show",
+            fixture.name
+        );
+    }
+    let dump = Inspector::default().dump(&snapshot);
     let focus = dump.lines().find(|l| l.starts_with("focus ")).unwrap();
     let semantics = dump
         .lines()
@@ -400,15 +456,19 @@ macro_rules! fixtures {
         $(
             #[test]
             fn $test() {
-                static FIXTURE: Fixture = Fixture {
-                    name: $name,
-                    size: $size,
-                    states: $states,
-                    build: $build,
-                };
-                check(&FIXTURE);
+                check(FIXTURES.iter().find(|f| f.name == $name).unwrap());
             }
         )*
+
+        /// Every fixture, for the checks that go over all of them.
+        static FIXTURES: &[Fixture] = &[$(
+            Fixture {
+                name: $name,
+                size: $size,
+                states: $states,
+                build: $build,
+            },
+        )*];
     };
 }
 
@@ -1002,4 +1062,86 @@ fixtures! {
             body("12 KB"),
         ],
     });
+}
+
+/// The actions that operate a control, which a screen reader offers its user to perform.
+const OPERATIONS: [Action; 6] = [
+    Action::Click,
+    Action::Increment,
+    Action::Decrement,
+    Action::Expand,
+    Action::Collapse,
+    Action::ShowMenu,
+];
+
+/// A cell of `fixture` in its normal state with a screen reader listening, and the nodes of its tree in order.
+fn heard(
+    fixture: &'static Fixture,
+) -> (
+    Run<Cells>,
+    AssistiveTechnology,
+    Vec<(NodeId, AccessibilityNode)>,
+) {
+    CELL.set(Some((fixture, State::Normal)));
+    let reader = AssistiveTechnology::new();
+    let run = Run::<Cells>::with_accessibility(Some(reader.adapter()));
+    let mut nodes = run.snapshot().accessibility;
+    nodes.sort_by_key(|(id, _)| *id);
+    (run, reader, nodes)
+}
+
+/// What the screen reader can tell of the cell: its outline, and how many windows are open.
+fn seen(run: &Run<Cells>) -> (Vec<String>, usize) {
+    let snapshot = run.snapshot();
+    let tree = whole_tree(run.window, snapshot.accessibility, snapshot.focus);
+    (
+        semantic_outline(&tree),
+        run.driver.runtime().windows().len(),
+    )
+}
+
+#[test]
+fn every_action_a_control_offers_reaches_the_application_or_changes_what_it_reads() {
+    let mut ignored = Vec::new();
+    for fixture in FIXTURES
+        .iter()
+        .filter(|f| f.states.contains(&State::Normal))
+    {
+        let (_, _, nodes) = heard(fixture);
+        for (index, (_, node)) in nodes.iter().enumerate() {
+            // choosing the tab that is already chosen changes nothing
+            let chosen = node.role == Role::Tab && node.states.selected;
+            for &action in node
+                .actions
+                .iter()
+                .filter(|a| OPERATIONS.contains(a) && !(chosen && **a == Action::Click))
+            {
+                // each action on a cell of its own, so one action's effect does not hide another's
+                let (mut run, reader, nodes) = heard(fixture);
+                let before = (HEARD.get(), seen(&run));
+                run.driver.ask(&reader, nodes[index].0, action, None);
+                run.settle();
+                if (HEARD.get(), seen(&run)) == before {
+                    ignored.push(format!(
+                        "{}: {} ignores {action:?}",
+                        fixture.name,
+                        describe(node)
+                    ));
+                }
+            }
+            if node.states.focusable && node.actions.contains(&Action::Focus) {
+                let (mut run, reader, nodes) = heard(fixture);
+                run.driver.ask(&reader, nodes[index].0, Action::Focus, None);
+                run.settle();
+                if run.snapshot().focus != Some(nodes[index].0) {
+                    ignored.push(format!(
+                        "{}: {} ignores Focus",
+                        fixture.name,
+                        describe(node)
+                    ));
+                }
+            }
+        }
+    }
+    assert_eq!(ignored, Vec::<String>::new());
 }

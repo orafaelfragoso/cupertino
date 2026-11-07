@@ -624,6 +624,14 @@ impl<M: 'static> Widget<M> for AccessoryButton<M> {
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(Role::Button);
         cx.name(self.accessory.label.clone());
-        cx.action(Action::Click);
+        // without a handler a press does nothing, so the button offers no action and says it is unavailable
+        if self.on_accessory.is_some() {
+            cx.action(Action::Click);
+        } else {
+            cx.states(AccessibleStates {
+                disabled: true,
+                ..AccessibleStates::default()
+            });
+        }
     }
 }

@@ -124,6 +124,10 @@ impl<M: Clone + 'static> Menu<M> {
             let back = (depth > 0).then(|| on_open(open[..depth - 1].to_vec()));
             let panel = Panel {
                 label: label.clone(),
+                rows: items
+                    .iter()
+                    .filter(|i| !matches!(i, MenuItem::Separator))
+                    .count(),
                 current: current
                     .filter(|_| depth == 0)
                     .and_then(|i| enabled_position(&items, i)),
@@ -209,6 +213,7 @@ fn rows<M: Clone + 'static>(
         })
         .collect();
     let mut position = 0;
+    let mut place = 0;
     items
         .iter()
         .enumerate()
@@ -250,11 +255,13 @@ fn rows<M: Clone + 'static>(
                 action,
                 labels: Rc::clone(&labels),
                 position,
+                place,
                 current: current == Some(index),
             };
             if enabled {
                 position += 1;
             }
+            place += 1;
             Element::new(row).key(index as u64)
         })
         .collect()
@@ -274,6 +281,8 @@ fn enabled_position<M>(items: &[MenuItem<M>], index: usize) -> Option<usize> {
 /// One level of a menu: its rows on the panel, and the messages that close it.
 struct Panel<M> {
     label: String,
+    /// How many rows the menu holds, separators not counted.
+    rows: usize,
     /// The place among the enabled rows of the row that takes the focus when the menu opens.
     current: Option<usize>,
     /// Sent on Escape: closes a submenu, or the whole menu.
@@ -373,6 +382,7 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
     fn semantics(&self, _: &bool, cx: &mut SemanticsCx<'_>) {
         cx.role(Role::Menu);
         cx.name(self.label.clone());
+        cx.item_count(self.rows);
         cx.focus_scope();
         cx.roving_group();
     }
@@ -393,6 +403,8 @@ struct Row<M> {
     labels: Rc<[String]>,
     /// This row's place among them, if enabled.
     position: usize,
+    /// This row's place among all the menu's rows, separators not counted, which a screen reader reads out.
+    place: usize,
     /// Highlighted while it has the focus, also before the pointer or a key moves it.
     current: bool,
 }
@@ -642,6 +654,7 @@ impl<M: Clone + 'static> Widget<M> for Row<M> {
     fn semantics(&self, _: &RowState, cx: &mut SemanticsCx<'_>) {
         cx.role(Role::MenuItem);
         cx.name(self.label.clone());
+        cx.item_index(self.place);
         if self.checked {
             cx.value(AccessibleValue::Toggle(Checked::True));
         }

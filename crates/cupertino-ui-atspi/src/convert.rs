@@ -135,6 +135,13 @@ pub(crate) fn node(node: &AccessibilityNode) -> accesskit::Node {
             out.add_action(action);
         }
     }
+    // AccessKit names a button or menu item from its children; an item that holds its text the same way is named so
+    // too, where a screen reader would otherwise hear an empty list item, tree item, cell or tab
+    if named_by_children(node) {
+        for child in &node.children {
+            out.push_labelled_by(node_id(*child));
+        }
+    }
     for relation in &node.relations {
         match relation {
             Relation::LabelledBy(id) => out.push_labelled_by(node_id(*id)),
@@ -157,6 +164,20 @@ pub(crate) fn node(node: &AccessibilityNode) -> accesskit::Node {
         None => {}
     }
     out
+}
+
+/// Roles a screen reader names by the text they hold when they have no name of their own.
+const NAMED_BY_CHILDREN: [Role; 4] = [Role::ListItem, Role::TreeItem, Role::Cell, Role::Tab];
+
+/// Whether `node` takes its name from its children: an item of one of [`NAMED_BY_CHILDREN`] roles with no name and
+/// no node that labels it.
+pub(crate) fn named_by_children(node: &AccessibilityNode) -> bool {
+    NAMED_BY_CHILDREN.contains(&node.role)
+        && node.name.is_none()
+        && !node
+            .relations
+            .iter()
+            .any(|r| matches!(r, Relation::LabelledBy(_)))
 }
 
 /// The actions that change a value or the selection in it, which a secret never takes from assistive technology.

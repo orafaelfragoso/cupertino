@@ -157,6 +157,7 @@ impl<M: Clone + 'static> Widget<M> for Dot<M> {
         }
         cx.role(Role::Tab);
         cx.name((self.index + 1).to_string());
+        cx.item_index(self.index);
         cx.states(AccessibleStates {
             disabled: !self.enabled,
             selected: self.index == self.current,
@@ -277,6 +278,7 @@ impl<M: Clone + 'static> Widget<M> for PageDots<M> {
         cx.name(self.label.clone());
         if self.count <= MAX_TABS {
             cx.role(Role::TabList);
+            cx.item_count(self.count);
             cx.roving_group();
             return;
         }

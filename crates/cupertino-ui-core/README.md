@@ -68,7 +68,9 @@ all on one thread.
 - **Accessibility.** A node without a role stays out of the tree and its children move up. A protected node's value
   becomes `AccessibleValue::Protected`, here, before any adapter, snapshot or test sees it. An adapter gets each
   window's whole tree, marked `full`, when it becomes active or the window opens, then only diffs while
-  `is_active`. An adapter wakes the runtime's waker when it becomes active, since `run` may be blocked. A protected
+  `is_active`, and hears each window's title (`window_title`) before its first tree and whenever the title changes. A
+  node holding the focus says it is focusable, whatever its semantics said, so a roving item reads as one that takes
+  focus. An adapter wakes the runtime's waker when it becomes active, since `run` may be blocked. A protected
   field's input-method state goes out without its surrounding text. Each turn takes the adapter's actions and gives
   each one to its target as `Event::Action`, in the window whose published tree holds it; one for a node that is gone
   is dropped.

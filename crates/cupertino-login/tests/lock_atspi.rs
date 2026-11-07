@@ -1,8 +1,9 @@
 //! The lock screen as assistive technology sees it, on a private bus with a fake accessibility registry: the password
 //! field is password text that says nothing of what is typed, no node of the tree, no message on the bus and no line of
-//! the diagnostics holds the password while it is typed, and every answer to an attempt is announced once. The lock
-//! screen is the Kit view of the lock screen ([`view::screen`]) on the headless window system with the lock screen's
-//! AT-SPI adapter, in a copy of this test binary started with the bus addresses AccessKit reads from its environment.
+//! the diagnostics holds the password while it is typed, every answer to an attempt is announced once, and the field is
+//! busy while an attempt is checked. The lock screen is the Kit view of the lock screen ([`view::screen`]) on the
+//! headless window system with the lock screen's AT-SPI adapter, in a copy of this test binary started with the bus
+//! addresses AccessKit reads from its environment.
 //! A second window of that application announces a marker before and after its part, and AccessKit sends its events in
 //! order, so what lies between the two markers is exactly what the part sent.
 
@@ -10,6 +11,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, Read, Write};
 use std::num::NonZeroU32;
 use std::process::{Child, ChildStdin, Command as Process, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, channel, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Wake, Waker};
@@ -21,11 +23,11 @@ use cupertino_kit::core::{
     AccessibilityAdapter, Application, Command, Key as NodeKey, PlaceholderIcons, RuntimeOptions,
     Window, WindowKey,
 };
-use cupertino_kit::geometry::Size;
+use cupertino_kit::geometry::{Point, Size};
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{
-    Capabilities, KeyEvent, Keysym, Mods, PlatformEvent, Timestamp, WindowEvent, WindowId,
-    WindowStates,
+    Capabilities, KeyEvent, Keysym, Mods, PlatformEvent, PointerEvent, Timestamp, WindowEvent,
+    WindowId, WindowStates,
 };
 use cupertino_kit::render::{CpuConfig, CpuRenderer};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
@@ -49,6 +51,8 @@ const ROOT: &str = "/org/a11y/atspi/accessible/root";
 const SECRET: &str = "hunter2";
 /// AT-SPI's role number of password text (`AtspiRole`).
 const PASSWORD_TEXT: u32 = 40;
+/// AT-SPI's state number of a busy object (`AtspiStateType`), a bit of `GetState`'s first word.
+const BUSY: u32 = 3;
 /// AT-SPI's politeness number of an assertive announcement (`AtspiLive`).
 const ASSERTIVE: i32 = 2;
 /// What the marker window announces just before and just after the part.
@@ -67,6 +71,8 @@ const ESCAPE: u32 = 0xff1b;
 
 /// The answers the lock screen gives to its attempts, in order; set before its application starts.
 static OUTCOMES: Mutex<Vec<AuthOutcome>> = Mutex::new(Vec::new());
+/// The lock screen holds each attempt, as a slow authenticator does, until a pointer move on it answers.
+static HELD: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug)]
 enum Msg {
@@ -79,6 +85,8 @@ enum Msg {
 struct Model {
     screen: LockScreen,
     outcomes: VecDeque<AuthOutcome>,
+    /// Each attempt waits for its answer until the next activity on the lock screen, as from [`HELD`].
+    held: bool,
     /// How many markers were shown.
     markers: usize,
     /// Each attempt's password, as the authenticator would take it.
@@ -102,6 +110,7 @@ impl Application for Locker {
         let model = Model {
             screen,
             outcomes: OUTCOMES.lock().unwrap().drain(..).collect(),
+            held: HELD.load(Ordering::SeqCst),
             markers: 0,
             attempts: 0,
             now: 1.0,
@@ -134,15 +143,25 @@ impl Application for Locker {
             Msg::Marker(_) => {}
             Msg::Lock(Input::Edited) => model.screen.edit(now),
             Msg::Lock(Input::Escape) => model.screen.escape(now),
+            // a held attempt is answered by the next input on the lock screen, a pointer move in the tests
+            Msg::Lock(Input::Activity) if model.held && model.screen.checking() => {
+                let outcome = model
+                    .outcomes
+                    .pop_front()
+                    .expect("an answer for each attempt");
+                model.screen.finish_auth(now, outcome).unwrap();
+            }
             Msg::Lock(Input::Activity) => model.screen.activity(now),
             Msg::Lock(Input::Submit(typed)) => {
                 if model.screen.submit(now, typed.secret()).is_some() {
                     model.attempts += 1;
-                    let outcome = model
-                        .outcomes
-                        .pop_front()
-                        .expect("an answer for each attempt");
-                    model.screen.finish_auth(now, outcome).unwrap();
+                    if !model.held {
+                        let outcome = model
+                            .outcomes
+                            .pop_front()
+                            .expect("an answer for each attempt");
+                        model.screen.finish_auth(now, outcome).unwrap();
+                    }
                 }
             }
             Msg::Lock(_) => {}
@@ -154,6 +173,7 @@ impl Application for Locker {
         fn screen<'a>(
             model: &'a Model,
             field: u64,
+            busy: bool,
             denied: bool,
             notice: Option<&'a str>,
         ) -> Screen<'a> {
@@ -165,6 +185,7 @@ impl Application for Locker {
                 field: Field::Password {
                     generation: field,
                     enabled: true,
+                    busy,
                 },
                 caps_lock: false,
                 spinner: None,
@@ -179,12 +200,22 @@ impl Application for Locker {
         }
         let s = &model.screen;
         let lock = view::screen(
-            &screen(model, s.field(), s.failure_outline(), s.notice()),
+            &screen(
+                model,
+                s.field(),
+                s.checking(),
+                s.failure_outline(),
+                s.notice(),
+            ),
             LOCKED_TITLE,
             Msg::Lock,
         );
         let marker = [None, Some(READY), Some(PLAYED)][model.markers.min(2)];
-        let markers = view::screen(&screen(model, 0, false, marker), MARKERS_TITLE, Msg::Marker);
+        let markers = view::screen(
+            &screen(model, 0, false, false, marker),
+            MARKERS_TITLE,
+            Msg::Marker,
+        );
         vec![
             view::full_screen(
                 WindowKey(NodeKey::from("lock")),
@@ -367,6 +398,23 @@ impl Run {
 
     fn marker(&mut self) {
         self.key(self.markers, ESCAPE, None);
+    }
+
+    /// Move the pointer over the lock screen: a held attempt is answered.
+    fn pointer(&mut self) {
+        self.driver
+            .window_system_mut()
+            .enqueue_window(
+                self.lock,
+                WindowEvent::Pointer(
+                    PointerEvent::Motion {
+                        position: Point::new(10.0, 10.0),
+                    },
+                    Timestamp(0),
+                ),
+            )
+            .unwrap();
+        self.settle();
     }
 
     /// The diagnostics a person could be shown: the Inspector dump of each window and the model.
@@ -823,5 +871,95 @@ fn every_answer_to_an_attempt_is_announced_once_and_assertively() {
             (LOCKED_OUT.to_owned(), ASSERTIVE),
         ],
         "{stderr}"
+    );
+}
+
+/// The password text of the lock window and whether AT-SPI says it is busy.
+fn field_busy(locked: &Locked, window: &str) -> (String, bool) {
+    let mut nodes = Vec::new();
+    walk(&locked.conn, &locked.peer, window, &mut nodes);
+    let field = nodes
+        .iter()
+        .find(|node| node.role == PASSWORD_TEXT)
+        .unwrap_or_else(|| panic!("no password text in {nodes:#?}"));
+    let states: Vec<u32> = accessible(&locked.conn, &locked.peer, &field.path)
+        .call("GetState", &())
+        .unwrap();
+    (field.path.clone(), states[0] & (1 << BUSY) != 0)
+}
+
+/// The `StateChanged` signals of the part on `path` for `state`, as their new values.
+fn changes(part: &Part, path: &str, state: &str) -> Vec<bool> {
+    type Event = (String, i32, i32, OwnedValue, HashMap<String, OwnedValue>);
+    part.signals()
+        .into_iter()
+        .filter(|m| {
+            let header = m.header();
+            header.member().is_some_and(|m| m == "StateChanged")
+                && header.path().is_some_and(|p| p.as_str() == path)
+        })
+        .filter_map(|m| {
+            let (kind, value, ..): Event = m.body().deserialize().unwrap();
+            (kind == state).then_some(value != 0)
+        })
+        .collect()
+}
+
+#[test]
+fn the_password_field_is_busy_while_an_attempt_is_checked() {
+    const NAME: &str = "the_password_field_is_busy_while_an_attempt_is_checked";
+    if std::env::var_os(LOCK_SCREEN).is_some() {
+        HELD.store(true, Ordering::SeqCst);
+        return lock_screen(vec![AuthOutcome::Denied], |run| {
+            run.type_text(SECRET);
+            run.key(run.lock, RETURN, None);
+        });
+    }
+    let Some(mut locked) = Locked::start(NAME) else {
+        return;
+    };
+    let windows = locked.windows();
+    let lock_window = windows[LOCKED_TITLE].clone();
+    let (_, before) = field_busy(&locked, &lock_window);
+    let part = locked.play();
+    let (_, checking) = field_busy(&locked, &lock_window);
+    let stderr = locked.finish();
+    assert!(!before, "busy before an attempt");
+    assert!(checking, "not busy while the attempt is checked: {stderr}");
+    let announced: Vec<_> = part.sent.iter().filter_map(announcement).collect();
+    assert!(announced.is_empty(), "said while checking: {announced:?}");
+}
+
+#[test]
+fn the_answer_ends_busy_and_a_wrong_password_is_announced_once() {
+    const NAME: &str = "the_answer_ends_busy_and_a_wrong_password_is_announced_once";
+    if std::env::var_os(LOCK_SCREEN).is_some() {
+        HELD.store(true, Ordering::SeqCst);
+        return lock_screen(vec![AuthOutcome::Denied], |run| {
+            run.type_text(SECRET);
+            run.key(run.lock, RETURN, None);
+            run.pointer();
+            // frames and input with nothing new to say, then the next edit
+            run.settle();
+            run.pointer();
+            run.type_text("x");
+        });
+    }
+    let Some(mut locked) = Locked::start(NAME) else {
+        return;
+    };
+    let windows = locked.windows();
+    let lock_window = windows[LOCKED_TITLE].clone();
+    let part = locked.play();
+    let (field, busy) = field_busy(&locked, &lock_window);
+    let stderr = locked.finish();
+    assert!(!busy, "still busy after the answer");
+    // the field of the attempt is new at its submission, busy from the start, and the answer ends that
+    assert_eq!(changes(&part, &field, "busy"), [false], "{stderr}");
+    let announced: Vec<_> = part.sent.iter().filter_map(announcement).collect();
+    assert_eq!(announced, [(DENIED.to_owned(), ASSERTIVE)], "{stderr}");
+    assert!(
+        !stderr.contains(SECRET),
+        "the diagnostics hold the password"
     );
 }

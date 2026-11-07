@@ -36,7 +36,7 @@ use crate::layout::{
     Layout, AVATAR_DIAMETER, HELP_SIZE, NAME_BASELINE_GAP, NAME_MAX_WIDTH, NAME_SIZE, TILE_WIDTH,
     USER_VIEW_BORDER,
 };
-use crate::model::{Key as PanelKey, Password};
+use crate::model::{Key as PanelKey, Password, MAX_PASSWORD_BYTES};
 use crate::panel::{Decision, Frames, Kind, Panel};
 use crate::picker::{Direction, Grid, Picker, Tile};
 use crate::power::{self, Menu};
@@ -205,8 +205,13 @@ pub struct Clock {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Field {
     /// The password field of `generation` ([`LockScreen::field`](crate::model::LockScreen::field)); `enabled` while
-    /// the screen takes a password.
-    Password { generation: u64, enabled: bool },
+    /// the screen takes a password, `busy` while an attempt is checked
+    /// ([`LockScreen::checking`](crate::model::LockScreen::checking)).
+    Password {
+        generation: u64,
+        enabled: bool,
+        busy: bool,
+    },
     /// The name typed for "Other…" or for an administrator.
     Name { text: String, revision: u64 },
 }
@@ -436,6 +441,7 @@ pub fn screen<M: Clone + 'static>(
         Field::Password {
             generation,
             enabled,
+            busy,
         } => (
             Element::new(SecureField {
                 label: PASSWORD_LABEL.to_owned(),
@@ -445,6 +451,11 @@ pub fn screen<M: Clone + 'static>(
                 on_submit: Some(Box::new(move |buffer| {
                     map(Input::Submit(Typed::of(buffer)))
                 })),
+                busy: *busy,
+                // the outline shows it and the notice below says it, once
+                invalid: screen.denied,
+                // the field refuses what the authenticator would not take, so a submission is never cut
+                max_len: Some(MAX_PASSWORD_BYTES),
             }),
             format!("password-{generation}"),
         ),

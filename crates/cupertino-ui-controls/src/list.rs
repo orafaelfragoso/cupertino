@@ -8,8 +8,8 @@ use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use crate::scroll;
 use crate::{
-    Column, ColumnWidth, Handler, Icon, IconDirection, ListView, OutlineTable, Scroller, Selection,
-    SortOrder, TableView, Text, TextRole, TreeItem, TreeToggle, TreeView,
+    Column, ColumnWidth, Handler, Icon, IconDirection, ListView, OutlineTable, RowKeyHandler,
+    Scroller, Selection, SortOrder, TableView, Text, TextRole, TreeItem, TreeToggle, TreeView,
 };
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_core::{
@@ -219,6 +219,7 @@ impl<M: 'static> From<ListView<M>> for Element<M> {
             type_select: list.type_select,
             on_select: list.on_select.map(Rc::new),
             on_activate: list.on_activate,
+            on_row_key: None,
             outline: None,
         };
         scroll::frame(
@@ -247,6 +248,7 @@ impl<M: 'static> From<TreeView<M>> for Element<M> {
             type_select: tree.type_select,
             on_select: tree.on_select.map(Rc::new),
             on_activate: tree.on_activate,
+            on_row_key: None,
             outline: Some(Rc::new(Outline {
                 item: tree.item,
                 on_toggle: tree.on_toggle,
@@ -315,6 +317,7 @@ fn table_element<M: 'static>(
         type_select: table.type_select,
         on_select: table.on_select.map(Rc::new),
         on_activate: table.on_activate,
+        on_row_key: table.on_row_key,
         outline,
     };
     let on_sort = table.on_sort.map(Rc::new);
@@ -366,6 +369,7 @@ struct Rows<M> {
     type_select: Option<Box<dyn Fn(usize) -> String>>,
     on_select: Option<Rc<Handler<Selection, M>>>,
     on_activate: Option<Handler<usize, M>>,
+    on_row_key: Option<RowKeyHandler<M>>,
     outline: Option<Rc<Outline<M>>>,
 }
 
@@ -502,6 +506,20 @@ impl<M: 'static> Rows<M> {
         };
         self.move_to(to, shift, cx);
         Propagation::Stop
+    }
+
+    /// A key the table did not take, offered to the application with the row the keyboard is on.
+    fn offer_key(&self, key: &KeyEvent, cx: &mut EventCx<'_, M>) -> Propagation {
+        let (Some(on_row_key), Some(at)) = (&self.on_row_key, self.cursor()) else {
+            return Propagation::Continue;
+        };
+        match on_row_key(at, key) {
+            Some(message) => {
+                cx.emit(message);
+                Propagation::Stop
+            }
+            None => Propagation::Continue,
+        }
     }
 
     /// Left and Right in a tree: open or close the cursor row, or move to its first child or its parent.
@@ -683,7 +701,11 @@ impl<M: 'static> Widget<M> for Rows<M> {
                 self.select(next, cx);
                 Propagation::Stop
             }
-            Event::Key(key, _) if key.pressed => self.key(state, &key, cx),
+            Event::Key(key, _) if key.pressed => match self.key(state, &key, cx) {
+                // what the table leaves goes to the application; the header's keys never pass the rows
+                Propagation::Continue => self.offer_key(&key, cx),
+                taken => taken,
+            },
             _ => Propagation::Continue,
         }
     }

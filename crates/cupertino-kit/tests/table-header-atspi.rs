@@ -114,6 +114,7 @@ impl Application for Files {
                 on_scroll: Box::new(Message::Scroll),
                 on_select: None,
                 on_activate: None,
+                on_row_key: None,
             }),
             menus: None,
         }]

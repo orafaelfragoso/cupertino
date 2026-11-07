@@ -885,6 +885,7 @@ fixtures! {
             on_scroll: Box::new(Message::Scroll),
             on_select: Some(Box::new(|_| Message::Nothing)),
             on_activate: None,
+            on_row_key: None,
         }
         .into()
     };

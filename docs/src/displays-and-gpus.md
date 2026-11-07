@@ -25,7 +25,7 @@ How Cupertino treats monitors, the GPU driver and X11 programs on the text-conso
 
 A paused session does not scan. The scan compares the displays with every connector that has a CRTC, not only with the one that changed.
 
-**When a display appears to clients.** An output is announced to applications only once its display shows it. A display that fails to turn on announces nothing. An output that goes away is withdrawn at once, but its global stays bindable for 5 seconds before it is destroyed, so a client that binds it late is not disconnected.
+**When a display appears to clients.** An output is announced to applications only once its display shows it. A display that fails to turn on announces nothing. An output that goes away is withdrawn at once, but its global stays bindable for 5 seconds before it is destroyed, so a client that binds it late is not disconnected. Panels on it are closed first, and none of them keeps the keyboard: an open control panel is dismissed and the window that had the keyboard gets it back.
 
 **Changing displays from a program.** The server offers `zwlr_output_manager_v1`, which tools such as `wlr-randr` and `kanshi` use. A configuration the display cannot carry out fails and the previous state is restored. A sandboxed client does not see this protocol.
 

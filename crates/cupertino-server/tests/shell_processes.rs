@@ -1008,6 +1008,146 @@ fn the_menu_bar_process_opens_a_menu_popup_and_a_click_outside_closes_it() {
     });
 }
 
+/// The menu bar process with an application window that has the keyboard. A click on empty bar space while a menu is
+/// open closes the menu and reaches nothing else: no item runs (the window stays the key window and no other popup
+/// opens), and the keyboard goes back to the window rather than to the bar. Hover and Right switch the open menu,
+/// Escape closes it, and the keyboard comes back to the window each time. Run with `--no-capture` for the trace.
+#[test]
+fn a_click_on_empty_bar_space_closes_the_menu_and_the_keyboard_goes_back_to_the_window() {
+    const BTN_LEFT: u32 = 0x110;
+    const ESCAPE: u32 = 1 + 8;
+    const RIGHT: u32 = 106 + 8;
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let Some(mut server) = Server::start(vec![real_process("cupertino-menubar", &bus)], true)
+    else {
+        return;
+    };
+    server.wait_until("the bar to be drawn", |s| {
+        committed_buffer(s, "cupertino-menubar").is_some()
+    });
+    spawn_toplevel(
+        PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
+            .join(server.state.socket_name.as_ref().unwrap()),
+    );
+    server.wait_until("the window to map and take the keyboard", |s| {
+        s.wm.key_window().is_some_and(|w| {
+            s.entry(w).is_some_and(|e| {
+                s.seat.get_keyboard().unwrap().current_focus().as_ref() == Some(e.surface())
+            })
+        })
+    });
+    let window = server.state.wm.key_window().unwrap();
+    let window_has_keyboard = |s: &Cupertino| {
+        s.seat.get_keyboard().unwrap().current_focus().as_ref()
+            == s.entry(window).map(|e| e.surface())
+    };
+    let focus = |s: &Cupertino| -> &'static str {
+        let focus = s.seat.get_keyboard().unwrap().current_focus();
+        if focus.as_ref() == s.entry(window).map(|e| e.surface()) {
+            "the window"
+        } else if focus.is_none() {
+            "nothing"
+        } else if s.popup_grab.is_some() {
+            "the menu (its grab)"
+        } else {
+            "another surface"
+        }
+    };
+    let mut time = 0;
+    let mut click = |server: &mut Server, x: f64, y: f64| {
+        time += 10;
+        server.state.pointer_moved_to((x, y).into(), time, None);
+        server.step();
+        server
+            .state
+            .pointer_button(BTN_LEFT, ButtonState::Pressed, time + 1);
+        server.step();
+        server
+            .state
+            .pointer_button(BTN_LEFT, ButtonState::Released, time + 2);
+        server.step();
+    };
+    let key = |server: &mut Server, code: u32| {
+        for state in [KeyState::Pressed, KeyState::Released] {
+            server
+                .state
+                .keyboard_event_now(Keycode::new(code), state, 0);
+            server.step();
+        }
+    };
+    let open = |s: &Cupertino| popup_buffer_size(s, "cupertino-menubar").is_some();
+
+    click(&mut server, 20.0, 12.0);
+    server.wait_until("the system menu to open with the grab", |s| {
+        open(s) && s.popup_grab.is_some() && !window_has_keyboard(s)
+    });
+    let system = popup_location(&server.state, "cupertino-menubar").unwrap();
+    eprintln!(
+        "trace: click on the system menu at (20, 12): menu open at {system:?}, keyboard on {}",
+        focus(&server.state)
+    );
+
+    // empty bar space, right of the application's menus and left of the status items
+    click(&mut server, 560.0, 12.0);
+    server.wait_until("the menu to close", |s| !open(s) && s.popup_grab.is_none());
+    server.wait_until("the keyboard back on the window", window_has_keyboard);
+    eprintln!(
+        "trace: click on empty bar space at (560, 12): menu closed, grab ended, keyboard on {}, key window {:?}",
+        focus(&server.state),
+        server.state.wm.key_window()
+    );
+    let end = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < end {
+        server.step();
+    }
+    assert!(!open(&server.state), "the click opened no other menu");
+    assert_eq!(server.state.wm.key_window(), Some(window));
+    assert_eq!(
+        server.state.wm.windows().count(),
+        1,
+        "no item ran on the window"
+    );
+    assert!(window_has_keyboard(&server.state));
+
+    // Right moves the open menu to the next title, hovering the system menu's title brings it back, Escape closes it
+    click(&mut server, 20.0, 12.0);
+    server.wait_until("the system menu to open again", |s| {
+        popup_location(s, "cupertino-menubar") == Some(system)
+    });
+    key(&mut server, RIGHT);
+    server.wait_until("Right to open the next menu", |s| {
+        popup_location(s, "cupertino-menubar").is_some_and(|at| at.x > system.x)
+    });
+    let next = popup_location(&server.state, "cupertino-menubar").unwrap();
+    eprintln!(
+        "trace: Right: the menu moved to {next:?}, keyboard on {}",
+        focus(&server.state)
+    );
+    time += 10;
+    server
+        .state
+        .pointer_moved_to((20.0, 12.0).into(), time, None);
+    server.wait_until("hovering the system title to switch back", |s| {
+        popup_location(s, "cupertino-menubar") == Some(system)
+    });
+    eprintln!("trace: hover on the system title: the menu moved back to {system:?}");
+    key(&mut server, ESCAPE);
+    server.wait_until("Escape to close the menu", |s| {
+        !open(s) && s.popup_grab.is_none()
+    });
+    server.wait_until(
+        "the keyboard back on the window after Escape",
+        window_has_keyboard,
+    );
+    eprintln!(
+        "trace: Escape: menu closed, keyboard on {}",
+        focus(&server.state)
+    );
+}
+
 /// Toolkits hide their in-window menu bar while `com.canonical.AppMenu.Registrar` has an owner, so the menu bar process
 /// owns it only while it shows a bar: the name goes with the output of the last bar.
 #[test]
@@ -1081,6 +1221,339 @@ fn the_menu_bar_process_outlives_an_unplugged_display() {
     }
     assert_eq!(server.state.supervisor.pid_of("cupertino-menubar"), pid);
     assert!(committed_buffer(&server.state, "cupertino-menubar").is_some());
+}
+
+// ---- the control panel and its output ---------------------------------------------------------------------------
+
+/// Layer namespace of the control panel's card and catcher.
+const PANEL: &str = "cupertino-controlcenter";
+
+/// One of the control panel's layer surfaces, on an output that exists.
+struct PanelSurface {
+    /// The card (the overlay layer), else the catcher.
+    card: bool,
+    /// Index of its output in `Cupertino::outputs`.
+    output: usize,
+    surface: smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    /// Where it is in global points.
+    rect: Rectangle<i32, Logical>,
+}
+
+/// The control panel's layer surfaces on every output.
+fn panel_surfaces(state: &Cupertino) -> Vec<PanelSurface> {
+    let mut out = Vec::new();
+    for (output, entry) in state.outputs.iter().enumerate() {
+        let map = layer_map_for_output(&entry.output);
+        let origin = entry.output.current_location();
+        for layer in map.layers().filter(|l| l.namespace() == PANEL) {
+            let Some(geometry) = map.layer_geometry(layer) else {
+                continue;
+            };
+            out.push(PanelSurface {
+                card: layer.layer() == smithay::wayland::shell::wlr_layer::Layer::Overlay,
+                output,
+                surface: layer.wl_surface().clone(),
+                rect: Rectangle::new(origin + geometry.loc, geometry.size),
+            });
+        }
+    }
+    out
+}
+
+/// The card, once it has committed a buffer.
+fn drawn_card(state: &Cupertino) -> Option<PanelSurface> {
+    panel_surfaces(state)
+        .into_iter()
+        .find(|p| p.card && surface_bytes(&p.surface).is_some())
+}
+
+/// The bytes of the buffer committed on `surface`; `None` before its first.
+fn surface_bytes(
+    surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+) -> Option<Vec<u8>> {
+    let buffer = with_renderer_surface_state(surface, |s| s.buffer().cloned())??;
+    with_buffer_contents(&buffer, |ptr, len, _| {
+        let mut copy = vec![0u8; len];
+        // SAFETY: `ptr` is valid for `len` bytes while the callback runs; the bytes are copied out
+        unsafe { std::ptr::copy_nonoverlapping(ptr, copy.as_mut_ptr(), len) };
+        copy
+    })
+    .ok()
+}
+
+/// `Toggle` on the control panel's bus name, retried until the process owns it; the answer comes through the returned
+/// channel, so the server keeps stepping meanwhile.
+fn toggle_panel(bus: &PrivateBus) -> Receiver<()> {
+    let address = bus.address.clone();
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        let end = Instant::now() + TIMEOUT;
+        let conn = zbus::block_on(
+            zbus::connection::Builder::address(address.as_str())
+                .unwrap()
+                .build(),
+        )
+        .unwrap();
+        loop {
+            let reply = zbus::block_on(conn.call_method(
+                Some("org.cupertino.ControlPanel1"),
+                "/org/cupertino/ControlPanel1",
+                Some("org.cupertino.ControlPanel1"),
+                "Toggle",
+                &(),
+            ));
+            match reply {
+                Ok(_) => return tx.send(()).unwrap(),
+                // the name is not owned yet
+                Err(_) if Instant::now() < end => std::thread::sleep(Duration::from_millis(50)),
+                Err(e) => panic!("Toggle never answered: {e}"),
+            }
+        }
+    });
+    rx
+}
+
+impl Server {
+    fn toggle_panel(&mut self, bus: &PrivateBus) {
+        let answer = toggle_panel(bus);
+        self.wait_until("Toggle to be answered", |_| answer.try_recv().is_ok());
+    }
+
+    fn run_for(&mut self, duration: Duration) {
+        let end = Instant::now() + duration;
+        while Instant::now() < end {
+            self.step();
+        }
+    }
+
+    fn keyboard_focus(
+        &self,
+    ) -> Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface> {
+        self.state.seat.get_keyboard().unwrap().current_focus()
+    }
+
+    /// Move the pointer to `at`, global points, and press and release the left button there.
+    fn click_at(&mut self, at: Point<i32, Logical>) {
+        const BTN_LEFT: u32 = 0x110;
+        self.state
+            .pointer_moved_to((f64::from(at.x), f64::from(at.y)).into(), 0, None);
+        self.step();
+        self.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 0);
+        self.step();
+        self.state
+            .pointer_button(BTN_LEFT, ButtonState::Released, 0);
+        self.step();
+    }
+
+    /// The head that shows the output at `index`.
+    fn head_of(&self, index: usize) -> cupertino_server::displays::HeadId {
+        let output = self.state.outputs[index].id;
+        self.state
+            .displays
+            .heads
+            .iter()
+            .find(|h| h.output == Some(output))
+            .expect("the head of the output")
+            .id
+    }
+
+    /// Open the control panel and wait until its card is drawn with the keyboard; returns the card.
+    fn open_panel(&mut self, bus: &PrivateBus) -> PanelSurface {
+        self.toggle_panel(bus);
+        self.wait_until("the card to be drawn with the keyboard", |s| {
+            drawn_card(s).is_some_and(|card| {
+                s.seat.get_keyboard().unwrap().current_focus().as_ref() == Some(&card.surface)
+            })
+        });
+        drawn_card(&self.state).unwrap()
+    }
+
+    /// Wait until the panel's surfaces are destroyed and none of them holds the keyboard or the pointer grab.
+    fn wait_panel_gone(&mut self, what: &str, surfaces: &[PanelSurface]) {
+        use smithay::reexports::wayland_server::Resource;
+        self.wait_until(what, |s| {
+            surfaces.iter().all(|p| !p.surface.is_alive())
+                && panel_surfaces(s).is_empty()
+                && s.exclusive_layer.is_none()
+                && s.popup_grab.is_none()
+        });
+    }
+}
+
+/// Toggling the card's Bluetooth switch and dragging its sound slider reach the panel's (in-memory) backends: the card
+/// draws the new state, and still does after the panel has read its backends again.
+fn interact_with_card(server: &mut Server, card: &PanelSurface) {
+    /// Centre of the Bluetooth switch and a point near the end of the sound slider's track, in card points (the
+    /// panel's layout with the battery row of `--fake-backends`).
+    const BLUETOOTH: (i32, i32) = (77, 115);
+    const SOUND_TRACK: (i32, i32) = (270, 305);
+    /// Long enough for the card to draw the frames of a click.
+    const SETTLE: Duration = Duration::from_millis(300);
+    /// The panel reads its backends again every second while it is open.
+    const REFRESH: Duration = Duration::from_millis(1500);
+    let at = |(x, y): (i32, i32)| card.rect.loc + Point::from((x, y));
+    let bytes = || surface_bytes(&card.surface).unwrap();
+    for (what, point) in [("switch", BLUETOOTH), ("slider", SOUND_TRACK)] {
+        let before = bytes();
+        server.click_at(at(point));
+        server.wait_until("the card to draw the new state", |_| {
+            surface_bytes(&card.surface).is_some_and(|b| b != before)
+        });
+        server.run_for(SETTLE);
+        let after = bytes();
+        assert!(after != before, "the {what} drew a new state");
+        server.run_for(REFRESH);
+        assert!(
+            bytes() == after,
+            "the backend kept the {what}'s new state through the refresh"
+        );
+    }
+}
+
+/// The control panel open on an output that is unplugged is dismissed at once: its surfaces go, the keyboard goes back
+/// to the window and nothing keeps the pointer. The process keeps running (it is not restarted), and the panel opens
+/// again on the remaining output with its switches and sliders acting. With the last output gone a toggle opens
+/// nothing; once a display is plugged in again the panel opens there. Run with `--no-capture` for the trace.
+#[test]
+fn the_control_panel_goes_with_its_output_and_opens_again_on_the_remaining_or_reconnected_one() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let mut panel = real_process(PANEL, &bus);
+    panel.command.push("--fake-backends".into());
+    let Some(mut server) = Server::start(vec![panel], true) else {
+        return;
+    };
+    spawn_toplevel(
+        PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
+            .join(server.state.socket_name.as_ref().unwrap()),
+    );
+    server.wait_until("the window to map and take the keyboard", |s| {
+        s.wm.key_window().is_some_and(|w| {
+            s.entry(w).is_some_and(|e| {
+                s.seat.get_keyboard().unwrap().current_focus().as_ref() == Some(e.surface())
+            })
+        })
+    });
+    let window = server.state.wm.key_window().unwrap();
+    let window_surface = server.state.entry(window).unwrap().surface().clone();
+    let second = headless::HeadlessDisplay {
+        name: "headless-2".into(),
+        size: (800, 600),
+        physical_mm: (0, 0),
+    };
+    headless::add_display(&mut server.state, &second, None).unwrap();
+    server.wait_until("two outputs", |s| s.outputs.len() == 2);
+
+    // open on the first output, which is then unplugged
+    let card = server.open_panel(&bus);
+    let pid = server
+        .state
+        .supervisor
+        .pid_of(PANEL)
+        .expect("the panel runs");
+    let opened = panel_surfaces(&server.state);
+    assert_eq!(opened.len(), 2, "the card and the catcher");
+    assert!(
+        opened.iter().all(|p| p.output == 0),
+        "both on the first output"
+    );
+    eprintln!(
+        "trace: Toggle: card at {:?} on output 0 of 2, keyboard on the card",
+        card.rect
+    );
+    let head = server.head_of(0);
+    headless::remove_display(&mut server.state, head).unwrap();
+    server.wait_panel_gone("the panel to go with its output", &opened);
+    server.wait_until("the keyboard back on the window", |s| {
+        s.seat.get_keyboard().unwrap().current_focus().as_ref() == Some(&window_surface)
+    });
+    eprintln!(
+        "trace: output 0 unplugged: card and catcher destroyed, no exclusive layer, no popup grab, keyboard on the window"
+    );
+    server.run_for(Duration::from_millis(500));
+    assert!(
+        panel_surfaces(&server.state).is_empty(),
+        "nothing reopens by itself"
+    );
+    assert_eq!(
+        server.state.supervisor.pid_of(PANEL),
+        Some(pid),
+        "no restart"
+    );
+
+    // the remaining output: open, act, dismiss with Escape
+    let card = server.open_panel(&bus);
+    assert!(panel_surfaces(&server.state).iter().all(|p| p.output == 0));
+    eprintln!(
+        "trace: Toggle: card at {:?} on the remaining output, keyboard on the card",
+        card.rect
+    );
+    interact_with_card(&mut server, &card);
+    eprintln!("trace: Bluetooth switch and sound slider drew their new state through a refresh");
+    const ESCAPE: u32 = 1 + 8;
+    for state in [KeyState::Pressed, KeyState::Released] {
+        server
+            .state
+            .keyboard_event_now(Keycode::new(ESCAPE), state, 0);
+        server.step();
+    }
+    let shown = panel_surfaces(&server.state);
+    server.wait_panel_gone("Escape to close the panel", &shown);
+    server.wait_until("the keyboard back on the window after Escape", |s| {
+        s.seat.get_keyboard().unwrap().current_focus().as_ref() == Some(&window_surface)
+    });
+
+    // the last output: unplugged while the panel is open, then a toggle with no output
+    server.open_panel(&bus);
+    let opened = panel_surfaces(&server.state);
+    let head = server.head_of(0);
+    headless::remove_display(&mut server.state, head).unwrap();
+    server.wait_until("no output", |s| s.outputs.is_empty());
+    server.wait_panel_gone("the panel to go with the last output", &opened);
+    let focus = server.keyboard_focus();
+    assert!(
+        opened.iter().all(|p| focus.as_ref() != Some(&p.surface)),
+        "no surface of the panel keeps the keyboard"
+    );
+    eprintln!(
+        "trace: last output unplugged: card and catcher destroyed, keyboard on {}",
+        if focus.as_ref() == Some(&window_surface) {
+            "the window"
+        } else {
+            "no panel surface"
+        }
+    );
+    server.toggle_panel(&bus);
+    server.run_for(Duration::from_millis(500));
+    assert_eq!(
+        server.state.supervisor.pid_of(PANEL),
+        Some(pid),
+        "a toggle with no output neither fails nor restarts the panel"
+    );
+    eprintln!("trace: Toggle with no output: nothing opened, the process kept running");
+
+    // a display plugged in again
+    let third = headless::HeadlessDisplay {
+        name: "headless-3".into(),
+        size: (1000, 700),
+        physical_mm: (0, 0),
+    };
+    headless::add_display(&mut server.state, &third, None).unwrap();
+    server.wait_until("the reconnected output", |s| s.outputs.len() == 1);
+    let card = server.open_panel(&bus);
+    eprintln!(
+        "trace: display plugged in, Toggle: card at {:?} on it, keyboard on the card",
+        card.rect
+    );
+    interact_with_card(&mut server, &card);
+    eprintln!("trace: Bluetooth switch and sound slider drew their new state through a refresh");
+    assert_eq!(
+        server.state.supervisor.pid_of(PANEL),
+        Some(pid),
+        "the same process throughout"
+    );
 }
 
 /// The switcher's panel is the dock process's: after the show delay it commits a panel-sized

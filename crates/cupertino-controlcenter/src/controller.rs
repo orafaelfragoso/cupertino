@@ -146,6 +146,13 @@ impl Controller {
         self.stop_dragging();
     }
 
+    /// The panel's surfaces are gone with their output: it is hidden at once, without the fade, and a drag in progress
+    /// ends without a write, as with a dismissal. The next toggle opens it again and reads every backend.
+    pub fn vanish(&mut self) {
+        self.lifecycle.hide();
+        self.stop_dragging();
+    }
+
     fn stop_dragging(&mut self) {
         self.dragging = None;
         self.pending = None;
@@ -578,6 +585,29 @@ mod tests {
         assert!(overlay.shown().is_empty());
         controller.toggle(2.0);
         assert_eq!(controller.controls().fraction(Slider::Display), Some(0.2));
+    }
+
+    #[test]
+    fn vanishing_hides_at_once_drops_the_drag_and_the_next_toggle_reads_again() {
+        let (mut controller, overlay) = opened();
+        controller.slide(1.0, Slider::Display, 0.2);
+        controller.slide(1.001, Slider::Display, 0.9);
+        controller.vanish();
+        assert_eq!(controller.phase(1.002), Phase::Hidden);
+        assert_eq!(
+            controller.next_wakeup(1.002),
+            None,
+            "no fade, no refresh, no write"
+        );
+        controller.release(1.003);
+        assert!(overlay.shown().is_empty());
+        controller.toggle(2.0);
+        assert_eq!(controller.phase(2.0), Phase::Shown);
+        assert_eq!(controller.controls().fraction(Slider::Display), Some(0.2));
+        assert!(
+            controller.press(Module::Bluetooth),
+            "the reopened panel acts on the backends"
+        );
     }
 
     #[test]

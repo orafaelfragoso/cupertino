@@ -124,6 +124,8 @@ pub enum Request {
     Toggle,
     /// The session locked: the server draws the lock screen, and only a shown panel has to go.
     Dismiss,
+    /// The output the panel's surfaces are on went away: the panel is hidden at once.
+    OutputGone,
 }
 
 /// Who holds the card's keyboard. The card takes the exclusive keyboard whenever the panel is shown (the catcher
@@ -158,13 +160,21 @@ impl CardKeyboard {
     }
 }
 
-/// Gives the panel's windows their layer surfaces on `output`. The card: the overlay layer, top right below the menu
+/// Gives the panel's windows their layer surfaces on one output. The card: the overlay layer, top right below the menu
 /// bar, with the exclusive keyboard while it is shown, so it is the key window as soon as it opens. The catcher: the
 /// top layer under it, over the whole output. The card's window opens with the panel and closes after its fade, so
-/// a hidden panel takes no input. Hears the session lock and the card losing the keyboard for the application.
+/// a hidden panel takes no input. Hears the session lock, the card losing the keyboard and the panel's output going
+/// away for the application.
+///
+/// The output is chosen when the panel opens with no surface left (the first output the server describes, see
+/// [`opening_output`]) and kept while the card or the catcher exists, so the two stay together and a toggle during
+/// the fade reopens on the card's output. When that output goes, the panel is dismissed at once (it does not move to
+/// another output); the next toggle opens it on an output that exists.
 struct PanelRoles {
     shell: LayerShell,
-    output: OutputId,
+    /// The output of the panel's surfaces; `None` while it has none, or with no output to choose (the server then
+    /// closes what opens).
+    output: Option<OutputId>,
     /// The menu bar's height, in whole points.
     menu_bar: i32,
     requests: async_channel::Sender<Request>,
@@ -176,7 +186,7 @@ struct PanelRoles {
 impl PanelRoles {
     fn config(&self, spec: &WindowSpec) -> Option<LayerSurfaceConfig> {
         let namespace = NAMESPACE.to_string();
-        let output = Some(self.output);
+        let output = self.output;
         Some(match spec.app_id.as_str() {
             APP_ID => LayerSurfaceConfig {
                 namespace,
@@ -225,6 +235,9 @@ impl SurfaceRoles for PanelRoles {
         conn: &mut Connection,
         spec: &WindowSpec,
     ) -> Option<std::result::Result<SurfaceId, WaylandError>> {
+        if self.card.is_none() && self.catcher.is_none() {
+            self.output = opening_output(&described(conn));
+        }
         let config = self.config(spec)?;
         let layer = match self.shell.layer_surface(conn, &config) {
             Ok(layer) => layer,
@@ -259,7 +272,7 @@ impl SurfaceRoles for PanelRoles {
         match *event.downcast_ref::<ShellEvent>()? {
             ShellEvent::Configure { surface, size } => {
                 let layer = self.layer(surface)?;
-                // a configure without a size closes the window, which restarts the process
+                // a configure without a size closes the window, which hides the panel
                 Some(match layer.configured(size) {
                     Ok(size) => RoleEvent::Configure { surface, size },
                     Err(_) => RoleEvent::Closed(surface),
@@ -285,6 +298,17 @@ impl SurfaceRoles for PanelRoles {
             self.catcher = None;
             if let Some(card) = &self.card {
                 card.set_keyboard_interactivity(self.keyboard.hiding());
+            }
+        }
+    }
+
+    /// The panel's output went away: the panel goes at once. The server also closes the surfaces of an output it drops,
+    /// which hides the panel the same way.
+    fn outputs_changed(&mut self, conn: &Connection) {
+        if output_gone(self.output, &described(conn)) {
+            self.output = None;
+            if self.card.is_some() || self.catcher.is_some() {
+                let _ = self.requests.send_blocking(Request::OutputGone);
             }
         }
     }
@@ -322,9 +346,14 @@ impl Panel {
         self.start.elapsed().as_secs_f64()
     }
 
-    /// Carry out what the user did on the card; the card only acts while it is shown, not while it fades.
+    /// Carry out what the user did on the card; the card only acts while it is shown, not while it fades. A window the
+    /// server closed hides the panel at once in any phase.
     fn input(&mut self, input: Input) {
         let now = self.now();
+        if input == Input::Closed {
+            self.controller.vanish();
+            return;
+        }
         if self.controller.phase(now) != Phase::Shown {
             return;
         }
@@ -337,6 +366,7 @@ impl Panel {
             }
             Input::Release(..) => self.controller.release(now),
             Input::Dismiss => self.controller.dismiss(now),
+            Input::Closed => unreachable!("handled above"),
         }
     }
 }
@@ -411,6 +441,7 @@ impl Application for Panel {
                 match request {
                     Request::Toggle => model.controller.toggle(now),
                     Request::Dismiss => model.controller.dismiss(now),
+                    Request::OutputGone => model.controller.vanish(),
                 }
                 let mut commands = schedule(model);
                 commands.push(listen(&model.requests));
@@ -446,24 +477,36 @@ impl Application for Panel {
     }
 }
 
-/// The first output the server has described.
-fn first_output(conn: &Connection) -> Result<OutputId> {
-    Ok(conn
-        .outputs()
+/// The server's outputs, in the order it announced them, and whether each is described yet.
+fn described(conn: &Connection) -> Vec<(OutputId, bool)> {
+    conn.outputs()
         .into_iter()
-        .find(|o| o.geometry.is_some())
-        .ok_or("the server has no output")?
-        .id)
+        .map(|o| (o.id, o.geometry.is_some()))
+        .collect()
 }
 
-/// Connect, claim the bus name and serve until the connection, the bus or a surface of the panel goes.
+/// The output a panel that has no surface opens on: the first one the server has described. `None` without one; the
+/// server then puts the surfaces on its active output, or closes them when it has no output at all.
+fn opening_output<O: Copy>(outputs: &[(O, bool)]) -> Option<O> {
+    outputs
+        .iter()
+        .find(|(_, described)| *described)
+        .map(|(id, _)| *id)
+}
+
+/// Whether the panel's `output` is no longer among the server's `outputs`.
+fn output_gone<O: PartialEq>(output: Option<O>, outputs: &[(O, bool)]) -> bool {
+    output.is_some_and(|output| !outputs.iter().any(|(id, _)| *id == output))
+}
+
+/// Connect, claim the bus name and serve until the connection or the bus goes. The panel opens on an output only when
+/// it is toggled, so the process also starts and keeps running while the server has no output.
 pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let menu_bar = Theme::load()?.shapes.menu_bar_height.ceil() as i32;
     let mut system = WaylandWindowSystem::connect(Profile::cupertino())
         .map_err(|e| format!("cannot connect to the Wayland display: {e:?}"))?;
     let conn = system.connection();
     let shell = LayerShell::bind(conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
-    let output = first_output(conn)?;
     let (sender, requests) = async_channel::unbounded();
     let bus = sender.clone();
     // the bus thread only queues; the application's loop carries the toggles out, so the effects never block the bus
@@ -476,7 +519,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     })?;
     let system = system.with_roles(PanelRoles {
         shell,
-        output,
+        output: None,
         menu_bar,
         requests: sender,
         card: None,
@@ -487,7 +530,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         system,
         start(Controller::new(backends(options)), requests),
     )?;
-    Err("a surface of the control panel was closed".into())
+    Err("the control panel's window system stopped".into())
 }
 
 #[cfg(test)]
@@ -598,6 +641,63 @@ mod tests {
         let current = model.timer;
         assert!(Panel::update(&mut model, Message::Timer(stale)).is_empty());
         assert_eq!(model.timer, current, "nothing is scheduled again");
+    }
+
+    #[test]
+    fn a_window_the_server_closed_hides_the_panel_at_once_and_a_toggle_opens_it_again() {
+        for fading in [false, true] {
+            let mut model = panel();
+            Panel::update(&mut model, Message::Request(Request::Toggle));
+            if fading {
+                Panel::update(&mut model, Message::Input(Input::Dismiss));
+            }
+            let commands = Panel::update(&mut model, Message::Input(Input::Closed));
+            assert!(
+                app_ids(&model).is_empty(),
+                "fading {fading}: no window is left"
+            );
+            assert_eq!(model.controller.phase(model.now()), Phase::Hidden);
+            assert!(
+                !timer(&commands),
+                "fading {fading}: no fade frame is scheduled"
+            );
+            Panel::update(&mut model, Message::Request(Request::Toggle));
+            assert_eq!(app_ids(&model), [CATCHER_APP_ID, APP_ID]);
+            let off = model.controller.controls().tile(Module::Bluetooth);
+            Panel::update(&mut model, Message::Input(Input::Press(Module::Bluetooth)));
+            assert_ne!(
+                model.controller.controls().tile(Module::Bluetooth),
+                off,
+                "fading {fading}: the reopened card switches Bluetooth"
+            );
+        }
+    }
+
+    #[test]
+    fn the_output_going_hides_the_panel_at_once() {
+        let mut model = panel();
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        Panel::update(&mut model, Message::Request(Request::OutputGone));
+        assert!(app_ids(&model).is_empty());
+        // a second close of the other window changes nothing
+        Panel::update(&mut model, Message::Input(Input::Closed));
+        assert_eq!(model.controller.phase(model.now()), Phase::Hidden);
+    }
+
+    #[test]
+    fn the_panel_opens_on_the_first_described_output_and_hears_when_its_output_goes() {
+        let (a, b) = (4_u32, 7_u32);
+        assert_eq!(opening_output::<u32>(&[]), None);
+        assert_eq!(opening_output(&[(a, false), (b, true)]), Some(b));
+        assert_eq!(opening_output(&[(a, true), (b, true)]), Some(a));
+        assert!(!output_gone::<u32>(None, &[]), "no output, nothing to lose");
+        assert!(!output_gone(Some(a), &[(a, true), (b, true)]));
+        assert!(
+            !output_gone(Some(a), &[(a, false)]),
+            "an output described anew is still there"
+        );
+        assert!(output_gone(Some(a), &[(b, true)]));
+        assert!(output_gone(Some(a), &[]), "the last output went");
     }
 
     #[test]

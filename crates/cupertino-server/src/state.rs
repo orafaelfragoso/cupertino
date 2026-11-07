@@ -968,12 +968,14 @@ impl Cupertino {
         id
     }
 
-    /// Remove an output (hot-unplug): its windows move to the first remaining output.
+    /// Remove an output (hot-unplug): its windows move to the first remaining output and its layer surfaces let go of
+    /// the input ([`Cupertino::release_output_layers`]).
     pub fn remove_output(&mut self, id: OutputId) {
         let Some(idx) = self.outputs.iter().position(|o| o.id == id) else {
             return;
         };
         let entry = self.outputs.remove(idx);
+        self.release_output_layers(&entry.output);
         let now = self.now();
         self.menu_bars.remove_output(id, now);
         self.refresh_gtk_capabilities();
@@ -987,6 +989,36 @@ impl Cupertino {
         let fx = self.wm.handle(Command::RemoveOutput { output: id }, now);
         self.apply_effects(fx);
         self.request_redraw();
+    }
+
+    /// The layer surfaces of an output that goes leave its layer map: a popup grab of one of them ends, and one that
+    /// holds the keyboard exclusively gives it back to the key window. Their clients destroy them later, after the
+    /// `closed` that [`Cupertino::drop_head_output`] sent, or never; meanwhile no output shows them and none of them
+    /// keeps the keyboard or the pointer.
+    fn release_output_layers(&mut self, output: &Output) {
+        let layers: Vec<_> = layer_map_for_output(output).layers().cloned().collect();
+        if layers.is_empty() {
+            return;
+        }
+        if self
+            .popup_grab_root()
+            .is_some_and(|root| layers.iter().any(|l| l.wl_surface() == root))
+        {
+            self.end_popup_grab(
+                SERIAL_COUNTER.next_serial(),
+                std::time::Duration::from(self.clock.now()).as_millis() as u32,
+            );
+        }
+        for layer in &layers {
+            self.layer_keyboard_exclusivity(layer.wl_surface(), false);
+        }
+        {
+            let mut map = layer_map_for_output(output);
+            for layer in &layers {
+                map.unmap_layer(layer);
+            }
+        }
+        self.refresh_holds();
     }
 
     /// Take a global away without disconnecting a client that binds it before it hears that it is gone: clients are

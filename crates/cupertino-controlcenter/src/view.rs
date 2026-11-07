@@ -50,6 +50,8 @@ pub enum Input {
     Release(Slider, f64),
     /// Escape, or a press outside the card.
     Dismiss,
+    /// The server closed the window: its output went away.
+    Closed,
 }
 
 /// The symbol of a module's switch or slider.
@@ -275,7 +277,7 @@ pub fn panel<M: Clone + 'static>(controls: &Controls, alpha: f64, to: fn(Input) 
             },
             to(Input::Dismiss),
         ),
-        on_close: None,
+        on_close: Some(to(Input::Closed)),
         background: WindowBackground::Surface {
             surface: Surface::Menu,
             radius: CARD_RADIUS,
@@ -360,7 +362,7 @@ pub fn catcher<M: Clone + 'static>(to: fn(Input) -> M) -> Window<M> {
             input_region: None,
         },
         shortcuts: CommandRegistry::new(),
-        on_close: None,
+        on_close: Some(to(Input::Closed)),
         background: WindowBackground::None,
         content: Element::new(Catcher {
             on_press: to(Input::Dismiss),

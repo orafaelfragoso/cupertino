@@ -2823,7 +2823,10 @@ fn before_drag_actions_a_drag_copies_and_its_drop_is_destroyed_without_a_finish(
         .unwrap();
     conn.flush().unwrap();
     assert!(matches!(
-        seen_matching(&seen, |s| matches!(s, Seen::Accept { .. } | Seen::DragActions { .. })),
+        seen_matching(&seen, |s| matches!(
+            s,
+            Seen::Accept { .. } | Seen::DragActions { .. }
+        )),
         Seen::Accept { .. }
     ));
     control.send(Control::DragDrop).unwrap();

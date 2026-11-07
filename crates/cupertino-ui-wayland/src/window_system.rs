@@ -1220,22 +1220,27 @@ impl WindowSystem for WaylandWindowSystem {
         Ok(read)
     }
 
-    /// A drop whose choice was to ask is told the final action first; one taken as an ask copies.
+    /// The source is told the action the drop was taken with before it finishes: a drop chosen as an ask, or taken
+    /// with another action than the one chosen (a copy where a move was shown), is given it first, so a source never
+    /// removes data the window only copied. One taken as an ask copies; one taken with an action the source does not
+    /// allow is refused, and the source keeps its data.
     fn finish_drop(&mut self, token: DropToken, action: Option<DropAction>) {
         let Some(at) = self.landed.iter().position(|d| d.token == token) else {
             return;
         };
         let drop = self.landed.remove(at);
+        let last = action.map(|action| match action {
+            DropAction::Ask => DropAction::Copy,
+            other => other,
+        });
+        let allowed =
+            last.filter(|last| drop.offer.source_actions().contains(drag_actions([last])));
         // a drop whose surface or offer is gone is already over
-        let _ = match action {
-            Some(action) => {
-                if drop.chosen == Some(DropAction::Ask) {
-                    let last = match action {
-                        DropAction::Ask => DropAction::Copy,
-                        other => other,
-                    };
-                    let last = drag_actions([&last]);
-                    let _ = self.conn.set_drag_actions(&drop.offer, last, last);
+        let _ = match allowed {
+            Some(last) => {
+                if drop.chosen != Some(last) {
+                    let bits = drag_actions([&last]);
+                    let _ = self.conn.set_drag_actions(&drop.offer, bits, bits);
                 }
                 self.conn.finish_drag(&drop.offer)
             }

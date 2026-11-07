@@ -162,6 +162,8 @@ enum Seen {
     },
     /// Its drop was finished.
     DropFinished,
+    /// Its offer was destroyed.
+    DropDestroyed,
 }
 
 #[derive(Default)]
@@ -848,6 +850,9 @@ impl Dispatch<WlDataOffer, String> for Mock {
             }
             wl_data_offer::Request::Finish => {
                 let _ = state.seen.send(Seen::DropFinished);
+            }
+            wl_data_offer::Request::Destroy => {
+                let _ = state.seen.send(Seen::DropDestroyed);
             }
             _ => {}
         }
@@ -2283,6 +2288,58 @@ mod window_system {
         );
         kit.ws.finish_drop(token, Some(DropAction::Move));
         assert_eq!(next(&seen), Seen::DropFinished);
+    }
+
+    /// A drop the compositor chose to move, which the window copied, is given the copy before it finishes, so the
+    /// source does not remove its data; one the window refuses is let go unfinished.
+    #[test]
+    fn a_drop_taken_with_another_action_than_the_one_shown_tells_the_source_first() {
+        use cupertino_ui_platform::{DropAction, DropAnswer, DropEvent};
+        let (mut kit, control, _committed, seen) = mapped();
+        let next = |seen: &Receiver<Seen>| seen.recv_timeout(Duration::from_secs(5)).unwrap();
+        let dropped = |kit: &mut Kit| {
+            control
+                .send(Control::DragIn("file:///tmp/a\r\n".into()))
+                .unwrap();
+            let token = kit.window_event(|e| match e {
+                WindowEvent::Drop(DropEvent::Enter { token, .. }) => Some(*token),
+                _ => None,
+            });
+            kit.window_event(|e| {
+                matches!(
+                    e,
+                    WindowEvent::Drop(DropEvent::Action(Some(DropAction::Move)))
+                )
+                .then_some(())
+            });
+            let answer = DropAnswer {
+                mime: Some("text/uri-list".into()),
+                actions: [DropAction::Copy, DropAction::Move].into(),
+                preferred: Some(DropAction::Move),
+            };
+            kit.ws.answer_drop(token, &answer).unwrap();
+            assert!(matches!(next(&seen), Seen::DropAccepted(Some(_))));
+            assert!(matches!(next(&seen), Seen::DropActions { .. }));
+            control.send(Control::DropIn).unwrap();
+            kit.window_event(|e| matches!(e, WindowEvent::Drop(DropEvent::Drop)).then_some(()));
+            token
+        };
+        let token = dropped(&mut kit);
+        kit.ws.finish_drop(token, Some(DropAction::Copy));
+        assert_eq!(
+            next(&seen),
+            Seen::DropActions {
+                actions: 1,
+                preferred: 1
+            },
+            "a copy, before the finish"
+        );
+        assert_eq!(next(&seen), Seen::DropFinished);
+        assert_eq!(next(&seen), Seen::DropDestroyed);
+
+        let token = dropped(&mut kit);
+        kit.ws.finish_drop(token, None);
+        assert_eq!(next(&seen), Seen::DropDestroyed, "refused, not finished");
     }
 
     /// An image wider than the transport shows (as a large preview at a high scale is) leaves the drag without an icon

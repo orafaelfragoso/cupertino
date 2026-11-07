@@ -66,7 +66,8 @@ a seat): `start_drag` hands the transport the data, the actions and the image as
 one drag at a time (a new one cancels the last), and reports the drag source's events as `PlatformEvent::Drag`.
 Drags over a window (from any client, this one included) arrive as `WindowEvent::Drop` with the transport modifiers
 held; `answer_drop` accepts the type and sets the actions, `read_drop` reads the drop like a clipboard read, and
-`finish_drop` finishes it (telling an `Ask` drop its final action first, a copy when the runtime took it as an ask) or
+`finish_drop` finishes it (telling the source the action taken first when it differs from the one chosen, as
+for an `Ask` drop, a copy when the runtime took it as an ask, and refusing an action the source does not allow) or
 refuses it. At most 8 drops are kept while they are read. A popup's `offset` moves
 its anchor rectangle; `reactive` is not sent.
 

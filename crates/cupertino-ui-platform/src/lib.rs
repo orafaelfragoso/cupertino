@@ -572,7 +572,8 @@ pub trait WindowSystem {
         Err(PlatformError::Unsupported)
     }
     /// Ends the drop of `token`: `Some(action)` took the data with that action (the source removes its own copy after a
-    /// move), `None` refused it and the source keeps it. A token that is gone is ignored.
+    /// move), told to the source even when another was chosen during the drag, and refused when the source does not
+    /// allow it; `None` refused it and the source keeps it. A token that is gone is ignored.
     fn finish_drop(&mut self, token: DropToken, action: Option<DropAction>) {
         let _ = (token, action);
     }

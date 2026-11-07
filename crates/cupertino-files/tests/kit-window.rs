@@ -981,3 +981,79 @@ fn the_sidebar_shows_the_sidebar_material_where_the_window_can_and_its_fill_wher
         "with Reduce Transparency the sidebar paints its opaque fill"
     );
 }
+
+/// A point in the toolbar row that none of its items covers, scanning from the row's trailing end.
+fn empty_toolbar_point(run: &Run) -> cupertino_kit::geometry::Point {
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    let nodes: HashMap<NodeId, &AccessibilityNode> = snapshot
+        .accessibility
+        .iter()
+        .map(|(id, n)| (*id, n))
+        .collect();
+    let toolbar = nodes
+        .values()
+        .find(|n| n.role == Role::Toolbar)
+        .expect("a toolbar");
+    let items: Vec<_> = toolbar.children.iter().map(|c| nodes[c].bounds).collect();
+    let bar = toolbar.bounds;
+    let y = bar.min_y() + bar.height() / 2.0;
+    let mut x = bar.max_x() - 12.0;
+    while x > bar.min_x() + 12.0 {
+        let p = cupertino_kit::geometry::Point::new(x, y);
+        if items.iter().all(|r| !r.outset(4.0).contains(p)) {
+            return p;
+        }
+        x -= 4.0;
+    }
+    panic!("the toolbar row has no room between its items")
+}
+
+fn window_requests(run: &Run) -> Vec<cupertino_kit::platform::WindowRequest> {
+    let system = run.driver.runtime().window_system();
+    system.requests(run.window).unwrap().to_vec()
+}
+
+#[test]
+fn the_toolbar_moves_the_window_on_a_drag_and_zooms_it_on_a_double_click() {
+    use cupertino_kit::geometry::Point;
+    use cupertino_kit::platform::{MouseButton, PointerEvent, Timestamp, WindowRequest};
+    let mut run = Run::new();
+    let at = |time: u64, event| WindowEvent::Pointer(event, Timestamp(time));
+    let button = |position, pressed| PointerEvent::Button {
+        position,
+        button: MouseButton::Left,
+        pressed,
+        serial: 1,
+        mods: Mods::NONE,
+    };
+    let drag = |run: &mut Run, from: Point, time: u64| {
+        let to = Point::new(from.x + 40.0, from.y + 30.0);
+        run.send(at(time, PointerEvent::Motion { position: from }));
+        run.send(at(time, button(from, true)));
+        run.send(at(time + 1, PointerEvent::Motion { position: to }));
+        run.send(at(time + 2, button(to, false)));
+        run.send(at(time + 3, PointerEvent::Leave));
+    };
+    let moves = |run: &Run| {
+        window_requests(run)
+            .iter()
+            .filter(|r| **r == WindowRequest::Move)
+            .count()
+    };
+    // the search field keeps its drag
+    let search = run.bounds(Role::TextInput, "Search");
+    drag(&mut run, search.center(), 0);
+    assert_eq!(moves(&run), 0);
+    let gap = empty_toolbar_point(&run);
+    drag(&mut run, gap, 10_000_000_000);
+    assert_eq!(
+        moves(&run),
+        1,
+        "a drag on the toolbar between its items moves the window"
+    );
+    for time in [20_000_000_000, 20_100_000_000] {
+        run.send(at(time, button(gap, true)));
+        run.send(at(time + 1, button(gap, false)));
+    }
+    assert!(window_requests(&run).contains(&WindowRequest::Maximize(true)));
+}

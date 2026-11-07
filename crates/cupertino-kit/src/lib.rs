@@ -2,6 +2,7 @@
 //! toolkit's crates and [`prelude`] has what a typical application names.
 
 pub mod app;
+pub mod file_icons;
 mod icons;
 
 pub use cupertino_geometry as geometry;

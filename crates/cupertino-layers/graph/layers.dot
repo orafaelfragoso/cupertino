@@ -1,5 +1,5 @@
 // cupertino-layers --graph
-// 79 crates, 363 internal dependencies
+// 79 crates, 365 internal dependencies
 // per layer: foundation 18, models 8, platform 9, protocol 3, transport 3, render 3, ui 13, core 1, shell 11, services 4, apps 2, tools 4
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-files (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-settings (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
@@ -159,8 +159,8 @@ digraph "layers" {
   "cupertino-dock" -> "cupertino-geometry";
   "cupertino-dock" -> "cupertino-icons";
   "cupertino-dock" -> "cupertino-kit";
+  "cupertino-dock" -> "cupertino-modifiers";
   "cupertino-dock" -> "cupertino-overview";
-  "cupertino-dock" -> "cupertino-protocol-app";
   "cupertino-dock" -> "cupertino-shell-client";
   "cupertino-dock" -> "cupertino-theme";
   "cupertino-dock" -> "cupertino-theme" [label="dev"];
@@ -197,6 +197,7 @@ digraph "layers" {
   "cupertino-keyboard" -> "cupertino-defaults";
   "cupertino-keyboard" -> "cupertino-key-bindings";
   "cupertino-keyboard" -> "cupertino-modifiers";
+  "cupertino-kit" -> "cupertino-apps";
   "cupertino-kit" -> "cupertino-assets";
   "cupertino-kit" -> "cupertino-capture" [label="dev"];
   "cupertino-kit" -> "cupertino-geometry";
@@ -319,6 +320,7 @@ digraph "layers" {
   "cupertino-portal" -> "cupertino-assets" [label="dev"];
   "cupertino-portal" -> "cupertino-defaults";
   "cupertino-portal" -> "cupertino-filepicker";
+  "cupertino-portal" -> "cupertino-geometry";
   "cupertino-portal" -> "cupertino-icons";
   "cupertino-portal" -> "cupertino-kit";
   "cupertino-portal" -> "cupertino-protocol-app";
@@ -344,14 +346,15 @@ digraph "layers" {
   "cupertino-scene" -> "cupertino-effects";
   "cupertino-scene" -> "cupertino-geometry";
   "cupertino-screenshot" -> "cupertino-animation";
-  "cupertino-screenshot" -> "cupertino-assets";
-  "cupertino-screenshot" -> "cupertino-decorations";
+  "cupertino-screenshot" -> "cupertino-assets" [label="dev"];
   "cupertino-screenshot" -> "cupertino-defaults";
   "cupertino-screenshot" -> "cupertino-geometry";
-  "cupertino-screenshot" -> "cupertino-protocol-app";
+  "cupertino-screenshot" -> "cupertino-kit";
+  "cupertino-screenshot" -> "cupertino-modifiers";
   "cupertino-screenshot" -> "cupertino-protocols";
   "cupertino-screenshot" -> "cupertino-shell-client";
-  "cupertino-screenshot" -> "cupertino-theme";
+  "cupertino-screenshot" -> "cupertino-theme" [label="dev"];
+  "cupertino-screenshot" -> "cupertino-ui-test" [label="dev"];
   "cupertino-screenshot" -> "cupertino-ui-wayland";
   "cupertino-screenshot" -> "cupertino-wayland-client";
   "cupertino-seat" -> "cupertino-devices";

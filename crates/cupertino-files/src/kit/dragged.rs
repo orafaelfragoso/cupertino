@@ -1,11 +1,10 @@
 //! Items dragged out of a window: the files as a `text/uri-list` a drop may copy or move, and the image that follows
-//! the pointer. One item shows its icon and its name as the grid shows them; several show the pressed item in front of
-//! the icons of up to two more, with the count in a badge on the stack. Rows dragged from the list show the pressed
-//! row's icon and name as wide as its name cell, with the count in a badge at its trailing end. The image keeps the
-//! point the press grabbed under the pointer and is drawn at [`OPACITY`].
+//! the pointer. One item shows its icon (or thumbnail) and its name as the grid shows them; several show the pressed
+//! item in front of the icons of up to two more, with the count in a badge on the stack. Rows dragged from the list
+//! show the pressed row's icon and name as wide as its name cell, with the count in a badge at its trailing end. The
+//! image keeps the point the press grabbed under the pointer and is drawn at [`OPACITY`].
 
-use cupertino_kit::controls::{Badge, Icon, IconDirection};
-use cupertino_kit::controls::{Text, TextRole};
+use cupertino_kit::controls::{Badge, Image, ImageFit, ImageSource, Text, TextRole};
 use cupertino_kit::core::{
     Change, Drag, DragPreview, Element, Event, EventCx, MeasureCx, PaintCx, Propagation,
     SemanticsCx, Widget, WindowKey,
@@ -34,7 +33,7 @@ const BADGE_OVERHANG: f64 = 8.0;
 /// The widest count badge, in points: room for three digits.
 const BADGE_WIDTH: f64 = 32.0;
 /// A dragged row's icon, its gap to the name and the name's size, in points.
-const ROW_ICON: f64 = 16.0;
+pub(super) const ROW_ICON: f64 = 16.0;
 const ROW_GAP: f64 = 6.0;
 const ROW_TEXT_SIZE: f32 = 13.0;
 /// The type the dragged files are offered in.
@@ -46,9 +45,9 @@ const URI_LIST: &str = "text/uri-list";
 pub struct Grab {
     /// The dragged items, the pressed one first.
     pub indices: Vec<usize>,
-    /// The pressed item's name, and the icon of each dragged item in the order of `indices`.
+    /// The pressed item's name, and the renditions of each dragged item's icon or thumbnail in the order of `indices`.
     pub name: String,
-    pub symbols: Vec<&'static str>,
+    pub icons: Vec<Vec<ImageSource>>,
     /// Where the press was, from the top left corner of the pressed item's cell, in points.
     pub offset: Point,
     /// The window reads right to left: the image's parts are placed from its right edge.
@@ -72,21 +71,18 @@ pub(super) fn start(
     drag(id, window, &grab.indices, entries, preview(grab))
 }
 
-/// The drag of the list's rows of `grab`, items of `entries`, out of window `id`.
+/// The drag of the list's rows of `grab`, items of `entries`, out of window `id`; `icon` is the renditions of the
+/// pressed row's icon.
 pub(super) fn start_rows(
     id: u64,
     window: WindowKey,
     grab: &RowGrab,
     entries: &[Entry],
+    icon: Vec<ImageSource>,
 ) -> Command<Message> {
     let pressed = grab.indices.first().and_then(|&i| entries.get(i));
     let name = pressed.map_or_else(String::new, |e| e.name.clone());
-    let symbol = if pressed.is_some_and(|e| e.is_dir) {
-        "symbol.folder"
-    } else {
-        "symbol.document"
-    };
-    let image = row_preview(grab, name, symbol);
+    let image = row_preview(grab, name, icon);
     drag(id, window, &grab.indices, entries, image)
 }
 
@@ -116,7 +112,11 @@ fn drag(
 
 /// The image of rows dragged from the list: the pressed row's icon and name in the size of its name cell, with the
 /// count of the rows in a badge at the trailing end when there are several, and the pointer where the press grabbed it.
-pub(super) fn row_preview(grab: &RowGrab, name: String, symbol: &str) -> DragPreview<Message> {
+pub(super) fn row_preview(
+    grab: &RowGrab,
+    name: String,
+    sources: Vec<ImageSource>,
+) -> DragPreview<Message> {
     let size = grab.cell;
     let count = grab.indices.len();
     let middle = |height: f64| (size.height - height) / 2.0;
@@ -133,7 +133,7 @@ pub(super) fn row_preview(grab: &RowGrab, name: String, symbol: &str) -> DragPre
             Rect::new(icon_x, middle(ROW_ICON), ROW_ICON, ROW_ICON),
             Insets::ZERO,
             0.0,
-            vec![icon(symbol, ROW_ICON)],
+            vec![icon(sources, ROW_ICON)],
         ),
         Element::new(Line {
             frame: Rect::new(text_x, 0.0, text_width, size.height),
@@ -199,12 +199,12 @@ pub(super) fn preview(grab: &Grab) -> DragPreview<Message> {
     let size = Size::new(grab.cell.width + room, grab.cell.height + room);
     let icon_left = (grab.cell.width - grab.icon_size) / 2.0;
     let icon_top = room + grab.icon_top;
-    let front = grab.symbols.first().copied().unwrap_or_default();
+    let front = grab.icons.first().cloned().unwrap_or_default();
     let mut children = Vec::new();
     // the icons behind, the farthest first, each a step up and to the trailing side of the one before it
     for depth in (1..=behind).rev() {
         let step = depth as f64 * STACK_STEP;
-        let symbol = grab.symbols.get(depth).copied().unwrap_or(front);
+        let sources = grab.icons.get(depth).unwrap_or(&front).clone();
         children.push(placed(
             Rect::new(
                 icon_left + step,
@@ -214,7 +214,7 @@ pub(super) fn preview(grab: &Grab) -> DragPreview<Message> {
             ),
             Insets::ZERO,
             0.0,
-            vec![icon(symbol, grab.icon_size)],
+            vec![icon(sources, grab.icon_size)],
         ));
     }
     children.push(placed(
@@ -262,13 +262,13 @@ pub(super) fn preview(grab: &Grab) -> DragPreview<Message> {
     }
 }
 
-fn icon(symbol: &str, size: f64) -> Element<Message> {
-    Element::new(Icon {
-        name: symbol.into(),
-        size,
-        direction: IconDirection::Fixed,
+fn icon(sources: Vec<ImageSource>, size: f64) -> Element<Message> {
+    Element::new(Image {
+        sources,
+        size: Size::new(size, size),
+        fit: ImageFit::Contain,
+        radius: 0.0,
         label: None,
-        tint: None,
     })
 }
 
@@ -437,7 +437,7 @@ mod tests {
         Grab {
             indices: (0..count).collect(),
             name: "a.txt".into(),
-            symbols: vec!["symbol.document"; count],
+            icons: vec![Vec::new(); count],
             offset: Point::new(30.0, 20.0),
             rtl: false,
             cell: Size::new(90.0, 100.0),
@@ -490,7 +490,7 @@ mod tests {
             cell: Size::new(300.0, 24.0),
             rtl: false,
         };
-        let preview = row_preview(&grab, "a.txt".into(), "symbol.document");
+        let preview = row_preview(&grab, "a.txt".into(), Vec::new());
         assert_eq!(preview.size, Size::new(300.0, 24.0));
         assert_eq!(preview.hotspot, Point::new(40.0, 9.0));
     }

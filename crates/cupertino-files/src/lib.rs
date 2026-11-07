@@ -5,7 +5,8 @@
 //! * [`natural`], [`sort`], [`group`]: collation and ordering of names, and the date buckets dates read in;
 //! * [`settings`]: per-folder view state and its store;
 //! * [`selection`], [`rename`], [`typeselect`]: interaction logic;
-//! * [`trash`], [`thumbnail`], [`tags`], [`mime`]: freedesktop-compliant services; [`open`]: default
+//! * [`trash`], [`thumbnail`], [`tags`], [`mime`]: freedesktop-compliant services; [`thumbnail_service`]: the
+//!   thumbnails of the items in view, made on worker threads; [`open`]: default
 //!   applications and the Open With list (`mimeapps.list`);
 //! * [`layout`]: icon and list layout engines with the measured metrics of [`metrics`];
 //! * [`format`]: how sizes and dates read;
@@ -45,6 +46,7 @@ pub mod settings;
 pub mod sort;
 pub mod tags;
 pub use cupertino_thumbnails as thumbnail;
+pub mod thumbnail_service;
 pub mod trash;
 pub mod typeselect;
 #[cfg(feature = "app")]

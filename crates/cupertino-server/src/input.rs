@@ -145,6 +145,8 @@ pub enum Action {
     FocusMenuBar,
     /// Open the menu bar's Help menu with its search field focused.
     HelpSearch,
+    /// Give the dock the keyboard on its first tile.
+    FocusDock,
     ToggleDockAutoHide,
     NotificationCenter,
     ControlPanel,
@@ -234,6 +236,7 @@ const NAMES: &[(&str, Action)] = &[
     ("launcher", Action::Launcher),
     ("focus-menu-bar", Action::FocusMenuBar),
     ("help-search", Action::HelpSearch),
+    ("focus-dock", Action::FocusDock),
     ("toggle-dock-auto-hide", Action::ToggleDockAutoHide),
     ("notification-center", Action::NotificationCenter),
     ("control-panel", Action::ControlPanel),
@@ -404,6 +407,7 @@ impl Action {
             | Action::ForceQuit
             | Action::Launcher
             | Action::FocusMenuBar
+            | Action::FocusDock
             | Action::ToggleDockAutoHide
             | Action::HelpSearch
             | Action::NotificationCenter
@@ -550,6 +554,7 @@ impl KeyBindings {
             I::NotificationCenter => Action::NotificationCenter,
             I::FocusMenuBar => Action::FocusMenuBar,
             I::HelpSearch => Action::HelpSearch,
+            I::FocusDock => Action::FocusDock,
             I::ToggleDockAutoHide => Action::ToggleDockAutoHide,
             I::Lock => Action::Lock,
             I::ToggleAppearance => Action::ToggleAppearance,
@@ -565,7 +570,7 @@ impl KeyBindings {
                 self.exec.push(cmd.clone());
                 Action::Exec(u16::try_from(self.exec.len() - 1).ok()?)
             }
-            I::MoveWindowToNextOutput | I::FocusDock => return None,
+            I::MoveWindowToNextOutput => return None,
         })
     }
 
@@ -764,6 +769,8 @@ pub enum ShellOp {
     FocusMenuBar,
     /// Open the Help menu of the active output's bar with its search field focused.
     HelpSearch,
+    /// The dock of the output under the pointer takes the keyboard.
+    FocusDock,
     /// Turn the docks' auto-hide on or off.
     ToggleDockAutoHide,
     /// Tell the window managers the stage shortcut was pressed.
@@ -969,6 +976,7 @@ pub fn translate_action(action: Action, ctx: &ActionContext) -> ActionPlan {
         }),
         Action::FocusMenuBar => plan.ops.push(ShellOp::FocusMenuBar),
         Action::HelpSearch => plan.ops.push(ShellOp::HelpSearch),
+        Action::FocusDock => plan.ops.push(ShellOp::FocusDock),
         Action::ToggleDockAutoHide => plan.ops.push(ShellOp::ToggleDockAutoHide),
         Action::NotificationCenter => plan.ops.push(ShellOp::ToggleNotificationCenter),
         Action::ControlPanel => plan.ops.push(ShellOp::ToggleControlPanel),

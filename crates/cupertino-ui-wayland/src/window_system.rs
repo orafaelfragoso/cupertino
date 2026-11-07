@@ -17,16 +17,16 @@ use cupertino_ui_menus::{AppMenus, WindowMenus};
 use cupertino_ui_platform::{
     ActivationRequest, Backdrop, Capabilities, ClipboardData, ClipboardKind, ClipboardToken,
     ConfigureId, CursorShape, DragImage, DragProgress, DragRequest, DragToken, DropAction,
-    KeyEvent, Keysym, MaterialRegion, MenuDescription, PlatformError, PlatformEvent, PopupSpec,
-    PresentOutcome, SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec,
-    WindowSystem,
+    DropAnswer, DropEvent, DropToken, KeyEvent, Keysym, MaterialRegion, MenuDescription,
+    PlatformError, PlatformEvent, PopupSpec, PresentOutcome, SystemAppearance, Timestamp,
+    WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{CpuFrame, RenderFrameId};
 use cupertino_ui_text::TextInputState;
 use cupertino_wayland_client::{
-    BufferFormat, Capability, ClipboardOffer, Connection, DragActions, DragIcon, DragSource,
-    DragSourceEvent, Error, Event, KeyboardEvent, PixelRect, Popup, ReadId, SurfaceId,
-    TokenRequest, Toplevel, ToplevelConfig,
+    BufferFormat, Capability, ClipboardOffer, Connection, DragActions, DragEvent, DragIcon,
+    DragOffer, DragSource, DragSourceEvent, Error, Event, KeyboardEvent, PixelRect, Popup, ReadId,
+    SurfaceId, TokenRequest, Toplevel, ToplevelConfig,
 };
 use rustix::time::ClockId;
 
@@ -46,6 +46,15 @@ enum Kind {
 enum Stall {
     Configure,
     Buffer,
+}
+
+/// The most drops kept while their data is read, as the transport keeps them.
+const MAX_LANDED: usize = 8;
+
+/// A drag from another client, or this one, over a window, and the transport's offer.
+struct IncomingDrop {
+    token: DropToken,
+    offer: DragOffer,
 }
 
 /// More rectangles than this carried between presents become one for the whole frame.
@@ -120,6 +129,8 @@ struct ShownBackdrop {
     material: Material,
     name: String,
     radius: f64,
+    /// Where it is in the window; `None` under the whole window.
+    bounds: Option<Rect>,
     /// The logical size its shape was last given.
     shaped: Option<(u32, u32)>,
 }
@@ -165,6 +176,11 @@ pub struct WaylandWindowSystem {
     /// The drag started last, while it runs; the transport runs one at a time.
     drag: Option<(DragSource, DragToken)>,
     next_drag: u64,
+    /// The drag over a window, until it leaves or drops.
+    hovering: Option<IncomingDrop>,
+    /// Drops being read, until the runtime finishes or refuses them, oldest first.
+    landed: Vec<IncomingDrop>,
+    next_drop: u64,
     /// Events produced outside a dispatch (a clipboard read, a frame that needs no wait), returned by the next one.
     queued: Vec<PlatformEvent>,
     woken: Arc<AtomicBool>,
@@ -203,6 +219,32 @@ fn drop_action(action: DragActions) -> Option<DropAction> {
     } else {
         None
     }
+}
+
+/// The transport's actions for `actions`.
+fn drag_actions<'a>(actions: impl IntoIterator<Item = &'a DropAction>) -> DragActions {
+    actions
+        .into_iter()
+        .fold(DragActions::empty(), |all, action| {
+            all | match action {
+                DropAction::Copy => DragActions::Copy,
+                DropAction::Move => DragActions::Move,
+                DropAction::Ask => DragActions::Ask,
+            }
+        })
+}
+
+/// The actions in the transport's `actions`.
+fn drop_actions(actions: DragActions) -> BTreeSet<DropAction> {
+    [
+        (DragActions::Copy, DropAction::Copy),
+        (DragActions::Move, DropAction::Move),
+        (DragActions::Ask, DropAction::Ask),
+    ]
+    .into_iter()
+    .filter(|(bit, _)| actions.contains(*bit))
+    .map(|(_, action)| action)
+    .collect()
 }
 
 /// The transport's icon of a drag image: its RGBA pixels in `wl_shm`'s byte order.
@@ -254,6 +296,9 @@ impl WaylandWindowSystem {
             next_activation: 0,
             drag: None,
             next_drag: 0,
+            hovering: None,
+            landed: Vec::new(),
+            next_drop: 0,
             queued: Vec::new(),
             woken: Arc::new(AtomicBool::new(false)),
             effects,
@@ -460,6 +505,7 @@ impl WaylandWindowSystem {
                 material,
                 radius,
                 alpha,
+                bounds,
             }) => {
                 // a fade changes only the alpha of the material already shown
                 if let Some(shown) = self
@@ -469,8 +515,9 @@ impl WaylandWindowSystem {
                     .filter(|b| b.name == material)
                 {
                     shown.material.set_alpha(alpha).map_err(protocol)?;
-                    if shown.radius != radius {
+                    if shown.radius != radius || shown.bounds != bounds {
                         shown.radius = radius;
+                        shown.bounds = bounds;
                         shown.shaped = None;
                     }
                     return Ok(());
@@ -493,6 +540,7 @@ impl WaylandWindowSystem {
                     material: wire,
                     name: material,
                     radius,
+                    bounds,
                     shaped: None,
                 })
             }
@@ -852,8 +900,50 @@ impl WaylandWindowSystem {
                 out.push(PlatformEvent::Drag { token, progress });
                 return;
             }
-            // the platform has no events for these yet: drops wait for the platform's drop events
-            Event::PopupRepositioned { .. } | Event::Drag { .. } => return,
+            Event::Drag { surface, event } => {
+                let Some(i) = on(&self.windows, surface) else {
+                    return;
+                };
+                let mods = convert::mods(self.conn.modifiers(), &self.profile);
+                let event = match event {
+                    DragEvent::Enter { offer, point } => {
+                        self.next_drop += 1;
+                        let token = DropToken(self.next_drop);
+                        let event = DropEvent::Enter {
+                            token,
+                            position: point,
+                            mimes: offer.mime_types().to_vec(),
+                            actions: drop_actions(offer.source_actions()),
+                            mods,
+                        };
+                        self.hovering = Some(IncomingDrop { token, offer });
+                        event
+                    }
+                    DragEvent::Motion { point, .. } => DropEvent::Motion {
+                        position: point,
+                        mods,
+                    },
+                    // after the drop the choice is the window's own, told by finish_drop
+                    DragEvent::Action(_) if self.hovering.is_none() => return,
+                    DragEvent::Action(action) => DropEvent::Action(drop_action(action)),
+                    DragEvent::Leave => {
+                        self.hovering = None;
+                        DropEvent::Leave
+                    }
+                    DragEvent::Drop => {
+                        let Some(drop) = self.hovering.take() else {
+                            return;
+                        };
+                        if self.landed.len() >= MAX_LANDED {
+                            self.landed.remove(0);
+                        }
+                        self.landed.push(drop);
+                        DropEvent::Drop
+                    }
+                };
+                (i, WindowEvent::Drop(event))
+            }
+            Event::PopupRepositioned { .. } => return,
         };
         let window = self.windows[i].id;
         out.push(PlatformEvent::Window { window, event });
@@ -1060,14 +1150,7 @@ impl WindowSystem for WaylandWindowSystem {
                 })
                 .ok()
         });
-        let mut actions = DragActions::empty();
-        for action in &request.actions {
-            actions |= match action {
-                DropAction::Copy => DragActions::Copy,
-                DropAction::Move => DragActions::Move,
-                DropAction::Ask => DragActions::Ask,
-            };
-        }
+        let actions = drag_actions(&request.actions);
         let contents = request
             .data
             .into_iter()
@@ -1086,6 +1169,68 @@ impl WindowSystem for WaylandWindowSystem {
             });
         }
         Ok(token)
+    }
+
+    /// Accepts the drag in the answer's type, or refuses it, and names the actions and the preferred one; the
+    /// compositor's choice arrives as [`DropEvent::Action`] (a compositor older than drag actions copies).
+    fn answer_drop(&mut self, token: DropToken, answer: &DropAnswer) -> Result<(), PlatformError> {
+        let offer = match &self.hovering {
+            Some(drop) if drop.token == token => drop.offer.clone(),
+            _ => return Err(PlatformError::Protocol("no such drag over a window".into())),
+        };
+        self.conn
+            .accept_drag(&offer, answer.mime.as_deref())
+            .map_err(platform_error)?;
+        let preferred = drag_actions(answer.preferred.as_ref());
+        self.conn
+            .set_drag_actions(&offer, drag_actions(&answer.actions), preferred)
+            .map_err(platform_error)?;
+        self.conn.flush().map_err(platform_error)
+    }
+
+    /// The read runs in the transport's loop like a clipboard read, with its limits.
+    fn read_drop(&mut self, token: DropToken, mime: &str) -> Result<ClipboardToken, PlatformError> {
+        let offer = self
+            .landed
+            .iter()
+            .find(|d| d.token == token)
+            .map(|d| d.offer.clone())
+            .ok_or_else(|| PlatformError::Protocol("no such drop".into()))?;
+        let id = self
+            .conn
+            .receive_drop(&offer, mime)
+            .map_err(platform_error)?;
+        self.next_clipboard += 1;
+        let read = ClipboardToken(self.next_clipboard);
+        self.reads.push((id, read, mime.to_owned()));
+        Ok(read)
+    }
+
+    /// The source is told the action the drop was taken with just before it finishes, whatever was chosen during the
+    /// drag (an ask, or a move where the window copied), so a source never removes data the window only copied. One
+    /// taken as an ask copies; one taken with an action the source does not allow is refused, and the source keeps its
+    /// data.
+    fn finish_drop(&mut self, token: DropToken, action: Option<DropAction>) {
+        let Some(at) = self.landed.iter().position(|d| d.token == token) else {
+            return;
+        };
+        let drop = self.landed.remove(at);
+        let last = action.map(|action| match action {
+            DropAction::Ask => DropAction::Copy,
+            other => other,
+        });
+        let allowed =
+            last.filter(|last| drop.offer.source_actions().contains(drag_actions([last])));
+        // a drop whose surface or offer is gone is already over
+        let _ = match allowed {
+            Some(last) => {
+                // a compositor tells the source only a change of action, so this costs nothing when it agrees
+                let bits = drag_actions([&last]);
+                let _ = self.conn.set_drag_actions(&drop.offer, bits, bits);
+                self.conn.finish_drag(&drop.offer)
+            }
+            None => self.conn.refuse_drop(&drop.offer),
+        };
     }
 
     fn set_clipboard(&mut self, kind: ClipboardKind, data: ClipboardData) {
@@ -1165,7 +1310,9 @@ impl WindowSystem for WaylandWindowSystem {
         let w = self.window_mut(window)?;
         let (surface, size) = (w.surface, w.size);
         if let Some(b) = w.backdrop.as_mut().filter(|b| b.shaped != Some(size)) {
-            let bounds = Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1));
+            let bounds = b
+                .bounds
+                .unwrap_or_else(|| Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1)));
             if b.material.set_shape(&bounds, b.radius).is_ok() {
                 b.shaped = Some(size);
             }

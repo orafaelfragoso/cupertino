@@ -352,6 +352,28 @@ impl Settings {
             .unwrap_or_default();
     }
 
+    /// Take the screen-sharing grant `id` out of `screen-sharing.conf` and read the file again. The file is read and
+    /// written under its lock ([`ScreenSharingConf::update`]) and only that grant goes: one the portal added since the
+    /// pane read the file stays. `Err` is the sentence the pane shows; nothing was written. Either way the pane then
+    /// shows the file as it is.
+    pub fn forget_grant(&mut self, paths: &Paths, id: &str) -> Result<(), String> {
+        let path = paths
+            .screen_sharing
+            .as_deref()
+            .ok_or_else(|| StoreError::NoPath(File::ScreenSharing).to_string())?;
+        let forgotten = ScreenSharingConf::update(path, |conf| {
+            conf.revoke(id);
+            Ok(())
+        })
+        .map_err(|e| {
+            eprintln!("cupertino-settings: the screen-sharing grant could not be forgotten: {e}");
+            StoreError::Io(File::ScreenSharing, e).to_string()
+        });
+        // the pane took the row out at once; it shows the file as it is, so a grant not forgotten shows again
+        self.reload_screen_sharing(paths);
+        forgotten
+    }
+
     /// Let `program` use the clipboard: its entry ([`clipboard::entry_for`], so a link becomes its file) is added and
     /// the file written. `Err` is the sentence the chooser shows; nothing changed.
     pub fn allow_clipboard(
@@ -414,7 +436,11 @@ impl Settings {
             File::Keyboard => self.keyboard.store(path).map(drop),
             File::Power => self.power.store(path).map(drop),
             File::DataControl => self.clipboard.store(path),
-            File::ScreenSharing => self.screen_sharing.store(path),
+            // the portal adds grants while Settings runs, so the list read earlier is never written back whole
+            File::ScreenSharing => Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "screen-sharing.conf is changed one grant at a time",
+            )),
         };
         stored.map_err(|e| {
             eprintln!("cupertino-settings: the {file:?} settings could not be saved: {e}");

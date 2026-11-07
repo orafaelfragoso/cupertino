@@ -261,6 +261,8 @@ pub enum Surface {
     Popover,
     /// A heads-up display over everything, such as the volume and brightness overlay.
     Hud,
+    /// The full-screen application grid over the desktop.
+    AppGrid,
     /// The application switcher's panel.
     Switcher,
 }
@@ -294,6 +296,7 @@ impl ThemeTokens {
             Surface::Sidebar => "Sidebar",
             Surface::Menu | Surface::Popover => "Menu",
             Surface::Hud => "LoginWindowControl",
+            Surface::AppGrid => "AppGrid",
             Surface::Switcher => "Switcher",
         };
         SurfaceLook {

@@ -9,7 +9,7 @@
 
 use std::rc::Rc;
 
-use cupertino_kit::controls::{Icon, IconDirection, Selection, Text, TextRole};
+use cupertino_kit::controls::{Image, ImageFit, ImageSource, Selection, Text, TextRole};
 use cupertino_kit::core::{
     AccessibleStates, Action, Change, Element, Event, EventCx, FocusTarget, Key, MeasureCx,
     PaintCx, Phase, Propagation, Role, SemanticsCx, Widget,
@@ -105,10 +105,10 @@ pub(super) fn by_name<S: AsRef<str>>(
     order.get(next).copied()
 }
 
-/// An item the grid shows: its name and the symbol of its icon.
+/// An item the grid shows: its name and the renditions of its icon or thumbnail.
 pub(super) struct Item {
     pub name: String,
-    pub symbol: &'static str,
+    pub icon: Vec<ImageSource>,
 }
 
 /// The content of the grid's scroll view: as tall as every cell, holding the cells that are built.
@@ -385,10 +385,10 @@ impl IconGrid {
         Some(Grab {
             indices: press.dragged.clone(),
             name: self.items[press.index].name.clone(),
-            symbols: press
+            icons: press
                 .dragged
                 .iter()
-                .map(|&i| self.items[i].symbol)
+                .map(|&i| self.items[i].icon.clone())
                 .collect(),
             offset: Point::new(
                 press.at.x - bounds.min_x() - left,
@@ -467,12 +467,12 @@ impl Widget<Message> for IconGrid {
                 let label = rect(cell.label_frame);
                 let (x, y) = (icon.min_x() - frame.min_x(), icon.min_y() - frame.min_y());
                 let children = vec![
-                    Element::new(Icon {
-                        name: self.items[index].symbol.into(),
-                        size: self.params.icon_size,
-                        direction: IconDirection::Fixed,
+                    Element::new(Image {
+                        sources: self.items[index].icon.clone(),
+                        size: Size::new(self.params.icon_size, self.params.icon_size),
+                        fit: ImageFit::Contain,
+                        radius: 0.0,
                         label: None,
-                        tint: None,
                     }),
                     Element::new(NameBox {
                         size: label.size,

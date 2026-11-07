@@ -156,6 +156,8 @@ pub struct Backdrop {
     pub material: String,
     pub radius: f64,
     pub alpha: f64,
+    /// Where the material is, in window points, when not under the whole window.
+    pub bounds: Option<Rect>,
 }
 
 /// A material of the theme data (`materials.json`) the compositor draws under one part of a window: `rect` in the
@@ -266,6 +268,47 @@ pub enum DragProgress {
     /// No drop: the drag was released where nothing accepts it, refused by the target, cancelled, or ignored by the
     /// compositor because the button had gone up.
     Cancelled,
+}
+
+/// Names one drag from any application, this one included, over this application's windows: from its enter until it
+/// leaves, or until its drop is finished with [`WindowSystem::finish_drop`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DropToken(pub u64);
+
+/// A drag from any application, this one included, over a window, in the window's logical coordinates. It enters,
+/// moves, and then leaves or drops; [`WindowSystem::answer_drop`] tells the dragging application what the window would
+/// take where the pointer is. `mods` are the keyboard modifiers held as the window system last knew them.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DropEvent {
+    /// The drag came over the window: its data's MIME types, as the source offers them, and what the source allows
+    /// done with it (a copy alone when its protocol has no actions).
+    Enter {
+        token: DropToken,
+        position: Point,
+        mimes: Vec<String>,
+        actions: BTreeSet<DropAction>,
+        mods: Mods,
+    },
+    Motion {
+        position: Point,
+        mods: Mods,
+    },
+    /// What a drop would do now, chosen from the source's actions and the window's answer; `None` when nothing.
+    Action(Option<DropAction>),
+    /// The drag left the window, or ended without a drop on it.
+    Leave,
+    /// The data was dropped where the drag was last: read it with [`WindowSystem::read_drop`] in the type the answer
+    /// took, then end it with [`WindowSystem::finish_drop`].
+    Drop,
+}
+
+/// What a window takes of the drag over it, where the pointer is now: the MIME type it would read (`None` refuses the
+/// drag there), the actions it can do with the data and the one it prefers.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DropAnswer {
+    pub mime: Option<String>,
+    pub actions: BTreeSet<DropAction>,
+    pub preferred: Option<DropAction>,
 }
 
 /// Names one activation-token request; the token arrives as [`PlatformEvent::ActivationToken`].
@@ -421,6 +464,8 @@ pub enum WindowEvent {
     },
     /// The user chose an item of the window's menus in the desktop's menu bar.
     MenuActivated(ActionName),
+    /// A drag from any application over the window. Needs [`Capabilities::drag_and_drop`].
+    Drop(DropEvent),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -511,6 +556,26 @@ pub trait WindowSystem {
     ) -> Result<DragToken, PlatformError> {
         let _ = (window, request);
         Err(PlatformError::Unsupported)
+    }
+    /// Tells the application dragging `token` what the window under it would take where the pointer is now; answered
+    /// on the drag's enter and whenever that changes, until the drop. A drag dropped where the answer took no type
+    /// (or no action the source allows) is not dropped. Needs [`Capabilities::drag_and_drop`].
+    fn answer_drop(&mut self, token: DropToken, answer: &DropAnswer) -> Result<(), PlatformError> {
+        let _ = (token, answer);
+        Err(PlatformError::Unsupported)
+    }
+    /// Starts reading the data dropped as `token` in `mime`, the type the last answer took; it arrives as
+    /// [`PlatformEvent::Clipboard`] with the returned token, `None` when it could not be read. Before the drop, or in
+    /// another type, it is refused.
+    fn read_drop(&mut self, token: DropToken, mime: &str) -> Result<ClipboardToken, PlatformError> {
+        let _ = (token, mime);
+        Err(PlatformError::Unsupported)
+    }
+    /// Ends the drop of `token`: `Some(action)` took the data with that action (the source removes its own copy after a
+    /// move), told to the source even when another was chosen during the drag, and refused when the source does not
+    /// allow it; `None` refused it and the source keeps it. A token that is gone is ignored.
+    fn finish_drop(&mut self, token: DropToken, action: Option<DropAction>) {
+        let _ = (token, action);
     }
     /// Asks for a [`WindowEvent::Frame`] when the compositor wants the next frame.
     fn request_frame(&mut self, window: WindowId);

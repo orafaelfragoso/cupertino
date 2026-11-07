@@ -84,6 +84,33 @@ impl Run {
         Run::start_configured(home, folder, places, notices, system, preferences, |s| s)
     }
 
+    /// [`Run::start_with`] on a headless system with `capabilities`.
+    pub fn start_on(
+        home: tempfile::TempDir,
+        folder: PathBuf,
+        places: Vec<Place>,
+        notices: Notices,
+        system: Option<zbus::blocking::Connection>,
+        preferences: ThemePreferences,
+        capabilities: Capabilities,
+    ) -> Run {
+        let host = Host {
+            capabilities,
+            ..Host::default()
+        };
+        let configure = |s| s;
+        Run::start_hosted(
+            home,
+            folder,
+            places,
+            notices,
+            system,
+            preferences,
+            configure,
+            host,
+        )
+    }
+
     /// [`Run::start_with`] with what `configure` makes of the window's [`Start`].
     pub fn start_configured(
         home: tempfile::TempDir,
@@ -528,6 +555,13 @@ impl Run {
             .filter(|(_, _, selected)| *selected)
             .map(|(name, _, _)| name)
             .collect()
+    }
+
+    /// The bounds of the list's row that shows `name`.
+    pub fn row_bounds(&self, name: &str) -> Rect {
+        let listed = self.listed();
+        let row = listed.into_iter().find(|(shown, _, _)| shown == name);
+        row.unwrap_or_else(|| panic!("no row {name:?}")).1
     }
 
     /// Each row of the list: the text of its first cell, its bounds and whether it is selected.

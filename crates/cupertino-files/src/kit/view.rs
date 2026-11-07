@@ -7,9 +7,10 @@ use cupertino_menu_model::{ActionName, MenuBar};
 
 use cupertino_kit::controls::{
     Column, ColumnWidth, ContextMenu, Dialog, DialogAction, DialogButton, DialogKind, Icon,
-    IconDirection, Modal, NavigationStack, OutlineTable, Progress, ScrollView, Scroller,
-    SecureField, Selection, Sidebar, SidebarAccessory, SidebarItem, SidebarSection, SortOrder,
-    Spacer, SplitView, Stack, TableView, Text, TextField, TextRole, TreeItem,
+    IconDirection, Image, ImageFit, ImageSource, Modal, NavigationStack, OutlineTable, Progress,
+    ScrollView, Scroller, SecureField, Selection, Sidebar, SidebarAccessory, SidebarItem,
+    SidebarSection, SortOrder, Spacer, SplitView, Stack, TableView, Text, TextField, TextRole,
+    TreeItem,
 };
 use cupertino_kit::core::{CommandRegistry, Key, Menus, Shortcut, WindowBackground};
 use cupertino_kit::geometry::{Insets, Size};
@@ -21,6 +22,7 @@ use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
 use cupertino_kit::theme::ColorRole;
 
 use super::context::Secondary;
+use super::drops;
 use super::grid::{self, IconGrid, Item};
 use super::list::{Gestures, RowCell};
 use super::search::{no_results, SearchSlot};
@@ -29,7 +31,7 @@ use super::toolbar::{PathSegment, ToolButton};
 use super::transfer::Transfer;
 use super::{window_key, BrowserWindow, Event, Message, Popup, Session, Unlock, COLUMNS};
 use crate::format::{human_size, relative_date};
-use crate::layout::icon::{self, Flow, FontMetrics, IconParams, SectionSpec};
+use crate::layout::icon::{self, Flow, FontMetrics, IconLayout, IconParams, SectionSpec};
 use crate::layout::list::RowSpec;
 use crate::menu_bar::MenuAction;
 use crate::metrics::{list_view, sidebar, window as window_metrics};
@@ -41,8 +43,14 @@ use crate::window::{metrics, path_chain, status_text, ViewMode};
 use crate::{mime, Entry, SortKey};
 
 pub(super) const SIDEBAR_WIDTH: f64 = sidebar::DEFAULT_WIDTH;
+/// The side of a list row's icon, in points.
+const ROW_ICON: f64 = list_view::ICON_SIZE_DEFAULT as f64;
 /// A list row: the icon size over the row padding, as the list view's rows.
-const ROW_HEIGHT: f64 = list_view::ICON_SIZE_DEFAULT as f64 + list_view::ROW_PADDING;
+const ROW_HEIGHT: f64 = ROW_ICON + list_view::ROW_PADDING;
+/// How far beyond the viewport items count as shown, in points: their thumbnails are made before they scroll in.
+const SHOWN_MARGIN: f64 = 200.0;
+/// The symbol of a folder of the path bar that is not a place of the sidebar.
+const FOLDER_SYMBOL: &str = "symbol.folder";
 /// The key of the field that edits an item's name in its row of window `id`; one per window, as focus goes to the
 /// first window holding the key.
 pub(super) fn name_field_key(id: u64) -> Key {
@@ -50,9 +58,6 @@ pub(super) fn name_field_key(id: u64) -> Key {
 }
 const ESCAPE: Keysym = Keysym(0xff1b);
 const DOWN: Keysym = Keysym(0xff54);
-/// The icons of a folder and of a file in the grid.
-const FOLDER_SYMBOL: &str = "symbol.folder";
-const DOCUMENT_SYMBOL: &str = "symbol.document";
 /// The symbol of a mounted removable file system's eject button.
 const EJECT_SYMBOL: &str = "symbol.eject";
 /// The width of a running transfer's progress bar, and the room between the parts of its row.
@@ -190,7 +195,7 @@ fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
     let selected = shown
         .iter()
         .position(|&i| session.places[i].folder() == Some(dir));
-    Element::from(Sidebar {
+    let sidebar = Element::from(Sidebar {
         label: "Sidebar".into(),
         sections,
         selected,
@@ -199,7 +204,8 @@ fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         on_select: Some(send(id, move |row| Event::Place(shown[row]))),
         on_accessory: Some(send(id, Event::Accessory)),
     })
-    .key("places")
+    .key("places");
+    drops::sidebar(session, id, sidebar)
 }
 
 /// The key of place `index`'s row: a folder's by its name, a removable file system's by its udisks object, so a row
@@ -264,6 +270,7 @@ fn unlock_sheet(id: u64, unlock: &Unlock) -> Dialog<Message> {
                 on_submit: Some(Box::new(move |_: &SecureBuffer| {
                     Message::Window(id, Event::Unlock)
                 })),
+                ..SecureField::default()
             })
             .key("passphrase"),
         ),
@@ -296,6 +303,7 @@ fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> 
         children: vec![folder.fill()],
     })
     .fill();
+    let folder = drops::folder(session, id, win, folder);
     let mut children = vec![Element::from(NavigationStack {
         content: Element::new(ContextMenu {
             content: folder,
@@ -456,6 +464,11 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         .collect();
     let names: Rc<[String]> = browser.entries().iter().map(|e| e.name.clone()).collect();
     let type_names = Rc::clone(&names);
+    let icons: Vec<Vec<ImageSource>> = browser
+        .entries()
+        .iter()
+        .map(|e| session.icons.icon(e, ROW_ICON))
+        .collect();
     let paths: Vec<std::path::PathBuf> = browser.entries().iter().map(|e| e.path.clone()).collect();
     let items = tree_items(browser.outline());
     let selected = selection(browser.selection());
@@ -504,6 +517,18 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
                 ],
             })
             .fill();
+            // the name follows the item's icon
+            let cell = match column {
+                0 => Element::new(Stack {
+                    axis: Axis::Horizontal,
+                    padding: Insets::ZERO,
+                    spacing: metrics::PATH_ICON_GAP,
+                    align: Align::Center,
+                    children: vec![item_image(icons[row].clone(), ROW_ICON), cell],
+                })
+                .fill(),
+                _ => cell,
+            };
             Element::new(RowCell {
                 window: id,
                 index: row,
@@ -588,38 +613,81 @@ fn tree_items(outline: &[RowSpec]) -> Vec<TreeItem> {
         .collect()
 }
 
-/// The folder as a grid of icons with their names, at the icon view's default settings, as wide as its viewport.
-fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
-    let browser = &win.browser;
+/// The icon grid's parameters at the icon view's default settings, and its layout as wide as the viewport.
+fn icon_layout(win: &BrowserWindow) -> (IconParams, IconLayout) {
     let settings = IconViewSettings::default();
-    let text_size = f64::from(settings.text_size);
     let params = IconParams::new(
         settings.icon_size,
         settings.grid_spacing,
         settings.text_size,
         settings.label_on_bottom,
         settings.show_item_info,
-        FontMetrics::estimate(text_size),
+        FontMetrics::estimate(f64::from(settings.text_size)),
     );
-    let entries = browser.entries();
     let layout = icon::layout(
         &params,
         win.scroll.viewport.width,
         &[SectionSpec {
             title: None,
-            count: entries.len(),
+            count: win.browser.entries().len(),
         }],
         Flow::Leading,
     );
+    (params, layout)
+}
+
+/// The items in view or near it, the topmost first, and the side of their icons in points.
+pub(super) fn shown(win: &BrowserWindow) -> (Vec<usize>, f64) {
+    let scroll = &win.scroll;
+    if scroll.viewport.height <= 0.0 {
+        return (Vec::new(), 0.0);
+    }
+    let (top, bottom) = (
+        scroll.offset.y - SHOWN_MARGIN,
+        scroll.offset.y + scroll.viewport.height + SHOWN_MARGIN,
+    );
+    match win.view {
+        ViewMode::List => {
+            let count = win.browser.entries().len();
+            let first = (top.max(0.0) / ROW_HEIGHT).floor() as usize;
+            let last = ((bottom.max(0.0) / ROW_HEIGHT).ceil() as usize).min(count);
+            ((first.min(last)..last).collect(), ROW_ICON)
+        }
+        ViewMode::Icons => {
+            let (params, layout) = icon_layout(win);
+            let shown = layout
+                .cells
+                .iter()
+                .filter(|c| c.frame.y + c.frame.h >= top && c.frame.y <= bottom)
+                .map(|c| c.index)
+                .collect();
+            (shown, params.icon_size)
+        }
+    }
+}
+
+/// An item's icon or thumbnail, `side` points square.
+fn item_image(sources: Vec<ImageSource>, side: f64) -> Element<Message> {
+    Element::new(Image {
+        sources,
+        size: Size::new(side, side),
+        fit: ImageFit::Contain,
+        radius: 0.0,
+        label: None,
+    })
+}
+
+/// The folder as a grid of icons with their names, at the icon view's default settings, as wide as its viewport.
+fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
+    let browser = &win.browser;
+    let (params, layout) = icon_layout(win);
+    let text_size = params.text_size;
+    let entries = browser.entries();
     let items: Rc<[Item]> = entries
         .iter()
         .map(|e| Item {
             name: e.name.clone(),
-            symbol: if e.is_dir {
-                FOLDER_SYMBOL
-            } else {
-                DOCUMENT_SYMBOL
-            },
+            icon: session.icons.icon(e, params.icon_size),
         })
         .collect();
     let rename = win.rename.as_ref().map(|r| {

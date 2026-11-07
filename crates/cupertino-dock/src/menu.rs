@@ -1,6 +1,5 @@
-//! The dock's context menus: a tile's and
-//! the separator's, as items, their layout as a popup beside the bar, and the hit test.
-//! Drawing is in `render::paint_menu`; the process opens the popup (`app.rs`).
+//! The dock's context menus: a tile's and the separator's, as items. CupertinoKit shows them as a popup of the bar
+//! ([`crate::view::menu`]), which lays the items out and takes the pointer and the keys.
 //!
 //! The item lists follow the design tables with these
 //! deviations, all approximate: the "Options" submenu is flattened into the top level (no
@@ -11,24 +10,11 @@
 
 use std::path::{Path, PathBuf};
 
-use cupertino_wm::geometry::{Point, Rect};
-
 use crate::config::{DockConfig, Orientation};
 use crate::tiles::TileKind;
 
-/// Row metrics, as the menu bar's popups (approximate).
-pub const ROW_HEIGHT: f64 = 22.0;
-pub const SEPARATOR_HEIGHT: f64 = 9.0;
-pub const PADDING_Y: f64 = 5.0;
-/// Horizontal inset of the labels inside the popup.
-pub const TEXT_INSET: f64 = 14.0;
-pub const MIN_WIDTH: f64 = 120.0;
-/// The popup keeps this far from the output's edges.
-pub const SCREEN_MARGIN: f64 = 4.0;
-/// Gap between the bar and the popup.
+/// Gap between a side dock's bar and the popup.
 pub const GAP: f64 = 6.0;
-pub const RADIUS: f64 = 8.0;
-pub const FONT_PT: f64 = 13.0;
 
 /// What a menu item does when picked.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -101,14 +87,6 @@ impl MenuItem {
 
     pub fn is_selectable(&self) -> bool {
         !self.separator && self.enabled
-    }
-
-    fn height(&self) -> f64 {
-        if self.separator {
-            SEPARATOR_HEIGHT
-        } else {
-            ROW_HEIGHT
-        }
     }
 }
 
@@ -246,59 +224,6 @@ pub fn separator_menu(cfg: &DockConfig) -> Vec<MenuItem> {
         position("Position: Bottom", Orientation::Bottom),
         position("Position: Right", Orientation::Right),
     ]
-}
-
-/// A laid-out menu, in the coordinates of the bar surface it pops up from.
-#[derive(Clone, Debug, PartialEq)]
-pub struct MenuLayout {
-    pub rect: Rect,
-    /// One rectangle per item, in the same coordinates.
-    pub rows: Vec<Rect>,
-}
-
-/// Lay the menu out beside the tile rectangle `anchor` (bar-surface coordinates): above it for a
-/// bottom dock, to its right or left for a side dock, kept inside `screen` (the output, in the
-/// same coordinates) by [`SCREEN_MARGIN`]. `measure` gives a label's width in points.
-pub fn layout(
-    items: &[MenuItem],
-    anchor: &Rect,
-    screen: &Rect,
-    orientation: Orientation,
-    measure: &dyn Fn(&str) -> f64,
-) -> MenuLayout {
-    let widest = items
-        .iter()
-        .filter(|i| !i.separator)
-        .map(|i| measure(&i.label))
-        .fold(0.0, f64::max);
-    let w = (widest + 2.0 * TEXT_INSET).max(MIN_WIDTH).ceil();
-    let h = items.iter().map(MenuItem::height).sum::<f64>() + 2.0 * PADDING_Y;
-    let (x, y) = match orientation {
-        Orientation::Bottom => (anchor.cx() - w / 2.0, anchor.y - GAP - h),
-        Orientation::Left => (anchor.right() + GAP, anchor.cy() - h / 2.0),
-        Orientation::Right => (anchor.x - GAP - w, anchor.cy() - h / 2.0),
-    };
-    let inner = screen.inset(SCREEN_MARGIN);
-    let x = x.max(inner.x).min(inner.right() - w).round();
-    let y = y.max(inner.y).min(inner.bottom() - h).round();
-    let rect = Rect::new(x, y, w, h);
-    let mut rows = Vec::with_capacity(items.len());
-    let mut top = y + PADDING_Y;
-    for item in items {
-        rows.push(Rect::new(x, top, w, item.height()));
-        top += item.height();
-    }
-    MenuLayout { rect, rows }
-}
-
-impl MenuLayout {
-    /// The selectable item under `p`.
-    pub fn hit(&self, items: &[MenuItem], p: Point) -> Option<usize> {
-        self.rows
-            .iter()
-            .position(|r| r.contains(p))
-            .filter(|i| items[*i].is_selectable())
-    }
 }
 
 #[cfg(test)]
@@ -491,65 +416,5 @@ mod tests {
             items[3..].iter().all(|i| !i.enabled),
             "the position is read from the file, not changed here"
         );
-    }
-
-    #[test]
-    fn the_popup_sits_above_a_bottom_dock_tile_and_stays_on_the_output() {
-        let items = tile_menu(&facts(TileKind::App, true, Some("a"), None));
-        let measure = |s: &str| s.len() as f64 * 7.0;
-        // the bar surface is 100 pt tall at the bottom of a 1000 × 700 output
-        let screen = Rect::new(0.0, -600.0, 1000.0, 700.0);
-        let tile = Rect::new(400.0, 30.0, 64.0, 64.0);
-        let l = layout(&items, &tile, &screen, Orientation::Bottom, &measure);
-        assert_eq!(
-            l.rect.w,
-            (16.0 * 7.0 + 2.0 * TEXT_INSET).ceil(),
-            "as wide as 'Remove from Dock' plus the insets"
-        );
-        assert_eq!(l.rect.bottom(), tile.y - GAP);
-        assert!((l.rect.cx() - tile.cx()).abs() <= 0.5);
-        assert_eq!(l.rows.len(), items.len());
-        assert_eq!(l.rows[0].y, l.rect.y + PADDING_Y);
-        assert_eq!(l.rows[1].h, SEPARATOR_HEIGHT);
-        assert_eq!(
-            l.rect.h,
-            4.0 * ROW_HEIGHT + SEPARATOR_HEIGHT + 2.0 * PADDING_Y
-        );
-        // a tile at the edge: the popup is pushed inside
-        let edge = layout(
-            &items,
-            &Rect::new(980.0, 30.0, 64.0, 64.0),
-            &screen,
-            Orientation::Bottom,
-            &measure,
-        );
-        assert_eq!(edge.rect.right(), screen.right() - SCREEN_MARGIN);
-        // a side dock puts it beside the tile
-        let side = layout(
-            &items,
-            &Rect::new(10.0, 300.0, 64.0, 64.0),
-            &Rect::new(0.0, 0.0, 1000.0, 700.0),
-            Orientation::Left,
-            &measure,
-        );
-        assert_eq!(side.rect.x, 74.0 + GAP);
-    }
-
-    #[test]
-    fn hits_land_on_selectable_rows_only() {
-        let items = tile_menu(&facts(TileKind::App, false, None, None));
-        let l = layout(
-            &items,
-            &Rect::new(400.0, 30.0, 64.0, 64.0),
-            &Rect::new(0.0, -600.0, 1000.0, 700.0),
-            Orientation::Bottom,
-            &|s| s.len() as f64 * 7.0,
-        );
-        let centre = |r: &Rect| Point::new(r.cx(), r.cy());
-        assert_eq!(l.hit(&items, centre(&l.rows[0])), Some(0));
-        assert_eq!(l.hit(&items, centre(&l.rows[1])), None, "the separator");
-        assert_eq!(l.hit(&items, centre(&l.rows[2])), None, "the disabled item");
-        assert_eq!(l.hit(&items, centre(&l.rows[3])), Some(3));
-        assert_eq!(l.hit(&items, Point::new(l.rect.x - 1.0, l.rect.cy())), None);
     }
 }

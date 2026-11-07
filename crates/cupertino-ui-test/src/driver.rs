@@ -93,6 +93,12 @@ impl<A: Application> TestDriver<A> {
                             .protected_focus(*window)
                             .ok_or(DriverError::UnknownWindow(*window))?
                     }
+                    // a drop is read for a drop target, not for the focused field
+                    PlatformEvent::Clipboard { token, .. }
+                        if self.runtime.window_system().reads_drop(*token) =>
+                    {
+                        false
+                    }
                     PlatformEvent::Clipboard { token, .. } => *self
                         .clipboard_reads
                         .get(token)

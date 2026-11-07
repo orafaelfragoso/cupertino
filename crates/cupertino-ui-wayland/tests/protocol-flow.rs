@@ -112,6 +112,10 @@ enum Control {
     Close,
     /// End the client's drag without a drop, as a release over nothing that accepts it does.
     CancelDrag,
+    /// Another client's drag of this URI list, copy or move, enters the window at (3, 4) and moves to (8, 9).
+    DragIn(String),
+    /// Then it drops there.
+    DropIn,
 }
 
 /// A request the server saw that the commit record does not cover.
@@ -149,6 +153,17 @@ enum Seen {
     /// A backdrop of the window took this shape (x, y, width, height).
     BackdropShape([i32; 4]),
     BackdropDestroyed,
+    /// A drag over the window was accepted in this type (`None`: refused).
+    DropAccepted(Option<String>),
+    /// It was given these actions and this preferred one.
+    DropActions {
+        actions: u32,
+        preferred: u32,
+    },
+    /// Its drop was finished.
+    DropFinished,
+    /// Its offer was destroyed.
+    DropDestroyed,
 }
 
 #[derive(Default)]
@@ -809,7 +824,7 @@ impl Dispatch<WlDataDevice, ()> for Mock {
 }
 impl Dispatch<WlDataOffer, String> for Mock {
     fn request(
-        _: &mut Self,
+        state: &mut Self,
         _: &ServerClient,
         _: &WlDataOffer,
         request: wl_data_offer::Request,
@@ -817,8 +832,29 @@ impl Dispatch<WlDataOffer, String> for Mock {
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
-        if let wl_data_offer::Request::Receive { fd, .. } = request {
-            std::fs::File::from(fd).write_all(text.as_bytes()).unwrap();
+        match request {
+            wl_data_offer::Request::Receive { fd, .. } => {
+                std::fs::File::from(fd).write_all(text.as_bytes()).unwrap()
+            }
+            wl_data_offer::Request::Accept { mime_type, .. } => {
+                let _ = state.seen.send(Seen::DropAccepted(mime_type));
+            }
+            wl_data_offer::Request::SetActions {
+                dnd_actions,
+                preferred_action,
+            } => {
+                let _ = state.seen.send(Seen::DropActions {
+                    actions: u32::from(dnd_actions),
+                    preferred: u32::from(preferred_action),
+                });
+            }
+            wl_data_offer::Request::Finish => {
+                let _ = state.seen.send(Seen::DropFinished);
+            }
+            wl_data_offer::Request::Destroy => {
+                let _ = state.seen.send(Seen::DropDestroyed);
+            }
+            _ => {}
         }
     }
 }
@@ -899,6 +935,29 @@ fn spawn_server_with(
                 Ok(Control::MenuReader(name)) => mock.menu.as_ref().unwrap().menu_reader(name),
                 Ok(Control::Close) => mock.toplevel.as_ref().unwrap().toplevel.close(),
                 Ok(Control::CancelDrag) => mock.drag.as_ref().unwrap().0.cancelled(),
+                Ok(Control::DragIn(list)) => {
+                    let device = mock.data_device.as_ref().unwrap();
+                    let offer = device
+                        .client()
+                        .unwrap()
+                        .create_resource::<WlDataOffer, String, Mock>(
+                            &display_handle,
+                            device.version(),
+                            list,
+                        )
+                        .unwrap();
+                    device.data_offer(&offer);
+                    offer.offer("text/uri-list".into());
+                    offer.source_actions(
+                        wl_data_device_manager::DndAction::Copy
+                            | wl_data_device_manager::DndAction::Move,
+                    );
+                    let surface = mock.toplevel.as_ref().unwrap().surface.clone();
+                    device.enter(41, &surface, 3.0, 4.0, Some(&offer));
+                    device.motion(50, 8.0, 9.0);
+                    offer.action(wl_data_device_manager::DndAction::Move);
+                }
+                Ok(Control::DropIn) => mock.data_device.as_ref().unwrap().drop(),
                 Ok(Control::PointerPress) => {
                     let (pointer, t) = (
                         mock.pointer.as_ref().unwrap(),
@@ -2145,6 +2204,150 @@ mod window_system {
             _ => None,
         });
         assert_eq!(progress, DragProgress::Cancelled);
+    }
+
+    /// Another client's drag over the window arrives as the platform's drop events: an enter with its types and the
+    /// source's actions, a motion, the compositor's choice; the answer accepts the type with the actions; the drop is
+    /// read through the clipboard's read event and finished with the action taken.
+    #[test]
+    fn a_drag_from_another_client_is_answered_read_and_finished() {
+        use cupertino_ui_platform::{ClipboardData, DropAction, DropAnswer, DropEvent, Mods};
+        let (mut kit, control, _committed, seen) = mapped();
+        control
+            .send(Control::DragIn("file:///tmp/a\r\n".into()))
+            .unwrap();
+        let (token, mimes, actions, at) = kit.window_event(|e| match e {
+            WindowEvent::Drop(DropEvent::Enter {
+                token,
+                mimes,
+                actions,
+                position,
+                mods,
+            }) => {
+                assert_eq!(*mods, Mods::NONE);
+                Some((*token, mimes.clone(), actions.clone(), *position))
+            }
+            _ => None,
+        });
+        assert_eq!(mimes, ["text/uri-list"]);
+        assert_eq!(actions, [DropAction::Copy, DropAction::Move].into());
+        assert_eq!(at, Point::new(3.0, 4.0));
+        assert_eq!(
+            kit.window_event(|e| match e {
+                WindowEvent::Drop(DropEvent::Motion { position, .. }) => Some(*position),
+                _ => None,
+            }),
+            Point::new(8.0, 9.0)
+        );
+        assert_eq!(
+            kit.window_event(|e| match e {
+                WindowEvent::Drop(DropEvent::Action(a)) => Some(*a),
+                _ => None,
+            }),
+            Some(DropAction::Move)
+        );
+        kit.ws
+            .answer_drop(
+                token,
+                &DropAnswer {
+                    mime: Some("text/uri-list".into()),
+                    actions: [DropAction::Copy, DropAction::Move].into(),
+                    preferred: Some(DropAction::Move),
+                },
+            )
+            .unwrap();
+        let next = |seen: &Receiver<Seen>| seen.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            next(&seen),
+            Seen::DropAccepted(Some("text/uri-list".into()))
+        );
+        assert_eq!(
+            next(&seen),
+            Seen::DropActions {
+                actions: 3,
+                preferred: 2
+            }
+        );
+        assert!(
+            kit.ws.read_drop(token, "text/uri-list").is_err(),
+            "not dropped yet"
+        );
+        control.send(Control::DropIn).unwrap();
+        kit.window_event(|e| matches!(e, WindowEvent::Drop(DropEvent::Drop)).then_some(()));
+        let read = kit.ws.read_drop(token, "text/uri-list").unwrap();
+        let data = kit.wait_for(|e| match e {
+            PlatformEvent::Clipboard { token, data } if *token == read => Some(data.clone()),
+            _ => None,
+        });
+        assert_eq!(
+            data,
+            Some(ClipboardData {
+                mime: "text/uri-list".into(),
+                bytes: b"file:///tmp/a\r\n".to_vec(),
+            })
+        );
+        kit.ws.finish_drop(token, Some(DropAction::Move));
+        assert_eq!(
+            next(&seen),
+            Seen::DropActions {
+                actions: 2,
+                preferred: 2
+            },
+            "the action taken, before the finish"
+        );
+        assert_eq!(next(&seen), Seen::DropFinished);
+    }
+
+    /// A drop the compositor chose to move, which the window copied, is given the copy before it finishes, so the
+    /// source does not remove its data; one the window refuses is let go unfinished.
+    #[test]
+    fn a_drop_taken_with_another_action_than_the_one_shown_tells_the_source_first() {
+        use cupertino_ui_platform::{DropAction, DropAnswer, DropEvent};
+        let (mut kit, control, _committed, seen) = mapped();
+        let next = |seen: &Receiver<Seen>| seen.recv_timeout(Duration::from_secs(5)).unwrap();
+        let dropped = |kit: &mut Kit| {
+            control
+                .send(Control::DragIn("file:///tmp/a\r\n".into()))
+                .unwrap();
+            let token = kit.window_event(|e| match e {
+                WindowEvent::Drop(DropEvent::Enter { token, .. }) => Some(*token),
+                _ => None,
+            });
+            kit.window_event(|e| {
+                matches!(
+                    e,
+                    WindowEvent::Drop(DropEvent::Action(Some(DropAction::Move)))
+                )
+                .then_some(())
+            });
+            let answer = DropAnswer {
+                mime: Some("text/uri-list".into()),
+                actions: [DropAction::Copy, DropAction::Move].into(),
+                preferred: Some(DropAction::Move),
+            };
+            kit.ws.answer_drop(token, &answer).unwrap();
+            assert!(matches!(next(&seen), Seen::DropAccepted(Some(_))));
+            assert!(matches!(next(&seen), Seen::DropActions { .. }));
+            control.send(Control::DropIn).unwrap();
+            kit.window_event(|e| matches!(e, WindowEvent::Drop(DropEvent::Drop)).then_some(()));
+            token
+        };
+        let token = dropped(&mut kit);
+        kit.ws.finish_drop(token, Some(DropAction::Copy));
+        assert_eq!(
+            next(&seen),
+            Seen::DropActions {
+                actions: 1,
+                preferred: 1
+            },
+            "a copy, before the finish"
+        );
+        assert_eq!(next(&seen), Seen::DropFinished);
+        assert_eq!(next(&seen), Seen::DropDestroyed);
+
+        let token = dropped(&mut kit);
+        kit.ws.finish_drop(token, None);
+        assert_eq!(next(&seen), Seen::DropDestroyed, "refused, not finished");
     }
 
     /// An image wider than the transport shows (as a large preview at a high scale is) leaves the drag without an icon

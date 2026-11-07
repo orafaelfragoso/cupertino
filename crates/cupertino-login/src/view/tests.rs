@@ -1,7 +1,8 @@
 //! The Kit views on the headless window system: what the password field publishes while a password is typed and after it
-//! is submitted, how a wrong password is shown and said, and the confirmation panels' keys, buttons and "Reopen windows"
-//! checkbox, through the tree assistive technology reads and the Inspector dump. With `CUPERTINO_LOOK_DIR` set, the test
-//! `pictures_for_review` writes each surface in light and dark at 1× and 2× there.
+//! is submitted, how a wrong password is shown and said, the field's busy and invalid states and its length limit, and
+//! the confirmation panels' keys, buttons and "Reopen windows" checkbox, through the tree assistive technology reads and
+//! the Inspector dump. With `CUPERTINO_LOOK_DIR` set, the test `pictures_for_review` writes each surface in light and dark
+//! at 1× and 2× there.
 
 use super::*;
 use crate::model::{AuthOutcome, LockScreen};
@@ -19,7 +20,7 @@ use cupertino_kit::platform::{
     WindowId, WindowStates,
 };
 use cupertino_kit::render::{CpuConfig, CpuRenderer};
-use cupertino_kit::text::{FontIndex, GlyphRaster};
+use cupertino_kit::text::{FontIndex, GlyphRaster, ImeBatch, ImeEvent};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_ui_test::{Inspector, ManualClock, TestDriver, LOOK_DIR};
 use std::cell::{Cell, RefCell};
@@ -46,6 +47,8 @@ enum Surface {
 thread_local! {
     /// The surface the next application on this thread shows.
     static SURFACE: Cell<Surface> = const { Cell::new(Surface::Lock) };
+    /// The next application on this thread holds each attempt until the next activity answers it.
+    static HELD: Cell<bool> = const { Cell::new(false) };
 }
 
 #[derive(Debug)]
@@ -64,6 +67,10 @@ struct Model {
     handled: Vec<String>,
     /// The attempts' passwords were what was typed.
     submitted: Vec<bool>,
+    /// The attempts' passwords' lengths in bytes.
+    lengths: Vec<usize>,
+    /// An attempt waits for its answer until the next [`Input::Activity`], as from [`HELD`].
+    held: bool,
     decided: Vec<Decision>,
     now: f64,
 }
@@ -114,6 +121,8 @@ impl Application for Shown {
             metrics: Metrics::of(&text),
             handled: Vec::new(),
             submitted: Vec::new(),
+            lengths: Vec::new(),
+            held: HELD.get(),
             decided: Vec::new(),
             now: 1.0,
         };
@@ -130,9 +139,17 @@ impl Application for Shown {
             Input::Submit(typed) => {
                 if model.screen.submit(now, typed.secret()).is_some() {
                     model.submitted.push(typed.secret() == SECRET);
-                    let outcome = model.outcome.clone();
-                    model.screen.finish_auth(now, outcome).unwrap();
+                    model.lengths.push(typed.secret().len());
+                    if !model.held {
+                        let outcome = model.outcome.clone();
+                        model.screen.finish_auth(now, outcome).unwrap();
+                    }
                 }
+            }
+            // a held attempt is answered by the next input, a pointer move in the tests
+            Input::Activity if model.held && model.screen.checking() => {
+                let outcome = model.outcome.clone();
+                model.screen.finish_auth(now, outcome).unwrap();
             }
             Input::Reopen(on) => {
                 if model.panel.reopen() != on {
@@ -159,6 +176,7 @@ impl Application for Shown {
                         field: Field::Password {
                             generation: s.field(),
                             enabled: true,
+                            busy: s.checking(),
                         },
                         caps_lock: false,
                         spinner: None,
@@ -544,6 +562,127 @@ fn a_wrong_password_is_said_in_words_assertively_and_outlined_until_the_next_edi
     run.type_text("x");
     assert!(run.node(|n| n.name.as_deref() == Some(DENIED)).is_none());
     assert!(!run.model().screen.failure_outline());
+}
+
+/// The password field's busy and invalid states as assistive technology holds them now.
+fn field_states(run: &Run) -> (bool, bool) {
+    let (_, field) = run.node(is_password).expect("a password field");
+    (field.states.busy, field.states.invalid)
+}
+
+/// How many times assistive technology was told of a live node named `text`: added with that name or renamed to it.
+fn said(run: &Run, text: &str) -> usize {
+    let mut names: Vec<(NodeId, Option<String>)> = Vec::new();
+    let mut count = 0;
+    for update in run.assistive.updates.borrow().iter() {
+        if update.full {
+            names.clear();
+        }
+        names.retain(|(id, _)| !update.removed.contains(id));
+        for (id, node) in &update.nodes {
+            let held = names.iter_mut().find(|(held, _)| held == id);
+            let before = held.as_ref().and_then(|(_, name)| name.clone());
+            if node.live.is_some()
+                && node.name.as_deref() == Some(text)
+                && before.as_deref() != Some(text)
+            {
+                count += 1;
+            }
+            match held {
+                Some((_, name)) => *name = node.name.clone(),
+                None => names.push((*id, node.name.clone())),
+            }
+        }
+    }
+    count
+}
+
+#[test]
+fn the_field_is_busy_while_an_attempt_is_checked_and_invalid_after_a_wrong_password_until_the_next_edit(
+) {
+    HELD.set(true);
+    let mut run = Run::new(Surface::Lock);
+    assert_eq!(field_states(&run), (false, false));
+    run.type_text(SECRET);
+    run.key(RETURN, None);
+    assert!(run.model().screen.checking());
+    assert_eq!(
+        field_states(&run),
+        (true, false),
+        "busy while it is checked"
+    );
+    assert_eq!(said(&run, DENIED), 0, "nothing is said before the answer");
+
+    // the answer
+    run.deliver(WindowEvent::Pointer(
+        PointerEvent::Motion {
+            position: Point::new(10.0, 10.0),
+        },
+        Timestamp(0),
+    ));
+    assert!(!run.model().screen.checking());
+    assert_eq!(field_states(&run), (false, true), "invalid once refused");
+    // more frames, a pointer move and the end of the shake change nothing that is said
+    run.deliver(WindowEvent::Pointer(
+        PointerEvent::Motion {
+            position: Point::new(20.0, 20.0),
+        },
+        Timestamp(0),
+    ));
+    run.settle();
+    assert_eq!(field_states(&run), (false, true));
+    assert_eq!(said(&run, DENIED), 1, "the refusal is said once");
+
+    run.type_text("x");
+    assert_eq!(
+        field_states(&run),
+        (false, false),
+        "the next edit clears it"
+    );
+    assert_eq!(said(&run, DENIED), 1);
+    assert!(!run.diagnostics().contains(SECRET));
+}
+
+#[test]
+fn the_field_refuses_what_the_authenticator_would_not_take_and_says_nothing_of_it() {
+    let mut run = Run::new(Surface::Lock);
+    run.type_text("a");
+    // an input method's text past the limit is cut at the last character that fits
+    let long = "b".repeat(MAX_PASSWORD_BYTES);
+    run.deliver(WindowEvent::Ime(ImeEvent::Done(ImeBatch {
+        preedit: None,
+        commit: Some(long),
+        delete: (0, 0),
+        current: true,
+    })));
+    let edits = |run: &Run| {
+        run.model()
+            .handled
+            .iter()
+            .filter(|h| *h == "Edited")
+            .count()
+    };
+    assert_eq!(edits(&run), 2);
+    let before = run.assistive.updates.borrow().len();
+    // the field is full: a key is no edit, and assistive technology hears nothing new of the field
+    run.type_text("cé");
+    assert_eq!(edits(&run), 2, "a refused key is no edit");
+    let field = run.node(is_password).expect("a password field").0;
+    let told: Vec<_> = run.assistive.updates.borrow()[before..]
+        .iter()
+        .flat_map(|u| u.nodes.iter())
+        .filter(|(id, _)| *id == field)
+        .map(|(_, node)| node.clone())
+        .collect();
+    assert!(
+        told.iter()
+            .all(|n| n.value == Some(AccessibleValue::Protected)
+                && n.name.as_deref() == Some(PASSWORD_LABEL)
+                && n.description.is_none()),
+        "{told:?}"
+    );
+    run.key(RETURN, None);
+    assert_eq!(run.model().lengths, [MAX_PASSWORD_BYTES]);
 }
 
 #[test]

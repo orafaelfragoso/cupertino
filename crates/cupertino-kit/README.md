@@ -9,6 +9,13 @@ compositor. `app::run_on` and `app::run_on_with` run on a window system a deskto
 `app::run_lock_screen_on_with` does the same for the lock screen, whose AT-SPI adapter the session's lock never mutes
 (`AtspiAdapter::lock_screen`). The `examples` test starts the Counter that way and compares it with `tests/goldens/counter-neutral.txt`.
 
+`file_icons::FileIcons` gives apps that list files the icon of each item's type as image renditions (1× and 2×) for
+`controls::Image`: the asset packs' and the host icon theme's icon of the type's kind or its nearest ancestor's (as
+`cupertino_icons::document::document_icon_name` maps them), then the generic document icon, then the placeholder; a
+special folder's own icon; and the alias badge of a symbolic link, drawn into the image. `discover` reads the installed
+packs and the icon theme, `without_host` a given pack alone and `builtin` the built-in assets (placeholders), for tests
+and captures. Files and the portal's file chooser draw their rows with it.
+
 Each example runs on Cupertino headless and on headless Mutter. One test per example and host asserts its app id,
 title and buffer size, and that it presents a frame (on Cupertino it also exits when its window closes). Its behaviour
 is checked by its golden: the trace of inputs, messages and models, then the Inspector dump.
@@ -23,6 +30,12 @@ is checked by its golden: the trace of inputs, messages and models, then the Ins
 The Cupertino tests are in `crates/cupertino-server/tests/standard-clients.rs`, the Mutter tests in
 `crates/cupertino-wayland-client/tests/mutter.rs` (they skip when `mutter` is not installed), and the goldens in this
 crate's `tests/examples.rs`.
+
+Windows move by their toolbar. The toolbar row of a `NavigationStack` is a window drag region: a drag where no control
+takes the press moves the window, and a double click there zooms it (maximizes it, or restores it). `WindowDragArea`
+makes any other part of a window one; `EventCx::move_window` and `EventCx::zoom_window` are the requests underneath.
+The keyboard has no move: the compositor's Zoom, Minimize and tile shortcuts and the menu bar's Window menu cover
+it (see `cupertino-ui-controls`).
 
 `ci/capture.sh kit/controls` and `kit/icons` draw the row 167a controls sheet and a grid of system symbols (`--direction rtl` mirrors them)
 headless, in light and dark at any scale (`examples/kit_capture.rs`, `crates/cupertino-capture`). `kit/counter`, `kit/forms`,

@@ -4,7 +4,7 @@
 //! ready for a frame. Time comes only from the injected clock and the window system's events.
 
 use crate::command::CommandRegistry;
-use crate::cx::{Effects, Status};
+use crate::cx::{Effects, Status, WindowGesture};
 use crate::damage::DamageTracker;
 use crate::focus::{Focus, FocusChange};
 use crate::layout_view::{placements, TreeView};
@@ -25,11 +25,11 @@ use cupertino_geometry::{Point, Rect, Size};
 use cupertino_menu_model::ActionName;
 use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutOptions, LayoutStats};
 use cupertino_ui_platform::{
-    ActivationRequest, Backdrop, ClipboardData, ClipboardKind, ConfigureId, ConstraintAdjust,
-    DragImage, DragProgress, DragRequest, DragToken, KeyEvent, Keysym, MaterialRegion,
-    MenuDescription, PlatformError, PlatformEvent, PointerEvent, PopupEdge, PopupSpec,
-    PresentOutcome, SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest,
-    WindowSpec, WindowSystem,
+    ActivationRequest, Backdrop, ClipboardData, ClipboardKind, ClipboardToken, ConfigureId,
+    ConstraintAdjust, DragImage, DragProgress, DragRequest, DragToken, DropAction, DropToken,
+    KeyEvent, Keysym, MaterialRegion, MenuDescription, PlatformError, PlatformEvent, PointerEvent,
+    PopupEdge, PopupSpec, PresentOutcome, SystemAppearance, Timestamp, TouchEvent, WindowEvent,
+    WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, DisplayList, PaintResources, RenderError, RenderRequest, UiRenderer,
@@ -117,8 +117,17 @@ struct WindowState<M> {
     configured: bool,
     ack: Option<ConfigureId>,
     active: bool,
+    /// The last configure said the window is maximized; a zoom asks for the other state.
+    maximized: bool,
+    /// The last configure said the window is fullscreen; a drag region neither moves nor zooms it.
+    fullscreen: bool,
     /// The compositor is ready for a frame.
     frame_ready: bool,
+    /// A frame of the window has been committed; the compositor has not necessarily shown it yet.
+    committed: bool,
+    /// The compositor answered the frame callback of a committed frame, so the window has been shown
+    /// ([`Command::OnPresented`]).
+    presented: bool,
     /// Something changed since the last presented frame.
     dirty: bool,
     /// Layout and semantics are up to date with the tree.
@@ -160,6 +169,8 @@ struct WindowState<M> {
     /// The error of the last frame, until one renders and presents; animations wait for that.
     failed: Option<UiError>,
     popup: Option<PopupState<M>>,
+    /// A drag from any application over the window.
+    drop: Option<drops::DropState>,
 }
 
 struct PopupState<M> {
@@ -193,6 +204,13 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     tokens: HashMap<ActivationRequest, TokenHandler<A::Message>>,
     /// What each step of a running drag turns into.
     drags: HashMap<DragToken, DragHandler<A::Message>>,
+    /// The drops whose data is being read, by read.
+    landed: HashMap<ClipboardToken, drops::Landed>,
+    /// Drops handed to their targets, finished once the turn has handled what they became: with the action agreed, or
+    /// what the application said it did.
+    finishing: Vec<(DropToken, Option<DropAction>)>,
+    /// The messages to send once a window has presented its first frame ([`Command::OnPresented`]).
+    on_presented: Vec<(WindowKey, A::Message)>,
 }
 
 impl<A: Application, W: WindowSystem> Runtime<A, W> {
@@ -224,6 +242,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             theme_for: None,
             tokens: HashMap::new(),
             drags: HashMap::new(),
+            landed: HashMap::new(),
+            finishing: Vec::new(),
+            on_presented: Vec::new(),
         };
         for command in commands {
             runtime.command(command);
@@ -371,6 +392,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
             self.view_dirty = true;
         }
+        self.finish_drops();
         if self.view_dirty && !self.exit {
             self.view_dirty = false;
             self.view()?;
@@ -403,6 +425,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             Command::CloseWindow(key) => {
                 if let Some(i) = self.windows.iter().position(|w| w.key == key) {
                     let w = self.windows.remove(i);
+                    self.on_presented.retain(|(k, _)| *k != key);
                     self.close(w);
                 }
             }
@@ -427,6 +450,14 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 None => self.messages.push_back(on_token(None)),
             },
             Command::StartDrag(drag) => self.start_drag(drag),
+            Command::FinishDrop(token, action) => self.drop_done(token, action),
+            Command::OnPresented { window, message } => {
+                if self.windows.iter().any(|w| w.key == window && w.presented) {
+                    self.messages.push_back(message);
+                } else {
+                    self.on_presented.push((window, message));
+                }
+            }
             Command::Exit => self.exit = true,
         }
     }
@@ -584,6 +615,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
             }
         }
+        // a message waits only for a window the view has: one closed, or never opened, presents nothing
+        let windows = &self.windows;
+        self.on_presented
+            .retain(|(key, _)| windows.iter().any(|w| &w.key == key));
         if self.windows.is_empty() && !A::RESIDENT {
             self.exit = true;
         }
@@ -620,7 +655,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             configured: false,
             ack: None,
             active: false,
+            maximized: false,
+            fullscreen: false,
             frame_ready: false,
+            committed: false,
+            presented: false,
             dirty: true,
             prepared: false,
             focus: Focus::default(),
@@ -649,6 +688,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             renderer: (self.options.renderers)(),
             failed: None,
             popup: None,
+            drop: None,
         }
     }
 
@@ -747,9 +787,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
                 return Ok(());
             }
-            PlatformEvent::Clipboard { .. }
-            | PlatformEvent::ClipboardOffered { .. }
-            | PlatformEvent::Wake => return Ok(()),
+            PlatformEvent::Clipboard { token, data } => {
+                self.drop_data(token, data);
+                return Ok(());
+            }
+            PlatformEvent::ClipboardOffered { .. } | PlatformEvent::Wake => return Ok(()),
             PlatformEvent::Appearance(appearance) => {
                 if let Some(theme_for) = &mut self.theme_for {
                     let theme = theme_for(&appearance);
@@ -781,6 +823,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.size = c.size.unwrap_or(w.spec.size);
                 w.ack = Some(c.id);
                 w.configured = true;
+                w.maximized = c.states.maximized;
+                w.fullscreen = c.states.fullscreen;
                 w.frame_ready = true;
                 w.invalidate();
                 w.damage.invalidate();
@@ -812,6 +856,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
             WindowEvent::Frame(time) => {
                 w.frame_ready = true;
+                // the callback of a committed frame: the compositor has shown it, not only received it
+                w.presented |= w.committed;
                 let animate = std::mem::take(&mut w.animate);
                 if !animate.is_empty() {
                     w.invalidate();
@@ -888,6 +934,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 return Ok(());
             }
             WindowEvent::Presented { .. } | WindowEvent::Discarded { .. } => return Ok(()),
+            WindowEvent::Drop(event) => {
+                self.drop_event(i, event);
+                return Ok(());
+            }
         }
         self.apply(i, effects);
         Ok(())
@@ -1051,6 +1101,15 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         }
         if let Some(text) = effects.clipboard {
             Self::set_clipboard(&mut self.system, text);
+        }
+        // a fullscreen window stays where it is: a maximize request would take it out of fullscreen
+        for gesture in effects.window.into_iter().filter(|_| !w.fullscreen) {
+            let request = match gesture {
+                WindowGesture::Move => WindowRequest::Move,
+                WindowGesture::Zoom => WindowRequest::Maximize(!w.maximized),
+            };
+            // a platform without the request, or a press the compositor no longer holds, leaves the window where it is
+            let _ = self.system.request(w.id, request);
         }
         w.wakes.extend(effects.wakes);
         if let Some((node, rect)) = effects.reveal {
@@ -1235,7 +1294,19 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
         }
         self.sync_accessibility();
+        self.send_presented();
         Ok(())
+    }
+
+    /// Sends the messages waiting for windows that have now presented a frame.
+    fn send_presented(&mut self) {
+        let windows = &self.windows;
+        let (ready, waiting) = std::mem::take(&mut self.on_presented)
+            .into_iter()
+            .partition(|(key, _)| windows.iter().any(|w| &w.key == key && w.presented));
+        self.on_presented = waiting;
+        let ready: Vec<(WindowKey, A::Message)> = ready;
+        self.messages.extend(ready.into_iter().map(|(_, m)| m));
     }
 
     /// Moves each open popup whose anchor moved or whose content changed size, once the parents are laid out.
@@ -1290,6 +1361,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         }
         let mut focus_effects = Effects::default();
         let mut hold = false;
+        let laid_out = !w.prepared;
         if !w.prepared {
             let available = Constraints::tight(w.size).map_err(UiError::Layout)?;
             let result = layout(
@@ -1400,6 +1472,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             focus_effects.absorb(scroll_effects);
         }
         self.apply(i, focus_effects);
+        // what lies under a drag that stood still may have moved
+        if laid_out {
+            self.drop_over(i);
+        }
         let w = &mut self.windows[i];
         if hold {
             w.held_paints += 1;
@@ -1471,6 +1547,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             PresentOutcome::Presented => {
                 w.ack = None;
                 w.frame_ready = false;
+                w.committed = true;
                 self.system.request_frame(w.id);
             }
             PresentOutcome::NotReady => {
@@ -1875,22 +1952,32 @@ fn route<'a, M: 'static>(
 /// Asks the window system for the material `w`'s background wants, or for none, when that changed. A platform that
 /// refuses leaves the window on its opaque fill.
 fn sync_backdrop<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>) {
-    let wanted = match w.background {
+    let shaped = match w.background {
         WindowBackground::Surface {
             surface,
             radius,
             alpha,
-        } if system.capabilities().app_effects => {
-            w.env
-                .theme
-                .surface(surface)
-                .material
-                .map(|material| Backdrop {
-                    material: material.to_owned(),
-                    radius,
-                    alpha: crate::surface_alpha(alpha),
-                })
-        }
+        } => Some((surface, None, radius, alpha)),
+        WindowBackground::SurfaceRect {
+            surface,
+            rect,
+            radius,
+            alpha,
+        } => Some((surface, Some(rect), radius, alpha)),
+        _ => None,
+    };
+    let wanted = match shaped {
+        Some((surface, bounds, radius, alpha)) if system.capabilities().app_effects => w
+            .env
+            .theme
+            .surface(surface)
+            .material
+            .map(|material| Backdrop {
+                material: material.to_owned(),
+                radius,
+                alpha: crate::surface_alpha(alpha),
+                bounds,
+            }),
         _ => None,
     };
     if wanted == w.backdrop {
@@ -1900,7 +1987,10 @@ fn sync_backdrop<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>) {
         .request(w.id, WindowRequest::Backdrop(wanted.clone()))
         .is_ok();
     w.backdrop = wanted.filter(|_| shown);
+    // the material is shaped with the next present, which a change that paints nothing new (a material under a moved
+    // rectangle) must still bring
     w.invalidate();
+    w.damage.invalidate();
 }
 
 /// Asks the window system to publish `menus`, or to withdraw them, when they changed.
@@ -1920,6 +2010,8 @@ fn sync_menus<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>, menus: 
         w.menus = wanted;
     }
 }
+
+mod drops;
 
 #[cfg(test)]
 mod tests;

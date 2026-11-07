@@ -11,6 +11,7 @@ use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -181,6 +182,25 @@ impl Drop for Pending {
     }
 }
 
+/// The one colour pick that runs, from the copy of the displays until it is answered.
+struct OnePick<'a>(&'a AtomicBool);
+
+impl<'a> OnePick<'a> {
+    /// The pick, unless another one runs.
+    fn take(running: &'a AtomicBool) -> Option<Self> {
+        running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| OnePick(running))
+    }
+}
+
+impl Drop for OnePick<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
 /// The object on the bus.
 pub struct Screenshot {
     applications: Vec<PathBuf>,
@@ -188,6 +208,8 @@ pub struct Screenshot {
     events: Box<dyn Fn(Event) + Send + Sync>,
     shoots: Box<dyn Fn(Shoot) + Send + Sync>,
     picks: Option<Box<dyn Fn(PickEvent) + Send + Sync>>,
+    /// A colour pick runs ([`OnePick`]).
+    picking: AtomicBool,
     calls: Calls,
 }
 
@@ -207,6 +229,7 @@ impl Screenshot {
             events: Box::new(events),
             shoots: Box::new(shoots),
             picks: None,
+            picking: AtomicBool::new(false),
             calls: Arc::default(),
         }
     }
@@ -337,7 +360,7 @@ impl Screenshot {
     }
 
     /// The colour of a pixel the person clicks on any display ([`crate::pick`]); 1 when they press Escape, 2 without
-    /// a picker or when the displays cannot be copied.
+    /// a picker, while another pick runs (refused before anything is copied) or when the displays cannot be copied.
     async fn pick_color(
         &self,
         #[zbus(header)] header: Header<'_>,
@@ -355,6 +378,11 @@ impl Screenshot {
             return Ok((Response::Other as u32, HashMap::new()));
         };
         let _pending = Pending::take(&self.calls, &handle, &app_id)?;
+        // one pick at a time, refused before a single display is copied for it
+        let Some(_one) = OnePick::take(&self.picking) else {
+            eprintln!("cupertino-portal: {handle} asked for a colour during another pick");
+            return Ok((Response::Other as u32, HashMap::new()));
+        };
         let request = Exported::at(connection, handle.as_ref()).await?;
         // nothing of the portal is on screen yet, so the displays are copied at once
         let answered = match self.copy(&request, Instant::now()).await {
@@ -700,7 +728,8 @@ mod tests {
 
     #[test]
     fn a_turned_display_at_another_scale_is_joined_upright_where_it_sits() {
-        use crate::geometry::{turned, upright, Turn};
+        use crate::geometry::{turned, upright};
+        use cupertino_geometry::OutputTransform;
         // a display at scale 1 on the left, and a quarter-turned one at scale 2 on its right: 50 x 100 points
         let left = Output {
             position: (0, 0),
@@ -718,7 +747,7 @@ mod tests {
             Transform::identity(),
             None,
         );
-        for turn in Turn::ALL {
+        for turn in OutputTransform::ALL {
             let buffer = turned(&shown, turn).unwrap();
             let right = Output {
                 position: (100, 0),

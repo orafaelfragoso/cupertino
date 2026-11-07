@@ -29,9 +29,12 @@ path or the `hicolor` theme. Depends on `cupertino-assets`, `cupertino-defaults`
 `document_icon_name` is the one place that maps a MIME type to a semantic name, on the shared MIME database of `cupertino-apps`
 (mapping, after: the type's icon, the nearest ancestor's, then the generic document icon): `folder` for a
 directory, then by the type or its nearest ancestor `document.pdf`, `document.image` / `.audio` / `.video` (by the media
-prefix), `document.archive`, `document.text`, `document.executable`, else `document.generic`. Scripts use `document.text`
+prefix), `document.archive` (not for an office document packed in an archive: a type whose generic icon is an
+`x-office-` one, such as a spreadsheet, falls through), `document.text`, `document.executable`, else `document.generic`. Scripts use `document.text`
 because the payload has no `document.script` icon. `FileIcons` also holds the folders that wear an icon of their own (the home
 folder and the user directories: `folder.home`, `folder.documents`, ...), which the file manager passes in from its places.
+`FileIcons::with_system` takes the `SystemIcons` to draw with, so a test or a capture can use `SystemIcons::without_host`
+and never read the icon themes of the machine.
 
 Badges: the design's bottom-left slot shows the alias badge, else the lock badge: `alias.badge` for a
 symbolic link, `locked.badge` for an item the user cannot write (counterpart). The other badges of the design

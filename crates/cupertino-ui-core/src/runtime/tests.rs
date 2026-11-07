@@ -6,13 +6,14 @@ use crate::test_support::{
 use crate::{
     Change, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Shortcut, Widget,
 };
+use crate::{DropOver, DropPlace, DropTarget};
 use cupertino_geometry::Rect;
 use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured, Overflow, SizeSpec,
 };
 use cupertino_ui_platform::{
-    Configure, DecorationMode, DropAction, Mods, MouseButton, PointerEvent, WindowStates,
-    WmCapabilities,
+    Configure, DecorationMode, DropAction, DropAnswer, DropEvent, DropToken, Mods, MouseButton,
+    PointerEvent, WindowStates, WmCapabilities,
 };
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_theme::{Color, ColorRole, ColorTokens, StateVariant, Surface};
@@ -31,6 +32,8 @@ struct Model {
     tokens: Vec<Option<String>>,
     /// Each step of a drag, as it was told.
     drags: Vec<String>,
+    /// The windows heard to have presented a frame, in the order heard.
+    presented: Vec<String>,
 }
 
 impl Application for Counter {
@@ -72,6 +75,15 @@ impl Application for Counter {
                     alpha: f64::NAN,
                 }
             }
+            "bar" | "bar moved" => {
+                let x = if message == "bar" { 10.0 } else { 40.0 };
+                model.background = WindowBackground::SurfaceRect {
+                    surface: Surface::Menu,
+                    rect: Rect::new(x, 20.0, 100.0, 50.0),
+                    radius: 8.0,
+                    alpha: 1.0,
+                }
+            }
             "close" => return vec![Command::CloseWindow(WindowKey("main".into()))],
             "wait" => return vec![Command::Perform(Box::pin(async { "done 7".to_string() }))],
             "launch" | "launch from gone" => {
@@ -106,6 +118,13 @@ impl Application for Counter {
                 })];
             }
             m if m.starts_with("dragged ") => model.drags.push(m[8..].to_owned()),
+            m if m.starts_with("await ") => {
+                return vec![Command::OnPresented {
+                    window: WindowKey(m[6..].to_owned().into()),
+                    message: format!("presented {}", &m[6..]),
+                }]
+            }
+            m if m.starts_with("presented ") => model.presented.push(m[10..].to_owned()),
             m if m.starts_with("token ") => model
                 .tokens
                 .push(Some(m[6..].to_owned()).filter(|t| !t.is_empty())),
@@ -412,6 +431,49 @@ fn an_activation_token_reaches_the_update_that_asked_and_a_gone_window_gets_none
     rt.step(steps()).unwrap();
     assert_eq!(rt.model().tokens, vec![Some("t-1".to_owned()), None]);
     assert_eq!(rt.window_system_mut().activations.len(), 1);
+}
+
+/// A message waits for the window's first presented frame, however late its configure comes: not the commit alone, but
+/// the frame callback that answers it, and a frame callback before any commit does not count. It comes once; asked for
+/// once the window has presented, it comes at once; asked for a window the view does not have, it never comes.
+#[test]
+fn a_message_waits_until_the_window_has_presented_its_first_frame() {
+    let (mut rt, window, _) = start();
+    rt.messages.push_back("await main".into());
+    rt.messages.push_back("await gone".into());
+    rt.step(steps()).unwrap();
+    assert!(rt.model().presented.is_empty(), "nothing is configured yet");
+    rt.step(steps()).unwrap();
+    assert!(rt.model().presented.is_empty(), "still nothing presented");
+    assert!(rt.window_system().presented.is_empty());
+    // a frame before anything was committed shows nothing
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(0)));
+    rt.step(steps()).unwrap();
+    assert!(rt.model().presented.is_empty(), "no frame was committed");
+
+    configure(&mut rt, window, 1);
+    assert_eq!(rt.window_system().presented.len(), 1);
+    assert!(
+        rt.model().presented.is_empty(),
+        "committed, but the compositor has not answered the frame callback"
+    );
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(0)));
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.model().presented, ["main"]);
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(0)));
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.model().presented, ["main"], "once");
+
+    rt.messages.push_back("await main".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.model().presented, ["main", "main"]);
+    assert!(
+        rt.on_presented.is_empty(),
+        "the message for a window that never opened was dropped"
+    );
 }
 
 /// The image is laid out at whole points and drawn at the window's scale rounded up to whole pixels per point, with the
@@ -1320,6 +1382,45 @@ fn a_window_paints_the_theme_background_unless_its_content_draws_its_own() {
     );
 }
 
+/// The material under a rectangle of the window is shaped with the window's next present. Moving the rectangle changes
+/// nothing the window paints while the compositor draws the material, so the move itself must bring a present.
+#[test]
+fn moving_the_material_under_a_rectangle_presents_the_window_again() {
+    let (mut rt, window, _) = start();
+    configure(&mut rt, window, 1);
+    rt.window_system_mut().effects = true;
+    let frame = |rt: &mut Rt, message: &str| {
+        rt.messages.push_back(message.into());
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(1)));
+        rt.step(steps()).unwrap();
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(2)));
+        rt.step(steps()).unwrap();
+        rt.window_system().presented.len()
+    };
+    let shown = frame(&mut rt, "bar");
+    assert_eq!(
+        frame(&mut rt, "bar"),
+        shown,
+        "nothing changed, nothing to present"
+    );
+    assert!(
+        frame(&mut rt, "bar moved") > shown,
+        "the moved material goes with a present"
+    );
+    let bounds = rt
+        .window_system()
+        .requests
+        .iter()
+        .rev()
+        .find_map(|(_, r)| match r {
+            WindowRequest::Backdrop(Some(b)) => b.bounds,
+            _ => None,
+        });
+    assert_eq!(bounds, Some(Rect::new(40.0, 20.0, 100.0, 50.0)));
+}
+
 #[test]
 fn a_menu_window_shows_the_menu_material_where_the_desktop_draws_it_and_the_opaque_fill_in_its_shape_elsewhere(
 ) {
@@ -1397,6 +1498,7 @@ fn a_menu_window_shows_the_menu_material_where_the_desktop_draws_it_and_the_opaq
         material: "Menu".into(),
         radius: 8.0,
         alpha: 1.0,
+        bounds: None,
     };
     assert_eq!(backdrops(&rt), vec![Some(menu.clone())]);
     frame(&mut rt, Some("half"));
@@ -2240,4 +2342,338 @@ fn a_toplevel_asks_for_its_menus_only_when_they_change_and_a_chosen_item_sends_i
 
     step(&mut rt, "hide");
     assert_eq!(asked(&rt).last(), Some(&None));
+}
+
+/// Three keyed items in a row over a drop target that takes a URI list: a drop on `a` moves into it (a copy with
+/// Option held), one on `c` is refused there, and anywhere else lands on the whole target as a copy. Item `b` sits in
+/// a target of its own that takes only images, which a URI list passes by.
+struct Shelf;
+
+#[derive(Default)]
+struct ShelfModel {
+    heard: Vec<String>,
+    /// How many drops were finished as each drop was handed over.
+    finished_at_drop: Vec<usize>,
+}
+
+const URI_LIST: &str = "text/uri-list";
+
+fn shelf_place(over: &DropOver<'_>) -> Option<DropPlace> {
+    let a = Key::from("a");
+    match over.keys.first() {
+        Some(key) if *key == a => Some(DropPlace {
+            key: Some(a),
+            action: if over.mods.contains(Mods::ALT) {
+                DropAction::Copy
+            } else {
+                DropAction::Move
+            },
+        }),
+        Some(key) if *key == Key::from("c") => None,
+        _ => Some(DropPlace {
+            key: None,
+            action: DropAction::Copy,
+        }),
+    }
+}
+
+impl Application for Shelf {
+    type Model = ShelfModel;
+    type Message = String;
+
+    fn init() -> (ShelfModel, Vec<Command<String>>) {
+        (ShelfModel::default(), Vec::new())
+    }
+
+    fn update(model: &mut ShelfModel, message: String) -> Vec<Command<String>> {
+        let mut commands = Vec::new();
+        if message.starts_with("drop ") {
+            let finished = crate::test_support::DROPS_FINISHED.with(std::cell::Cell::get);
+            model.finished_at_drop.push(finished);
+            // the data names what the shelf did with it, where it did not do what was agreed
+            if message.ends_with(": copied") {
+                commands.push(Command::FinishDrop(DropToken(7), Some(DropAction::Copy)));
+            } else if message.ends_with(": kept") {
+                commands.push(Command::FinishDrop(DropToken(7), None));
+            }
+        }
+        model.heard.push(message);
+        commands
+    }
+
+    fn view(_: &ShelfModel) -> Vec<Window<String>> {
+        let images = Element::from(DropTarget {
+            content: Element::new(leaf("b")).key("b"),
+            mimes: vec!["image/png".into()],
+            actions: [DropAction::Copy].into(),
+            place: Box::new(|_| {
+                Some(DropPlace {
+                    key: None,
+                    action: DropAction::Copy,
+                })
+            }),
+            on_hover: None,
+            on_drop: Box::new(|_| "image dropped".to_string()),
+        });
+        let items = Element::new(row(vec![
+            Element::new(leaf("a")).key("a"),
+            images,
+            Element::new(leaf("c")).key("c"),
+        ]));
+        vec![Window {
+            key: WindowKey("shelf".into()),
+            spec: WindowSpec {
+                title: "Shelf".into(),
+                app_id: "test.shelf".into(),
+                size: Size::new(200.0, 100.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Preferred,
+                foreign_parent: None,
+                input_region: None,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            popup: None,
+            background: WindowBackground::Theme,
+            menus: None,
+            content: Element::from(DropTarget {
+                content: items,
+                mimes: vec!["text/plain".into(), URI_LIST.into()],
+                actions: [DropAction::Copy, DropAction::Move].into(),
+                place: Box::new(shelf_place),
+                on_hover: Some(Box::new(|place| {
+                    format!("hover {:?}", place.map(|p| (p.key, p.action)))
+                })),
+                on_drop: Box::new(|dropped| {
+                    format!(
+                        "drop {:?} {:?} at {:?}: {}",
+                        dropped.place,
+                        dropped.action,
+                        dropped.position,
+                        String::from_utf8_lossy(&dropped.data.bytes)
+                    )
+                }),
+            }),
+        }]
+    }
+}
+
+type ShelfRt = Runtime<Shelf, FakeSystem>;
+
+fn shelf() -> (ShelfRt, WindowId) {
+    let damage = Rc::default();
+    let mut options = options(&damage);
+    let mut theme = (*options.theme).clone();
+    theme.colors = ColorTokens::new([(
+        (ColorRole::SelectedControlFill, StateVariant::NORMAL),
+        Color::new(0.0, 0.4, 1.0, 1.0),
+    )]);
+    options.theme = Arc::new(theme);
+    let mut rt = ShelfRt::new(FakeSystem::default(), options);
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+    (rt, window)
+}
+
+fn drag(rt: &mut ShelfRt, window: WindowId, event: DropEvent) {
+    rt.window_system_mut()
+        .send(window, WindowEvent::Drop(event));
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(1)));
+    rt.step(steps()).unwrap();
+}
+
+fn enter(rt: &mut ShelfRt, window: WindowId, at: Point, actions: &[DropAction]) {
+    drag(
+        rt,
+        window,
+        DropEvent::Enter {
+            token: DropToken(7),
+            position: at,
+            mimes: vec!["text/html".into(), URI_LIST.into()],
+            actions: actions.iter().copied().collect(),
+            mods: Mods::NONE,
+        },
+    );
+}
+
+/// The drop highlights the shelf shows: the rect of each translucent rounded fill.
+fn highlights(rt: &ShelfRt, window: WindowId) -> Vec<Rect> {
+    let list = rt.snapshot(window).unwrap().display_list;
+    list.nodes
+        .iter()
+        .flat_map(|node| {
+            let (x, y) = (node.transform.0[4], node.transform.0[5]);
+            node.ops.iter().filter_map(move |op| match op {
+                PaintOp::Fill {
+                    shape: Shape::RoundedRect { rect, .. },
+                    paint: Paint::Solid(color),
+                } if color.a < 0.5 => Some(rect.translate(x, y)),
+                _ => None,
+            })
+        })
+        .collect()
+}
+
+fn last_answer(rt: &ShelfRt) -> DropAnswer {
+    rt.window_system().drop_answers.last().unwrap().1.clone()
+}
+
+fn uri_answer(preferred: DropAction) -> DropAnswer {
+    DropAnswer {
+        mime: Some(URI_LIST.into()),
+        actions: [DropAction::Copy, DropAction::Move].into(),
+        preferred: Some(preferred),
+    }
+}
+
+#[test]
+fn a_drag_over_a_target_is_answered_highlighted_and_heard_as_it_moves_between_places() {
+    let (mut rt, window) = shelf();
+    let both = [DropAction::Copy, DropAction::Move];
+    enter(&mut rt, window, Point::new(5.0, 5.0), &both);
+    assert_eq!(last_answer(&rt), uri_answer(DropAction::Move));
+    assert_eq!(rt.model().heard, ["hover Some((Some(Str(\"a\")), Move))"]);
+    assert_eq!(highlights(&rt, window), [Rect::new(0.0, 0.0, 10.0, 10.0)]);
+
+    // the images target around `b` takes no URI list, so the shelf takes the drag there, as a whole
+    let moved = |rt: &mut ShelfRt, x: f64, mods: Mods| {
+        drag(
+            rt,
+            window,
+            DropEvent::Motion {
+                position: Point::new(x, 5.0),
+                mods,
+            },
+        )
+    };
+    moved(&mut rt, 15.0, Mods::NONE);
+    assert_eq!(last_answer(&rt), uri_answer(DropAction::Copy));
+    assert_eq!(rt.model().heard.last().unwrap(), "hover Some((None, Copy))");
+    assert_eq!(highlights(&rt, window), [Rect::new(0.0, 0.0, 200.0, 100.0)]);
+
+    let answers = rt.window_system().drop_answers.len();
+    let heard = rt.model().heard.len();
+    moved(&mut rt, 50.0, Mods::NONE);
+    assert_eq!(
+        rt.window_system().drop_answers.len(),
+        answers,
+        "the same answer is not told again"
+    );
+    assert_eq!(rt.model().heard.len(), heard, "nor the same place");
+
+    moved(&mut rt, 25.0, Mods::NONE);
+    assert_eq!(last_answer(&rt), DropAnswer::default(), "refused over `c`");
+    assert_eq!(rt.model().heard.last().unwrap(), "hover None");
+    assert!(highlights(&rt, window).is_empty());
+
+    moved(&mut rt, 5.0, Mods::ALT);
+    assert_eq!(last_answer(&rt), uri_answer(DropAction::Copy));
+
+    drag(&mut rt, window, DropEvent::Leave);
+    assert_eq!(rt.model().heard.last().unwrap(), "hover None");
+    assert!(highlights(&rt, window).is_empty());
+    assert!(rt.window_system().drop_reads.is_empty());
+    assert!(rt.window_system().drops_finished.is_empty());
+}
+
+#[test]
+fn a_drop_is_read_in_the_targets_type_handed_to_it_and_finished_with_the_chosen_action() {
+    let (mut rt, window) = shelf();
+    rt.window_system_mut().drop_data = Some(ClipboardData {
+        mime: URI_LIST.into(),
+        bytes: b"file:///x\r\n".to_vec(),
+    });
+    enter(
+        &mut rt,
+        window,
+        Point::new(4.0, 6.0),
+        &[DropAction::Copy, DropAction::Move],
+    );
+    drag(&mut rt, window, DropEvent::Action(Some(DropAction::Move)));
+    drag(&mut rt, window, DropEvent::Drop);
+    assert_eq!(
+        rt.window_system().drop_reads,
+        [(DropToken(7), URI_LIST.to_owned())]
+    );
+    assert_eq!(
+        rt.model().heard[1..],
+        [
+            "hover None".to_string(),
+            "drop Some(Str(\"a\")) Move at Point { x: 4.0, y: 6.0 }: file:///x\r\n".to_string()
+        ]
+    );
+    assert_eq!(
+        rt.window_system().drops_finished,
+        [(DropToken(7), Some(DropAction::Move))]
+    );
+    // the source hears the drop is done only after the model has it
+    assert_eq!(rt.model().finished_at_drop, [0]);
+    assert!(highlights(&rt, window).is_empty());
+}
+
+#[test]
+fn a_drop_finishes_with_what_the_update_says_it_did_rather_than_the_action_agreed() {
+    let (mut rt, window) = shelf();
+    let both = [DropAction::Copy, DropAction::Move];
+    for (data, done) in [("copied", Some(DropAction::Copy)), ("kept", None)] {
+        rt.window_system_mut().drop_data = Some(ClipboardData {
+            mime: URI_LIST.into(),
+            bytes: data.as_bytes().to_vec(),
+        });
+        enter(&mut rt, window, Point::new(4.0, 6.0), &both);
+        drag(&mut rt, window, DropEvent::Action(Some(DropAction::Move)));
+        drag(&mut rt, window, DropEvent::Drop);
+        assert!(rt.model().heard.last().unwrap().contains(" Move at "));
+        assert_eq!(
+            rt.window_system().drops_finished.last(),
+            Some(&(DropToken(7), done)),
+            "{data}"
+        );
+    }
+    assert_eq!(rt.window_system().drops_finished.len(), 2);
+}
+
+#[test]
+fn without_the_window_systems_word_a_drop_takes_an_action_the_source_allows() {
+    let (mut rt, window) = shelf();
+    rt.window_system_mut().drop_data = Some(ClipboardData {
+        mime: URI_LIST.into(),
+        bytes: b"file:///y".to_vec(),
+    });
+    // the source copies only, as before drag actions
+    enter(&mut rt, window, Point::new(5.0, 5.0), &[DropAction::Copy]);
+    drag(&mut rt, window, DropEvent::Drop);
+    assert!(rt
+        .model()
+        .heard
+        .last()
+        .unwrap()
+        .starts_with("drop Some(Str(\"a\")) Copy"));
+    assert_eq!(
+        rt.window_system().drops_finished,
+        [(DropToken(7), Some(DropAction::Copy))]
+    );
+}
+
+#[test]
+fn a_drop_where_nothing_takes_it_or_whose_data_fails_is_refused() {
+    let (mut rt, window) = shelf();
+    let both = [DropAction::Copy, DropAction::Move];
+    enter(&mut rt, window, Point::new(25.0, 5.0), &both);
+    drag(&mut rt, window, DropEvent::Drop);
+    assert!(rt.window_system().drop_reads.is_empty());
+    assert_eq!(rt.window_system().drops_finished, [(DropToken(7), None)]);
+
+    // the read fails: no data
+    enter(&mut rt, window, Point::new(5.0, 5.0), &both);
+    drag(&mut rt, window, DropEvent::Drop);
+    assert_eq!(rt.window_system().drop_reads.len(), 1);
+    assert_eq!(
+        rt.window_system().drops_finished,
+        [(DropToken(7), None), (DropToken(7), None)]
+    );
+    assert!(!rt.model().heard.iter().any(|m| m.starts_with("drop")));
 }

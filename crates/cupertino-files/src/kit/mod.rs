@@ -6,7 +6,9 @@ mod band;
 mod clicks;
 mod context;
 mod dragged;
+mod drops;
 mod grid;
+mod item_icons;
 mod list;
 mod places;
 mod search;
@@ -16,6 +18,7 @@ mod transfer;
 mod view;
 
 pub use dragged::Grab;
+pub use drops::Destination;
 pub use list::RowGrab;
 pub use places::PlacesSource;
 pub use transfer::Observer;
@@ -32,6 +35,7 @@ use cupertino_apps::{launch, MimeApps, MimeDatabase};
 use cupertino_kit::controls::{
     MenuAnchor, Navigation, Selection, SortOrder, SplitLayout, TextChange,
 };
+use cupertino_kit::file_icons::FileIcons;
 use cupertino_kit::layout::ScrollState;
 use cupertino_kit::platform::{DragProgress, WindowRequest};
 use cupertino_kit::prelude::*;
@@ -51,6 +55,7 @@ use crate::places::{removable_holding, Place};
 use crate::search_field::{self, SearchWidth};
 use crate::settings::ColumnId;
 use crate::tags::{self, TagColor};
+use crate::thumbnail::Thumbnailer;
 use crate::trash::Trash;
 use crate::udisks::{Media, Passphrase, Report, Volumes};
 use crate::window::ViewMode;
@@ -79,6 +84,8 @@ pub struct Start {
     places_source: Option<PlacesSource>,
     /// Folders whose changes may change the places, besides the trash.
     places_folders: Vec<PathBuf>,
+    file_icons: Option<FileIcons>,
+    thumbnails: Option<Thumbnailer>,
 }
 
 impl Start {
@@ -119,6 +126,8 @@ impl Start {
             observer: None,
             places_source: None,
             places_folders: Vec::new(),
+            file_icons: None,
+            thumbnails: None,
         })
     }
 
@@ -154,6 +163,23 @@ impl Start {
     pub fn with_transfer_observer(self, observer: Observer) -> Start {
         Start {
             observer: Some(observer),
+            ..self
+        }
+    }
+
+    /// The items drawn with the icons of `icons` in place of the built-in placeholders.
+    pub fn with_file_icons(self, icons: FileIcons) -> Start {
+        Start {
+            file_icons: Some(icons),
+            ..self
+        }
+    }
+
+    /// Pictures drawn with their thumbnails from `cache`, made there when it lacks them. Without it, every item shows
+    /// its type's icon.
+    pub fn with_thumbnails(self, cache: Thumbnailer) -> Start {
+        Start {
+            thumbnails: Some(cache),
             ..self
         }
     }
@@ -226,6 +252,12 @@ struct Session {
     next_transfer: u64,
     places_source: Option<PlacesSource>,
     places_watch: places::PlacesWatch,
+    /// The items' icons and thumbnails.
+    icons: item_icons::ItemIcons,
+    /// What wakes when a thumbnail is made.
+    thumbnails_woken: async_channel::Receiver<()>,
+    /// The items a drag out of a window carries, until it ends.
+    dragged: Vec<PathBuf>,
 }
 
 /// One browser window.
@@ -295,6 +327,8 @@ pub enum Message {
     Media,
     /// A folder the sidebar's places come from changed.
     Places,
+    /// A thumbnail was made.
+    Thumbnails,
     /// An event of the window with this id.
     Window(u64, Event),
 }
@@ -361,8 +395,18 @@ pub enum Event {
     Close,
     /// A press on items of the icon grid moved far enough to drag them out of the window.
     DragOut(Grab),
-    /// How a drag out of the window goes. The target copies or moves the files, so the window has nothing to do.
+    /// How a drag out of the window goes. The target copies or moves the files, so the window has nothing to do
+    /// but forget them once it ends.
     Dragged(DragProgress),
+    /// Files were dropped on the window, to go `to` (`None`: where nothing takes them), with the action agreed with
+    /// their source and the modifiers held. The source is told what was done with them, by `token`.
+    Dropped {
+        token: cupertino_kit::platform::DropToken,
+        to: Option<Destination>,
+        paths: Vec<PathBuf>,
+        action: cupertino_kit::platform::DropAction,
+        mods: cupertino_kit::platform::Mods,
+    },
     /// The transfer with this id has progress or its results waiting.
     Transferred(u64),
     /// Stop the transfer with this id: its Stop button.
@@ -434,6 +478,12 @@ impl Application for Files {
             .expect("kit::prepare runs before Files starts");
         let places_watch =
             places::PlacesWatch::start(start.places_folders, start.trash.home_trash());
+        let (thumbnails_wake, thumbnails_woken) = wake_channel();
+        let file_icons = start.file_icons.unwrap_or_else(|| {
+            let types = start.types.as_deref().cloned().unwrap_or_default();
+            FileIcons::builtin(types, HashMap::new())
+        });
+        let icons = item_icons::ItemIcons::new(file_icons, start.thumbnails, thumbnails_wake);
         let mut model = Model {
             windows: BTreeMap::new(),
             next_window: 0,
@@ -459,6 +509,9 @@ impl Application for Files {
                 next_transfer: 0,
                 places_watch,
                 places_source: start.places_source,
+                icons,
+                thumbnails_woken,
+                dragged: Vec::new(),
             },
         };
         let mut commands = vec![
@@ -467,6 +520,9 @@ impl Application for Files {
         ];
         if model.session.volumes.is_some() {
             commands.push(woken(&model.session.media_woken, Message::Media));
+        }
+        if model.session.icons.thumbnails() {
+            commands.push(woken(&model.session.thumbnails_woken, Message::Thumbnails));
         }
         (model, commands)
     }
@@ -478,7 +534,15 @@ impl Application for Files {
                 model.session.follow_places();
                 vec![woken(&model.session.places_watch.woken, Message::Places)]
             }
-            Message::Window(id, event) => model.window_event(id, event),
+            // the windows draw the thumbnails made
+            Message::Thumbnails => {
+                vec![woken(&model.session.thumbnails_woken, Message::Thumbnails)]
+            }
+            Message::Window(id, event) => {
+                let commands = model.window_event(id, event);
+                model.want_thumbnails(id);
+                commands
+            }
         }
     }
 
@@ -505,6 +569,19 @@ enum Step {
 }
 
 impl Model {
+    /// Ask for the thumbnails of the items window `id` shows, and for none once it is closed.
+    fn want_thumbnails(&self, id: u64) {
+        let icons = &self.session.icons;
+        match self.windows.get(&id) {
+            Some(window) => {
+                let (shown, points) = view::shown(window);
+                let entries = window.browser.entries();
+                icons.want(id, shown.into_iter().filter_map(|i| entries.get(i)), points);
+            }
+            None => icons.forget(id),
+        }
+    }
+
     /// Show `browser` in a window of its own.
     fn add_window(
         &mut self,
@@ -566,12 +643,119 @@ impl Model {
         commands
     }
 
+    /// Drag `grab`'s items out of window `id`, remembering them until the drag ends so the windows know their own items.
+    fn drag_out(&mut self, id: u64, grab: &Grab) -> Vec<Command<Message>> {
+        let Some(window) = self.windows.get(&id) else {
+            return Vec::new();
+        };
+        let entries = window.browser.entries();
+        self.session.dragged = grab
+            .indices
+            .iter()
+            .filter_map(|&i| Some(entries.get(i)?.path.clone()))
+            .collect();
+        vec![dragged::start(id, window_key(id), grab, entries)]
+    }
+
+    /// The drag of the list's rows of `grab` out of window `id`, as [`Self::drag_out`] for the grid.
+    fn drag_rows(&mut self, id: u64, grab: &RowGrab) -> Vec<Command<Message>> {
+        let Some(window) = self.windows.get(&id) else {
+            return Vec::new();
+        };
+        let entries = window.browser.entries();
+        self.session.dragged = grab
+            .indices
+            .iter()
+            .filter_map(|&i| Some(entries.get(i)?.path.clone()))
+            .collect();
+        let icon = grab
+            .indices
+            .first()
+            .and_then(|&i| entries.get(i))
+            .map(|e| self.session.icons.icon(e, dragged::ROW_ICON))
+            .unwrap_or_default();
+        vec![dragged::start_rows(id, window_key(id), grab, entries, icon)]
+    }
+
+    /// Put `paths` dropped on window `id` where they go: into the trash, or moved or copied into a folder as
+    /// [`drops::chosen`] says. A name the folder has is given a free copy name; the failures are reported together,
+    /// and the last item to arrive in the folder the window shows is selected. What the source is told was done: a
+    /// move only when every item left its place, a copy when every item was copied, and nothing otherwise (an item
+    /// that failed, or one moved into the folder already holding it), so the source keeps what it has.
+    fn drop_items(
+        &mut self,
+        id: u64,
+        to: &Destination,
+        paths: &[PathBuf],
+        agreed: cupertino_kit::platform::DropAction,
+        mods: cupertino_kit::platform::Mods,
+    ) -> Option<cupertino_kit::platform::DropAction> {
+        use cupertino_kit::platform::DropAction as Done;
+        let session = &self.session;
+        if paths.is_empty() {
+            return None;
+        }
+        let dir = match to {
+            Destination::Trash => {
+                let trashed: Vec<_> = paths.iter().map(|path| session.trash.trash(path)).collect();
+                let all = trashed.iter().all(Result::is_ok);
+                session.failed_some(Action::Trash, paths.iter().zip(trashed));
+                return all.then_some(Done::Move);
+            }
+            Destination::Folder(dir) => dir,
+        };
+        let action = match drops::chosen(paths, to, agreed, mods) {
+            Ok(action) => action,
+            Err(e) => {
+                let items: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+                session.failed(Action::Drop(DropAction::Move), &items, &e);
+                return None;
+            }
+        };
+        let placed = operations::drop_into(paths, dir, action);
+        let arrived = placed.iter().rev().find_map(|p| p.as_ref().ok()).cloned();
+        let done = match action {
+            DropAction::Copy => placed.iter().all(Result::is_ok).then_some(Done::Copy),
+            // a move into the folder holding the item leaves it where it is
+            DropAction::Move => paths
+                .iter()
+                .zip(&placed)
+                .all(|(from, to)| to.as_ref().is_ok_and(|to| to != from))
+                .then_some(Done::Move),
+        };
+        session.failed_some(Action::Drop(action), paths.iter().zip(placed));
+        if let (Some(window), Some(path)) = (self.windows.get_mut(&id), arrived) {
+            if window.browser.dir() == dir.as_path() {
+                window.browser.select_when_appears(path);
+            }
+        }
+        done
+    }
+
     fn window_event(&mut self, id: u64, event: Event) -> Vec<Command<Message>> {
         let event = match event {
             Event::Place(index) => return self.open_place(id, index),
             Event::Accessory(key) => return self.accessory(&key),
             Event::Unlock => return self.unlock(id),
             Event::MenuCommand(command) => return self.menu_command(id, command),
+            Event::DragOut(grab) => return self.drag_out(id, &grab),
+            Event::DragRows(grab) => return self.drag_rows(id, &grab),
+            Event::Dragged(progress) => {
+                if matches!(progress, DragProgress::Finished | DragProgress::Cancelled) {
+                    self.session.dragged.clear();
+                }
+                return Vec::new();
+            }
+            Event::Dropped {
+                token,
+                to,
+                paths,
+                action,
+                mods,
+            } => {
+                let done = to.and_then(|to| self.drop_items(id, &to, &paths, action, mods));
+                return vec![Command::FinishDrop(token, done)];
+            }
             event => event,
         };
         let session = &self.session;
@@ -593,7 +777,14 @@ impl Model {
                 commands.push(woken(&window.woken, Message::Window(id, Event::Woken)));
                 return commands;
             }
-            Event::Place(_) | Event::Accessory(_) | Event::Unlock | Event::MenuCommand(_) => {}
+            Event::Place(_)
+            | Event::Accessory(_)
+            | Event::Unlock
+            | Event::MenuCommand(_)
+            | Event::DragOut(_)
+            | Event::DragRows(_)
+            | Event::Dragged(_)
+            | Event::Dropped { .. } => {}
             Event::SecondaryPress(item) => {
                 // an item's press comes before the press on what holds it
                 if item.is_some() || window.pressed.is_none() {
@@ -690,11 +881,6 @@ impl Model {
             Event::Close => {
                 self.windows.remove(&id);
             }
-            Event::DragOut(grab) => {
-                let entries = window.browser.entries();
-                return vec![dragged::start(id, window_key(id), &grab, entries)];
-            }
-            Event::Dragged(_) => {}
             Event::Transferred(tid) => return window.transferred(id, tid, session),
             Event::SidebarFocus(focused) => window.sidebar_focused = focused,
             Event::Band(band) => window.band = band,
@@ -707,10 +893,6 @@ impl Model {
                 if let Err(e) = done {
                     eprintln!("cupertino-files: cannot open the folder's row: {e}");
                 }
-            }
-            Event::DragRows(grab) => {
-                let entries = window.browser.entries();
-                return vec![dragged::start_rows(id, window_key(id), &grab, entries)];
             }
             Event::FocusRow(index) => {
                 let Some(entry) = window.browser.entries().get(index) else {

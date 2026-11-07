@@ -12,7 +12,7 @@ mod trace;
 
 pub use clock::{ManualClock, TimeWentBackwards};
 pub use driver::{DriverError, TestDriver};
-pub use headless::{HeadlessWindowSystem, PresentedFrame, StartedDrag};
+pub use headless::{HeadlessWindowSystem, IncomingDrag, PresentedFrame, StartedDrag};
 pub use inspector::Inspector;
 pub use look::{appearance_name, LookError, LOOK_APPEARANCES, LOOK_DIR, LOOK_SCALE};
 pub use semantics::{describe, semantic_gaps, semantic_outline, unannounced, whole_tree};

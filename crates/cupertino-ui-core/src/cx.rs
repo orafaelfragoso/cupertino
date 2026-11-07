@@ -51,6 +51,15 @@ pub enum FocusTarget {
     Key(Key),
 }
 
+/// What a widget asked the window system to do with its window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WindowGesture {
+    /// An interactive move, answering the pointer press being handled.
+    Move,
+    /// Maximize, or restore a maximized window.
+    Zoom,
+}
+
 /// What widgets asked for while one event was routed.
 pub(crate) struct Effects<M> {
     pub(crate) messages: Vec<M>,
@@ -64,6 +73,8 @@ pub(crate) struct Effects<M> {
     pub(crate) wakes: Vec<(NodeId, Timestamp)>,
     pub(crate) text_input: Option<(NodeId, Option<TextInputState>)>,
     pub(crate) clipboard: Option<String>,
+    /// Moves and zooms of the window, in the order asked.
+    pub(crate) window: Vec<WindowGesture>,
     /// A part of a node, in its coordinates, for its scroll containers to show.
     pub(crate) reveal: Option<(NodeId, Rect)>,
 }
@@ -81,6 +92,7 @@ impl<M> Default for Effects<M> {
             wakes: Vec::new(),
             text_input: None,
             clipboard: None,
+            window: Vec::new(),
             reveal: None,
         }
     }
@@ -103,6 +115,7 @@ impl<M> Effects<M> {
         if other.clipboard.is_some() {
             self.clipboard = other.clipboard;
         }
+        self.window.extend(other.window);
         self.reveal = other.reveal.or(self.reveal);
     }
 }
@@ -231,6 +244,20 @@ impl<M> EventCx<'_, M> {
     /// Puts `text` on the clipboard, as a field's copy or cut does.
     pub fn set_clipboard(&mut self, text: String) {
         self.effects.clipboard = Some(text);
+    }
+
+    /// Starts an interactive move of the window, in answer to the pointer press being handled: call it while that press
+    /// is held, from its press or a motion after it. The window follows the pointer until the button is released; the
+    /// node then gets a pointer leave, which revokes its capture. A compositor that does not hold the press any more,
+    /// or a platform without moves, leaves the window where it is, and so does a fullscreen window.
+    pub fn move_window(&mut self) {
+        self.effects.window.push(WindowGesture::Move);
+    }
+
+    /// Maximizes the window, or restores it when the window system last said it is maximized. A fullscreen window stays
+    /// as it is.
+    pub fn zoom_window(&mut self) {
+        self.effects.window.push(WindowGesture::Zoom);
     }
 
     /// Delivers [`Event::AnimationFrame`](crate::Event::AnimationFrame) to this node on the next frame.

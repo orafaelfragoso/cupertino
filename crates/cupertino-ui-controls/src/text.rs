@@ -76,8 +76,11 @@ impl<M: 'static> Widget<M> for Text {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self != old {
+        // the colours are paint; what is set, in which role and whether it wraps, is size
+        if self.content != old.content || self.role != old.role || self.wrap != old.wrap {
             Change::Layout
+        } else if self != old {
+            Change::Paint
         } else {
             Change::None
         }

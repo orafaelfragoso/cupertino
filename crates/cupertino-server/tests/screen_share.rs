@@ -1,7 +1,7 @@
 //! Screen sharing end to end: the real `cupertino-portal` binary with the capture role against the in-process server,
 //! on a private D-Bus daemon and a private PipeWire daemon (never the user's). The test calls ScreenCast as
-//! xdg-desktop-portal does, presses Return on the chooser the portal maps, and reads frames of the headless output from
-//! the stream `Start` names, as a browser would. Skips (passes) without an EGL device, `dbus-daemon` or `pipewire`.
+//! xdg-desktop-portal does, presses Return on the chooser the portal maps once it is armed, and reads frames of the
+//! headless output from the stream `Start` names, as a browser would. Skips (passes) without an EGL device, `dbus-daemon` or `pipewire`.
 
 mod common;
 
@@ -27,6 +27,9 @@ use zbus::zvariant::{ObjectPath, OwnedValue, Value};
 
 const OUTPUT: (i32, i32) = (640, 400);
 const TIMEOUT: Duration = Duration::from_secs(30);
+/// How long the test lets the chooser stand before it types: longer than the portal's half-second arming delay, during
+/// which the chooser shares nothing.
+const ARMED: Duration = Duration::from_millis(700);
 /// Evdev code of Return plus the xkb offset of 8.
 const TAB: u32 = 15 + 8;
 const DOWN: u32 = 108 + 8;
@@ -206,6 +209,10 @@ fn the_portal_shares_the_chosen_display_as_a_stream_of_its_frames() {
     });
 
     server.wait_for("the chooser", |s| titled(s, "Share Screen").then_some(()));
+    let armed = Instant::now() + ARMED;
+    server.wait_for("the chooser to arm", |_| {
+        (Instant::now() >= armed).then_some(())
+    });
     for key in [TAB, DOWN, RETURN] {
         server.key(key);
     }

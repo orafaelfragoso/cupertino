@@ -3,11 +3,11 @@
 
 Checks the registry itself (fields, enums, duplicates, every source and test_owner path exists, every source_match
 occurs in its source file, and the test_owner of a socket or a binary names it), then compares it with the code: every
-`#[zbus::interface(name = ...)]` outside tests and examples, every org.cupertino.* name in the sources and every binary
-target of the workspace has an entry. The Wayland globals are compared at run time, by
-crates/cupertino-server/tests/contracts.rs."""
+`#[zbus::interface(name = ...)]` outside tests, examples and `#[cfg(test)]` modules, every org.cupertino.* name in the
+sources (test modules included) and every binary target of the workspace has an entry. The Wayland globals are compared
+at run time, by crates/cupertino-server/tests/contracts.rs."""
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
@@ -29,6 +29,10 @@ OPTIONAL = {"note", "version_without_render_node", "visible_to"}
 # a string: `zbus::interface`, `::zbus::interface`, an imported `interface`, and either inside a `cfg_attr`.
 ATTRIBUTE = re.compile(r'^[ \t]*#\[[^\]"]*?\binterface\b(?!\s*=)(.*?)\]', re.M | re.S)
 LITERAL_NAME = re.compile(r'\(\s*name\s*=\s*"([^"]+)"\s*[,)]')
+# A module that is compiled only for tests (`#[cfg(test)]` on the line before `mod name {` or `mod name;`, at one
+# indentation): its fakes serve nothing.
+TEST_ATTRIBUTE = re.compile(r'^([ \t]*)#\[cfg\(test\)\][ \t]*$')
+TEST_MODULE = re.compile(r'^([ \t]*)(?:pub(?:\([^)]*\))?[ \t]+)?mod[ \t]+(\w+)[ \t]*([{;])')
 # Entries without a test file. It only goes down: give an entry a test_owner and lower this number.
 UNKNOWN_TEST_OWNERS = 15
 UNKNOWN_SCOPES = 1
@@ -58,9 +62,53 @@ def parse(text):
 
 
 def sources(root):
-    """(path relative to ROOT, text) of every Rust file under a crate's src, which has no tests or examples."""
+    """(path relative to ROOT, text) of every Rust file under a crate's src; tests/ and examples/ are not read."""
     for path in sorted(root.glob("crates/*/src/**/*.rs")):
         yield path.relative_to(root).as_posix(), path.read_text()
+
+
+def module_dir(path):
+    """The directory that holds the files of the child modules of the module in `path`."""
+    path = PurePosixPath(path)
+    return path.parent if path.name in ("lib.rs", "main.rs", "mod.rs") else path.with_suffix("")
+
+
+def without_tests(path, text):
+    """`text` with each inline `#[cfg(test)] mod` blanked line by line, so the rest keeps its line numbers, and the
+    directories the files of all such modules (inline or `mod name;`) are in. Only the exact `#[cfg(test)]` counts:
+    `cfg(any(test, ...))` builds outside tests too. A module whose closing brace at its own indentation is not found
+    (code that is not rustfmt's) is left as it is."""
+    lines = text.splitlines(keepends=True)
+    dirs, number = [], 0
+    while number < len(lines):
+        attribute = TEST_ATTRIBUTE.match(lines[number])
+        module = attribute and number + 1 < len(lines) and TEST_MODULE.match(lines[number + 1])
+        if not module or module.group(1) != attribute.group(1):
+            number += 1
+            continue
+        dirs.append(module_dir(path) / module.group(2))
+        if module.group(3) == ";":
+            number += 2
+            continue
+        close = next((n for n in range(number + 2, len(lines)) if lines[n].rstrip() == module.group(1) + "}"), None)
+        if close is None:
+            number += 2
+            continue
+        for n in range(number, close + 1):
+            lines[n] = "\n"
+        number = close + 1
+    return "".join(lines), dirs
+
+
+def served(root):
+    """(path, text) of every source as `check_dbus` reads it for served interfaces: without its test modules, and none
+    of the files of a test module."""
+    read = [(path, *without_tests(path, text)) for path, text in sources(root)]
+    test_dirs = {d for _, _, dirs in read for d in dirs}
+    for path, text, _ in read:
+        file = PurePosixPath(path)
+        if not any(file.with_suffix("") == d or d in file.parents for d in test_dirs):
+            yield path, text
 
 
 def workspace_binaries(root):
@@ -146,7 +194,7 @@ def check_dbus(entries, root):
     problems, found = [], set()
     registered = {e["name"]: e for e in entries if e.get("kind") == "dbus-interface"}
     names = set(registered) | {e["bus_name"] for e in registered.values() if e.get("bus_name") != "none"}
-    for path, text in sources(root):
+    for path, text in served(root):
         for number, name in interfaces(text):
             if name is None:
                 problems.append(f"{path}:{number}: unparsed interface attribute: the name must be a string literal")
@@ -157,6 +205,8 @@ def check_dbus(entries, root):
                 problems.append(f"{path}:{number}: D-Bus interface {name} has no entry in {REGISTRY}")
             elif entry["source"] != path:
                 problems.append(f"{path}:{number}: {name} is registered in {entry['source']}")
+    # names are checked in test modules too: a fake's bus name is one its tests call
+    for path, text in sources(root):
         for number, line in enumerate(text.splitlines(), 1):
             if APP_ID.search(line):
                 continue

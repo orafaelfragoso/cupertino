@@ -272,7 +272,8 @@ impl Cupertino {
         }
         let wanted = self.accessibility.settings.screen_reader;
         match (wanted, self.session_reader.is_running()) {
-            (true, false) => {
+            // without a program (nested and offscreen runs, the start before the lookup) there is nothing to start
+            (true, false) if self.session_reader.program.is_some() => {
                 let socket = self.socket_name.clone();
                 self.session_reader.start(socket.as_deref());
             }

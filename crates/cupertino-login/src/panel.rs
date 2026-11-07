@@ -58,6 +58,10 @@ pub struct Text {
 
 pub const CANCEL_LABEL: &str = "Cancel";
 
+/// The checkbox of the log out, restart and shut down panels: whether the applications open now start again at the next
+/// login ([`crate::restore`]).
+pub const REOPEN_LABEL: &str = "Reopen windows when logging back in";
+
 impl Kind {
     /// The name in the log lines `panel shown: <name>`.
     pub fn log_name(self) -> &'static str {
@@ -117,6 +121,12 @@ impl Kind {
 
     /// The three confirmation panels count down to their default action; the power-button panel waits.
     fn has_countdown(self) -> bool {
+        self != Kind::PowerButton
+    }
+
+    /// The three confirmation panels show the "Reopen windows" checkbox; the power-button panel does not, and its restart
+    /// and shut down follow the choice the person last confirmed.
+    pub fn has_checkbox(self) -> bool {
         self != Kind::PowerButton
     }
 }
@@ -186,13 +196,17 @@ pub const INFO_LINE: f64 = 14.0;
 const TITLE_INFO_GAP: f64 = 8.0;
 const BUTTON_HEIGHT: f64 = 32.0;
 const BOTTOM_MARGIN: f64 = 13.0;
-/// Gap from the info line's bottom edge (power-button panel: the title's) to the buttons. approximate: the design chain
-/// is `info, 7, checkbox, 14, buttons` (`title, 9, checkbox, 21, buttons`) and the "Reopen windows" checkbox is not built,
-/// so only the last link of the chain, the checkbox-to-buttons gap, is kept as the gap from the text.
-const INFO_BUTTONS_GAP: f64 = 14.0;
+/// The chain below the info line on the log out, restart and shut down panels: 7 pt, the checkbox row, 14 pt, the
+/// buttons.
+const INFO_CHECKBOX_GAP: f64 = 7.0;
+const CHECKBOX_BUTTONS_GAP: f64 = 14.0;
+/// Height of the checkbox row (the box and its one-line label), and the box's edge, centred in the row at the text column.
+const CHECKBOX_HEIGHT: f64 = 18.0;
+pub const CHECKBOX_BOX: f64 = 14.0;
+/// Gap from the power-button panel's title to its buttons; that panel has no checkbox.
 const TITLE_BUTTONS_GAP: f64 = 21.0;
-/// Least gap from the icon's bottom edge to the buttons. approximate: without the checkbox the power-button panel's buttons
-/// (from x 59) would end up under the icon; 14 pt is the design's checkbox-to-buttons gap.
+/// Least gap from the icon's bottom edge to the buttons, so the power-button panel's buttons (from x 59) stay clear of
+/// the icon.
 const ICON_BUTTONS_GAP: f64 = 14.0;
 
 /// One button of a panel.
@@ -204,6 +218,16 @@ pub struct PanelButton {
     pub decision: Decision,
 }
 
+/// The "Reopen windows" checkbox of a panel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PanelCheckbox {
+    /// The row: the box and its label; a click anywhere on it toggles.
+    pub frame: Rect,
+    /// The box at the row's left edge.
+    pub check: Rect,
+    pub label: &'static str,
+}
+
 /// Where everything of a panel sits, in points from its top-left corner.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Frames {
@@ -213,6 +237,8 @@ pub struct Frames {
     pub title: Rect,
     /// `None` on the power-button panel.
     pub info: Option<Rect>,
+    /// `None` on the power-button panel.
+    pub checkbox: Option<PanelCheckbox>,
     /// Left to right: Cancel and the confirming button, or the four buttons of the power-button panel.
     pub buttons: Vec<PanelButton>,
 }
@@ -224,6 +250,11 @@ impl Frames {
             .iter()
             .find(|button| button.frame.contains(point))
             .map(|button| button.decision)
+    }
+
+    /// Whether a click at `point` (panel-local points) is on the checkbox.
+    pub fn checkbox_at(&self, point: Point) -> bool {
+        self.checkbox.is_some_and(|c| c.frame.contains(point))
     }
 }
 
@@ -248,9 +279,29 @@ impl Kind {
                 INFO_LINE * f64::from(info_lines),
             )
         });
-        let after_text = info.map_or(title.max_y() + TITLE_BUTTONS_GAP, |info| {
-            info.max_y() + INFO_BUTTONS_GAP
+        let checkbox = info.filter(|_| self.has_checkbox()).map(|info| {
+            let frame = Rect::new(
+                TEXT_LEFT,
+                info.max_y() + INFO_CHECKBOX_GAP,
+                wrap,
+                CHECKBOX_HEIGHT,
+            );
+            PanelCheckbox {
+                frame,
+                check: Rect::new(
+                    frame.x(),
+                    frame.y() + (CHECKBOX_HEIGHT - CHECKBOX_BOX) / 2.0,
+                    CHECKBOX_BOX,
+                    CHECKBOX_BOX,
+                ),
+                label: REOPEN_LABEL,
+            }
         });
+        let after_text = match (checkbox, info) {
+            (Some(checkbox), _) => checkbox.frame.max_y() + CHECKBOX_BUTTONS_GAP,
+            (None, Some(info)) => info.max_y() + CHECKBOX_BUTTONS_GAP,
+            (None, None) => title.max_y() + TITLE_BUTTONS_GAP,
+        };
         let buttons_top = after_text.max(ICON_INSET + ICON_SIZE + ICON_BUTTONS_GAP);
         let frame = |&(x, width): &(f64, f64)| Rect::new(x, buttons_top, width, BUTTON_HEIGHT);
         let columns = button_columns(self);
@@ -283,6 +334,7 @@ impl Kind {
             icon: Rect::new(ICON_INSET, ICON_INSET, ICON_SIZE, ICON_SIZE),
             title,
             info,
+            checkbox,
             buttons,
         }
     }
@@ -293,15 +345,39 @@ impl Kind {
 pub struct Panel {
     kind: Kind,
     start: f64,
+    /// The "Reopen windows" choice: the checkbox's state, or on the power-button panel the choice last confirmed.
+    reopen: bool,
 }
 
 impl Panel {
-    pub fn new(kind: Kind, now: f64) -> Self {
-        Panel { kind, start: now }
+    /// A panel whose checkbox starts at `reopen`, the choice the person last confirmed.
+    pub fn new(kind: Kind, now: f64, reopen: bool) -> Self {
+        Panel {
+            kind,
+            start: now,
+            reopen,
+        }
     }
 
     pub fn kind(&self) -> Kind {
         self.kind
+    }
+
+    /// Whether the applications open now start again at the next login.
+    pub fn reopen(&self) -> bool {
+        self.reopen
+    }
+
+    /// Flip the checkbox; nothing on the power-button panel, which has none. The countdown goes on.
+    pub fn toggle_reopen(&mut self) {
+        if self.kind.has_checkbox() {
+            self.reopen = !self.reopen;
+        }
+    }
+
+    /// Space flips the checkbox (the panel's only control besides the buttons, which Return and Escape answer).
+    pub fn toggles(&self, key: Key) -> bool {
+        self.kind.has_checkbox() && key == Key::Char(' ')
     }
 
     /// Whole seconds left on the countdown, rounded up so that it reads 60 when the panel appears and 0 only at the end;
@@ -350,7 +426,7 @@ mod tests {
 
     #[test]
     fn the_countdown_reads_sixty_when_it_appears_and_does_the_default_action_at_zero() {
-        let panel = Panel::new(Kind::ShutDown, 10.0);
+        let panel = Panel::new(Kind::ShutDown, 10.0, true);
         let left: Vec<Option<u32>> = [10.0, 10.5, 11.0, 69.5, 70.0]
             .into_iter()
             .map(|now| panel.seconds_left(now))
@@ -359,14 +435,14 @@ mod tests {
         assert_eq!(panel.tick(69.9), None);
         assert_eq!(panel.tick(70.0), Some(Decision::Do(Action::ShutDown)));
         assert_eq!(
-            Panel::new(Kind::LogOut, 0.0).tick(60.0),
+            Panel::new(Kind::LogOut, 0.0, true).tick(60.0),
             Some(Decision::Do(Action::LogOut))
         );
     }
 
     #[test]
     fn return_does_the_default_action_escape_cancels_and_typing_does_nothing() {
-        let panel = Panel::new(Kind::Restart, 0.0);
+        let panel = Panel::new(Kind::Restart, 0.0, true);
         assert_eq!(
             panel.press(Key::Return),
             Some(Decision::Do(Action::Restart))
@@ -384,7 +460,7 @@ mod tests {
 
     #[test]
     fn the_power_button_panel_has_no_countdown_and_takes_r_s_escape_and_return() {
-        let panel = Panel::new(Kind::PowerButton, 0.0);
+        let panel = Panel::new(Kind::PowerButton, 0.0, true);
         assert_eq!(
             (
                 panel.seconds_left(0.0),
@@ -416,7 +492,7 @@ mod tests {
 
     #[test]
     fn the_number_changes_every_second() {
-        let panel = Panel::new(Kind::LogOut, 0.0);
+        let panel = Panel::new(Kind::LogOut, 0.0, true);
         assert_eq!(panel.next_wakeup(0.0), Some(1.0));
         assert!((panel.next_wakeup(0.25).unwrap() - 0.75).abs() < 1e-9);
         assert!((panel.next_wakeup(59.5).unwrap() - 0.5).abs() < 1e-9);
@@ -435,6 +511,7 @@ mod tests {
             let frames = kind.frames(2, 2);
             let mut elements = vec![("icon", frames.icon), ("title", frames.title)];
             elements.extend(frames.info.map(|info| ("info", info)));
+            elements.extend(frames.checkbox.map(|c| ("checkbox", c.frame)));
             elements.extend(
                 frames
                     .buttons
@@ -516,23 +593,31 @@ mod tests {
 
     #[test]
     fn the_height_is_the_chain_of_the_wrapped_text() {
-        // top 20, title 2 x 16, gap 8, info 2 x 14, gap 14, buttons 32, bottom 13
+        // top 20, title 2 x 16, gap 8, info 2 x 14, gap 7, checkbox 18, gap 14, buttons 32, bottom 13
         for kind in [Kind::LogOut, Kind::Restart, Kind::ShutDown] {
             let frames = kind.frames(2, 2);
             assert_eq!(
                 (frames.width, frames.height),
-                (417.0, 20.0 + 32.0 + 8.0 + 28.0 + 14.0 + 32.0 + 13.0)
+                (
+                    417.0,
+                    20.0 + 32.0 + 8.0 + 28.0 + 7.0 + 18.0 + 14.0 + 32.0 + 13.0
+                )
             );
+            let checkbox = frames.checkbox.unwrap();
             assert_eq!(
                 (
                     frames.title,
                     frames.info.unwrap(),
+                    checkbox.frame,
+                    checkbox.check,
                     frames.buttons[0].frame.y()
                 ),
                 (
                     Rect::new(90.0, 20.0, 305.0, 32.0),
                     Rect::new(90.0, 60.0, 305.0, 28.0),
-                    102.0
+                    Rect::new(90.0, 95.0, 305.0, 18.0),
+                    Rect::new(90.0, 97.0, 14.0, 14.0),
+                    127.0
                 )
             );
         }
@@ -554,6 +639,49 @@ mod tests {
                 98.0
             )
         );
+        assert_eq!(
+            power.checkbox, None,
+            "the power-button panel has no checkbox"
+        );
+    }
+
+    #[test]
+    fn the_checkbox_starts_at_the_saved_choice_and_a_click_or_space_flips_it() {
+        let frames = Kind::LogOut.frames(2, 2);
+        let checkbox = frames.checkbox.unwrap();
+        assert_eq!(checkbox.label, "Reopen windows when logging back in");
+        assert!(frames.checkbox_at(checkbox.check.center()));
+        assert!(
+            frames.checkbox_at(Point::new(
+                checkbox.frame.max_x() - 1.0,
+                checkbox.frame.center().y
+            )),
+            "the label is part of the target"
+        );
+        assert!(!frames.checkbox_at(frames.buttons[1].frame.center()));
+        assert_eq!(frames.button_at(checkbox.check.center()), None);
+
+        let mut panel = Panel::new(Kind::Restart, 0.0, false);
+        assert!(!panel.reopen());
+        assert!(panel.toggles(Key::Char(' ')));
+        assert!(!panel.toggles(Key::Char('x')));
+        assert_eq!(panel.press(Key::Char(' ')), None, "space decides nothing");
+        panel.toggle_reopen();
+        assert!(panel.reopen());
+        assert_eq!(panel.seconds_left(1.0), Some(59), "the countdown goes on");
+        panel.toggle_reopen();
+        assert!(!panel.reopen());
+    }
+
+    #[test]
+    fn the_power_button_panel_keeps_the_saved_choice_and_cannot_flip_it() {
+        let mut panel = Panel::new(Kind::PowerButton, 0.0, true);
+        assert!(!panel.toggles(Key::Char(' ')));
+        panel.toggle_reopen();
+        assert!(panel.reopen());
+        assert!(!Kind::PowerButton
+            .frames(2, 0)
+            .checkbox_at(Point::new(100.0, 80.0)));
     }
 
     #[test]

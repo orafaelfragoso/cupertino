@@ -7,7 +7,8 @@ manager (`cupertino-sessiond`), with a user picker. The session agent shows the 
 
 ## Contents
 
-[Running](#running) · [Lock screen](#lock-screen) · [Session agent](#session-agent) · [Greeter](#greeter) ·
+[Running](#running) · [Lock screen](#lock-screen) · [Session agent](#session-agent) ·
+[Reopening applications](#reopening-applications) · [Greeter](#greeter) ·
 [Values applied](#reference-values-applied) · [Open issues](#open-issues) · [Modules](#modules) · [Tests](#tests)
 
 The crate has no rendering or compositor dependency: `cupertino-seat` supplies the logind lookup, and it builds against Smithay's
@@ -196,13 +197,17 @@ happens. The properties stay readable by every caller.
 A layer-shell surface on the overlay layer of the first output, without anchors so the server centres it, with exclusive
 keyboard. The width, the buttons' x and widths (32 pt high) and the 60 s countdown are. The height
 follows 's vertical chain: 20 pt, the title (bold 13 on 16 pt lines, wrapped at 305 pt), 8 pt, the info line (11 on 14 pt
-lines), 14 pt, the buttons, 13 pt. Each element sits at the previous one's bottom edge, using the line counts the renderer
+lines), 7 pt, the "Reopen windows when logging back in" checkbox (an 18 pt row: a 14 pt box at the text column and its
+label), 14 pt, the buttons, 13 pt. Each element sits at the previous one's bottom edge, using the line counts the renderer
 measures (`render::Renderer::panel_frames`; the info line at the most lines it takes while counting down, so the size stays put).
-With the design strings (two lines each) the log out, restart and shut down panels are 417 x 147 pt. The resize rule is.
+With the design strings (two lines each) the log out, restart and shut down panels are 417 x 172 pt. The resize rule is.
 
 - A second request replaces the open panel, and a lock closes it.
 - Return does the default action, Escape cancels, a button click does that button's, and the end of the countdown does the
   default action.
+- The checkbox starts at the choice the person last confirmed (on until then). A click on the box or its label, Space, or a
+  click from assistive technology (a `CheckBox` node with its checked state) flips it; the countdown goes on. Confirming
+  remembers the choice, cancelling forgets a change. See [Reopening applications](#reopening-applications).
 - Sleep asks the session manager at once (`RequestPower`, see below). Without a session manager on the bus (a session another display manager such as GDM or SDDM started) restart, shut down and sleep call logind's `Reboot`, `PowerOff` and `Suspend` instead (not interactive: what the person may not do, or what an inhibitor blocks, is refused and logged like the manager's refusals). Log out, restart and shut down first quit the applications
   (below); then log out calls logind's `TerminateSession` with this process's session id, and restart and shut down ask the
   manager. The manager refuses a restart or shut down while another user's session is open and the caller is no administrator
@@ -211,13 +216,13 @@ With the design strings (two lines each) the log out, restart and shut down pane
 - The words are the design strings of, in `panel::Kind::text`. The countdown is `panel::format_countdown`:
   full units, at most two ("1 minute" at the start, "59 seconds" a second later).
 
-**Power-button panel.** `panel::Kind::PowerButton`, 466 pt wide (143 pt high with the two-line title), four
+**Power-button panel.** `panel::Kind::PowerButton`, 466 pt wide (143 pt high with the two-line title), no checkbox (its
+restart and shut down follow the choice last confirmed on the other panels), four
 100 pt buttons at the x origins 59, 157, 255 and 353: Restart (`r`), Sleep (`s`), Cancel (Escape) and Shut Down
 (Return, the default button). The title is the Shut Down panel's. There is no info line and no countdown, so the panel waits for
 an answer. The register's origins are 98 pt apart for 100 pt buttons, so neighbours overlap by 2 pt and a click there goes to
 the left button. The title wraps at 354 pt and the buttons sit 21 pt below it (approximate), but never nearer than 14 pt to the
-icon's bottom edge: without the checkbox the design chain would put the buttons under the icon (bottom edge 84 against a
-73 pt chain).
+icon's bottom edge: the title chain alone would put the buttons under the icon (bottom edge 84 against a 73 pt chain).
 
 ### Quit sequence
 
@@ -235,6 +240,11 @@ the title (bold 13) at (102, 13) and the info line (10 pt) at (102, 55), both wr
 - Force Quit calls `ForceQuitApplication(app_id)` (SIGKILL to the processes of its windows) and gives it another 45 s.
 - An application that quits while its panel is up closes the panel. A lock while the panel is up cancels the log out.
 - Without `org.cupertino.Session1` on the bus (another compositor) the agent logs it and goes straight to the call.
+
+- While the applications quit, the agent records the identity the server names for each (`QuitNextApplication`'s `app_id`).
+  Once none is left, and before the logind call or the power request, it saves them for the next login
+  ([Reopening applications](#reopening-applications)). A cancelled sequence saves nothing; a restart or shut down the
+  manager or logind refuses drops what was saved, since the session goes on.
 
 ### Low battery
 
@@ -275,6 +285,39 @@ the release does nothing. With the session locked the press and the release are 
 ('s lock assertions). A release at or after 1.5 s shows the panel even when the loop has not yet seen the timer fire. The
 greeter has no session agent and takes no inhibitor, so a hold there shows nothing: the server logs a warning that nobody owns
 `org.cupertino.Login1`, and logind handles the key by its own configuration.
+
+## Reopening applications
+
+With "Reopen windows when logging back in" on, the applications open at a log out, restart or shut down start again at the
+next login (`restore`).
+
+**What is saved.** The identities the quit sequence recorded, in that order, each resolved to an installed desktop entry of
+the XDG application directories: the entry whose desktop file ID is the identity (with or without `.desktop`), else the first
+whose `StartupWMClass` is it, ignoring case. Left out, each with a log line (`application not saved for the next login:
+<identity>: <reason>`): an application without an entry, an entry hidden from listings (`NoDisplay`, `Hidden`, `OnlyShowIn`,
+`NotShowIn`, a failing `TryExec`), one with `Terminal=true`, one whose `Exec` does not split, and the shell's own programs
+(`restore::SHELL_PROGRAMS`: the server, the session manager and every shell process and daemon, matched by identity, desktop
+file ID and the program of `Exec`). An entry two identities resolve to is saved once; at most 64 are kept.
+
+**The file.** `$XDG_STATE_HOME/cupertino/restore` (default `~/.local/state/cupertino/restore`), replaced atomically, mode
+0600. It holds the format version, the choice (`reopen = true|false`), the boot (`/proc/sys/kernel/random/boot_id`) and logind
+session the list was saved in, and `app = <desktop file ID>` lines. Only desktop file IDs of letters, digits, `.`, `-` and `_`
+ending in `.desktop` are read; never a path or a command. A missing file is the choice on and no list; a malformed line is
+skipped, and a file of another version keeps only the choice. Without a boot ID the list is not saved.
+
+**At login.** After the login items, the agent reads the list and writes the file back without it, keeping the choice, *before*
+it starts anything; when that write fails nothing is started (`the saved list could not be emptied`). So a crash, a restart of
+the agent and an unexpected end of the session never start a list twice, and a session that ends without a confirmed panel
+(a crash, a power cut, `Super+Shift+Q` while the agent restarts) leaves no list. Dropped without starting anything: a list
+saved with the choice off, and a list saved in this very boot and session (the agent restarted after a refused restart, then a
+failure). Each ID is looked up again among the installed entries and started through its `Exec` with the file field codes
+dropped, without a terminal or an activation token, stdin closed, the exit reaped on a thread (`cupertino-apps`'s `exec` and
+`launch::spawn`). Not started, each logged as `application not reopened: <id>: <reason>`: a removed or now hidden entry, a
+shell program, a duplicate, an ID a login item started already (same file name) and a start that fails; the others go on.
+
+**Windows and documents.** The agent starts applications; it does not restore windows, their places or the documents in
+them, and Wayland gives it no way to. An application that wants to come back as it was keeps that state itself and restores
+it when it starts.
 
 ## Greeter
 
@@ -407,7 +450,7 @@ network users).
 | Picture | `~/.face` as PNG, cropped to a circle. A file that does not decode is an error; a missing one means initials. | `user` |
 | Panel body, icon, buttons | Opaque grey body with 12 pt corners, a plain disc, the accent blue on the default button. | `render`, `panel` |
 | Administrator | Members of `wheel` in `/etc/group`; the design's admin group has no counterpart. | `users::ADMIN_GROUP` in `cupertino-sessiond` |
-| Text to buttons gap | 14 pt below the info line, 21 pt below the power-button title: the last link of the design chains (`info, 7, checkbox, 14, buttons`; `title, 9, checkbox, 21, buttons`), kept because the "Reopen windows" checkbox is not built. Panels come out shorter than the design's 173 and 145 pt. | `panel::INFO_BUTTONS_GAP`, `panel::TITLE_BUTTONS_GAP` |
+| Checkbox row | 7 pt below the info line, 18 pt high with a 14 pt box (3 pt corners; the default button's blue with a white check when on, the cancel button's fill with an edge when off) and a 13 pt label 6 pt right of it, 14 pt above the buttons. The power-button panel has none, so its buttons sit 21 pt below its title. | `panel::INFO_CHECKBOX_GAP`, `panel::CHECKBOX_HEIGHT`, `panel::CHECKBOX_BOX`, `panel::CHECKBOX_BUTTONS_GAP`, `panel::TITLE_BUTTONS_GAP`, `render::CHECKBOX_*` |
 | Icon to buttons gap | At least 14 pt below the icon, so the power-button panel's buttons (from x 59) clear it. | `panel::ICON_BUTTONS_GAP` |
 | Greeter placeholders | Plain English. | `render::PLACEHOLDER` |
 | Countdown formatter | A zero unit is dropped; two units join with ", ". The reference output was not captured. | `panel::format_countdown` |
@@ -423,12 +466,13 @@ network users).
 | Force Quit | No confirmation sheet. SIGKILL to the processes of the application's windows. | server `quit.rs` |
 | Low-battery words | Ours; the design text is not in the strings read. | `low_battery` |
 | Login items | Started through `Command` without an activation token (no input event to ask for one). The design's delayed list (10 s) has no XDG counterpart. | `app` |
+| Reopened applications | Started without an activation token, after the login items, all at once. On until the person turns it off; the power-button panel has no checkbox and uses the saved choice. | `restore`, `app` |
 
 **Text.** The `ui` font is a variable font whose optical size follows the point size, so every `TextRenderer` owner calls `set_scale` with the output scale before it draws and measures (`wrap` measures in points, the drawing helpers at the canvas scale): text is laid out in points at the same optical size it is drawn with, at every output scale.
 
 ## Open issues
 
-- **Not implemented.** The name shadow, the rest of the status bar, the grace period, auto log-out, display sleep after the hide, the "Reopen windows when logging back in" checkbox, the picker's
+- **Not implemented.** The name shadow, the rest of the status bar, the grace period, auto log-out, display sleep after the hide, the picker's
   page indicator and the animation between the picker and the password screen ('s 0.5 s layout change, peekaboo and the
   cooldown), 's status bar, and the sessions the manager does not know (a hidden account's) in the power menu's ellipsis.
 ## Modules
@@ -443,12 +487,13 @@ network users).
 | `render` | `Renderer`, `View`, `PickerView` |
 | `spinner` | the spinner's frame, head spoke and spoke opacities |
 | `user` | `User::current` (account, full name, picture), `User::from_row` (a row of the manager's list), `initials`, `format_time` |
-| `panel` | `Kind`, `Action`, `Decision`, `Panel`: the countdown, the keys, the button frames and the words of the confirmation panels and the power-button panel |
+| `panel` | `Kind`, `Action`, `Decision`, `Panel`, `PanelCheckbox`: the countdown, the keys, the button and checkbox frames and the words of the confirmation panels and the power-button panel |
 | `power_button` | `PowerButton`, `Effect`: the power key's hold timing |
 | `logout` | `LogOut`, `Do`: the timing of the quit sequence |
 | `interrupt` | `Frames`, `Choice`, `title`, `info`, `press`: the interrupt panel |
 | `low_battery` | `LowBattery`, `Level`, `Notice`, `Action`: which notification to post, replace or withdraw |
 | `autostart` | `directories`, `list`, `parse`, `exec_argv`, `claim_run`: the XDG autostart entries |
+| `restore` | `SavedState`, `parse`, `to_text`, `load`, `store`, `save`, `discard`, `choice`, `state_path`, `Applications` (`restorable`, `by_id`), `saved_list`, `take_at_login`, `launch`, `SessionMark`: reopening applications at the next login |
 | `control` (feature `dbus`) | the `org.cupertino.Login1` interface (`serve`, `Service::set_locked`, `Service::set_capabilities`) |
 | `probe` | `run`: the thread that reads logind and the manager on request and publishes the capabilities |
 | `capabilities` | `Capabilities`, `Inputs`, `Answer`: which menu actions work, from logind's answers and the manager's presence |
@@ -471,7 +516,9 @@ cargo test -p cupertino-login --features app
 |---|---|
 | Shake, fade, state machine | The shake curve (peaks of 14 pt, zero outside), the linear fade, typing and the byte limit, wrong password, PAM error and success paths, a result with no attempt in flight, the hide after 30 s, the layout of a 1920 x 1080 output. |
 | Exhaustive inputs | Every sequence of up to five inputs and failures never reaches `Unlocking` or `Unlocked`. |
-| Panels and power key | Countdown, keys, button frames, clicks, the power-button panel's four buttons, its keys and its lack of a countdown; key timing at 0.2, 0.5 and 1.5 s with and without sleeping. |
+| Panels and power key | Countdown, keys, button and checkbox frames, clicks, the checkbox's start state, Space and its node for assistive technology, the power-button panel's four buttons, its keys and its lack of a countdown and checkbox; key timing at 0.2, 0.5 and 1.5 s with and without sleeping. |
+| Saved state (`restore`) | The file round-trips with IDs only, mode 0600; a missing file is the choice on; malformed lines, other versions, invalid IDs, duplicates and the 64 cap; identities resolve by ID then `StartupWMClass`; shell programs, terminal entries and bad `Exec` lines are refused; the list is emptied on disk before it is handed out and only once, dropped when saved in the same boot and session or with the choice off, and not handed out when it cannot be emptied; launching skips removed entries, duplicates, login items and failed starts. |
+| `tests/restore.rs` | A stand-in `org.cupertino.Session1` on a private `dbus-daemon` names the applications as they quit; the saved list in a fixture home holds only their desktop file IDs, and the next login starts the one still installed once through its `Exec`; a failed start leaves the rest going. |
 | Options | The session options, and that the greeter takes none. |
 | `tests/harden.rs` | The running greeter (waiting on a compositor that never answers) has core file size 0 and refuses its owner the read of `/proc/<pid>/environ`; each of the two calls removed fails it. The check of the environment is skipped as root. |
 | `org.cupertino.Login1` on a private `dbus-daemon` | `Lock`, a second process cannot take the name (`serve` fails with `NameTaken`; `serve_unnamed` serves the object on the unique name), `Request*` refused while locked, `Locked` announced once per change; a host process (`dbus-send`) is refused every method with `UntrustedCaller`, and a process with the login process's parent (a stand-in for an application the server started) is refused `Sleep` while the parent is not. |
@@ -480,7 +527,9 @@ cargo test -p cupertino-login --features app
 Not covered by a test:
 
 - The bus calls of the quit sequence and the notifications. The server side of `org.cupertino.Session1` is `cupertino-server`'s
-  `tests/quit.rs`, and the low-battery path runs in the QEMU harness.
+  `tests/quit.rs`, and the low-battery path runs in the QEMU harness. The process's start, with a saved list in a fixture
+  home, is `cupertino-server`'s `tests/session_restore.rs`.
+- A real log out, restart or shut down with the checkbox on, and the next real login.
 - The logind calls and signals. Against a private bus with a stand-in logind they showed the two inhibitors.
   A real `Lock` signal would lock the developer's session. The manager's side of `RequestPower` and `SessionReady` is tested in
   `cupertino-sessiond` (`tests/service.rs`) and by the QEMU checks `28` and `29`.

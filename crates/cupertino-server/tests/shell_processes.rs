@@ -2117,7 +2117,26 @@ fn the_login_process_connects_and_exits_outside_a_login_session() {
     };
     let mut login = real_process("cupertino-login", &bus);
     let program = login.command.pop().unwrap();
+    // inside a real login session the process gets as far as its login items and the applications saved to reopen: every
+    // directory it reads them from is the test's, so it never starts the host user's programs
+    use std::os::unix::fs::PermissionsExt;
+    let runtime = dir.file("runtime");
+    std::fs::create_dir(&runtime).unwrap();
+    std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let isolated = |sub: &str| {
+        let path = dir.file(sub);
+        std::fs::create_dir_all(&path).unwrap();
+        path.display().to_string()
+    };
     login.command.extend([
+        format!("HOME={}", isolated("home")),
+        format!("XDG_CONFIG_HOME={}", isolated("config")),
+        format!("XDG_CONFIG_DIRS={}", isolated("config-dirs")),
+        format!("XDG_DATA_HOME={}", isolated("data")),
+        format!("XDG_DATA_DIRS={}", isolated("data-dirs")),
+        format!("XDG_STATE_HOME={}", isolated("state")),
+        format!("XDG_CACHE_HOME={}", isolated("cache")),
+        format!("XDG_RUNTIME_DIR={}", runtime.display()),
         "sh".into(),
         "-c".into(),
         "exec \"$0\" 2>\"$1\"".into(),

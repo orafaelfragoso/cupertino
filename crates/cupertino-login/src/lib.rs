@@ -14,6 +14,7 @@
 //! * [`panel`]: the confirmation panel's countdown, keys, button frames and words.
 //! * [`logout`]: the timing of quitting the applications one at a time before the session ends.
 //! * [`interrupt`]: the panel that shows when an application does not quit: Cancel or Force Quit.
+//! * [`restore`]: reopening applications at the next login: the saved choice and list, and starting the list once.
 //! * [`low_battery`]: which low-battery notification to post, replace or withdraw as the warning level changes.
 //! * [`user`]: the user's name and picture, and the clock text.
 //! * feature `dbus`: [`control`] (the `org.cupertino.Login1` bus interface), [`logind`] (the session's lock request, suspend
@@ -52,6 +53,7 @@ pub mod power;
 pub mod power_button;
 pub mod probe;
 pub mod render;
+pub mod restore;
 #[cfg(feature = "dbus")]
 pub mod session;
 pub mod spinner;

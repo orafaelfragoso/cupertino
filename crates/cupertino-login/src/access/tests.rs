@@ -151,7 +151,7 @@ fn each_node_id_names_its_node() {
 #[test]
 fn a_panel_reads_its_title_countdown_and_buttons_with_the_default_one_focused() {
     let frames = Kind::LogOut.frames(2, 1);
-    let update = panel_tree(WindowId(7), Kind::LogOut, &frames, Some(42));
+    let update = panel_tree(WindowId(7), Kind::LogOut, &frames, Some(42), true);
     let root = &update.nodes[0].1;
     assert_eq!((root.role, root.states.modal), (Role::AlertDialog, true));
     let texts: Vec<_> = update.nodes[1..]
@@ -169,9 +169,13 @@ fn a_panel_reads_its_title_countdown_and_buttons_with_the_default_one_focused() 
             Kind::LogOut.countdown_message(42).unwrap()
         )
     );
+    assert_eq!(
+        texts[2],
+        (Role::CheckBox, crate::panel::REOPEN_LABEL.to_string())
+    );
     let buttons: Vec<_> = frames.buttons.iter().map(|b| b.label.to_string()).collect();
     assert_eq!(
-        texts[2..]
+        texts[3..]
             .iter()
             .map(|(_, name)| name.clone())
             .collect::<Vec<_>>(),
@@ -188,7 +192,12 @@ fn a_panel_reads_its_title_countdown_and_buttons_with_the_default_one_focused() 
 #[test]
 fn a_click_from_assistive_technology_decides_what_a_click_on_the_button_does() {
     let frames = Kind::PowerButton.frames(1, 0);
-    let update = panel_tree(WindowId(7), Kind::PowerButton, &frames, None);
+    let update = panel_tree(WindowId(7), Kind::PowerButton, &frames, None, true);
+    assert!(
+        update.nodes.iter().all(|(_, n)| n.role != Role::CheckBox),
+        "the power-button panel has no checkbox"
+    );
+    assert!(!panel_toggles(&frames, NodeId::new(4, NonZeroU32::MIN)));
     assert!(update
         .nodes
         .iter()
@@ -208,4 +217,33 @@ fn a_click_from_assistive_technology_decides_what_a_click_on_the_button_does() {
         panel_click(&frames, NodeId::new(10 + 9, NonZeroU32::MIN)),
         None
     );
+}
+
+#[test]
+fn the_checkbox_tells_its_state_and_a_click_on_it_flips_it_without_deciding() {
+    let frames = Kind::Restart.frames(2, 2);
+    let state = |reopen: bool| {
+        let update = panel_tree(WindowId(7), Kind::Restart, &frames, Some(60), reopen);
+        let (id, node) = update
+            .nodes
+            .into_iter()
+            .find(|(_, n)| n.role == Role::CheckBox)
+            .unwrap();
+        assert_eq!(node.actions, [Action::Click]);
+        assert!(node.states.focusable);
+        (id, node.value)
+    };
+    let (id, on) = state(true);
+    assert_eq!(on, Some(AccessibleValue::Toggle(Checked::True)));
+    assert_eq!(
+        state(false).1,
+        Some(AccessibleValue::Toggle(Checked::False))
+    );
+    assert!(panel_toggles(&frames, id));
+    assert_eq!(
+        panel_click(&frames, id),
+        None,
+        "the checkbox decides nothing"
+    );
+    assert!(!panel_toggles(&frames, NodeId::new(10, NonZeroU32::MIN)));
 }

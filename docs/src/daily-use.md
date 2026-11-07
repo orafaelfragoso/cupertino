@@ -6,6 +6,7 @@ A short guide for the first days on a machine that uses Cupertino as its session
 
 - **Start.** On a machine installed from the USB image (see [Install from a USB stick](install-usb.md)), `cupertino-login` starts the session on tty1: log in there. On other machines, the package installs the session entry `cupertino.desktop`, so GDM lists **Cupertino** in its session chooser; choose it, then log in. Do not turn on automatic login for this session while it is new: when the compositor ends for any reason, the session script ends and GDM shows its login screen again, and automatic login would start the session again at once.
 - **Leave normally.** Log out from the menu bar's system menu or with `Super+Shift+Q`. Applications are asked to quit first, and a confirmation panel appears. While the login process is restarting after a crash, `Super+Shift+Q` ends the session without asking.
+- **Reopen applications.** The log out, restart and shut down panels have **Reopen windows when logging back in**, on until you turn it off; the panel remembers your choice. With it on, the applications that were open start again once at the next login, through their desktop entries. Applications without a desktop entry and the shell's own programs are not saved. Each application opens as it does when you start it: getting its windows and documents back needs support in the application itself. After a crash or a power cut nothing is reopened.
 - **Lock.** `Super+Ctrl+Q`.
 - **Leave at once.** `Ctrl+Alt+Backspace` ends the compositor. `Ctrl+Alt+F1` to `F12` switch to a text console. Both are reserved: no application can take them over.
 - **Bound the first login.** Write a whole number of seconds into `~/.config/cupertino/session-limit`, for example `echo 600 > ~/.config/cupertino/session-limit`. The compositor stops after that long. Remove the file for a normal session.
@@ -108,6 +109,6 @@ The server's README has the full list under "Daily-driver known limits". The one
 - The volume and mute keys change the default PipeWire output and the microphone mute key toggles the default input. With no PipeWire daemon, volume and mute fall back to the ALSA master mixer.
 - X11 apps run through `xwayland-satellite`. Scale 2 and the clipboard were checked in a virtual machine only. With monitors of different scales, every X11 window gets the smallest scale.
 - The ISO and installer ship `foot`. Other installations need one of the terminals listed under keyboard shortcuts.
-- A server crash ends the session; windows are not reopened.
+- A server crash ends the session; windows are not reopened. Applications are reopened only after a confirmed log out, restart or shut down with the checkbox on.
 
 To report a bug, see [Trying Cupertino](trying.md).

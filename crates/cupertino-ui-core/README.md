@@ -43,12 +43,14 @@ all on one thread.
   wait for the frame callback. A window lays out again only when a node changed size (`Change::Layout`), it was
   resized or configured, or its environment changed; a focus move, a reveal, an animation frame or a paint-only
   change paints on the layout it has, and a layout that does run reuses the measures of the subtrees that did not
-  change. A node repaints only when it, its size, its focus or the window's active state changed. Damage is what the
-  changed nodes' operations reached and reach, cut by their clips; a node painted again in place damages only where
-  its operations differ (the ones both lists start and end with paint the same), so a container that draws nothing
-  damages nothing and a blinking caret damages the caret. A node with a group, whose opacity reaches its children,
-  and anything under a group with effects damage their whole box. A frame with no damage sends no buffer. A window
-  that cannot be laid out, rendered or presented goes to `on_window_error` and tries again, whole, on its next change or configure,
+  change. A node repaints only when it, its size, its focus or the window's active state changed. Damage is where
+  the changed nodes that draw were and are; a node that draws nothing, before and after (no operation and no group,
+  whose opacity reaches its children), damages nothing, so a container's repaint costs no pixels. A frame that
+  repainted nothing sends no buffer; one that repainted a node but no pixel commits with no damage, as an
+  animation's next frame and the state an application sets on its surface outside the frame wait for a commit. The
+  CPU renderer's partial redraw can blend an anti-aliased edge near a damaged rectangle's border a few levels
+  differently from a whole frame, so the rectangles a change damages show in pixel fixtures. A window that cannot be
+  laid out, rendered or presented goes to `on_window_error` and tries again, whole, on its next change or configure,
   whatever the cause: the renderer reports a target and content too large to draw with the same error. The same error
   again is not reported again, and the window's animations ask for no frames until a frame presents. An animation
   whose current value is what fails (a blur animating down from over the renderer's limit, say) therefore stays at

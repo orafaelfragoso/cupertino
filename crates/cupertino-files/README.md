@@ -281,9 +281,10 @@ Values live in `metrics.rs`.
 ### Frame time
 
 `tests/kit-damage.rs` pins what each interaction repaints, from the damage of each presented frame: an arrow key
-repaints the row the selection left and the row it reached, the caret blinks inside the search field, the search
-field's animation repaints only the toolbar, a hover repaints no row, a wheel step repaints only the listing, and a
-window kept up to date from damage alone has, after each of these, the pixels of the window drawn whole (at scale 1.5).
+repaints the row the selection left and the row it reached, the caret's blink repaints only the search field, the
+search field's animation repaints only the toolbar, a hover repaints no row, a wheel step repaints only the listing,
+and a window kept up to date from damage alone has, after each of these, the pixels of the window drawn whole (at
+scale 1.5), give or take the few levels by which the renderer's partial redraw blends an edge.
 
 `tests/kit-repaint.rs` holds `repaint_budget_report`, `#[ignore]`d because it measures wall time. In a generated folder of
 1500 files and with the window filling a 3840×2160 display at scales 2, 1.5 and 1, it times every frame of opening the
@@ -305,8 +306,9 @@ locked -- env CUPERTINO_REPAINT_DIR=DIR BINARY --ignored --nocapture --exact rep
 ## Open issues
 
 * Scrolling the listing, with the wheel or with an arrow key past the last row in view, repaints the whole listing on
-  the CPU: 60–70 ms a frame at 3840×2160, over the 8 ms budget. Opening a folder and each key of a search, which change
-  what the listing shows, take 15–45 ms. See Frame time.
+  the CPU: 60–70 ms a frame at 3840×2160, over the 8 ms budget. Opening a folder and the key of a search whose results
+  fill the listing take as long. At scale 1 the search field's animation and typing a new name take 8–10 ms. See Frame
+  time.
 * A folder does not spring open under a drag, and a drop from another application shows a move while it is held even
   when it will copy across devices. The drag badge holds three digits.
 * Thumbnails are made for PNG, JPEG and WebP pictures only (what `cupertino-thumbnails` decodes): no external

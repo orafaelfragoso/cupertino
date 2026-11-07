@@ -72,12 +72,11 @@ impl Application for Counter {
                     alpha: f64::NAN,
                 }
             }
-            "bar" | "bar moved" => {
-                let x = if message == "bar" { 10.0 } else { 40.0 };
-                model.background = WindowBackground::SurfaceRect {
+            "corners" | "rounder corners" => {
+                let radius = if message == "corners" { 8.0 } else { 16.0 };
+                model.background = WindowBackground::Surface {
                     surface: Surface::Menu,
-                    rect: Rect::new(x, 20.0, 100.0, 50.0),
-                    radius: 8.0,
+                    radius,
                     alpha: 1.0,
                 }
             }
@@ -1329,10 +1328,10 @@ fn a_window_paints_the_theme_background_unless_its_content_draws_its_own() {
     );
 }
 
-/// The material under a rectangle of the window is shaped with the window's next present. Moving the rectangle changes
-/// nothing the window paints while the compositor draws the material, so the move itself must bring a present.
+/// The material is shaped with the window's next present. New corners change nothing the window paints while the
+/// compositor draws the material, so the change itself must bring a present.
 #[test]
-fn moving_the_material_under_a_rectangle_presents_the_window_again() {
+fn reshaping_the_material_presents_the_window_again() {
     let (mut rt, window, _) = start();
     configure(&mut rt, window, 1);
     rt.window_system_mut().effects = true;
@@ -1346,26 +1345,26 @@ fn moving_the_material_under_a_rectangle_presents_the_window_again() {
         rt.step(steps()).unwrap();
         rt.window_system().presented.len()
     };
-    let shown = frame(&mut rt, "bar");
+    let shown = frame(&mut rt, "corners");
     assert_eq!(
-        frame(&mut rt, "bar"),
+        frame(&mut rt, "corners"),
         shown,
         "nothing changed, nothing to present"
     );
     assert!(
-        frame(&mut rt, "bar moved") > shown,
-        "the moved material goes with a present"
+        frame(&mut rt, "rounder corners") > shown,
+        "the reshaped material goes with a present"
     );
-    let bounds = rt
+    let radius = rt
         .window_system()
         .requests
         .iter()
         .rev()
         .find_map(|(_, r)| match r {
-            WindowRequest::Backdrop(Some(b)) => b.bounds,
+            WindowRequest::Backdrop(Some(b)) => Some(b.radius),
             _ => None,
         });
-    assert_eq!(bounds, Some(Rect::new(40.0, 20.0, 100.0, 50.0)));
+    assert_eq!(radius, Some(16.0));
 }
 
 #[test]
@@ -1445,7 +1444,6 @@ fn a_menu_window_shows_the_menu_material_where_the_desktop_draws_it_and_the_opaq
         material: "Menu".into(),
         radius: 8.0,
         alpha: 1.0,
-        bounds: None,
     };
     assert_eq!(backdrops(&rt), vec![Some(menu.clone())]);
     frame(&mut rt, Some("half"));

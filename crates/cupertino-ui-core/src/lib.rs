@@ -164,14 +164,6 @@ pub enum WindowBackground {
         radius: f64,
         alpha: f64,
     },
-    /// [`WindowBackground::Surface`] under `rect` (window points) instead of the whole window: a bar drawn inside a
-    /// larger surface that leaves room around it for content that grows out of it.
-    SurfaceRect {
-        surface: Surface,
-        rect: Rect,
-        radius: f64,
-        alpha: f64,
-    },
 }
 
 /// The opacity [`WindowBackground::Surface`] shows at `alpha`.

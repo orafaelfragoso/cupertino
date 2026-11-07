@@ -43,6 +43,7 @@ cupertino-assets = { path = "../cupertino-assets" }
 cupertino-ui-test = { path = "../cupertino-ui-test" }
 cupertino-capture = { path = "../cupertino-capture" }
 cupertino-test-bus = { path = "../cupertino-test-bus" }
+cupertino-ui-atspi = { path = "../cupertino-ui-atspi" }
 tiny-skia = "0.12"
 tempfile = "3"
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }

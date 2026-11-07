@@ -344,8 +344,7 @@ impl Trash {
             fs::create_dir_all(parent)?;
         }
         fs::rename(item.file_path(), dest)?;
-        let _ = fs::remove_file(item.info_path());
-        self.forget_dir_size(item);
+        forget(item);
         Ok(dest.clone())
     }
 
@@ -357,8 +356,7 @@ impl Trash {
             Ok(_) => fs::remove_file(&f)?,
             Err(_) => {}
         }
-        let _ = fs::remove_file(item.info_path());
-        self.forget_dir_size(item);
+        forget(item);
         Ok(())
     }
 
@@ -369,22 +367,6 @@ impl Trash {
             self.delete(i)?;
         }
         Ok(items.len())
-    }
-
-    fn forget_dir_size(&self, item: &TrashedItem) {
-        let path = item.trash_dir.join("directorysizes");
-        let Ok(s) = fs::read_to_string(&path) else {
-            return;
-        };
-        let enc = encode_path(&item.name);
-        let kept: Vec<&str> = s
-            .lines()
-            .filter(|l| l.splitn(3, ' ').nth(2) != Some(enc.as_str()))
-            .collect();
-        let _ = fs::write(
-            &path,
-            kept.join("\n") + if kept.is_empty() { "" } else { "\n" },
-        );
     }
 
     /// Delete items trashed more than `days` days ago (the "remove after 30 days" option, which the
@@ -400,6 +382,47 @@ impl Trash {
             }
         }
         Ok(n)
+    }
+}
+
+/// The trashed item `path` is, when it is an item of a trash directory's `files` folder that has its `.trashinfo`:
+/// whatever trash holds it, the home trash or a mount point's.
+pub fn trashed_item(path: &Path) -> Option<TrashedItem> {
+    let name = path.file_name()?.to_str()?.to_owned();
+    let files = path.parent()?;
+    if files.file_name()? != "files" {
+        return None;
+    }
+    let trash_dir = files.parent()?.to_path_buf();
+    let info = trash_dir.join("info").join(format!("{name}.trashinfo"));
+    let (original, deletion_date) = parse_info(&fs::read_to_string(info).ok()?).ok()?;
+    Some(TrashedItem {
+        name,
+        trash_dir,
+        original_path: PathBuf::from(original),
+        deletion_date,
+    })
+}
+
+/// Forget `item`, which has left its trash's `files` folder: an item moved out of the trash is restored, so its
+/// `.trashinfo` and its `directorysizes` line go (Trash specification 1.0), and nothing is left for an item that is not
+/// there.
+pub fn forget(item: &TrashedItem) {
+    let _ = fs::remove_file(item.info_path());
+    let path = item.trash_dir.join("directorysizes");
+    let Ok(s) = fs::read_to_string(&path) else {
+        return;
+    };
+    let enc = encode_path(&item.name);
+    let kept: Vec<&str> = s
+        .lines()
+        .filter(|l| l.splitn(3, ' ').nth(2) != Some(enc.as_str()))
+        .collect();
+    if kept.len() != s.lines().count() {
+        let _ = fs::write(
+            &path,
+            kept.join("\n") + if kept.is_empty() { "" } else { "\n" },
+        );
     }
 }
 

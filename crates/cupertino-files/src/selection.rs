@@ -1,5 +1,5 @@
 //! Selection model: click, toggle and range semantics, deferred collapse on mouse-up, keyboard
-//! extension, rubber band, and index maintenance under model changes.
+//! extension, and index maintenance under model changes. The window's rubber band works on the toolkit's selection.
 //!
 //! The semantics are the behaviour of the design: plain click replaces,
 //! the primary modifier toggles, shift selects the range from the anchor, shift+primary adds the
@@ -50,7 +50,6 @@ pub struct Selection {
     anchor: Option<usize>,
     focus: Option<usize>,
     pending_collapse: Option<usize>,
-    rubber_base: Option<BTreeSet<usize>>,
 }
 
 impl Selection {
@@ -190,35 +189,6 @@ impl Selection {
         self.focus = if len > 0 { Some(len - 1) } else { None };
     }
 
-    /// Start a rubber-band drag: remembers the selection to combine with.
-    pub fn rubber_band_begin(&mut self, mods: Modifiers) {
-        self.rubber_base = Some(if mods.shift || mods.primary {
-            self.selected.clone()
-        } else {
-            BTreeSet::new()
-        });
-    }
-
-    /// Update the rubber band with the indexes currently intersected. With a modifier the hit set
-    /// toggles items of the base selection (symmetric difference), otherwise it replaces it.
-    pub fn rubber_band_update(&mut self, hits: &[usize], mods: Modifiers) {
-        let base = self.rubber_base.clone().unwrap_or_default();
-        let hit: BTreeSet<usize> = hits.iter().copied().collect();
-        self.selected = if mods.shift || mods.primary {
-            base.symmetric_difference(&hit).copied().collect()
-        } else {
-            hit
-        };
-        if let Some(last) = hits.last() {
-            self.focus = Some(*last);
-            self.anchor.get_or_insert(*last);
-        }
-    }
-
-    pub fn rubber_band_end(&mut self) {
-        self.rubber_base = None;
-    }
-
     /// Keep indexes valid after an item was inserted at `at`.
     pub fn on_insert(&mut self, at: usize) {
         let shift = |i: usize| if i >= at { i + 1 } else { i };
@@ -330,21 +300,6 @@ mod tests {
         assert_eq!(sel(&s), [2, 3, 4]);
         s.move_focus(9, false);
         assert_eq!(sel(&s), [9]);
-    }
-
-    #[test]
-    fn rubber_band_replaces_or_toggles() {
-        let mut s = Selection::new();
-        s.mouse_down(1, Modifiers::NONE);
-        s.rubber_band_begin(Modifiers::NONE);
-        s.rubber_band_update(&[3, 4], Modifiers::NONE);
-        assert_eq!(sel(&s), [3, 4]);
-        s.rubber_band_end();
-        s.rubber_band_begin(Modifiers::PRIMARY);
-        s.rubber_band_update(&[4, 5], Modifiers::PRIMARY);
-        assert_eq!(sel(&s), [3, 5]);
-        s.rubber_band_update(&[], Modifiers::PRIMARY);
-        assert_eq!(sel(&s), [3, 4]);
     }
 
     #[test]

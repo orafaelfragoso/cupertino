@@ -130,6 +130,14 @@ fn start(options: Options) -> io::Result<Start> {
         places,
         folder_icons,
     } = session_places(&home, &dirs.data_dirs)?;
+    // the places follow the user directories, their configuration and the trash
+    let watched = [Some(home.clone()), cupertino_defaults::config_home()]
+        .into_iter()
+        .flatten()
+        .collect();
+    let (source_home, data_dirs) = (home.clone(), dirs.data_dirs.clone());
+    let source: kit::PlacesSource =
+        Box::new(move || session_places(&source_home, &data_dirs).map(|p| p.places));
     // one database for the Kind column, the icons and what opens an item, so all name the same type
     let types = Arc::new(MimeDatabase::load(&dirs.all_data_dirs()).map_err(other)?);
     let icons = FileIcons::discover((*types).clone(), folder_icons.into_iter().collect());
@@ -151,6 +159,7 @@ fn start(options: Options) -> io::Result<Start> {
         start
             .with_file_icons(icons)
             .with_thumbnails(Thumbnailer::from_env(kit::APP_ID))
+            .with_places_source(source, watched)
     })
     .map_err(|e| {
         io::Error::new(

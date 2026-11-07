@@ -875,6 +875,17 @@ pub struct TableView<M> {
     pub on_activate: Option<Handler<usize, M>>,
 }
 
+/// A [`TableView`] whose rows form an outline, as a [`TreeView`]'s do: each row's first cell comes after its indent and
+/// disclosure triangle, and Left and Right open and close rows as in a tree. Build its element with `Element::from`.
+pub struct OutlineTable<M> {
+    pub table: TableView<M>,
+    pub item: Box<dyn Fn(usize) -> TreeItem>,
+    /// Row `index`'s key, which its focus and accessible object follow while rows come and go above it; its index
+    /// without one.
+    pub key: Option<Box<dyn Fn(usize) -> Key>>,
+    pub on_toggle: Option<Handler<TreeToggle, M>>,
+}
+
 /// A row of a [`Sidebar`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct SidebarItem {

@@ -1,9 +1,10 @@
 //! Items dragged out of a window: the files as a `text/uri-list` a drop may copy or move, and the image that follows
-//! the pointer. One item shows its icon (or thumbnail) and its name as the grid shows them; several show the pressed item in front of
-//! the icons of up to two more, with the count in a badge on the stack. The image keeps the point the press grabbed
-//! under the pointer and is drawn at [`OPACITY`].
+//! the pointer. One item shows its icon (or thumbnail) and its name as the grid shows them; several show the pressed
+//! item in front of the icons of up to two more, with the count in a badge on the stack. Rows dragged from the list
+//! show the pressed row's icon and name as wide as its name cell, with the count in a badge at its trailing end. The
+//! image keeps the point the press grabbed under the pointer and is drawn at [`OPACITY`].
 
-use cupertino_kit::controls::{Badge, Image, ImageFit, ImageSource};
+use cupertino_kit::controls::{Badge, Image, ImageFit, ImageSource, Text, TextRole};
 use cupertino_kit::core::{
     Change, Drag, DragPreview, Element, Event, EventCx, MeasureCx, PaintCx, Propagation,
     SemanticsCx, Widget, WindowKey,
@@ -14,8 +15,10 @@ use cupertino_kit::layout::{
 };
 use cupertino_kit::platform::{ClipboardData, DropAction};
 use cupertino_kit::prelude::Command;
+use cupertino_kit::text::{AttributedText, TextStyle};
 use percent_encoding::{percent_encode, AsciiSet, NON_ALPHANUMERIC};
 
+use super::list::RowGrab;
 use super::{grid, Event as WindowEvent, Message};
 use crate::Entry;
 
@@ -29,6 +32,10 @@ const STACK_BEHIND: usize = 2;
 const BADGE_OVERHANG: f64 = 8.0;
 /// The widest count badge, in points: room for three digits.
 const BADGE_WIDTH: f64 = 32.0;
+/// A dragged row's icon, its gap to the name and the name's size, in points.
+pub(super) const ROW_ICON: f64 = 16.0;
+const ROW_GAP: f64 = 6.0;
+const ROW_TEXT_SIZE: f32 = 13.0;
 /// The type the dragged files are offered in.
 const URI_LIST: &str = "text/uri-list";
 
@@ -61,8 +68,32 @@ pub(super) fn start(
     grab: &Grab,
     entries: &[Entry],
 ) -> Command<Message> {
-    let uris: String = grab
-        .indices
+    drag(id, window, &grab.indices, entries, preview(grab))
+}
+
+/// The drag of the list's rows of `grab`, items of `entries`, out of window `id`; `icon` is the renditions of the
+/// pressed row's icon.
+pub(super) fn start_rows(
+    id: u64,
+    window: WindowKey,
+    grab: &RowGrab,
+    entries: &[Entry],
+    icon: Vec<ImageSource>,
+) -> Command<Message> {
+    let pressed = grab.indices.first().and_then(|&i| entries.get(i));
+    let name = pressed.map_or_else(String::new, |e| e.name.clone());
+    let image = row_preview(grab, name, icon);
+    drag(id, window, &grab.indices, entries, image)
+}
+
+fn drag(
+    id: u64,
+    window: WindowKey,
+    indices: &[usize],
+    entries: &[Entry],
+    image: DragPreview<Message>,
+) -> Command<Message> {
+    let uris: String = indices
         .iter()
         .filter_map(|&i| entries.get(i))
         .map(|e| format!("{}\r\n", file_uri(&e.path)))
@@ -74,9 +105,68 @@ pub(super) fn start(
             bytes: uris.into_bytes(),
         }],
         actions: [DropAction::Copy, DropAction::Move].into(),
-        image: Some(preview(grab)),
+        image: Some(image),
         on_progress: Box::new(move |progress| Message::Window(id, WindowEvent::Dragged(progress))),
     })
+}
+
+/// The image of rows dragged from the list: the pressed row's icon and name in the size of its name cell, with the
+/// count of the rows in a badge at the trailing end when there are several, and the pointer where the press grabbed it.
+pub(super) fn row_preview(
+    grab: &RowGrab,
+    name: String,
+    sources: Vec<ImageSource>,
+) -> DragPreview<Message> {
+    let size = grab.cell;
+    let count = grab.indices.len();
+    let middle = |height: f64| (size.height - height) / 2.0;
+    let badge = if count > 1 { BADGE_WIDTH } else { 0.0 };
+    let text_width = (size.width - ROW_ICON - ROW_GAP - badge).max(0.0);
+    // right to left, the icon is at the right edge and the badge at the left
+    let (icon_x, text_x, badge_x) = if grab.rtl {
+        (size.width - ROW_ICON, badge, 0.0)
+    } else {
+        (0.0, ROW_ICON + ROW_GAP, size.width - BADGE_WIDTH)
+    };
+    let mut children = vec![
+        placed(
+            Rect::new(icon_x, middle(ROW_ICON), ROW_ICON, ROW_ICON),
+            Insets::ZERO,
+            0.0,
+            vec![icon(sources, ROW_ICON)],
+        ),
+        Element::new(Line {
+            frame: Rect::new(text_x, 0.0, text_width, size.height),
+            children: vec![Element::new(Text {
+                content: AttributedText::plain(name, TextStyle::new(ROW_TEXT_SIZE)),
+                role: TextRole::Body,
+                wrap: false,
+                secondary: false,
+                selected: false,
+            })],
+        }),
+    ];
+    if count > 1 {
+        children.push(placed(
+            Rect::new(
+                badge_x,
+                middle(2.0 * BADGE_OVERHANG),
+                BADGE_WIDTH,
+                2.0 * BADGE_OVERHANG,
+            ),
+            Insets::ZERO,
+            0.0,
+            vec![Element::new(Badge {
+                text: Some(count.to_string()),
+                description: format!("{count} items"),
+            })],
+        ));
+    }
+    DragPreview {
+        content: Element::new(Preview { children }),
+        size,
+        hotspot: grab.offset,
+    }
 }
 
 /// The bytes a `file://` URI of a path keeps as they are: the unreserved ones and `/`.
@@ -244,6 +334,52 @@ impl Widget<Message> for Preview {
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
+/// A line of text at `frame`, from its leading edge and down its middle.
+struct Line {
+    frame: Rect,
+    children: Vec<Element<Message>>,
+}
+
+impl Widget<Message> for Line {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(self.frame.size.width),
+            height: SizeSpec::Fixed(self.frame.size.height),
+            position: self.frame.origin,
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: Axis::Horizontal,
+                spacing: 0.0,
+                align: Align::Center,
+                justify: Justify::Start,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<Message>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::Layout
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, Message>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
 /// A part of the image at `frame`: its children stacked down its middle under `insets`, `spacing` apart.
 struct Placed {
     frame: Rect,
@@ -344,6 +480,19 @@ mod tests {
             Point::new(30.0 + room, 20.0 + room),
             "the room is on the left"
         );
+    }
+
+    #[test]
+    fn a_row_is_its_name_cell_with_the_pointer_where_the_press_grabbed_it() {
+        let grab = RowGrab {
+            indices: vec![4, 1],
+            offset: Point::new(40.0, 9.0),
+            cell: Size::new(300.0, 24.0),
+            rtl: false,
+        };
+        let preview = row_preview(&grab, "a.txt".into(), Vec::new());
+        assert_eq!(preview.size, Size::new(300.0, 24.0));
+        assert_eq!(preview.hotspot, Point::new(40.0, 9.0));
     }
 
     #[test]

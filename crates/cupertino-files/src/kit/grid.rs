@@ -2,7 +2,10 @@
 //! cells near the viewport plus the cursor's. The model keeps the selection: clicks and keys report a new one and move
 //! the focus to the cursor's cell, which the runtime scrolls into view. Arrows go to the nearest cell that way
 //! ([`IconLayout::neighbour`], mirrored in right-to-left layouts), Page Up and Page Down by the rows in view, Home and
-//! End to the first and last item, Return opens, and typing selects by name. Read as a list of items.
+//! End to the first and last item, Return opens, typing selects by name, and Tab and Shift+Tab select the next and the
+//! previous item by name. A press on empty space draws a rubber band ([`super::band`]); a double click opens an item, a
+//! press on the name of the only selected item renames it after the double-click interval ([`super::clicks`]), and a
+//! press with Ctrl held opens the context menu. Read as a list of items.
 
 use std::rc::Rc;
 
@@ -21,6 +24,8 @@ use cupertino_kit::render::{Paint, PaintOp, Shape};
 use cupertino_kit::text::{AttributedText, TextStyle};
 use cupertino_kit::theme::{Color, ColorRole, InteractionVariant, StateVariant};
 
+use super::band::{self, Band};
+use super::clicks::Clicks;
 use super::dragged::Grab;
 use super::{Event as WindowEvent, Message};
 use crate::geom::{self, Direction};
@@ -39,6 +44,8 @@ const PAGE_DOWN: Keysym = Keysym(0xff56);
 const END: Keysym = Keysym(0xff57);
 const A: Keysym = Keysym(0x61);
 const SHIFTED_A: Keysym = Keysym(0x41);
+const TAB: Keysym = Keysym(0xff09);
+const LEFT_TAB: Keysym = Keysym(0xfe20);
 
 /// How far past the viewport cells are built, in points.
 const OVERSCAN: f64 = 200.0;
@@ -79,6 +86,25 @@ pub(super) fn target(layout: &IconLayout, from: usize, step: Step, rows: usize) 
     }
 }
 
+/// The item after (or before, `back`) item `from` in the order of `names`, by name: the first (or last) without one, and
+/// the same at the end.
+pub(super) fn by_name<S: AsRef<str>>(
+    names: &[S],
+    from: Option<usize>,
+    back: bool,
+) -> Option<usize> {
+    let mut order: Vec<usize> = (0..names.len()).collect();
+    order.sort_by(|&a, &b| crate::natural::compare_names(names[a].as_ref(), names[b].as_ref()));
+    let at = from.and_then(|f| order.iter().position(|&i| i == f));
+    let next = match (at, back) {
+        (None, false) => 0,
+        (None, true) => order.len().checked_sub(1)?,
+        (Some(at), false) => (at + 1).min(order.len() - 1),
+        (Some(at), true) => at.saturating_sub(1),
+    };
+    order.get(next).copied()
+}
+
 /// An item the grid shows: its name and the renditions of its icon or thumbnail.
 pub(super) struct Item {
     pub name: String,
@@ -96,16 +122,21 @@ pub(super) struct IconGrid {
     pub items: Rc<[Item]>,
     pub scroll: ScrollState,
     pub selection: Selection,
+    /// The rubber band being drawn, in the grid.
+    pub band: Option<Rect>,
     /// What sits under item `index`'s icon, given as `(index, selected)`: its [`name`], or the field it is renamed in.
     pub name: Box<dyn Fn(usize, bool) -> Element<Message>>,
 }
 
-/// The node state of the grid: what was typed to select, and when that search ends; the press that may become a drag.
+/// The node state of the grid: what was typed to select, and when that search ends; the press that may become a drag,
+/// the band being drawn and what the presses mean.
 #[derive(Default)]
 pub(super) struct TypeSelect {
     typed: String,
     typed_until: Option<Timestamp>,
     press: Option<Press>,
+    band: Option<Band>,
+    clicks: Clicks,
 }
 
 /// A press on an item, held: moving [`drag::START_DISTANCE`] drags the selection, a release without moving
@@ -181,18 +212,68 @@ impl IconGrid {
             .collect()
     }
 
-    /// The item whose icon or name is under a pointer at `position`, in window coordinates.
-    fn index_at(&self, position: Point, cx: &EventCx<'_, Message>) -> Option<usize> {
+    /// `position` in the window as a point of the layout, which is laid out left to right.
+    fn layout_point(&self, position: Point, cx: &EventCx<'_, Message>) -> Option<geom::Point> {
         let bounds = cx.bounds()?;
         let x = position.x - bounds.min_x();
         let x = match cx.env().direction {
             LayoutDirection::Ltr => x,
             LayoutDirection::Rtl => bounds.size.width - x,
         };
-        self.layout.hit(geom::Point {
+        Some(geom::Point {
             x,
             y: position.y - bounds.min_y(),
         })
+    }
+
+    /// The item whose icon or name is under a pointer at `position`, in window coordinates.
+    fn index_at(&self, position: Point, cx: &EventCx<'_, Message>) -> Option<usize> {
+        self.layout.hit(self.layout_point(position, cx)?)
+    }
+
+    /// Whether `position` in the window is on the name of item `index`.
+    fn on_name(&self, index: usize, position: Point, cx: &EventCx<'_, Message>) -> bool {
+        let (Some(at), Some(cell)) = (
+            self.layout_point(position, cx),
+            self.layout.cells.get(index),
+        ) else {
+            return false;
+        };
+        cell.label_frame.contains(at)
+    }
+
+    /// The part of the grid the scroll view shows, in the window.
+    fn shown(&self, cx: &EventCx<'_, Message>) -> Option<Rect> {
+        let bounds = cx.bounds()?;
+        let viewport = self.scroll.viewport;
+        Some(Rect::new(
+            bounds.min_x(),
+            bounds.min_y() + self.scroll.offset.y,
+            viewport.width.max(bounds.size.width),
+            viewport.height,
+        ))
+    }
+
+    /// Show `band` and select what it touches: the items whose icon or name it meets.
+    fn draw_band(&self, band: &Band, cx: &mut EventCx<'_, Message>) {
+        let Some(bounds) = cx.bounds() else {
+            return;
+        };
+        let rect = band.rect(bounds.origin);
+        let rtl = cx.env().direction == LayoutDirection::Rtl;
+        let x = if rtl {
+            bounds.size.width - rect.max_x()
+        } else {
+            rect.min_x()
+        };
+        let hits = self.layout.hits_in_rect(&geom::Rect {
+            x,
+            y: rect.min_y(),
+            w: rect.width(),
+            h: rect.height(),
+        });
+        self.select(band.select(&hits), cx);
+        cx.emit(Message::Window(self.window, WindowEvent::Band(Some(rect))));
     }
 
     fn pick(&self) -> Pick {
@@ -252,6 +333,14 @@ impl IconGrid {
                 let mut next = self.selection.clone();
                 next.select_all(self.count());
                 self.select(next, cx);
+                return Propagation::Stop;
+            }
+            TAB | LEFT_TAB if plain => {
+                let back = key.keysym == LEFT_TAB || mods.contains(Mods::SHIFT);
+                let names: Vec<&str> = self.items.iter().map(|i| i.name.as_str()).collect();
+                if let Some(to) = by_name(&names, self.cursor(), back) {
+                    self.move_to(to, false, cx);
+                }
                 return Propagation::Stop;
             }
             RETURN | KP_ENTER if plain => {
@@ -357,7 +446,8 @@ impl Widget<Message> for IconGrid {
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
             width: SizeSpec::Fill,
-            height: SizeSpec::Fixed(self.layout.content.h),
+            // as tall as the view at least, so a press under the last row starts a band
+            height: SizeSpec::Fixed(self.layout.content.h.max(self.scroll.viewport.height)),
             ..LayoutSpec::new(ContainerKind::Absolute)
         }
     }
@@ -366,6 +456,7 @@ impl Widget<Message> for IconGrid {
         let at = self.at();
         let pick = self.pick();
         let side = self.params.icon_box().w;
+        let band = self.band.map(band::view);
         self.built()
             .into_iter()
             .map(|index| {
@@ -407,6 +498,7 @@ impl Widget<Message> for IconGrid {
                 })
                 .key(Key::Int(index as u64))
             })
+            .chain(band)
             .collect()
     }
 
@@ -415,7 +507,7 @@ impl Widget<Message> for IconGrid {
     }
 
     fn update(&self, old: &Self, _: &mut TypeSelect) -> Change {
-        if self.layout != old.layout {
+        if self.layout != old.layout || self.scroll.viewport != old.scroll.viewport {
             Change::Layout
         } else {
             Change::None
@@ -446,8 +538,49 @@ impl Widget<Message> for IconGrid {
                 },
                 _,
             ) => {
+                if mods.contains(Mods::CTRL) {
+                    // Ctrl with a press is the secondary click
+                    state.clicks.cancel();
+                    let index = self.index_at(position, cx);
+                    if index.is_some() {
+                        cx.emit(Message::Window(
+                            self.window,
+                            WindowEvent::SecondaryPress(index),
+                        ));
+                    }
+                    cx.emit(Message::Window(
+                        self.window,
+                        WindowEvent::SecondaryPress(None),
+                    ));
+                    cx.emit(Message::Window(
+                        self.window,
+                        WindowEvent::ContextMenu(position),
+                    ));
+                    return Propagation::Stop;
+                }
                 let mut next = self.selection.clone();
                 let index = self.index_at(position, cx);
+                let Some(pressed) = index else {
+                    state.clicks.press_empty();
+                    if !mods.contains(Mods::SHIFT) && !mods.contains(Mods::PRIMARY) {
+                        next = Selection::new([], None, None);
+                    }
+                    self.select(next, cx);
+                    let origin = cx.bounds().map_or(Point::ZERO, |b| {
+                        Point::new(position.x - b.min_x(), position.y - b.min_y())
+                    });
+                    state.band = Some(Band::start(origin, position, mods, &self.selection));
+                    cx.capture_pointer();
+                    return Propagation::Stop;
+                };
+                let sole = self.selection.len() == 1 && self.selection.contains(pressed);
+                let on_name = self.on_name(pressed, position, cx);
+                let plain = !mods.contains(Mods::SHIFT) && !mods.contains(Mods::PRIMARY);
+                if state.clicks.press(pressed, on_name, sole, plain, cx.now()) {
+                    cx.emit(Message::Window(self.window, WindowEvent::Open(pressed)));
+                    return Propagation::Stop;
+                }
+                state.clicks.arm(cx);
                 // a plain press on a selected item keeps the selection for a drag; the release selects it alone
                 let keep = !mods.contains(Mods::SHIFT)
                     && !mods.contains(Mods::PRIMARY)
@@ -496,6 +629,15 @@ impl Widget<Message> for IconGrid {
                 Propagation::Continue
             }
             Event::Pointer(PointerEvent::Motion { position }, _) => {
+                if let Some(band) = state.band.as_mut() {
+                    band.pointer = position;
+                    let band = band.clone();
+                    self.draw_band(&band, cx);
+                    if let Some(shown) = self.shown(cx) {
+                        band::follow(self.window, self.scroll, position, shown, cx);
+                    }
+                    return Propagation::Stop;
+                }
                 let Some(press) = state.press.as_ref() else {
                     return Propagation::Continue;
                 };
@@ -504,6 +646,7 @@ impl Widget<Message> for IconGrid {
                     return Propagation::Stop;
                 }
                 let press = state.press.take().expect("held above");
+                state.clicks.cancel();
                 cx.release_pointer();
                 if let Some(grab) = self.grab(&press, cx) {
                     cx.emit(Message::Window(self.window, WindowEvent::DragOut(grab)));
@@ -518,10 +661,17 @@ impl Widget<Message> for IconGrid {
                 },
                 _,
             ) => {
+                if state.band.take().is_some() {
+                    cx.release_pointer();
+                    cx.emit(Message::Window(self.window, WindowEvent::Band(None)));
+                    return Propagation::Stop;
+                }
                 let Some(press) = state.press.take() else {
                     return Propagation::Continue;
                 };
                 cx.release_pointer();
+                // a rename that came due while the button was held starts now
+                state.clicks.arm(cx);
                 if press.collapse {
                     let mut next = self.selection.clone();
                     next.select_only(press.index);
@@ -531,9 +681,32 @@ impl Widget<Message> for IconGrid {
             }
             Event::Cancel => {
                 state.press = None;
+                state.clicks.cancel();
+                if state.band.take().is_some() {
+                    cx.emit(Message::Window(self.window, WindowEvent::Band(None)));
+                }
                 Propagation::Continue
             }
-            Event::Key(key, _) if key.pressed => self.key(state, &key, cx),
+            Event::Pointer(PointerEvent::Scroll { .. }, _) => {
+                state.clicks.cancel();
+                Propagation::Continue
+            }
+            Event::Wake(now) => {
+                let held = state.press.is_some();
+                state.clicks.wake(self.window, now, held, cx);
+                if let Some(band) = state.band.clone() {
+                    // the content moved under a still pointer: the band follows, and the scroll goes on
+                    self.draw_band(&band, cx);
+                    if let Some(shown) = self.shown(cx) {
+                        band::follow(self.window, self.scroll, band.pointer, shown, cx);
+                    }
+                }
+                Propagation::Continue
+            }
+            Event::Key(key, _) if key.pressed => {
+                state.clicks.cancel();
+                self.key(state, &key, cx)
+            }
             _ => Propagation::Continue,
         }
     }

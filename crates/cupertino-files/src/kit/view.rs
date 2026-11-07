@@ -6,10 +6,11 @@ use std::rc::Rc;
 use cupertino_menu_model::{ActionName, MenuBar};
 
 use cupertino_kit::controls::{
-    Column, ColumnWidth, ContextMenu, Dialog, DialogAction, DialogButton, DialogKind, Image,
-    ImageFit, ImageSource, Modal, NavigationStack, ScrollView, Scroller, SecureField, Selection,
-    Sidebar, SidebarAccessory, SidebarItem, SidebarSection, SortOrder, Spacer, SplitView, Stack,
-    TableView, Text, TextField, TextRole,
+    Column, ColumnWidth, ContextMenu, Dialog, DialogAction, DialogButton, DialogKind, Icon,
+    IconDirection, Image, ImageFit, ImageSource, Modal, NavigationStack, OutlineTable, Progress,
+    ScrollView, Scroller, SecureField, Selection, Sidebar, SidebarAccessory, SidebarItem,
+    SidebarSection, SortOrder, Spacer, SplitView, Stack, TableView, Text, TextField, TextRole,
+    TreeItem,
 };
 use cupertino_kit::core::{CommandRegistry, Key, Menus, Shortcut, WindowBackground};
 use cupertino_kit::geometry::{Insets, Size};
@@ -18,14 +19,20 @@ use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowSpec};
 use cupertino_kit::prelude::*;
 use cupertino_kit::text::SecureBuffer;
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
+use cupertino_kit::theme::ColorRole;
 
 use super::context::Secondary;
 use super::drops;
 use super::grid::{self, IconGrid, Item};
+use super::list::{Gestures, RowCell};
 use super::search::{no_results, SearchSlot};
-use super::{window_key, BrowserWindow, Event, Message, Session, Unlock, COLUMNS};
+use super::sidebar::{Backdrop, FocusWatch, Opaque};
+use super::toolbar::{PathSegment, ToolButton};
+use super::transfer::Transfer;
+use super::{window_key, BrowserWindow, Event, Message, Popup, Session, Unlock, COLUMNS};
 use crate::format::{human_size, relative_date};
 use crate::layout::icon::{self, Flow, FontMetrics, IconLayout, IconParams, SectionSpec};
+use crate::layout::list::RowSpec;
 use crate::menu_bar::MenuAction;
 use crate::metrics::{list_view, sidebar, window as window_metrics};
 use crate::places::{window_title, PlaceGroup};
@@ -42,6 +49,8 @@ const ROW_ICON: f64 = list_view::ICON_SIZE_DEFAULT as f64;
 const ROW_HEIGHT: f64 = ROW_ICON + list_view::ROW_PADDING;
 /// How far beyond the viewport items count as shown, in points: their thumbnails are made before they scroll in.
 const SHOWN_MARGIN: f64 = 200.0;
+/// The symbol of a folder of the path bar that is not a place of the sidebar.
+const FOLDER_SYMBOL: &str = "symbol.folder";
 /// The key of the field that edits an item's name in its row of window `id`; one per window, as focus goes to the
 /// first window holding the key.
 pub(super) fn name_field_key(id: u64) -> Key {
@@ -51,6 +60,11 @@ const ESCAPE: Keysym = Keysym(0xff1b);
 const DOWN: Keysym = Keysym(0xff54);
 /// The symbol of a mounted removable file system's eject button.
 const EJECT_SYMBOL: &str = "symbol.eject";
+/// The width of a running transfer's progress bar, and the room between the parts of its row.
+/// The side of the chevron between two folders of the path bar.
+const PATH_SEPARATOR: f64 = 8.0;
+const TRANSFER_PROGRESS_WIDTH: f64 = 160.0;
+const TRANSFER_SPACING: f64 = 8.0;
 const BAR_INSETS: Insets = Insets {
     top: 4.0,
     left: metrics::PATH_BAR_INSET,
@@ -79,7 +93,8 @@ pub(super) fn window(session: &Session, id: u64, win: &BrowserWindow) -> Window<
         },
         shortcuts: shortcuts(id, win, &bar, &disabled),
         on_close: Some(Message::Window(id, Event::Close)),
-        background: WindowBackground::Theme,
+        // the split view paints the sidebar material and the folder's background itself
+        background: WindowBackground::None,
         popup: None,
         menus: Some(Menus {
             bar,
@@ -87,17 +102,25 @@ pub(super) fn window(session: &Session, id: u64, win: &BrowserWindow) -> Window<
             on_activate: send(id, Event::Menu),
         }),
         content: Element::from(Modal {
-            content: Element::from(SplitView {
-                label: "Sidebar".into(),
-                axis: Axis::Horizontal,
-                leading: places(session, id, win),
-                trailing: content(session, id, win),
-                layout: win.split,
-                min_leading: metrics::SIDEBAR_MIN,
-                min_trailing: metrics::BROWSER_MIN.0,
-                on_change: Some(send(id, Event::Split)),
+            content: Element::new(Backdrop {
+                children: vec![Element::from(SplitView {
+                    label: "Sidebar".into(),
+                    axis: Axis::Horizontal,
+                    leading: Element::new(FocusWatch {
+                        on_focus: send(id, Event::SidebarFocus),
+                        children: vec![places(session, id, win)],
+                    }),
+                    trailing: Element::new(Opaque {
+                        children: vec![content(session, id, win)],
+                    }),
+                    layout: win.split,
+                    min_leading: metrics::SIDEBAR_MIN,
+                    min_trailing: metrics::BROWSER_MIN.0,
+                    on_change: Some(send(id, Event::Split)),
+                })
+                .key("browser")],
             })
-            .key("browser"),
+            .fill(),
             dialog: win.unlock.as_ref().map(|unlock| unlock_sheet(id, unlock)),
         }),
     }
@@ -295,8 +318,9 @@ fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> 
     })
     .key("navigation")
     .fill()];
+    children.extend(win.transfers.iter().map(|t| transfer_row(id, t)));
     if win.path_bar {
-        children.push(path_bar(session, win));
+        children.push(path_bar(session, id, win));
     }
     if win.status_bar {
         children.push(
@@ -357,8 +381,43 @@ fn toolbar(session: &Session, id: u64, win: &BrowserWindow) -> Vec<Element<Messa
         ],
     })
     .fill();
+    let popup = |popup: Popup, label: &str, symbol: &str, chevron, (w, h): (f64, f64)| {
+        Element::new(ToolButton {
+            label: label.into(),
+            symbol: symbol.into(),
+            chevron,
+            size: Size::new(w, h),
+            on_press: Message::Window(id, Event::Popup(popup)),
+        })
+        .key(popup_key(popup))
+    };
+    let view_symbol = match win.view {
+        ViewMode::List => "symbol.list",
+        _ => "symbol.grid",
+    };
     vec![
         title,
+        popup(
+            Popup::View,
+            "View",
+            view_symbol,
+            "symbol.chevron.up.down",
+            window_metrics::TOOLBAR_VIEW_POPUP,
+        ),
+        popup(
+            Popup::Tags,
+            "Tags",
+            "symbol.tag",
+            "symbol.chevron.down",
+            window_metrics::TOOLBAR_TAGS_POPUP,
+        ),
+        popup(
+            Popup::Action,
+            "Action",
+            "symbol.ellipsis.circle",
+            "symbol.chevron.down",
+            window_metrics::TOOLBAR_ACTION_POPUP,
+        ),
         Element::new(SearchSlot {
             window: id,
             animating: win.search_width.animating(),
@@ -403,12 +462,19 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         .iter()
         .map(|e| COLUMNS.map(|id| cell_text(e, id, now)))
         .collect();
-    let names: Vec<String> = browser.entries().iter().map(|e| e.name.clone()).collect();
+    let names: Rc<[String]> = browser.entries().iter().map(|e| e.name.clone()).collect();
+    let type_names = Rc::clone(&names);
     let icons: Vec<Vec<ImageSource>> = browser
         .entries()
         .iter()
         .map(|e| session.icons.icon(e, ROW_ICON))
         .collect();
+    let paths: Vec<std::path::PathBuf> = browser.entries().iter().map(|e| e.path.clone()).collect();
+    let items = tree_items(browser.outline());
+    let selected = selection(browser.selection());
+    let cell_selection = selected.clone();
+    let presses = Rc::clone(&win.list_presses);
+    let cell_presses = Rc::clone(&win.list_presses);
     let label = window_title(browser.dir(), &session.places);
     let rename = win.rename.as_ref().map(|r| {
         (
@@ -418,7 +484,7 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
             r.selection.clone(),
         )
     });
-    Element::from(TableView {
+    let table = TableView {
         label,
         columns,
         sort,
@@ -426,7 +492,7 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         count: rows.len(),
         row_height: ROW_HEIGHT,
         scroll: win.scroll,
-        selection: selection(browser.selection()),
+        selection: selected.clone(),
         multiple: true,
         cell: Box::new(move |row, column, selected| {
             if let Some((_, value, revision, selection)) =
@@ -463,18 +529,88 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
                 .fill(),
                 _ => cell,
             };
-            Element::new(Secondary {
-                message: Message::Window(id, Event::SecondaryPress(Some(row))),
+            Element::new(RowCell {
+                window: id,
+                index: row,
+                name: column == 0,
+                selection: cell_selection.clone(),
+                presses: Rc::clone(&cell_presses),
                 children: vec![cell],
             })
             .fill()
         }),
-        type_select: Some(Box::new(move |row| names[row].clone())),
+        type_select: Some(Box::new(move |row| type_names[row].clone())),
         on_scroll: send(id, Event::Scroll),
         on_select: Some(send(id, Event::Select)),
         on_activate: Some(send(id, Event::Open)),
+    };
+    let count = table.count;
+    let table = Element::from(OutlineTable {
+        table,
+        // the outline follows the entries; a row it does not know yet is a top-level one
+        item: Box::new(move |row| {
+            items.get(row).copied().unwrap_or(TreeItem {
+                level: 0,
+                expanded: None,
+                position: row,
+                siblings: count,
+            })
+        }),
+        key: Some(Box::new(move |row| row_key(id, &paths[row]))),
+        on_toggle: Some(send(id, Event::Toggle)),
     })
-    .key("items")
+    .key("items");
+    Element::new(Gestures {
+        window: id,
+        count,
+        row_height: ROW_HEIGHT,
+        scroll: win.scroll,
+        selection: selected,
+        names,
+        presses,
+        band: win.band,
+        children: vec![table],
+    })
+    .key("list")
+}
+
+/// The key of the list's row for the item at `path` in window `id`: its focus follows the item while folders open
+/// and close above it.
+pub(super) fn row_key(id: u64, path: &std::path::Path) -> Key {
+    Key::from(format!("row/{id}/{}", path.display()))
+}
+
+/// Each row of `outline` as the table reads it: its level, whether it is open, and its place among its siblings.
+fn tree_items(outline: &[RowSpec]) -> Vec<TreeItem> {
+    // the sibling groups met so far, by how many rows each holds, and those open along the current row's parents
+    let mut groups: Vec<usize> = Vec::new();
+    let mut open: Vec<(u32, usize)> = Vec::new();
+    let mut placed = Vec::with_capacity(outline.len());
+    for row in outline {
+        while open.last().is_some_and(|&(level, _)| level > row.level) {
+            open.pop();
+        }
+        let group = match open.last() {
+            Some(&(level, group)) if level == row.level => group,
+            _ => {
+                groups.push(0);
+                open.push((row.level, groups.len() - 1));
+                groups.len() - 1
+            }
+        };
+        placed.push((group, groups[group]));
+        groups[group] += 1;
+    }
+    outline
+        .iter()
+        .zip(placed)
+        .map(|(row, (group, position))| TreeItem {
+            level: row.level as usize,
+            expanded: row.expandable.then_some(row.expanded),
+            position,
+            siblings: groups[group],
+        })
+        .collect()
 }
 
 /// The icon grid's parameters at the icon view's default settings, and its layout as wide as the viewport.
@@ -571,6 +707,7 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         items,
         scroll: win.scroll,
         selection: selection(browser.selection()),
+        band: win.band,
         name: Box::new(
             move |index, selected| match rename.as_ref().filter(|r| r.0 == index) {
                 Some((_, value, revision, selection)) => {
@@ -613,19 +750,76 @@ fn name_field(
     .fill()
 }
 
-fn path_bar(session: &Session, win: &BrowserWindow) -> Element<Message> {
+/// The key of the toolbar's pop-up button `popup`, which its menu opens below.
+pub(super) fn popup_key(popup: Popup) -> Key {
+    Key::from(match popup {
+        Popup::View => "popup-view",
+        Popup::Tags => "popup-tags",
+        Popup::Action => "popup-action",
+    })
+}
+
+/// The folders from the top of the folder shown down to it, each its icon and name, which a click goes to.
+fn path_bar(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
     let chain = path_chain(win.browser.dir(), &session.places);
     let last = chain.len().saturating_sub(1);
     let children = chain
         .into_iter()
         .enumerate()
-        .flat_map(|(i, (_, name))| {
-            let segment = text(name, TextRole::Caption, i != last).key(Key::Int(i as u64));
-            let separator = (i != last).then(|| text("›".into(), TextRole::Caption, true));
+        .flat_map(|(i, (path, name))| {
+            let place = session.places.iter().find(|p| p.path == path);
+            let symbol = place.map_or(FOLDER_SYMBOL, |p| p.kind.symbol());
+            let segment = Element::new(PathSegment {
+                name,
+                symbol: symbol.into(),
+                accent: place.is_some_and(|p| p.kind == PlaceKind::Recents),
+                current: i == last,
+                on_press: Message::Window(id, Event::PathSegment(path)),
+            })
+            .key(Key::Int(i as u64));
+            let separator = (i != last).then(|| {
+                Element::new(Icon {
+                    name: "symbol.chevron.right".into(),
+                    size: PATH_SEPARATOR,
+                    direction: IconDirection::Semantic,
+                    label: None,
+                    tint: Some(ColorRole::SecondaryText),
+                })
+            });
             std::iter::once(segment).chain(separator)
         })
         .collect();
     bar(children).key("path-bar")
+}
+
+/// A running paste or move: what it does, how far it came and its Stop button.
+fn transfer_row(id: u64, transfer: &Transfer) -> Element<Message> {
+    let title = transfer.title();
+    let progress = Element::new(Progress {
+        label: title.clone(),
+        value: Some(transfer.fraction()),
+    })
+    .width(TRANSFER_PROGRESS_WIDTH);
+    Element::new(Stack {
+        axis: Axis::Horizontal,
+        padding: BAR_INSETS,
+        spacing: TRANSFER_SPACING,
+        align: Align::Center,
+        children: vec![
+            text(title, TextRole::Caption, true).fill(),
+            progress,
+            Element::new(Button {
+                label: "Stop".into(),
+                role: ButtonRole::Normal,
+                style: ButtonStyle::Bordered,
+                enabled: !transfer.cancel.is_cancelled(),
+                busy: false,
+                on_press: Some(Message::Window(id, Event::StopTransfer(transfer.id))),
+            })
+            .key("stop"),
+        ],
+    })
+    .key(Key::from(format!("transfer-{}", transfer.id)))
 }
 
 /// A handler that sends `event` of the window `id`.

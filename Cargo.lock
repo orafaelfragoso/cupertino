@@ -1161,6 +1161,7 @@ dependencies = [
  "cupertino-test-bus",
  "cupertino-theme",
  "cupertino-thumbnails",
+ "cupertino-ui-atspi",
  "cupertino-ui-test",
  "cupertino-ui-text",
  "libc",

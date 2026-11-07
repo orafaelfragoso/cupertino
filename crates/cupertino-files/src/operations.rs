@@ -2,11 +2,14 @@
 //! items into a folder. Nothing here overwrites: a clash renames the arriving item (drops) or fails (renames).
 
 use crate::rename::unique_name;
+use crate::trash;
 use std::fs;
-use std::io;
+use std::io::{self, Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// Name of a new folder, then with ` 2`, ` 3` … after it. (the design's default name; the numbering is
 /// approximate).
@@ -68,7 +71,7 @@ pub fn duplicate(paths: &[PathBuf]) -> Vec<io::Result<PathBuf>> {
             let parent = path
                 .parent()
                 .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
-            drop_one(path, parent, DropAction::Copy)
+            drop_into(std::slice::from_ref(path), parent, DropAction::Copy).remove(0)
         })
         .collect()
 }
@@ -138,12 +141,123 @@ struct Copied {
     meta: fs::Metadata,
 }
 
+/// How much of a file a copy reads and writes before it reports its progress and looks for a cancel.
+const COPY_CHUNK: usize = 1 << 20;
+
+/// What stops a transfer: set from any thread, it is seen before the next item and between two chunks of a file.
+#[derive(Clone, Debug, Default)]
+pub struct Cancel(Arc<AtomicBool>);
+
+impl Cancel {
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    fn check(&self) -> io::Result<()> {
+        match self.is_cancelled() {
+            true => Err(cancelled()),
+            false => Ok(()),
+        }
+    }
+}
+
+/// The error a stopped transfer gives: its own type, so an interrupted call of the file system is not taken for one.
+#[derive(Debug)]
+struct Stopped;
+
+impl std::fmt::Display for Stopped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the transfer was stopped")
+    }
+}
+
+impl std::error::Error for Stopped {}
+
+fn cancelled() -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, Stopped)
+}
+
+/// Whether `error` is a transfer's stop rather than a failure: it is not reported.
+pub fn is_cancelled(error: &io::Error) -> bool {
+    error.get_ref().is_some_and(|e| e.is::<Stopped>())
+}
+
+/// How far a transfer has come.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Progress {
+    /// Bytes of the items' files, links and folders done, and in all.
+    pub bytes: u64,
+    pub total_bytes: u64,
+    /// Items (sources) done, and in all.
+    pub items: usize,
+    pub total_items: usize,
+    /// The name of the item being transferred.
+    pub current: Option<String>,
+}
+
+impl Progress {
+    /// How much is done, from 0 to 1: by bytes, or by items when the items hold none.
+    pub fn fraction(&self) -> f64 {
+        let (done, total) = match self.total_bytes {
+            0 => (self.items as f64, self.total_items as f64),
+            total => (self.bytes as f64, total as f64),
+        };
+        if total > 0.0 {
+            (done / total).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+}
+
+/// The bytes a transfer of `path` counts: a file's length, and one for a folder or a link, so a tree of empty items
+/// still moves the progress. Read without following links; a stop ends the count, so a large tree does not hold it.
+fn weight(path: &Path, cancel: &Cancel) -> u64 {
+    if cancel.is_cancelled() {
+        return 0;
+    }
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if meta.is_dir() {
+        let children = fs::read_dir(path).into_iter().flatten().flatten();
+        1 + children.map(|c| weight(&c.path(), cancel)).sum::<u64>()
+    } else if meta.is_file() {
+        meta.len().max(1)
+    } else {
+        1
+    }
+}
+
+/// A copy's progress and its stop.
+struct Copying<'a> {
+    cancel: &'a Cancel,
+    /// Takes the bytes done since the last call.
+    advance: &'a mut dyn FnMut(u64),
+}
+
 /// Copy `from` to `to`, which must not exist, without following links. Every item is made exclusively, so nothing
-/// that exists is written over; on a failure what was made of `to` is removed again, so a partial copy is never left
-/// to look complete. The items copied, a folder before what it holds.
+/// that exists is written over; on a failure or a stop what was made of `to` is removed again, so a partial copy is
+/// never left to look complete. The items copied, a folder before what it holds.
+#[cfg(test)]
 fn copy_new(from: &Path, to: &Path) -> io::Result<Vec<Copied>> {
+    copy_new_with(
+        from,
+        to,
+        &mut Copying {
+            cancel: &Cancel::default(),
+            advance: &mut |_| {},
+        },
+    )
+}
+
+fn copy_new_with(from: &Path, to: &Path, copying: &mut Copying<'_>) -> io::Result<Vec<Copied>> {
     let mut copied = Vec::new();
-    match copy_tree(from, to, &mut copied) {
+    match copy_tree(from, to, &mut copied, copying) {
         Ok(()) => Ok(copied),
         Err(e) => {
             // the first item copied is `to` itself: made by this copy, so it is this copy's to remove
@@ -155,7 +269,13 @@ fn copy_new(from: &Path, to: &Path) -> io::Result<Vec<Copied>> {
     }
 }
 
-fn copy_tree(from: &Path, to: &Path, copied: &mut Vec<Copied>) -> io::Result<()> {
+fn copy_tree(
+    from: &Path,
+    to: &Path,
+    copied: &mut Vec<Copied>,
+    copying: &mut Copying<'_>,
+) -> io::Result<()> {
+    copying.cancel.check()?;
     let meta = fs::symlink_metadata(from)?;
     let kind = meta.file_type();
     if kind.is_symlink() {
@@ -164,6 +284,7 @@ fn copy_tree(from: &Path, to: &Path, copied: &mut Vec<Copied>) -> io::Result<()>
             path: from.to_path_buf(),
             meta,
         });
+        (copying.advance)(1);
     } else if kind.is_dir() {
         let permissions = meta.permissions();
         fs::create_dir(to)?;
@@ -171,9 +292,10 @@ fn copy_tree(from: &Path, to: &Path, copied: &mut Vec<Copied>) -> io::Result<()>
             path: from.to_path_buf(),
             meta,
         });
+        (copying.advance)(1);
         for child in fs::read_dir(from)? {
             let child = child?;
-            copy_tree(&child.path(), &to.join(child.file_name()), copied)?;
+            copy_tree(&child.path(), &to.join(child.file_name()), copied, copying)?;
         }
         fs::set_permissions(to, permissions)?;
     } else if kind.is_file() {
@@ -186,7 +308,21 @@ fn copy_tree(from: &Path, to: &Path, copied: &mut Vec<Copied>) -> io::Result<()>
             path: from.to_path_buf(),
             meta: meta.clone(),
         });
-        io::copy(&mut source, &mut target)?;
+        let mut buffer = vec![0; COPY_CHUNK.min(meta.len() as usize).max(1)];
+        loop {
+            let read = match source.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            };
+            target.write_all(&buffer[..read])?;
+            (copying.advance)(read as u64);
+            copying.cancel.check()?;
+        }
+        if meta.len() == 0 {
+            (copying.advance)(1);
+        }
         target.set_permissions(meta.permissions())?;
     } else {
         return Err(io::Error::new(
@@ -257,15 +393,63 @@ fn inside(dest: &Path, source: &Path) -> bool {
 
 /// Move or copy each of `sources` into the folder `dest`, giving an arriving item a free name (`name copy`) when
 /// `dest` has one with its name. One result per source, in order: the new path. A move into the item's own folder
-/// does nothing and keeps its path; a folder cannot go into itself.
+/// does nothing and keeps its path; a folder cannot go into itself. An item moved out of a trash is restored: its
+/// `.trashinfo` goes with it.
 pub fn drop_into(sources: &[PathBuf], dest: &Path, action: DropAction) -> Vec<io::Result<PathBuf>> {
-    sources
-        .iter()
-        .map(|source| drop_one(source, dest, action))
-        .collect()
+    transfer(sources, dest, action, &Cancel::default(), &mut |_| {})
 }
 
-fn drop_one(source: &Path, dest: &Path, action: DropAction) -> io::Result<PathBuf> {
+/// [`drop_into`] that reports its [`Progress`] to `progress` as it goes and stops at `cancel`: the item being copied
+/// is removed again and the items after it are left where they are, each with an error [`is_cancelled`] tells.
+pub fn transfer(
+    sources: &[PathBuf],
+    dest: &Path,
+    action: DropAction,
+    cancel: &Cancel,
+    progress: &mut dyn FnMut(&Progress),
+) -> Vec<io::Result<PathBuf>> {
+    let weights: Vec<u64> = sources.iter().map(|s| weight(s, cancel)).collect();
+    let mut done = Progress {
+        total_bytes: weights.iter().sum(),
+        total_items: sources.len(),
+        ..Progress::default()
+    };
+    let mut results = Vec::with_capacity(sources.len());
+    for (source, weight) in sources.iter().zip(weights) {
+        if cancel.is_cancelled() {
+            results.push(Err(cancelled()));
+            continue;
+        }
+        let before = done.bytes;
+        done.current = source.file_name().map(|n| n.to_string_lossy().into_owned());
+        progress(&done);
+        let result = {
+            let mut advance = |bytes: u64| {
+                // a file that grew while it was copied counts no further than it weighed
+                done.bytes = (done.bytes + bytes).min(before + weight);
+                progress(&done);
+            };
+            let mut copying = Copying {
+                cancel,
+                advance: &mut advance,
+            };
+            drop_one(source, dest, action, &mut copying)
+        };
+        done.bytes = before + weight;
+        done.items += 1;
+        done.current = None;
+        progress(&done);
+        results.push(result);
+    }
+    results
+}
+
+fn drop_one(
+    source: &Path,
+    dest: &Path,
+    action: DropAction,
+    copying: &mut Copying<'_>,
+) -> io::Result<PathBuf> {
     if inside(dest, source) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -286,16 +470,23 @@ fn drop_one(source: &Path, dest: &Path, action: DropAction) -> io::Result<PathBu
         dest.join(candidate).symlink_metadata().is_ok()
     }));
     match action {
-        DropAction::Move => match rename_no_replace(source, &target) {
-            // across volumes no rename reaches: copy, then remove the originals once the whole copy is made
-            Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
-                let copied = copy_new(source, &target)?;
-                remove_copied(&copied)?;
+        DropAction::Move => {
+            // read before the item leaves the trash, which its record names
+            let trashed = trash::trashed_item(source);
+            match rename_no_replace(source, &target) {
+                // across volumes no rename reaches: copy, then remove the originals once the whole copy is made
+                Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
+                    let copied = copy_new_with(source, &target, copying)?;
+                    remove_copied(&copied)?;
+                }
+                moved => moved?,
             }
-            moved => moved?,
-        },
+            if let Some(item) = trashed {
+                trash::forget(&item);
+            }
+        }
         DropAction::Copy => {
-            copy_new(source, &target)?;
+            copy_new_with(source, &target, copying)?;
         }
     }
     Ok(target)
@@ -503,6 +694,164 @@ mod tests {
             fs::read_link(copy.join("link")).unwrap(),
             d.path().join("src2")
         );
+    }
+
+    #[test]
+    fn a_transfer_reports_its_progress_up_to_every_byte_and_item() {
+        let d = tempfile::tempdir().unwrap();
+        let (src, dest) = (d.path().join("src"), d.path().join("dest"));
+        fs::create_dir_all(src.join("tree")).unwrap();
+        fs::create_dir(&dest).unwrap();
+        fs::write(src.join("tree/big"), vec![7u8; 3 * COPY_CHUNK + 5]).unwrap();
+        fs::write(src.join("small"), "abc").unwrap();
+        let mut seen = Vec::new();
+        let placed = transfer(
+            &[src.join("tree"), src.join("small")],
+            &dest,
+            DropAction::Copy,
+            &Cancel::default(),
+            &mut |p| seen.push(p.clone()),
+        );
+        assert!(placed.iter().all(Result::is_ok), "{placed:?}");
+        let last = seen.last().unwrap();
+        // the folder counts one, its file its length, the small file its three bytes
+        let total = 1 + 3 * COPY_CHUNK as u64 + 5 + 3;
+        assert_eq!((last.bytes, last.total_bytes), (total, total));
+        assert_eq!((last.items, last.total_items), (2, 2));
+        assert_eq!(last.fraction(), 1.0);
+        assert!(
+            seen.windows(2).all(|w| w[0].bytes <= w[1].bytes),
+            "the progress never goes back"
+        );
+        assert!(
+            seen.iter()
+                .any(|p| p.bytes > 1 && p.bytes < total && p.items == 0),
+            "a large file reports part of its copy"
+        );
+        assert_eq!(
+            seen.iter().find(|p| p.items == 1).unwrap().current,
+            None,
+            "between items nothing is current"
+        );
+    }
+
+    #[test]
+    fn a_stopped_copy_leaves_nothing_half_written_and_the_rest_where_it_was() {
+        let d = tempfile::tempdir().unwrap();
+        let (src, dest) = (d.path().join("src"), d.path().join("dest"));
+        fs::create_dir_all(src.join("tree/inner")).unwrap();
+        fs::create_dir(&dest).unwrap();
+        fs::write(src.join("tree/inner/big"), vec![1u8; 4 * COPY_CHUNK]).unwrap();
+        fs::write(src.join("after.txt"), "after").unwrap();
+        for action in [DropAction::Copy, DropAction::Move] {
+            let cancel = Cancel::default();
+            let stop = cancel.clone();
+            let placed = transfer(
+                &[src.join("tree"), src.join("after.txt")],
+                &dest,
+                action,
+                &cancel,
+                // stop once the big file is half copied
+                &mut |p| {
+                    if p.bytes > 2 * COPY_CHUNK as u64 {
+                        stop.cancel()
+                    }
+                },
+            );
+            match action {
+                // a move on one volume is a rename: it is done before any stop is seen
+                DropAction::Move => assert!(placed[0].is_ok(), "{placed:?}"),
+                DropAction::Copy => {
+                    assert!(is_cancelled(placed[0].as_ref().unwrap_err()), "{placed:?}");
+                    assert_eq!(fs::read_dir(&dest).unwrap().count(), 0, "no partial copy");
+                }
+            }
+            assert!(is_cancelled(placed[1].as_ref().unwrap_err()));
+            assert_eq!(fs::read_to_string(src.join("after.txt")).unwrap(), "after");
+            if action == DropAction::Copy {
+                assert_eq!(
+                    fs::read(src.join("tree/inner/big")).unwrap().len(),
+                    4 * COPY_CHUNK
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_stop_ends_the_count_of_what_a_transfer_weighs() {
+        let d = tempfile::tempdir().unwrap();
+        let tree = d.path().join("tree");
+        fs::create_dir_all(tree.join("inner")).unwrap();
+        fs::write(tree.join("inner/file"), "abcd").unwrap();
+        let cancel = Cancel::default();
+        // the two folders count one each, the file its four bytes
+        assert_eq!(weight(&tree, &cancel), 6);
+        cancel.cancel();
+        assert_eq!(
+            weight(&tree, &cancel),
+            0,
+            "a stopped transfer reads no further"
+        );
+        let placed = transfer(
+            std::slice::from_ref(&tree),
+            d.path(),
+            DropAction::Copy,
+            &cancel,
+            &mut |_| {},
+        );
+        assert!(is_cancelled(placed[0].as_ref().unwrap_err()));
+    }
+
+    #[test]
+    fn only_a_stop_is_taken_for_one() {
+        assert!(is_cancelled(&cancelled()));
+        // an interrupted call of the file system is a failure the window reports
+        assert!(!is_cancelled(&io::Error::from(io::ErrorKind::Interrupted)));
+        assert!(!is_cancelled(&io::Error::new(
+            io::ErrorKind::Interrupted,
+            "interrupted"
+        )));
+    }
+
+    #[test]
+    fn an_item_moved_out_of_the_trash_takes_its_record_and_a_copy_leaves_it() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let trash = crate::trash::Trash::with_home(d.path().join("Trash"));
+        for name in ["kept.txt", "moved.txt"] {
+            fs::write(home.join(name), name).unwrap();
+            trash.trash(&home.join(name)).unwrap();
+        }
+        fs::create_dir(home.join("dir")).unwrap();
+        trash.trash(&home.join("dir")).unwrap();
+        let files = d.path().join("Trash/files");
+        let dest = d.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+
+        let copied = drop_into(&[files.join("kept.txt")], &dest, DropAction::Copy);
+        assert!(copied[0].is_ok());
+        let moved = drop_into(
+            &[files.join("moved.txt"), files.join("dir")],
+            &dest,
+            DropAction::Move,
+        );
+        assert!(moved.iter().all(Result::is_ok), "{moved:?}");
+
+        let listed: Vec<String> = trash.list().unwrap().into_iter().map(|i| i.name).collect();
+        assert_eq!(
+            listed,
+            ["kept.txt"],
+            "a copy leaves the item trashed, a move restores it"
+        );
+        let info: Vec<_> = fs::read_dir(d.path().join("Trash/info")).unwrap().collect();
+        assert_eq!(info.len(), 1, "no record is left without its item");
+        let sizes = fs::read_to_string(d.path().join("Trash/directorysizes")).unwrap_or_default();
+        assert!(
+            !sizes.contains(" dir"),
+            "the folder's size line went with it: {sizes:?}"
+        );
+        assert!(dest.join("dir").is_dir() && dest.join("moved.txt").is_file());
     }
 
     #[test]

@@ -40,7 +40,7 @@ fn enabled(rows: &[(String, bool)], label: &str) -> bool {
 
 /// A point of the list below its rows.
 fn empty_space(run: &Run) -> Point {
-    let table = run.bounds(Role::Table, "Documents");
+    let table = run.bounds(Role::Table, &run.title());
     Point::new(table.center().x, table.max_y() - 20.0)
 }
 
@@ -129,4 +129,83 @@ fn a_secondary_click_on_an_icon_selects_it() {
     let rows = run.menu_rows();
     assert!(enabled(&rows, "Open"));
     assert!(labels(&rows).contains(&"Move to Trash"));
+}
+
+/// Into the folder `name` of the list.
+fn enter(run: &mut Run, name: &str) {
+    run.click_row(name);
+    run.key_with(0xff54, None, Mods::PRIMARY);
+    run.wait_until(|run| run.title() == name);
+}
+
+/// The rows of the folder menu, opened on the list's empty space.
+fn folder_menu(run: &mut Run) -> Vec<(String, bool)> {
+    let at = empty_space(run);
+    run.press_at(at, MouseButton::Right);
+    run.menu_rows()
+}
+
+#[test]
+fn copy_then_paste_item_copies_into_another_folder_under_a_free_name() {
+    let mut run = run();
+    let documents = run.home().join("Documents");
+    assert!(
+        !enabled(&folder_menu(&mut run), "Paste Item"),
+        "nothing copied yet"
+    );
+    run.close_menu();
+    assert!(run.context_menu().is_none());
+    run.right_click_row("a.txt");
+    run.choose("Copy “a.txt”");
+
+    enter(&mut run, "Notes");
+    assert!(enabled(&folder_menu(&mut run), "Paste Item"));
+    run.choose("Paste Item");
+    run.wait_until(|run| run.rows() == ["a.txt"]);
+    assert_eq!(run.selected_rows(), ["a.txt"], "what arrived is selected");
+    assert!(
+        documents.join("a.txt").is_file(),
+        "a copy leaves the original"
+    );
+
+    // again: the folder has the name, so the copy takes a free one
+    folder_menu(&mut run);
+    run.choose("Paste Item");
+    run.wait_until(|run| run.rows().len() == 2);
+    let names = std::fs::read_dir(documents.join("Notes")).unwrap().count();
+    assert_eq!(names, 2);
+}
+
+#[test]
+fn move_item_here_moves_and_empties_the_pasteboard() {
+    let mut run = run();
+    let documents = run.home().join("Documents");
+    run.click_row("b.txt");
+    run.menu("copy");
+    enter(&mut run, "Notes");
+    let rows = folder_menu(&mut run);
+    assert!(enabled(&rows, "Move Item Here"), "{rows:?}");
+    run.choose("Move Item Here");
+    run.wait_until(|run| run.rows() == ["b.txt"]);
+    assert!(!documents.join("b.txt").exists());
+    assert!(run.disabled().contains(&common::action("paste")));
+}
+
+#[test]
+fn a_folder_is_not_pasted_into_itself() {
+    let mut run = run();
+    let notes = run.home().join("Documents/Notes");
+    run.click_row("Notes");
+    // the window's shortcuts: Primary+C, then Primary+V inside the folder
+    run.key_with(u32::from('c'), Some('c'), Mods::PRIMARY);
+    enter(&mut run, "Notes");
+    run.key_with(u32::from('v'), Some('v'), Mods::PRIMARY);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    run.settle();
+    assert_eq!(
+        std::fs::read_dir(&notes).unwrap().count(),
+        0,
+        "nothing made"
+    );
+    assert!(run.rows().is_empty());
 }

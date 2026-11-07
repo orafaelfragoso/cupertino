@@ -56,6 +56,12 @@ pub enum Command {
     NewFolderWithSelection,
     /// Copy the selected items next to themselves.
     Duplicate,
+    /// Put the selected items on the pasteboard.
+    Copy,
+    /// Copy the items on the pasteboard into the folder.
+    Paste,
+    /// Move the items on the pasteboard into the folder.
+    MoveHere,
     /// Make a link to the selected item next to it.
     MakeAlias,
     /// Order the folder by this key, ascending or not.

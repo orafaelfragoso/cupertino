@@ -45,6 +45,8 @@ pub struct Background {
     pub view: ViewMode,
     pub sort: SortSpec,
     pub in_trash: bool,
+    /// How many items Copy put on the window's pasteboard.
+    pub pasteboard: usize,
 }
 
 /// A title that names the selection: `one` with `{}` for the name, `many` with `{}` for the count.
@@ -193,7 +195,12 @@ pub fn item_menu(subject: &Subject, apps: &[AppChoice]) -> Vec<MenuItem> {
     rows.push(MenuItem::separator());
     // descriptors 59 and 60: Copy, Copy as Pathname on Alt; 63: Share
     rows.push(
-        MenuItem::unavailable(&named(subject, "Copy “{}”", "Copy {} Items")).with_alternate(
+        MenuItem::command(
+            &named(subject, "Copy “{}”", "Copy {} Items"),
+            Command::Copy,
+            true,
+        )
+        .with_alternate(
             Mods::ALT,
             MenuItem::unavailable(&named(
                 subject,
@@ -279,15 +286,25 @@ fn group_menu() -> Vec<MenuItem> {
     items
 }
 
+/// Paste Item, with Move Item Here on Alt: they copy or move what Copy put on the pasteboard into the folder, when
+/// `can` (something was copied and the folder takes items).
+fn paste_row(can: bool) -> MenuItem {
+    let row = |label: &str, command: Command| match can {
+        true => MenuItem::command(label, command, true),
+        false => MenuItem::unavailable(label),
+    };
+    row("Paste Item", Command::Paste)
+        .with_alternate(Mods::ALT, row("Move Item Here", Command::MoveHere))
+        .with_alternate(Mods::SHIFT_ALT, MenuItem::unavailable("Paste Item Exactly"))
+}
+
 /// The menu of the empty space of a folder.
 pub fn background_menu(ctx: &Background) -> Vec<MenuItem> {
     let mut rows = vec![
         // descriptor 1
         MenuItem::command("New Folder", Command::NewFolder, !ctx.in_trash),
         // descriptors 17 to 19: Paste Item, Move Item Here on Alt, Paste Item Exactly on Shift + Alt
-        MenuItem::unavailable("Paste Item")
-            .with_alternate(Mods::ALT, MenuItem::unavailable("Move Item Here"))
-            .with_alternate(Mods::SHIFT_ALT, MenuItem::unavailable("Paste Item Exactly")),
+        paste_row(ctx.pasteboard > 0 && !ctx.in_trash),
         MenuItem::separator(),
     ];
     // descriptor 27
@@ -423,7 +440,6 @@ mod tests {
             "Get Info",
             "Compress 2 Items",
             "Quick Preview 2 Items",
-            "Copy 2 Items",
             "Share",
             "Quick Actions",
         ] {
@@ -515,6 +531,7 @@ mod tests {
             view: ViewMode::Icons,
             sort: SortSpec::default(),
             in_trash: false,
+            pasteboard: 0,
         };
         let items = background_menu(&ctx);
         assert_eq!(
@@ -572,9 +589,12 @@ mod tests {
             view: ViewMode::List,
             sort: SortSpec::default(),
             in_trash: true,
+            pasteboard: 2,
         };
         let items = background_menu(&ctx);
         assert!(!items[0].enabled, "nothing is created inside the trash");
+        let paste = items.iter().find(|i| i.label == "Paste Item").unwrap();
+        assert!(!paste.enabled, "nothing is pasted into the trash");
         assert!(labels(&items).contains(&"Empty Trash"));
         let paste = items.iter().find(|i| i.label == "Paste Item").unwrap();
         let alts: Vec<(Mods, &str)> = paste

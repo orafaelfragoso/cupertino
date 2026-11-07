@@ -26,6 +26,9 @@ pub enum MenuAction {
     MakeAlias,
     ShowOriginal,
     Eject,
+    Copy,
+    Paste,
+    MoveHere,
     SelectAll,
     View(ViewMode),
     SortBy(SortKey, bool),
@@ -58,6 +61,8 @@ pub struct MenuState {
     pub eject: Option<String>,
     /// The folder shown is on read-only media: nothing can be made, moved or renamed in it.
     pub read_only: bool,
+    /// Copy put items on the pasteboard.
+    pub can_paste: bool,
 }
 
 /// The sort choices the window has data for, with their action names.
@@ -98,6 +103,9 @@ impl MenuAction {
             MakeAlias => (Scope::Win, "make-alias"),
             ShowOriginal => (Scope::Win, "show-original"),
             Eject => (Scope::Win, "eject"),
+            Copy => (Scope::Win, "copy"),
+            Paste => (Scope::Win, "paste"),
+            MoveHere => (Scope::Win, "move-here"),
             SelectAll => (Scope::Win, "select-all"),
             View(ViewMode::Icons) => (Scope::Win, "view-icons"),
             View(ViewMode::List) => (Scope::Win, "view-list"),
@@ -129,6 +137,9 @@ impl MenuAction {
             MakeAlias,
             ShowOriginal,
             Eject,
+            Copy,
+            Paste,
+            MoveHere,
             SelectAll,
             View(ViewMode::Icons),
             View(ViewMode::List),
@@ -217,7 +228,14 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
     );
     let edit = Menu::new(
         "Edit",
-        vec![vec![item("Select All", SelectAll, chord(&[Primary], "a"))]],
+        vec![
+            vec![
+                item("Copy", Copy, chord(&[Primary], "c")),
+                item("Paste Item", Paste, chord(&[Primary], "v")),
+                item("Move Item Here", MoveHere, chord(&[Alt, Primary], "v")),
+            ],
+            vec![item("Select All", SelectAll, chord(&[Primary], "a"))],
+        ],
     );
     let sort_by = Menu::new(
         "Sort By",
@@ -339,6 +357,9 @@ pub fn enabled(state: &MenuState) -> Vec<(MenuAction, bool)> {
         (Duplicate, selected && !state.in_trash && writable),
         (MakeAlias, selected && !state.in_trash && writable),
         (ShowOriginal, state.single_link),
+        (Copy, selected),
+        (Paste, state.can_paste && !state.in_trash && writable),
+        (MoveHere, state.can_paste && !state.in_trash && writable),
         (Back, state.can_go_back),
         (Forward, state.can_go_forward),
         (EnclosingFolder, state.has_parent),
@@ -397,6 +418,10 @@ mod tests {
                 "  Make Alias win.make-alias",
                 "  Show Original win.show-original",
                 "Edit:",
+                "  Copy win.copy",
+                "  Paste Item win.paste",
+                "  Move Item Here win.move-here",
+                "  ---",
                 "  Select All win.select-all",
                 "View:",
                 "  as Icons win.view-icons",

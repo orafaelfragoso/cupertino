@@ -3,8 +3,9 @@
 //! key and Shift+F10 open the selection's menu, or the folder's without a selection. What each menu offers is
 //! [`crate::menu_spec`]; this module turns its rows into Kit's.
 //!
-//! * Kit's menus do not swap rows while modifiers are held, so a row's alternates are not offered; their actions are
-//!   in the menu bar (approximate).
+//! * Kit's menus do not swap rows while modifiers are held, so a row's alternates that can act are rows of their own
+//!   right after it ("Move Item Here" after "Paste Item", "Open in New Window" after "Open"); the others are left
+//!   out (approximate).
 //! * The row of tag colours is a Tags submenu of the seven colours, checked when every selected item has the colour;
 //!   the row of view modes is four rows, the current one checked (approximate).
 
@@ -128,6 +129,12 @@ pub(super) fn kit_items(id: u64, items: &[MenuItem]) -> Vec<KitItem<Message>> {
                 }
             }
         }
+        for (_, alternate) in &item.alternates {
+            // a submenu alternate ("Always Open With") would only repeat its row's choices here
+            if alternate.is_selectable() && matches!(alternate.kind, ItemKind::Command(_)) {
+                out.extend(kit_items(id, std::slice::from_ref(alternate)));
+            }
+        }
     }
     out
 }
@@ -235,6 +242,7 @@ mod tests {
             view: ViewMode::List,
             sort: SortSpec::default(),
             in_trash: false,
+            pasteboard: 0,
         });
         let rows = labels(&kit_items(0, &menu));
         assert!(rows.contains(&"New Folder".to_owned()), "{rows:?}");

@@ -34,7 +34,7 @@ use crate::menu_spec::{self, Background, Subject};
 use crate::name_edit::NameEdit;
 use crate::notice::{self, Action, Notices};
 use crate::open::{command_with, default_app_id, open_command, open_with, OpenError};
-use crate::operations;
+use crate::operations::{self, DropAction};
 use crate::places::{removable_holding, Place};
 use crate::search_field::{self, SearchWidth};
 use crate::settings::ColumnId;
@@ -182,6 +182,8 @@ struct Session {
     trash: Trash,
     /// How a new window shows its folder.
     view: ViewMode,
+    /// What Copy took last, for Paste Item and Move Item Here in any window.
+    pasteboard: Vec<PathBuf>,
 }
 
 /// One browser window.
@@ -362,6 +364,7 @@ impl Application for Files {
                 }),
                 trash: start.trash,
                 view: start.view,
+                pasteboard: Vec::new(),
             },
         };
         let mut commands = vec![model.add_window(start.browser, start.woken)];
@@ -594,8 +597,24 @@ impl Model {
         let Some(window) = self.windows.get_mut(&id) else {
             return Vec::new();
         };
+        match action {
+            MenuAction::Copy => {
+                self.session.pasteboard = window.selected_paths();
+                return Vec::new();
+            }
+            MenuAction::Paste | MenuAction::MoveHere => {
+                let moving = action == MenuAction::MoveHere;
+                window.paste(&self.session, moving);
+                if moving {
+                    self.session.pasteboard.clear();
+                }
+                return Vec::new();
+            }
+            _ => {}
+        }
         let session = &self.session;
         match action {
+            MenuAction::Copy | MenuAction::Paste | MenuAction::MoveHere => {}
             MenuAction::NewWindow => {
                 let folder = window.browser.dir().to_path_buf();
                 return self.open_windows(vec![folder]);
@@ -691,6 +710,9 @@ impl Model {
             MenuCommand::MakeAlias => MenuAction::MakeAlias,
             MenuCommand::SortBy(key, ascending) => MenuAction::SortBy(key, ascending),
             MenuCommand::SetView(view) => MenuAction::View(view),
+            MenuCommand::Copy => MenuAction::Copy,
+            MenuCommand::Paste => MenuAction::Paste,
+            MenuCommand::MoveHere => MenuAction::MoveHere,
             MenuCommand::OpenWith(app) => {
                 let Some(window) = self.windows.get(&id) else {
                     return Vec::new();
@@ -1057,6 +1079,30 @@ impl BrowserWindow {
         }
     }
 
+    /// Copy the items on the pasteboard into the folder, or move them when `moving`; a name the folder has is given
+    /// a free copy name. The failures are reported together; the last item that arrives is selected.
+    fn paste(&mut self, session: &Session, moving: bool) {
+        let action = match moving {
+            true => DropAction::Move,
+            false => DropAction::Copy,
+        };
+        let sources = &session.pasteboard;
+        let placed = operations::drop_into(sources, self.browser.dir(), action);
+        let arrived = placed
+            .iter()
+            .filter_map(|p| p.as_ref().ok())
+            .last()
+            .cloned();
+        let notice = match moving {
+            true => Action::Drop(DropAction::Move),
+            false => Action::Paste,
+        };
+        session.failed_some(notice, sources.iter().zip(placed));
+        if let Some(path) = arrived {
+            self.browser.select_when_appears(path);
+        }
+    }
+
     /// Move the selected items to the trash; the listing drops them when the watcher reports it.
     fn trash_selection(&self, session: &Session) {
         let paths = self.selected_paths();
@@ -1134,6 +1180,7 @@ impl BrowserWindow {
                 view: self.view,
                 sort: self.browser.sort(),
                 in_trash,
+                pasteboard: session.pasteboard.len(),
             };
             let label = crate::places::window_title(self.browser.dir(), &session.places);
             (label, menu_spec::background_menu(&background))
@@ -1349,6 +1396,7 @@ impl BrowserWindow {
                 .media
                 .holding(self.browser.dir())
                 .is_some_and(|d| d.read_only),
+            can_paste: !session.pasteboard.is_empty(),
         }
     }
 

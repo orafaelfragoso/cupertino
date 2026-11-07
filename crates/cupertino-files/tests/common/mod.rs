@@ -334,6 +334,28 @@ impl Run {
         self.settle();
     }
 
+    /// Escape in the open context menu.
+    pub fn close_menu(&mut self) {
+        let menu = self.context_menu().expect("a context menu is open");
+        self.show(menu);
+        let window = self.window;
+        self.window = menu;
+        // the press closes the popup, so no release reaches it
+        self.send(WindowEvent::Key(
+            KeyEvent {
+                code: 0,
+                keysym: Keysym(0xff1b),
+                text: None,
+                pressed: true,
+                repeat: false,
+                mods: Mods::NONE,
+            },
+            Timestamp(0),
+        ));
+        self.window = window;
+        self.settle();
+    }
+
     /// The compositor shows the popup `popup`.
     fn show(&mut self, popup: WindowId) {
         self.driver

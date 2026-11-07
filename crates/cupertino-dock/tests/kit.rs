@@ -86,6 +86,8 @@ struct Record {
     spawned: Vec<(Vec<String>, Option<String>)>,
     pins: Vec<Vec<String>>,
     shell: Vec<String>,
+    /// What the next read of `dock.conf` finds.
+    conf: Option<DockSettings>,
 }
 
 struct FakeHost(Rc<RefCell<Record>>);
@@ -150,7 +152,7 @@ impl Host for FakeHost {
         self.0.borrow_mut().pins.push(pins.to_vec());
     }
     fn read_conf(&mut self, _: &DockSettings) -> Option<DockSettings> {
-        None
+        self.0.borrow_mut().conf.take()
     }
     fn terminal(&mut self) -> Option<String> {
         None
@@ -1332,6 +1334,141 @@ fn pointer_motion_over_a_tile_presents_no_new_frame() {
     }
     let after = run.driver.window_system_mut().frames(bar).unwrap().len();
     assert_eq!(after, before, "no repaint for motion that changes nothing");
+}
+
+/// Every change the bar shows reaches the screen as a new frame of the bar's window: a running application, an
+/// attention bounce, a new output scale, Focus Dock, and a `dock.conf` that turns magnification on (only the
+/// surface's depth changes) or changes the tile size, the position or auto-hide; an
+/// output plugged in shows its strip, and the bar moved off an unplugged output shows on the next. The bar draws no
+/// revision that changes with every update, so each must change what it paints or its surface.
+#[test]
+fn every_change_the_bar_shows_presents_a_new_frame() {
+    use cupertino_defaults::dock::Position;
+    let mut run = Run::start();
+    let presented = |run: &mut Run| {
+        let bar = run.bar();
+        run.driver.window_system_mut().frames(bar).unwrap().len()
+    };
+    let check = |run: &mut Run, what: &str, change: &dyn Fn(&mut Run)| {
+        run.advance(2.0);
+        let before = presented(run);
+        change(run);
+        run.advance(2.0);
+        assert!(presented(run) > before, "{what} presents a new frame");
+    };
+    check(&mut run, "an application starting", &|run| {
+        run.message(Message::Dock {
+            output: 1,
+            events: vec![DockEvent::Window {
+                id: 8,
+                app_id: EDITOR.to_owned(),
+                title: "notes".to_owned(),
+                minimized: false,
+            }],
+        });
+    });
+    check(&mut run, "an application quitting", &|run| {
+        run.message(Message::Dock {
+            output: 1,
+            events: vec![DockEvent::WindowClosed(8)],
+        });
+    });
+    check(&mut run, "an attention bounce", &|run| {
+        run.message(Message::Dock {
+            output: 1,
+            events: vec![DockEvent::Attention(TERMINAL.to_owned())],
+        });
+    });
+    check(&mut run, "a new output scale", &|run| {
+        let bar = run.bar();
+        run.send_to(bar, WindowEvent::Scale(2.0));
+    });
+    let conf = |run: &mut Run, settings: DockSettings| {
+        run.record.borrow_mut().conf = Some(settings);
+        run.message(Message::ConfChanged);
+    };
+    // these change only the bar's surface (its depth, its keyboard interactivity), which applies with its next commit
+    let placements = run.record.borrow().placements.len();
+    check(&mut run, "magnification turned on", &|run| {
+        conf(
+            run,
+            DockSettings {
+                magnification: Some(true),
+                ..DockSettings::default()
+            },
+        );
+    });
+    assert!(
+        run.record.borrow().placements.len() > placements,
+        "the bar's depth changed"
+    );
+    check(&mut run, "Focus Dock", &|run| engage(run, 1));
+    assert_eq!(
+        run.record.borrow().keyboard.last(),
+        Some(&(Part::Bar(1), true))
+    );
+    check(&mut run, "a new tile size", &|run| {
+        conf(
+            run,
+            DockSettings {
+                tile_size: Some(40.0),
+                ..DockSettings::default()
+            },
+        );
+    });
+    check(&mut run, "a new position", &|run| {
+        conf(
+            run,
+            DockSettings {
+                tile_size: Some(40.0),
+                position: Some(Position::Left),
+                ..DockSettings::default()
+            },
+        );
+    });
+    check(&mut run, "auto-hide", &|run| {
+        conf(
+            run,
+            DockSettings {
+                tile_size: Some(40.0),
+                position: Some(Position::Left),
+                autohide: Some(true),
+                ..DockSettings::default()
+            },
+        );
+    });
+
+    // an output plugged in shows its edge strip; the bar's output unplugged moves the bar to the next one, shown there
+    let mut outputs = OUTPUTS.to_vec();
+    outputs.push(OutputInfo {
+        key: 3,
+        width: 800.0,
+        height: 600.0,
+        scale: 1.0,
+    });
+    run.message(Message::Outputs(outputs.clone()));
+    run.advance(2.0);
+    let strip = run
+        .window(&format!("{EDGE_APP_ID}@3"))
+        .expect("the new output's strip");
+    assert!(!run
+        .driver
+        .window_system_mut()
+        .frames(strip)
+        .unwrap()
+        .is_empty());
+    outputs.remove(0);
+    run.message(Message::Outputs(outputs));
+    run.advance(2.0);
+    let moved = run
+        .window(&format!("{BAR_APP_ID}@2"))
+        .expect("the bar on the next output");
+    assert!(!run
+        .driver
+        .window_system_mut()
+        .frames(moved)
+        .unwrap()
+        .is_empty());
 }
 
 // ---- the switcher and the overview through the model -----------------------------------------------------------

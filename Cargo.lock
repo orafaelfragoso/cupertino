@@ -1610,15 +1610,18 @@ dependencies = [
 name = "cupertino-screenshot"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
+ "async-io",
  "cupertino-animation",
  "cupertino-assets",
- "cupertino-decorations",
  "cupertino-defaults",
  "cupertino-geometry",
- "cupertino-protocol-app",
+ "cupertino-kit",
+ "cupertino-modifiers",
  "cupertino-protocols",
  "cupertino-shell-client",
  "cupertino-theme",
+ "cupertino-ui-test",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "libc",

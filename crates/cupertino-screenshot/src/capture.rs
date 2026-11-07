@@ -5,20 +5,30 @@
 //! PNG on the clipboard (`wl_data_device`). The server offers the capture globals only on the connection it started
 //! the process with.
 //!
-//! A capture is synchronous: the queue is dispatched until the frame is ready. Requests of both queues go out in the
-//! order they were made, so a surface the toolkit destroyed before a capture is not in it.
+//! The queue runs on a thread of its own ([`spawn`]), which reads the connection with the toolkit's loop the way two
+//! libwayland readers do, so the toolkit keeps drawing while a capture is copied or the clipboard is served. A capture
+//! is synchronous on that thread: the queue is dispatched until the frame is ready. Requests of both queues go out in
+//! the order they were made, so a surface the toolkit destroyed before the job was sent is not in the capture.
+//!
+//! The frames come turned as their output is ([`OutputTransform`]); every image leaves this module upright.
 
 use std::error::Error;
 use std::fs::File;
-use std::io::Write;
+use std::io::{ErrorKind, Read, Write};
 use std::os::fd::{AsFd, OwnedFd};
+use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{mpsc, Arc};
+use std::time::{Duration, Instant};
 
-use cupertino_geometry::Rect;
+use cupertino_geometry::{OutputTransform, Rect};
 use cupertino_protocols::client::screenshot::cupertino_screenshot_v1::{self, CupertinoScreenshotV1};
 use cupertino_screenshot::image::{self, Format};
 use cupertino_screenshot::pick::PickWindow;
+use cupertino_screenshot::session::Target;
 use cupertino_wayland_client::OutputId;
 use memmap2::Mmap;
+use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use rustix::fs::{memfd_create, MemfdFlags};
 use tiny_skia::Pixmap;
 use wayland_client::globals::{registry_queue_init, GlobalList, GlobalListContents};
@@ -27,9 +37,10 @@ use wayland_client::protocol::wl_data_device::{self, WlDataDevice};
 use wayland_client::protocol::wl_data_device_manager::WlDataDeviceManager;
 use wayland_client::protocol::wl_data_offer::WlDataOffer;
 use wayland_client::protocol::wl_data_source::{self, WlDataSource};
+use wayland_client::protocol::wl_keyboard::{self, WlKeyboard};
 use wayland_client::protocol::wl_output::WlOutput;
 use wayland_client::protocol::wl_registry::WlRegistry;
-use wayland_client::protocol::wl_seat::WlSeat;
+use wayland_client::protocol::wl_seat::{self, WlSeat};
 use wayland_client::protocol::wl_shm::{self, WlShm};
 use wayland_client::protocol::wl_shm_pool::WlShmPool;
 use wayland_client::{
@@ -48,6 +59,84 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 /// MIME type of the clipboard offer.
 const PNG_MIME: &str = "image/png";
+/// How long the server may take to give the clipboard pixel the keyboard before the copy is given up.
+const FOCUS_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// What the application asks of the capture thread.
+pub enum Job {
+    /// Copy `target` from `screens` (each output with its rectangle, by the index the target counts).
+    Capture {
+        target: Target,
+        pointer: bool,
+        screens: Vec<(OutputId, Rect)>,
+    },
+    /// Offer `png` on the clipboard with the serial of the first keyboard enter after the `after`th one, which the
+    /// clipboard pixel brings; then serve it.
+    Clipboard { png: Vec<u8>, after: u32 },
+}
+
+/// What the capture thread tells the application.
+#[derive(Clone, Debug)]
+pub enum Reply {
+    /// The windows on screen changed, front to back.
+    Windows(Vec<PickWindow>),
+    /// The images of a [`Job::Capture`], upright.
+    Shots(std::result::Result<Vec<Pixmap>, String>),
+    /// The clipboard offer is made; the pixel can go.
+    Offered,
+    /// Another selection replaced the offer, or it could not be made.
+    ClipboardDone(std::result::Result<(), String>),
+    /// The connection failed.
+    Failed(String),
+}
+
+/// The application's end of the capture thread.
+pub struct Worker {
+    jobs: mpsc::Sender<Job>,
+    wake: UnixStream,
+}
+
+impl Worker {
+    /// Hand `job` to the thread and wake it.
+    pub fn send(&self, job: Job) {
+        if self.jobs.send(job).is_ok() {
+            // a full socket already wakes the thread
+            let _ = (&self.wake).write(&[1]);
+        }
+    }
+}
+
+/// Start the capture thread with `capturer`; it answers on `replies` and counts the keyboard enters of the
+/// connection in `enters`. It ends when the application drops its [`Worker`] or stops listening.
+pub fn spawn(
+    mut capturer: Capturer,
+    replies: async_channel::Sender<Reply>,
+    enters: Arc<AtomicU32>,
+) -> Result<Worker> {
+    let (jobs, inbox) = mpsc::channel();
+    let (wake, woken) = UnixStream::pair()?;
+    woken.set_nonblocking(true)?;
+    capturer.state.enters = enters;
+    std::thread::Builder::new()
+        .name("cupertino-screenshot-capture".into())
+        .spawn(move || {
+            if let Err(e) = capturer.serve(&inbox, &woken, &replies) {
+                let _ = replies.send_blocking(Reply::Failed(e.to_string()));
+            }
+        })?;
+    Ok(Worker { jobs, wake })
+}
+
+/// The clipboard offer, from its job to its replacement.
+enum Clipboard {
+    /// Waiting for the keyboard enter after `after`, until `deadline`.
+    Waiting {
+        png: Vec<u8>,
+        after: u32,
+        deadline: Instant,
+    },
+    Serving,
+}
 
 /// What a copy session announced before its first frame.
 #[derive(Default)]
@@ -63,6 +152,9 @@ enum FrameEnd {
     Ready,
     Failed(String),
 }
+
+/// An image as the frame came, and how its output turns it.
+type Turned = (Pixmap, OutputTransform);
 
 #[derive(Default)]
 struct Toplevel {
@@ -83,9 +175,15 @@ struct State {
     windows: Vec<PickWindow>,
     windows_changed: bool,
     seat: WlSeat,
+    keyboard: Option<WlKeyboard>,
+    /// Keyboard enters heard on this connection, and the serial of the last.
+    enters: Arc<AtomicU32>,
+    enter_serial: Option<u32>,
     data_devices: WlDataDeviceManager,
     constraints: Constraints,
     frame: Option<FrameEnd>,
+    /// How the output turns the frame in flight.
+    transform: OutputTransform,
     /// The PNG offered on the clipboard, and whether another client's selection replaced it.
     clipboard: Option<Vec<u8>>,
     clipboard_cancelled: bool,
@@ -137,9 +235,13 @@ impl Capturer {
             windows: Vec::new(),
             windows_changed: false,
             seat: globals.bind::<WlSeat, State, ()>(&qh, 1..=7, ())?,
+            keyboard: None,
+            enters: Arc::default(),
+            enter_serial: None,
             data_devices: globals.bind::<WlDataDeviceManager, State, ()>(&qh, 1..=3, ())?,
             constraints: Constraints::default(),
             frame: None,
+            transform: OutputTransform::Normal,
             clipboard: None,
             clipboard_cancelled: false,
             clipboard_error: None,
@@ -153,19 +255,177 @@ impl Capturer {
         Ok(capturer)
     }
 
-    /// Handle what arrived for this queue while the toolkit's queue was read.
-    pub fn dispatch(&mut self) -> Result<()> {
+    /// The thread's loop: carry out the jobs, report the windows and serve the clipboard, until the application goes.
+    fn serve(
+        &mut self,
+        inbox: &mpsc::Receiver<Job>,
+        woken: &UnixStream,
+        replies: &async_channel::Sender<Reply>,
+    ) -> Result<()> {
+        let mut clipboard: Option<Clipboard> = None;
+        loop {
+            loop {
+                match inbox.try_recv() {
+                    Ok(Job::Capture {
+                        target,
+                        pointer,
+                        screens,
+                    }) => {
+                        let shots = self
+                            .capture(&target, pointer, &screens)
+                            .map_err(|e| e.to_string());
+                        if replies.send_blocking(Reply::Shots(shots)).is_err() {
+                            return Ok(());
+                        }
+                    }
+                    Ok(Job::Clipboard { png, after }) => {
+                        clipboard = Some(Clipboard::Waiting {
+                            png,
+                            after,
+                            deadline: Instant::now() + FOCUS_TIMEOUT,
+                        })
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
+                }
+            }
+            self.queue.dispatch_pending(&mut self.state)?;
+            let mut sent = Ok(());
+            if let Some(windows) = self.take_windows() {
+                sent = replies.send_blocking(Reply::Windows(windows));
+            }
+            match clipboard.take() {
+                Some(Clipboard::Waiting { png, after, .. })
+                    if self.state.enters.load(Ordering::SeqCst) > after =>
+                {
+                    let serial = self.state.enter_serial.expect("an enter came");
+                    self.offer_clipboard(png, serial)?;
+                    clipboard = Some(Clipboard::Serving);
+                    sent = sent.and(replies.send_blocking(Reply::Offered));
+                }
+                Some(Clipboard::Waiting { deadline, .. }) if Instant::now() >= deadline => {
+                    let problem = "the server gave the clipboard surface no keyboard focus".into();
+                    sent = sent.and(replies.send_blocking(Reply::ClipboardDone(Err(problem))));
+                }
+                Some(Clipboard::Serving) if self.state.clipboard_cancelled => {
+                    sent = sent.and(replies.send_blocking(Reply::ClipboardDone(Ok(()))));
+                }
+                other => clipboard = other,
+            }
+            if let Some(e) = self.state.clipboard_error.take() {
+                eprintln!("cupertino-screenshot: {e}");
+            }
+            if sent.is_err() {
+                return Ok(());
+            }
+            let timeout = match &clipboard {
+                Some(Clipboard::Waiting { deadline, .. }) => {
+                    Some(deadline.saturating_duration_since(Instant::now()))
+                }
+                _ => None,
+            };
+            self.block(woken, timeout)?;
+        }
+    }
+
+    /// Wait for the connection or the application, at most `timeout`, and read what arrived, with the toolkit's loop
+    /// as the other reader.
+    fn block(&mut self, woken: &UnixStream, timeout: Option<Duration>) -> Result<()> {
+        let guard = loop {
+            match self.queue.prepare_read() {
+                Some(guard) => break guard,
+                None => {
+                    self.queue.dispatch_pending(&mut self.state)?;
+                }
+            }
+        };
+        self.queue.flush()?;
+        let timespec = timeout.map(|d| Timespec {
+            tv_sec: d.as_secs() as i64,
+            tv_nsec: i64::from(d.subsec_nanos()),
+        });
+        let (connection_ready, wake_ready) = {
+            let fd = guard.connection_fd();
+            let mut fds = [
+                PollFd::new(&fd, PollFlags::IN),
+                PollFd::new(woken, PollFlags::IN),
+            ];
+            match poll(&mut fds, timespec.as_ref()) {
+                Ok(_) | Err(rustix::io::Errno::INTR) => {}
+                Err(e) => return Err(std::io::Error::from(e).into()),
+            }
+            (
+                fds[0]
+                    .revents()
+                    .intersects(PollFlags::IN | PollFlags::HUP | PollFlags::ERR),
+                fds[1].revents().contains(PollFlags::IN),
+            )
+        };
+        if connection_ready {
+            match guard.read() {
+                Ok(_) => {}
+                // the toolkit's loop read it
+                Err(wayland_client::backend::WaylandError::Io(e))
+                    if e.kind() == ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e.into()),
+            }
+        } else {
+            drop(guard);
+        }
+        if wake_ready {
+            let mut buf = [0; 64];
+            while matches!((&*woken).read(&mut buf), Ok(n) if n > 0) {}
+        }
         self.queue.dispatch_pending(&mut self.state)?;
         Ok(())
     }
 
     /// The windows on screen, front to back, when they changed since the last call.
-    pub fn take_windows(&mut self) -> Option<Vec<PickWindow>> {
+    fn take_windows(&mut self) -> Option<Vec<PickWindow>> {
         std::mem::take(&mut self.state.windows_changed).then(|| self.state.windows.clone())
     }
 
-    /// Copy the output `output` (its mode size in pixels).
-    pub fn output(&mut self, output: OutputId, pointer: bool) -> Result<Pixmap> {
+    /// Copy what `target` covers, upright.
+    fn capture(
+        &mut self,
+        target: &Target,
+        pointer: bool,
+        screens: &[(OutputId, Rect)],
+    ) -> Result<Vec<Pixmap>> {
+        let screen = |i: usize| {
+            screens
+                .get(i)
+                .copied()
+                .ok_or("the capture names an output that is gone")
+        };
+        Ok(match target {
+            Target::Screens => {
+                let mut shots = Vec::new();
+                for (id, _) in screens {
+                    let (whole, turn) = self.output(*id, pointer)?;
+                    shots.push(image::upright(&whole, turn));
+                }
+                shots
+            }
+            Target::Output(i) => {
+                let (whole, turn) = self.output(screen(*i)?.0, pointer)?;
+                vec![image::upright(&whole, turn)]
+            }
+            Target::Area { output, rect } => {
+                let (id, bounds) = screen(*output)?;
+                let (whole, turn) = self.output(id, pointer)?;
+                vec![image::area(&whole, rect, &bounds, turn)
+                    .ok_or("the selection is outside its output")?]
+            }
+            Target::Window(identifier) => {
+                let (whole, turn) = self.window(identifier, pointer)?;
+                vec![image::upright(&whole, turn)]
+            }
+        })
+    }
+
+    /// Copy the output `output` (its mode size in pixels, turned as the output is).
+    fn output(&mut self, output: OutputId, pointer: bool) -> Result<Turned> {
         let name = output.registry_name();
         let version = self
             .globals
@@ -188,7 +448,7 @@ impl Capturer {
     }
 
     /// Copy the window `identifier` (a foreign-toplevel identifier from the window feed), with its decorations.
-    pub fn window(&mut self, identifier: &str, pointer: bool) -> Result<Pixmap> {
+    fn window(&mut self, identifier: &str, pointer: bool) -> Result<Turned> {
         let handle = self
             .state
             .toplevels
@@ -204,10 +464,11 @@ impl Capturer {
     }
 
     /// One frame of `source` through a copy session, into a shm buffer read back as an image.
-    fn copy_source(&mut self, source: &ExtImageCaptureSourceV1, pointer: bool) -> Result<Pixmap> {
+    fn copy_source(&mut self, source: &ExtImageCaptureSourceV1, pointer: bool) -> Result<Turned> {
         let qh = self.queue.handle();
         self.state.constraints = Constraints::default();
         self.state.frame = None;
+        self.state.transform = OutputTransform::Normal;
         let options = if pointer {
             Options::PaintCursors
         } else {
@@ -282,13 +543,14 @@ impl Capturer {
         }
         // SAFETY: the memfd is private to this process and the server, which wrote the frame before `ready`.
         let map = unsafe { Mmap::map(&file) }?;
-        image::from_shm(width, height, stride, &map, format)
-            .ok_or_else(|| format!("the {width} x {height} buffer does not hold its image").into())
+        let image = image::from_shm(width, height, stride, &map, format)
+            .ok_or_else(|| format!("the {width} x {height} buffer does not hold its image"))?;
+        Ok((image, self.state.transform))
     }
 
     /// Offer `png` as the clipboard selection. The server accepts it only while a surface of this connection has the
     /// keyboard focus, which the caller arranges; `serial` is that of the latest input event.
-    pub fn offer_clipboard(&mut self, png: Vec<u8>, serial: u32) -> Result<()> {
+    fn offer_clipboard(&mut self, png: Vec<u8>, serial: u32) -> Result<()> {
         let qh = self.queue.handle();
         let source = self.state.data_devices.create_data_source(&qh, ());
         source.offer(PNG_MIME.into());
@@ -299,18 +561,6 @@ impl Capturer {
         device.set_selection(Some(&source), serial);
         self.state.clipboard = Some(png);
         self.queue.roundtrip(&mut self.state)?;
-        Ok(())
-    }
-
-    /// Serve pastes until another selection replaces the offer, after which nobody can paste it. A paste that could
-    /// not be written is reported and the offer stays.
-    pub fn serve_clipboard(&mut self) -> Result<()> {
-        while !self.state.clipboard_cancelled {
-            self.queue.blocking_dispatch(&mut self.state)?;
-            if let Some(e) = self.state.clipboard_error.take() {
-                eprintln!("cupertino-screenshot: {e}");
-            }
-        }
         Ok(())
     }
 }
@@ -332,7 +582,44 @@ delegate_noop!(State: ignore WlShm);
 delegate_noop!(State: WlShmPool);
 delegate_noop!(State: ignore WlBuffer);
 delegate_noop!(State: ignore WlOutput);
-delegate_noop!(State: ignore WlSeat);
+
+impl Dispatch<WlSeat, ()> for State {
+    /// The keyboard is bound once the seat has one: its enters bring the serial the clipboard offer needs.
+    fn event(
+        state: &mut Self,
+        seat: &WlSeat,
+        event: wl_seat::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let wl_seat::Event::Capabilities {
+            capabilities: WEnum::Value(capabilities),
+        } = event
+        {
+            if capabilities.contains(wl_seat::Capability::Keyboard) && state.keyboard.is_none() {
+                state.keyboard = Some(seat.get_keyboard(qh, ()));
+            }
+        }
+    }
+}
+
+impl Dispatch<WlKeyboard, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        // the toolkit's keyboard reads the keys; the keymap's descriptor closes with the event
+        if let wl_keyboard::Event::Enter { serial, .. } = event {
+            state.enter_serial = Some(serial);
+            state.enters.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
 delegate_noop!(State: WlDataDeviceManager);
 delegate_noop!(State: ignore WlDataOffer);
 delegate_noop!(State: ExtOutputImageCaptureSourceManagerV1);
@@ -379,7 +666,13 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, ()> for State {
             ext_image_copy_capture_frame_v1::Event::Failed { reason } => {
                 state.frame = Some(FrameEnd::Failed(format!("{reason:?}")))
             }
-            // the whole buffer is read, whatever the damage; transform and timing are not used
+            ext_image_copy_capture_frame_v1::Event::Transform {
+                transform: WEnum::Value(transform),
+            } => {
+                state.transform =
+                    OutputTransform::from_wayland(transform.into()).unwrap_or_default()
+            }
+            // the whole buffer is read, whatever the damage; timing is not used
             _ => {}
         }
     }

@@ -1,11 +1,12 @@
-//! Captured pixels: from the shm buffer the server filled to an image, the selection cut out of an output's image, and
-//! the PNG written to disk or offered on the clipboard.
+//! Captured pixels: from the shm buffer the server filled to an image, turned upright when the server sent it turned,
+//! the selection cut out of an output's image, the thumbnail's smaller copy, and the PNG written to disk or offered on
+//! the clipboard.
 
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::Path;
 
-use cupertino_geometry::Rect;
+use cupertino_geometry::{area_in_buffer, OutputTransform, Rect};
 use tiny_skia::{IntRect, Pixmap};
 
 /// Pixel format of a captured shm buffer (`wl_shm` formats, 32-bit little-endian words, so the bytes of a
@@ -51,24 +52,75 @@ pub fn from_shm(
     Some(pixmap)
 }
 
-/// The pixels of `area` (global points) in the image of an output at `output` (global points) that is `size` pixels:
-/// the area relative to the output times the image's scale, rounded to whole pixels.
-pub fn area_pixels(area: &Rect, output: &Rect, size: (u32, u32)) -> Option<IntRect> {
-    let (sx, sy) = (
-        f64::from(size.0) / output.width(),
-        f64::from(size.1) / output.height(),
-    );
-    let x0 = ((area.min_x() - output.min_x()) * sx).round() as i32;
-    let y0 = ((area.min_y() - output.min_y()) * sy).round() as i32;
-    let x1 = ((area.max_x() - output.min_x()) * sx).round() as i32;
-    let y1 = ((area.max_y() - output.min_y()) * sy).round() as i32;
-    let r = IntRect::from_ltrb(
-        x0.max(0),
-        y0.max(0),
-        x1.min(size.0 as i32),
-        y1.min(size.1 as i32),
-    )?;
-    Some(r)
+/// The upright picture of a buffer that holds it turned by `transform` (the `transform` of a copied frame).
+pub fn upright(image: &Pixmap, transform: OutputTransform) -> Pixmap {
+    if transform == OutputTransform::Normal {
+        return image.clone();
+    }
+    let (bw, bh) = (image.width(), image.height());
+    let (uw, uh) = transform.turn_pixels((bw, bh));
+    let mut out = Pixmap::new(uw, uh).expect("the image has a size");
+    let src = image.data();
+    let dst = out.data_mut();
+    for y in 0..bh {
+        for x in 0..bw {
+            let (ux, uy) = transform.upright_pixel((x, y), (bw, bh));
+            let i = ((y * bw + x) * 4) as usize;
+            let o = ((uy * uw + ux) * 4) as usize;
+            dst[o..o + 4].copy_from_slice(&src[i..i + 4]);
+        }
+    }
+    out
+}
+
+/// The upright picture of `area` (global points) of the output at `output` (global points), cut from the buffer
+/// `image` that holds the output's picture turned by `transform`, at the buffer's own scale: the pixels the area covers
+/// ([`area_in_buffer`]), turned upright. `None` when the area covers none of the output.
+pub fn area(
+    image: &Pixmap,
+    area: &Rect,
+    output: &Rect,
+    transform: OutputTransform,
+) -> Option<Pixmap> {
+    let a = area_in_buffer(area, output, (image.width(), image.height()), transform)?;
+    let rect = IntRect::from_xywh(a.x as i32, a.y as i32, a.width, a.height)?;
+    Some(upright(&image.clone_rect(rect)?, transform))
+}
+
+/// `image` reduced to `width` x `height` pixels by averaging the source pixels each target pixel covers, so a capture
+/// a tenth of its size stays smooth.
+pub fn downscale(image: &Pixmap, width: u32, height: u32) -> Option<Pixmap> {
+    let mut out = Pixmap::new(width, height)?;
+    let (sw, sh) = (image.width() as usize, image.height() as usize);
+    let src = image.data();
+    let dst = out.data_mut();
+    for y in 0..height as usize {
+        let (y0, y1) = (
+            y * sh / height as usize,
+            ((y + 1) * sh).div_ceil(height as usize).min(sh),
+        );
+        for x in 0..width as usize {
+            let (x0, x1) = (
+                x * sw / width as usize,
+                ((x + 1) * sw).div_ceil(width as usize).min(sw),
+            );
+            let mut sum = [0u32; 4];
+            for yy in y0..y1 {
+                for xx in x0..x1 {
+                    let i = (yy * sw + xx) * 4;
+                    for c in 0..4 {
+                        sum[c] += u32::from(src[i + c]);
+                    }
+                }
+            }
+            let n = ((y1 - y0) * (x1 - x0)).max(1) as u32;
+            let o = (y * width as usize + x) * 4;
+            for c in 0..4 {
+                dst[o + c] = ((sum[c] + n / 2) / n) as u8;
+            }
+        }
+    }
+    Some(out)
 }
 
 /// The PNG file of `image`.
@@ -191,18 +243,71 @@ mod tests {
         );
     }
 
+    /// A `w` x `h` image whose pixel `(x, y)` has red `x` and green `y`.
+    fn ramp(w: u32, h: u32) -> Pixmap {
+        let mut p = Pixmap::new(w, h).unwrap();
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                p.data_mut()[i..i + 4].copy_from_slice(&[x as u8, y as u8, 0, 255]);
+            }
+        }
+        p
+    }
+
+    fn red_green(p: &Pixmap, x: u32, y: u32) -> (u8, u8) {
+        let i = ((y * p.width() + x) * 4) as usize;
+        (p.data()[i], p.data()[i + 1])
+    }
+
     #[test]
     fn a_selection_maps_to_the_pixels_of_its_output_at_the_buffer_scale() {
-        let output = Rect::new(1280.0, 0.0, 1440.0, 900.0);
-        let area = Rect::new(1380.0, 50.0, 200.0, 150.0);
-        assert_eq!(
-            area_pixels(&area, &output, (1440, 900)),
-            IntRect::from_xywh(100, 50, 200, 150)
-        );
-        assert_eq!(
-            area_pixels(&area, &output, (2880, 1800)),
-            IntRect::from_xywh(200, 100, 400, 300)
-        );
+        let output = Rect::new(1280.0, 0.0, 144.0, 90.0);
+        let sel = Rect::new(1290.0, 5.0, 20.0, 15.0);
+        let one = area(&ramp(144, 90), &sel, &output, OutputTransform::Normal).unwrap();
+        assert_eq!((one.width(), one.height()), (20, 15));
+        assert_eq!(red_green(&one, 0, 0), (10, 5));
+        // the same selection on a second output at twice the scale: twice the pixels
+        let two = area(&ramp(288, 180), &sel, &output, OutputTransform::Normal).unwrap();
+        assert_eq!((two.width(), two.height()), (40, 30));
+        assert_eq!(red_green(&two, 0, 0), (20, 10));
+        assert!(area(
+            &ramp(144, 90),
+            &Rect::new(0.0, 0.0, 9.0, 9.0),
+            &output,
+            OutputTransform::Normal
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn a_selection_of_a_turned_buffer_comes_out_upright_for_every_transform() {
+        let output = Rect::new(0.0, 0.0, 40.0, 30.0);
+        let sel = Rect::new(3.0, 4.0, 10.0, 6.0);
+        let picture = ramp(40, 30);
+        let expected = area(&picture, &sel, &output, OutputTransform::Normal).unwrap();
+        for t in OutputTransform::ALL {
+            // the buffer the server would send turned by `t`: the picture turned by the inverse of turning it upright
+            let buffer = upright(&picture, t.inverse());
+            assert_eq!(
+                (buffer.width(), buffer.height()),
+                t.turn_pixels((40, 30)),
+                "{t:?}"
+            );
+            assert_eq!(upright(&buffer, t).data(), picture.data(), "{t:?}");
+            let cut = area(&buffer, &sel, &output, t).unwrap();
+            assert_eq!(cut.data(), expected.data(), "{t:?}");
+        }
+    }
+
+    #[test]
+    fn downscaling_averages_the_covered_pixels() {
+        let mut image = Pixmap::new(4, 2).expect("a pixmap");
+        image.fill(tiny_skia::Color::from_rgba8(0, 0, 0, 255));
+        image.data_mut()[..8].copy_from_slice(&[255, 255, 255, 255, 255, 255, 255, 255]);
+        let small = downscale(&image, 2, 1).expect("a pixmap");
+        assert_eq!(&small.data()[..4], &[128, 128, 128, 255]);
+        assert_eq!(&small.data()[4..8], &[0, 0, 0, 255]);
     }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {

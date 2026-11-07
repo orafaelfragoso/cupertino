@@ -1,7 +1,8 @@
 //! Values the analysis did not recover are approximate and
 //! say so; the README lists them.
 
-use cupertino_decorations::palette::Rgba;
+/// A straight-alpha sRGB colour, red, green, blue and alpha from 0 to 1.
+pub type Rgba = [f32; 4];
 
 // ---- floating thumbnail ------------------------------------------------------------------------------------------
 
@@ -27,10 +28,10 @@ pub const THUMBNAIL_BORDER_COLOR: Rgba = [0.0, 0.0, 0.0, 0.25];
 /// Room around the thumbnail for its shadow (section 6: nine-slice outset 56 pt;
 /// not in the register's measurements).
 pub const THUMBNAIL_SHADOW_OUTSET: f64 = 56.0;
-/// Peak alpha of the shadow asset (42/255). Its falloff is drawn as a Gaussian with
-/// [`THUMBNAIL_SHADOW_SIGMA`] (approximate: the asset's profile is not known).
-pub const THUMBNAIL_SHADOW_ALPHA: f64 = 42.0 / 255.0;
-pub const THUMBNAIL_SHADOW_SIGMA: f64 = 12.0;
+/// Peak alpha of the shadow asset (42/255). Its falloff is drawn as the toolkit's drop shadow with a blur of
+/// [`THUMBNAIL_SHADOW_BLUR`] (approximate: the asset's profile is not known).
+pub const THUMBNAIL_SHADOW_ALPHA: f32 = 42.0 / 255.0;
+pub const THUMBNAIL_SHADOW_BLUR: f64 = 12.0;
 /// Pointer travel on both axes under which a drag is ignored (5.0).
 pub const DRAG_SLOP: f64 = 5.0;
 /// Horizontal drag past which a release swipes the thumbnail away (+-30.0).
@@ -77,18 +78,25 @@ pub const CROSSHAIR_GAP: f64 = 3.0;
 
 // ---- toolbar -----------------------------------------------------------------------------------------------------
 
-/// Toolbar window and its background (628 x 104, background 560 x 48 at (34, 28)).
-pub const TOOLBAR_SIZE: (f64, f64) = (628.0, 104.0);
-pub const TOOLBAR_BACKGROUND: (f64, f64, f64, f64) = (34.0, 28.0, 560.0, 48.0);
-/// Corner radius of the background (8.0).
+/// The toolbar: its window is its background, 560 x 48 points with corners of radius 8, drawn on the toolkit's
+/// heads-up material.
+pub const TOOLBAR_SIZE: (f64, f64) = (560.0, 48.0);
 pub const TOOLBAR_RADIUS: f64 = 8.0;
-/// Distance of the window from the bottom of the visible frame (`visibleFrame.minY + 12`).
-pub const TOOLBAR_BOTTOM: i32 = 12;
-/// Material of the background: number 26, the alias of the login-window control material (number;
-/// the alias as in `cupertino-osd`).
-pub const TOOLBAR_MATERIAL: &str = "LoginWindowControl";
+/// Distance of the toolbar from the bottom of the visible frame: 12 points to the window of the design, whose
+/// background sits 28 points above that window's bottom edge.
+pub const TOOLBAR_BOTTOM: i32 = 40;
+/// Space between the toolbar's edges and its controls, and between the controls (approximate).
+pub const TOOLBAR_PADDING: f64 = 8.0;
+pub const TOOLBAR_SPACING: f64 = 8.0;
 /// Timer choices of the Options menu, seconds.
 pub const TIMER_CHOICES: [u32; 3] = [0, 5, 10];
+
+// ---- keyboard ----------------------------------------------------------------------------------------------------
+
+/// Share of the output's width and height of the selection an arrow key spans when there is none (approximate).
+pub const KEYBOARD_SELECTION: f64 = 0.5;
+/// Points an arrow key moves or resizes the selection with Shift held; a point without (approximate).
+pub const KEYBOARD_STEP_LARGE: f64 = 10.0;
 
 // ---- names -------------------------------------------------------------------------------------------------------
 

@@ -73,6 +73,11 @@ impl Lifecycle {
         }
     }
 
+    /// Hide the panel at once, without the fade: its surfaces are gone with their output.
+    pub fn hide(&mut self) {
+        self.state = State::Hidden;
+    }
+
     /// Start the fade-out of a shown panel; a hidden or hiding panel is left as it is.
     pub fn dismiss(&mut self, now: f64) {
         if self.phase(now) == Phase::Shown {
@@ -148,6 +153,24 @@ mod tests {
             (lifecycle.phase(1.1), lifecycle.opacity(1.1)),
             (Phase::Shown, 1.0)
         );
+    }
+
+    #[test]
+    fn hiding_skips_the_fade_from_any_phase_and_a_toggle_opens_again() {
+        let mut lifecycle = Lifecycle::new();
+        lifecycle.toggle(0.0);
+        lifecycle.hide();
+        assert_eq!(
+            (lifecycle.phase(0.0), lifecycle.opacity(0.0)),
+            (Phase::Hidden, 0.0)
+        );
+        lifecycle.toggle(1.0);
+        lifecycle.dismiss(2.0);
+        lifecycle.hide();
+        assert_eq!(lifecycle.phase(2.0), Phase::Hidden);
+        assert_eq!(lifecycle.until_hidden(2.0), None);
+        lifecycle.toggle(3.0);
+        assert_eq!(lifecycle.phase(3.0), Phase::Shown);
     }
 
     #[test]

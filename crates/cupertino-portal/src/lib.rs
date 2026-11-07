@@ -9,6 +9,9 @@ pub mod consent;
 pub mod dialog;
 pub mod file_chooser;
 pub mod geometry;
+pub mod pick;
+#[cfg(feature = "app")]
+pub mod pick_overlay;
 pub mod request;
 pub mod screen_cast;
 pub mod screenshot;

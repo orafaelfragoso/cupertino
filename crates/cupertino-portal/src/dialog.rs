@@ -1921,6 +1921,7 @@ mod tests {
             "Share with no row picked shares nothing"
         );
         click_at(&mut driver, window, Key::Int(0));
+        driver.look(window, "portal-share-screen").unwrap();
         repeat_key(&mut driver, window, RETURN);
         assert!(
             answer.try_recv().is_err(),

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use cupertino_assets::BUILTIN_FONT;
 use cupertino_kit::core::FrameSnapshot;
 use cupertino_kit::core::{
-    AccessibilityAdapter, AccessibilityUpdate, ActionRequest, Application, Command,
+    AccessibilityAdapter, AccessibilityUpdate, ActionRequest, Application, Command, Key,
     PlaceholderIcons, RuntimeOptions, Window, WindowKey,
 };
 use cupertino_kit::geometry::Point;
@@ -44,6 +44,8 @@ enum Step {
 enum Message {
     Step(Step),
     Input(Input),
+    /// Focus the node with this key, once the view shows it.
+    Focus(Key),
 }
 
 thread_local! {
@@ -105,9 +107,17 @@ impl Application for Scripted {
             }
             Message::Input(input) => {
                 let action = view::apply(model.center.get_mut(), &mut model.ui, input, model.now);
-                model.host.extend(action);
-                Vec::new()
+                model.host.extend(action.clone());
+                match action {
+                    Some(HostAction::Focus(key)) => {
+                        vec![Command::Perform(Box::pin(
+                            async move { Message::Focus(key) },
+                        ))]
+                    }
+                    _ => Vec::new(),
+                }
             }
+            Message::Focus(key) => vec![Command::Focus(key)],
         }
     }
 
@@ -799,7 +809,12 @@ fn a_centre_card_unfolds_its_long_body_with_its_disclosure_button() {
 #[test]
 fn the_keyboard_activates_and_clears_the_centre_s_cards_and_its_close_button_clears_one() {
     let mut run = Run::new();
-    for (t, app) in [(0.0, "Calendar"), (0.1, "Weather"), (0.2, "Backup")] {
+    for (t, app) in [
+        (0.0, "Calendar"),
+        (0.1, "Weather"),
+        (0.2, "Backup"),
+        (0.3, "Backup"),
+    ] {
         run.step(Step::At(t));
         run.notify(NotifyInput::new(app, "Summary", "Body"));
     }
@@ -807,8 +822,28 @@ fn the_keyboard_activates_and_clears_the_centre_s_cards_and_its_close_button_cle
     run.step(Step::OpenCentre);
     let window = run.only_window();
     run.send(window, WindowEvent::Focus(true));
+    let history = |run: &Run| -> Vec<u32> {
+        let model = run.driver.runtime().model();
+        let ids = model
+            .center
+            .borrow()
+            .history()
+            .iter()
+            .map(|n| n.id)
+            .collect();
+        ids
+    };
+    let focused = |run: &Run| -> Option<String> {
+        let snapshot = run.snapshot(window);
+        let node = snapshot
+            .nodes
+            .iter()
+            .find(|n| Some(n.id) == snapshot.focus)?;
+        node.key.as_ref().map(|k| format!("{k:?}"))
+    };
+    let key_of = |id: u32| Some(format!("{:?}", view::card_key(id)));
     let snapshot = run.snapshot(window);
-    let first = keyed(&snapshot, "card-3").unwrap().id;
+    let first = keyed(&snapshot, "card-4").unwrap().id;
     assert_eq!(
         snapshot.focus,
         Some(first),
@@ -819,25 +854,28 @@ fn the_keyboard_activates_and_clears_the_centre_s_cards_and_its_close_button_cle
         .iter()
         .find(|(_, a)| a.role == cupertino_kit::core::Role::List)
         .expect("the cards are a list");
-    assert_eq!(list.1.children.len(), 3);
+    assert_eq!(list.1.children.len(), 3, "one card for each application");
     run.key(window, 0xff0d);
     assert_eq!(
         run.host(),
-        vec![HostAction::Activate(3)],
+        vec![HostAction::Activate(4)],
         "Return activates it"
     );
     run.key(window, 0xffff);
-    let history: Vec<u32> = run
-        .driver
-        .runtime()
-        .model()
-        .center
-        .borrow()
-        .history()
-        .iter()
-        .map(|n| n.id)
-        .collect();
-    assert_eq!(history, vec![2, 1], "Delete clears it");
+    assert_eq!(history(&run), vec![3, 2, 1], "Delete clears it");
+    assert_eq!(
+        focused(&run),
+        key_of(3),
+        "the focus goes to the group's next card, which the view built after the update"
+    );
+    run.key(window, 0xffff);
+    assert_eq!(history(&run), vec![2, 1]);
+    assert_eq!(
+        focused(&run),
+        key_of(2),
+        "and then to the next group's card"
+    );
+
     let snapshot = run.snapshot(window);
     let card = rect(&snapshot, "card-1");
     let close = subtree(&snapshot, keyed(&snapshot, "card-1").unwrap().id)
@@ -850,22 +888,41 @@ fn the_keyboard_activates_and_clears_the_centre_s_cards_and_its_close_button_cle
         (view::CLOSE_INSET, view::CLOSE_INSET)
     );
     run.click(window, close.center());
-    let left: Vec<u32> = run
-        .driver
-        .runtime()
-        .model()
-        .center
-        .borrow()
-        .history()
-        .iter()
-        .map(|n| n.id)
-        .collect();
-    assert_eq!(left, vec![2]);
+    assert_eq!(history(&run), vec![2]);
+    assert_eq!(
+        focused(&run),
+        key_of(2),
+        "a card cleared with the pointer leaves the focus where it was"
+    );
     assert_eq!(
         run.host(),
-        vec![HostAction::Activate(3)],
+        vec![
+            HostAction::Activate(4),
+            HostAction::Focus(view::card_key(3)),
+            HostAction::Focus(view::card_key(2)),
+        ],
         "the close button activates nothing"
     );
+
+    // the last card cleared, Escape still closes the empty centre
+    run.key(window, 0xffff);
+    assert!(history(&run).is_empty());
+    // a press only: the centre's window closes on it
+    run.send(
+        window,
+        WindowEvent::Key(
+            KeyEvent {
+                code: 1,
+                keysym: Keysym(0xff1b),
+                text: None,
+                pressed: true,
+                repeat: false,
+                mods: Mods::NONE,
+            },
+            Timestamp(0),
+        ),
+    );
+    assert!(!run.ui().centre_open);
 }
 
 #[test]

@@ -2,7 +2,7 @@
 //! `cupertino_notifications::view` get their layer surfaces from [`NotificationRoles`], the bus wakes the
 //! application's loop through a channel, and timers pace the banners' lifetimes and animations.
 
-use cupertino_kit::core::{Application, Command, RuntimeOptions, Window};
+use cupertino_kit::core::{Application, Command, Key, RuntimeOptions, Window};
 use cupertino_kit::platform::WindowSpec;
 use cupertino_modifiers::Profile;
 use cupertino_notifications::dbus::{Server, ServerOptions};
@@ -215,6 +215,8 @@ pub enum Message {
     Note(Note),
     Timer(u64),
     Token(Pending, Option<String>),
+    /// Focus the node with this key, now that the view shows it.
+    Focus(Key),
     /// The bus thread and the roles are gone.
     Unheard,
 }
@@ -302,6 +304,12 @@ impl Notifications {
             Some(HostAction::OpenLink(href)) => {
                 open_link(&href);
                 Vec::new()
+            }
+            // the card may be one the view builds only after this update
+            Some(HostAction::Focus(key)) => {
+                vec![Command::Perform(Box::pin(
+                    async move { Message::Focus(key) },
+                ))]
             }
             None => Vec::new(),
         }
@@ -400,6 +408,7 @@ impl Application for Notifications {
                 model.complete(pending, token);
                 Vec::new()
             }
+            Message::Focus(key) => vec![Command::Focus(key)],
             Message::Unheard => {
                 eprintln!("cupertino-notifications: the bus thread stopped");
                 return vec![Command::Exit];

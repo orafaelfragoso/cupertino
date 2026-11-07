@@ -48,7 +48,7 @@ surface, ends the process with a failure status so the server restarts it.
   outside the header, the cards and the Clear menu, closes it. The list scrolls with the wheel (40 pt a notch), the touchpad
   (by its distance, offsets kept on whole points) and the keyboard (Up, Down, Page Up, Page Down, Home, End); Tab moves
   between the cards and their buttons and the list follows the focus. On a focused card Return, keypad Enter and Space run its
-  default action and Delete or Backspace clears it.
+  default action and Delete or Backspace clears it; the focus then goes to the card in its place (its group's next one, else the next group's, else the one before).
 - **Session.** On `locked` an open list closes; banners expire on their own.
 - **Accessibility.** A banner is a live region named "app: summary" with its body as description: polite, assertive when
   critical, so a screen reader reads it as it arrives, with the whole body even when the card cuts
@@ -182,5 +182,5 @@ cargo test -p cupertino-notifications
 | Test | Proves |
 |---|---|
 | `tests/dbus_integration.rs` | The server against a real client on a private `dbus-daemon`. Skipped when `dbus-daemon` is not installed. |
-| `tests/kit_goldens.rs` | The Kit windows on the headless window system against the Inspector dumps in `tests/goldens/`: a banner sliding in and at rest, a critical one taking over, with the screen-reader announcements (`banner`); the centre with a stacked group (`centre-stacked`); a swipe dragged 60 pt and mid-dismissal (`swipe-dismiss`). `CUPERTINO_UPDATE_GOLDENS=1` rewrites them. Geometry and interaction: a long banner body wraps inside its card and stops at its line limit; the centre scrolls with the wheel, the touchpad and the keyboard and a click hits the card shown there; the disclosure button unfolds and folds a body; the keyboard activates and clears cards and the close button clears one; each card's material region is its card and Reduce Transparency paints fills. |
+| `tests/kit_goldens.rs` | The Kit windows on the headless window system against the Inspector dumps in `tests/goldens/`: a banner sliding in and at rest, a critical one taking over, with the screen-reader announcements (`banner`); the centre with a stacked group (`centre-stacked`); a swipe dragged 60 pt and mid-dismissal (`swipe-dismiss`). `CUPERTINO_UPDATE_GOLDENS=1` rewrites them. Geometry and interaction: a long banner body wraps inside its card and stops at its line limit; the centre scrolls with the wheel, the touchpad and the keyboard and a click hits the card shown there; the disclosure button unfolds and folds a body; the keyboard activates and clears cards, the focus following to the card in a cleared one's place, the close button clears one and Escape closes an empty centre; each card's material region is its card and Reduce Transparency paints fills. |
 | `src/view/tests.rs` | `CardMetrics` against the built-in font: heights follow the text, wrapping, line limits and ellipsis, kept line breaks, the body byte bound, links cut at the ellipsis, buttons sharing a row, the close button inside the corner, and the `apply` of scroll, unfold, clear and close. |

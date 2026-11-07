@@ -133,8 +133,11 @@ pub enum Input {
     SwipeCancel(u32),
     /// The close button of a banner.
     Dismiss(u32),
-    /// The close button of a card of the centre, or Delete on it.
+    /// The close button of a card of the centre.
     Clear(u32),
+    /// Delete or Backspace on the focused card of the centre: it is cleared and the focus goes to the card that takes
+    /// its place.
+    ClearFocused(u32),
     /// An action button.
     Invoke(u32, String),
     /// A click on a card of the centre, Return or Space on it, or assistive technology's click on a card.
@@ -183,6 +186,9 @@ pub enum HostAction {
     Activate(u32),
     Invoke(u32, String),
     OpenLink(String),
+    /// Give the keyboard focus to the node with this key once the view is rebuilt
+    /// ([`Command::Focus`](cupertino_kit::core::Command::Focus)).
+    Focus(Key),
 }
 
 /// How much of a card's body shows.
@@ -491,6 +497,11 @@ pub fn banner_key(n: &Notification, height: f64) -> WindowKey {
     )))
 }
 
+/// The key of the card of notification `id`, a banner's or the front card of its group in the centre.
+pub fn card_key(id: u32) -> Key {
+    Key::from(format!("card-{id}"))
+}
+
 pub fn centre_key() -> WindowKey {
     WindowKey(Key::from("centre"))
 }
@@ -558,6 +569,22 @@ pub fn apply(
         Input::Clear(id) => {
             center.clear(id, now);
             ui.unfolded.remove(&id);
+        }
+        Input::ClearFocused(id) => {
+            let fronts = |c: &NotificationCenter| -> Vec<u32> {
+                c.groups().iter().map(|g| g.notifications[0].id).collect()
+            };
+            let at = fronts(center).iter().position(|&front| front == id);
+            center.clear(id, now);
+            ui.unfolded.remove(&id);
+            // the card now in its place: its group's next one, the next group's, or the last one when it was last
+            let after = fronts(center);
+            let next = at.and_then(|at| {
+                after
+                    .get(at)
+                    .or(at.checked_sub(1).and_then(|i| after.get(i)))
+            });
+            return next.map(|&front| HostAction::Focus(card_key(front)));
         }
         Input::Invoke(id, key) => return Some(HostAction::Invoke(id, key)),
         // the host closes the centre once it has the activation token, which needs the centre's window
@@ -667,7 +694,7 @@ fn banner_window<M: Clone + 'static>(
                 map,
             ),
         })
-        .key(format!("card-{}", n.id))],
+        .key(card_key(n.id))],
     });
     window(
         banner_key(n, layout.height),
@@ -820,7 +847,7 @@ fn centre_window<M: Clone + 'static>(
                     map,
                 ),
             })
-            .key(format!("card-{}", front.id)),
+            .key(card_key(front.id)),
         );
         y += stack.height(card.height, count);
     }
@@ -1656,7 +1683,7 @@ impl<M: 'static> Widget<M> for Card<M> {
             Event::Key(key, _) if active && key.pressed && cx.node() == cx.target() => {
                 match key.keysym {
                     RETURN | KEYPAD_ENTER | SPACE => cx.emit((self.map)(Input::Activate(self.id))),
-                    DELETE | BACKSPACE => cx.emit((self.map)(Input::Clear(self.id))),
+                    DELETE | BACKSPACE => cx.emit((self.map)(Input::ClearFocused(self.id))),
                     // the arrows and page keys scroll the list
                     _ => return Propagation::Continue,
                 }

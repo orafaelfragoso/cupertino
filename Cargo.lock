@@ -1248,6 +1248,7 @@ dependencies = [
 name = "cupertino-kit"
 version = "0.1.0"
 dependencies = [
+ "cupertino-apps",
  "cupertino-assets",
  "cupertino-capture",
  "cupertino-geometry",

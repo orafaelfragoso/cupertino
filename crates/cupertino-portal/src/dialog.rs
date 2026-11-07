@@ -1,6 +1,7 @@
 //! The file-chooser, app-chooser, screen-sharing and screenshot windows: one for each open request, drawn with CupertinoKit. The D-Bus side
 //! hands its events to the [`inbox`]; [`Dialogs`] is resident and keeps running while no dialog is open.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -15,6 +16,7 @@ use cupertino_kit::controls::{
     SplitView, TextRole,
 };
 use cupertino_kit::core::{next_resource_id, Checked, CommandRegistry, Key, Shortcut};
+use cupertino_kit::file_icons::FileIcons;
 use cupertino_kit::geometry::{Insets, Point, Size};
 use cupertino_kit::layout::ScrollState;
 use cupertino_kit::platform::{DecorationMode, Keysym, Mods};
@@ -165,6 +167,8 @@ pub struct Model {
     pickers: Vec<Picker>,
     apps: Vec<AppPicker>,
     app_icons: AppIcons,
+    /// The icons of the file chooser's rows, by the items' types.
+    file_icons: RefCell<FileIcons>,
     consents: Vec<Consent>,
 }
 
@@ -331,6 +335,14 @@ const NO_SCROLL: ScrollState = ScrollState {
     content: Size::ZERO,
     viewport: Size::ZERO,
 };
+
+/// The session's MIME database, which types the file chooser's rows for their icons; none when it cannot be read.
+fn types() -> cupertino_apps::MimeDatabase {
+    cupertino_apps::XdgDirs::from_env()
+        .ok()
+        .and_then(|dirs| cupertino_apps::MimeDatabase::load(&dirs.all_data_dirs()).ok())
+        .unwrap_or_default()
+}
 
 fn home() -> PathBuf {
     std::env::var_os("HOME")
@@ -517,6 +529,7 @@ impl Application for Dialogs {
                 theme: ThemeIcons::new(&Assets::discover()),
                 loaded: HashMap::new(),
             },
+            file_icons: RefCell::new(FileIcons::discover(types(), HashMap::new())),
             consents: Vec::new(),
         };
         let mut commands = model.take(inbox().take());
@@ -736,7 +749,7 @@ impl Application for Dialogs {
         model
             .open
             .iter()
-            .map(|d| window(d, &model.places))
+            .map(|d| window(d, &model.places, &model.file_icons))
             .chain(
                 model
                     .pickers
@@ -866,13 +879,18 @@ fn sidebar(d: &Dialog, places: &[Place]) -> Element<Message> {
     .key("places")
 }
 
-fn files(d: &Dialog) -> Element<Message> {
+fn files(d: &Dialog, icons: &RefCell<FileIcons>) -> Element<Message> {
     let id = d.id;
-    let rows: Vec<(bool, String)> = d
+    let mut icons = icons.borrow_mut();
+    let rows: Vec<(Vec<ImageSource>, String)> = d
         .chooser
         .entries()
         .iter()
-        .map(|e| (e.is_dir, e.name.clone()))
+        .map(|e| {
+            let mime = icons.database().file_type(&e.path, e.is_dir).to_owned();
+            let icon = icons.images(&e.path, &mime, false, ROW_ICON);
+            (icon, e.name.clone())
+        })
         .collect();
     let names: Vec<String> = rows.iter().map(|(_, n)| n.clone()).collect();
     let keys = names.clone();
@@ -891,16 +909,15 @@ fn files(d: &Dialog) -> Element<Message> {
         multiple: d.chooser.ask().multiple,
         initial: false,
         row: Box::new(move |i, selected| {
-            let (is_dir, name) = &rows[i];
-            row(
-                symbol(if *is_dir {
-                    "symbol.folder"
-                } else {
-                    "symbol.doc"
-                }),
-                name.clone(),
-                selected,
-            )
+            let (icon, name) = &rows[i];
+            let icon = Element::new(Image {
+                sources: icon.clone(),
+                size: Size::new(ROW_ICON, ROW_ICON),
+                fit: ImageFit::Contain,
+                radius: 0.0,
+                label: None,
+            });
+            row(icon, name.clone(), selected)
         }),
         key: Some(Box::new(move |i| Key::from(keys[i].clone()))),
         type_select: Some(Box::new(move |i| names[i].clone())),
@@ -1096,14 +1113,14 @@ fn bar_row(
     })
 }
 
-fn window(d: &Dialog, places: &[Place]) -> Window<Message> {
+fn window(d: &Dialog, places: &[Place], icons: &RefCell<FileIcons>) -> Window<Message> {
     let id = d.id;
     let ask = d.chooser.ask();
     let browser = Element::from(SplitView {
         label: "Sidebar".into(),
         axis: Axis::Horizontal,
         leading: sidebar(d, places),
-        trailing: files(d),
+        trailing: files(d, icons),
         layout: d.split,
         min_leading: 120.0,
         min_trailing: 320.0,

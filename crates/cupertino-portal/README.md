@@ -38,6 +38,8 @@ appearance, as `cupertino_app_effects_v1` sends it:
 `org.freedesktop.impl.portal.FileChooser` answers `OpenFile`, `SaveFile` and `SaveFiles` with a window drawn with
 CupertinoKit: a sidebar of the home folder and the user directories, the open folder's list, and a bottom bar with the
 filters, the choices, Cancel and the action button. A save adds a Save As field and asks before it replaces a file.
+Each row wears the icon of its type from the asset packs and the host icon theme, typed by name with the session's MIME
+database, as in Files (`cupertino_kit::file_icons`); the rows show no thumbnails and no special folder icons.
 
 - Only the owner of `org.freedesktop.portal.Desktop` may call it or close a request; any other caller gets
   `AccessDenied`. Options are checked before a window shows: a wrong type, a relative folder, a `current_name` with a

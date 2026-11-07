@@ -1,9 +1,9 @@
 //! Items dragged out of a window: the files as a `text/uri-list` a drop may copy or move, and the image that follows
-//! the pointer. One item shows its icon and its name as the grid shows them; several show the pressed item in front of
+//! the pointer. One item shows its icon (or thumbnail) and its name as the grid shows them; several show the pressed item in front of
 //! the icons of up to two more, with the count in a badge on the stack. The image keeps the point the press grabbed
 //! under the pointer and is drawn at [`OPACITY`].
 
-use cupertino_kit::controls::{Badge, Icon, IconDirection};
+use cupertino_kit::controls::{Badge, Image, ImageFit, ImageSource};
 use cupertino_kit::core::{
     Change, Drag, DragPreview, Element, Event, EventCx, MeasureCx, PaintCx, Propagation,
     SemanticsCx, Widget, WindowKey,
@@ -38,9 +38,9 @@ const URI_LIST: &str = "text/uri-list";
 pub struct Grab {
     /// The dragged items, the pressed one first.
     pub indices: Vec<usize>,
-    /// The pressed item's name, and the icon of each dragged item in the order of `indices`.
+    /// The pressed item's name, and the renditions of each dragged item's icon or thumbnail in the order of `indices`.
     pub name: String,
-    pub symbols: Vec<&'static str>,
+    pub icons: Vec<Vec<ImageSource>>,
     /// Where the press was, from the top left corner of the pressed item's cell, in points.
     pub offset: Point,
     /// The window reads right to left: the image's parts are placed from its right edge.
@@ -109,12 +109,12 @@ pub(super) fn preview(grab: &Grab) -> DragPreview<Message> {
     let size = Size::new(grab.cell.width + room, grab.cell.height + room);
     let icon_left = (grab.cell.width - grab.icon_size) / 2.0;
     let icon_top = room + grab.icon_top;
-    let front = grab.symbols.first().copied().unwrap_or_default();
+    let front = grab.icons.first().cloned().unwrap_or_default();
     let mut children = Vec::new();
     // the icons behind, the farthest first, each a step up and to the trailing side of the one before it
     for depth in (1..=behind).rev() {
         let step = depth as f64 * STACK_STEP;
-        let symbol = grab.symbols.get(depth).copied().unwrap_or(front);
+        let sources = grab.icons.get(depth).unwrap_or(&front).clone();
         children.push(placed(
             Rect::new(
                 icon_left + step,
@@ -124,7 +124,7 @@ pub(super) fn preview(grab: &Grab) -> DragPreview<Message> {
             ),
             Insets::ZERO,
             0.0,
-            vec![icon(symbol, grab.icon_size)],
+            vec![icon(sources, grab.icon_size)],
         ));
     }
     children.push(placed(
@@ -172,13 +172,13 @@ pub(super) fn preview(grab: &Grab) -> DragPreview<Message> {
     }
 }
 
-fn icon(symbol: &str, size: f64) -> Element<Message> {
-    Element::new(Icon {
-        name: symbol.into(),
-        size,
-        direction: IconDirection::Fixed,
+fn icon(sources: Vec<ImageSource>, size: f64) -> Element<Message> {
+    Element::new(Image {
+        sources,
+        size: Size::new(size, size),
+        fit: ImageFit::Contain,
+        radius: 0.0,
         label: None,
-        tint: None,
     })
 }
 
@@ -301,7 +301,7 @@ mod tests {
         Grab {
             indices: (0..count).collect(),
             name: "a.txt".into(),
-            symbols: vec!["symbol.document"; count],
+            icons: vec![Vec::new(); count],
             offset: Point::new(30.0, 20.0),
             rtl: false,
             cell: Size::new(90.0, 100.0),

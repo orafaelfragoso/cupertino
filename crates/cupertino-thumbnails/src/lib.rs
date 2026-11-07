@@ -194,6 +194,11 @@ impl Thumbnailer {
         Self::new(home, app)
     }
 
+    /// The `thumbnails` directory of the cache. The standard has no thumbnails made of the files under it.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn thumb_path(&self, uri: &str, size: ThumbSize) -> PathBuf {
         self.root
             .join(size.dir())
@@ -264,8 +269,11 @@ impl Thumbnailer {
             .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
         mkdir_private(&self.root)?;
         mkdir_private(dir)?;
+        // one name per write: two threads of a process making the same thumbnail never share a temporary file
+        static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let write = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let tmp = dir.join(format!(
-            ".tmp-{}-{}",
+            ".tmp-{}-{write}-{}",
             std::process::id(),
             md5_hex(&dest.to_string_lossy())
         ));
@@ -289,9 +297,27 @@ impl Thumbnailer {
         Ok(())
     }
 
-    /// Create the thumbnail of an image file at `size`; returns its path. A failure leaves a marker.
+    /// Whether `path` is under the cache directory, by its canonical path: the standard makes no thumbnails of
+    /// thumbnails, also when a symbolic link leads into the cache.
+    pub fn is_in_cache(&self, path: &Path) -> bool {
+        if path.starts_with(&self.root) {
+            return true;
+        }
+        match (fs::canonicalize(path), fs::canonicalize(&self.root)) {
+            (Ok(path), Ok(root)) => path.starts_with(root),
+            _ => false,
+        }
+    }
+
+    /// Create the thumbnail of an image file at `size`; returns its path. A failure leaves a marker. A file under the
+    /// cache directory itself is refused without a marker.
     pub fn create(&self, path: &Path, size: ThumbSize) -> Result<PathBuf, ThumbError> {
         let meta = fs::metadata(path)?;
+        if self.is_in_cache(path) {
+            return Err(ThumbError::Io(io::Error::other(
+                "the file is in the thumbnail cache",
+            )));
+        }
         let uri = file_uri(path);
         if self.is_known_failure(path) {
             return Err(ThumbError::KnownFailure);
@@ -358,6 +384,41 @@ impl Thumbnailer {
             None => self.create(path, size),
         }
     }
+
+    /// The thumbnail of `path` as straight RGBA pixels at most `edge` pixels a side: a valid cached one of `size` or
+    /// larger, else one created at `size`, shrunk to fit `edge` with its aspect ratio kept and never enlarged.
+    pub fn pixels(&self, path: &Path, size: ThumbSize, edge: u32) -> Result<Pixels, ThumbError> {
+        let thumb = match self.lookup_at_least(path, size) {
+            Some((_, p)) => p,
+            None => self.create(path, size)?,
+        };
+        let mut reader = image::ImageReader::open(&thumb)?.with_guessed_format()?;
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(ThumbSize::XXLarge.edge());
+        limits.max_image_height = Some(ThumbSize::XXLarge.edge());
+        reader.limits(limits);
+        let img = reader.decode()?;
+        let edge = edge.max(1);
+        let img = if img.width() > edge || img.height() > edge {
+            img.resize(edge, edge, FilterType::Triangle)
+        } else {
+            img
+        };
+        let rgba = img.to_rgba8();
+        Ok(Pixels {
+            width: rgba.width(),
+            height: rgba.height(),
+            rgba: rgba.into_raw(),
+        })
+    }
+}
+
+/// A decoded thumbnail: straight (not premultiplied) RGBA, row-major, `width * height * 4` bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pixels {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
 }
 
 #[cfg(test)]
@@ -426,6 +487,80 @@ mod tests {
         assert_eq!(
             t.lookup_at_least(&img, ThumbSize::Normal).map(|x| x.0),
             Some(ThumbSize::Large)
+        );
+    }
+
+    #[test]
+    fn pixels_come_from_the_cache_fitted_to_the_edge() {
+        let d = tempfile::tempdir().unwrap();
+        let t = Thumbnailer::new(d.path().join("cache"), "x");
+        let img = d.path().join("wide.png");
+        write_image(&img, 400, 200);
+        let px = t.pixels(&img, ThumbSize::Normal, 32).unwrap();
+        assert_eq!((px.width, px.height), (32, 16));
+        assert_eq!(px.rgba.len(), 32 * 16 * 4);
+        let cached = t
+            .lookup(&img, ThumbSize::Normal)
+            .expect("written to the cache");
+        let made = fs::metadata(&cached).unwrap().modified().unwrap();
+        // a second call reads the cached thumbnail and never enlarges it
+        let px = t.pixels(&img, ThumbSize::Normal, 512).unwrap();
+        assert_eq!((px.width, px.height), (128, 64));
+        assert_eq!(fs::metadata(&cached).unwrap().modified().unwrap(), made);
+        assert!(t.root().ends_with("cache/thumbnails"));
+    }
+
+    #[test]
+    fn threads_making_the_same_thumbnail_each_write_a_valid_one() {
+        let d = tempfile::tempdir().unwrap();
+        let img = d.path().join("p.png");
+        write_image(&img, 600, 300);
+        let cache = d.path().join("cache");
+        for _ in 0..10 {
+            let threads: Vec<_> = (0..4)
+                .map(|_| {
+                    let (cache, img) = (cache.clone(), img.clone());
+                    std::thread::spawn(move || {
+                        Thumbnailer::new(cache, "x").create(&img, ThumbSize::Normal)
+                    })
+                })
+                .collect();
+            for thread in threads {
+                let made = thread
+                    .join()
+                    .unwrap()
+                    .expect("each thread's thumbnail is written");
+                let decoded = image::open(&made).unwrap();
+                assert_eq!((decoded.width(), decoded.height()), (128, 64));
+            }
+        }
+        let left: Vec<_> = fs::read_dir(cache.join("thumbnails/normal"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(left.len(), 1, "no temporary file is left: {left:?}");
+    }
+
+    #[test]
+    fn a_file_reached_through_a_link_into_the_cache_gets_no_thumbnail() {
+        let d = tempfile::tempdir().unwrap();
+        let t = Thumbnailer::new(d.path().join("cache"), "x");
+        let img = d.path().join("p.png");
+        write_image(&img, 300, 300);
+        let made = t.create(&img, ThumbSize::Normal).unwrap();
+        let link = d.path().join("into-cache");
+        std::os::unix::fs::symlink(made.parent().unwrap(), &link).unwrap();
+        let through = link.join(made.file_name().unwrap());
+        assert!(t.is_in_cache(&through));
+        assert!(t.is_in_cache(&made));
+        assert!(!t.is_in_cache(&img));
+        assert!(t.create(&through, ThumbSize::Normal).is_err());
+        assert!(t.create(&made, ThumbSize::Normal).is_err());
+        assert!(!t.is_known_failure(&through), "a refusal leaves no marker");
+        assert_eq!(
+            fs::read_dir(made.parent().unwrap()).unwrap().count(),
+            1,
+            "no thumbnail of a thumbnail"
         );
     }
 

@@ -8,7 +8,9 @@
 //! (three removable file systems under Locations: "Backup Disk" mounted, "Camera Card" busy, "KINGSTON" not
 //! mounted). The home folder `avery` is made under a temporary directory with the user folders and sample files; the
 //! places are those of a session with that home on a computer named `cupertino`. File types come from the system's
-//! MIME database. The list's dates read relative to the time of the capture; the sample files are dated back from it.
+//! MIME database, the items' icons from the asset packs and the icon theme, and the sample pictures (drawn here) show
+//! their thumbnails, made in a thumbnail cache under the temporary directory before the window is drawn. The list's
+//! dates read relative to the time of the capture; the sample files are dated back from it.
 
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -19,16 +21,18 @@ use std::time::{Duration, Instant, SystemTime};
 use cupertino_capture::{App, Look, Request, State};
 use cupertino_files::kit::{prepare, Files, Start};
 use cupertino_files::notice::Notices;
-use cupertino_files::places::{standard_places, Place};
+use cupertino_files::places::{folder_icons, standard_places, Place};
+use cupertino_files::thumbnail::Thumbnailer;
 use cupertino_files::trash::Trash;
 use cupertino_files::window::ViewMode;
 use cupertino_kit::core::Role;
+use cupertino_kit::file_icons::FileIcons;
 use cupertino_kit::geometry::{Point, Size};
 use cupertino_kit::platform::{
     Capabilities, Mods, MouseButton, PointerEvent, SystemAppearance, Timestamp, WindowEvent,
     WindowId, WindowStates,
 };
-use cupertino_kit::render::PixelFormat;
+use cupertino_kit::render::{PaintOp, PixelFormat};
 use cupertino_kit::theme::ThemeTokens;
 use cupertino_theme::Theme;
 use cupertino_ui_test::{ManualClock, TestDriver};
@@ -47,7 +51,8 @@ const USER_DIRS: [(&str, &str); 6] = [
     ("VIDEOS", "Videos"),
 ];
 
-/// The sample files: name, size in bytes and age in days.
+/// The sample files: name, size in bytes and age in days. A `.png` is a picture drawn by [`sample_picture`], so it
+/// has a thumbnail, and its size is the picture's.
 const FILES: [(&str, u64, u64); 10] = [
     ("IMG_0042.png", 3_400_000, 5),
     ("Résumé 2026.pdf", 184_000, 12),
@@ -64,6 +69,13 @@ const FILES: [(&str, u64, u64); 10] = [
     ("Screenshot 2026-10-22 at 09.41.12.png", 1_200_000, 0),
     ("Website.md", 9_800, 3),
 ];
+
+/// The sample pictures: how many there are, and their size in pixels. They are wider than tall, so a thumbnail is the
+/// one image of the window that is not square.
+const PICTURES: usize = 2;
+const PICTURE_SIZE: (u32, u32) = (256, 176);
+/// How long the thumbnails of the sample pictures may take.
+const THUMBNAILS: Duration = Duration::from_secs(20);
 
 /// The window's size at 1×, in points.
 const WINDOW: (f64, f64) = (920.0, 436.0);
@@ -91,13 +103,46 @@ fn home(root: &Path) -> Result<PathBuf, String> {
             .and_then(|d| d.set_modified(now - Duration::from_secs(3_600)))
             .map_err(io)?;
     }
-    for (name, size, days) in FILES {
-        let file = std::fs::File::create(home.join(name)).map_err(io)?;
-        file.set_len(size).map_err(io)?;
-        file.set_modified(now - Duration::from_secs(days * 86_400 + 3_600))
+    for (n, (name, size, days)) in FILES.into_iter().enumerate() {
+        let path = home.join(name);
+        if name.ends_with(".png") {
+            sample_picture(n)
+                .save_png(&path)
+                .map_err(|e| e.to_string())?;
+        } else {
+            std::fs::File::create(&path)
+                .and_then(|f| f.set_len(size))
+                .map_err(io)?;
+        }
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .and_then(|f| f.set_modified(now - Duration::from_secs(days * 86_400 + 3_600)))
             .map_err(io)?;
     }
     Ok(home)
+}
+
+/// Sample picture `n`: a sky over hills, in colours of its own.
+fn sample_picture(n: usize) -> Pixmap {
+    let (w, h) = PICTURE_SIZE;
+    let mut pm = Pixmap::new(w, h).expect("a picture");
+    let hue = n as f32 * 0.37;
+    for y in 0..h {
+        for x in 0..w {
+            let (fx, fy) = (x as f32 / w as f32, y as f32 / h as f32);
+            let hill = 0.62 + 0.12 * (fx * 6.0 + hue * 5.0).sin();
+            let [r, g, b] = if fy > hill {
+                [0.25 + 0.2 * hue, 0.55 - 0.2 * fy, 0.25]
+            } else {
+                [0.45 + 0.4 * fy, 0.6 + 0.3 * fy - 0.2 * hue, 0.95]
+            };
+            let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+            let i = ((y * w + x) * 4) as usize;
+            pm.data_mut()[i..i + 4].copy_from_slice(&[c(r), c(g), c(b), 255]);
+        }
+    }
+    pm
 }
 
 struct Capture {
@@ -138,6 +183,15 @@ impl Capture {
         let dirs = cupertino_apps::XdgDirs::from_env().map_err(|e| e.to_string())?;
         let types =
             cupertino_apps::MimeDatabase::load(&dirs.all_data_dirs()).map_err(|e| e.to_string())?;
+        let user_dirs: Vec<(String, PathBuf)> = USER_DIRS
+            .iter()
+            .map(|(key, name)| (key.to_string(), self.home.join(name)))
+            .collect();
+        let folders = folder_icons(&self.home, &user_dirs, &places)
+            .into_iter()
+            .collect();
+        let icons = FileIcons::discover(types.clone(), folders);
+        let cache = self.root.path().join("cache");
         let start = Start::open(
             self.home.clone(),
             places,
@@ -151,7 +205,9 @@ impl Capture {
         .map_err(|e| format!("listing {}: {e}", self.home.display()))?
         .with_trash(Trash::with_home(self.root.path().join("no-trash")))
         .with_home(self.home.clone())
-        .with_view(view);
+        .with_view(view)
+        .with_file_icons(icons)
+        .with_thumbnails(Thumbnailer::new(&cache, "cupertino-files"));
         prepare(start);
         let mut options = cupertino_kit::app::options().map_err(|e| e.to_string())?;
         let preferences = cupertino_kit::app::preferences(&SystemAppearance {
@@ -207,6 +263,15 @@ impl Capture {
             std::thread::sleep(Duration::from_millis(5));
             settle(&mut driver, window, turns).map_err(|e| fail(&e))?;
         }
+        // the pictures' thumbnails are made on worker threads: wait until the window draws each
+        let end = Instant::now() + THUMBNAILS;
+        while thumbnails_drawn(&driver, window) < PICTURES {
+            if Instant::now() > end {
+                return Err(format!("the thumbnails took over {THUMBNAILS:?}"));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+            settle(&mut driver, window, turns).map_err(|e| fail(&e))?;
+        }
         if let Some(name) = selected {
             let at = text_center(&driver, window, name)
                 .ok_or_else(|| format!("{name}: no item of the sample folder"))?;
@@ -256,6 +321,23 @@ fn settle(
             .map_err(|e| Box::new(e) as _)?;
     }
     Ok(false)
+}
+
+/// How many thumbnails the window draws: the images that are not square.
+fn thumbnails_drawn(driver: &TestDriver<Files>, window: WindowId) -> usize {
+    let Some(snapshot) = driver.runtime().snapshot(window) else {
+        return 0;
+    };
+    snapshot
+        .display_list
+        .nodes
+        .iter()
+        .flat_map(|n| &n.ops)
+        .filter(|op| match op {
+            PaintOp::Image { dst, .. } => (dst.size.width - dst.size.height).abs() > 0.5,
+            _ => false,
+        })
+        .count()
 }
 
 /// The middle of the text `name` in the window.

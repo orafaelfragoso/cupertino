@@ -25,7 +25,7 @@ use super::announce::Announcer;
 use super::context::Secondary;
 use super::drops;
 use super::grid::{self, IconGrid, Item};
-use super::list::{Gestures, RowCell};
+use super::list::{self, Gestures, RowCell};
 use super::search::{no_results, SearchSlot};
 use super::sidebar::{Backdrop, FocusWatch, Opaque};
 use super::toolbar::{PathBar, PathSegment, ToolButton};
@@ -553,6 +553,7 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         on_scroll: send(id, Event::Scroll),
         on_select: Some(send(id, Event::Select)),
         on_activate: Some(send(id, Event::Open)),
+        on_row_key: Some(Box::new(list::tab(id, names, selected.cursor()))),
     };
     let count = table.count;
     let table = Element::from(OutlineTable {
@@ -576,7 +577,6 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         row_height: ROW_HEIGHT,
         scroll: win.scroll,
         selection: selected,
-        names,
         presses,
         band: win.band,
         children: vec![table],

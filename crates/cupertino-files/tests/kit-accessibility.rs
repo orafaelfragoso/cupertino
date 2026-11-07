@@ -416,7 +416,11 @@ fn tab_goes_from_the_sidebar_to_the_toolbar_the_items_and_the_path_bar_and_aroun
         "PopUpButton \"Tags\"",
         "PopUpButton \"Action\"",
         "TextInput \"Search\" = \"\"",
+        // the headers in the order they are shown, then the rows
         "ColumnHeader \"Name\"",
+        "ColumnHeader \"Date Modified\"",
+        "ColumnHeader \"Size\"",
+        "ColumnHeader \"Kind\"",
         // Tab in the list selects the next item by name, and past the last goes on
         "Row [a.txt]",
         "Row [b.txt]",
@@ -433,6 +437,7 @@ fn tab_goes_from_the_sidebar_to_the_toolbar_the_items_and_the_path_bar_and_aroun
         stops.push(focused(&run));
     }
     assert_eq!(stops, expected);
+    assert_eq!(run.selected_rows(), ["Notes"], "Tab selected as it went");
 
     // Shift+Tab before the first item by name leaves the list too, back through the headers
     run.click_row("a.txt");
@@ -450,6 +455,43 @@ fn tab_goes_from_the_sidebar_to_the_toolbar_the_items_and_the_path_bar_and_aroun
     run.key(TAB, None);
     assert_eq!(focused(&run), format!("Button {:?}", segments[0]));
     assert_eq!(run.selected_icons(), ["Notes"], "the selection stays");
+}
+
+/// The stops Tab (or Shift+Tab, `back`) visits from where the keyboard is, until it comes back there.
+fn walk(run: &mut Run, back: bool) -> Vec<String> {
+    let start = focused(run);
+    let mut stops = Vec::new();
+    for _ in 0..64 {
+        if back {
+            run.key_with(LEFT_TAB, None, Mods::SHIFT);
+        } else {
+            run.key(TAB, None);
+        }
+        let stop = focused(run);
+        if stop == start {
+            return stops;
+        }
+        stops.push(stop);
+    }
+    panic!("Tab never came back to {start}: {stops:?}");
+}
+
+#[test]
+fn shift_tab_visits_the_stops_tab_does_in_the_opposite_order() {
+    let (mut run, _) = start(Appearance::Light);
+    run.menu("toggle-path-bar");
+    run.click_named(Role::ListItem, "Documents");
+    assert_eq!(focused(&run), "ListItem \"Documents\"");
+    let forward = walk(&mut run, false);
+    for header in ["Name", "Date Modified", "Size", "Kind"] {
+        let header = format!("ColumnHeader {header:?}");
+        assert!(forward.contains(&header), "{header} is a stop: {forward:?}");
+    }
+    let back = walk(&mut run, true);
+    let mut mirrored = back.clone();
+    mirrored.reverse();
+    assert_eq!(mirrored, forward, "Shift+Tab is Tab backwards");
+    assert_eq!(focused(&run), "ListItem \"Documents\"");
 }
 
 #[test]

@@ -59,8 +59,11 @@ callback nobody asked for is not reported. On a compositor with `wp_presentation
 clock and never later than now, or as `Discarded` when the compositor never showed it.
 
 A clipboard read finishes before `read_clipboard` returns (the transport's one-second limit) and its data arrives with
-the next `dispatch`. Not offered yet, so their flags are false: touch, the primary selection, drag
-and drop, and the desktop's effects protocol, which an extension binds through `connection`. A popup's `offset` moves
+the next `dispatch`. Not offered yet, so their flags are false: touch, the primary selection, and the desktop's
+effects protocol, which an extension binds through `connection`. Drags go out (`drag_and_drop` with the clipboard and
+a seat): `start_drag` hands the transport the data, the actions and the image as a `DragIcon` in `wl_shm`'s byte order,
+one drag at a time (a new one cancels the last), and reports the drag source's events as `PlatformEvent::Drag`.
+Drops onto a window are not reported yet. A popup's `offset` moves
 its anchor rectangle; `reactive` is not sent.
 
 ## Tests
@@ -71,5 +74,6 @@ cargo test -p cupertino-ui-wayland
 
 Unit tests cover the pixel conversion, the damage cut, popup placement, the clipboard text, and the window system's
 conversions, input timeline and carried-damage bound. `tests/protocol-flow.rs` drives the presenter, the clipboard and
-the window system (frame pacing, carried and missed damage, the input region, a click, the clipboard, the waker, refused requests)
+the window system (frame pacing, carried and missed damage, the input region, a click, the clipboard, a drag with its
+icon, the waker, refused requests)
 against an in-process server.

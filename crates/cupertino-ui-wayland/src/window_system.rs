@@ -16,20 +16,21 @@ use cupertino_protocol_app::{
 use cupertino_ui_menus::{AppMenus, WindowMenus};
 use cupertino_ui_platform::{
     ActivationRequest, Backdrop, Capabilities, ClipboardData, ClipboardKind, ClipboardToken,
-    ConfigureId, CursorShape, KeyEvent, Keysym, MenuDescription, PlatformError, PlatformEvent,
-    PopupSpec, PresentOutcome, SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest,
-    WindowSpec, WindowSystem,
+    ConfigureId, CursorShape, DragImage, DragProgress, DragRequest, DragToken, DropAction,
+    KeyEvent, Keysym, MenuDescription, PlatformError, PlatformEvent, PopupSpec, PresentOutcome,
+    SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{CpuFrame, RenderFrameId};
 use cupertino_ui_text::TextInputState;
 use cupertino_wayland_client::{
-    BufferFormat, Capability, ClipboardOffer, Connection, Error, Event, KeyboardEvent, PixelRect,
-    Popup, ReadId, SurfaceId, TokenRequest, Toplevel, ToplevelConfig,
+    BufferFormat, Capability, ClipboardOffer, Connection, DragActions, DragIcon, DragSource,
+    DragSourceEvent, Error, Event, KeyboardEvent, PixelRect, Popup, ReadId, SurfaceId,
+    TokenRequest, Toplevel, ToplevelConfig,
 };
 use rustix::time::ClockId;
 
 use crate::convert::{self, InputTimeline};
-use crate::pixels::convert_rects;
+use crate::pixels::{convert_rects, rgba_to_argb8888};
 use crate::roles::{RoleEvent, SurfaceRoles};
 
 enum Kind {
@@ -134,6 +135,9 @@ pub struct WaylandWindowSystem {
     reads: Vec<(ReadId, ClipboardToken, String)>,
     tokens: Vec<(TokenRequest, ActivationRequest)>,
     next_activation: u64,
+    /// The drag started last, while it runs; the transport runs one at a time.
+    drag: Option<(DragSource, DragToken)>,
+    next_drag: u64,
     /// Events produced outside a dispatch (a clipboard read, a frame that needs no wait), returned by the next one.
     queued: Vec<PlatformEvent>,
     woken: Arc<AtomicBool>,
@@ -159,6 +163,33 @@ fn apply_appearance(appearance: &mut SystemAppearance, event: &AppEvent) -> bool
         _ => return false,
     }
     true
+}
+
+/// The compositor's chosen action; `None` for no action.
+fn drop_action(action: DragActions) -> Option<DropAction> {
+    if action.contains(DragActions::Move) {
+        Some(DropAction::Move)
+    } else if action.contains(DragActions::Copy) {
+        Some(DropAction::Copy)
+    } else if action.contains(DragActions::Ask) {
+        Some(DropAction::Ask)
+    } else {
+        None
+    }
+}
+
+/// The transport's icon of a drag image: its RGBA pixels in `wl_shm`'s byte order.
+fn drag_icon(image: &DragImage) -> Result<DragIcon, PlatformError> {
+    let mut pixels = vec![0; image.pixels.len()];
+    rgba_to_argb8888(&image.pixels, &mut pixels);
+    DragIcon::new(
+        image.width,
+        image.height,
+        image.scale,
+        pixels,
+        image.hotspot,
+    )
+    .ok_or_else(|| PlatformError::Protocol("a drag image the transport cannot show".into()))
 }
 
 fn platform_error(e: Error) -> PlatformError {
@@ -194,6 +225,8 @@ impl WaylandWindowSystem {
             reads: Vec::new(),
             tokens: Vec::new(),
             next_activation: 0,
+            drag: None,
+            next_drag: 0,
             queued: Vec::new(),
             woken: Arc::new(AtomicBool::new(false)),
             effects,
@@ -698,10 +731,25 @@ impl WaylandWindowSystem {
                 }
                 return;
             }
-            // the platform has no events for these yet: drags wait for the platform's drag events
-            Event::PopupRepositioned { .. } | Event::Drag { .. } | Event::DragSource { .. } => {
-                return
+            Event::DragSource { source, event } => {
+                let Some((_, token)) = self.drag.filter(|(s, _)| *s == source) else {
+                    return;
+                };
+                let progress = match event {
+                    DragSourceEvent::Target(mime) => DragProgress::Target(mime),
+                    DragSourceEvent::Action(action) => DragProgress::Action(drop_action(action)),
+                    DragSourceEvent::Dropped => DragProgress::Dropped,
+                    DragSourceEvent::Finished => DragProgress::Finished,
+                    DragSourceEvent::Cancelled => DragProgress::Cancelled,
+                };
+                if matches!(progress, DragProgress::Finished | DragProgress::Cancelled) {
+                    self.drag = None;
+                }
+                out.push(PlatformEvent::Drag { token, progress });
+                return;
             }
+            // the platform has no events for these yet: drops wait for the platform's drop events
+            Event::PopupRepositioned { .. } | Event::Drag { .. } => return,
         };
         let window = self.windows[i].id;
         out.push(PlatformEvent::Window { window, event });
@@ -724,7 +772,7 @@ impl WindowSystem for WaylandWindowSystem {
             touch: false,
             cursor_shape: has(Capability::CursorShape),
             primary_selection: false,
-            drag_and_drop: false,
+            drag_and_drop: has(Capability::Clipboard) && has(Capability::Seat),
             server_decorations: has(Capability::ServerDecoration),
             activation: has(Capability::Activation),
             app_effects: self.effects.is_some(),
@@ -888,6 +936,44 @@ impl WindowSystem for WaylandWindowSystem {
             Some(shape) => self.conn.set_cursor(convert::cursor(shape)),
             None => self.conn.hide_cursor(),
         };
+    }
+
+    /// The drag answers the latest button press still held in `window`'s client; one the transport refuses (no button
+    /// held) fails here, and one the compositor ignores ends as [`DragProgress::Cancelled`]. A drag started while
+    /// another runs replaces it, which ends as cancelled.
+    fn start_drag(
+        &mut self,
+        window: WindowId,
+        request: DragRequest,
+    ) -> Result<DragToken, PlatformError> {
+        let surface = self.window(window)?.surface;
+        let icon = request.image.as_ref().map(drag_icon).transpose()?;
+        let mut actions = DragActions::empty();
+        for action in &request.actions {
+            actions |= match action {
+                DropAction::Copy => DragActions::Copy,
+                DropAction::Move => DragActions::Move,
+                DropAction::Ask => DragActions::Ask,
+            };
+        }
+        let contents = request
+            .data
+            .into_iter()
+            .map(|d| (d.mime, d.bytes))
+            .collect();
+        let source = self
+            .conn
+            .start_drag_with_icon(surface, contents, actions, icon.as_ref())
+            .map_err(platform_error)?;
+        self.next_drag += 1;
+        let token = DragToken(self.next_drag);
+        if let Some((_, replaced)) = self.drag.replace((source, token)) {
+            self.queued.push(PlatformEvent::Drag {
+                token: replaced,
+                progress: DragProgress::Cancelled,
+            });
+        }
+        Ok(token)
     }
 
     fn set_clipboard(&mut self, kind: ClipboardKind, data: ClipboardData) {

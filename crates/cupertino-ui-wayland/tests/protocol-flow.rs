@@ -107,6 +107,8 @@ enum Control {
     MenuReader(String),
     /// Ask the window to close.
     Close,
+    /// End the client's drag without a drop, as a release over nothing that accepts it does.
+    CancelDrag,
 }
 
 /// A request the server saw that the commit record does not cover.
@@ -125,6 +127,20 @@ enum Seen {
         menubar: String,
     },
     MenuWithdrawn,
+    /// `wl_data_device.start_drag` with the press's serial, the source's types, and whether it named an icon surface.
+    DragStarted {
+        serial: u32,
+        types: Vec<String>,
+        icon: bool,
+    },
+    /// The drag's icon surface committed a buffer of `size` pixels at `scale` with the pointer at `hotspot` points (the
+    /// negated `wl_surface.offset`); its first pixel's bytes in memory.
+    IconCommitted {
+        size: (i32, i32),
+        scale: i32,
+        hotspot: (i32, i32),
+        first_pixel: [u8; 4],
+    },
 }
 
 #[derive(Default)]
@@ -134,6 +150,7 @@ struct SurfaceState {
     scale: i32,
     frames: Vec<WlCallback>,
     input_region: Option<Option<Vec<[i32; 4]>>>,
+    offset: (i32, i32),
 }
 
 type SurfaceData = Arc<Mutex<SurfaceState>>;
@@ -173,6 +190,8 @@ struct Mock {
     /// Presentation feedback not yet answered, oldest first.
     feedbacks: VecDeque<WpPresentationFeedback>,
     menu: Option<CupertinoAppMenuV1>,
+    /// The source and icon surface of the client's drag.
+    drag: Option<(WlDataSource, Option<WlSurface>)>,
 }
 
 struct Data;
@@ -328,7 +347,27 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
         init: &mut DataInit<'_, Self>,
     ) {
         let mut s = data.lock().unwrap();
+        let icon = state
+            .drag
+            .as_ref()
+            .is_some_and(|(_, icon)| icon.as_ref() == Some(surface));
         match request {
+            wl_surface::Request::Offset { x, y } => s.offset = (s.offset.0 + x, s.offset.1 + y),
+            wl_surface::Request::Commit if icon => {
+                if let Some(buffer) = s.buffer.take() {
+                    let b = buffer.data::<BufferData>().expect("buffer data");
+                    let start = b.offset as usize;
+                    state
+                        .seen
+                        .send(Seen::IconCommitted {
+                            size: (b.width, b.height),
+                            scale: s.scale,
+                            hotspot: (-s.offset.0, -s.offset.1),
+                            first_pixel: b.map[start..start + 4].try_into().unwrap(),
+                        })
+                        .unwrap();
+                }
+            }
             wl_surface::Request::Attach { buffer, .. } => s.buffer = buffer,
             wl_surface::Request::DamageBuffer {
                 x,
@@ -684,6 +723,34 @@ impl Dispatch<WlDataDevice, ()> for Mock {
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
+        if let wl_data_device::Request::StartDrag {
+            source: Some(source),
+            icon,
+            serial,
+            ..
+        } = request
+        {
+            let types = source
+                .data::<Mutex<Vec<String>>>()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .clone();
+            state
+                .seen
+                .send(Seen::DragStarted {
+                    serial,
+                    types,
+                    icon: icon.is_some(),
+                })
+                .unwrap();
+            // the drag takes the pointer, as a compositor's does
+            if let (Some(pointer), Some(t)) = (&state.pointer, &state.toplevel) {
+                pointer.leave(state.next_serial + 100, &t.surface);
+            }
+            state.drag = Some((source, icon));
+            return;
+        }
         if let wl_data_device::Request::SetSelection {
             source: Some(source),
             serial,
@@ -761,6 +828,7 @@ fn spawn_server_with(
             pasting: None,
             feedbacks: VecDeque::new(),
             menu: None,
+            drag: None,
         };
         let mut display_handle = display.handle();
         display_handle
@@ -793,6 +861,7 @@ fn spawn_server_with(
                 Ok(Control::Discard) => mock.feedbacks.pop_front().unwrap().discarded(),
                 Ok(Control::MenuReader(name)) => mock.menu.as_ref().unwrap().menu_reader(name),
                 Ok(Control::Close) => mock.toplevel.as_ref().unwrap().toplevel.close(),
+                Ok(Control::CancelDrag) => mock.drag.as_ref().unwrap().0.cancelled(),
                 Ok(Control::PointerPress) => {
                     let (pointer, t) = (
                         mock.pointer.as_ref().unwrap(),
@@ -1851,6 +1920,72 @@ mod window_system {
                 types: vec!["text/plain".into()]
             }
         );
+    }
+
+    /// The drag goes out from the press with its data's types and its image as the icon surface, in `wl_shm`'s byte
+    /// order at its scale with the pointer at the hotspot; the compositor's cancel ends it.
+    #[test]
+    fn a_drag_goes_out_with_its_image_as_the_icon_and_ends_when_the_compositor_cancels_it() {
+        use cupertino_ui_platform::{
+            ClipboardData, DragImage, DragProgress, DragRequest, DropAction,
+        };
+        let (mut kit, control, _committed, seen) = mapped();
+        assert!(kit.ws.capabilities().drag_and_drop);
+        let request = || {
+            let mut pixels = vec![0; 4 * 2 * 4];
+            pixels[..4].copy_from_slice(&[10, 20, 30, 255]);
+            DragRequest {
+                data: vec![ClipboardData {
+                    mime: "text/uri-list".into(),
+                    bytes: b"file:///a\r\n".to_vec(),
+                }],
+                actions: [DropAction::Copy, DropAction::Move].into(),
+                image: Some(DragImage {
+                    width: 4,
+                    height: 2,
+                    scale: 2,
+                    pixels,
+                    hotspot: Point::new(1.0, 1.0),
+                }),
+            }
+        };
+        assert!(
+            kit.ws.start_drag(kit.window, request()).is_err(),
+            "no button held"
+        );
+        control.send(Control::PointerPress).unwrap();
+        kit.window_event(|e| {
+            matches!(e, WindowEvent::Pointer(PointerEvent::Button { .. }, _)).then_some(())
+        });
+        let token = kit.ws.start_drag(kit.window, request()).unwrap();
+        kit.pump();
+        assert_eq!(
+            seen.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Seen::DragStarted {
+                serial: 6,
+                types: vec!["text/uri-list".into()],
+                icon: true,
+            }
+        );
+        assert_eq!(
+            seen.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Seen::IconCommitted {
+                size: (4, 2),
+                scale: 2,
+                hotspot: (1, 1),
+                first_pixel: [30, 20, 10, 255],
+            }
+        );
+        // the window loses the pointer for the drag
+        kit.window_event(|e| {
+            matches!(e, WindowEvent::Pointer(PointerEvent::Leave, _)).then_some(())
+        });
+        control.send(Control::CancelDrag).unwrap();
+        let progress = kit.wait_for(|e| match e {
+            PlatformEvent::Drag { token: t, progress } if *t == token => Some(progress.clone()),
+            _ => None,
+        });
+        assert_eq!(progress, DragProgress::Cancelled);
     }
 
     #[test]

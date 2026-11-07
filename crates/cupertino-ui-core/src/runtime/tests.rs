@@ -1311,6 +1311,7 @@ fn a_menu_window_shows_the_menu_material_where_the_desktop_draws_it_and_the_opaq
         material: "Menu".into(),
         radius: 8.0,
         alpha: 1.0,
+        bounds: None,
     };
     assert_eq!(backdrops(&rt), vec![Some(menu.clone())]);
     frame(&mut rt, Some("half"));

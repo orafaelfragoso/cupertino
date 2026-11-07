@@ -7,7 +7,7 @@
 //! [`crate::switcher`]; nothing here speaks Wayland.
 
 use crate::switcher::{HoverGate, Switcher, SwitcherLayout};
-use crate::wm_kit::{self, faded, fill, ImageSource, Look, Part, PointerInput, Rgba, Root};
+use crate::wm_kit::{self, fill, ImageSource, Look, Part, PointerInput, Rgba, Root};
 use cupertino_kit::core::{
     AccessibleStates, CommandRegistry, Element, Key, Role, Window, WindowBackground, WindowKey,
 };
@@ -27,6 +27,12 @@ pub const FRAME: f64 = 1.0 / 60.0;
 
 /// Weight of the selected application's name (regular).
 const LABEL_WEIGHT: u16 = 400;
+
+/// Over the opaque fill of Reduce Transparency the selection's alpha is this much stronger, so it stays visible.
+const OPAQUE_SELECTION_GAIN: f32 = 1.2;
+/// The selection under Increase Contrast: translucent white in dark, translucent black in light.
+const CONTRAST_SELECTION_DARK: Rgba = [1.0, 1.0, 1.0, 0.35];
+const CONTRAST_SELECTION_LIGHT: Rgba = [0.0, 0.0, 0.0, 0.3];
 
 /// One entry of the server's list: the application id and the name the panel shows (the desktop entry's name, else
 /// the id).
@@ -373,12 +379,17 @@ fn selection_fill(look: Look) -> Rgba {
     let base = SwitcherLayout::selection_fill(look.dark);
     if look.high_contrast {
         if look.dark {
-            [1.0, 1.0, 1.0, 0.35]
+            CONTRAST_SELECTION_DARK
         } else {
-            [0.0, 0.0, 0.0, 0.3]
+            CONTRAST_SELECTION_LIGHT
         }
     } else if look.reduce_transparency {
-        faded(base, 1.2)
+        [
+            base[0],
+            base[1],
+            base[2],
+            (base[3] * OPAQUE_SELECTION_GAIN).min(1.0),
+        ]
     } else {
         base
     }
@@ -390,5 +401,31 @@ fn label_color(look: Look) -> Rgba {
         (true, true) => [1.0, 1.0, 1.0, 1.0],
         (true, false) => [0.0, 0.0, 0.0, 1.0],
         (false, dark) => SwitcherLayout::label_color(dark),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Over the opaque fill of Reduce Transparency the selection is stronger than over the material.
+    #[test]
+    fn the_selection_is_stronger_under_reduce_transparency() {
+        for dark in [false, true] {
+            let base = selection_fill(Look {
+                dark,
+                ..Look::default()
+            });
+            let opaque = selection_fill(Look {
+                dark,
+                reduce_transparency: true,
+                ..Look::default()
+            });
+            assert_eq!(opaque[..3], base[..3]);
+            assert!(
+                opaque[3] > base[3] && opaque[3] <= 1.0,
+                "{opaque:?} over {base:?}"
+            );
+        }
     }
 }

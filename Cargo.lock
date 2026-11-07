@@ -1502,6 +1502,7 @@ dependencies = [
  "cupertino-ui-atspi",
  "cupertino-ui-core",
  "cupertino-ui-platform",
+ "cupertino-ui-test",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "libc",

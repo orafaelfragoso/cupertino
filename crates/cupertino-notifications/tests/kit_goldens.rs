@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex};
 use cupertino_assets::BUILTIN_FONT;
 use cupertino_kit::core::FrameSnapshot;
 use cupertino_kit::core::{
-    AccessibilityAdapter, AccessibilityUpdate, ActionRequest, Application, Command, Key,
-    PlaceholderIcons, RuntimeOptions, Window, WindowKey,
+    AccessibilityAdapter, AccessibilityUpdate, Action, ActionRequest, Application, Command, Key,
+    PlaceholderIcons, Role, RuntimeOptions, Window, WindowKey,
 };
 use cupertino_kit::geometry::Point;
 use cupertino_kit::geometry::{Rect, Size};
@@ -29,7 +29,7 @@ use cupertino_notifications::view::{
 };
 use cupertino_notifications::{CenterConfig, NotificationCenter, NotifyInput, Urgency};
 use cupertino_theme::Theme;
-use cupertino_ui_test::{Inspector, ManualClock, TestDriver};
+use cupertino_ui_test::{AssistiveTechnology, Inspector, ManualClock, TestDriver};
 
 /// What the test does to the model between frames.
 #[derive(Clone, Debug)]
@@ -133,11 +133,13 @@ impl Application for Scripted {
 }
 
 /// Writes down what a screen reader would announce: each live node, when it first reaches the tree and whenever
-/// its name or description changes.
+/// its name or description changes. The stand-in `reader` holds the trees too and hands the runtime the actions a test
+/// asks for.
 #[derive(Clone, Default)]
 struct Announcements {
     said: Arc<Mutex<Vec<String>>>,
     live: Arc<Mutex<BTreeMap<String, String>>>,
+    reader: AssistiveTechnology,
 }
 
 impl AccessibilityAdapter for Announcements {
@@ -145,9 +147,20 @@ impl AccessibilityAdapter for Announcements {
         true
     }
 
-    fn window_focus(&mut self, _: WindowId, _: bool) {}
+    fn window_focus(&mut self, window: WindowId, focused: bool) {
+        self.reader.window_focus(window, focused);
+    }
+
+    fn window_closed(&mut self, window: WindowId) {
+        self.reader.window_closed(window);
+    }
+
+    fn window_title(&mut self, window: WindowId, title: &str) {
+        self.reader.window_title(window, title);
+    }
 
     fn update(&mut self, update: &AccessibilityUpdate) {
+        self.reader.update(update);
         for (id, node) in &update.nodes {
             let Some(live) = node.live else {
                 continue;
@@ -166,7 +179,9 @@ impl AccessibilityAdapter for Announcements {
         }
     }
 
-    fn drain_actions(&mut self, _: &mut Vec<ActionRequest>) {}
+    fn drain_actions(&mut self, out: &mut Vec<ActionRequest>) {
+        self.reader.drain_actions(out);
+    }
 }
 
 fn theme(reduce_transparency: bool) -> ThemeTokens {
@@ -434,6 +449,29 @@ fn a_new_banner_slides_in_and_is_announced() {
         "{dump}"
     );
     golden("banner", &dump);
+}
+
+#[test]
+fn a_screen_reader_s_click_on_a_banner_s_action_button_invokes_its_action() {
+    let mut run = Run::new();
+    run.notify(mail("Lunch", "Are you free at noon?").with_action("reply", "Reply"));
+    run.step(Step::At(1.0));
+    let window = run.only_window();
+    let reader = run.announcements.reader.clone();
+    let tree = reader.tree(window).expect("the reader holds the banner");
+    let reply = tree
+        .nodes
+        .iter()
+        .find(|(_, n)| n.role == Role::Button && n.name.as_deref() == Some("Reply"))
+        .map(|(id, _)| *id)
+        .expect("the reader reads the action button");
+    run.driver.ask(&reader, reply, Action::Click, None);
+    run.settle();
+    assert!(
+        matches!(&run.host()[..], [HostAction::Invoke(_, key)] if key == "reply"),
+        "{:?}",
+        run.host()
+    );
 }
 
 #[test]

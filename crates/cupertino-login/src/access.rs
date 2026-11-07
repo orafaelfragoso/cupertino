@@ -6,8 +6,8 @@ use std::num::NonZeroU32;
 
 use cupertino_geometry::Rect;
 use cupertino_ui_core::{
-    AccessibilityNode, AccessibilityUpdate, AccessibleStates, AccessibleValue, Action, Live,
-    NodeId, Role,
+    AccessibilityNode, AccessibilityUpdate, AccessibleStates, AccessibleValue, Action, Checked,
+    Live, NodeId, Role,
 };
 use cupertino_ui_platform::WindowId;
 
@@ -149,24 +149,46 @@ pub fn lock_tree(window: WindowId, view: &LockView<'_>) -> AccessibilityUpdate {
 
 /// The first node id of a panel's buttons; button `i` is this plus `i`.
 const PANEL_BUTTONS: u32 = 10;
+/// The node id of a panel's "Reopen windows" checkbox.
+const PANEL_CHECKBOX: u32 = 4;
 
 fn panel_id(index: u32) -> NodeId {
     NodeId::new(index, NonZeroU32::MIN)
 }
 
 /// The whole tree of a confirmation panel of `kind` laid out in `frames` on `window`, with `seconds_left` on its
-/// countdown. The button Return presses has the focus; each button's only action is a click.
+/// countdown and its checkbox at `reopen`. The button Return presses has the focus; each button's only action is a
+/// click, and so is the checkbox's, which flips it.
 pub fn panel_tree(
     window: WindowId,
     kind: Kind,
     frames: &Frames,
     seconds_left: Option<u32>,
+    reopen: bool,
 ) -> AccessibilityUpdate {
     let text = kind.text();
     let mut nodes = vec![(panel_id(2), self::text(text.title, frames.title))];
     let info = seconds_left.and_then(|s| kind.countdown_message(s));
     if let (Some(info), Some(frame)) = (info, frames.info) {
         nodes.push((panel_id(3), self::text(&info, frame)));
+    }
+    if let Some(checkbox) = frames.checkbox {
+        nodes.push((
+            panel_id(PANEL_CHECKBOX),
+            AccessibilityNode {
+                value: Some(AccessibleValue::Toggle(if reopen {
+                    Checked::True
+                } else {
+                    Checked::False
+                })),
+                actions: vec![Action::Click],
+                states: AccessibleStates {
+                    focusable: true,
+                    ..AccessibleStates::default()
+                },
+                ..node(Role::CheckBox, Some(checkbox.label), checkbox.frame)
+            },
+        ));
     }
     let default = Decision::Do(kind.default_action());
     let mut focus = None;
@@ -215,6 +237,11 @@ pub fn panel_click(frames: &Frames, id: NodeId) -> Option<Decision> {
         .then(|| frames.buttons.get(index as usize))
         .flatten()
         .map(|button| button.decision)
+}
+
+/// Whether a click from assistive technology on node `id` of a panel laid out in `frames` flips its checkbox.
+pub fn panel_toggles(frames: &Frames, id: NodeId) -> bool {
+    frames.checkbox.is_some() && id == panel_id(PANEL_CHECKBOX)
 }
 
 /// The password field: its value is protected in every phase, and the only action it offers is focus.

@@ -22,8 +22,10 @@ app = [
 ]
 
 [dependencies]
+cupertino-apps = { path = "../cupertino-apps" }
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-decorations = { path = "../cupertino-decorations" }
+cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-login-ipc = { path = "../cupertino-login-ipc" }
 cupertino-peer = { path = "../cupertino-peer" }

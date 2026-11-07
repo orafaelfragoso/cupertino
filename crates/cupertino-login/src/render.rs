@@ -144,6 +144,13 @@ const PANEL_TITLE_BASELINE: f64 = 13.0;
 const PANEL_MESSAGE_SIZE: f64 = 11.0;
 const PANEL_MESSAGE_BASELINE: f64 = 11.0;
 const PANEL_MESSAGE_ALPHA: f32 = 0.7;
+/// The "Reopen windows" checkbox: the box's corner radius, its fill when ticked (the default button's blue) and empty (the
+/// cancel button's fill with an edge), the check's stroke, the label's size and its gap from the box.
+const CHECKBOX_RADIUS: f64 = 3.0;
+const CHECKBOX_EDGE_ALPHA: f32 = 0.35;
+const CHECK_STROKE: f64 = 1.8;
+const CHECKBOX_LABEL_SIZE: f64 = 13.0;
+const CHECKBOX_LABEL_GAP: f64 = 6.0;
 
 const WHITE: Rgba = [1.0, 1.0, 1.0, 1.0];
 const WEIGHT_MEDIUM: u16 = 500;
@@ -211,6 +218,8 @@ pub struct PanelView {
     pub seconds_left: Option<u32>,
     /// The layout from [`Renderer::panel_frames`]; its size is the pixmap's.
     pub frames: Frames,
+    /// The "Reopen windows" checkbox is ticked.
+    pub reopen: bool,
 }
 
 /// Draws the lock screen and the confirmation panel.
@@ -385,6 +394,34 @@ impl Renderer {
                 PANEL_MESSAGE_SIZE,
                 WEIGHT_MEDIUM,
                 with_alpha(WHITE, PANEL_MESSAGE_ALPHA),
+            );
+        }
+        if let Some(checkbox) = frames.checkbox {
+            let check = checkbox.check;
+            if view.reopen {
+                canvas.rounded(check, CHECKBOX_RADIUS, DEFAULT_BUTTON_FILL);
+                canvas.check_mark(check, CHECK_STROKE);
+            } else {
+                canvas.rounded(check, CHECKBOX_RADIUS, PILL_FILL);
+                canvas.outline(
+                    check,
+                    CHECKBOX_RADIUS,
+                    RING_WIDTH,
+                    [1.0, 1.0, 1.0, CHECKBOX_EDGE_ALPHA],
+                );
+            }
+            let left = check.max_x() + CHECKBOX_LABEL_GAP;
+            let baseline =
+                checkbox.frame.center().y + self.cap_height_per_em * CHECKBOX_LABEL_SIZE / 2.0;
+            self.left_text(
+                &mut canvas,
+                checkbox.label,
+                left,
+                baseline,
+                CHECKBOX_LABEL_SIZE,
+                WEIGHT_MEDIUM,
+                checkbox.frame.max_x() - left,
+                WHITE,
             );
         }
         for button in &frames.buttons {
@@ -1142,6 +1179,30 @@ impl Canvas<'_> {
             .stroke_path(&path, &solid(WHITE), &stroke, Transform::identity(), None);
     }
 
+    /// A white check inside the box `frame`, `width` points wide with round caps.
+    fn check_mark(&mut self, frame: Rect, width: f64) {
+        let at = |fx: f64, fy: f64| {
+            (
+                self.px(frame.x() + frame.width() * fx),
+                self.px(frame.y() + frame.height() * fy),
+            )
+        };
+        let (start, corner, end) = (at(0.25, 0.52), at(0.43, 0.7), at(0.76, 0.3));
+        let mut check = PathBuilder::new();
+        check.move_to(start.0, start.1);
+        check.line_to(corner.0, corner.1);
+        check.line_to(end.0, end.1);
+        let path = check.finish().expect("the check has a length");
+        let stroke = Stroke {
+            width: self.px(width),
+            line_cap: LineCap::Round,
+            line_join: LineJoin::Round,
+            ..Stroke::default()
+        };
+        self.pixmap
+            .stroke_path(&path, &solid(WHITE), &stroke, Transform::identity(), None);
+    }
+
     fn power_glyph(&mut self, x: f64, y: f64) {
         let mut ring = PathBuilder::new();
         // from just right of the top clockwise to just left of it, in steps of 10 degrees
@@ -1316,5 +1377,24 @@ mod tests {
         );
         assert!(near(20, 30, 153), "six o'clock {}", alpha(&pixmap, 20, 30));
         assert_eq!(alpha(&pixmap, 20, 20), 0);
+    }
+
+    #[test]
+    fn a_ticked_box_is_filled_with_a_white_check_through_its_middle() {
+        let mut pixmap = Pixmap::new(20, 20).unwrap();
+        let mut canvas = Canvas {
+            pixmap: &mut pixmap,
+            scale: 1.0,
+        };
+        let check = Rect::new(3.0, 3.0, 14.0, 14.0);
+        canvas.rounded(check, CHECKBOX_RADIUS, DEFAULT_BUTTON_FILL);
+        canvas.check_mark(check, CHECK_STROKE);
+        let pixel = |x, y| pixmap.pixel(x, y).unwrap();
+        // the check's corner at (0.43, 0.7) of the box, a filled point away from the check, and outside the box
+        let corner = pixel(9, 12);
+        assert!(corner.red() > 200 && corner.green() > 200, "{corner:?}");
+        let fill = pixel(13, 14);
+        assert!(fill.blue() > 200 && fill.red() < 60, "{fill:?}");
+        assert_eq!(pixel(1, 1).alpha(), 0);
     }
 }

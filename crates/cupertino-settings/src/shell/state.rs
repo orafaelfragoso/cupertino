@@ -190,12 +190,14 @@ impl State {
             }
         };
         let display = settings.accessibility.display;
+        let screen_reader_installed = paths.screen_reader.is_some();
         let mut state = State {
             paths,
             settings,
             services,
             live: Live {
                 hardware: Some(backends.hardware),
+                screen_reader_installed,
                 ..Live::default()
             },
             groups: sidebar::groups(&hidden),

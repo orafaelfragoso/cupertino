@@ -79,6 +79,9 @@ pub struct Paths {
     /// The machine's accessibility defaults (`SYSTEM_ACCESSIBILITY`), under every key `accessibility.conf` does not record.
     pub system_accessibility: Option<PathBuf>,
     pub data_control: Option<PathBuf>,
+    /// The installed screen reader (`installed_screen_reader`), which the session's compositor runs; `None` without one.
+    /// Settings only shows whether there is one: it never starts it.
+    pub screen_reader: Option<PathBuf>,
 }
 
 impl Paths {
@@ -92,6 +95,7 @@ impl Paths {
             accessibility: cupertino_defaults::config_file(ACCESSIBILITY_ENV, ACCESSIBILITY_FILE),
             system_accessibility: Some(PathBuf::from(SYSTEM_ACCESSIBILITY)),
             data_control: DataControlConf::path(),
+            screen_reader: cupertino_defaults::accessibility::installed_screen_reader(),
         }
     }
 

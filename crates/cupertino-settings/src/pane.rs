@@ -127,8 +127,17 @@ pub const PANES: [Pane; 17] = [
         "symbol.accessibility",
         Enclosure::Blue,
         Tier::Live,
-        &["Display", "Login Screen", "Pointer", "Keyboard"],
         &[
+            "Screen Reader",
+            "Display",
+            "Login Screen",
+            "Pointer",
+            "Keyboard",
+        ],
+        &[
+            "screen reader",
+            "read aloud",
+            "speech",
             "reduce motion",
             "transparency",
             "contrast",

@@ -41,6 +41,7 @@ impl Fixture {
             accessibility: None,
             system_accessibility: None,
             data_control: Some(dir.path().join("data-control.conf")),
+            screen_reader: None,
         };
         Fixture { dir, paths }
     }

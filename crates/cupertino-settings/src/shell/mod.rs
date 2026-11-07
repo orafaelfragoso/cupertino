@@ -667,6 +667,8 @@ mod tests {
             accessibility: Some(dir.join("accessibility.conf")),
             system_accessibility: None,
             data_control: Some(dir.join("data-control.conf")),
+            // shown as installed; Settings never starts it
+            screen_reader: Some(std::path::PathBuf::from("/usr/bin/orca")),
         }
     }
 
@@ -742,12 +744,22 @@ mod tests {
         sheet: Option<Sheet>,
         services: Services,
     ) -> (TestDriver<SettingsApp>, WindowId) {
+        start_state(dir, pane, services, |state| state.sheet = sheet)
+    }
+
+    /// [`start_on`] with the state changed by `prepare` before the window opens.
+    fn start_state(
+        dir: &Path,
+        pane: PaneId,
+        services: Services,
+        prepare: impl FnOnce(&mut State),
+    ) -> (TestDriver<SettingsApp>, WindowId) {
         let (wake, woken) = async_channel::bounded(1);
         let (notify, background) = background_channel(move || {
             let _ = wake.try_send(());
         });
         let mut state = State::new(paths(dir), services, pane, 1080.0, notify).unwrap();
-        state.sheet = sheet;
+        prepare(&mut state);
         launch(Start {
             state,
             background,
@@ -992,6 +1004,98 @@ mod tests {
         assert!(
             !described(&driver).contains(&asking),
             "Join called the service, which has no bus here, and the sheet shows why it failed"
+        );
+    }
+
+    /// The server's session object as the Accessibility pane uses it: the keys it holds, and the calls that set them.
+    struct FakeSession {
+        held: std::collections::HashMap<String, String>,
+        calls: Arc<Mutex<Vec<(String, String)>>>,
+    }
+
+    #[zbus::interface(name = "org.cupertino.Session1")]
+    impl FakeSession {
+        #[zbus(property)]
+        fn accessibility(&self) -> std::collections::HashMap<String, String> {
+            self.held.clone()
+        }
+
+        fn set_accessibility(&mut self, key: String, value: String) {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((key.clone(), value.clone()));
+            self.held.insert(key, value);
+        }
+    }
+
+    /// The state of the switch named `name`.
+    fn switch_state(driver: &TestDriver<SettingsApp>, window: WindowId, name: &str) -> String {
+        let snapshot = driver.runtime().snapshot(window).unwrap();
+        snapshot
+            .accessibility
+            .iter()
+            .find(|(_, n)| n.role == Role::Switch && n.name.as_deref() == Some(name))
+            .map(|(_, n)| cupertino_ui_test::describe(n))
+            .unwrap_or_else(|| panic!("a switch named {name:?}"))
+    }
+
+    #[test]
+    fn the_screen_reader_switch_asks_the_server_to_start_and_stop_the_reader() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+            eprintln!("skipped: dbus-daemon is not available");
+            return;
+        };
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let held = [("screen_reader".to_string(), "off".to_string())].into();
+        let _session = zbus::blocking::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .serve_at(
+                "/org/cupertino/Session1",
+                FakeSession {
+                    held,
+                    calls: Arc::clone(&calls),
+                },
+            )
+            .unwrap()
+            .name("org.cupertino.Session1")
+            .unwrap()
+            .build()
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let services = Services::on(Bus::address(NOWHERE), Bus::at(bus.connect()));
+        // the window's own session bus is the private one: no test reaches the real session
+        let session = bus.connect();
+        let (mut driver, window) =
+            start_state(dir.path(), PaneId::Accessibility, services, |state| {
+                state.bus = Some(session)
+            });
+        assert_eq!(
+            switch_state(&driver, window, "Screen reader"),
+            "Switch \"Screen reader\" off focusable"
+        );
+        let control = format!("{:?}-control", ControlId::ScreenReader);
+        click(&mut driver, window, &control);
+        assert_eq!(
+            switch_state(&driver, window, "Screen reader"),
+            "Switch \"Screen reader\" on focusable",
+            "the switch shows what the server now holds"
+        );
+        driver
+            .look(window, "settings-accessibility-screen-reader-on")
+            .unwrap();
+        click(&mut driver, window, &control);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [
+                ("screen_reader".to_string(), "on".to_string()),
+                ("screen_reader".to_string(), "off".to_string())
+            ]
+        );
+        assert_eq!(
+            switch_state(&driver, window, "Screen reader"),
+            "Switch \"Screen reader\" off focusable"
         );
     }
 

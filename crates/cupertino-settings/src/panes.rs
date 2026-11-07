@@ -75,6 +75,8 @@ pub enum ControlId {
     ColorFilterIntensity,
     /// Use Mine: the person's allow-listed display options become the machine's defaults.
     LoginScreen,
+    /// The session's screen reader on or off (`screen_reader`, which the server runs).
+    ScreenReader,
     CursorSize,
     ShakeToLocate,
     StickyKeys,
@@ -1071,6 +1073,7 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
             let keys = |k| Backend::Key(File::Keyboard, k);
             let k = &settings.keyboard;
             let mut out = vec![
+                screen_reader_section(a.screen_reader, live.screen_reader_installed),
                 Section {
                     header: header("Display"),
                     rows: display,
@@ -1137,7 +1140,8 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                 },
             ];
             if let Some(login) = &live.login_screen {
-                out.insert(1, login_screen_section(login));
+                // after Display
+                out.insert(2, login_screen_section(login));
             }
             out
         }
@@ -1452,6 +1456,32 @@ fn system_options() -> Vec<DisplayOption> {
         .into_iter()
         .filter(|o| SYSTEM_KEYS.contains(&o.key()))
         .collect()
+}
+
+/// What the Screen reader row says under its label: the chord that turns the reader on or off anywhere.
+pub const SCREEN_READER_DETAIL: &str =
+    "Reads the screen aloud. Super+Alt+S turns it on or off, also at the login screen.";
+/// Why the Screen reader switch is disabled without a reader.
+pub const NO_SCREEN_READER: &str = "No screen reader is installed.";
+
+/// The session's screen reader (`screen_reader` of `accessibility.conf`, which the server starts and stops), first in the
+/// pane so a person who needs it finds it at once; disabled with the reason when none is installed.
+fn screen_reader_section(on: bool, installed: bool) -> Section {
+    let mut reader = row(
+        ControlId::ScreenReader,
+        "Screen reader",
+        switch(on),
+        Backend::SetAccessibility(cupertino_defaults::accessibility::SCREEN_READER),
+    );
+    reader.detail = Some(SCREEN_READER_DETAIL.to_string());
+    if !installed {
+        reader.disabled = Some(NO_SCREEN_READER.to_string());
+    }
+    Section {
+        header: header("Screen Reader"),
+        rows: vec![reader],
+        footer: None,
+    }
 }
 
 /// What the section's footer says: the limit of the machine's defaults (the row's label says whom they reach).
@@ -2081,6 +2111,10 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
                 value: if bool_of(value) { "on" } else { "off" }.to_string(),
             }]
         }
+        ControlId::ScreenReader => vec![Effect::SetAccessibility {
+            key: cupertino_defaults::accessibility::SCREEN_READER,
+            value: if bool_of(value) { "on" } else { "off" }.to_string(),
+        }],
         ControlId::DisplayContrast => vec![Effect::SetAccessibility {
             key: "display_contrast",
             value: format!("{:.3}", fraction_of(value)),
@@ -2457,6 +2491,7 @@ mod tests {
             }),
             login_screen: Some(crate::live::LoginScreen::default()),
             apps: Vec::new(),
+            screen_reader_installed: true,
         };
         for pane in crate::pane::PANES.iter().map(|p| p.id) {
             for r in sections(pane, &unset(), LIGHT, &live)
@@ -2872,6 +2907,47 @@ mod tests {
     }
 
     #[test]
+    fn the_screen_reader_switch_comes_first_shows_the_server_s_value_and_asks_the_server() {
+        let reader = |settings: &Settings, installed: bool| {
+            let live = Live {
+                screen_reader_installed: installed,
+                ..Live::default()
+            };
+            sections(PaneId::Accessibility, settings, LIGHT, &live)[0].rows[0].clone()
+        };
+        let mut s = unset();
+        let row = reader(&s, true);
+        assert_eq!(
+            (row.label.as_str(), &row.control, row.disabled.as_deref()),
+            ("Screen reader", &Control::Switch { on: false }, None)
+        );
+        assert_eq!(row.detail.as_deref(), Some(SCREEN_READER_DETAIL));
+        assert_eq!(row.backend, Backend::SetAccessibility("screen_reader"));
+        assert_eq!(
+            reader(&s, false).disabled.as_deref(),
+            Some(NO_SCREEN_READER),
+            "without a reader the switch says why it is off"
+        );
+        s.accessibility.screen_reader = true;
+        assert_eq!(reader(&s, true).control, Control::Switch { on: true });
+        for (on, value) in [(true, "on"), (false, "off")] {
+            assert_eq!(
+                change(
+                    ControlId::ScreenReader,
+                    Value::Bool(on),
+                    &mut s,
+                    &Live::default()
+                ),
+                [Effect::SetAccessibility {
+                    key: "screen_reader",
+                    value: value.into()
+                }],
+                "the server starts or stops the reader and stores the key"
+            );
+        }
+    }
+
+    #[test]
     fn the_login_screen_section_follows_display_only_when_sessiond_allows_it() {
         let headers = |live: &Live| {
             sections(PaneId::Accessibility, &unset(), LIGHT, live)
@@ -2881,13 +2957,19 @@ mod tests {
         };
         assert_eq!(
             headers(&login_live(None)),
-            ["Display", "Pointer", "Keyboard"],
+            ["Screen Reader", "Display", "Pointer", "Keyboard"],
             "not allowed, not answered, or no sessiond"
         );
         let live = login_live(Some(LoginScreen::default()));
         assert_eq!(
             headers(&live),
-            ["Display", "Login Screen", "Pointer", "Keyboard"]
+            [
+                "Screen Reader",
+                "Display",
+                "Login Screen",
+                "Pointer",
+                "Keyboard"
+            ]
         );
         let row = login_row(&live);
         assert_eq!(row.label, "Login screen and new users");
@@ -2967,7 +3049,7 @@ mod tests {
                 title: "Use Mine".into()
             }
         );
-        let state = sections(PaneId::Accessibility, &s, LIGHT, &saved)[1]
+        let state = sections(PaneId::Accessibility, &s, LIGHT, &saved)[2]
             .rows
             .iter()
             .find(|r| r.label == "Login screen now")

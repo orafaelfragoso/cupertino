@@ -78,6 +78,7 @@ The lines go to stderr, and the QEMU check matches them. The greeter logs the sa
 | Line | When |
 |---|---|
 | `cupertino-login: locked` | Lock confirmed, once per lock. |
+| `cupertino-login: the session is locked without a lock screen: taking the lock` | At start, after the lock screen before this process ended without unlocking: it locks at once. |
 | `cupertino-login: authentication failed` | Wrong password. |
 | `cupertino-login: authentication error: <reason> | PAM could not decide or refused the account; the screen stays locked and shows the reason. |
 | `cupertino-login: unlocked` | After the unlock. |
@@ -117,8 +118,9 @@ The lines go to stderr, and the QEMU check matches them. The greeter logs the sa
 that appears later; it destroys the surface of one that goes away). It logs `cupertino-login: locked` once the server confirms,
 and the surfaces draw from the first configure on. After a successful attempt the interface fades out, the surfaces are
 destroyed, the server is told to unlock and the process logs `cupertino-login: unlocked`. Every error ends the process instead,
-so the lock stays, as the protocol requires. A restarted process finds the session locked, gets `finished` and exits again until
-the server offers a way back; that policy is the server's.
+so the lock stays, as the protocol requires, and the server keeps the outputs black. The process it restarts learns at start
+that the session is locked, logs `cupertino-login: the session is locked without a lock screen: taking the lock` and locks at
+once: the server lets it take over the lock its predecessor left, and its lock screen takes the password.
 
 Everything but the wallpaper is one layer whose opacity is animated. Times are on the process's clock, and the state machine
 (`model::LockScreen`) takes them as arguments.

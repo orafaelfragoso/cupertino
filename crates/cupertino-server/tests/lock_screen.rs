@@ -1,7 +1,9 @@
 //! The real login process holds the session lock under a headless server, with its Kit lock screen: it locks when the
 //! system is about to sleep and lets the sleep go on only once the lock is up; while the session is locked an
 //! application gets no key, no pointer motion and no button; and a return from another console (the session made active
-//! again) leaves the session locked, the lock surface with the keyboard and the application still without input. The
+//! again) leaves the session locked, the lock surface with the keyboard and the application still without input; and a
+//! login process killed while locked leaves the session locked, without input to the application, until the restarted one
+//! takes the lock. The
 //! login process finds its session through a stand-in logind on a private system bus and serves its interface on a
 //! private session bus; every directory it reads is a fixture's. Tests skip (pass) when no EGL device is available.
 
@@ -360,6 +362,69 @@ fn while_locked_an_application_gets_no_input_and_a_return_from_another_console_k
         session.log().contains("cupertino-login: locked"),
         "{}",
         session.log()
+    );
+}
+
+#[test]
+fn a_login_process_killed_while_locked_leaves_the_session_locked_until_its_successor_takes_the_lock(
+) {
+    let Some(mut session) = Session::start() else {
+        return;
+    };
+    let (application, center) = session.server.application();
+    session.server.state.lock_session_now();
+    session
+        .server
+        .wait_until("the lock screen to be up", |state| {
+            lock_screen_up(state, center)
+        });
+    session.server.run_for(QUIET);
+    let before = got(&application);
+
+    let pid = session
+        .server
+        .state
+        .supervisor
+        .pid_of("cupertino-login")
+        .expect("the login process runs");
+    // SAFETY: kill only sends a signal to the process the server started
+    assert_eq!(
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) },
+        0,
+        "killing the login process"
+    );
+    session
+        .server
+        .wait_until("the killed lock screen's surface to go", |state| {
+            !state
+                .surface_under(center.into())
+                .is_some_and(|(s, _)| state.is_lock_surface(&s))
+        });
+    assert!(
+        session.server.state.session_lock.is_active(),
+        "the crash of the lock screen opened the session"
+    );
+    session.server.input(center);
+    assert_eq!(
+        got(&application),
+        before,
+        "the application got input after the lock screen crashed"
+    );
+
+    session
+        .server
+        .wait_until("the restarted login process to take the lock", |state| {
+            state
+                .supervisor
+                .pid_of("cupertino-login")
+                .is_some_and(|p| p != pid)
+                && lock_screen_up(state, center)
+        });
+    session.server.input(center);
+    assert_eq!(
+        got(&application),
+        before,
+        "the application got input under the successor's lock screen"
     );
 }
 

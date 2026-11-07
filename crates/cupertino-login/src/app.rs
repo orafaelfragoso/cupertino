@@ -327,6 +327,13 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     let _ = refresh.send(());
 
     let (heard, heard_messages) = async_channel::unbounded();
+    // the session is locked as this process starts: its lock screen went away without unlocking (it crashed and the server
+    // restarted this process), and the outputs stay black with nothing to type a password into until this one takes the lock
+    if session_state.locked {
+        eprintln!("cupertino-login: the session is locked without a lock screen: taking the lock");
+        // the receiver is held just above
+        let _ = heard.send_blocking(Heard::LockRequested { explicit: false });
+    }
     let wish = Rc::new(RefCell::new(LockWish::default()));
     let mut roles = LoginRoles::new(
         layer_shell,

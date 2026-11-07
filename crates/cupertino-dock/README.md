@@ -157,7 +157,9 @@ root asks for the next frame while its view moves, and every frame wakes the mod
 0.1 s (`kit::FRAME_FALLBACK`) keeps it going if the frames stop (a surface the compositor does not show). Delays are
 timers: the switcher's, the held press, the edge dwell and the wheel. Reduce Motion applies as before. A window repaints
 only the nodes whose view changed: the bar's material, marks and tiles are separate nodes, so the pointer moving over the
-bar with magnification off repaints nothing, and a desktop entry's name is looked up once per application.
+bar with magnification off repaints nothing, and a desktop entry's name is looked up once per application. The bar does
+present again when its surface is given a new placement or keyboard interactivity, which apply with the surface's next
+commit (a magnification change alters the surface's depth, not what the bar draws).
 
 **Session.** The indicators and separators follow the appearance the server announces over `cupertino_session_v1`, read at
 start and redrawn on every change. The grid redraws too. `locked` removes an open grid, the Force Quit dialog, a menu and the edge strips at once, and the bar gives the keyboard back. The bar and the switcher panel stay.

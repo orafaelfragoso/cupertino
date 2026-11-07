@@ -26,7 +26,7 @@ use cupertino_theme::Appearance;
 use cupertino_wm::Rect;
 use smithay::backend::input::{ButtonState, KeyState};
 use smithay::backend::renderer::utils::with_renderer_surface_state;
-use smithay::desktop::{layer_map_for_output, PopupManager};
+use smithay::desktop::{layer_map_for_output, PopupKind, PopupManager};
 use smithay::input::keyboard::Keycode;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
@@ -920,6 +920,48 @@ fn layer_geometry(state: &Cupertino, namespace: &str) -> Option<Rectangle<i32, L
     let map = layer_map_for_output(&state.outputs.first()?.output);
     let layer = map.layers().find(|l| l.namespace() == namespace)?;
     map.layer_geometry(layer)
+}
+
+/// Assert that the PNG `bytes`, a capture of the `width` x `height` area at `(x, y)` of the output at scale 1, holds
+/// what the server draws there now, the pointer left out: every channel within a few levels. A capture taken while
+/// one of the screenshot tool's surfaces (overlay dim, border, crosshair, toolbar) was still up would differ there.
+fn assert_capture_shows_the_output(
+    server: &mut Server,
+    bytes: &[u8],
+    (x, y, width, height): (u32, u32, u32, u32),
+) {
+    let shot = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
+        .expect("a PNG")
+        .to_rgba8();
+    assert_eq!(shot.dimensions(), (width, height));
+    server.wait_until("the screenshot surfaces to go", |s| {
+        layer_geometry(s, "cupertino-screenshot").is_none()
+    });
+    let mut backend = server.state.backend.take().expect("a backend");
+    #[allow(irrefutable_let_patterns)]
+    let cupertino_server::backend::Backend::Headless(ref mut h) = backend
+    else {
+        panic!("the headless backend")
+    };
+    let output = server
+        .state
+        .draw_output_image(&mut h.renderer, 0, false, false)
+        .expect("the output drawn");
+    server.state.backend = Some(backend);
+    let mut worst = (0u8, (0, 0));
+    for (px, py, p) in shot.enumerate_pixels() {
+        let q = output.get_pixel(x + px, y + py);
+        let d = (0..3).map(|c| p[c].abs_diff(q[c])).max().unwrap();
+        if d > worst.0 {
+            worst = (d, (px, py));
+        }
+    }
+    assert!(
+        worst.0 <= 2,
+        "the capture differs from the output by {} at {:?}: a surface of the tool is in it",
+        worst.0,
+        worst.1
+    );
 }
 
 /// Mean brightness (0 to 255) of the strongly opaque pixels in the committed buffer of the menu bar process's
@@ -1962,10 +2004,12 @@ fn the_screenshot_action_maps_the_overlay_and_a_drag_writes_a_png_of_the_selecti
     let bytes = std::fs::read(&file).unwrap();
     let word = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
     assert_eq!((word(16), word(20)), (200, 150));
+    // the overlay, its border and the crosshair at the release point went before the copy
+    assert_capture_shows_the_output(&mut server, &bytes, (100, 100, 200, 150));
 }
 
-/// The toolbar shortcut maps the overlay and the 628 × 104 toolbar centred 12 pt above the bottom; in the remembered
-/// screen mode, Return captures the whole output.
+/// The toolbar shortcut maps the overlay and the 560 × 48 toolbar centred 40 pt above the bottom, which takes the
+/// keyboard; in the remembered screen mode, Return captures the whole output.
 #[test]
 fn the_screenshot_toolbar_sits_at_the_bottom_and_return_captures_the_screen() {
     const ENTER: u32 = 28 + 8;
@@ -2004,12 +2048,12 @@ fn the_screenshot_toolbar_sits_at_the_bottom_and_return_captures_the_screen() {
             .find(|g| g.size.w > 0 && g.size.w != OUTPUT.0)
     };
     server.wait_until("the toolbar to map", |s| toolbar(s).is_some());
-    // (1000 − 628) / 2 and 700 − 12 − 104
+    // (1000 − 560) / 2 and 700 − 40 − 48
     assert_eq!(
         toolbar(&server.state),
-        Some(Rectangle::new((186, 584).into(), (628, 104).into()))
+        Some(Rectangle::new((220, 612).into(), (560, 48).into()))
     );
-    server.wait_until("the overlay to take the keyboard", |s| {
+    server.wait_until("the toolbar to take the keyboard", |s| {
         s.seat.get_keyboard().unwrap().current_focus().is_some()
     });
     server
@@ -2029,6 +2073,160 @@ fn the_screenshot_toolbar_sits_at_the_bottom_and_return_captures_the_screen() {
     let bytes = std::fs::read(png(&shots).unwrap()).unwrap();
     let word = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
     assert_eq!((word(16), word(20)), (OUTPUT.0 as u32, OUTPUT.1 as u32));
+    // the overlay and the toolbar went before the copy
+    assert_capture_shows_the_output(
+        &mut server,
+        &bytes,
+        (0, 0, OUTPUT.0 as u32, OUTPUT.1 as u32),
+    );
+}
+
+/// Escape on the toolbar takes the overlay and the toolbar away and gives the keyboard back to the window that had it,
+/// without a capture.
+#[test]
+fn escape_on_the_screenshot_toolbar_removes_its_surfaces_and_gives_the_keyboard_back() {
+    const ESCAPE: u32 = 1 + 8;
+    let dir = TempDir::new("screenshot-escape");
+    let (conf, shots) = (dir.file("screenshot.conf"), dir.file("shots"));
+    std::fs::write(
+        &conf,
+        format!("location = {}\nshow-thumbnail = false\n", shots.display()),
+    )
+    .unwrap();
+    let Some(mut server) = Server::start(Vec::new(), true) else {
+        return;
+    };
+    spawn_toplevel(
+        PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
+            .join(server.state.socket_name.as_ref().unwrap()),
+    );
+    server.wait_until("the window to map", |s| s.wm.windows().count() == 1);
+    let window = server.state.wm.windows().next().unwrap().id;
+    let surface = server.state.entry(window).unwrap().surface().clone();
+    let on_window = move |s: &Cupertino| {
+        s.seat.get_keyboard().unwrap().current_focus().as_ref() == Some(&surface)
+    };
+    server.wait_until("the keyboard on the window", on_window.clone());
+    let binary = shell_bin_dir().join("cupertino-screenshot");
+    server.state.config.screenshot_command = vec![
+        "env".into(),
+        format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
+        binary.display().to_string(),
+    ];
+    server.state.execute_plan(ActionPlan {
+        commands: Vec::new(),
+        ops: vec![ShellOp::Screenshot(ScreenshotRequest::Toolbar)],
+    });
+    let surfaces = |s: &Cupertino| {
+        let Some(output) = s.outputs.first() else {
+            return 0;
+        };
+        layer_map_for_output(&output.output)
+            .layers()
+            .filter(|l| l.namespace().starts_with("cupertino-screenshot"))
+            .count()
+    };
+    server.wait_until("the overlay and the toolbar to map", |s| surfaces(s) == 2);
+    server.wait_until("the toolbar to take the keyboard", {
+        let on_window = on_window.clone();
+        move |s: &Cupertino| {
+            !on_window(s) && s.seat.get_keyboard().unwrap().current_focus().is_some()
+        }
+    });
+    server
+        .state
+        .keyboard_event_now(Keycode::new(ESCAPE), KeyState::Pressed, 0);
+    server.step();
+    server
+        .state
+        .keyboard_event_now(Keycode::new(ESCAPE), KeyState::Released, 0);
+    server.wait_until("the surfaces to go", |s| surfaces(s) == 0);
+    server.wait_until("the keyboard back on the window", on_window);
+    assert!(
+        !shots.exists() || std::fs::read_dir(&shots).unwrap().next().is_none(),
+        "nothing was captured"
+    );
+}
+
+/// The toolbar's Options menu is a popup of a layer surface at the bottom of the output: with no room below the
+/// button the server flips it upward, whole on the output.
+#[test]
+fn the_screenshot_options_menu_opens_above_the_toolbar_on_its_output() {
+    const BTN_LEFT: u32 = 0x110;
+    let dir = TempDir::new("screenshot-menu");
+    let conf = dir.file("screenshot.conf");
+    std::fs::write(&conf, "show-thumbnail = false\n").unwrap();
+    let Some(mut server) = Server::start(Vec::new(), true) else {
+        return;
+    };
+    let binary = shell_bin_dir().join("cupertino-screenshot");
+    server.state.config.screenshot_command = vec![
+        "env".into(),
+        format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
+        binary.display().to_string(),
+    ];
+    server.state.execute_plan(ActionPlan {
+        commands: Vec::new(),
+        ops: vec![ShellOp::Screenshot(ScreenshotRequest::Toolbar)],
+    });
+    type Area = Rectangle<i32, Logical>;
+    // the toolbar and, once it is open, its menu, in output points
+    let toolbar = |s: &Cupertino| -> Option<(Area, Option<Area>)> {
+        let map = layer_map_for_output(&s.outputs.first()?.output);
+        let layer = map
+            .layers()
+            .filter(|l| l.namespace() == "cupertino-screenshot")
+            .find(|l| {
+                map.layer_geometry(l)
+                    .is_some_and(|g| g.size.w > 0 && g.size.w != OUTPUT.0)
+            })?;
+        let at = map.layer_geometry(layer)?;
+        // where the server placed the popup, relative to the toolbar
+        let menu = PopupManager::popups_for_surface(layer.wl_surface())
+            .find_map(|(popup, _)| match popup {
+                PopupKind::Xdg(p) => Some(p.with_pending_state(|s| s.geometry)),
+                _ => None,
+            })
+            .map(|g| Rectangle::new(at.loc + g.loc, g.size));
+        Some((at, menu))
+    };
+    server.wait_until("the toolbar to map", |s| toolbar(s).is_some());
+    let (bar, _) = toolbar(&server.state).unwrap();
+    // the Options button: left of Capture at the toolbar's trailing end
+    let options = (
+        f64::from(bar.loc.x + bar.size.w - 120),
+        f64::from(bar.loc.y + bar.size.h / 2),
+    );
+    server.wait_until("the toolbar to take the keyboard", |s| {
+        s.seat.get_keyboard().unwrap().current_focus().is_some()
+    });
+    // the process hears the pointer enter, then the press and the release, each before the next
+    let settle = |server: &mut Server| {
+        let until = Instant::now() + Duration::from_millis(300);
+        server.wait_until("the process to keep up", |_| Instant::now() >= until);
+    };
+    server.state.pointer_moved_to(options.into(), 10, None);
+    settle(&mut server);
+    server
+        .state
+        .pointer_button(BTN_LEFT, ButtonState::Pressed, 20);
+    settle(&mut server);
+    server
+        .state
+        .pointer_button(BTN_LEFT, ButtonState::Released, 30);
+    server.wait_until("the menu to open", |s| {
+        toolbar(s).is_some_and(|(_, menu)| menu.is_some())
+    });
+    let (bar, menu) = toolbar(&server.state).unwrap();
+    let menu = menu.unwrap();
+    // below the button it would run past the bottom of the output; flipped, it ends above the toolbar's bottom
+    assert!(
+        menu.loc.y >= 0
+            && menu.loc.y + menu.size.h <= OUTPUT.1
+            && menu.loc.y + menu.size.h <= bar.loc.y + bar.size.h
+            && menu.loc.y < bar.loc.y,
+        "the menu {menu:?} opens upward from the toolbar {bar:?}, on the output"
+    );
 }
 
 /// The screen-to-clipboard shortcut captures the output without an overlay and offers it as `image/png` on the

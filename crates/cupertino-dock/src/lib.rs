@@ -3,9 +3,9 @@
 //! application switcher's panel ([`switcher`]), the application grid ([`app_grid`]), the overview's
 //! chrome and layout ([`overview_ui`]), the context menus ([`menu`]), the hot-corner and gesture
 //! actions ([`actions`]), the press and removal effect around a tile drag ([`tile_drag`]), the settings file ([`conf`]) and desktop entries ([`desktop`]). Pure logic
-//! (no compositor dependency). The feature `app` adds the `cupertino-dock` process: the bar, the
-//! switcher panel, the app grid, the overview and the menus on layer surfaces and popups as a
-//! client of the server.
+//! (no compositor dependency). The dock as a CupertinoKit application is [`kit`] with its windows ([`view`],
+//! [`switcher_kit`], [`overview_kit`]). The feature `app` adds the `cupertino-dock` process: those windows on layer
+//! surfaces and popups as a client of the server, with the icons it loads ([`icons`]).
 //!
 //! The tile
 //! layout, margins, section order and drag behaviour are approximate or unknown and configurable.
@@ -20,13 +20,13 @@ pub mod desktop;
 pub mod dock;
 pub mod ease;
 pub mod force_quit;
+#[cfg(feature = "app")]
+pub mod icons;
 pub mod kit;
 pub mod magnify;
 pub mod menu;
 pub mod overview_kit;
 pub mod overview_ui;
-#[cfg(feature = "app")]
-pub mod render;
 pub mod session;
 pub mod switcher;
 pub mod switcher_kit;

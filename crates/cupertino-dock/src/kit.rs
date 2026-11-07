@@ -1,8 +1,15 @@
 //! The dock as a CupertinoKit application: the model around [`Session`] and the surfaces that come and go (the context
-//! menu, the held tile, the application grid, the Force Quit dialog, the switcher's panel and the overview's chrome),
-//! what each message does to it, and its windows ([`view`]). What needs the session (the dock role's requests, the
-//! layer surfaces' placement and keyboard, starting programs, the pins file, icons and the two surfaces the process
-//! still paints itself) goes through [`Host`], so the model runs headless in tests.
+//! menu, the held tile, the application grid, the Force Quit dialog, and on every output the switcher's panel
+//! ([`SwitcherSurface`]) and the overview's chrome ([`OverviewSurface`])), what each message does to it, and its
+//! windows ([`view`]). Every window is drawn by CupertinoKit. What needs the session (the dock role's requests, the
+//! layer surfaces' placement and keyboard, starting programs, the pins file and the icons) goes through [`Host`], so
+//! the model runs headless in tests.
+//!
+//! What moves by itself (a bounce, the magnification, auto-hide, the removal puff, the grid, the switcher's fade, the
+//! overview's reflow and highlight) advances with the frames the compositor gives the window it is on: that window's
+//! root sends [`Input::Frame`] at each one while it moves. A wake every [`FRAME_FALLBACK`] seconds keeps an animation
+//! going on a window the compositor gives no frames (covered, or not shown yet); what is due at a set time (the
+//! switcher's delay, a held press, the edge dwell, the grid's wheel) is a timer.
 //!
 //! The dock is on one output at a time: the first output when it starts (the main display), and the first remaining
 //! one when its output goes away. Every other output has an edge strip along the dock's edge; the pointer resting
@@ -10,11 +17,10 @@
 //! so the hot corners, gestures, the overview and the switcher of every output reach the process; the window feed is
 //! taken from the bar's role only.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use cupertino_defaults::dock::DockSettings;
-use cupertino_kit::controls::ImageSource;
-use cupertino_kit::core::{Command, Window, WindowKey};
+use cupertino_kit::core::{Command, Key, Window, WindowKey};
 use cupertino_kit::geometry::Size;
 use cupertino_kit::platform::{KeyEvent, Keysym, Mods};
 use cupertino_wm::geometry::{Point, Rect};
@@ -26,19 +32,21 @@ use crate::config::Orientation;
 use crate::desktop::DesktopIndex;
 use crate::force_quit::{self, Button, Dialog, Entry, Extend};
 use crate::menu::{self, MenuCommand, MenuItem, TileFacts};
-use crate::overview_ui::{Mode, OverviewUi, UiAction, WindowEntry, Workspace};
+use crate::overview_kit::{OverviewInput, OverviewRequest, OverviewSurface};
+use crate::overview_ui::{Mode, WindowEntry, Workspace};
 use crate::session::{Activation, Session};
-use crate::switcher::{HoverGate, Switcher, SwitcherLayout};
+use crate::switcher_kit::{SwitcherEntry, SwitcherInput, SwitcherRequest, SwitcherSurface};
 use crate::tile_drag::{Poof, TilePress};
 use crate::tiles::{TileId, TileKind, TileLifecycle};
-use crate::view::{self, bridge, IconSet, Input, Pointer};
+use crate::view::{self, IconSet, Input, Pointer, Wm};
 use crate::DragOutcome;
 
 /// How long the pointer rests against another output's edge before the dock moves there, in seconds.
 pub const EDGE_DWELL: f64 = 0.4;
 
-/// The interval of the frames that drive an animation, in seconds.
-pub const FRAME: f64 = 1.0 / 60.0;
+/// While something moves, the interval of the wake that advances it when its window gets no frames from the
+/// compositor, in seconds.
+pub const FRAME_FALLBACK: f64 = 0.1;
 
 /// How long the trash's state is trusted before the folder is looked at again, in seconds.
 pub const TRASH_CHECK_EVERY: f64 = 1.0;
@@ -188,7 +196,8 @@ pub enum Part {
     /// The bar on the output with this key, while it is engaged.
     Bar(u32),
     Grid,
-    Overview,
+    /// The overview's chrome on the output with this key, while the overview is open.
+    Overview(u32),
 }
 
 /// The surfaces whose size the compositor decides.
@@ -208,15 +217,6 @@ pub enum IconKey {
     Named(String),
     /// The trash, empty or full.
     Trash(bool),
-}
-
-/// What the switcher's panel shows, for the host to paint.
-pub struct SwitcherPaint<'a> {
-    pub switcher: &'a Switcher,
-    pub layout: &'a SwitcherLayout,
-    pub desktop: &'a DesktopIndex,
-    pub dark: bool,
-    pub alpha: f64,
 }
 
 /// What the model needs the session for.
@@ -253,17 +253,6 @@ pub trait Host {
     fn window_closed(&mut self, id: u32);
     /// Whether the trash holds anything.
     fn trash_full(&mut self) -> bool;
-    /// The switcher's panel painted at `scale` device pixels per point.
-    fn paint_switcher(&mut self, scale: f64, panel: &SwitcherPaint<'_>) -> Option<ImageSource>;
-    /// The overview's chrome over an output `size` points large, painted at `scale` device pixels per point.
-    fn paint_overview(
-        &mut self,
-        scale: f64,
-        size: (f64, f64),
-        ui: &OverviewUi,
-        now: f64,
-        dark: bool,
-    ) -> Option<ImageSource>;
 }
 
 #[derive(Clone, Debug)]
@@ -346,20 +335,11 @@ struct Grid {
     layout: Option<GridLayout>,
 }
 
-struct SwitcherState {
-    output: u32,
-    switcher: Switcher,
-    layout: SwitcherLayout,
-    hover: HoverGate,
-    /// Entry the last `switcher_select` asked for, until the server answers.
-    requested: Option<usize>,
-    image: Option<ImageSource>,
-}
-
-struct Overview {
-    output: u32,
-    ui: OverviewUi,
-    image: Option<ImageSource>,
+/// The window-manager surfaces of one output.
+#[derive(Default)]
+struct WmSurfaces {
+    switcher: SwitcherSurface,
+    overview: OverviewSurface,
 }
 
 pub struct Model {
@@ -384,35 +364,42 @@ pub struct Model {
     pointer: Option<Point>,
     press: Option<TilePress>,
     poof: Option<Poof>,
-    /// When the switcher's and the overview's images were last painted.
-    bridges_painted: Option<f64>,
-    /// A paint of those images was left to the next frame.
-    bridges_owed: bool,
     menu: Option<OpenMenu>,
     /// The bar has the keyboard.
     pub engaged: bool,
+    /// Focus Dock came: the first tile takes the focus.
+    focus_first: bool,
+    /// A menu opened while the bar had the keyboard, and the leave its taking the keyboard brings has not come yet.
+    menu_takes_keyboard: bool,
+    /// The tile that has the bar's keyboard focus, as its window last said.
+    focused_tile: Option<TileId>,
+    /// The tiles that take the focus, in the bar's order, as the view last showed them.
+    tile_order: Vec<TileId>,
     /// The applications that stopped answering (their ids), as the server last said.
     unresponsive: HashSet<String>,
     force_quit: Option<ForceQuit>,
     grid: Option<Grid>,
-    switcher: Option<SwitcherState>,
-    /// The switch whose panel the compositor closed mid-switch; its next step builds the panel again around it.
-    orphan: Option<Switcher>,
-    overview: Option<Overview>,
+    /// The switcher's panel and the overview's chrome of every output, by output key.
+    wm: BTreeMap<u32, WmSurfaces>,
     pending: HashMap<u64, Pending>,
     next_launch: u64,
     /// The edge strip the pointer is on, and since when.
     edge: Option<(u32, f64)>,
-    icons: HashMap<(IconKey, u32), IconSet>,
+    /// The icons loaded, by key and side in whole points.
+    icons: HashMap<IconKey, BTreeMap<u32, IconSet>>,
+    /// The name of the desktop entry of each application key looked up so far (`None` without one): the entries do
+    /// not change while the process runs.
+    names: HashMap<String, Option<String>>,
     trash_checked: Option<f64>,
     trash_full: bool,
     wake_generation: u64,
     wake_at: Option<f64>,
-    /// Changes with every update, for what the bar draws under its tiles.
-    revision: u64,
     // what the host was last told
     placed: Option<Placement>,
     keyboard: Option<Part>,
+    /// Bumped whenever the host changes the bar's placement or a surface's keyboard interactivity, which apply with the
+    /// surface's next commit: the bar presents again, so they reach the server even when nothing it draws changed.
+    surface_changes: u64,
     minimize_target: Option<(u32, Rect)>,
     force_quit_size: Option<(f64, f64)>,
 }
@@ -440,27 +427,28 @@ impl Model {
             pointer: None,
             press: None,
             poof: None,
-            bridges_painted: None,
-            bridges_owed: false,
             menu: None,
             engaged: false,
+            focus_first: false,
+            menu_takes_keyboard: false,
+            focused_tile: None,
+            tile_order: Vec::new(),
             unresponsive: HashSet::new(),
             force_quit: None,
             grid: None,
-            switcher: None,
-            orphan: None,
-            overview: None,
+            wm: BTreeMap::new(),
             pending: HashMap::new(),
             next_launch: 0,
             edge: None,
             icons: HashMap::new(),
+            names: HashMap::new(),
             trash_checked: None,
             trash_full: false,
             wake_generation: 0,
             wake_at: None,
-            revision: 0,
             placed: None,
             keyboard: None,
+            surface_changes: 0,
             minimize_target: None,
             force_quit_size: None,
         }
@@ -561,13 +549,13 @@ impl Model {
                 DockEvent::WindowIcon(icon) => {
                     if let Some(w) = self.session.window_info(icon.id) {
                         let apps = [w.app_id.clone(), w.key.clone()];
-                        self.icons.retain(|(k, _), _| !matches!(k, IconKey::App(_)));
+                        self.icons.retain(|k, _| !matches!(k, IconKey::App(_)));
                         self.host.window_icon(apps, icon);
                     }
                 }
                 DockEvent::WindowClosed(id) => {
                     if self.session.window_info(id).is_some() {
-                        self.icons.retain(|(k, _), _| !matches!(k, IconKey::App(_)));
+                        self.icons.retain(|k, _| !matches!(k, IconKey::App(_)));
                     }
                     self.host.window_closed(id);
                     self.session.window_closed(id, now);
@@ -587,7 +575,7 @@ impl Model {
                     windows,
                     workspaces,
                 } => self.overview_changed(output, mode, area, &windows, workspaces),
-                DockEvent::OverviewClosed => self.overview_closed(),
+                DockEvent::OverviewClosed => self.overview_closed(output),
                 DockEvent::Trigger(trigger) => commands.extend(self.run_trigger(output, trigger)),
                 // a refused activation: the tile hops once (informational attention)
                 DockEvent::Attention(app_id) => self.session.attention(&app_id, now),
@@ -603,7 +591,10 @@ impl Model {
                     self.refresh_force_quit();
                 }
                 DockEvent::ForceQuitDialog => self.toggle_force_quit(),
-                DockEvent::Engage if !self.locked => self.engaged = true,
+                DockEvent::Engage if !self.locked => {
+                    self.engaged = true;
+                    self.focus_first = true;
+                }
                 DockEvent::Engage => {}
             }
         }
@@ -703,6 +694,21 @@ impl Model {
     fn store_pins(&mut self) {
         let pins = self.session.dock.pinned_keys();
         self.host.store_pins(&pins);
+    }
+
+    /// Look the desktop entry's name of every key in `keys` up once.
+    fn learn_names<'k>(&mut self, keys: impl IntoIterator<Item = &'k str>) {
+        for key in keys {
+            if !self.names.contains_key(key) {
+                let name = self.session.desktop().find(key).map(|e| e.name.clone());
+                self.names.insert(key.to_owned(), name);
+            }
+        }
+    }
+
+    /// The name of the desktop entry of the application `key`, as [`Self::learn_names`] looked it up.
+    fn entry_name(&self, key: &str) -> Option<&str> {
+        self.names.get(key).and_then(|name| name.as_deref())
     }
 
     /// The tile's rectangle in the bar's window, as it is laid out now.
@@ -825,12 +831,13 @@ impl Model {
         if items.is_empty() {
             return;
         }
-        let label = tile_name(&self.session, id);
+        let label = self.tile_name(id);
         self.menu = Some(OpenMenu {
             tile: id,
             items,
             label,
         });
+        self.menu_takes_keyboard = self.engaged;
     }
 
     fn run_menu_command(&mut self, command: MenuCommand) -> Vec<Command<Message>> {
@@ -910,15 +917,14 @@ impl Model {
         {
             self.force_quit = None;
         }
-        if self
-            .overview
-            .as_ref()
-            .is_some_and(|v| !there(v.output, &self.outputs))
-        {
-            self.overview = None;
-        }
-        if let Some(s) = self.switcher.take_if(|s| !there(s.output, &self.outputs)) {
-            self.orphan = Some(s.switcher);
+        // the surfaces of an output that went away go with it; a new output gets its own
+        self.wm.retain(|&o, _| there(o, &self.outputs));
+        for out in &self.outputs {
+            self.wm.entry(out.key).or_insert_with(|| {
+                let mut surfaces = WmSurfaces::default();
+                surfaces.overview.set_reduce_motion(self.reduce_motion);
+                surfaces
+            });
         }
         if self.edge.is_some_and(|(o, _)| !there(o, &self.outputs)) {
             self.edge = None;
@@ -934,12 +940,6 @@ impl Model {
             self.menu = None;
             self.press = None;
             self.engaged = false;
-        } else if key == bridge::switcher_key() {
-            if let Some(s) = self.switcher.take() {
-                self.orphan = Some(s.switcher);
-            }
-        } else if key == bridge::overview_key() {
-            self.overview = None;
         } else if key == view::grid::key() {
             self.grid = None;
         } else if key == view::force_quit::key() {
@@ -959,10 +959,8 @@ impl Model {
             .map(|t| Entry {
                 app_id: t.key.clone(),
                 name: self
-                    .session
-                    .desktop()
-                    .find(&t.key)
-                    .map(|e| e.name.clone())
+                    .entry_name(&t.key)
+                    .map(str::to_owned)
                     .unwrap_or_else(|| {
                         if t.title.is_empty() {
                             t.key.clone()
@@ -1005,6 +1003,9 @@ impl Model {
 
     /// The applications or their answers changed: the open dialog follows.
     fn refresh_force_quit(&mut self) {
+        if self.force_quit.is_none() {
+            return;
+        }
         let entries = self.force_quit_entries();
         if let Some(open) = self.force_quit.as_mut() {
             if open.dialog.entries() != entries.as_slice() {
@@ -1235,44 +1236,38 @@ impl Model {
 
     // ---- the application switcher --------------------------------------------------------------------------
 
-    /// A step of the open switch moves the selection; anything else opens a new switch on `output`.
+    /// The server's list and selection for the panel on `output`: a step of the switch on screen moves the selection,
+    /// anything else is a new switch, which ends one still waiting on another output.
     fn switcher_changed(&mut self, output: u32, apps: Vec<String>, selected: usize) {
-        if let Some(open) = self
-            .switcher
-            .as_mut()
-            .filter(|s| s.output == output && s.switcher.continues_with(&apps))
-        {
-            if open.switcher.select(selected).is_err() {
-                eprintln!(
-                    "cupertino-dock: the server sent a selection outside the switcher's list"
-                );
-            }
-            open.requested = None;
-            return;
-        }
-        let resumed = self.orphan.take().filter(|s| s.continues_with(&apps));
-        self.switcher = None;
+        let now = self.now();
         let Some(out) = self.output_info(output) else {
             eprintln!("cupertino-dock: the output of the switcher went away");
             return;
         };
-        let layout = SwitcherLayout::new(apps.len(), out.width, out.height);
-        let switcher = match resumed {
-            Some(mut switcher) => switcher.select(selected).map(|_| switcher),
-            None => Switcher::new(apps, selected, self.now()),
-        };
-        match switcher {
-            Ok(switcher) => {
-                self.switcher = Some(SwitcherState {
-                    output,
-                    switcher,
-                    layout,
-                    hover: HoverGate::default(),
-                    requested: None,
-                    image: None,
-                })
+        self.learn_names(apps.iter().map(String::as_str));
+        let entries = apps
+            .into_iter()
+            .map(|app_id| SwitcherEntry {
+                name: self
+                    .entry_name(&app_id)
+                    .map_or_else(|| app_id.clone(), str::to_owned),
+                app_id,
+            })
+            .collect();
+        for (&o, surfaces) in self.wm.iter_mut().filter(|(&o, _)| o != output) {
+            if surfaces.switcher.output() == Some(o) && !surfaces.switcher.is_done(now) {
+                surfaces.switcher.closed(false, now);
             }
-            Err(e) => eprintln!("cupertino-dock: {e}"),
+        }
+        let Some(surfaces) = self.wm.get_mut(&output) else {
+            return;
+        };
+        if let Err(e) =
+            surfaces
+                .switcher
+                .changed(output, (out.width, out.height), entries, selected, now)
+        {
+            eprintln!("cupertino-dock: {e}");
         }
     }
 
@@ -1280,47 +1275,26 @@ impl Model {
     /// appeared, removes it at once.
     fn switcher_closed(&mut self, committed: bool) {
         let now = self.now();
-        self.orphan = None;
-        match self.switcher.as_mut() {
-            Some(open) if committed && open.switcher.is_shown(now) => open.switcher.close(now),
-            _ => self.switcher = None,
+        for surfaces in self.wm.values_mut() {
+            surfaces.switcher.closed(committed, now);
         }
     }
 
-    /// Hovering over a tile (once the pointer left its first position) or pressing it selects that entry; the server
-    /// answers with the new selection. Releasing the left button on a tile switches to it, anywhere else on the panel
-    /// ends the switch.
-    fn switcher_pointer(&mut self, pointer: Pointer) {
-        let Some(open) = self.switcher.as_mut().filter(|s| !s.switcher.is_fading()) else {
+    /// What the panel on `output` reported; its requests go through the dock role of that output.
+    fn switcher_input(&mut self, output: u32, input: SwitcherInput) {
+        let now = self.now();
+        let Some(surfaces) = self.wm.get_mut(&output) else {
             return;
         };
-        // the window covers only the panel: its origin is the panel's in output points
-        let at = |p: cupertino_kit::geometry::Point| {
-            Point::new(p.x + open.layout.panel.x, p.y + open.layout.panel.y)
-        };
-        let n = open.switcher.apps().len();
-        let output = open.output;
-        let (position, pressed) = match pointer {
-            Pointer::Move(p) => (at(p), false),
-            Pointer::Press(p, _) => (at(p), true),
-            Pointer::Release(p) => {
-                let request = match open.layout.hit(at(p), n) {
-                    Some(entry) => Request::SwitcherActivate(entry),
-                    None => Request::SwitcherCancel,
-                };
-                self.host.request(output, request);
-                return;
-            }
-            _ => return,
-        };
-        let armed = open.hover.moved(position);
-        let Some(entry) = open.layout.hit(position, n) else {
-            return;
-        };
-        if (pressed || armed) && entry != open.switcher.selected() && open.requested != Some(entry)
-        {
-            open.requested = Some(entry);
-            self.host.request(output, Request::SwitcherSelect(entry));
+        for request in surfaces.switcher.input(input, now) {
+            self.host.request(
+                output,
+                match request {
+                    SwitcherRequest::Select(i) => Request::SwitcherSelect(i),
+                    SwitcherRequest::Activate(i) => Request::SwitcherActivate(i),
+                    SwitcherRequest::Cancel => Request::SwitcherCancel,
+                },
+            );
         }
     }
 
@@ -1349,99 +1323,65 @@ impl Model {
                 }
             })
             .collect();
-        match self
+        let Some(surfaces) = self.wm.get_mut(&output) else {
+            eprintln!("cupertino-dock: the output of the overview went away");
+            return;
+        };
+        for (id, frame) in surfaces
             .overview
-            .as_mut()
-            .filter(|o| o.output == output && !o.ui.is_closing() && o.ui.mode() == mode)
+            .changed(mode, area, &entries, workspaces, now)
         {
-            Some(open) => {
-                open.ui.set_windows(&entries, now);
-                open.ui.set_workspaces(workspaces);
-            }
-            None => {
-                self.overview = Some(Overview {
-                    output,
-                    ui: OverviewUi::new(mode, area, &entries, workspaces, now),
-                    image: None,
-                })
-            }
-        }
-        let open = self.overview.as_ref().expect("set above");
-        for (id, frame) in open.ui.frames() {
             self.host.request(output, Request::OverviewFrame(id, frame));
         }
     }
 
-    /// The server is leaving the overview: the chrome fades and gives the keyboard back.
-    fn overview_closed(&mut self) {
+    /// The server is leaving the overview of `output`: the chrome fades and gives the keyboard back.
+    fn overview_closed(&mut self, output: u32) {
         let now = self.now();
-        if let Some(open) = self.overview.as_mut().filter(|o| !o.ui.is_closing()) {
-            open.ui.close(now);
+        if let Some(surfaces) = self.wm.get_mut(&output) {
+            surfaces.overview.closed(now);
         }
     }
 
-    /// Every action is the server's to apply.
-    fn overview_action(&mut self, action: UiAction) {
-        let Some(output) = self.overview.as_ref().map(|o| o.output) else {
-            return;
-        };
-        let request = match action {
-            UiAction::None => return,
-            UiAction::Select(id) => Request::OverviewSelect(id),
-            UiAction::Close => Request::OverviewClose,
-            UiAction::SwitchWorkspace(id) => Request::SwitchWorkspace(id),
-            UiAction::AddWorkspace => Request::AddWorkspace,
-            UiAction::RemoveWorkspace(id) => Request::RemoveWorkspace(id),
-            UiAction::MoveWorkspace { id, index } => Request::MoveWorkspace { id, index },
-        };
-        self.host.request(output, request);
-    }
-
-    fn overview_pointer(&mut self, pointer: Pointer) {
+    /// What the chrome on `output` reported; every action is the server's to apply.
+    fn overview_input(&mut self, output: u32, input: OverviewInput) {
         let now = self.now();
-        let Some(open) = self.overview.as_mut() else {
+        let Some(surfaces) = self.wm.get_mut(&output) else {
             return;
         };
-        let at = |p: cupertino_kit::geometry::Point| Point::new(p.x, p.y);
-        let action = match pointer {
-            Pointer::Move(p) => {
-                open.ui.pointer_moved(Some(at(p)), now);
-                UiAction::None
-            }
-            Pointer::Leave => {
-                open.ui.pointer_moved(None, now);
-                UiAction::None
-            }
-            Pointer::Press(p, _) => open.ui.press(at(p), now),
-            Pointer::Release(p) => open.ui.release(at(p), now),
-            Pointer::Secondary(_) | Pointer::Scroll(..) => UiAction::None,
-        };
-        self.overview_action(action);
-    }
-
-    fn overview_key(&mut self, key: KeyEvent) {
-        use cupertino_overview::Key as K;
-        if !key.pressed {
-            return;
+        for request in surfaces.overview.input(input, now) {
+            self.host.request(
+                output,
+                match request {
+                    OverviewRequest::Select(id) => Request::OverviewSelect(id),
+                    OverviewRequest::Close => Request::OverviewClose,
+                    OverviewRequest::SwitchWorkspace(id) => Request::SwitchWorkspace(id),
+                    OverviewRequest::AddWorkspace => Request::AddWorkspace,
+                    OverviewRequest::RemoveWorkspace(id) => Request::RemoveWorkspace(id),
+                    OverviewRequest::MoveWorkspace { id, index } => {
+                        Request::MoveWorkspace { id, index }
+                    }
+                },
+            );
         }
-        let now = self.now();
-        let Some(open) = self.overview.as_mut() else {
-            return;
-        };
-        let mapped = match key.keysym {
-            LEFT => K::Left,
-            RIGHT => K::Right,
-            UP => K::Up,
-            DOWN => K::Down,
-            LEFT_TAB => K::Previous,
-            TAB if key.mods.contains(Mods::SHIFT) => K::Previous,
-            TAB => K::Next,
-            RETURN | KP_ENTER | SPACE => K::Activate,
-            ESCAPE => K::Cancel,
-            _ => return,
-        };
-        let action = open.ui.key(mapped, now);
-        self.overview_action(action);
+    }
+
+    /// The output whose overview is open and holds the keyboard.
+    fn overview_keyboard(&self) -> Option<u32> {
+        self.wm
+            .iter()
+            .find(|(_, s)| s.overview.wants_keyboard())
+            .map(|(&o, _)| o)
+    }
+
+    /// The compositor closed a window-manager surface of `output`.
+    fn wm_closed(&mut self, output: u32, which: Wm) {
+        if let Some(surfaces) = self.wm.get_mut(&output) {
+            match which {
+                Wm::Switcher => surfaces.switcher.lost(),
+                Wm::Overview => surfaces.overview.lost(),
+            }
+        }
     }
 
     // ---- hot corners and gestures ---------------------------------------------------------------------------
@@ -1496,19 +1436,30 @@ impl Model {
     // ---- after every message --------------------------------------------------------------------------------
 
     /// The icon of `key` at every size it is drawn at, loaded once.
-    fn icon_set(&mut self, key: &IconKey, sides: &[f64]) -> IconSet {
-        let mut set = IconSet::new();
+    fn icon_set(&mut self, key: &IconKey, sides: &[f64]) {
         for &side in sides {
             let px = side.ceil().max(1.0) as u32;
-            let host = &mut self.host;
-            let desktop = self.session.desktop();
-            let renditions = self
-                .icons
-                .entry((key.clone(), px))
-                .or_insert_with(|| host.icon(desktop, key, f64::from(px)));
-            set.extend(renditions.iter().cloned());
+            let loaded = self.icons.get(key).is_some_and(|k| k.contains_key(&px));
+            if !loaded {
+                let renditions = self.host.icon(self.session.desktop(), key, f64::from(px));
+                self.icons
+                    .entry(key.clone())
+                    .or_default()
+                    .insert(px, renditions);
+            }
         }
-        set
+    }
+
+    /// The loaded renditions of `key` at `sides`.
+    fn icon(&self, key: &IconKey, sides: &[f64]) -> IconSet {
+        let Some(loaded) = self.icons.get(key) else {
+            return IconSet::new();
+        };
+        sides
+            .iter()
+            .filter_map(|&s| loaded.get(&(s.ceil().max(1.0) as u32)))
+            .flat_map(|set| set.iter().cloned())
+            .collect()
     }
 
     /// The sides the tiles are drawn at: resting and fully magnified.
@@ -1526,17 +1477,26 @@ impl Model {
         })
     }
 
-    /// Load what the next view draws, so the view only reads.
-    fn prefill_icons(&mut self) {
-        let sides = self.tile_sides();
-        let mut keys: Vec<IconKey> = self
+    /// Load what the next view draws, and the names it shows, so the view only reads.
+    fn prefill(&mut self) {
+        let tiles: Vec<(TileId, TileKind, String)> = self
             .session
             .dock
             .tiles()
             .iter()
-            .filter(|t| t.kind != TileKind::Separator)
-            .filter_map(|t| self.tile_icon(t.id))
+            .map(|t| (t.id, t.kind, t.key.clone()))
             .collect();
+        self.learn_names(tiles.iter().map(|t| t.2.as_str()));
+        let sides = self.tile_sides();
+        let mut keys: Vec<IconKey> = tiles
+            .iter()
+            .filter(|t| t.1 != TileKind::Separator)
+            .filter_map(|t| self.tile_icon(t.0))
+            .collect();
+        keys.dedup();
+        for key in keys {
+            self.icon_set(&key, &sides);
+        }
         if let Some(open) = &self.force_quit {
             let fq: Vec<IconKey> = open
                 .dialog
@@ -1548,9 +1508,14 @@ impl Model {
                 self.icon_set(key, &[FORCE_QUIT_ROW_ICON, force_quit::ICON_SIZE]);
             }
         }
-        keys.dedup();
-        for key in keys {
-            self.icon_set(&key, &sides);
+        let switched: Vec<(String, f64)> = self
+            .wm
+            .values()
+            .filter_map(|s| Some((s.switcher.apps()?, s.switcher.icon_side()?)))
+            .flat_map(|(apps, side)| apps.iter().map(move |a| (a.clone(), side)))
+            .collect();
+        for (app, side) in switched {
+            self.icon_set(&IconKey::App(app), &[side]);
         }
         let grid_icons: Vec<(String, f64)> = match &self.grid {
             Some(Grid {
@@ -1576,16 +1541,51 @@ impl Model {
         }
     }
 
+    /// The bar's keyboard focus follows the model: Focus Dock focuses the first tile, with its ring; a focused tile
+    /// that went away hands the focus to its neighbour (the next one, else the one before), never to the bar.
+    fn focus_commands(&mut self) -> Vec<Command<Message>> {
+        let order: Vec<TileId> = self
+            .session
+            .dock
+            .tiles()
+            .iter()
+            .filter(|t| t.kind != TileKind::Separator)
+            .map(|t| t.id)
+            .collect();
+        let before = std::mem::replace(&mut self.tile_order, order);
+        let target = if self.engaged && std::mem::take(&mut self.focus_first) {
+            self.tile_order.first().copied()
+        } else {
+            match self.focused_tile {
+                Some(gone) if !self.tile_order.contains(&gone) => {
+                    let at = before.iter().position(|&t| t == gone).unwrap_or(0);
+                    before[at..]
+                        .iter()
+                        .chain(before[..at].iter().rev())
+                        .copied()
+                        .find(|t| self.tile_order.contains(t))
+                        .or_else(|| self.tile_order.first().copied())
+                }
+                _ => None,
+            }
+        };
+        self.focus_first &= self.engaged;
+        let Some(tile) = target else {
+            return Vec::new();
+        };
+        self.focused_tile = Some(tile);
+        vec![Command::Focus(view::bar::tile_key(tile.0))]
+    }
+
     /// Advance the animations, carry out what is due and tell the host what changed; then schedule the next wake.
     fn changed(&mut self) -> Vec<Command<Message>> {
         let now = self.now();
-        self.revision += 1;
         // the locked session, the grid, the overview and the Force Quit dialog hold the keyboard while they are up: a
         // Focus Dock meanwhile is dropped, not kept for when they go
         if self.locked
             || self.force_quit.is_some()
             || self.grid.as_ref().is_some_and(|g| !g.grid.is_closing())
-            || self.overview.as_ref().is_some_and(|o| !o.ui.is_closing())
+            || self.overview_keyboard().is_some()
         {
             self.engaged = false;
         }
@@ -1619,15 +1619,9 @@ impl Model {
                 self.grid = None;
             }
         }
-        if self
-            .switcher
-            .as_ref()
-            .is_some_and(|s| s.switcher.is_gone(now))
-        {
-            self.switcher = None;
-        }
-        if self.overview.as_ref().is_some_and(|o| o.ui.is_gone(now)) {
-            self.overview = None;
+        for surfaces in self.wm.values_mut() {
+            surfaces.switcher.tick(now);
+            surfaces.overview.tick(now);
         }
         if self.poof.is_some_and(|p| p.progress(now).is_none()) {
             self.poof = None;
@@ -1642,9 +1636,10 @@ impl Model {
             }
         }
         self.tell_host();
-        self.prefill_icons();
-        self.paint_bridges(now);
-        self.schedule(now)
+        self.prefill();
+        let mut commands = self.focus_commands();
+        commands.extend(self.schedule(now));
+        commands
     }
 
     /// Tell the host what it has to know: where the bar is, the minimize target, who has the keyboard and the dialog's
@@ -1654,6 +1649,7 @@ impl Model {
         if let Some(p) = placement.filter(|_| placement != self.placed) {
             self.placed = placement;
             self.host.place_bar(p);
+            self.surface_changes += 1;
         }
         if self.bar_size.is_none() {
             // no bar yet, so no role to send it on: it goes once the bar is sized
@@ -1665,8 +1661,8 @@ impl Model {
                 self.host.request(output, Request::MinimizeTarget(target.1));
             }
         }
-        let keyboard = if self.overview.as_ref().is_some_and(|o| !o.ui.is_closing()) {
-            Some(Part::Overview)
+        let keyboard = if let Some(output) = self.overview_keyboard() {
+            Some(Part::Overview(output))
         } else if self.grid.as_ref().is_some_and(|g| !g.grid.is_closing()) {
             Some(Part::Grid)
         } else if self.engaged {
@@ -1682,6 +1678,7 @@ impl Model {
                 self.host.keyboard(part, true);
             }
             self.keyboard = keyboard;
+            self.surface_changes += 1;
         }
         let size = self.force_quit.as_ref().map(|f| f.layout.size());
         if let Some((w, h)) = size.filter(|_| size != self.force_quit_size) {
@@ -1690,86 +1687,48 @@ impl Model {
         self.force_quit_size = size;
     }
 
-    /// The switcher's panel and the overview's chrome, painted again by the host.
-    fn paint_bridges(&mut self, now: f64) {
-        if self.switcher.is_none() && self.overview.is_none() {
-            self.bridges_owed = false;
-            return;
-        }
-        // each paint is the whole panel or the whole output, and a message comes with every pointer motion: at most one
-        // paint a frame, a message sooner leaves it to the next frame's wake
-        if self
-            .bridges_painted
-            .is_some_and(|at| now >= at && now - at < FRAME - 1e-6)
-        {
-            self.bridges_owed = true;
-            return;
-        }
-        self.bridges_painted = Some(now);
-        self.bridges_owed = false;
-        let outputs = self.outputs.clone();
-        let info = |key: u32| outputs.iter().copied().find(|o| o.key == key);
-        if let Some(open) = self.switcher.as_mut() {
-            if let (true, Some(out)) = (open.switcher.is_shown(now), info(open.output)) {
-                let panel = SwitcherPaint {
-                    switcher: &open.switcher,
-                    layout: &open.layout,
-                    desktop: self.session.desktop(),
-                    dark: self.dark,
-                    alpha: open.switcher.alpha(now),
-                };
-                open.image = self.host.paint_switcher(out.scale, &panel);
-            }
-        }
-        if let Some(open) = self.overview.as_mut() {
-            if let Some(out) = info(open.output) {
-                let size = (out.width, out.height);
-                open.image = self
-                    .host
-                    .paint_overview(out.scale, size, &open.ui, now, self.dark);
-            }
-        }
+    /// Whether the bar moves by itself: a bounce, the magnification, auto-hide, a drag settling or the removal puff.
+    fn bar_moving(&self, now: f64) -> bool {
+        self.session.dock.wants_tick(now) || self.poof.is_some()
+    }
+
+    /// Whether the window-manager surfaces of an output move by themselves now (they want the next frame).
+    fn wm_moving(surfaces: &WmSurfaces, now: f64) -> bool {
+        let soon = |at: Option<f64>| at.is_some_and(|at| at - now <= FRAME_FALLBACK);
+        // the switcher's wake is its delay until it shows, or the next frame of its fade
+        (soon(surfaces.switcher.next_wake(now)) && surfaces.switcher.is_shown(now))
+            || surfaces.overview.next_wake(now).is_some()
     }
 
     /// Whether anything moves on its own now.
     fn animating(&self, now: f64) -> bool {
-        self.session.dock.wants_tick(now)
-            || self.bridges_owed
-            || self.poof.is_some()
+        self.bar_moving(now)
             || self.grid.as_ref().is_some_and(|g| g.grid.animating(now))
-            || self
-                .switcher
-                .as_ref()
-                .is_some_and(|s| s.switcher.is_fading())
-            || self
-                .overview
-                .as_ref()
-                .is_some_and(|o| o.ui.is_animating(now))
+            || self.wm.values().any(|s| Self::wm_moving(s, now))
     }
 
-    /// One wake at the next frame while something moves, else at the next thing that is due.
+    /// While something moves its window's frames drive it, with a fallback wake; otherwise one wake at the next thing
+    /// that is due.
     fn schedule(&mut self, now: f64) -> Vec<Command<Message>> {
-        let due = if self.animating(now) {
-            Some(FRAME)
-        } else {
-            let panel = self
-                .switcher
-                .as_ref()
-                .filter(|s| !s.switcher.is_shown(now))
-                .map(|s| s.switcher.until_shown(now));
-            let wheel = self.grid.as_ref().and_then(|g| g.grid.until_settled(now));
-            let hold = self.press.as_ref().and_then(|p| p.hold_due(now));
-            let edge = self
-                .edge
-                .filter(|(o, _)| Some(*o) != self.output)
-                .map(|(_, since)| (since + EDGE_DWELL - now).max(0.0));
-            panel
-                .into_iter()
-                .chain(wheel)
-                .chain(hold)
-                .chain(edge)
-                .reduce(f64::min)
-        };
+        let panel = self
+            .wm
+            .values()
+            .filter(|s| !s.switcher.is_shown(now))
+            .filter_map(|s| s.switcher.next_wake(now))
+            .map(|at| (at - now).max(0.0));
+        let wheel = self.grid.as_ref().and_then(|g| g.grid.until_settled(now));
+        let hold = self.press.as_ref().and_then(|p| p.hold_due(now));
+        let edge = self
+            .edge
+            .filter(|(o, _)| Some(*o) != self.output)
+            .map(|(_, since)| (since + EDGE_DWELL - now).max(0.0));
+        let moving = self.animating(now).then_some(FRAME_FALLBACK);
+        let due = panel
+            .chain(wheel)
+            .chain(hold)
+            .chain(edge)
+            .chain(moving)
+            .reduce(f64::min);
         let Some(due) = due else {
             return Vec::new();
         };
@@ -1797,34 +1756,27 @@ const PAGE_DOWN: Keysym = Keysym(0xff56);
 const ESCAPE: Keysym = Keysym(0xff1b);
 const RETURN: Keysym = Keysym(0xff0d);
 const KP_ENTER: Keysym = Keysym(0xff8d);
-const SPACE: Keysym = Keysym(0x20);
 const BACKSPACE: Keysym = Keysym(0xff08);
-const TAB: Keysym = Keysym(0xff09);
-const LEFT_TAB: Keysym = Keysym(0xfe20);
 
-/// What assistive technology calls the tile with `id`.
-pub fn tile_name(session: &Session, id: TileId) -> String {
-    let Some(tile) = session.dock.tile(id) else {
-        return String::new();
-    };
-    match tile.kind {
-        TileKind::Trash => TRASH_NAME.to_owned(),
-        TileKind::Separator => String::new(),
-        TileKind::MinimizedWindow if !tile.title.is_empty() => tile.title.clone(),
-        TileKind::Recent => std::path::Path::new(&tile.key)
-            .file_name()
-            .map_or_else(|| tile.key.clone(), |n| n.to_string_lossy().into_owned()),
-        _ => session
-            .desktop()
-            .find(&tile.key)
-            .map(|e| e.name.clone())
-            .unwrap_or_else(|| {
-                if tile.title.is_empty() {
-                    tile.key.clone()
-                } else {
-                    tile.title.clone()
-                }
-            }),
+impl Model {
+    /// What assistive technology calls the tile with `id`.
+    pub fn tile_name(&self, id: TileId) -> String {
+        let Some(tile) = self.session.dock.tile(id) else {
+            return String::new();
+        };
+        match tile.kind {
+            TileKind::Trash => TRASH_NAME.to_owned(),
+            TileKind::Separator => String::new(),
+            TileKind::MinimizedWindow if !tile.title.is_empty() => tile.title.clone(),
+            TileKind::Recent => std::path::Path::new(&tile.key)
+                .file_name()
+                .map_or_else(|| tile.key.clone(), |n| n.to_string_lossy().into_owned()),
+            _ => match self.entry_name(&tile.key) {
+                Some(name) => name.to_owned(),
+                None if tile.title.is_empty() => tile.key.clone(),
+                None => tile.title.clone(),
+            },
+        }
     }
 }
 
@@ -1866,6 +1818,9 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             if let Some(grid) = model.grid.as_mut() {
                 grid.grid.set_reduce_motion(on);
             }
+            for surfaces in model.wm.values_mut() {
+                surfaces.overview.set_reduce_motion(on);
+            }
             Vec::new()
         }
         // the lock screen covers everything: the grid, the dialog and a menu go at once, without animation; the
@@ -1905,7 +1860,11 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             Vec::new()
         }
         Message::KeyboardLeft(output) => {
-            if Some(output) == model.output && model.menu.is_none() {
+            // the menu taking the keyboard is the one leave that keeps Focus Dock; any other (the server giving the
+            // keyboard to a window, a press outside closing the menu as well) ends it
+            if Some(output) == model.output
+                && !(model.menu.is_some() && std::mem::take(&mut model.menu_takes_keyboard))
+            {
                 model.engaged = false;
             }
             Vec::new()
@@ -2009,18 +1968,24 @@ fn input_message(model: &mut Model, input: Input) -> Vec<Command<Message>> {
             }
             Vec::new()
         }
-        Input::Switcher(pointer) => {
-            model.switcher_pointer(pointer);
+        Input::Switcher(output, input) => {
+            model.switcher_input(output, input);
             Vec::new()
         }
-        Input::Overview(pointer) => {
-            model.overview_pointer(pointer);
+        Input::Overview(output, input) => {
+            model.overview_input(output, input);
             Vec::new()
         }
-        Input::OverviewKey(key) => {
-            model.overview_key(key);
+        Input::WmClosed(output, which) => {
+            model.wm_closed(output, which);
             Vec::new()
         }
+        Input::TileFocused(id) => {
+            model.focused_tile = Some(TileId(id));
+            Vec::new()
+        }
+        // the update that follows every message advances what moves
+        Input::Frame => Vec::new(),
         Input::Closed(key) => {
             model.closed(key);
             Vec::new()
@@ -2034,6 +1999,49 @@ fn message(input: Input) -> Message {
 
 fn kit_point(p: Point) -> cupertino_kit::geometry::Point {
     cupertino_kit::geometry::Point::new(p.x, p.y)
+}
+
+/// The sides the switcher's panel on an output draws its icons at.
+fn icon_sides(surfaces: &WmSurfaces) -> Vec<f64> {
+    surfaces.switcher.icon_side().into_iter().collect()
+}
+
+/// A window-manager surface's window on the output with key `output`: a key and an `app_id` (the layer surface's
+/// namespace and output, `<namespace>@<output>`) of its own, and the compositor closing it reported as lost.
+fn on_output(mut window: Window<Message>, output: u32, which: Wm) -> Window<Message> {
+    if let Key::Str(name) = &window.key.0 {
+        window.key = WindowKey(Key::from(format!("{name}@{output}")));
+    }
+    window.spec.app_id = format!("{}@{output}", window.spec.app_id);
+    window.on_close = Some(message(Input::WmClosed(output, which)));
+    window
+}
+
+/// What the held tile's window draws, as a number that changes whenever any of it does: its window repaints then, and
+/// only then.
+fn drag_revision(held: Option<&view::drag::Held>, puff: Option<&view::drag::Puff>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut rect = |r: cupertino_kit::geometry::Rect| {
+        for v in [r.x(), r.y(), r.width(), r.height()] {
+            v.to_bits().hash(&mut h);
+        }
+    };
+    if let Some(held) = held {
+        rect(held.rect);
+        for v in [held.opacity, held.label, held.indicator] {
+            v.to_bits().hash(&mut h);
+        }
+        for source in &held.icon {
+            source.id.0.hash(&mut h);
+        }
+    }
+    if let Some(puff) = puff {
+        for v in [puff.centre.x, puff.centre.y, puff.size, puff.progress] {
+            v.to_bits().hash(&mut h);
+        }
+    }
+    h.finish()
 }
 
 /// Every window the model shows.
@@ -2051,13 +2059,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
             ));
         }
     }
-    let icons = |key: &(IconKey, u32)| model.icons.get(key).cloned().unwrap_or_default();
-    let set = |key: IconKey, sides: &[f64]| -> IconSet {
-        sides
-            .iter()
-            .flat_map(|&s| icons(&(key.clone(), s.ceil().max(1.0) as u32)))
-            .collect()
-    };
+    let set = |key: IconKey, sides: &[f64]| model.icon(&key, sides);
     let sides = model.tile_sides();
     if let (Some(output), Some(screen), Some(key)) = (model.output, model.screen(), model.bar_key())
     {
@@ -2075,9 +2077,9 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                 indicator: t.indicator,
                 icon: model
                     .tile_icon(t.id)
-                    .map(|k| set(k, &sides))
+                    .map(|k| model.icon(&k, &sides))
                     .unwrap_or_default(),
-                name: tile_name(&model.session, t.id),
+                name: model.tile_name(t.id),
                 description: tile_description(model, t.id, t.lifecycle),
             })
             .collect();
@@ -2102,7 +2104,9 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                 bar,
                 tiles,
                 input,
-                revision: model.revision,
+                initial: model.tile_order.first().map(|t| t.0),
+                ticking: model.bar_moving(now),
+                surface_changes: model.surface_changes,
             },
             message,
         ));
@@ -2148,9 +2152,10 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                         output,
                         size: Size::new(out.width, out.height),
                         orientation,
+                        revision: drag_revision(held.as_ref(), puff.as_ref()),
                         held,
                         puff,
-                        revision: model.revision,
+                        ticking: false,
                     },
                     message,
                 ));
@@ -2162,9 +2167,9 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
             let lookup = |name: &str| -> IconSet {
                 model
                     .icons
-                    .iter()
-                    .filter(|((k, _), _)| matches!(k, IconKey::Named(n) if n == name))
-                    .flat_map(|(_, set)| set.iter().cloned())
+                    .get(&IconKey::Named(name.to_owned()))
+                    .into_iter()
+                    .flat_map(|sizes| sizes.values().flatten().cloned())
                     .collect()
             };
             windows.push(view::grid::window(
@@ -2175,6 +2180,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                     now,
                     icons: &lookup,
                     size: Size::new(out.width, out.height),
+                    ticking: grid.grid.animating(now),
                 },
                 message,
             ));
@@ -2223,46 +2229,25 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
             message,
         ));
     }
-    if let Some(open) = &model.switcher {
-        if open.switcher.is_shown(now) {
-            let name = open
-                .switcher
-                .apps()
-                .get(open.switcher.selected())
-                .map(|app| {
-                    model
-                        .session
-                        .desktop()
-                        .find(app)
-                        .map_or_else(|| app.clone(), |e| e.name.clone())
-                })
-                .unwrap_or_default();
-            windows.push(bridge::switcher(
-                bridge::Painted {
-                    output: open.output,
-                    size: Size::new(open.layout.panel.w, open.layout.panel.h),
-                    image: open.image.clone(),
-                    alpha: open.switcher.alpha(now),
-                    name,
-                },
-                SwitcherLayout::RADIUS,
-                message,
-            ));
-        }
-    }
-    if let Some(open) = &model.overview {
-        if let Some(out) = model.output_info(open.output) {
-            windows.push(bridge::overview(
-                bridge::Painted {
-                    output: open.output,
-                    size: Size::new(out.width, out.height),
-                    image: open.image.clone(),
-                    alpha: 1.0,
-                    name: bridge::OVERVIEW_TITLE.to_owned(),
-                },
-                message,
-            ));
-        }
+    for (&output, surfaces) in &model.wm {
+        let Some(out) = model.output_info(output) else {
+            continue;
+        };
+        let icon = |app: &str| model.icon(&IconKey::App(app.to_owned()), &icon_sides(surfaces));
+        let switcher = surfaces.switcher.window_with_frames(
+            now,
+            &icon,
+            move |input| message(Input::Switcher(output, input)),
+            message(Input::Frame),
+        );
+        windows.extend(switcher.map(|w| on_output(w, output, Wm::Switcher)));
+        let overview = surfaces.overview.window_with_frames(
+            now,
+            Size::new(out.width, out.height),
+            move |input| message(Input::Overview(output, input)),
+            message(Input::Frame),
+        );
+        windows.extend(overview.map(|w| on_output(w, output, Wm::Overview)));
     }
     windows
 }

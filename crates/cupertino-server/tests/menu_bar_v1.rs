@@ -2107,6 +2107,65 @@ fn an_engaged_bar_holds_the_keyboard_over_window_focus_changes() {
     );
 }
 
+/// A press outside the engaged bar (its keyboard mode, or a menu opened from it) gives the keyboard back to the window,
+/// and the bar is not given it again while it still asks; a press on the bar keeps it.
+#[test]
+fn a_press_outside_the_engaged_bar_gives_the_keyboard_back() {
+    use smithay::backend::input::ButtonState;
+    let Some(mut h) = Harness::new() else { return };
+    let bar = BarClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&bar, 1);
+    let (app, window) = key_app(&mut h, "org.example.editor");
+    let f = h.state.wm.window(window).unwrap().geometry();
+    let press_at = |h: &mut Harness, x: f64, y: f64| {
+        h.state.pointer_moved_to((x, y).into(), 0, None);
+        h.state
+            .pointer_button(cupertino_server::events::BTN_LEFT, ButtonState::Pressed, 0);
+        h.state
+            .pointer_button(cupertino_server::events::BTN_LEFT, ButtonState::Released, 0);
+        h.advance(0.1);
+    };
+    let on_window = (f.x + 40.0, f.y + f.h - 40.0);
+
+    h.state.focus_menu_bar();
+    bar.send(Cmd::SetKeyboard(true));
+    h.wait_until("the bar to take the keyboard", |s| {
+        s.exclusive_layer.is_some() && !app.has_keyboard()
+    });
+    let held = h.state.exclusive_layer.clone();
+    press_at(&mut h, 500.0, f64::from(BAR_HEIGHT) / 2.0);
+    assert_eq!(h.state.exclusive_layer, held, "a press on the bar keeps it");
+    assert!(!app.has_keyboard());
+
+    press_at(&mut h, on_window.0, on_window.1);
+    assert_eq!(h.state.exclusive_layer, None);
+    h.wait_until("the keyboard back on the application", |_| {
+        app.has_keyboard()
+    });
+    // the bar commits again, still asking for the keyboard
+    bar.send(Cmd::SetKeyboard(true));
+    h.advance(0.1);
+    assert_eq!(
+        h.state.exclusive_layer, None,
+        "the bar's next commit does not take it back"
+    );
+    assert!(app.has_keyboard());
+
+    // engaged again with a menu open: one press outside closes the menu and gives the keyboard back
+    h.state.focus_menu_bar();
+    bar.send(Cmd::SetKeyboard(true));
+    h.wait_until("the engaged bar to take the keyboard", |s| {
+        s.exclusive_layer.is_some() && !app.has_keyboard()
+    });
+    open_menu(&mut h, &bar, &app);
+    press_at(&mut h, on_window.0, on_window.1);
+    h.wait_until("the keyboard to come back", |s| {
+        s.exclusive_layer.is_none() && app.has_keyboard()
+    });
+    assert!(h.state.popup_grab.is_none(), "the menu went with the press");
+    assert_eq!(bar.error(), None);
+}
+
 /// A bar process that exits with a menu open must not leave the output's next bar pinned
 /// revealed in full screen.
 #[test]

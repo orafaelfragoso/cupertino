@@ -1957,17 +1957,11 @@ fn sync_backdrop<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>) {
             surface,
             radius,
             alpha,
-        } => Some((surface, None, radius, alpha)),
-        WindowBackground::SurfaceRect {
-            surface,
-            rect,
-            radius,
-            alpha,
-        } => Some((surface, Some(rect), radius, alpha)),
+        } => Some((surface, radius, alpha)),
         _ => None,
     };
     let wanted = match shaped {
-        Some((surface, bounds, radius, alpha)) if system.capabilities().app_effects => w
+        Some((surface, radius, alpha)) if system.capabilities().app_effects => w
             .env
             .theme
             .surface(surface)
@@ -1976,7 +1970,6 @@ fn sync_backdrop<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>) {
                 material: material.to_owned(),
                 radius,
                 alpha: crate::surface_alpha(alpha),
-                bounds,
             }),
         _ => None,
     };
@@ -1987,8 +1980,8 @@ fn sync_backdrop<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>) {
         .request(w.id, WindowRequest::Backdrop(wanted.clone()))
         .is_ok();
     w.backdrop = wanted.filter(|_| shown);
-    // the material is shaped with the next present, which a change that paints nothing new (a material under a moved
-    // rectangle) must still bring
+    // the material is shaped with the next present, which a change that paints nothing new (new corners on a material
+    // the compositor draws) must still bring
     w.invalidate();
     w.damage.invalidate();
 }

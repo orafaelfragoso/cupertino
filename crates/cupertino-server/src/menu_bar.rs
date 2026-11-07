@@ -1171,7 +1171,8 @@ impl Cupertino {
             return;
         };
         // the bar answers by asking for exclusive keyboard interactivity, which gives it the
-        // keyboard on its next commit (`layer_keyboard_exclusivity`)
+        // keyboard on its next commit (`layer_keyboard_exclusivity`), even when a press released it
+        self.released_layer = None;
         for bar in self.menu_bars.bars.iter().filter(|b| b.output == active) {
             bar.resource.engage();
             bar.resource.done();
@@ -1188,6 +1189,7 @@ impl Cupertino {
         let Some(active) = self.menu_bars.set.active_output() else {
             return;
         };
+        self.released_layer = None;
         for bar in self
             .menu_bars
             .bars

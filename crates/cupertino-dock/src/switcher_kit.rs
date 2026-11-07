@@ -169,6 +169,23 @@ impl SwitcherSurface {
         self.open.as_ref().map(|o| o.switcher.selected())
     }
 
+    /// The applications of the switch, while one is shown or waits for its delay.
+    pub fn apps(&self) -> Option<&[String]> {
+        self.open.as_ref().map(|o| o.switcher.apps())
+    }
+
+    /// The side an application's icon is drawn at, in points, while a switch is shown or waits.
+    pub fn icon_side(&self) -> Option<f64> {
+        self.open.as_ref().map(|o| o.layout.item(0).w)
+    }
+
+    /// Whether the panel's window is up at `now`: past its delay and before the end of its fade.
+    pub fn is_shown(&self, now: f64) -> bool {
+        self.open
+            .as_ref()
+            .is_some_and(|o| o.switcher.is_shown(now) && !o.switcher.is_gone(now))
+    }
+
     /// What the window reported; the requests for the server.
     pub fn input(&mut self, input: SwitcherInput, now: f64) -> Vec<SwitcherRequest> {
         let Some(open) = self.open.as_mut().filter(|o| !o.switcher.is_fading()) else {
@@ -234,12 +251,47 @@ impl SwitcherSurface {
 
     /// The panel's window at `now`, from its delay to the end of its fade. `icon` gives the renditions of an
     /// application's icon (the generic application icon for one without).
-    pub fn window<M: Clone + 'static>(
+    pub fn window<M, F>(
         &self,
         now: f64,
         icon: &dyn Fn(&str) -> Vec<ImageSource>,
-        input: fn(SwitcherInput) -> M,
-    ) -> Option<Window<M>> {
+        input: F,
+    ) -> Option<Window<M>>
+    where
+        M: Clone + 'static,
+        F: Fn(SwitcherInput) -> M + Clone + 'static,
+    {
+        self.build(now, icon, input, None)
+    }
+
+    /// [`Self::window`] that sends `frame` at every frame the compositor gives the window while its fade runs, so the
+    /// caller advances the fade with the display rather than with a timer.
+    pub fn window_with_frames<M, F>(
+        &self,
+        now: f64,
+        icon: &dyn Fn(&str) -> Vec<ImageSource>,
+        input: F,
+        frame: M,
+    ) -> Option<Window<M>>
+    where
+        M: Clone + 'static,
+        F: Fn(SwitcherInput) -> M + Clone + 'static,
+    {
+        let fading = self.open.as_ref().is_some_and(|o| o.switcher.is_fading());
+        self.build(now, icon, input, fading.then_some(frame))
+    }
+
+    fn build<M, F>(
+        &self,
+        now: f64,
+        icon: &dyn Fn(&str) -> Vec<ImageSource>,
+        input: F,
+        frame: Option<M>,
+    ) -> Option<Window<M>>
+    where
+        M: Clone + 'static,
+        F: Fn(SwitcherInput) -> M + Clone + 'static,
+    {
         let open = self.open.as_ref()?;
         if !open.switcher.is_shown(now) || open.switcher.is_gone(now) {
             return None;
@@ -365,6 +417,7 @@ impl SwitcherSurface {
                 opacity: alpha,
                 pointer: Some(Box::new(move |p| input(SwitcherInput::Pointer(p)))),
                 key: None,
+                frame,
                 children,
             }),
             popup: None,

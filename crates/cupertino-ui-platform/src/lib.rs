@@ -156,8 +156,6 @@ pub struct Backdrop {
     pub material: String,
     pub radius: f64,
     pub alpha: f64,
-    /// Where the material is, in window points, when not under the whole window.
-    pub bounds: Option<Rect>,
 }
 
 /// A material of the theme data (`materials.json`) the compositor draws under one part of a window: `rect` in the

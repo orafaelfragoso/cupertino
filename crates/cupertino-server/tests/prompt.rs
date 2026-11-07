@@ -164,3 +164,43 @@ fn a_click_on_another_overlay_surface_leaves_the_keyboard_with_the_prompt() {
     d.pump();
     assert_eq!(keyboard_focus(&d.state), Some(prompt));
 }
+
+/// A press outside an engaged dock bar or menu bar takes the keyboard back from it; the prompt and the lock screen are
+/// not released that way: a press on a window leaves the keyboard with the prompt, and with the lock surface under the
+/// lock.
+#[test]
+fn a_press_on_a_window_leaves_the_keyboard_with_the_prompt_and_the_lock() {
+    let mut d = Desktop::new(1.0);
+    d.window();
+    let (_prompt, _other) = prompt_then_overlay(&mut d, (120, 80), KeyboardInteractivity::None);
+    let prompt = overlays(&d.state).into_iter().find(|o| o.1).unwrap().0;
+    let window = d.state.wm.windows().next().unwrap().id;
+    let f = d.state.wm.window(window).unwrap().geometry();
+    let at = (f.x + f.w - 20.0, f.y + f.h - 20.0);
+    let (hit, _) = d.state.surface_under(at.into()).expect("a surface");
+    assert!(!is_prompt(&hit), "the press lands on the window");
+    let press = |d: &mut Desktop| {
+        d.state.pointer_moved_to(at.into(), 0, None);
+        d.state
+            .pointer_button(cupertino_server::events::BTN_LEFT, ButtonState::Pressed, 0);
+        d.state
+            .pointer_button(cupertino_server::events::BTN_LEFT, ButtonState::Released, 0);
+        d.pump();
+    };
+    press(&mut d);
+    assert_eq!(keyboard_focus(&d.state), Some(prompt.clone()));
+    assert_eq!(d.state.exclusive_layer, Some(prompt.clone()));
+    assert_eq!(d.state.released_layer, None);
+
+    let _locker = d.lock();
+    wait_until(&mut d, "the lock surface to take the keyboard", |s| {
+        keyboard_focus(s).is_some_and(|focus| s.is_lock_surface(&focus))
+    });
+    press(&mut d);
+    assert!(
+        keyboard_focus(&d.state).is_some_and(|focus| d.state.is_lock_surface(&focus)),
+        "the lock surface keeps the keyboard"
+    );
+    assert_eq!(d.state.exclusive_layer, Some(prompt));
+    assert_eq!(d.state.released_layer, None);
+}

@@ -73,6 +73,8 @@ pub struct DragView {
     pub puff: Option<Puff>,
     /// Changes every frame something here moves.
     pub revision: u64,
+    /// Something here moves by itself: the window sends [`Input::Frame`] at every frame.
+    pub ticking: bool,
 }
 
 pub fn key() -> WindowKey {
@@ -87,6 +89,7 @@ pub fn window<M: Clone + 'static>(view: DragView, input: fn(Input) -> M) -> Wind
         held,
         puff,
         revision,
+        ticking,
     } = view;
     let held_icon = held.clone();
     Window {
@@ -121,6 +124,7 @@ pub fn window<M: Clone + 'static>(view: DragView, input: fn(Input) -> M) -> Wind
                     paint_puff(cx, puff);
                 }
             })),
+            frame: ticking.then(|| input(Input::Frame)),
             children: Vec::new(),
         }),
         popup: None,

@@ -509,6 +509,31 @@ fn the_keyboard_comes_back_to_what_opened_a_menu_or_a_rename() {
 }
 
 #[test]
+fn a_rename_that_keeps_the_name_gives_the_keyboard_back_at_once_and_never_later() {
+    let (mut run, _) = start(Appearance::Light);
+    run.click_row("b.txt");
+    run.menu("rename");
+    assert_eq!(focused(&run), "TextInput \"Name\" = \"b.txt\"");
+    run.key(RETURN, None);
+    assert_eq!(focused(&run), "Row [b.txt]");
+
+    // once the keyboard is elsewhere, a change in the folder leaves it there
+    run.click_named(Role::TextInput, "Search");
+    std::fs::write(run.home().join("Documents/c.txt"), "c").unwrap();
+    run.wait_until(|run| run.rows().len() == 4);
+    assert_eq!(focused(&run), "TextInput \"Search\" = \"\"");
+
+    // a name committed by a press on another row leaves the keyboard on that row
+    run.click_row("a.txt");
+    run.menu("rename");
+    run.click_row("c.txt");
+    assert_eq!(focused(&run), "Row [c.txt]");
+    std::fs::write(run.home().join("Documents/d.txt"), "d").unwrap();
+    run.wait_until(|run| run.rows().len() == 5);
+    assert_eq!(focused(&run), "Row [c.txt]");
+}
+
+#[test]
 fn a_folder_closed_over_the_focused_row_leaves_the_keyboard_on_the_folder() {
     let (mut run, at) = start(Appearance::Light);
     let notes = row(&run, "Notes");

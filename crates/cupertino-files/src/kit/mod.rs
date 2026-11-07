@@ -847,7 +847,8 @@ impl Model {
                     .select(indices, selection.anchor(), selection.cursor());
                 let renamed = window.rename_index();
                 if renamed.is_some() && window.browser.selection().indices().ne(renamed) {
-                    window.end_rename(session);
+                    // the keyboard goes where the press went, not back to the item renamed
+                    let _ = window.end_rename(session);
                 }
             }
             Event::Open(index) => {
@@ -898,7 +899,7 @@ impl Model {
                     rename.revision = change.revision;
                 }
             }
-            Event::NameSubmitted => window.end_rename(session),
+            Event::NameSubmitted => return window.submit_rename(id, session),
             Event::NameCancelled => {
                 if let Some(rename) = window.rename.take() {
                     return window.focus_item(id, &rename.path);
@@ -1441,6 +1442,7 @@ impl BrowserWindow {
         };
         self.rename = None;
         self.rename_when_listed = None;
+        self.focus_when_listed = None;
         self.sidebar_row = None;
         self.band = None;
         if !self.search.is_empty() {
@@ -1594,7 +1596,7 @@ impl BrowserWindow {
     /// of the folder without one. A name being edited is committed first.
     fn open_context(&mut self, at: cupertino_kit::geometry::Point, session: &Session) {
         if self.rename.is_some() {
-            self.end_rename(session);
+            let _ = self.end_rename(session);
             if self.rename.is_some() {
                 self.pressed = None;
                 return;
@@ -1637,7 +1639,7 @@ impl BrowserWindow {
     /// Open the menu of the toolbar's button `popup` below it.
     fn open_popup(&mut self, popup: Popup, session: &Session) {
         if self.rename.is_some() {
-            self.end_rename(session);
+            let _ = self.end_rename(session);
         }
         let in_trash = self.browser.dir() == session.trash.home_trash().join("files");
         let has_selection = !self.browser.selection().is_empty();
@@ -1860,27 +1862,43 @@ impl BrowserWindow {
     }
 
     /// Commit the edited name. A name that is not valid is reported and the field stays open. A rename that changes
-    /// the extension is not confirmed (there is no dialog to ask in).
-    fn end_rename(&mut self, session: &Session) {
-        let Some(rename) = self.rename.take() else {
-            return;
-        };
+    /// the extension is not confirmed (there is no dialog to ask in). The item's path once the name is committed, the
+    /// same when the name did not change; `None` when the field stays open or the rename failed.
+    fn end_rename(&mut self, session: &Session) -> Option<PathBuf> {
+        let rename = self.rename.take()?;
         match rename.edit.commit() {
-            Ok(None) => self.focus_when_listed = Some(rename.path.clone()),
+            Ok(None) => Some(rename.path),
             Ok(Some(name)) => match operations::rename_item(&rename.path, &name) {
                 Ok(path) => {
                     self.browser.select_when_appears(path.clone());
-                    self.focus_when_listed = Some(path);
+                    Some(path)
                 }
-                Err(e) => session.failed(Action::Rename, &[&rename.path], &e),
+                Err(e) => {
+                    session.failed(Action::Rename, &[&rename.path], &e);
+                    None
+                }
             },
             Err(e) => {
                 session
                     .notices
                     .post(notice::bad_name(rename.edit.text(), &e));
                 self.rename = Some(rename);
+                None
             }
         }
+    }
+
+    /// Return committed the name of window `id`'s rename: its item takes the keyboard, at once when it is listed under
+    /// that name (the name did not change), else once the view lists it.
+    fn submit_rename(&mut self, id: u64, session: &Session) -> Vec<Command<Message>> {
+        let Some(path) = self.end_rename(session) else {
+            return Vec::new();
+        };
+        if self.browser.entries().iter().any(|e| e.path == path) {
+            return self.focus_item(id, &path);
+        }
+        self.focus_when_listed = Some(path);
+        Vec::new()
     }
 
     /// The list of the window `id` changed: the name being edited follows its item, an item just renamed takes the

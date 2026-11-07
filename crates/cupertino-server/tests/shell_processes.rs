@@ -923,6 +923,48 @@ fn layer_geometry(state: &Cupertino, namespace: &str) -> Option<Rectangle<i32, L
     map.layer_geometry(layer)
 }
 
+/// Assert that the PNG `bytes`, a capture of the `width` x `height` area at `(x, y)` of the output at scale 1, holds
+/// what the server draws there now, the pointer left out: every channel within a few levels. A capture taken while
+/// one of the screenshot tool's surfaces (overlay dim, border, crosshair, toolbar) was still up would differ there.
+fn assert_capture_shows_the_output(
+    server: &mut Server,
+    bytes: &[u8],
+    (x, y, width, height): (u32, u32, u32, u32),
+) {
+    let shot = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
+        .expect("a PNG")
+        .to_rgba8();
+    assert_eq!(shot.dimensions(), (width, height));
+    server.wait_until("the screenshot surfaces to go", |s| {
+        layer_geometry(s, "cupertino-screenshot").is_none()
+    });
+    let mut backend = server.state.backend.take().expect("a backend");
+    #[allow(irrefutable_let_patterns)]
+    let cupertino_server::backend::Backend::Headless(ref mut h) = backend
+    else {
+        panic!("the headless backend")
+    };
+    let output = server
+        .state
+        .draw_output_image(&mut h.renderer, 0, false, false)
+        .expect("the output drawn");
+    server.state.backend = Some(backend);
+    let mut worst = (0u8, (0, 0));
+    for (px, py, p) in shot.enumerate_pixels() {
+        let q = output.get_pixel(x + px, y + py);
+        let d = (0..3).map(|c| p[c].abs_diff(q[c])).max().unwrap();
+        if d > worst.0 {
+            worst = (d, (px, py));
+        }
+    }
+    assert!(
+        worst.0 <= 2,
+        "the capture differs from the output by {} at {:?}: a surface of the tool is in it",
+        worst.0,
+        worst.1
+    );
+}
+
 /// Mean brightness (0 to 255) of the strongly opaque pixels in the committed buffer of the menu bar process's
 /// surface. The bar's material is the server's, so these are the process's own labels. `None` until the process
 /// has committed a buffer with such pixels.
@@ -1490,6 +1532,8 @@ fn the_screenshot_action_maps_the_overlay_and_a_drag_writes_a_png_of_the_selecti
     let bytes = std::fs::read(&file).unwrap();
     let word = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
     assert_eq!((word(16), word(20)), (200, 150));
+    // the overlay, its border and the crosshair at the release point went before the copy
+    assert_capture_shows_the_output(&mut server, &bytes, (100, 100, 200, 150));
 }
 
 /// The toolbar shortcut maps the overlay and the 560 × 48 toolbar centred 40 pt above the bottom, which takes the
@@ -1557,6 +1601,12 @@ fn the_screenshot_toolbar_sits_at_the_bottom_and_return_captures_the_screen() {
     let bytes = std::fs::read(png(&shots).unwrap()).unwrap();
     let word = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
     assert_eq!((word(16), word(20)), (OUTPUT.0 as u32, OUTPUT.1 as u32));
+    // the overlay and the toolbar went before the copy
+    assert_capture_shows_the_output(
+        &mut server,
+        &bytes,
+        (0, 0, OUTPUT.0 as u32, OUTPUT.1 as u32),
+    );
 }
 
 /// Escape on the toolbar takes the overlay and the toolbar away and gives the keyboard back to the window that had it,

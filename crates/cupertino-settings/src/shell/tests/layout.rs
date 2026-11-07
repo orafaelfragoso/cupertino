@@ -55,6 +55,22 @@ fn two_sections() -> Vec<Section> {
     ]
 }
 
+/// A long translated-style label and second line of a row.
+const LONG_LABEL: &str = "Mauszeiger beim Schütteln der Maus vorübergehend vergrößern";
+const LONG_DETAIL: &str = "Liest den Bildschirminhalt laut vor. Mit Super+Alt+S schalten Sie die \
+    Bildschirmausgabe jederzeit ein oder aus, auch im Anmeldebildschirm.";
+
+/// A section of a row with a long label and second line, then a row with a short one.
+fn long_rows() -> Vec<Section> {
+    let mut long = switch_row(ControlId::ShakeToLocate, LONG_LABEL);
+    long.detail = Some(LONG_DETAIL.into());
+    vec![Section {
+        header: Some("Zeiger".into()),
+        rows: vec![long, switch_row(ControlId::MouseNatural, "Scrollen")],
+        footer: None,
+    }]
+}
+
 static FORM: Mutex<Vec<Section>> = Mutex::new(Vec::new());
 
 /// The form of a pane alone in a window, inset as the Settings content is.
@@ -135,6 +151,38 @@ fn bounds<A: Application>(driver: &TestDriver<A>, window: WindowId, name: &str) 
         .bounds
 }
 
+/// The laid-out bounds of the node with `role` named `name`.
+fn bounds_of<A: Application>(
+    driver: &TestDriver<A>,
+    window: WindowId,
+    role: Role,
+    name: &str,
+) -> Rect {
+    driver
+        .runtime()
+        .snapshot(window)
+        .unwrap()
+        .accessibility
+        .into_iter()
+        .find(|(_, n)| n.role == role && n.name.as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("a {role:?} named {name:?}"))
+        .1
+        .bounds
+}
+
+/// A window of [`FormApp`] showing `sections`.
+fn form_window(sections: Vec<Section>) -> (TestDriver<FormApp>, WindowId) {
+    *FORM.lock().unwrap() = sections;
+    let mut driver = TestDriver::<FormApp>::new(
+        Capabilities::default(),
+        runtime_options(),
+        ManualClock::new(Timestamp(0)),
+    );
+    driver.run_until_idle(budget()).unwrap();
+    let window = driver.runtime().windows()[0].1;
+    (driver, window)
+}
+
 fn overlaps(a: &Rect, b: &Rect) -> bool {
     a.x() < b.max_x() - SLACK
         && b.x() < a.max_x() - SLACK
@@ -145,14 +193,7 @@ fn overlaps(a: &Rect, b: &Rect) -> bool {
 #[test]
 fn a_footnote_wider_than_its_section_wraps_and_the_next_section_starts_below_every_line() {
     let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
-    *FORM.lock().unwrap() = two_sections();
-    let mut driver = TestDriver::<FormApp>::new(
-        Capabilities::default(),
-        runtime_options(),
-        ManualClock::new(Timestamp(0)),
-    );
-    driver.run_until_idle(budget()).unwrap();
-    let window = driver.runtime().windows()[0].1;
+    let (mut driver, window) = form_window(two_sections());
     let mut heights = Vec::new();
     for width in [MIN_CONTENT, 500.0, 900.0] {
         for scale in SCALES {
@@ -206,6 +247,56 @@ fn a_footnote_wider_than_its_section_wraps_and_the_next_section_starts_below_eve
             at.windows(2).all(|pair| pair[0] >= pair[1]) && at[0] > at[at.len() - 1],
             "at {scale}x a narrower section gives the footnote more lines: {at:?}"
         );
+    }
+}
+
+#[test]
+fn a_row_whose_label_is_wider_than_its_section_wraps_and_keeps_its_control_in_the_window() {
+    let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut driver, window) = form_window(long_rows());
+    for width in [MIN_CONTENT, 500.0, 900.0] {
+        for scale in SCALES {
+            resize(&mut driver, window, width, scale);
+            let at = format!("{width} pt at {scale}x");
+            let (left, right) = (
+                WINDOW_CONTENT_INSET.left,
+                width - WINDOW_CONTENT_INSET.right,
+            );
+            let label = bounds_of(&driver, window, Role::StaticText, LONG_LABEL);
+            let detail = bounds_of(&driver, window, Role::StaticText, LONG_DETAIL);
+            let switch = bounds_of(&driver, window, Role::Switch, LONG_LABEL);
+            let next = bounds_of(&driver, window, Role::StaticText, "Scrollen");
+            let line = next.height();
+            assert!(
+                switch.x() >= left - SLACK && switch.max_x() <= right + SLACK,
+                "{at}: the switch stays in the section, {switch:?}"
+            );
+            for text in [&label, &detail] {
+                assert!(
+                    text.x() >= left - SLACK && text.max_x() <= switch.x() - form::ROW_GAP + SLACK,
+                    "{at}: the label ends a row gap before its switch, {text:?} and {switch:?}"
+                );
+            }
+            assert!(
+                detail.y() >= label.max_y() - SLACK,
+                "{at}: the second line follows the label"
+            );
+            if width < 900.0 {
+                assert!(
+                    detail.height() >= 2.0 * line - SLACK,
+                    "{at}: the second line wraps, {detail:?} for lines of {line}"
+                );
+            }
+            assert!(
+                next.y() >= detail.max_y().max(switch.max_y()) + form::ROW_GAP - SLACK,
+                "{at}: the next row starts below every line of this one, {next:?} after {detail:?}"
+            );
+            if scale == 1.0 {
+                driver
+                    .look(window, &format!("settings-long-row-{width}"))
+                    .unwrap();
+            }
+        }
     }
 }
 

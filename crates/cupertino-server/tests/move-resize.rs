@@ -1,5 +1,5 @@
-//! A client may start a move or resize of its window only with the serial of a pointer press that is still held on it.
-//! Tests skip (pass) when no EGL device is available.
+//! A client may start a move or resize of its window only with the serial of a pointer press that is still held on it,
+//! not with that of a key or focus change that came after the press. Tests skip (pass) when no EGL device is available.
 
 mod common;
 
@@ -15,18 +15,22 @@ use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
 use cupertino_server::events::BTN_LEFT;
 use cupertino_server::Cupertino;
-use smithay::backend::input::ButtonState;
+use smithay::backend::input::{ButtonState, KeyState};
+use smithay::input::keyboard::Keycode;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_compositor, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
+    wl_surface,
 };
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
 const OUTPUT: (i32, i32) = (1000, 700);
 const WINDOW: (i32, i32) = (400, 300);
+/// The key typed while the press is held: A, as an xkb keycode.
+const KEY_A: u32 = 38;
 
 #[derive(Clone, Copy, Debug)]
 enum Ask {
@@ -38,6 +42,8 @@ enum Ask {
 struct Log {
     /// Serial of the last button press, and whether that button is still down.
     press: Option<(u32, bool)>,
+    /// Serial of the last key event.
+    key: Option<u32>,
     drawn: bool,
 }
 
@@ -138,6 +144,9 @@ impl Dispatch<wl_seat::WlSeat, ()> for Client {
             if caps.contains(wl_seat::Capability::Pointer) {
                 seat.get_pointer(qh, ());
             }
+            if caps.contains(wl_seat::Capability::Keyboard) {
+                seat.get_keyboard(qh, ());
+            }
         }
     }
 }
@@ -164,6 +173,21 @@ impl Dispatch<wl_pointer::WlPointer, ()> for Client {
             } else if let Some((s, _)) = log.press {
                 log.press = Some((s, false));
             }
+        }
+    }
+}
+
+impl Dispatch<wl_keyboard::WlKeyboard, ()> for Client {
+    fn event(
+        state: &mut Self,
+        _: &wl_keyboard::WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_keyboard::Event::Key { serial, .. } = event {
+            state.log.lock().unwrap().key = Some(serial);
         }
     }
 }
@@ -367,4 +391,37 @@ fn a_stale_released_or_made_up_serial_starts_nothing() {
         "not the serial of the held press"
     );
     h.release();
+}
+
+#[test]
+fn a_move_with_the_serial_of_a_key_after_the_held_press_starts_nothing_and_the_press_serial_does() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = mapped_client(&mut h);
+    let press = h.press(&client);
+    // the pointer moves on with the button down and a key goes down and up, as before a toolbar drag starts a move
+    let window = h.state.windows.iter().find(|e| e.mapped).unwrap().id;
+    let frame = h.state.wm.window(window).unwrap().geometry();
+    h.state
+        .pointer_moved_to((frame.x + 140.0, frame.y + 160.0).into(), 0, None);
+    let key = Keycode::new(KEY_A);
+    h.state.keyboard_event_now(key, KeyState::Pressed, 0);
+    h.state.keyboard_event_now(key, KeyState::Released, 0);
+    h.wait_until("the key to reach the client", |_| {
+        client.log.lock().unwrap().key.is_some()
+    });
+    let later = client.log.lock().unwrap().key.unwrap();
+    assert_ne!(later, press);
+
+    client.ask(Ask::Move(later));
+    client.ask(Ask::Resize(later));
+    h.run_for(Duration::from_millis(300));
+    assert!(
+        !h.state.wm.is_interacting(),
+        "the serial of a key after the press is stale"
+    );
+
+    client.ask(Ask::Move(press));
+    h.wait_until("the move to start", |s| s.wm.is_interacting());
+    h.release();
+    assert!(!h.state.wm.is_interacting(), "the release ends it");
 }

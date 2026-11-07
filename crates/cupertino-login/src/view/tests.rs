@@ -341,7 +341,11 @@ impl Run {
             .iter()
             .flat_map(|update| cupertino_ui_test::secret_leaks(update, &[SECRET]))
             .collect();
-        assert_eq!(leaks, Vec::<String>::new(), "assistive technology reads the password");
+        assert_eq!(
+            leaks,
+            Vec::<String>::new(),
+            "assistive technology reads the password"
+        );
     }
 
     fn settle_frames(&mut self) {

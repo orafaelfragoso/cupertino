@@ -93,7 +93,11 @@ fn a_live_node_is_said_by_its_name_when_it_arrives_and_when_it_is_renamed() {
         step: None,
     });
     let window = (1, node(Role::Window, "OSD", &[2]));
-    adapter.update(&update(true, None, vec![window.clone(), (2, volume.clone())]));
+    adapter.update(&update(
+        true,
+        None,
+        vec![window.clone(), (2, volume.clone())],
+    ));
     // the same name again, a new value or a new description alone, and a whole tree that sends the node again are
     // not said: the bridge announces only an added or renamed node
     adapter.update(&update(false, None, vec![(2, volume.clone())]));
@@ -105,7 +109,11 @@ fn a_live_node_is_said_by_its_name_when_it_arrives_and_when_it_is_renamed() {
     });
     volume.description = Some("Speakers".into());
     adapter.update(&update(false, None, vec![(2, volume.clone())]));
-    adapter.update(&update(true, None, vec![window.clone(), (2, volume.clone())]));
+    adapter.update(&update(
+        true,
+        None,
+        vec![window.clone(), (2, volume.clone())],
+    ));
     volume.name = Some("Volume 75%".into());
     adapter.update(&update(false, None, vec![(2, volume.clone())]));
     // removed, then back: a new node, said again

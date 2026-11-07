@@ -1,6 +1,6 @@
 use cupertino_ui_core::{
-    AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, Action,
-    ActionData, ActionRequest, Live, NodeId,
+    AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, Action, ActionData,
+    ActionRequest, Live, NodeId,
 };
 use cupertino_ui_platform::WindowId;
 use std::collections::{BTreeMap, HashMap};

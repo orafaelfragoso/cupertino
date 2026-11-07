@@ -685,7 +685,10 @@ fn hover_selects_a_row_and_a_click_activates_it() {
 fn a_screen_reader_s_click_on_a_result_launches_it_and_closes_the_panel() {
     let mut run = Run::new();
     run.type_text("fire");
-    let tree = run.reader.tree(run.panel()).expect("the reader holds the panel");
+    let tree = run
+        .reader
+        .tree(run.panel())
+        .expect("the reader holds the panel");
     let row = tree
         .nodes
         .iter()

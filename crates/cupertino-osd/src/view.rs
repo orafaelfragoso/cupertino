@@ -440,12 +440,18 @@ mod tests {
     fn the_meter_s_name_says_the_level_unless_it_shows_a_mute() {
         assert_eq!(meter_name(Kind::Volume, 0.75), "Volume 75%");
         assert_eq!(meter_name(Kind::Brightness, 0.0), "Brightness 0%");
-        assert_eq!(meter_name(Kind::KeyboardBrightness, 1.0), "Keyboard brightness 100%");
+        assert_eq!(
+            meter_name(Kind::KeyboardBrightness, 1.0),
+            "Keyboard brightness 100%"
+        );
         assert_eq!(meter_name(Kind::Microphone, 0.333), "Microphone 33%");
         assert_eq!(meter_name(Kind::Mute, 0.0), "Volume muted");
         assert_eq!(meter_name(Kind::MicrophoneMute, 0.4), "Microphone muted");
         // a new level is a new name, which is what a bridge announces
-        assert_ne!(meter_name(Kind::Volume, 0.5), meter_name(Kind::Volume, 0.5625));
+        assert_ne!(
+            meter_name(Kind::Volume, 0.5),
+            meter_name(Kind::Volume, 0.5625)
+        );
     }
 
     #[test]

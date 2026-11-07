@@ -16,9 +16,10 @@ use cupertino_defaults::dock::{sanitize_large_size, sanitize_tile_size, DockSett
 use cupertino_defaults::keyboard::KeyboardSettings;
 use cupertino_defaults::menubar::{ClockSettings, MenuBarSettings};
 use cupertino_defaults::power::PowerSettings;
+use cupertino_defaults::screen_sharing::ScreenSharingConf;
 use cupertino_defaults::system::read_root_file;
 
-use crate::{clipboard, mapping};
+use crate::{clipboard, mapping, screen_sharing};
 
 /// A settings file the panes write.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -35,16 +36,19 @@ pub enum File {
     Power,
     /// `data-control.conf`, read by the server: the applications allowed to use the clipboard.
     DataControl,
+    /// `screen-sharing.conf`, read by the portal: the displays apps may share again without asking.
+    ScreenSharing,
 }
 
 impl File {
-    pub const ALL: [File; 6] = [
+    pub const ALL: [File; 7] = [
         File::Dock,
         File::Compositor,
         File::MenuBar,
         File::Keyboard,
         File::Power,
         File::DataControl,
+        File::ScreenSharing,
     ];
 
     /// The process that applies the file.
@@ -55,11 +59,12 @@ impl File {
                 "the window server"
             }
             File::MenuBar => "the menu bar",
+            File::ScreenSharing => "the portal",
         }
     }
 
     /// Whether the owning process applies a change of the file while it runs. All of them do (the live settings of
-    /// the server's `live` module, the dock's and the menu bar's watchers).
+    /// the server's `live` module, the dock's and the menu bar's watchers; the portal reads its file at each restore).
     pub fn reloads(self) -> bool {
         true
     }
@@ -79,6 +84,7 @@ pub struct Paths {
     /// The machine's accessibility defaults (`SYSTEM_ACCESSIBILITY`), under every key `accessibility.conf` does not record.
     pub system_accessibility: Option<PathBuf>,
     pub data_control: Option<PathBuf>,
+    pub screen_sharing: Option<PathBuf>,
 }
 
 impl Paths {
@@ -92,6 +98,7 @@ impl Paths {
             accessibility: cupertino_defaults::config_file(ACCESSIBILITY_ENV, ACCESSIBILITY_FILE),
             system_accessibility: Some(PathBuf::from(SYSTEM_ACCESSIBILITY)),
             data_control: DataControlConf::path(),
+            screen_sharing: ScreenSharingConf::path(),
         }
     }
 
@@ -103,6 +110,7 @@ impl Paths {
             File::Keyboard => self.keyboard.as_ref(),
             File::Power => self.power.as_ref(),
             File::DataControl => self.data_control.as_ref(),
+            File::ScreenSharing => self.screen_sharing.as_ref(),
         }
     }
 }
@@ -118,6 +126,8 @@ pub struct Settings {
     pub accessibility: AccessibilitySettings,
     /// `data-control.conf`, empty without a path.
     pub clipboard: clipboard::List,
+    /// `screen-sharing.conf`, empty without a path.
+    pub screen_sharing: screen_sharing::Grants,
     /// The height of the output the dock sits on: its default tile size depends on it (`default_tile_size`).
     pub display_height: f64,
 }
@@ -233,6 +243,11 @@ impl Settings {
             .as_deref()
             .map(clipboard::List::load)
             .unwrap_or_default();
+        let screen_sharing = paths
+            .screen_sharing
+            .as_deref()
+            .map(screen_sharing::Grants::load)
+            .unwrap_or_default();
         Ok(Settings {
             dock,
             compositor,
@@ -241,6 +256,7 @@ impl Settings {
             power,
             accessibility,
             clipboard,
+            screen_sharing,
             display_height,
         })
     }
@@ -323,6 +339,15 @@ impl Settings {
             .unwrap_or_default();
     }
 
+    /// Read `screen-sharing.conf` again (when the Privacy pane shows and after each write): the portal adds to it.
+    pub fn reload_screen_sharing(&mut self, paths: &Paths) {
+        self.screen_sharing = paths
+            .screen_sharing
+            .as_deref()
+            .map(screen_sharing::Grants::load)
+            .unwrap_or_default();
+    }
+
     /// Let `program` use the clipboard: its entry ([`clipboard::entry_for`], so a link becomes its file) is added and
     /// the file written. `Err` is the sentence the chooser shows; nothing changed.
     pub fn allow_clipboard(
@@ -385,6 +410,7 @@ impl Settings {
             File::Keyboard => self.keyboard.store(path).map(drop),
             File::Power => self.power.store(path).map(drop),
             File::DataControl => self.clipboard.store(path),
+            File::ScreenSharing => self.screen_sharing.store(path),
         };
         stored.map_err(|e| {
             eprintln!("cupertino-settings: the {file:?} settings could not be saved: {e}");

@@ -43,6 +43,7 @@ fn settings(dir: &std::path::Path) -> Settings {
         accessibility: Some(dir.join("accessibility.conf")),
         system_accessibility: None,
         data_control: None,
+        screen_sharing: None,
     };
     Settings::load(&paths, 1080.0).expect("defaults load without files")
 }

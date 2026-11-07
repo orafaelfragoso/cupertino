@@ -24,6 +24,7 @@ use crate::live::{
 };
 use crate::mapping;
 use crate::pane::PaneId;
+use crate::screen_sharing;
 use crate::settings::{File, Settings};
 
 /// A control of a pane.
@@ -107,6 +108,8 @@ pub enum ControlId {
     ClipboardUnusable(usize),
     /// The buttons that add an application (0) or a program (1).
     ClipboardAdd,
+    /// A grant of `screen-sharing.conf`, by index: Forget.
+    ScreenSharingGrant(usize),
 }
 
 /// What a control's value reaches the system through.
@@ -296,7 +299,8 @@ fn row(id: ControlId, label: impl Into<String>, control: Control, backend: Backe
     }
 }
 
-/// Clipboard Access: the entries of `data-control.conf`, the lines that allow nothing, and the add buttons.
+/// Clipboard Access (the entries of `data-control.conf`, the lines that allow nothing, and the add buttons), then
+/// Screen Sharing (the grants of `screen-sharing.conf`).
 fn privacy_sections(settings: &Settings, live: &Live) -> Vec<Section> {
     let list = &settings.clipboard;
     let backend = Backend::Key(File::DataControl, "allow");
@@ -369,10 +373,53 @@ fn privacy_sections(settings: &Settings, live: &Live) -> Vec<Section> {
             rows: vec![add],
             footer: Some(CLIPBOARD_FOOTER.to_string()),
         },
+        screen_sharing_section(settings, live),
     ]
 }
 
+/// Screen Sharing: each app that may share a display again without asking, with Forget.
+fn screen_sharing_section(settings: &Settings, live: &Live) -> Section {
+    let grants = &settings.screen_sharing;
+    let backend = Backend::Key(File::ScreenSharing, "grant");
+    let none = || Control::Text {
+        value: String::new(),
+    };
+    let mut rows = Vec::new();
+    if let Some(e) = &grants.unreadable {
+        rows.push(Row {
+            error: Some(e.clone()),
+            ..row(ControlId::Reading, CLIPBOARD_UNREADABLE, none(), backend)
+        });
+    }
+    for (i, grant) in grants.conf.grants.iter().enumerate() {
+        let (name, icon) = screen_sharing::identity(&grant.app_id, &live.apps);
+        rows.push(Row {
+            icon: Some(icon.unwrap_or_default()),
+            detail: Some(format!("Display {}", grant.display)),
+            ..row(
+                ControlId::ScreenSharingGrant(i),
+                name,
+                Control::Button {
+                    title: "Forget".to_string(),
+                },
+                backend,
+            )
+        });
+    }
+    if rows.is_empty() {
+        rows.push(row(ControlId::Reading, "No applications", none(), backend));
+    }
+    Section {
+        header: header("Screen Sharing"),
+        rows,
+        footer: Some(SCREEN_SHARING_FOOTER.to_string()),
+    }
+}
+
 const CLIPBOARD_UNREADABLE: &str = "The list can't be read";
+/// The footer of Screen Sharing: what a remembered app can do, and what Forget does.
+const SCREEN_SHARING_FOOTER: &str =
+    "These apps can share the display shown without asking you again. Forget one to be asked next time.";
 /// One line of footer: what an allowed application can do (wording approximate).
 const CLIPBOARD_FOOTER: &str = "These apps can read and change what you copy, at any time.";
 
@@ -2221,6 +2268,15 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
         ControlId::ClipboardAdd => vec![Effect::AskClipboardApp {
             program: index_of(value) == 1,
         }],
+        // forgetting only takes a permission away, so it asks nothing first; a share running now goes on
+        ControlId::ScreenSharingGrant(i) => {
+            let Some(grant) = settings.screen_sharing.conf.grants.get(i) else {
+                return Vec::new();
+            };
+            let id = grant.id.clone();
+            settings.screen_sharing.conf.revoke(&id);
+            store(File::ScreenSharing)
+        }
         ControlId::MouseNatural => {
             settings.compositor.mouse_natural_scrolling = Some(bool_of(value));
             store(File::Compositor)
@@ -2253,6 +2309,7 @@ mod tests {
             accessibility: cupertino_defaults::accessibility::AccessibilitySettings::default(),
             display_height: 1080.0,
             clipboard: crate::clipboard::List::default(),
+            screen_sharing: crate::screen_sharing::Grants::default(),
         }
     }
 

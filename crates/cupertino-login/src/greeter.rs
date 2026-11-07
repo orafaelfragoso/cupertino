@@ -466,6 +466,7 @@ impl Application for GreeterApp {
                         field: Field::Password {
                             generation: screen.field(),
                             enabled: !matches!(screen.phase(), Phase::Unlocking | Phase::Unlocked),
+                            busy: screen.checking(),
                         },
                         caps_lock: app.caps_lock,
                         spinner: screen.spinner(now),

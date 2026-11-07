@@ -98,6 +98,8 @@ pub enum DockChange {
     Unresponsive { app_id: String, unresponsive: bool },
     /// The Force Quit shortcut was pressed: open the Force Quit dialog, or close it when it is open.
     ForceQuitDialog,
+    /// The Focus Dock shortcut was pressed: the dock takes the keyboard on its first tile; from shell version 18.
+    Engage,
     /// The switch ended: `committed` when the selected application was activated, else cancelled.
     SwitcherClosed { committed: bool },
     /// The overview opened on the dock's output, or its windows or workspaces changed while open:
@@ -359,6 +361,7 @@ impl GroupBuilder {
                 unresponsive: state != 0,
             }),
             Event::ForceQuitDialog => self.changes.push(DockChange::ForceQuitDialog),
+            Event::Engage => self.changes.push(DockChange::Engage),
             Event::SwitcherClosed { committed } => self.changes.push(DockChange::SwitcherClosed {
                 committed: committed != 0,
             }),
@@ -521,6 +524,7 @@ mod tests {
             },
         );
         push(&mut group, Event::ForceQuitDialog);
+        push(&mut group, Event::Engage);
         assert_eq!(
             push(&mut group, Event::Done),
             Some(vec![
@@ -541,6 +545,7 @@ mod tests {
                     unresponsive: true
                 },
                 DockChange::ForceQuitDialog,
+                DockChange::Engage,
             ])
         );
     }

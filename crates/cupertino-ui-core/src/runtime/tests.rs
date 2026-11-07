@@ -74,6 +74,15 @@ impl Application for Counter {
                     alpha: f64::NAN,
                 }
             }
+            "bar" | "bar moved" => {
+                let x = if message == "bar" { 10.0 } else { 40.0 };
+                model.background = WindowBackground::SurfaceRect {
+                    surface: Surface::Menu,
+                    rect: Rect::new(x, 20.0, 100.0, 50.0),
+                    radius: 8.0,
+                    alpha: 1.0,
+                }
+            }
             "close" => return vec![Command::CloseWindow(WindowKey("main".into()))],
             "wait" => return vec![Command::Perform(Box::pin(async { "done 7".to_string() }))],
             "launch" | "launch from gone" => {
@@ -1355,6 +1364,45 @@ fn a_window_paints_the_theme_background_unless_its_content_draws_its_own() {
     );
 }
 
+/// The material under a rectangle of the window is shaped with the window's next present. Moving the rectangle changes
+/// nothing the window paints while the compositor draws the material, so the move itself must bring a present.
+#[test]
+fn moving_the_material_under_a_rectangle_presents_the_window_again() {
+    let (mut rt, window, _) = start();
+    configure(&mut rt, window, 1);
+    rt.window_system_mut().effects = true;
+    let frame = |rt: &mut Rt, message: &str| {
+        rt.messages.push_back(message.into());
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(1)));
+        rt.step(steps()).unwrap();
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(2)));
+        rt.step(steps()).unwrap();
+        rt.window_system().presented.len()
+    };
+    let shown = frame(&mut rt, "bar");
+    assert_eq!(
+        frame(&mut rt, "bar"),
+        shown,
+        "nothing changed, nothing to present"
+    );
+    assert!(
+        frame(&mut rt, "bar moved") > shown,
+        "the moved material goes with a present"
+    );
+    let bounds = rt
+        .window_system()
+        .requests
+        .iter()
+        .rev()
+        .find_map(|(_, r)| match r {
+            WindowRequest::Backdrop(Some(b)) => b.bounds,
+            _ => None,
+        });
+    assert_eq!(bounds, Some(Rect::new(40.0, 20.0, 100.0, 50.0)));
+}
+
 #[test]
 fn a_menu_window_shows_the_menu_material_where_the_desktop_draws_it_and_the_opaque_fill_in_its_shape_elsewhere(
 ) {
@@ -1432,6 +1480,7 @@ fn a_menu_window_shows_the_menu_material_where_the_desktop_draws_it_and_the_opaq
         material: "Menu".into(),
         radius: 8.0,
         alpha: 1.0,
+        bounds: None,
     };
     assert_eq!(backdrops(&rt), vec![Some(menu.clone())]);
     frame(&mut rt, Some("half"));

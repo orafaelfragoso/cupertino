@@ -652,6 +652,7 @@ fixtures! {
         enabled: look.enabled,
         on_change: None,
         on_submit: None,
+        ..SecureField::default()
     });
     scroll_view: "scroll-view", TALL, &[State::Normal, State::Hover, State::Focused], |look| ScrollView {
         content: Element::new(Text {

@@ -1064,7 +1064,8 @@ impl WlrLayerShellHandler for Cupertino {
         }
     }
 
-    /// A layer surface's popup (a toolbar's menu, say) stays on the layer surface's output.
+    /// A popup is created without a parent and given its layer surface here, before its first commit: only now is it
+    /// known whose output it must stay on.
     fn new_popup(&mut self, _parent: WlrLayerSurface, popup: PopupSurface) {
         self.unconstrain_popup(&popup);
     }
@@ -1211,23 +1212,20 @@ impl Cupertino {
         });
     }
 
-    /// A popup of a layer surface, such as a toolbar's menu, is kept on the output of the layer surface (`root`): it
-    /// flips, slides or resizes as its positioner allows.
+    /// A popup of a layer surface is kept inside the output the surface is on, flipped or slid as its positioner
+    /// allows: a dock's menu at the bottom edge opens above its tile. A root that is no layer surface is left alone.
     fn unconstrain_layer_popup(&self, popup: &PopupSurface, kind: &PopupKind, root: &WlSurface) {
-        for o in &self.outputs {
-            let map = layer_map_for_output(&o.output);
-            let Some(layer) = map.layer_for_surface(root, WindowSurfaceType::TOPLEVEL) else {
+        for out in &self.outputs {
+            let map = layer_map_for_output(&out.output);
+            let Some(geo) = map
+                .layer_for_surface(root, WindowSurfaceType::TOPLEVEL)
+                .and_then(|layer| map.layer_geometry(layer))
+            else {
                 continue;
             };
-            let Some(geometry) = map.layer_geometry(layer) else {
-                return;
-            };
-            // the output in the coordinates of the popup's parent
-            let mut target: Rectangle<i32, Logical> = Rectangle::new(
-                Point::from((0, 0)),
-                (o.rect.w.round() as i32, o.rect.h.round() as i32).into(),
-            );
-            target.loc -= geometry.loc;
+            // the output in the coordinates of the layer surface, then of the popup's parent
+            let mut target = Self::rect_to_logical(out.rect);
+            target.loc = Point::from((0, 0)) - geo.loc;
             target.loc -= get_popup_toplevel_coords(kind);
             popup.with_pending_state(|state| {
                 state.geometry = state.positioner.get_unconstrained_geometry(target);

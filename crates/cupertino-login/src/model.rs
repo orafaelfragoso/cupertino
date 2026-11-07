@@ -194,6 +194,12 @@ impl LockScreen {
         self.phase
     }
 
+    /// Whether an attempt is being checked: from its submission until the authenticator answers. The password field is
+    /// busy for assistive technology meanwhile.
+    pub fn checking(&self) -> bool {
+        matches!(self.phase, Phase::Authenticating { .. })
+    }
+
     /// Which password field the screen shows: a new number is a new, empty field.
     pub fn field(&self) -> u64 {
         self.field

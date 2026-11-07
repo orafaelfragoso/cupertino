@@ -2,7 +2,9 @@
 //! it ([`super::Popup`]). A press, Space, Return or an assistive Click opens the menu; the button reads as a pop-up
 //! button named for what it does.
 //!
-//! The path bar's folders ([`PathSegment`]): each its icon and name, which a click or an assistive Click goes to.
+//! The path bar's folders ([`PathSegment`]): each its icon and name, which a click, Space, Return or an assistive Click
+//! goes to. Each folder is a Tab stop, after the folder's items, and the bar reads as a group named "Path"
+//! ([`PathBar`]).
 
 use cupertino_kit::controls::{Icon, IconDirection, Text, TextRole};
 use cupertino_kit::core::{
@@ -191,23 +193,7 @@ impl Widget<Message> for ToolButton {
             }
         }
         if cx.is_focused() && cx.focus_visible() {
-            let ring = colors.get(ColorRole::KeyboardFocusIndicator, StateVariant::NORMAL);
-            if let Some(ring) = ring {
-                let half = FOCUS_RING / 2.0;
-                cx.push(PaintOp::Stroke {
-                    shape: Shape::RoundedRect {
-                        rect: Rect::new(
-                            half,
-                            half,
-                            size.width - FOCUS_RING,
-                            size.height - FOCUS_RING,
-                        ),
-                        radius: RADIUS - half,
-                    },
-                    paint: Paint::Solid(ring),
-                    width: FOCUS_RING,
-                });
-            }
+            focus_ring(cx);
         }
     }
 
@@ -217,6 +203,32 @@ impl Widget<Message> for ToolButton {
         cx.states(AccessibleStates::default());
         cx.action(Action::Click);
         cx.focusable();
+    }
+}
+
+/// The keyboard focus ring inside the node's bounds, in the theme's focus indicator colour.
+fn focus_ring(cx: &mut PaintCx<'_>) {
+    let size = cx.size();
+    let ring = cx
+        .env()
+        .theme
+        .colors
+        .get(ColorRole::KeyboardFocusIndicator, StateVariant::NORMAL);
+    if let Some(ring) = ring {
+        let half = FOCUS_RING / 2.0;
+        cx.push(PaintOp::Stroke {
+            shape: Shape::RoundedRect {
+                rect: Rect::new(
+                    half,
+                    half,
+                    size.width - FOCUS_RING,
+                    size.height - FOCUS_RING,
+                ),
+                radius: RADIUS - half,
+            },
+            paint: Paint::Solid(ring),
+            width: FOCUS_RING,
+        });
     }
 }
 
@@ -290,21 +302,88 @@ impl Widget<Message> for PathSegment {
                 cx.emit(self.on_press.clone());
                 Propagation::Stop
             }
+            Event::Key(key, _)
+                if key.pressed && matches!(key.keysym, SPACE | RETURN | KP_ENTER) =>
+            {
+                cx.emit(self.on_press.clone());
+                Propagation::Stop
+            }
             Event::Action(request)
                 if cx.node() == cx.target() && request.action == Action::Click =>
             {
                 cx.emit(self.on_press.clone());
                 Propagation::Stop
             }
+            Event::Focus { .. } if cx.node() == cx.target() => {
+                cx.request_paint();
+                Propagation::Continue
+            }
             _ => Propagation::Continue,
         }
     }
 
-    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if cx.is_focused() && cx.focus_visible() {
+            focus_ring(cx);
+        }
+    }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(Role::Button);
         cx.name(self.name.clone());
         cx.action(Action::Click);
+        cx.focusable();
+    }
+}
+
+/// What assistive technology calls the path bar.
+const PATH_BAR_LABEL: &str = "Path";
+
+/// The path bar's folders, read as one group.
+pub(super) struct PathBar {
+    pub children: Vec<Element<Message>>,
+}
+
+impl Widget<Message> for PathBar {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: Axis::Vertical,
+                spacing: 0.0,
+                align: Align::Stretch,
+                justify: Justify::Start,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<Message>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::ZERO,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, Message>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::Group);
+        cx.name(PATH_BAR_LABEL);
     }
 }

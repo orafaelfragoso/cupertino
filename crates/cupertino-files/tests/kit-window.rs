@@ -721,6 +721,9 @@ fn tab_and_shift_tab_select_the_next_and_previous_item_by_name() {
     assert_eq!(run.selected_icons(), ["Notes"]);
     run.key(TAB, None);
     assert_eq!(run.selected_icons(), ["Notes"], "the last stays");
+    // past the last the keyboard went on to the next control; Shift+Tab brings it back to the grid, then goes on
+    run.key_with(LEFT_TAB, None, Mods::SHIFT);
+    assert_eq!(run.selected_icons(), ["Notes"]);
     run.key_with(LEFT_TAB, None, Mods::SHIFT);
     assert_eq!(run.selected_icons(), ["b.txt"]);
 }

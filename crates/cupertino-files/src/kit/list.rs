@@ -1,7 +1,8 @@
 //! What the list view does beyond the toolkit's outline table: a press on empty space under the rows draws a rubber
 //! band ([`super::band`]), a double click opens a row, a press on the name of the only selected row renames it after
 //! the double-click interval ([`super::clicks`]), a press with Ctrl held opens the context menu, a press that moves
-//! drags the selected rows out of the window, and Tab and Shift+Tab select the next and the previous item by name.
+//! drags the selected rows out of the window, and Tab and Shift+Tab select the next and the previous item by name; past
+//! the last (or before the first) they move the keyboard on to the next control, so the list never holds it.
 //!
 //! [`RowCell`] wraps each cell of a row and takes the presses on it; the triangle before the name takes its own, so a
 //! press on it only opens or closes the folder. [`Gestures`] holds the whole table and takes what no row took: the
@@ -539,14 +540,18 @@ impl Widget<Message> for Gestures {
                     return Propagation::Continue;
                 }
                 let back = key.keysym == LEFT_TAB || mods.contains(Mods::SHIFT);
-                if let Some(to) = by_name(&self.names, self.selection.cursor(), back) {
-                    let mut next = self.selection.clone();
-                    next.select_only(to);
-                    if next != self.selection {
-                        self.emit(WindowEvent::Select(next), cx);
-                    }
-                    self.emit(WindowEvent::FocusRow(to), cx);
+                let cursor = self.selection.cursor();
+                // past the last item by name (or before the first) the keyboard goes on to the next control
+                let Some(to) = by_name(&self.names, cursor, back).filter(|&to| Some(to) != cursor)
+                else {
+                    return Propagation::Continue;
+                };
+                let mut next = self.selection.clone();
+                next.select_only(to);
+                if next != self.selection {
+                    self.emit(WindowEvent::Select(next), cx);
                 }
+                self.emit(WindowEvent::FocusRow(to), cx);
                 Propagation::Stop
             }
             _ => Propagation::Continue,

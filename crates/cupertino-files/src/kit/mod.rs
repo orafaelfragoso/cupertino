@@ -2,6 +2,7 @@
 //! status bars and the menus of the desktop's menu bar, over the toolkit-free [`Browser`]. It is the window `main.rs`
 //! runs.
 
+mod announce;
 mod band;
 mod clicks;
 mod context;
@@ -305,6 +306,12 @@ struct BrowserWindow {
     band: Option<cupertino_kit::geometry::Rect>,
     /// The presses on the list's rows, which its rows and its frame share.
     list_presses: list::SharedPresses,
+    /// What the window's live region reads last ([`announce`]).
+    announcement: announce::Announcement,
+    /// The keyboard is on the folder's items.
+    items_focused: bool,
+    /// An item just renamed, whose row or icon takes the keyboard once the view shows it.
+    focus_when_listed: Option<PathBuf>,
 }
 
 /// The sheet that asks for a locked container's passphrase.
@@ -415,6 +422,8 @@ pub enum Event {
     StopTransfer(u64),
     /// The keyboard came into the sidebar, or left it.
     SidebarFocus(bool),
+    /// The keyboard came onto the folder's items, or left them.
+    ItemsFocus(bool),
     /// The rubber band being drawn over the items, in the view's content; `None` once it is let go.
     Band(Option<cupertino_kit::geometry::Rect>),
     /// A press on the name of the only selected item was not followed by a second one: edit the name of item `index`.
@@ -541,7 +550,12 @@ impl Application for Files {
                 vec![woken(&model.session.thumbnails_woken, Message::Thumbnails)]
             }
             Message::Window(id, event) => {
+                let before = model.windows.get(&id).map(BrowserWindow::tally);
                 let commands = model.window_event(id, event);
+                if let (Some(before), Some(window)) = (before, model.windows.get_mut(&id)) {
+                    let after = window.tally();
+                    window.announcement.follow(before, after);
+                }
                 model.want_thumbnails(id);
                 commands
             }
@@ -623,6 +637,9 @@ impl Model {
             sidebar_row: None,
             band: None,
             list_presses: Default::default(),
+            announcement: announce::Announcement::default(),
+            items_focused: false,
+            focus_when_listed: None,
         };
         window.entered();
         self.windows.insert(id, window);
@@ -868,7 +885,11 @@ impl Model {
                 }
             }
             Event::NameSubmitted => window.end_rename(session),
-            Event::NameCancelled => window.rename = None,
+            Event::NameCancelled => {
+                if let Some(rename) = window.rename.take() {
+                    return window.focus_item(id, &rename.path);
+                }
+            }
             Event::FocusName => {
                 if window.rename.is_some() {
                     return vec![Command::Focus(view::name_field_key(id))];
@@ -886,14 +907,13 @@ impl Model {
             }
             Event::Transferred(tid) => return window.transferred(id, tid, session),
             Event::SidebarFocus(focused) => window.sidebar_focused = focused,
+            Event::ItemsFocus(focused) => window.items_focused = focused,
             Event::Band(band) => window.band = band,
             Event::Toggle(toggle) => {
-                let done = if toggle.expanded {
-                    window.browser.expand(toggle.index)
-                } else {
-                    Ok(window.browser.collapse(toggle.index))
-                };
-                if let Err(e) = done {
+                if !toggle.expanded {
+                    return window.collapse(id, toggle.index);
+                }
+                if let Err(e) = window.browser.expand(toggle.index) {
                     eprintln!("cupertino-files: cannot open the folder's row: {e}");
                 }
             }
@@ -954,6 +974,9 @@ impl Model {
                 let started =
                     transfer::Transfer::start(tid, sources, dest, moving, session.observer.clone());
                 let wake = woken(&started.woken, Message::Window(id, Event::Transferred(tid)));
+                window
+                    .announcement
+                    .say(announce::About::Transfer, started.title());
                 window.transfers.push(started);
                 return vec![wake];
             }
@@ -1490,6 +1513,15 @@ impl BrowserWindow {
             true => Action::Drop(DropAction::Move),
             false => Action::Paste,
         };
+        let stopped = results
+            .iter()
+            .any(|r| r.as_ref().is_err_and(operations::is_cancelled));
+        let failures = results
+            .iter()
+            .filter(|r| r.as_ref().is_err_and(|e| !operations::is_cancelled(e)))
+            .count();
+        self.announcement
+            .say(announce::About::Transfer, done.ended(stopped, failures));
         let failed = done
             .sources
             .iter()
@@ -1763,6 +1795,50 @@ impl BrowserWindow {
         }))]
     }
 
+    /// Give the keyboard to the row or icon of the item at `path` of window `id` once the view shows it.
+    fn focus_item(&self, id: u64, path: &Path) -> Vec<Command<Message>> {
+        let Some(index) = self.browser.entries().iter().position(|e| e.path == path) else {
+            return Vec::new();
+        };
+        let key = match self.view {
+            ViewMode::Icons => view::item_key(id, index),
+            _ => view::row_key(id, path),
+        };
+        vec![Command::Perform(Box::pin(async move {
+            Message::Window(id, Event::FocusKey(key))
+        }))]
+    }
+
+    /// Close the folder of row `index` of window `id`. When the keyboard was on an item inside it, the folder's row
+    /// takes the keyboard, where the selection's cursor goes.
+    fn collapse(&mut self, id: u64, index: usize) -> Vec<Command<Message>> {
+        let entries = self.browser.entries();
+        let folder = entries.get(index).map(|e| e.path.clone());
+        let cursor = self
+            .browser
+            .selection()
+            .focus()
+            .and_then(|c| entries.get(c));
+        let inside = match (&folder, cursor) {
+            (Some(folder), Some(cursor)) => {
+                cursor.path != *folder && cursor.path.starts_with(folder)
+            }
+            _ => false,
+        };
+        if !self.browser.collapse(index) || !inside || !self.items_focused {
+            return Vec::new();
+        }
+        folder.map_or_else(Vec::new, |folder| self.focus_item(id, &folder))
+    }
+
+    /// What the window's live region follows of its state.
+    fn tally(&self) -> announce::Tally {
+        announce::Tally {
+            results: self.browser.search_results(),
+            selected: self.browser.selection().len(),
+        }
+    }
+
     /// The row of the name being edited.
     fn rename_index(&self) -> Option<usize> {
         self.rename.as_ref().map(|r| r.edit.index())
@@ -1775,9 +1851,12 @@ impl BrowserWindow {
             return;
         };
         match rename.edit.commit() {
-            Ok(None) => {}
+            Ok(None) => self.focus_when_listed = Some(rename.path.clone()),
             Ok(Some(name)) => match operations::rename_item(&rename.path, &name) {
-                Ok(path) => self.browser.select_when_appears(path),
+                Ok(path) => {
+                    self.browser.select_when_appears(path.clone());
+                    self.focus_when_listed = Some(path);
+                }
                 Err(e) => session.failed(Action::Rename, &[&rename.path], &e),
             },
             Err(e) => {
@@ -1789,9 +1868,17 @@ impl BrowserWindow {
         }
     }
 
-    /// The list of the window `id` changed: the name being edited follows its item, and a folder just made starts
-    /// its rename.
+    /// The list of the window `id` changed: the name being edited follows its item, an item just renamed takes the
+    /// keyboard, and a folder just made starts its rename.
     fn listed(&mut self, id: u64) -> Vec<Command<Message>> {
+        let renamed = self
+            .focus_when_listed
+            .take_if(|path| self.browser.entries().iter().any(|e| &e.path == path));
+        if let Some(path) = renamed {
+            let mut commands = self.focus_item(id, &path);
+            commands.extend(self.listed(id));
+            return commands;
+        }
         let entries = self.browser.entries();
         if let Some(rename) = self.rename.as_mut() {
             match entries.iter().position(|e| e.path == rename.path) {

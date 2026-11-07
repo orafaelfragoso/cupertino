@@ -7,7 +7,7 @@ logic and layout metrics a native file manager (and a desktop-icon layer) needs.
 ## Usage
 
 ```sh
-cargo test -p cupertino-files --features app                    # 170+ unit tests; the Kit window run headless: 19 window, 9 context menu, 5 search, 6 drag and 7 drop tests; 15 removable media tests (a fake udisks2 on a private bus), 2 workflow, 3 session handler and 2 error notice tests
+cargo test -p cupertino-files --features app                    # 170+ unit tests; the Kit window run headless: 19 window, 9 context menu, 5 search, 6 drag and 9 drop tests; 15 removable media tests (a fake udisks2 on a private bus), 2 workflow, 3 session handler and 2 error notice tests
 cargo run -p cupertino-files --features app -- [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]  # the window (default $HOME), in a running session
 cargo clippy -p cupertino-files --all-targets
 ci/capture.sh files/window --view list   # a window or its sidebar on a sample home folder (crates/cupertino-capture)
@@ -99,7 +99,10 @@ the drop goes through `operations::drop_into`, as Paste Item does: a taken name 
 never goes into itself, the failures are one notice, and what arrives in the folder shown is selected. For the window's
 own drag the device is known while the drag moves, so the pointer shows the action; another application's files are
 known only at the drop, so with nothing held the drag shows a move and the drop copies what lies on another device. The
-source hears the drop is finished only after the files are in place. A drag of the window's own items has nowhere to go
+source hears the drop is finished only after the files are in place, and with what was done: a move only when every
+item left its place, a copy when every item was copied, and otherwise nothing (an item that failed, or one dropped on
+the folder already holding it), so a source never removes items Files did not take. A list is taken whole or not at
+all: one with a URI of another scheme or host, a relative path, a `.` or `..` step or a NUL is refused. A drag of the window's own items has nowhere to go
 on one of the dragged folders or in the folder holding them all. Folders do not spring open under a drag: the old
 window never wired `spring::SpringLoad` either.
 

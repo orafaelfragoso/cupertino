@@ -237,6 +237,7 @@ fn files_dropped_on_a_sidebar_place_go_into_its_folder_and_on_the_trash_into_the
     // the trash takes items away, so it shows a move whatever is held
     assert_eq!(incoming(&run, token).chosen, Some(DropAction::Move));
     assert!(release(&mut run));
+    assert_eq!(incoming(&run, token).finished, Some(Some(DropAction::Move)));
     assert_eq!(names(&run.home().join("Trash/files")), ["y.txt"]);
     assert!(names(&run.home().join("Elsewhere")).is_empty());
 }
@@ -320,8 +321,82 @@ fn a_drag_of_another_type_or_onto_the_toolbar_is_refused_and_a_drop_with_no_file
         .unwrap();
     run.settle();
     assert!(release(&mut run));
-    assert_eq!(incoming(&run, token).finished, Some(Some(DropAction::Move)));
+    assert_eq!(
+        incoming(&run, token).finished,
+        Some(None),
+        "nothing taken: the source keeps its data"
+    );
     assert!(names(&run.home().join("Documents/Notes")).is_empty());
+}
+
+/// Another application drags `paths` with copy and move allowed over `at` with `mods`, and drops; how the window
+/// finished the drop.
+fn drop_list(run: &mut Run, list: Vec<ClipboardData>, at: Point, mods: Mods) -> Option<DropAction> {
+    let window = run.window;
+    let both = [DropAction::Copy, DropAction::Move].into();
+    let system = run.driver.window_system_mut();
+    let token = system.drag_enter(window, at, list, both, mods).unwrap();
+    run.settle();
+    assert!(release(run));
+    incoming(run, token).finished.expect("finished")
+}
+
+#[test]
+fn a_drop_that_fails_in_part_or_moves_nothing_is_not_told_done_so_the_source_keeps_its_items() {
+    let mut run = window(Appearance::Light);
+    let notes = run.row_bounds("Notes").center();
+    let gone = run.home().join("Elsewhere/gone.txt");
+    // with Option held the items copy: x.txt does, gone.txt cannot
+    let paths = vec![run.home().join("Elsewhere/x.txt"), gone.clone()];
+    assert_eq!(
+        drop_list(&mut run, uri_list(&paths), notes, Mods::ALT),
+        None
+    );
+    assert_eq!(names(&run.home().join("Documents/Notes")), ["x.txt"]);
+    // with the primary modifier they move: y.txt does, gone.txt cannot
+    let paths = vec![run.home().join("Elsewhere/y.txt"), gone];
+    assert_eq!(
+        drop_list(&mut run, uri_list(&paths), notes, Mods::PRIMARY),
+        None
+    );
+    assert_eq!(
+        names(&run.home().join("Documents/Notes")),
+        ["x.txt", "y.txt"]
+    );
+    assert_eq!(
+        names(&run.home().join("Elsewhere")),
+        ["x.txt"],
+        "the copied item stays, for the source to keep"
+    );
+
+    // another application's item dropped on the folder that holds it stays there, and is not said moved
+    let b = run.row_bounds("b.txt").center();
+    let a = vec![run.home().join("Documents/a.txt")];
+    assert_eq!(drop_list(&mut run, uri_list(&a), b, Mods::NONE), None);
+    assert!(run.home().join("Documents/a.txt").exists());
+}
+
+#[test]
+fn a_list_with_a_remote_relative_or_climbing_uri_is_refused_whole() {
+    let mut run = window(Appearance::Light);
+    let notes = run.row_bounds("Notes").center();
+    let x = run.home().join("Elsewhere/x.txt");
+    for odd in [
+        "file://elsewhere/tmp/y".to_string(),
+        "file:y.txt".to_string(),
+        format!(
+            "file://{}/../Elsewhere/y.txt",
+            run.home().join("Documents").display()
+        ),
+    ] {
+        let list = vec![ClipboardData {
+            mime: URI_LIST.into(),
+            bytes: format!("file://{}\r\n{odd}\r\n", x.display()).into_bytes(),
+        }];
+        assert_eq!(drop_list(&mut run, list, notes, Mods::NONE), None, "{odd}");
+    }
+    assert!(names(&run.home().join("Documents/Notes")).is_empty());
+    assert_eq!(names(&run.home().join("Elsewhere")), ["x.txt", "y.txt"]);
 }
 
 #[test]

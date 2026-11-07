@@ -196,12 +196,15 @@ fn all_on(paths: &[PathBuf], dir: &Path) -> std::io::Result<bool> {
     Ok(true)
 }
 
+/// The message of `dropped` on window `id`, to go `to`; a list Files cannot read in full goes nowhere.
 fn dropped_on(id: u64, to: Option<Destination>, dropped: Dropped) -> Message {
+    let paths = uri_paths(&dropped.data.bytes);
     Message::Window(
         id,
         Event::Dropped {
-            to,
-            paths: uri_paths(&dropped.data.bytes),
+            token: dropped.token,
+            to: to.filter(|_| paths.is_some()),
+            paths: paths.unwrap_or_default(),
             action: dropped.action,
             mods: dropped.mods,
         },
@@ -227,22 +230,29 @@ pub(super) fn chosen(
     Ok(action(same, mods))
 }
 
-/// The local files of a `text/uri-list`: one URI a line, `#` lines being comments; URIs of other schemes and hosts
-/// are left out.
-pub(super) fn uri_paths(bytes: &[u8]) -> Vec<PathBuf> {
-    String::from_utf8_lossy(bytes)
+/// The local files of a `text/uri-list`: one URI a line, `#` lines being comments. The list comes from any
+/// application, so it is taken whole or not at all: `None` when it is not text, or a URI is of another scheme or host,
+/// or its path is not absolute, steps through `.` or `..`, or holds a NUL. A source told its items moved removes them
+/// all, so none may be left out.
+pub(super) fn uri_paths(bytes: &[u8]) -> Option<Vec<PathBuf>> {
+    std::str::from_utf8(bytes)
+        .ok()?
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .filter_map(|uri| {
+        .map(|uri| {
             let rest = uri.strip_prefix("file://")?;
             let path = rest.strip_prefix("localhost").unwrap_or(rest);
             // the query and fragment are not part of the path
             let path = path.split(['?', '#']).next()?;
-            path.starts_with('/').then(|| {
-                let bytes: Vec<u8> = percent_decode_str(path).collect();
-                PathBuf::from(OsString::from_vec(bytes))
-            })
+            if !path.starts_with('/') {
+                return None;
+            }
+            let bytes: Vec<u8> = percent_decode_str(path).collect();
+            let plain = bytes
+                .split(|&b| b == b'/')
+                .all(|step| step != b"." && step != b"..");
+            (plain && !bytes.contains(&0)).then(|| PathBuf::from(OsString::from_vec(bytes)))
         })
         .collect()
 }
@@ -253,14 +263,42 @@ mod tests {
 
     #[test]
     fn a_uri_list_gives_its_local_files_decoded() {
-        let list = b"# dragged\r\nfile:///home/a/My%20Notes.txt\r\nfile://localhost/tmp/b\r\nhttps://example.org/c\r\nfile://elsewhere/d\r\n\r\nfile:///e%23f?x=1\n";
+        let list = b"# dragged\r\nfile:///home/a/My%20Notes.txt\r\nfile://localhost/tmp/b\r\n\r\nfile:///e%23f?x=1\n";
         assert_eq!(
             uri_paths(list),
-            [
+            Some(vec![
                 PathBuf::from("/home/a/My Notes.txt"),
                 PathBuf::from("/tmp/b"),
                 PathBuf::from("/e#f"),
-            ]
+            ])
+        );
+        assert_eq!(uri_paths(b"# nothing\r\n"), Some(Vec::new()));
+    }
+
+    #[test]
+    fn a_uri_list_with_anything_but_plain_local_absolute_paths_is_refused_whole() {
+        for odd in [
+            "https://example.org/c",
+            "file://elsewhere/d",
+            "file://localhostx/d",
+            "file:relative/d",
+            "file:/d",
+            "/d",
+            "file://",
+            "file:///a/../etc/passwd",
+            "file:///a/%2E%2E/etc",
+            "file:///a/./b",
+            "file:///a/.",
+            "file:///a/b%00c",
+        ] {
+            let list = format!("file:///ok\r\n{odd}\r\n");
+            assert_eq!(uri_paths(list.as_bytes()), None, "{odd}");
+        }
+        assert_eq!(uri_paths(b"file:///a\xff\r\n"), None, "not text");
+        assert_eq!(
+            uri_paths(b"file:///a/%FF"),
+            Some(vec![PathBuf::from(OsString::from_vec(b"/a/\xff".to_vec()))]),
+            "a name that is not UTF-8 is percent-encoded"
         );
     }
 

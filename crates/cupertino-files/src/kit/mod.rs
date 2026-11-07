@@ -314,8 +314,9 @@ pub enum Event {
     /// but forget them once it ends.
     Dragged(DragProgress),
     /// Files were dropped on the window, to go `to` (`None`: where nothing takes them), with the action agreed with
-    /// their source and the modifiers held.
+    /// their source and the modifiers held. The source is told what was done with them, by `token`.
     Dropped {
+        token: cupertino_kit::platform::DropToken,
         to: Option<Destination>,
         paths: Vec<PathBuf>,
         action: cupertino_kit::platform::DropAction,
@@ -490,7 +491,9 @@ impl Model {
 
     /// Put `paths` dropped on window `id` where they go: into the trash, or moved or copied into a folder as
     /// [`drops::chosen`] says. A name the folder has is given a free copy name; the failures are reported together,
-    /// and the last item to arrive in the folder the window shows is selected.
+    /// and the last item to arrive in the folder the window shows is selected. What the source is told was done: a
+    /// move only when every item left its place, a copy when every item was copied, and nothing otherwise (an item
+    /// that failed, or one moved into the folder already holding it), so the source keeps what it has.
     fn drop_items(
         &mut self,
         id: u64,
@@ -498,12 +501,18 @@ impl Model {
         paths: &[PathBuf],
         agreed: cupertino_kit::platform::DropAction,
         mods: cupertino_kit::platform::Mods,
-    ) {
+    ) -> Option<cupertino_kit::platform::DropAction> {
+        use cupertino_kit::platform::DropAction as Done;
         let session = &self.session;
+        if paths.is_empty() {
+            return None;
+        }
         let dir = match to {
             Destination::Trash => {
-                let trashed = paths.iter().map(|path| (path, session.trash.trash(path)));
-                return session.failed_some(Action::Trash, trashed);
+                let trashed: Vec<_> = paths.iter().map(|path| session.trash.trash(path)).collect();
+                let all = trashed.iter().all(Result::is_ok);
+                session.failed_some(Action::Trash, paths.iter().zip(trashed));
+                return all.then_some(Done::Move);
             }
             Destination::Folder(dir) => dir,
         };
@@ -511,17 +520,28 @@ impl Model {
             Ok(action) => action,
             Err(e) => {
                 let items: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-                return session.failed(Action::Drop(DropAction::Move), &items, &e);
+                session.failed(Action::Drop(DropAction::Move), &items, &e);
+                return None;
             }
         };
         let placed = operations::drop_into(paths, dir, action);
         let arrived = placed.iter().rev().find_map(|p| p.as_ref().ok()).cloned();
+        let done = match action {
+            DropAction::Copy => placed.iter().all(Result::is_ok).then_some(Done::Copy),
+            // a move into the folder holding the item leaves it where it is
+            DropAction::Move => paths
+                .iter()
+                .zip(&placed)
+                .all(|(from, to)| to.as_ref().is_ok_and(|to| to != from))
+                .then_some(Done::Move),
+        };
         session.failed_some(Action::Drop(action), paths.iter().zip(placed));
         if let (Some(window), Some(path)) = (self.windows.get_mut(&id), arrived) {
             if window.browser.dir() == dir.as_path() {
                 window.browser.select_when_appears(path);
             }
         }
+        done
     }
 
     fn window_event(&mut self, id: u64, event: Event) -> Vec<Command<Message>> {
@@ -538,15 +558,14 @@ impl Model {
                 return Vec::new();
             }
             Event::Dropped {
+                token,
                 to,
                 paths,
                 action,
                 mods,
             } => {
-                if let Some(to) = to {
-                    self.drop_items(id, &to, &paths, action, mods);
-                }
-                return Vec::new();
+                let done = to.and_then(|to| self.drop_items(id, &to, &paths, action, mods));
+                return vec![Command::FinishDrop(token, done)];
             }
             event => event,
         };

@@ -87,6 +87,8 @@ pub struct Start {
     places_folders: Vec<PathBuf>,
     file_icons: Option<FileIcons>,
     thumbnails: Option<Thumbnailer>,
+    /// What the list words its dates relative to.
+    clock: fn() -> SystemTime,
 }
 
 impl Start {
@@ -129,6 +131,7 @@ impl Start {
             places_folders: Vec::new(),
             file_icons: None,
             thumbnails: None,
+            clock: SystemTime::now,
         })
     }
 
@@ -183,6 +186,11 @@ impl Start {
             thumbnails: Some(cache),
             ..self
         }
+    }
+
+    /// The list wording its dates ("Today at 09:41") relative to the time `clock` gives, in place of the system's.
+    pub fn with_clock(self, clock: fn() -> SystemTime) -> Start {
+        Start { clock, ..self }
     }
 }
 
@@ -259,6 +267,8 @@ struct Session {
     thumbnails_woken: async_channel::Receiver<()>,
     /// The items a drag out of a window carries, until it ends.
     dragged: Vec<PathBuf>,
+    /// What the list words its dates relative to.
+    clock: fn() -> SystemTime,
 }
 
 /// One browser window.
@@ -281,6 +291,8 @@ struct BrowserWindow {
     split: SplitLayout,
     /// When the dates of the list were last worded.
     now: SystemTime,
+    /// What gives `now`.
+    clock: fn() -> SystemTime,
     /// The name being edited in place.
     rename: Option<Rename>,
     /// A folder just made, whose name is edited once the list shows it.
@@ -523,6 +535,7 @@ impl Application for Files {
                 icons,
                 thumbnails_woken,
                 dragged: Vec::new(),
+                clock: start.clock,
             },
         };
         let mut commands = vec![
@@ -624,7 +637,8 @@ impl Model {
                 position: view::SIDEBAR_WIDTH,
                 collapsed: None,
             },
-            now: SystemTime::now(),
+            now: (self.session.clock)(),
+            clock: self.session.clock,
             rename: None,
             rename_when_listed: None,
             full_screen: false,
@@ -790,7 +804,7 @@ impl Model {
                     eprintln!("cupertino-files: {error}");
                 }
                 if polled.changed {
-                    window.now = SystemTime::now();
+                    window.now = (window.clock)();
                     window.read_available();
                 }
                 let mut commands = window.listed(id);
@@ -1434,7 +1448,7 @@ impl BrowserWindow {
             self.search_revision += 1;
         }
         self.follow_search();
-        self.now = SystemTime::now();
+        self.now = (self.clock)();
         self.read_available();
     }
 

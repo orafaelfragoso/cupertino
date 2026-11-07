@@ -1186,3 +1186,50 @@ fn the_toolbar_moves_the_window_on_a_drag_and_zooms_it_on_a_double_click() {
     }
     assert!(window_requests(&run).contains(&WindowRequest::Maximize(true)));
 }
+
+/// The time the next test's window words its dates against: noon (UTC) of a day long before the test runs.
+fn fixed_now() -> std::time::SystemTime {
+    std::time::UNIX_EPOCH + Duration::from_secs(1_792_670_400)
+}
+
+#[test]
+fn the_list_words_its_dates_against_the_clock_it_was_started_with() {
+    let home = tempfile::tempdir().unwrap();
+    let documents = home.path().join("Documents");
+    std::fs::create_dir_all(&documents).unwrap();
+    let file = documents.join("a.txt");
+    std::fs::write(&file, "a").unwrap();
+    let modified = fixed_now() - Duration::from_secs(2 * 3_600);
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .and_then(|f| f.set_modified(modified))
+        .unwrap();
+    let places = vec![place("Documents", &documents, PlaceKind::Documents)];
+    let preferences = cupertino_kit::theme::ThemePreferences {
+        appearance: cupertino_kit::theme::Appearance::Light,
+        reduce_transparency: false,
+        reduce_motion: false,
+    };
+    let mut run = Run::start_configured(
+        home,
+        documents,
+        places,
+        Notices::start(None),
+        None,
+        preferences,
+        |start| start.with_clock(fixed_now),
+    );
+    run.wait_until(|run| run.rows() == ["a.txt"]);
+    let date = cupertino_files::format::relative_date(modified, fixed_now());
+    assert!(
+        run.read_aloud().contains(&date),
+        "{date:?} in {:?}",
+        run.read_aloud()
+    );
+    // the system's clock would word it as a date weeks ago, never as today or yesterday
+    assert_ne!(
+        date,
+        cupertino_files::format::relative_date(modified, std::time::SystemTime::now())
+    );
+}

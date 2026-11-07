@@ -11,7 +11,7 @@ CupertinoKit is the toolkit that Cupertino's own apps are moving onto. This page
 | `cupertino-controlcenter` | The whole panel: a Kit window on a layer surface with module toggles, tiles, the battery meter and level sliders. | |
 | `cupertino-menubar` | Bar and menus on Kit layer surfaces. | Outside-click dismissal on empty bar space has an open review finding. |
 | `cupertino-launcher` | Search panel, catcher and hidden windows on Kit layer surfaces. | See the crate README for interaction and styling limits. |
-| `cupertino-notifications` | Banners and notification centre on Kit layer surfaces. | Material, body layout and centre scrolling still have review findings. |
+| `cupertino-notifications` | Banners and notification centre on Kit layer surfaces. | Application icons from image data, image paths and desktop entries are not drawn yet. |
 | Dock, login and lock screen, screenshot UI, window-manager UI | | Normal entry points still use their existing drawing paths. |
 
 ## The OSD

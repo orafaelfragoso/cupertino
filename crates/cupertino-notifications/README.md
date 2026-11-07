@@ -35,26 +35,45 @@ surface, ends the process with a failure status so the server restarts it.
   right margin, the leftward swipe travel and the shadow (`view::strip_width`), and as tall as the card plus its shadow; its input
   region is the card at rest, so clicks elsewhere reach the windows under it, and a swipe keeps the pointer by its implicit grab.
   The card moves inside its window by the model's slide and drag offsets. The open centre is one window anchored top, right and
-  bottom that takes the keyboard. A replaced notification gets a new banner window (its height may change).
-- **Display options.** Reduce Motion sets `Motion::reduce_motion` (banners fade in place). Kit follows the appearance, Reduce
-  Transparency and Increase Contrast itself.
+  bottom that takes the keyboard: the header stays at the top and the cards scroll below it in a Kit `ScrollView`, which ends
+  `BOTTOM_MARGIN` (16 pt) above the screen's bottom edge. A replaced notification gets a new banner window (its height may
+  change).
+- **Display options.** Reduce Motion sets `Motion::reduce_motion` (banners fade in place); unfolding a body and scrolling have
+  no animation of their own beyond the scroll view's. Kit follows the appearance, Reduce Transparency and Increase Contrast
+  itself: under either, or without the compositor's effects, the theme's popover surface has no material and every card paints
+  its opaque fill.
 - **Input.** Hover pauses the timeout. A click runs the default action, a button its action, a link `xdg-open`. The close button
   dismisses, and a drag to the right swipes the banner away. Every action first fetches an `xdg_activation_v1` token, which goes
-  out as `ActivationToken` before `ActionInvoked`. While the list is open the surface takes the keyboard and Escape closes it.
+  out as `ActivationToken` before `ActionInvoked`. While the list is open the surface takes the keyboard and Escape, or a press
+  outside the header, the cards and the Clear menu, closes it. The list scrolls with the wheel (40 pt a notch), the touchpad
+  (by its distance, offsets kept on whole points) and the keyboard (Up, Down, Page Up, Page Down, Home, End); Tab moves
+  between the cards and their buttons and the list follows the focus. On a focused card Return, keypad Enter and Space run its
+  default action and Delete or Backspace clears it.
 - **Session.** On `locked` an open list closes; banners expire on their own.
 - **Accessibility.** A banner is a live region named "app: summary" with its body as description: polite, assertive when
-  critical, so a screen reader reads it as it arrives. The centre's cards are not live; a group's front card says how many more
-  it holds. Every card and close button takes assistive technology's click.
+  critical, so a screen reader reads it as it arrives, with the whole body even when the card cuts
+  it short. The centre is a group named "Notification Centre" holding a list of its cards (list items with their position);
+  its cards are not live, and a group's front card says how many more it holds. The first card takes the focus when the list
+  opens. Every card, close button and action button takes assistive technology's click, and the disclosure button reports
+  whether the body is unfolded.
 - **Banners.** One on screen, one waiting. A banner arriving while one is shown takes the waiting slot; a banner already waiting goes straight to the centre. Critical urgency and `expire_timeout = 0` are alerts without a timer; a waiting banner
   stays behind them. A client `expire_timeout` is honoured, capped at 60 s. A rightward release dismisses at speed
   `max(dx/100, 8) / 15`; a leftward one springs back.
 - **Do not disturb.** Banners are suppressed and notifications kept in the centre. Critical urgency bypasses it
   (`critical_bypasses_dnd`), and `Until(t) ends by itself.
-- **Drawing.** Kit controls on a card the `view` module paints: the theme's popover fill with a 0.5 pt separator outline,
-  16 pt corners and a drop shadow, faded as one layer with its content. A 32 pt icon (the `app_icon` symbol, else `bell`), the
-  summary semibold on one line, the body on one line with bold, italic and link markup (`RichText`, links are `xdg-open`ed), up
-  to 3 action buttons (pills) and an 18 pt close button (a banner's while hovered, always on a centre card). Card heights come
-  from `view::CardMetrics`, which the model measures with.
+- **Drawing.** Kit controls on a card the `view` module paints: the compositor's material of the theme's popover surface under
+  the card (`PaintCx::material`, cut to the part the list shows), a 0.5 pt separator outline, 16 pt corners and a drop shadow
+  around it, faded as one layer with its content. Where the material is refused (reduced transparency, increased contrast, no
+  compositor effects, more materials than the window may show) the card paints the surface's opaque fill instead. The cards
+  behind a group's front card and the Clear menu are always opaque, as a material would show through to the card in front. A
+  32 pt icon (the `app_icon` symbol, else `bell`), the summary semibold in up to `SUMMARY_LINES` (2) lines, the body in up to
+  `BODY_LINES` (4) lines with bold, italic and link markup (`RichText`, links are `xdg-open`ed), up to 3 action buttons
+  (pills, sharing the row when their labels do not fit) and an 18 pt close button 4 pt inside the corner (a banner's while
+  hovered, always on a centre card). Text wraps at word boundaries and keeps the body's line breaks; text past the limit ends
+  in an ellipsis and links past the cut are dropped. A centre card whose body is cut has a disclosure button beside its summary
+  that unfolds the body to `UNFOLDED_BODY_LINES` (20); banners stay folded (the centre holds the whole message). Card heights
+  come from `view::CardMetrics`, which measures the text with the windows' own text system and theme, so the model's stack
+  geometry and the drawn cards agree.
 
 ## Protocols / D-Bus it speaks
 
@@ -106,8 +125,9 @@ server.center().tick(server.now());
 server.flush_events()?;                                 // NotificationClosed / ActionInvoked signals
 // timers: server.center().next_wakeup(now) -> Frame | At(t) | None
 
-// in its view: the banners on screen, or the open centre
-view::windows(&mut server.center(), &ui, server.now(), Message::Input)
+// in its view: the banners on screen, or the open centre, measured with the windows' theme and text system
+let metrics = view::CardMetrics::new(options.theme.clone(), options.text.clone()); // once, from RuntimeOptions
+view::windows(&mut server.center(), &ui, &metrics, server.now(), Message::Input)
 ```
 
 The model's calls, for a host of its own (all take `now`):
@@ -148,9 +168,8 @@ The model's calls, for a host of its own (all take `now`):
 
 ## Open issues
 
-- The cards paint the theme's opaque popover fill: a Kit window has one compositor material for the whole window, so the
-  per-card blur of the earlier CPU renderer is not drawn until Kit offers a material per node.
-- The body shows one line and the summary one line (no wrapping), as `CardMetrics` measures without the text system.
+- A card scrolled partly under the header is cut by the list's edge, but its material keeps rounded corners there: the
+  compositor's backdrop shapes are rounded rectangles of one radius.
 - Application icons are looked up as system symbols; image-data, image-path and desktop-entry icons are not drawn yet.
 
 ## Tests
@@ -163,4 +182,5 @@ cargo test -p cupertino-notifications
 | Test | Proves |
 |---|---|
 | `tests/dbus_integration.rs` | The server against a real client on a private `dbus-daemon`. Skipped when `dbus-daemon` is not installed. |
-| `tests/kit_goldens.rs` | The Kit windows on the headless window system against the Inspector dumps in `tests/goldens/`: a banner sliding in and at rest, a critical one taking over, with the screen-reader announcements (`banner`); the centre with a stacked group (`centre-stacked`); a swipe dragged 60 pt and mid-dismissal (`swipe-dismiss`). `CUPERTINO_UPDATE_GOLDENS=1` rewrites them. |
+| `tests/kit_goldens.rs` | The Kit windows on the headless window system against the Inspector dumps in `tests/goldens/`: a banner sliding in and at rest, a critical one taking over, with the screen-reader announcements (`banner`); the centre with a stacked group (`centre-stacked`); a swipe dragged 60 pt and mid-dismissal (`swipe-dismiss`). `CUPERTINO_UPDATE_GOLDENS=1` rewrites them. Geometry and interaction: a long banner body wraps inside its card and stops at its line limit; the centre scrolls with the wheel, the touchpad and the keyboard and a click hits the card shown there; the disclosure button unfolds and folds a body; the keyboard activates and clears cards and the close button clears one; each card's material region is its card and Reduce Transparency paints fills. |
+| `src/view/tests.rs` | `CardMetrics` against the built-in font: heights follow the text, wrapping, line limits and ellipsis, kept line breaks, the body byte bound, links cut at the ellipsis, buttons sharing a row, the close button inside the corner, and the `apply` of scroll, unfold, clear and close. |

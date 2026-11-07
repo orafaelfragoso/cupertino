@@ -1,6 +1,7 @@
 //! The banners and the notification centre as CupertinoKit draws them, on the headless window system. Each golden
 //! is the Inspector dump of every open window after a scripted run of the model, with what a screen reader was told
-//! to announce on the way. `CUPERTINO_UPDATE_GOLDENS=1` rewrites the goldens.
+//! to announce on the way. `CUPERTINO_UPDATE_GOLDENS=1` rewrites the goldens. The other tests drive the windows with
+//! the pointer, the wheel, the touchpad and the keyboard and check the geometry of what they show.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -8,19 +9,24 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 
 use cupertino_assets::BUILTIN_FONT;
+use cupertino_kit::core::FrameSnapshot;
 use cupertino_kit::core::{
     AccessibilityAdapter, AccessibilityUpdate, ActionRequest, Application, Command,
     PlaceholderIcons, RuntimeOptions, Window, WindowKey,
 };
 use cupertino_kit::geometry::Point;
+use cupertino_kit::geometry::{Rect, Size};
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{
-    Capabilities, Mods, MouseButton, PointerEvent, Timestamp, WindowEvent, WindowId, WindowStates,
+    Capabilities, KeyEvent, Keysym, MaterialRegion, Mods, MouseButton, PointerEvent, ScrollSource,
+    Timestamp, WindowEvent, WindowId, WindowRequest, WindowStates,
 };
 use cupertino_kit::render::{CpuConfig, CpuRenderer};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
-use cupertino_notifications::view::{self, Input, Ui, SHADOW_MARGIN};
+use cupertino_notifications::view::{
+    self, CardMetrics, Fold, HostAction, Input, Ui, SHADOW_MARGIN,
+};
 use cupertino_notifications::{CenterConfig, NotificationCenter, NotifyInput, Urgency};
 use cupertino_theme::Theme;
 use cupertino_ui_test::{Inspector, ManualClock, TestDriver};
@@ -41,8 +47,8 @@ enum Message {
 }
 
 thread_local! {
-    /// The steps of this thread's run, taken by [`Scripted::init`].
-    static STEPS: RefCell<Option<async_channel::Receiver<Step>>> = const { RefCell::new(None) };
+    /// The steps of this thread's run and its cards' metrics, taken by [`Scripted::init`].
+    static STEPS: RefCell<Option<(async_channel::Receiver<Step>, CardMetrics)>> = const { RefCell::new(None) };
 }
 
 struct Model {
@@ -50,6 +56,9 @@ struct Model {
     ui: Ui,
     now: f64,
     steps: async_channel::Receiver<Step>,
+    metrics: CardMetrics,
+    /// What the windows left to the host, in order.
+    host: Vec<HostAction>,
 }
 
 fn next(steps: &async_channel::Receiver<Step>) -> Command<Message> {
@@ -68,13 +77,15 @@ impl Application for Scripted {
     const RESIDENT: bool = true;
 
     fn init() -> (Model, Vec<Command<Message>>) {
-        let steps = STEPS.with_borrow_mut(Option::take).expect("a scripted run");
+        let (steps, metrics) = STEPS.with_borrow_mut(Option::take).expect("a scripted run");
         let first = next(&steps);
         let model = Model {
             center: RefCell::new(NotificationCenter::new(CenterConfig::default())),
             ui: Ui::default(),
             now: 0.0,
             steps,
+            metrics,
+            host: Vec::new(),
         };
         (model, vec![first])
     }
@@ -93,7 +104,8 @@ impl Application for Scripted {
                 vec![next(&model.steps)]
             }
             Message::Input(input) => {
-                view::apply(model.center.get_mut(), &mut model.ui, input, model.now);
+                let action = view::apply(model.center.get_mut(), &mut model.ui, input, model.now);
+                model.host.extend(action);
                 Vec::new()
             }
         }
@@ -103,6 +115,7 @@ impl Application for Scripted {
         view::windows(
             &mut model.center.borrow_mut(),
             &model.ui,
+            &model.metrics,
             model.now,
             Message::Input,
         )
@@ -146,11 +159,11 @@ impl AccessibilityAdapter for Announcements {
     fn drain_actions(&mut self, _: &mut Vec<ActionRequest>) {}
 }
 
-fn theme() -> ThemeTokens {
+fn theme(reduce_transparency: bool) -> ThemeTokens {
     let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
     let preferences = ThemePreferences {
         appearance: Appearance::Light,
-        reduce_transparency: false,
+        reduce_transparency,
         reduce_motion: false,
     };
     ThemeTokens::cupertino(&Theme::from_dir(data).unwrap(), preferences).unwrap()
@@ -165,19 +178,38 @@ struct Run {
     steps: async_channel::Sender<Step>,
     announcements: Announcements,
     configured: Vec<WindowId>,
+    size: Option<Size>,
+}
+
+/// How a run's window system and theme are set up.
+#[derive(Clone, Copy, Default)]
+struct Setup {
+    /// The desktop draws materials under windows.
+    effects: bool,
+    reduce_transparency: bool,
+    /// The size the windows are configured at instead of the one they ask for.
+    size: Option<Size>,
 }
 
 impl Run {
     fn new() -> Self {
+        Self::with(Setup::default())
+    }
+
+    fn with(setup: Setup) -> Self {
         let (steps, receiver) = async_channel::unbounded();
-        STEPS.set(Some(receiver));
         let mut fonts = FontIndex::new();
         fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
         let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
+        let theme = Arc::new(theme(setup.reduce_transparency));
+        STEPS.set(Some((
+            receiver,
+            CardMetrics::new(Arc::clone(&theme), Arc::clone(&text)),
+        )));
         let glyphs = Arc::clone(&text);
         let announcements = Announcements::default();
         let options = RuntimeOptions {
-            theme: Arc::new(theme()),
+            theme,
             text,
             icons: Arc::new(PlaceholderIcons::default()),
             direction: LayoutDirection::Ltr,
@@ -198,7 +230,10 @@ impl Run {
             on_window_error: None,
         };
         let driver = TestDriver::new(
-            Capabilities::default(),
+            Capabilities {
+                app_effects: setup.effects,
+                ..Capabilities::default()
+            },
             options,
             ManualClock::new(Timestamp(0)),
         );
@@ -207,6 +242,7 @@ impl Run {
             steps,
             announcements,
             configured: Vec::new(),
+            size: setup.size,
         };
         run.settle();
         run
@@ -222,7 +258,7 @@ impl Run {
                 if !self.configured.contains(&window) {
                     self.configured.push(window);
                     system
-                        .configure(window, None, WindowStates::default())
+                        .configure(window, self.size, WindowStates::default())
                         .unwrap();
                     busy = true;
                 } else if system.frame_requested(window).unwrap() {
@@ -286,11 +322,7 @@ impl Run {
         model
             .center
             .borrow_mut()
-            .placements(
-                cupertino_kit::geometry::Size::new(width, 0.0),
-                &mut view::CardMetrics,
-                model.now,
-            )
+            .placements(Size::new(width, 0.0), &mut model.metrics.clone(), model.now)
             .iter()
             .map(|p| p.rect.x())
             .collect()
@@ -440,4 +472,467 @@ fn a_swipe_drags_the_banner_and_a_release_past_the_distance_dismisses_it() {
         "the dismissed banner's window closed"
     );
     golden("swipe-dismiss", &format!("{dragged}{leaving}"));
+}
+
+impl Run {
+    fn snapshot(&self, window: WindowId) -> FrameSnapshot {
+        self.driver.runtime().snapshot(window).unwrap()
+    }
+
+    fn send(&mut self, window: WindowId, event: WindowEvent) {
+        self.driver
+            .window_system_mut()
+            .enqueue_window(window, event)
+            .unwrap();
+        self.settle();
+    }
+
+    fn key(&mut self, window: WindowId, keysym: u32) {
+        for pressed in [true, false] {
+            self.send(
+                window,
+                WindowEvent::Key(
+                    KeyEvent {
+                        code: 1,
+                        keysym: Keysym(keysym),
+                        text: None,
+                        pressed,
+                        repeat: false,
+                        mods: Mods::NONE,
+                    },
+                    Timestamp(0),
+                ),
+            );
+        }
+    }
+
+    fn click(&mut self, window: WindowId, at: Point) {
+        self.pointer(window, PointerEvent::Motion { position: at });
+        self.button(window, at, true);
+        self.button(window, at, false);
+    }
+
+    fn scroll(&mut self, window: WindowId, at: Point, scroll: PointerEvent) {
+        self.pointer(window, PointerEvent::Motion { position: at });
+        self.pointer(window, scroll);
+    }
+
+    fn ui(&self) -> Ui {
+        self.driver.runtime().model().ui.clone()
+    }
+
+    fn host(&self) -> Vec<HostAction> {
+        self.driver.runtime().model().host.clone()
+    }
+
+    fn materials(&self, window: WindowId) -> Vec<Vec<MaterialRegion>> {
+        self.driver
+            .runtime()
+            .window_system()
+            .requests(window)
+            .unwrap()
+            .iter()
+            .filter_map(|r| match r {
+                WindowRequest::Materials(m) => Some(m.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// The rect of the node with `key`, in window coordinates.
+fn rect(snapshot: &FrameSnapshot, key: &str) -> Rect {
+    keyed(snapshot, key)
+        .unwrap_or_else(|| panic!("no node {key:?}"))
+        .rect
+}
+
+fn keyed<'a>(
+    snapshot: &'a FrameSnapshot,
+    key: &str,
+) -> Option<&'a cupertino_kit::core::NodeSnapshot> {
+    snapshot
+        .nodes
+        .iter()
+        .find(|n| n.key == Some(cupertino_kit::core::Key::from(key.to_owned())))
+}
+
+/// Every node under `root`, itself included.
+fn subtree(
+    snapshot: &FrameSnapshot,
+    root: cupertino_kit::core::NodeId,
+) -> Vec<&cupertino_kit::core::NodeSnapshot> {
+    let mut out = Vec::new();
+    let mut todo = vec![root];
+    while let Some(id) = todo.pop() {
+        if let Some(node) = snapshot.nodes.iter().find(|n| n.id == id) {
+            todo.extend(node.children.iter().copied());
+            out.push(node);
+        }
+    }
+    out
+}
+
+fn inside(outer: Rect, inner: Rect) -> bool {
+    const EPSILON: f64 = 0.01;
+    inner.min_x() >= outer.min_x() - EPSILON
+        && inner.min_y() >= outer.min_y() - EPSILON
+        && inner.max_x() <= outer.max_x() + EPSILON
+        && inner.max_y() <= outer.max_y() + EPSILON
+}
+
+const RELEASE_NOTES: &str = "Here is the full draft of the release notes so you can review it before the meeting. \
+The first section covers the new notification centre, which now scrolls with the wheel, the touchpad and the \
+keyboard, and wraps long messages instead of cutting them off after one line. The second section lists the fixes to \
+the dock and the menu bar, and the third explains the changes to the settings app. Please read it all the way to the \
+end, where the known issues and the upgrade notes are, and send me your comments by tomorrow afternoon.";
+
+/// Fourteen applications' notifications, the last one with a body far longer than a card shows.
+fn many(run: &mut Run) -> Vec<u32> {
+    let mut ids = Vec::new();
+    for i in 0..13 {
+        run.step(Step::At(i as f64 * 0.1));
+        run.notify(NotifyInput::new(
+            &format!("App {i}"),
+            &format!("Message {i}"),
+            "A short body on one line.",
+        ));
+        ids.push(run.driver.runtime().model().center.borrow().history()[0].id);
+    }
+    run.notify(mail("Release notes draft", RELEASE_NOTES).with_action("reply", "Reply"));
+    ids.push(run.driver.runtime().model().center.borrow().history()[0].id);
+    run.step(Step::At(10.0));
+    ids
+}
+
+#[test]
+fn a_banner_s_long_body_wraps_inside_its_card_and_stops_at_its_line_limit() {
+    let mut run = Run::new();
+    run.notify(mail("Release notes draft", RELEASE_NOTES).with_action("reply", "Reply"));
+    run.step(Step::At(1.0));
+    let window = run.only_window();
+    let snapshot = run.snapshot(window);
+    let card = keyed(&snapshot, "card-1").expect("the banner's card");
+    let spec = run
+        .driver
+        .runtime()
+        .window_system()
+        .spec(window)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        spec.size.height,
+        card.rect.height() + 2.0 * SHADOW_MARGIN,
+        "the window is as tall as the card and its shadow"
+    );
+    let model = run.driver.runtime().model();
+    let n = model.center.borrow().get(1).unwrap().clone();
+    let layout = model.metrics.card(&n, card.rect.width(), Fold::Banner);
+    assert_eq!(card.rect.height(), layout.height);
+    assert!(layout.body.unwrap().content.text.ends_with('\u{2026}'));
+    let content = card.rect.outset(-view::PADDING);
+    for node in subtree(&snapshot, card.id).into_iter().skip(1) {
+        if node.key.as_ref().is_some_and(|k| *k == "close".into()) {
+            continue;
+        }
+        if node.widget.ends_with("::Place<kit_goldens::Message>") {
+            continue;
+        }
+        assert!(
+            inside(content, node.rect),
+            "{} at {:?} leaves the card's content box {content:?}",
+            node.widget,
+            node.rect
+        );
+    }
+    let semantics = &snapshot.accessibility;
+    let named = semantics
+        .iter()
+        .find(|(_, a)| a.name.as_deref() == Some("Mail: Release notes draft"))
+        .expect("the card is announced");
+    assert_eq!(
+        named.1.description.as_deref(),
+        Some(RELEASE_NOTES),
+        "assistive technology hears all of the body"
+    );
+}
+
+#[test]
+fn the_centre_scrolls_with_the_wheel_the_touchpad_and_the_keyboard_and_keeps_its_hit_targets() {
+    let mut run = Run::with(Setup {
+        size: Some(Size::new(388.0, 480.0)),
+        ..Setup::default()
+    });
+    let ids = many(&mut run);
+    run.step(Step::OpenCentre);
+    let window = run.only_window();
+    run.send(window, WindowEvent::Focus(true));
+    let top = run
+        .driver
+        .runtime()
+        .model()
+        .center
+        .borrow()
+        .config
+        .layout
+        .top_inset;
+    let snapshot = run.snapshot(window);
+    let list = rect(&snapshot, "list");
+    assert_eq!(rect(&snapshot, "header-row").min_y(), top);
+    assert_eq!(list.min_y(), top + view::HEADER_HEIGHT);
+    assert_eq!(
+        list.max_y(),
+        480.0 - view::BOTTOM_MARGIN,
+        "the list ends above the bottom edge"
+    );
+    let scroll = run.ui().scroll;
+    assert!(
+        scroll.content.height > scroll.viewport.height + 400.0,
+        "{scroll:?}"
+    );
+    assert_eq!(scroll.offset.y, 0.0);
+
+    let at = Point::new(200.0, list.min_y() + 100.0);
+    run.scroll(
+        window,
+        at,
+        PointerEvent::Scroll {
+            position: at,
+            delta: Point::ZERO,
+            value120: Some((0, 120)),
+            source: ScrollSource::Wheel,
+            stop: false,
+        },
+    );
+    assert_eq!(
+        run.ui().scroll.offset.y,
+        40.0,
+        "a wheel detent moves a line"
+    );
+    run.scroll(
+        window,
+        at,
+        PointerEvent::Scroll {
+            position: at,
+            delta: Point::new(0.0, 25.4),
+            value120: None,
+            source: ScrollSource::Finger,
+            stop: false,
+        },
+    );
+    assert_eq!(
+        run.ui().scroll.offset.y,
+        65.0,
+        "the touchpad moves by its fingers, in whole points"
+    );
+
+    // the first card has the focus; the keys it does not use move the list
+    let end = 0xff57;
+    run.key(window, end);
+    let scroll = run.ui().scroll;
+    assert_eq!(
+        scroll.offset.y,
+        scroll.content.height - scroll.viewport.height
+    );
+    let snapshot = run.snapshot(window);
+    let last = rect(&snapshot, &format!("card-{}", ids[0]));
+    assert!(
+        inside(list, last),
+        "the oldest card shows at the end: {last:?} in {list:?}"
+    );
+    // a click lands on the card that shows there now
+    run.click(window, Point::new(last.center().x, last.center().y));
+    assert_eq!(run.host(), vec![HostAction::Activate(ids[0])]);
+    let header = rect(&snapshot, "header-row");
+    let newest = rect(&snapshot, &format!("card-{}", ids[13]));
+    assert!(
+        newest.max_y() <= header.max_y(),
+        "the newest card scrolled away under the header"
+    );
+
+    run.key(window, 0xff50);
+    assert_eq!(run.ui().scroll.offset.y, 0.0, "Home goes back to the top");
+    run.key(window, 0xff56);
+    let scroll = run.ui().scroll;
+    assert_eq!(
+        scroll.offset.y,
+        scroll.viewport.height - 40.0,
+        "Page Down keeps a line in view"
+    );
+}
+
+#[test]
+fn a_centre_card_unfolds_its_long_body_with_its_disclosure_button() {
+    let mut run = Run::new();
+    run.notify(mail("Release notes draft", RELEASE_NOTES));
+    run.step(Step::At(1.0));
+    run.step(Step::OpenCentre);
+    let window = run.only_window();
+    let snapshot = run.snapshot(window);
+    let folded = rect(&snapshot, "card-1");
+    let disclosure = rect(&snapshot, "disclosure");
+    assert!(inside(folded, disclosure));
+    run.click(window, disclosure.center());
+    assert!(run.ui().unfolded.contains(&1));
+    assert!(
+        run.host().is_empty(),
+        "the disclosure button does not activate the card"
+    );
+    let snapshot = run.snapshot(window);
+    let unfolded = rect(&snapshot, "card-1");
+    assert!(
+        unfolded.height() > folded.height() + 30.0,
+        "{folded:?} → {unfolded:?}"
+    );
+    let node = keyed(&snapshot, "disclosure").unwrap().id;
+    let semantics = &snapshot
+        .accessibility
+        .iter()
+        .find(|(id, _)| *id == node)
+        .unwrap()
+        .1;
+    assert_eq!(semantics.states.expanded, Some(true));
+    run.click(window, rect(&snapshot, "disclosure").center());
+    assert!(run.ui().unfolded.is_empty());
+}
+
+#[test]
+fn the_keyboard_activates_and_clears_the_centre_s_cards_and_its_close_button_clears_one() {
+    let mut run = Run::new();
+    for (t, app) in [(0.0, "Calendar"), (0.1, "Weather"), (0.2, "Backup")] {
+        run.step(Step::At(t));
+        run.notify(NotifyInput::new(app, "Summary", "Body"));
+    }
+    run.step(Step::At(1.0));
+    run.step(Step::OpenCentre);
+    let window = run.only_window();
+    run.send(window, WindowEvent::Focus(true));
+    let snapshot = run.snapshot(window);
+    let first = keyed(&snapshot, "card-3").unwrap().id;
+    assert_eq!(
+        snapshot.focus,
+        Some(first),
+        "the newest card takes the focus"
+    );
+    let list = snapshot
+        .accessibility
+        .iter()
+        .find(|(_, a)| a.role == cupertino_kit::core::Role::List)
+        .expect("the cards are a list");
+    assert_eq!(list.1.children.len(), 3);
+    run.key(window, 0xff0d);
+    assert_eq!(
+        run.host(),
+        vec![HostAction::Activate(3)],
+        "Return activates it"
+    );
+    run.key(window, 0xffff);
+    let history: Vec<u32> = run
+        .driver
+        .runtime()
+        .model()
+        .center
+        .borrow()
+        .history()
+        .iter()
+        .map(|n| n.id)
+        .collect();
+    assert_eq!(history, vec![2, 1], "Delete clears it");
+    let snapshot = run.snapshot(window);
+    let card = rect(&snapshot, "card-1");
+    let close = subtree(&snapshot, keyed(&snapshot, "card-1").unwrap().id)
+        .into_iter()
+        .find(|n| n.key.as_ref().is_some_and(|k| *k == "close".into()))
+        .unwrap()
+        .rect;
+    assert_eq!(
+        (close.min_x() - card.min_x(), close.min_y() - card.min_y()),
+        (view::CLOSE_INSET, view::CLOSE_INSET)
+    );
+    run.click(window, close.center());
+    let left: Vec<u32> = run
+        .driver
+        .runtime()
+        .model()
+        .center
+        .borrow()
+        .history()
+        .iter()
+        .map(|n| n.id)
+        .collect();
+    assert_eq!(left, vec![2]);
+    assert_eq!(
+        run.host(),
+        vec![HostAction::Activate(3)],
+        "the close button activates nothing"
+    );
+}
+
+#[test]
+fn each_card_shows_the_compositor_s_material_where_the_desktop_draws_it_and_its_fill_elsewhere() {
+    let mut run = Run::with(Setup {
+        effects: true,
+        ..Setup::default()
+    });
+    run.notify(mail("Lunch", "Are you free at noon?"));
+    run.step(Step::At(1.0));
+    let window = run.only_window();
+    let card = rect(&run.snapshot(window), "card-1");
+    let shown = run
+        .materials(window)
+        .last()
+        .cloned()
+        .expect("materials were asked for");
+    assert_eq!(
+        shown,
+        vec![MaterialRegion {
+            material: "Menu".into(),
+            rect: card,
+            radius: view::CORNER_RADIUS,
+            alpha: 1.0,
+        }],
+        "the popover's material under the banner's card and nowhere else in its strip"
+    );
+    run.notify(NotifyInput::new("Calendar", "Stand-up", "In 5 minutes"));
+    run.notify(NotifyInput::new("Calendar", "Review", "In 10 minutes"));
+    run.step(Step::At(2.0));
+    run.step(Step::OpenCentre);
+    let window = run.only_window();
+    let snapshot = run.snapshot(window);
+    let regions = run.materials(window).last().cloned().unwrap();
+    let rects: Vec<Rect> = regions.iter().map(|r| r.rect).collect();
+    let header = rect(&snapshot, "header-row");
+    assert_eq!(
+        rects,
+        vec![
+            Rect::new(28.0, header.min_y(), 344.0, view::HEADER_HEIGHT),
+            rect(&snapshot, "card-3"),
+            rect(&snapshot, "card-1"),
+        ],
+        "the header and each front card; the cards behind a group's front one are opaque"
+    );
+
+    let mut run = Run::with(Setup {
+        effects: true,
+        reduce_transparency: true,
+        ..Setup::default()
+    });
+    run.notify(mail("Lunch", "Are you free at noon?"));
+    run.step(Step::At(1.0));
+    let window = run.only_window();
+    assert!(
+        run.materials(window).iter().all(Vec::is_empty),
+        "Reduce Transparency shows no material"
+    );
+    let fills = run
+        .snapshot(window)
+        .display_list
+        .nodes
+        .iter()
+        .flat_map(|n| n.ops.iter())
+        .filter(|op| {
+            matches!(op, cupertino_kit::render::PaintOp::Fill { shape: cupertino_kit::render::Shape::RoundedRect { rect, .. }, .. } if rect.size == card.size)
+        })
+        .count();
+    assert_eq!(fills, 1, "the card paints its opaque fill");
 }

@@ -1039,7 +1039,7 @@ fn a_locked_container_asks_for_its_passphrase_and_never_shows_or_reports_it() {
     assert_eq!(log[0], "Unlock sdb1 right=false");
     assert!(
         log[1].starts_with(
-            "Notify Files: “Kingston DataTraveler” couldn't be unlocked / Error unlocking /dev/sdb1"
+            "Notify Files: “Kingston DataTraveler” couldn't be unlocked / The call failed."
         ),
         "{log:?}"
     );

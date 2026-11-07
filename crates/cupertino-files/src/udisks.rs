@@ -258,10 +258,11 @@ fn notice_of(
         Operation::Eject => format!("“{name}” couldn't be ejected"),
         Operation::Unlock => format!("“{name}” couldn't be unlocked"),
     };
-    let message = message.map(|m| match secret {
-        Some(secret) if !secret.is_empty() => m.replace(secret.text(), "…"),
-        _ => m.to_owned(),
-    });
+    // a service text that holds the passphrase is not shown at all: one with the passphrase cut out would show where it
+    // was, which gives a short one away
+    let message = message
+        .filter(|m| secret.is_none_or(|s| s.is_empty() || !m.contains(s.text())))
+        .map(str::to_owned);
     let (summary, body) = match error.and_then(|n| n.strip_prefix(ERROR)) {
         Some("NotAuthorizedDismissed") => return None,
         Some("DeviceBusy") => (format!("“{name}” wasn't ejected"), using(holders)),
@@ -804,6 +805,29 @@ mod tests {
         assert_eq!(
             link.body,
             "Error mounting /dev/sdb1 at /run/media/ada/&lt;a href=x&gt;y&lt;/a&gt;: bad superblock"
+        );
+    }
+
+    #[test]
+    fn an_unlock_failure_shows_the_service_text_only_when_it_does_not_hold_the_passphrase() {
+        let failed = |message: &str, secret: &str| {
+            notice_of(
+                Operation::Unlock,
+                "Secrets",
+                &error("org.freedesktop.UDisks2.Error.Failed", message),
+                &[],
+                Some(&Passphrase::new(secret)),
+            )
+            .unwrap()
+            .body
+        };
+        let wrong = "Error unlocking /dev/sdb1: Failed to activate device: Incorrect passphrase.";
+        assert_eq!(failed(wrong, "correct horse battery"), wrong);
+        // a short passphrase found in the text: nothing of the text is shown, so nothing tells where it was
+        assert_eq!(failed(wrong, "dev"), "The call failed.");
+        assert_eq!(
+            failed("Error unlocking /dev/sdb1: bad key hunter2", "hunter2"),
+            "The call failed."
         );
     }
 }

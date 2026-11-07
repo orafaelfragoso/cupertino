@@ -1,92 +1,64 @@
-//! Glue between the dock model and the toolkit surfaces: draws the bar over a server-rendered
-//! backdrop, feeds the model the pointer and the server's window list, and carries out what a
-//! click on a tile asks for. It also draws the application switcher's panel on an overlay surface
-//! that lives for one switch, and tells the server which entry the pointer picked; and it opens
-//! the application grid on a keyboard-exclusive overlay surface when the server forwards the
-//! app-grid action, and launches from it through the same path as a tile. When the server opens
-//! the overview it lays the windows out and answers with their frames, draws the workspaces bar,
-//! the highlight and the titles on a keyboard-exclusive overlay surface, and sends the picks; hot
-//! corners and gestures the server reports are mapped to their action (`dock.conf`); a right
-//! click on a tile or the separator opens its context menu as a popup. The decisions live in the
-//! library modules (`session`, `dock`, `conf`, `switcher`, `app_grid`, `overview_ui`, `menu`,
-//! `actions`); drawing is in `render`.
+//! Glue between the dock's Kit application ([`cupertino_dock::kit`]) and the session: the windows get their layer
+//! surfaces from [`DockRoles`] by their `app_id` (`<prefix>@<output>`), the bar and every edge strip take the dock role
+//! of their output, what the server tells those roles and the session observer arrives as messages, and [`AppHost`]
+//! sends the dock's requests, places the bar, starts programs, keeps the pins, loads the icons and paints the two
+//! surfaces the process still paints itself (the switcher's panel and the overview's chrome).
 
-use cupertino_apps::launch::{spawn, Launch, OPEN_COMMAND};
+use cupertino_apps::exec::CommandSpec;
+use cupertino_apps::launch::{spawn, OPEN_COMMAND};
 use cupertino_assets::Assets;
 use cupertino_defaults::dock::DockSettings;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
-use cupertino_dock::actions::{ActionMap, ActionTarget, Trigger};
-use cupertino_dock::app_grid::{self, AppGrid, GridLayout, Key as GridKey, Outcome};
+use cupertino_dock::actions::{ActionMap, Trigger};
 use cupertino_dock::conf::{
-    default_pins, dock_config, load_pins, session_file_manager, store_pins, FILE_MANAGER, TERMINALS,
+    default_pins, dock_config, load_pins, session_file_manager, store_pins, TERMINALS,
 };
 use cupertino_dock::config::Orientation;
 use cupertino_dock::desktop::DesktopIndex;
-use cupertino_dock::force_quit::{self, Button as FqButton, Dialog, Entry as FqEntry, Extend};
-use cupertino_dock::menu::{self, MenuCommand, MenuItem, MenuLayout, TileFacts};
-use cupertino_dock::overview_ui::{self, Mode, OverviewUi, UiAction, WindowEntry, Workspace};
-use cupertino_dock::render::{
-    self, ForceQuitView, GridView, Icons, LabelText, OverviewView, Panel,
+use cupertino_dock::kit::{
+    self, AppAction, DockEvent, Host, IconKey, Message, Model, OutputInfo, Part, Placement,
+    Request, Sized, SwitcherPaint, WindowIcon,
 };
-use cupertino_dock::session::{Activation, Session};
-use cupertino_dock::switcher::{self, HoverGate, Switcher, SwitcherLayout};
-use cupertino_dock::tile_drag::{Poof, TilePress};
-use cupertino_dock::tiles::TileKind;
-use cupertino_dock::{Dock, DragOutcome};
-use cupertino_geometry::Rect as GRect;
-use cupertino_overview::Key as OverviewKey;
-use cupertino_protocol_app::{AppEffects, Backdrop};
+use cupertino_dock::overview_ui::{Mode, OverviewUi, Workspace};
+use cupertino_dock::render::{self, Icons, LabelText, OverviewView, Panel};
+use cupertino_dock::session::Session;
+use cupertino_dock::view::{
+    edge, IconSet, BAR_APP_ID, DRAG_APP_ID, EDGE_APP_ID, FORCE_QUIT_APP_ID, GRID_APP_ID,
+    OVERVIEW_APP_ID, SWITCHER_APP_ID,
+};
+use cupertino_dock::Dock;
+use cupertino_kit::controls::ImageSource;
+use cupertino_kit::core::{next_resource_id, Application, Command, Window};
+use cupertino_kit::platform::WindowSpec;
+use cupertino_kit::render::{ImageResource, PixelFormat};
+use cupertino_modifiers::Profile;
 use cupertino_shell_client::{
-    Anchor, AppCommand, Corner, Dock as DockRole, DockChange, DockUpdate, Gesture,
+    Anchor, AppCommand, Corner, Dock as DockRole, DockChange, DockWindowIcon, Gesture,
     KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
-    OverviewMode, OverviewWindow, OverviewWorkspace, Session as SessionObserver, SessionChange,
-    SessionState, Shell, ShellEvent,
+    OverviewMode, SessionChange, SessionState, Shell, ShellEvent, WindowIconImage,
 };
 use cupertino_theme::Typography;
-use cupertino_ui_wayland::{popup, Ready, ShmPresenter};
+use cupertino_ui_wayland::{RoleEvent, SurfaceRoles, WaylandWindowSystem};
 use cupertino_wayland_client::{
-    key, Button, Connection, Event, KeyboardEvent, Modifiers, OutputId, PointerEvent, Popup,
-    SurfaceId, TokenRequest,
+    Connection, Error as WaylandError, Event, ExtensionEvent, OutputId, SurfaceId,
 };
-use cupertino_wm::geometry::{Point, Rect};
-use std::collections::HashMap;
+use cupertino_wm::geometry::Rect;
+use std::cell::RefCell;
 use std::error::Error;
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::Command as Process;
+use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-/// Role of the surface for the server (`wlr-layer-shell` namespace).
-/// Namespace of the surface that draws the tile held by the pointer.
-/// The layer-shell namespace of the Force Quit dialog.
-const FORCE_QUIT_NAMESPACE: &str = "cupertino-force-quit";
-const DRAG_NAMESPACE: &str = "cupertino-dock-drag";
-const NAMESPACE: &str = "cupertino-dock";
-
-/// Role of the switcher's overlay surface for the server (`wlr-layer-shell` namespace).
-const SWITCHER_NAMESPACE: &str = "cupertino-dock-switcher";
-
-/// Material of the bar, drawn by the server below the surface.
-const MATERIAL: &str = "Menu";
-
-/// Corner radius of the bar as a fraction of the tile size. approximate.
-const BAR_RADIUS: f64 = 0.3;
-
 /// The name the process reports problems under.
 const PROCESS: &str = "cupertino-dock";
 
-/// The trash, which opens in the session's file manager, or when it is not installed through [`OPEN_COMMAND`] (the
-/// session's default handler of `x-scheme-handler/trash`; a directory opens with that of `inode/directory`).
-const TRASH_URI: &str = "trash:///";
-
-/// Material of a context menu's popup, the menu bar's.
-const MENU_MATERIAL: &str = "Menu";
-
 /// Command line of the process.
 pub struct Options {
-    /// Terminal emulator that runs entries with `Terminal=true`; the first installed of the
-    /// common ones when absent.
+    /// Terminal emulator that runs entries with `Terminal=true`; the first installed of the common ones when absent.
     pub terminal: Option<String>,
 }
 
@@ -107,126 +79,72 @@ impl Options {
     }
 }
 
-/// An application waiting for its activation token.
-struct Pending {
-    /// Key of the tile that bounces once the program started.
-    key: String,
-    argv: Vec<String>,
+/// What a layer surface of the process is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    Bar,
+    Edge,
+    Drag,
+    Grid,
+    ForceQuit,
+    Switcher,
+    Overview,
 }
 
-/// The switcher's panel while a switch is under way: the model and the overlay surface, created
-/// when the switch opens and destroyed when it ends. The surface is as large as the panel, centred
-/// by the server on the output it names (the one under the pointer when the switch opened, not
-/// necessarily the dock's), and takes no keys: the server keeps those.
-struct Overlay {
-    output: OutputId,
-    switcher: Switcher,
-    layout: SwitcherLayout,
+impl Kind {
+    /// The kind and the output key an `app_id` names.
+    fn of(app_id: &str) -> Option<(Kind, u32)> {
+        let (prefix, output) = app_id.rsplit_once('@')?;
+        let kind = match prefix {
+            BAR_APP_ID => Kind::Bar,
+            EDGE_APP_ID => Kind::Edge,
+            DRAG_APP_ID => Kind::Drag,
+            GRID_APP_ID => Kind::Grid,
+            FORCE_QUIT_APP_ID => Kind::ForceQuit,
+            SWITCHER_APP_ID => Kind::Switcher,
+            OVERVIEW_APP_ID => Kind::Overview,
+            _ => return None,
+        };
+        Some((kind, output.parse().ok()?))
+    }
+}
+
+struct Surface {
+    kind: Kind,
+    output: u32,
     layer: LayerSurface,
-    presenter: ShmPresenter,
-    backdrop: Backdrop,
-    hover: HoverGate,
-    /// Entry the last `switcher_select` asked for, until the server answers.
-    requested: Option<usize>,
-    /// The first draw after the show delay was asked for.
-    draw_requested: bool,
+    /// The dock role of the bar and of the edge strips.
+    role: Option<DockRole>,
 }
 
-/// The open application grid: the model and its overlay surface, anchored to every edge of the
-/// output below the 30 pt top band and inside the dock bar's exclusive zone, with the keyboard
-/// while it is open. The layout is known once the server sized the surface.
-struct Grid {
-    grid: AppGrid,
-    layer: LayerSurface,
-    presenter: ShmPresenter,
-    backdrop: Backdrop,
-    layout: Option<GridLayout>,
-    /// The first frame was presented.
-    drawn: bool,
-    cache: render::GridCache,
+/// The process's layer surfaces, shared by the roles and the host.
+#[derive(Default)]
+struct Surfaces {
+    all: Vec<Surface>,
+    /// Where the bar goes, as the model last said.
+    placement: Option<Placement>,
 }
 
-/// The open overview's chrome: the layout model and its overlay surface over the whole output
-/// (so surface and output coordinates agree), with the keyboard while it is open.
-struct OverviewSurface {
-    ui: OverviewUi,
-    layer: LayerSurface,
-    presenter: ShmPresenter,
+impl Surfaces {
+    fn of_surface(&self, surface: SurfaceId) -> Option<&Surface> {
+        self.all.iter().find(|s| s.layer.surface() == surface)
+    }
+
+    fn of_kind(&mut self, kind: Kind) -> Option<&mut Surface> {
+        self.all.iter_mut().find(|s| s.kind == kind)
+    }
+
+    /// The dock role of the output with key `output`: its bar's or its edge strip's.
+    fn role(&self, output: u32) -> Option<&DockRole> {
+        self.all
+            .iter()
+            .filter(|s| s.output == output)
+            .find_map(|s| s.role.as_ref())
+    }
 }
 
-/// An open context menu: a popup of the bar surface with a grab.
-/// The Force Quit Applications dialog on screen.
-struct ForceQuit {
-    dialog: Dialog,
-    layer: LayerSurface,
-    presenter: ShmPresenter,
-    layout: force_quit::Layout,
-    hover_row: Option<usize>,
-    hover_button: Option<FqButton>,
-}
-
-struct Menu {
-    items: Vec<MenuItem>,
-    layout: MenuLayout,
-    popup: Popup,
-    presenter: ShmPresenter,
-    backdrop: Backdrop,
-    hovered: Option<usize>,
-}
-
-struct App {
-    conn: Connection,
-    layer_shell: LayerShell,
-    effects: AppEffects,
-    _observer: SessionObserver,
-    /// The session's appearance (for the indicators and separators) and display options.
-    observed: SessionState,
-    layer: LayerSurface,
-    presenter: ShmPresenter,
-    role: DockRole,
-    backdrop: Backdrop,
-    session: Session,
-    icons: Icons,
-    labels: LabelText,
-    overlay: Option<Overlay>,
-    grid: Option<Grid>,
-    overview: Option<OverviewSurface>,
-    menu: Option<Menu>,
-    /// The applications that stopped answering (their ids), as the server last said.
-    unresponsive: std::collections::HashSet<String>,
-    force_quit: Option<ForceQuit>,
-    /// What the hot corners and gestures do.
-    actions: ActionMap,
-    /// The switch whose overlay surface the server closed mid-switch; the next step of that switch
-    /// builds the surface again around it, so a panel that was on screen is not delayed again.
-    orphan: Option<Switcher>,
-    start: Instant,
-    /// Pointer position in the surface, while the pointer is over it.
-    pointer: Option<Point>,
-    /// The left press on an application tile that is a click or the start of a drag.
-    press: Option<TilePress>,
-    /// The puff where the last dragged tile was removed, until it is over.
-    poof: Option<Poof>,
-    /// The surface over the whole output that draws the tile held by the pointer, settling after a
-    /// drop or fading after a removal: it may leave the bar's own surface. It takes no input.
-    drag_surface: Option<(LayerSurface, ShmPresenter)>,
-    /// Where the pins are stored (`None` when neither `XDG_CONFIG_HOME` nor `HOME` is set).
-    pins_path: Option<PathBuf>,
-    terminal: Option<String>,
-    pending: HashMap<TokenRequest, Pending>,
-    output: OutputId,
-    /// `dock.conf` as last read, the last good values of the next read; its path and the watch on it (`None` without one).
-    conf: DockSettings,
-    conf_path: Option<PathBuf>,
-    conf_changes: std::sync::mpsc::Receiver<WatchEvent>,
-    _conf_watch: Option<ConfigWatcher>,
-    /// Height of the dock's output in points, which picks the default tile size.
-    display_height: f64,
-}
-
-/// The edges the dock's surface is anchored to and its size for a dock on `orientation` that is `extent` deep.
-fn placement(orientation: Orientation, extent: f64) -> (Anchor, (u32, u32)) {
-    let extent = extent as u32;
+/// The edges a surface along the dock's edge is anchored to, and its size for `extent` points deep.
+fn along(orientation: Orientation, extent: u32) -> (Anchor, (u32, u32)) {
     match orientation {
         Orientation::Bottom => (Anchor::Bottom | Anchor::Left | Anchor::Right, (0, extent)),
         Orientation::Left => (Anchor::Left | Anchor::Top | Anchor::Bottom, (extent, 0)),
@@ -234,44 +152,363 @@ fn placement(orientation: Orientation, extent: f64) -> (Anchor, (u32, u32)) {
     }
 }
 
-/// Watch `dock.conf` at `path`; its changes wake the loop. A watch that cannot be set up is reported: the file then
-/// applies at the next start.
-fn watch_conf(
-    conn: &Connection,
-    path: Option<&PathBuf>,
-) -> (Option<ConfigWatcher>, std::sync::mpsc::Receiver<WatchEvent>) {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let Some(path) = path else { return (None, rx) };
-    let waker = conn.waker();
-    let watch = ConfigWatcher::new(vec![path.clone()], move |event| {
+const ALL_EDGES: Anchor = Anchor::Top
+    .union(Anchor::Bottom)
+    .union(Anchor::Left)
+    .union(Anchor::Right);
+
+/// Gives the windows their layer surfaces and forwards what the server tells the dock roles and the session observer.
+struct DockRoles {
+    layer_shell: LayerShell,
+    shell: Shell,
+    surfaces: Rc<RefCell<Surfaces>>,
+    observed: SessionState,
+    messages: async_channel::Sender<Message>,
+}
+
+impl DockRoles {
+    fn send(&self, message: Message) {
         // the receiver is gone only while the process exits
-        if tx.send(event).is_ok() {
-            waker.wake();
+        let _ = self.messages.try_send(message);
+    }
+
+    fn config(&self, kind: Kind, output: OutputId, spec: &WindowSpec) -> LayerSurfaceConfig {
+        let whole = |v: f64| v.ceil().max(1.0) as u32;
+        let placement = self.surfaces.borrow().placement;
+        let orientation = placement.map_or(Orientation::Bottom, |p| p.orientation);
+        let (layer, anchor, size, exclusive_zone, keyboard) = match kind {
+            Kind::Bar => {
+                let extent = placement.map_or(whole(spec.size.height), |p| whole(p.extent));
+                let (anchor, size) = along(orientation, extent);
+                let zone = placement.map_or(0, |p| p.exclusive_zone);
+                (Layer::Top, anchor, size, zone, KeyboardInteractivity::None)
+            }
+            Kind::Edge => {
+                let (anchor, size) = along(orientation, whole(edge::DEPTH));
+                // -1: the strip lies on the very edge, whatever reserves room there
+                (Layer::Top, anchor, size, -1, KeyboardInteractivity::None)
+            }
+            // the whole output, so the window's coordinates are the output's
+            Kind::Drag => (
+                Layer::Overlay,
+                ALL_EDGES,
+                (0, 0),
+                -1,
+                KeyboardInteractivity::None,
+            ),
+            // the server fills the output within the exclusive zones, so the dock bar stays visible; the menu bar's
+            // reservation is not a layer zone, so the grid covers the bar
+            Kind::Grid => (
+                Layer::Overlay,
+                ALL_EDGES,
+                (0, 0),
+                0,
+                KeyboardInteractivity::Exclusive,
+            ),
+            // no anchor: the server centres the surface on the output, ignoring the zones
+            Kind::ForceQuit => (
+                Layer::Overlay,
+                Anchor::empty(),
+                (whole(spec.size.width), whole(spec.size.height)),
+                -1,
+                KeyboardInteractivity::Exclusive,
+            ),
+            // the server keeps the keys of the switch
+            Kind::Switcher => (
+                Layer::Overlay,
+                Anchor::empty(),
+                (whole(spec.size.width), whole(spec.size.height)),
+                -1,
+                KeyboardInteractivity::None,
+            ),
+            // over the dock bar and the menu bar, so the window's coordinates are the output's (the server's area is
+            // in them)
+            Kind::Overview => (
+                Layer::Overlay,
+                ALL_EDGES,
+                (0, 0),
+                -1,
+                KeyboardInteractivity::Exclusive,
+            ),
+        };
+        LayerSurfaceConfig {
+            namespace: match kind {
+                Kind::Bar => BAR_APP_ID,
+                Kind::Edge => EDGE_APP_ID,
+                Kind::Drag => DRAG_APP_ID,
+                Kind::Grid => GRID_APP_ID,
+                Kind::ForceQuit => FORCE_QUIT_APP_ID,
+                Kind::Switcher => SWITCHER_APP_ID,
+                Kind::Overview => OVERVIEW_APP_ID,
+            }
+            .to_string(),
+            output: Some(output),
+            layer,
+            anchor,
+            size,
+            margin: Margin::default(),
+            exclusive_zone,
+            keyboard,
         }
-    });
-    match watch {
-        Ok(w) => (Some(w), rx),
-        Err(e) => {
-            eprintln!(
-                "cupertino-dock: cannot watch {}: {e}; changes apply at the next start",
-                path.display()
-            );
-            (None, rx)
-        }
+    }
+
+    fn forward(&self, surface: SurfaceId, update: &[DockChange]) {
+        let Some(output) = self.surfaces.borrow().of_surface(surface).map(|s| s.output) else {
+            return;
+        };
+        let events = update.iter().map(dock_event).collect();
+        self.send(Message::Dock { output, events });
     }
 }
 
-/// `dock.conf` at `path` (nothing set when it does not exist). Lines that are not understood are
-/// reported; with `last_good` their keys keep its values.
-fn load_dock_settings(
-    path: &std::path::Path,
-    last_good: Option<&DockSettings>,
-) -> Result<DockSettings> {
+fn output_key(id: OutputId) -> u32 {
+    id.registry_name()
+}
+
+/// The compositor's outputs that have a logical size, in its order.
+fn outputs(conn: &Connection) -> Vec<OutputInfo> {
+    conn.outputs()
+        .into_iter()
+        .filter_map(|o| {
+            let g = o.geometry?;
+            Some(OutputInfo {
+                key: output_key(o.id),
+                width: f64::from(g.width),
+                height: f64::from(g.height),
+                scale: o.effective_scale().unwrap_or_else(|| o.scale.factor()),
+            })
+        })
+        .collect()
+}
+
+fn wm_rect(r: &cupertino_geometry::Rect) -> Rect {
+    Rect::new(r.x(), r.y(), r.width(), r.height())
+}
+
+fn trigger_of_corner(corner: Corner) -> Trigger {
+    match corner {
+        Corner::TopLeft => Trigger::CornerTopLeft,
+        Corner::TopRight => Trigger::CornerTopRight,
+        Corner::BottomLeft => Trigger::CornerBottomLeft,
+        Corner::BottomRight => Trigger::CornerBottomRight,
+        // the enum is non-exhaustive for the client; the toolkit drops values it does not know
+        _ => Trigger::CornerTopLeft,
+    }
+}
+
+fn trigger_of_gesture(gesture: Gesture) -> Trigger {
+    match gesture {
+        Gesture::SwipeUp => Trigger::SwipeUp,
+        Gesture::SwipeDown => Trigger::SwipeDown,
+        Gesture::Pinch => Trigger::Pinch,
+        Gesture::Spread => Trigger::Spread,
+        _ => Trigger::SwipeUp,
+    }
+}
+
+/// One change of the server's as the model takes it.
+fn dock_event(change: &DockChange) -> DockEvent {
+    match change.clone() {
+        DockChange::Window(w) => DockEvent::Window {
+            id: w.id,
+            app_id: w.app_id,
+            title: w.title,
+            minimized: w.minimized,
+        },
+        DockChange::WindowIcon(icon) => DockEvent::WindowIcon(WindowIcon {
+            id: icon.id,
+            name: icon.name,
+            image: icon.image.map(|i| (i.size, i.argb)),
+        }),
+        DockChange::WindowClosed(id) => DockEvent::WindowClosed(id),
+        DockChange::Launching(app_id) => DockEvent::Launching(app_id),
+        DockChange::ToggleAutoHide => DockEvent::ToggleAutoHide,
+        DockChange::ToggleAppGrid => DockEvent::ToggleAppGrid,
+        DockChange::SwitcherChanged {
+            output,
+            apps,
+            selected,
+        } => DockEvent::Switcher {
+            output: output_key(output),
+            apps,
+            selected,
+        },
+        DockChange::SwitcherClosed { committed } => DockEvent::SwitcherClosed { committed },
+        DockChange::OverviewChanged {
+            mode,
+            area,
+            windows,
+            workspaces,
+        } => DockEvent::Overview {
+            mode: match mode {
+                OverviewMode::All => Mode::All,
+                OverviewMode::App(_) => Mode::App,
+            },
+            area: wm_rect(&area),
+            windows: windows.iter().map(|w| (w.id, wm_rect(&w.frame))).collect(),
+            workspaces: workspaces
+                .iter()
+                .map(|w| Workspace {
+                    id: w.id,
+                    current: w.current,
+                })
+                .collect(),
+        },
+        DockChange::OverviewClosed => DockEvent::OverviewClosed,
+        DockChange::HotCorner(corner) => DockEvent::Trigger(trigger_of_corner(corner)),
+        DockChange::Gesture(gesture) => DockEvent::Trigger(trigger_of_gesture(gesture)),
+        DockChange::Attention(app_id) => DockEvent::Attention(app_id),
+        DockChange::Unresponsive {
+            app_id,
+            unresponsive,
+        } => DockEvent::Unresponsive {
+            app_id,
+            unresponsive,
+        },
+        DockChange::ForceQuitDialog => DockEvent::ForceQuitDialog,
+        DockChange::Engage => DockEvent::Engage,
+    }
+}
+
+impl SurfaceRoles for DockRoles {
+    fn create(
+        &mut self,
+        conn: &mut Connection,
+        spec: &WindowSpec,
+    ) -> Option<std::result::Result<SurfaceId, WaylandError>> {
+        let (kind, key) = Kind::of(&spec.app_id)?;
+        let Some(output) = conn
+            .outputs()
+            .into_iter()
+            .map(|o| o.id)
+            .find(|&id| output_key(id) == key)
+        else {
+            return Some(Err(WaylandError::Protocol("the dock's output went away")));
+        };
+        let config = self.config(kind, output, spec);
+        let layer = match self.layer_shell.layer_surface(conn, &config) {
+            Ok(layer) => layer,
+            Err(cupertino_shell_client::Error::Transport(e)) => return Some(Err(e)),
+            Err(_) => return Some(Err(WaylandError::Protocol("no layer surface for the dock"))),
+        };
+        let surface = layer.surface();
+        let role = match kind {
+            Kind::Bar | Kind::Edge => match self.shell.dock(conn, surface, output) {
+                Ok(role) => Some(role),
+                Err(cupertino_shell_client::Error::Transport(e)) => return Some(Err(e)),
+                Err(_) => return Some(Err(WaylandError::Protocol("no dock role"))),
+            },
+            _ => None,
+        };
+        self.surfaces.borrow_mut().all.push(Surface {
+            kind,
+            output: key,
+            layer,
+            role,
+        });
+        Some(Ok(surface))
+    }
+
+    fn event(&mut self, event: &ExtensionEvent) -> Option<RoleEvent> {
+        if let Some(change) = self.observed.apply(event) {
+            self.send(match change {
+                SessionChange::Appearance { dark } => Message::Dark(dark),
+                SessionChange::DisplayOptions(display) => {
+                    Message::ReduceMotion(display.reduce_motion)
+                }
+                SessionChange::Lock { locked } => Message::Locked(locked),
+            });
+            // the window system follows the appearance and the lock too
+            return None;
+        }
+        match event.downcast_ref::<ShellEvent>()? {
+            &ShellEvent::Configure { surface, size } => {
+                let surfaces = self.surfaces.borrow();
+                let s = surfaces.of_surface(surface)?;
+                // a configure without a size closes the window, which the model answers
+                let Ok(size) = s.layer.configured(size) else {
+                    return Some(RoleEvent::Closed(surface));
+                };
+                let sized = match s.kind {
+                    Kind::Bar => Some(Sized::Bar(s.output)),
+                    Kind::Grid => Some(Sized::Grid),
+                    _ => None,
+                };
+                drop(surfaces);
+                if let Some(sized) = sized {
+                    self.send(Message::Sized(sized, f64::from(size.0), f64::from(size.1)));
+                }
+                Some(RoleEvent::Configure { surface, size })
+            }
+            // its output went away
+            &ShellEvent::Closed(surface) => {
+                self.surfaces.borrow().of_surface(surface)?;
+                Some(RoleEvent::Closed(surface))
+            }
+            ShellEvent::Dock { surface, update } => {
+                self.forward(*surface, update);
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn destroyed(&mut self, surface: SurfaceId) {
+        self.surfaces
+            .borrow_mut()
+            .all
+            .retain(|s| s.layer.surface() != surface);
+    }
+
+    fn keyboard_focus(&mut self, surface: SurfaceId, focused: bool) {
+        let output = self
+            .surfaces
+            .borrow()
+            .of_surface(surface)
+            .filter(|s| s.kind == Kind::Bar)
+            .map(|s| s.output);
+        if let (Some(output), false) = (output, focused) {
+            self.send(Message::KeyboardLeft(output));
+        }
+    }
+
+    fn outputs_changed(&mut self, conn: &Connection) {
+        self.send(Message::Outputs(outputs(conn)));
+    }
+}
+
+/// Whether `program` is an executable file on `PATH` (or at the path it names).
+fn installed(program: &str) -> bool {
+    if program.contains('/') {
+        return Path::new(program).is_file();
+    }
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
+}
+
+/// A premultiplied pixmap as a Kit image.
+fn image(pixmap: &tiny_skia::Pixmap) -> ImageSource {
+    ImageSource {
+        id: next_resource_id(),
+        image: ImageResource {
+            revision: 0,
+            width: pixmap.width(),
+            height: pixmap.height(),
+            stride: pixmap.width() * 4,
+            format: PixelFormat::Rgba8Premultiplied,
+            pixels: Arc::from(pixmap.data()),
+        },
+    }
+}
+
+/// `dock.conf` at `path` (nothing set when it does not exist). Lines that are not understood are reported; with
+/// `last_good` their keys keep its values.
+fn load_dock_settings(path: &Path, last_good: Option<&DockSettings>) -> Result<DockSettings> {
     let (settings, problems) = DockSettings::load(path, last_good)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     for problem in problems {
         eprintln!(
-            "cupertino-dock: {} line {}: {}",
+            "{PROCESS}: {} line {}: {}",
             path.display(),
             problem.line,
             problem.message
@@ -280,19 +517,326 @@ fn load_dock_settings(
     Ok(settings)
 }
 
+struct AppHost {
+    surfaces: Rc<RefCell<Surfaces>>,
+    start: Instant,
+    icons: Icons,
+    labels: LabelText,
+    /// Where the pins are stored (`None` when neither `XDG_CONFIG_HOME` nor `HOME` is set).
+    pins_path: Option<PathBuf>,
+    conf_path: Option<PathBuf>,
+    terminal: Option<String>,
+}
+
+impl AppHost {
+    fn request_on(&self, role: &DockRole, request: Request) -> std::result::Result<(), String> {
+        let shape = |r: std::result::Result<(), cupertino_shell_client::Error>| {
+            r.map_err(|e| e.to_string())
+        };
+        let rect = |r: &Rect| cupertino_geometry::Rect::new(r.x, r.y, r.w, r.h);
+        match request {
+            Request::ActivateApp(app_id) => role.activate_app(&app_id),
+            Request::RestoreWindow { id, tile } => shape(role.restore_window(id, &rect(&tile)))?,
+            Request::MinimizeTarget(target) => shape(role.set_minimize_target(&rect(&target)))?,
+            Request::App(app_id, action) => role.app_command(
+                &app_id,
+                match action {
+                    AppAction::ShowWindows => AppCommand::ShowWindows,
+                    AppAction::Hide => AppCommand::Hide,
+                    AppAction::Quit => AppCommand::Quit,
+                },
+            ),
+            Request::ForceQuitApp(app_id) => role.force_quit_app(&app_id),
+            Request::RunAction(name) => role.run_action(&name),
+            Request::SwitcherSelect(i) => shape(role.switcher_select(i))?,
+            Request::SwitcherActivate(i) => shape(role.switcher_activate(i))?,
+            Request::SwitcherCancel => role.switcher_cancel(),
+            Request::OverviewFrame(id, frame) => shape(role.overview_frame(id, &rect(&frame)))?,
+            Request::OverviewSelect(id) => role.overview_select(id),
+            Request::OverviewClose => role.overview_close(),
+            Request::SwitchWorkspace(id) => role.switch_workspace(id),
+            Request::AddWorkspace => role.add_workspace(),
+            Request::RemoveWorkspace(id) => role.remove_workspace(id),
+            Request::MoveWorkspace { id, index } => shape(role.move_workspace(id, index))?,
+        }
+        Ok(())
+    }
+}
+
+impl Host for AppHost {
+    fn now(&self) -> f64 {
+        self.start.elapsed().as_secs_f64()
+    }
+
+    fn wake(&mut self, after: f64, generation: u64) -> Vec<Command<Message>> {
+        let after = Duration::from_secs_f64(after.max(0.0));
+        vec![Command::Perform(Box::pin(async move {
+            async_io::Timer::after(after).await;
+            Message::Wake(generation)
+        }))]
+    }
+
+    fn request(&mut self, output: u32, request: Request) {
+        let surfaces = self.surfaces.borrow();
+        // before the role exists (the minimize target of a bar not created yet) the next change sends it again
+        let Some(role) = surfaces.role(output) else {
+            return;
+        };
+        if let Err(e) = self.request_on(role, request) {
+            eprintln!("{PROCESS}: a request to the server failed: {e}");
+        }
+    }
+
+    fn place_bar(&mut self, placement: Placement) {
+        let mut surfaces = self.surfaces.borrow_mut();
+        surfaces.placement = Some(placement);
+        let (anchor, size) = along(placement.orientation, placement.extent.max(1.0) as u32);
+        for s in surfaces
+            .all
+            .iter_mut()
+            .filter(|s| s.kind == Kind::Bar && s.output == placement.output)
+        {
+            s.layer.set_placement(anchor, size);
+            s.layer.set_exclusive_zone(placement.exclusive_zone);
+        }
+        let (anchor, size) = along(placement.orientation, edge::DEPTH as u32);
+        for s in surfaces.all.iter_mut().filter(|s| s.kind == Kind::Edge) {
+            s.layer.set_placement(anchor, size);
+        }
+    }
+
+    fn keyboard(&mut self, part: Part, on: bool) {
+        let mut surfaces = self.surfaces.borrow_mut();
+        let surface = match part {
+            Part::Bar(output) => surfaces
+                .all
+                .iter_mut()
+                .find(|s| s.kind == Kind::Bar && s.output == output),
+            Part::Grid => surfaces.of_kind(Kind::Grid),
+            Part::Overview => surfaces.of_kind(Kind::Overview),
+        };
+        if let Some(s) = surface {
+            s.layer.set_keyboard_interactivity(if on {
+                KeyboardInteractivity::Exclusive
+            } else {
+                KeyboardInteractivity::None
+            });
+        }
+    }
+
+    fn resize_force_quit(&mut self, width: f64, height: f64) {
+        if let Some(s) = self.surfaces.borrow_mut().of_kind(Kind::ForceQuit) {
+            s.layer
+                .set_placement(Anchor::empty(), (width.ceil() as u32, height.ceil() as u32));
+        }
+    }
+
+    fn spawn(&mut self, argv: Vec<String>, token: Option<String>) -> bool {
+        let Some(spec) = CommandSpec::from_argv(argv) else {
+            return false;
+        };
+        let spec = match token {
+            Some(token) => spec.with_activation_token(&token),
+            None => spec,
+        };
+        spawn(PROCESS, spec.to_command())
+    }
+
+    fn open(&mut self, target: &str) {
+        let mut command = Process::new(OPEN_COMMAND);
+        command.arg(target);
+        spawn(PROCESS, command);
+    }
+
+    fn shell(&mut self, command_line: &str) {
+        let mut command = Process::new("sh");
+        command.args(["-c", command_line]);
+        spawn(PROCESS, command);
+    }
+
+    /// A failure goes to stderr: the dock keeps the order it shows, and the next change writes the file again.
+    fn store_pins(&mut self, pins: &[String]) {
+        let Some(path) = &self.pins_path else { return };
+        if let Err(e) = store_pins(path, pins) {
+            eprintln!("{PROCESS}: cannot write {}: {e}", path.display());
+        }
+    }
+
+    fn read_conf(&mut self, last_good: &DockSettings) -> Option<DockSettings> {
+        let path = self.conf_path.as_ref()?;
+        match load_dock_settings(path, Some(last_good)) {
+            Ok(settings) => Some(settings),
+            Err(e) => {
+                eprintln!("{PROCESS}: {e}; the dock keeps its settings");
+                None
+            }
+        }
+    }
+
+    fn terminal(&mut self) -> Option<String> {
+        self.terminal.clone().or_else(|| {
+            TERMINALS
+                .iter()
+                .find(|t| installed(t))
+                .map(|t| t.to_string())
+        })
+    }
+
+    fn icon(&mut self, desktop: &DesktopIndex, icon: &IconKey, side: f64) -> IconSet {
+        kit::ICON_SCALES
+            .iter()
+            .map(|scale: &f64| {
+                let px = (side * scale).ceil().max(1.0) as u32;
+                let pixmap = match icon {
+                    IconKey::App(key) => self.icons.app(desktop, key, px),
+                    IconKey::Named(name) => self.icons.named(name, px),
+                    IconKey::Trash(full) => self.icons.trash(*full, px),
+                };
+                image(pixmap)
+            })
+            .collect()
+    }
+
+    fn window_icon(&mut self, apps: [String; 2], icon: WindowIcon) {
+        self.icons.window_icon(
+            apps,
+            DockWindowIcon {
+                id: icon.id,
+                name: icon.name,
+                image: icon
+                    .image
+                    .map(|(size, argb)| WindowIconImage { size, argb }),
+            },
+        );
+    }
+
+    fn window_closed(&mut self, id: u32) {
+        self.icons.window_closed(id);
+    }
+
+    fn trash_full(&mut self) -> bool {
+        self.icons.trash_full()
+    }
+
+    fn paint_switcher(&mut self, scale: f64, panel: &SwitcherPaint<'_>) -> Option<ImageSource> {
+        let layout = panel.layout;
+        let mut pixmap = tiny_skia::Pixmap::new(
+            (layout.panel.w * scale).ceil() as u32,
+            (layout.panel.h * scale).ceil() as u32,
+        )?;
+        let view = Panel {
+            switcher: panel.switcher,
+            layout,
+            desktop: panel.desktop,
+            dark: panel.dark,
+            alpha: panel.alpha,
+        };
+        render::paint_switcher(
+            &mut pixmap,
+            scale as f32,
+            &view,
+            &mut self.icons,
+            &mut self.labels,
+        );
+        Some(image(&pixmap))
+    }
+
+    fn paint_overview(
+        &mut self,
+        scale: f64,
+        size: (f64, f64),
+        ui: &OverviewUi,
+        now: f64,
+        dark: bool,
+    ) -> Option<ImageSource> {
+        let mut pixmap = tiny_skia::Pixmap::new(
+            (size.0 * scale).ceil() as u32,
+            (size.1 * scale).ceil() as u32,
+        )?;
+        let view = OverviewView { ui, now, dark };
+        render::paint_overview(&mut pixmap, scale as f32, &view, &mut self.labels);
+        Some(image(&pixmap))
+    }
+}
+
+/// The model and the channel the session's messages arrive on.
+pub struct App {
+    model: Model,
+    heard: async_channel::Receiver<Message>,
+}
+
+fn listen(heard: &async_channel::Receiver<Message>) -> Command<Message> {
+    let heard = heard.clone();
+    Command::Perform(Box::pin(async move {
+        heard.recv().await.unwrap_or(Message::Unheard)
+    }))
+}
+
+impl Application for App {
+    type Model = App;
+    type Message = Message;
+    const RESIDENT: bool = true;
+
+    /// Not used: the model needs the host and the connection [`run`] sets up, and starts through `run_on`.
+    fn init() -> (App, Vec<Command<Message>>) {
+        unreachable!("the dock starts only through `run`, which hands the model to `run_on`")
+    }
+
+    fn update(app: &mut App, message: Message) -> Vec<Command<Message>> {
+        let heard = message.is_heard();
+        let mut commands = kit::update(&mut app.model, message);
+        if heard {
+            commands.push(listen(&app.heard));
+        }
+        commands
+    }
+
+    fn view(app: &App) -> Vec<Window<Message>> {
+        kit::view(&app.model)
+    }
+}
+
+/// Watch `dock.conf` at `path`; a change is told as [`Message::ConfChanged`]. A watch that cannot be set up is
+/// reported: the file then applies at the next start.
+fn watch_conf(
+    path: Option<&PathBuf>,
+    messages: async_channel::Sender<Message>,
+) -> Option<ConfigWatcher> {
+    let path = path?;
+    let watch = ConfigWatcher::new(vec![path.clone()], move |event| match event {
+        WatchEvent::Changed(_) => {
+            let _ = messages.send_blocking(Message::ConfChanged);
+        }
+        WatchEvent::Error(e) => eprintln!("{PROCESS}: watching dock.conf failed: {e}"),
+    });
+    match watch {
+        Ok(w) => Some(w),
+        Err(e) => {
+            eprintln!(
+                "{PROCESS}: cannot watch {}: {e}; changes apply at the next start",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
 /// Connect, take the dock role of the first output and serve until the connection fails.
 pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let assets = Assets::discover();
-    let mut conn = Connection::connect()?;
-    let layer_shell = LayerShell::bind(&mut conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
-    let effects = AppEffects::bind(&mut conn).ok_or("the server lacks cupertino_app_effects_v1")?;
-    let shell = Shell::bind(&mut conn).ok_or("the server lacks cupertino_shell_v1")?;
-    let (observer, observed, early) = shell.observe(&mut conn)?;
-    let (output, geometry) = conn
-        .outputs()
-        .into_iter()
-        .find_map(|o| o.geometry.map(|g| (o.id, g)))
-        .ok_or("the server has no output")?;
+    let mut system = WaylandWindowSystem::connect(Profile::cupertino())
+        .map_err(|e| format!("cannot connect to the Wayland display: {e:?}"))?;
+    let conn = system.connection();
+    let layer_shell = LayerShell::bind(conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
+    let shell = Shell::bind(conn).ok_or("the server lacks cupertino_shell_v1")?;
+    let (observer, mut observed, early) = shell.observe(conn)?;
+    for event in early {
+        if let Event::Extension(event) = event {
+            observed.apply(&event);
+        }
+    }
+    let outputs = outputs(conn);
+    let display_height = outputs.first().ok_or("the server has no output")?.height;
 
     let desktop = DesktopIndex::load_from(&cupertino_defaults::data_dirs());
     let conf_path = DockSettings::path();
@@ -300,7 +844,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         Some(path) => Some(load_dock_settings(path, None)?),
         None => None,
     };
-    let cfg = dock_config(file.as_ref(), f64::from(geometry.height));
+    let cfg = dock_config(file.as_ref(), display_height);
     let actions = file
         .as_ref()
         .map_or_else(ActionMap::default, |f| f.actions.clone());
@@ -336,1984 +880,46 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     dock.set_pinned(&pins.iter().map(String::as_str).collect::<Vec<_>>());
     let session = Session::new(dock, desktop);
 
-    let (anchor, size) = placement(session.dock.cfg.orientation, session.dock.surface_extent());
-    let layer = layer_shell.layer_surface(
-        &mut conn,
-        &LayerSurfaceConfig {
-            namespace: NAMESPACE.to_string(),
-            output: Some(output),
-            layer: Layer::Top,
-            anchor,
-            size,
-            margin: Margin::default(),
-            // windows keep clear of the bar, not of the room magnified tiles and bounces need
-            exclusive_zone: session.dock.exclusive_zone().ceil() as i32,
-            keyboard: KeyboardInteractivity::None,
-        },
-    )?;
-    let role = shell.dock(&conn, layer.surface(), output)?;
-    let backdrop = effects.backdrop(&conn, layer.surface())?;
-    backdrop.set_material(MATERIAL);
-    let labels = LabelText::new(&Typography::default(), &assets)?;
-    let (conf_watch, conf_changes) = watch_conf(&conn, conf_path.as_ref());
-    let conf = file.unwrap_or_default();
-    let display_height = f64::from(geometry.height);
-    let mut app = App {
-        presenter: ShmPresenter::new(layer.surface()),
-        conn,
+    let (messages, heard) = async_channel::unbounded();
+    let _conf_watch = watch_conf(conf_path.as_ref(), messages.clone());
+    let surfaces = Rc::new(RefCell::new(Surfaces::default()));
+    let initial = (
+        observed.dark,
+        observed.display.reduce_motion,
+        observed.locked,
+    );
+    let system = system.with_roles(DockRoles {
         layer_shell,
-        effects,
-        _observer: observer,
+        shell,
+        surfaces: Rc::clone(&surfaces),
         observed,
-        layer,
-        role,
-        backdrop,
-        session,
-        icons: Icons::new(&assets),
-        labels,
-        overlay: None,
-        grid: None,
-        unresponsive: fixture_unresponsive(),
-        force_quit: None,
-        overview: None,
-        menu: None,
-        actions,
-        orphan: None,
+        messages,
+    });
+    let host = AppHost {
+        surfaces,
         start: Instant::now(),
-        pointer: None,
-        press: None,
-        poof: None,
-        drag_surface: None,
+        icons: Icons::new(&assets),
+        labels: LabelText::new(&Typography::default(), &assets)?,
         pins_path,
-        terminal: options.terminal.clone(),
-        pending: HashMap::new(),
-        output,
-        conf,
         conf_path,
-        conf_changes,
-        _conf_watch: conf_watch,
-        display_height,
+        terminal: options.terminal.clone(),
     };
-    for event in early {
-        app.handle(event)?;
-    }
-    loop {
-        app.present()?;
-        let timeout = app.until_due();
-        for event in app.conn.wait(timeout)? {
-            app.handle(event)?;
-        }
-        app.reload_conf()?;
-        app.show_panel_when_due()?;
-        app.settle_grid_wheel()?;
-        app.open_menu_when_held()?;
-    }
-}
-
-/// The grid key a toolkit key stands for; a character without a command modifier
-/// types into the search field.
-/// The dialog's key for an evdev `code`.
-fn force_quit_key(code: u32) -> Option<force_quit::Key> {
-    Some(match code {
-        key::ESCAPE => force_quit::Key::Escape,
-        key::ENTER | key::KEYPAD_ENTER => force_quit::Key::Return,
-        key::UP => force_quit::Key::Up,
-        key::DOWN => force_quit::Key::Down,
-        key::HOME => force_quit::Key::Home,
-        key::END => force_quit::Key::End,
-        _ => return None,
-    })
-}
-
-fn grid_key(code: u32, mods: Modifiers, character: Option<char>) -> Option<GridKey> {
-    let named = match code {
-        key::ESCAPE => Some(GridKey::Escape),
-        key::ENTER | key::KEYPAD_ENTER => Some(GridKey::Return),
-        key::BACKSPACE => Some(GridKey::Backspace),
-        key::LEFT => Some(GridKey::Left),
-        key::RIGHT => Some(GridKey::Right),
-        key::UP => Some(GridKey::Up),
-        key::DOWN => Some(GridKey::Down),
-        key::HOME => Some(GridKey::Home),
-        key::END => Some(GridKey::End),
-        key::PAGE_UP => Some(GridKey::PageUp),
-        key::PAGE_DOWN => Some(GridKey::PageDown),
-        _ => None,
-    };
-    if named.is_some() {
-        return named;
-    }
-    if mods.ctrl || mods.alt || mods.logo {
-        return None;
-    }
-    character.filter(|c| !c.is_control()).map(GridKey::Char)
-}
-
-fn geometry_rect(r: &Rect) -> GRect {
-    GRect::new(r.x, r.y, r.w, r.h)
-}
-
-/// The overview key a toolkit key stands for.
-fn overview_key(code: u32, mods: Modifiers) -> Option<OverviewKey> {
-    Some(match code {
-        key::LEFT => OverviewKey::Left,
-        key::RIGHT => OverviewKey::Right,
-        key::UP => OverviewKey::Up,
-        key::DOWN => OverviewKey::Down,
-        key::TAB if mods.shift => OverviewKey::Previous,
-        key::TAB => OverviewKey::Next,
-        key::ENTER | key::KEYPAD_ENTER | key::SPACE => OverviewKey::Activate,
-        key::ESCAPE => OverviewKey::Cancel,
-        _ => return None,
-    })
-}
-
-fn trigger_of_corner(corner: Corner) -> Trigger {
-    match corner {
-        Corner::TopLeft => Trigger::CornerTopLeft,
-        Corner::TopRight => Trigger::CornerTopRight,
-        Corner::BottomLeft => Trigger::CornerBottomLeft,
-        Corner::BottomRight => Trigger::CornerBottomRight,
-        // the enum is non-exhaustive for the client; the toolkit drops values it does not know
-        _ => Trigger::CornerTopLeft,
-    }
-}
-
-fn trigger_of_gesture(gesture: Gesture) -> Trigger {
-    match gesture {
-        Gesture::SwipeUp => Trigger::SwipeUp,
-        Gesture::SwipeDown => Trigger::SwipeDown,
-        Gesture::Pinch => Trigger::Pinch,
-        Gesture::Spread => Trigger::Spread,
-        _ => Trigger::SwipeUp,
-    }
-}
-
-/// Whether `program` is an executable file on `PATH` (or at the path it names).
-fn installed(program: &str) -> bool {
-    if program.contains('/') {
-        return std::path::Path::new(program).is_file();
-    }
-    std::env::var_os("PATH")
-        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
-}
-
-impl App {
-    /// Seconds on the monotonic clock the model is driven with.
-    fn now(&self) -> f64 {
-        self.start.elapsed().as_secs_f64()
-    }
-
-    /// The surface as the model's screen.
-    fn screen(&self) -> Result<Rect> {
-        let (width, height) = self
-            .presenter
-            .size()
-            .ok_or("the dock surface has not been configured yet")?;
-        Ok(Rect::new(0.0, 0.0, f64::from(width), f64::from(height)))
-    }
-
-    fn handle(&mut self, event: Event) -> Result<()> {
-        match event {
-            Event::Frame(frame) => {
-                if let Some(presenter) = self.presenters().find(|p| p.surface() == frame.surface) {
-                    presenter.frame_done();
-                }
-            }
-            Event::PopupConfigure { popup, configure } => {
-                if let Some(menu) = self.menu.as_mut().filter(|m| m.popup == popup) {
-                    menu.presenter
-                        .configured((configure.width, configure.height));
-                }
-            }
-            // the drag surface takes no input; the bar's surface keeps the pointer until the release
-            Event::Pointer { surface, .. } if self.is_drag_surface(surface) => {}
-            Event::Pointer { surface, event, .. } if self.is_overlay(surface) => {
-                self.overlay_pointer(event)?
-            }
-            Event::Pointer { surface, event, .. } if self.is_grid(surface) => {
-                self.grid_pointer(event)?
-            }
-            Event::Pointer { surface, event, .. } if self.is_force_quit(surface) => {
-                self.force_quit_pointer(event)?
-            }
-            Event::Pointer { surface, event, .. } if self.is_overview(surface) => {
-                self.overview_pointer(event)?
-            }
-            Event::Pointer { surface, event, .. } if self.is_menu(surface) => {
-                self.menu_pointer(event)?
-            }
-            Event::Pointer { event, .. } => self.pointer(event)?,
-            Event::ActivationToken { request, token } => self.complete(request, &token)?,
-            Event::OutputsChanged => {
-                if !self.conn.outputs().iter().any(|o| o.id == self.output) {
-                    return Err("the output of the dock went away".into());
-                }
-            }
-            Event::Keyboard {
-                surface,
-                event:
-                    KeyboardEvent::Key {
-                        code,
-                        pressed: true,
-                        mods,
-                        character,
-                        ..
-                    },
-                ..
-            } if self.is_grid(surface) => {
-                if let Some(key) = grid_key(code, mods, character) {
-                    let now = self.now();
-                    let outcome = self
-                        .grid
-                        .as_mut()
-                        .expect("is_grid saw it")
-                        .grid
-                        .key(key, now);
-                    self.grid_outcome(outcome)?;
-                }
-            }
-            Event::Keyboard {
-                surface,
-                event:
-                    KeyboardEvent::Key {
-                        code,
-                        pressed: true,
-                        mods,
-                        ..
-                    },
-                ..
-            } if self.is_overview(surface) => {
-                if let Some(key) = overview_key(code, mods) {
-                    let now = self.now();
-                    let action = self
-                        .overview
-                        .as_mut()
-                        .expect("is_overview saw it")
-                        .ui
-                        .key(key, now);
-                    self.overview_action(action)?;
-                }
-            }
-            Event::Keyboard {
-                surface,
-                event:
-                    KeyboardEvent::Key {
-                        code,
-                        pressed: true,
-                        mods,
-                        ..
-                    },
-                ..
-            } if self.is_force_quit(surface) => {
-                if let Some(key) = force_quit_key(code) {
-                    let outcome = self
-                        .force_quit
-                        .as_mut()
-                        .expect("is_force_quit saw it")
-                        .dialog
-                        .key(key, mods.shift);
-                    self.force_quit_outcome(outcome)?;
-                }
-            }
-            // the keyboard moved elsewhere: the grid loses its reason to stay open
-            Event::Keyboard {
-                surface,
-                event: KeyboardEvent::Leave,
-                ..
-            } if self.is_grid(surface) => self.close_grid()?,
-            // the server dismissed the menu's grab: the menu is over
-            Event::PopupDone(popup) if self.is_menu(popup.surface()) => self.drop_menu()?,
-            Event::Extension(event) => match self.observed.apply(&event) {
-                Some(SessionChange::Appearance { .. }) => {
-                    self.presenter.request_redraw();
-                    if let Some(overlay) = &mut self.overlay {
-                        overlay.presenter.request_redraw();
-                    }
-                    if let Some(grid) = &mut self.grid {
-                        grid.presenter.request_redraw();
-                    }
-                }
-                // the materials follow the options in the server; the grid's fade follows Reduce Motion
-                Some(SessionChange::DisplayOptions(options)) => {
-                    if let Some(grid) = &mut self.grid {
-                        grid.grid.set_reduce_motion(options.reduce_motion);
-                        grid.presenter.request_redraw();
-                    }
-                }
-                // the lock screen covers everything: the grid and a menu go at once, without animation;
-                // the overview's chrome waits for the server's `overview_closed`
-                Some(SessionChange::Lock { locked: true }) => {
-                    self.close_force_quit()?;
-                    self.drop_grid()?;
-                    self.drop_menu()?;
-                }
-                Some(SessionChange::Lock { .. }) => {}
-                None => match event.downcast_ref::<ShellEvent>() {
-                    Some(&ShellEvent::Configure { surface, size }) => {
-                        self.configured(surface, size)?
-                    }
-                    // the output went away: the switch goes on in the server, the panel has no place to be
-                    Some(&ShellEvent::Closed(surface)) if self.is_drag_surface(surface) => {
-                        self.drag_surface = None
-                    }
-                    Some(&ShellEvent::Closed(surface)) if self.is_overlay(surface) => {
-                        self.lose_overlay()?
-                    }
-                    Some(&ShellEvent::Closed(surface)) if self.is_grid(surface) => {
-                        self.drop_grid()?
-                    }
-                    Some(&ShellEvent::Closed(surface)) if self.is_force_quit(surface) => {
-                        self.close_force_quit()?
-                    }
-                    Some(&ShellEvent::Closed(surface)) if self.is_overview(surface) => {
-                        self.drop_overview()?
-                    }
-                    Some(ShellEvent::Closed(_)) => {
-                        return Err("the server closed the dock surface".into())
-                    }
-                    Some(ShellEvent::Dock { update, .. }) => self.feed(update.clone())?,
-                    // the bar has no menu-bar role and leaves the session's requests to others
-                    _ => {}
-                },
-            },
-            // the bar has no transient interface of its own and takes no keys; the scale is read when drawing
-            _ => {}
-        }
-        Ok(())
-    }
-
-    /// Every presenter: the bar's, then those of the surfaces that come and go.
-    fn presenters(&mut self) -> impl Iterator<Item = &mut ShmPresenter> {
-        std::iter::once(&mut self.presenter)
-            .chain(self.drag_surface.iter_mut().map(|(_, p)| p))
-            .chain(self.overlay.iter_mut().map(|o| &mut o.presenter))
-            .chain(self.grid.iter_mut().map(|g| &mut g.presenter))
-            .chain(self.force_quit.iter_mut().map(|f| &mut f.presenter))
-            .chain(self.overview.iter_mut().map(|o| &mut o.presenter))
-            .chain(self.menu.iter_mut().map(|m| &mut m.presenter))
-    }
-
-    /// A configure of a layer surface; one of a surface destroyed since is dropped. The server sized the grid's
-    /// surface to the usable area: that is the grid's layout.
-    fn configured(&mut self, surface: SurfaceId, size: (u32, u32)) -> Result<()> {
-        let layers = std::iter::once((&self.layer, &mut self.presenter))
-            .chain(self.drag_surface.iter_mut().map(|(l, p)| (&*l, p)))
-            .chain(
-                self.overlay
-                    .iter_mut()
-                    .map(|o| (&o.layer, &mut o.presenter)),
-            )
-            .chain(self.grid.iter_mut().map(|g| (&g.layer, &mut g.presenter)))
-            .chain(
-                self.force_quit
-                    .iter_mut()
-                    .map(|f| (&f.layer, &mut f.presenter)),
-            )
-            .chain(
-                self.overview
-                    .iter_mut()
-                    .map(|o| (&o.layer, &mut o.presenter)),
-            );
-        for (layer, presenter) in layers {
-            if layer.surface() == surface {
-                presenter.configured(layer.configured(size)?);
-            }
-        }
-        if let Some(grid) = self.grid.as_mut().filter(|g| g.layer.surface() == surface) {
-            let (width, height) = grid.presenter.size().expect("configured above");
-            grid.layout = Some(GridLayout::new(f64::from(width), f64::from(height)));
-        }
-        Ok(())
-    }
-
-    /// Draw every surface that can take a frame, until none can: a frame of the bar asks for one of the drag surface.
-    fn present(&mut self) -> Result<()> {
-        loop {
-            let mut ready = Vec::new();
-            let presenters = std::iter::once(&mut self.presenter)
-                .chain(self.drag_surface.iter_mut().map(|(_, p)| p))
-                .chain(self.overlay.iter_mut().map(|o| &mut o.presenter))
-                .chain(self.grid.iter_mut().map(|g| &mut g.presenter))
-                .chain(self.force_quit.iter_mut().map(|f| &mut f.presenter))
-                .chain(self.overview.iter_mut().map(|o| &mut o.presenter))
-                .chain(self.menu.iter_mut().map(|m| &mut m.presenter));
-            for presenter in presenters {
-                loop {
-                    match presenter.poll(&self.conn)? {
-                        // a draw follows every scale change
-                        Ready::ScaleChanged(_) => {}
-                        Ready::Draw => break ready.push(presenter.surface()),
-                        Ready::Idle => break,
-                    }
-                }
-            }
-            if ready.is_empty() {
-                return Ok(());
-            }
-            for surface in ready {
-                match surface {
-                    s if self.is_drag_surface(s) => self.draw_dragged()?,
-                    s if self.is_overlay(s) => self.draw_overlay()?,
-                    s if self.is_grid(s) => self.draw_grid()?,
-                    s if self.is_force_quit(s) => self.draw_force_quit()?,
-                    s if self.is_overview(s) => self.draw_overview()?,
-                    s if self.is_menu(s) => self.draw_menu()?,
-                    s if s == self.layer.surface() => self.draw()?,
-                    // removed by a frame drawn before it
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    /// Apply a group of the server's window changes at once.
-    fn feed(&mut self, update: DockUpdate) -> Result<()> {
-        let now = self.now();
-        for change in update {
-            match change {
-                DockChange::Window(w) => {
-                    self.session
-                        .window(w.id, &w.app_id, &w.title, w.minimized, now)
-                }
-                DockChange::WindowIcon(icon) => {
-                    if let Some(w) = self.session.window_info(icon.id) {
-                        let apps = [w.app_id.clone(), w.key.clone()];
-                        self.icons.window_icon(apps, icon);
-                    }
-                }
-                DockChange::WindowClosed(id) => {
-                    self.icons.window_closed(id);
-                    self.session.window_closed(id, now)
-                }
-                DockChange::Launching(app_id) => self.session.launching(&app_id, now),
-                DockChange::ToggleAutoHide => {
-                    self.session.dock.toggle_autohide(now);
-                    self.layer
-                        .set_exclusive_zone(self.session.dock.exclusive_zone().ceil() as i32);
-                }
-                DockChange::SwitcherChanged {
-                    output,
-                    apps,
-                    selected,
-                } => self.switcher_changed(output, apps, selected)?,
-                DockChange::SwitcherClosed { committed } => self.switcher_closed(committed)?,
-                DockChange::ToggleAppGrid => self.toggle_app_grid()?,
-                DockChange::OverviewChanged {
-                    mode,
-                    area,
-                    windows,
-                    workspaces,
-                } => self.overview_changed(mode, area, windows, workspaces)?,
-                DockChange::OverviewClosed => self.overview_closed()?,
-                DockChange::HotCorner(corner) => self.run_trigger(trigger_of_corner(corner))?,
-                DockChange::Gesture(gesture) => self.run_trigger(trigger_of_gesture(gesture))?,
-                // a refused activation: the tile hops once (informational attention)
-                DockChange::Attention(app_id) => self.session.attention(&app_id, now),
-                DockChange::Unresponsive {
-                    app_id,
-                    unresponsive,
-                } => {
-                    if unresponsive {
-                        self.unresponsive.insert(app_id);
-                    } else {
-                        self.unresponsive.remove(&app_id);
-                    }
-                    self.refresh_force_quit()?;
-                }
-                DockChange::ForceQuitDialog => self.toggle_force_quit()?,
-            }
-        }
-        self.session.list_taken();
-        self.presenter.request_redraw();
-        Ok(())
-    }
-
-    /// The model sees the pointer on the next frame; a left press activates the tile under it, an
-    /// application tile on release (a press that moves on is a drag-reorder instead).
-    fn pointer(&mut self, event: PointerEvent) -> Result<()> {
-        match event {
-            PointerEvent::Enter(p) | PointerEvent::Motion(p) => {
-                self.pointer = Some(Point::new(p.x, p.y));
-                self.drag_pointer(Point::new(p.x, p.y))?;
-                self.presenter.request_redraw();
-            }
-            PointerEvent::Leave => {
-                self.pointer = None;
-                self.presenter.request_redraw();
-            }
-            PointerEvent::Button {
-                button: Button::Left,
-                pressed: true,
-                position,
-            } => self.press(Point::new(position.x, position.y))?,
-            PointerEvent::Button {
-                button: Button::Left,
-                pressed: false,
-                position,
-            } => self.release(Point::new(position.x, position.y))?,
-            PointerEvent::Button {
-                button: Button::Right,
-                pressed: true,
-                position,
-            } => self.open_menu(Point::new(position.x, position.y))?,
-            PointerEvent::Button { .. } | PointerEvent::Scroll { .. } => {}
-        }
-        Ok(())
-    }
-
-    /// A left press: an application tile waits for the release or the first move, any other tile is
-    /// activated at once.
-    fn press(&mut self, position: Point) -> Result<()> {
-        let now = self.now();
-        let screen = self.screen()?;
-        // a release was lost (the server ended the grab): the drag of that press is over
-        self.session.dock.cancel_drag();
-        match self.session.dock.hit_test(position, screen, now) {
-            Some(hit) if matches!(hit.kind, TileKind::App | TileKind::Recent) => {
-                self.press = Some(TilePress::new(hit.id, position, now))
-            }
-            _ => {
-                self.press = None;
-                self.click(position)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Pointer motion with a tile pressed: begin the drag once the press moved far enough, and
-    /// keep the gap under the pointer while it goes on. The server keeps the pointer on the dock
-    /// surface until the release, so the drag follows the pointer outside the bar.
-    fn drag_pointer(&mut self, position: Point) -> Result<()> {
-        let Some(press) = self.press.as_mut() else {
-            return Ok(());
-        };
-        let (began, id, origin) = (press.moved(position), press.id, press.origin);
-        let now = self.now();
-        let screen = self.screen()?;
-        if began {
-            self.session
-                .dock
-                .begin_drag(id, origin, position, screen, now);
-        } else if self.session.dock.is_dragging() {
-            self.session.dock.drag_move(position, screen, now);
-        }
-        Ok(())
-    }
-
-    /// A press held in place on a tile opens the tile's menu after [`HOLD_MENU_DELAY`] seconds;
-    /// the press is then neither a click nor a drag.
-    fn open_menu_when_held(&mut self) -> Result<()> {
-        let now = self.now();
-        let Some(origin) = self
-            .press
-            .as_mut()
-            .and_then(|p| p.held(now).then_some(p.origin))
-        else {
-            return Ok(());
-        };
-        self.press = None;
-        self.open_menu(origin)
-    }
-
-    /// A left release: a drag drops the tile, a press that stayed in place is a click.
-    fn release(&mut self, position: Point) -> Result<()> {
-        let Some(press) = self.press.take() else {
-            return Ok(());
-        };
-        if !press.is_dragging() {
-            return self.click(press.origin);
-        }
-        let now = self.now();
-        let screen = self.screen()?;
-        match self.session.dock.end_drag(screen, now) {
-            DragOutcome::Cancelled => {}
-            DragOutcome::Reordered { .. } => self.store_pins(),
-            DragOutcome::Removed { kind, .. } => {
-                self.poof = Some(Poof {
-                    centre: position,
-                    started: now,
-                });
-                if kind == TileKind::App {
-                    self.store_pins();
-                }
-            }
-        }
-        self.presenter.request_redraw();
-        Ok(())
-    }
-
-    /// Write the pinned applications in their order (nothing is stored without a config directory).
-    /// Move or resize the dock's surface when its edge or depth differs from `placed`, what they were before a change.
-    fn sync_placement(&mut self, placed: (Orientation, f64)) -> Result<()> {
-        let now_placed = (
-            self.session.dock.cfg.orientation,
-            self.session.dock.surface_extent(),
-        );
-        if now_placed != placed {
-            let (anchor, size) = placement(now_placed.0, now_placed.1);
-            self.layer.set_placement(anchor, size);
-        }
-        Ok(())
-    }
-
-    /// Apply the changes of `dock.conf`: the file is read again with the current values as the last good ones (its bad
-    /// lines are reported), and what changed applies now. A file that cannot be read keeps the current values.
-    fn reload_conf(&mut self) -> Result<()> {
-        while let Ok(event) = self.conf_changes.try_recv() {
-            let path = match (event, &self.conf_path) {
-                (WatchEvent::Error(e), _) => {
-                    eprintln!("cupertino-dock: watching dock.conf failed: {e}");
-                    continue;
-                }
-                (WatchEvent::Changed(_), Some(path)) => path.clone(),
-                (WatchEvent::Changed(_), None) => unreachable!("only a configured file is watched"),
-            };
-            let after = match load_dock_settings(&path, Some(&self.conf)) {
-                Ok(after) => after,
-                Err(e) => {
-                    eprintln!("cupertino-dock: {e}; the dock keeps its settings");
-                    continue;
-                }
-            };
-            let before = std::mem::replace(&mut self.conf, after.clone());
-            self.apply_conf_change(&before, &after)?;
-        }
-        Ok(())
-    }
-
-    /// Apply the keys whose value differs between `before` and `after`, the values `dock.conf` held; a key removed
-    /// from the file goes back to its default. The pins of `dock.conf` apply at the next start (the dock keeps the pins
-    /// the user changes in `dock-pins`).
-    fn apply_conf_change(&mut self, before: &DockSettings, after: &DockSettings) -> Result<()> {
-        let target = dock_config(Some(after), self.display_height);
-        let now = self.now();
-        let placed = (
-            self.session.dock.cfg.orientation,
-            self.session.dock.surface_extent(),
-        );
-        let cfg = &mut self.session.dock.cfg;
-        if before.tile_size != after.tile_size {
-            cfg.tile_size = target.tile_size;
-        }
-        if before.large_size != after.large_size {
-            cfg.large_size = target.large_size;
-        }
-        if before.magnification != after.magnification {
-            cfg.magnification = target.magnification;
-        }
-        if before.position != after.position {
-            cfg.orientation = target.orientation;
-        }
-        if before.recents != after.recents {
-            cfg.show_recents = target.show_recents;
-        }
-        if before.autohide != after.autohide && cfg.autohide != target.autohide {
-            self.session.dock.toggle_autohide(now);
-        }
-        if before.actions != after.actions {
-            self.actions = after.actions.clone();
-        }
-        self.sync_placement(placed)?;
-        self.layer
-            .set_exclusive_zone(self.session.dock.exclusive_zone().ceil() as i32);
-        self.presenter.request_redraw();
-        Ok(())
-    }
-
-    /// A failure goes to stderr: the dock keeps the order it shows, and the next change writes the
-    /// file again.
-    fn store_pins(&self) {
-        let Some(path) = &self.pins_path else { return };
-        if let Err(e) = store_pins(path, &self.session.dock.pinned_keys()) {
-            eprintln!("cupertino-dock: cannot write {}: {e}", path.display());
-        }
-    }
-
-    /// Carry out what the tile at `position` stands for.
-    fn click(&mut self, position: Point) -> Result<()> {
-        let now = self.now();
-        let screen = self.screen()?;
-        let Some(hit) = self.session.dock.hit_test(position, screen, now) else {
-            return Ok(());
-        };
-        match self.session.activation(hit.id) {
-            Some(Activation::ActivateApp(app_id)) => self.role.activate_app(&app_id),
-            Some(Activation::RestoreWindow(id)) => {
-                let tile = self
-                    .session
-                    .dock
-                    .layout(screen, now)
-                    .tiles
-                    .into_iter()
-                    .find(|t| t.id == hit.id)
-                    .expect("a hit tile is in the layout it was hit in");
-                self.role.restore_window(id, &geometry_rect(&tile.rect))?;
-            }
-            Some(Activation::Launch(key)) => self.begin_launch(key)?,
-            Some(Activation::OpenTrash) => self.open_in_file_manager(TRASH_URI)?,
-            None => {}
-        }
-        Ok(())
-    }
-
-    /// Open `target` (a folder or the trash) in the session's file manager like a launch of its tile (an
-    /// activation token, so its window takes the focus, and a bounce); without it through [`OPEN_COMMAND`].
-    fn open_in_file_manager(&mut self, target: &str) -> Result<()> {
-        match self.session.file_manager_command(target) {
-            Some(argv) => {
-                let request = match self
-                    .conn
-                    .request_activation_token(self.layer.surface(), None)
-                {
-                    Ok(request) => request,
-                    Err(e) => {
-                        eprintln!("cupertino-dock: cannot open {target}: {e}");
-                        return Ok(());
-                    }
-                };
-                self.pending.insert(
-                    request,
-                    Pending {
-                        key: FILE_MANAGER.to_string(),
-                        argv,
-                    },
-                );
-            }
-            None => {
-                let mut command = Command::new(OPEN_COMMAND);
-                command.arg(target);
-                spawn(PROCESS, command);
-            }
-        }
-        Ok(())
-    }
-
-    /// Fetch an activation token for the launch; the program starts when it arrives.
-    fn begin_launch(&mut self, key: String) -> Result<()> {
-        let launch = self.session.launch(&key);
-        let mut argv = launch.argv;
-        if launch.terminal {
-            let Some(terminal) = self.terminal.clone().or_else(|| {
-                TERMINALS
-                    .iter()
-                    .find(|t| installed(t))
-                    .map(|t| t.to_string())
-            }) else {
-                eprintln!("cupertino-dock: {key} runs in a terminal and none is installed (start with --terminal)");
-                return Ok(());
-            };
-            argv.splice(0..0, [terminal, "-e".to_string()]);
-        }
-        if argv.is_empty() {
-            eprintln!("cupertino-dock: {key} has no command");
-            return Ok(());
-        }
-        let request = match self
-            .conn
-            .request_activation_token(self.layer.surface(), None)
-        {
-            Ok(request) => request,
-            Err(e) => {
-                eprintln!("cupertino-dock: cannot launch {key}: {e}");
-                return Ok(());
-            }
-        };
-        self.pending.insert(request, Pending { key, argv });
-        Ok(())
-    }
-
-    /// Start the program that waited for `token` (the application uses it to take the focus) and
-    /// bounce its tile.
-    fn complete(&mut self, request: TokenRequest, token: &str) -> Result<()> {
-        let Pending { key, argv } = self
-            .pending
-            .remove(&request)
-            .expect("token for a request this process made");
-        let command = Launch::Program(argv)
-            .command(token)
-            .expect("a pending launch has a program");
-        if spawn(PROCESS, command.to_command()) {
-            let now = self.now();
-            self.session.dock.app_launching(&key, now);
-            self.presenter.request_redraw();
-        }
-        Ok(())
-    }
-
-    fn is_overlay(&self, surface: SurfaceId) -> bool {
-        self.overlay
-            .as_ref()
-            .is_some_and(|o| o.layer.surface() == surface)
-    }
-
-    /// The server sent the switcher's list and selection: a step of the open switch moves the
-    /// selection, anything else opens a new switch with a new overlay surface on `output`.
-    fn switcher_changed(
-        &mut self,
-        output: OutputId,
-        apps: Vec<String>,
-        selected: usize,
-    ) -> Result<()> {
-        if let Some(overlay) = self
-            .overlay
-            .as_mut()
-            .filter(|o| o.output == output && o.switcher.continues_with(&apps))
-        {
-            overlay.switcher.select(selected)?;
-            overlay.requested = None;
-            overlay.presenter.request_redraw();
-            return Ok(());
-        }
-        let resumed = self.orphan.take().filter(|s| s.continues_with(&apps));
-        self.close_overlay()?;
-        let geometry = self
-            .conn
-            .outputs()
-            .into_iter()
-            .find(|o| o.id == output)
-            .and_then(|o| o.geometry)
-            .ok_or("the output of the switcher went away")?;
-        let layout = SwitcherLayout::new(
-            apps.len(),
-            f64::from(geometry.width),
-            f64::from(geometry.height),
-        );
-        let switcher = match resumed {
-            Some(mut switcher) => {
-                switcher.select(selected)?;
-                switcher
-            }
-            None => Switcher::new(apps, selected, self.now())?,
-        };
-        let layer = self.layer_shell.layer_surface(
-            &mut self.conn,
-            &LayerSurfaceConfig {
-                namespace: SWITCHER_NAMESPACE.to_string(),
-                output: Some(output),
-                layer: Layer::Overlay,
-                anchor: Anchor::empty(),
-                size: (layout.panel.w as u32, layout.panel.h as u32),
-                margin: Margin::default(),
-                // -1: the surface ignores the zones of the dock bar and the menu bar and is centred on the output
-                exclusive_zone: -1,
-                // the server keeps the keys of the switch
-                keyboard: KeyboardInteractivity::None,
-            },
-        )?;
-        let backdrop = self.effects.backdrop(&self.conn, layer.surface())?;
-        backdrop.set_material(switcher::MATERIAL);
-        self.overlay = Some(Overlay {
-            output,
-            switcher,
-            layout,
-            presenter: ShmPresenter::new(layer.surface()),
-            layer,
-            backdrop,
-            hover: HoverGate::default(),
-            requested: None,
-            draw_requested: false,
-        });
-        Ok(())
-    }
-
-    /// The switch ended. A panel that was on screen fades out after a commit; a cancel, or a
-    /// commit before the panel appeared, removes it at once.
-    fn switcher_closed(&mut self, committed: bool) -> Result<()> {
-        let now = self.now();
-        self.orphan = None;
-        let Some(overlay) = self.overlay.as_mut() else {
-            return Ok(());
-        };
-        if committed && overlay.switcher.is_shown(now) {
-            overlay.switcher.close(now);
-            overlay.presenter.request_redraw();
-            Ok(())
-        } else {
-            self.close_overlay()
-        }
-    }
-
-    /// The server closed the overlay surface: the switch it showed waits in `orphan` for its next step.
-    fn lose_overlay(&mut self) -> Result<()> {
-        if let Some(Overlay {
-            switcher,
-            layer,
-            backdrop,
-            ..
-        }) = self.overlay.take()
-        {
-            drop(backdrop);
-            self.conn.destroy(layer.surface())?;
-            self.orphan = Some(switcher);
-        }
-        Ok(())
-    }
-
-    /// Remove the overlay surface with its backdrop, if any.
-    fn close_overlay(&mut self) -> Result<()> {
-        if let Some(Overlay {
-            layer, backdrop, ..
-        }) = self.overlay.take()
-        {
-            drop(backdrop);
-            self.conn.destroy(layer.surface())?;
-        }
-        Ok(())
-    }
-
-    /// How long the loop may sleep: until the switcher's panel is due or the grid's wheel burst
-    /// settles, whichever comes first; without either, until something happens.
-    fn until_due(&self) -> Option<Duration> {
-        let now = self.now();
-        let panel = self
-            .overlay
-            .as_ref()
-            .filter(|o| !o.draw_requested)
-            .map(|o| o.switcher.until_shown(now));
-        let wheel = self.grid.as_ref().and_then(|g| g.grid.until_settled(now));
-        let hold = self.press.as_ref().and_then(|p| p.hold_due(now));
-        panel
-            .into_iter()
-            .chain(wheel)
-            .chain(hold)
-            .reduce(f64::min)
-            .map(Duration::from_secs_f64)
-    }
-
-    fn is_force_quit(&self, surface: SurfaceId) -> bool {
-        self.force_quit
-            .as_ref()
-            .is_some_and(|f| f.layer.surface() == surface)
-    }
-
-    /// The running applications for the dialog: the dock's running application tiles, with the unresponsive ones marked.
-    fn force_quit_entries(&self) -> Vec<FqEntry> {
-        self.session
-            .dock
-            .tiles()
-            .into_iter()
-            .filter(|t| t.kind == TileKind::App && t.running)
-            .map(|t| FqEntry {
-                app_id: t.key.clone(),
-                name: self
-                    .session
-                    .desktop()
-                    .find(&t.key)
-                    .map(|e| e.name.clone())
-                    .unwrap_or_else(|| {
-                        if t.title.is_empty() {
-                            t.key.clone()
-                        } else {
-                            t.title.clone()
-                        }
-                    }),
-                unresponsive: self.unresponsive.contains(&t.key),
-                built_in: t.built_in,
-            })
-            .collect()
-    }
-
-    /// The Force Quit shortcut: open the dialog, or close it when it is open.
-    fn toggle_force_quit(&mut self) -> Result<()> {
-        if self.force_quit.is_some() {
-            return self.close_force_quit();
-        }
-        self.open_force_quit(None)
-    }
-
-    /// Open the dialog, on the second step for `ask_about` (the dock menu's Force Quit) when that is given.
-    fn open_force_quit(&mut self, ask_about: Option<&str>) -> Result<()> {
-        if self.force_quit.is_some() {
-            self.close_force_quit()?;
-        }
-        let entries = self.force_quit_entries();
-        let dialog = match ask_about {
-            Some(app_id) => Dialog::asking_about(entries, app_id),
-            None => Dialog::new(entries),
-        };
-        let layout = force_quit::Layout::for_dialog(&dialog);
-        let (width, height) = layout.size();
-        let layer = self.layer_shell.layer_surface(
-            &mut self.conn,
-            &LayerSurfaceConfig {
-                namespace: FORCE_QUIT_NAMESPACE.to_string(),
-                output: Some(self.output),
-                layer: Layer::Overlay,
-                // no anchor: the server centres the surface on the output
-                anchor: Anchor::empty(),
-                size: (width as u32, height as u32),
-                margin: Margin::default(),
-                exclusive_zone: -1,
-                keyboard: KeyboardInteractivity::Exclusive,
-            },
-        )?;
-        self.force_quit = Some(ForceQuit {
-            dialog,
-            presenter: ShmPresenter::new(layer.surface()),
-            layer,
-            layout,
-            hover_row: None,
-            hover_button: None,
-        });
-        Ok(())
-    }
-
-    fn close_force_quit(&mut self) -> Result<()> {
-        if let Some(open) = self.force_quit.take() {
-            self.conn.destroy(open.layer.surface())?;
-        }
-        Ok(())
-    }
-
-    /// The applications or their answers changed: the open dialog follows.
-    fn refresh_force_quit(&mut self) -> Result<()> {
-        let entries = self.force_quit_entries();
-        let Some(open) = self.force_quit.as_mut() else {
-            return Ok(());
-        };
-        open.dialog.set_entries(entries);
-        self.relayout_force_quit()
-    }
-
-    /// Lay the open dialog out again for its step and rows, and resize its surface when the size changed.
-    fn relayout_force_quit(&mut self) -> Result<()> {
-        let Some(open) = self.force_quit.as_mut() else {
-            return Ok(());
-        };
-        let layout = force_quit::Layout::for_dialog(&open.dialog);
-        let resized = layout.size() != open.layout.size();
-        open.layout = layout;
-        if resized {
-            let (width, height) = open.layout.size();
-            open.layer
-                .set_placement(Anchor::empty(), (width as u32, height as u32));
-        }
-        open.presenter.request_redraw();
-        Ok(())
-    }
-
-    fn draw_force_quit(&mut self) -> Result<()> {
-        let Some(open) = self.force_quit.as_mut() else {
-            return Ok(());
-        };
-        let view = ForceQuitView {
-            dialog: &open.dialog,
-            layout: &open.layout,
-            desktop: self.session.desktop(),
-            dark: self.observed.dark,
-            hover_row: open.hover_row,
-            hover_button: open.hover_button,
-        };
-        let (icons, labels) = (&mut self.icons, &mut self.labels);
-        open.presenter.draw(&mut self.conn, None, |pixmap, scale| {
-            render::paint_force_quit(pixmap, scale.factor() as f32, &view, icons, labels)
-        })?;
-        Ok(())
-    }
-
-    /// What a key or a click did to the dialog.
-    fn force_quit_outcome(&mut self, outcome: force_quit::Outcome) -> Result<()> {
-        match outcome {
-            force_quit::Outcome::Nothing => Ok(()),
-            // the second step has another size and other parts
-            force_quit::Outcome::Redraw => self.relayout_force_quit(),
-            force_quit::Outcome::Close => self.close_force_quit(),
-            force_quit::Outcome::Force(app_ids) => {
-                for app_id in &app_ids {
-                    self.role.force_quit_app(app_id);
-                }
-                self.close_force_quit()
-            }
-        }
-    }
-
-    fn force_quit_pointer(&mut self, event: PointerEvent) -> Result<()> {
-        let mods = self.conn.modifiers();
-        let Some(open) = self.force_quit.as_mut() else {
-            return Ok(());
-        };
-        let at = |position: cupertino_geometry::Point| Point::new(position.x, position.y);
-        match event {
-            PointerEvent::Motion(position) | PointerEvent::Enter(position) => {
-                let p = at(position);
-                let hover = (open.layout.row_at(p), open.layout.button_at(p));
-                if hover != (open.hover_row, open.hover_button) {
-                    (open.hover_row, open.hover_button) = hover;
-                    open.presenter.request_redraw();
-                }
-                Ok(())
-            }
-            PointerEvent::Leave => {
-                if open.hover_row.take().is_some() | open.hover_button.take().is_some() {
-                    open.presenter.request_redraw();
-                }
-                Ok(())
-            }
-            PointerEvent::Button {
-                button: Button::Left,
-                pressed: true,
-                position,
-            } => {
-                let p = at(position);
-                let confirming = open.dialog.confirming().is_some();
-                let outcome = match (open.layout.button_at(p), confirming) {
-                    (Some(FqButton::Cancel), true) => open.dialog.cancel_pressed(),
-                    (Some(FqButton::ForceQuit), true) => open.dialog.confirm_pressed(),
-                    (Some(FqButton::ForceQuit), false) => open.dialog.force_quit_pressed(),
-                    _ => match open.layout.row_at(p) {
-                        Some(i) => open.dialog.select(
-                            i,
-                            if mods.shift {
-                                Extend::Range
-                            } else if mods.ctrl || mods.logo {
-                                Extend::Toggle
-                            } else {
-                                Extend::Replace
-                            },
-                        ),
-                        None => force_quit::Outcome::Nothing,
-                    },
-                };
-                self.force_quit_outcome(outcome)
-            }
-            PointerEvent::Scroll { dy, .. } => {
-                let rows = (dy / force_quit::ROW_HEIGHT).round() as isize;
-                let rows = if rows == 0 {
-                    dy.signum() as isize
-                } else {
-                    rows
-                };
-                let outcome = open.dialog.scroll(rows);
-                self.force_quit_outcome(outcome)
-            }
-            PointerEvent::Button { .. } => Ok(()),
-        }
-    }
-
-    fn is_grid(&self, surface: SurfaceId) -> bool {
-        self.grid
-            .as_ref()
-            .is_some_and(|g| g.layer.surface() == surface)
-    }
-
-    /// The app-grid action: open the grid, or start closing it when it is open. An action during
-    /// the exit animation does nothing.
-    fn toggle_app_grid(&mut self) -> Result<()> {
-        match &self.grid {
-            Some(grid) if grid.grid.is_closing() => Ok(()),
-            Some(_) => self.close_grid(),
-            None => self.open_grid(),
-        }
-    }
-
-    /// Create the grid's surface over the usable area of the dock's output, with the keyboard.
-    fn open_grid(&mut self) -> Result<()> {
-        let mut grid = AppGrid::from_desktop(self.session.desktop(), self.now());
-        grid.set_reduce_motion(self.observed.display.reduce_motion);
-        let layer = self.layer_shell.layer_surface(
-            &mut self.conn,
-            &LayerSurfaceConfig {
-                namespace: app_grid::NAMESPACE.to_string(),
-                output: Some(self.output),
-                layer: Layer::Overlay,
-                anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
-                // the server fills both axes within the exclusive zones, so the dock bar stays visible; the menu bar's
-                // reservation is not a layer zone, so the grid covers the bar
-                size: (0, 0),
-                margin: Margin::default(),
-                exclusive_zone: 0,
-                keyboard: KeyboardInteractivity::Exclusive,
-            },
-        )?;
-        let backdrop = self.effects.backdrop(&self.conn, layer.surface())?;
-        backdrop.set_material(app_grid::MATERIAL);
-        self.grid = Some(Grid {
-            grid,
-            presenter: ShmPresenter::new(layer.surface()),
-            layer,
-            backdrop,
-            layout: None,
-            drawn: false,
-            cache: render::GridCache::default(),
-        });
-        Ok(())
-    }
-
-    /// Start the grid's exit animation and give the keyboard back at once.
-    fn close_grid(&mut self) -> Result<()> {
-        let now = self.now();
-        let Some(grid) = self.grid.as_mut().filter(|g| !g.grid.is_closing()) else {
-            return Ok(());
-        };
-        grid.grid.close(now);
-        grid.layer
-            .set_keyboard_interactivity(KeyboardInteractivity::None);
-        grid.presenter.request_redraw();
-        Ok(())
-    }
-
-    /// Remove the grid's surface with its backdrop, if any.
-    fn drop_grid(&mut self) -> Result<()> {
-        if let Some(Grid {
-            layer, backdrop, ..
-        }) = self.grid.take()
-        {
-            drop(backdrop);
-            self.conn.destroy(layer.surface())?;
-        }
-        Ok(())
-    }
-
-    /// Carry out what a key or click on the grid asked for: a launch goes through the tiles' path
-    /// and closes the grid.
-    fn grid_outcome(&mut self, outcome: Option<Outcome>) -> Result<()> {
-        match outcome {
-            Some(Outcome::Launch(key)) => {
-                self.begin_launch(key)?;
-                self.close_grid()?;
-            }
-            Some(Outcome::Close) => self.close_grid()?,
-            None => {}
-        }
-        if let Some(grid) = &mut self.grid {
-            grid.presenter.request_redraw();
-        }
-        Ok(())
-    }
-
-    /// A press on the grid launches, flips or closes; the wheel accumulates towards a flip.
-    fn grid_pointer(&mut self, event: PointerEvent) -> Result<()> {
-        let now = self.now();
-        let Some(grid) = self.grid.as_mut() else {
-            return Ok(());
-        };
-        match event {
-            PointerEvent::Button {
-                button: Button::Left,
-                pressed: true,
-                position,
-            } => {
-                let Some(layout) = grid.layout.as_ref() else {
-                    return Ok(());
-                };
-                let outcome = grid
-                    .grid
-                    .click(Point::new(position.x, position.y), layout, now);
-                self.grid_outcome(outcome)
-            }
-            PointerEvent::Scroll { dx, dy, .. } => {
-                grid.grid.scroll(dx, dy, now);
-                Ok(())
-            }
-            PointerEvent::Enter(_)
-            | PointerEvent::Motion(_)
-            | PointerEvent::Leave
-            | PointerEvent::Button { .. } => Ok(()),
-        }
-    }
-
-    /// A wheel burst that is 75 ms old flips a page.
-    fn settle_grid_wheel(&mut self) -> Result<()> {
-        let now = self.now();
-        if let Some(grid) = self.grid.as_mut() {
-            if grid.grid.settle(now) {
-                grid.presenter.request_redraw();
-            }
-        }
-        Ok(())
-    }
-
-    /// One frame of the grid; a finished exit removes the surface. Nothing before the server sized it.
-    fn draw_grid(&mut self) -> Result<()> {
-        let (start, now) = (self.start, self.now());
-        let Some(grid) = self.grid.as_mut() else {
-            return Ok(());
-        };
-        let Some(layout) = grid.layout else {
-            return Ok(());
-        };
-        grid.grid.tick(now);
-        if grid.grid.is_gone(now) {
-            return self.drop_grid();
-        }
-        let visual = grid.grid.visual(now);
-        grid.backdrop
-            .set_shape(&GRect::new(0.0, 0.0, layout.width, layout.height), 0.0)?;
-        grid.backdrop.set_alpha(visual.alpha)?;
-        grid.presenter.set_zoom(visual.scale);
-        let view = GridView {
-            grid: &grid.grid,
-            layout: &layout,
-            now,
-        };
-        let (icons, labels, cache) = (&mut self.icons, &mut self.labels, &mut grid.cache);
-        grid.presenter.draw(&mut self.conn, None, |pixmap, scale| {
-            render::paint_app_grid(pixmap, scale.factor() as f32, &view, icons, labels, cache)
-        })?;
-        if !grid.drawn {
-            grid.drawn = true;
-            grid.grid.restart_entry(start.elapsed().as_secs_f64());
-        }
-        if grid.grid.animating(now) {
-            grid.presenter.request_redraw();
-        }
-        Ok(())
-    }
-
-    /// Ask for the first frame of the panel once its delay has passed.
-    fn show_panel_when_due(&mut self) -> Result<()> {
-        let now = self.now();
-        if let Some(overlay) = self
-            .overlay
-            .as_mut()
-            .filter(|o| !o.draw_requested && o.switcher.is_shown(now))
-        {
-            overlay.draw_requested = true;
-            overlay.presenter.request_redraw();
-        }
-        Ok(())
-    }
-
-    /// Hovering over a tile (once the pointer left its first position) or pressing it selects
-    /// that entry; the server answers with the new selection. Releasing the left button on a tile
-    /// switches to it, anywhere else on the panel ends the switch.
-    fn overlay_pointer(&mut self, event: PointerEvent) -> Result<()> {
-        let Some(overlay) = self.overlay.as_mut().filter(|o| !o.switcher.is_fading()) else {
-            return Ok(());
-        };
-        let (position, pressed) = match event {
-            PointerEvent::Enter(p) | PointerEvent::Motion(p) => (p, false),
-            PointerEvent::Button {
-                button: Button::Left,
-                pressed: true,
-                position,
-            } => (position, true),
-            PointerEvent::Button {
-                button: Button::Left,
-                pressed: false,
-                position,
-            } => {
-                let at = Point::new(
-                    position.x + overlay.layout.panel.x,
-                    position.y + overlay.layout.panel.y,
-                );
-                match overlay.layout.hit(at, overlay.switcher.apps().len()) {
-                    Some(entry) => self.role.switcher_activate(entry)?,
-                    None => self.role.switcher_cancel(),
-                }
-                return Ok(());
-            }
-            PointerEvent::Leave | PointerEvent::Button { .. } | PointerEvent::Scroll { .. } => {
-                return Ok(())
-            }
-        };
-        // the surface covers only the panel: its origin is the panel's in output points
-        let at = Point::new(
-            position.x + overlay.layout.panel.x,
-            position.y + overlay.layout.panel.y,
-        );
-        let armed = overlay.hover.moved(at);
-        let Some(entry) = overlay.layout.hit(at, overlay.switcher.apps().len()) else {
-            return Ok(());
-        };
-        if (pressed || armed)
-            && entry != overlay.switcher.selected()
-            && overlay.requested != Some(entry)
-        {
-            overlay.requested = Some(entry);
-            self.role.switcher_select(entry)?;
-        }
-        Ok(())
-    }
-
-    /// One frame of the panel: nothing before its delay, then the content at the fade's opacity;
-    /// a finished fade removes the surface.
-    fn draw_overlay(&mut self) -> Result<()> {
-        let now = self.now();
-        let Some(overlay) = self.overlay.as_mut() else {
-            return Ok(());
-        };
-        if overlay.switcher.is_gone(now) {
-            return self.close_overlay();
-        }
-        if !overlay.switcher.is_shown(now) {
-            return Ok(());
-        }
-        let alpha = overlay.switcher.alpha(now);
-        let size = GRect::new(0.0, 0.0, overlay.layout.panel.w, overlay.layout.panel.h);
-        overlay.backdrop.set_shape(&size, SwitcherLayout::RADIUS)?;
-        overlay.backdrop.set_alpha(alpha)?;
-        let panel = Panel {
-            switcher: &overlay.switcher,
-            layout: &overlay.layout,
-            desktop: self.session.desktop(),
-            dark: self.observed.dark,
-            alpha,
-        };
-        let (icons, labels) = (&mut self.icons, &mut self.labels);
-        overlay
-            .presenter
-            .draw(&mut self.conn, None, |pixmap, scale| {
-                render::paint_switcher(pixmap, scale.factor() as f32, &panel, icons, labels)
-            })?;
-        if overlay.switcher.is_fading() {
-            overlay.presenter.request_redraw();
-        }
-        Ok(())
-    }
-
-    /// One frame: advance the model, publish what the server needs (input region, minimize
-    /// target, backdrop) and draw the tiles.
-    fn draw(&mut self) -> Result<()> {
-        let now = self.now();
-        let screen = self.screen()?;
-        let dock = &mut self.session.dock;
-        dock.pointer_moved(self.pointer, screen, now);
-        dock.tick(now);
-        let layout = dock.layout(screen, now);
-        let input: Vec<GRect> = dock
-            .input_rects(screen, now)
-            .iter()
-            .map(geometry_rect)
-            .collect();
-        self.conn
-            .set_input_region(self.layer.surface(), Some(&input))?;
-        self.role
-            .set_minimize_target(&geometry_rect(&dock.next_minimized_slot(screen)))?;
-        let bar = layout
-            .bar
-            .intersection(&screen)
-            .map_or(GRect::new(0.0, 0.0, 0.0, 0.0), |r| geometry_rect(&r));
-        self.backdrop
-            .set_shape(&bar, dock.cfg.tile_size * BAR_RADIUS)?;
-        let poof = self
-            .poof
-            .and_then(|p| p.progress(now).map(|progress| (p.centre, progress)));
-        if poof.is_none() {
-            self.poof = None;
-        }
-        let wants_frame = dock.wants_tick(now) || poof.is_some();
-        let (session, icons, dark) = (&self.session, &mut self.icons, self.observed.dark);
-        self.presenter.draw(&mut self.conn, None, |pixmap, scale| {
-            render::paint(pixmap, scale.factor() as f32, session, &layout, icons, dark);
-        })?;
-        let held = layout.dragging.is_some() || poof.is_some();
-        self.sync_drag_surface(held)?;
-        // frame callbacks pace the animations
-        if wants_frame {
-            self.presenter.request_redraw();
-        }
-        Ok(())
-    }
-
-    /// The surface of the held, settling or fading tile exists exactly while there is one.
-    fn sync_drag_surface(&mut self, needed: bool) -> Result<()> {
-        match (needed, &mut self.drag_surface) {
-            (true, None) => {
-                let layer = self.layer_shell.layer_surface(
-                    &mut self.conn,
-                    &LayerSurfaceConfig {
-                        namespace: DRAG_NAMESPACE.to_string(),
-                        output: Some(self.output),
-                        layer: Layer::Overlay,
-                        anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
-                        size: (0, 0),
-                        margin: Margin::default(),
-                        // -1: the whole output, so the surface's coordinates are the output's
-                        exclusive_zone: -1,
-                        keyboard: KeyboardInteractivity::None,
-                    },
-                )?;
-                self.conn.set_input_region(layer.surface(), Some(&[]))?;
-                let mut presenter = ShmPresenter::new(layer.surface());
-                presenter.request_redraw();
-                self.drag_surface = Some((layer, presenter));
-            }
-            (true, Some((_, presenter))) => presenter.request_redraw(),
-            (false, Some((layer, _))) => {
-                self.conn.destroy(layer.surface())?;
-                self.drag_surface = None;
-            }
-            (false, None) => {}
-        }
-        Ok(())
-    }
-
-    fn is_drag_surface(&self, surface: SurfaceId) -> bool {
-        self.drag_surface
-            .as_ref()
-            .is_some_and(|(layer, _)| layer.surface() == surface)
-    }
-
-    /// One frame of the drag surface: the held tile with its label, and the puff of a removal.
-    fn draw_dragged(&mut self) -> Result<()> {
-        let now = self.now();
-        let screen = self.screen()?;
-        let in_surface = self.screen_in_surface()?;
-        // the bar's surface sits at (-x, -y) of the output
-        let origin = Point::new(-in_surface.x, -in_surface.y);
-        let layout = self.session.dock.layout(screen, now);
-        let poof = self
-            .poof
-            .and_then(|p| p.progress(now).map(|progress| (p.centre, progress)));
-        let tile_size = self.session.dock.cfg.tile_size;
-        let (session, icons, labels, dark) = (
-            &self.session,
-            &mut self.icons,
-            &mut self.labels,
-            self.observed.dark,
-        );
-        let Some((_, presenter)) = &mut self.drag_surface else {
-            return Ok(());
-        };
-        presenter.draw(&mut self.conn, None, |pixmap, scale| {
-            if let Some(dragged) = &layout.dragging {
-                render::paint_dragged(
-                    pixmap,
-                    scale.factor() as f32,
-                    session,
-                    icons,
-                    labels,
-                    dragged,
-                    origin,
-                    dark,
-                );
-            }
-            if let Some((centre, progress)) = poof {
-                render::paint_poof(
-                    pixmap,
-                    scale.factor() as f32,
-                    Point::new(centre.x + origin.x, centre.y + origin.y),
-                    tile_size,
-                    progress,
-                    dark,
-                );
-            }
-        })?;
-        Ok(())
-    }
-
-    // ---- overview ----------------------------------------------------------------------------
-
-    fn is_overview(&self, surface: SurfaceId) -> bool {
-        self.overview
-            .as_ref()
-            .is_some_and(|o| o.layer.surface() == surface)
-    }
-
-    /// The window feed's title and minimized state for the overview's windows.
-    fn window_entries(&self, windows: &[OverviewWindow]) -> Vec<WindowEntry> {
-        windows
-            .iter()
-            .map(|w| {
-                let info = self.session.window_info(w.id);
-                WindowEntry {
-                    id: w.id,
-                    frame: Rect::new(w.frame.x(), w.frame.y(), w.frame.width(), w.frame.height()),
-                    title: info.map(|i| i.title.clone()).unwrap_or_default(),
-                    minimized: info.is_some_and(|i| i.minimized),
-                }
-            })
-            .collect()
-    }
-
-    /// The server opened the overview or changed its contents: lay the windows out, tell the
-    /// server their frames, and show the chrome (creating its surface when the overview opens).
-    fn overview_changed(
-        &mut self,
-        mode: OverviewMode,
-        area: GRect,
-        windows: Vec<OverviewWindow>,
-        workspaces: Vec<OverviewWorkspace>,
-    ) -> Result<()> {
-        let now = self.now();
-        let entries = self.window_entries(&windows);
-        let workspaces: Vec<Workspace> = workspaces
-            .iter()
-            .map(|w| Workspace {
-                id: w.id,
-                current: w.current,
-            })
-            .collect();
-        let mode = match mode {
-            OverviewMode::All => Mode::All,
-            OverviewMode::App(_) => Mode::App,
-        };
-        match self
-            .overview
-            .as_mut()
-            .filter(|o| !o.ui.is_closing() && o.ui.mode() == mode)
-        {
-            Some(open) => {
-                open.ui.set_windows(&entries, now);
-                open.ui.set_workspaces(workspaces);
-            }
-            None => {
-                self.drop_overview()?;
-                let area = Rect::new(area.x(), area.y(), area.width(), area.height());
-                let ui = OverviewUi::new(mode, area, &entries, workspaces, now);
-                let layer = self.layer_shell.layer_surface(
-                    &mut self.conn,
-                    &LayerSurfaceConfig {
-                        namespace: overview_ui::NAMESPACE.to_string(),
-                        output: Some(self.output),
-                        layer: Layer::Overlay,
-                        anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
-                        size: (0, 0),
-                        margin: Margin::default(),
-                        // -1: the whole output, over the dock bar and the menu bar, so the surface's
-                        // coordinates are the output's (the area the server sent is in them)
-                        exclusive_zone: -1,
-                        keyboard: KeyboardInteractivity::Exclusive,
-                    },
-                )?;
-                self.overview = Some(OverviewSurface {
-                    ui,
-                    presenter: ShmPresenter::new(layer.surface()),
-                    layer,
-                });
-            }
-        }
-        let open = self.overview.as_mut().expect("set above");
-        for (id, frame) in open.ui.frames() {
-            self.role.overview_frame(id, &geometry_rect(&frame))?;
-        }
-        open.presenter.request_redraw();
-        Ok(())
-    }
-
-    /// The server is leaving the overview: the chrome fades and gives the keyboard back.
-    fn overview_closed(&mut self) -> Result<()> {
-        let now = self.now();
-        let Some(open) = self.overview.as_mut().filter(|o| !o.ui.is_closing()) else {
-            return Ok(());
-        };
-        open.ui.close(now);
-        open.layer
-            .set_keyboard_interactivity(KeyboardInteractivity::None);
-        open.presenter.request_redraw();
-        Ok(())
-    }
-
-    /// Remove the overview's surface, if any.
-    fn drop_overview(&mut self) -> Result<()> {
-        if let Some(OverviewSurface { layer, .. }) = self.overview.take() {
-            self.conn.destroy(layer.surface())?;
-        }
-        Ok(())
-    }
-
-    /// Carry out what the pointer or a key asked for: every action is the server's to apply.
-    fn overview_action(&mut self, action: UiAction) -> Result<()> {
-        match action {
-            UiAction::None => {}
-            UiAction::Select(id) => self.role.overview_select(id),
-            UiAction::Close => self.role.overview_close(),
-            UiAction::SwitchWorkspace(id) => self.role.switch_workspace(id),
-            UiAction::AddWorkspace => self.role.add_workspace(),
-            UiAction::RemoveWorkspace(id) => self.role.remove_workspace(id),
-            UiAction::MoveWorkspace { id, index } => self.role.move_workspace(id, index)?,
-        }
-        if let Some(open) = &mut self.overview {
-            open.presenter.request_redraw();
-        }
-        Ok(())
-    }
-
-    fn overview_pointer(&mut self, event: PointerEvent) -> Result<()> {
-        let now = self.now();
-        let Some(open) = self.overview.as_mut() else {
-            return Ok(());
-        };
-        let action = match event {
-            PointerEvent::Enter(p) | PointerEvent::Motion(p) => {
-                open.ui.pointer_moved(Some(Point::new(p.x, p.y)), now);
-                UiAction::None
-            }
-            PointerEvent::Leave => {
-                open.ui.pointer_moved(None, now);
-                UiAction::None
-            }
-            PointerEvent::Button {
-                button: Button::Left,
-                pressed: true,
-                position,
-            } => open.ui.press(Point::new(position.x, position.y), now),
-            PointerEvent::Button {
-                button: Button::Left,
-                pressed: false,
-                position,
-            } => open.ui.release(Point::new(position.x, position.y), now),
-            PointerEvent::Button { .. } | PointerEvent::Scroll { .. } => UiAction::None,
-        };
-        self.overview_action(action)
-    }
-
-    /// One frame of the chrome; a finished fade removes the surface.
-    fn draw_overview(&mut self) -> Result<()> {
-        let now = self.now();
-        let Some(open) = self.overview.as_mut() else {
-            return Ok(());
-        };
-        if open.ui.is_gone(now) {
-            return self.drop_overview();
-        }
-        let view = OverviewView {
-            ui: &open.ui,
-            now,
-            dark: self.observed.dark,
-        };
-        let labels = &mut self.labels;
-        open.presenter.draw(&mut self.conn, None, |pixmap, scale| {
-            render::paint_overview(pixmap, scale.factor() as f32, &view, labels)
-        })?;
-        if open.ui.is_animating(now) {
-            open.presenter.request_redraw();
-        }
-        Ok(())
-    }
-
-    // ---- hot corners and gestures ---------------------------------------------------------------
-
-    /// A corner or gesture the server reported: run what `dock.conf` maps it to.
-    fn run_trigger(&mut self, trigger: Trigger) -> Result<()> {
-        match self.actions.get(trigger).clone() {
-            ActionTarget::None => Ok(()),
-            ActionTarget::AppGrid => self.toggle_app_grid(),
-            ActionTarget::Exec(command_line) => {
-                let mut command = Command::new("sh");
-                command.args(["-c", &command_line]);
-                spawn(PROCESS, command);
-                Ok(())
-            }
-            ActionTarget::Server(name) => {
-                self.role.run_action(&name);
-                Ok(())
-            }
-        }
-    }
-
-    // ---- context menus ----------------------------------------------------------------------------
-
-    fn is_menu(&self, surface: SurfaceId) -> bool {
-        self.menu
-            .as_ref()
-            .is_some_and(|m| m.popup.surface() == surface)
-    }
-
-    /// The output in the bar surface's coordinates: the popup stays inside it.
-    fn screen_in_surface(&self) -> Result<Rect> {
-        let screen = self.screen()?;
-        let (sw, sh) = (screen.w, screen.h);
-        let out = self
-            .conn
-            .outputs()
-            .into_iter()
-            .find(|o| o.id == self.output)
-            .and_then(|o| o.geometry)
-            .ok_or("the output of the dock went away")?;
-        let (w, h) = (f64::from(out.width), f64::from(out.height));
-        let (x, y) = match self.session.dock.cfg.orientation {
-            Orientation::Bottom => (0.0, sh - h),
-            Orientation::Left => (0.0, 0.0),
-            Orientation::Right => (sw - w, 0.0),
-        };
-        Ok(Rect::new(x, y, w, h))
-    }
-
-    /// A right click on the bar: the menu of the tile or the separator under it, as a popup.
-    fn open_menu(&mut self, position: Point) -> Result<()> {
-        self.drop_menu()?;
-        let now = self.now();
-        let screen = self.screen()?;
-        let Some(hit) = self.session.dock.hit_test(position, screen, now) else {
-            return Ok(());
-        };
-        let items = match self.session.dock.tile(hit.id) {
-            Some(tile) if tile.kind == TileKind::Separator => {
-                menu::separator_menu(&self.session.dock.cfg)
-            }
-            Some(tile) => {
-                let entry_path = self
-                    .session
-                    .desktop()
-                    .find(&tile.key)
-                    .map(|e| e.path.as_path());
-                let running_app_id = self.session.running_app_id(hit.id);
-                menu::tile_menu(&TileFacts {
-                    kind: tile.kind,
-                    key: &tile.key,
-                    pinned: tile.pinned,
-                    built_in: tile.built_in,
-                    running_app_id,
-                    unresponsive: running_app_id.is_some_and(|app| self.unresponsive.contains(app)),
-                    entry_path,
-                })
-            }
-            None => return Ok(()),
-        };
-        if items.is_empty() {
-            return Ok(());
-        }
-        let anchor = self
-            .session
-            .dock
-            .layout(screen, now)
-            .tiles
-            .into_iter()
-            .find(|t| t.id == hit.id)
-            .expect("a hit tile is in the layout it was hit in")
-            .rect;
-        let widths: HashMap<String, f64> = items
-            .iter()
-            .filter(|i| !i.separator)
-            .map(|i| (i.label.clone(), self.labels.width(&i.label, menu::FONT_PT)))
-            .collect();
-        let output = self.screen_in_surface()?;
-        let layout = menu::layout(
-            &items,
-            &anchor,
-            &output,
-            self.session.dock.cfg.orientation,
-            &|label| widths[label],
-        );
-        let popup = self.conn.popup(
-            self.layer.surface(),
-            &popup::placement(&geometry_rect(&layout.rect), true)?,
-        )?;
-        let backdrop = self.effects.backdrop(&self.conn, popup.surface())?;
-        backdrop.set_material(MENU_MATERIAL);
-        backdrop.set_shape(
-            &GRect::new(0.0, 0.0, layout.rect.w, layout.rect.h),
-            menu::RADIUS,
-        )?;
-        self.menu = Some(Menu {
-            items,
-            layout,
-            popup,
-            presenter: ShmPresenter::new(popup.surface()),
-            backdrop,
-            hovered: None,
-        });
-        Ok(())
-    }
-
-    /// Remove the menu's popup with its backdrop, if any.
-    fn drop_menu(&mut self) -> Result<()> {
-        if let Some(Menu {
-            popup, backdrop, ..
-        }) = self.menu.take()
-        {
-            drop(backdrop);
-            self.conn.destroy(popup.surface())?;
-        }
-        Ok(())
-    }
-
-    /// Hovering highlights a row; a left press on a row runs its command and closes the menu.
-    fn menu_pointer(&mut self, event: PointerEvent) -> Result<()> {
-        let Some(menu) = self.menu.as_mut() else {
-            return Ok(());
-        };
-        let at = |p: cupertino_geometry::Point| {
-            Point::new(p.x + menu.layout.rect.x, p.y + menu.layout.rect.y)
-        };
-        match event {
-            PointerEvent::Enter(p) | PointerEvent::Motion(p) => {
-                menu.hovered = menu.layout.hit(&menu.items, at(p));
-                menu.presenter.request_redraw();
-            }
-            PointerEvent::Leave => {
-                menu.hovered = None;
-                menu.presenter.request_redraw();
-            }
-            PointerEvent::Button {
-                button: Button::Left,
-                pressed: true,
-                position,
-            } => {
-                let picked = menu
-                    .layout
-                    .hit(&menu.items, at(position))
-                    .and_then(|i| menu.items[i].command.clone());
-                self.drop_menu()?;
-                if let Some(command) = picked {
-                    self.run_menu_command(command)?;
-                }
-            }
-            PointerEvent::Button { .. } | PointerEvent::Scroll { .. } => {}
-        }
-        Ok(())
-    }
-
-    fn run_menu_command(&mut self, command: MenuCommand) -> Result<()> {
-        let now = self.now();
-        match command {
-            MenuCommand::KeepInDock(key) => {
-                self.session.dock.pin(&key, None, now);
-                self.store_pins();
-            }
-            MenuCommand::RemoveFromDock(key) => {
-                self.session.dock.unpin(&key, now);
-                self.store_pins();
-            }
-            MenuCommand::ShowInFileManager(dir) => {
-                self.open_in_file_manager(&dir.to_string_lossy())?
-            }
-            MenuCommand::ShowAllWindows(app) => {
-                self.role.app_command(&app, AppCommand::ShowWindows)
-            }
-            MenuCommand::Hide(app) => self.role.app_command(&app, AppCommand::Hide),
-            MenuCommand::Quit(app) => self.role.app_command(&app, AppCommand::Quit),
-            MenuCommand::ForceQuit(app) => self.open_force_quit(Some(&app))?,
-            MenuCommand::Open(key) => self.begin_launch(key)?,
-            MenuCommand::OpenTrash => self.open_in_file_manager(TRASH_URI)?,
-            MenuCommand::ToggleAutoHide => {
-                self.session.dock.toggle_autohide(now);
-                self.layer
-                    .set_exclusive_zone(self.session.dock.exclusive_zone().ceil() as i32);
-            }
-            MenuCommand::ToggleMagnification => {
-                let placed = (
-                    self.session.dock.cfg.orientation,
-                    self.session.dock.surface_extent(),
-                );
-                self.session.dock.cfg.magnification = !self.session.dock.cfg.magnification;
-                // the magnified tiles need the deeper surface
-                self.sync_placement(placed)?;
-            }
-            // the items are disabled: the position is the file's
-            MenuCommand::Position(_) => {}
-        }
-        self.presenter.request_redraw();
-        Ok(())
-    }
-
-    fn draw_menu(&mut self) -> Result<()> {
-        let Some(menu) = self.menu.as_mut() else {
-            return Ok(());
-        };
-        let (items, layout, hovered, dark, labels) = (
-            &menu.items,
-            &menu.layout,
-            menu.hovered,
-            self.observed.dark,
-            &mut self.labels,
-        );
-        menu.presenter.draw(&mut self.conn, None, |pixmap, scale| {
-            render::paint_menu(
-                pixmap,
-                scale.factor() as f32,
-                items,
-                layout,
-                hovered,
-                dark,
-                labels,
-            )
-        })?;
-        Ok(())
-    }
+    let mut model = Model::new(session, actions, file.unwrap_or_default(), Box::new(host));
+    model.set_unresponsive(fixture_unresponsive());
+    let mut commands = vec![listen(&heard)];
+    for message in [
+        Message::Dark(initial.0),
+        Message::ReduceMotion(initial.1),
+        Message::Locked(initial.2),
+        Message::Outputs(outputs),
+    ] {
+        commands.extend(kit::update(&mut model, message));
+    }
+    let app = App { model, heard };
+    // the observer lives as long as the process
+    let _observer = observer;
+    cupertino_kit::app::run_on::<App>(system, (app, commands))?;
+    Err("the dock's surfaces were closed".into())
 }
 
 /// The application ids that the screenshot fixtures declare unresponsive.

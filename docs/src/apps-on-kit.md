@@ -12,7 +12,8 @@ CupertinoKit is the toolkit that Cupertino's own apps are moving onto. This page
 | `cupertino-menubar` | Bar and menus on Kit layer surfaces. | Outside-click dismissal on empty bar space has an open review finding. |
 | `cupertino-launcher` | Search panel, catcher and hidden windows on Kit layer surfaces. | See the crate README for interaction and styling limits. |
 | `cupertino-notifications` | Banners and notification centre on Kit layer surfaces. | Material, body layout and centre scrolling still have review findings. |
-| Dock, login and lock screen, screenshot UI, window-manager UI | | Normal entry points still use their existing drawing paths. |
+| `cupertino-dock` | The bar, its context menus, the dragged tile, the application grid, the Force Quit dialog and the edge strips that move the bar to another display, as Kit windows on layer surfaces, with keyboard navigation (Focus Dock) and accessible names and actions on every tile. | The switcher panel and the Overview chrome are Kit windows whose content the process still paints as one image, until the window-manager surfaces move to Kit. Multi-monitor acceptance on hardware is open (#22). |
+| Login and lock screen, screenshot UI, window-manager UI | | Normal entry points still use their existing drawing paths. |
 
 ## The OSD
 

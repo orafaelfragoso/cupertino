@@ -2,9 +2,14 @@
 
 The dock process of the Cupertino desktop. It stands in for the design's dock process, and it also hosts the application
 switcher panel, the application grid and the Overview chrome. The crate holds the model (tiles, layout, magnification, bounce,
-auto-hide, with no compositor dependency) and the `cupertino-dock` process (feature `app`), a client of the server on `cupertino-wayland-client`,
-`cupertino-shell-client` (layer surfaces and the dock role) and `cupertino-protocol-app` (backdrops), with a
-`cupertino-ui-wayland` presenter per surface.
+auto-hide, with no compositor dependency), the CupertinoKit application that draws it (`src/kit.rs`, the model and its
+messages, and `src/view/`, one pure view function per window) and the `cupertino-dock` process (feature `app`, `src/app.rs`),
+which runs that application on `cupertino-ui-wayland` and gives its windows layer surfaces and the dock role through
+`cupertino-shell-client`.
+
+The bar, the context menus, the tile held by a drag, the application grid and the Force Quit dialog are Kit windows. The
+switcher panel and the Overview chrome are Kit windows too, but their content is still one image the process paints with
+`render.rs`. They move to Kit views of their own with the window-manager surfaces.
 
 ## Running
 
@@ -72,10 +77,35 @@ with amplitudes 1/0.5/0.25, repeating every 2000 ms with lift `len + 1` pt (info
 
 ### Bar and tiles
 
-The process (`src/app.rs`, `render.rs`) draws the bar and tiles on a layer surface of the first output. The surface is at the
-bottom, left or right per `Orientation`, full width or height along its edge so magnification and bounces have room. It uses
-the `Menu` material as a server-rendered backdrop and takes the dock role (`get_dock`). The exclusive zone is the bar's
-thickness, or 0 with auto-hide. The input region is the bar and its tiles, or only the reveal strip while hidden.
+The bar is a Kit window (`src/view/bar.rs`) on a layer surface of the dock's display. The surface is at the bottom, left or
+right per `Orientation`, full width or height along its edge so magnification and bounces have room. It has the `Menu`
+material under the bar's own rectangle only (`WindowBackground::SurfaceRect`) and takes the dock role (`get_dock`). The
+exclusive zone is the bar's thickness, or 0 with auto-hide. The input region is the bar and its tiles, or only the reveal
+strip while hidden. Each tile is a node at the rectangle `Dock::layout` gives it and draws its icon; the bar draws the
+running indicators and the separators under the tiles.
+
+**Displays.** The dock starts on the first output, the main display. Every other output gets an edge strip: a layer surface
+one point deep along the dock's edge (`cupertino-dock-edge`, `src/view/edge.rs`) that draws nothing and holds that output's
+dock role. When the pointer rests on a strip for 0.4 s (`kit::EDGE_DWELL`), the bar moves to that output and the output it
+left gets a strip. Passing over a strip does not move the bar, and neither does a drag in progress or a locked session. When
+the dock's output goes away the bar moves to the first remaining one. The window list is taken from the bar's role only; the
+switcher, the Overview, hot corners and gestures are taken from the role of the output they happen on.
+
+**Keyboard.** The Focus Dock shortcut (`focus-dock`: Ctrl+F3 under the `cupertino` profile, Super+F3 under `classic-pc`) makes the server send `engage` to the dock of the
+output under the pointer. The bar then takes the keyboard with the first tile focused. The arrows along the bar move the focus,
+Home and End go to the ends, Return or Space activates the tile, the Menu key or Shift+F10 opens its menu, and Escape
+gives the keyboard back. Activating a tile gives it back too.
+
+**Accessibility.** The bar is a toolbar named "Dock". Every tile is a button named after its application (the desktop
+entry's name), "Trash", or the minimized window's title, with the actions Click and Show Menu. Its description says what
+the tile shows: "Running", "Opening", "Not responding" or "Needs attention" for an application, "Minimized window" for a window, and "Contains items" for a trash with something in it. Separators
+are separators. The menus are Kit menus, the grid's results and page dots and the Force Quit rows and buttons are named
+nodes with a Click action. The edge strips are groups named "Dock edge".
+
+**Reduce Motion, Reduce Transparency and Increase Contrast.** These follow the session as in the other Kit shells. With
+Reduce Transparency or Increase Contrast the theme gives the bar, the menus, the grid and the dialog an opaque fill instead
+of a material, and Increase Contrast draws the running indicators fully opaque and the separators at twice their alpha.
+Reduce Motion drops the grid's scale step and keeps its fade.
 
 - A click on a running application's tile calls `activate_app`.
 - A click on a pinned application that is not running launches its desktop entry with an xdg-activation token and bounces.
@@ -112,11 +142,11 @@ thickness, or 0 with auto-hide. The input region is the bar and its tiles, or on
 - An application's own icon comes from `cupertino-icons` (its desktop entry's `Icon=`: an absolute path or `hicolor` only); the trash is the asset `trash.empty` or `trash.full` (the home trash folder has an entry or not, looked at once a second).
 
 **Session.** The indicators and separators follow the appearance the server announces over `cupertino_session_v1`, read at
-start and redrawn on every change. The grid redraws too. `locked` removes an open grid. The bar and the switcher panel ignore it.
+start and redrawn on every change. The grid redraws too. `locked` removes an open grid, the Force Quit dialog, a menu and the edge strips at once, and the bar gives the keyboard back. The bar and the switcher panel stay.
 
 ### Application switcher
 
-Code: `src/switcher.rs`, `render::paint_switcher`, the overlay in `app.rs`. The server keeps the keys and the choice and sends
+Code: `src/switcher.rs`, `render::paint_switcher`, `src/view/bridge.rs` and the switcher part of `src/kit.rs`. The server keeps the keys and the choice and sends
 the panel's output, the list and the selection (`switcher_output`, `switcher_changed`, `switcher_closed`). The keys (Q / H among
 them) are the server's.
 
@@ -136,7 +166,7 @@ bar reserve (exclusive zone -1) and uses the `Switcher` material as a server-ren
 
 ### Application grid
 
-Code: `src/app_grid.rs`, `render::paint_app_grid`, the `Grid` in `app.rs`. The server forwards the app-grid action (shortcut,
+Code: `src/app_grid.rs`, `src/view/grid.rs` and the grid part of `src/kit.rs`. The server forwards the app-grid action (shortcut,
 hot corner, four-finger pinch) as `toggle_app_grid` and keeps nothing else.
 
 **Surface.** The dock opens the grid on an overlay layer surface (namespace `cupertino-dock-app-grid`) anchored to every edge of
@@ -155,9 +185,8 @@ layer. The dock bar's zone stands for the design's dock extent, an mapping.
 - The search field is 250 × 25, 15 pt above the page, with a light 16 pt text.
 
 **Motion.** The grid fades and scales in from 1.05 over 0.25 s ease-in, and out the reverse way. The entry starts once
-the first frame (which loads the icons, at opacity 0) is presented. The compositor applies the scale through the
-surface's viewport (`ShmPresenter::set_zoom`); without a viewport the grid only fades. The dock paints the content once
-per look and fades the kept copy on each frame. A page flip takes 0.5 s on the curve. Under Reduce Motion (the session's display options) the grid keeps its opacity
+the grid's surface is first sized. Each frame lays the items, the dots and the search field out scaled about the centre and draws
+them at the fade's opacity. A page flip takes 0.5 s on the curve. Under Reduce Motion (the session's display options) the grid keeps its opacity
 animation and skips the scale step.
 
 **Input.**
@@ -177,7 +206,7 @@ alpha, "No Results" as white at gray 0.204, end-of-text truncation instead of th
 
 ### Overview
 
-Code: `src/overview_ui.rs`, `render::paint_overview`, the `OverviewSurface` in `app.rs`. The server owns the session: the
+Code: `src/overview_ui.rs`, `render::paint_overview`, `src/view/bridge.rs` and the overview part of `src/kit.rs`. The server owns the session: the
 transition, the windows' frames and their animation, Escape, the click fallback, and closing on a workspace switch and when
 the dock dies. It sends the dock of its output the window set with desktop frames, the workspaces and the usable area
 (`overview_changed`).
@@ -206,8 +235,8 @@ spread is show desktop (roles).
 
 ### Context menus
 
-Code: `src/menu.rs`, `render::paint_menu`, the `Menu` in `app.rs`. A right click on a tile or the separator opens a popup of
-the bar surface with a grab (`Menu` material).
+Code: `src/menu.rs` (the items), `src/view/menu.rs`. A right click on a tile or the separator opens a Kit menu, a popup
+of the bar surface with a grab (`Menu` material).
 
 - **The file manager tile.** The session file manager (`cupertino-files` when installed, else the first installed of
   Nautilus, Dolphin, Thunar; the list is approximate) is built into the dock as its first tile, as the design's is: that
@@ -261,7 +290,7 @@ to another slot (approximate slack). The add slot sends `add_workspace` and the 
 cargo test -p cupertino-dock --features app
 ```
 
-`cargo test -p cupertino-dock --features app` runs 188 tests; without the feature the process code is skipped.
+`cargo test -p cupertino-dock --features app` runs 193 tests; without the feature the process code is skipped.
 
 | Test | Proves |
 |---|---|
@@ -272,3 +301,4 @@ cargo test -p cupertino-dock --features app
 | Tile drag unit tests | The press that becomes a drag past the threshold, the held press, and the removal puff's timing. |
 | `tests/dock.rs` | Sections, orientations, hit-testing, minimize targets and drag-reorder: the grab, the gap rule, the slide, the strip and section limits, the removal gate, the dim, the settle and the removal fade. |
 | `tests/session.rs` | Windows and tiles, the launch bounce (announced, not doubled, unannounced, not for the first list) and the refused-activation hop. |
+| `tests/kit.rs` | The dock as CupertinoKit runs it, headless (`cupertino-ui-test`), behind a fake host: the bar's accessible tree, a click that activates or launches with an activation token, a drag off the bar that removes a pin, a tile menu whose item reaches the server, Focus Dock with the arrows, Return and Escape, the move to another display by resting on its edge strip, the window list from the bar's role only and a gesture from any, no material under Reduce Transparency, the Force Quit dialog from the keyboard, the application grid typed into and launched from, and the lock. |

@@ -9,14 +9,16 @@ description = "Dock for the Cupertino desktop: tiles, layout, magnification, bou
 layer = "shell"
 
 [features]
-# the `cupertino-dock` process: the bar on a layer surface as a client of the server
+# the `cupertino-dock` process: its CupertinoKit windows on layer surfaces as a client of the server
 app = [
+    "dep:async-channel",
+    "dep:async-io",
     "dep:cupertino-apps",
     "dep:cupertino-assets",
     "dep:cupertino-decorations",
     "dep:cupertino-geometry",
     "dep:cupertino-icons",
-    "dep:cupertino-protocol-app",
+    "dep:cupertino-modifiers",
     "dep:cupertino-shell-client",
     "dep:cupertino-theme",
     "dep:cupertino-ui-wayland",
@@ -25,6 +27,8 @@ app = [
 ]
 
 [dependencies]
+async-channel = { version = "2", optional = true }
+async-io = { version = "2", optional = true }
 cupertino-animation = { path = "../cupertino-animation" }
 cupertino-overview = { path = "../cupertino-overview" }
 cupertino-wm = { path = "../cupertino-wm" }
@@ -32,9 +36,10 @@ cupertino-apps = { path = "../cupertino-apps", optional = true }
 cupertino-assets = { path = "../cupertino-assets", optional = true }
 cupertino-decorations = { path = "../cupertino-decorations", optional = true }
 cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-kit = { path = "../cupertino-kit" }
 cupertino-geometry = { path = "../cupertino-geometry", optional = true }
 cupertino-icons = { path = "../cupertino-icons", optional = true }
-cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
+cupertino-modifiers = { path = "../cupertino-modifiers", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-theme = { path = "../cupertino-theme", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
@@ -42,6 +47,10 @@ cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = tr
 tiny-skia = { version = "0.12", optional = true }
 
 [dev-dependencies]
+async-channel = "2"
+cupertino-assets = { path = "../cupertino-assets" }
+cupertino-theme = { path = "../cupertino-theme" }
+cupertino-ui-test = { path = "../cupertino-ui-test" }
 tempfile = "3"
 
 [lints.rust]

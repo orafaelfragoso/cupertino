@@ -3,7 +3,8 @@
 //! locked, and neither unlocking nor locking announces anything by itself. The application runs in a copy of this test
 //! binary, started with the bus addresses AccessKit reads from its environment. It announces a marker once it is
 //! unmuted and again at its end; AccessKit sends its events in order, so what lies before and between the markers is
-//! exactly what each stage sent.
+//! exactly what each stage sent. The application that draws the lock screen is never muted by the lock it holds: the answer
+//! to a password attempt is announced.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -110,6 +111,25 @@ fn application() {
     std::io::stdin().read_to_end(&mut Vec::new()).unwrap();
 }
 
+/// The lock screen: the session is locked from its start, its first answer to an attempt changes the status after
+/// [`READY`], and it ends with [`PLAYED`].
+fn lock_screen() {
+    let mut adapter =
+        AtspiAdapter::lock_screen(Waker::from(Arc::new(Unpark(std::thread::current()))));
+    adapter.window_focus(WINDOW, true);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !adapter.is_active() {
+        assert!(Instant::now() < deadline, "accessibility never turned on");
+        std::thread::park_timeout(Duration::from_millis(20));
+    }
+    adapter.session_locked(true);
+    adapter.update(&tree("Enter the password", &[]));
+    adapter.update(&tree("Enter the password", &[READY]));
+    adapter.update(&tree("Incorrect password", &[READY]));
+    adapter.update(&tree("Incorrect password", &[READY, PLAYED]));
+    std::io::stdin().read_to_end(&mut Vec::new()).unwrap();
+}
+
 struct Status;
 
 #[zbus::interface(name = "org.a11y.Status")]
@@ -149,16 +169,9 @@ fn announcement(message: &Message) -> Option<String> {
     Some(String::try_from(said).unwrap())
 }
 
-#[test]
-fn a_live_region_says_nothing_until_the_session_is_known_unlocked_nor_while_it_is_locked() {
-    const NAME: &str =
-        "a_live_region_says_nothing_until_the_session_is_known_unlocked_nor_while_it_is_locked";
-    if std::env::var_os(APPLICATION).is_some() {
-        return application();
-    }
-    let Some(bus) = PrivateBus::start() else {
-        return;
-    };
+/// What the application that `part` names announced, from the start to [`PLAYED`]; `None` without `dbus-daemon`.
+fn announced(name: &str, part: &str) -> Option<Vec<String>> {
+    let bus = PrivateBus::start()?;
     let (embedded, embeds) = channel();
     let _status = bus
         .blocking_builder()
@@ -196,8 +209,8 @@ fn a_live_region_says_nothing_until_the_session_is_known_unlocked_nor_while_it_i
         }
     });
     let mut app = Command::new(std::env::current_exe().unwrap())
-        .args([NAME, "--exact", "--nocapture"])
-        .env(APPLICATION, "1")
+        .args([name, "--exact", "--nocapture"])
+        .env(APPLICATION, part)
         .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
         .env("AT_SPI_BUS_ADDRESS", &bus.address)
         .stdin(Stdio::piped())
@@ -216,8 +229,37 @@ fn a_live_region_says_nothing_until_the_session_is_known_unlocked_nor_while_it_i
     }
     drop(app.stdin.take());
     assert!(app.wait().unwrap().success(), "the application failed");
-    assert_eq!(
-        *said.lock().unwrap(),
-        [READY, "Finished after the lock", PLAYED]
-    );
+    let said = said.lock().unwrap().clone();
+    Some(said)
+}
+
+#[test]
+fn a_live_region_says_nothing_until_the_session_is_known_unlocked_nor_while_it_is_locked() {
+    const NAME: &str =
+        "a_live_region_says_nothing_until_the_session_is_known_unlocked_nor_while_it_is_locked";
+    if std::env::var_os(APPLICATION).is_some() {
+        return application();
+    }
+    let Some(said) = announced(NAME, "application") else {
+        return;
+    };
+    assert_eq!(said, [READY, "Finished after the lock", PLAYED]);
+}
+
+#[test]
+fn the_lock_screen_announces_the_answer_to_an_attempt_while_the_session_is_locked() {
+    const NAME: &str =
+        "the_lock_screen_announces_the_answer_to_an_attempt_while_the_session_is_locked";
+    if std::env::var_os(APPLICATION).is_some() {
+        return lock_screen();
+    }
+    let Some(said) = announced(NAME, "lock-screen") else {
+        return;
+    };
+    let from_ready: Vec<&str> = said
+        .iter()
+        .map(String::as_str)
+        .skip_while(|s| *s != READY)
+        .collect();
+    assert_eq!(from_ready, [READY, "Incorrect password", PLAYED]);
 }

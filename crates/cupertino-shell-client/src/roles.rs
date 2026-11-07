@@ -459,8 +459,8 @@ impl Shell {
         // version 10 the menu bar's window list, shortcuts and default-menu commands, version 11 its edit request,
         // version 12 its Help search shortcut, version 13 its force_quit_app request, version 14 its backdrop lightness,
         // version 15 the enabled controls of the active window, version 16 whether it is in full screen,
-        // version 17 the dock's window icons
-        conn.bind_extension(9..=17, Quiet).map(Shell)
+        // version 17 the dock's window icons, version 18 the dock's engage event
+        conn.bind_extension(9..=18, Quiet).map(Shell)
     }
 
     /// Observe the session: its appearance and display options arrive as

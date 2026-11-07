@@ -231,7 +231,9 @@ impl Painter {
             let background = (id == root
                 && match input.background {
                     WindowBackground::Theme => true,
-                    WindowBackground::Surface { .. } => !input.backdrop,
+                    WindowBackground::Surface { .. } | WindowBackground::SurfaceRect { .. } => {
+                        !input.backdrop
+                    }
                     WindowBackground::None => false,
                 })
             .then_some(input.background);
@@ -262,6 +264,17 @@ impl Painter {
                 // the window's own background, under everything its content paints
                 if let Some(background) = background {
                     let bounds = Rect::new(0.0, 0.0, size.width, size.height);
+                    let surface_fill = |surface, alpha| {
+                        input
+                            .env
+                            .theme
+                            .surface(surface)
+                            .fill
+                            .map(|fill: Color| Color {
+                                a: fill.a * crate::surface_alpha(alpha) as f32,
+                                ..fill
+                            })
+                    };
                     let (shape, color) = match background {
                         WindowBackground::Surface {
                             surface,
@@ -272,10 +285,17 @@ impl Painter {
                                 rect: bounds,
                                 radius,
                             },
-                            input.env.theme.surface(surface).fill.map(|fill| Color {
-                                a: fill.a * crate::surface_alpha(alpha) as f32,
-                                ..fill
-                            }),
+                            surface_fill(surface, alpha),
+                        ),
+                        // the window's origin is the root's
+                        WindowBackground::SurfaceRect {
+                            surface,
+                            rect,
+                            radius,
+                            alpha,
+                        } => (
+                            Shape::RoundedRect { rect, radius },
+                            surface_fill(surface, alpha),
                         ),
                         _ => {
                             let state = StateVariant {

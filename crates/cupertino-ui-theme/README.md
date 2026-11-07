@@ -31,9 +31,9 @@ the built-in palettes. A page indicator dot for a page not shown (`PageDot`) is 
 opaque grey at 3:1 or more in the built-in palettes; the shown page's dot is `Text`.
 
 `ThemeTokens::surface` gives a sidebar, menu or popover the material to ask the compositor for (`Sidebar`, or `Menu`
-for menus and popovers, `LoginWindowControl` for a heads-up display, `Switcher` for the application switcher's panel)
-and the opaque window background to paint where there is none. With reduced transparency or in
-high contrast it asks for no material.
+for menus and popovers, `LoginWindowControl` for a heads-up display, `AppGrid` for the full-screen application grid and
+`Switcher` for the application switcher's panel) and the opaque window background to paint where there is none. With
+reduced transparency or in high contrast it asks for no material.
 
 Approximate: every state colour, the disabled fills and borders, the opaque thumb, the dark white role text and the
 dark tooltip in the Cupertino light and dark palettes; all neutral and high-contrast values.

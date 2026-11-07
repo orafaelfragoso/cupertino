@@ -214,6 +214,7 @@ enum DockEvent {
         unresponsive: bool,
     },
     ForceQuitDialog,
+    Engage,
     /// `own`: the output named is the one the dock is on.
     SwitcherOutput {
         own: bool,
@@ -386,6 +387,7 @@ impl Dispatch<CupertinoDockV1, ()> for ClientState {
                 unresponsive: state == 1,
             },
             E::ForceQuitDialog => DockEvent::ForceQuitDialog,
+            E::Engage => DockEvent::Engage,
             E::SwitcherOutput { output } => DockEvent::SwitcherOutput {
                 own: state.status.lock().unwrap().own_output.as_ref() == Some(&output),
             },
@@ -1286,6 +1288,45 @@ fn the_force_quit_action_opens_the_dialog_in_the_dock() {
         vec![DockEvent::ForceQuitDialog, DockEvent::Done]
     );
     assert_eq!(dock.error(), None);
+}
+
+/// The Focus Dock action engages the dock of the output under the pointer, from shell version 18 only: an older dock
+/// is told the next action and nothing before it.
+#[test]
+fn the_focus_dock_action_engages_the_dock_from_shell_version_18_only() {
+    let Some(mut h) = Harness::new() else { return };
+    let focus = |h: &mut Harness| {
+        h.state.execute_plan(ActionPlan {
+            commands: Vec::new(),
+            ops: vec![ShellOp::FocusDock],
+        })
+    };
+    let dock = DockClient::spawn_at(h.shell_stream(), true, 0, 18);
+    h.wait_for_groups(&dock, 1);
+    focus(&mut h);
+    h.wait_for_groups(&dock, 2);
+    assert_eq!(dock.groups()[1], vec![DockEvent::Engage, DockEvent::Done]);
+    assert_eq!(dock.error(), None);
+    let out = h.state.outputs[0].id;
+    h.wait_until("the dock surface to be placed", |s| {
+        s.dock_rect(out).is_some()
+    });
+    dock.send(Cmd::Quit);
+    h.wait_until("the dock to go", |s| s.dock_rect(out).is_none());
+
+    let old = DockClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&old, 1);
+    focus(&mut h);
+    h.state.execute_plan(ActionPlan {
+        commands: Vec::new(),
+        ops: vec![ShellOp::OpenForceQuit],
+    });
+    h.wait_for_groups(&old, 2);
+    assert_eq!(
+        old.groups()[1],
+        vec![DockEvent::ForceQuitDialog, DockEvent::Done]
+    );
+    assert_eq!(old.error(), None);
 }
 
 #[test]

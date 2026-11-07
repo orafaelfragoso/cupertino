@@ -120,6 +120,8 @@ struct ShownBackdrop {
     material: Material,
     name: String,
     radius: f64,
+    /// Where it is in the window; `None` under the whole window.
+    bounds: Option<Rect>,
     /// The logical size its shape was last given.
     shaped: Option<(u32, u32)>,
 }
@@ -460,6 +462,7 @@ impl WaylandWindowSystem {
                 material,
                 radius,
                 alpha,
+                bounds,
             }) => {
                 // a fade changes only the alpha of the material already shown
                 if let Some(shown) = self
@@ -469,8 +472,9 @@ impl WaylandWindowSystem {
                     .filter(|b| b.name == material)
                 {
                     shown.material.set_alpha(alpha).map_err(protocol)?;
-                    if shown.radius != radius {
+                    if shown.radius != radius || shown.bounds != bounds {
                         shown.radius = radius;
+                        shown.bounds = bounds;
                         shown.shaped = None;
                     }
                     return Ok(());
@@ -493,6 +497,7 @@ impl WaylandWindowSystem {
                     material: wire,
                     name: material,
                     radius,
+                    bounds,
                     shaped: None,
                 })
             }
@@ -1165,7 +1170,9 @@ impl WindowSystem for WaylandWindowSystem {
         let w = self.window_mut(window)?;
         let (surface, size) = (w.surface, w.size);
         if let Some(b) = w.backdrop.as_mut().filter(|b| b.shaped != Some(size)) {
-            let bounds = Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1));
+            let bounds = b
+                .bounds
+                .unwrap_or_else(|| Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1)));
             if b.material.set_shape(&bounds, b.radius).is_ok() {
                 b.shaped = Some(size);
             }

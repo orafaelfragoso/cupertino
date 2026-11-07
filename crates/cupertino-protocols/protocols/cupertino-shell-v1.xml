@@ -10,7 +10,7 @@
      ends: interfaces may change without a version bump until then.
   </description>
 
-  <interface name="cupertino_shell_v1" version="17">
+  <interface name="cupertino_shell_v1" version="18">
     <description summary="shell services of the server">
       Global singleton, offered only to the processes the server started for a shell role, on a
       connection of their own. Each request needs the role it creates: a connection that holds
@@ -20,7 +20,7 @@
       cupertino_app_effects_v1 protocol, which any client may use, and removes their requests here. Version 6 adds the
       session_action request of the menu bar object, version 7 the lock_requested event of the session object, version 8 the session_agent event of the menu bar
       object, version 9 the log_out_requested event of the session object, version 10 the window list, the shortcuts and the further
-      window commands of the menu bar object, version 11 its edit request, version 12 its engage_help event, version 13 its force_quit_app request, version 14 its backdrop_luminance event, version 15 its window_controls event, version 16 its window_full_screen event, version 17 the window_icon event of the dock object. An object this global
+      window commands of the menu bar object, version 11 its edit request, version 12 its engage_help event, version 13 its force_quit_app request, version 14 its backdrop_luminance event, version 15 its window_controls event, version 16 its window_full_screen event, version 17 the window_icon event of the dock object, version 18 its engage event. An object this global
       creates has the version the global was bound at, so the since of each message of those
       objects is the shell version that added it.
     </description>
@@ -618,7 +618,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_dock_v1" version="17">
+  <interface name="cupertino_dock_v1" version="18">
     <description summary="the dock of one output">
       Events describe the windows of the session and the application switcher. They come in
       groups ended by a done event; the client applies a group at once. The first group, sent
@@ -864,6 +864,15 @@
       <arg name="name" type="string"/>
       <arg name="size" type="uint"/>
       <arg name="pixels" type="fd"/>
+    </event>
+
+    <event name="engage" since="18">
+      <description summary="the Focus Dock shortcut was pressed">
+        Focus the first tile of the dock for keyboard navigation. The dock takes the keyboard by
+        asking for exclusive keyboard interactivity on its surface and lets go when navigation
+        ends. Sent to the dock of the output under the pointer, else the first dock, in a group
+        of its own ended by done; never while the session is locked or a lock is pending.
+      </description>
     </event>
 
     <event name="done">

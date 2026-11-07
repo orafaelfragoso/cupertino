@@ -1833,6 +1833,13 @@ impl BrowserWindow {
     /// The place Eject acts on: while the keyboard is in the sidebar, the mounted removable file system its row is on;
     /// else the one that holds the folder shown.
     fn eject_target(&self, session: &Session) -> Option<usize> {
+        // a drive that also holds the home folder is the session's own disk: the chord never takes it
+        let ejectable = |i: usize| {
+            session.places[i].ejectable()
+                && !i
+                    .checked_sub(session.standard_places)
+                    .is_some_and(|device| session.media.drive_holds(device, &session.home))
+        };
         let focused = self
             .sidebar_row
             .as_ref()
@@ -1840,10 +1847,9 @@ impl BrowserWindow {
             .and_then(|key| {
                 (0..session.places.len()).find(|&i| view::place_key(session, i) == *key)
             })
-            .filter(|&i| session.places[i].ejectable());
+            .filter(|&i| ejectable(i));
         focused.or_else(|| {
-            removable_holding(self.browser.dir(), &session.places)
-                .filter(|&i| session.places[i].ejectable())
+            removable_holding(self.browser.dir(), &session.places).filter(|&i| ejectable(i))
         })
     }
 

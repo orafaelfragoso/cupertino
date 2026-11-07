@@ -979,6 +979,55 @@ fn primary_e_ejects_the_device_of_the_sidebar_row_the_keyboard_is_on() {
     assert_eq!(run.title(), window_title(&run.home(), &[]), "off the card");
 }
 
+/// Primary+E leaves a drive that also holds the home folder, as a portable disk the session runs from: its eject would
+/// unmount the home folder with it. Another drive still ejects.
+#[test]
+fn primary_e_never_ejects_the_drive_that_holds_the_home_folder() {
+    let Some(fake) = Fake::start() else { return };
+    let home = tempfile::tempdir().unwrap();
+    let (data, b) = (home.path().join("Data"), home.path().join("B"));
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    fake.drive("portable", "", "", true);
+    fake.drive("stick", "", "", true);
+    let labelled = |label| Block {
+        label,
+        ..Block::default()
+    };
+    fake.block(
+        "sde1",
+        Some("portable"),
+        Some(home.path().to_str().unwrap()),
+        labelled("Home"),
+    );
+    fake.block(
+        "sde2",
+        Some("portable"),
+        Some(data.to_str().unwrap()),
+        labelled("Data"),
+    );
+    fake.block(
+        "sdd1",
+        Some("stick"),
+        Some(b.to_str().unwrap()),
+        labelled("B"),
+    );
+    let mut run = kit(&fake, home, data.clone());
+    run.wait_until(|run| row(run, "Data", "Removable") && row(run, "B", "Removable"));
+    assert_eq!(run.title(), "Data");
+    run.key_with(0x65, Some('e'), cupertino_kit::platform::Mods::PRIMARY);
+    assert_eq!(
+        run.title(),
+        "Data",
+        "the window stays on the home folder's drive"
+    );
+
+    run.click_named(Role::ListItem, "B");
+    run.key_with(0x65, Some('e'), cupertino_kit::platform::Mods::PRIMARY);
+    // the log is in order: the stick's eject is the first thing the fake was asked
+    assert_eq!(wait_for_log(&fake, 2), ["Unmount sdd1 0", "Eject stick 0"]);
+}
+
 /// A read-only medium takes nothing new: no new folder, nothing moved off it, and no paste though a copied file waits
 /// on the pasteboard.
 #[test]

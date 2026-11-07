@@ -369,6 +369,8 @@ pub struct Model {
     pub engaged: bool,
     /// Focus Dock came: the first tile takes the focus.
     focus_first: bool,
+    /// A menu opened while the bar had the keyboard, and the leave its taking the keyboard brings has not come yet.
+    menu_takes_keyboard: bool,
     /// The tile that has the bar's keyboard focus, as its window last said.
     focused_tile: Option<TileId>,
     /// The tiles that take the focus, in the bar's order, as the view last showed them.
@@ -425,6 +427,7 @@ impl Model {
             menu: None,
             engaged: false,
             focus_first: false,
+            menu_takes_keyboard: false,
             focused_tile: None,
             tile_order: Vec::new(),
             unresponsive: HashSet::new(),
@@ -830,6 +833,7 @@ impl Model {
             items,
             label,
         });
+        self.menu_takes_keyboard = self.engaged;
     }
 
     fn run_menu_command(&mut self, command: MenuCommand) -> Vec<Command<Message>> {
@@ -1850,7 +1854,11 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             Vec::new()
         }
         Message::KeyboardLeft(output) => {
-            if Some(output) == model.output && model.menu.is_none() {
+            // the menu taking the keyboard is the one leave that keeps Focus Dock; any other (the server giving the
+            // keyboard to a window, a press outside closing the menu as well) ends it
+            if Some(output) == model.output
+                && !(model.menu.is_some() && std::mem::take(&mut model.menu_takes_keyboard))
+            {
                 model.engaged = false;
             }
             Vec::new()

@@ -91,8 +91,11 @@ class SecretServiceTest(unittest.TestCase):
     def lines(self, fmt, service):
         return [line for line in (self.PAM / fmt / service).read_text().splitlines() if line and not line.startswith('#')]
 
-    # The stack that checks the password, per format.
-    STACK = {'arch': 'auth include system-local-login', 'deb': '@include common-auth', 'rpm': 'auth include system-auth'}
+    # The stack that checks the password, per format and service. Fedora's system-auth ends its auth stack at
+    # `sufficient pam_unix.so`; an `include` would end this service's stack there too and the keyring line would never
+    # run, so rpm takes it as a substack (as the distributions' own display managers do).
+    STACK = {'arch': 'auth include system-local-login', 'deb': '@include common-auth', 'rpm': 'auth substack system-auth'}
+    LOCK_STACK = {'arch': 'auth include system-auth', 'deb': '@include common-auth', 'rpm': 'auth substack system-auth'}
 
     def test_a_login_with_a_password_unlocks_the_keyring_and_its_session_starts_the_daemon(self):
         for fmt, stack in self.STACK.items():
@@ -111,7 +114,7 @@ class SecretServiceTest(unittest.TestCase):
                 self.assertEqual(autologin[-1], self.SESSION)
                 self.assertNotIn(self.AUTH, autologin)
                 lock = self.lines(fmt, 'cupertino-login')
-                self.assertEqual(lock[1], self.AUTH, 'right after the password stack')
+                self.assertEqual(lock[:2], [self.LOCK_STACK[fmt], self.AUTH], 'right after the password stack')
                 self.assertFalse([line for line in lock if line.startswith(('session', '-session'))])
                 self.assertFalse([line for line in self.lines(fmt, 'cupertino-greeter') if 'keyring' in line])
 

@@ -51,11 +51,10 @@ enum Stall {
 /// The most drops kept while their data is read, as the transport keeps them.
 const MAX_LANDED: usize = 8;
 
-/// A drag from another client, or this one, over a window: the transport's offer and the action last chosen for it.
+/// A drag from another client, or this one, over a window, and the transport's offer.
 struct IncomingDrop {
     token: DropToken,
     offer: DragOffer,
-    chosen: Option<DropAction>,
 }
 
 /// More rectangles than this carried between presents become one for the whole frame.
@@ -917,29 +916,16 @@ impl WaylandWindowSystem {
                             actions: drop_actions(offer.source_actions()),
                             mods,
                         };
-                        self.hovering = Some(IncomingDrop {
-                            token,
-                            offer,
-                            chosen: None,
-                        });
+                        self.hovering = Some(IncomingDrop { token, offer });
                         event
                     }
                     DragEvent::Motion { point, .. } => DropEvent::Motion {
                         position: point,
                         mods,
                     },
-                    DragEvent::Action(action) => {
-                        let action = drop_action(action);
-                        // after the drop the choice can still change, for the drop read last
-                        match self.hovering.as_mut().or(self.landed.last_mut()) {
-                            Some(drop) => drop.chosen = action,
-                            None => return,
-                        }
-                        if self.hovering.is_none() {
-                            return;
-                        }
-                        DropEvent::Action(action)
-                    }
+                    // after the drop the choice is the window's own, told by finish_drop
+                    DragEvent::Action(_) if self.hovering.is_none() => return,
+                    DragEvent::Action(action) => DropEvent::Action(drop_action(action)),
                     DragEvent::Leave => {
                         self.hovering = None;
                         DropEvent::Leave
@@ -1220,10 +1206,10 @@ impl WindowSystem for WaylandWindowSystem {
         Ok(read)
     }
 
-    /// The source is told the action the drop was taken with before it finishes: a drop chosen as an ask, or taken
-    /// with another action than the one chosen (a copy where a move was shown), is given it first, so a source never
-    /// removes data the window only copied. One taken as an ask copies; one taken with an action the source does not
-    /// allow is refused, and the source keeps its data.
+    /// The source is told the action the drop was taken with just before it finishes, whatever was chosen during the
+    /// drag (an ask, or a move where the window copied), so a source never removes data the window only copied. One
+    /// taken as an ask copies; one taken with an action the source does not allow is refused, and the source keeps its
+    /// data.
     fn finish_drop(&mut self, token: DropToken, action: Option<DropAction>) {
         let Some(at) = self.landed.iter().position(|d| d.token == token) else {
             return;
@@ -1238,10 +1224,9 @@ impl WindowSystem for WaylandWindowSystem {
         // a drop whose surface or offer is gone is already over
         let _ = match allowed {
             Some(last) => {
-                if drop.chosen != Some(last) {
-                    let bits = drag_actions([&last]);
-                    let _ = self.conn.set_drag_actions(&drop.offer, bits, bits);
-                }
+                // a compositor tells the source only a change of action, so this costs nothing when it agrees
+                let bits = drag_actions([&last]);
+                let _ = self.conn.set_drag_actions(&drop.offer, bits, bits);
                 self.conn.finish_drag(&drop.offer)
             }
             None => self.conn.refuse_drop(&drop.offer),

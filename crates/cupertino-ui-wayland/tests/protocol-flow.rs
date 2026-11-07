@@ -2287,6 +2287,14 @@ mod window_system {
             })
         );
         kit.ws.finish_drop(token, Some(DropAction::Move));
+        assert_eq!(
+            next(&seen),
+            Seen::DropActions {
+                actions: 2,
+                preferred: 2
+            },
+            "the action taken, before the finish"
+        );
         assert_eq!(next(&seen), Seen::DropFinished);
     }
 

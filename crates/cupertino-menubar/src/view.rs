@@ -208,13 +208,19 @@ fn bar<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) -> Windo
     let controller = scene.controller;
     let highlight = controller.highlighted_slot();
     let open = controller.open_slot();
-    let children = controller
+    let mut places = 0;
+    let children: Vec<_> = controller
         .layout()
         .slots
         .iter()
         .map(|slot| {
             let (role, name) = slot_semantics(slot, scene);
+            let place = (role == Role::MenuItem).then(|| {
+                places += 1;
+                places - 1
+            });
             Element::new(SlotNode {
+                place,
                 bar: scene.bar,
                 slot: slot.clone(),
                 look: slot_look(slot, scene),
@@ -241,6 +247,7 @@ fn bar<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) -> Windo
             size: None,
             role: Role::MenuBar,
             name: BAR_TITLE.to_owned(),
+            items: places,
             scrim: scene.scrim,
             input,
             children,
@@ -375,12 +382,19 @@ fn menu<M: Clone + 'static>(
         caret: f.caret(),
         selection: f.selection(),
     });
-    let children = layout
+    let mut places = 0;
+    let children: Vec<_> = layout
         .rows
         .iter()
         .enumerate()
         .map(|(i, row)| {
+            let searching = field.is_some() && row.item.id == HELP_SEARCH;
+            let place = (!row.item.separator && !searching).then(|| {
+                places += 1;
+                places - 1
+            });
             Element::new(RowNode {
+                place,
                 bar: scene.bar,
                 row: row.clone(),
                 origin: BarPoint::new(rect.x, rect.y),
@@ -414,6 +428,7 @@ fn menu<M: Clone + 'static>(
             size: Some(size),
             role: Role::Menu,
             name: open.menu.label.clone(),
+            items: places,
             scrim: None,
             input,
             children,
@@ -578,6 +593,8 @@ struct Root<M> {
     size: Option<Size>,
     role: Role,
     name: String,
+    /// How many items the bar or menu holds, which a screen reader reads with each item's place.
+    items: usize,
     scrim: Option<Rgba>,
     input: fn(Input) -> M,
     children: Vec<Element<M>>,
@@ -608,7 +625,11 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if self.size != old.size {
             Change::Layout
-        } else if self.scrim != old.scrim || self.name != old.name || self.origin != old.origin {
+        } else if self.scrim != old.scrim
+            || self.name != old.name
+            || self.items != old.items
+            || self.origin != old.origin
+        {
             Change::Paint
         } else {
             Change::None
@@ -670,6 +691,7 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(self.role);
         cx.name(self.name.clone());
+        cx.item_count(self.items);
     }
 }
 
@@ -713,6 +735,8 @@ fn clicked<M>(
 
 /// One slot of a bar: its highlight and what it draws.
 struct SlotNode<M> {
+    /// The slot's place among the bar's menus, if it opens one.
+    place: Option<usize>,
     bar: BarId,
     slot: Slot,
     look: SlotLook,
@@ -743,6 +767,7 @@ impl<M: Clone + 'static> Widget<M> for SlotNode<M> {
             || self.highlighted != old.highlighted
             || self.expanded != old.expanded
             || self.name != old.name
+            || self.place != old.place
             || self.tone != old.tone
             || self.font != old.font
             || self.metrics != old.metrics
@@ -844,6 +869,9 @@ impl<M: Clone + 'static> Widget<M> for SlotNode<M> {
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(self.role);
         cx.name(self.name.clone());
+        if let Some(place) = self.place {
+            cx.item_index(place);
+        }
         cx.states(AccessibleStates {
             selected: self.highlighted,
             expanded: self.expanded,
@@ -857,6 +885,8 @@ impl<M: Clone + 'static> Widget<M> for SlotNode<M> {
 
 /// One row of a menu.
 struct RowNode<M> {
+    /// The row's place among the menu's items, separators and the search field not counted.
+    place: Option<usize>,
     bar: BarId,
     row: PopupRow,
     /// The menu's top-left corner in the bar's coordinates.
@@ -982,6 +1012,7 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
         } else if self.row != old.row
             || self.hot != old.hot
             || self.expanded != old.expanded
+            || self.place != old.place
             || self.text_x != old.text_x
             || self.key_width != old.key_width
             || self.field != old.field
@@ -1156,6 +1187,9 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
             }
         }
         cx.name(item.label.clone());
+        if let Some(place) = self.place {
+            cx.item_index(place);
+        }
         if let Some(detail) = &self.row.detail {
             cx.description(detail.clone());
         }

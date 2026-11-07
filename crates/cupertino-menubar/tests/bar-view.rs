@@ -197,7 +197,13 @@ impl Run {
     }
 
     /// Runs until idle, configuring each window it opens and drawing each frame asked for.
+    /// Runs until every window rests, then checks that a screen reader could read every window open.
     fn settle(&mut self) {
+        self.settle_frames();
+        self.driver.assert_accessible("Menu bar");
+    }
+
+    fn settle_frames(&mut self) {
         let active = WindowStates {
             activated: true,
             ..WindowStates::default()

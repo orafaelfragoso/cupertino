@@ -51,7 +51,8 @@ zooms it, as the old window's unified bar did; back / forward, the pop-up button
 presses, and from the keyboard the compositor's Zoom shortcut (Super+Ctrl+Z by default) and the menu bar's Window menu
 zoom, minimize and tile it. A window opens in the icon view. Under the folder the path bar and the status bar can be
 shown; both are hidden by default. The path bar names the folder chain from the root (or from Trash / Recents), each
-folder with its icon, and a click on one goes there; the status bar reads "N items, X available" (`statvfs` of the
+folder with its icon, and a click on one, or Space or Return on it, goes there (each folder is a Tab stop, and the bar
+reads as the group "Path"); the status bar reads "N items, X available" (`statvfs` of the
 folder, read again whenever the listing changes and after a transfer). Changes on disk appear live. The sidebar shows
 the theme's sidebar material where the compositor can draw it, and its opaque fill without desktop effects or under
 Reduce Transparency (`kit::sidebar`).
@@ -60,7 +61,8 @@ Reduce Transparency (`kit::sidebar`).
 touches replace the selection, or toggle against it with Shift or Primary held at the press; near the top or bottom
 edge the view scrolls under the band. A click on the name of the only selected item edits the name after the
 double-click interval, unless a second click (which opens), a scroll or a key comes first (`kit::clicks`). Ctrl with a
-press opens the context menu; Tab and Shift+Tab select the next and previous item by name.
+press opens the context menu; Tab and Shift+Tab select the next and previous item by name, and past the last or before
+the first item the keyboard goes on to the next or previous control.
 
 **Item images** (`kit::item_icons`). Each item in the icon view, the list view and a drag image wears the icon of its
 type from the asset packs and the host icon theme, through the toolkit's `cupertino_kit::file_icons::FileIcons`: the
@@ -154,6 +156,24 @@ cut at 256 characters and escaped, because the body is markup. Without a session
 is written to stderr instead, with the reason. Failures that only explain the window (an entry that can't be read, the
 free space, the default applications) stay on stderr. The wording is approximate.
 
+**Accessibility** (`tests/kit-accessibility.rs`). Every control reads its role, name and state and does its default
+action when assistive technology asks: the places and their eject buttons, back and forward, the View, Tags and Action
+pop-up buttons, the search field, the path bar's folders, the icon view's cells, the list's rows (selected, open or
+closed, with their level and position; Click selects a row alone, Expand and Collapse open and close a folder), the
+column headers (sorted up or down), the transfer row and its Stop button, the name editor and the context menu. Icons
+are decorative, an item reads by its name and never by its path, and the rubber band is not read. Tab goes from the
+sidebar to the toolbar, the folder's items, the path bar's folders and the sidebar's separator, then around. The
+keyboard comes back to the button or item that opened a menu, and to the item a rename commits or cancels; a folder
+closed over the row the keyboard is on leaves it on the folder. A polite live region (`kit::announce`) reads a
+transfer starting and ending ("Copied “a.txt” to “Documents”", "Stopped copying …"), a search's result count and the
+selection's count once it holds more than one item, without taking the keyboard; a single item selected is read by the
+focus that comes to it and a failure by its notification. Each message is a node of its own, so the same words said
+again (a second copy of the same file) are heard again; a rubber band says its count once it is let go, and a
+transfer's progress is not announced. A selected row's text, its secondary columns included, is
+drawn in the selected control text colour on the accent. The focus ring shows on the toolbar buttons, the path bar's
+folders and the rows under Increase Contrast. Over AT-SPI the list is a multiselectable table whose rows carry their
+selected state.
+
 **Removable media** come from udisks2 on the system bus (`udisks`): after Trash, Locations lists every file system of a
 drive that udisks neither hides (`HintIgnore`) nor counts as the system's (`HintSystem`), with usage `filesystem`, and
 every locked encrypted container. A block without a drive, such as a loop device, is left out. A row is named by
@@ -199,7 +219,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | Alt+Primary+P / Primary+/ | show or hide the path bar / the status bar |
 | arrows, Home / End, Page Up / Page Down, typing; Shift / Primary click; Primary+A; a list column header | selection, type-select, select all, sort (again: reverse) |
 | press on empty space and drag (Shift / Primary: toggle) | rubber band (above) |
-| Tab / Shift+Tab | the next / previous item by name |
+| Tab / Shift+Tab | the next / previous item by name; past the last / first, the next / previous control |
 | a folder's triangle, Right / Left in the list | open / close the folder in place |
 | click the name of the only selected item and wait | rename (above) |
 | Primary+Backspace | move the selection to the trash (`$XDG_DATA_HOME/Trash`, freedesktop Trash 1.0); Put Back in the trash |
@@ -208,7 +228,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | Primary+C, Primary+V, Alt+Primary+V | copy, paste item, move item here (above) |
 | right press, Ctrl with a press, Menu, Shift+F10 | context menu (above) |
 | the toolbar's View, Tags and Action buttons | the view modes, the tags, the context menu, below the button |
-| click a folder of the path bar | go there |
+| click a folder of the path bar, or Space / Return on it | go there |
 | Escape | end a rename without renaming, else clear the search |
 | click a removable row / its eject button, File › Eject, Primary+E | mount or unlock it and go there / eject its drive (above) |
 | drag the separator right of the sidebar | resize the sidebar |
@@ -298,6 +318,9 @@ Values live in `metrics.rs`.
 * Recents is listed in the window's sort order, not by last use, and opening a file does not add it to the list.
   Applications shows the desktop entry files of one folder; opening one does not launch the application.
 * The lock badge is not drawn, because entries carry no permission bits.
+* Over AT-SPI the list's table offers no Selection interface (the accessibility bridge gives one only to lists and
+  trees of items), so a screen reader reads the selection row by row. The pop-up buttons do not say whether their menu
+  is open.
 * Removable media: disc images and network mounts are not listed.
 * Opening several files opens each without confirmation; a mixed selection enters the first folder only (approximate).
   Open in New Window opens as many windows as there are selected folders.

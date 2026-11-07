@@ -3,7 +3,7 @@
 //! the focus to the cursor's cell, which the runtime scrolls into view. Arrows go to the nearest cell that way
 //! ([`IconLayout::neighbour`], mirrored in right-to-left layouts), Page Up and Page Down by the rows in view, Home and
 //! End to the first and last item, Return opens, typing selects by name, and Tab and Shift+Tab select the next and the
-//! previous item by name. A press on empty space draws a rubber band ([`super::band`]); a double click opens an item, a
+//! previous item by name, and past the last (or before the first) move the keyboard on to the next control. A press on empty space draws a rubber band ([`super::band`]); a double click opens an item, a
 //! press on the name of the only selected item renames it after the double-click interval ([`super::clicks`]), and a
 //! press with Ctrl held opens the context menu. Read as a list of items.
 
@@ -103,6 +103,21 @@ pub(super) fn by_name<S: AsRef<str>>(
         (Some(at), true) => at.saturating_sub(1),
     };
     order.get(next).copied()
+}
+
+/// The key of item `index`'s cell in the grid of window `id`: one per window, as focus goes to the first window holding
+/// the key.
+pub(super) fn cell_key(id: u64, index: usize) -> Key {
+    Key::from(format!("icon/{id}/{index}"))
+}
+
+/// The index of the item whose cell [`cell_key`] keyed `key`.
+pub(super) fn cell_index(key: &Key) -> Option<u64> {
+    let Key::Str(key) = key else {
+        return None;
+    };
+    let (_, index) = key.strip_prefix("icon/")?.split_once('/')?;
+    index.parse().ok()
 }
 
 /// An item the grid shows: its name and the renditions of its icon or thumbnail.
@@ -254,7 +269,8 @@ impl IconGrid {
         ))
     }
 
-    /// Show `band` and select what it touches: the items whose icon or name it meets.
+    /// Show `band` and select what it touches: the items whose icon or name it meets. The window hears of the band
+    /// before its selection, so it holds the selection's count until the band is let go.
     fn draw_band(&self, band: &Band, cx: &mut EventCx<'_, Message>) {
         let Some(bounds) = cx.bounds() else {
             return;
@@ -272,8 +288,8 @@ impl IconGrid {
             w: rect.width(),
             h: rect.height(),
         });
-        self.select(band.select(&hits), cx);
         cx.emit(Message::Window(self.window, WindowEvent::Band(Some(rect))));
+        self.select(band.select(&hits), cx);
     }
 
     fn pick(&self) -> Pick {
@@ -300,7 +316,7 @@ impl IconGrid {
             next.select_only(index);
         }
         self.select(next, cx);
-        cx.focus_item(FocusTarget::Key(Key::Int(index as u64)));
+        cx.focus_item(FocusTarget::Key(cell_key(self.window, index)));
     }
 
     fn key(
@@ -338,10 +354,15 @@ impl IconGrid {
             TAB | LEFT_TAB if plain => {
                 let back = key.keysym == LEFT_TAB || mods.contains(Mods::SHIFT);
                 let names: Vec<&str> = self.items.iter().map(|i| i.name.as_str()).collect();
-                if let Some(to) = by_name(&names, self.cursor(), back) {
-                    self.move_to(to, false, cx);
-                }
-                return Propagation::Stop;
+                let cursor = self.cursor();
+                // past the last item by name (or before the first) the keyboard goes on to the next control
+                return match by_name(&names, cursor, back).filter(|&to| Some(to) != cursor) {
+                    Some(to) => {
+                        self.move_to(to, false, cx);
+                        Propagation::Stop
+                    }
+                    None => Propagation::Continue,
+                };
             }
             RETURN | KP_ENTER if plain => {
                 return match self.cursor() {
@@ -496,7 +517,7 @@ impl Widget<Message> for IconGrid {
                     pick: Rc::clone(&pick),
                     children,
                 })
-                .key(Key::Int(index as u64))
+                .key(cell_key(self.window, index))
             })
             .chain(band)
             .collect()
@@ -1008,6 +1029,14 @@ impl Widget<Message> for Highlight {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cells_key_names_its_window_and_gives_its_index_back() {
+        assert_ne!(cell_key(1, 4), cell_key(2, 4));
+        assert_eq!(cell_index(&cell_key(1, 4)), Some(4));
+        assert_eq!(cell_index(&Key::Int(4)), None);
+        assert_eq!(cell_index(&Key::from("row/1/x")), None);
+    }
     use crate::layout::icon::{self, Flow, FontMetrics, IconParams, SectionSpec};
 
     /// Ten items of 64 pt icons in a grid four cells wide: rows of 0-3, 4-7 and 8-9.

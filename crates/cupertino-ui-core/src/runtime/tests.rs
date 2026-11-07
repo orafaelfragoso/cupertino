@@ -432,8 +432,9 @@ fn an_activation_token_reaches_the_update_that_asked_and_a_gone_window_gets_none
     assert_eq!(rt.window_system_mut().activations.len(), 1);
 }
 
-/// A message waits for the window's first presented frame, however late its configure comes; asked for once the window
-/// has presented, it comes at once; asked for a window the view does not have, it never comes.
+/// A message waits for the window's first presented frame, however late its configure comes: not the commit alone, but
+/// the frame callback that answers it, and a frame callback before any commit does not count. It comes once; asked for
+/// once the window has presented, it comes at once; asked for a window the view does not have, it never comes.
 #[test]
 fn a_message_waits_until_the_window_has_presented_its_first_frame() {
     let (mut rt, window, _) = start();
@@ -444,10 +445,26 @@ fn a_message_waits_until_the_window_has_presented_its_first_frame() {
     rt.step(steps()).unwrap();
     assert!(rt.model().presented.is_empty(), "still nothing presented");
     assert!(rt.window_system().presented.is_empty());
+    // a frame before anything was committed shows nothing
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(0)));
+    rt.step(steps()).unwrap();
+    assert!(rt.model().presented.is_empty(), "no frame was committed");
 
     configure(&mut rt, window, 1);
     assert_eq!(rt.window_system().presented.len(), 1);
+    assert!(
+        rt.model().presented.is_empty(),
+        "committed, but the compositor has not answered the frame callback"
+    );
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(0)));
+    rt.step(steps()).unwrap();
     assert_eq!(rt.model().presented, ["main"]);
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(0)));
+    rt.step(steps()).unwrap();
+    assert_eq!(rt.model().presented, ["main"], "once");
 
     rt.messages.push_back("await main".into());
     rt.step(steps()).unwrap();

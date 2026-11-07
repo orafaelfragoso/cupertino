@@ -66,8 +66,9 @@ ext-foreign-toplevel-list-v1).
   "An application" for an empty id. It lists the displays and the windows, by title and app id, with nothing
   selected. When the app asked to persist and has an id, a check box "Let “<app>” share it again without asking" is
   offered, unticked.
-- The window takes no answer that grants for 500 ms after its first frame is on screen (the first configure and the
-  commit of a frame; a window the server shows late starts the delay late): clicks, row picks and keys do nothing
+- The window takes no answer that grants for 500 ms after its first frame is on screen (the frame callback that
+  answers its first committed frame; a window the server shows late starts the delay late, and one it never shows
+  stays unarmed): clicks, row picks and keys do nothing
   until then, and a key held since before keeps doing nothing, since Return shares only on a fresh press (its
   repeats are ignored). Share is the default button and is enabled only once armed and a row is picked; Escape cancels at once.
 - The answer to `Start` is `0` with one entry in `streams`: the node id, `source_type`, `size` (logical for a display,

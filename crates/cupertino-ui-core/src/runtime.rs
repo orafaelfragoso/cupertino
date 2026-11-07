@@ -123,7 +123,10 @@ struct WindowState<M> {
     fullscreen: bool,
     /// The compositor is ready for a frame.
     frame_ready: bool,
-    /// A frame of the window has been presented ([`Command::OnPresented`]).
+    /// A frame of the window has been committed; the compositor has not necessarily shown it yet.
+    committed: bool,
+    /// The compositor answered the frame callback of a committed frame, so the window has been shown
+    /// ([`Command::OnPresented`]).
     presented: bool,
     /// Something changed since the last presented frame.
     dirty: bool,
@@ -644,6 +647,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             maximized: false,
             fullscreen: false,
             frame_ready: false,
+            committed: false,
             presented: false,
             dirty: true,
             prepared: false,
@@ -838,6 +842,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
             WindowEvent::Frame(time) => {
                 w.frame_ready = true;
+                // the callback of a committed frame: the compositor has shown it, not only received it
+                w.presented |= w.committed;
                 let animate = std::mem::take(&mut w.animate);
                 if !animate.is_empty() {
                     w.invalidate();
@@ -1518,7 +1524,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             PresentOutcome::Presented => {
                 w.ack = None;
                 w.frame_ready = false;
-                w.presented = true;
+                w.committed = true;
                 self.system.request_frame(w.id);
             }
             PresentOutcome::NotReady => {

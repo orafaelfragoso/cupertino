@@ -326,9 +326,10 @@ pub enum Command<M> {
         on_token: TokenHandler<M>,
     },
     StartDrag(Drag<M>),
-    /// Sends `message` once `window` has presented its first frame: the compositor configured it and a frame of its
-    /// content was committed. At once when it already has; never when the window closes first, or when the view
-    /// that follows this command has no such window.
+    /// Sends `message` once `window` has presented its first frame: the compositor configured it, a frame of its
+    /// content was committed, and the compositor answered that frame's callback. At once when it already has; never
+    /// when the window closes first, when the view that follows this command has no such window, or while the
+    /// compositor sends the window no frame callback (a window it does not show).
     OnPresented {
         window: WindowKey,
         message: M,

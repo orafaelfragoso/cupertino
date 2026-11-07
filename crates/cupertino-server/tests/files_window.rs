@@ -151,9 +151,8 @@ fn files_process(home: &Path, data_dirs: &Path) -> ShellProcess {
     }
 }
 
-/// The file manager's sidebar metrics in points: the toolbar strip over the sidebar, the space above the first
-/// group (approximate in the file manager), a group title row, a medium row and the space between groups.
-const STRIP: f64 = 52.0;
+/// The file manager's sidebar metrics in points: the sidebar runs the window's full height, then the space above the
+/// first group, a group title row, a medium row and the space between groups.
 const SIDEBAR_TOP: f64 = 10.0;
 const GROUP_ROW: f64 = 19.0;
 const ROW: f64 = 28.0;
@@ -162,8 +161,7 @@ const INTERGROUP: f64 = 13.0;
 /// The vertical centre, in window points, of row `row` of the second sidebar group when the first group has
 /// `favourites` rows: the sidebar stacks its groups the same way for any number of places.
 fn second_group_row_centre(favourites: usize, row: usize) -> f64 {
-    STRIP
-        + SIDEBAR_TOP
+    SIDEBAR_TOP
         + GROUP_ROW
         + favourites as f64 * ROW
         + INTERGROUP

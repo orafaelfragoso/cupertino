@@ -34,6 +34,14 @@ pub mod window {
     /// time it takes to change (seconds).
     pub const SEARCH_GROWTH: f64 = 2.5;
     pub const SEARCH_GROW_SECONDS: f64 = 0.2;
+    /// The most of the toolbar the open search field takes.
+    pub const SEARCH_MAX_SHARE: f64 = 0.5;
+    /// Horizontal inset of the toolbar's items from its edges, the leading and trailing fields of the unified metrics
+    /// record, and the space between two items (approximate).
+    pub const TOOLBAR_INSET: f64 = 8.0;
+    pub const TOOLBAR_ITEM_GAP: f64 = 12.0;
+    /// Room the folder's title keeps when the search field grows (approximate).
+    pub const TITLE_MIN: f64 = 60.0;
     pub const TOOLBAR_SHARE: (f64, f64) = (29.0, 25.0);
     pub const TOOLBAR_PREVIEW_BUTTON: (f64, f64) = (28.0, 26.0);
     pub const TOOLBAR_ACTION_POPUP: (f64, f64) = (41.0, 24.0);

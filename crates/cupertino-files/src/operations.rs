@@ -132,33 +132,127 @@ pub fn same_volume(a: &Path, b: &Path) -> io::Result<bool> {
     Ok(fs::metadata(a)?.dev() == fs::metadata(b)?.dev())
 }
 
-fn copy_tree(from: &Path, to: &Path) -> io::Result<()> {
-    let meta = fs::symlink_metadata(from)?;
-    if meta.file_type().is_symlink() {
-        std::os::unix::fs::symlink(fs::read_link(from)?, to)
-    } else if meta.is_dir() {
-        fs::create_dir(to)?;
-        for child in fs::read_dir(from)? {
-            let child = child?;
-            copy_tree(&child.path(), &to.join(child.file_name()))?;
+/// One item a copy took: its path in the source and what it was when it was read.
+struct Copied {
+    path: PathBuf,
+    meta: fs::Metadata,
+}
+
+/// Copy `from` to `to`, which must not exist, without following links. Every item is made exclusively, so nothing
+/// that exists is written over; on a failure what was made of `to` is removed again, so a partial copy is never left
+/// to look complete. The items copied, a folder before what it holds.
+fn copy_new(from: &Path, to: &Path) -> io::Result<Vec<Copied>> {
+    let mut copied = Vec::new();
+    match copy_tree(from, to, &mut copied) {
+        Ok(()) => Ok(copied),
+        Err(e) => {
+            // the first item copied is `to` itself: made by this copy, so it is this copy's to remove
+            if !copied.is_empty() {
+                let _ = remove_made(to);
+            }
+            Err(e)
         }
-        fs::set_permissions(to, meta.permissions())
-    } else if meta.is_file() {
-        fs::copy(from, to).map(|_| ())
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "neither a file, a folder nor a link",
-        ))
     }
 }
 
-fn remove_tree(path: &Path) -> io::Result<()> {
+fn copy_tree(from: &Path, to: &Path, copied: &mut Vec<Copied>) -> io::Result<()> {
+    let meta = fs::symlink_metadata(from)?;
+    let kind = meta.file_type();
+    if kind.is_symlink() {
+        std::os::unix::fs::symlink(fs::read_link(from)?, to)?;
+        copied.push(Copied {
+            path: from.to_path_buf(),
+            meta,
+        });
+    } else if kind.is_dir() {
+        let permissions = meta.permissions();
+        fs::create_dir(to)?;
+        copied.push(Copied {
+            path: from.to_path_buf(),
+            meta,
+        });
+        for child in fs::read_dir(from)? {
+            let child = child?;
+            copy_tree(&child.path(), &to.join(child.file_name()), copied)?;
+        }
+        fs::set_permissions(to, permissions)?;
+    } else if kind.is_file() {
+        let mut source = fs::File::open(from)?;
+        let mut target = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(to)?;
+        copied.push(Copied {
+            path: from.to_path_buf(),
+            meta: meta.clone(),
+        });
+        io::copy(&mut source, &mut target)?;
+        target.set_permissions(meta.permissions())?;
+    } else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "neither a file, a folder nor a link",
+        ));
+    }
+    Ok(())
+}
+
+/// Remove what a failed copy made at `path`, without following links.
+fn remove_made(path: &Path) -> io::Result<()> {
     if fs::symlink_metadata(path)?.is_dir() {
         fs::remove_dir_all(path)
     } else {
         fs::remove_file(path)
     }
+}
+
+/// Remove the originals of a finished copy, a folder's items before the folder. An item that changed since it was
+/// copied stops the removal with an error, and a folder that gained an item is not removed, so nothing that was not
+/// copied is lost.
+fn remove_copied(copied: &[Copied]) -> io::Result<()> {
+    let changed = |path: &Path| {
+        io::Error::other(format!(
+            "“{}” changed while it was copied, so it was left where it was",
+            path.display()
+        ))
+    };
+    for item in copied.iter().rev() {
+        let now = fs::symlink_metadata(&item.path)?;
+        let same = now.ino() == item.meta.ino()
+            && now.dev() == item.meta.dev()
+            && now.file_type() == item.meta.file_type();
+        if !same {
+            return Err(changed(&item.path));
+        }
+        if now.is_dir() {
+            fs::remove_dir(&item.path).map_err(|e| match e.kind() {
+                io::ErrorKind::DirectoryNotEmpty => changed(&item.path),
+                _ => e,
+            })?;
+        } else {
+            if now.len() != item.meta.len()
+                || now.mtime() != item.meta.mtime()
+                || now.mtime_nsec() != item.meta.mtime_nsec()
+            {
+                return Err(changed(&item.path));
+            }
+            fs::remove_file(&item.path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Whether the folder `dest` is `source` or inside it, by path or once links are followed.
+fn inside(dest: &Path, source: &Path) -> bool {
+    if dest.starts_with(source) {
+        return true;
+    }
+    // a folder reached through a link may still be inside: compare where both really are
+    fs::symlink_metadata(source).is_ok_and(|m| m.is_dir())
+        && matches!(
+            (fs::canonicalize(dest), fs::canonicalize(source)),
+            (Ok(dest), Ok(source)) if dest.starts_with(&source)
+        )
 }
 
 /// Move or copy each of `sources` into the folder `dest`, giving an arriving item a free name (`name copy`) when
@@ -172,7 +266,7 @@ pub fn drop_into(sources: &[PathBuf], dest: &Path, action: DropAction) -> Vec<io
 }
 
 fn drop_one(source: &Path, dest: &Path, action: DropAction) -> io::Result<PathBuf> {
-    if dest.starts_with(source) {
+    if inside(dest, source) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "a folder cannot be dropped into itself",
@@ -193,14 +287,16 @@ fn drop_one(source: &Path, dest: &Path, action: DropAction) -> io::Result<PathBu
     }));
     match action {
         DropAction::Move => match rename_no_replace(source, &target) {
-            // Super forces a move across volumes, where no rename reaches: copy, then remove the original
+            // across volumes no rename reaches: copy, then remove the originals once the whole copy is made
             Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
-                copy_tree(source, &target)?;
-                remove_tree(source)?;
+                let copied = copy_new(source, &target)?;
+                remove_copied(&copied)?;
             }
             moved => moved?,
         },
-        DropAction::Copy => copy_tree(source, &target)?,
+        DropAction::Copy => {
+            copy_new(source, &target)?;
+        }
     }
     Ok(target)
 }
@@ -324,6 +420,104 @@ mod tests {
         let moved = drop_into(&[src.join("tree")], &dest, DropAction::Move);
         assert_eq!(moved[0].as_ref().unwrap(), &dest.join("tree copy"));
         assert!(!src.join("tree").exists());
+    }
+
+    #[test]
+    fn a_copy_that_fails_part_way_leaves_nothing_at_the_destination_and_the_source_as_it_was() {
+        let d = tempfile::tempdir().unwrap();
+        let (src, dest) = (d.path().join("src"), d.path().join("dest"));
+        fs::create_dir_all(src.join("tree/inner")).unwrap();
+        fs::create_dir(&dest).unwrap();
+        fs::write(src.join("tree/a.txt"), "a").unwrap();
+        fs::write(src.join("tree/inner/b.txt"), "b").unwrap();
+        // a pipe is none of what a copy takes, wherever the listing puts it
+        let fifo =
+            std::ffi::CString::new(src.join("tree/inner/pipe").as_os_str().as_bytes()).unwrap();
+        // SAFETY: the path is NUL-terminated and outlives the call
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+
+        let placed = drop_into(&[src.join("tree")], &dest, DropAction::Copy);
+        assert!(placed[0].is_err(), "{placed:?}");
+        assert_eq!(
+            fs::read_dir(&dest).unwrap().count(),
+            0,
+            "no partial copy is left"
+        );
+        assert_eq!(fs::read_to_string(src.join("tree/a.txt")).unwrap(), "a");
+        assert_eq!(
+            fs::read_to_string(src.join("tree/inner/b.txt")).unwrap(),
+            "b"
+        );
+    }
+
+    #[test]
+    fn a_copy_never_writes_over_an_item_that_is_there() {
+        let d = tempfile::tempdir().unwrap();
+        let (from, to) = (d.path().join("from.txt"), d.path().join("to.txt"));
+        fs::write(&from, "new").unwrap();
+        fs::write(&to, "old").unwrap();
+        let err = copy_new(&from, &to).err().unwrap();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(&to).unwrap(), "old", "kept, not removed");
+    }
+
+    #[test]
+    fn the_originals_of_a_copy_go_only_when_nothing_changed_while_it_was_made() {
+        let d = tempfile::tempdir().unwrap();
+        let (src, copy) = (d.path().join("src"), d.path().join("copy"));
+        fs::create_dir_all(src.join("inner")).unwrap();
+        fs::write(src.join("a.txt"), "a").unwrap();
+        fs::write(src.join("inner/b.txt"), "b").unwrap();
+        let copied = copy_new(&src, &copy).unwrap();
+        // an item arrives in the folder after the copy listed it
+        fs::write(src.join("inner/late.txt"), "late").unwrap();
+        assert!(remove_copied(&copied).is_err());
+        assert_eq!(
+            fs::read_to_string(src.join("inner/late.txt")).unwrap(),
+            "late"
+        );
+        assert_eq!(fs::read_to_string(copy.join("inner/b.txt")).unwrap(), "b");
+
+        let (src, copy) = (d.path().join("src2"), d.path().join("copy2"));
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("a.txt"), "a").unwrap();
+        let copied = copy_new(&src, &copy).unwrap();
+        // a file written after it was copied
+        fs::write(src.join("a.txt"), "longer").unwrap();
+        assert!(remove_copied(&copied).is_err());
+        assert_eq!(fs::read_to_string(src.join("a.txt")).unwrap(), "longer");
+
+        let (src, copy) = (d.path().join("src3"), d.path().join("copy3"));
+        fs::create_dir_all(src.join("inner")).unwrap();
+        fs::write(src.join("inner/b.txt"), "b").unwrap();
+        std::os::unix::fs::symlink(d.path().join("src2"), src.join("link")).unwrap();
+        let copied = copy_new(&src, &copy).unwrap();
+        remove_copied(&copied).unwrap();
+        assert!(!src.exists());
+        assert!(
+            d.path().join("src2/a.txt").exists(),
+            "a link is removed, not what it points at"
+        );
+        assert_eq!(fs::read_to_string(copy.join("inner/b.txt")).unwrap(), "b");
+        assert_eq!(
+            fs::read_link(copy.join("link")).unwrap(),
+            d.path().join("src2")
+        );
+    }
+
+    #[test]
+    fn a_folder_cannot_be_dropped_into_itself_through_a_link() {
+        let d = tempfile::tempdir().unwrap();
+        fs::create_dir_all(d.path().join("a/b")).unwrap();
+        std::os::unix::fs::symlink(d.path().join("a/b"), d.path().join("link")).unwrap();
+        for action in [DropAction::Copy, DropAction::Move] {
+            let placed = drop_into(&[d.path().join("a")], &d.path().join("link"), action);
+            assert_eq!(
+                placed[0].as_ref().unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+        assert_eq!(fs::read_dir(d.path().join("a/b")).unwrap().count(), 0);
     }
 
     #[test]

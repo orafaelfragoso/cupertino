@@ -414,6 +414,13 @@ impl<M: 'static> Viewport<M> {
         mods: Mods,
         cx: &mut EventCx<'_, M>,
     ) -> bool {
+        // a key held with a command modifier is a shortcut, for the window
+        if [Mods::PRIMARY, Mods::CTRL, Mods::ALT]
+            .into_iter()
+            .any(|m| mods.contains(m))
+        {
+            return false;
+        }
         let page = (self.state.viewport.height - LINE).max(LINE);
         let at = state.offset;
         let rtl = cx.env().direction == LayoutDirection::Rtl;

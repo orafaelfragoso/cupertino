@@ -1,25 +1,36 @@
 //! What a browser window shows for its [`BrowserWindow`].
 
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
+use cupertino_menu_model::{ActionName, MenuBar};
+
 use cupertino_kit::controls::{
-    Column, ColumnWidth, NavigationStack, ScrollView, Scroller, Selection, Sidebar, SidebarItem,
-    SidebarSection, SortOrder, Spacer, SplitView, Stack, TableView, Text, TextField, TextRole,
+    Column, ColumnWidth, ContextMenu, Dialog, DialogAction, DialogButton, DialogKind, Modal,
+    NavigationStack, ScrollView, Scroller, SecureField, Selection, Sidebar, SidebarAccessory,
+    SidebarItem, SidebarSection, SortOrder, Spacer, SplitView, Stack, TableView, Text, TextField,
+    TextRole,
 };
 use cupertino_kit::core::{CommandRegistry, Key, Menus, Shortcut, WindowBackground};
 use cupertino_kit::geometry::{Insets, Size};
 use cupertino_kit::layout::{Align, Axis};
 use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowSpec};
 use cupertino_kit::prelude::*;
+use cupertino_kit::text::SecureBuffer;
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
 
+use super::context::Secondary;
 use super::grid::{self, IconGrid, Item};
-use super::{window_key, BrowserWindow, Event, Message, Session, COLUMNS};
+use super::search::{no_results, SearchSlot};
+use super::{window_key, BrowserWindow, Event, Message, Session, Unlock, COLUMNS};
+use crate::format::{human_size, relative_date};
 use crate::layout::icon::{self, Flow, FontMetrics, IconParams, SectionSpec};
+use crate::menu_bar::MenuAction;
 use crate::metrics::{list_view, sidebar, window as window_metrics};
 use crate::places::{window_title, PlaceGroup};
-use crate::render::{human_size, relative_date};
+use crate::places::{PlaceKind, Volume};
 use crate::settings::{default_columns, ColumnId, IconViewSettings};
+use crate::udisks::Passphrase;
 use crate::window::{metrics, path_chain, status_text, ViewMode};
 use crate::{mime, Entry, SortKey};
 
@@ -32,9 +43,12 @@ pub(super) fn name_field_key(id: u64) -> Key {
     Key::from(format!("name-field/{id}"))
 }
 const ESCAPE: Keysym = Keysym(0xff1b);
+const DOWN: Keysym = Keysym(0xff54);
 /// The icons of a folder and of a file in the grid.
 const FOLDER_SYMBOL: &str = "symbol.folder";
 const DOCUMENT_SYMBOL: &str = "symbol.document";
+/// The symbol of a mounted removable file system's eject button.
+const EJECT_SYMBOL: &str = "symbol.eject";
 const BAR_INSETS: Insets = Insets {
     top: 4.0,
     left: metrics::PATH_BAR_INSET,
@@ -46,6 +60,8 @@ pub(super) fn window(session: &Session, id: u64, win: &BrowserWindow) -> Window<
     let browser = &win.browser;
     let title = window_title(browser.dir(), &session.places);
     let state = win.menu_state(session);
+    let bar = crate::menu_bar::menu_bar(&state);
+    let disabled = BrowserWindow::disabled(&state);
     let (width, height) = window_metrics::DEFAULT_SIZE;
     Window {
         key: window_key(id),
@@ -59,42 +75,73 @@ pub(super) fn window(session: &Session, id: u64, win: &BrowserWindow) -> Window<
             foreign_parent: None,
             input_region: None,
         },
-        shortcuts: shortcuts(id, win),
+        shortcuts: shortcuts(id, win, &bar, &disabled),
         on_close: Some(Message::Window(id, Event::Close)),
         background: WindowBackground::Theme,
         popup: None,
         menus: Some(Menus {
-            bar: crate::menu_bar::menu_bar(&state),
-            disabled: BrowserWindow::disabled(&state),
+            bar,
+            disabled,
             on_activate: send(id, Event::Menu),
         }),
-        content: Element::from(SplitView {
-            label: "Sidebar".into(),
-            axis: Axis::Horizontal,
-            leading: places(session, id, win),
-            trailing: content(session, id, win),
-            layout: win.split,
-            min_leading: metrics::SIDEBAR_MIN,
-            min_trailing: metrics::BROWSER_MIN.0,
-            on_change: Some(send(id, Event::Split)),
-        })
-        .key("browser"),
+        content: Element::from(Modal {
+            content: Element::from(SplitView {
+                label: "Sidebar".into(),
+                axis: Axis::Horizontal,
+                leading: places(session, id, win),
+                trailing: content(session, id, win),
+                layout: win.split,
+                min_leading: metrics::SIDEBAR_MIN,
+                min_trailing: metrics::BROWSER_MIN.0,
+                on_change: Some(send(id, Event::Split)),
+            })
+            .key("browser"),
+            dialog: win.unlock.as_ref().map(|unlock| unlock_sheet(id, unlock)),
+        }),
     }
 }
 
-/// Escape ends a rename without renaming, once the field has passed the key on.
-fn shortcuts(id: u64, win: &BrowserWindow) -> CommandRegistry<Message> {
-    let registry = CommandRegistry::new();
-    match win.rename {
-        Some(_) => registry.with(
-            Shortcut {
-                mods: Mods::NONE,
-                keysym: ESCAPE,
-            },
-            Message::Window(id, Event::NameCancelled),
-        ),
-        None => registry,
+/// The chords of the menus' enabled items, Primary+Down to open the selection, and Escape, once a field has passed it
+/// on: it ends a rename without renaming, else it clears the search.
+fn shortcuts(
+    id: u64,
+    win: &BrowserWindow,
+    bar: &MenuBar,
+    disabled: &BTreeSet<ActionName>,
+) -> CommandRegistry<Message> {
+    let mut registry = CommandRegistry::new();
+    for (chord, action) in crate::menu_bar::chords(bar) {
+        let Some(keysym) = crate::menu_bar::keysym(chord.key.name()) else {
+            continue;
+        };
+        if !disabled.contains(&action.name()) {
+            let shortcut = Shortcut {
+                mods: chord.modifiers,
+                keysym: Keysym(keysym),
+            };
+            registry.insert(shortcut, Message::Window(id, Event::Menu(action.name())));
+        }
     }
+    if !disabled.contains(&MenuAction::Open.name()) {
+        let open_down = Shortcut {
+            mods: Mods::PRIMARY,
+            keysym: DOWN,
+        };
+        registry.insert(
+            open_down,
+            Message::Window(id, Event::Menu(MenuAction::Open.name())),
+        );
+    }
+    let escape = Shortcut {
+        mods: Mods::NONE,
+        keysym: ESCAPE,
+    };
+    if win.rename.is_some() {
+        registry.insert(escape, Message::Window(id, Event::NameCancelled));
+    } else if !win.search.is_empty() {
+        registry.insert(escape, Message::Window(id, Event::SearchCleared));
+    }
+    registry
 }
 
 fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
@@ -113,16 +160,9 @@ fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
             title: Some(group.title().into()),
             items: shown
                 .iter()
-                .map(|&i| &session.places[i])
-                .filter(|p| p.group == group)
-                .map(|p| SidebarItem {
-                    key: Key::from(format!("place-{}", p.name)),
-                    label: p.name.clone(),
-                    icon: Some(p.kind.symbol().into()),
-                    description: None,
-                    accessory: None,
-                    busy: false,
-                })
+                .copied()
+                .filter(|&i| session.places[i].group == group)
+                .map(|i| place_item(session, i))
                 .collect(),
         })
         .filter(|s: &SidebarSection| !s.items.is_empty())
@@ -137,18 +177,112 @@ fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         scroll: win.sidebar_scroll,
         on_scroll: send(id, Event::SidebarScroll),
         on_select: Some(send(id, move |row| Event::Place(shown[row]))),
-        on_accessory: None,
+        on_accessory: Some(send(id, Event::Accessory)),
     })
     .key("places")
 }
 
+/// The key of place `index`'s row: a folder's by its name, a removable file system's by its udisks object, so a row
+/// keeps its focus and accessible object while others come and go.
+pub(super) fn place_key(session: &Session, index: usize) -> Key {
+    let device = index
+        .checked_sub(session.standard_places)
+        .and_then(|row| session.media.device(row));
+    match device {
+        Some((device, _)) => Key::from(format!("device-{}", device.object.as_str())),
+        None => Key::from(format!("place-{}", session.places[index].name)),
+    }
+}
+
+/// The row of place `index`. A removable file system is described for assistive technology ("Removable", and whether
+/// it is mounted, locked or read-only), a mounted one has an eject button, and one with a call under way is busy.
+fn place_item(session: &Session, index: usize) -> SidebarItem {
+    let place = &session.places[index];
+    let device = index
+        .checked_sub(session.standard_places)
+        .and_then(|row| session.media.device(row));
+    let description = device.map(|(device, _)| {
+        let mut words = vec!["Removable"];
+        if device.locked {
+            words.push("locked");
+        } else if device.mount.is_none() {
+            words.push("not mounted");
+        }
+        if device.read_only {
+            words.push("read-only");
+        }
+        words.join(", ")
+    });
+    SidebarItem {
+        key: place_key(session, index),
+        label: place.name.clone(),
+        icon: Some(place.kind.symbol().into()),
+        description,
+        accessory: place.ejectable().then(|| SidebarAccessory {
+            symbol: EJECT_SYMBOL.into(),
+            label: format!("Eject {}", place.name),
+        }),
+        busy: place.kind == PlaceKind::Removable(Volume::Busy),
+    }
+}
+
+/// The sheet that asks for the passphrase of a locked container.
+fn unlock_sheet(id: u64, unlock: &Unlock) -> Dialog<Message> {
+    Dialog {
+        kind: DialogKind::Dialog,
+        title: format!("Unlock “{}”", unlock.name),
+        message: "Enter the passphrase of this encrypted volume.".into(),
+        body: Some(
+            Element::new(SecureField {
+                label: "Passphrase".into(),
+                placeholder: "Passphrase".into(),
+                enabled: true,
+                on_change: Some(Box::new(move |typed: &SecureBuffer| {
+                    let passphrase = typed.with_secret(Passphrase::new);
+                    Message::Window(id, Event::Passphrase(passphrase))
+                })),
+                on_submit: Some(Box::new(move |_: &SecureBuffer| {
+                    Message::Window(id, Event::Unlock)
+                })),
+            })
+            .key("passphrase"),
+        ),
+        buttons: vec![
+            DialogButton {
+                label: "Cancel".into(),
+                action: DialogAction::Cancel,
+                on_press: Message::Window(id, Event::UnlockCancelled),
+            },
+            DialogButton {
+                label: "Unlock".into(),
+                action: DialogAction::Default,
+                on_press: Message::Window(id, Event::Unlock),
+            },
+        ],
+    }
+}
+
 fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
     let history = win.browser.history();
+    let folder = match (win.view, win.browser.no_results()) {
+        (ViewMode::List, false) => list(session, id, win),
+        (ViewMode::List, true) => no_results(list(session, id, win), list_view::HEADER_HEIGHT),
+        (ViewMode::Icons, false) => icons(session, id, win),
+        (ViewMode::Icons, true) => no_results(icons(session, id, win), 0.0),
+    };
+    // a secondary press anywhere in the folder opens a context menu: an item's cell says it was on the item first
+    let folder = Element::new(Secondary {
+        message: Message::Window(id, Event::SecondaryPress(None)),
+        children: vec![folder.fill()],
+    })
+    .fill();
     let mut children = vec![Element::from(NavigationStack {
-        content: match win.view {
-            ViewMode::List => list(session, id, win),
-            ViewMode::Icons => icons(session, id, win),
-        },
+        content: Element::new(ContextMenu {
+            content: folder,
+            on_open: Some(send(id, Event::ContextMenu)),
+        })
+        .key("folder")
+        .fill(),
         toolbar: toolbar(session, id, win),
         can_go_back: history.back_target().is_some(),
         can_go_forward: history.forward_target().is_some(),
@@ -183,31 +317,50 @@ fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> 
     .fill()
 }
 
+/// The folder's title, which takes the room the other items leave, then the search field, which grows into it while it
+/// has the keyboard or text ([`crate::search_field`]).
 fn toolbar(session: &Session, id: u64, win: &BrowserWindow) -> Vec<Element<Message>> {
+    let field = Element::new(TextField {
+        label: "Search".into(),
+        placeholder: "Search".into(),
+        value: win.search.clone(),
+        revision: win.search_revision,
+        purpose: ContentPurpose::Normal,
+        enabled: true,
+        on_change: Some(send(id, Event::Search)),
+        on_submit: None,
+        selection: None,
+        initial: false,
+    })
+    .key("search")
+    .width(win.search_width.width());
+    // a stack that fills the room gives the title its width, so a long one ends in an ellipsis, and centres it
+    let title = Element::new(Stack {
+        axis: Axis::Vertical,
+        padding: Insets::ZERO,
+        spacing: 0.0,
+        align: Align::Stretch,
+        children: vec![
+            Element::new(Spacer { min: 0.0 }),
+            text(
+                window_title(win.browser.dir(), &session.places),
+                TextRole::Section,
+                false,
+            )
+            .key("title"),
+            Element::new(Spacer { min: 0.0 }),
+        ],
+    })
+    .fill();
     vec![
-        text(
-            window_title(win.browser.dir(), &session.places),
-            TextRole::Section,
-            false,
-        )
-        .key("title"),
-        Element::new(Spacer {
-            min: metrics::TITLE_TRAILING_GAP,
-        }),
-        Element::new(TextField {
-            label: "Search".into(),
-            placeholder: "Search".into(),
-            value: win.search.clone(),
-            revision: win.search_revision,
-            purpose: ContentPurpose::Normal,
-            enabled: true,
-            on_change: Some(send(id, Event::Search)),
-            on_submit: None,
-            selection: None,
-            initial: false,
+        title,
+        Element::new(SearchSlot {
+            window: id,
+            animating: win.search_width.animating(),
+            children: vec![field],
         })
-        .key("search")
-        .width(window_metrics::TOOLBAR_SEARCH_FIELD.0),
+        .key("search-slot")
+        .width(win.search_width.width()),
     ]
 }
 
@@ -272,7 +425,7 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
                 return name_field(id, value.clone(), *revision, selection.clone());
             }
             // a stack that fills the cell gives the text its width, so a long one ends in an ellipsis
-            Element::new(Stack {
+            let cell = Element::new(Stack {
                 axis: Axis::Vertical,
                 padding: Insets::ZERO,
                 spacing: 0.0,
@@ -286,6 +439,11 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
                     ),
                     Element::new(Spacer { min: 0.0 }),
                 ],
+            })
+            .fill();
+            Element::new(Secondary {
+                message: Message::Window(id, Event::SecondaryPress(Some(row))),
+                children: vec![cell],
             })
             .fill()
         }),

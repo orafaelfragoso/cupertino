@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use cupertino_files::notice::Notices;
 use cupertino_files::places::{window_title, PlaceKind};
 use cupertino_files::udisks::{Device, Report, Volumes, MANAGER_PATH, UDISKS_NAME};
-use cupertino_kit::core::Key;
+use cupertino_kit::core::Role;
 use cupertino_test_bus::{missing_tool, PrivateBus};
 use zbus::blocking::Connection;
 use zbus::object_server::SignalEmitter;
@@ -26,6 +26,10 @@ struct State {
     busy: HashSet<String>,
     /// The error a mount fails with.
     refuse_mount: Option<Fail>,
+    /// Where file systems are mounted, each in a folder named by its block; `/run/media/ada` when empty.
+    mount_root: String,
+    /// The passphrase that unlocks every container.
+    passphrase: String,
 }
 
 type Shared = Arc<Mutex<State>>;
@@ -37,6 +41,7 @@ enum Fail {
     ZBus(zbus::Error),
     DeviceBusy(String),
     NotAuthorizedDismissed(String),
+    Failed(String),
 }
 
 struct Block {
@@ -47,6 +52,8 @@ struct Block {
     system: bool,
     drive: OwnedObjectPath,
     size: u64,
+    read_only: bool,
+    backing: OwnedObjectPath,
 }
 
 impl Default for Block {
@@ -59,6 +66,8 @@ impl Default for Block {
             system: false,
             drive: OwnedObjectPath::try_from("/").unwrap(),
             size: 0,
+            read_only: false,
+            backing: OwnedObjectPath::try_from("/").unwrap(),
         }
     }
 }
@@ -93,6 +102,87 @@ impl Block {
     fn size(&self) -> u64 {
         self.size
     }
+    #[zbus(property)]
+    fn read_only(&self) -> bool {
+        self.read_only
+    }
+    #[zbus(property)]
+    fn crypto_backing_device(&self) -> OwnedObjectPath {
+        self.backing.clone()
+    }
+}
+
+/// An encrypted container whose cleartext block, once unlocked, is `<id>_clear` with the label `label`.
+struct Encrypted {
+    id: String,
+    label: &'static str,
+    cleartext: OwnedObjectPath,
+    state: Shared,
+}
+
+#[zbus::interface(name = "org.freedesktop.UDisks2.Encrypted")]
+impl Encrypted {
+    #[zbus(property)]
+    fn cleartext_device(&self) -> OwnedObjectPath {
+        self.cleartext.clone()
+    }
+
+    async fn unlock(
+        &mut self,
+        passphrase: String,
+        _options: HashMap<String, OwnedValue>,
+        #[zbus(object_server)] server: &zbus::ObjectServer,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> Result<OwnedObjectPath, Fail> {
+        let right = {
+            let mut state = self.state.lock().unwrap();
+            let right = passphrase == state.passphrase;
+            state.log.push(format!("Unlock {} right={right}", self.id));
+            right
+        };
+        if !right {
+            // a service that echoes what it was sent: the window must not pass that on
+            return Err(Fail::Failed(format!(
+                "Error unlocking /dev/{}: wrong passphrase {passphrase}",
+                self.id
+            )));
+        }
+        let clear = format!("{}_clear", self.id);
+        let block = Block {
+            label: self.label,
+            backing: OwnedObjectPath::try_from(block_path(&self.id)).unwrap(),
+            ..Block::default()
+        };
+        server.at(block_path(&clear), block).await?;
+        let filesystem = Filesystem {
+            id: clear.clone(),
+            mount: None,
+            state: self.state.clone(),
+        };
+        server.at(block_path(&clear), filesystem).await?;
+        self.cleartext = OwnedObjectPath::try_from(block_path(&clear)).unwrap();
+        self.cleartext_device_changed(&emitter).await?;
+        Ok(self.cleartext.clone())
+    }
+
+    async fn lock(
+        &mut self,
+        _options: HashMap<String, OwnedValue>,
+        #[zbus(object_server)] server: &zbus::ObjectServer,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> Result<(), Fail> {
+        self.state
+            .lock()
+            .unwrap()
+            .log
+            .push(format!("Lock {}", self.id));
+        let clear = block_path(&format!("{}_clear", self.id));
+        server.remove::<Filesystem, _>(clear.as_str()).await?;
+        server.remove::<Block, _>(clear.as_str()).await?;
+        self.cleartext = OwnedObjectPath::try_from("/").unwrap();
+        self.cleartext_device_changed(&emitter).await?;
+        Ok(())
+    }
 }
 
 struct Filesystem {
@@ -126,7 +216,13 @@ impl Filesystem {
         if let Some(e) = refused {
             return Err(e);
         }
-        let at = format!("/run/media/ada/{}", self.id);
+        let root = self.state.lock().unwrap().mount_root.clone();
+        let root = if root.is_empty() {
+            "/run/media/ada".to_owned()
+        } else {
+            root
+        };
+        let at = format!("{root}/{}", self.id);
         self.mount = Some(at.clone());
         self.mount_points_changed(&emitter).await?;
         Ok(at)
@@ -299,6 +395,25 @@ impl Fake {
                 },
             )
             .unwrap();
+    }
+
+    /// A locked encrypted container `id` on the drive `drive`, which holds a file system labelled `label`.
+    fn encrypted(&self, id: &str, drive: &str, label: &'static str) {
+        let block = Block {
+            usage: "crypto",
+            drive: OwnedObjectPath::try_from(drive_path(drive)).unwrap(),
+            size: 8_000_000_000,
+            ..Block::default()
+        };
+        let server = self.udisks.object_server();
+        server.at(block_path(id), block).unwrap();
+        let encrypted = Encrypted {
+            id: id.into(),
+            label,
+            cleartext: OwnedObjectPath::try_from("/").unwrap(),
+            state: self.state.clone(),
+        };
+        server.at(block_path(id), encrypted).unwrap();
     }
 
     fn remove(&self, id: &str) {
@@ -579,10 +694,7 @@ fn eject_from_the_window_on_a_card_goes_home_and_ejects_its_drive() {
         Notices::start(None),
         Some(fake.bus.connect()),
     );
-    run.wait_until(|run| {
-        let runtime = run.driver.runtime();
-        runtime.find(run.window, &Key::from("place-CARD")).is_some()
-    });
+    run.wait_until(|run| row(run, "CARD", "Removable"));
     assert!(!run.disabled().contains(&common::action("eject")));
 
     run.menu("eject");
@@ -592,8 +704,7 @@ fn eject_from_the_window_on_a_card_goes_home_and_ejects_its_drive() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(fake.log(), ["Unmount sdc1 0", "Eject card 0"]);
-    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from);
-    assert_eq!(run.title(), window_title(&home, &[]));
+    assert_eq!(run.title(), window_title(&run.home(), &[]));
 }
 
 #[test]
@@ -714,4 +825,319 @@ fn without_udisks_on_the_bus_there_are_no_devices_until_it_comes() {
     woken.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(volumes.poll(), [Report::Devices(Vec::new())]);
     drop(udisks);
+}
+
+/// A Kit window on `folder` of `home`, with Documents (`home`) in the sidebar and the fake's removable media.
+fn kit(fake: &Fake, home: tempfile::TempDir, folder: PathBuf) -> common::Run {
+    let documents = common::place("Documents", home.path(), PlaceKind::Documents);
+    common::Run::start(
+        home,
+        folder,
+        vec![documents],
+        Notices::start(Some(fake.bus.connect())),
+        Some(fake.bus.connect()),
+    )
+}
+
+/// Whether the sidebar has a row named `name` described as `description`.
+fn row(run: &common::Run, name: &str, description: &str) -> bool {
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    snapshot.accessibility.iter().any(|(_, node)| {
+        node.role == Role::ListItem
+            && node.name.as_deref() == Some(name)
+            && node.description.as_deref() == Some(description)
+    })
+}
+
+/// Waits up to 5 s for the fake's log to hold `count` lines.
+fn wait_for_log(fake: &Fake, count: usize) -> Vec<String> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while fake.log().len() < count {
+        assert!(Instant::now() < deadline, "log {:?}", fake.log());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    fake.log()
+}
+
+#[test]
+fn a_click_on_a_device_mounts_it_and_takes_the_window_that_asked_there() {
+    let Some(fake) = Fake::start() else { return };
+    let home = tempfile::tempdir().unwrap();
+    let media = home.path().join("media");
+    std::fs::create_dir_all(media.join("sdb1")).unwrap();
+    std::fs::write(media.join("sdb1/photo.jpg"), "").unwrap();
+    fake.state.lock().unwrap().mount_root = media.to_string_lossy().into_owned();
+    fake.drive("usb", "Kingston", "DataTraveler", false);
+    fake.block(
+        "sdb1",
+        Some("usb"),
+        None,
+        Block {
+            label: "KINGSTON",
+            ..Block::default()
+        },
+    );
+    let folder = home.path().to_path_buf();
+    let mut run = kit(&fake, home, folder);
+    run.wait_until(|run| row(run, "KINGSTON", "Removable, not mounted"));
+    let first = run.window;
+    run.menu("new");
+    let second = run.windows()[1];
+    run.activate(second);
+    run.wait_until(|run| row(run, "KINGSTON", "Removable, not mounted"));
+
+    run.click_named(Role::ListItem, "KINGSTON");
+    assert_eq!(wait_for_log(&fake, 1), ["Mount sdb1 []"]);
+    run.wait_until(|run| run.title() == "sdb1");
+    run.wait_until(|run| run.rows() == ["photo.jpg"]);
+    assert!(row(&run, "KINGSTON", "Removable"));
+    assert_eq!(
+        run.named(Role::Button)
+            .iter()
+            .filter(|b| *b == "Eject KINGSTON")
+            .count(),
+        1
+    );
+    run.driver.look(run.window, "files-device-mounted").unwrap();
+
+    // the other window stayed where it was
+    run.activate(first);
+    assert_ne!(run.title(), "sdb1");
+}
+
+#[test]
+fn the_eject_button_unmounts_every_partition_and_the_window_goes_home() {
+    let Some(fake) = Fake::start() else { return };
+    let home = tempfile::tempdir().unwrap();
+    let (a, b) = (home.path().join("A"), home.path().join("B"));
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    fake.drive("card", "", "", true);
+    let labelled = |label| Block {
+        label,
+        ..Block::default()
+    };
+    fake.block(
+        "sdc1",
+        Some("card"),
+        Some(a.to_str().unwrap()),
+        labelled("A"),
+    );
+    fake.block(
+        "sdc2",
+        Some("card"),
+        Some(b.to_str().unwrap()),
+        labelled("B"),
+    );
+    let mut run = kit(&fake, home, b.clone());
+    run.wait_until(|run| row(run, "A", "Removable") && row(run, "B", "Removable"));
+    assert_eq!(run.title(), "B");
+
+    run.click_named(Role::Button, "Eject A");
+    assert_eq!(
+        wait_for_log(&fake, 3),
+        ["Unmount sdc1 0", "Unmount sdc2 0", "Eject card 0"]
+    );
+    assert_eq!(run.title(), window_title(&run.home(), &[]), "off the card");
+}
+
+#[test]
+fn a_read_only_medium_is_described_so_and_takes_nothing_new() {
+    let Some(fake) = Fake::start() else { return };
+    let home = tempfile::tempdir().unwrap();
+    let disc = home.path().join("DISC");
+    std::fs::create_dir_all(&disc).unwrap();
+    fake.drive("optical", "", "", true);
+    fake.block(
+        "sr0",
+        Some("optical"),
+        Some(disc.to_str().unwrap()),
+        Block {
+            label: "DISC",
+            read_only: true,
+            ..Block::default()
+        },
+    );
+    let mut run = kit(&fake, home, disc);
+    run.wait_until(|run| row(run, "DISC", "Removable, read-only"));
+    let disabled = run.disabled();
+    for name in ["new-folder", "move-to-trash", "duplicate"] {
+        assert!(disabled.contains(&common::action(name)), "{name}");
+    }
+}
+
+#[test]
+fn a_device_pulled_out_leaves_the_sidebar_and_its_window_goes_home_still_answering() {
+    let Some(fake) = Fake::start() else { return };
+    let home = tempfile::tempdir().unwrap();
+    let stick = home.path().join("STICK");
+    std::fs::create_dir_all(stick.join("Photos")).unwrap();
+    fake.drive("usb", "Kingston", "DataTraveler", false);
+    fake.block(
+        "sdb1",
+        Some("usb"),
+        Some(stick.to_str().unwrap()),
+        Block {
+            label: "STICK",
+            ..Block::default()
+        },
+    );
+    let mut run = kit(&fake, home, stick.clone());
+    run.wait_until(|run| row(run, "STICK", "Removable") && run.rows() == ["Photos"]);
+
+    // no eject: the device just goes
+    fake.remove("sdb1");
+    run.wait_until(|run| !run.named(Role::ListItem).contains(&"STICK".to_owned()));
+    assert_eq!(run.title(), window_title(&run.home(), &[]));
+    assert!(run
+        .named(Role::Button)
+        .iter()
+        .all(|b| !b.starts_with("Eject")));
+    // the window still answers
+    run.menu("toggle-status-bar");
+    assert!(run
+        .named(Role::StaticText)
+        .iter()
+        .any(|t| t.ends_with("items") || t.contains("item")));
+    assert!(
+        fake.log().is_empty(),
+        "nothing was asked of udisks: {:?}",
+        fake.log()
+    );
+}
+
+#[test]
+fn a_locked_container_asks_for_its_passphrase_and_never_shows_or_reports_it() {
+    const WRONG: &str = "hunter2-wrong";
+    const RIGHT: &str = "correct horse";
+    const RETURN: u32 = 0xff0d;
+    let Some(fake) = Fake::start() else { return };
+    let home = tempfile::tempdir().unwrap();
+    let media = home.path().join("media");
+    std::fs::create_dir_all(media.join("sdb1_clear")).unwrap();
+    {
+        let mut state = fake.state.lock().unwrap();
+        state.mount_root = media.to_string_lossy().into_owned();
+        state.passphrase = RIGHT.into();
+    }
+    fake.drive("usb", "Kingston", "DataTraveler", false);
+    fake.encrypted("sdb1", "usb", "Secrets");
+    let folder = home.path().to_path_buf();
+    let mut run = kit(&fake, home, folder);
+    run.wait_until(|run| row(run, "Kingston DataTraveler", "Removable, locked"));
+
+    run.click_named(Role::ListItem, "Kingston DataTraveler");
+    run.wait_until(|run| run.named(Role::PasswordInput) == ["Passphrase"]);
+    run.driver.look(run.window, "files-unlock-sheet").unwrap();
+    run.click("passphrase");
+    run.type_text(WRONG);
+    for text in run.read_aloud() {
+        assert!(!text.contains(WRONG), "assistive technology reads {text:?}");
+    }
+    run.key(RETURN, None);
+    let log = fake.log_once_notified();
+    assert_eq!(log[0], "Unlock sdb1 right=false");
+    assert!(
+        log[1].starts_with(
+            "Notify Files: “Kingston DataTraveler” couldn't be unlocked / The call failed."
+        ),
+        "{log:?}"
+    );
+    assert!(
+        log.iter().all(|l| !l.contains(WRONG)),
+        "the passphrase leaked: {log:?}"
+    );
+    run.wait_until(|run| run.named(Role::PasswordInput).is_empty());
+    run.wait_until(|run| row(run, "Kingston DataTraveler", "Removable, locked"));
+
+    // again, with the right one: unlocked, mounted and shown
+    run.click_named(Role::ListItem, "Kingston DataTraveler");
+    run.wait_until(|run| run.named(Role::PasswordInput) == ["Passphrase"]);
+    run.click("passphrase");
+    run.type_text(RIGHT);
+    run.click_named(Role::Button, "Unlock");
+    run.wait_until(|run| run.title() == "sdb1_clear");
+    run.wait_until(|run| row(run, "Secrets", "Removable"));
+    assert!(!run
+        .named(Role::ListItem)
+        .contains(&"Kingston DataTraveler".to_owned()));
+    for text in run.read_aloud() {
+        assert!(!text.contains(RIGHT), "assistive technology reads {text:?}");
+    }
+
+    // an eject unmounts, locks the container again and ejects the drive
+    run.click_named(Role::Button, "Eject Secrets");
+    let log = wait_for_log(&fake, 7);
+    assert_eq!(
+        log[2..],
+        [
+            "Unlock sdb1 right=true",
+            "Mount sdb1_clear []",
+            "Unmount sdb1_clear 0",
+            "Lock sdb1",
+            "PowerOff usb 0",
+        ][..]
+    );
+    assert!(log.iter().all(|l| !l.contains(RIGHT)));
+    run.wait_until(|run| row(run, "Kingston DataTraveler", "Removable, locked"));
+}
+
+#[test]
+fn cancel_closes_the_passphrase_sheet_without_a_call() {
+    const ESCAPE: u32 = 0xff1b;
+    let Some(fake) = Fake::start() else { return };
+    let home = tempfile::tempdir().unwrap();
+    fake.drive("usb", "Kingston", "DataTraveler", false);
+    fake.encrypted("sdb1", "usb", "Secrets");
+    let folder = home.path().to_path_buf();
+    let mut run = kit(&fake, home, folder);
+    run.wait_until(|run| row(run, "Kingston DataTraveler", "Removable, locked"));
+    run.click_named(Role::ListItem, "Kingston DataTraveler");
+    run.wait_until(|run| run.named(Role::PasswordInput) == ["Passphrase"]);
+    run.key(ESCAPE, None);
+    run.wait_until(|run| run.named(Role::PasswordInput).is_empty());
+    run.click_named(Role::ListItem, "Kingston DataTraveler");
+    run.wait_until(|run| run.named(Role::PasswordInput) == ["Passphrase"]);
+    run.click_named(Role::Button, "Cancel");
+    run.wait_until(|run| run.named(Role::PasswordInput).is_empty());
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(fake.log().is_empty(), "{:?}", fake.log());
+}
+
+#[test]
+fn a_busy_file_system_names_the_program_that_keeps_it() {
+    let Some(fake) = Fake::start() else { return };
+    let home = tempfile::tempdir().unwrap();
+    let card = home.path().join("CARD");
+    std::fs::create_dir_all(&card).unwrap();
+    // a program whose working folder is on the card
+    let mut holder = std::process::Command::new("sleep")
+        .arg("30")
+        .current_dir(&card)
+        .spawn()
+        .unwrap();
+    fake.drive("card", "", "", true);
+    fake.block(
+        "sdc1",
+        Some("card"),
+        Some(card.to_str().unwrap()),
+        Block {
+            label: "CARD",
+            ..Block::default()
+        },
+    );
+    fake.state.lock().unwrap().busy.insert("sdc1".into());
+    let mut watch = fake.watch();
+    let devices = watch.devices(&["CARD"]);
+    watch.volumes.eject(&devices[0], devices.clone());
+    let log = fake.log_once_notified();
+    holder.kill().unwrap();
+    let _ = holder.wait();
+    assert_eq!(
+        log,
+        [
+            "Unmount sdc1 0",
+            "Notify Files: “CARD” wasn't ejected / “sleep” is using it. Quit it and try again. (transient Some(true))"
+        ]
+    );
 }

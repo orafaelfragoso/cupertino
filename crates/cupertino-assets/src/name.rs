@@ -70,7 +70,7 @@ pub const RASTER_NAMES: [&str; 26] = [
 ];
 
 /// The template symbol names the shell looks up.
-pub const SYMBOL_NAMES: [&str; 58] = [
+pub const SYMBOL_NAMES: [&str; 59] = [
     "symbol.accessibility",
     "symbol.appearance",
     "symbol.applications",
@@ -94,6 +94,7 @@ pub const SYMBOL_NAMES: [&str; 58] = [
     "symbol.externaldrive",
     "symbol.file-sharing",
     "symbol.film",
+    "symbol.folder",
     "symbol.gallery",
     "symbol.grid",
     "symbol.house",

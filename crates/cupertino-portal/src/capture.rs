@@ -1154,6 +1154,8 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, Part> for Wayland {
 
 #[cfg(test)]
 mod tests {
+    use cupertino_wayland_client::{OutputGeometry, Scale};
+
     use super::*;
 
     #[test]
@@ -1173,5 +1175,53 @@ mod tests {
         assert_eq!(pixels(&window, &both), [Pixel::Bgra, Pixel::Bgrx]);
         assert_eq!(pixels(&window, &[wl_shm::Format::Xrgb8888]), [Pixel::Bgrx]);
         assert!(pixels(&display, &[wl_shm::Format::Rgb565]).is_empty());
+    }
+
+    fn info(transform: OutputTransform, geometry: Option<OutputGeometry>) -> OutputInfo {
+        OutputInfo {
+            id: OutputId::from_registry_name(1),
+            name: Some("DP-1".to_owned()),
+            description: None,
+            make: None,
+            model: None,
+            physical_size_mm: None,
+            transform,
+            scale: Scale::from_integer(2).unwrap(),
+            mode: Some((3840, 2160)),
+            refresh_mhz: None,
+            geometry,
+        }
+    }
+
+    #[test]
+    fn a_display_sits_by_its_logical_geometry_else_by_its_mode_turned_over_its_scale() {
+        let at = OutputGeometry {
+            x: 1920,
+            y: 0,
+            width: 1080,
+            height: 1920,
+        };
+        assert_eq!(
+            placement(&info(OutputTransform::Rotated90, Some(at))),
+            Placement {
+                position: (1920, 0),
+                size: (1080, 1920)
+            }
+        );
+        for (transform, size) in [
+            (OutputTransform::Normal, (1920, 1080)),
+            (OutputTransform::Rotated90, (1080, 1920)),
+            (OutputTransform::Rotated180, (1920, 1080)),
+            (OutputTransform::Flipped270, (1080, 1920)),
+        ] {
+            assert_eq!(
+                placement(&info(transform, None)),
+                Placement {
+                    position: (0, 0),
+                    size
+                },
+                "{transform:?}"
+            );
+        }
     }
 }

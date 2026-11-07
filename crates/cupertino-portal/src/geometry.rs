@@ -181,9 +181,9 @@ mod tests {
     /// An image whose every pixel differs: its red channel is ten times the column and its green channel the row.
     fn marked(width: u32, height: u32) -> Pixmap {
         let mut image = Pixmap::new(width, height).unwrap();
-        for (i, px) in image.data_mut().chunks_exact_mut(4).enumerate() {
+        for (i, px) in image.pixels_mut().iter_mut().enumerate() {
             let (x, y) = (i as u32 % width, i as u32 / width);
-            px.copy_from_slice(&[x as u8 * 10, y as u8 * 10, 0, 255]);
+            *px = tiny_skia::ColorU8::from_rgba(x as u8 * 10, y as u8 * 10, 0, 255).premultiply();
         }
         image
     }

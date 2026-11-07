@@ -70,7 +70,7 @@ fn node(
 }
 
 /// A window with a text label, an OK button, a password field that, like a careless core, still carries its value, and
-/// a list of 50,000 items that holds only the 40,000th.
+/// a list of 50,000 items that holds only the 40,000th, which has no name of its own but holds its text.
 fn tree() -> AccessibilityUpdate {
     AccessibilityUpdate {
         window: WINDOW,
@@ -126,8 +126,19 @@ fn tree() -> AccessibilityUpdate {
                 id(6),
                 AccessibilityNode {
                     item_index: Some(39_999),
-                    ..node(Role::ListItem, "Item 40,000", None, Vec::new(), Vec::new())
+                    name: None,
+                    ..node(Role::ListItem, "", None, Vec::new(), vec![id(7)])
                 },
+            ),
+            (
+                id(7),
+                node(
+                    Role::StaticText,
+                    "Item 40,000",
+                    None,
+                    Vec::new(),
+                    Vec::new(),
+                ),
             ),
         ],
         removed: Vec::new(),
@@ -338,6 +349,11 @@ fn an_assistive_technology_reads_the_window_and_its_click_reaches_the_applicatio
     )
     .unwrap();
     let attributes: HashMap<String, String> = item.call("GetAttributes", &()).unwrap();
+    let item_name: String = item.get_property("Name").unwrap();
+    assert_eq!(
+        item_name, "Item 40,000",
+        "an item is named by the text it holds"
+    );
     assert_eq!(
         (
             attributes.get("posinset").map(String::as_str),

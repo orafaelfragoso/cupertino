@@ -8,8 +8,8 @@ use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use crate::scroll;
 use crate::{
-    Column, ColumnWidth, Handler, Icon, IconDirection, ListView, Scroller, Selection, SortOrder,
-    TableView, Text, TextRole, TreeItem, TreeToggle, TreeView,
+    Column, ColumnWidth, Handler, Icon, IconDirection, ListView, OutlineTable, Scroller, Selection,
+    SortOrder, TableView, Text, TextRole, TreeItem, TreeToggle, TreeView,
 };
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_core::{
@@ -264,66 +264,84 @@ impl<M: 'static> From<TreeView<M>> for Element<M> {
 
 impl<M: 'static> From<TableView<M>> for Element<M> {
     fn from(table: TableView<M>) -> Self {
-        let columns: Rc<[Column]> = table.columns.into();
-        let cell = table.cell;
-        let widths: Rc<[ColumnWidth]> = columns.iter().map(|c| c.width).collect();
-        let row: Box<dyn Fn(usize, bool) -> Element<M>> = Box::new(move |index, selected| {
-            let cells = widths
-                .iter()
-                .enumerate()
-                .map(|(column, &width)| {
-                    Element::new(Cell {
-                        width,
-                        column,
-                        header: None,
-                        content: vec![cell(index, column, selected)],
-                    })
-                })
-                .collect();
-            Element::new(Cells { cells })
-        });
-        let rows = Rows {
-            kind: Kind::Table,
-            label: table.label.clone(),
-            count: table.count,
-            row_height: table.row_height,
-            scroll: table.scroll,
-            selection: table.selection,
-            multiple: table.multiple,
-            initial: false,
-            row,
-            key: None,
-            type_select: table.type_select,
-            on_select: table.on_select.map(Rc::new),
-            on_activate: table.on_activate,
-            outline: None,
-        };
-        let on_sort = table.on_sort.map(Rc::new);
-        let header = Element::new(Header {
-            cells: columns
-                .iter()
-                .enumerate()
-                .map(|(index, column)| {
-                    let order = table.sort.filter(|&(c, _)| c == index).map(|(_, o)| o);
-                    let last = index + 1 == columns.len();
-                    header_cell(index, last, column, order, on_sort.clone())
-                })
-                .collect(),
-        });
-        let body = scroll::frame(
-            Element::new(rows),
-            table.scroll,
-            (false, true),
-            Scroller::Overlay,
-            Rc::new(table.on_scroll),
-        );
-        Element::new(TableFrame {
-            label: table.label,
-            count: table.count,
-            multiple: table.multiple,
-            children: vec![header, body],
-        })
+        table_element(table, None, None)
     }
+}
+
+impl<M: 'static> From<OutlineTable<M>> for Element<M> {
+    fn from(outline: OutlineTable<M>) -> Self {
+        let outline_rows = Outline {
+            item: outline.item,
+            on_toggle: outline.on_toggle,
+        };
+        table_element(outline.table, Some(Rc::new(outline_rows)), outline.key)
+    }
+}
+
+fn table_element<M: 'static>(
+    table: TableView<M>,
+    outline: Option<Rc<Outline<M>>>,
+    key: Option<Box<dyn Fn(usize) -> Key>>,
+) -> Element<M> {
+    let columns: Rc<[Column]> = table.columns.into();
+    let cell = table.cell;
+    let widths: Rc<[ColumnWidth]> = columns.iter().map(|c| c.width).collect();
+    let row: Box<dyn Fn(usize, bool) -> Element<M>> = Box::new(move |index, selected| {
+        let cells = widths
+            .iter()
+            .enumerate()
+            .map(|(column, &width)| {
+                Element::new(Cell {
+                    width,
+                    column,
+                    header: None,
+                    content: vec![cell(index, column, selected)],
+                })
+            })
+            .collect();
+        Element::new(Cells { cells })
+    });
+    let rows = Rows {
+        kind: Kind::Table,
+        label: table.label.clone(),
+        count: table.count,
+        row_height: table.row_height,
+        scroll: table.scroll,
+        selection: table.selection,
+        multiple: table.multiple,
+        initial: false,
+        row,
+        key,
+        type_select: table.type_select,
+        on_select: table.on_select.map(Rc::new),
+        on_activate: table.on_activate,
+        outline,
+    };
+    let on_sort = table.on_sort.map(Rc::new);
+    let header = Element::new(Header {
+        cells: columns
+            .iter()
+            .enumerate()
+            .map(|(index, column)| {
+                let order = table.sort.filter(|&(c, _)| c == index).map(|(_, o)| o);
+                let last = index + 1 == columns.len();
+                header_cell(index, last, column, order, on_sort.clone())
+            })
+            .collect(),
+    });
+    let body = scroll::frame(
+        Element::new(rows),
+        table.scroll,
+        (false, true),
+        Scroller::Overlay,
+        Rc::new(table.on_scroll),
+    );
+    Element::new(TableFrame {
+        label: table.label,
+        count: table.count,
+        multiple: table.multiple,
+        children: vec![header, body],
+    })
 }
 
 fn no_measure() -> Measured {

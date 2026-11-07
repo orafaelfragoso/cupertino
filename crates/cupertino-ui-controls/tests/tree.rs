@@ -1,7 +1,10 @@
 mod support;
 
 use cupertino_geometry::{Point, Size};
-use cupertino_ui_controls::{Selection, Text, TextRole, TreeItem, TreeToggle, TreeView};
+use cupertino_ui_controls::{
+    Column, ColumnWidth, OutlineTable, Selection, TableView, Text, TextRole, TreeItem, TreeToggle,
+    TreeView,
+};
 use cupertino_ui_core::{Action, Application, Command, Element, Key, NodeId, Role, Window};
 use cupertino_ui_layout::{LayoutDirection, ScrollState};
 use cupertino_ui_platform::Mods;
@@ -22,10 +25,12 @@ struct Setup {
     open: bool,
     /// Folder 0 holds no files.
     empty: bool,
+    /// The rows are a table's, with a Size column after the name.
+    table: bool,
 }
 
 thread_local! {
-    static SETUP: Cell<Setup> = const { Cell::new(Setup { folders: 3, open: false, empty: false }) };
+    static SETUP: Cell<Setup> = const { Cell::new(Setup { folders: 3, open: false, empty: false, table: false }) };
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -105,40 +110,76 @@ impl Application for Folders {
         let open = model.open.clone();
         let folders = model.folders;
         let names = shown.clone();
+        let count = shown.len();
+        let item = Box::new(move |index| match shown[index] {
+            (folder, None) => TreeItem {
+                level: 0,
+                expanded: Some(open.contains(&folder)),
+                position: folder,
+                siblings: folders,
+            },
+            (_, Some(file)) => TreeItem {
+                level: 1,
+                expanded: None,
+                position: file,
+                siblings: FILES,
+            },
+        });
+        let name = move |index: usize, selected| {
+            let name = match names[index] {
+                (folder, None) => format!("Folder {folder}"),
+                (folder, Some(file)) => format!("File {folder}.{file}"),
+            };
+            Element::new(Text {
+                content: AttributedText::plain(name, TextStyle::new(13.0)),
+                role: TextRole::Body,
+                wrap: false,
+                secondary: false,
+                selected,
+            })
+        };
+        if SETUP.get().table {
+            let columns = vec![
+                Column {
+                    title: "Name".into(),
+                    width: ColumnWidth::Fill,
+                },
+                Column {
+                    title: "Size".into(),
+                    width: ColumnWidth::Fixed(60.0),
+                },
+            ];
+            return window(Element::from(OutlineTable {
+                table: TableView {
+                    label: "Folders".into(),
+                    columns,
+                    sort: None,
+                    on_sort: None,
+                    count,
+                    row_height: ROW,
+                    scroll: model.scroll,
+                    selection: model.selection.clone(),
+                    multiple: false,
+                    cell: Box::new(move |index, _, selected| name(index, selected)),
+                    type_select: None,
+                    on_scroll: Box::new(Message::Scroll),
+                    on_select: Some(Box::new(Message::Select)),
+                    on_activate: None,
+                },
+                item,
+                key: None,
+                on_toggle: Some(Box::new(Message::Toggle)),
+            }));
+        }
         window(Element::from(TreeView {
             label: "Folders".into(),
-            count: shown.len(),
+            count,
             row_height: ROW,
             scroll: model.scroll,
             selection: model.selection.clone(),
             multiple: false,
-            item: Box::new(move |index| match shown[index] {
-                (folder, None) => TreeItem {
-                    level: 0,
-                    expanded: Some(open.contains(&folder)),
-                    position: folder,
-                    siblings: folders,
-                },
-                (_, Some(file)) => TreeItem {
-                    level: 1,
-                    expanded: None,
-                    position: file,
-                    siblings: FILES,
-                },
-            }),
-            row: Box::new(move |index, selected| {
-                let name = match names[index] {
-                    (folder, None) => format!("Folder {folder}"),
-                    (folder, Some(file)) => format!("File {folder}.{file}"),
-                };
-                Element::new(Text {
-                    content: AttributedText::plain(name, TextStyle::new(13.0)),
-                    role: TextRole::Body,
-                    wrap: false,
-                    secondary: false,
-                    selected,
-                })
-            }),
+            item,
+            row: Box::new(name),
             type_select: None,
             on_scroll: Box::new(Message::Scroll),
             on_select: Some(Box::new(Message::Select)),
@@ -153,6 +194,7 @@ fn harness(folders: usize, open: bool, direction: LayoutDirection) -> Harness<Fo
         folders,
         open,
         empty: false,
+        table: false,
     });
     Harness::with_direction(direction)
 }
@@ -289,6 +331,7 @@ fn right_on_an_open_row_without_children_stays_on_it() {
         folders: 3,
         open: false,
         empty: true,
+        table: false,
     });
     let mut h = Harness::<Folders>::new();
     h.tap(TAB);
@@ -305,6 +348,7 @@ fn a_screen_reader_opens_and_closes_a_row_with_its_expand_and_collapse_actions()
         folders: 3,
         open: false,
         empty: false,
+        table: false,
     });
     let mut h = Harness::<Folders>::assistive();
     h.ask(&Key::Int(1), Action::Expand);
@@ -320,4 +364,54 @@ fn a_screen_reader_opens_and_closes_a_row_with_its_expand_and_collapse_actions()
         [toggle(true), toggle(false)],
         "an Expand on an open row changes nothing"
     );
+}
+
+#[test]
+fn an_outline_table_opens_its_rows_as_a_tree_does_and_reads_each_rows_level() {
+    SETUP.set(Setup {
+        folders: 3,
+        open: false,
+        empty: false,
+        table: true,
+    });
+    let mut h = Harness::<Folders>::new();
+    h.tap(TAB);
+    h.tap(RIGHT);
+    assert_eq!(rows(h.model()).len(), 3 + FILES, "Right opened folder 0");
+    h.tap(RIGHT);
+    assert_eq!(focused_row(&h), Some(1), "to its first file");
+    h.tap(LEFT);
+    h.tap(LEFT);
+    assert_eq!(rows(h.model()).len(), 3, "closed again");
+
+    let nodes = h.snapshot().accessibility;
+    let bounds = nodes
+        .iter()
+        .find(|(id, _)| Some(*id) == row(&h, 1))
+        .expect("row 1")
+        .1
+        .bounds;
+    let y = bounds.min_y() + ROW / 2.0;
+    h.click(Point::new(bounds.min_x() + 18.0, y));
+    assert_eq!(
+        rows(h.model()).len(),
+        3 + FILES,
+        "the triangle opened folder 1"
+    );
+    assert_eq!(
+        h.model().selection.len(),
+        1,
+        "and kept the selection on folder 0"
+    );
+    assert!(h.model().selection.contains(0));
+
+    let nodes = h.snapshot().accessibility;
+    let read = |index| {
+        let id = row(&h, index).expect("built");
+        let node = &nodes.iter().find(|(n, _)| *n == id).expect("a node").1;
+        (node.role, node.level, node.states.expanded)
+    };
+    assert_eq!(read(1), (Role::Row, Some(1), Some(true)));
+    assert_eq!(read(2), (Role::Row, Some(2), None));
+    assert!(nodes.iter().any(|(_, n)| n.role == Role::ColumnHeader));
 }

@@ -423,3 +423,55 @@ fn assistive_technology_reads_the_description_and_clicks_the_eject_button() {
     h.ask_node(id, Action::Click);
     assert_eq!(h.model().1, [Device::Eject(Key::from("Backup"))]);
 }
+
+/// Placeholders, with the colour of every symbol asked for kept by name.
+#[derive(Debug, Default)]
+struct Tints {
+    asked: std::sync::Mutex<Vec<(String, cupertino_ui_theme::Color)>>,
+    draw: cupertino_ui_core::PlaceholderIcons,
+}
+
+impl cupertino_ui_core::Icons for Tints {
+    fn symbol(
+        &self,
+        name: &str,
+        px: u32,
+        color: cupertino_ui_theme::Color,
+        mirrored: bool,
+    ) -> cupertino_ui_core::IconImage {
+        self.asked.lock().unwrap().push((name.to_owned(), color));
+        self.draw.symbol(name, px, color, mirrored)
+    }
+}
+
+#[test]
+fn an_inactive_windows_row_icons_take_the_secondary_label_colour() {
+    let tints = std::sync::Arc::new(Tints::default());
+    let mut h =
+        Harness::<Places>::with_icons(cupertino_ui_layout::LayoutDirection::Ltr, tints.clone());
+    let accent = color(ColorRole::ControlFill, InteractionVariant::Normal, true);
+    let last = |tints: &Tints| tints.asked.lock().unwrap().last().map(|(_, c)| *c);
+    assert_eq!(last(&tints), Some(accent), "the accent while active");
+    tints.asked.lock().unwrap().clear();
+    h.rt.window_system_mut()
+        .configure(
+            h.window,
+            Some(Size::new(200.0, 100.0)),
+            cupertino_ui_platform::WindowStates::default(),
+        )
+        .unwrap();
+    h.settle();
+    let asked = tints.asked.lock().unwrap().clone();
+    assert!(!asked.is_empty(), "the rows drew their icons again");
+    let secondary = support::theme()
+        .colors
+        .get(
+            ColorRole::SecondaryText,
+            cupertino_ui_theme::StateVariant::NORMAL,
+        )
+        .unwrap();
+    assert!(
+        asked.iter().all(|(_, c)| *c == secondary),
+        "every row's icon in the secondary label colour: {asked:?}"
+    );
+}

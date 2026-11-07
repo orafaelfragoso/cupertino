@@ -460,8 +460,14 @@ impl<M: 'static> Widget<M> for Row<M> {
             }
         };
         if let Some(name) = &self.item.icon {
+            // in a window that is not active another row's icon is no longer the accent: it takes the secondary label
+            // colour, which keeps its contrast against the sidebar where the inactive accent would fade into it
             let tint = if self.selected {
                 text
+            } else if !cx.window_active() {
+                theme
+                    .colors
+                    .get(ColorRole::SecondaryText, StateVariant::NORMAL)
             } else {
                 look::color(&theme, ColorRole::ControlFill, &selected)
             };

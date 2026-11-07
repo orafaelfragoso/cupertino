@@ -47,6 +47,8 @@ const READ_LIMIT: usize = 16 << 20;
 const SERVE_TIMEOUT: Duration = Duration::from_secs(1);
 /// The most reads served at once; a read beyond them gets its descriptor closed at once.
 const MAX_SERVES: usize = 8;
+/// The most drops kept while they are read, before they are finished or refused; a drop past them refuses the oldest.
+const MAX_LANDED: usize = 8;
 
 /// The current selection of another client, with the MIME types it is offered in.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -119,7 +121,8 @@ impl DragOffer {
         &self.mime_types
     }
 
-    /// What the dragging client allows done with the data.
+    /// What the dragging client allows done with the data. A compositor older than drag actions (`wl_data_offer`
+    /// before version 3) only copies, so its drags allow a copy alone.
     pub fn source_actions(&self) -> DndAction {
         self.actions
     }
@@ -132,12 +135,14 @@ pub enum DragEvent {
     Enter { offer: DragOffer, point: Point },
     /// `time` is the compositor's input timestamp in milliseconds, as for the pointer's events.
     Motion { point: Point, time: u32 },
-    /// The action the compositor chose from the source's and the ones [`crate::Connection::set_drag_actions`] named.
+    /// The action the compositor chose from the source's and the ones [`crate::Connection::set_drag_actions`] named;
+    /// it can still change after the drop, until the drop is finished. A compositor older than drag actions sends none.
     Action(DndAction),
     /// The drag left the surface, or ended without a drop on it.
     Leave,
     /// The data was dropped on the surface: read it with [`crate::Connection::receive_drop`], then
-    /// [`crate::Connection::finish_drag`].
+    /// [`crate::Connection::finish_drag`], or refuse it with [`crate::Connection::refuse_drop`]. A drag that drops
+    /// has no leave; another drag may enter while this one is still read.
     Drop,
 }
 
@@ -346,7 +351,10 @@ pub(crate) struct Clipboard {
     own: Option<(WlDataSource, Contents)>,
     serving: Arc<AtomicUsize>,
     reads: Vec<PendingRead>,
+    /// The drag over this client's surfaces, until it leaves or drops.
     drag: Option<IncomingDrag>,
+    /// Drags dropped on this client's surfaces and not yet finished or refused, oldest first.
+    landed: Vec<IncomingDrag>,
     outgoing: Option<OutgoingDrag>,
     next_drag_source: u64,
     /// Reads answered without a pipe, reported with the next pump.
@@ -508,12 +516,10 @@ impl Clipboard {
         Ok(id)
     }
 
-    /// Tell the dragging client the drop's data was taken (`wl_data_offer.finish`), and let the offer go.
+    /// Tell the dragging client the drop's data was taken (`wl_data_offer.finish`, from version 3), and let the offer
+    /// go.
     pub(crate) fn finish_drag(&mut self, offer: &DragOffer) -> Result<(), Error> {
-        if !self.current_drag(offer)?.dropped {
-            return Err(Error::Protocol("a drag finishes after its drop"));
-        }
-        let drag = self.drag.take().expect("found above");
+        let drag = self.take_landed(offer)?;
         if drag.offer.version() >= 3 {
             drag.offer.finish();
         }
@@ -521,18 +527,46 @@ impl Clipboard {
         Ok(())
     }
 
+    /// Let a drop go without taking it: the offer is destroyed unfinished, which the compositor tells the dragging client
+    /// as a cancel (from version 3). Its running reads end with nothing.
+    pub(crate) fn refuse_drop(&mut self, offer: &DragOffer) -> Result<(), Error> {
+        self.take_landed(offer)?.offer.destroy();
+        Ok(())
+    }
+
+    /// The dropped drag `offer` names, taken out of those kept; an error for one that is still dragged or gone.
+    fn take_landed(&mut self, offer: &DragOffer) -> Result<IncomingDrag, Error> {
+        if self.drag.as_ref().is_some_and(|d| d.id == offer.id) {
+            return Err(Error::Protocol("a drag finishes after its drop"));
+        }
+        let at = self
+            .landed
+            .iter()
+            .position(|d| d.id == offer.id)
+            .ok_or(Error::Cancelled)?;
+        Ok(self.landed.remove(at))
+    }
+
     fn current_drag(&mut self, offer: &DragOffer) -> Result<&mut IncomingDrag, Error> {
         self.drag
-            .as_mut()
-            .filter(|d| d.id == offer.id)
+            .iter_mut()
+            .chain(self.landed.iter_mut())
+            .find(|d| d.id == offer.id)
             .ok_or(Error::Cancelled)
     }
 
-    /// Forget a drag over `surface`, which is going away.
+    /// Forget the drags over and dropped on `surface`, which is going away.
     pub(crate) fn forget_surface(&mut self, surface: SurfaceId) {
         if let Some(drag) = self.drag.take_if(|d| d.surface == surface) {
             drag.offer.destroy();
         }
+        self.landed.retain(|drag| {
+            let keep = drag.surface != surface;
+            if !keep {
+                drag.offer.destroy();
+            }
+            keep
+        });
     }
 
     /// Start dragging `contents` from `origin`, with the `actions` it allows and `icon` following the pointer;
@@ -619,11 +653,11 @@ impl Clipboard {
                 .map(|(id, data)| Event::Received { id, data }),
         );
         let selection = self.selection.as_ref().map(|(id, _)| *id);
-        let drop = self.drag.as_ref().map(|d| d.id);
+        let drops: Vec<u64> = self.drag.iter().chain(&self.landed).map(|d| d.id).collect();
         self.reads.retain_mut(|read| {
             let alive = match read.source {
                 Source::Selection(id) => Some(id) == selection,
-                Source::Drop(id) => Some(id) == drop,
+                Source::Drop(id) => drops.contains(&id),
             };
             let data = if alive {
                 let before = read.bytes.len();
@@ -837,19 +871,28 @@ impl Dispatch<WlDataDevice, ()> for State {
                 surface,
                 x,
                 y,
-                id: Some(offer),
+                id,
             } => {
                 let on = state.surface_of(&surface);
                 let clipboard = &mut state.clipboard;
-                if let Some(old) = clipboard.drag.take_if(|d| !d.dropped) {
+                // the compositor leaves before it enters again; a drag still kept here is one it never left
+                if let Some(old) = clipboard.drag.take() {
                     old.offer.destroy();
                 }
+                // a drag of this client's own that offers no data (a null source) has nothing to read
+                let Some(offer) = id else {
+                    return;
+                };
                 let Some(on) = on else {
                     return offer.destroy();
                 };
                 let types = offer.data::<OfferTypes>();
                 let mime_types = types.map(|t| t.types.lock().expect("offer types").clone());
-                let actions = types.map(|t| *t.actions.lock().expect("offer actions"));
+                // before version 3 a drag has no actions: it copies
+                let actions = match offer.version() {
+                    ..3 => Some(DndAction::Copy),
+                    _ => types.map(|t| *t.actions.lock().expect("offer actions")),
+                };
                 clipboard.next_offer += 1;
                 let public = DragOffer {
                     id: clipboard.next_offer,
@@ -873,7 +916,7 @@ impl Dispatch<WlDataDevice, ()> for State {
                 });
             }
             wl_data_device::Event::Motion { time, x, y } => {
-                if let Some(drag) = state.clipboard.drag.as_ref().filter(|d| !d.dropped) {
+                if let Some(drag) = &state.clipboard.drag {
                     state.events.push(Event::Drag {
                         surface: drag.surface,
                         event: DragEvent::Motion {
@@ -885,8 +928,8 @@ impl Dispatch<WlDataDevice, ()> for State {
             }
             wl_data_device::Event::Leave => {
                 let clipboard = &mut state.clipboard;
-                // a dropped offer stays until the drop is read and finished
-                let surface = match clipboard.drag.take_if(|d| !d.dropped) {
+                // a dropped offer is kept apart until the drop is read and finished or refused
+                let surface = match clipboard.drag.take() {
                     Some(drag) => {
                         drag.offer.destroy();
                         Some(drag.surface)
@@ -901,9 +944,15 @@ impl Dispatch<WlDataDevice, ()> for State {
                 }
             }
             wl_data_device::Event::Drop => {
-                if let Some(drag) = state.clipboard.drag.as_mut().filter(|d| !d.dropped) {
+                let clipboard = &mut state.clipboard;
+                if let Some(mut drag) = clipboard.drag.take() {
                     drag.dropped = true;
                     let surface = drag.surface;
+                    if clipboard.landed.len() >= MAX_LANDED {
+                        // a client that never finishes its drops does not hold every offer
+                        clipboard.landed.remove(0).offer.destroy();
+                    }
+                    clipboard.landed.push(drag);
                     state.events.push(Event::Drag {
                         surface,
                         event: DragEvent::Drop,
@@ -942,7 +991,13 @@ impl Dispatch<WlDataOffer, OfferTypes> for State {
             wl_data_offer::Event::Action {
                 dnd_action: wayland_client::WEnum::Value(action),
             } => {
-                if let Some(drag) = state.clipboard.drag.as_ref().filter(|d| d.offer == *offer) {
+                let clipboard = &state.clipboard;
+                if let Some(drag) = clipboard
+                    .drag
+                    .iter()
+                    .chain(&clipboard.landed)
+                    .find(|d| d.offer == *offer)
+                {
                     state.events.push(Event::Drag {
                         surface: drag.surface,
                         event: DragEvent::Action(action),

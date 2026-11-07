@@ -1174,6 +1174,13 @@ impl Connection {
         self.flush()
     }
 
+    /// Let the drop of `offer` go without taking it, as when its data could not be read or used: the dragging client
+    /// hears a cancel (from `wl_data_offer` version 3) and keeps its data. Before the drop it is refused.
+    pub fn refuse_drop(&mut self, offer: &DragOffer) -> Result<(), Error> {
+        self.state.clipboard.refuse_drop(offer)?;
+        self.flush()
+    }
+
     /// The queue extensions create their objects on.
     pub fn queue_handle(&self) -> QueueHandle<State> {
         self.queue.handle()

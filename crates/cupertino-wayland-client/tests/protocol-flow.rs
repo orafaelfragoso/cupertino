@@ -105,6 +105,8 @@ struct Globals {
     presentation: bool,
     /// Keep each clipboard read's pipe open, writing nothing, until the test releases it.
     hold_reads: bool,
+    /// Offer `wl_data_device_manager` version 2, from before drag actions, instead of 3.
+    no_drag_actions: bool,
 }
 
 impl Globals {
@@ -176,6 +178,8 @@ enum Control {
     DragAction(wl_data_device_manager::DndAction),
     DragDrop,
     DragLeave,
+    /// A drag enters the toplevel without an offer, as the client's own drag of no data does.
+    DragEnterEmpty,
     /// To the client's own drag source: the target's type, a request for the data in `mime`, and the end.
     SourceTarget(Option<&'static str>),
     SourceSend(&'static str),
@@ -1347,7 +1351,8 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
             );
         }
         if globals.clipboard {
-            dh.create_global::<Mock, WlDataDeviceManager, _>(3, ());
+            let version = if globals.no_drag_actions { 2 } else { 3 };
+            dh.create_global::<Mock, WlDataDeviceManager, _>(version, ());
         }
         if globals.decoration.is_some() {
             dh.create_global::<Mock, ZxdgDecorationManagerV1, _>(1, ());
@@ -1573,7 +1578,9 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
             for t in types {
                 offer.offer(t.into());
             }
-            offer.source_actions(actions);
+            if offer.version() >= 3 {
+                offer.source_actions(actions);
+            }
             device.enter(serial, &surface, 4.0, 5.0, Some(&offer));
             mock.drag_offer = Some(offer);
             mock.seen.send(Seen::DragEntered(serial)).unwrap();
@@ -1585,6 +1592,11 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
         Control::DragAction(action) => mock.drag_offer.as_ref().unwrap().action(action),
         Control::DragDrop => mock.data_device.as_ref().unwrap().drop(),
         Control::DragLeave => mock.data_device.as_ref().unwrap().leave(),
+        Control::DragEnterEmpty => {
+            let (serial, surface) = (mock.serial(), mock.surface().clone());
+            let device = mock.data_device.as_ref().unwrap();
+            device.enter(serial, &surface, 4.0, 5.0, None);
+        }
         Control::SourceTarget(mime) => mock
             .drag_source
             .as_ref()
@@ -2559,28 +2571,67 @@ fn dragged_over() -> (
     Toplevel,
     DragOffer,
 ) {
-    let (mut conn, control, seen) = connect(Globals {
+    dragged_over_with(Globals {
         seat: true,
         clipboard: true,
         ..Globals::core()
-    });
+    })
+}
+
+/// [`dragged_over`] on a compositor with `globals`.
+fn dragged_over_with(
+    globals: Globals,
+) -> (
+    Connection,
+    Sender<Control>,
+    Receiver<Seen>,
+    Stash,
+    Toplevel,
+    DragOffer,
+) {
+    let (mut conn, control, seen) = connect(globals);
     let mut stash = Stash::new();
     let w = window(&mut conn, Decorations::Client);
     configured(&mut conn, &mut stash, w);
+    let offer = drag_enters(&mut conn, &control, &mut stash, w);
+    (conn, control, seen, stash, w, offer)
+}
+
+/// A drag of plain text or HTML, copy or move, enters `w`: its offer.
+fn drag_enters(
+    conn: &mut Connection,
+    control: &Sender<Control>,
+    stash: &mut Stash,
+    w: Toplevel,
+) -> DragOffer {
     control
         .send(Control::DragEnter {
             types: vec!["text/plain", "text/html"],
             actions: DndAction::Copy | DndAction::Move,
         })
         .unwrap();
-    let offer = wait_for(&mut conn, &mut stash, |e| match e {
+    wait_for(conn, stash, |e| match e {
         Event::Drag {
             surface,
             event: DragEvent::Enter { offer, point },
         } if *surface == w.surface() && *point == Point::new(4.0, 5.0) => Some(offer.clone()),
         _ => None,
-    });
-    (conn, control, seen, stash, w, offer)
+    })
+}
+
+/// Accept `offer` in plain text for a copy, and have the compositor drop it.
+fn accept_and_drop(
+    conn: &mut Connection,
+    control: &Sender<Control>,
+    stash: &mut Stash,
+    offer: &DragOffer,
+) {
+    conn.accept_drag(offer, Some("text/plain")).unwrap();
+    conn.set_drag_actions(offer, DragActions::Copy, DragActions::Copy)
+        .unwrap();
+    conn.flush().unwrap();
+    control.send(Control::DragDrop).unwrap();
+    assert_eq!(next_drag(conn, stash), DragEvent::Drop);
 }
 
 fn next_drag(conn: &mut Connection, stash: &mut Stash) -> DragEvent {
@@ -2696,6 +2747,134 @@ fn a_drag_that_leaves_lets_its_offer_go_and_finishes_only_after_a_drop() {
         conn.accept_drag(&offer, Some("text/plain")),
         Err(Error::Cancelled)
     ));
+}
+
+#[test]
+fn a_drag_that_enters_while_a_drop_is_read_leaves_that_read_running() {
+    let (mut conn, control, seen, mut stash, w, first) = dragged_over_with(Globals {
+        seat: true,
+        clipboard: true,
+        hold_reads: true,
+        ..Globals::core()
+    });
+    accept_and_drop(&mut conn, &control, &mut stash, &first);
+    let read = conn.receive_drop(&first, "text/plain").unwrap();
+    conn.flush().unwrap();
+    seen_matching(&seen, |s| matches!(s, Seen::Receive(_)));
+    let second = drag_enters(&mut conn, &control, &mut stash, w);
+    assert_ne!(first, second);
+    assert!(
+        matches!(conn.finish_drag(&second), Err(Error::Protocol(_))),
+        "the new drag has not dropped"
+    );
+    control.send(Control::Release(b"first")).unwrap();
+    let data = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::Received { id, data } if *id == read => Some(data.clone()),
+        _ => None,
+    });
+    assert_eq!(data, Some(b"first".to_vec()));
+    conn.finish_drag(&first).unwrap();
+    assert_eq!(
+        seen_matching(&seen, |s| matches!(s, Seen::Finish)),
+        Seen::Finish
+    );
+    conn.accept_drag(&second, Some("text/html")).unwrap();
+}
+
+#[test]
+fn a_refused_drop_lets_its_offer_go_unfinished_and_ends_its_read() {
+    let (mut conn, control, seen, mut stash, _w, offer) = dragged_over_with(Globals {
+        seat: true,
+        clipboard: true,
+        hold_reads: true,
+        ..Globals::core()
+    });
+    assert!(
+        matches!(conn.refuse_drop(&offer), Err(Error::Protocol(_))),
+        "not dropped yet"
+    );
+    accept_and_drop(&mut conn, &control, &mut stash, &offer);
+    let read = conn.receive_drop(&offer, "text/plain").unwrap();
+    conn.refuse_drop(&offer).unwrap();
+    assert_eq!(
+        seen_matching(&seen, |s| matches!(s, Seen::Finish | Seen::OfferDestroyed)),
+        Seen::OfferDestroyed,
+        "destroyed without a finish"
+    );
+    let data = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::Received { id, data } if *id == read => Some(data.clone()),
+        _ => None,
+    });
+    assert_eq!(data, None);
+    assert!(matches!(conn.finish_drag(&offer), Err(Error::Cancelled)));
+}
+
+#[test]
+fn before_drag_actions_a_drag_copies_and_its_drop_is_destroyed_without_a_finish() {
+    let (mut conn, control, seen, mut stash, _w, offer) = dragged_over_with(Globals {
+        seat: true,
+        clipboard: true,
+        no_drag_actions: true,
+        ..Globals::core()
+    });
+    assert_eq!(offer.source_actions(), DragActions::Copy);
+    conn.accept_drag(&offer, Some("text/plain")).unwrap();
+    conn.set_drag_actions(&offer, DragActions::Move, DragActions::Move)
+        .unwrap();
+    conn.flush().unwrap();
+    assert!(matches!(
+        seen_matching(&seen, |s| matches!(s, Seen::Accept { .. } | Seen::DragActions { .. })),
+        Seen::Accept { .. }
+    ));
+    control.send(Control::DragDrop).unwrap();
+    assert_eq!(next_drag(&mut conn, &mut stash), DragEvent::Drop);
+    let read = conn.receive_drop(&offer, "text/plain").unwrap();
+    let data = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::Received { id, data } if *id == read => Some(data.clone()),
+        _ => None,
+    });
+    assert_eq!(data, Some(b"as text/plain".to_vec()));
+    conn.finish_drag(&offer).unwrap();
+    assert_eq!(
+        seen_matching(&seen, |s| matches!(
+            s,
+            Seen::Finish | Seen::OfferDestroyed | Seen::DragActions { .. }
+        )),
+        Seen::OfferDestroyed,
+        "no actions and no finish before version 3"
+    );
+}
+
+#[test]
+fn an_enter_without_an_offer_lets_the_drag_before_it_go() {
+    let (mut conn, control, seen, mut stash, _w, offer) = dragged_over();
+    control.send(Control::DragEnterEmpty).unwrap();
+    // the enter is on the wire before the round trip's answer, so the round trip dispatches it
+    conn.roundtrip().unwrap();
+    stash.extend(conn.wait(Some(Duration::ZERO)).unwrap());
+    conn.flush().unwrap();
+    assert_eq!(
+        seen_matching(&seen, |s| matches!(s, Seen::OfferDestroyed)),
+        Seen::OfferDestroyed
+    );
+    assert!(matches!(
+        conn.accept_drag(&offer, None),
+        Err(Error::Cancelled)
+    ));
+    control.send(Control::DragMotion).unwrap();
+    seen_matching(&seen, |s| matches!(s, Seen::DragMoved));
+    conn.roundtrip().unwrap();
+    stash.extend(conn.wait(Some(Duration::ZERO)).unwrap());
+    assert!(
+        !stash.iter().any(|e| matches!(
+            e,
+            Event::Drag {
+                event: DragEvent::Enter { .. } | DragEvent::Motion { .. },
+                ..
+            }
+        )),
+        "no drag to report: {stash:?}"
+    );
 }
 
 #[test]

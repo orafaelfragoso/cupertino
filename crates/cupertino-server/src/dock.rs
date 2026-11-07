@@ -548,6 +548,8 @@ impl Cupertino {
         if self.session_lock.is_active() {
             return;
         }
+        // a dock a press released takes the keyboard again when engaged again
+        self.released_layer = None;
         let output = self
             .output_at(self.pointer.current_location())
             .map(|o| o.id);

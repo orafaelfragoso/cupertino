@@ -508,6 +508,8 @@ enum Cmd {
     GtkRequestFocus(Option<String>),
     /// An application window sets an icon of this name and one [`ICON_SIDE`] buffer of [`ICON_PIXEL`]s, and commits.
     SetIcon(&'static str),
+    /// The dock asks for exclusive keyboard interactivity (true) or for none, and commits.
+    SetKeyboard(bool),
     /// Drop the connection: the dock process died.
     Quit,
 }
@@ -603,7 +605,7 @@ impl DockClient {
                     .bind(global.name, global.version.min(4), qh, ());
             status.lock().unwrap().own_output = Some(output.clone());
             let surface = compositor.create_surface(qh, ());
-            if layer {
+            let layer_surface = layer.then(|| {
                 let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
                     globals.bind(qh, 1..=4, ()).unwrap();
                 let l = layer_shell.get_layer_surface(
@@ -621,7 +623,8 @@ impl DockClient {
                         | zwlr_layer_surface_v1::Anchor::Right,
                 );
                 l.set_exclusive_zone(DOCK_HEIGHT);
-            }
+                l
+            });
             let dock = shell.get_dock(&surface, &output, qh, ());
             if layer {
                 let backdrop = effects.get_backdrop(&surface, qh, ());
@@ -657,6 +660,17 @@ impl DockClient {
                 Cmd::RunAction(name) => dock.run_action(name.to_string()),
                 Cmd::ForceQuitApp(app_id) => dock.force_quit_app(app_id.to_string()),
                 Cmd::AppCommand(app_id, command) => dock.app_command(app_id.to_string(), command),
+                Cmd::SetKeyboard(exclusive) => {
+                    layer_surface
+                        .as_ref()
+                        .expect("a layer surface")
+                        .set_keyboard_interactivity(if exclusive {
+                            zwlr_layer_surface_v1::KeyboardInteractivity::Exclusive
+                        } else {
+                            zwlr_layer_surface_v1::KeyboardInteractivity::None
+                        });
+                    commit_surface.commit();
+                }
                 Cmd::Activate(_) | Cmd::GtkPresent | Cmd::GtkRequestFocus(_) | Cmd::SetIcon(_) => {
                     panic!("the dock does not act as an application window")
                 }
@@ -1327,6 +1341,83 @@ fn the_focus_dock_action_engages_the_dock_from_shell_version_18_only() {
         vec![DockEvent::ForceQuitDialog, DockEvent::Done]
     );
     assert_eq!(old.error(), None);
+}
+
+/// An engaged dock holds the keyboard until a press lands outside it: the keyboard then goes to the window, the dock is
+/// not given it back while it still asks, and it takes it again when it asks anew or is engaged again.
+#[test]
+fn a_press_outside_the_engaged_dock_gives_the_keyboard_back() {
+    let Some(mut h) = Harness::new() else { return };
+    let _app = spawn_app(h.socket_path(), "org.example.a");
+    let window = h.mapped_window(1);
+    let dock = DockClient::spawn_at(h.shell_stream(), true, 0, 18);
+    h.wait_for_groups(&dock, 1);
+    let out = h.state.outputs[0].id;
+    h.wait_until("the dock surface to be placed", |s| {
+        s.dock_rect(out).is_some()
+    });
+    let window_surface = h.state.entry(window).unwrap().surface().clone();
+    let focus = |h: &Harness| h.state.seat.get_keyboard().unwrap().current_focus();
+    let press_at = |h: &mut Harness, x: f64, y: f64| {
+        h.state.pointer_moved_to((x, y).into(), 0, None);
+        h.state
+            .pointer_button(cupertino_server::events::BTN_LEFT, ButtonState::Pressed, 0);
+        h.state
+            .pointer_button(cupertino_server::events::BTN_LEFT, ButtonState::Released, 0);
+        h.step();
+    };
+    let engage = |h: &mut Harness| {
+        h.state.execute_plan(ActionPlan {
+            commands: Vec::new(),
+            ops: vec![ShellOp::FocusDock],
+        })
+    };
+
+    engage(&mut h);
+    dock.send(Cmd::SetKeyboard(true));
+    h.wait_until("the dock to take the keyboard", |s| {
+        s.exclusive_layer.is_some()
+    });
+    let held = h.state.exclusive_layer.clone();
+    assert_eq!(focus(&h), held);
+
+    let bar = h.state.dock_rect(out).unwrap();
+    press_at(&mut h, bar.x + bar.w / 2.0, bar.y + bar.h / 2.0);
+    assert_eq!(
+        h.state.exclusive_layer, held,
+        "a press on the dock keeps it"
+    );
+    assert_eq!(focus(&h), held);
+
+    let f = h.state.wm.window(window).unwrap().geometry();
+    press_at(&mut h, f.x + 40.0, f.y + 80.0);
+    assert_eq!(h.state.exclusive_layer, None, "a press outside releases it");
+    assert_eq!(focus(&h), Some(window_surface.clone()));
+    // the dock commits again while it still asks for the keyboard: it is not given it back
+    dock.send(Cmd::SetMinimizeTarget);
+    h.advance(0.1);
+    assert_eq!(h.state.exclusive_layer, None);
+    assert_eq!(focus(&h), Some(window_surface.clone()));
+
+    // a new claim after letting go takes the keyboard again
+    dock.send(Cmd::SetKeyboard(false));
+    h.advance(0.1);
+    dock.send(Cmd::SetKeyboard(true));
+    h.wait_until("the dock to take the keyboard again", |s| {
+        s.exclusive_layer.is_some()
+    });
+    assert_eq!(focus(&h), held);
+
+    // released again, then engaged again before it let go: the next commit takes the keyboard
+    press_at(&mut h, f.x + 40.0, f.y + 80.0);
+    assert_eq!(focus(&h), Some(window_surface));
+    engage(&mut h);
+    dock.send(Cmd::SetMinimizeTarget);
+    h.wait_until("the engaged dock to take the keyboard", |s| {
+        s.exclusive_layer.is_some()
+    });
+    assert_eq!(focus(&h), held);
+    assert_eq!(dock.error(), None);
 }
 
 #[test]

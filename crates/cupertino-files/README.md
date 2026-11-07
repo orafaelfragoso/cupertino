@@ -112,7 +112,7 @@ pasteboard, the keyboard's and assistive technology's way in: Copy (the item men
 moves them there and empties the pasteboard. A name that is taken gives the arrival a free one (`name copy`), a folder is
 never pasted into itself, and what arrived is selected. Both run beside the window (`kit::transfer`): a row under the
 folder shows the item under way and the bytes done, and its Stop button ends the transfer, removing what was half
-written and leaving the rest where it was. An item moved out of the trash takes its `.trashinfo` record with it; a copy
+written and leaving the rest where it was; closing the window stops its transfers the same way and waits for them. An item moved out of the trash takes its `.trashinfo` record with it; a copy
 leaves the record with the trashed item. The pasteboard is not the session's clipboard: other
 applications neither see it nor fill it.
 

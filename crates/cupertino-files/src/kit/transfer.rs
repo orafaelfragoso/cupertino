@@ -34,6 +34,7 @@ pub(super) struct Transfer {
     pub progress: Progress,
     pub woken: async_channel::Receiver<()>,
     shared: Arc<Mutex<Shared>>,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Transfer {
@@ -55,7 +56,7 @@ impl Transfer {
         };
         let (thread_shared, thread_cancel) = (Arc::clone(&shared), cancel.clone());
         let (thread_sources, thread_dest) = (sources.clone(), dest.clone());
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("cupertino-files transfer".into())
             .spawn(move || {
                 let mut woke = Instant::now() - PROGRESS_INTERVAL;
@@ -90,6 +91,7 @@ impl Transfer {
             progress: Progress::default(),
             woken,
             shared,
+            thread: Some(thread),
         }
     }
 
@@ -118,6 +120,19 @@ impl Transfer {
     /// From 0 to 1.
     pub fn fraction(&self) -> f64 {
         self.progress.fraction()
+    }
+}
+
+/// A transfer whose window closed, or that ended, is stopped and waited for: Files exits with its last window, and a
+/// copy cut off with the process would leave a half-written item at its destination under the item's own name.
+impl Drop for Transfer {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        // a thread that waits to hand over its last wake gives up at once
+        self.woken.close();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
@@ -159,5 +174,36 @@ mod tests {
         assert_eq!(transfer.fraction(), 1.0);
         let one = Transfer::start(8, vec![d.path().join("a.txt")], dest, true, None);
         assert_eq!(one.title(), "Moving “a.txt” to “Documents”");
+    }
+
+    #[test]
+    fn a_transfer_whose_window_closes_stops_and_leaves_nothing_half_written() {
+        let d = tempfile::tempdir().unwrap();
+        let dest = d.path().join("Documents");
+        std::fs::create_dir(&dest).unwrap();
+        let big = d.path().join("big");
+        std::fs::write(&big, vec![3u8; 8 << 20]).unwrap();
+        // the copy holds after its first chunk until it is stopped, so the window closes mid-file
+        let (started, start) = std::sync::mpsc::sync_channel(1);
+        let stopped: Arc<std::sync::OnceLock<Cancel>> = Arc::default();
+        let held = Arc::clone(&stopped);
+        let observer: Observer = Arc::new(move |p: &Progress| {
+            if p.bytes > 0 && p.items == 0 {
+                let _ = started.try_send(());
+                while !held.get().is_some_and(Cancel::is_cancelled) {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        });
+        let transfer = Transfer::start(9, vec![big.clone()], dest.clone(), false, Some(observer));
+        start.recv().unwrap();
+        stopped.set(transfer.cancel.clone()).unwrap();
+        drop(transfer);
+        assert_eq!(
+            std::fs::read_dir(&dest).unwrap().count(),
+            0,
+            "the part copied is removed before the window is gone"
+        );
+        assert_eq!(std::fs::metadata(&big).unwrap().len(), 8 << 20);
     }
 }

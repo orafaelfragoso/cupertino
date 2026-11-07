@@ -628,6 +628,60 @@ mod tests {
     }
 
     #[test]
+    fn a_turned_display_at_another_scale_is_joined_upright_where_it_sits() {
+        use crate::geometry::{turned, upright, Turn};
+        // a display at scale 1 on the left, and a quarter-turned one at scale 2 on its right: 50 x 100 points
+        let left = Output {
+            position: (0, 0),
+            size: (100, 50),
+            image: filled(100, 50, [255, 0, 0, 255]),
+        };
+        // the turned display's upright image: its top half green, its bottom half blue
+        let mut shown = filled(100, 200, [0, 0, 255, 255]);
+        shown.fill_rect(
+            tiny_skia::Rect::from_xywh(0.0, 0.0, 100.0, 100.0).unwrap(),
+            &tiny_skia::Paint {
+                shader: tiny_skia::Shader::SolidColor(tiny_skia::Color::from_rgba8(0, 255, 0, 255)),
+                ..tiny_skia::Paint::default()
+            },
+            Transform::identity(),
+            None,
+        );
+        for turn in Turn::ALL {
+            let buffer = turned(&shown, turn).unwrap();
+            let right = Output {
+                position: (100, 0),
+                size: (50, 100),
+                image: upright(&buffer, turn).unwrap(),
+            };
+            let image = compose(&[
+                Output {
+                    image: left.image.clone(),
+                    ..left
+                },
+                right,
+            ])
+            .unwrap();
+            assert_eq!((image.width(), image.height()), (300, 200), "{turn:?}");
+            assert_eq!(
+                pixel(&image, 250, 10),
+                [0, 255, 0, 255],
+                "{turn:?}: its top"
+            );
+            assert_eq!(
+                pixel(&image, 250, 190),
+                [0, 0, 255, 255],
+                "{turn:?}: its bottom"
+            );
+            assert_eq!(
+                pixel(&image, 199, 99),
+                [255, 0, 0, 255],
+                "{turn:?}: the other display"
+            );
+        }
+    }
+
+    #[test]
     fn the_name_has_the_date_and_a_twelve_hour_time() {
         let at = |hour, minute, second| LocalTime {
             year: 2026,

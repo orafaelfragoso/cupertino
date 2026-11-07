@@ -7,6 +7,7 @@ pub mod chooser;
 #[cfg(feature = "app")]
 pub mod dialog;
 pub mod file_chooser;
+pub mod geometry;
 pub mod request;
 pub mod screen_cast;
 pub mod screenshot;

@@ -109,7 +109,7 @@ pub(super) struct TypeSelect {
 }
 
 /// A press on an item, held: moving [`drag::START_DISTANCE`] drags the selection, a release without moving
-/// selects the item alone when the press kept a larger selection.
+/// selects the item alone, with the cursor and the anchor on it, when the press kept the selection.
 struct Press {
     index: usize,
     /// In window coordinates.
@@ -468,7 +468,7 @@ impl Widget<Message> for IconGrid {
                         dragged: std::iter::once(index)
                             .chain(rest.filter(|&i| i != index && i < self.count()))
                             .collect(),
-                        collapse: keep && next.len() > 1,
+                        collapse: keep,
                     }
                 });
                 if state.press.is_some() {

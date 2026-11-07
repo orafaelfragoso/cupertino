@@ -269,8 +269,11 @@ impl Thumbnailer {
             .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
         mkdir_private(&self.root)?;
         mkdir_private(dir)?;
+        // one name per write: two threads of a process making the same thumbnail never share a temporary file
+        static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let write = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let tmp = dir.join(format!(
-            ".tmp-{}-{}",
+            ".tmp-{}-{write}-{}",
             std::process::id(),
             md5_hex(&dest.to_string_lossy())
         ));
@@ -487,6 +490,37 @@ mod tests {
         assert_eq!((px.width, px.height), (128, 64));
         assert_eq!(fs::metadata(&cached).unwrap().modified().unwrap(), made);
         assert!(t.root().ends_with("cache/thumbnails"));
+    }
+
+    #[test]
+    fn threads_making_the_same_thumbnail_each_write_a_valid_one() {
+        let d = tempfile::tempdir().unwrap();
+        let img = d.path().join("p.png");
+        write_image(&img, 600, 300);
+        let cache = d.path().join("cache");
+        for _ in 0..10 {
+            let threads: Vec<_> = (0..4)
+                .map(|_| {
+                    let (cache, img) = (cache.clone(), img.clone());
+                    std::thread::spawn(move || {
+                        Thumbnailer::new(cache, "x").create(&img, ThumbSize::Normal)
+                    })
+                })
+                .collect();
+            for thread in threads {
+                let made = thread
+                    .join()
+                    .unwrap()
+                    .expect("each thread's thumbnail is written");
+                let decoded = image::open(&made).unwrap();
+                assert_eq!((decoded.width(), decoded.height()), (128, 64));
+            }
+        }
+        let left: Vec<_> = fs::read_dir(cache.join("thumbnails/normal"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(left.len(), 1, "no temporary file is left: {left:?}");
     }
 
     #[test]

@@ -486,3 +486,77 @@ fn a_drag_the_system_refuses_leaves_the_window_as_it_was() {
     browser.click("b.txt");
     assert_eq!(browser.selected(), ["b.txt"]);
 }
+
+/// The bounds of the list's text `name`.
+fn text_bounds(browser: &Browser, name: &str) -> Rect {
+    let snapshot = browser.driver.runtime().snapshot(browser.window).unwrap();
+    snapshot
+        .accessibility
+        .iter()
+        .find(|(_, n)| n.role == Role::StaticText && n.name.as_deref() == Some(name))
+        .map(|(_, n)| n.bounds)
+        .unwrap_or_else(|| panic!("no text {name:?}"))
+}
+
+/// Rows of the list drag as their URIs, the pressed row first, with an image of the pressed row's name cell held where
+/// the press grabbed it and the count of the rows.
+#[test]
+fn rows_of_the_list_drag_together_with_the_pressed_row_first() {
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        for scale in [1u32, 2] {
+            let mut browser = Browser::new(appearance);
+            browser.send(WindowEvent::Scale(f64::from(scale)));
+            browser.menu("view-list");
+            let a = text_bounds(&browser, "a.txt");
+            let b = text_bounds(&browser, "b.txt");
+            let center =
+                |r: Rect| Point::new(r.min_x() + r.width() / 2.0, r.min_y() + r.height() / 2.0);
+            browser.button(center(a), true);
+            browser.button(center(a), false);
+            for pressed in [true, false] {
+                browser.pointer(PointerEvent::Button {
+                    position: center(b),
+                    button: MouseButton::Left,
+                    pressed,
+                    serial: 1,
+                    mods: Mods::SHIFT,
+                });
+            }
+            let press = center(b);
+            let before = browser.driver.runtime().window_system().drags().len();
+            browser.pointer(PointerEvent::Motion { position: press });
+            browser.button(press, true);
+            browser.pointer(PointerEvent::Motion {
+                position: Point::new(press.x + MOVE, press.y + MOVE / 2.0),
+            });
+            let drags = browser.driver.runtime().window_system().drags();
+            let started = drags.get(before).cloned().expect("a drag");
+            let uris = format!("{}\r\n{}\r\n", browser.uri("b.txt"), browser.uri("a.txt"));
+            assert_eq!(
+                String::from_utf8(started.request.data[0].bytes.clone()).unwrap(),
+                uris,
+                "both rows, the pressed one first"
+            );
+            let image = image(&started);
+            assert_eq!(image.scale, scale);
+            assert!(
+                image.height < image.width / 4,
+                "a row: {}×{}",
+                image.width,
+                image.height
+            );
+            assert!(image.hotspot.x > 0.0 && image.hotspot.y > 0.0);
+            let (alpha, shown) = coverage(image);
+            assert!(shown > 0 && alpha <= 205, "drawn at 0.8 opacity");
+            let name = format!(
+                "files-drag-rows-{}@{scale}x",
+                if appearance == Appearance::Light {
+                    "light"
+                } else {
+                    "dark"
+                }
+            );
+            capture(image, &name, appearance);
+        }
+    }
+}

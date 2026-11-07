@@ -69,6 +69,12 @@ impl Run {
     /// The window of [`Run::new`] posting to `notices`, with the trash's folder as a place after Downloads when
     /// `trash_listed`.
     fn with(trash_listed: bool, notices: Notices) -> Run {
+        Run::hosted(trash_listed, notices, false, common::Host::default())
+    }
+
+    /// The window of [`Run::with`] on a window system that can do what `host` says, with Reduce Transparency on when
+    /// `opaque`.
+    fn hosted(trash_listed: bool, notices: Notices, opaque: bool, host: common::Host) -> Run {
         let home = tempfile::tempdir().unwrap();
         let documents = home.path().join("Documents");
         let downloads = home.path().join("Downloads");
@@ -84,7 +90,21 @@ impl Run {
             let trash = home.path().join("Trash/files");
             places.push(place("Trash", &trash, PlaceKind::Trash));
         }
-        Run::start(home, documents, places, notices, None)
+        let preferences = cupertino_kit::theme::ThemePreferences {
+            appearance: cupertino_kit::theme::Appearance::Light,
+            reduce_transparency: opaque,
+            reduce_motion: false,
+        };
+        Run::start_hosted(
+            home,
+            documents,
+            places,
+            notices,
+            None,
+            preferences,
+            |start| start,
+            host,
+        )
     }
 }
 
@@ -299,7 +319,8 @@ fn the_window_reads_its_sidebar_toolbar_and_table_by_role_name_value_and_state()
     });
     assert_eq!(gaps, Vec::<String>::new());
     let row = |state: &str, cells: [&str; 4]| {
-        let mut lines = vec![format!("      Row{state}")];
+        // rows read as an outline: each top-level row one of the folder's three
+        let mut lines = vec![format!("      Row 3 items{state}")];
         for cell in cells {
             lines.push("        Cell".to_owned());
             lines.push(format!("          StaticText {cell}"));
@@ -318,6 +339,9 @@ fn the_window_reads_its_sidebar_toolbar_and_table_by_role_name_value_and_state()
             "    Button \"Back\" disabled",
             "    Button \"Forward\" disabled",
             "    StaticText \"Documents\"",
+            "    PopUpButton \"View\" focusable",
+            "    PopUpButton \"Tags\" focusable",
+            "    PopUpButton \"Action\" focusable",
             "    TextInput \"Search\" = \"\" focusable",
             "  Table \"Documents\" 3 items multiselectable",
             "    Row",
@@ -338,7 +362,10 @@ fn the_window_reads_its_sidebar_toolbar_and_table_by_role_name_value_and_state()
             ["\"a.txt\"", "<date>", "\"1 byte\"", "\"Text\""],
         ));
         lines.extend(row("", ["\"b.txt\"", "<date>", "\"2 bytes\"", "\"Text\""]));
-        lines.extend(row("", ["\"Notes\"", "<date>", "\"--\"", "\"Folder\""]));
+        lines.extend(row(
+            " collapsed",
+            ["\"Notes\"", "<date>", "\"--\"", "\"Folder\""],
+        ));
         lines.push("  Splitter \"Sidebar\" = 200 of 0..919 focusable".to_owned());
         lines
     };
@@ -517,4 +544,422 @@ fn each_window_keeps_its_own_view() {
     assert_eq!(run.rows(), Vec::<String>::new());
     run.activate(first);
     assert_eq!(run.rows(), ["a.txt", "b.txt", "Notes"]);
+}
+
+#[test]
+fn the_trash_place_comes_with_the_first_item_trashed_and_leaves_with_the_trash() {
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    let places = |run: &Run| run.named(Role::ListItem);
+    assert!(
+        !places(&run).contains(&"Trash".to_owned()),
+        "nothing trashed yet"
+    );
+    run.click_row("a.txt");
+    run.menu("move-to-trash");
+    run.wait_until(|run| places(run).contains(&"Trash".to_owned()));
+    run.click("place-Trash");
+    assert_eq!(run.title(), "Trash");
+    run.wait_until(|run| run.rows() == ["a.txt"]);
+
+    // another program empties the trash and removes its folder: the place goes, and the window with it
+    run.click("place-Documents");
+    std::fs::remove_dir_all(run.home().join("Trash/files")).unwrap();
+    run.wait_until(|run| !places(run).contains(&"Trash".to_owned()));
+    assert_eq!(places(&run), ["Documents", "Downloads"]);
+}
+
+/// The grid's items in the window, by name.
+fn icon_frames(run: &Run) -> HashMap<String, cupertino_kit::geometry::Rect> {
+    run.icon_cells()
+        .into_iter()
+        .map(|(name, rect, _)| (name, rect))
+        .collect()
+}
+
+#[test]
+fn a_band_from_empty_space_selects_the_icons_it_touches_and_modifiers_toggle_them() {
+    use cupertino_kit::geometry::Point;
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    run.menu("view-icons");
+    let frames = icon_frames(&run);
+    let grid = run.bounds(Role::List, &run.title());
+    // under the row of items, clear of the window's edges
+    let below = frames.values().map(|f| f.max_y()).fold(0.0, f64::max) + 40.0;
+    assert!(
+        below < grid.max_y() - 40.0,
+        "the grid reaches below its items"
+    );
+    // clear of the divider beside the sidebar
+    let empty = Point::new(frames["a.txt"].center().x - 20.0, below);
+    run.drag(empty, frames["b.txt"].center(), Mods::NONE);
+    assert_eq!(run.selected_icons(), ["a.txt", "b.txt"]);
+
+    // Shift keeps what was selected and adds what the band touches
+    let corner = Point::new(frames["Notes"].max_x() + 40.0, below);
+    run.drag(corner, frames["Notes"].center(), Mods::SHIFT);
+    assert_eq!(run.selected_icons(), ["a.txt", "b.txt", "Notes"]);
+    // Primary takes away what the band touches again
+    run.drag(corner, frames["Notes"].center(), Mods::PRIMARY);
+    assert_eq!(run.selected_icons(), ["a.txt", "b.txt"]);
+    // a plain press on empty space clears the selection
+    run.press_at(empty, cupertino_kit::platform::MouseButton::Left);
+    assert_eq!(run.selected_icons(), Vec::<String>::new());
+}
+
+#[test]
+fn a_band_pressed_at_the_bottom_edge_scrolls_the_grid_under_it() {
+    use cupertino_kit::geometry::Point;
+    use cupertino_kit::platform::{MouseButton, PointerEvent, Timestamp};
+    let mut run = Run::new();
+    for i in 0..60 {
+        std::fs::write(run.home().join(format!("Documents/item {i:02}.txt")), "x").unwrap();
+    }
+    run.menu("view-icons");
+    run.wait_until(|run| icon_frames(run).contains_key("item 00.txt"));
+    let grid = run.bounds(Role::List, &run.title());
+    let first = icon_frames(&run)["a.txt"];
+    let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
+    // in the gap after the first item
+    let from = Point::new(first.max_x() + 1.0, first.min_y() + 2.0);
+    // the band reaches into the second column
+    let edge = Point::new(first.max_x() + 40.0, grid.max_y() - 12.0);
+    let button = |position, pressed| {
+        pointer(PointerEvent::Button {
+            position,
+            button: MouseButton::Left,
+            pressed,
+            serial: 1,
+            mods: Mods::NONE,
+        })
+    };
+    run.send(pointer(PointerEvent::Motion { position: from }));
+    run.send(button(from, true));
+    run.send(pointer(PointerEvent::Motion { position: edge }));
+    let before = run.selected_icons();
+    let top = |run: &Run| icon_frames(run)["a.txt"].min_y();
+    let at = top(&run);
+    // the pointer stays still: the edge timer goes on scrolling
+    run.frames(500, 50);
+    assert!(top(&run) < at, "the content moved up under the band");
+    let after = run.selected_icons();
+    assert!(
+        after.iter().any(|name| !before.contains(name)),
+        "the band grew over the items scrolled in: {before:?} {after:?}"
+    );
+    run.send(button(edge, false));
+    let selected = run.selected_icons().len();
+    run.frames(300, 50);
+    assert_eq!(run.selected_icons().len(), selected, "a release ends it");
+}
+
+#[test]
+fn ctrl_with_a_press_opens_the_context_menu_on_the_icon() {
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    run.menu("view-icons");
+    let b = icon_frames(&run)["b.txt"];
+    run.press_with(
+        b.center(),
+        cupertino_kit::platform::MouseButton::Left,
+        Mods::CTRL,
+    );
+    assert!(
+        run.context_menu().is_some(),
+        "Ctrl and a press is a secondary click"
+    );
+    assert_eq!(run.selected_icons(), ["b.txt"]);
+    assert!(run.menu_rows().iter().any(|(label, _)| label == "Rename"));
+}
+
+#[test]
+fn a_double_click_opens_and_a_click_on_the_selected_name_renames_after_a_pause() {
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    run.menu("view-icons");
+    let field = |run: &Run| {
+        run.driver
+            .runtime()
+            .find(run.window, &Key::from(format!("name-field/{}", 0)))
+            .is_some()
+    };
+    run.click_icon("b.txt");
+    run.frames(600, 100);
+    assert!(!field(&run), "the first click only selects");
+    // the second click, on the name of the only selected item
+    let name = run.bounds(Role::StaticText, "b.txt");
+    run.press_at(name.center(), cupertino_kit::platform::MouseButton::Left);
+    assert!(!field(&run), "nothing yet: it may be a double click");
+    run.frames(600, 100);
+    assert!(field(&run), "the name is edited once the interval passed");
+    run.key(0xff1b, None);
+
+    run.click_icon("Notes");
+    run.click_icon("Notes");
+    run.wait_until(|run| run.title() == "Notes");
+    run.frames(600, 100);
+    assert!(!field(&run), "a double click renames nothing");
+}
+
+#[test]
+fn tab_and_shift_tab_select_the_next_and_previous_item_by_name() {
+    const TAB: u32 = 0xff09;
+    const LEFT_TAB: u32 = 0xfe20;
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    run.menu("view-icons");
+    run.menu("sort-size");
+    let order: Vec<String> = run.icons().into_iter().map(|(n, _)| n).collect();
+    assert_eq!(order[..2], ["b.txt", "a.txt"], "shown by size");
+    run.click_icon("a.txt");
+    run.key(TAB, None);
+    assert_eq!(run.selected_icons(), ["b.txt"], "by name, not as shown");
+    run.key(TAB, None);
+    assert_eq!(run.selected_icons(), ["Notes"]);
+    run.key(TAB, None);
+    assert_eq!(run.selected_icons(), ["Notes"], "the last stays");
+    run.key_with(LEFT_TAB, None, Mods::SHIFT);
+    assert_eq!(run.selected_icons(), ["b.txt"]);
+}
+
+/// The list's row showing `name`.
+fn row_bounds(run: &Run, name: &str) -> cupertino_kit::geometry::Rect {
+    run.listed()
+        .into_iter()
+        .find(|(shown, _, _)| shown == name)
+        .unwrap_or_else(|| panic!("no row {name:?}"))
+        .1
+}
+
+#[test]
+fn a_folders_triangle_and_the_arrows_open_and_close_it_in_the_list() {
+    use cupertino_kit::geometry::Point;
+    const LEFT: u32 = 0xff51;
+    const RIGHT: u32 = 0xff53;
+    let mut run = Run::new();
+    std::fs::write(run.home().join("Documents/Notes/todo.txt"), "t").unwrap();
+    run.wait_until(|run| run.rows().len() == 3);
+    run.click_row("a.txt");
+    let notes = row_bounds(&run, "Notes");
+    // the triangle sits at the row's leading edge, before the name
+    let triangle = Point::new(notes.min_x() + 18.0, notes.min_y() + notes.height() / 2.0);
+    run.press_at(triangle, cupertino_kit::platform::MouseButton::Left);
+    run.wait_until(|run| run.rows().len() == 4);
+    assert_eq!(run.rows(), ["a.txt", "b.txt", "Notes", "todo.txt"]);
+    assert_eq!(
+        run.selected_rows(),
+        ["a.txt"],
+        "the triangle selects nothing"
+    );
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    let levels: Vec<(Option<usize>, Option<bool>)> = snapshot
+        .accessibility
+        .iter()
+        .filter(|(_, n)| n.role == Role::Row && n.level.is_some())
+        .map(|(_, n)| (n.level, n.states.expanded))
+        .collect();
+    assert!(
+        levels.contains(&(Some(1), Some(true))),
+        "Notes reads as open: {levels:?}"
+    );
+    assert!(
+        levels.contains(&(Some(2), None)),
+        "todo.txt one level in: {levels:?}"
+    );
+
+    run.press_at(triangle, cupertino_kit::platform::MouseButton::Left);
+    run.wait_until(|run| run.rows().len() == 3);
+    run.click_row("Notes");
+    run.key(RIGHT, None);
+    run.wait_until(|run| run.rows().len() == 4);
+    run.key(LEFT, None);
+    run.wait_until(|run| run.rows().len() == 3);
+    run.key(RIGHT, None);
+    run.wait_until(|run| run.rows().len() == 4);
+    run.menu("view-icons");
+    run.menu("view-list");
+    assert_eq!(run.rows().len(), 3, "leaving the list closes its folders");
+}
+
+#[test]
+fn a_band_under_the_rows_selects_the_rows_it_crosses() {
+    use cupertino_kit::geometry::Point;
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    let notes = row_bounds(&run, "Notes");
+    let b = row_bounds(&run, "b.txt");
+    let under = Point::new(notes.min_x() + notes.width() / 2.0, notes.max_y() + 40.0);
+    run.drag(under, b.center(), Mods::NONE);
+    assert_eq!(run.selected_rows(), ["b.txt", "Notes"]);
+    run.drag(under, Point::new(under.x, notes.max_y() + 20.0), Mods::NONE);
+    assert_eq!(
+        run.selected_rows(),
+        Vec::<String>::new(),
+        "a band over no row"
+    );
+    run.click_row("a.txt");
+    run.drag(under, notes.center(), Mods::SHIFT);
+    assert_eq!(
+        run.selected_rows(),
+        ["a.txt", "Notes"],
+        "Shift adds to the selection"
+    );
+}
+
+#[test]
+fn in_the_list_ctrl_click_opens_the_menu_a_double_click_opens_and_a_pause_renames() {
+    use cupertino_kit::platform::MouseButton;
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    let b = row_bounds(&run, "b.txt");
+    run.press_with(b.center(), MouseButton::Left, Mods::CTRL);
+    assert!(run.context_menu().is_some());
+    assert_eq!(run.selected_rows(), ["b.txt"]);
+    run.close_menu();
+
+    let field = |run: &Run| {
+        run.driver
+            .runtime()
+            .find(run.window, &Key::from("name-field/0"))
+            .is_some()
+    };
+    run.frames(600, 100);
+    let name = run.bounds(Role::StaticText, "b.txt");
+    run.press_at(name.center(), MouseButton::Left);
+    assert!(!field(&run));
+    run.frames(600, 100);
+    assert!(
+        field(&run),
+        "a press on the selected name renames it after a pause"
+    );
+    run.key(0xff1b, None);
+
+    run.click_row("Notes");
+    run.click_row("Notes");
+    run.wait_until(|run| run.title() == "Notes");
+}
+
+#[test]
+fn in_the_list_tab_and_shift_tab_select_by_name() {
+    const TAB: u32 = 0xff09;
+    const LEFT_TAB: u32 = 0xfe20;
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    run.menu("sort-size");
+    assert_eq!(run.rows()[..2], ["b.txt", "a.txt"]);
+    run.click_row("a.txt");
+    run.key(TAB, None);
+    assert_eq!(run.selected_rows(), ["b.txt"]);
+    run.key(TAB, None);
+    assert_eq!(run.selected_rows(), ["Notes"]);
+    run.key_with(LEFT_TAB, None, Mods::SHIFT);
+    assert_eq!(run.selected_rows(), ["b.txt"]);
+    run.key(0xff54, None);
+    assert_eq!(
+        run.selected_rows(),
+        ["a.txt"],
+        "the arrows go on from the row Tab chose"
+    );
+}
+
+#[test]
+fn the_toolbars_view_tags_and_action_buttons_open_their_menus_below_them() {
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    let labels = |run: &mut Run| -> Vec<(String, bool)> { run.menu_rows() };
+
+    run.click_named(Role::PopUpButton, "View");
+    assert!(run.context_menu().is_some(), "the View menu");
+    let rows = labels(&mut run);
+    assert_eq!(
+        rows[..2],
+        [("Icons".to_owned(), true), ("List".to_owned(), true)]
+    );
+    assert!(rows.contains(&("Columns".to_owned(), false)));
+    run.choose("Icons");
+    assert_eq!(run.rows(), Vec::<String>::new(), "shown as icons");
+    run.click_named(Role::PopUpButton, "View");
+    run.choose("List");
+    run.wait_until(|run| run.rows().len() == 3);
+
+    run.click_named(Role::PopUpButton, "Action");
+    let rows = labels(&mut run);
+    assert!(
+        rows.contains(&("New Folder".to_owned(), true)),
+        "the folder's menu: {rows:?}"
+    );
+    run.close_menu();
+    run.click_row("a.txt");
+    run.click_named(Role::PopUpButton, "Action");
+    let rows = labels(&mut run);
+    assert!(
+        rows.contains(&("Rename".to_owned(), true)),
+        "the selection's menu: {rows:?}"
+    );
+    run.close_menu();
+
+    run.click_named(Role::PopUpButton, "Tags");
+    let rows = labels(&mut run);
+    assert_eq!(rows.len(), 7, "the tag colours: {rows:?}");
+    assert!(rows.iter().all(|(_, enabled)| *enabled));
+    run.close_menu();
+}
+
+#[test]
+fn a_click_on_a_folder_of_the_path_bar_goes_to_it() {
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    run.menu("toggle-path-bar");
+    run.click_row("Notes");
+    run.click_row("Notes");
+    run.wait_until(|run| run.title() == "Notes");
+    let segments = run.named(Role::Button);
+    assert!(
+        segments.ends_with(&["Documents".to_owned(), "Notes".to_owned()]),
+        "{segments:?}"
+    );
+    run.click_named(Role::Button, "Documents");
+    run.wait_until(|run| run.title() == "Documents");
+    assert_eq!(run.rows(), ["a.txt", "b.txt", "Notes"]);
+}
+
+#[test]
+fn the_sidebar_shows_the_sidebar_material_where_the_window_can_and_its_fill_where_it_cannot() {
+    use cupertino_kit::platform::{Capabilities, WindowRequest};
+    let materials = |opaque: bool| {
+        let host = common::Host {
+            capabilities: Capabilities {
+                app_effects: true,
+                ..Capabilities::default()
+            },
+            ..common::Host::default()
+        };
+        let mut run = Run::hosted(false, Notices::start(None), opaque, host);
+        run.wait_until(|run| run.rows().len() == 3);
+        let system = run.driver.runtime().window_system();
+        let requests = system.requests(run.window).unwrap();
+        requests
+            .iter()
+            .rev()
+            .find_map(|request| match request {
+                WindowRequest::Materials(regions) => Some(regions.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    };
+    let regions = materials(false);
+    let sidebar = regions
+        .iter()
+        .find(|r| r.material.to_lowercase().contains("sidebar"))
+        .unwrap_or_else(|| panic!("the sidebar material: {regions:?}"));
+    assert_eq!(sidebar.rect.min_x(), 0.0, "from the window's leading edge");
+    assert!(
+        sidebar.rect.width() >= 200.0,
+        "under the whole sidebar: {sidebar:?}"
+    );
+    assert!(
+        materials(true).is_empty(),
+        "with Reduce Transparency the sidebar paints its opaque fill"
+    );
 }

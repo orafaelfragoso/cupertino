@@ -124,6 +124,14 @@ fn start(options: Options) -> io::Result<Start> {
     let home =
         PathBuf::from(std::env::var_os("HOME").ok_or_else(|| io::Error::other("HOME is not set"))?);
     let SessionPlaces { places, .. } = session_places(&home, &dirs.data_dirs)?;
+    // the places follow the user directories, their configuration and the trash
+    let watched = [Some(home.clone()), cupertino_defaults::config_home()]
+        .into_iter()
+        .flatten()
+        .collect();
+    let (source_home, data_dirs) = (home.clone(), dirs.data_dirs.clone());
+    let source: kit::PlacesSource =
+        Box::new(move || session_places(&source_home, &data_dirs).map(|p| p.places));
     // one database for the Kind column and for what opens an item, so both name the same type
     let types = Arc::new(MimeDatabase::load(&dirs.all_data_dirs()).map_err(other)?);
     let notices = Notices::start(zbus::blocking::Connection::session().ok());
@@ -140,6 +148,7 @@ fn start(options: Options) -> io::Result<Start> {
         options.terminal,
         system,
     )
+    .map(|start| start.with_places_source(source, watched))
     .map_err(|e| {
         io::Error::new(
             e.kind(),

@@ -5,12 +5,17 @@
 
 mod common;
 
+use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::time::Duration;
+
 use common::{place, Run};
+use cupertino_files::kit::Observer;
 use cupertino_files::notice::Notices;
 use cupertino_files::places::PlaceKind;
 use cupertino_kit::core::Role;
 use cupertino_kit::geometry::Point;
 use cupertino_kit::platform::{Mods, MouseButton};
+use cupertino_kit::theme::{Appearance, ThemePreferences};
 
 const MENU: u32 = 0xff67;
 
@@ -208,4 +213,111 @@ fn a_folder_is_not_pasted_into_itself() {
         "nothing made"
     );
     assert!(run.rows().is_empty());
+}
+
+/// A gate a transfer waits at once it copied part of a file, until the test opens it; `reached` hears when it waits.
+struct Gate {
+    open: Mutex<bool>,
+    opened: Condvar,
+}
+
+impl Gate {
+    fn observer(gate: &Arc<Gate>, reached: mpsc::Sender<()>) -> Observer {
+        let gate = Arc::clone(gate);
+        let reached = Mutex::new(Some(reached));
+        Arc::new(move |progress| {
+            if progress.bytes == 0 || progress.bytes == progress.total_bytes {
+                return;
+            }
+            if let Some(reached) = reached.lock().unwrap().take() {
+                let _ = reached.send(());
+            }
+            let open = gate.open.lock().unwrap();
+            let _open = gate
+                .opened
+                .wait_timeout_while(open, Duration::from_secs(10), |open| !*open)
+                .unwrap();
+        })
+    }
+
+    fn release(&self) {
+        *self.open.lock().unwrap() = true;
+        self.opened.notify_all();
+    }
+}
+
+#[test]
+fn a_large_paste_runs_beside_the_window_shows_its_progress_and_stops_without_a_half_copy() {
+    let home = tempfile::tempdir().unwrap();
+    let documents = home.path().join("Documents");
+    std::fs::create_dir_all(documents.join("Notes")).unwrap();
+    // four chunks of the copy, so it can stop between two of them
+    let big = vec![5u8; 4 << 20];
+    std::fs::write(documents.join("big.bin"), &big).unwrap();
+    let places = vec![place("Documents", &documents, PlaceKind::Documents)];
+    let gate = Arc::new(Gate {
+        open: Mutex::new(false),
+        opened: Condvar::new(),
+    });
+    let (reached, waits) = mpsc::channel();
+    let observer = Gate::observer(&gate, reached);
+    let preferences = ThemePreferences {
+        appearance: Appearance::Light,
+        reduce_transparency: false,
+        reduce_motion: false,
+    };
+    let mut run = Run::start_configured(
+        home,
+        documents.clone(),
+        places,
+        Notices::start(None),
+        None,
+        preferences,
+        |start| start.with_transfer_observer(observer),
+    );
+    run.wait_until(|run| run.rows().len() == 2);
+    run.click_row("big.bin");
+    run.menu("copy");
+    enter(&mut run, "Notes");
+    run.menu("paste");
+    waits
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the copy started");
+
+    // the copy waits at the gate on its own thread: the window still answers and shows what it does
+    run.wait_until(|run| !run.named(Role::ProgressIndicator).is_empty());
+    assert_eq!(
+        run.named(Role::ProgressIndicator),
+        ["Copying “big.bin” to “Notes”"]
+    );
+    assert!(run.named(Role::Button).contains(&"Stop".to_owned()));
+    run.menu("toggle-status-bar");
+    assert!(
+        run.read_aloud().iter().any(|t| t.contains("item")),
+        "the window answers"
+    );
+
+    run.click_named(Role::Button, "Stop");
+    gate.release();
+    run.wait_until(|run| run.named(Role::ProgressIndicator).is_empty());
+    let left: Vec<_> = std::fs::read_dir(documents.join("Notes"))
+        .unwrap()
+        .collect();
+    assert!(
+        left.is_empty(),
+        "a stopped copy leaves nothing half written: {left:?}"
+    );
+    assert_eq!(std::fs::read(documents.join("big.bin")).unwrap(), big);
+    assert!(run.rows().is_empty());
+}
+
+#[test]
+fn a_paste_that_runs_to_its_end_takes_its_row_away_and_selects_what_arrived() {
+    let mut run = run();
+    run.click_row("b.txt");
+    run.menu("copy");
+    enter(&mut run, "Notes");
+    run.menu("paste");
+    run.wait_until(|run| run.selected_rows() == ["b.txt"]);
+    run.wait_until(|run| run.named(Role::ProgressIndicator).is_empty());
 }

@@ -42,6 +42,9 @@ pub mod window {
     pub const TOOLBAR_ITEM_GAP: f64 = 12.0;
     /// Room the folder's title keeps when the search field grows (approximate).
     pub const TITLE_MIN: f64 = 60.0;
+    /// The toolbar's pop-up buttons, `(width, height)`: View (how the folder is shown), Tags and Action.
+    pub const TOOLBAR_VIEW_POPUP: (f64, f64) = (44.0, 24.0);
+    pub const TOOLBAR_TAGS_POPUP: (f64, f64) = (29.0, 25.0);
     pub const TOOLBAR_ACTION_POPUP: (f64, f64) = (41.0, 24.0);
 }
 

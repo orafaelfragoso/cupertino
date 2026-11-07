@@ -2,13 +2,23 @@
 //! status bars and the menus of the desktop's menu bar, over the toolkit-free [`Browser`]. It is the window `main.rs`
 //! runs.
 
+mod band;
+mod clicks;
 mod context;
 mod dragged;
 mod grid;
+mod list;
+mod places;
 mod search;
+mod sidebar;
+mod toolbar;
+mod transfer;
 mod view;
 
 pub use dragged::Grab;
+pub use list::RowGrab;
+pub use places::PlacesSource;
+pub use transfer::Observer;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -19,7 +29,9 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use cupertino_apps::{launch, MimeApps, MimeDatabase};
-use cupertino_kit::controls::{Navigation, Selection, SortOrder, SplitLayout, TextChange};
+use cupertino_kit::controls::{
+    MenuAnchor, Navigation, Selection, SortOrder, SplitLayout, TextChange,
+};
 use cupertino_kit::layout::ScrollState;
 use cupertino_kit::platform::{DragProgress, WindowRequest};
 use cupertino_kit::prelude::*;
@@ -63,6 +75,10 @@ pub struct Start {
     trash: Trash,
     view: ViewMode,
     home: Option<PathBuf>,
+    observer: Option<Observer>,
+    places_source: Option<PlacesSource>,
+    /// Folders whose changes may change the places, besides the trash.
+    places_folders: Vec<PathBuf>,
 }
 
 impl Start {
@@ -100,6 +116,9 @@ impl Start {
             trash: Trash::new(),
             view: ViewMode::Icons,
             home: None,
+            observer: None,
+            places_source: None,
+            places_folders: Vec::new(),
         })
     }
 
@@ -119,6 +138,24 @@ impl Start {
     /// The windows opening in `view` in place of the icon view.
     pub fn with_view(self, view: ViewMode) -> Start {
         Start { view, ..self }
+    }
+
+    /// The sidebar's standard places read again from `source` whenever one of `folders` changes, besides the trash's
+    /// place, which follows the trash.
+    pub fn with_places_source(self, source: PlacesSource, folders: Vec<PathBuf>) -> Start {
+        Start {
+            places_source: Some(source),
+            places_folders: folders,
+            ..self
+        }
+    }
+
+    /// Every paste and move calling `observer` with its progress on its own thread, before it looks for a stop.
+    pub fn with_transfer_observer(self, observer: Observer) -> Start {
+        Start {
+            observer: Some(observer),
+            ..self
+        }
     }
 }
 
@@ -184,6 +221,11 @@ struct Session {
     view: ViewMode,
     /// What Copy took last, for Paste Item and Move Item Here in any window.
     pasteboard: Vec<PathBuf>,
+    /// What each transfer calls with its progress.
+    observer: Option<Observer>,
+    next_transfer: u64,
+    places_source: Option<PlacesSource>,
+    places_watch: places::PlacesWatch,
 }
 
 /// One browser window.
@@ -218,6 +260,17 @@ struct BrowserWindow {
     context: Option<context::OpenMenu>,
     /// What the latest secondary press was on, until its context menu opens: an item, or empty space.
     pressed: Option<Option<usize>>,
+    /// The pastes and moves into a folder of this window still running, oldest first.
+    transfers: Vec<transfer::Transfer>,
+    /// The keyboard is in the sidebar.
+    sidebar_focused: bool,
+    /// The key of the sidebar row a click or the arrows last chose since the window last went to another folder: the
+    /// row the sidebar's keyboard is on, when it is not the selected one.
+    sidebar_row: Option<Key>,
+    /// The rubber band being drawn over the items, in the view's content.
+    band: Option<cupertino_kit::geometry::Rect>,
+    /// The presses on the list's rows, which its rows and its frame share.
+    list_presses: list::SharedPresses,
 }
 
 /// The sheet that asks for a locked container's passphrase.
@@ -240,6 +293,8 @@ struct Rename {
 pub enum Message {
     /// The removable media have reports waiting.
     Media,
+    /// A folder the sidebar's places come from changed.
+    Places,
     /// An event of the window with this id.
     Window(u64, Event),
 }
@@ -308,6 +363,39 @@ pub enum Event {
     DragOut(Grab),
     /// How a drag out of the window goes. The target copies or moves the files, so the window has nothing to do.
     Dragged(DragProgress),
+    /// The transfer with this id has progress or its results waiting.
+    Transferred(u64),
+    /// Stop the transfer with this id: its Stop button.
+    StopTransfer(u64),
+    /// The keyboard came into the sidebar, or left it.
+    SidebarFocus(bool),
+    /// The rubber band being drawn over the items, in the view's content; `None` once it is let go.
+    Band(Option<cupertino_kit::geometry::Rect>),
+    /// A press on the name of the only selected item was not followed by a second one: edit the name of item `index`.
+    RenameItem(usize),
+    /// Open or close a folder's row of the list: its triangle, Left or Right.
+    Toggle(cupertino_kit::controls::TreeToggle),
+    /// A press on rows of the list moved far enough to drag them out of the window.
+    DragRows(RowGrab),
+    /// Tab chose row `index` of the list: give it the keyboard once the list shows it.
+    FocusRow(usize),
+    /// The list shows the row with this key: give it the keyboard.
+    FocusKey(Key),
+    /// A toolbar button's menu: open it below the button.
+    Popup(Popup),
+    /// A folder of the path bar was clicked: go to it.
+    PathSegment(PathBuf),
+}
+
+/// The toolbar's pop-up buttons.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Popup {
+    /// How the folder is shown.
+    View,
+    /// The selection's tag colours.
+    Tags,
+    /// The selection's menu, or the folder's without a selection.
+    Action,
 }
 
 /// The list's columns, in order.
@@ -344,6 +432,8 @@ impl Application for Files {
         let start = START
             .with(|s| s.borrow_mut().take())
             .expect("kit::prepare runs before Files starts");
+        let places_watch =
+            places::PlacesWatch::start(start.places_folders, start.trash.home_trash());
         let mut model = Model {
             windows: BTreeMap::new(),
             next_window: 0,
@@ -365,9 +455,16 @@ impl Application for Files {
                 trash: start.trash,
                 view: start.view,
                 pasteboard: Vec::new(),
+                observer: start.observer,
+                next_transfer: 0,
+                places_watch,
+                places_source: start.places_source,
             },
         };
-        let mut commands = vec![model.add_window(start.browser, start.woken)];
+        let mut commands = vec![
+            model.add_window(start.browser, start.woken),
+            woken(&model.session.places_watch.woken, Message::Places),
+        ];
         if model.session.volumes.is_some() {
             commands.push(woken(&model.session.media_woken, Message::Media));
         }
@@ -377,6 +474,10 @@ impl Application for Files {
     fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
         match message {
             Message::Media => model.follow_media(),
+            Message::Places => {
+                model.session.follow_places();
+                vec![woken(&model.session.places_watch.woken, Message::Places)]
+            }
             Message::Window(id, event) => model.window_event(id, event),
         }
     }
@@ -437,6 +538,11 @@ impl Model {
             view: self.session.view,
             context: None,
             pressed: None,
+            transfers: Vec::new(),
+            sidebar_focused: false,
+            sidebar_row: None,
+            band: None,
+            list_presses: Default::default(),
         };
         window.entered();
         self.windows.insert(id, window);
@@ -481,6 +587,7 @@ impl Model {
                 }
                 if polled.changed {
                     window.now = SystemTime::now();
+                    window.read_available();
                 }
                 let mut commands = window.listed(id);
                 commands.push(woken(&window.woken, Message::Window(id, Event::Woken)));
@@ -588,6 +695,50 @@ impl Model {
                 return vec![dragged::start(id, window_key(id), &grab, entries)];
             }
             Event::Dragged(_) => {}
+            Event::Transferred(tid) => return window.transferred(id, tid, session),
+            Event::SidebarFocus(focused) => window.sidebar_focused = focused,
+            Event::Band(band) => window.band = band,
+            Event::Toggle(toggle) => {
+                let done = if toggle.expanded {
+                    window.browser.expand(toggle.index)
+                } else {
+                    Ok(window.browser.collapse(toggle.index))
+                };
+                if let Err(e) = done {
+                    eprintln!("cupertino-files: cannot open the folder's row: {e}");
+                }
+            }
+            Event::DragRows(grab) => {
+                let entries = window.browser.entries();
+                return vec![dragged::start_rows(id, window_key(id), &grab, entries)];
+            }
+            Event::FocusRow(index) => {
+                let Some(entry) = window.browser.entries().get(index) else {
+                    return Vec::new();
+                };
+                let key = view::row_key(id, &entry.path);
+                return vec![Command::Perform(Box::pin(async move {
+                    Message::Window(id, Event::FocusKey(key))
+                }))];
+            }
+            Event::FocusKey(key) => return vec![Command::Focus(key)],
+            Event::Popup(popup) => window.open_popup(popup, session),
+            Event::PathSegment(path) => {
+                if path != window.browser.dir() {
+                    window.go(path, session);
+                }
+            }
+            Event::RenameItem(index) => {
+                let state = window.menu_state(session);
+                if menu_bar::enabled(&state).contains(&(MenuAction::Rename, true)) {
+                    return window.begin_rename(id, index);
+                }
+            }
+            Event::StopTransfer(tid) => {
+                if let Some(running) = window.transfers.iter().find(|t| t.id == tid) {
+                    running.stop();
+                }
+            }
         }
         Vec::new()
     }
@@ -604,11 +755,22 @@ impl Model {
             }
             MenuAction::Paste | MenuAction::MoveHere => {
                 let moving = action == MenuAction::MoveHere;
-                window.paste(&self.session, moving);
-                if moving {
-                    self.session.pasteboard.clear();
+                let session = &mut self.session;
+                if session.pasteboard.is_empty() {
+                    return Vec::new();
                 }
-                return Vec::new();
+                let tid = session.next_transfer;
+                session.next_transfer += 1;
+                let sources = match moving {
+                    true => std::mem::take(&mut session.pasteboard),
+                    false => session.pasteboard.clone(),
+                };
+                let dest = window.browser.dir().to_path_buf();
+                let started =
+                    transfer::Transfer::start(tid, sources, dest, moving, session.observer.clone());
+                let wake = woken(&started.woken, Message::Window(id, Event::Transferred(tid)));
+                window.transfers.push(started);
+                return vec![wake];
             }
             _ => {}
         }
@@ -641,7 +803,7 @@ impl Model {
                 )];
             }
             MenuAction::Eject => {
-                if let Some(place) = removable_holding(window.browser.dir(), &session.places) {
+                if let Some(place) = window.eject_target(session) {
                     self.eject(place);
                 }
             }
@@ -687,10 +849,17 @@ impl Model {
             }
             MenuAction::ShowOriginal => window.show_original(session),
             MenuAction::View(view) if view != window.view => {
+                // the folders opened in the list close with it
+                window.browser.collapse_all();
+                window.band = None;
                 window.view = view;
                 window.scroll.offset = cupertino_kit::geometry::Point::ZERO;
             }
             MenuAction::View(_) => {}
+        }
+        if matches!(action, MenuAction::MoveToTrash | MenuAction::PutBack) {
+            // the first item trashed makes the trash: its place comes at once
+            self.session.follow_places();
         }
         Vec::new()
     }
@@ -799,11 +968,14 @@ impl Model {
         let Some(place) = session.places.get(index) else {
             return Vec::new();
         };
+        let row = view::place_key(session, index);
         if let Some(folder) = place.folder() {
             let folder = folder.to_path_buf();
             window.go(folder, session);
+            window.sidebar_row = Some(row);
             return Vec::new();
         }
+        window.sidebar_row = Some(row);
         let Some(row) = index.checked_sub(session.standard_places) else {
             return Vec::new();
         };
@@ -917,6 +1089,18 @@ impl Session {
         if let Some(e) = first {
             self.failed(action, &failed, &e);
         }
+    }
+
+    /// Read the standard places again, keeping the removable media's after them, and watch the trash once it exists.
+    fn follow_places(&mut self) {
+        let trash = self.trash.home_trash().to_path_buf();
+        self.standard_places = places::reread(
+            &mut self.places,
+            self.standard_places,
+            self.places_source.as_ref(),
+            &trash.join("files"),
+        );
+        self.places_watch.follow(&trash);
     }
 
     fn show_media(&mut self) {
@@ -1033,12 +1217,20 @@ impl BrowserWindow {
         };
         self.rename = None;
         self.rename_when_listed = None;
+        self.sidebar_row = None;
+        self.band = None;
         if !self.search.is_empty() {
             self.search.clear();
             self.search_revision += 1;
         }
         self.follow_search();
         self.now = SystemTime::now();
+        self.read_available();
+    }
+
+    /// Read the free space of the folder's file system for the status bar: on entering a folder, whenever its listing
+    /// changes, and after a transfer, so it follows what the window and others write there.
+    fn read_available(&mut self) {
         self.available = match self.browser.available_space() {
             Ok(bytes) => bytes,
             Err(e) => {
@@ -1079,24 +1271,37 @@ impl BrowserWindow {
         }
     }
 
-    /// Copy the items on the pasteboard into the folder, or move them when `moving`; a name the folder has is given
-    /// a free copy name. The failures are reported together; the last item that arrives is selected.
-    fn paste(&mut self, session: &Session, moving: bool) {
-        let action = match moving {
-            true => DropAction::Move,
-            false => DropAction::Copy,
+    /// The transfer `tid` of the window `id` reported: its row shows its progress; once it ended the failures are
+    /// reported together (a stop is none), the last item that arrived is selected when the window still shows where it
+    /// went, and the free space is read again.
+    fn transferred(&mut self, id: u64, tid: u64, session: &Session) -> Vec<Command<Message>> {
+        let Some(at) = self.transfers.iter().position(|t| t.id == tid) else {
+            return Vec::new();
         };
-        let sources = &session.pasteboard;
-        let placed = operations::drop_into(sources, self.browser.dir(), action);
-        let arrived = placed.iter().rev().find_map(|p| p.as_ref().ok()).cloned();
-        let notice = match moving {
+        let Some(results) = self.transfers[at].poll() else {
+            let wake = woken(
+                &self.transfers[at].woken,
+                Message::Window(id, Event::Transferred(tid)),
+            );
+            return vec![wake];
+        };
+        let done = self.transfers.remove(at);
+        let arrived = results.iter().rev().find_map(|p| p.as_ref().ok()).cloned();
+        let notice = match done.moving {
             true => Action::Drop(DropAction::Move),
             false => Action::Paste,
         };
-        session.failed_some(notice, sources.iter().zip(placed));
-        if let Some(path) = arrived {
+        let failed = done
+            .sources
+            .iter()
+            .zip(results)
+            .filter(|(_, r)| !r.as_ref().is_err_and(operations::is_cancelled));
+        session.failed_some(notice, failed);
+        if let Some(path) = arrived.filter(|p| p.parent() == Some(self.browser.dir())) {
             self.browser.select_when_appears(path);
         }
+        self.read_available();
+        Vec::new()
     }
 
     /// Move the selected items to the trash; the listing drops them when the watcher reports it.
@@ -1172,21 +1377,66 @@ impl BrowserWindow {
                 menu_spec::item_menu(&subject, &self.selection_apps(session)),
             )
         } else {
-            let background = Background {
-                view: self.view,
-                sort: self.browser.sort(),
-                in_trash,
-                pasteboard: session.pasteboard.len(),
-            };
+            let background = self.background(session, in_trash);
             let label = crate::places::window_title(self.browser.dir(), &session.places);
             (label, menu_spec::background_menu(&background))
         };
         self.context = Some(context::OpenMenu {
-            at,
+            anchor: MenuAnchor::At(at),
             label,
             items,
             open: Vec::new(),
         });
+    }
+
+    /// Open the menu of the toolbar's button `popup` below it.
+    fn open_popup(&mut self, popup: Popup, session: &Session) {
+        if self.rename.is_some() {
+            self.end_rename(session);
+        }
+        let in_trash = self.browser.dir() == session.trash.home_trash().join("files");
+        let has_selection = !self.browser.selection().is_empty();
+        let (label, items) = match popup {
+            Popup::View => ("View".to_owned(), menu_spec::view_menu(self.view)),
+            Popup::Tags => {
+                let subject = self.subject(in_trash);
+                let on = if has_selection {
+                    subject.tags_on
+                } else {
+                    Vec::new()
+                };
+                ("Tags".to_owned(), menu_spec::tags_menu(&on, has_selection))
+            }
+            Popup::Action if has_selection => {
+                let subject = self.subject(in_trash);
+                let items = menu_spec::item_menu(&subject, &self.selection_apps(session));
+                ("Action".to_owned(), items)
+            }
+            Popup::Action => {
+                let background = self.background(session, in_trash);
+                ("Action".to_owned(), menu_spec::background_menu(&background))
+            }
+        };
+        self.context = Some(context::OpenMenu {
+            anchor: MenuAnchor::Below(view::popup_key(popup)),
+            label,
+            items,
+            open: Vec::new(),
+        });
+    }
+
+    /// What the folder's menu depends on.
+    fn background(&self, session: &Session, in_trash: bool) -> Background {
+        Background {
+            view: self.view,
+            sort: self.browser.sort(),
+            in_trash,
+            read_only: session
+                .media
+                .holding(self.browser.dir())
+                .is_some_and(|d| d.read_only),
+            pasteboard: session.pasteboard.len(),
+        }
     }
 
     /// What the menu of the selection depends on.
@@ -1385,8 +1635,8 @@ impl BrowserWindow {
             can_go_back: history.back_target().is_some(),
             can_go_forward: history.forward_target().is_some(),
             has_parent: !self.browser.is_virtual() && self.browser.dir().parent().is_some(),
-            eject: removable_holding(self.browser.dir(), &session.places)
-                .filter(|&i| session.places[i].ejectable())
+            eject: self
+                .eject_target(session)
                 .map(|i| session.places[i].name.clone()),
             read_only: session
                 .media
@@ -1394,6 +1644,23 @@ impl BrowserWindow {
                 .is_some_and(|d| d.read_only),
             can_paste: !session.pasteboard.is_empty(),
         }
+    }
+
+    /// The place Eject acts on: while the keyboard is in the sidebar, the mounted removable file system its row is on;
+    /// else the one that holds the folder shown.
+    fn eject_target(&self, session: &Session) -> Option<usize> {
+        let focused = self
+            .sidebar_row
+            .as_ref()
+            .filter(|_| self.sidebar_focused)
+            .and_then(|key| {
+                (0..session.places.len()).find(|&i| view::place_key(session, i) == *key)
+            })
+            .filter(|&i| session.places[i].ejectable());
+        focused.or_else(|| {
+            removable_holding(self.browser.dir(), &session.places)
+                .filter(|&i| session.places[i].ejectable())
+        })
     }
 
     /// The actions the menus show but the window cannot do now.

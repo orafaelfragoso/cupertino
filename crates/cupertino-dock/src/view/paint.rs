@@ -250,6 +250,9 @@ pub struct Root<M> {
     /// Changes every time what `under` draws changes.
     pub revision: u64,
     pub under: Option<Underlay>,
+    /// Sent at every frame the compositor gives the window while it is set: what moves by itself advances with the
+    /// display's frames.
+    pub frame: Option<M>,
     pub children: Vec<Element<M>>,
 }
 
@@ -276,6 +279,7 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
             || self.alpha != old.alpha
             || self.name != old.name
             || self.role != old.role
+            || self.frame.is_some() != old.frame.is_some()
         {
             Change::Paint
         } else {
@@ -345,6 +349,13 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
                     None => Propagation::Continue,
                 }
             }
+            Event::AnimationFrame(_) => {
+                if let Some(frame) = &self.frame {
+                    cx.emit(frame.clone());
+                    cx.request_animation_frame();
+                }
+                Propagation::Continue
+            }
             Event::FocusWithin { gained: false, .. } | Event::Focus { gained: false, .. } => {
                 if let Some(blur) = &self.on_blur {
                     cx.emit(blur.clone());
@@ -356,6 +367,9 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if self.frame.is_some() {
+            cx.request_animation_frame();
+        }
         if self.alpha < 1.0 {
             cx.set_group(self.alpha.clamp(0.0, 1.0) as f32, Vec::new());
         }

@@ -1,17 +1,19 @@
 //! The bar: one window as wide (or tall) as its edge of the output, deep enough for the magnified tiles and the
-//! bounces, with the menu material under the bar's own rectangle only. Each tile is a node at the rectangle the model
-//! laid it out at, drawing its icon; the bar draws the running indicators and the separators under them. The tiles are
-//! one roving group: the arrows move the keyboard focus along the bar, Return or Space activates, the Menu key or
-//! Shift+F10 opens the tile's menu, Escape gives the keyboard back.
+//! bounces. A node at the bar's own rectangle asks for the menu material under it ([`PaintCx::material`]), or paints
+//! the menu's opaque fill where the session shows none; each tile is a node at the rectangle the model laid it out at,
+//! drawing its icon, and each running indicator and separator is a node of its own under the tiles, so a change
+//! repaints only the nodes it moved. The tiles are one roving group: the arrows move the keyboard focus along the bar,
+//! Return or Space activates, the Menu key or Shift+F10 opens the tile's menu, Escape gives the keyboard back.
 
 use cupertino_kit::core::{
     AccessibleStates, Action, Change, CommandRegistry, Element, Event, EventCx, FocusTarget, Key,
     MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground,
     WindowKey,
 };
-use cupertino_kit::geometry::{Rect, Size};
+use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, LayoutSpec, Measured};
 use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowSpec};
+use cupertino_kit::render::{Paint, PaintOp, Shape};
 use cupertino_kit::theme::Surface;
 
 use super::paint::{self, Root};
@@ -77,40 +79,53 @@ pub struct BarView {
     pub tiles: Vec<TileView>,
     /// Where the window takes the pointer.
     pub input: Vec<Rect>,
-    /// Changes whenever the drawing under the tiles changes.
-    pub revision: u64,
+    /// The tile the keyboard focus goes to when the bar takes the keyboard (`TileId.0`).
+    pub initial: Option<u64>,
+    /// Something on the bar moves by itself: the window sends [`Input::Frame`] at every frame.
+    pub ticking: bool,
+}
+
+/// The key of the tile with `id` (`TileId.0`) in the bar's window.
+pub fn tile_key(id: u64) -> Key {
+    Key::from(format!("tile-{id}"))
 }
 
 /// The bar's window.
 pub fn window<M: Clone + 'static>(view: BarView, input: fn(Input) -> M) -> Window<M> {
     let orientation = view.orientation;
-    let marks: Vec<(TileKind, Rect, bool)> = view
-        .tiles
-        .iter()
-        .map(|t| (t.kind, t.rest, t.indicator))
-        .collect();
-    let first = view
-        .tiles
-        .iter()
-        .find(|t| t.kind != TileKind::Separator)
-        .map(|t| t.id);
-    let children = view
-        .tiles
-        .into_iter()
-        .map(|tile| {
-            let key = Key::from(format!("tile-{}", tile.id));
-            Element::new(TileNode {
-                initial: first == Some(tile.id),
-                tile,
-                tile_size: view.tile_size,
-                orientation,
-                input,
-            })
-            .key(key)
-        })
-        .collect();
-    let bar = view.bar;
     let radius = view.tile_size * BAR_RADIUS;
+    let mut children = Vec::with_capacity(2 * view.tiles.len() + 1);
+    if view.bar.width() > 0.0 && view.bar.height() > 0.0 {
+        children.push(
+            Element::new(BarMaterial {
+                rect: view.bar,
+                radius,
+            })
+            .key(Key::from("material")),
+        );
+    }
+    for tile in &view.tiles {
+        let mark = match tile.kind {
+            TileKind::Separator => Some(Mark::Separator(separator_rect(tile.rest, orientation))),
+            _ if tile.indicator => Some(Mark::Indicator(indicator_rect(tile.rest, orientation))),
+            _ => None,
+        };
+        if let Some(mark) = mark {
+            children.push(Element::new(MarkNode(mark)).key(Key::from(format!("mark-{}", tile.id))));
+        }
+    }
+    let initial = view.initial;
+    children.extend(view.tiles.into_iter().map(|tile| {
+        let key = tile_key(tile.id);
+        Element::new(TileNode {
+            initial: initial == Some(tile.id),
+            tile,
+            tile_size: view.tile_size,
+            orientation,
+            input,
+        })
+        .key(key)
+    }));
     Window {
         key: view.key.clone(),
         spec: WindowSpec {
@@ -125,16 +140,7 @@ pub fn window<M: Clone + 'static>(view: BarView, input: fn(Input) -> M) -> Windo
         },
         shortcuts: CommandRegistry::new(),
         on_close: Some(input(Input::Closed(view.key.clone()))),
-        background: if bar.width() > 0.0 && bar.height() > 0.0 {
-            WindowBackground::SurfaceRect {
-                surface: Surface::Menu,
-                rect: bar,
-                radius,
-                alpha: 1.0,
-            }
-        } else {
-            WindowBackground::None
-        },
+        background: WindowBackground::None,
         content: Element::new(Root {
             role: Role::Toolbar,
             name: BAR_TITLE.to_owned(),
@@ -145,8 +151,9 @@ pub fn window<M: Clone + 'static>(view: BarView, input: fn(Input) -> M) -> Windo
             roving: true,
             on_blur: None,
             alpha: 1.0,
-            revision: view.revision,
-            under: Some(Box::new(move |cx| marks_under(cx, &marks, orientation))),
+            revision: 0,
+            under: None,
+            frame: view.ticking.then(|| input(Input::Frame)),
             children,
         }),
         popup: None,
@@ -154,52 +161,175 @@ pub fn window<M: Clone + 'static>(view: BarView, input: fn(Input) -> M) -> Windo
     }
 }
 
-/// The running indicators and the separators, under the tiles.
-fn marks_under(cx: &mut PaintCx<'_>, marks: &[(TileKind, Rect, bool)], orientation: Orientation) {
-    let env = cx.env().clone();
-    let (dark, contrast) = (paint::is_dark(&env), paint::is_high_contrast(&env));
-    let indicator = {
-        let c = if dark {
-            INDICATOR_DARK
+/// The bar's own rectangle: the menu material under it, or the menu's opaque fill where the session shows none
+/// (Reduce Transparency, Increase Contrast, no desktop effects).
+struct BarMaterial {
+    rect: Rect,
+    radius: f64,
+}
+
+impl<M: Clone + 'static> Widget<M> for BarMaterial {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        paint::placed(self.rect)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.rect != old.rect {
+            Change::Layout
+        } else if self.radius != old.radius {
+            Change::Paint
         } else {
-            INDICATOR_LIGHT
-        };
-        paint::color(if contrast { [c[0], c[1], c[2], 1.0] } else { c })
-    };
-    let separator = {
-        let c = if dark {
-            SEPARATOR_DARK
-        } else {
-            SEPARATOR_LIGHT
-        };
-        paint::color(if contrast {
-            paint::faded([c[0], c[1], c[2], c[3] * 2.0], 1.0)
-        } else {
-            c
-        })
-    };
-    for &(kind, r, running) in marks {
-        if kind == TileKind::Separator {
-            let line = if orientation.is_horizontal() {
-                Rect::new(
-                    r.x() + r.width() / 2.0 - 0.5,
-                    r.y() + r.height() * 0.15,
-                    1.0,
-                    r.height() * 0.7,
-                )
-            } else {
-                Rect::new(
-                    r.x() + r.width() * 0.15,
-                    r.y() + r.height() / 2.0 - 0.5,
-                    r.width() * 0.7,
-                    1.0,
-                )
-            };
-            paint::fill(cx, line, 0.5, separator);
-        } else if running {
-            let dot = indicator_rect(r, orientation);
-            paint::fill(cx, dot, INDICATOR / 2.0, indicator);
+            Change::None
         }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: self.rect.size,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if cx.material(Surface::Menu, self.radius, 1.0) {
+            return;
+        }
+        let Some(fill) = cx.env().theme.surface(Surface::Menu).fill else {
+            return;
+        };
+        let size = cx.size();
+        cx.push(PaintOp::Fill {
+            shape: Shape::RoundedRect {
+                rect: Rect::new(0.0, 0.0, size.width, size.height),
+                radius: self.radius,
+            },
+            paint: Paint::Solid(fill),
+        });
+    }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.hidden();
+    }
+}
+
+/// What the bar draws under a tile.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Mark {
+    /// The running indicator, at this rectangle of the window.
+    Indicator(Rect),
+    /// The separator's line, at this rectangle of the window.
+    Separator(Rect),
+}
+
+impl Mark {
+    fn rect(self) -> Rect {
+        match self {
+            Mark::Indicator(r) | Mark::Separator(r) => r,
+        }
+    }
+}
+
+/// A running indicator or a separator's line.
+struct MarkNode(Mark);
+
+impl<M: Clone + 'static> Widget<M> for MarkNode {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        paint::placed(self.0.rect())
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        match (self.0, old.0) {
+            (a, b) if a == b => Change::None,
+            (Mark::Indicator(_), Mark::Indicator(_)) | (Mark::Separator(_), Mark::Separator(_)) => {
+                Change::Layout
+            }
+            _ => Change::Paint,
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: self.0.rect().size,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let env = cx.env().clone();
+        let (dark, contrast) = (paint::is_dark(&env), paint::is_high_contrast(&env));
+        let size = cx.size();
+        let all = Rect::new(0.0, 0.0, size.width, size.height);
+        match self.0 {
+            Mark::Indicator(_) => {
+                let c = if dark {
+                    INDICATOR_DARK
+                } else {
+                    INDICATOR_LIGHT
+                };
+                let c = paint::color(if contrast { [c[0], c[1], c[2], 1.0] } else { c });
+                paint::fill(cx, all, INDICATOR / 2.0, c);
+            }
+            Mark::Separator(_) => {
+                let c = if dark {
+                    SEPARATOR_DARK
+                } else {
+                    SEPARATOR_LIGHT
+                };
+                let c = paint::color(if contrast {
+                    paint::faded([c[0], c[1], c[2], c[3] * 2.0], 1.0)
+                } else {
+                    c
+                });
+                paint::fill(cx, all, 0.5, c);
+            }
+        }
+    }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.hidden();
+    }
+}
+
+/// The separator's line across the middle of the slot `r`.
+fn separator_rect(r: Rect, orientation: Orientation) -> Rect {
+    if orientation.is_horizontal() {
+        Rect::new(
+            r.x() + r.width() / 2.0 - 0.5,
+            r.y() + r.height() * 0.15,
+            1.0,
+            r.height() * 0.7,
+        )
+    } else {
+        Rect::new(
+            r.x() + r.width() * 0.15,
+            r.y() + r.height() / 2.0 - 0.5,
+            r.width() * 0.7,
+            1.0,
+        )
     }
 }
 
@@ -269,6 +399,10 @@ impl<M: Clone + 'static> Widget<M> for TileNode<M> {
         }
         let id = self.tile.id;
         match event {
+            Event::Focus { gained: true, .. } => {
+                cx.emit((self.input)(Input::TileFocused(id)));
+                return Propagation::Continue;
+            }
             Event::Action(request) => match request.action {
                 Action::Click => cx.emit((self.input)(Input::Activate(id))),
                 Action::ShowMenu => cx.emit((self.input)(Input::ShowMenu(id))),

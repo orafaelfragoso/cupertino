@@ -62,6 +62,7 @@ pub fn window<M: Clone + 'static>(
             alpha: 1.0,
             revision: 0,
             under: None,
+            frame: None,
             children: Vec::new(),
         }),
         popup: None,

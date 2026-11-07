@@ -14,9 +14,7 @@ use cupertino_dock::actions::{ActionMap, Trigger};
 use cupertino_dock::desktop::{parse_entry, DesktopIndex};
 use cupertino_dock::kit::{
     self, DockEvent, Host, IconKey, Message, Model, OutputInfo, Part, Placement, Request, Sized,
-    SwitcherPaint,
 };
-use cupertino_dock::overview_ui::{Mode, OverviewUi};
 use cupertino_dock::session::Session;
 use cupertino_dock::view::{IconSet, BAR_APP_ID, EDGE_APP_ID, FORCE_QUIT_APP_ID, GRID_APP_ID};
 use cupertino_dock::{Dock, DockConfig};
@@ -78,8 +76,6 @@ struct Record {
     requests: Vec<(u32, Request)>,
     placements: Vec<Placement>,
     keyboard: Vec<(Part, bool)>,
-    /// How many times the overview's image was painted.
-    overview_paints: usize,
     spawned: Vec<(Vec<String>, Option<String>)>,
     pins: Vec<Vec<String>>,
     shell: Vec<String>,
@@ -153,20 +149,6 @@ impl Host for FakeHost {
     fn window_closed(&mut self, _: u32) {}
     fn trash_full(&mut self) -> bool {
         false
-    }
-    fn paint_switcher(&mut self, _: f64, _: &SwitcherPaint<'_>) -> Option<ImageSource> {
-        Some(square(8))
-    }
-    fn paint_overview(
-        &mut self,
-        _: f64,
-        _: (f64, f64),
-        _: &OverviewUi,
-        _: f64,
-        _: bool,
-    ) -> Option<ImageSource> {
-        self.0.borrow_mut().overview_paints += 1;
-        Some(square(8))
     }
 }
 
@@ -775,46 +757,6 @@ fn the_focus_dock_shortcut_shows_an_auto_hidden_bar_until_escape() {
     assert_eq!(editor_y(&mut run), hidden, "and hides once it lets go");
 }
 
-/// The overview's image covers the whole output: messages that come within a frame of its last paint, as every
-/// pointer motion does, leave the next paint to the next frame instead of painting it again each time.
-#[test]
-fn the_overview_is_painted_at_most_once_a_frame() {
-    let mut run = Run::start();
-    let paints = |run: &Run| run.record.borrow().overview_paints;
-    run.message(Message::Dock {
-        output: 1,
-        events: vec![DockEvent::Overview {
-            mode: Mode::All,
-            area: cupertino_wm::geometry::Rect::new(0.0, 0.0, 1280.0, 800.0),
-            windows: vec![(
-                7,
-                cupertino_wm::geometry::Rect::new(100.0, 100.0, 400.0, 300.0),
-            )],
-            workspaces: Vec::new(),
-        }],
-    });
-    let first = paints(&run);
-    assert_eq!(first, 1, "the overview is painted as it opens");
-    for i in 0..20 {
-        run.message(Message::Dock {
-            output: 1,
-            events: vec![DockEvent::Window {
-                id: 7,
-                app_id: TERMINAL.to_owned(),
-                title: format!("shell {i}"),
-                minimized: false,
-            }],
-        });
-    }
-    assert_eq!(paints(&run), first, "not again within the frame");
-    run.advance(kit::FRAME);
-    assert_eq!(
-        paints(&run),
-        first + 1,
-        "the paint left over, at the next frame"
-    );
-}
-
 #[test]
 fn resting_the_pointer_on_another_displays_edge_moves_the_dock_there() {
     let mut run = Run::start();
@@ -887,28 +829,40 @@ fn the_window_feed_comes_from_the_bars_role_and_a_trigger_from_any() {
     );
 }
 
+/// The bar's node asks for the menu material under the bar's own rectangle, not under the whole window (which is
+/// deeper and as wide as the output); under Reduce Transparency it asks for none and paints the opaque fill.
 #[test]
 fn with_reduce_transparency_the_bar_asks_for_no_material() {
     for (reduce, material) in [(false, true), (true, false)] {
         let mut run = Run::with(tokens(reduce), ActionMap::default());
         let bar = run.bar();
-        let backdrop = run
-            .driver
-            .window_system_mut()
-            .requests(bar)
-            .unwrap()
+        let width = run.driver.window_system_mut().spec(bar).unwrap().size.width;
+        let requests = run.driver.window_system_mut().requests(bar).unwrap();
+        assert!(
+            !requests
+                .iter()
+                .any(|r| matches!(r, WindowRequest::Backdrop(Some(_)))),
+            "no material under the whole window"
+        );
+        let regions = requests
             .iter()
             .rev()
             .find_map(|r| match r {
-                WindowRequest::Backdrop(b) => Some(b.clone()),
+                WindowRequest::Materials(m) => Some(m.clone()),
                 _ => None,
             })
-            .flatten();
-        assert_eq!(backdrop.is_some(), material, "reduce transparency {reduce}");
-        if let Some(b) = backdrop {
+            .unwrap_or_default();
+        assert_eq!(
+            !regions.is_empty(),
+            material,
+            "reduce transparency {reduce}"
+        );
+        if material {
+            assert_eq!(regions.len(), 1, "{regions:?}");
+            assert_eq!(regions[0].material, "Menu");
             assert!(
-                b.bounds.is_some(),
-                "the material lies under the bar's rectangle only"
+                regions[0].rect.width() < width,
+                "the material lies under the bar's rectangle only: {regions:?}"
             );
         }
     }

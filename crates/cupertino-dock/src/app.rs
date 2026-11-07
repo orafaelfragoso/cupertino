@@ -1,8 +1,8 @@
 //! Glue between the dock's Kit application ([`cupertino_dock::kit`]) and the session: the windows get their layer
 //! surfaces from [`DockRoles`] by their `app_id` (`<prefix>@<output>`), the bar and every edge strip take the dock role
 //! of their output, what the server tells those roles and the session observer arrives as messages, and [`AppHost`]
-//! sends the dock's requests, places the bar, starts programs, keeps the pins, loads the icons and paints the two
-//! surfaces the process still paints itself (the switcher's panel and the overview's chrome).
+//! sends the dock's requests, places the bar, gives the surfaces the keyboard, starts programs, keeps the pins and
+//! loads the icons. Every surface is drawn by CupertinoKit.
 
 use cupertino_apps::exec::CommandSpec;
 use cupertino_apps::launch::{spawn, OPEN_COMMAND};
@@ -15,12 +15,12 @@ use cupertino_dock::conf::{
 };
 use cupertino_dock::config::Orientation;
 use cupertino_dock::desktop::DesktopIndex;
+use cupertino_dock::icons::Icons;
 use cupertino_dock::kit::{
     self, AppAction, DockEvent, Host, IconKey, Message, Model, OutputInfo, Part, Placement,
-    Request, Sized, SwitcherPaint, WindowIcon,
+    Request, Sized, WindowIcon,
 };
-use cupertino_dock::overview_ui::{Mode, OverviewUi, Workspace};
-use cupertino_dock::render::{self, Icons, LabelText, OverviewView, Panel};
+use cupertino_dock::overview_ui::{Mode, Workspace};
 use cupertino_dock::session::Session;
 use cupertino_dock::view::{
     edge, IconSet, BAR_APP_ID, DRAG_APP_ID, EDGE_APP_ID, FORCE_QUIT_APP_ID, GRID_APP_ID,
@@ -37,7 +37,6 @@ use cupertino_shell_client::{
     KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
     OverviewMode, SessionChange, SessionState, Shell, ShellEvent, WindowIconImage,
 };
-use cupertino_theme::Typography;
 use cupertino_ui_wayland::{RoleEvent, SurfaceRoles, WaylandWindowSystem};
 use cupertino_wayland_client::{
     Connection, Error as WaylandError, Event, ExtensionEvent, OutputId, SurfaceId,
@@ -123,6 +122,8 @@ struct Surfaces {
     all: Vec<Surface>,
     /// Where the bar goes, as the model last said.
     placement: Option<Placement>,
+    /// The surface that has the keyboard, as the model last said.
+    keyboard: Option<Part>,
 }
 
 impl Surfaces {
@@ -174,14 +175,26 @@ impl DockRoles {
 
     fn config(&self, kind: Kind, output: OutputId, spec: &WindowSpec) -> LayerSurfaceConfig {
         let whole = |v: f64| v.ceil().max(1.0) as u32;
-        let placement = self.surfaces.borrow().placement;
+        let (placement, holder) = {
+            let surfaces = self.surfaces.borrow();
+            (surfaces.placement, surfaces.keyboard)
+        };
+        // a surface made while the model gives it the keyboard takes it at once
+        let keyboard_of = |part: Part| {
+            if holder == Some(part) {
+                KeyboardInteractivity::Exclusive
+            } else {
+                KeyboardInteractivity::None
+            }
+        };
+        let key = output_key(output);
         let orientation = placement.map_or(Orientation::Bottom, |p| p.orientation);
         let (layer, anchor, size, exclusive_zone, keyboard) = match kind {
             Kind::Bar => {
                 let extent = placement.map_or(whole(spec.size.height), |p| whole(p.extent));
                 let (anchor, size) = along(orientation, extent);
                 let zone = placement.map_or(0, |p| p.exclusive_zone);
-                (Layer::Top, anchor, size, zone, KeyboardInteractivity::None)
+                (Layer::Top, anchor, size, zone, keyboard_of(Part::Bar(key)))
             }
             Kind::Edge => {
                 let (anchor, size) = along(orientation, whole(edge::DEPTH));
@@ -222,13 +235,13 @@ impl DockRoles {
                 KeyboardInteractivity::None,
             ),
             // over the dock bar and the menu bar, so the window's coordinates are the output's (the server's area is
-            // in them)
+            // in them); the keyboard while the overview is open
             Kind::Overview => (
                 Layer::Overlay,
                 ALL_EDGES,
                 (0, 0),
                 -1,
-                KeyboardInteractivity::Exclusive,
+                keyboard_of(Part::Overview(key)),
             ),
         };
         LayerSurfaceConfig {
@@ -530,7 +543,6 @@ struct AppHost {
     surfaces: Rc<RefCell<Surfaces>>,
     start: Instant,
     icons: Icons,
-    labels: LabelText,
     /// Where the pins are stored (`None` when neither `XDG_CONFIG_HOME` nor `HOME` is set).
     pins_path: Option<PathBuf>,
     conf_path: Option<PathBuf>,
@@ -616,13 +628,17 @@ impl Host for AppHost {
 
     fn keyboard(&mut self, part: Part, on: bool) {
         let mut surfaces = self.surfaces.borrow_mut();
+        if on {
+            surfaces.keyboard = Some(part);
+        } else if surfaces.keyboard == Some(part) {
+            surfaces.keyboard = None;
+        }
+        let of =
+            |kind: Kind, output: u32| move |s: &&mut Surface| s.kind == kind && s.output == output;
         let surface = match part {
-            Part::Bar(output) => surfaces
-                .all
-                .iter_mut()
-                .find(|s| s.kind == Kind::Bar && s.output == output),
+            Part::Bar(output) => surfaces.all.iter_mut().find(of(Kind::Bar, output)),
             Part::Grid => surfaces.of_kind(Kind::Grid),
-            Part::Overview => surfaces.of_kind(Kind::Overview),
+            Part::Overview(output) => surfaces.all.iter_mut().find(of(Kind::Overview, output)),
         };
         if let Some(s) = surface {
             s.layer.set_keyboard_interactivity(if on {
@@ -725,46 +741,6 @@ impl Host for AppHost {
 
     fn trash_full(&mut self) -> bool {
         self.icons.trash_full()
-    }
-
-    fn paint_switcher(&mut self, scale: f64, panel: &SwitcherPaint<'_>) -> Option<ImageSource> {
-        let layout = panel.layout;
-        let mut pixmap = tiny_skia::Pixmap::new(
-            (layout.panel.w * scale).ceil() as u32,
-            (layout.panel.h * scale).ceil() as u32,
-        )?;
-        let view = Panel {
-            switcher: panel.switcher,
-            layout,
-            desktop: panel.desktop,
-            dark: panel.dark,
-            alpha: panel.alpha,
-        };
-        render::paint_switcher(
-            &mut pixmap,
-            scale as f32,
-            &view,
-            &mut self.icons,
-            &mut self.labels,
-        );
-        Some(image(&pixmap))
-    }
-
-    fn paint_overview(
-        &mut self,
-        scale: f64,
-        size: (f64, f64),
-        ui: &OverviewUi,
-        now: f64,
-        dark: bool,
-    ) -> Option<ImageSource> {
-        let mut pixmap = tiny_skia::Pixmap::new(
-            (size.0 * scale).ceil() as u32,
-            (size.1 * scale).ceil() as u32,
-        )?;
-        let view = OverviewView { ui, now, dark };
-        render::paint_overview(&mut pixmap, scale as f32, &view, &mut self.labels);
-        Some(image(&pixmap))
     }
 }
 
@@ -908,7 +884,6 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         surfaces,
         start: Instant::now(),
         icons: Icons::new(&assets),
-        labels: LabelText::new(&Typography::default(), &assets)?,
         pins_path,
         conf_path,
         terminal: options.terminal.clone(),

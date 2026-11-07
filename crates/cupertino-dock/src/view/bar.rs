@@ -83,6 +83,9 @@ pub struct BarView {
     pub initial: Option<u64>,
     /// Something on the bar moves by itself: the window sends [`Input::Frame`] at every frame.
     pub ticking: bool,
+    /// Changes when the bar's surface was given a placement or keyboard interactivity, which apply with its next commit:
+    /// the window presents again for them.
+    pub surface_changes: u64,
 }
 
 /// The key of the tile with `id` (`TileId.0`) in the bar's window.
@@ -151,7 +154,7 @@ pub fn window<M: Clone + 'static>(view: BarView, input: fn(Input) -> M) -> Windo
             roving: true,
             on_blur: None,
             alpha: 1.0,
-            revision: 0,
+            revision: view.surface_changes,
             under: None,
             frame: view.ticking.then(|| input(Input::Frame)),
             children,

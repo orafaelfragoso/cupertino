@@ -397,6 +397,9 @@ pub struct Model {
     // what the host was last told
     placed: Option<Placement>,
     keyboard: Option<Part>,
+    /// Bumped whenever the host changes the bar's placement or a surface's keyboard interactivity, which apply with the
+    /// surface's next commit: the bar presents again, so they reach the server even when nothing it draws changed.
+    surface_changes: u64,
     minimize_target: Option<(u32, Rect)>,
     force_quit_size: Option<(f64, f64)>,
 }
@@ -445,6 +448,7 @@ impl Model {
             wake_at: None,
             placed: None,
             keyboard: None,
+            surface_changes: 0,
             minimize_target: None,
             force_quit_size: None,
         }
@@ -1645,6 +1649,7 @@ impl Model {
         if let Some(p) = placement.filter(|_| placement != self.placed) {
             self.placed = placement;
             self.host.place_bar(p);
+            self.surface_changes += 1;
         }
         if self.bar_size.is_none() {
             // no bar yet, so no role to send it on: it goes once the bar is sized
@@ -1673,6 +1678,7 @@ impl Model {
                 self.host.keyboard(part, true);
             }
             self.keyboard = keyboard;
+            self.surface_changes += 1;
         }
         let size = self.force_quit.as_ref().map(|f| f.layout.size());
         if let Some((w, h)) = size.filter(|_| size != self.force_quit_size) {
@@ -2100,6 +2106,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                 input,
                 initial: model.tile_order.first().map(|t| t.0),
                 ticking: model.bar_moving(now),
+                surface_changes: model.surface_changes,
             },
             message,
         ));

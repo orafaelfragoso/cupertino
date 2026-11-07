@@ -90,13 +90,19 @@ struct Record {
 
 struct FakeHost(Rc<RefCell<Record>>);
 
-/// A solid square `px` device pixels large.
+/// A square image `px` device pixels large: a solid square with a transparent margin of a tenth of its side, as an
+/// icon leaves room around its shape.
 fn square(px: u32) -> ImageSource {
-    let pixels: Vec<u8> = [40u8, 90, 200, 255]
-        .iter()
-        .copied()
-        .cycle()
-        .take((px * px * 4) as usize)
+    let margin = px / 10;
+    let inside = |i: u32| (margin..px - margin).contains(&i);
+    let pixels: Vec<u8> = (0..px * px)
+        .flat_map(|i| {
+            if inside(i % px) && inside(i / px) {
+                [40u8, 90, 200, 255]
+            } else {
+                [0; 4]
+            }
+        })
         .collect();
     ImageSource {
         id: next_resource_id(),
@@ -240,6 +246,13 @@ impl Run {
     }
 
     fn with(theme: ThemeTokens, actions: ActionMap) -> Self {
+        Self::on(theme, actions, true)
+    }
+
+    /// [`Run::with`] on a desktop that offers its materials (`app_effects`) or not, where the windows paint their fills.
+    fn on(theme: ThemeTokens, actions: ActionMap, app_effects: bool) -> Self {
+        // window ids start again with a new runtime: none of them is configured yet
+        CONFIGURED.with_borrow_mut(Vec::clear);
         let record = Rc::new(RefCell::new(Record::default()));
         let mut dock = Dock::new(DockConfig::default());
         dock.set_pinned(&[EDITOR, TERMINAL]);
@@ -280,7 +293,7 @@ impl Run {
             on_window_error: None,
         };
         let capabilities = Capabilities {
-            app_effects: true,
+            app_effects,
             ..Capabilities::default()
         };
         let driver = TestDriver::new(capabilities, options, ManualClock::new(Timestamp(0)));
@@ -1477,4 +1490,109 @@ fn the_overview_takes_the_keyboard_and_sends_the_window_frames() {
         run.record.borrow().keyboard.last().copied(),
         Some((Part::Overview(1), false))
     );
+}
+
+/// With `CUPERTINO_LOOK_DIR` set, pictures of the dock as its model drives it, light and dark at 1x and 2x: the bar with
+/// a running application, a tile's menu, the switcher panel and the overview's chrome over three windows. The desktop
+/// offers no materials here, so the windows show their opaque fills where the compositor would draw a material.
+#[test]
+fn look_captures() {
+    let Some(dir) = std::env::var_os("CUPERTINO_LOOK_DIR") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    let looks = [Appearance::Light, Appearance::Dark];
+    for scale in [1.0, 2.0] {
+        let mut run = Run::on(tokens(false), ActionMap::default(), false);
+        let bar = run.bar();
+        run.driver
+            .look_into(&dir, bar, "dock-bar", scale, &looks)
+            .unwrap();
+        let terminal = centre(run.bounds(bar, Role::Button, "Terminal"));
+        run.pointer(bar, PointerEvent::Enter { position: terminal });
+        run.button(bar, terminal, MouseButton::Right, true);
+        run.button(bar, terminal, MouseButton::Right, false);
+        let menu = open_menu_window(&run, bar).expect("the menu opened");
+        // the compositor gives a popup the size it was placed at
+        let system = run.driver.window_system_mut();
+        let size = system.placement(menu).unwrap().expect("placed").size;
+        system
+            .configure(menu, Some(size), WindowStates::default())
+            .unwrap();
+        run.settle();
+        run.driver
+            .look_into(&dir, menu, "dock-menu", scale, &looks)
+            .unwrap();
+        run.key(menu, ESCAPE);
+
+        run.message(Message::Dock {
+            output: 1,
+            events: vec![DockEvent::Switcher {
+                output: 1,
+                apps: vec![
+                    TERMINAL.to_owned(),
+                    EDITOR.to_owned(),
+                    "org.example.Viewer".to_owned(),
+                ],
+                selected: 1,
+            }],
+        });
+        for _ in 0..6 {
+            run.advance(0.1);
+        }
+        let panel = run
+            .window(&format!("{SWITCHER_APP_ID}@1"))
+            .expect("the switcher");
+        run.driver
+            .look_into(&dir, panel, "dock-switcher", scale, &looks)
+            .unwrap();
+        run.message(Message::Dock {
+            output: 1,
+            events: vec![DockEvent::SwitcherClosed { committed: false }],
+        });
+
+        for (id, title) in [(7, "shell"), (8, "Meeting Notes"), (9, "Plan")] {
+            let app_id = if id == 7 { TERMINAL } else { EDITOR };
+            run.message(Message::Dock {
+                output: 1,
+                events: vec![DockEvent::Window {
+                    id,
+                    app_id: app_id.to_owned(),
+                    title: title.to_owned(),
+                    minimized: false,
+                }],
+            });
+        }
+        run.message(Message::Dock {
+            output: 1,
+            events: vec![DockEvent::Overview {
+                mode: Mode::All,
+                area: WmRect::new(0.0, 0.0, 1280.0, 800.0),
+                windows: vec![
+                    (7, WmRect::new(40.0, 60.0, 600.0, 400.0)),
+                    (8, WmRect::new(300.0, 100.0, 700.0, 500.0)),
+                    (9, WmRect::new(500.0, 200.0, 500.0, 400.0)),
+                ],
+                workspaces: vec![
+                    Workspace {
+                        id: 101,
+                        current: true,
+                    },
+                    Workspace {
+                        id: 102,
+                        current: false,
+                    },
+                ],
+            }],
+        });
+        for _ in 0..12 {
+            run.advance(0.1);
+        }
+        let chrome = run
+            .window(&format!("{OVERVIEW_APP_ID}@1"))
+            .expect("the overview");
+        run.driver
+            .look_into(&dir, chrome, "dock-overview-three-windows", scale, &looks)
+            .unwrap();
+    }
 }

@@ -532,6 +532,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                         let _ = self
                             .system
                             .request(w.id, WindowRequest::SetTitle(spec.title.clone()));
+                        if let Some(adapter) = &mut self.options.accessibility {
+                            if w.accessible {
+                                adapter.window_title(w.id, &spec.title);
+                            }
+                        }
                     }
                     if w.spec.min_size != spec.min_size {
                         let _ = self
@@ -1576,6 +1581,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             if w.accessible || !w.prepared {
                 continue;
             }
+            adapter.window_title(w.id, &w.spec.title);
             adapter.update(&AccessibilityUpdate {
                 window: w.id,
                 root,

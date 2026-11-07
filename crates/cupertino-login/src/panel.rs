@@ -119,6 +119,15 @@ impl Kind {
         }
     }
 
+    /// The button that has the focus when the panel appears, which Space presses: the default button, but Cancel on the
+    /// power-button panel, whose default Shut Down has no countdown, so that one Space shuts nothing down.
+    pub fn focused(self) -> Decision {
+        match self {
+            Kind::PowerButton => Decision::Cancel,
+            _ => Decision::Do(self.default_action()),
+        }
+    }
+
     /// The three confirmation panels count down to their default action; the power-button panel waits.
     fn has_countdown(self) -> bool {
         self != Kind::PowerButton

@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::model::{AuthOutcome, LockScreen};
-use crate::panel::{Action, Decision, Kind, Panel, REOPEN_LABEL};
+use crate::panel::{Action, Decision, Kind, Panel, CANCEL_LABEL, REOPEN_LABEL};
 use crate::picker::Picker;
 use cupertino_assets::BUILTIN_FONT;
 use cupertino_kit::core::{
@@ -676,14 +676,21 @@ fn the_power_button_panel_has_no_checkbox_and_its_letters_choose() {
     assert!(run.node(is_reopen).is_none());
     run.key('s' as u32, Some('s'));
     run.key('r' as u32, Some('r'));
-    // Space flips no choice here: it presses the focused button, the default Shut Down, as Return does
+    // Shut Down has no countdown here, so Cancel has the focus: Space flips no choice and cancels, Return still shuts down
+    let focused = run.focused().expect("a focused button");
+    assert_eq!(
+        (focused.role, focused.name.as_deref()),
+        (Role::Button, Some(CANCEL_LABEL))
+    );
     run.key(SPACE, Some(' '));
     assert!(run.model().panel.reopen());
+    run.key(RETURN, None);
     assert_eq!(
         run.model().decided,
         [
             Decision::Do(Action::Sleep),
             Decision::Do(Action::Restart),
+            Decision::Cancel,
             Decision::Do(Action::ShutDown)
         ]
     );

@@ -892,7 +892,7 @@ pub fn panel<M: Clone + 'static>(
     for button in &frames.buttons {
         children.push(
             Element::new(Place {
-                initial: button.decision == default,
+                initial: button.decision == kind.focused(),
                 ..Place::filled(
                     button.frame,
                     vec![Element::new(Button {

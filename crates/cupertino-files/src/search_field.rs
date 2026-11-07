@@ -141,7 +141,7 @@ mod tests {
         assert_eq!(open_width(260.0), REST);
         for toolbar in [200.0, 300.0, 400.0, 600.0, 1000.0] {
             let w = open_width(toolbar);
-            assert!(w >= REST && w <= REST * 2.5, "{toolbar}: {w}");
+            assert!((REST..=REST * 2.5).contains(&w), "{toolbar}: {w}");
             let room = toolbar - 2.0 * window::TOOLBAR_INSET - 53.0 - 12.0 - 60.0 - 12.0;
             assert!(w <= room.max(REST), "{toolbar}: {w} passes the title");
         }

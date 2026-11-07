@@ -10,8 +10,7 @@
 //! From the keyboard alone: an arrow key spans a selection in the middle of the output when there is none, then moves
 //! it a point at a time (Shift: [`KEYBOARD_STEP_LARGE`] points), and with Alt it grows or shrinks the selection from
 //! its bottom-right corner; in the window pick the arrows go through the windows front to back; Return captures what
-//! the keys chose. These are this tool's own (approximate: the design's keyboard handling of the overlay is not
-//! known).
+//! the keys chose. These keys are this tool's own.
 //!
 //! Positions are global logical points; `outputs` are the outputs' rectangles in the same space.
 

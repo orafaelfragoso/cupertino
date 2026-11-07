@@ -82,8 +82,7 @@ pub const CROSSHAIR_GAP: f64 = 3.0;
 /// heads-up material.
 pub const TOOLBAR_SIZE: (f64, f64) = (560.0, 48.0);
 pub const TOOLBAR_RADIUS: f64 = 8.0;
-/// Distance of the toolbar from the bottom of the visible frame: 12 points to the window of the design, whose
-/// background sits 28 points above that window's bottom edge.
+/// Distance of the toolbar from the bottom of the visible frame, in points.
 pub const TOOLBAR_BOTTOM: i32 = 40;
 /// Space between the toolbar's edges and its controls, and between the controls (approximate).
 pub const TOOLBAR_PADDING: f64 = 8.0;

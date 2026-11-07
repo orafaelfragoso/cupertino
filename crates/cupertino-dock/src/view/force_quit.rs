@@ -7,7 +7,7 @@ use cupertino_kit::core::{
     PaintCx, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
 };
 use cupertino_kit::geometry::{Point, Rect, Size};
-use cupertino_kit::layout::{Constraints, LayoutSpec, Measured};
+use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
 use cupertino_kit::platform::{DecorationMode, Keysym, WindowSpec};
 use cupertino_kit::theme::Color;
 
@@ -113,6 +113,8 @@ pub struct ForceQuitView {
     pub output: u32,
     pub layout: Layout,
     pub rows: Vec<RowView>,
+    /// How many applications the list holds, the rows scrolled out of view included.
+    pub entries: usize,
     /// No applications run.
     pub empty: bool,
     pub can_force_quit: bool,
@@ -131,15 +133,33 @@ pub fn window<M: Clone + 'static>(view: ForceQuitView, input: fn(Input) -> M) ->
     let mut children: Vec<Element<M>> = Vec::new();
     match &view.layout {
         Layout::List(l) => {
-            for row in &view.rows {
-                children.push(
+            // the text the underlay paints, read in its place among the controls
+            children.push(text(kit_rect(&l.heading), fq::HEADING, "heading"));
+            let mut rows: Vec<Element<M>> = view
+                .rows
+                .iter()
+                .map(|row| {
                     Element::new(RowNode {
                         row: row.clone(),
                         input,
                     })
-                    .key(Key::from(format!("row-{}", row.index))),
-                );
+                    .key(Key::from(format!("row-{}", row.index)))
+                })
+                .collect();
+            if view.empty {
+                rows.push(text(kit_rect(&l.list), fq::NO_APPLICATIONS, "empty"));
             }
+            children.push(
+                Element::new(Semantic {
+                    role: Role::List,
+                    name: LIST_NAME.to_owned(),
+                    bounds: kit_rect(&l.list),
+                    items: Some(view.entries),
+                    children: rows,
+                })
+                .key(Key::from("list")),
+            );
+            children.push(text(kit_rect(&l.footer), fq::FOOTER, "footer"));
             children.push(button(
                 kit_rect(&l.force_quit),
                 fq::FORCE_QUIT,
@@ -151,6 +171,7 @@ pub fn window<M: Clone + 'static>(view: ForceQuitView, input: fn(Input) -> M) ->
             ));
         }
         Layout::Question(q) => {
+            children.push(text(kit_rect(&q.detail), fq::UNSAVED_CHANGES, "detail"));
             // Cancel is the default button
             children.push(button(
                 kit_rect(&q.cancel),
@@ -223,6 +244,79 @@ pub fn window<M: Clone + 'static>(view: ForceQuitView, input: fn(Input) -> M) ->
         }),
         popup: None,
         menus: None,
+    }
+}
+
+/// What a screen reader calls the list of applications.
+const LIST_NAME: &str = "Applications";
+
+/// Text the window's underlay paints, as a screen reader reads it.
+fn text<M: Clone + 'static>(rect: Rect, text: &str, key: &'static str) -> Element<M> {
+    Element::new(Semantic {
+        role: Role::StaticText,
+        name: text.to_owned(),
+        bounds: rect,
+        items: None,
+        children: Vec::new(),
+    })
+    .key(Key::from(key))
+}
+
+/// A node only assistive technology sees: it fills the window, so its children keep their places in the window's
+/// coordinates, and reads as `role` named `name` at `bounds`, holding `items` items when it is a list.
+struct Semantic<M> {
+    role: Role,
+    name: String,
+    bounds: Rect,
+    items: Option<usize>,
+    children: Vec<Element<M>>,
+}
+
+impl<M: Clone + 'static> Widget<M> for Semantic<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fill,
+            ..LayoutSpec::new(ContainerKind::Absolute)
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.bounds != old.bounds || self.name != old.name || self.items != old.items {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), constraints: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(constraints.width.ideal(), constraints.height.ideal()),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(self.role);
+        cx.name(self.name.clone());
+        cx.bounds(self.bounds);
+        if let Some(items) = self.items {
+            cx.item_count(items);
+        }
     }
 }
 
@@ -334,15 +428,21 @@ struct RowNode<M> {
 }
 
 impl<M: Clone + 'static> Widget<M> for RowNode<M> {
-    type State = ();
+    /// The row took the focus since it was last selected: it takes it once a selection, so Tab can leave it.
+    type State = bool;
 
     fn layout(&self) -> LayoutSpec {
         paint::placed(self.row.rect)
     }
 
-    fn state(&self) {}
+    fn state(&self) -> bool {
+        false
+    }
 
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
+    fn update(&self, old: &Self, took: &mut bool) -> Change {
+        if !self.row.selected {
+            *took = false;
+        }
         if self.row.rect != old.row.rect {
             Change::Layout
         } else if self.row != old.row {
@@ -352,24 +452,37 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
         }
     }
 
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+    fn measure(&self, _: &bool, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         Measured {
             size: Size::new(self.row.rect.width(), self.row.rect.height()),
             baseline: None,
         }
     }
 
-    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+    fn event(&self, took: &mut bool, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         match event {
             Event::Action(request) if request.action == Action::Click => {
                 cx.emit((self.input)(Input::ForceQuitRow(self.row.index)));
                 Propagation::Stop
             }
+            Event::Action(request) if request.action == Action::Focus => {
+                cx.request_focus();
+                Propagation::Stop
+            }
+            // the frame a newly selected row asked for: it takes the focus, so a screen reader follows the selection
+            Event::AnimationFrame(_) if self.row.selected && !*took => {
+                *took = true;
+                cx.request_focus();
+                Propagation::Continue
+            }
             _ => Propagation::Continue,
         }
     }
 
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+    fn paint(&self, took: &bool, cx: &mut PaintCx<'_>) {
+        if self.row.selected && !*took {
+            cx.request_animation_frame();
+        }
         let env = cx.env().clone();
         let p = Palette::new(paint::is_dark(&env), paint::is_high_contrast(&env));
         let size = cx.size();
@@ -419,9 +532,13 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
         }
     }
 
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+    fn semantics(&self, _: &bool, cx: &mut SemanticsCx<'_>) {
         cx.role(Role::ListItem);
         cx.name(self.row.name.clone());
+        cx.item_index(self.row.index);
+        if self.row.selected {
+            cx.focusable();
+        }
         if self.row.unresponsive {
             cx.description(
                 fq::NOT_RESPONDING_SUFFIX

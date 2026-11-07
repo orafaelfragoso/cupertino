@@ -375,6 +375,7 @@ impl OverviewSurface {
                         role: Some(Role::Button),
                         look_key: format!("{name}:{current}"),
                         take_focus: false,
+                        place: None,
                         live: false,
                         name,
                         states: AccessibleStates {
@@ -418,6 +419,7 @@ impl OverviewSurface {
                             click: Some(input(OverviewInput::RemoveWorkspace(id))),
                             look_key: String::new(),
                             take_focus: false,
+                            place: None,
                             live: false,
                             paint: Box::new(|cx, _| {
                                 let size = cx.size();
@@ -443,6 +445,7 @@ impl OverviewSurface {
                         click: Some(input(OverviewInput::AddWorkspace)),
                         look_key: String::new(),
                         take_focus: false,
+                        place: None,
                         live: false,
                         paint: Box::new(|cx, look| {
                             let size = cx.size();
@@ -495,6 +498,7 @@ impl OverviewSurface {
                 click: None,
                 look_key: format!("{opacity}"),
                 take_focus: false,
+                place: None,
                 live: false,
                 paint: Box::new(move |cx, look| {
                     let size = cx.size();
@@ -535,6 +539,7 @@ impl OverviewSurface {
                     click: Some(input(OverviewInput::Select(id))),
                     look_key: String::new(),
                     take_focus: selected,
+                    place: None,
                     live: false,
                     // the server draws the window itself
                     paint: Box::new(|_, _| {}),
@@ -547,6 +552,7 @@ impl OverviewSurface {
                     role: None,
                     look_key: title.clone(),
                     take_focus: false,
+                    place: None,
                     live: false,
                     name: String::new(),
                     states: AccessibleStates::default(),
@@ -575,6 +581,7 @@ impl OverviewSurface {
             content: Element::new(Root {
                 role: Role::Group,
                 name: TITLE.to_owned(),
+                items: None,
                 opacity: alpha,
                 pointer: Some(Box::new({
                     let input = input.clone();

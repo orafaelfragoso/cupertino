@@ -36,7 +36,7 @@ use cupertino_kit::render::{CpuConfig, CpuRenderer, ImageResource, PixelFormat};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_theme::Theme;
-use cupertino_ui_test::{ManualClock, TestDriver};
+use cupertino_ui_test::{semantic_outline, unannounced, whole_tree, ManualClock, TestDriver};
 use cupertino_wm::geometry::Rect as WmRect;
 
 const EDITOR: &str = "org.example.Editor";
@@ -320,7 +320,13 @@ impl Run {
     }
 
     /// Run until nothing is left to do, configuring every new window and drawing every requested frame.
+    /// Runs until every window rests, then checks that a screen reader could read every window open.
     fn settle(&mut self) {
+        self.settle_frames();
+        self.driver.assert_accessible("Dock");
+    }
+
+    fn settle_frames(&mut self) {
         for _ in 0..32 {
             self.driver.run_until_idle(budget()).unwrap();
             let mut busy = false;
@@ -935,6 +941,54 @@ fn the_force_quit_dialog_is_driven_from_the_keyboard() {
             .any(|(_, r)| matches!(r, Request::ForceQuitApp(a) if a == TERMINAL)),
         "{:?}",
         run.requests()
+    );
+}
+
+#[test]
+fn the_force_quit_dialog_reads_its_text_and_list_and_the_selected_row_takes_the_focus() {
+    let mut run = Run::start();
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::ForceQuitDialog],
+    });
+    let dialog = run.window(&format!("{FORCE_QUIT_APP_ID}@1")).unwrap();
+    run.send_to(dialog, WindowEvent::Focus(true));
+    let snapshot = run.driver.runtime().snapshot(dialog).unwrap();
+    let tree = whole_tree(dialog, snapshot.accessibility, snapshot.focus);
+    let items: Vec<String> = tree
+        .nodes
+        .iter()
+        .filter(|(_, n)| n.role == Role::ListItem)
+        .map(|(_, n)| n.name.clone().unwrap())
+        .collect();
+    assert!(!items.is_empty());
+    let list = format!("List \"Applications\" {} items", items.len());
+    let first = format!("ListItem {:?}", items[0]);
+    assert_eq!(
+        unannounced(
+            &tree,
+            &[
+                "StaticText \"If an application does not respond for a while, select its name and click Force Quit.\"",
+                &list,
+                &first,
+                "StaticText \"You can open this window by pressing Super-Alt-Escape.\"",
+            ]
+        ),
+        Vec::<&str>::new(),
+        "{}",
+        semantic_outline(&tree).join("\n")
+    );
+    run.key(dialog, DOWN);
+    assert_eq!(
+        run.focused(dialog),
+        Some(items[0].clone()),
+        "the row Down selects takes the focus"
+    );
+    run.key(dialog, TAB);
+    assert_eq!(
+        run.focused(dialog).as_deref(),
+        Some("Force Quit"),
+        "Tab leaves the list for the button, and the selected row does not take it back"
     );
 }
 

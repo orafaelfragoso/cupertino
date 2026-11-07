@@ -341,7 +341,13 @@ impl Run {
 
     /// Runs until nothing is left to do: a new window is configured at the size it asked for, at the run's scale, and
     /// every frame asked for is given.
+    /// Runs until every window rests, then checks that a screen reader could read every window open.
     fn settle(&mut self) {
+        self.settle_frames();
+        self.driver.assert_accessible("Window manager surfaces");
+    }
+
+    fn settle_frames(&mut self) {
         for _ in 0..16 {
             self.driver.run_until_idle(budget()).unwrap();
             let mut busy = false;
@@ -975,7 +981,7 @@ fn the_switcher_shows_after_its_delay_and_the_pointer_selects_and_activates() {
     );
     let reading = run.reading(window);
     for line in [
-        "List \"Application Switcher\"",
+        "List \"Application Switcher\" 3 items",
         "ListItem \"Files\" focusable",
         "ListItem \"Settings\" focusable selected",
         "ListItem \"Forms\" focusable",

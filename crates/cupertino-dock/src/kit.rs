@@ -384,6 +384,10 @@ pub struct Model {
     pointer: Option<Point>,
     press: Option<TilePress>,
     poof: Option<Poof>,
+    /// When the switcher's and the overview's images were last painted.
+    bridges_painted: Option<f64>,
+    /// A paint of those images was left to the next frame.
+    bridges_owed: bool,
     menu: Option<OpenMenu>,
     /// The bar has the keyboard.
     pub engaged: bool,
@@ -436,6 +440,8 @@ impl Model {
             pointer: None,
             press: None,
             poof: None,
+            bridges_painted: None,
+            bridges_owed: false,
             menu: None,
             engaged: false,
             unresponsive: HashSet::new(),
@@ -1686,6 +1692,21 @@ impl Model {
 
     /// The switcher's panel and the overview's chrome, painted again by the host.
     fn paint_bridges(&mut self, now: f64) {
+        if self.switcher.is_none() && self.overview.is_none() {
+            self.bridges_owed = false;
+            return;
+        }
+        // each paint is the whole panel or the whole output, and a message comes with every pointer motion: at most one
+        // paint a frame, a message sooner leaves it to the next frame's wake
+        if self
+            .bridges_painted
+            .is_some_and(|at| now >= at && now - at < FRAME - 1e-6)
+        {
+            self.bridges_owed = true;
+            return;
+        }
+        self.bridges_painted = Some(now);
+        self.bridges_owed = false;
         let outputs = self.outputs.clone();
         let info = |key: u32| outputs.iter().copied().find(|o| o.key == key);
         if let Some(open) = self.switcher.as_mut() {
@@ -1713,6 +1734,7 @@ impl Model {
     /// Whether anything moves on its own now.
     fn animating(&self, now: f64) -> bool {
         self.session.dock.wants_tick(now)
+            || self.bridges_owed
             || self.poof.is_some()
             || self.grid.as_ref().is_some_and(|g| g.grid.animating(now))
             || self

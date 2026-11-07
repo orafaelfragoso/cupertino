@@ -16,7 +16,7 @@ use cupertino_dock::kit::{
     self, DockEvent, Host, IconKey, Message, Model, OutputInfo, Part, Placement, Request, Sized,
     SwitcherPaint,
 };
-use cupertino_dock::overview_ui::OverviewUi;
+use cupertino_dock::overview_ui::{Mode, OverviewUi};
 use cupertino_dock::session::Session;
 use cupertino_dock::view::{IconSet, BAR_APP_ID, EDGE_APP_ID, FORCE_QUIT_APP_ID, GRID_APP_ID};
 use cupertino_dock::{Dock, DockConfig};
@@ -78,6 +78,8 @@ struct Record {
     requests: Vec<(u32, Request)>,
     placements: Vec<Placement>,
     keyboard: Vec<(Part, bool)>,
+    /// How many times the overview's image was painted.
+    overview_paints: usize,
     spawned: Vec<(Vec<String>, Option<String>)>,
     pins: Vec<Vec<String>>,
     shell: Vec<String>,
@@ -163,6 +165,7 @@ impl Host for FakeHost {
         _: f64,
         _: bool,
     ) -> Option<ImageSource> {
+        self.0.borrow_mut().overview_paints += 1;
         Some(square(8))
     }
 }
@@ -770,6 +773,46 @@ fn the_focus_dock_shortcut_shows_an_auto_hidden_bar_until_escape() {
         run.advance(0.5);
     }
     assert_eq!(editor_y(&mut run), hidden, "and hides once it lets go");
+}
+
+/// The overview's image covers the whole output: messages that come within a frame of its last paint, as every
+/// pointer motion does, leave the next paint to the next frame instead of painting it again each time.
+#[test]
+fn the_overview_is_painted_at_most_once_a_frame() {
+    let mut run = Run::start();
+    let paints = |run: &Run| run.record.borrow().overview_paints;
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Overview {
+            mode: Mode::All,
+            area: cupertino_wm::geometry::Rect::new(0.0, 0.0, 1280.0, 800.0),
+            windows: vec![(
+                7,
+                cupertino_wm::geometry::Rect::new(100.0, 100.0, 400.0, 300.0),
+            )],
+            workspaces: Vec::new(),
+        }],
+    });
+    let first = paints(&run);
+    assert_eq!(first, 1, "the overview is painted as it opens");
+    for i in 0..20 {
+        run.message(Message::Dock {
+            output: 1,
+            events: vec![DockEvent::Window {
+                id: 7,
+                app_id: TERMINAL.to_owned(),
+                title: format!("shell {i}"),
+                minimized: false,
+            }],
+        });
+    }
+    assert_eq!(paints(&run), first, "not again within the frame");
+    run.advance(kit::FRAME);
+    assert_eq!(
+        paints(&run),
+        first + 1,
+        "the paint left over, at the next frame"
+    );
 }
 
 #[test]

@@ -72,8 +72,12 @@ impl Clicks {
         }
     }
 
-    /// At a wake at `now`: start the rename that is due, in the window `window`.
-    pub fn wake(&mut self, window: u64, now: Timestamp, cx: &mut EventCx<'_, Message>) {
+    /// At a wake at `now`: start the rename that is due, in the window `window`. While the press is `held` it waits:
+    /// the press may still become a drag, and the release [arms](Self::arm) it again.
+    pub fn wake(&mut self, window: u64, now: Timestamp, held: bool, cx: &mut EventCx<'_, Message>) {
+        if held {
+            return;
+        }
         if let Some(RenameEvent::Begin(index)) = self.rename.poll(seconds(now)) {
             cx.emit(Message::Window(window, WindowEvent::RenameItem(index)));
         }

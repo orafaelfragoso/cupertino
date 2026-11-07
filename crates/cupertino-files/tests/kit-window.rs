@@ -856,6 +856,132 @@ fn in_the_list_ctrl_click_opens_the_menu_a_double_click_opens_and_a_pause_rename
     run.wait_until(|run| run.title() == "Notes");
 }
 
+/// A left press at `at` in `run`'s window, without its release.
+fn press_down(run: &mut Run, at: cupertino_kit::geometry::Point) {
+    use cupertino_kit::platform::{MouseButton, PointerEvent, Timestamp};
+    let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
+    run.send(pointer(PointerEvent::Motion { position: at }));
+    run.send(pointer(PointerEvent::Button {
+        position: at,
+        button: MouseButton::Left,
+        pressed: true,
+        serial: 1,
+        mods: Mods::NONE,
+    }));
+}
+
+#[test]
+fn in_the_list_a_key_the_triangle_or_a_held_press_keeps_a_pending_rename_from_starting() {
+    use cupertino_kit::geometry::Point;
+    use cupertino_kit::platform::MouseButton;
+    const RIGHT: u32 = 0xff53;
+    const LEFT: u32 = 0xff51;
+    let mut run = Run::new();
+    std::fs::write(run.home().join("Documents/Notes/todo.txt"), "t").unwrap();
+    run.wait_until(|run| run.rows().len() == 3);
+    let field = |run: &Run| {
+        run.driver
+            .runtime()
+            .find(run.window, &Key::from("name-field/0"))
+            .is_some()
+    };
+    run.click_row("Notes");
+    run.frames(600, 100);
+    let name = run.bounds(Role::StaticText, "Notes");
+
+    // a key the table takes for itself: Right opens the folder, and no rename follows
+    run.press_at(name.center(), MouseButton::Left);
+    run.key(RIGHT, None);
+    run.wait_until(|run| run.rows().len() == 4);
+    run.frames(600, 100);
+    assert!(!field(&run), "a key cancels the rename");
+    run.key(LEFT, None);
+    run.wait_until(|run| run.rows().len() == 3);
+    run.frames(600, 100);
+
+    // the triangle stops its press before the row sees it
+    let notes = row_bounds(&run, "Notes");
+    let triangle = Point::new(notes.min_x() + 18.0, notes.center().y);
+    run.press_at(name.center(), MouseButton::Left);
+    run.press_at(triangle, MouseButton::Left);
+    run.wait_until(|run| run.rows().len() == 4);
+    run.frames(600, 100);
+    assert!(!field(&run), "the triangle cancels the rename");
+    run.press_at(triangle, MouseButton::Left);
+    run.wait_until(|run| run.rows().len() == 3);
+    run.frames(600, 100);
+
+    // a press held past the interval may still be a drag: the rename waits for the release
+    press_down(&mut run, name.center());
+    run.frames(600, 100);
+    assert!(!field(&run), "no rename while the button is held");
+    run.release(name.center(), Mods::NONE);
+    run.frames(100, 50);
+    assert!(field(&run), "the release starts the rename that came due");
+}
+
+#[test]
+fn in_the_list_ctrl_click_on_a_rows_margin_or_triangle_opens_the_menu() {
+    use cupertino_kit::geometry::Point;
+    use cupertino_kit::platform::MouseButton;
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    run.click_row("b.txt");
+    let a = row_bounds(&run, "a.txt");
+    // the leading margin, where a folder's triangle would be: no cell of the row is there
+    run.press_with(
+        Point::new(a.min_x() + 12.0, a.center().y),
+        MouseButton::Left,
+        Mods::CTRL,
+    );
+    assert!(
+        run.context_menu().is_some(),
+        "Ctrl with a press is the secondary click"
+    );
+    assert_eq!(
+        run.selected_rows(),
+        ["a.txt"],
+        "the menu's item, not one more"
+    );
+    run.close_menu();
+    let notes = row_bounds(&run, "Notes");
+    run.press_with(
+        Point::new(notes.min_x() + 18.0, notes.center().y),
+        MouseButton::Left,
+        Mods::CTRL,
+    );
+    assert!(run.context_menu().is_some());
+    assert_eq!(
+        run.rows().len(),
+        3,
+        "Ctrl on a triangle does not open the folder"
+    );
+    run.close_menu();
+}
+
+#[test]
+fn a_band_held_while_the_view_changes_ends_with_the_list() {
+    use cupertino_kit::geometry::Point;
+    use cupertino_kit::platform::{PointerEvent, Timestamp};
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    let notes = row_bounds(&run, "Notes");
+    let under = Point::new(notes.center().x, notes.max_y() + 40.0);
+    run.hold(under, Point::new(under.x, notes.center().y), Mods::NONE);
+    assert_eq!(run.selected_rows(), ["Notes"]);
+    run.menu("view-icons");
+    run.menu("view-list");
+    run.click_row("a.txt");
+    let b = row_bounds(&run, "b.txt");
+    // a move with no button held draws no band
+    let position = Point::new(b.center().x, b.min_y() - 30.0);
+    run.send(WindowEvent::Pointer(
+        PointerEvent::Motion { position },
+        Timestamp(0),
+    ));
+    assert_eq!(run.selected_rows(), ["a.txt"]);
+}
+
 #[test]
 fn in_the_list_tab_and_shift_tab_select_by_name() {
     const TAB: u32 = 0xff09;

@@ -1034,6 +1034,8 @@ impl Model {
                 // the folders opened in the list close with it
                 window.browser.collapse_all();
                 window.band = None;
+                // a press or a band of the list ends with it: its nodes go without a release
+                *window.list_presses.borrow_mut() = Default::default();
                 window.view = view;
                 window.scroll.offset = cupertino_kit::geometry::Point::ZERO;
             }

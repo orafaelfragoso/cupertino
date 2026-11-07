@@ -259,12 +259,16 @@ impl Widget<Message> for RowCell {
                 {
                     presses.press = None;
                     cx.release_pointer();
+                    // a rename that came due while the button was held starts now
+                    presses.clicks.arm(cx);
                     return Propagation::Stop;
                 }
                 Propagation::Continue
             }
             Event::Wake(now) => {
-                self.presses.borrow_mut().clicks.wake(self.window, now, cx);
+                let mut presses = self.presses.borrow_mut();
+                let held = presses.press.is_some();
+                presses.clicks.wake(self.window, now, held, cx);
                 Propagation::Continue
             }
             Event::Cancel => {
@@ -338,6 +342,43 @@ impl Gestures {
         self.emit(WindowEvent::Band(Some(rect)), cx);
     }
 
+    /// What the list sees before the table and its rows do, which take keys and presses for themselves: a key, a scroll
+    /// or a press anywhere (a triangle's too) cancels a pending rename, and Ctrl with a press on the rows is the
+    /// secondary click wherever it lands in a row, its triangle and margins included.
+    fn capture(&self, event: &Event, cx: &mut EventCx<'_, Message>) -> Propagation {
+        match *event {
+            Event::Key(ref key, _) if key.pressed => self.presses.borrow_mut().clicks.cancel(),
+            Event::Pointer(PointerEvent::Scroll { .. }, _) => {
+                self.presses.borrow_mut().clicks.cancel()
+            }
+            Event::Pointer(
+                PointerEvent::Button {
+                    position,
+                    button: MouseButton::Left,
+                    pressed: true,
+                    mods,
+                    ..
+                },
+                _,
+            ) => {
+                // a press on a row's name arms the rename again as it lands; a double click is still told
+                self.presses.borrow_mut().clicks.cancel();
+                if mods.contains(Mods::CTRL) && self.shown(cx).is_some_and(|s| s.contains(position))
+                {
+                    let row = self.content_origin(cx).and_then(|origin| {
+                        let row = ((position.y - origin.y) / self.row_height).floor();
+                        (row >= 0.0 && (row as usize) < self.count).then_some(row as usize)
+                    });
+                    self.emit(WindowEvent::SecondaryPress(row), cx);
+                    self.emit(WindowEvent::ContextMenu(position), cx);
+                    return Propagation::Stop;
+                }
+            }
+            _ => {}
+        }
+        Propagation::Continue
+    }
+
     fn follow(&self, pointer: Point, cx: &mut EventCx<'_, Message>) {
         if let Some(shown) = self.shown(cx) {
             band::follow(self.window, self.scroll, pointer, shown, cx);
@@ -397,10 +438,7 @@ impl Widget<Message> for Gestures {
 
     fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, Message>) -> Propagation {
         if cx.phase() == Phase::Capture {
-            if let Event::Pointer(PointerEvent::Scroll { .. }, _) = event {
-                self.presses.borrow_mut().clicks.cancel();
-            }
-            return Propagation::Continue;
+            return self.capture(event, cx);
         }
         match *event {
             // what reaches here is under the rows: no row took it
@@ -470,7 +508,11 @@ impl Widget<Message> for Gestures {
                 Propagation::Stop
             }
             Event::Wake(now) => {
-                self.presses.borrow_mut().clicks.wake(self.window, now, cx);
+                {
+                    let mut presses = self.presses.borrow_mut();
+                    let held = presses.press.is_some();
+                    presses.clicks.wake(self.window, now, held, cx);
+                }
                 let band = self.presses.borrow().band.clone();
                 if let Some(band) = band {
                     // the rows moved under a still pointer: the band follows, and the scroll goes on

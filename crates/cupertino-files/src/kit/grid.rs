@@ -670,6 +670,8 @@ impl Widget<Message> for IconGrid {
                     return Propagation::Continue;
                 };
                 cx.release_pointer();
+                // a rename that came due while the button was held starts now
+                state.clicks.arm(cx);
                 if press.collapse {
                     let mut next = self.selection.clone();
                     next.select_only(press.index);
@@ -690,7 +692,8 @@ impl Widget<Message> for IconGrid {
                 Propagation::Continue
             }
             Event::Wake(now) => {
-                state.clicks.wake(self.window, now, cx);
+                let held = state.press.is_some();
+                state.clicks.wake(self.window, now, held, cx);
                 if let Some(band) = state.band.clone() {
                     // the content moved under a still pointer: the band follows, and the scroll goes on
                     self.draw_band(&band, cx);

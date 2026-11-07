@@ -36,13 +36,13 @@ Implemented:
 
 - Settings uses Kit, including About; its old painter and window modules were deleted in [#92](https://github.com/orafaelfragoso/cupertino/pull/92).
 - OSD, Control Center, launcher, menu bar and notifications draw through Kit. Dock, login and lock, screenshot UI and the window-manager UI still need migration. [What runs on CupertinoKit](apps-on-kit.md) tracks the actual entry points.
-- The parallel Kit Files window has list and icon views, file operations, new windows and menus. The installed binary still starts `app::run` in `crates/cupertino-files/src/main.rs`.
+- Files runs on Kit: `crates/cupertino-files/src/main.rs` starts `kit::run`, and the old window and its direct drawing dependencies were deleted ([#46](https://github.com/orafaelfragoso/cupertino/issues/46)).
 - Portals provide Settings, FileChooser, ScreenCast, AppChooser and Screenshot. App icons, activation tokens and screenshot retry are merged. Kit menus now share one session-bus connection per app.
 - [#93](https://github.com/orafaelfragoso/cupertino/pull/93) adds app and portal screen-reader checks. These are automated checks, not a complete assistive-technology acceptance run.
 
 Still required:
 
-- Finish Files parity, remove its old window and direct drawing dependencies, and resolve the file-operation correctness findings before changing the default ([#46](https://github.com/orafaelfragoso/cupertino/issues/46)).
+- Close the remaining Files gaps: drops onto folders and places, file-type icons and thumbnails, and the toolbar's view, Tags and Action popups. The crate README lists the open issues.
 - Migrate the remaining shell clients and fix the reviewed menu-bar, Control Center and notification interaction gaps.
 - Complete portal colour picking, remembered permissions, rotated captures and requesting-app identification in screencast consent. Verify browser file choosing and screen sharing in an installed session.
 - Complete the application accessibility audit, semantic-tree hardening, phase screenshots and phase-end review.

@@ -1564,7 +1564,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         w.resources = painting.resources;
         w.dirty = false;
         w.held_paints = 0;
-        if matches!(&damage, DamageRegion::Rects(r) if r.is_empty()) {
+        // a frame that repainted nothing sends nothing; one that repainted no pixel commits with no damage
+        if matches!(&damage, DamageRegion::Rects(r) if r.is_empty()) && !w.damage.repainted() {
             return Ok(());
         }
         let scale = w.env.scale;

@@ -263,13 +263,10 @@ fn assert_drawn_whole(run: &mut Run, when: &str) {
         .unwrap();
     run.settle();
     let frames = run.driver.runtime().window_system().frames(run.window);
-    let whole = frames.unwrap().last().unwrap();
-    assert!(presented(run) > before, "the configure drew the window");
-    assert_eq!(
-        area(&whole.damage),
-        u64::from(whole.width) * u64::from(whole.height),
-        "the configure drew the window whole"
-    );
+    let whole = frames.unwrap()[before..]
+        .iter()
+        .find(|f| area(&f.damage) == u64::from(f.width) * u64::from(f.height))
+        .expect("the configure drew the window whole");
     let differ = kept
         .chunks(4)
         .zip(whole.pixels.chunks(4))

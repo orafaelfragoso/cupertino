@@ -25,6 +25,8 @@ pub(crate) struct DamageTracker {
     previous: HashMap<PaintNodeId, Seen>,
     order: Vec<PaintNodeId>,
     full: bool,
+    /// The last frame painted, moved or removed a node with a box, whether or not it changed a pixel.
+    repainted: bool,
 }
 
 impl DamageTracker {
@@ -33,10 +35,18 @@ impl DamageTracker {
         self.full = true;
     }
 
+    /// Whether the last frame painted, moved or removed a node with a box. Such a frame commits even when it changed
+    /// no pixel: what an application sets on its surface outside the frame (a layer's zone or placement) and the next
+    /// frame of an animation wait for a commit.
+    pub(crate) fn repainted(&self) -> bool {
+        self.repainted
+    }
+
     pub(crate) fn damage(&mut self, painting: &Painting) -> DamageRegion {
         let order: Vec<PaintNodeId> = painting.list.nodes.iter().map(|n| n.id).collect();
         let mut current = HashMap::with_capacity(order.len());
         let mut rects = Vec::new();
+        let mut repainted = false;
         for (i, (node, &own)) in painting.list.nodes.iter().zip(&painting.own).enumerate() {
             let reach = painting.reach.get(i).copied().flatten();
             let changed = painting.changed.get(i).copied().flatten();
@@ -49,25 +59,32 @@ impl DamageTracker {
             };
             match self.previous.get(&node.id) {
                 Some(old) if *old == seen => {}
-                Some(old) => match (old.reach, reach) {
-                    // painted again in place: only what changed
-                    (Some(was), Some(is))
-                        if was == is
-                            && old.transform == seen.transform
-                            && old.clip == seen.clip
-                            && changed.is_some() =>
-                    {
-                        rects.extend(changed);
+                Some(old) => {
+                    repainted |= !old.own.is_empty() || !own.is_empty();
+                    match (old.reach, reach) {
+                        // painted again in place: only what changed
+                        (Some(was), Some(is))
+                            if was == is
+                                && old.transform == seen.transform
+                                && old.clip == seen.clip
+                                && changed.is_some() =>
+                        {
+                            rects.extend(changed);
+                        }
+                        (Some(was), Some(is)) if old.clip == seen.clip => rects.extend([was, is]),
+                        _ => rects.extend([old.own, own]),
                     }
-                    (Some(was), Some(is)) if old.clip == seen.clip => rects.extend([was, is]),
-                    _ => rects.extend([old.own, own]),
-                },
-                None => rects.push(reach.unwrap_or(own)),
+                }
+                None => {
+                    repainted |= !own.is_empty();
+                    rects.push(reach.unwrap_or(own));
+                }
             }
             current.insert(node.id, seen);
         }
         for (id, old) in &self.previous {
             if !current.contains_key(id) {
+                repainted |= !old.own.is_empty();
                 rects.push(old.reach.unwrap_or(old.own));
             }
         }
@@ -77,6 +94,7 @@ impl DamageTracker {
             !kept_before.eq(kept_now)
         };
         let full = std::mem::take(&mut self.full) || reordered;
+        self.repainted = repainted || full;
         self.previous = current;
         self.order = order;
         if full {
@@ -171,6 +189,15 @@ mod tests {
             DamageRegion::Rects(vec![]),
             "painted the same again: nothing"
         );
+        assert!(
+            tracker.repainted(),
+            "but the frame commits, for what waits on a commit"
+        );
+        assert_eq!(
+            tracker.damage(&with(3, 0.0, Some(Rect::new(0.0, 0.0, 0.0, 0.0)))),
+            DamageRegion::Rects(vec![])
+        );
+        assert!(!tracker.repainted(), "nothing painted: no frame");
         assert_eq!(
             tracker.damage(&with(3, 20.0, None)),
             DamageRegion::Rects(vec![reach, reach.translate(20.0, 0.0)]),

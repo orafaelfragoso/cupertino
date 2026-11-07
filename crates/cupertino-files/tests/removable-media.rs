@@ -1367,7 +1367,11 @@ fn descendants(conn: &Connection, peer: &str, path: &str) -> Vec<(OwnedObjectPat
     let mut out = Vec::new();
     for (_, child) in found.unwrap_or_default() {
         let node = accessible(conn, peer, child.as_str());
-        let role: u32 = node.call("GetRole", &()).unwrap();
+        // a node that went between the two calls, as the media arrive, is not there yet for the polling caller
+        let role: zbus::Result<u32> = node.call("GetRole", &());
+        let Ok(role) = role else {
+            continue;
+        };
         let name: String = node.get_property("Name").unwrap_or_default();
         out.push((child.clone(), role, name));
         out.extend(descendants(conn, peer, child.as_str()));

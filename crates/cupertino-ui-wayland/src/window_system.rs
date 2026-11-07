@@ -1133,8 +1133,8 @@ impl WindowSystem for WaylandWindowSystem {
         };
     }
 
-    /// The drag answers the latest button press still held in `window`'s client; one the transport refuses (no button
-    /// held) fails here, and one the compositor ignores ends as [`DragProgress::Cancelled`]. A drag started while
+    /// The drag answers the button press that started the implicit grab still held in `window`'s client (the first of
+    /// the buttons down); one the transport refuses (no button held) fails here, and one the compositor ignores ends as [`DragProgress::Cancelled`]. A drag started while
     /// another runs replaces it, which ends as cancelled. An image the transport cannot show is left out.
     fn start_drag(
         &mut self,

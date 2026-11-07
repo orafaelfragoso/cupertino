@@ -142,10 +142,15 @@ fn pointer(conn: &mut Connection, w: &mut Window, event: PointerEvent) -> Result
             position,
         } if decorations(w) == Decorations::Client => {
             let size = shown_size(w);
-            match resize_edge(position.x, position.y, size) {
-                Some(edge) => conn.start_resize(w.toplevel, edge)?,
-                None if position.y < TITLE_BAR => conn.start_move(w.toplevel)?,
-                None => {}
+            let started = match resize_edge(position.x, position.y, size) {
+                Some(edge) => conn.start_resize(w.toplevel, edge),
+                None if position.y < TITLE_BAR => conn.start_move(w.toplevel),
+                None => Ok(()),
+            };
+            // a click whose release came with its press holds nothing by the time it is handled: the window stays
+            match started {
+                Err(Error::PermissionDenied(_)) => {}
+                result => result?,
             }
         }
         _ => {}

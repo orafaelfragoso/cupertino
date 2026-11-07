@@ -139,6 +139,7 @@ impl Application for Listed {
                 on_scroll: Box::new(Message::Scroll),
                 on_select: Some(Box::new(Message::Select)),
                 on_activate: Some(Box::new(Message::Activate)),
+                on_row_key: None,
             }));
         }
         window(Element::from(ListView {

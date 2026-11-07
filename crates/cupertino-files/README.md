@@ -61,8 +61,10 @@ Reduce Transparency (`kit::sidebar`).
 touches replace the selection, or toggle against it with Shift or Primary held at the press; near the top or bottom
 edge the view scrolls under the band. A click on the name of the only selected item edits the name after the
 double-click interval, unless a second click (which opens), a scroll or a key comes first (`kit::clicks`). Ctrl with a
-press opens the context menu; Tab and Shift+Tab select the next and previous item by name, and past the last or before
-the first item the keyboard goes on to the next or previous control.
+press opens the context menu; Tab and Shift+Tab on an item select the next and previous item by name (with nothing
+selected, from the first or last by name, or the one after it when the keyboard is already on it), and past the last or
+before the first item the keyboard goes on to the next or previous control. In the list, Tab on a column header goes to
+the next header and from the last into the rows; the table hands Files only its rows' keys (`TableView::on_row_key`).
 
 **Item images** (`kit::item_icons`). Each item in the icon view, the list view and a drag image wears the icon of its
 type from the asset packs and the host icon theme, through the toolkit's `cupertino_kit::file_icons::FileIcons`: the
@@ -158,11 +160,12 @@ free space, the default applications) stay on stderr. The wording is approximate
 
 **Accessibility** (`tests/kit-accessibility.rs`). Every control reads its role, name and state and does its default
 action when assistive technology asks: the places and their eject buttons, back and forward, the View, Tags and Action
-pop-up buttons, the search field, the path bar's folders, the icon view's cells, the list's rows (selected, open or
+pop-up buttons (each says whether its menu is open), the search field, the path bar's folders, the icon view's cells, the list's rows (selected, open or
 closed, with their level and position; Click selects a row alone, Expand and Collapse open and close a folder), the
 column headers (sorted up or down), the transfer row and its Stop button, the name editor and the context menu. Icons
 are decorative, an item reads by its name and never by its path, and the rubber band is not read. Tab goes from the
-sidebar to the toolbar, the folder's items, the path bar's folders and the sidebar's separator, then around. The
+sidebar to the toolbar, the list's column headers in the order shown, the folder's items, the path bar's folders and the
+sidebar's separator, then around, and Shift+Tab visits the same stops in the opposite order. The
 keyboard comes back to the button or item that opened a menu, and to the item a rename commits or cancels; a folder
 closed over the row the keyboard is on leaves it on the folder. A polite live region (`kit::announce`) reads a
 transfer starting and ending ("Copied “a.txt” to “Documents”", "Stopped copying …"), a search's result count and the
@@ -172,7 +175,8 @@ again (a second copy of the same file) are heard again; a rubber band says its c
 transfer's progress is not announced. A selected row's text, its secondary columns included, is
 drawn in the selected control text colour on the accent. The focus ring shows on the toolbar buttons, the path bar's
 folders and the rows under Increase Contrast. Over AT-SPI the list is a multiselectable table whose rows carry their
-selected state.
+selected state. The tests listen through `cupertino-ui-test`'s stand-in screen reader (`AssistiveTechnology`), and every
+settle of the test window runs the shared accessibility audit over each window open, with nothing left out.
 
 **Removable media** come from udisks2 on the system bus (`udisks`): after Trash, Locations lists every file system of a
 drive that udisks neither hides (`HintIgnore`) nor counts as the system's (`HintSystem`), with usage `filesystem`, and
@@ -219,7 +223,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | Alt+Primary+P / Primary+/ | show or hide the path bar / the status bar |
 | arrows, Home / End, Page Up / Page Down, typing; Shift / Primary click; Primary+A; a list column header | selection, type-select, select all, sort (again: reverse) |
 | press on empty space and drag (Shift / Primary: toggle) | rubber band (above) |
-| Tab / Shift+Tab | the next / previous item by name; past the last / first, the next / previous control |
+| Tab / Shift+Tab | on an item: the next / previous item by name; past the last / first, the next / previous control (a list column header: the next / previous header or control) |
 | a folder's triangle, Right / Left in the list | open / close the folder in place |
 | click the name of the only selected item and wait | rename (above) |
 | Primary+Backspace | move the selection to the trash (`$XDG_DATA_HOME/Trash`, freedesktop Trash 1.0); Put Back in the trash |
@@ -319,8 +323,11 @@ Values live in `metrics.rs`.
   Applications shows the desktop entry files of one folder; opening one does not launch the application.
 * The lock badge is not drawn, because entries carry no permission bits.
 * Over AT-SPI the list's table offers no Selection interface (the accessibility bridge gives one only to lists and
-  trees of items), so a screen reader reads the selection row by row. The pop-up buttons do not say whether their menu
-  is open.
+  trees of items), so a screen reader reads the selection row by row.
+* When the node the keyboard is on goes away (the row of the folder it opens, the list swapped for the icon grid, an
+  item moved to the trash), the keyboard falls to its nearest surviving ancestor (the table's rows, the items' frame),
+  and assistive technology is told the focus is on the nearest node of that path it can see, such as the table, until
+  Tab or a click moves it on.
 * Removable media: disc images and network mounts are not listed.
 * Opening several files opens each without confirmation; a mixed selection enters the first folder only (approximate).
   Open in New Window opens as many windows as there are selected folders.

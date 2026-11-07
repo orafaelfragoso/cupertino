@@ -45,7 +45,7 @@ no area, and a list, menu, tree or tab item outside its container, without its p
 row in a left-to-right layout, or up a column).
 
 `TestDriver::accessibility_audit()` audits every open window, an untitled root named by the window's title as the AT-SPI
-bridge names it, and `assert_accessible(what)` fails with every window's outline (`semantic_outlines()`).
+bridge names it and the focus the one an adapter is told (`FrameSnapshot::accessibility_focus`), and `assert_accessible(what)` fails with every window's outline (`semantic_outlines()`).
 
 `AssistiveTechnology` is a stand-in reader for `RuntimeOptions::accessibility`: it holds each window's tree, put
 together from whole and partial updates, records each live region's `Announcement` of its name when it arrives and when

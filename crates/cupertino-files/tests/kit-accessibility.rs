@@ -7,9 +7,7 @@
 
 mod common;
 
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -18,18 +16,17 @@ use cupertino_files::kit::Observer;
 use cupertino_files::notice::Notices;
 use cupertino_files::places::PlaceKind;
 use cupertino_kit::core::{
-    AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, AccessibleValue, Action,
-    ActionData, ActionRequest, NodeId, Role,
+    AccessibilityAdapter, AccessibilityNode, AccessibleValue, Action, ActionData, NodeId, Role,
 };
 use cupertino_kit::geometry::Point;
-use cupertino_kit::platform::{Mods, PlatformEvent, WindowId, WindowStates};
+use cupertino_kit::platform::{Mods, PlatformEvent, WindowStates};
 use cupertino_kit::render::{Paint, PaintNodeId, PaintOp};
 use cupertino_kit::theme::{
     Appearance, Color, ColorRole, StateVariant, ThemePreferences, ThemeTokens,
 };
 use cupertino_test_bus::{missing_tool, PrivateBus};
 use cupertino_theme::Theme;
-use cupertino_ui_test::{describe, semantic_outline, whole_tree};
+use cupertino_ui_test::{describe, semantic_outline, whole_tree, AssistiveTechnology};
 use zbus::blocking::Connection;
 use zbus::zvariant::OwnedObjectPath;
 
@@ -41,67 +38,20 @@ const SPACE: u32 = 0x20;
 const MENU_KEY: u32 = 0xff67;
 const LEFT: u32 = 0xff51;
 
-/// An assistive technology that always listens: it asks for what the test says and hears a live region's name as the
-/// AT-SPI bridge announces it, when the region's node reaches the tree with a name and whenever its name changes. A
-/// node sent again with the same name, or with a new value or description alone, is not heard again.
-#[derive(Clone, Default)]
-struct Assistive {
-    asked: Rc<RefCell<Vec<ActionRequest>>>,
-    heard: Rc<RefCell<Vec<String>>>,
-    /// The node that said each of `heard`.
-    speakers: Rc<RefCell<Vec<NodeId>>>,
-    /// The name of each node of the tree the window sent, put together from its whole and partial updates.
-    names: Rc<RefCell<HashMap<NodeId, Option<String>>>>,
-}
-
-impl AccessibilityAdapter for Assistive {
-    fn is_active(&self) -> bool {
-        true
-    }
-
-    fn window_focus(&mut self, _: WindowId, _: bool) {}
-
-    fn update(&mut self, update: &AccessibilityUpdate) {
-        let mut names = self.names.borrow_mut();
-        let mut heard = self.heard.borrow_mut();
-        // a whole tree replaces the one held, but a node it sends again is the same node
-        let mut before = if update.full {
-            std::mem::take(&mut *names)
-        } else {
-            HashMap::new()
-        };
-        for id in &update.removed {
-            names.remove(id);
-        }
-        for (id, node) in &update.nodes {
-            let old = names.remove(id).or_else(|| before.remove(id)).flatten();
-            let name = node.name.as_deref().unwrap_or("").trim();
-            if node.live.is_some()
-                && !name.is_empty()
-                && old.as_deref().map(str::trim) != Some(name)
-            {
-                heard.push(name.to_owned());
-                self.speakers.borrow_mut().push(*id);
-            }
-            names.insert(*id, node.name.clone());
-        }
-    }
-
-    fn drain_actions(&mut self, out: &mut Vec<ActionRequest>) {
-        out.append(&mut self.asked.borrow_mut());
-    }
-}
-
 /// A window on `home/Documents`, which holds `a.txt`, `b.txt` and the folder `Notes` with `todo.txt` in it, shown as a
 /// list in `appearance`, with Documents and Downloads in the sidebar and an assistive technology listening.
-fn start(appearance: Appearance) -> (Run, Assistive) {
+fn start(appearance: Appearance) -> (Run, AssistiveTechnology) {
     start_with(appearance, false, None)
 }
 
 /// [`start`] with Reduce Motion on when `still`, and every transfer calling `observer`.
-fn start_with(appearance: Appearance, still: bool, observer: Option<Observer>) -> (Run, Assistive) {
-    let at = Assistive::default();
-    let run = start_hosted(appearance, still, observer, Box::new(at.clone()));
+fn start_with(
+    appearance: Appearance,
+    still: bool,
+    observer: Option<Observer>,
+) -> (Run, AssistiveTechnology) {
+    let at = AssistiveTechnology::new();
+    let run = start_hosted(appearance, still, observer, at.adapter());
     (run, at)
 }
 
@@ -189,17 +139,30 @@ fn row(run: &Run, name: &str) -> NodeId {
 }
 
 /// Asks node `target` for `action`, as a screen reader does, and lets the window answer.
-fn ask(run: &mut Run, at: &Assistive, target: NodeId, action: Action, data: Option<ActionData>) {
-    at.asked.borrow_mut().push(ActionRequest {
-        target,
-        action,
-        data,
-    });
-    run.driver
-        .window_system_mut()
-        .enqueue(PlatformEvent::Wake)
-        .unwrap();
+fn ask(
+    run: &mut Run,
+    at: &AssistiveTechnology,
+    target: NodeId,
+    action: Action,
+    data: Option<ActionData>,
+) {
+    run.driver.ask(at, target, action, data);
     run.settle();
+}
+
+/// What the live regions said, oldest first.
+fn heard(at: &AssistiveTechnology) -> Vec<String> {
+    at.announcements().into_iter().map(|a| a.text).collect()
+}
+
+/// The live region node the reader holds that reads `text`.
+fn speaker(run: &Run, at: &AssistiveTechnology, text: &str) -> Option<NodeId> {
+    let tree = at.tree(run.window)?;
+    let found = tree
+        .nodes
+        .into_iter()
+        .find(|(_, n)| n.live.is_some() && n.name.as_deref().map(str::trim) == Some(text));
+    found.map(|(id, _)| id)
 }
 
 /// The node with the keyboard focus as a screen reader reads it without its states, a row by its first cell:
@@ -416,7 +379,11 @@ fn tab_goes_from_the_sidebar_to_the_toolbar_the_items_and_the_path_bar_and_aroun
         "PopUpButton \"Tags\"",
         "PopUpButton \"Action\"",
         "TextInput \"Search\" = \"\"",
+        // the headers in the order they are shown, then the rows
         "ColumnHeader \"Name\"",
+        "ColumnHeader \"Date Modified\"",
+        "ColumnHeader \"Size\"",
+        "ColumnHeader \"Kind\"",
         // Tab in the list selects the next item by name, and past the last goes on
         "Row [a.txt]",
         "Row [b.txt]",
@@ -433,6 +400,7 @@ fn tab_goes_from_the_sidebar_to_the_toolbar_the_items_and_the_path_bar_and_aroun
         stops.push(focused(&run));
     }
     assert_eq!(stops, expected);
+    assert_eq!(run.selected_rows(), ["Notes"], "Tab selected as it went");
 
     // Shift+Tab before the first item by name leaves the list too, back through the headers
     run.click_row("a.txt");
@@ -452,6 +420,68 @@ fn tab_goes_from_the_sidebar_to_the_toolbar_the_items_and_the_path_bar_and_aroun
     assert_eq!(run.selected_icons(), ["Notes"], "the selection stays");
 }
 
+/// The stops Tab (or Shift+Tab, `back`) visits from where the keyboard is, until it comes back there.
+fn walk(run: &mut Run, back: bool) -> Vec<String> {
+    let start = focused(run);
+    let mut stops = Vec::new();
+    for _ in 0..64 {
+        if back {
+            run.key_with(LEFT_TAB, None, Mods::SHIFT);
+        } else {
+            run.key(TAB, None);
+        }
+        let stop = focused(run);
+        if stop == start {
+            return stops;
+        }
+        stops.push(stop);
+    }
+    panic!("Tab never came back to {start}: {stops:?}");
+}
+
+#[test]
+fn shift_tab_visits_the_stops_tab_does_in_the_opposite_order() {
+    let (mut run, _) = start(Appearance::Light);
+    run.menu("toggle-path-bar");
+    run.click_named(Role::ListItem, "Documents");
+    assert_eq!(focused(&run), "ListItem \"Documents\"");
+    let forward = walk(&mut run, false);
+    for header in ["Name", "Date Modified", "Size", "Kind"] {
+        let header = format!("ColumnHeader {header:?}");
+        assert!(forward.contains(&header), "{header} is a stop: {forward:?}");
+    }
+    let back = walk(&mut run, true);
+    let mut mirrored = back.clone();
+    mirrored.reverse();
+    assert_eq!(mirrored, forward, "Shift+Tab is Tab backwards");
+    assert_eq!(focused(&run), "ListItem \"Documents\"");
+}
+
+#[test]
+fn tab_in_an_empty_folder_walks_the_headers_and_goes_on_past_the_list() {
+    let (mut run, _) = start(Appearance::Light);
+    run.click_named(Role::ListItem, "Downloads");
+    run.wait_until(|run| run.title() == "Downloads");
+    assert_eq!(focused(&run), "ListItem \"Downloads\"");
+    let forward = walk(&mut run, false);
+    let headers: Vec<&str> = forward
+        .iter()
+        .filter_map(|s| s.strip_prefix("ColumnHeader "))
+        .collect();
+    assert_eq!(
+        headers,
+        ["\"Name\"", "\"Date Modified\"", "\"Size\"", "\"Kind\""],
+        "{forward:?}"
+    );
+    assert!(
+        !forward.iter().any(|s| s.starts_with("Row")),
+        "no row to stop on: {forward:?}"
+    );
+    let mut back = walk(&mut run, true);
+    back.reverse();
+    assert_eq!(back, forward, "Shift+Tab is Tab backwards");
+}
+
 #[test]
 fn the_keyboard_comes_back_to_what_opened_a_menu_or_a_rename() {
     let (mut run, _) = start(Appearance::Light);
@@ -461,10 +491,18 @@ fn the_keyboard_comes_back_to_what_opened_a_menu_or_a_rename() {
     while focused(&run) != "PopUpButton \"View\"" {
         run.key_with(LEFT_TAB, None, Mods::SHIFT);
     }
+    let view = find(&run, Role::PopUpButton, "View");
+    assert_eq!(nodes(&run)[&view].states.expanded, Some(false));
     run.key(SPACE, Some(' '));
     assert!(run.context_menu().is_some(), "the View menu");
+    assert_eq!(
+        nodes(&run)[&view].states.expanded,
+        Some(true),
+        "the button says its menu is open"
+    );
     run.close_menu();
     assert!(run.context_menu().is_none());
+    assert_eq!(nodes(&run)[&view].states.expanded, Some(false));
     assert_eq!(focused(&run), "PopUpButton \"View\"");
 
     // the context menu, opened with the Menu key on a row
@@ -598,7 +636,6 @@ fn transfers_searches_and_selections_are_announced_without_moving_the_keyboard()
     let (reached, waits) = mpsc::channel();
     let observer = Gate::observer(&gate, reached);
     let (mut run, at) = start_with(Appearance::Light, false, Some(observer));
-    let heard = |at: &Assistive| at.heard.borrow().clone();
 
     // more than one item selected is counted; one is read by the focus on it
     run.click_row("a.txt");
@@ -628,6 +665,7 @@ fn transfers_searches_and_selections_are_announced_without_moving_the_keyboard()
     run.click_named(Role::ListItem, "Downloads");
     run.wait_until(|run| run.title() == "Downloads");
     let before = focused(&run);
+    let moves = at.focus_moves(run.window);
     run.menu("paste");
     waits
         .recv_timeout(Duration::from_secs(10))
@@ -661,39 +699,33 @@ fn transfers_searches_and_selections_are_announced_without_moving_the_keyboard()
     assert!(!run.home().join("Downloads/big.bin").exists());
 
     // a copy that runs to its end
+    let copied = "Copied “big.bin” to “Downloads”";
     run.menu("paste");
     run.wait_until(|run| {
         run.named(Role::ProgressIndicator).is_empty() && run.rows() == ["big.bin"]
     });
-    assert_eq!(
-        heard(&at).last().map(String::as_str),
-        Some("Copied “big.bin” to “Downloads”")
-    );
+    assert_eq!(heard(&at).last().map(String::as_str), Some(copied));
     assert_eq!(focused(&run), before, "the keyboard stays");
+    let first = speaker(&run, &at, copied).expect("the region reads the copy");
 
     // the same copy again says the same words again, from a node of its own: a reader hears it even when the copy
     // starts and ends before the window next sends its tree
     run.menu("paste");
     run.wait_until(|run| run.named(Role::ProgressIndicator).is_empty() && run.rows().len() == 2);
-    let copied = "Copied “big.bin” to “Downloads”";
     let said = heard(&at);
-    let speakers: Vec<NodeId> = said
-        .iter()
-        .zip(at.speakers.borrow().iter())
-        .filter(|(s, _)| *s == copied)
-        .map(|(_, id)| *id)
-        .collect();
-    assert_eq!(speakers.len(), 2, "{said:?}");
-    assert_ne!(
-        speakers[0], speakers[1],
-        "each message is a node of its own"
+    assert_eq!(said.iter().filter(|s| *s == copied).count(), 2, "{said:?}");
+    let second = speaker(&run, &at, copied).expect("the region reads the second copy");
+    assert_ne!(first, second, "each message is a node of its own");
+    assert_eq!(
+        at.focus_moves(run.window),
+        moves,
+        "no announcement moved the keyboard"
     );
 }
 
 #[test]
 fn a_rubber_band_says_how_many_items_it_selected_once_it_is_let_go() {
     let (mut run, at) = start(Appearance::Light);
-    let heard = |at: &Assistive| at.heard.borrow().clone();
     let notes = run.row_bounds("Notes");
     let first = run.row_bounds("a.txt");
     let under = Point::new(notes.center().x, notes.max_y() + 40.0);

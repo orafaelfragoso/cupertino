@@ -444,7 +444,7 @@ pub enum Event {
     Toggle(cupertino_kit::controls::TreeToggle),
     /// A press on rows of the list moved far enough to drag them out of the window.
     DragRows(RowGrab),
-    /// Tab chose row `index` of the list: give it the keyboard once the list shows it.
+    /// Tab chose row `index` of the list: select it alone and give it the keyboard once the list shows it.
     FocusRow(usize),
     /// The list shows the row with this key: give it the keyboard.
     FocusKey(Key),
@@ -840,17 +840,7 @@ impl Model {
             Event::UnlockCancelled => window.unlock = None,
             Event::Navigate(Navigation::Back) => window.step(Step::Back, session),
             Event::Navigate(Navigation::Forward) => window.step(Step::Forward, session),
-            Event::Select(selection) => {
-                let indices = selection.ranges().iter().flat_map(Clone::clone);
-                window
-                    .browser
-                    .select(indices, selection.anchor(), selection.cursor());
-                let renamed = window.rename_index();
-                if renamed.is_some() && window.browser.selection().indices().ne(renamed) {
-                    // the keyboard goes where the press went, not back to the item renamed
-                    let _ = window.end_rename(session);
-                }
-            }
+            Event::Select(selection) => window.select(&selection, session),
             Event::Open(index) => {
                 if !window.browser.selection().contains(index) {
                     window.browser.select([index], Some(index), Some(index));
@@ -937,6 +927,9 @@ impl Model {
                     return Vec::new();
                 };
                 let key = view::row_key(id, &entry.path);
+                let mut alone = Selection::new([], None, None);
+                alone.select_only(index);
+                window.select(&alone, session);
                 return vec![Command::Perform(Box::pin(async move {
                     Message::Window(id, Event::FocusKey(key))
                 }))];
@@ -1853,6 +1846,18 @@ impl BrowserWindow {
             results: self.browser.search_results(),
             selected: self.browser.selection().len(),
             banding: self.band.is_some(),
+        }
+    }
+
+    /// Select as `selection` does; a rename of an item it leaves out ends, as the keyboard goes where the selection
+    /// went, not back to the item renamed.
+    fn select(&mut self, selection: &Selection, session: &Session) {
+        let indices = selection.ranges().iter().flat_map(Clone::clone);
+        self.browser
+            .select(indices, selection.anchor(), selection.cursor());
+        let renamed = self.rename_index();
+        if renamed.is_some() && self.browser.selection().indices().ne(renamed) {
+            let _ = self.end_rename(session);
         }
     }
 

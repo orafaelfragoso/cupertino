@@ -1,6 +1,6 @@
 //! A table's sorting headers by keyboard: Tab reaches each column's header before the rows, and Space or Return sorts
 //! by that column, flipping the order of the column already sorted. The sorting header tells assistive technology its
-//! order.
+//! order. A key on a header never reaches the rows' handler; one on a row does.
 
 mod support;
 
@@ -15,12 +15,15 @@ use support::{window, Harness, RETURN, SPACE, TAB};
 enum Message {
     Scroll(ScrollState),
     Sort((usize, SortOrder)),
+    /// A key a row passed on: the row the keyboard was on, and the key.
+    RowKey(usize, u32),
 }
 
 struct Model {
     scroll: ScrollState,
     sort: (usize, SortOrder),
     sorted: Vec<(usize, SortOrder)>,
+    row_keys: Vec<(usize, u32)>,
 }
 
 struct Sorted;
@@ -38,6 +41,7 @@ impl Application for Sorted {
             },
             sort: (0, SortOrder::Ascending),
             sorted: Vec::new(),
+            row_keys: Vec::new(),
         };
         (model, Vec::new())
     }
@@ -49,6 +53,7 @@ impl Application for Sorted {
                 model.sort = sort;
                 model.sorted.push(sort);
             }
+            Message::RowKey(row, keysym) => model.row_keys.push((row, keysym)),
         }
         Vec::new()
     }
@@ -84,6 +89,10 @@ impl Application for Sorted {
             on_scroll: Box::new(Message::Scroll),
             on_select: None,
             on_activate: None,
+            // the rows keep every key but Tab, which goes on to the next control
+            on_row_key: Some(Box::new(|row, key| {
+                (key.keysym.0 != TAB).then_some(Message::RowKey(row, key.keysym.0))
+            })),
         }))
     }
 }
@@ -159,4 +168,29 @@ fn tab_reaches_each_header_and_space_or_return_sorts_by_its_column() {
             (1, SortOrder::Ascending)
         ]
     );
+}
+
+#[test]
+fn a_key_on_a_header_never_reaches_the_rows_handler_and_one_on_a_row_does() {
+    const X: u32 = 0x78;
+    let mut h = Harness::<Sorted>::new();
+    h.tap(TAB);
+    assert_eq!(h.snapshot().focus, Some(header(&h, 0)));
+    h.tap(X);
+    h.tap(TAB);
+    assert_eq!(h.snapshot().focus, Some(header(&h, 1)));
+    h.tap(X);
+    assert_eq!(
+        h.model().row_keys,
+        [],
+        "the headers' keys stay off the rows"
+    );
+    // Tab into the rows, then a key the table does not take itself
+    h.tap(TAB);
+    h.tap(X);
+    assert_eq!(h.model().row_keys, [(0, X)]);
+    // the handler let Tab go: it leaves the table, and comes back to the headers
+    h.tap(TAB);
+    assert_eq!(h.snapshot().focus, Some(header(&h, 0)));
+    assert_eq!(h.model().row_keys, [(0, X)]);
 }

@@ -689,3 +689,59 @@ fn a_node_holding_the_focus_says_it_can_take_focus() {
         ((false, false), (true, true))
     );
 }
+
+#[test]
+fn a_focus_on_a_node_without_a_role_is_told_on_its_nearest_ancestor_in_the_tree() {
+    // the root (the window), a container with no role, and a button in it
+    let (tree, root, _) = pass(Element::new(group(vec![Element::new(group(vec![
+        Element::new(leaf("deep")),
+    ]))])));
+    let order = tree.preorder(root);
+    let (container, deep) = (order[1], order[2]);
+    let geometry: Geometry = order
+        .iter()
+        .map(|&id| {
+            (
+                id,
+                Placement {
+                    rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                    target: Rect::new(0.0, 0.0, 10.0, 10.0),
+                    clip: None,
+                    own_clip: None,
+                },
+            )
+        })
+        .collect();
+    let at = |focus| build(&tree, root, &geometry, focus, LayoutDirection::Ltr);
+    let focused = |pass: &SemanticsPass| {
+        let mut on: Vec<NodeId> = pass
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.states.focused)
+            .map(|(&id, _)| id)
+            .collect();
+        on.sort();
+        on
+    };
+
+    let left = at(Some(container));
+    assert!(
+        !left.nodes.contains_key(&container),
+        "the container has no role"
+    );
+    assert_eq!(left.focus, Some(root), "told on the window instead");
+    assert_eq!(focused(&left), [root]);
+    assert!(
+        left.nodes[&root].states.focusable,
+        "a node holding the focus can take it"
+    );
+
+    let on = at(Some(deep));
+    assert_eq!(on.focus, Some(deep), "a node in the tree is told as it is");
+    assert_eq!(focused(&on), [deep]);
+    assert!(!on.nodes[&root].states.focusable);
+
+    let none = at(None);
+    assert_eq!(none.focus, None);
+    assert!(focused(&none).is_empty());
+}

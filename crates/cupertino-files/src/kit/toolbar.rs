@@ -49,6 +49,8 @@ pub(super) struct ToolButton {
     /// The chevron that says it opens a menu: down, or up and down for a choice.
     pub chevron: &'static str,
     pub size: Size,
+    /// Its menu is open.
+    pub expanded: bool,
     pub on_press: Message,
 }
 
@@ -100,6 +102,8 @@ impl Widget<Message> for ToolButton {
     fn update(&self, old: &Self, _: &mut ToolState) -> Change {
         if self.size != old.size {
             Change::Layout
+        } else if self.expanded != old.expanded {
+            Change::Paint
         } else {
             Change::None
         }
@@ -202,7 +206,10 @@ impl Widget<Message> for ToolButton {
     fn semantics(&self, _: &ToolState, cx: &mut SemanticsCx<'_>) {
         cx.role(Role::PopUpButton);
         cx.name(self.label.clone());
-        cx.states(AccessibleStates::default());
+        cx.states(AccessibleStates {
+            expanded: Some(self.expanded),
+            ..AccessibleStates::default()
+        });
         cx.action(Action::Click);
         cx.focusable();
     }

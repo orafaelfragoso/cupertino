@@ -59,7 +59,9 @@ impl<A: Application> TestDriver<A> {
 
     /// The [`accessibility_audit`](crate::accessibility_audit) of every window the application has open, each line
     /// after the window's title in brackets. A root with no name of its own is named by its window's title first, as
-    /// the AT-SPI bridge names it; a window not laid out yet is skipped.
+    /// the AT-SPI bridge names it, and the focus is the one an adapter is told
+    /// ([`FrameSnapshot::accessibility_focus`](cupertino_ui_core::FrameSnapshot::accessibility_focus)); a window not laid
+    /// out yet is skipped.
     pub fn accessibility_audit(&self) -> Vec<String> {
         let mut problems = Vec::new();
         for (_, window) in self.runtime.windows() {
@@ -75,7 +77,8 @@ impl<A: Application> TestDriver<A> {
                 .spec(window)
                 .map(|s| s.title.clone())
                 .unwrap_or_default();
-            let mut tree = crate::whole_tree(window, snapshot.accessibility, snapshot.focus);
+            let mut tree =
+                crate::whole_tree(window, snapshot.accessibility, snapshot.accessibility_focus);
             if let Some((_, root)) = tree.nodes.iter_mut().find(|(id, _)| *id == tree.root) {
                 if root.name.is_none() && !title.is_empty() {
                     root.name = Some(title.clone());
@@ -120,7 +123,8 @@ impl<A: Application> TestDriver<A> {
                 .map(|s| s.title.clone())
                 .unwrap_or_default();
             out.push_str(&format!("[{title}]\n"));
-            let tree = crate::whole_tree(window, snapshot.accessibility, snapshot.focus);
+            let tree =
+                crate::whole_tree(window, snapshot.accessibility, snapshot.accessibility_focus);
             for line in crate::semantic_outline(&tree) {
                 out.push_str(&line);
                 out.push('\n');

@@ -226,6 +226,8 @@ impl Run {
         self.home.path().to_path_buf()
     }
 
+    /// Runs until no window waits for a frame, then checks that a screen reader could read every window open.
+    #[track_caller]
     pub fn settle(&mut self) {
         for _ in 0..8 {
             self.driver.run_until_idle(budget()).unwrap();
@@ -236,12 +238,13 @@ impl Run {
                 .filter(|&w| system.frame_requested(w).unwrap())
                 .collect();
             if waiting.is_empty() {
-                return;
+                break;
             }
             for window in waiting {
                 system.frame_ready(window, self.now).unwrap();
             }
         }
+        self.driver.assert_accessible("Files");
     }
 
     /// Move the clock on by `ms` milliseconds a frame of `step_ms` at a time, presenting the frames the windows ask

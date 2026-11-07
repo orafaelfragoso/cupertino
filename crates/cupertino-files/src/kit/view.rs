@@ -7,8 +7,8 @@ use cupertino_menu_model::{ActionName, MenuBar};
 
 use cupertino_kit::controls::{
     Column, ColumnWidth, ContextMenu, Dialog, DialogAction, DialogButton, DialogKind, Icon,
-    IconDirection, Image, ImageFit, ImageSource, Modal, NavigationStack, OutlineTable, Progress,
-    ScrollView, Scroller, SecureField, Selection, Sidebar, SidebarAccessory, SidebarItem,
+    IconDirection, Image, ImageFit, ImageSource, MenuAnchor, Modal, NavigationStack, OutlineTable,
+    Progress, ScrollView, Scroller, SecureField, Selection, Sidebar, SidebarAccessory, SidebarItem,
     SidebarSection, SortOrder, Spacer, SplitView, Stack, TableView, Text, TextField, TextRole,
     TreeItem,
 };
@@ -25,7 +25,7 @@ use super::announce::Announcer;
 use super::context::Secondary;
 use super::drops;
 use super::grid::{self, IconGrid, Item};
-use super::list::{Gestures, RowCell};
+use super::list::{self, Gestures, RowCell};
 use super::search::{no_results, SearchSlot};
 use super::sidebar::{Backdrop, FocusWatch, Opaque};
 use super::toolbar::{PathBar, PathSegment, ToolButton};
@@ -401,6 +401,10 @@ fn toolbar(session: &Session, id: u64, win: &BrowserWindow) -> Vec<Element<Messa
             symbol: symbol.into(),
             chevron,
             size: Size::new(w, h),
+            expanded: win
+                .context
+                .as_ref()
+                .is_some_and(|menu| menu.anchor == MenuAnchor::Below(popup_key(popup))),
             on_press: Message::Window(id, Event::Popup(popup)),
         })
         .key(popup_key(popup))
@@ -553,6 +557,7 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         on_scroll: send(id, Event::Scroll),
         on_select: Some(send(id, Event::Select)),
         on_activate: Some(send(id, Event::Open)),
+        on_row_key: Some(Box::new(list::tab(id, names, selected.cursor()))),
     };
     let count = table.count;
     let table = Element::from(OutlineTable {
@@ -576,7 +581,6 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         row_height: ROW_HEIGHT,
         scroll: win.scroll,
         selection: selected,
-        names,
         presses,
         band: win.band,
         children: vec![table],

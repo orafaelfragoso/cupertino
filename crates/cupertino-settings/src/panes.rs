@@ -1073,12 +1073,12 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
             let keys = |k| Backend::Key(File::Keyboard, k);
             let k = &settings.keyboard;
             let mut out = vec![
-                screen_reader_section(a.screen_reader, live.screen_reader_installed),
                 Section {
                     header: header("Display"),
                     rows: display,
                     footer: None,
                 },
+                screen_reader_section(a.screen_reader, live.screen_reader_installed),
                 Section {
                     header: header("Pointer"),
                     rows: vec![
@@ -1140,8 +1140,7 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                 },
             ];
             if let Some(login) = &live.login_screen {
-                // after Display
-                out.insert(2, login_screen_section(login));
+                out.insert(1, login_screen_section(login));
             }
             out
         }
@@ -1464,8 +1463,8 @@ pub const SCREEN_READER_DETAIL: &str =
 /// Why the Screen reader switch is disabled without a reader.
 pub const NO_SCREEN_READER: &str = "No screen reader is installed.";
 
-/// The session's screen reader (`screen_reader` of `accessibility.conf`, which the server starts and stops), first in the
-/// pane so a person who needs it finds it at once; disabled with the reason when none is installed.
+/// The session's screen reader (`screen_reader` of `accessibility.conf`, which the server starts and stops), after the
+/// display options and their login screen defaults; disabled with the reason when none is installed.
 fn screen_reader_section(on: bool, installed: bool) -> Section {
     let mut reader = row(
         ControlId::ScreenReader,
@@ -2907,13 +2906,17 @@ mod tests {
     }
 
     #[test]
-    fn the_screen_reader_switch_comes_first_shows_the_server_s_value_and_asks_the_server() {
+    fn the_screen_reader_switch_shows_the_server_s_value_and_asks_the_server() {
         let reader = |settings: &Settings, installed: bool| {
             let live = Live {
                 screen_reader_installed: installed,
                 ..Live::default()
             };
-            sections(PaneId::Accessibility, settings, LIGHT, &live)[0].rows[0].clone()
+            sections(PaneId::Accessibility, settings, LIGHT, &live)
+                .into_iter()
+                .flat_map(|s| s.rows)
+                .find(|r| r.id == ControlId::ScreenReader)
+                .expect("the Screen reader row")
         };
         let mut s = unset();
         let row = reader(&s, true);
@@ -2957,16 +2960,16 @@ mod tests {
         };
         assert_eq!(
             headers(&login_live(None)),
-            ["Screen Reader", "Display", "Pointer", "Keyboard"],
+            ["Display", "Screen Reader", "Pointer", "Keyboard"],
             "not allowed, not answered, or no sessiond"
         );
         let live = login_live(Some(LoginScreen::default()));
         assert_eq!(
             headers(&live),
             [
-                "Screen Reader",
                 "Display",
                 "Login Screen",
+                "Screen Reader",
                 "Pointer",
                 "Keyboard"
             ]
@@ -3049,7 +3052,7 @@ mod tests {
                 title: "Use Mine".into()
             }
         );
-        let state = sections(PaneId::Accessibility, &s, LIGHT, &saved)[2]
+        let state = sections(PaneId::Accessibility, &s, LIGHT, &saved)[1]
             .rows
             .iter()
             .find(|r| r.label == "Login screen now")

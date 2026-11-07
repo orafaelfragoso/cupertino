@@ -128,9 +128,9 @@ pub const PANES: [Pane; 17] = [
         Enclosure::Blue,
         Tier::Live,
         &[
-            "Screen Reader",
             "Display",
             "Login Screen",
+            "Screen Reader",
             "Pointer",
             "Keyboard",
         ],

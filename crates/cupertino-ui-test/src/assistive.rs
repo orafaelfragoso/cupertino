@@ -53,7 +53,8 @@ impl AssistiveTechnology {
         Box::new(self.clone())
     }
 
-    /// Queues an action on `target` as a screen reader would ask for it; the runtime takes it on its next turn.
+    /// Queues an action on `target` as a screen reader would ask for it; the runtime takes it on its next turn, once
+    /// something wakes it ([`TestDriver::ask`](crate::TestDriver::ask) asks and wakes it).
     pub fn ask(&self, target: NodeId, action: Action, data: Option<ActionData>) {
         self.lock().asked.push(ActionRequest {
             target,

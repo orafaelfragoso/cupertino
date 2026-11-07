@@ -90,6 +90,19 @@ impl<A: Application> TestDriver<A> {
         problems
     }
 
+    /// Asks `target` for `action` on behalf of `reader`, as a screen reader does, and wakes the runtime as a real
+    /// adapter does, so its next turn performs it.
+    pub fn ask(
+        &mut self,
+        reader: &crate::AssistiveTechnology,
+        target: cupertino_ui_core::NodeId,
+        action: cupertino_ui_core::Action,
+        data: Option<cupertino_ui_core::ActionData>,
+    ) {
+        reader.ask(target, action, data);
+        let _ = self.window_system_mut().enqueue(PlatformEvent::Wake);
+    }
+
     /// Every open window's [`semantic_outline`](crate::semantic_outline), after its title, for a failure message.
     pub fn semantic_outlines(&self) -> String {
         let mut out = String::new();

@@ -1088,11 +1088,7 @@ impl BrowserWindow {
         };
         let sources = &session.pasteboard;
         let placed = operations::drop_into(sources, self.browser.dir(), action);
-        let arrived = placed
-            .iter()
-            .filter_map(|p| p.as_ref().ok())
-            .last()
-            .cloned();
+        let arrived = placed.iter().rev().find_map(|p| p.as_ref().ok()).cloned();
         let notice = match moving {
             true => Action::Drop(DropAction::Move),
             false => Action::Paste,

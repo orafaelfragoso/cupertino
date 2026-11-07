@@ -1988,6 +1988,39 @@ mod window_system {
         assert_eq!(progress, DragProgress::Cancelled);
     }
 
+    /// An image wider than the transport shows (as a large preview at a high scale is) leaves the drag without an icon
+    /// surface; the drag itself still goes out.
+    #[test]
+    fn a_drag_whose_image_is_too_large_goes_out_without_an_icon() {
+        use cupertino_ui_platform::{ClipboardData, DragImage, DragRequest, DropAction};
+        let (mut kit, control, _committed, seen) = mapped();
+        control.send(Control::PointerPress).unwrap();
+        kit.window_event(|e| {
+            matches!(e, WindowEvent::Pointer(PointerEvent::Button { .. }, _)).then_some(())
+        });
+        let (width, height) = (1026, 2);
+        let request = DragRequest {
+            data: vec![ClipboardData {
+                mime: "text/uri-list".into(),
+                bytes: b"file:///a\r\n".to_vec(),
+            }],
+            actions: [DropAction::Copy].into(),
+            image: Some(DragImage {
+                width,
+                height,
+                scale: 2,
+                pixels: vec![0; (width * height * 4) as usize],
+                hotspot: Point::new(1.0, 1.0),
+            }),
+        };
+        kit.ws.start_drag(kit.window, request).unwrap();
+        kit.pump();
+        assert!(matches!(
+            seen.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Seen::DragStarted { icon: false, .. }
+        ));
+    }
+
     #[test]
     fn a_waker_from_another_thread_ends_a_dispatch_with_wake() {
         let (mut kit, _control, _committed, _seen) = mapped();

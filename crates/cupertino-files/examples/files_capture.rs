@@ -10,13 +10,14 @@
 //! places are those of a session with that home on a computer named `cupertino`. File types come from the system's
 //! MIME database, the items' icons from the asset packs and the icon theme, and the sample pictures (drawn here) show
 //! their thumbnails, made in a thumbnail cache under the temporary directory before the window is drawn. The list's
-//! dates read relative to the time of the capture; the sample files are dated back from it.
+//! dates read relative to a fixed time ([`sample_now`]), which the sample files are dated back from, so every capture
+//! draws the same dates whenever it runs.
 
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cupertino_capture::{App, Look, Request, State};
 use cupertino_files::kit::{prepare, Files, Start};
@@ -77,6 +78,14 @@ const PICTURE_SIZE: (u32, u32) = (256, 176);
 /// How long the thumbnails of the sample pictures may take.
 const THUMBNAILS: Duration = Duration::from_secs(20);
 
+/// The time the capture is drawn at, in seconds since the epoch: noon (UTC) of an autumn weekday.
+const SAMPLE_TIME: u64 = 1_792_670_400;
+
+/// The time the window words its dates against and the sample files are dated back from.
+fn sample_now() -> SystemTime {
+    UNIX_EPOCH + Duration::from_secs(SAMPLE_TIME)
+}
+
 /// The window's size at 1×, in points.
 const WINDOW: (f64, f64) = (920.0, 436.0);
 /// The sidebar column's width, in points.
@@ -95,7 +104,7 @@ fn io(e: std::io::Error) -> String {
 /// The sample home folder under `root`: the user folders (an hour old) and the sample files (sparse, with their ages).
 fn home(root: &Path) -> Result<PathBuf, String> {
     let home = root.join(HOME);
-    let now = SystemTime::now();
+    let now = sample_now();
     for (_, name) in USER_DIRS {
         let dir = home.join(name);
         std::fs::create_dir_all(&dir).map_err(io)?;
@@ -207,7 +216,8 @@ impl Capture {
         .with_home(self.home.clone())
         .with_view(view)
         .with_file_icons(icons)
-        .with_thumbnails(Thumbnailer::new(&cache, "cupertino-files"));
+        .with_thumbnails(Thumbnailer::new(&cache, "cupertino-files"))
+        .with_clock(sample_now);
         prepare(start);
         let mut options = cupertino_kit::app::options().map_err(|e| e.to_string())?;
         let preferences = cupertino_kit::app::preferences(&SystemAppearance {

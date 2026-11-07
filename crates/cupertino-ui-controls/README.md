@@ -37,7 +37,9 @@ from the application's model and reports changes as messages.
   each row's level and whether it is open, its first cell comes after the indent and the disclosure triangle, and the
   triangle, Right and Left ask `on_toggle` to open or close a row (Right on an open row and Left on a child move to its
   first child and to its parent). `key` keys each row, so its focus and accessible object follow it while rows open
-  above it; without it a row is keyed by its index. A plain `TableView` is unchanged.
+  above it; without it a row is keyed by its index. A plain `TableView` is unchanged. Assistive technology selects a
+  row of a list, table or tree alone with its Click action, and opens and closes a tree or outline row with Expand and
+  Collapse.
 - **Truncation.** A `Text` that does not wrap, and a tooltip's tip past its 300 pt text width, end in an ellipsis
   where they are cut; the accessible name keeps the whole text.
 - **Rich text.** `RichText` draws its links in the link colour over a 1 px underline 1.5 pt below the baseline. Each

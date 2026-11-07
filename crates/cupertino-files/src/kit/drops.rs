@@ -109,16 +109,14 @@ pub(super) fn folder(
 }
 
 /// The item under a drag among `keys`, with the key that names it: a list row by its key in `rows`, else a grid cell
-/// by its index. A row is looked for first, as the cells inside it are keyed by their column.
+/// by the index its key holds. A row is looked for first, as the cells inside it are keyed by their column.
 fn item_under(keys: &[Key], rows: &HashMap<Key, u64>) -> Option<(Key, u64)> {
     let row = keys
         .iter()
         .find_map(|key| Some((key.clone(), *rows.get(key)?)));
     row.or_else(|| {
-        keys.iter().find_map(|key| match key {
-            Key::Int(i) => Some((key.clone(), *i)),
-            _ => None,
-        })
+        keys.iter()
+            .find_map(|key| Some((key.clone(), super::grid::cell_index(key)?)))
     })
 }
 

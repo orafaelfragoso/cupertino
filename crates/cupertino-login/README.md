@@ -11,11 +11,13 @@ manager (`cupertino-sessiond`), with a user picker. The session agent shows the 
 [Reopening applications](#reopening-applications) · [Greeter](#greeter) ·
 [Values applied](#reference-values-applied) · [Open issues](#open-issues) · [Modules](#modules) · [Tests](#tests)
 
-The crate has no rendering or compositor dependency: `cupertino-seat` supplies the logind lookup, and it builds against Smithay's
-session trait. The state machine (`model`), layout (`layout`), CPU renderer (`render`) and user and clock helpers (`user`) are
-separate from the process, so a host can drive the screen without it. Sizes, positions, the shake, the fades and the hide timer
-follow the analysis. Items marked approximate are authored
-and replaceable.
+Every screen and panel is drawn with CupertinoKit: `view` builds the Kit windows (the lock screen, the greeter's picker, name
+and password screens and power menu, the confirmation panels and the interrupt panel) from the pure models, and Kit's runtime
+draws them, routes their keys and publishes them to assistive technology. The crate has no compositor dependency:
+`cupertino-seat` supplies the logind lookup, and it builds against Smithay's session trait. The state machine (`model`), layout
+(`layout`), panels (`panel`, `interrupt`), views (`view`) and user and clock helpers (`user`) are separate from the process, so
+a test drives the screen on Kit's headless window system without it. Sizes, positions, the shake, the fades and the hide timer
+follow the analysis. Items marked approximate are authored and replaceable.
 
 This is the one shell process that links a library beyond the C runtime: `libpam`, through `pam-client2` 0.5.5 (MPL-2.0, the
 maintained fork of `pam-client`, over `pam-sys2`), for the lock screen. The greeter links no PAM code: it talks to the session
@@ -23,10 +25,12 @@ manager through `cupertino-login-ipc` (`models/`), and the manager runs the auth
 
 ## Running
 
-Feature `app` builds the binary: a client of `cupertino-server` on `cupertino-wayland-client`, `cupertino-shell-client` and a `cupertino-ui-wayland`
-presenter per surface, that needs the server's
-`ext_session_lock_manager_v1` and `ext_idle_notifier_v1` globals besides the toolkit's usual ones. The server starts and
-restarts it through the `shell` key of its configuration:
+Feature `app` builds the binary: a CupertinoKit application on `cupertino-ui-wayland`'s window system, whose surface roles
+(`roles`, the binary's) make the lock windows `ext-session-lock-v1` lock surfaces and the greeter, panel and interrupt windows
+layer-shell overlays. It needs the server's `ext_session_lock_manager_v1` and `ext_idle_notifier_v1` globals besides the
+toolkit's usual ones. The session runs on `cupertino_kit::app::run_lock_screen_on_with`, whose AT-SPI adapter is not muted
+while the session is locked (the lock screen is what a person hears then); the greeter on `run_on_with`. The server starts
+and restarts it through the `shell` key of its configuration:
 
 ```json
 {"shell": [{"name": "login", "command": ["cupertino-login"]}]}
@@ -127,12 +131,24 @@ Everything but the wallpaper is one layer whose opacity is animated. Times are o
 | `Unlocking` | The interface fades out. | The fade ends: `Unlocked`. |
 | `Unlocked` | The process unlocks the session. | |
 
-Keys: printable characters append (not with Ctrl, Alt or Super held), Backspace deletes, Return submits, Escape clears. An empty
-field is not submitted. After 30 s without input the interface fades out; the next key or pointer input shows it again and is
-not typed. A notice (an error that is not a wrong password, or text from PAM or the session manager) shows under the field until the next edit.
+Keys: the password field is Kit's `SecureField`, which takes the typing and shows dots; Return submits, Escape clears (the
+lock screen's root takes Escape before the field). An empty field is not submitted. After 30 s without input the interface
+fades out; the next key or pointer input shows it again and is not typed. A notice (an error that is not a wrong password, or
+text from PAM or the session manager) shows under the field until the next edit. A wrong password says "Incorrect password.
+Try again." under the field besides the red outline and the shake, so a failure is never shown by colour or motion alone.
 
-The only way to `Unlocked` is `LockScreen::finish_auth` with `AuthOutcome::Success` for an attempt that `LockScreen::press`
-handed out. `finish_auth` without an attempt in flight is an error.
+The only way to `Unlocked` is `LockScreen::finish_auth` with `AuthOutcome::Success` for an attempt that `LockScreen::submit`
+handed out. `finish_auth` without an attempt in flight is an error. One attempt runs at a time: `submit` refuses while an
+attempt is being decided, so the rate of attempts is PAM's (its delay after a failure holds the answer back on the worker
+thread, and `pam_faillock` counts and locks out).
+
+**Keyboard and screen reader.** Each lock window is named "Locked", described by the user's name, and its only control is
+the password field, which has the focus from the start and again after each submission or Escape (a new field, keyed by `LockScreen::field`, inside a focus
+scope that gives it the initial focus). Assistive technology reads the field as password text named "Password" whose value is
+protected: it learns that there is a value, never the value, its length or the caret. The denial and the notices are
+assertive live regions, announced once when they appear; the clock, the user's name, the Caps Lock badge and the spinner are
+text nodes. The greeter's tiles are buttons (the arrows move the selection, Return or Space chooses, Tab opens the power
+menu), the power item is a button that opens a Kit menu, and the panels are modal alert dialogs (below).
 
 ### Authentication
 
@@ -144,9 +160,12 @@ field until the next edit, also after a wrong password. Every prompt but the pas
 
 The process holds the typed password, so it starts by setting `PR_SET_DUMPABLE=0` and `RLIMIT_CORE=0` (`harden`): it writes no core file and its owner cannot read its memory or environment through `/proc`. Memory the process has freed is not zeroed here, and swap can hold a password (no `mlockall`).
 
-The password lives in a 512-byte buffer (`PAM_MAX_RESP_SIZE`, allocated once so typing never copies it), zeroed when the attempt
-is done. One copy escapes: `pam-client2` takes the prompt answer as a `CString` by value and drops it after copying it for PAM,
-without zeroing it.
+While it is typed the password lives in the field's `SecureBuffer` (Kit's, zeroed when the field goes). Return hands the view a
+zeroizing copy (`view::Typed`, whose `Debug` prints no content), the model turns it into the attempt's `Password` (a 512-byte
+zeroing buffer, `PAM_MAX_RESP_SIZE`), and the field is replaced by a new, empty one, which drops and zeroes the old buffer;
+Escape does the same. The `Password` goes to the PAM worker and is zeroed when the attempt is done. No log line, message
+`Debug` or Inspector dump holds it. One copy escapes: `pam-client2` takes the prompt answer as a `CString` by value and drops it
+after copying it for PAM, without zeroing it.
 
 Service file for Arch Linux (checked against `/etc/pam.d` on the development host, which has `system-auth` with `pam_faillock`
 and `pam_unix`):
@@ -194,13 +213,15 @@ A layer-shell surface on the overlay layer of the first output, without anchors 
 keyboard. The width, the buttons' x and widths (32 pt high) and the 60 s countdown are. The height
 follows 's vertical chain: 20 pt, the title (bold 13 on 16 pt lines, wrapped at 305 pt), 8 pt, the info line (11 on 14 pt
 lines), 7 pt, the "Reopen windows when logging back in" checkbox (an 18 pt row: a 14 pt box at the text column and its
-label), 14 pt, the buttons, 13 pt. Each element sits at the previous one's bottom edge, using the line counts the renderer
-measures (`render::Renderer::panel_frames`; the info line at the most lines it takes while counting down, so the size stays put).
+label), 14 pt, the buttons, 13 pt. Each element sits at the previous one's bottom edge, using the line counts the theme's text
+system measures (`view::panel_frames`; the info line at the most lines it takes while counting down, so the size stays put).
 With the design strings (two lines each) the log out, restart and shut down panels are 417 x 172 pt. The resize rule is.
+The panel is a Kit window (`view::panel`): a modal alert dialog on the popover surface, Kit buttons at the frames (the default
+one with the accent and the focus), and Kit's `CheckBox` in the checkbox row.
 
 - A second request replaces the open panel, and a lock closes it.
 - Return does the default action, Escape cancels, a button click does that button's, and the end of the countdown does the
-  default action.
+  default action. Tab moves the focus through the checkbox and the buttons; assistive technology clicks a button.
 - The checkbox starts at the choice the person last confirmed (on until then). A click on the box or its label, Space, or a
   click from assistive technology (a `CheckBox` node with its checked state) flips it; the countdown goes on. Confirming
   remembers the choice, cancelling forgets a change. See [Reopening applications](#reopening-applications).
@@ -354,6 +375,14 @@ for "Other…") and keeps the password until the manager asks for it. The screen
   `reset`. `Users` (the list changed) builds the tiles again with the new rows; a password screen being typed on stays.
 - A broken connection ends the process with failure.
 
+**Authentication hand-off.** The password leaves the screens at one place each, so work that adds to authentication (unlocking
+the Secret Service keyring with the login password, for example) hooks in there and nowhere in the views: in the greeter,
+`GreeterApp::answer` (`greeter.rs`) moves the password into the `Answer` for the manager's prompt, and everything after it is the
+session manager's PAM stack; on the lock screen, `auth::Authenticator::attempt` takes the `Password` that `LockScreen::submit`
+handed out and runs the PAM transaction on its worker thread (`auth.rs`). A PAM module in the `cupertino-login` service (or in
+the manager's service for the login) sees the password as PAM's authentication token, which is how a keyring module gets it;
+this crate unlocks no keyring itself.
+
 **Surface.** One full-output overlay layer surface per output with exclusive keyboard (`ext-session-lock` needs a session to
 lock). The register has no difference between the login and the lock screen for the clock, the user view and the field (are the login window's own layout), so the greeter draws the lock screen's for the password, including the hide after
 30 s without input (the picker does not hide). Messages from PAM within one attempt follow one another in the notice (a lock-out is two: that the account is locked and for how long). The manager reads the pictures, because the greeter's user cannot read a home directory.
@@ -438,25 +467,24 @@ network users).
 
 | Item | Value | Where |
 |---|---|---|
-| Wallpaper | Procedural gradient with two blobs in the server's dark desktop colours. The design shows the user's wallpaper, which the process cannot ask for yet. | `render::wallpaper` |
-| Password field fill | White 0.2. The design uses material 27, a backdrop that lock surfaces do not get. | `render::PILL_FILL` |
-| Dots | 6 pt, 11 pt apart, at most 11 shown (the room left by the badge's slot on both sides). | `render` |
+| Wallpaper | Procedural gradient with two blobs in the server's dark desktop colours. The design shows the user's wallpaper, which the process cannot ask for yet. | `view::widgets::WALLPAPER_*` |
+| Password and name fields | Kit's `SecureField` and `TextField` in the pill's frame, with Kit's own fill, dots, caret and focus ring. | `view::screen` |
 | Gap between name and field, notice position | 10 pt (the spinner gap of), 20 pt. | `layout` |
-| Initials, text | Grey fill, initials 0.4 of the avatar; white text, date Medium, time Semibold of the substitute family. | `render` |
+| Initials, text | Grey fill, initials 0.4 of the avatar; white text, date Medium, time Semibold of the theme's family. | `view::widgets::AVATAR_FILL`, `view::INITIALS_SIZE` |
 | Picture | `~/.face` as PNG, cropped to a circle. A file that does not decode is an error; a missing one means initials. | `user` |
-| Panel body, icon, buttons | Opaque grey body with 12 pt corners, a plain disc, the accent blue on the default button. | `render`, `panel` |
+| Panel body, icon, buttons | Kit's popover surface with 12 pt corners, a plain disc, Kit buttons (the default one in the accent). | `view::PANEL_RADIUS`, `view::PANEL_ICON_FILL`, `panel` |
 | Administrator | Members of `wheel` in `/etc/group`; the design's admin group has no counterpart. | `users::ADMIN_GROUP` in `cupertino-sessiond` |
-| Checkbox row | 7 pt below the info line, 18 pt high with a 14 pt box (3 pt corners; the default button's blue with a white check when on, the cancel button's fill with an edge when off) and a 13 pt label 6 pt right of it, 14 pt above the buttons. The power-button panel has none, so its buttons sit 21 pt below its title. | `panel::INFO_CHECKBOX_GAP`, `panel::CHECKBOX_HEIGHT`, `panel::CHECKBOX_BOX`, `panel::CHECKBOX_BUTTONS_GAP`, `panel::TITLE_BUTTONS_GAP`, `render::CHECKBOX_*` |
+| Checkbox row | 7 pt below the info line, 18 pt high, Kit's `CheckBox` with its label at the text column, 14 pt above the buttons. The power-button panel has none, so its buttons sit 21 pt below its title. | `panel::INFO_CHECKBOX_GAP`, `panel::CHECKBOX_HEIGHT`, `panel::CHECKBOX_BUTTONS_GAP`, `panel::TITLE_BUTTONS_GAP` |
 | Icon to buttons gap | At least 14 pt below the icon, so the power-button panel's buttons (from x 59) clear it. | `panel::ICON_BUTTONS_GAP` |
-| Greeter placeholders | Plain English. | `render::PLACEHOLDER` |
+| Field placeholders and names | Plain English: "Enter Password", "Name"; the fields are named "Password" and "Name" for assistive technology. | `view::PASSWORD_PLACEHOLDER`, `view::NAME_PLACEHOLDER` |
 | Countdown formatter | A zero unit is dropped; two units join with ", ". The reference output was not captured. | `panel::format_countdown` |
-| Panel text baselines | First baseline 13 pt (title) and 11 pt (info) below the line box top; the design font metrics are not available. Columns, line boxes, wrap widths and the height rule are (the height rule ). | `render::PANEL_TITLE_BASELINE`, `render::PANEL_MESSAGE_BASELINE` |
-| Caps lock glyph | The arrow-over-bar cut-out is ours; gives path constants but not their order. No tooltip (text not decoded). | `render::CAPS_GLYPH` |
-| Spinner size and cap | 16 pt square in the 18 pt slot (intrinsic size not in the payload read); round caps at both ends, the design has a flat inner end. | `render::SPINNER_SIZE`, `render::Canvas::spinner` |
-| Password help | One line 32 pt above the bottom edge (offset, section 2), our words. No hint text: a threshold above 0 only moves the failure count at which the help shows. | `render::PASSWORD_HELP` |
-| Logged-in mark | A 9 pt disc (green, 0.20 0.72 0.35) with a white check at the lower right of the avatar of a user who has a session. approximate: the design marks such users in its picker, the shape and place are not read. | `render::LOGGED_IN_FILL` |
-| Picker tiles | 186 x 112 pt cells (150 pt name plus 18 pt borders, avatar, name line), grid centred from the password screen's user view. Selected tile: white 0.2 rounded square of 86 pt (the register's selection size), 20 pt corners. "Other…" avatar: grey disc with an ellipsis. "Larger than 1024 x 768" means both sides larger. | `layout::TILE_WIDTH`, `layout::TILE_HEIGHT`, `render`, `picker::max_per_page` |
-| Power item and menu | The status bar is only the power item: 22 pt square, 20 pt from the trailing edge, 6 pt from the top; a ring with a 60 degree gap and a stem, 5.5 pt radius, 1.6 pt stroke. Menu 150 pt wide, 24 pt rows, 4 pt padding and gap, 8 pt corners. Items. | `layout`, `render` |
+| Panel text | Kit text: the title as body text in Semibold, the info line as a caption in the secondary colour, wrapped at the text column. | `view::panel` |
+| Caps lock glyph | The arrow-over-bar cut-out is ours; gives path constants but not their order. Named "Caps Lock is on" for assistive technology. | `view::widgets::CAPS_GLYPH` |
+| Spinner size and cap | 16 pt square in the 18 pt slot (intrinsic size not in the payload read); round caps at both ends, the design has a flat inner end. Named "Checking the password". | `view::widgets::SPINNER_SIZE` |
+| Password help | One line 32 pt above the bottom edge (offset, section 2), our words. No hint text: a threshold above 0 only moves the failure count at which the help shows. | `view::PASSWORD_HELP` |
+| Logged-in mark | A 9 pt disc (green, 0.20 0.72 0.35) with a white check at the lower right of the avatar of a user who has a session; the tile's description says "Logged in". approximate: the design marks such users in its picker, the shape and place are not read. | `view::widgets::LOGGED_IN_FILL` |
+| Picker tiles | 186 x 112 pt cells (150 pt name plus 18 pt borders, avatar, name line), grid centred from the password screen's user view. Selected tile: white 0.2 rounded square of 86 pt (the register's selection size), 20 pt corners. "Other…" avatar: grey disc with an ellipsis. "Larger than 1024 x 768" means both sides larger. | `layout::TILE_WIDTH`, `layout::TILE_HEIGHT`, `view::widgets::SELECTION_*`, `picker::max_per_page` |
+| Power item and menu | The status bar is only the power item: 22 pt square, 20 pt from the trailing edge, 6 pt from the top; a ring with a 60 degree gap and a stem, 5.5 pt radius, 1.6 pt stroke. The menu is Kit's menu below the item. | `layout`, `view::widgets::POWER_*`, `view::power_menu` |
 | Interrupt panel buttons, words | Cancel 83 pt at x 214, Force Quit 100 pt at x 295, 32 pt high, ending with the text column; no default button (Return does nothing). The words are ours; the design fills them in at run time. | `interrupt` |
 | Quit order | Most recently used first; the design walks its process list from the end, order not read. | server `quit.rs` |
 | Force Quit | No confirmation sheet. SIGKILL to the processes of the application's windows. | server `quit.rs` |
@@ -464,7 +492,7 @@ network users).
 | Login items | Started through `Command` without an activation token (no input event to ask for one). The design's delayed list (10 s) has no XDG counterpart. | `app` |
 | Reopened applications | Started without an activation token, after the login items, all at once. On until the person turns it off; the power-button panel has no checkbox and uses the saved choice. | `restore`, `app` |
 
-**Text.** The `ui` font is a variable font whose optical size follows the point size, so every `TextRenderer` owner calls `set_scale` with the output scale before it draws and measures (`wrap` measures in points, the drawing helpers at the canvas scale): text is laid out in points at the same optical size it is drawn with, at every output scale.
+**Text.** All text is laid out and drawn by Kit's text system in points, at the output's scale.
 
 ## Open issues
 
@@ -480,7 +508,7 @@ network users).
 | `layout` | `Layout`: the frames and baselines of the screen in points |
 | `power` | `Action`, `Menu`, `MenuKey`: the power menu's items and its selection |
 | `picker` | `Picker` (`new` takes the accounts and whether "Other…" shows; `NoTiles` when nothing is left), `Tile`, `Grid`, `cell_of`, `max_per_page`, `NameEntry` |
-| `render` | `Renderer`, `View`, `PickerView` |
+| `view` | The Kit views: `screen` (lock and greeter password and name screens), `picker`, `power_menu`, `panel`, `interrupt`, `full_screen`, `panel_frames`; `Input`, the messages they send; `Typed`, a submitted password |
 | `spinner` | the spinner's frame, head spoke and spoke opacities |
 | `user` | `User::current` (account, full name, picture), `User::from_row` (a row of the manager's list), `initials`, `format_time` |
 | `panel` | `Kind`, `Action`, `Decision`, `Panel`, `PanelCheckbox`: the countdown, the keys, the button and checkbox frames and the words of the confirmation panels and the power-button panel |
@@ -500,7 +528,8 @@ network users).
 | `auth` (feature `app`) | `Authenticator`: PAM on a worker thread |
 | `manager` (feature `app`) | `Connection`, `Message`: the greeter's connection to the session manager and the thread that reads its events |
 
-The process (`main`, `options`, `screen`, `app`, `greeter`) is the binary's.
+The process (`main`, `options`, `screen`, `roles`, `app`, `greeter`) is the binary's: `roles` gives the Kit windows their
+Wayland roles and holds the session lock, `app` is the session (`SessionApp`), `greeter` the login screen (`GreeterApp`).
 
 ## Tests
 
@@ -512,7 +541,9 @@ cargo test -p cupertino-login --features app
 |---|---|
 | Shake, fade, state machine | The shake curve (peaks of 14 pt, zero outside), the linear fade, typing and the byte limit, wrong password, PAM error and success paths, a result with no attempt in flight, the hide after 30 s, the layout of a 1920 x 1080 output. |
 | Exhaustive inputs | Every sequence of up to five inputs and failures never reaches `Unlocking` or `Unlocked`. |
-| Panels and power key | Countdown, keys, button and checkbox frames, clicks, the checkbox's start state, Space and its node for assistive technology, the power-button panel's four buttons, its keys and its lack of a countdown and checkbox; key timing at 0.2, 0.5 and 1.5 s with and without sleeping. |
+| Panels and power key | Countdown, keys, button and checkbox frames, the checkbox's start state and Space, the power-button panel's four buttons, its keys and its lack of a countdown and checkbox; key timing at 0.2, 0.5 and 1.5 s with and without sleeping. |
+| Views (`view`, Kit's headless window system) | While a password is typed the field is a `PasswordInput` named "Password" with a protected value, and neither the Inspector dump, the published tree, the updates nor the messages' `Debug` hold it; Return submits it once and a new empty field takes the focus; Escape empties the field; a wrong password is said in an assertive live region and outlined until the next edit; the lock window is modal with the field as its only control; the "Reopen windows" checkbox starts at the saved choice and a click, Space or an assistive technology click flips it without deciding; the default button has the focus, Return, Escape, a click and an assistive technology click decide; Tab reaches the checkbox and the buttons; the power-button panel has no checkbox and its letters choose; the interrupt panel focuses Cancel and Return does not force quit; the picker offers each account and "Other…" and the arrows step. With `CUPERTINO_LOOK_DIR` set, `pictures_for_review` writes each surface in light and dark at 1× and 2×. |
+| `tests/lock_atspi.rs` | The Kit lock screen with the lock screen's AT-SPI adapter on a private bus with a stand-in registry: while a password is typed, no node of the tree (name, description, text) holds it, the field is password text named "Password" whose text is empty, no message on the bus and no line of the process's diagnostics (each message's `Debug`, the Inspector dumps, the model) holds it, and no key reaches the registry; every answer to an attempt is announced once and assertively. |
 | Saved state (`restore`) | The file round-trips with IDs only, mode 0600; a missing file is the choice on; malformed lines, other versions, invalid IDs, duplicates and the 64 cap; identities resolve by ID then `StartupWMClass`; shell programs, terminal entries and bad `Exec` lines are refused; the list is emptied on disk before it is handed out and only once, dropped when saved in the same boot and session or with the choice off, and not handed out when it cannot be emptied; launching skips removed entries, duplicates, login items and failed starts. |
 | `tests/restore.rs` | A stand-in `org.cupertino.Session1` on a private `dbus-daemon` names the applications as they quit; the saved list in a fixture home holds only their desktop file IDs, and the next login starts the one still installed once through its `Exec`; a failed start leaves the rest going. |
 | Options | The session options, and that the greeter takes none. |
@@ -529,9 +560,30 @@ Not covered by a test:
 - The logind calls and signals. Against a private bus with a stand-in logind they showed the two inhibitors.
   A real `Lock` signal would lock the developer's session. The manager's side of `RequestPower` and `SessionReady` is tested in
   `cupertino-sessiond` (`tests/service.rs`) and by the QEMU checks `28` and `29`.
-- The drawing of the panel and of the greeter, and the PAM success path (it needs the user's password).
-- The lock and unlock cycle against a server with `ext-session-lock`: the phase 5 QEMU check, and `cupertino-shell-client`'s
-  `tests/protocol-flow.rs` for the lock it uses.
+- The PAM success path (it needs the user's password), and the unlock against a server.
+- The lock: `cupertino-server`'s `tests/lock_screen.rs` runs this process under a headless server with a stand-in logind. It
+  locks on `PrepareForSleep` and lets go of the sleep delay only once the lock is up; while locked an application gets no
+  key, motion or button; and a return from another console keeps the lock and the application's lack of input. The phase 5
+  QEMU check and `cupertino-shell-client`'s `tests/protocol-flow.rs` cover the unlock.
+- Real suspend, real console switches and real PAM logins: checked by hand, below.
+
+**Checked by hand** (on a test account, never with a real person's password in a capture or log):
+
+1. Suspend: in a session, `systemctl suspend`. Before the machine sleeps the lock screen is up
+   (`journalctl --user -b | grep 'cupertino-login: locked'` shows the line before the kernel's suspend line), and
+   `systemd-inhibit --list` showed the `cupertino-login` sleep delay before and does not after. On wake the lock screen is
+   there, and the field has the keyboard.
+2. Console switch: lock (`loginctl lock-session`), switch to another console (Ctrl+Alt+F3) and back. The lock
+   screen is still up, typing goes into the field, and a click where a window was reaches nothing underneath.
+3. Wrong password: type a wrong password and Return. The field shakes, is outlined in red, says "Incorrect password. Try
+   again." and Orca reads it; Return again at once with another wrong password waits for PAM's delay before the next answer;
+   after the `pam_faillock` limit the notice says the account is locked.
+4. Unlock: the right password unlocks, the log shows `cupertino-login: unlocked`, and `systemd-inhibit --list` shows the sleep
+   delay again.
+5. Screen reader: with Orca on, the locked screen reads "Locked", the field as a password text named "Password"; typing reads
+   no characters; Accerciser shows the field's text as empty.
+6. Greeter: log out to the login screen, choose a tile with the arrows and Return, type the password and Return. The session
+   starts; a wrong password is said and shaken as on the lock screen.
 
 On the development host a wrong password through the real PAM stack (`pam_unix`, service `vlock`) returned `Denied`, and the sleep
 inhibitor showed up in `systemd-inhibit --list`.

@@ -1,31 +1,43 @@
 //! The lock screen as assistive technology sees it, on a private bus with a fake accessibility registry: the password
-//! field is there and says nothing of what is typed, typing a password sends assistive technology nothing at all, and
-//! every answer to an attempt is announced once. The lock screen runs in a copy of this test binary, started with the
-//! bus addresses AccessKit reads from its environment. It announces a marker before and after its part, and AccessKit
-//! sends its events in order, so what lies between the two markers is exactly what the part sent.
+//! field is password text that says nothing of what is typed, no node of the tree, no message on the bus and no line of
+//! the diagnostics holds the password while it is typed, and every answer to an attempt is announced once. The lock
+//! screen is the Kit view of the lock screen ([`view::screen`]) on the headless window system with the lock screen's
+//! AT-SPI adapter, in a copy of this test binary started with the bus addresses AccessKit reads from its environment.
+//! A second window of that application announces a marker before and after its part, and AccessKit sends its events in
+//! order, so what lies between the two markers is exactly what the part sent.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::collections::{HashMap, VecDeque};
+use std::io::{BufRead, Read, Write};
 use std::num::NonZeroU32;
-use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{channel, Sender};
+use std::process::{Child, ChildStdin, Command as Process, Stdio};
+use std::sync::mpsc::{self, channel, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Wake, Waker};
 use std::thread::Thread;
 use std::time::{Duration, Instant};
 
-use cupertino_geometry::Rect;
-use cupertino_login::access::{lock_tree, LockView, DENIED};
-use cupertino_login::layout::Layout;
-use cupertino_login::model::{AuthOutcome, Key, LockScreen};
+use cupertino_assets::BUILTIN_FONT;
+use cupertino_kit::core::{
+    AccessibilityAdapter, Application, Command, Key as NodeKey, PlaceholderIcons, RuntimeOptions,
+    Window, WindowKey,
+};
+use cupertino_kit::geometry::Size;
+use cupertino_kit::layout::LayoutDirection;
+use cupertino_kit::platform::{
+    Capabilities, KeyEvent, Keysym, Mods, PlatformEvent, Timestamp, WindowEvent, WindowId,
+    WindowStates,
+};
+use cupertino_kit::render::{CpuConfig, CpuRenderer};
+use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
+use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
+use cupertino_login::model::{AuthOutcome, LockScreen};
+use cupertino_login::user::User;
+use cupertino_login::view::{
+    self, Clock, Field, Input, Metrics, Screen, DENIED, LOCKED_TITLE, LOCK_APP_ID, PASSWORD_LABEL,
+};
 use cupertino_test_bus::PrivateBus;
 use cupertino_ui_atspi::AtspiAdapter;
-use cupertino_ui_core::{
-    AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, AccessibleStates, Live, NodeId,
-    Role,
-};
-use cupertino_ui_platform::WindowId;
+use cupertino_ui_test::{Inspector, ManualClock, TestDriver};
 use zbus::blocking::{Connection, MessageIterator, Proxy};
 use zbus::message::Type;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
@@ -39,12 +51,160 @@ const SECRET: &str = "hunter2";
 const PASSWORD_TEXT: u32 = 40;
 /// AT-SPI's politeness number of an assertive announcement (`AtspiLive`).
 const ASSERTIVE: i32 = 2;
-/// What the lock screen announces just before and just after its part.
+/// What the marker window announces just before and just after the part.
 const READY: &str = "Test part starts";
 const PLAYED: &str = "Test part ends";
+const MARKERS_TITLE: &str = "Markers";
+/// The diagnostics of the lock screen start with this line, so the test knows they were written.
+const DIAGNOSTICS: &str = "diagnostics:";
 /// How long one step may take on a heavily loaded machine; on an idle one each takes milliseconds. Below nextest's
 /// 120 s budget for the whole test, so a hang fails with its own message.
 const PATIENCE: Duration = Duration::from_secs(60);
+const SCREEN: Size = Size::new(1280.0, 800.0);
+
+const RETURN: u32 = 0xff0d;
+const ESCAPE: u32 = 0xff1b;
+
+/// The answers the lock screen gives to its attempts, in order; set before its application starts.
+static OUTCOMES: Mutex<Vec<AuthOutcome>> = Mutex::new(Vec::new());
+
+#[derive(Clone, Debug)]
+enum Msg {
+    Lock(Input),
+    /// Escape on the marker window shows the next marker.
+    Marker(Input),
+}
+
+#[derive(Debug)]
+struct Model {
+    screen: LockScreen,
+    outcomes: VecDeque<AuthOutcome>,
+    /// How many markers were shown.
+    markers: usize,
+    /// Each attempt's password, as the authenticator would take it.
+    attempts: usize,
+    now: f64,
+    clock: Clock,
+    user: User,
+    metrics: Metrics,
+}
+
+/// The lock screen of the session process, answering each attempt at once with the next of [`OUTCOMES`].
+struct Locker;
+
+impl Application for Locker {
+    type Model = Model;
+    type Message = Msg;
+
+    fn init() -> (Model, Vec<Command<Msg>>) {
+        let mut screen = LockScreen::new(0.0, 3600.0);
+        screen.settle_interface();
+        let model = Model {
+            screen,
+            outcomes: OUTCOMES.lock().unwrap().drain(..).collect(),
+            markers: 0,
+            attempts: 0,
+            now: 1.0,
+            clock: Clock {
+                date: "Monday, June 1".into(),
+                time: "09:41".into(),
+            },
+            user: User {
+                login: "ada".into(),
+                display: "Ada".into(),
+                picture: None,
+                uid: None,
+                logged_in: false,
+            },
+            metrics: Metrics {
+                ascent: 0.97,
+                descent: 0.24,
+            },
+        };
+        (model, Vec::new())
+    }
+
+    fn update(model: &mut Model, message: Msg) -> Vec<Command<Msg>> {
+        // the application's diagnostics: every message it handles
+        eprintln!("cupertino-login test: {message:?}");
+        model.now += 0.01;
+        let now = model.now;
+        match message {
+            Msg::Marker(Input::Escape) => model.markers += 1,
+            Msg::Marker(_) => {}
+            Msg::Lock(Input::Edited) => model.screen.edit(now),
+            Msg::Lock(Input::Escape) => model.screen.escape(now),
+            Msg::Lock(Input::Activity) => model.screen.activity(now),
+            Msg::Lock(Input::Submit(typed)) => {
+                if model.screen.submit(now, typed.secret()).is_some() {
+                    model.attempts += 1;
+                    let outcome = model
+                        .outcomes
+                        .pop_front()
+                        .expect("an answer for each attempt");
+                    model.screen.finish_auth(now, outcome).unwrap();
+                }
+            }
+            Msg::Lock(_) => {}
+        }
+        Vec::new()
+    }
+
+    fn view(model: &Model) -> Vec<Window<Msg>> {
+        fn screen<'a>(
+            model: &'a Model,
+            field: u64,
+            denied: bool,
+            notice: Option<&'a str>,
+        ) -> Screen<'a> {
+            Screen {
+                size: SCREEN,
+                metrics: model.metrics,
+                clock: &model.clock,
+                user: Some(&model.user),
+                field: Field::Password {
+                    generation: field,
+                    enabled: true,
+                },
+                caps_lock: false,
+                spinner: None,
+                denied,
+                notice,
+                help: false,
+                opacity: 1.0,
+                shake: 0.0,
+                hidden: false,
+                power: None,
+            }
+        }
+        let s = &model.screen;
+        let lock = view::screen(
+            &screen(model, s.field(), s.failure_outline(), s.notice()),
+            LOCKED_TITLE,
+            Msg::Lock,
+        );
+        let marker = [None, Some(READY), Some(PLAYED)][model.markers.min(2)];
+        let markers = view::screen(&screen(model, 0, false, marker), MARKERS_TITLE, Msg::Marker);
+        vec![
+            view::full_screen(
+                WindowKey(NodeKey::from("lock")),
+                format!("{LOCK_APP_ID}.0"),
+                LOCKED_TITLE,
+                SCREEN,
+                lock,
+                None,
+            ),
+            view::full_screen(
+                WindowKey(NodeKey::from("markers")),
+                "cupertino-login.test-markers".into(),
+                MARKERS_TITLE,
+                SCREEN,
+                markers,
+                None,
+            ),
+        ]
+    }
+}
 
 struct Unpark(Thread);
 
@@ -54,82 +214,207 @@ impl Wake for Unpark {
     }
 }
 
-/// `update` with a live node for each of `markers` added under its root; ids from 100 stay clear of the lock screen's.
-fn with_markers(mut update: AccessibilityUpdate, markers: &[&str]) -> AccessibilityUpdate {
-    for (i, marker) in markers.iter().enumerate() {
-        let id = NodeId::new(100 + i as u32, NonZeroU32::MIN);
-        update.nodes.push((
-            id,
-            AccessibilityNode {
-                role: Role::StaticText,
-                name: Some((*marker).to_owned()),
-                description: None,
-                value: None,
-                states: AccessibleStates::default(),
-                bounds: Rect::new(0.0, 0.0, 1.0, 1.0),
-                actions: Vec::new(),
-                relations: Vec::new(),
-                children: Vec::new(),
-                live: Some(Live::Assertive),
-                item_count: None,
-                level: None,
-                item_index: None,
-                column_index: None,
-                sort: None,
-            },
-        ));
-        let root = update.root;
-        let (_, root) = update.nodes.iter_mut().find(|(id, _)| *id == root).unwrap();
-        root.children.push(id);
-    }
-    update
+fn budget() -> NonZeroU32 {
+    NonZeroU32::new(10_000).unwrap()
 }
 
-/// The lock screen: it sends its tree once accessibility is active, and once its input says go announces [`READY`],
-/// plays `part` with a way to send its tree, as the app does after each frame, announces [`PLAYED`] and waits for its
-/// input to close.
-fn lock_screen(part: impl FnOnce(&mut LockScreen, &mut dyn FnMut(&LockScreen))) {
-    let adapter = RefCell::new(AtspiAdapter::new(Waker::from(Arc::new(Unpark(
-        std::thread::current(),
-    )))));
-    let window = WindowId(1);
-    adapter.borrow_mut().window_focus(window, true);
-    let layout = Layout::new(1280.0, 800.0, 0.25);
-    let mut screen = LockScreen::new(0.0, 30.0);
-    let markers = RefCell::new(Vec::new());
-    let send = |screen: &LockScreen| {
-        let tree = lock_tree(
-            window,
-            &LockView {
-                screen,
-                layout: &layout,
-                size: (1280.0, 800.0),
-                user_name: "Ada",
-                time: "9:41",
-                date: None,
-                caps_lock: false,
-                help: None,
-                power: false,
-            },
+/// The lock screen running headless, publishing to AT-SPI.
+struct Run {
+    driver: TestDriver<Locker>,
+    lock: WindowId,
+    markers: WindowId,
+}
+
+impl Run {
+    fn start(adapter: Box<dyn AccessibilityAdapter>) -> Run {
+        let mut fonts = FontIndex::new();
+        fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
+        let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
+        let glyphs = Arc::clone(&text);
+        let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
+        let preferences = ThemePreferences {
+            appearance: Appearance::Dark,
+            reduce_transparency: false,
+            reduce_motion: false,
+        };
+        let theme = ThemeTokens::cupertino(
+            &cupertino_theme::Theme::from_dir(data).unwrap(),
+            preferences,
+        )
+        .unwrap();
+        let options = RuntimeOptions {
+            theme: Arc::new(theme),
+            text,
+            icons: Arc::new(PlaceholderIcons::default()),
+            direction: LayoutDirection::Ltr,
+            node_limit: 1000,
+            renderers: Box::new(move || {
+                Box::new(CpuRenderer::new(
+                    CpuConfig {
+                        max_pixels: 1 << 22,
+                        glyph_cache_bytes: 1 << 20,
+                        image_cache_bytes: 1 << 20,
+                        font_smoothing: true,
+                    },
+                    GlyphRaster::new(Arc::clone(&glyphs)),
+                ))
+            }),
+            accessibility: Some(adapter),
+            clock: Arc::new(ManualClock::new(Timestamp(0))),
+            on_window_error: None,
+        };
+        let mut driver = TestDriver::new(
+            Capabilities::default(),
+            options,
+            ManualClock::new(Timestamp(0)),
         );
-        adapter
-            .borrow_mut()
-            .update(&with_markers(tree, &markers.borrow()));
-    };
-    let deadline = Instant::now() + PATIENCE;
-    while !adapter.borrow().is_active() {
-        assert!(Instant::now() < deadline, "accessibility never turned on");
-        std::thread::park_timeout(Duration::from_millis(20));
+        driver.run_until_idle(budget()).unwrap();
+        let windows: HashMap<String, WindowId> = driver
+            .runtime()
+            .windows()
+            .into_iter()
+            .map(|(key, id)| (format!("{:?}", key.0), id))
+            .collect();
+        let find = |name: &str| {
+            *windows
+                .iter()
+                .find(|(key, _)| key.contains(name))
+                .unwrap_or_else(|| panic!("no {name} window in {windows:?}"))
+                .1
+        };
+        let (lock, markers) = (find("lock"), find("markers"));
+        for window in [markers, lock] {
+            let active = WindowStates {
+                activated: window == lock,
+                ..WindowStates::default()
+            };
+            driver
+                .window_system_mut()
+                .configure(window, None, active)
+                .unwrap();
+        }
+        let mut run = Run {
+            driver,
+            lock,
+            markers,
+        };
+        // the adapter makes a window known to assistive technology as it learns its focus
+        run.driver
+            .window_system_mut()
+            .enqueue_window(lock, WindowEvent::Focus(true))
+            .unwrap();
+        run.settle();
+        run
     }
-    send(&screen);
-    let mut line = String::new();
-    std::io::stdin().read_line(&mut line).unwrap();
-    markers.borrow_mut().push(READY);
-    send(&screen);
-    part(&mut screen, &mut |screen| send(screen));
-    markers.borrow_mut().push(PLAYED);
-    send(&screen);
-    std::io::stdin().read_to_end(&mut Vec::new()).unwrap();
+
+    /// Let the runtime do what is ready, the adapter's wake-ups included, and present the frames it asks for.
+    fn settle(&mut self) {
+        self.driver
+            .window_system_mut()
+            .enqueue(PlatformEvent::Wake)
+            .unwrap();
+        for _ in 0..16 {
+            self.driver.run_until_idle(budget()).unwrap();
+            let system = self.driver.window_system_mut();
+            let mut asked = false;
+            for window in [self.lock, self.markers] {
+                if system.frame_requested(window).unwrap() {
+                    system.frame_ready(window, Timestamp(0)).unwrap();
+                    asked = true;
+                }
+            }
+            if !asked {
+                return;
+            }
+        }
+        panic!("the windows keep asking for frames");
+    }
+
+    /// Press and release a key on `window`; a character's key types it.
+    fn key(&mut self, window: WindowId, keysym: u32, text: Option<char>) {
+        let code = match keysym {
+            RETURN => 28,
+            ESCAPE => 1,
+            _ => 0,
+        };
+        for pressed in [true, false] {
+            self.driver
+                .window_system_mut()
+                .enqueue_window(
+                    window,
+                    WindowEvent::Key(
+                        KeyEvent {
+                            code,
+                            keysym: Keysym(keysym),
+                            text: text.filter(|_| pressed),
+                            pressed,
+                            repeat: false,
+                            mods: Mods::NONE,
+                        },
+                        Timestamp(0),
+                    ),
+                )
+                .unwrap();
+            self.settle();
+        }
+    }
+
+    fn type_text(&mut self, text: &str) {
+        for c in text.chars() {
+            self.key(self.lock, c as u32, Some(c));
+        }
+    }
+
+    fn marker(&mut self) {
+        self.key(self.markers, ESCAPE, None);
+    }
+
+    /// The diagnostics a person could be shown: the Inspector dump of each window and the model.
+    fn diagnostics(&self) {
+        eprintln!("{DIAGNOSTICS}");
+        let runtime = self.driver.runtime();
+        for window in [self.lock, self.markers] {
+            eprintln!(
+                "{}",
+                Inspector::default().dump(&runtime.snapshot(window).unwrap())
+            );
+        }
+        eprintln!("{:?}", runtime.model());
+    }
+}
+
+/// The lock screen: it answers its attempts with `outcomes`, publishes its tree once accessibility is active, and once
+/// its input says go shows [`READY`], plays `part`, shows [`PLAYED`], writes its diagnostics, and keeps running until
+/// its input closes.
+fn lock_screen(outcomes: Vec<AuthOutcome>, part: impl FnOnce(&mut Run)) {
+    *OUTCOMES.lock().unwrap() = outcomes;
+    let adapter = AtspiAdapter::lock_screen(Waker::from(Arc::new(Unpark(std::thread::current()))));
+    let mut run = Run::start(Box::new(adapter));
+    let (said, input) = mpsc::channel();
+    let main = std::thread::current();
+    std::thread::spawn(move || {
+        let mut stdin = std::io::stdin().lock();
+        let mut line = String::new();
+        stdin.read_line(&mut line).unwrap();
+        let _ = said.send(());
+        main.unpark();
+        stdin.read_to_end(&mut Vec::new()).unwrap();
+        let _ = said.send(());
+        main.unpark();
+    });
+    let wait = |run: &mut Run| loop {
+        run.settle();
+        if input.try_recv().is_ok() {
+            return;
+        }
+        std::thread::park_timeout(Duration::from_millis(20));
+    };
+    wait(&mut run);
+    run.marker();
+    part(&mut run);
+    run.marker();
+    run.diagnostics();
+    wait(&mut run);
 }
 
 struct Status;
@@ -160,14 +445,46 @@ impl Socket {
     }
 }
 
+fn proxy<'a>(conn: &'a Connection, peer: &str, path: &str, interface: &'static str) -> Proxy<'a> {
+    Proxy::new(conn, peer.to_owned(), path.to_owned(), interface).unwrap()
+}
+
 fn accessible<'a>(conn: &'a Connection, peer: &str, path: &str) -> Proxy<'a> {
-    Proxy::new(
-        conn,
-        peer.to_owned(),
-        path.to_owned(),
-        "org.a11y.atspi.Accessible",
-    )
-    .unwrap()
+    proxy(conn, peer, path, "org.a11y.atspi.Accessible")
+}
+
+fn children(conn: &Connection, peer: &str, path: &str) -> Vec<OwnedObjectPath> {
+    let children: Vec<(String, OwnedObjectPath)> = accessible(conn, peer, path)
+        .call("GetChildren", &())
+        .unwrap_or_default();
+    children.into_iter().map(|(_, path)| path).collect()
+}
+
+/// One node as assistive technology reads it: role, name, description and, for text, its whole text.
+#[derive(Debug)]
+struct NodeRead {
+    path: String,
+    role: u32,
+    name: String,
+    description: String,
+    text: Option<String>,
+}
+
+/// Every node under `path`, depth first.
+fn walk(conn: &Connection, peer: &str, path: &str, nodes: &mut Vec<NodeRead>) {
+    let node = accessible(conn, peer, path);
+    let text: zbus::Result<String> =
+        proxy(conn, peer, path, "org.a11y.atspi.Text").call("GetText", &(0i32, -1i32));
+    nodes.push(NodeRead {
+        path: path.to_owned(),
+        role: node.call("GetRole", &()).unwrap_or(0),
+        name: node.get_property("Name").unwrap_or_default(),
+        description: node.get_property("Description").unwrap_or_default(),
+        text: text.ok(),
+    });
+    for child in children(conn, peer, path) {
+        walk(conn, peer, child.as_str(), nodes);
+    }
 }
 
 /// The text and politeness of an announcement.
@@ -181,32 +498,29 @@ fn announcement(message: &Message) -> Option<(String, i32)> {
     Some((String::try_from(said).unwrap(), politeness))
 }
 
-/// What the lock screen sent while it played its part: the messages between its two markers, and the object paths of
-/// the markers.
+/// What the lock screen sent while it played its part: the messages between its two markers.
 struct Part {
     sent: Vec<Message>,
+    /// The object paths of the markers' announcements.
     markers: [String; 2],
 }
 
 impl Part {
-    /// The signals of the part that are not about a marker.
+    /// The signals of the part that are not about the marker window.
     fn signals(&self) -> Vec<&Message> {
         self.sent
             .iter()
             .filter(|m| m.message_type() == Type::Signal)
             .filter(|m| {
                 let path = m.header().path().map(|p| p.to_string()).unwrap_or_default();
-                let body = m.data();
-                !self.markers.iter().any(|marker| {
-                    path == *marker || body.windows(marker.len()).any(|w| w == marker.as_bytes())
-                })
+                !self.markers.contains(&path)
             })
             .collect()
     }
 }
 
 /// A lock screen started by test `name` in a copy of this binary, embedded in a fake registry, with every message it
-/// sends from then on recorded.
+/// sends from then on recorded and its standard error kept.
 struct Locked {
     app: Child,
     stdin: ChildStdin,
@@ -237,12 +551,14 @@ impl Locked {
             .unwrap()
             .build()
             .unwrap();
-        let mut app = Command::new(std::env::current_exe().unwrap())
+        let mut app = Process::new(std::env::current_exe().unwrap())
             .args([name, "--exact", "--nocapture"])
             .env(LOCK_SCREEN, "1")
             .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
             .env("AT_SPI_BUS_ADDRESS", &bus.address)
+            .env_remove("CUPERTINO_ASSET_DIR")
             .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .unwrap();
         let peer = embeds.recv_timeout(PATIENCE).expect("the root embedded");
@@ -278,6 +594,27 @@ impl Locked {
         })
     }
 
+    /// The windows of the lock screen by name, once both are there.
+    fn windows(&self) -> HashMap<String, String> {
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let windows: HashMap<String, String> = children(&self.conn, &self.peer, ROOT)
+                .into_iter()
+                .map(|path| {
+                    let name: String = accessible(&self.conn, &self.peer, path.as_str())
+                        .get_property("Name")
+                        .unwrap_or_default();
+                    (name, path.to_string())
+                })
+                .collect();
+            if windows.contains_key(LOCKED_TITLE) && windows.contains_key(MARKERS_TITLE) {
+                return windows;
+            }
+            assert!(Instant::now() < deadline, "the lock screen never appeared");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     /// Tells the lock screen to play its part and waits until it has announced both markers.
     fn play(&mut self) -> Part {
         writeln!(self.stdin).unwrap();
@@ -308,72 +645,62 @@ impl Locked {
         self.sent.0.lock().unwrap().clone()
     }
 
-    fn finish(mut self) {
+    /// Closes the lock screen's input and returns what it wrote to standard error.
+    fn finish(mut self) -> String {
         drop(self.stdin);
-        assert!(self.app.wait().unwrap().success(), "the lock screen failed");
+        let mut stderr = String::new();
+        self.app
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut stderr)
+            .unwrap();
+        assert!(
+            self.app.wait().unwrap().success(),
+            "the lock screen failed: {stderr}"
+        );
+        stderr
     }
 }
 
 #[test]
-fn typing_a_password_sends_assistive_technology_nothing() {
-    const NAME: &str = "typing_a_password_sends_assistive_technology_nothing";
+fn neither_the_tree_nor_the_bus_nor_the_diagnostics_hold_a_password_being_typed() {
+    const NAME: &str =
+        "neither_the_tree_nor_the_bus_nor_the_diagnostics_hold_a_password_being_typed";
     if std::env::var_os(LOCK_SCREEN).is_some() {
-        return lock_screen(|screen, send| {
-            for c in SECRET.chars() {
-                screen.press(1.0, Key::Char(c));
-                send(screen);
-            }
-        });
+        return lock_screen(Vec::new(), |run| run.type_text(SECRET));
     }
     let Some(mut locked) = Locked::start(NAME) else {
         return;
     };
-    let (conn, peer) = (&locked.conn, locked.peer.as_str());
-    let deadline = Instant::now() + PATIENCE;
-    let window = loop {
-        let windows: Vec<(String, OwnedObjectPath)> = accessible(conn, peer, ROOT)
-            .call("GetChildren", &())
-            .unwrap_or_default();
-        if let Some(window) = windows.into_iter().next() {
-            break window.1;
-        }
-        assert!(Instant::now() < deadline, "the lock screen never appeared");
-        std::thread::sleep(Duration::from_millis(50));
-    };
-    let nodes: Vec<(String, OwnedObjectPath)> = accessible(conn, peer, window.as_str())
-        .call("GetChildren", &())
-        .unwrap();
-    let field = nodes
-        .into_iter()
-        .map(|(_, path)| path)
-        .find(|path| {
-            let role: u32 = accessible(conn, peer, path.as_str())
-                .call("GetRole", &())
-                .unwrap();
-            role == PASSWORD_TEXT
-        })
-        .expect("a password field");
-    // its name comes back through the monitor, which so reads the lock screen's messages
-    let name: String = accessible(conn, peer, field.as_str())
-        .get_property("Name")
-        .unwrap();
-    assert_eq!(name, "Password");
-
+    let windows = locked.windows();
+    let lock_window = windows[LOCKED_TITLE].clone();
     let part = locked.play();
-    let text = Proxy::new(
-        &locked.conn,
-        locked.peer.clone(),
-        field.as_str().to_owned(),
-        "org.a11y.atspi.Text",
-    )
-    .unwrap();
-    let shown: zbus::Result<String> = text.call("GetText", &(0i32, -1i32));
+
+    // the whole tree, read while the password sits in the field
+    let mut nodes = Vec::new();
+    walk(&locked.conn, &locked.peer, &lock_window, &mut nodes);
+    let field = nodes
+        .iter()
+        .find(|node| node.role == PASSWORD_TEXT)
+        .unwrap_or_else(|| panic!("no password text in {nodes:#?}"));
+    assert_eq!(field.name, PASSWORD_LABEL);
     assert!(
-        shown.map_or(true, |t| t.is_empty()),
-        "the password reached assistive technology"
+        field.text.as_deref().is_none_or(str::is_empty),
+        "the password field reads {:?}",
+        field.text
     );
+    let hold = |text: &str| text.contains(SECRET);
+    for node in &nodes {
+        assert!(
+            !hold(&node.name)
+                && !hold(&node.description)
+                && !node.text.as_deref().is_some_and(hold),
+            "a node holds the password: {node:?}"
+        );
+    }
     let sent = locked.sent();
-    locked.finish();
+    let stderr = locked.finish();
 
     let typed: Vec<_> = part
         .signals()
@@ -381,18 +708,28 @@ fn typing_a_password_sends_assistive_technology_nothing() {
         .map(|m| {
             let header = m.header();
             (
-                header.interface().map(|i| i.to_string()),
+                header.path().map(|p| p.to_string()),
                 header.member().map(|m| m.to_string()),
             )
         })
+        .filter(|(_, member)| {
+            // typing may move the caret's state or the field's emptiness, never a text or value change
+            member
+                .as_deref()
+                .is_some_and(|m| m.contains("TextChanged") || m.contains("PropertyChange"))
+        })
+        .filter(|(path, _)| path.as_deref() == Some(field.path.as_str()))
         .collect();
-    assert!(typed.is_empty(), "typing sent signals: {typed:?}");
+    assert!(
+        typed.is_empty(),
+        "typing sent text to assistive technology: {typed:?}"
+    );
     let holds = |text: &[u8]| {
         sent.iter()
             .any(|m| m.data().windows(text.len()).any(|w| w == text))
     };
     assert!(
-        holds(b"Password"),
+        holds(PASSWORD_LABEL.as_bytes()),
         "the monitor reads what the lock screen sends"
     );
     let keys: Vec<_> = sent
@@ -416,6 +753,22 @@ fn typing_a_password_sends_assistive_technology_nothing() {
         "keyboard events went to the registry: {keys:?}"
     );
     assert!(!holds(SECRET.as_bytes()), "a message held the password");
+
+    let (_, diagnostics) = stderr
+        .split_once(DIAGNOSTICS)
+        .unwrap_or_else(|| panic!("the lock screen wrote no diagnostics: {stderr}"));
+    assert!(
+        diagnostics.contains("SecureField") || diagnostics.contains(PASSWORD_LABEL),
+        "the diagnostics show the field: {diagnostics}"
+    );
+    assert!(
+        stderr.contains("Lock(Edited)"),
+        "the diagnostics list the messages: {stderr}"
+    );
+    assert!(
+        !stderr.contains(SECRET),
+        "the diagnostics hold the password"
+    );
 }
 
 #[test]
@@ -423,29 +776,27 @@ fn every_answer_to_an_attempt_is_announced_once_and_assertively() {
     const NAME: &str = "every_answer_to_an_attempt_is_announced_once_and_assertively";
     const LOCKED_OUT: &str = "The account is locked.";
     if std::env::var_os(LOCK_SCREEN).is_some() {
-        return lock_screen(|screen, send| {
-            let outcomes = [
-                AuthOutcome::Denied,
-                AuthOutcome::Denied,
-                AuthOutcome::Error(LOCKED_OUT.into()),
-            ];
-            for (i, outcome) in outcomes.into_iter().enumerate() {
-                let now = 1.0 + i as f64;
-                screen.press(now, Key::Char('x'));
-                screen.press(now, Key::Return);
-                send(screen);
-                screen.finish_auth(now + 0.5, outcome).unwrap();
-                // a redraw with nothing new to say
-                send(screen);
-                send(screen);
+        let outcomes = vec![
+            AuthOutcome::Denied,
+            AuthOutcome::Denied,
+            AuthOutcome::Error(LOCKED_OUT.into()),
+        ];
+        return lock_screen(outcomes, |run| {
+            for _ in 0..3 {
+                run.type_text("x");
+                run.key(run.lock, RETURN, None);
+                // frames with nothing new to say
+                run.settle();
+                run.settle();
             }
         });
     }
     let Some(mut locked) = Locked::start(NAME) else {
         return;
     };
+    locked.windows();
     let part = locked.play();
-    locked.finish();
+    let stderr = locked.finish();
 
     let announced: Vec<_> = part.sent.iter().filter_map(announcement).collect();
     assert_eq!(
@@ -454,6 +805,7 @@ fn every_answer_to_an_attempt_is_announced_once_and_assertively() {
             (DENIED.to_owned(), ASSERTIVE),
             (DENIED.to_owned(), ASSERTIVE),
             (LOCKED_OUT.to_owned(), ASSERTIVE),
-        ]
+        ],
+        "{stderr}"
     );
 }

@@ -9,7 +9,7 @@
 //! * [`picker`]: the greeter's user tiles, grid, selection and the name typed for "Other…".
 //! * [`power`]: the greeter's power menu.
 //! * [`power_button`]: what a press, a release and a hold of the power button do.
-//! * [`render`]: the CPU drawing.
+//! * [`view`]: the screens and panels as CupertinoKit draws them, and what the person does on them.
 //! * [`spinner`]: the frames and spoke opacities of the progress spinner.
 //! * [`panel`]: the confirmation panel's countdown, keys, button frames and words.
 //! * [`logout`]: the timing of quitting the applications one at a time before the session ends.
@@ -25,10 +25,9 @@
 //! * feature `app`: [`auth`] (PAM), [`manager`] (the greeter's connection to the session manager) and the `cupertino-login`
 //!   process.
 //!
-//! Sizes, positions, the shake, the fades and the hide timer come from the analysis; the wallpaper source, the field material, the dots and the notice are approximate, each
-//! labelled where it is defined.
+//! Sizes, positions, the shake, the fades and the hide timer come from the analysis; the wallpaper source and the notice
+//! are approximate, each labelled where it is defined.
 
-pub mod access;
 #[cfg(feature = "app")]
 pub mod auth;
 pub mod autostart;
@@ -52,7 +51,6 @@ pub mod picker;
 pub mod power;
 pub mod power_button;
 pub mod probe;
-pub mod render;
 pub mod restore;
 #[cfg(feature = "dbus")]
 pub mod session;
@@ -60,5 +58,6 @@ pub mod spinner;
 #[cfg(feature = "dbus")]
 pub mod upower;
 pub mod user;
+pub mod view;
 
 pub use model::{AuthOutcome, Key, LockScreen, NoAttempt, Password, Phase};

@@ -1,16 +1,10 @@
-//! What the lock screen and the greeter share: the clock text, the frame bookkeeping, the key translation and the
-//! drawing of the screen on a surface.
+//! What the lock screen and the greeter share: the clock text and the pacing of their timers.
 
-use cupertino_login::model::{Key, LockScreen};
-use cupertino_login::picker::{Grid, NameEntry, Picker, Tile};
-use cupertino_login::power::Menu;
-use cupertino_login::render::{Field, PickerView, PowerView, Renderer, View};
-use cupertino_login::user::{format_time, User};
-use cupertino_shell_client::LayerSurface;
-use cupertino_ui_wayland::{Ready, ShmPresenter};
-use cupertino_wayland_client::{key, Connection, Modifiers, OutputId, SurfaceId, Waker};
+use cupertino_kit::core::Command;
+use cupertino_login::user::format_time;
+use cupertino_login::view::Clock;
 use std::error::Error;
-use std::sync::mpsc::Sender;
+use std::time::Duration;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -19,33 +13,8 @@ pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const DATE_FORMAT: &std::ffi::CStr = c"%A, %B %-d";
 const TIME_FORMAT: &std::ffi::CStr = c"%H:%M";
 
-/// Queues a message for the loop and wakes it; cloned into every thread.
-pub struct Notifier<M> {
-    sender: Sender<M>,
-    waker: Waker,
-}
-
-impl<M> Clone for Notifier<M> {
-    fn clone(&self) -> Self {
-        Notifier {
-            sender: self.sender.clone(),
-            waker: self.waker.clone(),
-        }
-    }
-}
-
-impl<M> Notifier<M> {
-    pub fn new(sender: Sender<M>, waker: Waker) -> Self {
-        Notifier { sender, waker }
-    }
-
-    pub fn send(&self, message: M) {
-        self.sender
-            .send(message)
-            .expect("the receiver lives as long as the process");
-        self.waker.wake();
-    }
-}
+/// The interval of the frames of a fade, a shake or the spinner.
+pub const FRAME: f64 = 1.0 / 60.0;
 
 /// The time the screens show: only the display clock, never what times authentication, back-off or the lock
 /// ([`cupertino_shell_client::test_clock`]).
@@ -53,260 +22,61 @@ pub fn display_unix_seconds() -> Result<i64> {
     Ok(cupertino_shell_client::test_clock::display_unix_seconds()?)
 }
 
-/// What a frame shows that changes without the state machine's say: when this differs from the last frame, redraw.
-#[derive(PartialEq)]
-pub struct FrameKey {
-    pub(crate) time: String,
-    field: FieldKey,
-    notice: Option<String>,
-    pub(crate) caps_lock: bool,
-    spinner: Option<u32>,
-    help: bool,
-    /// The row selected in the open power menu.
-    power_open: Option<usize>,
-    power_prompts: bool,
-    opacity: f64,
-    shake: f64,
-    failure_outline: bool,
-}
-
-/// What the field of a frame holds.
-#[derive(PartialEq)]
-enum FieldKey {
-    Password(usize),
-    Name(String),
-}
-
-/// What a frame of the password screen is made of besides the clock.
-#[derive(Clone, Copy)]
-pub struct Scene<'a> {
-    pub screen: &'a LockScreen,
-    /// Caps Lock is on and the password field has the focus.
-    pub caps_lock: bool,
-    /// Failed attempts have brought up the password help.
-    pub help: bool,
-    /// The greeter's power item, if there is one.
-    pub power: Option<&'a Menu>,
-}
-
-impl FrameKey {
-    /// A frame of the password screen.
-    pub fn new(scene: &Scene<'_>, now: f64) -> Result<FrameKey> {
-        let screen = scene.screen;
-        Ok(FrameKey {
-            time: format_time(display_unix_seconds()?, TIME_FORMAT)?,
-            field: FieldKey::Password(screen.password_len()),
-            notice: screen.notice().map(str::to_owned),
-            caps_lock: scene.caps_lock,
-            spinner: screen.spinner(now),
-            help: scene.help,
-            power_open: scene.power.and_then(Menu::open),
-            power_prompts: scene.power.is_some_and(Menu::will_prompt),
-            opacity: screen.opacity(now),
-            shake: screen.shake(now),
-            failure_outline: screen.failure_outline(),
-        })
-    }
-
-    /// A frame of the screen where a name is typed for the "Other…" tile, or for an administrator; `notice` says which.
-    pub fn name(entry: &NameEntry, notice: Option<&str>, power: Option<&Menu>) -> Result<FrameKey> {
-        Ok(FrameKey {
-            time: format_time(display_unix_seconds()?, TIME_FORMAT)?,
-            field: FieldKey::Name(entry.text().to_owned()),
-            notice: notice.map(str::to_owned),
-            caps_lock: false,
-            spinner: None,
-            help: false,
-            power_open: power.and_then(Menu::open),
-            power_prompts: power.is_some_and(Menu::will_prompt),
-            opacity: 1.0,
-            shake: 0.0,
-            failure_outline: false,
-        })
-    }
-}
-
-/// What a frame of the user picker shows that can change: the clock, the selection, the page size, the power menu and which
-/// tiles carry the logged-in mark.
-#[derive(PartialEq)]
-pub struct PickerKey {
-    time: String,
-    selected: usize,
-    max_per_page: usize,
-    power_open: Option<usize>,
-    power_prompts: bool,
-    logged_in: Vec<bool>,
-}
-
-impl PickerKey {
-    pub fn new(picker: &Picker, max_per_page: usize, power: Option<&Menu>) -> Result<PickerKey> {
-        let logged_in = picker
-            .tiles()
-            .iter()
-            .map(|tile| matches!(tile, Tile::Account(user) if user.logged_in))
-            .collect();
-        Ok(PickerKey {
-            time: format_time(display_unix_seconds()?, TIME_FORMAT)?,
-            selected: picker.selected_index(),
-            max_per_page,
-            power_open: power.and_then(Menu::open),
-            power_prompts: power.is_some_and(Menu::will_prompt),
-            logged_in,
-        })
-    }
-}
-
-/// What the renderer needs of the power item.
-fn power_view(power: Option<&Menu>) -> Option<PowerView<'_>> {
-    power.map(|menu| PowerView {
-        items: menu.items(),
-        open: menu.open(),
-        will_prompt: menu.will_prompt(),
+/// The clock text now.
+pub fn clock() -> Result<Clock> {
+    let now = display_unix_seconds()?;
+    Ok(Clock {
+        date: format_time(now, DATE_FORMAT)?,
+        time: format_time(now, TIME_FORMAT)?,
     })
 }
 
-/// The key of the screen a pressed key stands for, or `None` for a key that is only activity (a shortcut is not part of
-/// a password).
-pub fn typed_key(code: u32, mods: Modifiers, character: Option<char>) -> Option<Key> {
-    match code {
-        key::ENTER | key::KEYPAD_ENTER => Some(Key::Return),
-        key::BACKSPACE => Some(Key::Backspace),
-        key::ESCAPE => Some(Key::Escape),
-        _ if mods.ctrl || mods.alt || mods.logo => None,
-        _ => character.map(Key::Char),
-    }
+/// Seconds until the clock's minute turns.
+pub fn to_next_minute() -> Result<f64> {
+    Ok((60 - display_unix_seconds()?.rem_euclid(60)) as f64)
 }
 
-/// The full-output surface of one output: a lock surface, or a layer surface (`layer`) for the greeter.
-pub struct OutputSurface {
-    pub output: OutputId,
-    pub layer: Option<LayerSurface>,
-    pub presenter: ShmPresenter,
+/// One timer of an application: only the latest one counts, and a new one is set only when it would fire before the
+/// one that is pending, so a stream of input does not pile timers up.
+#[derive(Debug, Default)]
+pub struct Timer {
+    id: u64,
+    /// When the pending timer fires, on the application's clock.
+    pending: Option<f64>,
 }
 
-impl OutputSurface {
-    pub fn surface(&self) -> SurfaceId {
-        self.presenter.surface()
-    }
-
-    /// A configure of the surface with the size as sent.
-    pub fn configured(&mut self, size: (u32, u32)) -> Result<()> {
-        let size = match &self.layer {
-            Some(layer) => layer.configured(size)?,
-            None => size,
-        };
-        self.presenter.configured(size);
-        Ok(())
-    }
-}
-
-/// The surfaces of `surfaces` that can take a frame now; poll again after drawing them.
-pub fn ready(conn: &Connection, surfaces: &mut [OutputSurface]) -> Result<Vec<SurfaceId>> {
-    let mut ready = Vec::new();
-    for s in surfaces {
-        loop {
-            match s.presenter.poll(conn)? {
-                // a draw follows every scale change
-                Ready::ScaleChanged(_) => {}
-                Ready::Draw => break ready.push(s.surface()),
-                Ready::Idle => break,
-            }
+impl Timer {
+    /// The timer `id` fired; whether it is the one that counts.
+    pub fn fired(&mut self, id: u64) -> bool {
+        if id == self.id {
+            self.pending = None;
+            true
+        } else {
+            false
         }
     }
-    Ok(ready)
-}
 
-/// Draw the frame `key` on `presenter`, the password screen of `user` (`None`: the name screen of "Other…").
-pub fn draw(
-    conn: &mut Connection,
-    presenter: &mut ShmPresenter,
-    renderer: &mut Renderer,
-    key: &FrameKey,
-    user: Option<&User>,
-    power: Option<&Menu>,
-) -> Result<()> {
-    let date = format_time(display_unix_seconds()?, DATE_FORMAT)?;
-    let field = match &key.field {
-        FieldKey::Password(len) => Field::Password(*len),
-        FieldKey::Name(text) => Field::Name(text),
-    };
-    let view = View {
-        time: &key.time,
-        date: &date,
-        user,
-        field,
-        notice: key.notice.as_deref(),
-        caps_lock: key.caps_lock,
-        spinner: key.spinner,
-        help: key.help,
-        power: power_view(power),
-        opacity: key.opacity,
-        shake: key.shake,
-        failure_outline: key.failure_outline,
-    };
-    presenter.draw(conn, None, |pixmap, scale| {
-        renderer.render(&view, pixmap, scale.factor() as f32)
-    })?;
-    Ok(())
-}
-
-/// Draw the frame `key` of the user picker on `presenter`.
-pub fn draw_picker(
-    conn: &mut Connection,
-    presenter: &mut ShmPresenter,
-    renderer: &mut Renderer,
-    key: &PickerKey,
-    picker: &Picker,
-    power: Option<&Menu>,
-) -> Result<()> {
-    let date = format_time(display_unix_seconds()?, DATE_FORMAT)?;
-    let page = picker.page(key.max_per_page);
-    let view = PickerView {
-        power: power_view(power),
-        time: &key.time,
-        date: &date,
-        tiles: &picker.tiles()[page.clone()],
-        grid: Grid::for_count(key.max_per_page.min(picker.tiles().len())),
-        selected: key.selected - page.start,
-    };
-    presenter.draw(conn, None, |pixmap, scale| {
-        renderer.render_picker(&view, pixmap, scale.factor() as f32)
-    })?;
-    Ok(())
-}
-
-/// Keep exactly one surface per output the server has described, made by `create`.
-pub fn arrange_surfaces(
-    conn: &mut Connection,
-    surfaces: &mut Vec<OutputSurface>,
-    create: impl Fn(&mut Connection, OutputId) -> Result<(SurfaceId, Option<LayerSurface>)>,
-) -> Result<()> {
-    let outputs: Vec<OutputId> = conn
-        .outputs()
-        .into_iter()
-        .filter(|o| o.geometry.is_some())
-        .map(|o| o.id)
-        .collect();
-    let mut gone = Vec::new();
-    surfaces.retain(|s| {
-        let keep = outputs.contains(&s.output);
-        if !keep {
-            gone.push(s.surface());
+    /// Fire `wait` seconds after `now` (`None`: no timer is needed), unless the pending timer fires before that.
+    pub fn schedule<M: Send + 'static>(
+        &mut self,
+        now: f64,
+        wait: Option<f64>,
+        message: fn(u64) -> M,
+    ) -> Option<Command<M>> {
+        let wait = wait?.max(0.0);
+        let at = now + wait;
+        if self
+            .pending
+            .is_some_and(|pending| pending > now && pending <= at)
+        {
+            return None;
         }
-        keep
-    });
-    for surface in gone {
-        conn.destroy(surface)?;
+        self.id += 1;
+        self.pending = Some(at);
+        let id = self.id;
+        Some(Command::Perform(Box::pin(async move {
+            async_io::Timer::after(Duration::from_secs_f64(wait)).await;
+            message(id)
+        })))
     }
-    for output in outputs {
-        if !surfaces.iter().any(|s| s.output == output) {
-            let (surface, layer) = create(conn, output)?;
-            surfaces.push(OutputSurface {
-                output,
-                layer,
-                presenter: ShmPresenter::new(surface),
-            });
-        }
-    }
-    Ok(())
 }

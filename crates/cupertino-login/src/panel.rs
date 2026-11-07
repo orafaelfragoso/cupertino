@@ -2,7 +2,7 @@
 //! power-button panel with four buttons and no countdown. What each asks, where its buttons sit and what its
 //! keys do. Pure: time is an absolute `f64` in seconds on the caller's clock.
 
-use cupertino_geometry::{Point, Rect};
+use cupertino_geometry::Rect;
 
 use crate::model::Key;
 
@@ -241,21 +241,6 @@ pub struct Frames {
     pub checkbox: Option<PanelCheckbox>,
     /// Left to right: Cancel and the confirming button, or the four buttons of the power-button panel.
     pub buttons: Vec<PanelButton>,
-}
-
-impl Frames {
-    /// The decision a click at `point` (panel-local points) makes, if it is on a button.
-    pub fn button_at(&self, point: Point) -> Option<Decision> {
-        self.buttons
-            .iter()
-            .find(|button| button.frame.contains(point))
-            .map(|button| button.decision)
-    }
-
-    /// Whether a click at `point` (panel-local points) is on the checkbox.
-    pub fn checkbox_at(&self, point: Point) -> bool {
-        self.checkbox.is_some_and(|c| c.frame.contains(point))
-    }
 }
 
 impl Kind {
@@ -650,16 +635,15 @@ mod tests {
         let frames = Kind::LogOut.frames(2, 2);
         let checkbox = frames.checkbox.unwrap();
         assert_eq!(checkbox.label, "Reopen windows when logging back in");
-        assert!(frames.checkbox_at(checkbox.check.center()));
         assert!(
-            frames.checkbox_at(Point::new(
-                checkbox.frame.max_x() - 1.0,
-                checkbox.frame.center().y
-            )),
-            "the label is part of the target"
+            checkbox.frame.contains(checkbox.check.center())
+                && checkbox.frame.width() == wrap_width(Kind::LogOut),
+            "the row holds the box and spans the text column, so the label is part of the target"
         );
-        assert!(!frames.checkbox_at(frames.buttons[1].frame.center()));
-        assert_eq!(frames.button_at(checkbox.check.center()), None);
+        assert!(frames
+            .buttons
+            .iter()
+            .all(|b| b.frame.intersection(&checkbox.frame).is_none()));
 
         let mut panel = Panel::new(Kind::Restart, 0.0, false);
         assert!(!panel.reopen());
@@ -679,9 +663,7 @@ mod tests {
         assert!(!panel.toggles(Key::Char(' ')));
         panel.toggle_reopen();
         assert!(panel.reopen());
-        assert!(!Kind::PowerButton
-            .frames(2, 0)
-            .checkbox_at(Point::new(100.0, 80.0)));
+        assert_eq!(Kind::PowerButton.frames(2, 0).checkbox, None);
     }
 
     #[test]
@@ -699,25 +681,23 @@ mod tests {
     }
 
     #[test]
-    fn a_click_hits_a_button_or_nothing() {
+    fn the_buttons_decide_cancel_then_the_action_and_the_power_panel_offers_four() {
         let frames = Kind::ShutDown.frames(2, 2);
+        let decisions: Vec<Decision> = frames.buttons.iter().map(|b| b.decision).collect();
         assert_eq!(
-            frames.button_at(frames.buttons[1].frame.center()),
-            Some(Decision::Do(Action::ShutDown))
+            decisions,
+            [Decision::Cancel, Decision::Do(Action::ShutDown)]
         );
-        assert_eq!(
-            frames.button_at(frames.buttons[0].frame.center()),
-            Some(Decision::Cancel)
-        );
-        assert_eq!(frames.button_at(Point::new(5.0, 5.0)), None);
         let power = Kind::PowerButton.frames(2, 0);
+        let decisions: Vec<Decision> = power.buttons.iter().map(|b| b.decision).collect();
         assert_eq!(
-            power.button_at(power.buttons[1].frame.center()),
-            Some(Decision::Do(Action::Sleep))
-        );
-        assert_eq!(
-            power.button_at(power.buttons[2].frame.center()),
-            Some(Decision::Cancel)
+            decisions,
+            [
+                Decision::Do(Action::Restart),
+                Decision::Do(Action::Sleep),
+                Decision::Cancel,
+                Decision::Do(Action::ShutDown)
+            ]
         );
     }
 

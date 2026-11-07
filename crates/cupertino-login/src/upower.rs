@@ -56,7 +56,7 @@ pub struct Battery {
 }
 
 /// What the watch reports.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Report {
     Battery(Battery),
     /// The power daemon is not on the bus (or left it): there is nothing to warn about until it comes back.

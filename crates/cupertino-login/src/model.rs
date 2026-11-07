@@ -1,7 +1,9 @@
-//! The lock screen's state machine: the password field, the phases of an attempt, the shake after a failure and the
-//! fades of the interface. Pure: time is an absolute `f64` in seconds on the caller's clock, input arrives as [`Key`]s
-//! and the outcome of the authentication as [`AuthOutcome`]. The only way to [`Phase::Unlocked`] is
-//! [`LockScreen::finish_auth`] with [`AuthOutcome::Success`] for an attempt that [`LockScreen::press`] handed out.
+//! The lock screen's state machine: the phases of an attempt, the shake after a failure, the fades of the interface and
+//! what the screen says about the last attempt. Pure: time is an absolute `f64` in seconds on the caller's clock, the
+//! password field's edits arrive as calls and the outcome of the authentication as [`AuthOutcome`]. The typed text is not
+//! here: it lives in the toolkit's secure field until it is submitted, and [`LockScreen::submit`] takes it then. The only
+//! way to [`Phase::Unlocked`] is [`LockScreen::finish_auth`] with [`AuthOutcome::Success`] for an attempt that
+//! [`LockScreen::submit`] handed out.
 
 use crate::spinner;
 use std::f64::consts::PI;
@@ -82,15 +84,15 @@ pub enum Phase {
     Unlocked,
 }
 
-/// A key the lock screen reacts to.
+/// A key of a field that is not a password: the name typed at the greeter, and the panels' shortcuts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
     /// A typed character; control characters are ignored.
     Char(char),
     Backspace,
-    /// Submit the password.
+    /// Submit the field.
     Return,
-    /// Clear the field.
+    /// Clear the field, or cancel.
     Escape,
 }
 
@@ -122,16 +124,25 @@ impl std::error::Error for NoAttempt {}
 /// A password in a buffer that is zeroed when it is dropped.
 pub type Password = Zeroizing<String>;
 
-fn empty_password() -> Password {
-    // allocated at its limit, so typing never moves it and leaves a copy behind
-    Zeroizing::new(String::with_capacity(MAX_PASSWORD_BYTES))
+/// A copy of `text` in a zeroed-on-drop buffer of [`MAX_PASSWORD_BYTES`], cut at the last character that fits: the
+/// buffer is allocated at its limit, so filling it never moves it and leaves a copy behind.
+pub fn password(text: &str) -> Password {
+    let mut end = text.len().min(MAX_PASSWORD_BYTES);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut password = Zeroizing::new(String::with_capacity(MAX_PASSWORD_BYTES));
+    password.push_str(&text[..end]);
+    password
 }
 
 /// The lock screen while the session is locked.
 #[derive(Debug)]
 pub struct LockScreen {
     phase: Phase,
-    password: Password,
+    /// Counts the times the password field was emptied (a submission, Escape, an unlock): the view makes a new field
+    /// for each, so the typed text of the one before is dropped and zeroed.
+    field: u64,
     /// Why the last attempt could not be decided; shown until the next edit.
     notice: Option<String>,
     interface: Fade,
@@ -149,7 +160,7 @@ impl LockScreen {
     pub fn new(now: f64, hide_after: f64) -> Self {
         LockScreen {
             phase: Phase::Locked,
-            password: empty_password(),
+            field: 0,
             notice: None,
             interface: Fade {
                 from: 0.0,
@@ -183,9 +194,9 @@ impl LockScreen {
         self.phase
     }
 
-    /// Characters in the field.
-    pub fn password_len(&self) -> usize {
-        self.password.chars().count()
+    /// Which password field the screen shows: a new number is a new, empty field.
+    pub fn field(&self) -> u64 {
+        self.field
     }
 
     /// The failure of the last attempt that was not a wrong password, until the next edit.
@@ -217,12 +228,23 @@ impl LockScreen {
         }
     }
 
-    /// Whether the interface is on its way to hidden or hidden.
-    fn hidden(&self) -> bool {
+    /// Whether the interface is on its way to hidden or hidden: the next key only shows it again.
+    pub fn hidden(&self) -> bool {
         self.interface.to == 0.0 && self.phase != Phase::Unlocking
     }
 
-    /// Note input that is not a key (pointer motion or a press): it shows a hidden interface and restarts the idle time.
+    /// Whether the field takes edits now: while waiting, during an attempt and during the shake (it was emptied on
+    /// submit, and a retry is typed straight away), never while the interface is hidden or the screen unlocks.
+    pub fn editable(&self) -> bool {
+        !self.hidden()
+            && matches!(
+                self.phase,
+                Phase::Locked | Phase::Authenticating { .. } | Phase::Failed { .. }
+            )
+    }
+
+    /// Note input: it shows a hidden interface and restarts the idle time. The key or click that shows a hidden
+    /// interface does nothing else; the view swallows it.
     pub fn activity(&mut self, now: f64) {
         self.last_input = now;
         if self.phase == Phase::Locked {
@@ -230,49 +252,42 @@ impl LockScreen {
         }
     }
 
-    /// Handle a key. The key that shows a hidden interface does nothing else. Returns the password when it is
-    /// submitted: the screen is then [`Phase::Authenticating`], waiting for [`LockScreen::finish_auth`].
-    /// The field takes keys while an attempt runs and during the shake (it was emptied on submit, and a retry
-    /// is typed straight away); only a second submission waits for the answer.
-    pub fn press(&mut self, now: f64, key: Key) -> Option<Password> {
-        let was_hidden = self.hidden();
+    /// The person changed the text in the field: what the screen said about the last attempt goes.
+    pub fn edit(&mut self, now: f64) {
+        let editable = self.editable();
         self.activity(now);
-        let typing = matches!(
-            self.phase,
-            Phase::Locked | Phase::Authenticating { .. } | Phase::Failed { .. }
-        );
-        if was_hidden || !typing {
+        if editable {
+            self.notice = None;
+            self.failure_outline = false;
+        }
+    }
+
+    /// Escape: empty the field (a new [`LockScreen::field`]) and forget what the screen said about the last attempt.
+    pub fn escape(&mut self, now: f64) {
+        let editable = self.editable();
+        self.activity(now);
+        if editable {
+            self.field += 1;
+            self.notice = None;
+            self.failure_outline = false;
+        }
+    }
+
+    /// Return in the field with `typed` in it, borrowed from the field's zeroed buffer. Returns the password to authenticate
+    /// when it is submitted, its only copy: the screen is then [`Phase::Authenticating`], waiting for
+    /// [`LockScreen::finish_auth`], and the field is a new, empty one, so the view drops the old field and its buffer. An
+    /// empty field, a second submission while an attempt runs, and Return on a hidden interface submit nothing.
+    pub fn submit(&mut self, now: f64, typed: &str) -> Option<Password> {
+        let editable = self.editable();
+        self.activity(now);
+        if !editable || typed.is_empty() || matches!(self.phase, Phase::Authenticating { .. }) {
             return None;
         }
-        match key {
-            Key::Char(c) => {
-                if !c.is_control() && self.password.len() + c.len_utf8() <= MAX_PASSWORD_BYTES {
-                    self.password.push(c);
-                }
-                self.notice = None;
-                self.failure_outline = false;
-            }
-            Key::Backspace => {
-                self.password.pop();
-                self.notice = None;
-                self.failure_outline = false;
-            }
-            Key::Escape => {
-                self.password = empty_password();
-                self.notice = None;
-                self.failure_outline = false;
-            }
-            Key::Return
-                if self.password.is_empty()
-                    || matches!(self.phase, Phase::Authenticating { .. }) => {}
-            Key::Return => {
-                self.phase = Phase::Authenticating { since: now };
-                self.notice = None;
-                self.failure_outline = false;
-                return Some(std::mem::replace(&mut self.password, empty_password()));
-            }
-        }
-        None
+        self.phase = Phase::Authenticating { since: now };
+        self.field += 1;
+        self.notice = None;
+        self.failure_outline = false;
+        Some(password(typed))
     }
 
     /// Show a message the authenticator sent while the attempt runs, until the next edit. The messages of one attempt follow
@@ -284,7 +299,7 @@ impl LockScreen {
         });
     }
 
-    /// Take the authenticator's answer to the attempt [`LockScreen::press`] handed out.
+    /// Take the authenticator's answer to the attempt [`LockScreen::submit`] handed out.
     pub fn finish_auth(&mut self, now: f64, outcome: AuthOutcome) -> Result<(), NoAttempt> {
         if !matches!(self.phase, Phase::Authenticating { .. }) {
             return Err(NoAttempt);
@@ -311,7 +326,7 @@ impl LockScreen {
     /// The session manager proved the password at the login screen (a fast user switch, unlock result 4 of the design,
     /// ): unlock from any phase. The caller only calls this for a message of the manager.
     pub fn unlock_by_switch(&mut self, now: f64) {
-        self.password = empty_password();
+        self.field += 1;
         self.failure_outline = false;
         self.phase = Phase::Unlocking;
         self.interface.retarget(now, 0.0);
@@ -362,10 +377,9 @@ impl LockScreen {
 mod tests {
     use super::*;
 
-    fn type_str(screen: &mut LockScreen, now: f64, text: &str) {
-        for c in text.chars() {
-            assert_eq!(screen.press(now, Key::Char(c)), None);
-        }
+    /// Submit `typed` at `now`; the password handed to the authenticator, if any.
+    fn submit(screen: &mut LockScreen, now: f64, typed: &str) -> Option<String> {
+        screen.submit(now, typed).map(|p| p.as_str().to_owned())
     }
 
     fn approx(actual: f64, expected: f64) {
@@ -406,83 +420,58 @@ mod tests {
     }
 
     #[test]
-    fn typing_edits_the_field() {
-        let mut screen = LockScreen::new(0.0, HIDE_AFTER);
-        type_str(&mut screen, 1.0, "héllo");
-        assert_eq!(screen.password_len(), 5);
-        assert_eq!(screen.press(1.0, Key::Char('\u{7}')), None);
-        assert_eq!(screen.password_len(), 5);
-        screen.press(1.0, Key::Backspace);
-        assert_eq!(screen.password_len(), 4);
-        screen.press(1.0, Key::Escape);
-        assert_eq!(screen.password_len(), 0);
-        screen.press(1.0, Key::Backspace);
-        assert_eq!(screen.password_len(), 0);
-    }
-
-    #[test]
-    fn the_field_stops_at_the_authenticator_limit() {
-        let mut screen = LockScreen::new(0.0, HIDE_AFTER);
-        for _ in 0..MAX_PASSWORD_BYTES + 10 {
-            screen.press(1.0, Key::Char('a'));
-        }
-        assert_eq!(screen.password_len(), MAX_PASSWORD_BYTES);
-        // a two-byte character does not fit in the one byte left over, a one-byte one does
-        screen.press(1.0, Key::Backspace);
-        screen.press(1.0, Key::Char('é'));
-        assert_eq!(screen.password_len(), MAX_PASSWORD_BYTES - 1);
-        screen.press(1.0, Key::Char('a'));
-        assert_eq!(screen.password_len(), MAX_PASSWORD_BYTES);
+    fn a_password_is_cut_at_the_authenticator_limit_on_a_character_boundary() {
+        let long = "a".repeat(MAX_PASSWORD_BYTES + 10);
+        assert_eq!(password(&long).len(), MAX_PASSWORD_BYTES);
+        // a two-byte character does not fit in the one byte left over
+        let straddling = format!("{}é", "a".repeat(MAX_PASSWORD_BYTES - 1));
+        assert_eq!(password(&straddling).len(), MAX_PASSWORD_BYTES - 1);
+        let fits = format!("{}é", "a".repeat(MAX_PASSWORD_BYTES - 2));
+        assert_eq!(password(&fits).len(), MAX_PASSWORD_BYTES);
+        assert_eq!(password(&long).capacity(), MAX_PASSWORD_BYTES);
     }
 
     #[test]
     fn return_with_an_empty_field_does_nothing() {
         let mut screen = LockScreen::new(0.0, HIDE_AFTER);
-        assert_eq!(screen.press(1.0, Key::Return), None);
+        assert_eq!(submit(&mut screen, 1.0, ""), None);
         assert_eq!(screen.phase(), Phase::Locked);
+        assert_eq!(screen.field(), 0, "the field stays as it is");
     }
 
     #[test]
     fn return_hands_over_the_password_and_empties_the_field() {
         let mut screen = LockScreen::new(0.0, HIDE_AFTER);
-        type_str(&mut screen, 1.0, "hunter2");
-        let password = screen
-            .press(1.0, Key::Return)
-            .expect("the password is submitted");
-        assert_eq!(password.as_str(), "hunter2");
+        assert_eq!(
+            submit(&mut screen, 1.0, "hunter2").as_deref(),
+            Some("hunter2")
+        );
         assert_eq!(screen.phase(), Phase::Authenticating { since: 1.0 });
-        assert_eq!(screen.password_len(), 0);
-        // a retry can be typed while the answer is pending, but not submitted
-        assert_eq!(screen.press(1.1, Key::Char('x')), None);
-        assert_eq!(screen.press(1.1, Key::Return), None);
+        assert_eq!(screen.field(), 1, "a new, empty field");
+        // a retry can be typed while the answer is pending, but not submitted: one attempt at a time
+        screen.edit(1.1);
+        assert!(screen.editable());
+        assert_eq!(submit(&mut screen, 1.1, "x"), None);
         assert_eq!(screen.phase(), Phase::Authenticating { since: 1.0 });
-        assert_eq!(screen.password_len(), 1);
+        assert_eq!(screen.field(), 1, "the retry is kept");
     }
 
     #[test]
     fn a_wrong_password_shakes_then_waits_for_a_new_one() {
         let mut screen = LockScreen::new(0.0, HIDE_AFTER);
-        type_str(&mut screen, 1.0, "wrong");
-        screen.press(1.0, Key::Return);
+        submit(&mut screen, 1.0, "wrong");
         screen.finish_auth(2.0, AuthOutcome::Denied).unwrap();
         assert_eq!(screen.phase(), Phase::Failed { since: 2.0 });
         approx(screen.shake(2.0 + SHAKE_DURATION / 12.0), 14.0);
-        // a retry typed during the shake is kept
-        type_str(&mut screen, 2.1, "ri");
+        // a retry typed and submitted during the shake goes out at once
+        screen.edit(2.1);
         screen.tick(2.375);
         assert_eq!(screen.phase(), Phase::Failed { since: 2.0 });
         screen.tick(2.5);
         assert_eq!(screen.phase(), Phase::Locked);
         approx(screen.shake(2.5), 0.0);
-        type_str(&mut screen, 2.5, "ght");
-        assert_eq!(screen.password_len(), 5);
-        assert_eq!(
-            screen
-                .press(2.6, Key::Return)
-                .as_deref()
-                .map(String::as_str),
-            Some("right")
-        );
+        assert_eq!(submit(&mut screen, 2.6, "right").as_deref(), Some("right"));
+        assert_eq!(screen.field(), 2);
     }
 
     #[test]
@@ -490,9 +479,8 @@ mod tests {
         for reduce_motion in [false, true] {
             let mut screen = LockScreen::new(0.0, HIDE_AFTER);
             screen.set_reduce_motion(reduce_motion);
-            type_str(&mut screen, 1.0, "wrong");
             assert!(!screen.failure_outline());
-            screen.press(1.0, Key::Return);
+            submit(&mut screen, 1.0, "wrong");
             screen.tick(2.5);
             assert!(screen.spinner(2.5).is_some());
             assert!(!screen.failure_outline(), "not while the attempt runs");
@@ -502,19 +490,18 @@ mod tests {
             screen.tick(3.0 + SHAKE_DURATION + 1.0);
             assert_eq!(screen.phase(), Phase::Locked);
             assert!(screen.failure_outline(), "it stays after the shake");
-            type_str(&mut screen, 5.0, "r");
+            screen.activity(4.5);
+            assert!(screen.failure_outline(), "a pointer move is not an edit");
+            screen.edit(5.0);
             assert!(!screen.failure_outline(), "the next keystroke ends it");
 
-            for edit in [Key::Backspace, Key::Escape] {
-                screen.press(6.0, Key::Return);
-                screen.finish_auth(6.5, AuthOutcome::Denied).unwrap();
-                assert!(screen.failure_outline());
-                screen.press(7.0, edit);
-                assert!(!screen.failure_outline(), "{edit:?} ends it");
-                type_str(&mut screen, 7.0, "r");
-            }
+            submit(&mut screen, 6.0, "again");
+            screen.finish_auth(6.5, AuthOutcome::Denied).unwrap();
+            assert!(screen.failure_outline());
+            screen.escape(7.0);
+            assert!(!screen.failure_outline(), "Escape ends it");
 
-            screen.press(8.0, Key::Return);
+            submit(&mut screen, 8.0, "r");
             screen
                 .finish_auth(8.5, AuthOutcome::Error("account locked".into()))
                 .unwrap();
@@ -522,11 +509,22 @@ mod tests {
                 !screen.failure_outline(),
                 "an undecided attempt shows its notice instead"
             );
-            type_str(&mut screen, 9.0, "right");
-            screen.press(9.0, Key::Return);
+            submit(&mut screen, 9.0, "right");
             screen.finish_auth(9.5, AuthOutcome::Success).unwrap();
             assert!(!screen.failure_outline());
         }
+    }
+
+    #[test]
+    fn escape_empties_the_field_and_clears_the_notice() {
+        let mut screen = LockScreen::new(0.0, HIDE_AFTER);
+        submit(&mut screen, 1.0, "pw");
+        screen
+            .finish_auth(1.5, AuthOutcome::Error("no PAM".into()))
+            .unwrap();
+        assert_eq!(screen.field(), 1);
+        screen.escape(2.0);
+        assert_eq!((screen.field(), screen.notice()), (2, None));
     }
 
     #[test]
@@ -535,8 +533,7 @@ mod tests {
         let mut still = LockScreen::new(0.0, HIDE_AFTER);
         still.set_reduce_motion(true);
         for screen in [&mut moving, &mut still] {
-            type_str(screen, 1.0, "wrong");
-            screen.press(1.0, Key::Return);
+            submit(screen, 1.0, "wrong");
             screen.finish_auth(2.0, AuthOutcome::Denied).unwrap();
         }
         let mut t = 2.0;
@@ -556,8 +553,7 @@ mod tests {
     #[test]
     fn an_authenticator_error_keeps_the_screen_locked_and_shows_the_reason_until_the_next_edit() {
         let mut screen = LockScreen::new(0.0, HIDE_AFTER);
-        type_str(&mut screen, 1.0, "pw");
-        screen.press(1.0, Key::Return);
+        submit(&mut screen, 1.0, "pw");
         screen
             .finish_auth(
                 1.5,
@@ -566,31 +562,30 @@ mod tests {
             .unwrap();
         assert_eq!(screen.phase(), Phase::Locked);
         assert_eq!(screen.notice(), Some("authentication service unavailable"));
-        assert_eq!(screen.password_len(), 0);
-        screen.press(2.0, Key::Char('a'));
+        screen.edit(2.0);
         assert_eq!(screen.notice(), None);
     }
 
     #[test]
     fn a_message_of_the_authenticator_shows_until_the_next_edit() {
         let mut screen = LockScreen::new(0.0, HIDE_AFTER);
-        type_str(&mut screen, 1.0, "pw");
-        screen.press(1.0, Key::Return);
+        submit(&mut screen, 1.0, "pw");
         screen.notify("Password expires soon".into());
         assert_eq!(screen.notice(), Some("Password expires soon"));
         screen.finish_auth(1.5, AuthOutcome::Denied).unwrap();
         assert_eq!(screen.notice(), Some("Password expires soon"));
-        screen.press(2.0, Key::Char('a'));
+        screen.edit(2.0);
         assert_eq!(screen.notice(), None);
     }
 
     #[test]
     fn success_fades_the_interface_out_and_then_unlocks() {
         let mut screen = LockScreen::new(0.0, HIDE_AFTER);
-        type_str(&mut screen, 1.0, "pw");
-        screen.press(1.0, Key::Return);
+        submit(&mut screen, 1.0, "pw");
         screen.finish_auth(2.0, AuthOutcome::Success).unwrap();
         assert_eq!(screen.phase(), Phase::Unlocking);
+        assert!(!screen.editable(), "nothing more is typed");
+        assert_eq!(submit(&mut screen, 2.05, "more"), None);
         approx(screen.opacity(2.125), 0.5);
         screen.tick(2.2);
         assert_eq!(screen.phase(), Phase::Unlocking);
@@ -601,18 +596,14 @@ mod tests {
     #[test]
     fn a_fast_user_switch_unlocks_from_any_phase_and_forgets_what_was_typed() {
         let mut screen = LockScreen::new(0.0, HIDE_AFTER);
-        type_str(&mut screen, 1.0, "pw");
+        screen.edit(1.0);
         screen.unlock_by_switch(2.0);
-        assert_eq!(
-            (screen.phase(), screen.password_len()),
-            (Phase::Unlocking, 0)
-        );
+        assert_eq!((screen.phase(), screen.field()), (Phase::Unlocking, 1));
         screen.tick(2.25);
         assert_eq!(screen.phase(), Phase::Unlocked);
         // also with an attempt on its way to the authenticator
         let mut screen = LockScreen::new(0.0, HIDE_AFTER);
-        type_str(&mut screen, 1.0, "pw");
-        screen.press(1.0, Key::Return);
+        submit(&mut screen, 1.0, "pw");
         screen.unlock_by_switch(1.5);
         assert_eq!(screen.phase(), Phase::Unlocking);
     }
@@ -625,6 +616,14 @@ mod tests {
             Err(NoAttempt)
         );
         assert_eq!(screen.phase(), Phase::Locked);
+        // and a second answer to one attempt too
+        submit(&mut screen, 2.0, "pw");
+        screen.finish_auth(2.5, AuthOutcome::Denied).unwrap();
+        assert_eq!(
+            screen.finish_auth(2.6, AuthOutcome::Success),
+            Err(NoAttempt)
+        );
+        assert_eq!(screen.phase(), Phase::Failed { since: 2.5 });
     }
 
     #[test]
@@ -632,20 +631,20 @@ mod tests {
         // every sequence of up to five steps from the inputs that do not carry a success
         #[derive(Clone, Copy, Debug)]
         enum Step {
-            Type,
-            Backspace,
+            Edit,
             Escape,
-            Return,
+            Submit,
+            SubmitEmpty,
             Activity,
             Tick(f64),
             Denied,
             Error,
         }
         let steps = [
-            Step::Type,
-            Step::Backspace,
+            Step::Edit,
             Step::Escape,
-            Step::Return,
+            Step::Submit,
+            Step::SubmitEmpty,
             Step::Activity,
             Step::Tick(0.5),
             Step::Tick(40.0),
@@ -668,10 +667,10 @@ mod tests {
                 for step in sequence {
                     now += 1.0;
                     match *step {
-                        Step::Type => drop(screen.press(now, Key::Char('a'))),
-                        Step::Backspace => drop(screen.press(now, Key::Backspace)),
-                        Step::Escape => drop(screen.press(now, Key::Escape)),
-                        Step::Return => drop(screen.press(now, Key::Return)),
+                        Step::Edit => screen.edit(now),
+                        Step::Escape => screen.escape(now),
+                        Step::Submit => drop(submit(&mut screen, now, "a")),
+                        Step::SubmitEmpty => drop(submit(&mut screen, now, "")),
                         Step::Activity => screen.activity(now),
                         Step::Tick(seconds) => {
                             now += seconds;
@@ -694,8 +693,7 @@ mod tests {
     #[test]
     fn the_messages_of_one_attempt_follow_each_other_and_a_later_one_replaces_them() {
         let mut screen = LockScreen::new(0.0, HIDE_AFTER);
-        type_str(&mut screen, 1.0, "x");
-        assert!(screen.press(1.0, Key::Return).is_some());
+        assert!(submit(&mut screen, 1.0, "x").is_some());
         screen.notify("The account is locked due to 3 failed logins.".to_owned());
         screen.notify("(10 minutes left to unlock)".to_owned());
         assert_eq!(
@@ -713,7 +711,7 @@ mod tests {
     #[test]
     fn a_screen_locked_on_request_hides_after_five_seconds_without_input() {
         let mut screen = LockScreen::new(0.0, HIDE_AFTER_EXPLICIT_LOCK);
-        type_str(&mut screen, 1.0, "a");
+        screen.edit(1.0);
         approx(screen.next_wakeup(1.0).unwrap(), 5.0);
         screen.tick(5.9);
         approx(screen.opacity(5.9), 1.0);
@@ -723,31 +721,31 @@ mod tests {
     }
 
     #[test]
-    fn an_untouched_interface_hides_after_thirty_seconds_and_the_waking_key_is_not_typed() {
+    fn an_untouched_interface_hides_after_thirty_seconds_and_the_waking_input_is_not_typed() {
         let mut screen = LockScreen::new(0.0, HIDE_AFTER);
-        type_str(&mut screen, 5.0, "ab");
+        screen.edit(5.0);
         approx(screen.next_wakeup(5.0).unwrap(), 30.0);
         // the fade-in ended at 0.25, before the first input at 5
         approx(screen.next_wakeup(0.0).unwrap(), 0.25);
         screen.tick(34.9);
         approx(screen.opacity(34.9), 1.0);
         screen.tick(35.0);
+        assert!(screen.hidden() && !screen.editable());
         approx(screen.opacity(35.125), 0.5);
         approx(screen.opacity(35.25), 0.0);
         assert_eq!(screen.next_wakeup(36.0), None);
-        // the key shows the interface again and leaves the field alone
-        assert_eq!(screen.press(40.0, Key::Char('c')), None);
-        assert_eq!(screen.password_len(), 2);
+        // Return on the hidden interface shows it and submits nothing
+        assert_eq!(submit(&mut screen, 40.0, "typed before"), None);
+        assert_eq!(screen.phase(), Phase::Locked);
         approx(screen.opacity(40.25), 1.0);
-        type_str(&mut screen, 41.0, "c");
-        assert_eq!(screen.password_len(), 3);
+        assert!(screen.editable());
+        assert_eq!(submit(&mut screen, 41.0, "pw").as_deref(), Some("pw"));
     }
 
     #[test]
     fn the_interface_does_not_hide_while_an_attempt_is_pending() {
         let mut screen = LockScreen::new(0.0, HIDE_AFTER);
-        type_str(&mut screen, 1.0, "pw");
-        screen.press(1.0, Key::Return);
+        submit(&mut screen, 1.0, "pw");
         screen.tick(100.0);
         approx(screen.opacity(100.0), 1.0);
         // only the spinner moves: its frame turns 1/48 s into the next frame length
@@ -757,9 +755,8 @@ mod tests {
     #[test]
     fn the_spinner_appears_after_a_second_of_authentication_and_turns_at_24_frames_a_second() {
         let mut screen = LockScreen::new(0.0, HIDE_AFTER);
-        type_str(&mut screen, 1.0, "pw");
         assert_eq!(screen.spinner(1.0), None);
-        screen.press(2.0, Key::Return);
+        submit(&mut screen, 2.0, "pw");
         assert_eq!((screen.spinner(2.0), screen.spinner(2.999)), (None, None));
         approx(screen.next_wakeup(2.5).unwrap(), 0.5);
         assert_eq!(
@@ -773,5 +770,14 @@ mod tests {
         );
         screen.finish_auth(4.2, AuthOutcome::Denied).unwrap();
         assert_eq!(screen.spinner(4.2), None);
+    }
+
+    #[test]
+    fn the_screen_holds_no_password_to_print() {
+        let mut screen = LockScreen::new(0.0, HIDE_AFTER);
+        let handed = submit(&mut screen, 1.0, "hunter2");
+        assert_eq!(handed.as_deref(), Some("hunter2"));
+        let printed = format!("{screen:?}");
+        assert!(!printed.contains("hunter2"), "{printed}");
     }
 }

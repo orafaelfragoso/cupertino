@@ -4,7 +4,7 @@
 //! The layout is the design's interrupt panel: content 413 x 128, a 64 pt icon at (20, 13), a bold
 //! 13 pt title at (102, 13) and a 10 pt info line at (102, 55), both 293 wide, and the buttons on y 83.
 
-use cupertino_geometry::{Point, Rect};
+use cupertino_geometry::Rect;
 
 use crate::model::Key;
 use crate::panel::CANCEL_LABEL;
@@ -75,14 +75,6 @@ impl Frames {
             ],
         }
     }
-
-    /// The choice a click at `point` (panel-local points) makes, if it is on a button.
-    pub fn button_at(&self, point: Point) -> Option<Choice> {
-        self.buttons
-            .iter()
-            .find(|b| b.frame.contains(point))
-            .map(|b| b.choice)
-    }
 }
 
 impl Default for Frames {
@@ -137,17 +129,12 @@ mod tests {
     }
 
     #[test]
-    fn clicks_hit_a_button_and_escape_cancels() {
+    fn the_buttons_are_cancel_then_force_quit_and_escape_cancels() {
         let f = Frames::new();
         assert_eq!(
-            f.button_at(f.buttons[1].frame.center()),
-            Some(Choice::ForceQuit)
+            f.buttons.map(|b| b.choice),
+            [Choice::Cancel, Choice::ForceQuit]
         );
-        assert_eq!(
-            f.button_at(f.buttons[0].frame.center()),
-            Some(Choice::Cancel)
-        );
-        assert_eq!(f.button_at(f.icon.center()), None);
         assert_eq!(press(Key::Escape), Some(Choice::Cancel));
         assert_eq!(press(Key::Return), None, "Force Quit is not the default");
     }

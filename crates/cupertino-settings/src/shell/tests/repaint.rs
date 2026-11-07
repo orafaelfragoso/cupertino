@@ -1,5 +1,8 @@
 //! What the window repaints for its common interactions, and how long each frame takes at 3840×2160.
 //!
+//! The tests pin the damage, never the wall time: a switch and a slider repaint only themselves, and switching panes
+//! repaints in the sidebar only the rows the selection left and reached.
+//!
 //! `repaint_budget_report` is `#[ignore]`d: it measures wall time, which depends on the machine, and is run by hand in
 //! the release profile (see the crate's README). At each backing scale of [`SCALES`], with the window filling a
 //! 3840×2160 display, it times every frame of each interaction with [`FrameMeter`]. Tables go to standard output and,
@@ -278,5 +281,134 @@ fn repaint_budget_report() {
             let rows = runs.iter().map(|(n, s)| (*n, s.as_slice()));
             std::fs::write(dir.join(format!("settings-{scale}x.csv")), csv(rows)).unwrap();
         }
+    }
+}
+
+/// The damage of every frame `window` presented since frame `from`, and the frames there are now.
+fn damage_since(
+    driver: &TestDriver<SettingsApp>,
+    window: WindowId,
+    from: usize,
+) -> (Vec<cupertino_kit::render::PixelRect>, usize) {
+    let frames = driver.runtime().window_system().frames(window).unwrap();
+    let damage = frames[from..]
+        .iter()
+        .flat_map(|f| f.damage.clone())
+        .collect();
+    (damage, frames.len())
+}
+
+/// Whether `rect`, in pixels, lies inside `bounds`, in points at scale 1, give or take a pixel.
+fn inside(rect: &cupertino_kit::render::PixelRect, bounds: Rect) -> bool {
+    f64::from(rect.x) >= bounds.min_x().floor() - 1.0
+        && f64::from(rect.y) >= bounds.min_y().floor() - 1.0
+        && f64::from(rect.x + rect.width) <= bounds.max_x().ceil() + 1.0
+        && f64::from(rect.y + rect.height) <= bounds.max_y().ceil() + 1.0
+}
+
+/// How far past its bounds a control may paint: its focus ring and its shadow.
+const CONTROL_REACH: f64 = 8.0;
+
+#[test]
+fn a_switch_repaints_only_itself_while_its_knob_slides() {
+    let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let (mut driver, window) = start(dir.path(), PaneId::DesktopDock, 1.0, false);
+    let mut meter = FrameMeter::new(window, Timestamp(0));
+    let switch = rect_of(
+        &driver,
+        window,
+        &format!("{:?}-control", ControlId::AutoHide),
+    );
+    let (_, before) = damage_since(&driver, window, 0);
+    meter.step(&mut driver, |s, _| {
+        press_and_release(s, window, switch.center())
+    });
+    until_quiet(&mut driver, &mut meter, 10, 200);
+    let (damage, after) = damage_since(&driver, window, before);
+    assert!(after > before + 1, "the knob slid over frames");
+    let reach = switch.outset(CONTROL_REACH);
+    assert!(
+        damage.iter().all(|r| inside(r, reach)),
+        "only the switch: {damage:?} outside {reach:?}"
+    );
+}
+
+#[test]
+fn a_slider_repaints_only_itself_while_its_knob_is_dragged() {
+    let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let (mut driver, window) = start(dir.path(), PaneId::DesktopDock, 1.0, false);
+    let mut meter = FrameMeter::new(window, Timestamp(0));
+    let slider = rect_of(
+        &driver,
+        window,
+        &format!("{:?}-control", ControlId::DockSize),
+    );
+    let y = slider.center().y;
+    let (_, before) = damage_since(&driver, window, 0);
+    meter.step(&mut driver, |s, _| {
+        let at = Point::new(slider.min_x() + 4.0, y);
+        pointer(s, window, PointerEvent::Motion { position: at });
+        button(s, window, at, true);
+    });
+    for i in 1..=10 {
+        let x = slider.min_x() + 4.0 + (slider.width() - 8.0) * f64::from(i) / 10.0;
+        meter.step(&mut driver, |s, _| {
+            pointer(
+                s,
+                window,
+                PointerEvent::Motion {
+                    position: Point::new(x, y),
+                },
+            )
+        });
+    }
+    meter.step(&mut driver, |s, _| {
+        button(s, window, Point::new(slider.max_x() - 4.0, y), false)
+    });
+    until_quiet(&mut driver, &mut meter, 10, 200);
+    let (damage, after) = damage_since(&driver, window, before);
+    assert!(after > before + 5, "the knob moved with the pointer");
+    let reach = slider.outset(CONTROL_REACH);
+    assert!(
+        damage.iter().all(|r| inside(r, reach)),
+        "only the slider: {damage:?} outside {reach:?}"
+    );
+}
+
+#[test]
+fn switching_panes_repaints_in_the_sidebar_only_the_rows_the_selection_left_and_reached() {
+    let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let (mut driver, window) = start(dir.path(), PaneId::Keyboard, 1.0, false);
+    let mut meter = FrameMeter::new(window, Timestamp(0));
+    let mut from = rect_of(&driver, window, "keyboard");
+    for pane in ["mouse", "sound", "appearance"] {
+        let to = rect_of(&driver, window, pane);
+        let (_, before) = damage_since(&driver, window, 0);
+        meter.step(&mut driver, |s, _| {
+            press_and_release(s, window, to.center())
+        });
+        until_quiet(&mut driver, &mut meter, 10, 200);
+        let (damage, after) = damage_since(&driver, window, before);
+        assert!(after > before, "the pane changed");
+        let (a, b) = (from.outset(CONTROL_REACH), to.outset(CONTROL_REACH));
+        let in_sidebar: Vec<_> = damage
+            .iter()
+            .filter(|r| f64::from(r.x) < SIDEBAR - CONTROL_REACH)
+            .collect();
+        // two rows next to each other repaint as one rectangle
+        let span = a.union(&b);
+        let area: f64 = in_sidebar
+            .iter()
+            .map(|r| f64::from(r.width) * f64::from(r.height))
+            .sum();
+        assert!(
+            in_sidebar.iter().all(|r| inside(r, span))
+                && area <= a.width() * a.height() + b.width() * b.height(),
+            "only the two rows of the sidebar: {in_sidebar:?} outside {a:?} and {b:?}"
+        );
+        from = to;
     }
 }

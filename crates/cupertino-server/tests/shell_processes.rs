@@ -1392,19 +1392,19 @@ fn interact_with_card(server: &mut Server, card: &PanelSurface) {
     /// The panel reads its backends again every second while it is open.
     const REFRESH: Duration = Duration::from_millis(1500);
     let at = |(x, y): (i32, i32)| card.rect.loc + Point::from((x, y));
-    let bytes = |server: &Server| surface_bytes(&card.surface).unwrap();
+    let bytes = || surface_bytes(&card.surface).unwrap();
     for (what, point) in [("switch", BLUETOOTH), ("slider", SOUND_TRACK)] {
-        let before = bytes(server);
+        let before = bytes();
         server.click_at(at(point));
         server.wait_until("the card to draw the new state", |_| {
             surface_bytes(&card.surface).is_some_and(|b| b != before)
         });
         server.run_for(SETTLE);
-        let after = bytes(server);
+        let after = bytes();
         assert!(after != before, "the {what} drew a new state");
         server.run_for(REFRESH);
         assert!(
-            bytes(server) == after,
+            bytes() == after,
             "the backend kept the {what}'s new state through the refresh"
         );
     }

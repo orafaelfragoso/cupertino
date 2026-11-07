@@ -3789,6 +3789,50 @@ fn an_edit_never_repeats() {
     assert_eq!(app.keys()[from..], [], "no repeat and nothing else");
 }
 
+/// A press on the bar's own empty space while its menu is open: the menu's grab ends and the press goes nowhere, and the
+/// keyboard goes back to the key window, not to the bar, whose layer surface never asked for it. The next keys reach the
+/// application.
+#[test]
+fn a_press_on_empty_bar_space_dismisses_the_menu_and_gives_the_keyboard_back_to_the_key_window() {
+    use smithay::backend::input::ButtonState;
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let (app, window) = key_app(&mut h, "org.example.editor");
+    open_menu(&mut h, &bar, &app);
+    let from = app.keys().len();
+
+    // well right of the menu, on the bar
+    h.state
+        .pointer_moved_to((500.0, f64::from(BAR_HEIGHT) / 2.0).into(), 0, None);
+    h.step();
+    h.state
+        .pointer_button(cupertino_server::events::BTN_LEFT, ButtonState::Pressed, 0);
+    h.step();
+    h.state
+        .pointer_button(cupertino_server::events::BTN_LEFT, ButtonState::Released, 0);
+    h.wait_until("the menu's grab to end", |s| s.popup_grab.is_none());
+    h.wait_until("the keyboard back on the application", |_| {
+        app.has_keyboard()
+    });
+    let focus = h.state.seat.get_keyboard().unwrap().current_focus();
+    assert_eq!(
+        focus.as_ref(),
+        Some(h.state.entry(window).unwrap().surface()),
+        "the key window has the keyboard, not the bar"
+    );
+    assert_eq!(h.state.wm.key_window(), Some(window));
+
+    h.key(KEY_W + 8, true);
+    h.key(KEY_W + 8, false);
+    settle_app(&mut h, &app);
+    assert_eq!(
+        app.presses_since(from),
+        [KeyEvent::Key(KEY_W, true), KeyEvent::Key(KEY_W, false)],
+        "the next key reaches the application"
+    );
+    assert_eq!(bar.error(), None);
+}
+
 #[test]
 fn a_terminal_gets_only_copy_and_paste_as_ctrl_shift() {
     let Some(mut h) = Harness::new() else { return };

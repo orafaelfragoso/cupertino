@@ -1008,6 +1008,146 @@ fn the_menu_bar_process_opens_a_menu_popup_and_a_click_outside_closes_it() {
     });
 }
 
+/// The menu bar process with an application window that has the keyboard. A click on empty bar space while a menu is
+/// open closes the menu and reaches nothing else: no item runs (the window stays the key window and no other popup
+/// opens), and the keyboard goes back to the window rather than to the bar. Hover and Right switch the open menu,
+/// Escape closes it, and the keyboard comes back to the window each time. Run with `--no-capture` for the trace.
+#[test]
+fn a_click_on_empty_bar_space_closes_the_menu_and_the_keyboard_goes_back_to_the_window() {
+    const BTN_LEFT: u32 = 0x110;
+    const ESCAPE: u32 = 1 + 8;
+    const RIGHT: u32 = 106 + 8;
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let Some(mut server) = Server::start(vec![real_process("cupertino-menubar", &bus)], true)
+    else {
+        return;
+    };
+    server.wait_until("the bar to be drawn", |s| {
+        committed_buffer(s, "cupertino-menubar").is_some()
+    });
+    spawn_toplevel(
+        PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
+            .join(server.state.socket_name.as_ref().unwrap()),
+    );
+    server.wait_until("the window to map and take the keyboard", |s| {
+        s.wm.key_window().is_some_and(|w| {
+            s.entry(w).is_some_and(|e| {
+                s.seat.get_keyboard().unwrap().current_focus().as_ref() == Some(e.surface())
+            })
+        })
+    });
+    let window = server.state.wm.key_window().unwrap();
+    let window_has_keyboard = |s: &Cupertino| {
+        s.seat.get_keyboard().unwrap().current_focus().as_ref()
+            == s.entry(window).map(|e| e.surface())
+    };
+    let focus = |s: &Cupertino| -> &'static str {
+        let focus = s.seat.get_keyboard().unwrap().current_focus();
+        if focus.as_ref() == s.entry(window).map(|e| e.surface()) {
+            "the window"
+        } else if focus.is_none() {
+            "nothing"
+        } else if s.popup_grab.is_some() {
+            "the menu (its grab)"
+        } else {
+            "another surface"
+        }
+    };
+    let mut time = 0;
+    let mut click = |server: &mut Server, x: f64, y: f64| {
+        time += 10;
+        server.state.pointer_moved_to((x, y).into(), time, None);
+        server.step();
+        server
+            .state
+            .pointer_button(BTN_LEFT, ButtonState::Pressed, time + 1);
+        server.step();
+        server
+            .state
+            .pointer_button(BTN_LEFT, ButtonState::Released, time + 2);
+        server.step();
+    };
+    let key = |server: &mut Server, code: u32| {
+        for state in [KeyState::Pressed, KeyState::Released] {
+            server
+                .state
+                .keyboard_event_now(Keycode::new(code), state, 0);
+            server.step();
+        }
+    };
+    let open = |s: &Cupertino| popup_buffer_size(s, "cupertino-menubar").is_some();
+
+    click(&mut server, 20.0, 12.0);
+    server.wait_until("the system menu to open with the grab", |s| {
+        open(s) && s.popup_grab.is_some() && !window_has_keyboard(s)
+    });
+    let system = popup_location(&server.state, "cupertino-menubar").unwrap();
+    eprintln!(
+        "trace: click on the system menu at (20, 12): menu open at {system:?}, keyboard on {}",
+        focus(&server.state)
+    );
+
+    // empty bar space, right of the application's menus and left of the status items
+    click(&mut server, 560.0, 12.0);
+    server.wait_until("the menu to close", |s| !open(s) && s.popup_grab.is_none());
+    server.wait_until("the keyboard back on the window", window_has_keyboard);
+    eprintln!(
+        "trace: click on empty bar space at (560, 12): menu closed, grab ended, keyboard on {}, key window {:?}",
+        focus(&server.state),
+        server.state.wm.key_window()
+    );
+    let end = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < end {
+        server.step();
+    }
+    assert!(!open(&server.state), "the click opened no other menu");
+    assert_eq!(server.state.wm.key_window(), Some(window));
+    assert_eq!(
+        server.state.wm.windows().count(),
+        1,
+        "no item ran on the window"
+    );
+    assert!(window_has_keyboard(&server.state));
+
+    // Right moves the open menu to the next title, hovering the system menu's title brings it back, Escape closes it
+    click(&mut server, 20.0, 12.0);
+    server.wait_until("the system menu to open again", |s| {
+        popup_location(s, "cupertino-menubar") == Some(system)
+    });
+    key(&mut server, RIGHT);
+    server.wait_until("Right to open the next menu", |s| {
+        popup_location(s, "cupertino-menubar").is_some_and(|at| at.x > system.x)
+    });
+    let next = popup_location(&server.state, "cupertino-menubar").unwrap();
+    eprintln!(
+        "trace: Right: the menu moved to {next:?}, keyboard on {}",
+        focus(&server.state)
+    );
+    time += 10;
+    server
+        .state
+        .pointer_moved_to((20.0, 12.0).into(), time, None);
+    server.wait_until("hovering the system title to switch back", |s| {
+        popup_location(s, "cupertino-menubar") == Some(system)
+    });
+    eprintln!("trace: hover on the system title: the menu moved back to {system:?}");
+    key(&mut server, ESCAPE);
+    server.wait_until("Escape to close the menu", |s| {
+        !open(s) && s.popup_grab.is_none()
+    });
+    server.wait_until(
+        "the keyboard back on the window after Escape",
+        window_has_keyboard,
+    );
+    eprintln!(
+        "trace: Escape: menu closed, keyboard on {}",
+        focus(&server.state)
+    );
+}
+
 /// Toolkits hide their in-window menu bar while `com.canonical.AppMenu.Registrar` has an owner, so the menu bar process
 /// owns it only while it shows a bar: the name goes with the output of the last bar.
 #[test]

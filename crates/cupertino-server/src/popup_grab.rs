@@ -129,12 +129,7 @@ impl Cupertino {
         if self.entry_for_surface(&root).is_some() {
             return;
         }
-        let back = self.exclusive_layer.clone().or_else(|| {
-            self.wm
-                .key_window()
-                .and_then(|w| self.entry(w))
-                .map(|e| e.surface().clone())
-        });
+        let back = self.keyboard_after_grab(root);
         self.release_popup_grab(
             SERIAL_COUNTER.next_serial(),
             std::time::Duration::from(self.clock.now()).as_millis() as u32,
@@ -142,11 +137,30 @@ impl Cupertino {
         );
     }
 
-    /// End the popup grab, if any: the popups of its chain are dismissed, the keyboard goes back to the toplevel and the
-    /// pointer grab is released.
+    /// Where the keyboard goes when the grab of `root`'s popups ends: back to `root` when it is a window. A layer surface
+    /// (the menu bar) holds the keyboard only while it asks for it, so the keyboard of its grab goes to the exclusive
+    /// layer, else the key window, never to the layer itself.
+    fn keyboard_after_grab(&self, root: WlSurface) -> Option<WlSurface> {
+        if self.entry_for_surface(&root).is_some() {
+            return Some(root);
+        }
+        self.exclusive_layer.clone().or_else(|| {
+            self.wm
+                .key_window()
+                .and_then(|w| self.entry(w))
+                .map(|e| e.surface().clone())
+        })
+    }
+
+    /// End the popup grab, if any: the popups of its chain are dismissed, the keyboard goes back to the toplevel (for a
+    /// layer surface's popups, where [`Cupertino::keyboard_after_grab`] says) and the pointer grab is released.
     pub fn end_popup_grab(&mut self, serial: Serial, time: u32) {
-        let root = self.popup_grab.as_ref().map(|active| active.root.clone());
-        self.release_popup_grab(serial, time, root);
+        let focus = self
+            .popup_grab
+            .as_ref()
+            .map(|active| active.root.clone())
+            .and_then(|root| self.keyboard_after_grab(root));
+        self.release_popup_grab(serial, time, focus);
     }
 
     /// End the popup grab, if any, giving the keyboard to `focus`.

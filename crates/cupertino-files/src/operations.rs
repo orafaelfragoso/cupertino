@@ -215,14 +215,17 @@ impl Progress {
 }
 
 /// The bytes a transfer of `path` counts: a file's length, and one for a folder or a link, so a tree of empty items
-/// still moves the progress. Read without following links.
-fn weight(path: &Path) -> u64 {
+/// still moves the progress. Read without following links; a stop ends the count, so a large tree does not hold it.
+fn weight(path: &Path, cancel: &Cancel) -> u64 {
+    if cancel.is_cancelled() {
+        return 0;
+    }
     let Ok(meta) = fs::symlink_metadata(path) else {
         return 0;
     };
     if meta.is_dir() {
         let children = fs::read_dir(path).into_iter().flatten().flatten();
-        1 + children.map(|c| weight(&c.path())).sum::<u64>()
+        1 + children.map(|c| weight(&c.path(), cancel)).sum::<u64>()
     } else if meta.is_file() {
         meta.len().max(1)
     } else {
@@ -405,7 +408,7 @@ pub fn transfer(
     cancel: &Cancel,
     progress: &mut dyn FnMut(&Progress),
 ) -> Vec<io::Result<PathBuf>> {
-    let weights: Vec<u64> = sources.iter().map(|s| weight(s)).collect();
+    let weights: Vec<u64> = sources.iter().map(|s| weight(s, cancel)).collect();
     let mut done = Progress {
         total_bytes: weights.iter().sum(),
         total_items: sources.len(),
@@ -772,6 +775,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_stop_ends_the_count_of_what_a_transfer_weighs() {
+        let d = tempfile::tempdir().unwrap();
+        let tree = d.path().join("tree");
+        fs::create_dir_all(tree.join("inner")).unwrap();
+        fs::write(tree.join("inner/file"), "abcd").unwrap();
+        let cancel = Cancel::default();
+        // the two folders count one each, the file its four bytes
+        assert_eq!(weight(&tree, &cancel), 6);
+        cancel.cancel();
+        assert_eq!(
+            weight(&tree, &cancel),
+            0,
+            "a stopped transfer reads no further"
+        );
+        let placed = transfer(
+            std::slice::from_ref(&tree),
+            d.path(),
+            DropAction::Copy,
+            &cancel,
+            &mut |_| {},
+        );
+        assert!(is_cancelled(placed[0].as_ref().unwrap_err()));
     }
 
     #[test]

@@ -12,7 +12,8 @@ CupertinoKit is the toolkit that Cupertino's own apps are moving onto. This page
 | `cupertino-menubar` | Bar and menus on Kit layer surfaces. | Outside-click dismissal on empty bar space has an open review finding. |
 | `cupertino-launcher` | Search panel, catcher and hidden windows on Kit layer surfaces. | See the crate README for interaction and styling limits. |
 | `cupertino-notifications` | Banners and notification centre on Kit layer surfaces. | Material, body layout and centre scrolling still have review findings. |
-| Dock, login and lock screen, screenshot UI, window-manager UI | | Normal entry points still use their existing drawing paths. |
+| `cupertino-login` | The lock screen (Kit windows as session-lock surfaces, one per output), the greeter's picker, name and password screens and power menu, the log out, restart, shut down and power-button panels with the "Reopen windows" checkbox, and the interrupt panel. The password field is Kit's secure field. | Real suspend, console switches and PAM logins are checked by hand (the crate README lists the checks). |
+| Dock, screenshot UI, window-manager UI | | Normal entry points still use their existing drawing paths. |
 
 ## The OSD
 

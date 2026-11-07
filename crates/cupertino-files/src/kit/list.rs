@@ -327,7 +327,8 @@ impl Gestures {
         ))
     }
 
-    /// Show `band` and select the rows it crosses.
+    /// Show `band` and select the rows it crosses: the window hears of the band before its selection, so it holds the
+    /// selection's count until the band is let go.
     fn draw_band(&self, band: &Band, cx: &mut EventCx<'_, Message>) {
         let Some(origin) = self.content_origin(cx) else {
             return;
@@ -337,10 +338,10 @@ impl Gestures {
         let past = ((rect.max_y() / self.row_height).ceil().max(0.0) as usize).min(self.count);
         let hits: Vec<usize> = (first..past).collect();
         let next = band.select(&hits);
+        self.emit(WindowEvent::Band(Some(rect)), cx);
         if next != self.selection {
             self.emit(WindowEvent::Select(next), cx);
         }
-        self.emit(WindowEvent::Band(Some(rect)), cx);
     }
 
     /// What the list sees before the table and its rows do, which take keys and presses for themselves: a key, a scroll

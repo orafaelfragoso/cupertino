@@ -41,11 +41,17 @@ const SPACE: u32 = 0x20;
 const MENU_KEY: u32 = 0xff67;
 const LEFT: u32 = 0xff51;
 
-/// An assistive technology that always listens: it asks for what the test says and hears every live region's text.
+/// An assistive technology that always listens: it asks for what the test says and hears a live region's name as the
+/// AT-SPI bridge announces it, when the region's node reaches the tree with a name and whenever its name changes. A
+/// node sent again with the same name, or with a new value or description alone, is not heard again.
 #[derive(Clone, Default)]
 struct Assistive {
     asked: Rc<RefCell<Vec<ActionRequest>>>,
     heard: Rc<RefCell<Vec<String>>>,
+    /// The node that said each of `heard`.
+    speakers: Rc<RefCell<Vec<NodeId>>>,
+    /// The name of each node of the tree the window sent, put together from its whole and partial updates.
+    names: Rc<RefCell<HashMap<NodeId, Option<String>>>>,
 }
 
 impl AccessibilityAdapter for Assistive {
@@ -56,13 +62,28 @@ impl AccessibilityAdapter for Assistive {
     fn window_focus(&mut self, _: WindowId, _: bool) {}
 
     fn update(&mut self, update: &AccessibilityUpdate) {
+        let mut names = self.names.borrow_mut();
         let mut heard = self.heard.borrow_mut();
-        for (_, node) in &update.nodes {
-            if let (Some(_), Some(name)) = (node.live, &node.name) {
-                if heard.last() != Some(name) {
-                    heard.push(name.clone());
-                }
+        // a whole tree replaces the one held, but a node it sends again is the same node
+        let mut before = if update.full {
+            std::mem::take(&mut *names)
+        } else {
+            HashMap::new()
+        };
+        for id in &update.removed {
+            names.remove(id);
+        }
+        for (id, node) in &update.nodes {
+            let old = names.remove(id).or_else(|| before.remove(id)).flatten();
+            let name = node.name.as_deref().unwrap_or("").trim();
+            if node.live.is_some()
+                && !name.is_empty()
+                && old.as_deref().map(str::trim) != Some(name)
+            {
+                heard.push(name.to_owned());
+                self.speakers.borrow_mut().push(*id);
             }
+            names.insert(*id, node.name.clone());
         }
     }
 
@@ -624,6 +645,43 @@ fn transfers_searches_and_selections_are_announced_without_moving_the_keyboard()
         Some("Copied “big.bin” to “Downloads”")
     );
     assert_eq!(focused(&run), before, "the keyboard stays");
+
+    // the same copy again says the same words again, from a node of its own: a reader hears it even when the copy
+    // starts and ends before the window next sends its tree
+    run.menu("paste");
+    run.wait_until(|run| run.named(Role::ProgressIndicator).is_empty() && run.rows().len() == 2);
+    let copied = "Copied “big.bin” to “Downloads”";
+    let said = heard(&at);
+    let speakers: Vec<NodeId> = said
+        .iter()
+        .zip(at.speakers.borrow().iter())
+        .filter(|(s, _)| *s == copied)
+        .map(|(_, id)| *id)
+        .collect();
+    assert_eq!(speakers.len(), 2, "{said:?}");
+    assert_ne!(
+        speakers[0], speakers[1],
+        "each message is a node of its own"
+    );
+}
+
+#[test]
+fn a_rubber_band_says_how_many_items_it_selected_once_it_is_let_go() {
+    let (mut run, at) = start(Appearance::Light);
+    let heard = |at: &Assistive| at.heard.borrow().clone();
+    let notes = run.row_bounds("Notes");
+    let first = run.row_bounds("a.txt");
+    let under = Point::new(notes.center().x, notes.max_y() + 40.0);
+    let over = Point::new(first.center().x + 60.0, first.center().y);
+    run.hold(under, over, Mods::NONE);
+    assert_eq!(run.selected_rows().len(), 3);
+    assert!(
+        heard(&at).is_empty(),
+        "nothing while it is drawn: {:?}",
+        heard(&at)
+    );
+    run.release(over, Mods::NONE);
+    assert_eq!(heard(&at), ["3 items selected"]);
 }
 
 /// The theme the window draws with in `appearance`.

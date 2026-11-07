@@ -269,7 +269,8 @@ impl IconGrid {
         ))
     }
 
-    /// Show `band` and select what it touches: the items whose icon or name it meets.
+    /// Show `band` and select what it touches: the items whose icon or name it meets. The window hears of the band
+    /// before its selection, so it holds the selection's count until the band is let go.
     fn draw_band(&self, band: &Band, cx: &mut EventCx<'_, Message>) {
         let Some(bounds) = cx.bounds() else {
             return;
@@ -287,8 +288,8 @@ impl IconGrid {
             w: rect.width(),
             h: rect.height(),
         });
-        self.select(band.select(&hits), cx);
         cx.emit(Message::Window(self.window, WindowEvent::Band(Some(rect))));
+        self.select(band.select(&hits), cx);
     }
 
     fn pick(&self) -> Pick {

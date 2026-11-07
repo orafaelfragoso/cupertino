@@ -1850,6 +1850,7 @@ impl BrowserWindow {
         announce::Tally {
             results: self.browser.search_results(),
             selected: self.browser.selection().len(),
+            banding: self.band.is_some(),
         }
     }
 

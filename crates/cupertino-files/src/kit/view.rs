@@ -344,10 +344,11 @@ fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> 
         );
     }
     children.push(
+        // each message is a node of its own, which a screen reader hears as it appears
         Element::new(Announcer {
             text: win.announcement.text.clone(),
         })
-        .key("announcer"),
+        .key(format!("announcer/{}", win.announcement.serial)),
     );
     Element::new(Stack {
         axis: Axis::Vertical,

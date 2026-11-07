@@ -167,7 +167,9 @@ keyboard comes back to the button or item that opened a menu, and to the item a 
 closed over the row the keyboard is on leaves it on the folder. A polite live region (`kit::announce`) reads a
 transfer starting and ending ("Copied “a.txt” to “Documents”", "Stopped copying …"), a search's result count and the
 selection's count once it holds more than one item, without taking the keyboard; a single item selected is read by the
-focus that comes to it and a failure by its notification. A selected row's text, its secondary columns included, is
+focus that comes to it and a failure by its notification. Each message is a node of its own, so the same words said
+again (a second copy of the same file) are heard again; a rubber band says its count once it is let go, and a
+transfer's progress is not announced. A selected row's text, its secondary columns included, is
 drawn in the selected control text colour on the accent. The focus ring shows on the toolbar buttons, the path bar's
 folders and the rows under Increase Contrast. Over AT-SPI the list is a multiselectable table whose rows carry their
 selected state.

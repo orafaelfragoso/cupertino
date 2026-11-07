@@ -153,13 +153,17 @@ and `pam_unix`):
 ```
 #%PAM-1.0
 auth       include    system-auth
+-auth      optional   pam_gnome_keyring.so
 account    include    system-auth
 ```
 
 It includes `system-auth` and not `system-login`, which adds `pam_shells`, `pam_nologin` (refuses every user but root while
 `/etc/nologin` exists, for example during shutdown) and the login session modules, none of which belongs to unlocking. Failures
 count towards the account's `pam_faillock` limit, as for a login. `pam_unix` checks the process's own user through
-`unix_chkpwd`, so the process needs no privilege.
+`unix_chkpwd`, so the process needs no privilege. `pam_gnome_keyring` (skipped when it is not installed) runs only after the
+password stack accepted the password and unlocks the user's keyring with it when it is locked (see
+`cupertino-sessiond`'s README, "Secret Service"). A new drawing of this screen keeps passing the typed password to
+`Authenticator`: that is where the keyring is unlocked, not in the UI.
 
 ## Session agent
 

@@ -1,5 +1,6 @@
 """Tests of the session command: `python3 -I packaging/test_session.py`."""
 import os
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -28,6 +29,33 @@ trap 'exit 0' TERM
 shift
 "$@" &
 wait
+"""
+
+# A user manager whose session target is active, so the end of the session cleans up after it.
+ACTIVE_SYSTEMCTL = '#!/bin/sh\necho "$@" >>"$OUT/systemctl"\n[ "$2" = is-active ] && exit 0\nexit 0\n'
+
+# busctl that records its calls and answers the list of collections with $COLLECTIONS (no provider runs when unset).
+FAKE_BUSCTL = """#!/bin/sh
+echo "$@" >>"$OUT/busctl"
+case " $* " in
+*' get-property '*) [ -n "${COLLECTIONS:-}" ] || exit 1; printf '%s\\n' "$COLLECTIONS" ;;
+*' call '*) printf 'aoo 0 "/"\\n' ;;
+esac
+"""
+
+# A session bus with no service directories: nothing on it is started on demand.
+BUS_CONFIG = """<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:dir={dir}</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*"/>
+    <allow receive_sender="*"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
 """
 
 
@@ -204,6 +232,101 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertEqual(self.args(), ['--udev'])
         self.assertIn('more than 7 digits', self.log())
+
+    # The end of a session locks the Secret Service's collections (cupertino-sessiond's README, "Secret Service").
+
+    def tools(self, systemctl=ACTIVE_SYSTEMCTL, busctl=FAKE_BUSCTL):
+        tools = self.root / 'tools'
+        tools.mkdir(exist_ok=True)
+        for name, text in (('systemctl', systemctl), ('busctl', busctl)):
+            if text is not None:
+                (tools / name).write_text(text)
+                (tools / name).chmod(0o755)
+        return f"{tools}:{os.environ['PATH']}"
+
+    def busctl(self):
+        path = self.out / 'busctl'
+        return path.read_text().splitlines() if path.exists() else []
+
+    def test_logout_locks_every_collection_without_starting_a_provider(self):
+        listed = 'ao 2 "/org/freedesktop/secrets/collection/login" "/org/freedesktop/secrets/collection/session"'
+        result = self.run_session(PATH=self.tools(), COLLECTIONS=listed)
+        self.assertEqual(result.returncode, 0)
+        prefix = '--user --auto-start=no --timeout=2 '
+        self.assertEqual(self.busctl(), [
+            prefix + 'get-property org.freedesktop.secrets /org/freedesktop/secrets org.freedesktop.Secret.Service '
+            'Collections',
+            prefix + 'call org.freedesktop.secrets /org/freedesktop/secrets org.freedesktop.Secret.Service Lock ao 2 '
+            '/org/freedesktop/secrets/collection/login /org/freedesktop/secrets/collection/session',
+        ])
+        self.assertIn('locked the keyring (2 collections)', self.log())
+
+    def test_logout_leaves_a_provider_that_is_not_running_alone(self):
+        result = self.run_session(PATH=self.tools())
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(self.busctl()), 1)
+        self.assertNotIn('keyring', self.log())
+
+    def test_logout_never_passes_on_a_path_that_is_not_a_collection(self):
+        for listed in ('ao 1 "/org/freedesktop/secrets/collection/x;touch${IFS}gone"',
+                       'ao 2 "/org/freedesktop/secrets/collection/login" "/etc/passwd"',
+                       'ao 1 "/org/freedesktop/secrets/collection/"',
+                       'as 1 "/org/freedesktop/secrets/collection/login"'):
+            with self.subTest(listed):
+                (self.out / 'busctl').unlink(missing_ok=True)
+                result = self.run_session(PATH=self.tools(), COLLECTIONS=listed)
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(len(self.busctl()), 1, 'Lock was called')
+                self.assertIn('could not lock the keyring: an unexpected', self.log())
+        self.assertFalse((self.root / 'gone').exists())
+
+    def test_a_session_that_did_not_own_the_user_manager_does_not_lock_at_logout(self):
+        inactive = '#!/bin/sh\necho "$@" >>"$OUT/systemctl"\n[ "$2" = is-active ] && exit 3\nexit 0\n'
+        listed = 'ao 1 "/org/freedesktop/secrets/collection/login"'
+        self.run_session(PATH=self.tools(systemctl=inactive), COLLECTIONS=listed)
+        self.assertEqual(self.busctl(), [])
+
+    def test_the_keyring_daemon_is_locked_at_logout(self):
+        """gnome-keyring-daemon on a private bus with no activatable services, unlocked as PAM unlocks it at login."""
+        missing = [tool for tool in ('dbus-daemon', 'gnome-keyring-daemon', 'busctl') if not shutil.which(tool)]
+        if missing:
+            self.assertNotEqual(os.environ.get('CUPERTINO_KEYRING_REQUIRED'), '1', f"{', '.join(missing)} not installed")
+            self.skipTest(f"{', '.join(missing)} not installed")
+        # under /tmp: the bus's and the daemon's sockets must fit in a socket path
+        run = Path(tempfile.mkdtemp(prefix='kr', dir='/tmp'))
+        self.addCleanup(shutil.rmtree, run, True)
+        (run / 'bus.conf').write_text(BUS_CONFIG.format(dir=run))
+        bus = subprocess.Popen(['dbus-daemon', f'--config-file={run}/bus.conf', '--nofork', '--print-address=1'],
+                               stdout=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: (bus.kill(), bus.wait(), bus.stdout.close()))
+        address = bus.stdout.readline().strip()
+        home = self.root / 'home'
+        home.mkdir()
+        env = {'PATH': '/usr/bin:/bin', 'HOME': str(home), 'XDG_RUNTIME_DIR': str(run),
+               'DBUS_SESSION_BUS_ADDRESS': address}
+        daemon = subprocess.Popen(['gnome-keyring-daemon', '--foreground', '--components=secrets',
+                                   f'--control-directory={run}/keyring', '--unlock'],
+                                  env=env, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: (daemon.kill(), daemon.wait()))
+        daemon.stdin.write(b'login password')
+        daemon.stdin.close()
+
+        def locked():
+            got = subprocess.run(['busctl', '--user', 'get-property', 'org.freedesktop.secrets',
+                                  '/org/freedesktop/secrets/collection/login', 'org.freedesktop.Secret.Collection',
+                                  'Locked'], env=env, capture_output=True, text=True)
+            return got.stdout.strip() if got.returncode == 0 else None
+
+        for _ in range(100):
+            if locked() is not None:
+                break
+            time.sleep(0.05)
+        self.assertEqual(locked(), 'b false', 'the login password did not unlock the keyring')
+        result = self.run_session(PATH=self.tools(busctl=None), DBUS_SESSION_BUS_ADDRESS=address)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(locked(), 'b true')
+        self.assertIn('locked the keyring (2 collections)', self.log())
 
 
 if __name__ == '__main__':

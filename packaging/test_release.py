@@ -82,6 +82,64 @@ class PortalsConfTest(unittest.TestCase):
                     self.assertIn(f'xdg-desktop-portal-{backend}', packages)
 
 
+class SecretServiceTest(unittest.TestCase):
+    """gnome-keyring is the session's Secret Service, unlocked through PAM (cupertino-sessiond's README, "Secret Service")."""
+    PAM = release.ROOT / 'packaging/pam'
+    AUTH = '-auth optional pam_gnome_keyring.so'
+    SESSION = '-session optional pam_gnome_keyring.so auto_start'
+
+    def lines(self, fmt, service):
+        return [line for line in (self.PAM / fmt / service).read_text().splitlines() if line and not line.startswith('#')]
+
+    # The stack that checks the password, per format and service. Fedora's system-auth ends its auth stack at
+    # `sufficient pam_unix.so`; an `include` would end this service's stack there too and the keyring line would never
+    # run, so rpm takes it as a substack (as the distributions' own display managers do).
+    STACK = {'arch': 'auth include system-local-login', 'deb': '@include common-auth', 'rpm': 'auth substack system-auth'}
+    LOCK_STACK = {'arch': 'auth include system-auth', 'deb': '@include common-auth', 'rpm': 'auth substack system-auth'}
+
+    def test_a_login_with_a_password_unlocks_the_keyring_and_its_session_starts_the_daemon(self):
+        for fmt, stack in self.STACK.items():
+            with self.subTest(fmt):
+                lines = self.lines(fmt, 'cupertino-session')
+                # right after the stack that checks the password: the module only keeps the password it was given
+                self.assertEqual(lines[lines.index(self.AUTH) - 1], stack)
+                # last: pam_systemd has made the runtime directory, where the daemon's control socket is
+                self.assertEqual(lines[-1], self.SESSION)
+                self.assertEqual(lines.count(self.AUTH) + lines.count(self.SESSION), 2)
+
+    def test_auto_login_starts_the_daemon_locked_and_the_lock_screen_unlocks_it(self):
+        for fmt in ('arch', 'deb', 'rpm'):
+            with self.subTest(fmt):
+                autologin = self.lines(fmt, 'cupertino-autologin')
+                self.assertEqual(autologin[-1], self.SESSION)
+                self.assertNotIn(self.AUTH, autologin)
+                lock = self.lines(fmt, 'cupertino-login')
+                self.assertEqual(lock[:2], [self.LOCK_STACK[fmt], self.AUTH], 'right after the password stack')
+                self.assertFalse([line for line in lock if line.startswith(('session', '-session'))])
+                self.assertFalse([line for line in self.lines(fmt, 'cupertino-greeter') if 'keyring' in line])
+
+    def test_every_format_installs_the_provider_its_pam_module_and_a_client(self):
+        meta = tomllib.loads((release.ROOT / 'crates/cupertino-server/Cargo.toml').read_text())['package']['metadata']
+        deb = [d.strip() for d in meta['deb']['recommends'].split(',')]
+        for package in ('gnome-keyring', 'libpam-gnome-keyring', 'libsecret-tools'):
+            self.assertIn(package, deb)
+        for package in ('gnome-keyring', 'gnome-keyring-pam', 'libsecret'):
+            self.assertIn(package, meta['generate-rpm']['recommends'])
+        for recipe in ('packaging/arch/cupertino/PKGBUILD', 'packaging/arch/cupertino-git/PKGBUILD'):
+            with self.subTest(recipe):
+                depends = re.search(r'^\s+depends=\((.*?)\)', (release.ROOT / recipe).read_text(), re.M | re.S).group(1)
+                self.assertIn("'gnome-keyring'", depends)
+                self.assertIn("'libsecret'", depends)
+        live = (release.ROOT / 'packaging/iso/packages.x86_64').read_text().split()
+        self.assertIn('gnome-keyring', live)
+        self.assertIn('libsecret', live)
+
+    def test_sandboxed_apps_reach_the_keyring_through_the_secret_portal(self):
+        conf = configparser.ConfigParser()
+        conf.read(release.ROOT / 'packaging/files' / PortalsConfTest.CONF)
+        self.assertEqual(conf['preferred']['org.freedesktop.impl.portal.Secret'], 'gnome-keyring')
+
+
 class RuntimeFloorTest(unittest.TestCase):
     """dbus 1.16 passes the caller's ProcessFD (dbus-broker does from 34); PipeWire 1.4 follows a screencast resize."""
 

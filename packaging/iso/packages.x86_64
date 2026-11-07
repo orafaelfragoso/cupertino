@@ -31,6 +31,8 @@ xwayland-satellite
 xdg-desktop-portal
 xdg-desktop-portal-gtk
 polkit
+gnome-keyring
+libsecret
 foot
 noto-fonts
 ttf-dejavu

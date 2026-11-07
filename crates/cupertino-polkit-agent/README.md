@@ -36,8 +36,11 @@ above the menu bar and the dock, and the panel sits above them on the active out
 exclusively. A click on the scrim does nothing. The server keeps the prompt's surfaces out of every capture.
 
 The panel shows the lock symbol, "Authentication Required", polkit's message (at most six lines), a user pop-up when
-polkitd offers more than one user, the field, the error, PAM's information and Caps Lock, a Details disclosure with the
-program and the action, and Cancel and Authenticate. Return authenticates, Escape cancels, and Tab cycles inside the
+polkitd offers more than one user, the field, the error, PAM's information and Caps Lock, a Details disclosure, and
+Cancel and Authenticate. The details name the application the person used (polkitd's subject), the program that asked
+polkitd when it is another one (its caller), and the action. Both are the executables
+the kernel names for polkitd's process ids, never what a process says about itself; a process the user may not inspect
+(one running as root) or that has ended gets no row. Return authenticates, Escape cancels, and Tab cycles inside the
 panel. After three failed attempts polkitd gets the failure and the program shows its own error.
 
 While the session is locked (`cupertino_app_effects_v1` version 5 `session_lock`) or isn't logind's active one,
@@ -50,7 +53,8 @@ value is protected, so neither what is typed nor its length leaves the process; 
 
 | Module | What |
 |---|---|
-| `agent` | the agent on the system bus and its registration |
+| `agent` | the agent on the system bus and its registration; the prompt's detail rows |
+| `conversation` | the model's effects carried out: the helper started and answered, polkitd answered |
 | `helper` | the conversation with polkit's helper |
 | `model` | the prompt and the waiting requests, as a pure model |
 | `panel` | the panel's layout and keyboard focus |
@@ -61,6 +65,28 @@ value is protected, so neither what is typed nor its length leaves the process; 
 
 The colours are the design tokens of the session's appearance; the scrim is `authentication-scrim`. Values marked
 approximate in `panel` and `render` are Cupertino's own.
+
+## Tests
+
+`cargo test -p cupertino-polkit-agent`: the model, the panel, the text and the helper's protocol as unit tests;
+`tests/agent.rs` the agent on a private bus with a fake polkitd (registration, refusals, limits); `tests/flow.rs` a whole
+authentication without a display: a fake polkitd asks, the model and `conversation` run the fixture helper
+(`tests/fixtures/polkit-agent-helper-1`, which accepts "right"), and the test types. It checks the reason and the
+application the prompt shows, that a valid password answers polkitd, that three wrong ones are retried and then end the
+authentication, and that Escape and polkitd's cancel answer `Cancelled`. polkitd and its real helper are not run: they
+need the system bus and root.
+
+**Not verified on an installed session.** Logged in on a machine installed from the live image:
+
+1. In a terminal, `pkexec true`: the prompt shows "Authentication is needed to run `/usr/bin/true' as the super user"
+   (polkit's own text); Details shows the shell as the application and `org.freedesktop.policykit.exec`.
+2. Type a wrong password three times: "Incorrect password. Try again." twice, then the prompt closes and `pkexec` prints
+   that the authorization failed (`echo $?` is 127).
+3. `pkexec true` again, Escape: `pkexec` reports the request dismissed (`echo $?` is 126). Again with the right password:
+   exit 0.
+4. Mount a disk from the file manager as a user that needs a password (or `udisksctl mount -b DEVICE`): the prompt
+   shows udisks' reason and the file manager as the application.
+5. Lock the screen while a prompt is up: it is dismissed; after unlocking, a new `pkexec true` prompts again.
 
 ## Not yet
 

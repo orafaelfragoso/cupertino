@@ -12,7 +12,7 @@ Cupertino ships `cupertino-portal`, an xdg-desktop-portal backend. Sandboxed and
 | AppChooser | Asks which app opens a link or a file, when xdg-desktop-portal's OpenURI needs you to choose. |
 | Screenshot | Asks before it takes a screenshot of every display for an app. |
 
-The routing file `cupertino-portals.conf` sends Settings and FileChooser to Cupertino first and then the GTK backend, sends ScreenCast, AppChooser and Screenshot to Cupertino only, and sends every other interface to the GTK backend.
+The routing file `cupertino-portals.conf` sends Settings and FileChooser to Cupertino first and then the GTK backend, sends ScreenCast, AppChooser and Screenshot to Cupertino only, sends Secret (the saved passwords of sandboxed apps) to gnome-keyring, and sends every other interface to the GTK backend. Saved passwords themselves are described in [Using Cupertino every day](daily-use.md#saved-passwords).
 
 ## App chooser (OpenURI)
 

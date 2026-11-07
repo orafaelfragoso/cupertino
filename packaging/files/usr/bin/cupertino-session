@@ -21,6 +21,41 @@ note() {
     printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" 2>/dev/null >>"$state/session.log" || true
 }
 
+# Logout locks every collection of the Secret Service on the user bus (gnome-keyring's, unlocked by PAM at login; see
+# cupertino-sessiond's README, "Secret Service"). The provider outlives the session while the user manager runs (a
+# second session, lingering), and nothing it holds stays readable once the person has logged out. A provider that is
+# not running is not started. The object paths are checked before they are passed on; secrets are never read here.
+lock_secrets() {
+    command -v busctl >/dev/null 2>&1 || return 0
+    found=$(busctl --user --auto-start=no --timeout=2 get-property org.freedesktop.secrets /org/freedesktop/secrets \
+        org.freedesktop.Secret.Service Collections 2>/dev/null) || return 0
+    # `ao 2 "/org/freedesktop/secrets/collection/login" "/org/freedesktop/secrets/collection/session"`
+    set -f
+    # shellcheck disable=SC2046 # split into words on purpose; globbing is off
+    set -- $(printf '%s\n' "$found" | tr -d '"')
+    set +f
+    if [ "$#" -lt 2 ] || [ "$1" != ao ]; then
+        note "could not lock the keyring: an unexpected list of collections"
+        return 0
+    fi
+    shift 2
+    for path in "$@"; do
+        case $path in
+        /org/freedesktop/secrets/collection/*[!A-Za-z0-9_/]* | /org/freedesktop/secrets/collection/) ;;
+        /org/freedesktop/secrets/collection/*) continue ;;
+        esac
+        note "could not lock the keyring: an unexpected collection path"
+        return 0
+    done
+    [ "$#" -gt 0 ] || return 0
+    if busctl --user --auto-start=no --timeout=2 call org.freedesktop.secrets /org/freedesktop/secrets \
+        org.freedesktop.Secret.Service Lock ao "$#" "$@" >/dev/null 2>&1; then
+        note "locked the keyring ($# collections)"
+    else
+        note "could not lock the keyring"
+    fi
+}
+
 limit=${CUPERTINO_SESSION_LIMIT:-}
 if [ -z "$limit" ] && [ -r "$config/session-limit" ]; then
     read -r limit <"$config/session-limit" || true
@@ -108,6 +143,7 @@ if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet cu
     # shellcheck disable=SC2086 # the names are checked above
     systemctl --user unset-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE DISPLAY XAUTHORITY$defaults 2>/dev/null || true
     note "stopped cupertino-session.target and removed the session's variables from the user manager"
+    lock_secrets
 fi
 
 reason=

@@ -2,12 +2,13 @@
 //! `cupertino_notifications::view` get their layer surfaces from [`NotificationRoles`], the bus wakes the
 //! application's loop through a channel, and timers pace the banners' lifetimes and animations.
 
-use cupertino_kit::core::{Application, Command, Window};
+use cupertino_kit::core::{Application, Command, Key, RuntimeOptions, Window};
 use cupertino_kit::platform::WindowSpec;
 use cupertino_modifiers::Profile;
 use cupertino_notifications::dbus::{Server, ServerOptions};
 use cupertino_notifications::view::{
-    self, banner_key, centre_key, HostAction, Input, Ui, CENTRE_TITLE, SHADOW_MARGIN,
+    self, banner_key, centre_key, CardMetrics, Fold, HostAction, Input, Ui, CENTRE_TITLE,
+    SHADOW_MARGIN,
 };
 use cupertino_notifications::{CenterConfig, StackLayout, Wakeup};
 use cupertino_protocol_app::AppEvent;
@@ -20,6 +21,7 @@ use cupertino_ui_wayland::{RoleEvent, SurfaceRoles, WaylandWindowSystem};
 use cupertino_wayland_client::{Connection, Error as WaylandError, ExtensionEvent, SurfaceId};
 use std::collections::HashMap;
 use std::error::Error;
+use std::sync::Arc;
 use std::time::Duration;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -203,6 +205,8 @@ pub struct Notifications {
     sender: async_channel::Sender<Note>,
     /// The timer that counts; one scheduled before it is ignored when it fires.
     timer: u64,
+    /// Measures the cards with the windows' text system; set once the runtime has its options.
+    metrics: Option<CardMetrics>,
 }
 
 #[derive(Clone, Debug)]
@@ -211,6 +215,8 @@ pub enum Message {
     Note(Note),
     Timer(u64),
     Token(Pending, Option<String>),
+    /// Focus the node with this key, now that the view shows it.
+    Focus(Key),
     /// The bus thread and the roles are gone.
     Unheard,
 }
@@ -272,7 +278,11 @@ impl Notifications {
         let window = if self.ui.centre_open {
             centre_key()
         } else {
-            banner_key(n)
+            let width = c.config.layout.width;
+            banner_key(
+                n,
+                self.metrics.as_ref()?.card(n, width, Fold::Banner).height,
+            )
         };
         Some(Command::ActivationToken {
             window,
@@ -294,6 +304,12 @@ impl Notifications {
             Some(HostAction::OpenLink(href)) => {
                 open_link(&href);
                 Vec::new()
+            }
+            // the card may be one the view builds only after this update
+            Some(HostAction::Focus(key)) => {
+                vec![Command::Perform(Box::pin(
+                    async move { Message::Focus(key) },
+                ))]
             }
             None => Vec::new(),
         }
@@ -344,6 +360,7 @@ fn start(options: &Options) -> Result<(Notifications, Vec<Command<Message>>)> {
             notes,
             sender,
             timer: 0,
+            metrics: None,
         },
         vec![first],
     ))
@@ -356,10 +373,14 @@ impl Application for Notifications {
 
     /// The process's daemon on the session bus; [`run`] starts it with the command line's options.
     fn init() -> (Notifications, Vec<Command<Message>>) {
-        start(&Options {
+        let options = cupertino_kit::app::options()
+            .unwrap_or_else(|e| panic!("cupertino-notifications: {e}"));
+        let (mut model, commands) = start(&Options {
             replace_existing: false,
         })
-        .unwrap_or_else(|e| panic!("cupertino-notifications: {e}"))
+        .unwrap_or_else(|e| panic!("cupertino-notifications: {e}"));
+        model.metrics = Some(metrics(&options));
+        (model, commands)
     }
 
     fn update(model: &mut Notifications, message: Message) -> Vec<Command<Message>> {
@@ -371,7 +392,7 @@ impl Application for Notifications {
                     Note::Toggle => {
                         model.ui = Ui {
                             centre_open: !model.ui.centre_open,
-                            menu_open: false,
+                            ..Ui::default()
                         }
                     }
                     Note::Locked => model.ui = Ui::default(),
@@ -387,6 +408,7 @@ impl Application for Notifications {
                 model.complete(pending, token);
                 Vec::new()
             }
+            Message::Focus(key) => vec![Command::Focus(key)],
             Message::Unheard => {
                 eprintln!("cupertino-notifications: the bus thread stopped");
                 return vec![Command::Exit];
@@ -397,9 +419,23 @@ impl Application for Notifications {
     }
 
     fn view(model: &Notifications) -> Vec<Window<Message>> {
+        let Some(metrics) = &model.metrics else {
+            return Vec::new();
+        };
         let now = model.server.now();
-        view::windows(&mut model.server.center(), &model.ui, now, Message::Input)
+        view::windows(
+            &mut model.server.center(),
+            &model.ui,
+            metrics,
+            now,
+            Message::Input,
+        )
     }
+}
+
+/// The cards' metrics in the type and with the text system the runtime draws with.
+fn metrics(options: &RuntimeOptions) -> CardMetrics {
+    CardMetrics::new(Arc::clone(&options.theme), Arc::clone(&options.text))
 }
 
 /// Connect, claim the bus names and serve until the connection or the bus fails.
@@ -418,7 +454,11 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         layers: HashMap::new(),
         notes: sender,
     });
-    cupertino_kit::app::run_on::<Notifications>(system, start)?;
+    cupertino_kit::app::run_on_with::<Notifications>(system, move |options| {
+        let (mut model, commands) = start;
+        model.metrics = Some(metrics(options));
+        (model, commands)
+    })?;
     Err("the notification surfaces were closed".into())
 }
 

@@ -26,10 +26,10 @@ use cupertino_menu_model::ActionName;
 use cupertino_ui_layout::{layout, Constraints, LayoutDirection, LayoutOptions, LayoutStats};
 use cupertino_ui_platform::{
     ActivationRequest, Backdrop, ClipboardData, ClipboardKind, ConfigureId, ConstraintAdjust,
-    DragImage, DragProgress, DragRequest, DragToken, KeyEvent, Keysym, MenuDescription,
-    PlatformError, PlatformEvent, PointerEvent, PopupEdge, PopupSpec, PresentOutcome,
-    SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec,
-    WindowSystem,
+    DragImage, DragProgress, DragRequest, DragToken, KeyEvent, Keysym, MaterialRegion,
+    MenuDescription, PlatformError, PlatformEvent, PointerEvent, PopupEdge, PopupSpec,
+    PresentOutcome, SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest,
+    WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, DisplayList, PaintResources, RenderError, RenderRequest, UiRenderer,
@@ -104,6 +104,10 @@ struct WindowState<M> {
     background: WindowBackground,
     /// The material the window system shows under the window, as last asked for.
     backdrop: Option<Backdrop>,
+    /// The materials the window system shows under nodes, as last asked for.
+    materials: Vec<MaterialRegion>,
+    /// The window system refused materials under nodes: the nodes paint their fills.
+    materials_refused: bool,
     /// The menus the window system was last asked to publish.
     menus: Option<MenuDescription>,
     on_menu: Option<Box<dyn Fn(ActionName) -> M>>,
@@ -601,6 +605,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             on_close: None,
             background: WindowBackground::Theme,
             backdrop: None,
+            materials: Vec::new(),
+            materials_refused: false,
             menus: None,
             on_menu: None,
             root: None,
@@ -1403,20 +1409,37 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         if !(w.configured && w.frame_ready) {
             return Ok(());
         }
-        let painting = w.painter.paint(
-            &self.tree,
-            root,
-            &w.geometry,
-            &PaintInput {
-                env: &w.env,
-                focus: w.focus.node(),
-                focus_visible: w.focus.visible(),
-                window_active: w.active,
-                background: w.background,
-                backdrop: w.backdrop.is_some(),
-                now,
-            },
-        );
+        let effects = self.system.capabilities().app_effects;
+        let paint = |w: &mut WindowState<A::Message>, tree: &Tree<A::Message>| {
+            w.painter.paint(
+                tree,
+                root,
+                &w.geometry,
+                &PaintInput {
+                    env: &w.env,
+                    focus: w.focus.node(),
+                    focus_visible: w.focus.visible(),
+                    window_active: w.active,
+                    background: w.background,
+                    backdrop: w.backdrop.is_some(),
+                    materials: effects && !w.materials_refused,
+                    now,
+                },
+            )
+        };
+        let mut painting = paint(w, &self.tree);
+        // the shapes take effect with the frame's commit, so the frame presents in full
+        if painting.materials != w.materials {
+            let request = WindowRequest::Materials(painting.materials.clone());
+            if self.system.request(w.id, request).is_ok() {
+                w.materials = std::mem::take(&mut painting.materials);
+            } else {
+                w.materials_refused = true;
+                w.materials.clear();
+                painting = paint(w, &self.tree);
+            }
+            w.damage.invalidate();
+        }
         let damage = w.damage.damage(&painting);
         w.animate.extend(painting.animating);
         w.display_list = painting.list;

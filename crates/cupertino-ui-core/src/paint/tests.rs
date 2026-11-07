@@ -108,6 +108,7 @@ impl Fixture {
                 window_active: true,
                 background: WindowBackground::Theme,
                 backdrop: false,
+                materials: false,
                 now: Timestamp(0),
             },
         );
@@ -209,6 +210,7 @@ fn a_node_carries_the_clip_it_puts_on_its_children_and_bounds_that_cover_its_sub
             window_active: true,
             background: WindowBackground::Theme,
             backdrop: false,
+            materials: false,
             now: Timestamp(0),
         },
     );
@@ -355,6 +357,7 @@ fn a_group_reaches_the_renderer_and_its_effects_widen_the_subtree_bounds() {
             window_active: true,
             background: WindowBackground::Theme,
             backdrop: false,
+            materials: false,
             now: Timestamp(0),
         },
     );
@@ -453,6 +456,7 @@ fn an_image_a_node_draws_travels_with_the_list_and_stays_when_the_node_is_reused
                 window_active: true,
                 background: WindowBackground::Theme,
                 backdrop: false,
+                materials: false,
                 now: Timestamp(0),
             },
         )
@@ -479,4 +483,135 @@ fn an_image_a_node_draws_travels_with_the_list_and_stays_when_the_node_is_reused
         );
     }
     assert_eq!(paints.get(), 1, "the second frame reused the node");
+}
+
+/// Asks for the popover material under itself and paints the opaque fill where the window does not show it.
+struct Platter;
+
+impl Widget<M> for Platter {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if !cx.material(cupertino_ui_theme::Surface::Popover, 6.0, 0.5) {
+            cx.push(PaintOp::Fill {
+                shape: Shape::Rect(Rect::from_origin_size(Point::new(0.0, 0.0), cx.size())),
+                paint: Paint::Solid(Color::new(0.5, 0.5, 0.5, 1.0)),
+            });
+        }
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+#[test]
+fn a_node_s_material_is_cut_to_what_shows_and_capped_per_window_and_a_refused_one_is_painted() {
+    let platters = MAX_MATERIALS + 2;
+    let mut tree = Tree::<M>::new(platters + 2);
+    let children = (0..platters).map(|_| Element::new(Platter)).collect();
+    let root = tree
+        .reconcile(None, Element::new(crate::test_support::group(children)))
+        .unwrap();
+    let ids = tree.get(root).unwrap().children.clone();
+    let viewport = Rect::new(0.0, 0.0, 100.0, 1000.0);
+    let mut geometry = Geometry::from([(
+        root,
+        Placement {
+            rect: viewport,
+            target: viewport,
+            clip: None,
+            own_clip: Some(viewport),
+        },
+    )]);
+    // the first platter is half scrolled out of the viewport's top, the others below it, 20 pt apart
+    for (i, id) in ids.iter().enumerate() {
+        let rect = Rect::new(10.0, i as f64 * 20.0 - 5.0, 80.0, 10.0);
+        geometry.insert(
+            *id,
+            Placement {
+                rect,
+                target: rect,
+                clip: Some(viewport),
+                own_clip: None,
+            },
+        );
+    }
+    let env = env();
+    let mut painter = Painter::default();
+    let mut paint = |materials| {
+        painter.paint(
+            &tree,
+            root,
+            &geometry,
+            &PaintInput {
+                env: &env,
+                focus: None,
+                focus_visible: false,
+                window_active: true,
+                background: WindowBackground::None,
+                backdrop: false,
+                materials,
+                now: Timestamp(0),
+            },
+        )
+    };
+    let filled = |painting: &Painting| {
+        painting
+            .list
+            .nodes
+            .iter()
+            .filter(|n| !n.ops.is_empty())
+            .count()
+    };
+
+    let shown = paint(true);
+    assert_eq!(
+        shown.materials.len(),
+        MAX_MATERIALS,
+        "no more than a window shows"
+    );
+    assert_eq!(
+        shown.materials[0],
+        MaterialRegion {
+            material: "Menu".into(),
+            rect: Rect::new(10.0, 0.0, 80.0, 5.0),
+            radius: 6.0,
+            alpha: 0.5,
+        },
+        "the popover's material, in window coordinates, cut by the viewport"
+    );
+    assert_eq!(shown.materials[1].rect, Rect::new(10.0, 15.0, 80.0, 10.0));
+    assert_eq!(
+        filled(&shown),
+        2,
+        "the platters past the limit paint their fill"
+    );
+
+    let refused = paint(false);
+    assert!(refused.materials.is_empty());
+    assert_eq!(
+        filled(&refused),
+        platters,
+        "every platter paints its fill when the window shows none"
+    );
 }

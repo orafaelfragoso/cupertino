@@ -51,6 +51,12 @@ all on one thread.
   or when the request fails, core paints the surface's opaque fill in the window's rounded shape. A theme change
   (Reduce Transparency, high contrast) takes the material away or asks for it again. Its `alpha` fades the material
   or the fill, so a window can fade its background with its content; a change of alpha alone keeps the material.
+  A node can also ask for its surface's material under itself while painting (`PaintCx::material(surface, radius,
+  alpha)`): core cuts it to the part of the node that shows (a scroll view's clip, say) and sends the window's list
+  as `WindowRequest::Materials` when it changes. It is granted, and the call returns `true`, only with `app_effects`,
+  when the theme gives the surface a material and while the window holds fewer than `MAX_MATERIALS` (32); otherwise,
+  or after the window system refused the list, the node paints its own fill. The material lies under all of the
+  window's content, so a node drawn over another node's material shows it; group opacity does not reach it.
 - **Menus.** A toplevel's `menus` go to the window system as `WindowRequest::Menus` when its bar or its disabled
   items change, and `None` withdraws them; an item chosen in the desktop's menu bar (`WindowEvent::MenuActivated`)
   sends `on_activate`'s message. A popup's menus are ignored.

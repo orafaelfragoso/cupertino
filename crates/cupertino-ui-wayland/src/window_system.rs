@@ -17,8 +17,9 @@ use cupertino_ui_menus::{AppMenus, WindowMenus};
 use cupertino_ui_platform::{
     ActivationRequest, Backdrop, Capabilities, ClipboardData, ClipboardKind, ClipboardToken,
     ConfigureId, CursorShape, DragImage, DragProgress, DragRequest, DragToken, DropAction,
-    KeyEvent, Keysym, MenuDescription, PlatformError, PlatformEvent, PopupSpec, PresentOutcome,
-    SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
+    KeyEvent, Keysym, MaterialRegion, MenuDescription, PlatformError, PlatformEvent, PopupSpec,
+    PresentOutcome, SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec,
+    WindowSystem,
 };
 use cupertino_ui_render::{CpuFrame, RenderFrameId};
 use cupertino_ui_text::TextInputState;
@@ -50,6 +51,24 @@ enum Stall {
 /// More rectangles than this carried between presents become one for the whole frame.
 const MAX_CARRIED: usize = 64;
 
+/// The most backdrops `cupertino_app_effects_v1` lets one surface hold. The compositor ends the connection of a client
+/// that asks for more, so a request past it is refused here and the runtime paints fills instead.
+const MAX_BACKDROPS_PER_SURFACE: usize = 64;
+/// The most backdrops `cupertino_app_effects_v1` lets one client hold over all its surfaces.
+const MAX_BACKDROPS_PER_CLIENT: usize = 128;
+
+/// Whether a surface holding `on_surface` backdrops, of the `held` the client holds in all, stays within the
+/// compositor's limits.
+fn backdrops_fit(on_surface: usize, held: usize) -> bool {
+    on_surface <= MAX_BACKDROPS_PER_SURFACE && held <= MAX_BACKDROPS_PER_CLIENT
+}
+
+fn too_many_backdrops() -> PlatformError {
+    PlatformError::Protocol(format!(
+        "at most {MAX_BACKDROPS_PER_SURFACE} backdrops per surface and {MAX_BACKDROPS_PER_CLIENT} per client"
+    ))
+}
+
 struct Window {
     id: WindowId,
     surface: SurfaceId,
@@ -72,6 +91,8 @@ struct Window {
     /// Presented frames the compositor has not yet said it showed or discarded, oldest first.
     in_flight: VecDeque<RenderFrameId>,
     backdrop: Option<ShownBackdrop>,
+    /// The materials under parts of the window, in the order the runtime asked for them.
+    materials: Vec<ShownMaterial>,
     /// A toplevel's application id; empty for a popup.
     app_id: String,
     configured: bool,
@@ -101,6 +122,12 @@ struct ShownBackdrop {
     radius: f64,
     /// The logical size its shape was last given.
     shaped: Option<(u32, u32)>,
+}
+
+/// A material under a part of a window, as last sent; each setter takes effect with the next present.
+struct ShownMaterial {
+    material: Material,
+    region: MaterialRegion,
 }
 
 /// Sets the flag [`WindowSystem::dispatch`] reports as [`PlatformEvent::Wake`] and wakes the connection's wait.
@@ -329,6 +356,7 @@ impl WaylandWindowSystem {
             frame_wanted: false,
             in_flight: VecDeque::new(),
             backdrop: None,
+            materials: Vec::new(),
             app_id: String::new(),
             configured: false,
             menus: None,
@@ -411,6 +439,14 @@ impl WaylandWindowSystem {
         Ok(())
     }
 
+    /// The backdrops this client holds over all its windows: their own and those under their parts.
+    fn backdrops_held(&self) -> usize {
+        self.windows
+            .iter()
+            .map(|w| w.materials.len() + usize::from(w.backdrop.is_some()))
+            .sum()
+    }
+
     fn set_backdrop(
         &mut self,
         window: WindowId,
@@ -439,6 +475,14 @@ impl WaylandWindowSystem {
                     }
                     return Ok(());
                 }
+                // the backdrop it replaces is still held while the new one is made
+                let w = self.window(window)?;
+                if !backdrops_fit(
+                    w.materials.len() + usize::from(w.backdrop.is_some()) + 1,
+                    self.backdrops_held() + 1,
+                ) {
+                    return Err(too_many_backdrops());
+                }
                 let (effects, _) = self.effects.as_ref().ok_or(PlatformError::Unsupported)?;
                 let wire = effects
                     .backdrop(&self.conn, surface)
@@ -455,6 +499,66 @@ impl WaylandWindowSystem {
         };
         self.window_mut(window)?.backdrop = shown;
         Ok(())
+    }
+
+    /// Shows `regions` under the window: each kept backdrop object takes the next region and is told only what
+    /// changed, new ones are made for the rest, and those left over are destroyed.
+    fn set_materials(
+        &mut self,
+        window: WindowId,
+        regions: Vec<MaterialRegion>,
+    ) -> Result<(), PlatformError> {
+        let protocol = |e: cupertino_protocol_app::Error| PlatformError::Protocol(e.to_string());
+        let surface = self.window(window)?.surface;
+        if !regions.is_empty() && self.effects.is_none() {
+            return Err(PlatformError::Unsupported);
+        }
+        let w = self.window(window)?;
+        let on_surface = regions.len() + usize::from(w.backdrop.is_some());
+        let others = self.backdrops_held() - w.materials.len();
+        if !backdrops_fit(on_surface, others + regions.len()) {
+            // a window the runtime falls back to fills for shows no material at all
+            self.window_mut(window)?.materials.clear();
+            return Err(too_many_backdrops());
+        }
+        let mut shown = std::mem::take(&mut self.window_mut(window)?.materials);
+        shown.truncate(regions.len());
+        let result = (|| {
+            for (i, region) in regions.into_iter().enumerate() {
+                if let Some(old) = shown.get_mut(i) {
+                    if old.region.material != region.material {
+                        old.material.set_material(&region.material);
+                    }
+                    if old.region.alpha != region.alpha {
+                        old.material.set_alpha(region.alpha).map_err(protocol)?;
+                    }
+                    if old.region.rect != region.rect || old.region.radius != region.radius {
+                        old.material
+                            .set_shape(&region.rect, region.radius)
+                            .map_err(protocol)?;
+                    }
+                    old.region = region;
+                    continue;
+                }
+                let (effects, _) = self.effects.as_ref().ok_or(PlatformError::Unsupported)?;
+                let material = effects
+                    .backdrop(&self.conn, surface)
+                    .map_err(|e| PlatformError::Protocol(e.to_string()))?;
+                material.set_material(&region.material);
+                material.set_alpha(region.alpha).map_err(protocol)?;
+                material
+                    .set_shape(&region.rect, region.radius)
+                    .map_err(protocol)?;
+                shown.push(ShownMaterial { material, region });
+            }
+            Ok(())
+        })();
+        // a window the runtime falls back to fills for shows no material at all
+        if result.is_err() {
+            shown.clear();
+        }
+        self.window_mut(window)?.materials = shown;
+        result
     }
 
     /// The window at `i` may draw again; whether the frame it asked for meanwhile is due now.
@@ -859,6 +963,7 @@ impl WindowSystem for WaylandWindowSystem {
     fn request(&mut self, window: WindowId, request: WindowRequest) -> Result<(), PlatformError> {
         let result = match request {
             WindowRequest::Backdrop(backdrop) => return self.set_backdrop(window, backdrop),
+            WindowRequest::Materials(regions) => return self.set_materials(window, regions),
             WindowRequest::Menus(menus) => return self.set_menus(window, menus),
             WindowRequest::SetInputRegion(region) => {
                 self.window_mut(window)?.input_region = Some(region);

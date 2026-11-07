@@ -93,6 +93,7 @@ mod tests {
             own,
             animating: Vec::new(),
             resources: Default::default(),
+            materials: Vec::new(),
         }
     }
 

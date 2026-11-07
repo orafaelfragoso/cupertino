@@ -5,6 +5,7 @@
 mod context;
 mod dragged;
 mod grid;
+mod item_icons;
 mod search;
 mod view;
 
@@ -20,6 +21,7 @@ use std::time::SystemTime;
 
 use cupertino_apps::{launch, MimeApps, MimeDatabase};
 use cupertino_kit::controls::{Navigation, Selection, SortOrder, SplitLayout, TextChange};
+use cupertino_kit::file_icons::FileIcons;
 use cupertino_kit::layout::ScrollState;
 use cupertino_kit::platform::{DragProgress, WindowRequest};
 use cupertino_kit::prelude::*;
@@ -39,6 +41,7 @@ use crate::places::{removable_holding, Place};
 use crate::search_field::{self, SearchWidth};
 use crate::settings::ColumnId;
 use crate::tags::{self, TagColor};
+use crate::thumbnail::Thumbnailer;
 use crate::trash::Trash;
 use crate::udisks::{Media, Passphrase, Report, Volumes};
 use crate::window::ViewMode;
@@ -63,6 +66,8 @@ pub struct Start {
     trash: Trash,
     view: ViewMode,
     home: Option<PathBuf>,
+    file_icons: Option<FileIcons>,
+    thumbnails: Option<Thumbnailer>,
 }
 
 impl Start {
@@ -100,6 +105,8 @@ impl Start {
             trash: Trash::new(),
             view: ViewMode::Icons,
             home: None,
+            file_icons: None,
+            thumbnails: None,
         })
     }
 
@@ -119,6 +126,23 @@ impl Start {
     /// The windows opening in `view` in place of the icon view.
     pub fn with_view(self, view: ViewMode) -> Start {
         Start { view, ..self }
+    }
+
+    /// The items drawn with the icons of `icons` in place of the built-in placeholders.
+    pub fn with_file_icons(self, icons: FileIcons) -> Start {
+        Start {
+            file_icons: Some(icons),
+            ..self
+        }
+    }
+
+    /// Pictures drawn with their thumbnails from `cache`, made there when it lacks them. Without it, every item shows
+    /// its type's icon.
+    pub fn with_thumbnails(self, cache: Thumbnailer) -> Start {
+        Start {
+            thumbnails: Some(cache),
+            ..self
+        }
     }
 }
 
@@ -184,6 +208,10 @@ struct Session {
     view: ViewMode,
     /// What Copy took last, for Paste Item and Move Item Here in any window.
     pasteboard: Vec<PathBuf>,
+    /// The items' icons and thumbnails.
+    icons: item_icons::ItemIcons,
+    /// What wakes when a thumbnail is made.
+    thumbnails_woken: async_channel::Receiver<()>,
 }
 
 /// One browser window.
@@ -240,6 +268,8 @@ struct Rename {
 pub enum Message {
     /// The removable media have reports waiting.
     Media,
+    /// A thumbnail was made.
+    Thumbnails,
     /// An event of the window with this id.
     Window(u64, Event),
 }
@@ -344,6 +374,12 @@ impl Application for Files {
         let start = START
             .with(|s| s.borrow_mut().take())
             .expect("kit::prepare runs before Files starts");
+        let (thumbnails_wake, thumbnails_woken) = wake_channel();
+        let file_icons = start.file_icons.unwrap_or_else(|| {
+            let types = start.types.as_deref().cloned().unwrap_or_default();
+            FileIcons::builtin(types, HashMap::new())
+        });
+        let icons = item_icons::ItemIcons::new(file_icons, start.thumbnails, thumbnails_wake);
         let mut model = Model {
             windows: BTreeMap::new(),
             next_window: 0,
@@ -365,11 +401,16 @@ impl Application for Files {
                 trash: start.trash,
                 view: start.view,
                 pasteboard: Vec::new(),
+                icons,
+                thumbnails_woken,
             },
         };
         let mut commands = vec![model.add_window(start.browser, start.woken)];
         if model.session.volumes.is_some() {
             commands.push(woken(&model.session.media_woken, Message::Media));
+        }
+        if model.session.icons.thumbnails() {
+            commands.push(woken(&model.session.thumbnails_woken, Message::Thumbnails));
         }
         (model, commands)
     }
@@ -377,7 +418,15 @@ impl Application for Files {
     fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
         match message {
             Message::Media => model.follow_media(),
-            Message::Window(id, event) => model.window_event(id, event),
+            // the windows draw the thumbnails made
+            Message::Thumbnails => {
+                vec![woken(&model.session.thumbnails_woken, Message::Thumbnails)]
+            }
+            Message::Window(id, event) => {
+                let commands = model.window_event(id, event);
+                model.want_thumbnails(id);
+                commands
+            }
         }
     }
 
@@ -404,6 +453,19 @@ enum Step {
 }
 
 impl Model {
+    /// Ask for the thumbnails of the items window `id` shows, and for none once it is closed.
+    fn want_thumbnails(&self, id: u64) {
+        let icons = &self.session.icons;
+        match self.windows.get(&id) {
+            Some(window) => {
+                let (shown, points) = view::shown(window);
+                let entries = window.browser.entries();
+                icons.want(id, shown.into_iter().filter_map(|i| entries.get(i)), points);
+            }
+            None => icons.forget(id),
+        }
+    }
+
     /// Show `browser` in a window of its own.
     fn add_window(
         &mut self,

@@ -45,8 +45,27 @@ folder's name (Section text, cut with an ellipsis) and the search field, over th
 laid out by `layout::icon`) or the list view (the toolkit's table: Name, Date Modified, Size, Kind; a header click
 sorts, again reverses). A window opens in the icon view. Under the folder the path bar and the status bar can be shown;
 both are hidden by default. The path bar names the folder chain from the root (or from Trash / Recents); the status bar
-reads "N items, X available" (`statvfs` of the folder). Items wear the theme's folder and document symbols. Changes on
-disk appear live.
+reads "N items, X available" (`statvfs` of the folder). Changes on disk appear live.
+
+**Item images** (`kit::item_icons`). Each item in the icon view, the list view and a drag image wears the icon of its
+type from the asset packs and the host icon theme, through the toolkit's `cupertino_kit::file_icons::FileIcons`: the
+icon of the type's kind or of its nearest ancestor's (PDF, image, audio, video, archive, text, program; an office
+document packed in a zip is not an archive), else the generic document icon, else the packs' placeholder. The home
+folder and the user directories wear their own folder icons (`places::folder_icons`), and a symbolic link the alias
+badge in its bottom-left corner. Each icon is drawn at 1× and 2× and keeps its image for the life of the process.
+A PNG, JPEG or WebP picture shows its thumbnail once it is made (a symbolic link keeps its type's icon and badge).
+`thumbnail_service::ThumbnailService` makes thumbnails on two worker threads, never on the UI thread: after each
+message a window says which items are in view or within 200 pt of it (`view::shown`), and the service drops what no
+window wants any more before a worker starts it. A worker takes the thumbnail from the freedesktop cache
+(`$XDG_CACHE_HOME/thumbnails`, `Thumbnailer::from_env("cupertino-files")`, the rules of `cupertino-thumbnails`: valid
+for the file's modification time and size, a failure remembered under `fail/cupertino-files/`, nothing under the cache
+itself thumbnailed) or creates it there, then decodes it at 2 pixels a point (128 for the icon view's 64 pt, 32 for
+the list's 16 pt). At most 32 MiB of decoded thumbnails stay in memory: the least recently drawn go first, those out of
+view before those in it. When a picture changes on disk, the watcher's new modification time and size make it wanted
+again; the old thumbnail shows until the new one is made, and a file that failed is tried again once it changes.
+`Start::with_file_icons` and `Start::with_thumbnails` give a window the session's icons and cache (`main.rs` does);
+without them every icon is the built-in placeholder and no thumbnail is made, which is what the tests use unless they
+pass a fixture pack and a temporary cache.
 
 The sidebar lists the design's default Favorites, Recents, Applications, Desktop, Documents and Downloads (the
 nearby-sharing item has no counterpart), those that exist, and the computer (the file system root, under the pretty
@@ -80,8 +99,8 @@ applications neither see it nor fill it.
 **Dragging out.** The icon view drags items out of the window (`kit::dragged`, hooked into `kit::grid`'s press, motion
 and release and `kit`'s `Event::DragOut`): a press on an item that moves 5 pt offers the dragged files as a
 `text/uri-list` (copy or move; the pressed item first, then the rest of the selection in the view's order) and the image
-follows the pointer, which holds it where the press grabbed the cell. One item shows its icon and its selected name as
-the grid draws them; several show the pressed item in front of the icons of up to two more, each 4 pt up and to the
+follows the pointer, which holds it where the press grabbed the cell. One item shows its icon (or thumbnail) and its
+selected name as the grid draws them; several show the pressed item in front of the icons of up to two more, each 4 pt up and to the
 trailing side, with the count in a badge on the farthest icon's corner. The image is drawn at 0.8 opacity
 (`dragged::OPACITY`), at the window's scale rounded up. A press on an item of a selection keeps the selection, and its
 release without a drag selects that item alone. The window does nothing when the drag ends (the receiving application
@@ -175,7 +194,8 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | `window`, `format` | the window's wording and metrics | `metrics`, `ViewMode`, `path_chain`, `status_text`; `human_size`, `available_size`, `relative_date` |
 | `udisks` (feature `app`) | removable media | `devices` (the listed file systems and locked containers of udisks' managed objects), `Volumes::{watch, poll, mount, unlock, eject}` → `Report`, `Media` (the listed devices and the busy ones), `Passphrase`, `holders`, `notice` (a failure's notification text) |
 | `notice` (feature `app`) | failures as notifications | `failure`, `unopened`, `bad_name` → `Notice`; `Notices::{start, post}`; `shown`, `escape` |
-| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino-ui-test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, then `run` or a `TestDriver<Files>`; `grid` (the icon view), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images) |
+| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino-ui-test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons` and `with_thumbnails`, then `run` or a `TestDriver<Files>`; `grid` (the icon view), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `item_icons` (items' icons and thumbnails) |
+| `thumbnail_service` | thumbnails of the items in view | `ThumbnailService::{new, want, forget, get, queued, memory}`, `Stamp`, `has_thumbnail`, `MEMORY_BUDGET`, `WORKERS` |
 | `main` (feature `app`) | the binary | arguments, the session's places, types, associations and buses, then `kit::run` |
 
 ### Measured defaults
@@ -219,8 +239,9 @@ Values live in `metrics.rs`.
   from another application (Copy and Paste Item stand in), and a folder does not spring open under a drag
   (`spring::SpringLoad` is not wired). The list view starts no drags (the table has no hook for it), and the drag
   badge holds three digits.
-* Items wear the theme's folder and document symbols: there are no file-type icons, folder icons of the user
-  directories, alias badges or thumbnails yet. Under the headless symbol theme they are placeholder squares.
+* Thumbnails are made for PNG, JPEG and WebP pictures only (what `cupertino-thumbnails` decodes): no external
+  thumbnailers, so videos, PDFs and other documents show their type's icon. Thumbnails are decoded for a 2× display;
+  a 1× display draws them shrunk. The sidebar keeps the design's template symbols, as the places are not files.
 * The toolbar has no view, Group By, Tags or Action popups, no share, preview or path controls and no sidebar toggle;
   the View menu and the context menus stand in for the view and the tags. The search filters the folder shown by name
   (the design searches the computer by default); its field has no clear button.

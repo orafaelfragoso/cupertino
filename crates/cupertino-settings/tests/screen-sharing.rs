@@ -124,8 +124,9 @@ fn forget_takes_the_grant_out_of_the_file_and_keeps_the_others() {
         &mut settings,
         &live(),
     );
-    assert_eq!(effects, [Effect::Store(File::ScreenSharing)]);
-    settings.store(&paths, File::ScreenSharing).unwrap();
+    assert_eq!(effects, [Effect::ForgetGrant(MEETING.to_owned())]);
+    assert_eq!(rows(&settings, &live()).len(), 1, "the row goes at once");
+    settings.forget_grant(&paths, MEETING).unwrap();
     let path = paths.screen_sharing.as_ref().unwrap();
     let conf = ScreenSharingConf::load(path).unwrap().0;
     assert!(conf.find(MEETING, "org.example.Meeting").is_none());
@@ -165,6 +166,57 @@ fn no_grant_shows_no_applications_and_a_refused_file_is_never_written() {
     let settings = Settings::load(&paths, 1080.0).unwrap();
     let refused = rows(&settings, &Live::default());
     assert!(refused[0].error.is_some(), "the refusal is shown");
-    assert!(settings.store(&paths, File::ScreenSharing).is_err());
+    let mut settings = settings;
+    assert!(settings.forget_grant(&paths, MEETING).is_err());
+    assert!(
+        settings.store(&paths, File::ScreenSharing).is_err(),
+        "the list is never written whole"
+    );
     assert!(std::fs::read_to_string(path).unwrap().contains(MEETING));
+}
+
+#[test]
+fn forget_keeps_a_grant_the_portal_added_after_the_pane_read_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(dir.path());
+    write(
+        &paths,
+        &format!("grant = {MEETING} org.example.Meeting display DP-1\n"),
+    );
+    let mut settings = Settings::load(&paths, 1080.0).unwrap();
+    // the portal remembers another share while the pane shows the older list
+    let path = paths.screen_sharing.as_ref().unwrap();
+    ScreenSharingConf::update(path, |conf| {
+        conf.grants.push(
+            cupertino_defaults::screen_sharing::Grant::parse(&format!(
+                "{OTHER} org.example.Other display DP-2"
+            ))
+            .unwrap(),
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(rows(&settings, &live()).len(), 1, "the pane has not reread");
+
+    let effects = change(
+        ControlId::ScreenSharingGrant(0),
+        Value::Index(0),
+        &mut settings,
+        &live(),
+    );
+    let [Effect::ForgetGrant(id)] = &effects[..] else {
+        panic!("expected a Forget, got {effects:?}");
+    };
+    settings.forget_grant(&paths, id).unwrap();
+    let conf = ScreenSharingConf::load(path).unwrap().0;
+    assert!(conf.find(MEETING, "org.example.Meeting").is_none());
+    assert!(
+        conf.find(OTHER, "org.example.Other").is_some(),
+        "the grant added since is kept"
+    );
+    assert_eq!(
+        rows(&settings, &live())[0].detail.as_deref(),
+        Some("Display DP-2"),
+        "the pane shows the file as it is now"
+    );
 }

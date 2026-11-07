@@ -186,13 +186,19 @@ fn interactions(scale: f64) -> Vec<(&'static str, Vec<FrameSample>)> {
         .iter()
         .filter(|(_, r, _)| r.max_y() <= list.max_y())
         .count();
-    for _ in 0..in_view.saturating_sub(2).min(30) {
+    let measured = in_view.saturating_sub(2).min(30);
+    for _ in 0..measured {
         meter.step(&mut run.driver, |s, _| key(s, window, DOWN, None));
     }
     until_quiet(&mut run, &mut meter, 10, 100);
     out.push(("arrow selection", meter.take()));
 
     // past the last row in view, each step scrolls the listing by a row
+    for _ in measured..in_view {
+        meter.step(&mut run.driver, |s, _| key(s, window, DOWN, None));
+    }
+    until_quiet(&mut run, &mut meter, 10, 100);
+    meter.take();
     for _ in 0..30 {
         meter.step(&mut run.driver, |s, _| key(s, window, DOWN, None));
     }

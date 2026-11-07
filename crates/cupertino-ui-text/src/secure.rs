@@ -52,6 +52,12 @@ impl SecureBuffer {
         buffer
     }
 
+    /// Change the limit of [`with_max_len`](Self::with_max_len), or lift it with `None`. Text already past a lower
+    /// limit stays; only later insertions are cut.
+    pub fn set_max_len(&mut self, max_len: Option<usize>) {
+        self.max_len = max_len;
+    }
+
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -328,6 +334,19 @@ mod tests {
         buffer.with_secret(|s| assert_eq!(s, "abc"));
         buffer.insert("de\u{301}f");
         buffer.with_secret(|s| assert_eq!(s, "abcd"));
+    }
+
+    #[test]
+    fn a_new_limit_cuts_later_insertions_and_keeps_the_text() {
+        let mut buffer = SecureBuffer::new();
+        buffer.insert("abcd");
+        buffer.set_max_len(Some(2));
+        buffer.with_secret(|s| assert_eq!(s, "abcd"));
+        buffer.insert("e");
+        buffer.with_secret(|s| assert_eq!(s, "abcd"));
+        buffer.set_max_len(None);
+        buffer.insert("e");
+        buffer.with_secret(|s| assert_eq!(s, "abcde"));
     }
 
     #[test]

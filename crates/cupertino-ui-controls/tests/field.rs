@@ -94,6 +94,7 @@ impl<const ENABLED: bool> Application for Form<ENABLED> {
                     on_submit: Some(Box::new(|secret| {
                         Message::Login(secret.with_secret(|s| s.chars().count()))
                     })),
+                    ..SecureField::default()
                 })
                 .key("password"),
             ],
@@ -339,6 +340,115 @@ fn disabled_fields_take_no_focus_or_text() {
     assert_eq!(h.model().text, "");
     assert!(h.accessible("name").states.disabled);
     assert!(h.accessible("password").states.disabled);
+}
+
+/// The most bytes [`Gate`]'s password field holds.
+const GATE_LIMIT: usize = 4;
+
+/// A sign-in form whose model sets the password field's states: Return starts a check (busy), the next Return answers
+/// it with a refusal (invalid), and the next edit clears the refusal.
+struct Gate;
+
+#[derive(Debug, Default)]
+struct GateModel {
+    checking: bool,
+    refused: bool,
+    /// The password's length in bytes at each reported edit, and at each Return.
+    typed: Vec<usize>,
+    submitted: Vec<usize>,
+}
+
+#[derive(Clone, Debug)]
+enum GateMessage {
+    Typed(usize),
+    Submit(usize),
+}
+
+impl Application for Gate {
+    type Model = GateModel;
+    type Message = GateMessage;
+
+    fn init() -> (GateModel, Vec<Command<GateMessage>>) {
+        (GateModel::default(), Vec::new())
+    }
+
+    fn update(model: &mut GateModel, message: GateMessage) -> Vec<Command<GateMessage>> {
+        match message {
+            GateMessage::Typed(len) => {
+                model.typed.push(len);
+                model.refused = false;
+            }
+            GateMessage::Submit(len) => {
+                model.submitted.push(len);
+                model.refused = model.checking;
+                model.checking = !model.checking;
+            }
+        }
+        Vec::new()
+    }
+
+    fn view(model: &GateModel) -> Vec<Window<GateMessage>> {
+        window(
+            Element::new(SecureField {
+                label: "Password".into(),
+                on_change: Some(Box::new(|secret| {
+                    GateMessage::Typed(secret.with_secret(str::len))
+                })),
+                on_submit: Some(Box::new(|secret| {
+                    GateMessage::Submit(secret.with_secret(str::len))
+                })),
+                busy: model.checking,
+                invalid: model.refused,
+                max_len: Some(GATE_LIMIT),
+                ..SecureField::default()
+            })
+            .key("password"),
+        )
+    }
+}
+
+#[test]
+fn a_password_field_is_busy_and_invalid_as_its_model_says() {
+    let mut h = Harness::<Gate>::new();
+    h.tap(TAB);
+    assert!(h.focused("password"));
+    let states = |h: &Harness<Gate>| {
+        let states = h.accessible("password").states;
+        (states.busy, states.invalid)
+    };
+    assert_eq!(states(&h), (false, false));
+    h.type_text("ab");
+    h.tap(RETURN);
+    assert_eq!(states(&h), (true, false), "busy while the check runs");
+    h.tap(RETURN);
+    assert_eq!(states(&h), (false, true), "invalid once it is refused");
+    h.type_text("c");
+    assert_eq!(states(&h), (false, false), "the next edit clears it");
+}
+
+#[test]
+fn a_password_field_refuses_text_past_its_limit_without_an_edit() {
+    let mut h = Harness::<Gate>::new();
+    h.tap(TAB);
+    h.type_text("abcdef");
+    assert_eq!(
+        h.model().typed,
+        [1, 2, 3, 4],
+        "the keys past the limit are no edits"
+    );
+    h.tap(BACKSPACE.1);
+    // two bytes do not fit in the one left, and an input method's text is cut at the last character that fits
+    h.type_text("é");
+    h.send(batch(None, Some("xyz"), true));
+    assert_eq!(h.model().typed, [1, 2, 3, 4, 3, 4]);
+    h.tap(RETURN);
+    assert_eq!(h.model().submitted, [GATE_LIMIT]);
+    // a selection is replaced even when the field is full
+    h.press_key(A, 'a' as u32, true, false, Mods::PRIMARY);
+    h.type_text("é");
+    assert_eq!(h.model().typed.last(), Some(&2));
+    let node = h.accessible("password");
+    assert_eq!(node.value, Some(AccessibleValue::Protected));
 }
 
 #[test]

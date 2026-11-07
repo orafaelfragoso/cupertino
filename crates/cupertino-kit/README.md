@@ -5,7 +5,9 @@ as modules and has a `prelude`. MPL-2.0.
 
 `app::run` and `app::options` start on the Cupertino theme from the installed theme data, and on
 `ThemeTokens::neutral` when there is none or it is unusable (one line on stderr says why), so an application runs on any
-compositor. The `examples` test starts the Counter that way and compares it with `tests/goldens/counter-neutral.txt`.
+compositor. `app::run_on` and `app::run_on_with` run on a window system a desktop shell set up with its surface roles;
+`app::run_lock_screen_on_with` does the same for the lock screen, whose AT-SPI adapter the session's lock never mutes
+(`AtspiAdapter::lock_screen`). The `examples` test starts the Counter that way and compares it with `tests/goldens/counter-neutral.txt`.
 
 Each example runs on Cupertino headless and on headless Mutter. One test per example and host asserts its app id,
 title and buffer size, and that it presents a frame (on Cupertino it also exits when its window closes). Its behaviour

@@ -81,6 +81,22 @@ pub fn run_on_with<A: Application>(
         .map_err(AppError::Runtime)
 }
 
+/// [`run_on_with`] for the application that draws the lock screen: its accessibility adapter is not muted while the
+/// session is locked ([`AtspiAdapter::lock_screen`]), since what it shows then is what a person needs to hear.
+pub fn run_lock_screen_on_with<A: Application>(
+    system: WaylandWindowSystem,
+    start: impl FnOnce(&RuntimeOptions) -> (A::Model, Vec<Command<A::Message>>),
+) -> Result<(), AppError> {
+    let (mut options, theme) = options_and_theme(start_preferences(system.appearance()))?;
+    let follow = theme_for(theme, Arc::clone(&options.theme));
+    options.accessibility = Some(Box::new(AtspiAdapter::lock_screen(system.waker())));
+    let start = start(&options);
+    Runtime::<A, _>::start(system, options, start)
+        .with_theme_for(follow)
+        .run()
+        .map_err(AppError::Runtime)
+}
+
 /// The runtime options of an application on this system, in the light appearance with motion on. [`run`] starts in the
 /// session's appearance and display options instead and follows them.
 pub fn options() -> Result<RuntimeOptions, AppError> {

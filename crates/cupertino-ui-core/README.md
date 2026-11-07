@@ -51,6 +51,8 @@ all on one thread.
   or when the request fails, core paints the surface's opaque fill in the window's rounded shape. A theme change
   (Reduce Transparency, high contrast) takes the material away or asks for it again. Its `alpha` fades the material
   or the fill, so a window can fade its background with its content; a change of alpha alone keeps the material.
+  `WindowBackground::SurfaceRect` puts the material, or the fill, under one rounded rectangle of the window only
+  (`Backdrop::bounds`), for a window larger than what it shows, such as a dock bar with room for its magnified tiles.
 - **Menus.** A toplevel's `menus` go to the window system as `WindowRequest::Menus` when its bar or its disabled
   items change, and `None` withdraws them; an item chosen in the desktop's menu bar (`WindowEvent::MenuActivated`)
   sends `on_activate`'s message. A popup's menus are ignored.

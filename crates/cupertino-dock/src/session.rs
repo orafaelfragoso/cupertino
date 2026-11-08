@@ -1,7 +1,7 @@
 //! What the dock shows of the session: the windows the server reports, mapped to the tiles of the
 //! applications they belong to, and what a click on a tile asks for.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cupertino_wm::ids::WindowId;
 
@@ -29,6 +29,9 @@ pub enum Activation {
     RestoreWindow(u32),
     /// Start the application of the tile with this key.
     Launch(String),
+    /// Ask the application of the tile with this key for a new window: it runs (the server reported it resident)
+    /// but shows none. `app_id` is the application id the server reported it by.
+    Reopen { key: String, app_id: String },
     /// Open the trash.
     OpenTrash,
 }
@@ -47,6 +50,9 @@ pub struct Session {
     desktop: DesktopIndex,
     /// Windows by server id.
     windows: BTreeMap<u32, Window>,
+    /// The application ids the server reported resident: a process of the application that showed a window is
+    /// still connected, with or without windows now.
+    resident: BTreeSet<String>,
     /// The server's first list of windows was taken in: an application that appears after that
     /// has just started, one in the list was running before the dock was.
     live: bool,
@@ -58,6 +64,7 @@ impl Session {
             dock,
             desktop,
             windows: BTreeMap::new(),
+            resident: BTreeSet::new(),
             live: false,
         }
     }
@@ -102,7 +109,8 @@ impl Session {
         }
         let key = self.key_of(app_id);
         if !self.windows.values().any(|w| w.key == key) {
-            if self.live {
+            // a resident application showing a window again was running all along: no launch hop
+            if self.live && self.resident_app_id(&key).is_none() {
                 self.dock.app_appeared(&key, now);
             } else {
                 self.dock.app_started(&key, now);
@@ -129,7 +137,8 @@ impl Session {
         }
     }
 
-    /// A window went away; the application leaves the running state with its last window.
+    /// A window went away. The application leaves the running state with its last window unless the server
+    /// reported it resident: its process still runs, and the tile keeps its running dot until it exits.
     pub fn window_closed(&mut self, id: u32, now: f64) {
         let Some(window) = self.windows.remove(&id) else {
             return;
@@ -137,9 +146,52 @@ impl Session {
         if window.minimized {
             self.dock.window_restored(WindowId(u64::from(id)), now);
         }
-        if !self.windows.values().any(|w| w.key == window.key) {
+        if !self.windows.values().any(|w| w.key == window.key)
+            && self.resident_app_id(&window.key).is_none()
+        {
             self.dock.app_quit(&window.key, now);
         }
+    }
+
+    /// The server reported whether a process of `app_id` that showed a window is still connected. A resident
+    /// application keeps (or, for one the dock had not seen, gets) its running dot without windows; one that stops
+    /// being resident with no window left has quit.
+    pub fn set_resident(&mut self, app_id: &str, resident: bool, now: f64) {
+        let key = self.key_of(app_id);
+        if resident {
+            if self.resident.insert(app_id.to_owned())
+                && !self.windows.values().any(|w| w.key == key)
+            {
+                self.dock.app_started(&key, now);
+            }
+        } else if self.resident.remove(app_id)
+            && !self.windows.values().any(|w| w.key == key)
+            && self.resident_app_id(&key).is_none()
+        {
+            self.dock.app_quit(&key, now);
+        }
+    }
+
+    /// The server's first group for a new dock role lists every resident application: one the dock still held that
+    /// it did not list has gone (it exited while the dock was away), and loses its running dot.
+    pub fn residents_listed(&mut self, listed: &BTreeSet<String>, now: f64) {
+        let gone: Vec<String> = self.resident.difference(listed).cloned().collect();
+        for app_id in gone {
+            self.set_resident(&app_id, false, now);
+        }
+    }
+
+    /// The application id of a resident application whose tile key is `key`.
+    fn resident_app_id(&self, key: &str) -> Option<&str> {
+        self.resident
+            .iter()
+            .find(|a| self.key_of(a) == key)
+            .map(String::as_str)
+    }
+
+    /// Whether the application of tile `key` has a window.
+    pub fn has_windows(&self, key: &str) -> bool {
+        self.windows.values().any(|w| w.key == key)
     }
 
     /// The ids of the windows the server reported, in order.
@@ -152,13 +204,15 @@ impl Session {
         self.windows.get(&id)
     }
 
-    /// The application id of the windows an application tile stands for; `None` while none runs.
+    /// The application id of the windows an application tile stands for, or of its resident process; `None` while
+    /// none runs.
     pub fn running_app_id(&self, id: TileId) -> Option<&str> {
         let tile = self.dock.tile(id)?;
         self.windows
             .values()
             .find(|w| w.key == tile.key)
             .map(|w| w.app_id.as_str())
+            .or_else(|| self.resident_app_id(&tile.key))
     }
 
     /// The server started a program of this application: its tile bounces until a window appears.
@@ -183,15 +237,34 @@ impl Session {
                     u32::try_from(w.0).expect("window ids come from the server as u32"),
                 )
             }),
-            TileKind::App | TileKind::Recent => {
-                Some(match self.windows.values().find(|w| w.key == tile.key) {
-                    Some(w) => Activation::ActivateApp(w.app_id.clone()),
-                    None => Activation::Launch(tile.key.clone()),
-                })
-            }
+            TileKind::App | TileKind::Recent => Some(self.opening(&tile.key)),
             TileKind::Trash => Some(Activation::OpenTrash),
             TileKind::Separator => None,
         }
+    }
+
+    /// What opening the application of tile `key` asks for: raising its windows, a new window of its resident
+    /// process, or starting it.
+    pub fn opening(&self, key: &str) -> Activation {
+        if let Some(w) = self.windows.values().find(|w| w.key == key) {
+            return Activation::ActivateApp(w.app_id.clone());
+        }
+        match self.resident_app_id(key) {
+            Some(app_id) => Activation::Reopen {
+                key: key.to_owned(),
+                app_id: app_id.to_owned(),
+            },
+            None => Activation::Launch(key.to_owned()),
+        }
+    }
+
+    /// The D-Bus name an application of tile `key` takes `org.freedesktop.Application` calls on, when its desktop
+    /// entry says it is D-Bus activatable: the desktop file ID.
+    pub fn bus_name(&self, key: &str) -> Option<String> {
+        self.desktop
+            .find(key)
+            .filter(|e| e.dbus_activatable)
+            .map(|e| e.id.clone())
     }
 
     /// The command that starts the application of tile `key`: the `Exec` of its desktop entry, or

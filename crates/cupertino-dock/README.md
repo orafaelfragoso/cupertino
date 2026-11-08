@@ -143,6 +143,14 @@ Reduce Motion drops the grid's scale step and keeps its fade. The bar follows it
   the new window takes the focus, not whether the program may start: the server maps a window without a valid grant
   below the key window and bounces its tile (server README, *Activation*), so the launch only loses its focus, and the
   click is never dropped.
+- **Recents.** With `recents` on (the default), the bar has a section of up to three recent applications
+  (`RECENTS_MAX`) after the applications, between two separators, before the minimized windows and the trash. It holds
+  the applications that quit since the dock started, the most recent first, then the launcher's frecency history, each
+  once, each by its desktop entry, and none with a tile among the applications (pinned or running). It is worked out
+  again, and the history read again, only when an application gets or loses its tile or one quits. A recent tile opens
+  and starts its application as a pinned one does, and is named after its entry. **Decision:** an unpinned application
+  that runs keeps its tile among the applications, after the pinned ones, rather than in the recents section; when it
+  quits it comes into the recents.
 - A press on an application or recents tile acts on release. Past 5 pt on either axis from the press point
   (`tile_drag::DRAG_THRESHOLD`) the press is a drag-reorder; held in place for 0.5 s it opens the tile's
   menu instead (`HOLD_MENU_DELAY`). A drag follows the design rules of §7.2:
@@ -404,7 +412,7 @@ to another slot (approximate slack). The add slot sends `add_workspace` and the 
 
 ## Open issues
 
-- **Not wired.** A recents source for the bar, window thumbnails in minimized tiles and in the
+- **Not wired.** Window thumbnails in minimized tiles and in the
   workspaces bar, a key to toggle auto-hide, and changing the position at run time.
 - **Switcher.** The all-displays preference, scroll, and drag and drop.
 - **Application grid.** Folders, edit mode and drag, the pinch spring, the rubber band at the ends of the scroll, and

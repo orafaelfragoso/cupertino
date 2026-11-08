@@ -483,6 +483,9 @@ pub struct Model {
     requested: HashSet<(IconKey, u32)>,
     /// The grid's icons were asked for in the background.
     grid_preloaded: bool,
+    /// What the bar's recents were last worked out from: the application tiles and the applications that quit. The
+    /// launcher's history is read again when it changes.
+    recents_basis: Option<Vec<String>>,
     /// The name of the desktop entry of each application key looked up so far (`None` without one): the entries do
     /// not change while the process runs.
     names: HashMap<String, Option<String>>,
@@ -542,6 +545,7 @@ impl Model {
             background_icons: None,
             requested: HashSet::new(),
             grid_preloaded: false,
+            recents_basis: None,
             names: HashMap::new(),
             trash_checked: None,
             trash_full: false,
@@ -1677,6 +1681,7 @@ impl Model {
         }
         if before.recents != after.recents {
             cfg.show_recents = target.show_recents;
+            self.recents_basis = None;
         }
         if before.autohide != after.autohide && cfg.autohide != target.autohide {
             self.session.dock.toggle_autohide(now);
@@ -1989,6 +1994,7 @@ impl Model {
             }
         }
         let mut commands = self.expire_tokens(now);
+        self.refresh_recents(now);
         self.tell_host();
         commands.extend(self.preload());
         self.prefill();
@@ -2001,6 +2007,33 @@ impl Model {
         commands.extend(self.focus_commands());
         commands.extend(self.schedule(now));
         commands
+    }
+
+    /// The bar's recents section: the applications that quit since the dock started, then the launcher's history, each
+    /// without a tile among the applications, at most [`crate::config::DockConfig::recents_max`]. Worked out again, the
+    /// history read again, only when an application gets or loses its tile or one quits.
+    fn refresh_recents(&mut self, now: f64) {
+        if !self.session.dock.cfg.show_recents {
+            return;
+        }
+        let mut basis: Vec<String> = self
+            .session
+            .dock
+            .tiles()
+            .iter()
+            .filter(|t| t.kind == TileKind::App && !t.is_leaving())
+            .map(|t| t.key.clone())
+            .collect();
+        basis.push(String::new());
+        basis.extend(self.session.recently_quit().iter().cloned());
+        if self.recents_basis.as_ref() == Some(&basis) {
+            return;
+        }
+        self.recents_basis = Some(basis);
+        let history = self.host.recent_apps();
+        let recents = self.session.recent_apps(&history);
+        let keys: Vec<&str> = recents.iter().map(String::as_str).collect();
+        self.session.dock.set_recents(&keys, now);
     }
 
     /// Tell the host what it has to know: where the bar is, the minimize target, who has the keyboard and the dialog's
@@ -2138,9 +2171,6 @@ impl Model {
             TileKind::Trash => TRASH_NAME.to_owned(),
             TileKind::Separator => String::new(),
             TileKind::MinimizedWindow if !tile.title.is_empty() => tile.title.clone(),
-            TileKind::Recent => std::path::Path::new(&tile.key)
-                .file_name()
-                .map_or_else(|| tile.key.clone(), |n| n.to_string_lossy().into_owned()),
             _ => match self.entry_name(&tile.key) {
                 Some(name) => name.to_owned(),
                 None if tile.title.is_empty() => tile.key.clone(),

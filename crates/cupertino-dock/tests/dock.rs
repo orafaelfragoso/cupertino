@@ -71,7 +71,8 @@ fn section_order_and_separators() {
     d.set_recents(&["doc1", "doc2"], 0.0);
     assert_eq!(
         kinds(&d),
-        vec![App, App, App, Separator, Recent, Recent, Trash]
+        vec![App, App, App, Separator, Recent, Recent, Separator, Trash],
+        "recents between two separators"
     );
     d.window_minimized(WindowId(1), "mail", "Inbox", 0.0);
     assert_eq!(
@@ -93,7 +94,7 @@ fn section_order_and_separators() {
     assert_eq!(
         kinds(&d2),
         vec![App, App, App, Separator, MinimizedWindow, Trash],
-        "no recents separator without recents"
+        "no second separator without recents"
     );
     let cfg = DockConfig {
         show_recents: false,

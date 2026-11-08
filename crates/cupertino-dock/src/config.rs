@@ -75,6 +75,8 @@ pub const SEPARATOR_RATIO: f64 = 26.0 / 64.0;
 pub const BAR_EDGE_PADDING_RATIO: f64 = 10.0 / 64.0;
 /// Gap between the bar and the screen edge, in points.
 pub const EDGE_MARGIN: f64 = 5.0;
+/// How many recent applications the bar's recents section holds at most.
+pub const RECENTS_MAX: usize = 3;
 
 #[derive(Clone, Debug)]
 pub struct DockConfig {
@@ -105,7 +107,9 @@ pub struct DockConfig {
     pub edge_padding_ratio: f64,
     /// Gap between the bar and the screen edge, in points.
     pub edge_margin: f64,
+    /// Show the recent applications' section, between the applications and the windows and the trash.
     pub show_recents: bool,
+    /// How many recent applications that section holds at most ([`RECENTS_MAX`]).
     pub recents_max: usize,
     /// Draw a running indicator under running apps (setting existence, default unknown).
     pub show_running_indicators: bool,
@@ -155,7 +159,7 @@ impl Default for DockConfig {
             edge_padding_ratio: BAR_EDGE_PADDING_RATIO,
             edge_margin: EDGE_MARGIN,
             show_recents: true,
-            recents_max: 5,
+            recents_max: RECENTS_MAX,
             show_running_indicators: true,
             minimize_to_app: false,
             minimize_effect: MinimizeEffect::WarpMinimize,

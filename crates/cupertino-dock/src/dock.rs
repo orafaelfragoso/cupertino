@@ -1,8 +1,8 @@
 //! The dock model: tile sections, layout, hit-testing, minimize targets and drag-reorder.
 //!
 //! Section order along the axis: apps (pinned first, then running unpinned),
-//! a separator, recents (optional, followed by a recents separator when minimized tiles follow),
-//! minimized-window tiles, trash. Orders and sizes of the separators are approximate.
+//! a separator, recents (optional, followed by a separator of their own),
+//! minimized-window tiles, trash.
 
 use std::collections::HashMap;
 
@@ -702,8 +702,8 @@ impl Dock {
         if self.cfg.show_recents {
             push_section(&mut out, &self.recents, Section::Recents, drag, tile);
         }
-        let minimized_live = self.minimized.iter().any(|t| !t.leaving) || ghost;
-        if self.live_recents() && minimized_live {
+        // the trash always follows, so recents always have a separator after them
+        if self.live_recents() {
             out.push(Slot::Tile(&self.sep_recents));
         }
         out.extend(self.minimized.iter().map(Slot::Tile));

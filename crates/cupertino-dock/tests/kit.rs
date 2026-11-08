@@ -1170,7 +1170,7 @@ fn named(run: &Run, window: WindowId, role: Role) -> Vec<String> {
 
 /// The grid is a panel inside the output, not the whole of it: its search field on top, the pills of the categories
 /// its applications are in, the recently used applications in a row of their own above a separator, then every
-/// application by name. The first Escape leaves the search field alone, the second dismisses the grid.
+/// application by name. One Escape dismisses the grid.
 #[test]
 fn the_grid_is_a_panel_of_pills_recents_and_every_application_and_one_escape_closes_it() {
     let mut run = Run::start();
@@ -1811,6 +1811,138 @@ fn an_icon_the_background_leaves_out_loads_on_the_spot() {
     );
     let loads = run.record.borrow().icon_loads.clone();
     assert!(loads.contains(&(IconKey::App("org.example.Viewer".to_owned()), 64.0)));
+}
+
+const VIEWER: &str = "org.example.Viewer";
+
+/// The tiles of the bar by name, the separators as "|", in order.
+fn bar_row(run: &mut Run) -> Vec<String> {
+    let bar = run.bar();
+    let mut nodes: Vec<(Role, String, String, Rect)> = run
+        .nodes(bar)
+        .into_iter()
+        .filter(|n| matches!(n.0, Role::Button | Role::Separator))
+        .collect();
+    nodes.sort_by(|a, b| a.3.x().total_cmp(&b.3.x()));
+    nodes
+        .into_iter()
+        .map(|n| {
+            if n.0 == Role::Separator {
+                "|".to_owned()
+            } else {
+                n.1
+            }
+        })
+        .collect()
+}
+
+fn viewer_run() -> Run {
+    Run::on_desktop(
+        tokens(false),
+        ActionMap::default(),
+        true,
+        vec![
+            entry_with(VIEWER, "Viewer", ""),
+            entry_with("org.example.Mail", "Mail", ""),
+            entry_with("org.example.Music", "Music", ""),
+            entry_with("org.example.Maps", "Maps", ""),
+        ],
+    )
+}
+
+/// An application that quits, not pinned, comes into the recents: their own section after the applications, between
+/// two separators, before the trash. Opening it from there starts it; while it runs it is among the applications.
+#[test]
+fn an_application_that_quits_comes_into_the_recents_between_two_separators() {
+    let mut run = viewer_run();
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Window {
+            id: 9,
+            app_id: VIEWER.to_owned(),
+            title: "picture".to_owned(),
+            minimized: false,
+        }],
+    });
+    run.advance(1.0);
+    let row = bar_row(&mut run);
+    assert_eq!(&row[..3], ["Editor", "Terminal", "Viewer"], "{row:?}");
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::WindowClosed(9)],
+    });
+    run.advance(1.0);
+    let row = bar_row(&mut run);
+    let trash = row.last().cloned().unwrap();
+    assert_eq!(
+        row,
+        ["Editor", "Terminal", "|", "Viewer", "|", trash.as_str()]
+    );
+    let bar = run.bar();
+    run.click(bar, centre(run.bounds(bar, Role::Button, "Viewer")));
+    let spawned = run.record.borrow().spawned.clone();
+    assert_eq!(spawned.len(), 1);
+    assert_eq!(spawned[0].0[0], "viewer");
+}
+
+/// With the launcher's history, the recents are the applications that quit, then the history's, the most recent first:
+/// none pinned or running, none twice, at most three.
+#[test]
+fn the_recents_are_those_that_quit_then_the_launchers_history_at_most_three() {
+    let mut run = viewer_run();
+    run.record.borrow_mut().recent = vec![
+        format!("{EDITOR}.desktop"),
+        "org.example.Maps.desktop".to_owned(),
+        "org.example.Music.desktop".to_owned(),
+        "org.example.Mail.desktop".to_owned(),
+        "org.example.Gone.desktop".to_owned(),
+    ];
+    for (id, closed) in [(9, false), (9, true)] {
+        let events = if closed {
+            vec![DockEvent::WindowClosed(id)]
+        } else {
+            vec![DockEvent::Window {
+                id,
+                app_id: "org.example.Music".to_owned(),
+                title: "song".to_owned(),
+                minimized: false,
+            }]
+        };
+        run.message(Message::Dock { output: 1, events });
+        run.advance(1.0);
+    }
+    let row = bar_row(&mut run);
+    assert_eq!(
+        &row[..7],
+        ["Editor", "Terminal", "|", "Music", "Maps", "Mail", "|"],
+        "{row:?}"
+    );
+}
+
+/// With the recents off (`recents = off`), the bar has no recents section.
+#[test]
+fn without_recents_the_bar_has_one_separator() {
+    let mut run = viewer_run();
+    run.record.borrow_mut().conf = Some(DockSettings {
+        recents: Some(false),
+        ..DockSettings::default()
+    });
+    run.message(Message::ConfChanged);
+    for events in [
+        vec![DockEvent::Window {
+            id: 9,
+            app_id: VIEWER.to_owned(),
+            title: "picture".to_owned(),
+            minimized: false,
+        }],
+        vec![DockEvent::WindowClosed(9)],
+    ] {
+        run.message(Message::Dock { output: 1, events });
+        run.advance(1.0);
+    }
+    let row = bar_row(&mut run);
+    assert_eq!(row.len(), 4, "{row:?}");
+    assert_eq!(&row[..3], ["Editor", "Terminal", "|"]);
 }
 
 /// A new bar role's first group lists every resident application: one the dock still holds that it does not list

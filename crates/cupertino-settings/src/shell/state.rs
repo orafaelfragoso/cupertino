@@ -10,6 +10,7 @@ use crate::controls::{Control, LevelWriter, Value};
 use crate::history::History;
 use crate::inflight::Reads;
 use crate::live::{display_name, Live, LoginScreen, Pictures, Reading};
+use crate::pages::Page;
 use crate::panes::{self, Call, ControlId, Effect, Section, Session};
 use crate::services::{self, Services, SESSION_NAME, SESSION_PATH};
 use crate::settings::{system_accessibility, File, Paths, Settings};
@@ -116,7 +117,7 @@ pub struct State {
     pub(crate) live: Live,
     pub(crate) hidden: Vec<PaneId>,
     pub(crate) groups: Vec<Vec<PaneId>>,
-    pub(crate) history: History<PaneId>,
+    pub(crate) history: History<Page>,
     /// The pane whose services are started.
     pub(crate) content_pane: PaneId,
     /// The refusals shown under their rows.
@@ -202,7 +203,7 @@ impl State {
             },
             groups: sidebar::groups(&hidden),
             hidden,
-            history: History::new(pane),
+            history: History::new(Page::pane(pane)),
             content_pane: pane,
             errors: Vec::new(),
             reported: std::collections::HashSet::new(),
@@ -242,18 +243,28 @@ impl State {
 
     /// Show `pane`, pushed on the history; a hidden pane shows the first row instead. The services follow.
     pub(crate) fn go(&mut self, pane: PaneId) -> Result<()> {
-        let pane = if self.hidden.contains(&pane) {
-            self.rows()[0]
+        self.show(Page::pane(pane))
+    }
+
+    /// Show `page`, pushed on the history; a page of a hidden pane shows the first row instead. The services follow.
+    pub(crate) fn show(&mut self, page: Page) -> Result<()> {
+        let page = if self.hidden.contains(&page.pane) {
+            Page::pane(self.rows()[0])
         } else {
-            pane
+            page
         };
-        self.history.push(pane);
+        self.history.push(page);
         self.follow()
+    }
+
+    /// The pane the history shows now.
+    pub(crate) fn pane(&self) -> PaneId {
+        self.history.current().pane
     }
 
     /// Start the services of the pane the history shows now and stop those of the one before.
     pub(crate) fn follow(&mut self) -> Result<()> {
-        let to = self.history.current();
+        let to = self.pane();
         if self.content_pane != to {
             let from = std::mem::replace(&mut self.content_pane, to);
             self.level = None;
@@ -273,7 +284,7 @@ impl State {
             self.groups = sidebar::groups(&hidden);
             self.hidden = hidden;
         }
-        if self.hidden.contains(&self.history.current()) {
+        if self.hidden.contains(&self.pane()) {
             return self.go(self.rows()[0]);
         }
         if let Some(dark) = self.services.dark() {
@@ -400,7 +411,7 @@ impl State {
     /// The current pane's sections with the values in effect and the errors of refused changes.
     pub(crate) fn sections(&self) -> Vec<Section> {
         let mut sections = panes::sections(
-            self.history.current(),
+            self.pane(),
             &self.settings,
             Session {
                 dark: self.dark,

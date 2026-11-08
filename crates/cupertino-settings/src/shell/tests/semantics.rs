@@ -105,23 +105,9 @@ fn each_pane_without_a_service_reads_its_controls_by_role_name_value_and_state()
             PaneId::Accessibility,
             "Accessibility",
             &[
-                "StaticText \"Display\"",
-                "Switch \"Reduce motion\" off focusable",
-                "Switch \"Reduce transparency\" off focusable",
-                "Switch \"Increase contrast\" off focusable",
-                "Switch \"Differentiate without colour\" off focusable",
-                "Switch \"Invert colours\" off focusable",
-                "Slider \"Display contrast\" = 0 of 0..1 focusable",
-                "PopUpButton \"Colour filter\" = \"None\" focusable collapsed",
-                "StaticText \"Pointer\"",
-                "Slider \"Pointer size\" = 0 of 0..1 focusable",
-                "Switch \"Shake mouse pointer to locate\" on focusable",
-                "StaticText \"Keyboard\"",
-                "Switch \"Sticky keys\" off focusable",
-                "Switch \"Press Shift five times to toggle sticky keys\" off focusable",
-                "Switch \"Slow keys\" off focusable",
-                "Switch \"Mouse keys\" off focusable",
-                "Switch \"Press Alt five times to toggle mouse keys\" off focusable",
+                "Button \"Display\" focusable",
+                "Button \"Pointer\" focusable",
+                "Button \"Keyboard\" focusable",
             ],
         ),
         (
@@ -160,11 +146,7 @@ fn each_pane_without_a_service_reads_its_controls_by_role_name_value_and_state()
                 "PopUpButton \"Minimize windows using\" = \"Warp\" focusable collapsed",
                 "Switch \"Automatically hide and show the Dock\" off focusable",
                 "Switch \"Show suggested and recent apps in Dock\" on focusable",
-                "StaticText \"Hot Corners\"",
-                "PopUpButton \"Top Left\" = \"None\" focusable collapsed",
-                "PopUpButton \"Top Right\" = \"None\" focusable collapsed",
-                "PopUpButton \"Bottom Left\" = \"None\" focusable collapsed",
-                "PopUpButton \"Bottom Right\" = \"None\" focusable collapsed",
+                "Button \"Hot Corners\" focusable",
             ],
         ),
         (
@@ -219,13 +201,7 @@ fn each_pane_without_a_service_reads_its_controls_by_role_name_value_and_state()
         (
             PaneId::Privacy,
             "Privacy & Security",
-            &[
-                "StaticText \"Clipboard Access\"",
-                "StaticText \"No applications\"",
-                "Button \"Add App…\" focusable",
-                "Button \"Browse…\" focusable",
-                "StaticText \"These apps can read and change what you copy, at any time.\"",
-            ],
+            &["Button \"Clipboard Access\" focusable"],
         ),
         (
             PaneId::Keyboard,
@@ -254,6 +230,92 @@ fn each_pane_without_a_service_reads_its_controls_by_role_name_value_and_state()
     ];
     for (pane, title, content) in panes {
         pane_announces(pane, title, content, None);
+    }
+}
+
+/// What a sub-page reads besides its content: its pane's sidebar row still selected, its own title in the toolbar,
+/// and a history to go back through.
+fn sub_page_chrome(pane: &str, title: &str) -> [String; 6] {
+    [
+        format!("ListItem {pane:?} focusable selected"),
+        format!("StaticText {title:?}"),
+        "Button \"Back\" focusable".to_owned(),
+        "Button \"Forward\" disabled".to_owned(),
+        "TextInput \"Search\" = \"\" focusable".to_owned(),
+        "Splitter \"Sidebar\" = 215 of 0..714 focusable".to_owned(),
+    ]
+}
+
+#[test]
+fn each_sub_page_reads_its_controls_by_role_name_value_and_state() {
+    let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+    let pages: [(PaneId, &str, SubPage, &[&str]); 5] = [
+        (
+            PaneId::Accessibility,
+            "Accessibility",
+            SubPage::Display,
+            &[
+                "Switch \"Reduce motion\" off focusable",
+                "Switch \"Reduce transparency\" off focusable",
+                "Switch \"Increase contrast\" off focusable",
+                "Switch \"Differentiate without colour\" off focusable",
+                "Switch \"Invert colours\" off focusable",
+                "Slider \"Display contrast\" = 0 of 0..1 focusable",
+                "PopUpButton \"Colour filter\" = \"None\" focusable collapsed",
+            ],
+        ),
+        (
+            PaneId::Accessibility,
+            "Accessibility",
+            SubPage::Pointer,
+            &[
+                "Slider \"Pointer size\" = 0 of 0..1 focusable",
+                "Switch \"Shake mouse pointer to locate\" on focusable",
+            ],
+        ),
+        (
+            PaneId::Accessibility,
+            "Accessibility",
+            SubPage::Keyboard,
+            &[
+                "Switch \"Sticky keys\" off focusable",
+                "Switch \"Press Shift five times to toggle sticky keys\" off focusable",
+                "Switch \"Slow keys\" off focusable",
+                "Switch \"Mouse keys\" off focusable",
+                "Switch \"Press Alt five times to toggle mouse keys\" off focusable",
+            ],
+        ),
+        (
+            PaneId::DesktopDock,
+            "Desktop & Dock",
+            SubPage::HotCorners,
+            &[
+                "PopUpButton \"Top Left\" = \"None\" focusable collapsed",
+                "PopUpButton \"Top Right\" = \"None\" focusable collapsed",
+                "PopUpButton \"Bottom Left\" = \"None\" focusable collapsed",
+                "PopUpButton \"Bottom Right\" = \"None\" focusable collapsed",
+            ],
+        ),
+        (
+            PaneId::Privacy,
+            "Privacy & Security",
+            SubPage::ClipboardAccess,
+            &[
+                "StaticText \"No applications\"",
+                "Button \"Add App…\" focusable",
+                "Button \"Browse…\" focusable",
+                "StaticText \"These apps can read and change what you copy, at any time.\"",
+            ],
+        ),
+    ];
+    for (pane, pane_title, sub, content) in pages {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut driver, window) = start(dir.path(), pane);
+        click(&mut driver, window, &format!("open-{sub:?}"));
+        let chrome = sub_page_chrome(pane_title, sub.title());
+        let mut expected: Vec<&str> = chrome.iter().map(String::as_str).collect();
+        expected.extend(content);
+        announces(&driver, window, &format!("{sub:?}"), &expected);
     }
 }
 

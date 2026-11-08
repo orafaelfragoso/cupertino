@@ -1,6 +1,6 @@
-//! The Settings window on CupertinoKit: the sidebar beside the pane under a back and forward toolbar with the search
-//! field, the pane's sections as Kit controls, its sheets as dialogs and its menus on the desktop's menu bar. What the
-//! window shows and does lives in [`state`]; this module only shows it.
+//! The Settings window on CupertinoKit: the sidebar of panes under its search field beside the page under a back and
+//! forward toolbar, the page's header card and sections as Kit controls, its sheets as dialogs and its menus on the
+//! desktop's menu bar. What the window shows and does lives in [`state`]; this module only shows it.
 
 mod form;
 mod sheets;
@@ -11,11 +11,11 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use cupertino_kit::controls::{
-    Modal, Navigation, NavigationStack, ScrollView, Scroller, Sidebar, SidebarItem, SidebarSection,
-    SplitLayout, SplitView, TextRole, WINDOW_CONTENT_INSET,
+    FormBackground, Modal, Navigation, NavigationStack, ScrollView, Scroller, SearchField,
+    SplitLayout, SplitView, TextRole, TileSidebar, TileSidebarItem,
 };
 use cupertino_kit::core::{CommandRegistry, Menus, Shortcut};
-use cupertino_kit::geometry::{Point, Size};
+use cupertino_kit::geometry::{Insets, Point, Size};
 use cupertino_kit::layout::ScrollState;
 use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowRequest};
 use cupertino_kit::prelude::*;
@@ -25,6 +25,7 @@ use cupertino_menu_model::ActionName;
 use crate::controls::Value;
 use crate::instance;
 use crate::menu_bar::{self, MenuAction, MenuState};
+use crate::pages::{self, Page, SubPage};
 use crate::panes::ControlId;
 use crate::search::{self, Hit};
 use crate::services::Services;
@@ -45,8 +46,15 @@ const SLIDE_TICK: Duration = Duration::from_millis(100);
 const SIDEBAR: f64 = 215.0;
 const MIN_SIDEBAR: f64 = 150.0;
 const MIN_CONTENT: f64 = 320.0;
-/// The toolbar's search field, as wide as other toolbars' (approximate).
-const SEARCH_WIDTH: f64 = 112.0;
+/// The page's padding inside the content, below the toolbar row.
+const PAGE_INSET: Insets = Insets {
+    top: 12.0,
+    left: 20.0,
+    bottom: 20.0,
+    right: 20.0,
+};
+/// Room kept above the sidebar's search field, for window controls that a shell may draw over the sidebar's top.
+pub const SIDEBAR_TOP: f64 = 0.0;
 /// The interface width factor: 1 for English (approximate).
 const WIDTH_FACTOR: f64 = 1.0;
 /// How far a pane may pass its window's height, in points, before it counts as longer than the window.
@@ -67,10 +75,11 @@ pub fn default_size(f: f64) -> Size {
 }
 
 /// The template symbols of the window's chrome; with the panes' ([`crate::pane::symbols`]) the process requires them.
-pub const CHROME_SYMBOLS: [&str; 6] = [
+pub const CHROME_SYMBOLS: [&str; 7] = [
     "symbol.chevron.left",
     "symbol.chevron.right",
     "symbol.search",
+    "symbol.magnifyingglass",
     "symbol.xmark.circle",
     "symbol.chevron.up.down",
     "symbol.checkmark",
@@ -79,7 +88,11 @@ pub const CHROME_SYMBOLS: [&str; 6] = [
 /// Every template symbol the window draws.
 pub fn required_symbols() -> Vec<&'static str> {
     let mut all = crate::pane::symbols();
-    all.extend(CHROME_SYMBOLS);
+    for symbol in pages::symbols().into_iter().chain(CHROME_SYMBOLS) {
+        if !all.contains(&symbol) {
+            all.push(symbol);
+        }
+    }
     all
 }
 
@@ -200,6 +213,8 @@ pub enum Message {
     Search,
     Found(usize),
     Commit(ControlId, Value),
+    /// A row of the page opens this sub-page.
+    OpenPage(SubPage),
     /// The level slider of `ControlId` moved, written while it moves.
     Level(ControlId, f64),
     Open(Option<ControlId>),
@@ -258,20 +273,54 @@ impl Shell {
         }
     }
 
-    /// Show `pane` from the sidebar or a search; the content goes back to its top.
-    fn go(&mut self, pane: PaneId) -> Result<()> {
+    /// Show `page` from the sidebar, a row or a search; the content goes back to its top.
+    fn show(&mut self, page: Page) -> Result<()> {
         self.open = None;
         self.content_scroll.offset = Default::default();
-        self.state.go(pane)
+        self.state.show(page)
+    }
+
+    /// The sidebar's groups: every pane's row, or while a search is typed only the rows of the panes it finds.
+    fn shown_groups(&self) -> Vec<Vec<PaneId>> {
+        let hits = self.hits();
+        if self.query.trim().is_empty() {
+            return self.state.groups.clone();
+        }
+        self.state
+            .groups
+            .iter()
+            .map(|group| {
+                group
+                    .iter()
+                    .copied()
+                    .filter(|pane| hits.iter().any(|hit| hit.pane == *pane))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|group| !group.is_empty())
+            .collect()
+    }
+
+    /// Ends a search: the field clears.
+    fn end_search(&mut self) {
+        if !self.query.is_empty() {
+            self.query.clear();
+            self.query_revision += 1;
+        }
     }
 
     fn handle(&mut self, message: Message) -> Result<Vec<Command<Message>>> {
         match message {
             Message::Select(i) => {
-                if let Some(&pane) = self.state.rows().get(i) {
-                    self.go(pane)?;
+                let rows: Vec<PaneId> = self.shown_groups().into_iter().flatten().collect();
+                if let Some(&pane) = rows.get(i) {
+                    self.end_search();
+                    self.show(Page::pane(pane))?;
                 }
             }
+            Message::OpenPage(sub) => self.show(Page {
+                pane: sub.pane(),
+                sub: Some(sub),
+            })?,
             Message::Navigate(to) => {
                 let moved = match to {
                     Navigation::Back => self.state.history.back(),
@@ -279,6 +328,7 @@ impl Shell {
                 };
                 if moved.is_some() {
                     self.open = None;
+                    self.content_scroll.offset = Default::default();
                     self.state.follow()?;
                 }
             }
@@ -395,10 +445,9 @@ impl Shell {
     /// Choose search result `i`: its pane shows and the search ends.
     fn found(&mut self, i: usize) -> Result<Vec<Command<Message>>> {
         if let Some(hit) = self.hits().get(i) {
-            let pane = hit.pane;
-            self.query.clear();
-            self.query_revision += 1;
-            self.go(pane)?;
+            let page = pages::of_hit(hit);
+            self.end_search();
+            self.show(page)?;
         }
         Ok(Vec::new())
     }
@@ -409,52 +458,28 @@ impl Shell {
         Vec::new()
     }
 
+    /// The search field over the rows of the panes, each with its tile; the current pane's row selected.
     fn sidebar(&self) -> Element<Message> {
         let has_battery = self.state.live.has_battery();
-        let current = self.state.history.current();
-        let sections = self
-            .state
-            .groups
+        let current = self.state.history.current().pane;
+        let groups = self.shown_groups();
+        let selected = groups.iter().flatten().position(|p| *p == current);
+        let groups = groups
             .iter()
-            .map(|group| SidebarSection {
-                title: None,
-                items: group
+            .map(|group| {
+                group
                     .iter()
-                    .map(|pane| SidebarItem {
+                    .map(|pane| TileSidebarItem {
                         key: Key::from(pane.key()),
                         label: pane.title(has_battery).into(),
-                        icon: Some(pane.pane().symbol.into()),
-                        description: None,
-                        accessory: None,
-                        busy: false,
+                        symbol: pane.pane().symbol.into(),
+                        tile: form::tile_color(pane.pane().enclosure),
                     })
-                    .collect(),
+                    .collect()
             })
             .collect();
-        Element::from(Sidebar {
-            label: "Settings".into(),
-            sections,
-            selected: self.state.rows().iter().position(|p| *p == current),
-            scroll: self.sidebar_scroll,
-            on_scroll: Box::new(Message::SidebarScroll),
-            on_select: Some(Box::new(Message::Select)),
-            on_accessory: None,
-        })
-        .key("sidebar")
-    }
-
-    /// The pane's title and the search field, after the back and forward buttons.
-    fn toolbar(&self) -> Vec<Element<Message>> {
-        let title = self
-            .state
-            .history
-            .current()
-            .title(self.state.live.has_battery());
-        let mut items: Vec<Element<Message>> =
-            form::text(title, TextRole::Title).into_iter().collect();
-        items.extend([
-            Element::new(Spacer::default()),
-            Element::new(TextField {
+        let search = Element::new(SearchField {
+            field: TextField {
                 label: "Search".into(),
                 placeholder: "Search".into(),
                 value: self.query.clone(),
@@ -465,22 +490,62 @@ impl Shell {
                 on_submit: Some(Message::Search),
                 selection: None,
                 initial: false,
-            })
-            .width(SEARCH_WIDTH)
-            .key("search"),
-        ]);
-        items
+            },
+        })
+        .key("search");
+        let sidebar = Element::from(TileSidebar {
+            label: "Settings".into(),
+            header: Some(search),
+            groups,
+            selected,
+            scroll: self.sidebar_scroll,
+            on_scroll: Box::new(Message::SidebarScroll),
+            on_select: Some(Box::new(Message::Select)),
+        })
+        .key("sidebar");
+        Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets {
+                top: SIDEBAR_TOP,
+                ..Insets::ZERO
+            },
+            spacing: 0.0,
+            align: Align::Stretch,
+            children: vec![sidebar.fill()],
+        })
+    }
+
+    /// A sub-page's title after the back and forward buttons; a pane's own page shows its title on its header card.
+    fn toolbar(&self) -> Vec<Element<Message>> {
+        let page = self.state.history.current();
+        match page.sub {
+            Some(sub) => form::text(sub.title(), TextRole::Title)
+                .into_iter()
+                .collect(),
+            None => Vec::new(),
+        }
     }
 
     fn content(&self) -> Element<Message> {
         let body = if self.query.trim().is_empty() {
-            form::pane(&self.state.sections(), self.open)
+            let page = self.state.history.current();
+            let sections = self.state.sections();
+            let has_battery = self.state.live.has_battery();
+            let header = page.sub.is_none().then(|| {
+                form::header(
+                    page.pane,
+                    page.pane.title(has_battery),
+                    pages::description(page.pane, has_battery),
+                )
+            });
+            let blocks = pages::blocks(page, sections.clone());
+            form::page(header, &blocks, &sections, self.open)
         } else {
             form::results(&self.hits())
         };
         let page = Element::new(Stack {
             axis: Axis::Vertical,
-            padding: WINDOW_CONTENT_INSET,
+            padding: PAGE_INSET,
             spacing: 0.0,
             align: Align::Stretch,
             children: vec![body],
@@ -492,7 +557,7 @@ impl Shell {
         } else {
             Scroller::Overlay
         };
-        Element::from(NavigationStack {
+        let stack = Element::from(NavigationStack {
             content: Element::from(ScrollView {
                 content: page,
                 state: self.content_scroll,
@@ -506,7 +571,8 @@ impl Shell {
             can_go_back: self.state.history.can_go_back(),
             can_go_forward: self.state.history.can_go_forward(),
             on_navigate: Some(Box::new(Message::Navigate)),
-        })
+        });
+        Element::from(FormBackground { content: stack })
     }
 }
 
@@ -1063,6 +1129,50 @@ mod tests {
             .unwrap_or_else(|| panic!("a switch named {name:?}"))
     }
 
+    /// The names of the nodes with `role`.
+    fn named(driver: &TestDriver<SettingsApp>, window: WindowId, role: Role) -> Vec<String> {
+        driver
+            .runtime()
+            .snapshot(window)
+            .unwrap()
+            .accessibility
+            .into_iter()
+            .filter(|(_, n)| n.role == role)
+            .filter_map(|(_, n)| n.name)
+            .collect()
+    }
+
+    #[test]
+    fn a_navigation_row_opens_its_page_and_back_and_forward_go_through_the_history() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let (mut driver, window) = start(dir.path(), PaneId::DesktopDock);
+        let corner = "Top Left".to_owned();
+        let on_pane = |driver: &TestDriver<SettingsApp>| {
+            let buttons = named(driver, window, Role::Button);
+            assert!(buttons.contains(&"Hot Corners".to_owned()), "{buttons:?}");
+            assert!(!named(driver, window, Role::PopUpButton).contains(&corner));
+            assert!(named(driver, window, Role::StaticText).contains(&"Desktop & Dock".to_owned()));
+        };
+        let on_corners = |driver: &TestDriver<SettingsApp>| {
+            assert!(named(driver, window, Role::PopUpButton).contains(&corner));
+            assert!(named(driver, window, Role::StaticText).contains(&"Hot Corners".to_owned()));
+            assert!(
+                !named(driver, window, Role::Button).contains(&"Hot Corners".to_owned()),
+                "the page no longer shows the row that opened it"
+            );
+        };
+        on_pane(&driver);
+        click(&mut driver, window, "open-HotCorners");
+        on_corners(&driver);
+        let back = node(&driver, window, Role::Button, "Back");
+        click_node(&mut driver, window, back);
+        on_pane(&driver);
+        let forward = node(&driver, window, Role::Button, "Forward");
+        click_node(&mut driver, window, forward);
+        on_corners(&driver);
+    }
+
     #[test]
     fn the_screen_reader_switch_asks_the_server_to_start_and_stop_the_reader() {
         let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
@@ -1094,6 +1204,8 @@ mod tests {
             start_state(dir.path(), PaneId::Accessibility, services, |state| {
                 state.bus = Some(session)
             });
+        // the switch is on the pane's Screen Reader page
+        click(&mut driver, window, "open-ScreenReader");
         assert_eq!(
             switch_state(&driver, window, "Screen reader"),
             "Switch \"Screen reader\" off focusable"
@@ -1126,7 +1238,7 @@ mod tests {
     fn a_pane_longer_than_the_window_shows_its_scroll_bar_and_one_that_fits_does_not() {
         let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
-        let (mut driver, window) = start(dir.path(), PaneId::Accessibility);
+        let (mut driver, window) = start(dir.path(), PaneId::Keyboard);
         let bars = |driver: &TestDriver<SettingsApp>| {
             driver
                 .runtime()
@@ -1137,15 +1249,25 @@ mod tests {
                 .filter(|(_, n)| n.role == Role::ScrollBar)
                 .count()
         };
-        assert_eq!(
-            bars(&driver),
-            1,
-            "the Accessibility pane goes on below the default window"
-        );
         let active = WindowStates {
             activated: true,
             ..WindowStates::default()
         };
+        driver
+            .window_system_mut()
+            .configure(
+                window,
+                Some(Size::new(metrics::DEFAULT_WIDTH, 400.0)),
+                active,
+            )
+            .unwrap();
+        settle(&mut driver, window);
+        settle(&mut driver, window);
+        assert_eq!(
+            bars(&driver),
+            1,
+            "the Keyboard pane goes on below a short window"
+        );
         driver
             .window_system_mut()
             .configure(
@@ -1185,19 +1307,26 @@ mod tests {
         let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let (mut driver, window) = start(dir.path(), PaneId::DesktopDock);
-        let search = driver.runtime().find(window, &Key::from("search")).unwrap();
-        let field = driver
-            .runtime()
-            .snapshot(window)
-            .unwrap()
-            .nodes
-            .iter()
-            .find(|n| n.id == search)
-            .unwrap()
-            .rect;
+        let rect = |driver: &TestDriver<SettingsApp>, key: &'static str| {
+            let id = driver.runtime().find(window, &Key::from(key)).unwrap();
+            driver
+                .runtime()
+                .snapshot(window)
+                .unwrap()
+                .nodes
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap()
+                .rect
+        };
+        let field = rect(&driver, "search");
         let y = field.origin.y + field.size.height / 2.0;
-        // between the pane's title and the search field, where no toolbar item lies
-        let gap = Point::new(field.origin.x - 40.0, y);
+        // in the toolbar row above the page, after the back and forward buttons, where no toolbar item lies
+        let content = rect(&driver, "content");
+        let gap = Point::new(
+            content.origin.x + content.size.width - 60.0,
+            content.origin.y - 26.0,
+        );
         let at = |time: u64, event| WindowEvent::Pointer(event, Timestamp(time));
         let button = |position, pressed| PointerEvent::Button {
             position,
@@ -1228,7 +1357,7 @@ mod tests {
             send(&mut driver, window, at(time, event));
         }
         assert!(!requests(&mut driver).contains(&WindowRequest::Move));
-        let to = Point::new(gap.x - 30.0, y + 30.0);
+        let to = Point::new(gap.x - 30.0, gap.y + 30.0);
         for (time, event) in [
             (10_000_000_000, PointerEvent::Motion { position: gap }),
             (10_000_000_000, button(gap, true)),

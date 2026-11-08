@@ -127,9 +127,7 @@ fn a_band_held_at_the_top_edge_scrolls_the_grid_back_selecting_the_items_it_pass
     // the pointer stays still at the edge: the content goes on scrolling down under it
     run.frames(600, 50);
     assert!(
-        cells(&run)
-            .get("zeta.txt")
-            .is_none_or(|z| z.min_y() > at),
+        cells(&run).get("zeta.txt").is_none_or(|z| z.min_y() > at),
         "the items moved down under the band"
     );
     let after = run.selected_icons();
@@ -160,7 +158,8 @@ fn indices(names: &[String]) -> Vec<usize> {
 }
 
 #[test]
-fn a_band_held_at_the_bottom_edge_scrolls_the_grid_on_selecting_the_rows_it_passes_and_stops_when_let_go() {
+fn a_band_held_at_the_bottom_edge_scrolls_the_grid_on_selecting_the_rows_it_passes_and_stops_when_let_go(
+) {
     let mut run = window();
     run.menu("view-icons");
     run.wait_until(|run| cells(run).contains_key("item 00.txt"));
@@ -182,7 +181,9 @@ fn a_band_held_at_the_bottom_edge_scrolls_the_grid_on_selecting_the_rows_it_pass
     assert!(after.len() > before.len(), "{before:?} then {after:?}");
     // the first column, every row the band passed, with no gap
     // (the rows scrolled out of view above are not read)
-    let expected: Vec<usize> = (0..after.len()).map(|row| after[0] + row * columns).collect();
+    let expected: Vec<usize> = (0..after.len())
+        .map(|row| after[0] + row * columns)
+        .collect();
     assert_eq!(after, expected, "{columns} columns");
     assert_eq!(after[0] % columns, 0);
     button(&mut run, edge, false);

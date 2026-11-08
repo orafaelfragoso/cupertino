@@ -154,7 +154,11 @@ mod tests {
         let first = s.hover(Some(1)).unwrap();
         assert_eq!(s.hover(Some(1)), None);
         let second = s.hover(Some(2)).unwrap();
-        assert_eq!(run(&mut s, first), None, "the first folder's timer is stale");
+        assert_eq!(
+            run(&mut s, first),
+            None,
+            "the first folder's timer is stale"
+        );
         assert!(matches!(run(&mut s, second), Some(Sprung::Flash(2, _))));
     }
 

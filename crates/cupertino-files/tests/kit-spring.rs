@@ -1,7 +1,8 @@
 //! Folders that spring open under a held drag, in the browser window on CupertinoKit run headless: a folder row, an icon,
 //! a sidebar place and a path bar folder open after the delay and not before, flashing just before; the drag goes on in
 //! the folder that opened; the drag leaving the window or being cancelled takes the window back to its folder, history,
-//! selection, view and scroll position, and a drop keeps the folder the drag opened.
+//! selection, view and scroll position, and a drop keeps the folder the drag opened. With `CUPERTINO_SPRING_CAPTURES`
+//! naming a directory, a flashing folder row is written there as PNGs, light and dark at 1x and 2x, for a look at it.
 
 #![cfg(feature = "app")]
 
@@ -14,7 +15,8 @@ use cupertino_files::spring::{SPRING_DELAY, SPRING_FLASH};
 use cupertino_kit::core::Role;
 use cupertino_kit::geometry::{Point, Rect};
 use cupertino_kit::platform::{
-    Capabilities, ClipboardData, DragProgress, DropAction, DropToken, Mods, PlatformEvent, PointerEvent, ScrollSource, Timestamp, WindowEvent,
+    Capabilities, ClipboardData, DragProgress, DropAction, DropToken, Mods, PlatformEvent,
+    PointerEvent, ScrollSource, Timestamp, WindowEvent,
 };
 use cupertino_kit::theme::{Appearance, ThemePreferences};
 
@@ -27,6 +29,11 @@ const FLASH_MS: u64 = (SPRING_FLASH * 1000.0) as u64;
 /// holds `core.txt`) and `Projects` (holding `plan.txt`), and the files `w00.txt` to `w39.txt`, with Documents and Archive in the sidebar, on a headless system
 /// that drags and takes drops; `home/Elsewhere` holds `x.txt`, which another application drags.
 fn window() -> Run {
+    window_in(Appearance::Light)
+}
+
+/// [`window`] in `appearance`.
+fn window_in(appearance: Appearance) -> Run {
     let home = tempfile::tempdir().unwrap();
     let documents = home.path().join("Documents");
     let archive = home.path().join("Archive");
@@ -53,7 +60,7 @@ fn window() -> Run {
         place("Archive", &archive, PlaceKind::Documents),
     ];
     let preferences = ThemePreferences {
-        appearance: Appearance::Light,
+        appearance,
         reduce_transparency: false,
         reduce_motion: false,
     };
@@ -206,10 +213,18 @@ fn an_icon_a_sidebar_place_and_a_path_bar_folder_spring_open_too() {
     drag_to(&mut run, archive.center());
     hold(&mut run, DELAY_MS + 20);
     assert_eq!(shown(&run), "Archive");
-    run.driver.window_system_mut().drag_leave(run.window).unwrap();
+    run.driver
+        .window_system_mut()
+        .drag_leave(run.window)
+        .unwrap();
     run.settle();
     assert_eq!(shown(&run), "Documents");
-    assert!(run.driver.runtime().window_system().incoming_drag(token).is_some());
+    assert!(run
+        .driver
+        .runtime()
+        .window_system()
+        .incoming_drag(token)
+        .is_some());
 
     // from inside Notes, the path bar's Documents opens the folder above
     run.menu("view-list");
@@ -255,11 +270,17 @@ fn the_drag_leaving_the_window_takes_it_back_to_its_folder_history_selection_vie
     assert!(notes.min_y() < top, "scrolled: {before:?}");
 
     // the part of the folder's row still in view
-    drag_in(&mut run, Point::new(notes.min_x() + 4.0, notes.max_y() - 3.0));
+    drag_in(
+        &mut run,
+        Point::new(notes.min_x() + 4.0, notes.max_y() - 3.0),
+    );
     spring(&mut run, "Notes", "Inner");
     drag_to_row(&mut run, "Inner");
     spring(&mut run, "Inner", "core.txt");
-    run.driver.window_system_mut().drag_leave(run.window).unwrap();
+    run.driver
+        .window_system_mut()
+        .drag_leave(run.window)
+        .unwrap();
     run.settle();
     assert_eq!(shown(&run), "Documents");
     run.wait_until(|run| run.listed() == before);
@@ -283,7 +304,10 @@ fn the_icon_view_comes_back_too() {
     hold(&mut run, DELAY_MS + 20);
     assert_eq!(shown(&run), "Notes");
     run.menu("view-list");
-    run.driver.window_system_mut().drag_leave(run.window).unwrap();
+    run.driver
+        .window_system_mut()
+        .drag_leave(run.window)
+        .unwrap();
     run.settle();
     assert_eq!(shown(&run), "Documents");
     assert!(run.rows().is_empty(), "the icon view again");
@@ -341,13 +365,7 @@ fn own_drag(run: &mut Run, name: &str) -> cupertino_ui_test::StartedDrag {
     let both = [DropAction::Copy, DropAction::Move].into();
     let system = run.driver.window_system_mut();
     system
-        .drag_enter(
-            window,
-            from,
-            started.request.data.clone(),
-            both,
-            Mods::NONE,
-        )
+        .drag_enter(window, from, started.request.data.clone(), both, Mods::NONE)
         .unwrap();
     run.settle();
     started
@@ -371,8 +389,45 @@ fn a_cancelled_drag_of_the_windows_own_items_takes_it_back() {
     assert_eq!(shown(&run), "Documents");
     run.wait_until(|run| run.selected_rows() == ["w03.txt"]);
     // the compositor ends the drag over the window too: nothing opens after it
-    run.driver.window_system_mut().drag_leave(run.window).unwrap();
+    run.driver
+        .window_system_mut()
+        .drag_leave(run.window)
+        .unwrap();
     run.settle();
     hold(&mut run, DELAY_MS * 2);
     assert_eq!(shown(&run), "Documents");
+}
+
+#[test]
+fn a_flashing_folder_row_in_light_and_dark_at_1x_and_2x() {
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        for scale in [1u32, 2] {
+            let mut run = window_in(appearance);
+            run.send(WindowEvent::Scale(f64::from(scale)));
+            drag_in_row(&mut run, "Notes");
+            hold(&mut run, DELAY_MS - FLASH_MS / 2);
+            assert_eq!(run.selected_rows(), ["Notes"], "{appearance:?} at {scale}x");
+            capture(&mut run, appearance, scale);
+        }
+    }
+}
+
+/// Writes the latest frame as `<CUPERTINO_SPRING_CAPTURES>/files-spring-flash-<appearance>@<scale>x.png` when that
+/// variable is set.
+fn capture(run: &mut Run, appearance: Appearance, scale: u32) {
+    let Some(dir) = std::env::var_os("CUPERTINO_SPRING_CAPTURES") else {
+        return;
+    };
+    let window = run.window;
+    let frames = run.driver.window_system_mut().frames(window).unwrap();
+    let frame = frames.last().unwrap();
+    let mut pixmap = tiny_skia::Pixmap::new(frame.width, frame.height).unwrap();
+    pixmap.data_mut().copy_from_slice(&frame.pixels);
+    let name = match appearance {
+        Appearance::Light => "light",
+        _ => "dark",
+    };
+    let path = std::path::Path::new(&dir).join(format!("files-spring-flash-{name}@{scale}x.png"));
+    pixmap.save_png(&path).unwrap();
+    eprintln!("wrote {}", path.display());
 }

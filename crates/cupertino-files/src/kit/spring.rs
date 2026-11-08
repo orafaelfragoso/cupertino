@@ -55,7 +55,11 @@ fn after(id: u64, timer: Timer) -> Command<Message> {
 
 impl BrowserWindow {
     /// A drag is over `folder`, or over no folder, in window `id`. The folder shown opens nothing.
-    pub(super) fn spring_over(&mut self, id: u64, folder: Option<PathBuf>) -> Vec<Command<Message>> {
+    pub(super) fn spring_over(
+        &mut self,
+        id: u64,
+        folder: Option<PathBuf>,
+    ) -> Vec<Command<Message>> {
         let folder = folder.filter(|f| f != self.browser.dir());
         self.springing
             .dwell

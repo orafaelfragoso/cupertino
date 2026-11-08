@@ -2665,7 +2665,10 @@ fn a_drag_over_a_target_is_answered_highlighted_and_heard_as_it_moves_between_pl
     assert_eq!(last_answer(&rt), uri_answer(DropAction::Copy));
 
     drag(&mut rt, window, DropEvent::Leave);
-    assert!(rt.model().heard.ends_with(&["hover None".into(), "left".into()]));
+    assert!(rt
+        .model()
+        .heard
+        .ends_with(&["hover None".into(), "left".into()]));
     assert!(highlights(&rt, window).is_empty());
     assert!(rt.window_system().drop_reads.is_empty());
     assert!(rt.window_system().drops_finished.is_empty());

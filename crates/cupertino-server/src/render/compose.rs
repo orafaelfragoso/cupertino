@@ -8,10 +8,11 @@ use std::time::Duration;
 use cupertino_effects::Mesh;
 use cupertino_geometry::{CornerStyle, Point, Rect};
 use cupertino_scene::{
-    AlphaMode, BufferCrop, Clip, ContentDamage, FrameId, GlobalRect, ImageId, ImageMapping,
-    ImageRole, LayerStack, MaterialPass, MaterialStage, Output, OutputId, OutputInvalidation,
-    OutputPoint, OutputRect, PhysicalSize, Placement, RecipeId, ResourceKey, SceneFrame, SceneId,
-    SceneItem, SceneKind, SceneLayer, SnapshotId, Source, SurfaceId, SurfaceRole,
+    AlphaMode, BufferCrop, Clip, ContentDamage, FrameId, GlassId, GlassPass, GlobalRect, ImageId,
+    ImageMapping, ImageRole, LayerStack, MaterialPass, MaterialStage, Output, OutputId,
+    OutputInvalidation, OutputPoint, OutputRect, PhysicalSize, Placement, RecipeId, ResourceKey,
+    SceneFrame, SceneId, SceneItem, SceneKind, SceneLayer, SnapshotId, Source, SurfaceId,
+    SurfaceRole,
 };
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -20,6 +21,7 @@ use smithay::utils::{Logical, Physical, Rectangle};
 
 type DevicePoint = smithay::utils::Point<i32, Physical>;
 
+use super::material::glass::GlassContainer;
 use super::material::GpuRecipe;
 use super::scene::SceneParams;
 use super::snapshots::{SnapshotLease, SnapshotOwner};
@@ -73,6 +75,15 @@ pub struct Material {
     pub clip: Clip,
 }
 
+/// A glass container over what lies below it, drawn over the area it samples. Its container gets a handle in the
+/// frame's registry once it is pushed.
+pub struct Glass {
+    pub glass: Rc<GlassContainer>,
+    pub kind: SceneKind,
+    pub index: u64,
+    pub opacity: f32,
+}
+
 /// What keeps a stored snapshot alive for a frame: a lease on one that effect state owns, or the ownership of one the
 /// frame captured for itself.
 pub enum SnapshotKeep {
@@ -106,6 +117,7 @@ pub enum Piece {
     Tree(Box<Tree>),
     Image(Box<Picture>),
     Material(Box<Material>),
+    Glass(Box<Glass>),
     Mesh(Box<MeshPiece>),
 }
 
@@ -132,6 +144,7 @@ pub struct FrameResources {
     pub surfaces: Vec<WlSurface>,
     pub images: Vec<MemoryRenderBuffer>,
     pub recipes: Vec<Rc<GpuRecipe>>,
+    pub glass: Vec<Rc<GlassContainer>>,
     pub snapshots: Vec<Option<FrameSnapshot>>,
 }
 
@@ -154,6 +167,7 @@ impl Composition {
                 surfaces: Vec::new(),
                 images: Vec::new(),
                 recipes: Vec::new(),
+                glass: Vec::new(),
                 snapshots: Vec::new(),
             },
         }
@@ -215,6 +229,34 @@ impl Composition {
                         placement: Placement::IDENTITY,
                         opacity: f64::from(material.opacity),
                         clip: material.clip,
+                        damage: ContentDamage::Full,
+                    },
+                );
+            }
+            Piece::Glass(glass) => {
+                let Some(area) = glass.glass.sample_area() else {
+                    return;
+                };
+                let id = GlassId(ResourceKey {
+                    slot: self.resources.glass.len() as u64,
+                    generation: self.id.0,
+                });
+                self.resources.glass.push(glass.glass);
+                self.items.push(
+                    layer,
+                    SceneItem {
+                        id: SceneId {
+                            kind: glass.kind,
+                            index: glass.index,
+                        },
+                        revision: 0,
+                        source: Source::Glass(GlassPass {
+                            glass: id,
+                            rect: output_rect(area),
+                        }),
+                        placement: Placement::IDENTITY,
+                        opacity: f64::from(glass.opacity),
+                        clip: Clip::None,
                         damage: ContentDamage::Full,
                     },
                 );

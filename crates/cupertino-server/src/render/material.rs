@@ -26,6 +26,9 @@ use smithay::utils::{Buffer, Logical, Physical, Rectangle, Scale, Size};
 
 use super::shader_rect::{to_physical_rect, ElementCache, ElementKey, Sig};
 
+#[path = "glass.rs"]
+pub mod glass;
+
 const FULLSCREEN_VERT: &str = include_str!("../../shaders/fullscreen.vert");
 const DOWNSAMPLE_FRAG: &str = include_str!("../../shaders/downsample.frag");
 const BLUR_FRAG: &str = include_str!("../../shaders/blur.frag");
@@ -130,6 +133,7 @@ pub struct MaterialGl {
     tick: u64,
     pub stats: MaterialStats,
     failure: Option<String>,
+    glass: glass::GlassGl,
 }
 
 pub type SharedMaterial = Rc<RefCell<MaterialGl>>;
@@ -322,6 +326,7 @@ impl MaterialGl {
             tick: 0,
             stats: MaterialStats::default(),
             failure: None,
+            glass: glass::GlassGl::default(),
         };
         let res = renderer
             .with_context(|gl| unsafe { me.init(gl) })
@@ -357,6 +362,7 @@ impl MaterialGl {
             bind_block(gl, p, "PassParams", BIND_PASS)?;
         }
         bind_block(gl, material, "Region", BIND_REGION)?;
+        self.glass = glass::GlassGl::init(gl)?;
         let src_loc = [downsample, blur, color].map(|p| uniform_loc(gl, p, "u_src"));
         let material_loc = MaterialLocs {
             proj: uniform_loc(gl, material, "u_proj"),
@@ -411,6 +417,7 @@ impl MaterialGl {
             tick: 0,
             stats: MaterialStats::default(),
             failure: None,
+            glass: glass::GlassGl::default(),
         }))
     }
 
@@ -773,7 +780,8 @@ impl MaterialGl {
 
     /// Release all GL objects. Call with the renderer's context current.
     pub fn destroy(&mut self, renderer: &mut GlesRenderer) {
-        let free = std::mem::take(&mut self.free);
+        let mut free = std::mem::take(&mut self.free);
+        free.extend(self.glass.targets());
         let cache = std::mem::take(&mut self.cache);
         let progs = self.progs.take();
         let bufs = [self.ubo_pass, self.ubo_region];
@@ -788,6 +796,7 @@ impl MaterialGl {
                 }
             }
             gl.DeleteBuffers(2, bufs.as_ptr());
+            self.glass.destroy(gl);
         });
     }
 }

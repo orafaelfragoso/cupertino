@@ -1,5 +1,5 @@
 //! Rendering: the element enum, the layer stack that fixes the drawing order, custom GLES
-//! elements (shadow / rounded rectangles / corner mask / material pass) and the scene builder.
+//! elements (shadow / rounded rectangles / corner mask / material and glass passes) and the scene builder.
 //!
 //! Per-output element order, bottom to top, is [`SceneLayer`]; [`LayerStack`] flattens it into the
 //! front-to-back list the damage tracker expects.
@@ -27,6 +27,7 @@ pub mod ui;
 pub mod wallpaper;
 
 pub use clip::{ClipElement, ClipShape};
+pub use material::glass::{GlassContainer, GlassElement};
 pub use material::{GpuRecipe, MaterialElement, MaterialGl, MaterialStage, SharedMaterial};
 pub use mesh::{MeshElement, MeshGl, SharedMesh};
 pub use programs::Programs;
@@ -45,6 +46,8 @@ render_elements! {
     Shader = ShaderRect,
     /// Material passes (menu bar strip, backdrops of the shell processes).
     Material = MaterialElement,
+    /// Glass containers: the union of a surface's glass backdrops over the blurred backdrop.
+    Glass = GlassElement,
     /// CPU-drawn buffers: themed cursor image, menu bar contents, popups.
     Image = MemoryRenderBufferRenderElement<GlesRenderer>,
     /// Title bars and rims, rescaled together with their window.

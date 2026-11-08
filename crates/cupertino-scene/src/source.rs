@@ -30,6 +30,10 @@ pub struct SnapshotId(pub ResourceKey);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RecipeId(pub ResourceKey);
 
+/// A glass container of the frame: its shapes, style and blend width, resolved by the renderer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GlassId(pub ResourceKey);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AlphaMode {
     Straight,
@@ -123,6 +127,14 @@ pub struct MaterialPass {
     pub tint: [f32; 3],
 }
 
+/// One glass container: its shapes joined into one outline over the backdrop below. `rect` is what of the backdrop
+/// it reads, the shapes grown by the reach of the blur and the refraction; the pass draws nothing past it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlassPass {
+    pub glass: GlassId,
+    pub rect: OutputRect,
+}
+
 /// Preserve live-surface import and scanout eligibility when choosing the renderer element.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SurfaceRole {
@@ -173,6 +185,7 @@ pub enum Source {
         colours: [[f32; 4]; 4],
     },
     Material(MaterialPass),
+    Glass(GlassPass),
     /// Existing effect vertices in output-local logical points, with their original UVs.
     TexturedMesh {
         snapshot: SnapshotId,

@@ -11,6 +11,7 @@ filters and vibrant blending, driven by the recipes of `cupertino-theme`.
 | `glass-renderer` | headless binary (`--demo`, `--cpu-check`, `--bench N`) |
 | `cpu` | f32 CPU reference of the same pipeline (half-float intermediates emulated); `apply_color_ops` runs a recipe's colour chain on one colour, which the server uses to measure the wallpaper as the menu bar's material shows it |
 | `shaders/gles/ | GLSL ES 3.00 port of every shader for the compositor's GLES renderer |
+| `glass` | the glass background pass: `Container` (shapes joined by a smooth union whose blend width is the container's spacing, each with the recipe of its size from `cupertino-theme`), `Container::shade` (the CPU model of every stage, for tests), `GlassUniform` (the std140 block of `glass.wgsl` and `gles/glass.frag`) |
 | `display_filter` | the display's colour filter, invert and contrast as a colour chain over a whole output (settings from `cupertino-defaults`) |
 
 ## Usage
@@ -81,10 +82,32 @@ approximate and supplied by the caller.
 table) with the design's `Normalize`. Channel gains, fade, post offsets and reduce white point are not in the chain
 (the design drops the offsets on this path).
 
+### Glass
+
+`src/glass.rs` is the model of the glass background pass and `shaders/glass.wgsl` / `gles/glass.vert`, `gles/glass.frag`
+draw it, one draw per container over its sampled area (the shapes grown by the reach of the blur and refraction,
+`Container::sample_area`). The backdrop is read at half scale into up to four blur levels and a blur fill; the
+composite then, per pixel:
+
+1. evaluates the field: the smooth union of the shapes' rounded-rectangle distances, polynomial blend of width
+   `spacing` (0 is a hard union), with each shape's size-dependent values mixed by the same weights;
+2. refraction: inside the band along the edge, the sample point moves along the outward normal by the offset times
+   (1 − t)², t the depth into the band;
+3. blur levels and blur fill: the levels laid over each other widest first, then the fill darkens, lightens or covers;
+4. face colour on linear light: saturation, white gain, per-channel limit, luminance cap, then encoded black lift and fill;
+5. bleed: the widest level, saturated and mapped between black and white, lightens (dark) or darkens (light) the face
+   in the bleed band;
+6. key and fill rim lights: a Gaussian band about the edge, lit by a cosine lobe around the light angle and its
+   opposite; the key colour is the highlight matrix applied to the face, the fill colour the key plus the colour bias;
+7. outside the shape, the drop shadow and the ring shadow at their opacity.
+
+Unit tests check each stage on the model (`glass::tests`) and `tests/shaders.rs` checks that the `Glass` block has the
+same members in both shader languages and the Rust struct's size.
+
 ### GLSL ES 3.00 port
 
 `shaders/gles/`: `fullscreen.vert`, `downsample.frag`, `blur.frag`, `color.frag`, `blit.frag`,
-`material.vert`, `material.frag`, `vibrant.vert`, `vibrant.frag`. Uniform blocks use std140 and are
+`material.vert`, `material.frag`, `vibrant.vert`, `vibrant.frag`, `glass.vert`, `glass.frag`. Uniform blocks use std140 and are
 byte-identical to the Rust structs in `src/ops.rs`, so the same buffers work for both back ends.
 Material and vibrant quads are 4-vertex triangle strips (`gl_VertexID`). Samplers: `u_src`,
 `u_source`, `u_backdrop`, `u_glyphs`. When the source/backdrop textures were rendered by GL (row 0 at

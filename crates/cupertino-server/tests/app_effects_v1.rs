@@ -572,6 +572,101 @@ fn backdrop_material_pass_matches_the_cpu_reference() {
     }
 }
 
+/// The GLES glass pass against the CPU model of `cupertino-glass`: a rounded glass panel over the procedural wallpaper,
+/// whose colours change slowly enough that every blur level of it is the wallpaper itself, must match it within the
+/// error of the half-scale capture, in each appearance and with each accessibility recipe.
+#[test]
+fn glass_pass_matches_the_cpu_model() {
+    use cupertino_defaults::accessibility::DisplayOptions;
+    use cupertino_glass::glass::{Container, GlassShape};
+    use cupertino_theme::{Appearance, GlassStyle};
+    use smithay::input::pointer::CursorImageStatus;
+
+    let panel = Layout {
+        size: (400, 160),
+        margin_top: 260,
+        margin_left: 300,
+        material: "Glass",
+        shape: (0, 0, 400, 160, 24.0),
+        alpha: 1.0,
+    };
+    let options = |rt: bool, ic: bool| DisplayOptions {
+        reduce_transparency: rt,
+        increase_contrast: ic,
+        ..DisplayOptions::default()
+    };
+    for (dark, display) in [
+        (false, options(false, false)),
+        (true, options(false, false)),
+        (true, options(true, false)),
+        (false, options(false, true)),
+    ] {
+        let appearance = if dark {
+            Appearance::Dark
+        } else {
+            Appearance::Light
+        };
+        let shoot = |with_panel: bool| -> Option<image::RgbaImage> {
+            let mut h = Harness::with_config(|c| c.appearance = appearance)?;
+            h.state.cursor_status = CursorImageStatus::Hidden;
+            h.state.accessibility.settings.display = display;
+            let client = with_panel.then(|| TestClient::spawn_with(h.socket_path(), panel));
+            if client.is_some() {
+                h.wait_until("the glass backdrop", |s| {
+                    !layer_backdrops(&s.outputs[0].output).is_empty()
+                });
+            }
+            for _ in 0..3 {
+                h.step();
+            }
+            Some(h.screenshot(if with_panel { "glass" } else { "wall" }))
+        };
+        let (Some(wall), Some(gpu)) = (shoot(false), shoot(true)) else {
+            return;
+        };
+        let at = |x: f32, y: f32| -> [f32; 3] {
+            let x = (x.floor() as i64).clamp(0, OUTPUT.0 as i64 - 1) as u32;
+            let y = (y.floor() as i64).clamp(0, OUTPUT.1 as i64 - 1) as u32;
+            let p = wall.get_pixel(x, y);
+            [0, 1, 2].map(|c| p[c] as f32 / 255.0)
+        };
+        let mode = cupertino_server::accessibility::glass_mode(dark, GlassStyle::Regular, display);
+        let (x0, y0) = (panel.margin_left as f32, panel.margin_top as f32);
+        let container = Container::new(
+            vec![GlassShape::new([x0, y0, 400.0, 160.0], 24.0)],
+            0.0,
+            mode,
+        );
+        let (mut sum, mut max, mut n) = (0.0f64, 0i32, 0usize);
+        let mut changed = 0;
+        for y in panel.margin_top - 4..panel.margin_top + 164 {
+            for x in panel.margin_left - 4..panel.margin_left + 404 {
+                let p = [x as f32 + 0.5, y as f32 + 0.5];
+                let (c, cov) = container.shade(p, &|_, q| at(q[0], q[1]));
+                let under = at(p[0], p[1]);
+                let got = gpu.get_pixel(x as u32, y as u32);
+                for i in 0..3 {
+                    let want = ((under[i] * (1.0 - cov) + c[i] * cov) * 255.0).round() as i32;
+                    let d = (got[i] as i32 - want).abs();
+                    sum += d as f64;
+                    max = max.max(d);
+                    n += 1;
+                }
+                if got != wall.get_pixel(x as u32, y as u32) {
+                    changed += 1;
+                }
+            }
+        }
+        let mean = sum / n as f64;
+        eprintln!("glass dark={dark} {display:?}: mean abs diff {mean:.3}, max {max}");
+        assert!(
+            mean < 1.5 && max <= 24,
+            "glass dark={dark} {display:?}: GLES vs CPU mean {mean:.3} max {max}"
+        );
+        assert!(changed > 400 * 160 / 2, "the glass pass ran");
+    }
+}
+
 /// Reduce Transparency and Increase Contrast turn a translucent menu-bar strip into the opaque fill
 /// of the material's `-Opaque` variant (from the light and from the high-contrast catalog), and
 /// turning them off brings the wallpaper back.

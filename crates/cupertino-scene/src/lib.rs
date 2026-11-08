@@ -10,8 +10,9 @@ pub use coordinates::{
 };
 pub use layers::{LayerStack, SceneLayer};
 pub use source::{
-    AlphaMode, Clip, ImageId, ImageMapping, ImageRole, MaterialPass, MaterialStage, Placement,
-    RecipeId, ResourceKey, RoundedRect, Shadow, SnapshotId, Source, SurfaceId, SurfaceRole,
+    AlphaMode, Clip, GlassId, GlassPass, ImageId, ImageMapping, ImageRole, MaterialPass,
+    MaterialStage, Placement, RecipeId, ResourceKey, RoundedRect, Shadow, SnapshotId, Source,
+    SurfaceId, SurfaceRole,
 };
 
 use std::time::Duration;

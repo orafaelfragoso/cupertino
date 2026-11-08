@@ -2,11 +2,14 @@
 //! read at start and written on every change; the server applies the settings to its own drawing
 //! and sends the four display options to the shell processes on the session object.
 //!
-//! * Reduce Transparency: materials use their opaque variants (`RenderResources::recipe`).
+//! * Reduce Transparency: materials use their opaque variants (`RenderResources::recipe`); glass keeps its shape and
+//!   takes its reduced-transparency recipe ([`glass_mode`]): no bending or rim light, a much wider blur and a dense
+//!   fill, so what lies behind shows only as soft colour.
 //! * Increase Contrast: the high-contrast catalogs ([`Cupertino::appearance`]), so materials are
 //!   opaque too, and the decorations take the high-contrast palette and the contrast half of the
-//!   shadow table (`decor.rs`).
-//! * Reduce Motion: the replacements of `render::motion`.
+//!   shadow table (`decor.rs`). Glass takes its increased-contrast colours (a denser fill and a firmer edge); with
+//!   both options on, the reduced-transparency optics with the increased-contrast colours.
+//! * Reduce Motion: the replacements of `render::motion`; glass flattens its rim light and widens its narrowest blur.
 //! * Invert, display contrast and the colour filter: a material pass over the whole output, below
 //!   the pointer ([`Accessibility::display_filter`], `cupertino_glass::display_filter`).
 //!
@@ -26,11 +29,23 @@ use cupertino_defaults::accessibility::{
 use cupertino_effects::{TransformKind, WindowKind};
 use cupertino_glass::display_filter::display_filter_ops;
 use cupertino_theme::recipe::{Backdrop, Recipe};
-use cupertino_theme::Appearance;
+use cupertino_theme::{Appearance, GlassMode, GlassStyle};
 
 use crate::render::GpuRecipe;
 
 use crate::state::Cupertino;
+
+/// The glass recipe mode of `style` in the dark (`dark`) or light appearance under the display `options`: each option
+/// selects its own recipe of the glass rather than turning it off.
+pub fn glass_mode(dark: bool, style: GlassStyle, options: DisplayOptions) -> GlassMode {
+    GlassMode {
+        dark,
+        style,
+        reduce_transparency: options.reduce_transparency,
+        increase_contrast: options.increase_contrast,
+        reduce_motion: options.reduce_motion,
+    }
+}
 
 /// The settings and where they are stored.
 #[derive(Debug, Default)]

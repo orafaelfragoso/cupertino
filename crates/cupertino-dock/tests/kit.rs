@@ -94,6 +94,8 @@ struct Record {
     activated: Vec<(String, Option<String>)>,
     /// The application does not answer on the bus: an activation over it fails.
     no_bus: bool,
+    /// The icons loaded, with the side asked for, in order.
+    icon_loads: Vec<(IconKey, f64)>,
 }
 
 struct FakeHost(Rc<RefCell<Record>>);
@@ -172,7 +174,8 @@ impl Host for FakeHost {
         let ok = !record.no_bus;
         Some(Box::pin(async move { ok }))
     }
-    fn icon(&mut self, _: &DesktopIndex, _: &IconKey, side: f64) -> IconSet {
+    fn icon(&mut self, _: &DesktopIndex, icon: &IconKey, side: f64) -> IconSet {
+        self.0.borrow_mut().icon_loads.push((icon.clone(), side));
         [1.0, 2.0]
             .iter()
             .map(|scale| square((side * scale).ceil().max(1.0) as u32))
@@ -269,22 +272,32 @@ impl Run {
 
     /// [`Run::with`] on a desktop that offers its materials (`app_effects`) or not, where the windows paint their fills.
     fn on(theme: ThemeTokens, actions: ActionMap, app_effects: bool) -> Self {
+        Self::on_desktop(theme, actions, app_effects, Vec::new())
+    }
+
+    /// [`Run::on`] with `more` desktop entries besides the editor's and the terminal's.
+    fn on_desktop(
+        theme: ThemeTokens,
+        actions: ActionMap,
+        app_effects: bool,
+        more: Vec<cupertino_dock::desktop::DesktopEntry>,
+    ) -> Self {
         // window ids start again with a new runtime: none of them is configured yet
         CONFIGURED.with_borrow_mut(Vec::clear);
         let record = Rc::new(RefCell::new(Record::default()));
         let mut dock = Dock::new(DockConfig::default());
         dock.set_pinned(&[EDITOR, TERMINAL]);
-        let desktop = DesktopIndex {
-            // the terminal's entry is D-Bus activatable, the editor's is not
-            entries: vec![
-                entry_with(EDITOR, "Editor", "Categories=Development;TextEditor;\n"),
-                entry_with(
-                    TERMINAL,
-                    "Terminal",
-                    "Categories=System;TerminalEmulator;\nDBusActivatable=true\n",
-                ),
-            ],
-        };
+        let mut entries = vec![
+            entry_with(EDITOR, "Editor", "Categories=Development;TextEditor;\n"),
+            entry_with(
+                TERMINAL,
+                "Terminal",
+                "Categories=System;TerminalEmulator;\nDBusActivatable=true\n",
+            ),
+        ];
+        entries.extend(more);
+        // the terminal's entry is D-Bus activatable, the editor's is not
+        let desktop = DesktopIndex { entries };
         let model = Model::new(
             Session::new(dock, desktop),
             actions,
@@ -388,6 +401,12 @@ impl Run {
     fn message(&mut self, message: Message) {
         self.send.try_send(message).unwrap();
         self.settle();
+    }
+
+    /// Hand the model `message` and run until it is idle, drawing no frame: one pass of the model.
+    fn message_unframed(&mut self, message: Message) {
+        self.send.try_send(message).unwrap();
+        self.driver.run_until_idle(budget()).unwrap();
     }
 
     /// Move the host's clock on by `seconds` and wake the model.
@@ -1276,6 +1295,76 @@ fn the_dock_stays_shown_beside_the_open_grid() {
         shown,
         "the bar is shown beside the grid"
     );
+}
+
+/// Opening the grid waits for none of its icons beyond a row: the panel comes at once with every application of its
+/// rows named and a placeholder where an icon is still loading, and the icons of the rows shown fill in over the frames
+/// that follow, before those of the rows out of sight.
+#[test]
+fn the_grid_opens_without_waiting_for_its_icons_and_fills_them_in_over_its_frames() {
+    let more = (0..60)
+        .map(|i| entry_with(&format!("org.example.App{i:02}"), &format!("App {i:02}"), ""))
+        .collect();
+    let mut run = Run::on_desktop(tokens(false), ActionMap::default(), true, more);
+    let grid_loads = |run: &Run| -> Vec<String> {
+        run.record
+            .borrow()
+            .icon_loads
+            .iter()
+            .filter(|(_, side)| *side == cupertino_dock::app_grid::GridLayout::ICON)
+            .filter_map(|(key, _)| match key {
+                IconKey::Named(name) => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::ToggleAppGrid],
+    });
+    let grid = run
+        .window(&format!("{GRID_APP_ID}@1"))
+        .expect("the grid opened");
+    run.message_unframed(Message::Sized(Sized::Grid, 1280.0, 800.0));
+    let first = grid_loads(&run);
+    assert!(
+        !first.is_empty() && first.len() <= kit::GRID_ICONS_PER_PASS,
+        "a row of icons at most before the panel shows: {first:?}"
+    );
+    let shown = named(&run, grid, Role::Button);
+    assert!(
+        shown.len() > first.len(),
+        "the panel names every application of its rows meanwhile: {shown:?}"
+    );
+
+    // the frames that follow load the rest of the rows shown, and then those near them
+    run.settle();
+    for _ in 0..4 {
+        run.advance(1.0 / 60.0);
+    }
+    let loads = grid_loads(&run);
+    let names = |run: &Run| -> Vec<String> {
+        named(run, grid, Role::Button)
+            .into_iter()
+            .map(|n| match n.as_str() {
+                "Editor" => EDITOR.to_owned(),
+                "Terminal" => TERMINAL.to_owned(),
+                other => format!("org.example.App{}", other.trim_start_matches("App ")),
+            })
+            .collect()
+    };
+    let visible = names(&run);
+    assert!(
+        visible.iter().all(|key| loads.contains(key)),
+        "every icon shown is loaded: {visible:?} of {loads:?}"
+    );
+    assert!(
+        loads[..visible.len()].iter().all(|key| visible.contains(key)),
+        "the rows shown came first: {loads:?}"
+    );
+    assert!(loads.len() > visible.len(), "then the rows near them");
+    let unique: std::collections::BTreeSet<&String> = loads.iter().collect();
+    assert_eq!(unique.len(), loads.len(), "each icon loaded once");
 }
 
 // ---- residency --------------------------------------------------------------------------------------------------

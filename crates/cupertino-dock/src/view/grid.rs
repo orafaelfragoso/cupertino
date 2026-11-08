@@ -35,6 +35,10 @@ const OUTLINE_SHARE: f32 = 0.6;
 /// A pill that is off: the label colour at this share; the scroll indicator's thumb the same way.
 const PILL_FILL_SHARE: f32 = 0.08;
 const THUMB_SHARE: f32 = 0.3;
+/// An application whose icon is still loading: a rounded square of the label colour at this share, its corners this
+/// share of its side, where the icon will be.
+const ICON_PLACEHOLDER_SHARE: f32 = 0.08;
+const ICON_PLACEHOLDER_ROUNDING: f64 = 0.22;
 /// The magnifying glass: its lens's share of the symbol's size and its stroke width; the caret's width.
 const LENS_SHARE: f64 = 0.62;
 const SYMBOL_STROKE: f64 = 2.0;
@@ -790,7 +794,17 @@ impl<M: Clone + 'static> Widget<M> for ItemNode<M> {
                 fill,
             );
         }
-        paint::image(cx, &self.image, self.icon);
+        if self.image.is_empty() {
+            let side = self.icon.width().min(self.icon.height());
+            paint::fill(
+                cx,
+                self.icon,
+                side * ICON_PLACEHOLDER_ROUNDING,
+                share(label_color(cx), ICON_PLACEHOLDER_SHARE),
+            );
+        } else {
+            paint::image(cx, &self.image, self.icon);
+        }
         let env = cx.env().clone();
         let size = GridLayout::LABEL_FONT_PT * self.scale;
         let max = self.cell.width() - 2.0 * GridLayout::LABEL_INSET * self.scale;

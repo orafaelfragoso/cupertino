@@ -268,7 +268,10 @@ centre. The second Escape dismisses the grid. Typing in the collapsed field open
 it on the full list, and Return opens the first result.
 
 **Motion.** The grid fades and scales in from 1.05 over 0.25 s ease-in, and out the reverse way. The entry starts once
-the grid's surface is sized and the icons it shows first are loaded, so a slow first load does not use up the fade. Under Reduce Motion (the session's display options) the grid only fades.
+the grid's surface is sized. Opening the grid waits for none of its icons: each pass of the model loads at most a row of
+them (`GRID_ICONS_PER_PASS`) and stops after about 8 ms (`GRID_ICON_BUDGET`), the rows shown first and then a screenful
+either way, and while some are left the grid asks for frames. An icon still loading is a faint rounded square. Under
+Reduce Motion (the session's display options) the grid only fades.
 
 **Input.**
 

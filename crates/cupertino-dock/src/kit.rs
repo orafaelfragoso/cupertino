@@ -61,6 +61,14 @@ pub const OPEN_GUARD: f64 = 5.0;
 /// How much a bouncing tile dims at the top of a hop under Reduce Motion, where it stays in place.
 pub const REDUCED_BOUNCE_DIM: f64 = 0.5;
 
+/// How many of the application grid's icons load in one pass of the model, at most: the panel shows at once, with a
+/// placeholder for each icon still loading, and the icons fill in over the frames after, the rows shown first.
+pub const GRID_ICONS_PER_PASS: usize = app_grid::COLUMNS;
+
+/// How long one pass may spend loading the grid's icons before it leaves the rest for the next frame (after at least
+/// one icon), so loading never holds up the frames of the bar or of the grid's entry.
+pub const GRID_ICON_BUDGET: std::time::Duration = std::time::Duration::from_millis(8);
+
 /// Side of an icon in the Force Quit dialog's rows and in its question, in points.
 const FORCE_QUIT_ROW_ICON: f64 = 16.0;
 
@@ -376,8 +384,10 @@ struct Grid {
     grid: AppGrid,
     /// The compositor sized the surface.
     sized: bool,
-    /// The entry animation started: once the surface was sized and the icons it shows first were loaded.
+    /// The entry animation started: on the pass after the surface was sized.
     entered: bool,
+    /// Icons of the rows shown or near them are still to load ([`GRID_ICONS_PER_PASS`]): the grid asks for frames.
+    icons_pending: bool,
 }
 
 /// The window-manager surfaces of one output.
@@ -1294,6 +1304,7 @@ impl Model {
             grid,
             sized: false,
             entered: false,
+            icons_pending: false,
         });
     }
 
@@ -1637,6 +1648,46 @@ impl Model {
         })
     }
 
+    /// Load the icons of the grid's rows shown, then of a screenful either way, at the grid's icon size: at most
+    /// [`GRID_ICONS_PER_PASS`] and about [`GRID_ICON_BUDGET`] of them a pass, so opening the grid waits for none of
+    /// them. While some are left the grid asks for frames, and each frame loads more.
+    fn prefill_grid(&mut self) {
+        let Some(open) = &self.grid else {
+            return;
+        };
+        let mut order: Vec<usize> = open.grid.visible().into_iter().map(|p| p.index).collect();
+        for index in open.grid.nearby() {
+            if !order.contains(&index) {
+                order.push(index);
+            }
+        }
+        let names: Vec<String> = order
+            .into_iter()
+            .filter_map(|i| open.grid.item(i))
+            .map(|app| app.icon.clone())
+            .collect();
+        let side = GridLayout::ICON;
+        let px = side.ceil().max(1.0) as u32;
+        let started = std::time::Instant::now();
+        let mut loaded = 0;
+        let mut pending = false;
+        for name in names {
+            let key = IconKey::Named(name);
+            if self.icons.get(&key).is_some_and(|k| k.contains_key(&px)) {
+                continue;
+            }
+            if loaded == GRID_ICONS_PER_PASS || (loaded > 0 && started.elapsed() >= GRID_ICON_BUDGET) {
+                pending = true;
+                break;
+            }
+            self.icon_set(&key, &[side]);
+            loaded += 1;
+        }
+        if let Some(open) = self.grid.as_mut() {
+            open.icons_pending = pending;
+        }
+    }
+
     /// Load what the next view draws, and the names it shows, so the view only reads.
     fn prefill(&mut self) {
         let tiles: Vec<(TileId, TileKind, String)> = self
@@ -1677,19 +1728,7 @@ impl Model {
         for (app, side) in switched {
             self.icon_set(&IconKey::App(app), &[side]);
         }
-        // the icons of the rows shown and of a screenful either way, at the grid's icon size
-        let grid_icons: Vec<(String, f64)> = match &self.grid {
-            Some(Grid { grid, .. }) => grid
-                .nearby()
-                .into_iter()
-                .filter_map(|i| grid.item(i))
-                .map(|app| (app.icon.clone(), GridLayout::ICON))
-                .collect(),
-            None => Vec::new(),
-        };
-        for (name, side) in grid_icons {
-            self.icon_set(&IconKey::Named(name), &[side]);
-        }
+        self.prefill_grid();
     }
 
     /// The bar's keyboard focus follows the model: Focus Dock focuses the first tile, with its ring; a focused tile
@@ -1788,7 +1827,8 @@ impl Model {
         }
         self.tell_host();
         self.prefill();
-        // the grid's entry runs whole on the frames after its icons were loaded, however long that took
+        // the grid's entry starts on the pass its surface was sized, with its first icons; the rest fill in over the
+        // frames of the entry
         if let Some(grid) = self.grid.as_mut().filter(|g| g.sized && !g.entered) {
             grid.entered = true;
             grid.grid.restart_entry(self.host.now());
@@ -1859,7 +1899,10 @@ impl Model {
     /// Whether anything moves on its own now.
     fn animating(&self, now: f64) -> bool {
         self.bar_moving(now)
-            || self.grid.as_ref().is_some_and(|g| g.grid.animating(now))
+            || self
+                .grid
+                .as_ref()
+                .is_some_and(|g| g.grid.animating(now) || g.icons_pending)
             || self.wm.values().any(|s| Self::wm_moving(s, now))
     }
 
@@ -2326,7 +2369,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                     now,
                     icons: &lookup,
                     size: Size::new(out.width, out.height),
-                    ticking: grid.grid.animating(now),
+                    ticking: grid.grid.animating(now) || grid.icons_pending,
                 },
                 message,
             ));

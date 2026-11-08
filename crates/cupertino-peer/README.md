@@ -47,6 +47,16 @@ nothing; the caller is the process behind its connection.
   would wait for good. `FromOwner::owner` gives the owner it follows, for a method call from the same service. Users:
   `cupertino-login`, `cupertino-sessiond`, `cupertino-netd`, `cupertino-polkit-agent` and the server's power watchers.
 
+* `lookup::Lookup`: asks the bus daemon who callers are on a connection of its own (`Lookup::connect(address)`), never on
+  the one that reads a service's calls, with at most `MAX_IN_FLIGHT` (8) questions out at once and an `ANSWER_DEADLINE`
+  (5 s) on each: `credentials(sender)` and `caller(sender)`. Each answer carries the caller's process descriptor, and a bus
+  daemon queues at most 64 descriptors for one connection of the system bus and refuses every message to it beyond that
+  ("destination has a full message queue"); asked on the reading connection, the answers queue behind every call that
+  came first, so a peer that sends enough calls at once (or while the service's thread waits for logind) shuts every other
+  caller out. On the second connection nothing else arrives, and the questions never number more than the queue holds.
+  Users: `cupertino-sessiond` and `cupertino-netd`, on the system bus. A flood sent faster than a service can answer still
+  delays every caller of that service, as for any service on the bus; it is no longer refused for them.
+
 Users: `cupertino-server` (`org.cupertino.Session1`, the call to `org.cupertino.Login1` and the owner check of a bus name
 a Wayland client announces), `cupertino-login`
 (`org.cupertino.Login1`) and `cupertino-osd` (`org.cupertino.Osd1`).
@@ -68,4 +78,5 @@ process that exited, a Flatpak process that exited with its info file still matc
 incomplete `.flatpak-info`, sandboxed against unsandboxed both ways, two Snap processes), credentials without a
 `ProcessFD`, the peer of a socket, and a Wayland client classified by its label and root; `sent_by_bus` on messages that carry the daemon's name, a unique name and
 no sender; `from_owner` on a private bus: only the owner is heard, through a change of owner and a name nobody owns yet, and 1000
-forged signals stop neither the owner's signal nor a call on the same connection.
+forged signals stop neither the owner's signal nor a call on the same connection; `Lookup` names a caller on its own
+connection, and a name nobody holds is no caller.

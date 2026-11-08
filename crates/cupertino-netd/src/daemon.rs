@@ -5,15 +5,22 @@
 //! The host loop calls [`Daemon::publish`] after every change and answers the [`Request`]s that
 //! [`Requests::drain`] returns. Objects hold no state of their own: each call reads the current
 //! snapshot, so a getter never disagrees with the last signal.
+//!
+//! Who a caller is, the bus daemon is asked on a second connection ([`Lookup`]), never on the one
+//! that reads the calls: there each answer, which carries the caller's process descriptor, would
+//! queue behind the calls that came first, and a flood of calls would fill the daemon's queue for
+//! the service with them, so that the daemon refused every other caller's call.
 
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use cupertino_peer::lookup::Lookup;
 use rustix::event::{eventfd, EventfdFlags};
 use rustix::io::{read, write, Errno};
 use zbus::blocking::connection::Builder;
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
+use zbus::Address;
 
 use crate::auth::Authorizer;
 use crate::engine::{Command, CommandError};
@@ -89,6 +96,8 @@ impl Requests {
 pub struct Shared {
     snapshot: Mutex<Snapshot>,
     authorizer: Box<dyn Authorizer>,
+    /// Asks the bus daemon who callers are, on a connection of its own.
+    lookup: Lookup,
     requests: Sender<Request>,
     waker: Arc<OwnedFd>,
 }
@@ -103,6 +112,11 @@ impl Shared {
 
     pub fn authorizer(&self) -> &dyn Authorizer {
         self.authorizer.as_ref()
+    }
+
+    /// Where the callers' credentials are asked.
+    pub fn lookup(&self) -> &Lookup {
+        &self.lookup
     }
 
     /// Hands `command` to the engine and waits for its answer.
@@ -135,18 +149,22 @@ impl Daemon {
             eventfd(0, EventfdFlags::NONBLOCK | EventfdFlags::CLOEXEC)
                 .map_err(Error::syscall("eventfd"))?,
         );
+        let address = match &config.bus {
+            Bus::System => Address::system(),
+            Bus::Session => Address::session(),
+            Bus::Address(address) => address.parse(),
+        }
+        .map_err(Error::bus("finding the bus"))?;
+        let lookup =
+            Lookup::connect(address.clone()).map_err(Error::bus("connecting to the bus"))?;
         let shared = Arc::new(Shared {
             snapshot: Mutex::new(Snapshot::default()),
             authorizer: config.authorizer,
+            lookup,
             requests: sender,
             waker: waker.clone(),
         });
-        let builder = match &config.bus {
-            Bus::System => Builder::system(),
-            Bus::Session => Builder::session(),
-            Bus::Address(address) => Builder::address(address.as_str()),
-        }
-        .map_err(Error::bus("connecting to the bus"))?;
+        let builder = Builder::address(address).map_err(Error::bus("connecting to the bus"))?;
         let serve = Error::bus("exporting an object");
         let connection = builder
             .serve_at(NETWORK_PATH, NetworkObject(shared.clone()))

@@ -18,8 +18,10 @@
 //! `/.flatpak-info`). An unsandboxed process could make a `/.flatpak-info` of its own in a user namespace and pass for a
 //! Flatpak instance, but it can reach every name on the bus directly already, so this gains it nothing.
 //!
-//! [`signal`] tells who sent a signal, on either bus.
+//! [`signal`] tells who sent a signal, on either bus. [`lookup::Lookup`] asks who called on a connection of its own, for a
+//! service that must not wait on the connection that reads its calls.
 
+pub mod lookup;
 pub mod signal;
 
 use std::io::Read;

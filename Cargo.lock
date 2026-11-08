@@ -1481,6 +1481,7 @@ dependencies = [
 name = "cupertino-peer"
 version = "0.1.0"
 dependencies = [
+ "async-lock",
  "cupertino-test-bus",
  "libc",
  "ordered-stream",

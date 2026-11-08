@@ -132,6 +132,15 @@ fn start(
         decision,
         asked: asked.clone(),
     });
+    start_with(bus, authorizer, asked, answer)
+}
+
+fn start_with(
+    bus: &PrivateBus,
+    authorizer: Box<dyn Authorizer>,
+    asked: Arc<Mutex<Vec<u32>>>,
+    answer: fn(&Command) -> std::result::Result<(), CommandError>,
+) -> Running {
     let (daemon, requests) = Daemon::connect(Config {
         bus: Bus::Address(bus.address.clone()),
         authorizer,
@@ -627,4 +636,80 @@ fn a_second_daemon_cannot_take_the_names() {
         "the bus name org.freedesktop.NetworkManager is owned by another process"
     );
     drop(first);
+}
+
+/// The question from which [`Slow`] waits.
+const SLOW_FROM: usize = 100;
+
+/// Refuses every caller, as logind would for a process outside a session. From the [`SLOW_FROM`]th question on (by then
+/// the daemon has asked the bus about many callers) each waits while the test holds `held`, as a slow logind keeps the
+/// daemon's thread, and says on `asked` that it came.
+struct Slow {
+    held: Arc<Mutex<()>>,
+    questions: std::sync::atomic::AtomicUsize,
+    asked: Mutex<mpsc::Sender<()>>,
+}
+
+impl Authorizer for Slow {
+    fn authorize(&self, _pid: u32) -> Result<Decision> {
+        if self
+            .questions
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1
+            >= SLOW_FROM
+        {
+            let _ = self.asked.lock().unwrap().send(());
+            drop(self.held.lock().unwrap());
+        }
+        Ok(Decision::Denied(
+            "the caller is not in a login session".to_owned(),
+        ))
+    }
+}
+
+#[test]
+fn a_flood_of_calls_while_logind_is_slow_does_not_make_the_bus_refuse_others() {
+    // the system bus's own limits: the bus daemon queues few descriptors for one connection
+    let dir = tempfile::tempdir().unwrap();
+    let Some(bus) =
+        PrivateBus::start_with_config(&cupertino_test_bus::system_limits_config(dir.path()))
+    else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let held = Arc::new(Mutex::new(()));
+    let (asked, questions) = mpsc::channel();
+    let slow = Box::new(Slow {
+        held: held.clone(),
+        questions: Default::default(),
+        asked: Mutex::new(asked),
+    });
+    let running = start_with(&bus, slow, Arc::default(), accept);
+    let logind_waits = held.lock().unwrap();
+    // calls that each make the daemon ask who called, sent at once without waiting for an answer
+    let flooder = bus.connect();
+    for _ in 0..3000 {
+        let message = zbus::Message::method_call(NETWORK_PATH, "Scan")
+            .and_then(|b| b.destination(NETWORK))
+            .and_then(|b| b.interface(NETWORK))
+            .and_then(|b| b.with_flags(zbus::message::Flags::NoReplyExpected))
+            .and_then(|b| b.build(&()))
+            .unwrap();
+        zbus::block_on(flooder.inner().send(&message)).unwrap();
+    }
+    // the daemon waits for logind: the answers about the other callers come meanwhile
+    questions
+        .recv_timeout(WAIT)
+        .expect("the daemon asked about a caller");
+    thread::sleep(Duration::from_millis(300));
+    let client = bus.connect();
+    let answer = thread::spawn(move || error_name(network(&client).call::<_, _, ()>("Scan", &())));
+    thread::sleep(Duration::from_millis(300));
+    drop(logind_waits);
+    // the daemon's own refusal, not the bus daemon's
+    assert_eq!(
+        answer.join().unwrap(),
+        "org.cupertino.Network1.NotAuthorized"
+    );
+    assert_eq!(running.engine.commands(), []);
 }

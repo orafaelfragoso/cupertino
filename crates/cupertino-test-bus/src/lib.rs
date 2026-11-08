@@ -128,6 +128,34 @@ impl PrivateBus {
     }
 }
 
+/// Writes into `dir` the configuration of a bus that lets everyone own every name and send everything, with the daemon's
+/// built-in limits: those of a system bus, which queues at most 64 descriptors and 127 MiB for one connection and awaits
+/// at most 128 replies for one connection (a session bus raises them all). Start it with
+/// [`PrivateBus::start_with_config`]; keep `dir` until the bus is dropped.
+pub fn system_limits_config(dir: &Path) -> std::path::PathBuf {
+    let config = dir.join("system-limits.conf");
+    std::fs::write(
+        &config,
+        format!(
+            r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>system</type>
+  <listen>unix:dir={}</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*"/>
+    <allow receive_sender="*"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>"#,
+            dir.display()
+        ),
+    )
+    .expect("writing the bus configuration");
+    config
+}
+
 impl Drop for PrivateBus {
     fn drop(&mut self) {
         let _ = self.daemon.kill();
@@ -195,6 +223,22 @@ mod tests {
         assert!(started.elapsed() < WAIT + Duration::from_secs(2));
         let message = failure.downcast_ref::<String>().unwrap();
         assert!(message.contains("handshake did not finish"), "{message}");
+    }
+
+    #[test]
+    fn a_bus_with_the_system_limits_takes_names_and_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(bus) = PrivateBus::start_with_config(&system_limits_config(dir.path())) else {
+            return;
+        };
+        let service = bus.connect();
+        service.request_name("org.example.Limits").unwrap();
+        let client = bus.connect();
+        let owner = zbus::blocking::fdo::DBusProxy::new(&client)
+            .unwrap()
+            .get_name_owner("org.example.Limits".try_into().unwrap())
+            .unwrap();
+        assert_eq!(owner.as_str(), service.unique_name().unwrap().as_str());
     }
 
     #[test]

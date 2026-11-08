@@ -14,9 +14,7 @@ use std::sync::Arc;
 use cupertino_netlink::Security;
 use zbus::fdo;
 use zbus::message::Header;
-use zbus::names::BusName;
 use zbus::object_server::SignalEmitter;
-use zbus::Connection;
 
 use crate::auth::Decision;
 use crate::daemon::Shared;
@@ -36,24 +34,18 @@ enum Refusal {
     Failed(String),
 }
 
-/// Maps the caller's bus name to its process through `GetConnectionCredentials` and asks the
-/// authorizer. The pid comes from the bus daemon, not from the message, so the caller cannot
-/// choose it.
-async fn authorize(
-    shared: &Shared,
-    header: Option<&Header<'_>>,
-    connection: &Connection,
-) -> Result<(), Refusal> {
+/// Maps the caller's bus name to its process through `GetConnectionCredentials`, asked on the
+/// daemon's second connection ([`Shared::lookup`]), and asks the authorizer. The pid comes from the
+/// bus daemon, not from the message, so the caller cannot choose it.
+async fn authorize(shared: &Shared, header: Option<&Header<'_>>) -> Result<(), Refusal> {
     let failed =
         |what: &str, error: &dyn std::fmt::Display| Refusal::Failed(format!("{what}: {error}"));
     let sender = header
         .and_then(Header::sender)
         .ok_or_else(|| Refusal::Failed("the call has no sender".to_owned()))?;
-    let bus = fdo::DBusProxy::new(connection)
-        .await
-        .map_err(|e| failed("connecting to the bus daemon", &e))?;
-    let credentials = bus
-        .get_connection_credentials(BusName::from(sender.clone()))
+    let credentials = shared
+        .lookup()
+        .credentials(sender)
         .await
         .map_err(|e| failed("reading the caller's credentials", &e))?;
     let pid = credentials
@@ -131,12 +123,8 @@ pub struct NetworkObject(pub Arc<Shared>);
 #[zbus::interface(name = "org.cupertino.Network1")]
 impl NetworkObject {
     /// Asks for a scan. The list changes (`NetworksChanged`) when it ends.
-    async fn scan(
-        &self,
-        #[zbus(header)] header: Header<'_>,
-        #[zbus(connection)] connection: &Connection,
-    ) -> Result<(), NetworkError> {
-        authorize(&self.0, Some(&header), connection).await?;
+    async fn scan(&self, #[zbus(header)] header: Header<'_>) -> Result<(), NetworkError> {
+        authorize(&self.0, Some(&header)).await?;
         Ok(self.0.submit(Command::Scan).await?)
     }
 
@@ -164,21 +152,16 @@ impl NetworkObject {
     async fn connect(
         &self,
         #[zbus(header)] header: Header<'_>,
-        #[zbus(connection)] connection: &Connection,
         ssid: String,
         passphrase: String,
     ) -> Result<(), NetworkError> {
-        authorize(&self.0, Some(&header), connection).await?;
+        authorize(&self.0, Some(&header)).await?;
         let passphrase = (!passphrase.is_empty()).then_some(passphrase);
         Ok(self.0.submit(Command::Connect { ssid, passphrase }).await?)
     }
 
-    async fn disconnect(
-        &self,
-        #[zbus(header)] header: Header<'_>,
-        #[zbus(connection)] connection: &Connection,
-    ) -> Result<(), NetworkError> {
-        authorize(&self.0, Some(&header), connection).await?;
+    async fn disconnect(&self, #[zbus(header)] header: Header<'_>) -> Result<(), NetworkError> {
+        authorize(&self.0, Some(&header)).await?;
         Ok(self.0.submit(Command::Disconnect).await?)
     }
 
@@ -207,9 +190,8 @@ impl NetworkObject {
         &self,
         value: bool,
         #[zbus(header)] header: Option<Header<'_>>,
-        #[zbus(connection)] connection: &Connection,
     ) -> zbus::Result<()> {
-        set_wireless(&self.0, value, header, connection).await
+        set_wireless(&self.0, value, header).await
     }
 
     #[zbus(property)]
@@ -265,9 +247,8 @@ async fn set_wireless(
     shared: &Shared,
     value: bool,
     header: Option<Header<'_>>,
-    connection: &Connection,
 ) -> zbus::Result<()> {
-    authorize(shared, header.as_ref(), connection)
+    authorize(shared, header.as_ref())
         .await
         .map_err(|refusal| match refusal {
             Refusal::Denied(reason) => fdo::Error::AccessDenied(reason),
@@ -318,9 +299,8 @@ impl Manager {
         &self,
         value: bool,
         #[zbus(header)] header: Option<Header<'_>>,
-        #[zbus(connection)] connection: &Connection,
     ) -> zbus::Result<()> {
-        set_wireless(&self.0, value, header, connection).await
+        set_wireless(&self.0, value, header).await
     }
 
     /// `802-3-ethernet`, `802-11-wireless`, or empty without a primary connection.

@@ -1964,13 +1964,10 @@ fn serve_bus(mailbox: &Mailbox, admin_groups: Vec<String>) -> Result<zbus::block
                 && service::only_root_changes(file)
         }),
     };
-    Ok(service::serve(
-        zbus::blocking::connection::Builder::system()?,
-        authorizer,
-        sink,
-        machine,
+    Ok(
+        service::serve(zbus::Address::system()?, authorizer, sink, machine)
+            .map_err(|e| format!("serving {}: {e}", service::BUS_NAME))?,
     )
-    .map_err(|e| format!("serving {}: {e}", service::BUS_NAME))?)
 }
 
 /// Tell systemd the manager is up (`Type=notify`): the socket listens, the login screen's session is starting and the bus name

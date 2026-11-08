@@ -20,6 +20,11 @@
 //! Restarting or shutting down the machine with other users logged in needs a decision that only the manager can take, so it is
 //! the manager, as root, that calls logind for the agent. The service runs on the bus daemon's thread of the connection: a
 //! method that needs the manager's state sends a [`Call`] to the main loop and waits for its answer, a bounded time.
+//!
+//! The caller's credentials are asked on a second connection to the bus ([`cupertino_peer::lookup::Lookup`]), never on the
+//! one that reads the calls: there each answer, which carries a process descriptor, would queue behind the calls that came
+//! first, and a flood of calls would fill the daemon's queue for the service with them, so that the daemon refused every
+//! other caller's call.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -28,13 +33,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cupertino_defaults::accessibility::{SystemAccessibility, SYSTEM_KEYS};
+use cupertino_peer::lookup::Lookup;
 use cupertino_peer::Caller;
 
 use cupertino_login_ipc::{PowerAction, PowerRefusal};
-use zbus::fdo::{self, RequestNameFlags, RequestNameReply};
+use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::message::Header;
-use zbus::names::BusName;
-use zbus::Connection;
 
 use crate::caller::{authorise, CallerSession, Denial, Need};
 use crate::system_accessibility::{Limiter, MAX_FIELD};
@@ -162,6 +166,8 @@ pub struct LoginManager {
     sink: Sink,
     machine: MachineFiles,
     limiter: Mutex<Limiter>,
+    /// Asks the bus daemon who callers are, on a connection of its own.
+    lookup: Lookup,
 }
 
 impl LoginManager {
@@ -169,18 +175,15 @@ impl LoginManager {
     async fn caller(
         &self,
         header: &Header<'_>,
-        connection: &Connection,
         need: Need,
     ) -> Result<(CallerSession, String), Error> {
         let sender = header
             .sender()
             .ok_or_else(|| Error::Failed("the call has no sender".to_owned()))?;
-        let bus = fdo::DBusProxy::new(connection)
-            .await
-            .map_err(|e| Error::Failed(format!("connecting to the bus daemon: {e}")))?;
         // the bus daemon names the process behind the connection: the caller cannot choose it
-        let credentials = bus
-            .get_connection_credentials(BusName::from(sender.clone()))
+        let credentials = self
+            .lookup
+            .credentials(sender)
             .await
             .map_err(|e| Error::Failed(format!("reading the caller's credentials: {e}")))?;
         let pid = credentials.process_id().ok_or_else(|| {
@@ -200,19 +203,13 @@ impl LoginManager {
 
     /// The user of the caller of `header`, when the caller is the installed settings application of an administrator at
     /// the console (the account's groups asked now).
-    async fn console_administrator(
-        &self,
-        header: &Header<'_>,
-        connection: &Connection,
-    ) -> Result<u32, Error> {
+    async fn console_administrator(&self, header: &Header<'_>) -> Result<u32, Error> {
         let sender = header
             .sender()
             .ok_or_else(|| Error::Failed("the call has no sender".to_owned()))?;
-        let bus = fdo::DBusProxy::new(connection)
-            .await
-            .map_err(|e| Error::Failed(format!("connecting to the bus daemon: {e}")))?;
-        let credentials = bus
-            .get_connection_credentials(BusName::from(sender.clone()))
+        let credentials = self
+            .lookup
+            .credentials(sender)
             .await
             .map_err(|e| Error::Failed(format!("reading the caller's credentials: {e}")))?;
         let uid = credentials
@@ -287,7 +284,6 @@ impl LoginManager {
     async fn request_power(
         &self,
         #[zbus(header)] header: Header<'_>,
-        #[zbus(connection)] connection: &Connection,
         action: &str,
     ) -> Result<(), Error> {
         let action = match action {
@@ -300,9 +296,7 @@ impl LoginManager {
                 ))
             }
         };
-        let (session, _) = self
-            .caller(&header, connection, Need::ActiveUserSession)
-            .await?;
+        let (session, _) = self.caller(&header, Need::ActiveUserSession).await?;
         self.ask(|reply| Call::Power {
             session,
             action,
@@ -316,11 +310,8 @@ impl LoginManager {
     async fn switch_to_login_window(
         &self,
         #[zbus(header)] header: Header<'_>,
-        #[zbus(connection)] connection: &Connection,
     ) -> Result<(), Error> {
-        let (session, _) = self
-            .caller(&header, connection, Need::ActiveUserSession)
-            .await?;
+        let (session, _) = self.caller(&header, Need::ActiveUserSession).await?;
         self.ask(|reply| Call::SwitchToLoginWindow { session, reply })?
             .map_err(|refusal| match refusal {
                 SwitchRefusal::NoLoginScreen => {
@@ -331,12 +322,8 @@ impl LoginManager {
     }
 
     /// The caller's session is up and the caller is its agent. Repeated calls (the agent restarted) register the new caller.
-    async fn session_ready(
-        &self,
-        #[zbus(header)] header: Header<'_>,
-        #[zbus(connection)] connection: &Connection,
-    ) -> Result<(), Error> {
-        let (session, agent) = self.caller(&header, connection, Need::UserSession).await?;
+    async fn session_ready(&self, #[zbus(header)] header: Header<'_>) -> Result<(), Error> {
+        let (session, agent) = self.caller(&header, Need::UserSession).await?;
         self.ask(|reply| Call::Ready {
             session,
             agent,
@@ -355,7 +342,6 @@ impl LoginManager {
     async fn set_system_accessibility(
         &self,
         #[zbus(header)] header: Header<'_>,
-        #[zbus(connection)] connection: &Connection,
         options: HashMap<String, String>,
     ) -> Result<(), Error> {
         if options.len() > SYSTEM_KEYS.len()
@@ -367,7 +353,7 @@ impl LoginManager {
                 "too many settings, or a setting too long".to_owned(),
             ));
         }
-        let uid = self.console_administrator(&header, connection).await?;
+        let uid = self.console_administrator(&header).await?;
         let path = self
             .machine
             .dir
@@ -407,14 +393,8 @@ impl LoginManager {
 
     /// Whether the caller may set the machine's accessibility defaults now: a hint for the settings application, which
     /// shows its control only then; [`Self::set_system_accessibility`] checks again.
-    async fn can_set_system_accessibility(
-        &self,
-        #[zbus(header)] header: Header<'_>,
-        #[zbus(connection)] connection: &Connection,
-    ) -> bool {
-        self.console_administrator(&header, connection)
-            .await
-            .is_ok()
+    async fn can_set_system_accessibility(&self, #[zbus(header)] header: Header<'_>) -> bool {
+        self.console_administrator(&header).await.is_ok()
     }
 }
 
@@ -423,15 +403,16 @@ pub fn unlock(connection: &zbus::blocking::Connection, agent: &str) -> zbus::Res
     connection.emit_signal(Some(agent), OBJECT_PATH, BUS_NAME, "Unlock", &())
 }
 
-/// Export the interface on the bus `builder` connects to and take [`BUS_NAME`], never queued behind another owner. The
-/// interface is served while the returned connection lives.
+/// Export the interface on the bus at `address` and take [`BUS_NAME`], never queued behind another owner. The interface is
+/// served while the returned connection lives; a second connection to the bus asks who the callers are.
 pub fn serve(
-    builder: zbus::blocking::connection::Builder<'_>,
+    address: zbus::Address,
     authorizer: Arc<dyn Authorizer>,
     sink: Sink,
     machine: MachineFiles,
 ) -> zbus::Result<zbus::blocking::Connection> {
-    let connection = builder
+    let lookup = Lookup::connect(address.clone())?;
+    let connection = zbus::blocking::connection::Builder::address(address)?
         .serve_at(
             OBJECT_PATH,
             LoginManager {
@@ -439,6 +420,7 @@ pub fn serve(
                 sink,
                 machine,
                 limiter: Mutex::new(Limiter::default()),
+                lookup,
             },
         )?
         .build()?;

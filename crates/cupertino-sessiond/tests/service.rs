@@ -46,7 +46,7 @@ fn session(active: bool) -> CallerSession {
 struct Fixture {
     /// The machine's files (`/etc/cupertino` of the test).
     machine: tempfile::TempDir,
-    _bus: PrivateBus,
+    bus: PrivateBus,
     _service: Connection,
     client: Connection,
     calls: Receiver<Call>,
@@ -72,6 +72,14 @@ fn fixture_on(
     administrator: bool,
     settings: bool,
 ) -> Option<Fixture> {
+    fixture_with(bus, Arc::new(Scripted(session, administrator)), settings)
+}
+
+fn fixture_with(
+    bus: PrivateBus,
+    authorizer: Arc<dyn Authorizer>,
+    settings: bool,
+) -> Option<Fixture> {
     let machine = tempfile::tempdir().unwrap();
     let test_program = std::env::current_exe().unwrap();
     let files = service::MachineFiles {
@@ -84,8 +92,8 @@ fn fixture_on(
     let sender = Mutex::new(sender);
     let sink: Sink = Arc::new(move |call| sender.lock().unwrap().send(call).is_ok());
     let service = service::serve(
-        zbus::blocking::connection::Builder::address(bus.address.as_str()).unwrap(),
-        Arc::new(Scripted(session, administrator)),
+        bus.address.as_str().try_into().unwrap(),
+        authorizer,
         sink,
         files,
     )
@@ -93,7 +101,7 @@ fn fixture_on(
     let client = bus.connect();
     Some(Fixture {
         machine,
-        _bus: bus,
+        bus,
         _service: service,
         client,
         calls,
@@ -312,8 +320,8 @@ fn unlock_reaches_the_agent_it_is_sent_to_and_no_other_listener() {
     let Some(fixture) = fixture(Some(session(true))) else {
         return;
     };
-    let agent = fixture._bus.connect();
-    let bystander = fixture._bus.connect();
+    let agent = fixture.bus.connect();
+    let bystander = fixture.bus.connect();
     let rule = || {
         zbus::MatchRule::builder()
             .msg_type(zbus::message::Type::Signal)
@@ -577,4 +585,81 @@ fn only_a_program_file_root_alone_can_change_passes_for_the_installed_one() {
     );
     assert!(!service::is_root_only(0, 0o100_757), "writable by anyone");
     assert!(!service::is_root_only(0, 0o040_755), "not a file");
+}
+
+/// The question from which [`Slow`] waits.
+const SLOW_FROM: usize = 100;
+
+/// Knows no session for any process. From the [`SLOW_FROM`]th question on (by then the service has asked the bus about
+/// many callers) each waits while the test holds `held`, as a slow logind keeps the service's thread, and says on `asked`
+/// that it came.
+struct Slow {
+    held: Arc<Mutex<()>>,
+    questions: std::sync::atomic::AtomicUsize,
+    asked: Mutex<std::sync::mpsc::Sender<()>>,
+}
+
+impl Authorizer for Slow {
+    fn session_of(&self, _pid: u32) -> Result<Option<CallerSession>, String> {
+        if self
+            .questions
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1
+            >= SLOW_FROM
+        {
+            let _ = self.asked.lock().unwrap().send(());
+            drop(self.held.lock().unwrap());
+        }
+        Ok(None)
+    }
+
+    fn is_administrator(&self, _uid: u32) -> Result<bool, String> {
+        Ok(false)
+    }
+}
+
+#[test]
+fn a_flood_of_calls_while_logind_is_slow_does_not_make_the_bus_refuse_others() {
+    // the system bus's own limits: the daemon queues few descriptors for one connection
+    let dir = tempfile::tempdir().unwrap();
+    let Some(bus) =
+        PrivateBus::start_with_config(&cupertino_test_bus::system_limits_config(dir.path()))
+    else {
+        return;
+    };
+    let held = Arc::new(Mutex::new(()));
+    let (asked, questions) = channel();
+    let slow = Slow {
+        held: held.clone(),
+        questions: Default::default(),
+        asked: Mutex::new(asked),
+    };
+    let Some(fixture) = fixture_with(bus, Arc::new(slow), false) else {
+        return;
+    };
+    let logind_waits = held.lock().unwrap();
+    // calls that each make the service ask who called, sent at once without waiting for an answer: with no reply asked
+    // for, the daemon's limit on the replies one connection awaits does not stop them
+    let flooder = fixture.bus.connect();
+    for _ in 0..3000 {
+        let message = zbus::Message::method_call(service::OBJECT_PATH, "SessionReady")
+            .and_then(|b| b.destination(service::BUS_NAME))
+            .and_then(|b| b.interface(service::BUS_NAME))
+            .and_then(|b| b.with_flags(zbus::message::Flags::NoReplyExpected))
+            .and_then(|b| b.build(&()))
+            .unwrap();
+        zbus::block_on(flooder.inner().send(&message)).unwrap();
+    }
+    // the service waits for logind: the answers about the other callers come meanwhile
+    questions
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the service asked about a caller");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let client = fixture.client.clone();
+    let answer = std::thread::spawn(move || call(&client, "SessionReady", &()));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    drop(logind_waits);
+    // the service's own refusal, not the bus daemon's
+    assert_eq!(error_name(answer.join().unwrap()), ACCESS_DENIED);
+    assert!(fixture.calls.try_recv().is_err());
 }

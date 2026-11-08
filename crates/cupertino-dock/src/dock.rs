@@ -29,8 +29,11 @@ pub struct PlacedTile {
     pub kind: TileKind,
     /// Rectangle in screen coordinates, without the bounce lift.
     pub rect: Rect,
-    /// Bounce lift in points along the bar normal (away from the screen edge).
+    /// Bounce lift in points along the bar normal (away from the screen edge); 0 under Reduce Motion.
     pub lift: f64,
+    /// Under Reduce Motion, where a bounce would be from 0 (at rest) to 1 (the top of its highest hop): the tile dims
+    /// in place by it instead of lifting. 0 otherwise.
+    pub pulse: f64,
     pub lifecycle: TileLifecycle,
     /// Running indicator should be drawn (running tile and indicators enabled).
     pub indicator: bool,
@@ -187,6 +190,9 @@ pub struct Dock {
     pub autohide_external: bool,
     /// An auto-hidden dock shows, as if the pointer were over it, while this holds (the dock has the keyboard).
     pub keep_shown: bool,
+    /// Reduce Motion: the magnification comes and goes at once, and bounces (launch, the launch hop, attention) dim
+    /// the tile in place instead of lifting it ([`PlacedTile::pulse`]).
+    reduce_motion: bool,
     profile: Box<dyn MagnificationProfile>,
     apps: Vec<Tile>,
     recents: Vec<Tile>,
@@ -258,6 +264,7 @@ impl Dock {
             autohide,
             autohide_external: false,
             keep_shown: false,
+            reduce_motion: false,
             cfg,
             bounce: BounceConfig::default(),
             profile: Box::new(FisheyeProfile),
@@ -301,6 +308,19 @@ impl Dock {
         if self.cfg.autohide {
             self.autohide.update(false, now);
         }
+    }
+
+    /// Follow the session's Reduce Motion option. A magnification under way jumps to where it was going.
+    pub fn set_reduce_motion(&mut self, on: bool) {
+        self.reduce_motion = on;
+        if on {
+            let target = self.fish.target();
+            self.fish.set_immediately(target);
+        }
+    }
+
+    pub fn reduce_motion(&self) -> bool {
+        self.reduce_motion
     }
 
     /// Replace the magnification profile (the verified fisheye is the default; the raised-cosine
@@ -740,6 +760,11 @@ impl Dock {
         if self.cfg.autohide {
             return 0.0;
         }
+        self.bar_depth()
+    }
+
+    /// Depth of the shown bar across the dock axis: the margin, the padding and a tile at rest.
+    pub fn bar_depth(&self) -> f64 {
         self.cfg.tile_size + 2.0 * self.cfg.bar_padding + self.cfg.edge_margin
     }
 
@@ -941,15 +966,24 @@ impl Dock {
 
     fn placed(&self, t: &Tile, rect: Rect, now: Option<f64>) -> PlacedTile {
         let n = now.unwrap_or(0.0);
+        let lift = if now.is_some() && !self.reduce_motion {
+            t.bounce_lift_pt(&self.bounce, self.cfg.tile_size, n)
+        } else {
+            0.0
+        };
+        let pulse = if now.is_some() && self.reduce_motion {
+            let shape =
+                |b: Option<crate::bounce::Bounce>| b.map_or(0.0, |b| b.shape(&self.bounce, n));
+            shape(t.launch).max(shape(t.attention)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         PlacedTile {
             id: t.id,
             kind: t.kind,
             rect,
-            lift: if now.is_some() {
-                t.bounce_lift_pt(&self.bounce, self.cfg.tile_size, n)
-            } else {
-                0.0
-            },
+            lift,
+            pulse,
             lifecycle: t.lifecycle(&self.bounce, n),
             indicator: self.cfg.show_running_indicators && t.running && t.kind == TileKind::App,
             presence: now.map_or(1.0, |n| t.presence(n)),
@@ -1027,7 +1061,9 @@ impl Dock {
         if over != self.hot {
             self.hot = over;
             let amount = self.fish.value(now) * (self.cfg.large_size - self.cfg.tile_size).max(0.0);
-            let ms = if over {
+            let ms = if self.reduce_motion {
+                0.0
+            } else if over {
                 fish_ramp_ms(&self.cfg, amount, false)
             } else {
                 fish_ramp_out_ms(&self.cfg, amount, false)
@@ -1143,7 +1179,11 @@ impl Dock {
         self.rest = self.rest_positions(screen);
         self.slides.clear();
         self.hot = false;
-        let ms = fish_ramp_ms(&self.cfg, 0.0, true);
+        let ms = if self.reduce_motion {
+            0.0
+        } else {
+            fish_ramp_ms(&self.cfg, 0.0, true)
+        };
         self.fish.animate_to(0.0, ms / 1000.0, now);
         self.drag_move(pointer, screen, now);
         true
@@ -1361,6 +1401,7 @@ impl Dock {
                 kind,
                 rect: from_rect,
                 lift: 0.0,
+                pulse: 0.0,
                 lifecycle: TileLifecycle::Idle,
                 indicator: false,
                 presence: 1.0,

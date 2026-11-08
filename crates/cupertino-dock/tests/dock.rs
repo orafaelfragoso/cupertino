@@ -376,6 +376,70 @@ fn pointer_drives_magnification_and_hover() {
         .all(|p| p.kind == TileKind::Separator || (p.rect.w - 48.0).abs() < 1e-6));
 }
 
+/// Under Reduce Motion the tiles magnify at once and a bounce dims its tile in place: no lift, a pulse that peaks
+/// where the hop would.
+#[test]
+fn under_reduce_motion_magnification_is_immediate_and_a_bounce_dims_in_place() {
+    let mut d = dock_with(base_cfg());
+    d.set_reduce_motion(true);
+    let rest = d.layout(SCREEN, 0.0);
+    let target = rest.tiles[1].clone();
+    d.pointer_moved(Some(target.rect.center()), SCREEN, 0.0);
+    assert!((d.magnification_amount(0.0) - 1.0).abs() < 1e-9, "no ramp");
+    let big = d.layout(SCREEN, 0.0);
+    let big = big.tiles.iter().find(|p| p.id == target.id).unwrap();
+    assert!((big.rect.w - d.cfg.large_size).abs() < 3.0);
+    d.pointer_moved(Some(Point::new(5.0, 5.0)), SCREEN, 0.0);
+    assert!(d.magnification_amount(0.0) < 1e-9, "no ramp out");
+
+    d.app_launching("mail", 1.0);
+    let id = d.app_tile("mail").unwrap().id;
+    let get = |d: &Dock, now| {
+        d.layout(SCREEN, now)
+            .tiles
+            .iter()
+            .find(|t| t.id == id)
+            .unwrap()
+            .clone()
+    };
+    let peak = 1.0 + d.bounce.period / 2.0;
+    assert_eq!(get(&d, peak).lift, 0.0);
+    assert!(get(&d, peak).pulse > 0.99, "{}", get(&d, peak).pulse);
+    assert!(get(&d, 1.0).pulse < 1e-6);
+    assert_eq!(get(&d, peak).lifecycle, TileLifecycle::Launching);
+
+    d.set_reduce_motion(false);
+    assert!(get(&d, peak).lift > 0.0, "the bounce lifts again");
+    assert_eq!(get(&d, peak).pulse, 0.0);
+}
+
+/// An auto-hidden dock held out (beside the open application grid) shows with the pointer away and magnifies under it.
+#[test]
+fn an_auto_hidden_dock_held_out_shows_and_magnifies() {
+    let cfg = DockConfig {
+        autohide: true,
+        ..base_cfg()
+    };
+    let mut d = dock_with(cfg);
+    d.keep_shown = true;
+    d.pointer_moved(Some(Point::new(960.0, 100.0)), SCREEN, 0.0);
+    d.pointer_moved(Some(Point::new(960.0, 100.0)), SCREEN, 0.6);
+    let t = 5.0;
+    d.pointer_moved(Some(Point::new(960.0, 100.0)), SCREEN, t);
+    let shown = d.layout(SCREEN, t);
+    assert!(shown.bar.bottom() <= SCREEN.bottom(), "{:?}", shown.bar);
+    let target = shown.tiles[1].clone();
+    d.pointer_moved(Some(target.rect.center()), SCREEN, t);
+    let t = settle(&mut d, t);
+    let l = d.layout(SCREEN, t);
+    let big = l.tiles.iter().find(|p| p.id == target.id).unwrap();
+    assert!(
+        (big.rect.w - d.cfg.large_size).abs() < 3.0,
+        "{:?}",
+        big.rect
+    );
+}
+
 #[test]
 fn hover_tracks_magnified_tile_under_pointer_along_a_sweep() {
     let mut d = dock_with(base_cfg());

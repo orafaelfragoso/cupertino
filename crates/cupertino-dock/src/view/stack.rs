@@ -13,7 +13,7 @@ use cupertino_kit::platform::{DecorationMode, WindowSpec};
 use cupertino_kit::render::{Paint, PaintOp, Shape};
 use cupertino_kit::theme::{Color, ColorRole, StateVariant};
 
-use super::bar::{paint_edge, BAR_SURFACE};
+use super::bar::{lit_by_glass, paint_edge, BAR_SURFACE};
 use super::paint::{self, Root};
 use super::{kit_rect, IconSet, Input};
 use crate::config::Orientation;
@@ -237,7 +237,8 @@ impl<M: Clone + 'static> Widget<M> for PanelNode {
         let size = cx.size();
         let all = Rect::new(0.0, 0.0, size.width, size.height);
         let radius = self.radius.min(size.width.min(size.height) / 2.0);
-        if !cx.material(BAR_SURFACE, radius, self.alpha) {
+        let shown = cx.material(BAR_SURFACE, radius, self.alpha);
+        if !shown {
             if let Some(fill) = cx.env().theme.surface(BAR_SURFACE).fill {
                 cx.push(PaintOp::Fill {
                     shape: Shape::RoundedRect { rect: all, radius },
@@ -245,7 +246,7 @@ impl<M: Clone + 'static> Widget<M> for PanelNode {
                 });
             }
         }
-        paint_edge(cx, all, radius);
+        paint_edge(cx, all, radius, shown && lit_by_glass(cx));
     }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {

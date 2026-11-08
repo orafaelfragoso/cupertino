@@ -15,7 +15,7 @@ use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, LayoutSpec, Measured};
 use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowSpec};
 use cupertino_kit::render::{GradientStop, Paint, PaintOp, Shape};
-use cupertino_kit::theme::Surface;
+use cupertino_kit::theme::{Surface, GLASS_MATERIAL};
 
 use super::paint::{self, Root};
 use super::{IconSet, Input, BAR_APP_ID, BAR_TITLE};
@@ -48,14 +48,14 @@ pub(crate) const INDICATOR_DARK: paint::Rgba = [1.0, 1.0, 1.0, 0.6];
 const SEPARATOR_LIGHT: paint::Rgba = [0.0, 0.0, 0.0, 0.2];
 const SEPARATOR_DARK: paint::Rgba = [1.0, 1.0, 1.0, 0.25];
 
-/// The bar's fine edge: a hairline just inside its outline, darker than what is around it, light and dark, and its
-/// width in points (one device pixel at 2x); Increase Contrast doubles it.
+/// The bar's fine edge where the bar is not glass: a hairline just inside its outline, darker than what is around it,
+/// light and dark, and its width in points (one device pixel at 2x); Increase Contrast doubles it.
 const EDGE_LIGHT: paint::Rgba = [0.0, 0.0, 0.0, 0.25];
 const EDGE_DARK: paint::Rgba = [0.0, 0.0, 0.0, 0.6];
 const EDGE_WIDTH: f64 = 0.5;
-/// The rim inside the edge: a light line along the bar's top and bottom that fades out down its sides, at this
-/// alpha at the top and the bottom (light, dark), and gone over the middle of the sides
-/// ([`RIM_FADE`] of the bar's depth from either end).
+/// The rim inside the edge where the bar is not glass (which lights its own): a light line along the bar's top and
+/// bottom that fades out down its sides, at this alpha at the top and the bottom (light, dark), and gone over the
+/// middle of the sides ([`RIM_FADE`] of the bar's depth from either end).
 const RIM_TOP: [f32; 2] = [0.5, 0.45];
 const RIM_BOTTOM: [f32; 2] = [0.6, 0.5];
 const RIM_FADE: f32 = 0.3;
@@ -235,7 +235,8 @@ impl<M: Clone + 'static> Widget<M> for BarMaterial {
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let size = cx.size();
         let all = Rect::new(0.0, 0.0, size.width, size.height);
-        if !cx.material(BAR_SURFACE, self.radius, 1.0) {
+        let shown = cx.material(BAR_SURFACE, self.radius, 1.0);
+        if !shown {
             if let Some(fill) = cx.env().theme.surface(BAR_SURFACE).fill {
                 cx.push(PaintOp::Fill {
                     shape: Shape::RoundedRect {
@@ -246,7 +247,7 @@ impl<M: Clone + 'static> Widget<M> for BarMaterial {
                 });
             }
         }
-        paint_edge(cx, all, self.radius);
+        paint_edge(cx, all, self.radius, shown && lit_by_glass(cx));
     }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
@@ -254,10 +255,20 @@ impl<M: Clone + 'static> Widget<M> for BarMaterial {
     }
 }
 
-/// The bar's fine edge and rim over its material or fill, in the bar's rectangle `all`.
-pub(crate) fn paint_edge(cx: &mut PaintCx<'_>, all: Rect, radius: f64) {
+/// Whether the bar's surface is glass, which lights its own rim along the top and the bottom.
+pub(crate) fn lit_by_glass(cx: &PaintCx<'_>) -> bool {
+    cx.env().theme.surface(BAR_SURFACE).material == Some(GLASS_MATERIAL)
+}
+
+/// The bar's fine edge over its material or fill, in the bar's rectangle `all`, and inside it the light rim; neither
+/// where the glass under the bar lights its own rim (`lit`), except with Increase Contrast.
+pub(crate) fn paint_edge(cx: &mut PaintCx<'_>, all: Rect, radius: f64, lit: bool) {
     let env = cx.env().clone();
     let (dark, contrast) = (paint::is_dark(&env), paint::is_high_contrast(&env));
+    // the glass's own rim is the bar's edge; with Increase Contrast the edge and the rim stand out over it too
+    if lit && !contrast {
+        return;
+    }
     let edge = if dark { EDGE_DARK } else { EDGE_LIGHT };
     let width = if contrast {
         2.0 * EDGE_WIDTH

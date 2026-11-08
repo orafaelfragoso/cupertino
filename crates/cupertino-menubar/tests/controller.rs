@@ -1284,24 +1284,24 @@ fn a_press_dragged_onto_a_row_chooses_it_once_on_release_and_closes_the_menu() {
 }
 
 #[test]
-fn a_quick_click_or_a_hold_without_reaching_a_row_leaves_the_menu_open_and_a_drag_back_to_the_title_closes_it(
-) {
+fn a_quick_click_leaves_the_menu_open_and_a_hold_or_a_drag_back_to_the_title_closes_it() {
     let tracking_interval = cupertino_menu_model::tracking::TRACKING_INTERVAL;
     let mut c = controller();
     let title = slot_center(&c, &file());
     c.pointer_press(title, 0.0);
     let o = c.pointer_release(title, tracking_interval - 0.1);
-    assert_eq!((activations(&o), c.mode()), (0, Mode::Sticky));
+    assert_eq!(
+        (c.is_open(), c.mode(), activations(&o)),
+        (true, Mode::Sticky, 0)
+    );
     c.close();
 
     c.pointer_press(title, 10.0);
-    let o = c.pointer_release(title, 10.0 + 2.0 * tracking_interval);
-    assert_eq!(
-        (c.is_open(), c.mode(), activations(&o)),
-        (true, Mode::Sticky, 0),
+    let o = c.pointer_release(title, 10.0 + tracking_interval);
+    assert!(
+        !c.is_open() && has(&o, &Effect::Closed) && activations(&o) == 0,
         "held without reaching a row"
     );
-    c.close();
 
     c.pointer_press(title, 20.0);
     let row = row_center(&c, 0, 10);

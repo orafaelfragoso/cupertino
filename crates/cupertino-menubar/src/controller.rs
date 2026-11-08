@@ -85,8 +85,8 @@ pub struct ControllerConfig {
     pub submenu_close_delay: f64,
     /// Keep a submenu open while the pointer heads into it ([`SubmenuAim`]).
     pub safe_triangle: bool,
-    /// Releasing the button over the open title after a quick click, or without the pointer having reached a row,
-    /// leaves the menu open (click-sticky); a drag that reached a row and came back to the title closes it.
+    /// Releasing the button over the open title within the tracking interval of the press leaves the menu open
+    /// (click-sticky); a release there after a longer hold, or a drag out and back, closes it.
     pub release_on_title_keeps_open: bool,
     /// A click outside the menus closes them and is also delivered to the client below.
     pub click_outside_passthrough: bool,

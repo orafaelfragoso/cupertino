@@ -88,7 +88,7 @@ impl Tracking {
         match under {
             Under::Item if self.reached || held => Release::Choose,
             Under::Item | Under::Menu => Release::Stay,
-            Under::Title if !self.reached || !held => Release::Stay,
+            Under::Title if !held => Release::Stay,
             Under::Title | Under::Outside => Release::Close,
         }
     }
@@ -173,14 +173,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_quick_click_on_the_title_stays_open_and_a_drag_onto_a_row_chooses_it() {
+    fn a_quick_click_on_the_title_stays_open_a_held_one_closes_and_a_drag_onto_a_row_chooses_it() {
         let click = Tracking::from_title(1.0);
         assert_eq!(click.release(1.2, Under::Title), Release::Stay);
         assert_eq!(
-            click.release(3.0, Under::Title),
+            click.release(1.0 + TRACKING_INTERVAL - 0.01, Under::Title),
             Release::Stay,
+            "just inside the interval"
+        );
+        assert_eq!(
+            click.release(1.0 + TRACKING_INTERVAL, Under::Title),
+            Release::Close,
             "held without reaching a row"
         );
+        assert_eq!(click.release(1.4, Under::Outside), Release::Close);
         let mut drag = Tracking::from_title(1.0);
         drag.reach();
         assert_eq!(
@@ -258,6 +264,33 @@ mod tests {
         assert!(aim.moved((60.0, 20.0), 0.1, Some(EDGE)));
         assert!(aim.moved((60.0, 20.0), 0.2, Some(EDGE)));
         assert!(!aim.moved((60.0, 20.0), 0.5, Some(EDGE)));
+    }
+
+    #[test]
+    fn a_submenu_on_the_left_is_headed_into_leftwards_and_an_empty_one_along_its_line() {
+        // flipped beside the screen edge, or in right-to-left: the near edge is the submenu's right side
+        let left = Edge {
+            x: 0.0,
+            top: 0.0,
+            bottom: 200.0,
+        };
+        let mut aim = SubmenuAim::default();
+        aim.moved((50.0, 10.0), 0.0, Some(left));
+        assert!(
+            aim.moved((40.0, 30.0), 0.02, Some(left)),
+            "down to the left"
+        );
+        assert!(!aim.moved((60.0, 40.0), 0.04, Some(left)), "to the right");
+        // no height: the triangle is a segment, and a move off it never heads there
+        let flat = Edge {
+            x: 100.0,
+            top: 10.0,
+            bottom: 10.0,
+        };
+        let mut aim = SubmenuAim::default();
+        aim.moved((50.0, 10.0), 0.0, Some(flat));
+        assert!(aim.moved((70.0, 10.0), 0.02, Some(flat)), "along the line");
+        assert!(!aim.moved((80.0, 11.0), 0.04, Some(flat)), "off it");
     }
 
     #[test]

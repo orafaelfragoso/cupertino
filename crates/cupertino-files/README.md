@@ -7,7 +7,7 @@ logic and layout metrics a native file manager (and a desktop-icon layer) needs.
 ## Usage
 
 ```sh
-cargo test -p cupertino-files --features app                    # 210+ unit tests; the Kit window run headless: 38 window, 16 accessibility, 15 context menu, 7 damage, 5 search, 5 item icon, 7 drag, 9 drop, 10 spring-loaded folder, 9 file operation and 4 type-to-select and band tests; 19 removable media tests (a fake udisks2 on a private bus), 2 workflow, 3 session handler and 2 error notice tests
+cargo test -p cupertino-files --features app                    # 210+ unit tests; the Kit window run headless: 38 window, 16 accessibility, 15 context menu, 7 damage, 5 search, 5 item icon, 7 drag, 9 drop, 10 spring-loaded folder, 9 file operation and 4 type-to-select and band tests; 19 removable media tests (a fake udisks2 on a private bus), 11 single-instance tests (a private bus), 2 workflow, 3 session handler and 2 error notice tests
 cargo run -p cupertino-files --features app -- [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]  # the window (default $HOME), in a running session
 cargo clippy -p cupertino-files --all-targets
 ci/capture.sh files/window --view list   # a window or its sidebar on a sample home folder (crates/cupertino-capture)
@@ -38,7 +38,48 @@ loop {
 
 `main` reads the session (XDG directories, the sidebar's places, the MIME database, the recents file, the session bus
 for notifications, the system bus for removable media) and runs `kit::run`. Every window is a window of that one
-process: File › New Window and Open in New Window open another beside it.
+process: File › New Window and Open in New Window open another beside it, and a later launch opens its window there
+too (below).
+
+**One process per session** (`instance`). Files keeps running while a file operation runs with no window open, so a
+second process would not see its operations, its progress window or its pasteboard. At startup Files claims the session
+bus name `org.cupertino.Files` (without queueing) and serves `org.freedesktop.Application` at `/org/cupertino/Files`.
+A launch that finds the name taken (the dock, the launcher, a terminal, `xdg-open` of a folder) hands its request to
+the running Files and exits with success: a folder argument becomes `Open` (a relative path made absolute where it was
+launched, sent as a `file://` URI), no argument becomes `Activate`, and the launch's `XDG_ACTIVATION_TOKEN` (else
+`DESKTOP_STARTUP_ID`) goes along as `activation-token` and `desktop-startup-id`. Files takes the token out of its
+environment at startup, so no program it starts inherits it, and raises its own first window with it.
+
+* `Activate` brings the most recently opened browser window forward, or opens one on the home folder when none is
+  open. `Open` opens a window on each `file://` (local) or `trash:///` URI; one URI of any other kind (another host, a
+  path without a scheme, a file in the trash) refuses the whole call with `InvalidArgs`. `ActivateAction` takes
+  `show-progress` (the progress window, when it lists something, as Window › Show Progress) and `new-window` (a window
+  on the home folder), with no parameter.
+* The window a call opens or brings forward is raised with the call's token once it has been shown
+  (`WindowRequest::Activate`); with several folders, the last window opened is raised. A forwarded `--terminal` is
+  ignored: the running Files keeps its own.
+* Only an unsandboxed process of the same user may call: the caller is named by the bus daemon's credentials (its
+  `ProcessFD`, else its `ProcessID`) and refused when it runs in a Flatpak (a `/.flatpak-info` in its root), in a Snap
+  (an AppArmor label starting `snap.`), as another user, or when its root cannot be checked. A launch with a token
+  hands it only to an owner that runs the same program; another owner (an install at another path, or a program that
+  took the name) gets the request without the token, and the launch says so on stderr.
+* The window's thread never waits on the bus: a call reaches it through a channel (at most 16 waiting; more are refused
+  with `LimitsExceeded`) and the bus thread waits for its answer. The service's connection reads no signals (the name
+  is claimed with a plain `RequestName` call), so the credentials call made for each incoming call cannot stall behind a
+  full signal queue.
+* A launch waits 3 s for an answer (`FORWARD_TIMEOUT`, as long as the dock waits for one). A running Files that does not
+  answer in time and still owns the name fails the launch with a message, so a second Files never starts beside a hung
+  one; one that left lets the launch claim the name and start. As it exits, Files refuses waiting and later calls
+  (`org.freedesktop.DBus.Error.Disconnected`) and gives the name up before it waits for its notices, so a launch racing
+  the exit claims the name and starts (it keeps trying for 5 s). Without a session bus Files runs alone and says so.
+* Decision: the desktop file stays `cupertino-files.desktop` and does not set `DBusActivatable`, so pinned dock items
+  and the default file manager keep their ID; a launch reaches the running Files through the hand-over above. The
+  Desktop Entry specification wants the desktop file ID to equal the bus name for D-Bus activation, and a bus name needs
+  two elements, so `cupertino-files` cannot be one. To adopt it later: rename the desktop file to
+  `org.cupertino.Files.desktop` with `DBusActivatable=true`, ship `org.cupertino.Files.service` (D-Bus session
+  services, `Exec` the program) so the bus can start Files, set the windows' application id (`kit::APP_ID`) to the same
+  ID, and migrate the dock's pinned items, `mimeapps.list` defaults and the session's default file manager from the old
+  ID. The dock then calls `Activate` itself, with its token, instead of starting the program.
 
 The window is a split view: the sidebar of places, then a navigation stack whose toolbar holds back / forward, the
 folder's name (Section text, cut with an ellipsis), the View, Tags and Action pop-up buttons (`kit::toolbar`; each opens
@@ -332,9 +373,10 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | `window`, `format` | the window's wording and metrics | `metrics`, `ViewMode`, `path_chain`, `status_text`; `human_size`, `available_size`, `relative_date` |
 | `udisks` (feature `app`) | removable media | `devices` (the listed file systems and locked containers of udisks' managed objects), `Volumes::{watch, poll, mount, unlock, eject}` → `Report`, `Media` (the listed devices and the busy ones), `Passphrase`, `holders`, `notice` (a failure's notification text) |
 | `notice` (feature `app`) | failures as notifications | `failure`, `unopened`, `bad_name`, `finished` (an operation that ended unseen) → `Notice`; `Notices::{start, post, flush}`; `shown`, `escape`, `explained` (an error as a sentence for a window) |
-| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino-ui-test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons`, `with_thumbnails` and `with_places_source`, then `run` or a `TestDriver<Files>`; `grid` (the icon view), `list` (the list view's presses and band), `band` (the rubber band), `clicks` (double-click and click-to-rename), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places), `transfer` (the worker of a file operation: `Work` → `Outcome`), `jobs` (the file operations of the process and when the progress window shows; `PROGRESS_WINDOW_DELAY`, `Start::with_progress_delay`), `progress` (the progress window, and the click on a window's row that shows it), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places, the path bar and the folder shown), `spring` (spring-loaded folders and the way back), `item_icons` (items' icons and thumbnails) |
+| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino-ui-test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons`, `with_thumbnails`, `with_places_source`, `with_instance` and `with_activation_token`, then `run` or a `TestDriver<Files>`; `grid` (the icon view), `list` (the list view's presses and band), `band` (the rubber band), `clicks` (double-click and click-to-rename), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places), `transfer` (the worker of a file operation: `Work` → `Outcome`), `jobs` (the file operations of the process and when the progress window shows; `PROGRESS_WINDOW_DELAY`, `Start::with_progress_delay`), `progress` (the progress window, and the click on a window's row that shows it), `remote` (what the calls of later launches and of the desktop do), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places, the path bar and the folder shown), `spring` (spring-loaded folders and the way back), `item_icons` (items' icons and thumbnails) |
 | `thumbnail_service` | thumbnails of the items in view | `ThumbnailService::{new, want, forget, get, queued, memory}`, `Stamp`, `has_thumbnail`, `MEMORY_BUDGET`, `WORKERS` |
-| `main` (feature `app`) | the binary | arguments, the session's places, types, associations and buses, then `kit::run` |
+| `instance` (feature `app`) | one process per session | `Service::serve` (the name and `org.freedesktop.Application`; `take` the waiting `Call`s), `serve_or_forward` → `Launch::{Serve, Forwarded}`, `Target::{of_argument, of_uri, uri, folder}`, `Request`, `Action`, `take_activation_token`, `FORWARD_TIMEOUT`, `BUS_NAME`, `OBJECT_PATH` |
+| `main` (feature `app`) | the binary | arguments, the hand-over to a running Files, the session's places, types, associations and buses, then `kit::run` |
 
 ### Measured defaults
 
@@ -422,9 +464,9 @@ locked -- env CUPERTINO_REPAINT_DIR=DIR BINARY --ignored --nocapture --exact rep
 * The free space is read again when the listing changes and after a transfer, not when another program writes
   elsewhere on the file system.
 * With no browser window open and the progress window hidden, nothing of Files is on screen while an operation runs:
-  the dock and the menu bar cannot show the progress window again until a browser window is open (a new launch is a
-  new process). The progress window gives no time estimate, and an operation's icon is a symbol, not the folder's
-  own icon.
+  launching Files again opens a browser window, whose Window › Show Progress shows it, and the desktop may call the
+  `show-progress` action, but the dock has no menu item for it. The progress window gives no time estimate, and an
+  operation's icon is a symbol, not the folder's own icon.
 * The folder icons of the user directories are read when the application starts; a user directory moved later keeps
   the plain folder icon until Files starts again.
 * The pasteboard is the application's own, not the session's clipboard.

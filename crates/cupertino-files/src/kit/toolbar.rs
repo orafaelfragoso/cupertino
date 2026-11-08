@@ -44,7 +44,7 @@ fn tinted(symbol: &str, size: f64, tint: Option<ColorRole>) -> Element<Message> 
 
 /// The keyboard focus ring, its outer edge `outset` points outside the node's bounds, in the theme's focus indicator
 /// colour.
-fn focus_ring(cx: &mut PaintCx<'_>, outset: f64) {
+pub(super) fn focus_ring(cx: &mut PaintCx<'_>, outset: f64) {
     let size = cx.size();
     let ring = cx
         .env()

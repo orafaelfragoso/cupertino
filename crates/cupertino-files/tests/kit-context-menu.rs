@@ -92,7 +92,8 @@ fn a_secondary_click_on_empty_space_clears_the_selection_and_offers_the_folder()
     let rows = run.menu_rows();
     assert!(enabled(&rows, "New Folder"), "{rows:?}");
     assert!(enabled(&rows, "as Icons"));
-    assert!(!enabled(&rows, "as Columns"));
+    assert!(enabled(&rows, "as Columns"));
+    assert!(!enabled(&rows, "as Gallery"));
     assert!(!labels(&rows).contains(&"Move to Trash"));
 
     run.choose("as Icons");

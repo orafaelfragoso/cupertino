@@ -70,6 +70,8 @@ pub enum Command {
     /// Add the tag of this colour to the selection, or remove it when every item has it.
     ToggleTag(TagColor),
     SetView(ViewMode),
+    /// Preview the selection in the preview window.
+    Peek,
 }
 
 impl Command {
@@ -92,6 +94,7 @@ impl Command {
             Command::Copy => MenuAction::Copy,
             Command::Paste => MenuAction::Paste,
             Command::MoveHere => MenuAction::MoveHere,
+            Command::Peek => MenuAction::Peek,
             Command::OpenWith(_) | Command::ToggleTag(_) => return None,
         })
     }
@@ -203,7 +206,7 @@ pub const VIEW_ROW_ORDER: [ViewSegment; 4] = [
     ViewSegment::Gallery,
 ];
 
-/// A choice of the view row; only the first two have a view behind them in this window.
+/// A choice of the view row; Gallery has no view behind it in this window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewSegment {
     Icons,
@@ -217,7 +220,8 @@ impl ViewSegment {
         match self {
             ViewSegment::Icons => Some(ViewMode::Icons),
             ViewSegment::List => Some(ViewMode::List),
-            ViewSegment::Columns | ViewSegment::Gallery => None,
+            ViewSegment::Columns => Some(ViewMode::Columns),
+            ViewSegment::Gallery => None,
         }
     }
 }

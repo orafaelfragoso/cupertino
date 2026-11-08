@@ -266,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn the_folder_menu_offers_the_two_views_with_the_current_one_checked() {
+    fn the_folder_menu_offers_the_views_with_the_current_one_checked() {
         let menu = background_menu(&Background {
             view: ViewMode::List,
             sort: SortSpec::default(),
@@ -285,13 +285,18 @@ mod tests {
             [
                 "as Icons [\u{2318}1]",
                 "as List ✓ [\u{2318}2]",
-                "as Columns (off)",
+                "as Columns [\u{2318}3]",
                 "as Gallery (off)"
             ]
         );
         assert_eq!(
             modes(),
-            [Some(ViewMode::Icons), Some(ViewMode::List), None, None]
+            [
+                Some(ViewMode::Icons),
+                Some(ViewMode::List),
+                Some(ViewMode::Columns),
+                None
+            ]
         );
     }
 

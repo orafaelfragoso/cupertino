@@ -5,6 +5,7 @@
 mod announce;
 mod band;
 mod clicks;
+mod columns;
 mod context;
 mod dragged;
 mod drops;
@@ -12,12 +13,15 @@ mod grid;
 mod item_icons;
 mod jobs;
 mod list;
+mod peek;
 mod places;
 mod progress;
 mod remote;
 mod search;
 mod sidebar;
 mod spring;
+mod tabs;
+mod tag_editor;
 mod toolbar;
 mod transfer;
 mod view;
@@ -26,7 +30,10 @@ pub use dragged::Grab;
 pub use drops::Destination;
 pub use jobs::{JobEvent, PROGRESS_WINDOW_DELAY};
 pub use list::RowGrab;
+pub use peek::PeekEvent;
 pub use places::PlacesSource;
+pub use tabs::TabEvent;
+pub use tag_editor::TagEvent;
 pub use transfer::Observer;
 
 use std::cell::RefCell;
@@ -60,8 +67,10 @@ use crate::notice::{self, Action, Notices};
 use crate::open::{command_with, default_app_id, open_command, open_with, OpenError};
 use crate::operations::{self, DropAction};
 use crate::places::{removable_holding, Place};
+use crate::preview::Browse;
 use crate::search_field::{self, SearchWidth};
 use crate::settings::ColumnId;
+use crate::tab_strip::{TabId, TabStrip};
 use crate::tags::{self, TagColor};
 use crate::thumbnail::Thumbnailer;
 use crate::trash::Trash;
@@ -77,6 +86,7 @@ pub const APP_ID: &str = "cupertino-files";
 pub struct Start {
     browser: Browser,
     woken: async_channel::Receiver<()>,
+    wake: Wake,
     places: Vec<Place>,
     notices: Notices,
     /// What opens a file: the session's associations, read at each open so changed defaults apply at once.
@@ -127,10 +137,11 @@ impl Start {
                 .map_err(|e| eprintln!("cupertino-files: no removable media: {e}"))
                 .ok()
         });
-        let (browser, woken) = open_browser(folder, types.clone(), recents.clone())?;
+        let (browser, woken, wake) = open_browser(folder, types.clone(), recents.clone())?;
         Ok(Start {
             browser,
             woken,
+            wake,
             places,
             notices,
             applications,
@@ -249,8 +260,11 @@ impl Start {
     }
 }
 
+/// What a model calls when it has changes waiting.
+type Wake = Arc<dyn Fn() + Send + Sync>;
+
 /// What a model calls when it has changes waiting, and what wakes then.
-fn wake_channel() -> (Arc<dyn Fn() + Send + Sync>, async_channel::Receiver<()>) {
+fn wake_channel() -> (Wake, async_channel::Receiver<()>) {
     let (wake, woken) = async_channel::bounded(1);
     let wake = Arc::new(move || {
         // a wake already waiting covers this change too
@@ -259,15 +273,22 @@ fn wake_channel() -> (Arc<dyn Fn() + Send + Sync>, async_channel::Receiver<()>) 
     (wake, woken)
 }
 
-/// The browser of `folder`, and what wakes when its model has changes waiting.
+/// The browser of `folder`, what wakes when its model has changes waiting, and what wakes it: the window's other tabs
+/// wake it too.
 fn open_browser(
     folder: PathBuf,
     types: Option<Arc<MimeDatabase>>,
     recents: PathBuf,
-) -> io::Result<(Browser, async_channel::Receiver<()>)> {
+) -> io::Result<(Browser, async_channel::Receiver<()>, Wake)> {
     let (wake, woken) = wake_channel();
-    let browser = Browser::open(folder, SortSpec::default(), recents, types, wake)?;
-    Ok((browser, woken))
+    let browser = Browser::open(
+        folder,
+        SortSpec::default(),
+        recents,
+        types,
+        Arc::clone(&wake),
+    )?;
+    Ok((browser, woken, wake))
 }
 
 thread_local! {
@@ -330,14 +351,25 @@ struct Session {
     clock: fn() -> SystemTime,
     /// The bus name later launches hand their requests to, until Files exits.
     instance: Option<Service>,
-    /// An item a window listed carries a tag: the sidebar shows its Tags heading from then on.
-    tagged: std::cell::Cell<bool>,
+    /// The tags the items the windows listed carry, which the sidebar's Tags section lists from then on.
+    known_tags: RefCell<BTreeSet<String>>,
+    /// The colours of the colour tags' dots.
+    tag_colors: tag_editor::TagColors,
+    /// The fixed-pitch family the previews set text files in.
+    text_family: Option<String>,
 }
 
 /// One browser window.
 struct BrowserWindow {
     browser: Browser,
     woken: async_channel::Receiver<()>,
+    /// What every tab's folder calls when it changes, which wakes the window.
+    wake: Wake,
+    /// The window's tabs, and those not shown ([`tabs`]).
+    tabs: TabStrip,
+    parked: HashMap<TabId, tabs::Tab>,
+    /// View › Show Tab Bar: the bar shows with a single tab too.
+    tab_bar: bool,
     path_bar: bool,
     status_bar: bool,
     /// The free space of the folder's file system, for the status bar.
@@ -387,6 +419,14 @@ struct BrowserWindow {
     focus_when_listed: Option<PathBuf>,
     /// Folders a held drag opens ([`spring`]).
     springing: spring::Springing,
+    /// The columns of the column view beyond the folder shown.
+    columns: columns::ColumnsView,
+    /// The start of the text files previewed.
+    texts: peek::Texts,
+    /// The preview window, while it is open.
+    peek: Option<peek::Peek>,
+    /// The tags popover, while it is open.
+    tag_editor: Option<tag_editor::TagEditor>,
 }
 
 /// The sheet that asks for a locked container's passphrase.
@@ -523,6 +563,33 @@ pub enum Event {
     SpringDue(u64, crate::spring::Step),
     /// A drag that was over the window left it, or ended there without a drop.
     DragLeft,
+    /// The column of this folder in the column view scrolled.
+    ColumnScroll(PathBuf, ScrollState),
+    /// Row `index` of the column of `folder`, a folder other than the one shown, was chosen: show that folder with the
+    /// row selected; `secondary` when a secondary press chose it, whose context menu follows.
+    ColumnPick {
+        folder: PathBuf,
+        index: usize,
+        secondary: bool,
+    },
+    /// Right (1) or Left (-1) in the column of the folder shown.
+    ColumnStep(isize),
+    /// The divider of column `index` was dragged to make it `width` wide; with Option held (`all`), every column.
+    ColumnResize {
+        index: usize,
+        width: f64,
+        all: bool,
+    },
+    /// The preview column's text scrolled.
+    PreviewScroll(ScrollState),
+    /// The preview window.
+    Peek(PeekEvent),
+    /// The tab bar.
+    Tab(TabEvent),
+    /// The tags popover.
+    Tags(TagEvent),
+    /// The tag of this name in the sidebar was chosen: the folder's items that carry it are shown.
+    TagPlace(String),
 }
 
 /// The toolbar's pop-up buttons.
@@ -534,6 +601,8 @@ pub enum Popup {
     Tags,
     /// The selection's menu, or the folder's without a selection.
     Action,
+    /// The selected item's menu, from the preview column's button.
+    More,
 }
 
 /// The list's columns, in order.
@@ -618,12 +687,14 @@ impl Application for Files {
                 dragged: Vec::new(),
                 clock: start.clock,
                 instance: start.instance,
-                tagged: std::cell::Cell::new(false),
+                known_tags: RefCell::new(BTreeSet::new()),
+                tag_colors: tag_editor::tag_colors(),
+                text_family: cupertino_kit::app::mono_family(),
             },
         };
         let first = model.next_window;
         let mut commands = vec![
-            model.add_window(start.browser, start.woken),
+            model.add_window(start.browser, start.woken, start.wake),
             woken(&model.session.places_watch.woken, Message::Places),
         ];
         if let Some(token) = start.activation {
@@ -656,7 +727,11 @@ impl Application for Files {
                     .context
                     .as_ref()
                     .map(|menu| context::windows(id, menu));
+                let preview = peek::window(&model.session, id, window)
+                    .into_iter()
+                    .chain(view::tag_popover(&model.session, id, window));
                 std::iter::once(view::window(&model.session, id, window))
+                    .chain(preview)
                     .chain(menu.into_iter().flatten())
             })
             .chain(progress::window(&model.session.jobs))
@@ -685,6 +760,9 @@ impl Model {
             Message::Window(id, event) => {
                 let before = self.windows.get(&id).map(BrowserWindow::tally);
                 let commands = self.window_event(id, event);
+                if let Some(window) = self.windows.get_mut(&id) {
+                    window.follow_view(&self.session);
+                }
                 if let (Some(before), Some(window)) = (before, self.windows.get_mut(&id)) {
                     let after = window.tally();
                     window.announcement.follow(before, after);
@@ -725,6 +803,8 @@ impl Model {
                 let (shown, points) = view::shown(window);
                 let entries = window.browser.entries();
                 icons.want(id, shown.into_iter().filter_map(|i| entries.get(i)), points);
+                let (previewed, points) = window.previewed();
+                icons.want_previews(id, previewed, points);
             }
             None => icons.forget(id),
         }
@@ -735,14 +815,19 @@ impl Model {
         &mut self,
         browser: Browser,
         woken: async_channel::Receiver<()>,
+        wake: Wake,
     ) -> Command<Message> {
         let id = self.next_window;
         self.next_window += 1;
-        let wake = self::woken(&woken, Message::Window(id, Event::Woken));
+        let waiting = self::woken(&woken, Message::Window(id, Event::Woken));
         let prefs = self.session.prefs.get();
         let mut window = BrowserWindow {
             browser,
             woken,
+            wake,
+            tabs: TabStrip::new(),
+            parked: HashMap::new(),
+            tab_bar: false,
             path_bar: prefs.path_bar,
             status_bar: prefs.status_bar,
             available: None,
@@ -774,10 +859,14 @@ impl Model {
             items_focused: false,
             focus_when_listed: None,
             springing: spring::Springing::default(),
+            columns: columns::ColumnsView::new(prefs.column_width),
+            texts: peek::Texts::default(),
+            peek: None,
+            tag_editor: None,
         };
         window.entered();
         self.windows.insert(id, window);
-        wake
+        waiting
     }
 
     /// Open a window on each of `folders`.
@@ -796,9 +885,9 @@ impl Model {
             session.types.clone(),
             session.recents.clone(),
         ) {
-            Ok((browser, woken)) => {
+            Ok((browser, woken, wake)) => {
                 let id = self.next_window;
-                Some((id, self.add_window(browser, woken)))
+                Some((id, self.add_window(browser, woken, wake)))
             }
             Err(e) => {
                 session.failed(Action::Open, &[&folder], &e);
@@ -1034,14 +1123,19 @@ impl Model {
                 for error in polled.errors {
                     eprintln!("cupertino-files: {error}");
                 }
-                if polled.changed {
+                let columns = window.columns.poll();
+                // the tabs not shown follow their folders too
+                for tab in window.parked.values_mut() {
+                    let polled = tab.browser.poll();
+                    for error in polled.errors {
+                        eprintln!("cupertino-files: {error}");
+                    }
+                    tab.columns.poll();
+                }
+                if polled.changed || columns {
                     window.now = (window.clock)();
                     window.read_available();
-                    if !session.tagged.get()
-                        && window.browser.entries().iter().any(|e| !e.tags.is_empty())
-                    {
-                        session.tagged.set(true);
-                    }
+                    session.learn_tags(window.browser.entries());
                 }
                 window.spring_settle();
                 let mut commands = window.listed(id);
@@ -1188,6 +1282,139 @@ impl Model {
                     return window.begin_rename(id, index);
                 }
             }
+            Event::ColumnScroll(folder, scroll) => window.columns.scrolled(folder, scroll),
+            Event::ColumnPick {
+                folder,
+                index,
+                secondary,
+            } => {
+                if window.rename.is_some() {
+                    let _ = window.end_rename(session);
+                }
+                if window.columns.pick(&mut window.browser, &folder, index) {
+                    window.entered();
+                }
+                if secondary {
+                    window.pressed = Some(window.browser.selection().indices().next());
+                }
+                // the keyboard follows into the column of the folder now shown, for typing and the arrows
+                let picked = window.browser.selection().indices().next();
+                if let Some(path) = picked
+                    .and_then(|i| window.browser.entries().get(i))
+                    .map(|e| e.path.clone())
+                {
+                    return window.focus_item(id, &path);
+                }
+            }
+            Event::ColumnStep(by) => {
+                if window.rename.is_some() {
+                    return Vec::new();
+                }
+                if let Some(path) = window.columns.step(&mut window.browser, by) {
+                    window.entered();
+                    window.columns.sync(&window.browser, &mut window.scroll);
+                    return window.focus_item(id, &path);
+                }
+            }
+            Event::ColumnResize { index, width, all } => {
+                window.columns.chain.resize(index, width, all);
+                let width = if all {
+                    window.columns.chain.default_width()
+                } else {
+                    window.columns.chain.width(index)
+                };
+                session.remember_column_width(width);
+            }
+            Event::PreviewScroll(scroll) => window.columns.preview_scroll = scroll,
+            Event::Peek(event) => return self.peek(id, event),
+            Event::Tags(TagEvent::Filter(change)) => {
+                if let Some(editor) = window.tag_editor.as_mut() {
+                    editor.filter = change.text;
+                    editor.revision = change.revision;
+                }
+            }
+            Event::Tags(TagEvent::Toggle(name)) => window.toggle_named_tag(&name, session),
+            Event::Tags(TagEvent::Submit) => {
+                let typed = window
+                    .tag_editor
+                    .as_ref()
+                    .map(|e| e.filter.trim().to_owned())
+                    .unwrap_or_default();
+                if !typed.is_empty() {
+                    window.add_tag(&typed, session);
+                    if let Some(editor) = window.tag_editor.as_mut() {
+                        editor.filter.clear();
+                        editor.revision += 1;
+                    }
+                }
+            }
+            Event::Tags(TagEvent::Close) => window.tag_editor = None,
+            Event::Tags(TagEvent::Scroll(scroll)) => {
+                if let Some(editor) = window.tag_editor.as_mut() {
+                    editor.scroll = scroll;
+                }
+            }
+            Event::TagPlace(name) => {
+                window.browser.set_filter(&name);
+                window.search = name;
+                window.search_revision += 1;
+                window.follow_search();
+            }
+            Event::Tab(TabEvent::Select(tab)) => window.show_tab(tab),
+            Event::Tab(TabEvent::Move(tab, to)) => window.tabs.move_to(tab, to),
+            Event::Tab(TabEvent::New) => return self.menu(id, MenuAction::NewTab),
+            Event::Tab(TabEvent::Close(tab)) => {
+                if tab == window.tabs.active_id() {
+                    return self.menu(id, MenuAction::CloseTab);
+                }
+                window.tabs.close(tab);
+                window.parked.remove(&tab);
+            }
+        }
+        Vec::new()
+    }
+
+    /// What the preview window of window `id` asked for.
+    fn peek(&mut self, id: u64, event: PeekEvent) -> Vec<Command<Message>> {
+        let session = &self.session;
+        let Some(window) = self.windows.get_mut(&id) else {
+            return Vec::new();
+        };
+        let Some(look) = window.peek.as_mut() else {
+            return Vec::new();
+        };
+        match event {
+            PeekEvent::Tick { now, animate } => {
+                if look.tick(now, animate) {
+                    window.peek = None;
+                }
+            }
+            PeekEvent::Close => look.close(),
+            PeekEvent::Closed => window.peek = None,
+            PeekEvent::Scroll(scroll) => look.scroll = scroll,
+            PeekEvent::FullScreen => {
+                look.full_screen = !look.full_screen;
+                return vec![Command::Window(
+                    peek::window_key(id),
+                    WindowRequest::Fullscreen(look.full_screen),
+                )];
+            }
+            PeekEvent::Open => {
+                let path = look.browse.current().to_path_buf();
+                return session.open_paths(id, vec![path], None);
+            }
+            PeekEvent::Step(by) if look.browse.len() > 1 => {
+                look.browse.step(by);
+            }
+            PeekEvent::Step(by) => {
+                // one item: the arrows move the window's selection, which the preview follows
+                let count = window.browser.entries().len();
+                let at = window.browser.selection().indices().next();
+                if let Some(at) = at.filter(|_| count > 0) {
+                    let to = (at as isize + by).clamp(0, count as isize - 1) as usize;
+                    window.browser.select([to], Some(to), Some(to));
+                }
+            }
         }
         Vec::new()
     }
@@ -1314,6 +1541,22 @@ impl Model {
                 window.scroll.offset = cupertino_kit::geometry::Point::ZERO;
             }
             MenuAction::View(_) => {}
+            MenuAction::Peek => window.toggle_peek(),
+            MenuAction::NewTab => window.new_tab(session),
+            MenuAction::CloseTab => {
+                if !window.close_tab() {
+                    self.windows.remove(&id);
+                }
+            }
+            MenuAction::NextTab => {
+                let tab = window.tabs.clone().cycle(1);
+                window.show_tab(tab);
+            }
+            MenuAction::PreviousTab => {
+                let tab = window.tabs.clone().cycle(-1);
+                window.show_tab(tab);
+            }
+            MenuAction::ToggleTabBar => window.tab_bar = !window.tab_bar_shown(),
         }
         if matches!(
             action,
@@ -1528,7 +1771,22 @@ impl Session {
             view: window.view,
             path_bar: window.path_bar,
             status_bar: window.status_bar,
+            column_width: self.prefs.get().column_width,
         };
+        self.keep(prefs);
+    }
+
+    /// A column was made `width` wide: new windows' columns start at that width.
+    fn remember_column_width(&self, width: f64) {
+        let prefs = WindowPrefs {
+            column_width: width,
+            ..self.prefs.get()
+        };
+        self.keep(prefs);
+    }
+
+    /// `prefs` become what a new window starts with, kept in the prefs file when there is one.
+    fn keep(&self, prefs: WindowPrefs) {
         if self.prefs.replace(prefs) == prefs {
             return;
         }
@@ -1538,6 +1796,16 @@ impl Session {
                     "cupertino-files: cannot keep the window's view in {}: {e}",
                     file.display()
                 );
+            }
+        }
+    }
+
+    /// The tags `entries` carry join those the sidebar lists.
+    fn learn_tags(&self, entries: &[crate::Entry]) {
+        let mut known = self.known_tags.borrow_mut();
+        for tag in entries.iter().flat_map(|e| &e.tags) {
+            if !known.contains(tag) {
+                known.insert(tag.clone());
             }
         }
     }
@@ -1653,6 +1921,160 @@ impl Session {
 }
 
 impl BrowserWindow {
+    /// After each event: the column view follows the folder and the selection, the preview window follows a single
+    /// selected item and closes once its items are gone, and the texts previewed are read.
+    fn follow_view(&mut self, session: &Session) {
+        if self.view == ViewMode::Columns {
+            self.columns.sync(&self.browser, &mut self.scroll);
+        }
+        let selected = self.selected_paths();
+        if let Some(look) = self.peek.as_mut() {
+            // a new selection is previewed from its first item
+            if !selected.is_empty() && selected != look.browse.items() {
+                if let Some(browse) = Browse::new(selected.clone(), 0) {
+                    look.browse = browse;
+                }
+            }
+            let listed = |p: &Path| self.browser.entries().iter().any(|e| e.path == p);
+            if !listed(look.browse.current()) {
+                self.peek = None;
+            }
+        }
+        if let Some(look) = self.peek.as_mut() {
+            let current = look.browse.current().to_path_buf();
+            look.follow_app(session, &current);
+        }
+        let (previewed, _) = self.previewed();
+        let previewed: Vec<crate::Entry> = previewed.cloned().collect();
+        self.texts.follow(&previewed);
+    }
+
+    /// The items previewed: the preview column's file and the preview window's item, and the side of their pictures
+    /// in points.
+    fn previewed(&self) -> (impl Iterator<Item = &crate::Entry>, f64) {
+        let entries = self.browser.entries();
+        let column = (self.view == ViewMode::Columns)
+            .then(|| self.columns.chain(&self.browser).preview)
+            .flatten()
+            .and_then(|i| entries.get(i));
+        let window = self
+            .peek
+            .as_ref()
+            .and_then(|look| entries.iter().find(|e| e.path == look.browse.current()));
+        (column.into_iter().chain(window), peek::PICTURE)
+    }
+
+    /// Whether the tab bar shows: with more than one tab, or when View › Show Tab Bar asked for it.
+    fn tab_bar_shown(&self) -> bool {
+        self.tab_bar || self.tabs.len() > 1
+    }
+
+    /// Open a tab after the one shown, on the folder shown, in the same view, and show it.
+    fn new_tab(&mut self, session: &Session) {
+        let opened = Browser::open(
+            self.browser.dir().to_path_buf(),
+            self.browser.sort(),
+            session.recents.clone(),
+            session.types.clone(),
+            Arc::clone(&self.wake),
+        );
+        let browser = match opened {
+            Ok(browser) => browser,
+            Err(e) => return session.failed(Action::Open, &[self.browser.dir()], &e),
+        };
+        let shown = self.tabs.active_id();
+        let mut tab = tabs::Tab {
+            browser,
+            view: self.view,
+            scroll: ScrollState {
+                viewport: self.scroll.viewport,
+                ..NO_SCROLL
+            },
+            search: String::new(),
+            search_revision: 0,
+            available: self.available,
+            mounted_read_only: self.mounted_read_only,
+            columns: columns::ColumnsView::new(self.columns.chain.default_width()),
+        };
+        self.tabs.open();
+        self.swap_tab(&mut tab);
+        self.parked.insert(shown, tab);
+        self.entered();
+    }
+
+    /// Close the tab shown and show the next one, else the one before; `false` when it was the last tab, so the window
+    /// closes instead.
+    fn close_tab(&mut self) -> bool {
+        let shown = self.tabs.active_id();
+        let Some(next) = self.tabs.close(shown) else {
+            return false;
+        };
+        if let Some(mut tab) = self.parked.remove(&next) {
+            self.swap_tab(&mut tab);
+        }
+        self.left_tab();
+        true
+    }
+
+    /// Show tab `id`, parking the one shown.
+    fn show_tab(&mut self, id: TabId) {
+        let shown = self.tabs.active_id();
+        if id == shown || !self.tabs.select(id) {
+            return;
+        }
+        let Some(mut tab) = self.parked.remove(&id) else {
+            return;
+        };
+        self.swap_tab(&mut tab);
+        self.parked.insert(shown, tab);
+        self.left_tab();
+    }
+
+    /// Swap the tab shown for `tab`.
+    fn swap_tab(&mut self, tab: &mut tabs::Tab) {
+        std::mem::swap(&mut self.browser, &mut tab.browser);
+        std::mem::swap(&mut self.view, &mut tab.view);
+        std::mem::swap(&mut self.scroll, &mut tab.scroll);
+        std::mem::swap(&mut self.search, &mut tab.search);
+        std::mem::swap(&mut self.search_revision, &mut tab.search_revision);
+        std::mem::swap(&mut self.available, &mut tab.available);
+        std::mem::swap(&mut self.mounted_read_only, &mut tab.mounted_read_only);
+        std::mem::swap(&mut self.columns, &mut tab.columns);
+    }
+
+    /// Another tab is shown: what belonged to the one left ends, and the one shown catches up with its folder.
+    fn left_tab(&mut self) {
+        self.rename = None;
+        self.rename_when_listed = None;
+        self.focus_when_listed = None;
+        self.context = None;
+        self.pressed = None;
+        self.band = None;
+        self.sidebar_row = None;
+        self.peek = None;
+        self.tag_editor = None;
+        *self.list_presses.borrow_mut() = Default::default();
+        let polled = self.browser.poll();
+        for error in polled.errors {
+            eprintln!("cupertino-files: {error}");
+        }
+        // the search field shows the tab's search; the revision moves on so the field takes it
+        self.search_revision += 1;
+        self.follow_search();
+        self.now = (self.clock)();
+    }
+
+    /// Space, or File › Quick Preview: open the preview window on the selected items, or close it.
+    fn toggle_peek(&mut self) {
+        match self.peek.as_mut() {
+            Some(look) if !look.closing => look.close(),
+            _ => {
+                let selected = self.selected_paths();
+                self.peek = Browse::new(selected, 0).map(peek::Peek::new);
+            }
+        }
+    }
+
     fn go(&mut self, to: PathBuf, session: &Session) {
         match self.browser.go(to.clone()) {
             Ok(()) => self.entered(),
@@ -1873,6 +2295,17 @@ impl BrowserWindow {
         if self.rename.is_some() {
             let _ = self.end_rename(session);
         }
+        if popup == Popup::Tags
+            && (self.tag_editor.is_some() || !self.browser.selection().is_empty())
+        {
+            // the tags of the selection, edited in a popover; without a selection the menu shows them unavailable
+            self.context = None;
+            self.tag_editor = match self.tag_editor {
+                Some(_) => None,
+                None => Some(tag_editor::TagEditor::new()),
+            };
+            return;
+        }
         let in_trash = self.browser.dir() == session.trash.home_trash().join("files");
         let has_selection = !self.browser.selection().is_empty();
         let (label, items) = match popup {
@@ -1886,12 +2319,12 @@ impl BrowserWindow {
                 };
                 ("Tags".to_owned(), menu_spec::tags_menu(&on, has_selection))
             }
-            Popup::Action if has_selection => {
+            Popup::Action | Popup::More if has_selection => {
                 let subject = self.subject(in_trash);
                 let items = menu_spec::item_menu(&subject, &self.selection_apps(session));
                 ("Action".to_owned(), items)
             }
-            Popup::Action => {
+            Popup::Action | Popup::More => {
                 let background = self.background(session, in_trash);
                 ("Action".to_owned(), menu_spec::background_menu(&background))
             }
@@ -1988,6 +2421,40 @@ impl BrowserWindow {
             (path, changed)
         });
         session.failed_some(Action::Tag, changed);
+    }
+
+    /// Take the tag `name` off every selected item when each carries it, else add it to those without it.
+    fn toggle_named_tag(&self, name: &str, session: &Session) {
+        let entries = self.browser.entries();
+        let selected: Vec<&crate::Entry> = self
+            .browser
+            .selection()
+            .indices()
+            .filter_map(|i| entries.get(i))
+            .collect();
+        if selected.iter().all(|e| carries(e, name)) {
+            let paths: Vec<PathBuf> = selected.iter().map(|e| e.path.clone()).collect();
+            let changed = paths.iter().map(|p| (p, tags::remove_tag(p, name)));
+            session.failed_some(Action::Tag, changed);
+        } else {
+            self.add_tag(name, session);
+        }
+    }
+
+    /// Add the tag `name` to the selected items that lack it; the sidebar lists it from now on.
+    fn add_tag(&self, name: &str, session: &Session) {
+        let entries = self.browser.entries();
+        let paths: Vec<PathBuf> = self
+            .browser
+            .selection()
+            .indices()
+            .filter_map(|i| entries.get(i))
+            .filter(|e| !carries(e, name))
+            .map(|e| e.path.clone())
+            .collect();
+        let changed = paths.iter().map(|p| (p, tags::add_tag(p, name)));
+        session.failed_some(Action::Tag, changed);
+        session.known_tags.borrow_mut().insert(name.to_owned());
     }
 
     /// End the search: the folder is listed whole again.
@@ -2201,6 +2668,8 @@ impl BrowserWindow {
             read_only: self.read_only(session),
             can_paste: !session.pasteboard.is_empty(),
             jobs: !session.jobs.is_empty(),
+            tabs: self.tabs.len(),
+            tab_bar: self.tab_bar_shown(),
         }
     }
 
@@ -2259,6 +2728,11 @@ fn dropped(
             .then_some(Done::Move),
         transfer::Work::Duplicate { .. } | transfer::Work::NewFolderWith { .. } => None,
     }
+}
+
+/// Whether `entry` carries the tag `name`.
+fn carries(entry: &crate::Entry, name: &str) -> bool {
+    entry.tags.iter().any(|t| t.eq_ignore_ascii_case(name))
 }
 
 /// Whether `entry` has the tag of `color`.

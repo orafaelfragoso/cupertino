@@ -30,8 +30,8 @@ use cupertino_kit::core::Role;
 use cupertino_kit::file_icons::FileIcons;
 use cupertino_kit::geometry::{Point, Size};
 use cupertino_kit::platform::{
-    Capabilities, Mods, MouseButton, PointerEvent, SystemAppearance, Timestamp, WindowEvent,
-    WindowId, WindowStates,
+    Capabilities, KeyEvent, Keysym, Mods, MouseButton, PointerEvent, SystemAppearance, Timestamp,
+    WindowEvent, WindowId, WindowStates,
 };
 use cupertino_kit::render::{PaintOp, PixelFormat};
 use cupertino_kit::theme::ThemeTokens;
@@ -118,6 +118,8 @@ fn home(root: &Path) -> Result<PathBuf, String> {
             sample_picture(n)
                 .save_png(&path)
                 .map_err(|e| e.to_string())?;
+        } else if let Some(text) = sample_text(name, size) {
+            std::fs::write(&path, text).map_err(io)?;
         } else {
             std::fs::File::create(&path)
                 .and_then(|f| f.set_len(size))
@@ -129,7 +131,58 @@ fn home(root: &Path) -> Result<PathBuf, String> {
             .and_then(|f| f.set_modified(now - Duration::from_secs(days * 86_400 + 3_600)))
             .map_err(io)?;
     }
+    // a folder of documents, for the column view's chain
+    let documents = home.join("Documents");
+    for (name, size) in DOCUMENTS {
+        let path = documents.join(name);
+        match sample_text(name, size) {
+            Some(text) => std::fs::write(&path, text).map_err(io)?,
+            None => std::fs::File::create(&path)
+                .and_then(|f| f.set_len(size))
+                .map_err(io)?,
+        }
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .and_then(|f| f.set_modified(now - Duration::from_secs(2 * 86_400)))
+            .map_err(io)?;
+    }
+    std::fs::create_dir_all(documents.join("Projects")).map_err(io)?;
     Ok(home)
+}
+
+/// The files of the sample Documents folder: name and size in bytes.
+const DOCUMENTS: [(&str, u64); 4] = [
+    ("Meeting notes.txt", 1_400),
+    ("Budget 2027.xlsx", 36_000),
+    ("Reading list.md", 900),
+    ("Contract.pdf", 220_000),
+];
+
+/// The lines a sample text file repeats.
+const SAMPLE_LINES: [&str; 6] = [
+    "Plan for the week",
+    "",
+    "- Review the layout of the new folder views",
+    "- Write down what the preview shows for each kind of file",
+    "- Check the colours in both appearances",
+    "- Keep the sizes on the point grid",
+];
+
+/// The contents of sample text file `name`, `size` bytes of plain lines; `None` for a file that is not text.
+fn sample_text(name: &str, size: u64) -> Option<Vec<u8>> {
+    if ![".txt", ".md", ".rs"].iter().any(|ext| name.ends_with(ext)) {
+        return None;
+    }
+    let mut text = Vec::new();
+    let mut n = 0;
+    while (text.len() as u64) < size {
+        text.extend_from_slice(SAMPLE_LINES[n % SAMPLE_LINES.len()].as_bytes());
+        text.push(b'\n');
+        n += 1;
+    }
+    text.truncate(size as usize);
+    Some(text)
 }
 
 /// Sample picture `n`: a sky over hills, in colours of its own.
@@ -178,12 +231,15 @@ impl Capture {
         Ok(Capture { home, places, root })
     }
 
-    /// The window on the sample home folder in `view` with `places`, `selected` selected, drawn in `look` at `scale`.
+    /// The window on the sample home folder in `view` with `places`, `selected` selected, drawn in `look` at `scale`;
+    /// after `then` is done, the window it opened last (the preview window, a popover), or the browser window.
+    #[allow(clippy::too_many_arguments)]
     fn draw(
         &self,
         view: ViewMode,
         places: Vec<Place>,
         selected: Option<&str>,
+        then: &[Step],
         look: Look,
         scale: f32,
         size: Size,
@@ -282,11 +338,63 @@ impl Capture {
             std::thread::sleep(Duration::from_millis(5));
             settle(&mut driver, window, turns).map_err(|e| fail(&e))?;
         }
-        if let Some(name) = selected {
-            let at = text_center(&driver, window, name)
-                .ok_or_else(|| format!("{name}: no item of the sample folder"))?;
+        // a path of names is clicked one after the other, each once its column shows it
+        for name in selected.into_iter().flat_map(|path| path.split('/')) {
+            let end = Instant::now() + LISTING;
+            let at = loop {
+                if let Some(at) = text_center(&driver, window, name) {
+                    break at;
+                }
+                if Instant::now() > end {
+                    return Err(format!("{name}: no item of the sample folder"));
+                }
+                std::thread::sleep(Duration::from_millis(5));
+                settle(&mut driver, window, turns).map_err(|e| fail(&e))?;
+            };
             click(&mut driver, window, at, turns).map_err(|e| fail(&e))?;
+            settle(&mut driver, window, turns).map_err(|e| fail(&e))?;
         }
+        for step in then {
+            match *step {
+                Step::Key(keysym, mods) => {
+                    key(&mut driver, window, keysym, mods, turns).map_err(|e| fail(&e))?
+                }
+                Step::Click(name) => {
+                    let at = text_center(&driver, window, name)
+                        .or_else(|| named_center(&driver, window, name))
+                        .ok_or_else(|| format!("{name}: nothing of that name"))?;
+                    click(&mut driver, window, at, turns).map_err(|e| fail(&e))?;
+                }
+            }
+            settle(&mut driver, window, turns).map_err(|e| fail(&e))?;
+        }
+        let shown = driver.runtime().windows();
+        let window = match shown.last() {
+            Some(&(_, newest)) if newest != window => {
+                let system = driver.window_system_mut();
+                system
+                    .enqueue_window(newest, WindowEvent::Scale(f64::from(scale)))
+                    .map_err(|e| fail(&e))?;
+                system
+                    .configure(newest, None, active)
+                    .map_err(|e| fail(&e))?;
+                // its motion runs on the frames' clock: present frames a sixtieth of a second apart until it rests
+                let mut at = 0;
+                for _ in 0..MOTION_FRAMES {
+                    driver.run_until_idle(turns).map_err(|e| fail(&e))?;
+                    let system = driver.window_system_mut();
+                    if !system.frame_requested(newest).map_err(|e| fail(&e))? {
+                        break;
+                    }
+                    at += 16_666_667;
+                    system
+                        .frame_ready(newest, Timestamp(at))
+                        .map_err(|e| fail(&e))?;
+                }
+                newest
+            }
+            _ => window,
+        };
         if !settle(&mut driver, window, turns).map_err(|e| fail(&e))? {
             return Err("the window keeps asking for frames".into());
         }
@@ -357,14 +465,68 @@ fn thumbnails_drawn(driver: &TestDriver<Files>, window: WindowId) -> usize {
         .count()
 }
 
-/// The middle of the text `name` in the window.
+/// What a capture does once the items are selected.
+#[derive(Clone, Copy, Debug)]
+enum Step {
+    /// A key pressed and let go, with the modifiers held.
+    Key(u32, Mods),
+    /// A click on the text or the control of this name.
+    Click(&'static str),
+}
+
+/// The frames a window opened by a step may take to finish its motion.
+const MOTION_FRAMES: usize = 120;
+
+/// The middle of the node named `name` in the window.
+fn named_center(driver: &TestDriver<Files>, window: WindowId, name: &str) -> Option<Point> {
+    let snapshot = driver.runtime().snapshot(window)?;
+    snapshot
+        .accessibility
+        .iter()
+        .find(|(_, n)| n.name.as_deref() == Some(name))
+        .map(|(_, n)| n.bounds.center())
+}
+
+/// The key of `keysym` pressed and let go with `mods` held.
+fn key(
+    driver: &mut TestDriver<Files>,
+    window: WindowId,
+    keysym: u32,
+    mods: Mods,
+    turns: NonZeroU32,
+) -> Result<(), Box<dyn std::fmt::Debug>> {
+    for pressed in [true, false] {
+        let event = WindowEvent::Key(
+            KeyEvent {
+                code: 0,
+                keysym: Keysym(keysym),
+                text: char::from_u32(keysym)
+                    .filter(|c| pressed && !c.is_control() && mods.is_empty()),
+                pressed,
+                repeat: false,
+                mods,
+            },
+            Timestamp(0),
+        );
+        driver
+            .window_system_mut()
+            .enqueue_window(window, event)
+            .map_err(|e| Box::new(e) as _)?;
+        driver.run_until_idle(turns).map_err(|e| Box::new(e) as _)?;
+    }
+    Ok(())
+}
+
+/// The middle of the text `name` in the window: the one furthest along, so an item is found before the sidebar's place
+/// of the same name, and the newest column's before the others.
 fn text_center(driver: &TestDriver<Files>, window: WindowId, name: &str) -> Option<Point> {
     let snapshot = driver.runtime().snapshot(window)?;
     snapshot
         .accessibility
         .iter()
-        .find(|(_, n)| n.role == Role::StaticText && n.name.as_deref() == Some(name))
+        .filter(|(_, n)| n.role == Role::StaticText && n.name.as_deref() == Some(name))
         .map(|(_, n)| n.bounds.center())
+        .max_by(|a, b| a.x.total_cmp(&b.x))
 }
 
 /// A click at `at`.
@@ -404,7 +566,12 @@ impl App for Capture {
     const STATE_FLAGS: &'static [&'static str] = &["view", "selected", "devices"];
 
     fn surfaces(&self) -> Vec<String> {
-        vec!["window".into(), "sidebar".into()]
+        vec![
+            "window".into(),
+            "sidebar".into(),
+            "preview".into(),
+            "popover".into(),
+        ]
     }
 
     fn sheet_states(&self, surface: &str) -> Vec<State> {
@@ -419,9 +586,13 @@ impl App for Capture {
     }
 
     fn capture(&mut self, r: &Request<'_>) -> Result<Pixmap, String> {
-        if !matches!(r.surface, "window" | "sidebar") {
-            return Err(format!("{}: no such surface", r.surface));
-        }
+        // the preview window opens with Space on the selection; the tags popover from the toolbar's Tags button
+        let then: &[Step] = match r.surface {
+            "window" | "sidebar" => &[],
+            "preview" => &[Step::Key(0x20, Mods::NONE)],
+            "popover" => &[Step::Click("Tags")],
+            _ => return Err(format!("{}: no such surface", r.surface)),
+        };
         let mut view = ViewMode::Icons;
         let mut selected = None;
         let mut places = self.places.clone();
@@ -429,7 +600,8 @@ impl App for Capture {
             match (flag.as_str(), value.as_str()) {
                 ("view", "icon") => view = ViewMode::Icons,
                 ("view", "list") => view = ViewMode::List,
-                ("view", _) => return Err(format!("--view {value}: icon or list")),
+                ("view", "columns") => view = ViewMode::Columns,
+                ("view", _) => return Err(format!("--view {value}: icon, list or columns")),
                 ("devices", "removable") => places.extend([
                     Place::removable(
                         "Backup Disk",
@@ -454,11 +626,12 @@ impl App for Capture {
             view,
             places,
             selected.as_deref(),
+            then,
             r.look,
             r.scale,
             Size::new(w, h),
         )?;
-        if r.surface == "window" {
+        if r.surface != "sidebar" {
             return Ok(pm);
         }
         let scale = f64::from(r.scale);

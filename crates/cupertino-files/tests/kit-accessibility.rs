@@ -378,6 +378,7 @@ fn tab_goes_from_the_sidebar_to_the_toolbar_the_items_and_the_path_bar_and_aroun
         // the view modes the window can show, then the menus
         "RadioButton \"Icons\" off",
         "RadioButton \"List\" on",
+        "RadioButton \"Columns\" off",
         "PopUpButton \"View\"",
         "PopUpButton \"Tags\"",
         "PopUpButton \"Action\"",
@@ -866,8 +867,8 @@ fn the_focus_ring_shows_on_the_toolbar_the_path_bar_and_a_selected_row_with_incr
         let (mut run, _) = start(appearance);
         run.menu("toggle-path-bar");
         let segments = path_segments(&run);
-        // the sidebar, the two view modes, then the View menu
-        for _ in 0..4 {
+        // the sidebar, the three view modes, then the View menu
+        for _ in 0..5 {
             run.key(TAB, None);
         }
         assert_eq!(focused(&run), "PopUpButton \"View\"");

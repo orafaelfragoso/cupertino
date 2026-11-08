@@ -24,6 +24,7 @@ use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
 use cupertino_kit::theme::ColorRole;
 
 use super::announce::Announcer;
+use super::columns;
 use super::context::Secondary;
 use super::drops;
 use super::grid::{self, IconGrid, Item};
@@ -57,14 +58,16 @@ const ROW_HEIGHT: f64 = ROW_ICON + list_view::ROW_PADDING;
 const SHOWN_MARGIN: f64 = 200.0;
 /// The symbol of a folder of the path bar that is not a place of the sidebar.
 const FOLDER_SYMBOL: &str = "symbol.folder";
-/// The heading of the sidebar's tags.
+/// The heading of the sidebar's tags, and the symbol of each.
 const TAGS_TITLE: &str = "Tags";
+const TAG_SYMBOL: &str = "symbol.tag";
 /// The key of the field that edits an item's name in its row of window `id`; one per window, as focus goes to the
 /// first window holding the key.
 pub(super) fn name_field_key(id: u64) -> Key {
     Key::from(format!("name-field/{id}"))
 }
 const ESCAPE: Keysym = Keysym(0xff1b);
+const SPACE: Keysym = Keysym(0x20);
 const DOWN: Keysym = Keysym(0xff54);
 /// The symbol of a mounted removable file system's eject button.
 const EJECT_SYMBOL: &str = "symbol.eject";
@@ -161,12 +164,29 @@ fn shortcuts(
             Message::Window(id, Event::Menu(MenuAction::Open.name())),
         );
     }
+    // Space opens the preview of the selection, or closes it; a field takes it first
+    let peek = win.peek.as_ref().is_some_and(|look| !look.closing);
+    if win.rename.is_none() && (peek || !disabled.contains(&MenuAction::Peek.name())) {
+        let space = Shortcut {
+            mods: Mods::NONE,
+            keysym: SPACE,
+        };
+        registry.insert(
+            space,
+            Message::Window(id, Event::Menu(MenuAction::Peek.name())),
+        );
+    }
     let escape = Shortcut {
         mods: Mods::NONE,
         keysym: ESCAPE,
     };
     if win.rename.is_some() {
         registry.insert(escape, Message::Window(id, Event::NameCancelled));
+    } else if peek {
+        registry.insert(
+            escape,
+            Message::Window(id, Event::Menu(MenuAction::Peek.name())),
+        );
     } else if !win.search.is_empty() {
         registry.insert(escape, Message::Window(id, Event::SearchCleared));
     }
@@ -201,11 +221,22 @@ fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         .iter()
         .map(|s| s.title.as_deref() == Some(PlaceGroup::Favorites.title()))
         .collect();
-    // the Tags heading, once an item listed carries a tag; it lists no rows, as a tag is not a place to go yet
-    if session.tagged.get() {
+    // the Tags section, once an item listed carries a tag: the colour tags first, in their order, then the others
+    let tags = sidebar_tags(session);
+    if !tags.is_empty() {
         sections.push(SidebarSection {
             title: Some(TAGS_TITLE.into()),
-            items: Vec::new(),
+            items: tags
+                .iter()
+                .map(|name| SidebarItem {
+                    key: Key::from(format!("sidebar-tag/{name}")),
+                    label: name.clone(),
+                    icon: Some(TAG_SYMBOL.into()),
+                    description: None,
+                    accessory: None,
+                    busy: false,
+                })
+                .collect(),
         });
     }
     // a place about to spring open under a drag flashes as the selected one
@@ -224,12 +255,65 @@ fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         selected,
         scroll: win.sidebar_scroll,
         on_scroll: send(id, Event::SidebarScroll),
-        on_select: Some(send(id, move |row| Event::Place(shown[row]))),
+        on_select: Some(send(id, move |row: usize| match shown.get(row) {
+            Some(&place) => Event::Place(place),
+            None => Event::TagPlace(tags[row - shown.len()].clone()),
+        })),
         on_accessory: Some(send(id, Event::Accessory)),
     }
     .with_look(SidebarLook::Neutral { accent })
     .key("places");
     drops::sidebar(session, id, sidebar)
+}
+
+/// The tags the sidebar lists: those the windows' items carry, the colour tags first in their order.
+fn sidebar_tags(session: &Session) -> Vec<String> {
+    let known = session.known_tags.borrow();
+    let colours = crate::context_menu::TAG_ROW_ORDER
+        .iter()
+        .map(|c| c.title())
+        .filter(|title| known.iter().any(|k| k.eq_ignore_ascii_case(title)))
+        .map(str::to_owned);
+    let others = known
+        .iter()
+        .filter(|k| crate::tags::TagColor::from_title(k).is_none())
+        .cloned();
+    colours.chain(others).collect()
+}
+
+/// The tags popover of window `id`, while it is open.
+pub(super) fn tag_popover(
+    session: &Session,
+    id: u64,
+    win: &BrowserWindow,
+) -> Option<Window<Message>> {
+    let editor = win.tag_editor.as_ref()?;
+    let entries = win.browser.entries();
+    let selected: Vec<&Entry> = win
+        .browser
+        .selection()
+        .indices()
+        .filter_map(|i| entries.get(i))
+        .collect();
+    let subject = match selected.as_slice() {
+        [] => return None,
+        [one] => format!("“{}”", one.name),
+        many => format!("{} items", many.len()),
+    };
+    let known: Vec<String> = session.known_tags.borrow().iter().cloned().collect();
+    let on = |name: &str| {
+        selected
+            .iter()
+            .all(|e| e.tags.iter().any(|t| t.eq_ignore_ascii_case(name)))
+    };
+    let tags = super::tag_editor::listed(&known, on, &editor.filter);
+    Some(super::tag_editor::window(
+        id,
+        editor,
+        &subject,
+        tags,
+        &session.tag_colors,
+    ))
 }
 
 /// The key of place `index`'s row: a folder's by its name, a removable file system's by its udisks object, so a row
@@ -320,7 +404,16 @@ fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> 
         (ViewMode::List, true) => no_results(list(session, id, win), list_view::HEADER_HEIGHT),
         (ViewMode::Icons, false) => icons(session, id, win),
         (ViewMode::Icons, true) => no_results(icons(session, id, win), 0.0),
+        (ViewMode::Columns, false) => columns::view(session, id, win),
+        (ViewMode::Columns, true) => no_results(columns::view(session, id, win), 0.0),
     };
+    // Space on the items opens their preview
+    let peek = !disabled_peek(session, win);
+    let folder = Element::new(super::peek::SpaceKey {
+        message: peek.then(|| Message::Window(id, Event::Menu(MenuAction::Peek.name()))),
+        children: vec![folder.fill()],
+    })
+    .fill();
     // the window follows whether the keyboard is on the items, so a folder closed over it hands it to the folder
     let folder = Element::new(FocusWatch {
         on_focus: send(id, Event::ItemsFocus),
@@ -334,6 +427,18 @@ fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> 
     })
     .fill();
     let folder = drops::folder(session, id, win, folder);
+    // the tab bar, under the toolbar
+    let folder = match win.tab_bar_shown() {
+        true => Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets::ZERO,
+            spacing: 0.0,
+            align: Align::Stretch,
+            children: vec![tab_bar(session, id, win), folder.fill()],
+        })
+        .fill(),
+        false => folder,
+    };
     let mut children = vec![Element::from(NavigationStack {
         content: Element::new(ContextMenu {
             content: folder,
@@ -384,6 +489,36 @@ fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> 
     .fill()
 }
 
+/// The tab bar of window `id`: each tab named after its folder.
+fn tab_bar(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
+    let active = win.tabs.active_id();
+    let tabs = win
+        .tabs
+        .order()
+        .iter()
+        .map(|&tab| {
+            let dir = match win.parked.get(&tab) {
+                Some(parked) => parked.browser.dir(),
+                None => win.browser.dir(),
+            };
+            super::tabs::Shown {
+                id: tab,
+                title: window_title(dir, &session.places),
+                active: tab == active,
+            }
+        })
+        .collect();
+    super::tabs::bar(id, tabs)
+}
+
+/// Whether Space on the items does nothing: a name is edited, or nothing is selected and no preview is open.
+fn disabled_peek(session: &Session, win: &BrowserWindow) -> bool {
+    let open = win.peek.as_ref().is_some_and(|look| !look.closing);
+    let state = win.menu_state(session);
+    let enabled = crate::menu_bar::enabled(&state).contains(&(MenuAction::Peek, true));
+    win.rename.is_some() || !(open || enabled)
+}
+
 /// The folder's title, which takes the room the other items leave; the view-mode choice; the View menu; the share,
 /// Tags and Action group; then the search field, which rests as a round button and grows into the title's room while
 /// it has the keyboard or text ([`crate::search_field`]).
@@ -432,12 +567,19 @@ fn toolbar(session: &Session, id: u64, win: &BrowserWindow) -> Vec<Element<Messa
                 menu(MenuAction::View(ViewMode::List)),
                 None,
             ),
-            item(None, "symbol.columns", "Columns", None, None),
+            item(
+                None,
+                "symbol.columns",
+                "Columns",
+                menu(MenuAction::View(ViewMode::Columns)),
+                None,
+            ),
             item(None, "symbol.gallery", "Gallery", None, None),
         ],
         selected: Some(match win.view {
             ViewMode::Icons => 0,
             ViewMode::List => 1,
+            ViewMode::Columns => 2,
         }),
         dividers: true,
     };
@@ -450,7 +592,7 @@ fn toolbar(session: &Session, id: u64, win: &BrowserWindow) -> Vec<Element<Messa
                 "symbol.tag",
                 "Tags",
                 popup(Popup::Tags),
-                Some(expanded(Popup::Tags)),
+                Some(expanded(Popup::Tags) || win.tag_editor.is_some()),
             ),
             ToolbarItem {
                 glyph: ToolbarGlyph::More,
@@ -720,6 +862,7 @@ pub(super) fn shown(win: &BrowserWindow) -> (Vec<usize>, f64) {
             let last = ((bottom.max(0.0) / ROW_HEIGHT).ceil() as usize).min(count);
             ((first.min(last)..last).collect(), ROW_ICON)
         }
+        ViewMode::Columns => (win.columns.shown(&win.browser, SHOWN_MARGIN), ROW_ICON),
         ViewMode::Icons => {
             let (params, layout) = icon_layout(win);
             let shown = layout
@@ -797,7 +940,7 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
     .key("icons")
 }
 
-fn name_field(
+pub(super) fn name_field(
     id: u64,
     value: String,
     revision: u64,
@@ -825,6 +968,7 @@ pub(super) fn popup_key(popup: Popup) -> Key {
         Popup::View => "popup-view",
         Popup::Tags => "popup-tags",
         Popup::Action => "popup-action",
+        Popup::More => "popup-more",
     })
 }
 
@@ -963,7 +1107,7 @@ fn cell_text(e: &Entry, id: ColumnId, now: std::time::SystemTime) -> String {
 }
 
 /// The selection the views show: the browser's, with the folder about to spring open under a drag flashing as selected.
-fn shown_selection(win: &BrowserWindow) -> Selection {
+pub(super) fn shown_selection(win: &BrowserWindow) -> Selection {
     let selected = win.browser.selection();
     let flashing = win
         .springing

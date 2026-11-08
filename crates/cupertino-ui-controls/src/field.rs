@@ -3,7 +3,7 @@
 //! method, and assistive technology learns only that there is a value.
 
 use crate::look::{self, paint_focus_ring};
-use crate::{SecureField, TextChange, TextField};
+use crate::{SearchField, SecureField, TextChange, TextField};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Environment,
@@ -57,20 +57,58 @@ pub(crate) fn position(byte: usize) -> TextPosition {
     }
 }
 
+/// A search field's height, the magnifying glass's size and its leading edge, the text's leading edge, and its fill
+/// and rim: white at these opacities in a dark appearance, the fill white and the rim black in a light one.
+const SEARCH_HEIGHT: f64 = 28.0;
+const SEARCH_GLYPH: f64 = 12.5;
+const SEARCH_GLYPH_X: f64 = 9.5;
+const SEARCH_TEXT_X: f64 = 28.0;
+const SEARCH_FILL_DARK: f32 = 0.2;
+const SEARCH_RIM_DARK: f32 = 0.12;
+const SEARCH_FILL_LIGHT: f32 = 0.45;
+const SEARCH_RIM_LIGHT: f32 = 0.09;
+
+/// How a text field draws its chrome.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum FieldLook {
+    #[default]
+    Plain,
+    /// A capsule with a magnifying glass before the text: a [`SearchField`].
+    Search,
+}
+
+impl FieldLook {
+    fn height(self, theme: &ThemeTokens) -> f64 {
+        match self {
+            FieldLook::Plain => theme.metrics.field_height,
+            FieldLook::Search => SEARCH_HEIGHT,
+        }
+    }
+}
+
 /// The chrome is the field's height, centred in a node padded out to the minimum target.
-fn chrome(size: Size, theme: &ThemeTokens) -> Rect {
-    let height = theme.metrics.field_height;
+fn chrome(size: Size, theme: &ThemeTokens, look: FieldLook) -> Rect {
+    let height = look.height(theme);
     Rect::new(0.0, (size.height - height) / 2.0, size.width, height)
 }
 
-/// Where text, selection, composition and caret show; they are clipped to it.
-fn interior(size: Size, theme: &ThemeTokens) -> Rect {
+/// Where text, selection, composition and caret show; they are clipped to it. A search field's text starts after its
+/// magnifying glass, at the reading direction's start.
+fn interior(size: Size, theme: &ThemeTokens, look: FieldLook, direction: LayoutDirection) -> Rect {
     let inset = theme.metrics.field_inset;
-    chrome(size, theme).inset(Insets {
+    let (start, end) = match look {
+        FieldLook::Plain => (inset, inset),
+        FieldLook::Search => (SEARCH_TEXT_X, inset),
+    };
+    let (left, right) = match direction {
+        LayoutDirection::Ltr => (start, end),
+        LayoutDirection::Rtl => (end, start),
+    };
+    chrome(size, theme, look).inset(Insets {
         top: 0.0,
-        left: inset,
+        left,
         bottom: 0.0,
-        right: inset,
+        right,
     })
 }
 
@@ -104,10 +142,11 @@ fn placed(
     text: &str,
     size: Size,
     scroll: f64,
+    field: FieldLook,
 ) -> Option<(ParagraphLayout, Point)> {
     let layout = look::paragraph(env, text, Some(look::direction(env)))?;
-    let chrome = chrome(size, &env.theme);
-    let area = interior(size, &env.theme);
+    let chrome = chrome(size, &env.theme, field);
+    let area = interior(size, &env.theme, field, env.direction);
     let origin = Point::new(
         leading_x(env, area, layout.size().width) - scroll,
         look::top(&layout, chrome, env),
@@ -148,11 +187,12 @@ fn paint_text(
     shown: &Shown<'_>,
     placeholder: &str,
     scroll: &Cell<f64>,
+    field: FieldLook,
 ) {
     let env = cx.env().clone();
     let size = cx.size();
-    let area = interior(size, &env.theme);
-    let chrome = chrome(size, &env.theme);
+    let area = interior(size, &env.theme, field, env.direction);
+    let chrome = chrome(size, &env.theme, field);
     let Some(layout) = look::paragraph(&env, shown.text, Some(look::direction(&env))) else {
         return;
     };
@@ -192,7 +232,12 @@ fn paint_text(
                 leading_x(&env, area, placeholder.size().width),
                 look::top(&placeholder, chrome, &env),
             );
-            look::glyphs(cx, &placeholder, at, color(ColorRole::PlaceholderText));
+            // a search field's placeholder reads as its label, so it is stronger than a plain field's
+            let role = match field {
+                FieldLook::Plain => ColorRole::PlaceholderText,
+                FieldLook::Search => ColorRole::SecondaryText,
+            };
+            look::glyphs(cx, &placeholder, at, color(role));
         }
     } else {
         look::glyphs(cx, &layout, origin, color(ColorRole::Text));
@@ -295,17 +340,20 @@ fn layout() -> LayoutSpec {
     }
 }
 
-fn measure(constraints: Constraints, cx: &MeasureCx<'_>) -> Measured {
-    let metrics = cx.env().theme.metrics;
+fn measure(constraints: Constraints, cx: &MeasureCx<'_>, field: FieldLook) -> Measured {
     Measured {
-        size: Size::new(constraints.width.ideal(), metrics.field_height),
+        size: Size::new(constraints.width.ideal(), field.height(&cx.env().theme)),
         baseline: None,
     }
 }
 
-fn paint_chrome(cx: &mut PaintCx<'_>, state: &ControlState) {
+fn paint_chrome(cx: &mut PaintCx<'_>, state: &ControlState, field: FieldLook) {
     let theme = cx.env().theme.clone();
-    let rect = chrome(cx.size(), &theme);
+    let rect = chrome(cx.size(), &theme, field);
+    if field == FieldLook::Search {
+        paint_search_chrome(cx, rect, state);
+        return;
+    }
     let radius = theme.metrics.field_radius;
     look::fill(
         cx,
@@ -320,6 +368,54 @@ fn paint_chrome(cx: &mut PaintCx<'_>, state: &ControlState) {
         1.0,
         look::color(&theme, ColorRole::TextFieldBorder, state),
     );
+    paint_focus_ring(cx, rect, radius);
+}
+
+/// A search field's capsule, its rim and its magnifying glass at the reading direction's start.
+fn paint_search_chrome(cx: &mut PaintCx<'_>, rect: Rect, state: &ControlState) {
+    let theme = cx.env().theme.clone();
+    let radius = rect.height() / 2.0;
+    let white = cupertino_ui_theme::Color::new(1.0, 1.0, 1.0, 1.0);
+    let black = cupertino_ui_theme::Color::new(0.0, 0.0, 0.0, 1.0);
+    let (fill, rim) = if theme.preferences.appearance.is_dark() {
+        (
+            white.with_alpha(SEARCH_FILL_DARK),
+            white.with_alpha(SEARCH_RIM_DARK),
+        )
+    } else {
+        (
+            white.with_alpha(SEARCH_FILL_LIGHT),
+            black.with_alpha(SEARCH_RIM_LIGHT),
+        )
+    };
+    look::fill(cx, rect, radius, Some(fill));
+    look::stroke(
+        cx,
+        rect.inset(cupertino_geometry::Insets::uniform(0.5)),
+        radius - 0.5,
+        1.0,
+        Some(rim),
+    );
+    let glyph = match cx.env().direction {
+        LayoutDirection::Ltr => SEARCH_GLYPH_X,
+        LayoutDirection::Rtl => rect.width() - SEARCH_GLYPH_X - SEARCH_GLYPH,
+    };
+    let area = Rect::new(
+        rect.min_x() + glyph,
+        rect.min_y(),
+        SEARCH_GLYPH,
+        rect.height(),
+    );
+    if let Some(color) = look::color(&theme, ColorRole::SecondaryText, state) {
+        crate::icon::symbol(
+            cx,
+            "symbol.magnifyingglass",
+            SEARCH_GLYPH,
+            color,
+            false,
+            area,
+        );
+    }
     paint_focus_ring(cx, rect, radius);
 }
 
@@ -383,6 +479,7 @@ pub struct FieldState {
     /// Set by paint, where the field's width is known, and read by hit testing.
     scroll: Cell<f64>,
     blink: Blink,
+    look: FieldLook,
 }
 
 /// The text without what an input method is still composing: what the model holds.
@@ -469,9 +566,9 @@ impl FieldState {
     /// The caret in window coordinates, for the input method's candidate window, at the scroll the next paint takes.
     fn caret_rect<M>(&self, cx: &EventCx<'_, M>) -> Option<Rect> {
         let bounds = cx.bounds()?;
-        let (layout, origin) = placed(cx.env(), self.buffer.text(), bounds.size, 0.0)?;
+        let (layout, origin) = placed(cx.env(), self.buffer.text(), bounds.size, 0.0, self.look)?;
         let caret = layout.caret_rect(self.buffer.caret_position());
-        let width = interior(bounds.size, &cx.env().theme).width();
+        let width = interior(bounds.size, &cx.env().theme, self.look, cx.env().direction).width();
         let scroll = follow(
             self.scroll.get(),
             caret.min_x(),
@@ -488,8 +585,13 @@ impl FieldState {
     /// The text position under `point`, in window coordinates.
     fn index_at<M>(&self, point: Point, cx: &EventCx<'_, M>) -> Option<TextPosition> {
         let bounds = cx.bounds()?;
-        let (layout, origin) =
-            placed(cx.env(), self.buffer.text(), bounds.size, self.scroll.get())?;
+        let (layout, origin) = placed(
+            cx.env(),
+            self.buffer.text(),
+            bounds.size,
+            self.scroll.get(),
+            self.look,
+        )?;
         Some(layout.index_at(point - bounds.origin - origin))
     }
 
@@ -693,6 +795,7 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
             hovered: false,
             scroll: Cell::new(0.0),
             blink: Blink::default(),
+            look: FieldLook::Plain,
         }
     }
 
@@ -722,7 +825,7 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
         constraints: Constraints,
         cx: &mut MeasureCx<'_>,
     ) -> Measured {
-        measure(constraints, cx)
+        measure(constraints, cx, FieldLook::Plain)
     }
 
     fn target(&self, _: &FieldState, env: &Environment) -> Size {
@@ -739,7 +842,7 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
 
     fn paint(&self, state: &FieldState, cx: &mut PaintCx<'_>) {
         let look = control_state(self.enabled, state.hovered, cx);
-        paint_chrome(cx, &look);
+        paint_chrome(cx, &look, state.look);
         let shown = Shown {
             text: state.buffer.text(),
             caret: state.buffer.caret_position(),
@@ -754,6 +857,7 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
             &shown,
             &self.placeholder,
             &state.scroll,
+            state.look,
         );
     }
 
@@ -958,7 +1062,7 @@ impl<M: 'static> Widget<M> for SecureField<M> {
         constraints: Constraints,
         cx: &mut MeasureCx<'_>,
     ) -> Measured {
-        measure(constraints, cx)
+        measure(constraints, cx, FieldLook::Plain)
     }
 
     fn target(&self, _: &SecureState, env: &Environment) -> Size {
@@ -982,7 +1086,7 @@ impl<M: 'static> Widget<M> for SecureField<M> {
             protected: true,
             ..control_state(self.enabled, state.hovered, cx)
         };
-        paint_chrome(cx, &look);
+        paint_chrome(cx, &look, FieldLook::Plain);
         // the text system shapes only bullets: one per grapheme, with the caret and selection counted in graphemes
         let (caret, selection) = state.buffer.masked_selection();
         let width = BULLET.len_utf8();
@@ -1001,6 +1105,7 @@ impl<M: 'static> Widget<M> for SecureField<M> {
             &shown,
             &self.placeholder,
             &state.scroll,
+            FieldLook::Plain,
         );
     }
 
@@ -1019,5 +1124,50 @@ impl<M: 'static> Widget<M> for SecureField<M> {
             cx.focusable();
             cx.action(Action::Focus);
         }
+    }
+}
+
+/// A search field is its text field with the search look: the same state, keys, input method and semantics.
+impl<M: Clone + 'static> Widget<M> for SearchField<M> {
+    type State = FieldState;
+
+    fn layout(&self) -> LayoutSpec {
+        layout()
+    }
+
+    fn state(&self) -> FieldState {
+        FieldState {
+            look: FieldLook::Search,
+            ..self.field.state()
+        }
+    }
+
+    fn update(&self, old: &Self, state: &mut FieldState) -> Change {
+        self.field.update(&old.field, state)
+    }
+
+    fn measure(
+        &self,
+        _: &FieldState,
+        constraints: Constraints,
+        cx: &mut MeasureCx<'_>,
+    ) -> Measured {
+        measure(constraints, cx, FieldLook::Search)
+    }
+
+    fn target(&self, state: &FieldState, env: &Environment) -> Size {
+        self.field.target(state, env)
+    }
+
+    fn event(&self, state: &mut FieldState, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        self.field.event(state, event, cx)
+    }
+
+    fn paint(&self, state: &FieldState, cx: &mut PaintCx<'_>) {
+        self.field.paint(state, cx)
+    }
+
+    fn semantics(&self, state: &FieldState, cx: &mut SemanticsCx<'_>) {
+        self.field.semantics(state, cx)
     }
 }

@@ -1,7 +1,7 @@
 # cupertino-ui-controls
 
-The standard CupertinoKit controls: `Text`, `Icon`, `Button`, `Toggle`, `TextField`, `SecureField`, `Stack`, `Spacer`
-and `Separator` so far. MPL-2.0. Each control reads every colour and metric from the theme tokens, takes its value
+The standard CupertinoKit controls: `Text`, `Icon`, `Button`, `Toggle`, `TextField`, `SecureField`, `Stack`, `Spacer`,
+`Separator` and the settings form controls so far. MPL-2.0. Each control reads every colour and metric from the theme tokens, takes its value
 from the application's model and reports changes as messages.
 
 - **Arming.** A pointer or touch press arms a button or switch, release over it activates once, release elsewhere
@@ -33,6 +33,18 @@ from the application's model and reports changes as messages.
   `on_accessory`; without it the accessory reads as disabled. A busy row turns an activity indicator in the accessory's
   place, standing still under Reduce Motion. In a window that is not active the rows' icons take the secondary label
   colour.
+- **Settings form.** `FormGroup` sets rows on a rounded fill with a hairline between each, inset from both edges;
+  `FormRow` is a row of it, at least `FORM_ROW_HEIGHT` tall (`FORM_TILE_ROW_HEIGHT` with an `IconTile`, a white
+  symbol on a rounded square of a `TileColor`), and its content takes the rest of the row. `NavigationRow` is one Tab
+  stop that opens a page: a tile, the label and a trailing chevron; a click, Return, Space or assistive technology's
+  Click sends `on_open`, and without it the row reads as disabled. `FormHeader` is the card at the top of a page, its
+  large tile over a bold title and a centred description, read as the title described by the description.
+  `FormBackground` fills its room with the colour behind the groups. `SearchField` is a `TextField` drawn as a capsule
+  with a magnifying glass; it edits and reads as its field does.
+- **Tiled sidebar.** `TileSidebar` lists a settings window's pages: rows of `TILE_SIDEBAR_ROW_HEIGHT`, a tile before
+  each label, in groups set apart by space, under an optional header (a `SearchField`) that does not scroll. The
+  selected row fills with the selected control colour, its label bold. Keys, Tab stop, reporting and assistive
+  technology behave as `Sidebar`'s.
 - **Positions.** A menu item says its place among the menu's items and the menu says how many it holds, separators not
   counted; a tab and a page dot say their place and their tab list says its count.
 - **Outline table.** `OutlineTable` is a `TableView` whose rows form an outline, as a `TreeView`'s do: `item` gives

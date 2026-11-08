@@ -10,6 +10,7 @@ mod dialog;
 mod disclosure;
 mod editor;
 mod field;
+mod form;
 mod grid;
 mod icon;
 mod image;
@@ -32,6 +33,7 @@ mod stepper;
 mod tabs;
 mod text;
 mod text_box;
+mod tile_sidebar;
 mod toggle;
 mod tooltip;
 mod window_drag;
@@ -39,6 +41,7 @@ mod window_group;
 
 pub use editor::EditorState;
 pub use field::{FieldState, SecureState};
+pub use form::{FORM_ROW_HEIGHT, FORM_TILE_ROW_HEIGHT};
 pub use list::ListState;
 pub use press::Press;
 pub use scroll::{BarState, ViewportState};
@@ -46,6 +49,7 @@ pub use slider::SliderState;
 pub use split::DividerState;
 pub use stepper::StepperState;
 pub use text_box::TextBoxState;
+pub use tile_sidebar::TILE_SIDEBAR_ROW_HEIGHT;
 pub use tooltip::{TooltipChange, TooltipState};
 
 pub use cupertino_ui_core::SortOrder;
@@ -954,4 +958,105 @@ pub struct Spacer {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Separator {
     pub axis: Axis,
+}
+
+/// The colour of an [`IconTile`]: a system colour, drawn with a slight top-to-bottom shade.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TileColor {
+    #[default]
+    Blue,
+    Gray,
+    /// Nearly black, as a tile for display and appearance settings.
+    Graphite,
+    Green,
+    Indigo,
+    Orange,
+    Pink,
+    Purple,
+    Red,
+    Teal,
+    Yellow,
+}
+
+/// A system symbol in white on a rounded square of a system colour, as before a settings row. Decorative: the row
+/// beside it names it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IconTile {
+    /// A system symbol name.
+    pub symbol: String,
+    pub color: TileColor,
+    /// The side of the square, in points, where it stands alone; a row draws its tile at the row's own size.
+    pub size: f64,
+}
+
+/// Rows set off on a rounded fill, as a section of a settings form, with an inset hairline between each row and the
+/// next. It is no Tab stop and no node of its own to assistive technology: its rows are. Build its element with
+/// `Element::from`.
+pub struct FormGroup<M> {
+    pub rows: Vec<Element<M>>,
+}
+
+/// One row of a [`FormGroup`]: an optional icon tile, then `content`, which takes the rest of the row. The row is at
+/// least as tall as a form row (taller with a tile) and pads its content on every side. Build its element with
+/// `Element::from`.
+pub struct FormRow<M> {
+    pub tile: Option<IconTile>,
+    pub content: Element<M>,
+}
+
+/// A row of a [`FormGroup`] that opens a page: an optional icon tile, the label and a chevron at the trailing edge.
+/// One Tab stop; a click, Return, Space or assistive technology's Click sends `on_open`.
+pub struct NavigationRow<M> {
+    pub label: String,
+    pub tile: Option<IconTile>,
+    pub on_open: Option<M>,
+}
+
+/// The card at the top of a settings page: a large icon tile over the page's title in bold and a short description,
+/// centred on a group's rounded fill. Assistive technology reads the title, described by the description.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FormHeader {
+    pub tile: IconTile,
+    pub title: String,
+    pub description: String,
+}
+
+/// `content` on the colour behind a form's groups (the text background), filling the room it is given. No node of its
+/// own to assistive technology. Build its element with `Element::from`.
+pub struct FormBackground<M> {
+    pub content: Element<M>,
+}
+
+/// A [`TextField`] drawn as a search field: a capsule with a magnifying glass before the text. It behaves, edits and
+/// reads to assistive technology as its field does.
+pub struct SearchField<M> {
+    pub field: TextField<M>,
+}
+
+/// A row of a [`TileSidebar`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct TileSidebarItem {
+    /// The row's identity, unique in the sidebar: its focus and accessible object follow it while rows come and go.
+    pub key: Key,
+    pub label: String,
+    /// A system symbol name, drawn in white on the tile.
+    pub symbol: String,
+    pub tile: TileColor,
+}
+
+/// A settings window's list of pages in its leading pane: rows with a coloured icon tile before the label, in groups
+/// set apart by space, one row selected and filled with the accent colour. `header` (a search field) stands above the
+/// rows and does not scroll. One Tab stop at the selected row, else the first; Up, Down, Home and End move the
+/// selection across the groups, and a click or assistive technology's Click selects a row. A row that becomes selected
+/// is reported once; selecting the selected row reports nothing. Build its element with `Element::from`.
+pub struct TileSidebar<M> {
+    /// The list's accessible name.
+    pub label: String,
+    pub header: Option<Element<M>>,
+    pub groups: Vec<Vec<TileSidebarItem>>,
+    /// The selected row, counted over every group's rows in order.
+    pub selected: Option<usize>,
+    pub scroll: ScrollState,
+    pub on_scroll: Handler<ScrollState, M>,
+    pub on_select: Option<Handler<usize, M>>,
 }

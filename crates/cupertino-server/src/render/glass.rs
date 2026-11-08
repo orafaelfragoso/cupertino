@@ -264,8 +264,8 @@ pub fn grid_mean(grid: &[u8], (w, h): (i32, i32), uv: [f32; 4]) -> [f32; 3] {
                 continue;
             }
             let i = (y * w + x) * 4;
-            for c in 0..3 {
-                sum[c] += f32::from(grid.get(i + c).copied().unwrap_or(0));
+            for (c, s) in sum.iter_mut().enumerate() {
+                *s += f32::from(grid.get(i + c).copied().unwrap_or(0));
             }
             n += 1;
         }

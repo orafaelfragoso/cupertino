@@ -52,6 +52,10 @@ pub(crate) struct NodeMaterial {
 /// How far a blur reaches beyond the content it blurs, per unit of radius.
 const BLUR_REACH: f64 = 3.0;
 
+/// How far past its clip, in points, a node's content may still change a pixel: the clip's anti-aliased edge covers
+/// part of the pixel it falls in, and the renderer scales the content's own coverage of that pixel by it.
+const CLIP_EDGE: f64 = 1.0;
+
 /// Everything `ops` may touch, in their own coordinates: strokes reach half their width outside the shape, effects
 /// reach as far as their blur and offset, and a glyph is taken to fill its em square around the pen with room for
 /// ascenders, descenders and overhang.
@@ -158,7 +162,7 @@ pub(crate) struct Painter {
 /// Whether paint made in `a` is paint made in `b`: the same theme, text system, icons and scale, the same direction.
 /// Compares the shared parts by identity, not `Environment`'s `==`, so an environment's owner keeps its `Arc`s across
 /// frames; one rebuilt every frame repaints every node every frame.
-fn same_environment(a: &Environment, b: &Environment) -> bool {
+pub(crate) fn same_environment(a: &Environment, b: &Environment) -> bool {
     Arc::ptr_eq(&a.theme, &b.theme)
         && Arc::ptr_eq(&a.text, &b.text)
         && Arc::ptr_eq(&a.icons, &b.icons)
@@ -168,8 +172,12 @@ fn same_environment(a: &Environment, b: &Environment) -> bool {
 
 pub(crate) struct Painting {
     pub(crate) list: DisplayList,
-    /// What each node itself draws, in window coordinates, in the list's order; damage is tracked per node.
+    /// What each node itself draws, in window coordinates, in the list's order; damage is tracked per node. A node
+    /// with a group draws its whole subtree, and a node under a group with effects draws that group's whole reach.
     pub(crate) own: Vec<Rect>,
+    /// Whether each node, in the list's order, draws nothing itself: no operation and no group (whose opacity reaches
+    /// its children). Such a node changes no pixel when it paints again, moves or goes away.
+    pub(crate) blank: Vec<bool>,
     /// The nodes that asked for the next frame while they painted.
     pub(crate) animating: Vec<NodeId>,
     /// The images the list draws.
@@ -221,6 +229,7 @@ impl Painter {
         let mut seen = HashSet::with_capacity(self.nodes.len());
         let mut clips = Vec::new();
         let mut materials = Vec::new();
+        let mut blank = Vec::new();
         let window = geometry.get(&root).map(|p| p.rect);
         for id in tree.preorder(root) {
             let (Some(node), Some(placement)) = (tree.get(id), geometry.get(&id)) else {
@@ -351,6 +360,7 @@ impl Painter {
                 );
             }
             let painted = &self.nodes[&id];
+            blank.push(painted.ops.is_empty() && painted.group.is_none());
             if let Some(material) = painted.material {
                 let shown = visible.translate(origin.x, origin.y);
                 if shown.width() > 0.0 && shown.height() > 0.0 {
@@ -394,7 +404,7 @@ impl Painter {
             seen.insert(id);
         }
         self.nodes.retain(|id, _| seen.contains(id));
-        let own = list.nodes.iter().map(|n| n.bounds).collect();
+        let mut own: Vec<Rect> = list.nodes.iter().map(|n| n.bounds).collect();
         // Children come after their parent, so walking backwards widens each parent by its finished children.
         let index: HashMap<PaintNodeId, usize> = list
             .nodes
@@ -406,7 +416,9 @@ impl Painter {
             if let Some(group) = &list.nodes[i].group {
                 let widened = with_effects(list.nodes[i].bounds, &group.effects);
                 list.nodes[i].bounds = match clips[i] {
-                    Some(clip) => widened.intersection(&clip).unwrap_or(list.nodes[i].bounds),
+                    Some(clip) => widened
+                        .intersection(&clip.outset(CLIP_EDGE))
+                        .unwrap_or(list.nodes[i].bounds),
                     None => widened,
                 };
             }
@@ -415,9 +427,27 @@ impl Painter {
                 list.nodes[p].bounds = list.nodes[p].bounds.union(&bounds);
             }
         }
+        // A group's opacity and effects reach its whole subtree, so the group damages all of it; under a group with
+        // effects, which spread each pixel across their reach, any node damages the outermost such group's whole reach.
+        let mut spread: Vec<Option<usize>> = Vec::with_capacity(list.nodes.len());
+        for (i, (node, own)) in list.nodes.iter().zip(&mut own).enumerate() {
+            let above = node
+                .parent
+                .and_then(|p| index.get(&p))
+                .and_then(|&p| spread[p]);
+            if node.group.is_some() {
+                *own = node.bounds;
+            }
+            if let Some(group) = above {
+                *own = list.nodes[group].bounds;
+            }
+            let effects = node.group.as_ref().is_some_and(|g| !g.effects.is_empty());
+            spread.push(above.or(effects.then_some(i)));
+        }
         Painting {
             list,
             own,
+            blank,
             animating,
             resources,
             materials,
@@ -431,11 +461,9 @@ fn bounds(rect: Rect, extent: Option<Rect>, clip: Option<Rect>) -> Rect {
         rect.union(&e.translate(rect.origin.x, rect.origin.y))
     });
     match clip {
-        Some(clip) => {
-            reach
-                .intersection(&clip)
-                .unwrap_or(Rect::new(rect.origin.x, rect.origin.y, 0.0, 0.0))
-        }
+        Some(clip) => reach
+            .intersection(&clip.outset(CLIP_EDGE))
+            .unwrap_or(Rect::new(rect.origin.x, rect.origin.y, 0.0, 0.0)),
         None => reach,
     }
 }

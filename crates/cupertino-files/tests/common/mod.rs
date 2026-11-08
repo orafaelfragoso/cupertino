@@ -52,6 +52,10 @@ pub struct Host {
     /// Publishes the windows' accessible trees, as over AT-SPI.
     pub accessibility: Option<Box<dyn cupertino_kit::core::AccessibilityAdapter>>,
     pub capabilities: Capabilities,
+    /// The renderer's limits, when not the tests' small ones (a 4K window needs more).
+    pub renderer: Option<CpuConfig>,
+    /// The most nodes a window may have, when not the tests' small number.
+    pub node_limit: Option<usize>,
 }
 
 impl Run {
@@ -168,20 +172,21 @@ impl Run {
         fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
         let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
         let glyphs = Arc::clone(&text);
+        let config = host.renderer.unwrap_or(CpuConfig {
+            max_pixels: 1 << 22,
+            glyph_cache_bytes: 1 << 20,
+            image_cache_bytes: 1 << 20,
+            font_smoothing: true,
+        });
         let options = RuntimeOptions {
             theme: Arc::new(theme),
             text,
             icons: Arc::new(PlaceholderIcons::default()),
             direction: LayoutDirection::Ltr,
-            node_limit: 4000,
+            node_limit: host.node_limit.unwrap_or(4000),
             renderers: Box::new(move || {
                 Box::new(CpuRenderer::new(
-                    CpuConfig {
-                        max_pixels: 1 << 22,
-                        glyph_cache_bytes: 1 << 20,
-                        image_cache_bytes: 1 << 20,
-                        font_smoothing: true,
-                    },
+                    config,
                     GlyphRaster::new(Arc::clone(&glyphs)),
                 ))
             }),

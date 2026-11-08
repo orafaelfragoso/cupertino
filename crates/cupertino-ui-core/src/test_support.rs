@@ -5,7 +5,7 @@ use crate::{
     Change, Element, Environment, Event, EventCx, MeasureCx, PaintCx, Propagation, Role,
     SemanticsCx, Widget,
 };
-use cupertino_geometry::{Point, Size};
+use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
 };
@@ -17,7 +17,8 @@ use cupertino_ui_platform::{
     WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{
-    CpuFrame, DamageRegion, PixelFormat, RenderError, RenderFrameId, RenderRequest, UiRenderer,
+    CpuFrame, DamageRegion, Paint, PaintOp, PixelFormat, RenderError, RenderFrameId, RenderRequest,
+    Shape, UiRenderer,
 };
 use cupertino_ui_text::{
     ChangeCause, ContentHints, ContentPurpose, FontIndex, Surrounding, TextInputState, TextSystem,
@@ -106,6 +107,8 @@ pub(crate) struct Leaf {
     pub(crate) initial: bool,
     /// Takes Escape before the focus path.
     pub(crate) dismissible: bool,
+    /// Draws a square whose shade follows its focus and the animation frames it has seen, so those changes show.
+    pub(crate) drawn: bool,
 }
 
 pub(crate) fn leaf(label: &'static str) -> Leaf {
@@ -120,11 +123,13 @@ pub(crate) fn leaf(label: &'static str) -> Leaf {
         wake_after: None,
         initial: false,
         dismissible: false,
+        drawn: false,
     }
 }
 
 impl<M: From<String> + 'static> Widget<M> for Leaf {
-    /// How many updates the node has seen, so tests can tell a kept node from a new one.
+    /// How many updates (and, when drawn, animation frames) the node has seen, so tests can tell a kept node from a new
+    /// one.
     type State = u32;
 
     fn layout(&self) -> LayoutSpec {
@@ -151,7 +156,7 @@ impl<M: From<String> + 'static> Widget<M> for Leaf {
         }
     }
 
-    fn event(&self, _: &mut u32, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+    fn event(&self, state: &mut u32, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         let name = match event {
             Event::Pointer(PointerEvent::Enter { .. }, _) => "enter",
             Event::Pointer(PointerEvent::Leave, _) => "leave",
@@ -181,6 +186,9 @@ impl<M: From<String> + 'static> Widget<M> for Leaf {
             }
             Event::Wake(_) => "wake",
             Event::AnimationFrame(_) => {
+                if self.drawn {
+                    *state += 1;
+                }
                 cx.request_animation_frame();
                 cx.request_paint();
                 "frame"
@@ -214,7 +222,16 @@ impl<M: From<String> + 'static> Widget<M> for Leaf {
         }
     }
 
-    fn paint(&self, _: &u32, _: &mut PaintCx<'_>) {}
+    fn paint(&self, state: &u32, cx: &mut PaintCx<'_>) {
+        if self.drawn {
+            let shade = (*state % 8) as f32 / 8.0 + if cx.is_focused() { 0.05 } else { 0.0 };
+            let size = cx.size();
+            cx.push(PaintOp::Fill {
+                shape: Shape::Rect(Rect::new(0.0, 0.0, size.width, size.height)),
+                paint: Paint::Solid(cupertino_ui_theme::Color::new(shade, shade, shade, 1.0)),
+            });
+        }
+    }
 
     fn semantics(&self, _: &u32, cx: &mut SemanticsCx<'_>) {
         if let Some(role) = self.role {

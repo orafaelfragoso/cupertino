@@ -604,6 +604,7 @@ impl Application for SettingsApp {
 #[cfg(test)]
 mod tests {
     mod layout;
+    mod repaint;
     mod semantics;
 
     use std::num::NonZeroU32;

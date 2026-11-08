@@ -248,6 +248,9 @@ struct Tree<'n> {
     nodes: &'n [PaintNode],
     /// Each node's own extent in window pixels.
     extents: Vec<Bounds>,
+    /// How far, in pixels, the effects in each node's subtree (its group's, its layers' and its descendants') reach past
+    /// what they are computed from, along the deepest chain of them.
+    reach: Vec<i32>,
     children: Vec<Vec<usize>>,
     roots: Vec<usize>,
 }
@@ -264,12 +267,25 @@ impl<'n> Tree<'n> {
                 None => roots.push(i),
             }
         }
+        // children come after their parent, so walking backwards finishes each node's children first
+        let mut reach = vec![0; nodes.len()];
+        for i in (0..nodes.len()).rev() {
+            let below = children[i].iter().map(|&c| reach[c]).max().unwrap_or(0);
+            let group = nodes[i]
+                .group
+                .as_ref()
+                .map_or(0, |g| effects::support(&g.effects, scale));
+            reach[i] = node_support(&nodes[i], scale)
+                .max(below)
+                .saturating_add(group);
+        }
         Tree {
             nodes,
             extents: nodes
                 .iter()
                 .map(|n| geometry::own_extent(n, scale))
                 .collect(),
+            reach,
             children,
             roots,
         }
@@ -338,8 +354,8 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         chain: &[&'n PaintNode],
     ) -> Result<(), RenderError> {
         let node = &tree.nodes[i];
-        let halo = effects::support(&group.effects, self.scale)
-            .saturating_add(node_support(node, self.scale));
+        // a descendant's blur or shadow near the needed pixels is computed from pixels past them, which the layer holds
+        let halo = tree.reach[i];
         let area = Bounds::of_rect(&node.bounds, self.scale)
             .intersect(&t.limit.outset(halo))
             .intersect(&t.rect);

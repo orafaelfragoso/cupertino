@@ -72,3 +72,16 @@ CUPERTINO_LOOK_DIR=/tmp/look cargo test -p cupertino-portal -p cupertino-files -
 
 Add `CUPERTINO_LOOK_APPEARANCES=light,dark,light-hc,dark-hc` for the high-contrast pictures too. The pictures use
 the test's placeholder icons, not the asset pack's.
+
+## Frame timing
+
+`repaint::FrameMeter` steps a driven window one 60 Hz frame period at a time: it moves the clock on, queues the
+period's input, answers the frame callbacks until the runtime is idle, and keeps a `FrameSample` (wall time from the
+input to the presented frame, damaged and window pixels, rectangles, whether the frame was whole) of each frame it
+presents. `Summary::of` gives the nearest-rank p50, p95, p99 and maximum, the frames over `FRAME_BUDGET` (8 ms) and
+the whole frames, never an average alone, and `markdown_row` and `csv` write them out.
+`HeadlessWindowSystem::set_keep_pixels(false)` stops presented frames from keeping a copy of all their pixels: only
+each frame's damage is copied, into one buffer per window, as a client copies a frame into its shared buffer, so a
+timing run does not count a whole-window copy that only a test makes. The Files and Settings repaint reports use both
+(see their READMEs). Wall time depends on the machine: a test that pins what a frame repaints reads the damage of
+`HeadlessWindowSystem::frames`.

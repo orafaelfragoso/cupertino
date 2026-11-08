@@ -32,6 +32,43 @@ CupertinoKit is the toolkit that Cupertino's own apps are moving onto. This page
 
 A Kit window publishes its menus to the desktop's menu bar, and an item chosen there sends its message back to the app. A Kit app can also ask for an activation token for another application, and the Dock and the window switcher show the icon that a window sets for itself.
 
+## Frame time
+
+Files and Settings each have a repaint report that times every frame of their common interactions with the window
+filling a 3840×2160 display at scales 2, 1.5 and 1: `repaint_budget_report` in `crates/cupertino-files/tests/kit-repaint.rs`
+and in `crates/cupertino-settings/src/shell/tests/repaint.rs`. Each frame is timed from its input to the presented
+frame (update, view, layout, paint, raster on the CPU and the copy of the damage), and the report gives p50, p95, p99,
+maximum, the frames over 8 ms and the share of the window each frame repainted. The tests are `#[ignore]`d, as wall
+time depends on the machine; the crates' READMEs say how to run them. Tests that do run pin what each interaction
+repaints instead (`crates/cupertino-files/tests/kit-damage.rs`, the damage tests of the Settings report's module).
+
+Measured on 2026-11-07 on an AMD Ryzen 7 5800X (8 cores, 16 threads) in the release profile, one test thread, Files
+with a folder of 1500 files (p99 at scales 2 / 1.5 / 1, in ms):
+
+| Interaction | p99 | Frames over 8 ms |
+|---|---|---|
+| Files: arrow-key selection among the rows in view | 6.2 / 6.5 / 7.3 | none |
+| Files: hover over the rows | 4.1 / 4.9 / 6.0 | none |
+| Files: the caret's blink in the search field | 3.7 / 4.2 / 5.3 | none |
+| Files: the search field opening | 5.4 / 6.7 / 8.8 | all 13 at scale 1 |
+| Files: the search field closing | 7.5 / 8.5 / 9.8 | 1 of 14 at scale 1.5, 13 of 14 at scale 1 |
+| Files: typing a new name | 5.7 / 6.4 / 8.6 | 6 of 12 at scale 1 |
+| Files: typing a search | 66.0 / 70.1 / 76.2 | 1 of 11: the key whose results fill the listing |
+| Files: opening the folder of 1500 files | 57.1 / 58.9 / 61.0 | both frames |
+| Files: wheel scrolling the listing | 61.5 / 66.5 / 70.5 | all |
+| Files: an arrow key past the last row in view (scrolls a row) | 64.4 / 68.2 / 71.4 | all |
+| Settings: switching panes | 10.1 / 7.2 / 4.9 | 2 of 8 at scale 2 |
+| Settings: toggling a switch, dragging a slider, the caret | under 0.5 | none |
+| Settings: scrolling a pane (at its default size) | 5.7 / 3.3 / 1.9 | none |
+| Settings: typing a search (the results pop up) | 15.0 / 11.4 / 7.2 | 1 of 8 at scales 2 and 1.5 |
+
+Before this work every frame of Files but the caret's and a hover's repainted 85–95 % of the window and took
+57–96 ms, and switching Settings panes repainted 96–98 % in 16–21 ms. Now a node that draws nothing (a stack, a
+scroll view's content, the listing's gesture layer) damages nothing, a node that draws damages its box, and a change
+that moves nothing keeps the layout. A scroll, a folder opened and the search results still repaint everything the
+listing shows, at about 9 ns a pixel: up to 7.6 million pixels a frame at scale 1. Meeting 8 ms there needs the
+renderer to move the pixels it has, or the GPU composition planned for Phase 6.
+
 ## What this means for you
 
 Nothing you have to change. The programs above run as before, with the same shortcuts. Where the table says "not yet", the old window is still what you get.

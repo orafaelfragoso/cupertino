@@ -528,3 +528,39 @@ fn a_busy_row_turns_an_activity_indicator_where_its_eject_button_was() {
         );
     }
 }
+
+#[test]
+fn with_motion_reduced_a_busy_row_s_indicator_stands_still_and_asks_for_no_frames() {
+    let mut reduced = support::theme();
+    reduced.motion.reduce = true;
+    // a harness that is not animated settles only once the window stops asking for frames
+    let mut h = Harness::<Devices>::with_theme(reduced);
+    let strokes = |h: &Harness<Devices>| -> Vec<f32> {
+        let id = PaintNodeId::from(row(h, "Card"));
+        h.snapshot()
+            .display_list
+            .nodes
+            .into_iter()
+            .find(|n| n.id == id)
+            .unwrap()
+            .ops
+            .into_iter()
+            .filter_map(|op| match op {
+                PaintOp::Stroke {
+                    shape: Shape::Path { .. },
+                    paint: Paint::Solid(c),
+                    ..
+                } => Some(c.a),
+                _ => None,
+            })
+            .collect()
+    };
+    let still = strokes(&h);
+    assert_eq!(still.len(), 8, "the indicator is drawn: {still:?}");
+    assert!(
+        still[0] > still[1..].iter().copied().fold(0.0, f32::max),
+        "its first spoke is the brightest: {still:?}"
+    );
+    h.settle();
+    assert_eq!(strokes(&h), still, "and it does not turn");
+}

@@ -286,7 +286,7 @@ fn a_unified_window_fills_its_frame_and_only_its_buttons_take_the_pointer_over_t
         0.0,
         "the unified surface starts at the top edge"
     );
-    assert_eq!(standard.insets().vertical(), 28.0);
+    assert_eq!(standard.insets().vertical(), 32.0);
     let (unified_id, standard_id) = (unified.id, standard.id);
     let frame_of = |id| h.state.wm.window(id).unwrap().geometry();
     assert_eq!(
@@ -295,7 +295,7 @@ fn a_unified_window_fills_its_frame_and_only_its_buttons_take_the_pointer_over_t
     );
     assert_eq!(
         (frame_of(standard_id).w, frame_of(standard_id).h),
-        (f64::from(SIZE.0), f64::from(SIZE.1) + 28.0)
+        (f64::from(SIZE.0), f64::from(SIZE.1) + 32.0)
     );
 
     let layout =

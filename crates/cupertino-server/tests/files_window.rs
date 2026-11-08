@@ -155,9 +155,10 @@ fn files_process(home: &Path, data_dirs: &Path, bus: &PrivateBus) -> ShellProces
     }
 }
 
-/// The file manager's sidebar metrics in points: the sidebar runs the window's full height, then the space above the
-/// first group, a group title row, a medium row and the space between groups.
-const SIDEBAR_TOP: f64 = 10.0;
+/// The file manager's sidebar metrics in points: the sidebar runs the window's full height, its list starting below
+/// the window control buttons' row of 52, then the space above the first group, a group title row, a medium row and
+/// the space between groups.
+const SIDEBAR_TOP: f64 = 52.0 + 10.0;
 const GROUP_ROW: f64 = 19.0;
 const ROW: f64 = 28.0;
 const INTERGROUP: f64 = 13.0;

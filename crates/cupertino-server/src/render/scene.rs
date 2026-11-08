@@ -87,7 +87,8 @@ pub fn fullscreen_corner_cap(frame: Rect, output: Rect) -> f64 {
 impl WindowPlan {
     /// The radius `radius` within [`WindowPlan::corner_cap`].
     pub fn capped(&self, radius: f64) -> f64 {
-        self.corner_cap.map_or(radius, |cap| radius.min(cap.max(0.0)))
+        self.corner_cap
+            .map_or(radius, |cap| radius.min(cap.max(0.0)))
     }
 }
 

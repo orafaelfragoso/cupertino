@@ -1312,7 +1312,7 @@ fn decorations_buttons_title_bar_and_resize_zones_drive_the_window() {
     );
     assert_eq!(
         (frame.w, frame.h),
-        (400.0, 328.0),
+        (400.0, 332.0),
         "frame = surface + title bar"
     );
     let layout = h.state.decor.decorations().layout(Size::new(400.0, 300.0));
@@ -1390,7 +1390,7 @@ fn decorations_buttons_title_bar_and_resize_zones_drive_the_window() {
         .state
         .decor
         .decorations()
-        .layout(Size::new(zoomed.w, zoomed.h - 28.0));
+        .layout(Size::new(zoomed.w, zoomed.h - 32.0));
     let c = zlayout.button(ButtonKind::Close).center;
     h.click(zoomed.x + c.x, zoomed.y + c.y);
     h.wait_until("the client to see close", |_| client.closed());

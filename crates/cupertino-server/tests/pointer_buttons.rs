@@ -32,7 +32,7 @@ use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_ba
 
 const OUTPUT: (i32, i32) = (1000, 700);
 /// Height of the server-drawn title bar.
-const TITLE_BAR: f64 = 28.0;
+const TITLE_BAR: f64 = 32.0;
 /// Linux evdev code of the secondary button.
 const BTN_RIGHT: u32 = 0x111;
 

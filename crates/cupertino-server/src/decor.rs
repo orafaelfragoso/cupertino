@@ -395,7 +395,9 @@ impl Decor {
         }
         if render_rim {
             self.renders += 1;
-            let pm = self.for_style(input.style).render_rim(Size::new(fw, fh), scale);
+            let pm = self
+                .for_style(input.style)
+                .render_rim(Size::new(fw, fh), scale);
             let size = (pm.width() as i32, pm.height() as i32);
             let buf = MemoryRenderBuffer::from_slice(
                 pm.data(),

@@ -37,7 +37,7 @@ use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_ba
 
 const OUTPUT: (i32, i32) = (1000, 700);
 /// Height of the server-drawn title bar.
-const TITLE_BAR: f64 = 28.0;
+const TITLE_BAR: f64 = 32.0;
 /// The key of the injected touchpad and wheel in the server's pointer devices.
 const PAD: &str = "pad";
 const WHEEL: &str = "wheel";

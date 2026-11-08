@@ -26,6 +26,7 @@ pub mod group;
 pub mod history;
 #[cfg(feature = "app")]
 pub mod instance;
+pub mod item_art;
 #[cfg(feature = "app")]
 pub mod kit;
 pub mod layout;

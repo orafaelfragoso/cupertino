@@ -162,7 +162,7 @@ fn text_page(c: &mut Canvas, seed: u64) {
     while y + thickness < b - LINE_MARGIN {
         // a short line now and then ends a paragraph, and the next leaves a blank line
         let roll = next(&mut state);
-        let share = if roll % 7 == 0 {
+        let share = if roll.is_multiple_of(7) {
             0.25 + f64::from((roll >> 8) as u8) / 255.0 * 0.4
         } else {
             0.82 + f64::from((roll >> 16) as u8) / 255.0 * 0.18
@@ -172,7 +172,7 @@ fn text_page(c: &mut Canvas, seed: u64) {
             LINE,
         );
         y += pitch;
-        if roll % 7 == 0 {
+        if roll.is_multiple_of(7) {
             y += pitch;
         }
     }
@@ -348,10 +348,9 @@ impl Canvas {
                 }
                 let alpha = f64::from(c[3]) / 255.0 * coverage;
                 let i = ((row * self.px + col) * 4) as usize;
-                for k in 0..3 {
-                    let src = f64::from(c[k]) * alpha;
-                    let dst = f64::from(self.pixels[i + k]);
-                    self.pixels[i + k] = (src + dst * (1.0 - alpha)).round() as u8;
+                for (pixel, &channel) in self.pixels[i..i + 3].iter_mut().zip(&c[..3]) {
+                    let src = f64::from(channel) * alpha;
+                    *pixel = (src + f64::from(*pixel) * (1.0 - alpha)).round() as u8;
                 }
                 let dst = f64::from(self.pixels[i + 3]);
                 self.pixels[i + 3] = (alpha * 255.0 + dst * (1.0 - alpha)).round() as u8;

@@ -514,6 +514,80 @@ mod tests {
     use crate::pane::PaneId;
     use crate::panes::sections;
 
+    fn settings() -> crate::settings::Settings {
+        crate::settings::Settings {
+            dock: Default::default(),
+            compositor: Default::default(),
+            menubar: cupertino_defaults::menubar::MenuBarSettings {
+                clock: cupertino_defaults::menubar::ClockSettings::UNSET,
+            },
+            keyboard: Default::default(),
+            power: Default::default(),
+            accessibility: Default::default(),
+            display_height: 1080.0,
+            clipboard: Default::default(),
+            screen_sharing: Default::default(),
+            notifications: Default::default(),
+        }
+    }
+
+    /// The accessible name of each application's previews pop-up, by application id.
+    fn previews_names(settings: &crate::settings::Settings, live: &Live) -> Vec<(String, String)> {
+        let session = crate::panes::Session {
+            dark: false,
+            display: Default::default(),
+        };
+        let apps = crate::panes::notification_apps(settings, live);
+        let shown = sections(PaneId::Notifications, settings, session, live);
+        let names = control_names(&shown);
+        let mut out: Vec<(String, String)> = shown
+            .iter()
+            .flat_map(|s| &s.rows)
+            .filter_map(|r| match r.id {
+                ControlId::NotificationAppPreviews(i) => {
+                    Some((apps[i].0.clone(), names.get(r.id).unwrap().to_owned()))
+                }
+                _ => None,
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn two_apps_of_one_name_keep_their_numbers_whichever_has_a_choice() {
+        let mail = |id: &str| (id.to_owned(), "Mail".to_owned());
+        let live = |apps: Vec<(String, String)>| Live {
+            notifying_apps: apps,
+            ..Live::default()
+        };
+        let mut plain = settings();
+        let expected = vec![
+            (
+                "org.a.Mail".to_owned(),
+                "Show previews, Mail (1)".to_owned(),
+            ),
+            (
+                "org.z.Mail".to_owned(),
+                "Show previews, Mail (2)".to_owned(),
+            ),
+        ];
+        let both = [mail("org.z.Mail"), mail("org.a.Mail")];
+        assert_eq!(previews_names(&plain, &live(both.to_vec())), expected);
+        let reversed = [mail("org.a.Mail"), mail("org.z.Mail")];
+        assert_eq!(previews_names(&plain, &live(reversed.to_vec())), expected);
+        // a choice for the second makes it a saved application, listed before the centre's
+        plain.notifications.apps.insert(
+            "org.z.Mail".into(),
+            cupertino_defaults::notifications::AppOverride {
+                show_on_lock_screen: Some(false),
+                show_previews: None,
+            },
+        );
+        assert_eq!(previews_names(&plain, &live(both.to_vec())), expected);
+        assert_eq!(previews_names(&plain, &live(reversed.to_vec())), expected);
+    }
+
     #[test]
     fn two_apps_of_one_name_get_popups_of_names_of_their_own() {
         let live = Live {

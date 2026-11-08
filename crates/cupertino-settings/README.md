@@ -74,8 +74,9 @@ sidebar row (approximate). The desktop entry is `data/applications/cupertino-set
   history (Back returns to the sub-page); on the main page itself the row does nothing and the page keeps its scroll
   position. Whether the design does the same is not known.
 - Decision: two applications of one name on the Notifications pane keep their headers as they are; their pop-ups'
-  accessible names (the label and the header) are numbered in the order they show, as "Show previews, Mail (1)" and
-  "Show previews, Mail (2)".
+  accessible names (the label and the header) are numbered in the order they show, which for one name is by
+  application id, as "Show previews, Mail (1)" and "Show previews, Mail (2)": the numbers do not change when one of
+  them gets a choice of its own or the notification centre lists them in another order.
 
 ## Tests
 

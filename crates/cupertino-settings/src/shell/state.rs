@@ -287,6 +287,7 @@ impl State {
         }
         match self.content_pane {
             PaneId::Focus => self.live.focus = self.services.focus(),
+            PaneId::Notifications => self.live.notifying_apps = self.services.notifying_apps(),
             PaneId::Sound => {
                 if self.level.is_none() {
                     self.live.volume = self.services.volume();
@@ -342,6 +343,8 @@ impl State {
         if to == PaneId::Privacy {
             self.settings.reload_clipboard(&self.paths);
             self.settings.reload_screen_sharing(&self.paths);
+        }
+        if matches!(to, PaneId::Privacy | PaneId::Notifications) {
             let (locale, visibility) = (
                 cupertino_apps::entry::Locale::from_env(),
                 cupertino_apps::entry::Visibility::from_env(),

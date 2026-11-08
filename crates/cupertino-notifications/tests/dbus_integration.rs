@@ -413,3 +413,192 @@ fn focus_durations_are_offered_set_and_their_end_announced() {
     );
     assert!(!p.get_property::<bool>("DoNotDisturb").unwrap());
 }
+
+#[test]
+fn notify_caps_the_application_name_summary_and_body() {
+    use cupertino_notifications::notification::{
+        MAX_APP_NAME_CHARS, MAX_BODY_CHARS, MAX_SUMMARY_CHARS,
+    };
+    let Some(bus) = start_bus() else { return };
+    let server = Server::start(ServerOptions {
+        address: Some(bus.address.clone()),
+        ..Default::default()
+    })
+    .unwrap();
+    let c = client(&bus);
+    let (app, summary, body) = (
+        "a".repeat(MAX_APP_NAME_CHARS * 3),
+        "s".repeat(MAX_SUMMARY_CHARS * 3),
+        "b".repeat(MAX_BODY_CHARS * 3),
+    );
+    let id = notify(
+        &proxy(&c),
+        (&app, 0, "", &summary, &body, vec![], HashMap::new(), -1),
+    );
+    let center = server.center();
+    let n = center.get(id).unwrap();
+    for (text, max) in [
+        (&n.app_name, MAX_APP_NAME_CHARS),
+        (&n.summary, MAX_SUMMARY_CHARS),
+        (&n.body, MAX_BODY_CHARS),
+    ] {
+        assert_eq!(text.chars().count(), max);
+        assert!(text.ends_with('\u{2026}'));
+    }
+}
+
+fn centre_proxy(c: &Connection) -> Proxy<'_> {
+    zbus::blocking::proxy::Builder::new(c)
+        .destination(CENTRE_BUS_NAME)
+        .unwrap()
+        .path(CENTRE_OBJECT_PATH)
+        .unwrap()
+        .interface("org.cupertino.NotificationCenter1")
+        .unwrap()
+        .cache_properties(zbus::proxy::CacheProperties::No)
+        .build()
+        .unwrap()
+}
+
+type LockRow = (u32, String, String, String);
+
+#[test]
+fn the_lock_screen_gets_only_what_the_policy_allows_and_hears_each_change() {
+    use cupertino_defaults::notifications::{AppOverride, NotificationSettings, Previews};
+    let Some(bus) = start_bus() else { return };
+    let server = Server::start(ServerOptions {
+        address: Some(bus.address.clone()),
+        ..Default::default()
+    })
+    .unwrap();
+    server.serve_centre_control(|| {}).unwrap();
+    let mut policy = NotificationSettings::UNSET;
+    policy.set_app(
+        "org.example.Chat",
+        AppOverride {
+            show_previews: Some(Previews::Always),
+            ..AppOverride::default()
+        },
+    );
+    policy.set_app(
+        "Hidden",
+        AppOverride {
+            show_on_lock_screen: Some(false),
+            ..AppOverride::default()
+        },
+    );
+    server.center().set_policy(policy);
+    let c = client(&bus);
+    let centre = centre_proxy(&c);
+    let changes = {
+        let (tx, rx) = mpsc::channel();
+        let conn = c.clone();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let p = centre_proxy(&conn);
+            let it = p.receive_signal("LockScreenChanged").unwrap();
+            ready_tx.send(()).unwrap();
+            for m in it {
+                if tx.send(m).is_err() {
+                    break;
+                }
+            }
+        });
+        ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        rx
+    };
+    let rows = |p: &Proxy<'_>| -> Vec<LockRow> { p.call("LockScreenNotifications", &()).unwrap() };
+    let p = proxy(&c);
+    notify(
+        &p,
+        (
+            "Mail",
+            0,
+            "",
+            "Before",
+            "the lock",
+            vec![],
+            HashMap::new(),
+            -1,
+        ),
+    );
+    assert!(
+        rows(&centre).is_empty(),
+        "unlocked: nothing for the lock screen"
+    );
+
+    let now = server.now();
+    server.center().set_screen_locked(true, now);
+    let mut hints: HashMap<&str, Value<'_>> = HashMap::new();
+    hints.insert("desktop-entry", Value::from("org.example.Chat"));
+    let chat = notify(
+        &p,
+        ("Chat", 0, "", "Ada", "See you at 6", vec![], hints, -1),
+    );
+    let mail = notify(
+        &p,
+        (
+            "Mail",
+            0,
+            "",
+            "Bank",
+            "Your code is 482913",
+            vec!["copy", "Copy 482913"],
+            HashMap::new(),
+            -1,
+        ),
+    );
+    notify(
+        &p,
+        (
+            "Hidden",
+            0,
+            "",
+            "Secret",
+            "never shown",
+            vec![],
+            HashMap::new(),
+            -1,
+        ),
+    );
+    server.flush_events().unwrap();
+    changes
+        .recv_timeout(Duration::from_secs(5))
+        .expect("LockScreenChanged");
+    let listed = rows(&centre);
+    assert_eq!(
+        listed,
+        [
+            (mail, "Mail".into(), "Notification".into(), String::new()),
+            (chat, "Chat".into(), "Ada".into(), "See you at 6".into()),
+        ]
+    );
+    let words = format!("{listed:?}");
+    for private in ["482913", "Bank", "Secret", "never shown", "Before"] {
+        assert!(
+            !words.contains(private),
+            "{private} reached the lock screen"
+        );
+    }
+    // nothing changed: no signal
+    server.flush_events().unwrap();
+    assert!(changes.recv_timeout(Duration::from_millis(200)).is_err());
+
+    let now = server.now();
+    server.center().set_screen_locked(false, now);
+    server.flush_events().unwrap();
+    changes
+        .recv_timeout(Duration::from_secs(5))
+        .expect("LockScreenChanged at the unlock");
+    assert!(rows(&centre).is_empty());
+
+    let apps: Vec<(String, String)> = centre.call("Applications", &()).unwrap();
+    assert_eq!(
+        apps,
+        [
+            ("Hidden".to_owned(), "Hidden".to_owned()),
+            ("Mail".to_owned(), "Mail".to_owned()),
+            ("org.example.Chat".to_owned(), "Chat".to_owned()),
+        ]
+    );
+}

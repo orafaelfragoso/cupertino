@@ -196,6 +196,7 @@ impl Application for Locker {
                 shake: 0.0,
                 hidden: false,
                 power: None,
+                notices: &[],
             }
         }
         let s = &model.screen;

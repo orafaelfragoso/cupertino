@@ -20,6 +20,7 @@ pub enum PaneId {
     Displays,
     Wallpaper,
     Sound,
+    Notifications,
     Focus,
     LockScreen,
     Privacy,
@@ -37,6 +38,7 @@ pub enum Enclosure {
     Pink,
     Indigo,
     Green,
+    Red,
 }
 
 /// How a pane's settings reach the running system (§2).
@@ -84,7 +86,7 @@ const fn pane(
 }
 
 /// Every pane of the minimum set.
-pub const PANES: [Pane; 17] = [
+pub const PANES: [Pane; 18] = [
     pane(
         PaneId::Wifi,
         "Wi-Fi",
@@ -220,6 +222,22 @@ pub const PANES: [Pane; 17] = [
         &["volume", "mute", "speakers", "audio"],
     ),
     pane(
+        PaneId::Notifications,
+        "Notifications",
+        "symbol.bell",
+        Enclosure::Red,
+        Tier::File,
+        &["Lock Screen", "Application Notifications"],
+        &[
+            "notifications",
+            "lock screen",
+            "previews",
+            "show previews",
+            "banners",
+            "alerts",
+        ],
+    ),
+    pane(
         PaneId::Focus,
         "Focus",
         "symbol.moon.fill",
@@ -323,6 +341,7 @@ impl PaneId {
             PaneId::Displays => "displays",
             PaneId::Wallpaper => "wallpaper",
             PaneId::Sound => "sound",
+            PaneId::Notifications => "notifications",
             PaneId::Focus => "focus",
             PaneId::LockScreen => "lock-screen",
             PaneId::Privacy => "privacy",

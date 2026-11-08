@@ -31,6 +31,7 @@
 "symbol.appearance" = ["preferences-desktop-theme-symbolic", "preferences-desktop-appearance-symbolic", "applications-graphics-symbolic"]
 "symbol.applications" = ["view-app-grid-symbolic", "applications-all-symbolic", "preferences-desktop-apps-symbolic"]
 "symbol.battery" = ["battery-symbolic", "battery-full-symbolic", "battery-level-100-symbolic"]
+"symbol.bell" = ["preferences-system-notifications-symbolic", "notifications-symbolic", "notification-symbolic"]
 "symbol.bluetooth" = ["bluetooth-symbolic", "bluetooth-active-symbolic"]
 "symbol.checkmark" = ["object-select-symbolic", "emblem-ok-symbolic", "checkmark-symbolic"]
 "symbol.chevron.down" = ["pan-down-symbolic", "go-down-symbolic"]

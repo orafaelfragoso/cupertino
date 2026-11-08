@@ -36,14 +36,15 @@ use crate::layout::{
     Layout, AVATAR_DIAMETER, HELP_SIZE, NAME_BASELINE_GAP, NAME_MAX_WIDTH, NAME_SIZE, TILE_WIDTH,
     USER_VIEW_BORDER,
 };
+use crate::lock_notices::{self, Notice};
 use crate::model::{Key as PanelKey, Password, MAX_PASSWORD_BYTES};
 use crate::panel::{Decision, Frames, Kind, Panel};
 use crate::picker::{Direction, Grid, Picker, Tile};
 use crate::power::{self, Menu};
 use crate::user::{initials, User};
 use widgets::{
-    Adornment, Avatar, Backdrop, Fade, FieldFrame, Label, Look, Place, Pressable, Slot, ESCAPE,
-    WHITE,
+    Adornment, Avatar, Backdrop, Fade, FieldFrame, Label, Look, NoticeCard, Place, Pressable, Slot,
+    ESCAPE, WHITE,
 };
 
 /// The `app_id` of a lock surface's window, followed by `.` and the output's registry name: the surface roles give it
@@ -239,6 +240,9 @@ pub struct Screen<'a> {
     pub hidden: bool,
     /// The greeter's power item.
     pub power: Option<&'a Menu>,
+    /// The notifications the lock screen shows, newest first, as the notification daemon gave them
+    /// ([`crate::lock_notices`]); none on the greeter.
+    pub notices: &'a [Notice],
 }
 
 fn label(
@@ -549,6 +553,7 @@ pub fn screen<M: Clone + 'static>(
     if let Some(menu) = screen.power {
         children.push(power_item(menu, &layout, map));
     }
+    children.extend(notice_cards(screen.notices, screen.size, metrics));
     Element::new(Backdrop {
         wallpaper: true,
         hidden: screen.hidden,
@@ -563,6 +568,49 @@ pub fn screen<M: Clone + 'static>(
             children,
         })],
     })
+}
+
+/// The cards of the lock screen's notifications in a column at the top right, and the line that counts those not
+/// shown. A card shows only what the daemon sent: an application and "Notification", or a title and body it allowed.
+fn notice_cards<M: 'static>(
+    notices: &[Notice],
+    size: Size,
+    metrics: Metrics,
+) -> Option<Element<M>> {
+    if notices.is_empty() {
+        return None;
+    }
+    let (cards, more) = lock_notices::shown(notices);
+    let mut children: Vec<Element<M>> = cards
+        .iter()
+        .map(|n| {
+            Element::new(NoticeCard {
+                app: n.app.clone(),
+                title: n.title.clone(),
+                body: n.body.clone(),
+                speech: n.speech(),
+                ascent: metrics.ascent,
+                descent: metrics.descent,
+            })
+            .key(format!("notice-{}", n.id))
+        })
+        .collect();
+    if more > 0 {
+        let size = lock_notices::APP_SIZE;
+        let height = ((metrics.ascent + metrics.descent) * size).ceil();
+        children.push(Element::new(Label {
+            color: Some(Color::new(1.0, 1.0, 1.0, NOTICE_ALPHA)),
+            ..label(
+                lock_notices::more_text(more),
+                size,
+                FontWeight::REGULAR,
+                Rect::new(0.0, 0.0, lock_notices::CARD_WIDTH, height),
+                metrics,
+            )
+        }));
+    }
+    let column = lock_notices::column(size.width, size.height);
+    Some(Element::new(Place::text(column, children)).key("notices"))
 }
 
 /// Everything the user picker shows.

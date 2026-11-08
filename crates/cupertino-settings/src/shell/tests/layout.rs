@@ -403,3 +403,85 @@ fn the_mouse_resolution_footnote_wraps_without_clipping_or_overlapping_at_every_
         }
     }
 }
+
+struct FakeCentre;
+
+#[zbus::interface(name = "org.cupertino.NotificationCenter1")]
+impl FakeCentre {
+    fn applications(&self) -> Vec<(String, String)> {
+        vec![
+            ("org.example.Calendar".into(), "Calendar".into()),
+            ("org.example.Mail".into(), "Mail".into()),
+        ]
+    }
+}
+
+#[test]
+fn the_notifications_pane_lays_out_each_app_without_clipping_or_overlapping_at_every_width_and_scale(
+) {
+    let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+        eprintln!("skipped: dbus-daemon is not available");
+        return;
+    };
+    let _centre = zbus::blocking::connection::Builder::address(bus.address.as_str())
+        .unwrap()
+        .serve_at("/org/cupertino/NotificationCenter1", FakeCentre)
+        .unwrap()
+        .name("org.cupertino.NotificationCenter1")
+        .unwrap()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("notifications.conf"),
+        "show_previews = when-unlocked\napp.org.example.Mail.show_previews = never\n",
+    )
+    .unwrap();
+    let services = Services::on(Bus::address(NOWHERE), Bus::at(bus.connect()));
+    let (mut driver, window) = start_on(dir.path(), PaneId::Notifications, None, services);
+    for width in WIDTHS {
+        for scale in SCALES {
+            resize(&mut driver, window, width, scale);
+            let at = format!("{width} pt at {scale}x");
+            let snapshot = driver.runtime().snapshot(window).unwrap();
+            let page = snapshot
+                .accessibility
+                .iter()
+                .filter(|(_, n)| n.role == Role::ScrollView)
+                .map(|(_, n)| n.bounds)
+                .max_by(|a, b| a.x().total_cmp(&b.x()))
+                .expect("the pane's scroll view");
+            let content: Vec<(String, Rect)> = snapshot
+                .accessibility
+                .iter()
+                .filter(|(_, n)| {
+                    matches!(n.role, Role::StaticText | Role::Switch | Role::PopUpButton)
+                })
+                .filter(|(_, n)| n.bounds.x() >= page.x() && n.bounds.y() >= page.y())
+                .map(|(_, n)| (n.name.clone().unwrap_or_default(), n.bounds))
+                .collect();
+            for name in ["Calendar", "Mail", "Application Notifications"] {
+                assert!(
+                    content.iter().any(|(n, _)| n == name),
+                    "{at}: {name:?} shows"
+                );
+            }
+            for (i, (a, ra)) in content.iter().enumerate() {
+                assert!(
+                    ra.max_x() <= width + SLACK,
+                    "{at}: {a:?} is not cut off at the window's edge, {ra:?}"
+                );
+                for (b, rb) in &content[i + 1..] {
+                    assert!(
+                        !overlaps(ra, rb),
+                        "{at}: {a:?} {ra:?} and {b:?} {rb:?} overlap"
+                    );
+                }
+            }
+            if width == metrics::DEFAULT_WIDTH && scale == 1.0 {
+                driver.look(window, "settings-notifications").unwrap();
+            }
+        }
+    }
+}

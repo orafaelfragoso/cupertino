@@ -375,7 +375,16 @@ impl Shell {
             Message::Refresh => {
                 let now = self.state.now();
                 if self.state.level.is_none() {
+                    let apps = |state: &state::State| {
+                        crate::panes::notification_apps(&state.settings, &state.live)
+                    };
+                    let before = apps(&self.state);
                     self.state.refresh(now)?;
+                    if self.open.is_some_and(|open| {
+                        !crate::panes::menu_survives(open, &before, &apps(&self.state))
+                    }) {
+                        self.open = None;
+                    }
                 }
                 return Ok(vec![after(REFRESH, Message::Refresh)]);
             }
@@ -678,6 +687,7 @@ mod tests {
             system_accessibility: None,
             data_control: Some(dir.join("data-control.conf")),
             screen_sharing: None,
+            notifications: Some(dir.join("notifications.conf")),
             // shown as installed; Settings never starts it
             screen_reader: Some(std::path::PathBuf::from("/usr/bin/orca")),
         }

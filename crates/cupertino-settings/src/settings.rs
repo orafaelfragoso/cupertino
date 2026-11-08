@@ -15,6 +15,7 @@ use cupertino_defaults::data_control::DataControlConf;
 use cupertino_defaults::dock::{sanitize_large_size, sanitize_tile_size, DockSettings, Position};
 use cupertino_defaults::keyboard::KeyboardSettings;
 use cupertino_defaults::menubar::{ClockSettings, MenuBarSettings};
+use cupertino_defaults::notifications::NotificationSettings;
 use cupertino_defaults::power::PowerSettings;
 use cupertino_defaults::screen_sharing::ScreenSharingConf;
 use cupertino_defaults::system::read_root_file;
@@ -38,10 +39,12 @@ pub enum File {
     DataControl,
     /// `screen-sharing.conf`, read by the portal: the displays apps may share again without asking.
     ScreenSharing,
+    /// `notifications.conf`, read by the notification centre: what notifications show on the lock screen.
+    Notifications,
 }
 
 impl File {
-    pub const ALL: [File; 7] = [
+    pub const ALL: [File; 8] = [
         File::Dock,
         File::Compositor,
         File::MenuBar,
@@ -49,6 +52,7 @@ impl File {
         File::Power,
         File::DataControl,
         File::ScreenSharing,
+        File::Notifications,
     ];
 
     /// The process that applies the file.
@@ -60,11 +64,13 @@ impl File {
             }
             File::MenuBar => "the menu bar",
             File::ScreenSharing => "the portal",
+            File::Notifications => "the notification centre",
         }
     }
 
     /// Whether the owning process applies a change of the file while it runs. All of them do (the live settings of
-    /// the server's `live` module, the dock's and the menu bar's watchers; the portal reads its file at each restore).
+    /// the server's `live` module, the dock's, the menu bar's and the notification centre's watchers; the portal reads its
+    /// file at each restore).
     pub fn reloads(self) -> bool {
         true
     }
@@ -85,6 +91,7 @@ pub struct Paths {
     pub system_accessibility: Option<PathBuf>,
     pub data_control: Option<PathBuf>,
     pub screen_sharing: Option<PathBuf>,
+    pub notifications: Option<PathBuf>,
     /// The installed screen reader (`installed_screen_reader`), which the session's compositor runs; `None` without one.
     /// Settings only shows whether there is one: it never starts it.
     pub screen_reader: Option<PathBuf>,
@@ -102,6 +109,7 @@ impl Paths {
             system_accessibility: Some(PathBuf::from(SYSTEM_ACCESSIBILITY)),
             data_control: DataControlConf::path(),
             screen_sharing: ScreenSharingConf::path(),
+            notifications: NotificationSettings::path(),
             screen_reader: cupertino_defaults::accessibility::installed_screen_reader(),
         }
     }
@@ -115,6 +123,7 @@ impl Paths {
             File::Power => self.power.as_ref(),
             File::DataControl => self.data_control.as_ref(),
             File::ScreenSharing => self.screen_sharing.as_ref(),
+            File::Notifications => self.notifications.as_ref(),
         }
     }
 }
@@ -132,6 +141,8 @@ pub struct Settings {
     pub clipboard: clipboard::List,
     /// `screen-sharing.conf`, empty without a path.
     pub screen_sharing: screen_sharing::Grants,
+    /// `notifications.conf`: the lock screen's policy, by default and by application.
+    pub notifications: NotificationSettings,
     /// The height of the output the dock sits on: its default tile size depends on it (`default_tile_size`).
     pub display_height: f64,
 }
@@ -252,6 +263,15 @@ impl Settings {
             .as_deref()
             .map(screen_sharing::Grants::load)
             .unwrap_or_default();
+        let notifications = match &paths.notifications {
+            Some(p) => NotificationSettings::load(p, last_good.map(|l| &l.notifications)).map(
+                |(s, problems)| {
+                    lines("notifications.conf", problems);
+                    s
+                },
+            )?,
+            None => NotificationSettings::default(),
+        };
         Ok(Settings {
             dock,
             compositor,
@@ -261,6 +281,7 @@ impl Settings {
             accessibility,
             clipboard,
             screen_sharing,
+            notifications,
             display_height,
         })
     }
@@ -436,6 +457,7 @@ impl Settings {
             File::Keyboard => self.keyboard.store(path).map(drop),
             File::Power => self.power.store(path).map(drop),
             File::DataControl => self.clipboard.store(path),
+            File::Notifications => self.notifications.store(path).map(drop),
             // the portal adds grants while Settings runs, so the list read earlier is never written back whole
             File::ScreenSharing => Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,

@@ -22,7 +22,9 @@
 //! it arrives. A bridge to assistive technology announces a live node only as it appears or is renamed, and says its
 //! name alone, so a banner is named after what it shows ([`banner_speech`]): a new banner, or one whose text changes
 //! in place, is said whole. While the screen is locked no window is open, as the lock screen hides them; a banner
-//! still on screen at the unlock appears then and is said. The cards of the centre are not live. They are the items of
+//! still on screen at the unlock appears then without being said again, as it was said when it arrived. A banner or
+//! card of an application whose previews are off shows only "Notification" ([`NotificationCenter::shown`]). The cards
+//! of the centre are not live. They are the items of
 //! a list, named after their application and summary with the whole body as description, Tab stops that Return or
 //! Space activates and Delete clears.
 
@@ -56,7 +58,9 @@ use cupertino_theme::metrics::{alignment_height, Control};
 use crate::center::{
     BannerMeasure, ClearScope, NotificationCenter, StackLayout, SwipeConfig, SwipeOutcome,
 };
-use crate::notification::{Notification, Urgency};
+use crate::notification::{
+    cap, Notification, Urgency, ELLIPSIS, MAX_APP_NAME_CHARS, MAX_SUMMARY_CHARS,
+};
 use crate::stack::GroupStack;
 
 /// The `app_id` of every window of the process.
@@ -117,8 +121,6 @@ const SHADOW_BLUR: f64 = 8.0;
 const SHADOW_ALPHA: f32 = 0.2;
 /// How far beyond a card its shadow can reach: the area the shadow is drawn in.
 const SHADOW_REACH: f64 = 4.0 * SHADOW_BLUR;
-/// What ends a line of text that is cut.
-const ELLIPSIS: char = '\u{2026}';
 
 const RETURN: Keysym = Keysym(0xff0d);
 const KEYPAD_ENTER: Keysym = Keysym(0xff8d);
@@ -407,7 +409,7 @@ impl CardMetrics {
             column
         };
         let summary = self.fit(
-            &plain(&n.summary, FontWeight::SEMIBOLD),
+            &plain(&cap(&n.summary, MAX_SUMMARY_CHARS), FontWeight::SEMIBOLD),
             role,
             SUMMARY_LINES,
             summary_width,
@@ -525,7 +527,8 @@ pub fn centre_key() -> WindowKey {
 
 /// The windows for the model at `now`: the banners on screen, or the open centre instead of them (they stay in the
 /// model and show again when it closes). None while the screen is locked: the lock screen hides them, so assistive
-/// technology has nothing of them to read, and a banner still on screen at the unlock appears then and is announced.
+/// technology has nothing of them to read, and a banner still on screen at the unlock appears then, not announced
+/// again ([`NotificationCenter::is_quiet`]).
 pub fn windows<M: Clone + 'static>(
     center: &mut NotificationCenter,
     ui: &Ui,
@@ -545,7 +548,8 @@ pub fn windows<M: Clone + 'static>(
         .into_iter()
         .filter(|p| p.opacity > MIN_OPACITY)
         .filter_map(|p| {
-            let n = center.get(p.id)?.clone();
+            let n = center.shown(center.get(p.id)?).into_owned();
+            let quiet = center.is_quiet(p.id);
             let layout = metrics.card(&n, p.rect.width(), Fold::Banner);
             let card = Rect::new(p.rect.x(), SHADOW_MARGIN, p.rect.width(), p.rect.height());
             // the resting card and its close button, which reaches past its corner: the swipe keeps the pointer with an
@@ -564,7 +568,7 @@ pub fn windows<M: Clone + 'static>(
                 vec![region, close_rect(region)],
                 p.opacity,
                 p.hovered,
-                p.leaving,
+                p.leaving || quiet,
                 width,
                 map,
             ))
@@ -672,7 +676,11 @@ fn window<M: Clone + 'static>(key: WindowKey, spec: WindowSpec, content: Element
 
 /// What assistive technology calls a card.
 pub fn accessible_name(n: &Notification) -> String {
-    match (n.app_name.trim(), n.summary.trim()) {
+    let (app, summary) = (
+        cap(&n.app_name, MAX_APP_NAME_CHARS),
+        cap(&n.summary, MAX_SUMMARY_CHARS),
+    );
+    match (app.trim(), summary.trim()) {
         ("", summary) => summary.to_owned(),
         (app, "") => app.to_owned(),
         (app, summary) => format!("{app}: {summary}"),
@@ -684,7 +692,10 @@ pub fn accessible_name(n: &Notification) -> String {
 /// Lunch, Are you free at noon?"). Its buttons are its children, with names of their own.
 pub fn banner_speech(n: &Notification, layout: &CardLayout) -> String {
     let flat = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let head = match (flat(&n.app_name), flat(&layout.summary.text)) {
+    let head = match (
+        flat(&cap(&n.app_name, MAX_APP_NAME_CHARS)),
+        flat(&layout.summary.text),
+    ) {
         (app, summary) if app.is_empty() => summary,
         (app, summary) if summary.is_empty() => app,
         (app, summary) => format!("{app}: {summary}"),
@@ -709,14 +720,14 @@ fn banner_window<M: Clone + 'static>(
     region: Vec<Rect>,
     opacity: f64,
     hovered: bool,
-    leaving: bool,
+    unannounced: bool,
     width: f64,
     map: fn(Input) -> M,
 ) -> Window<M> {
     let size = Size::new(width, card.height() + 2.0 * SHADOW_MARGIN);
     // a banner going away is no longer live: one whose window appears only as it leaves (at the unlock, or as the
-    // centre closes) is not said again
-    let live = match (leaving, n.urgency) {
+    // centre closes) is not said again; nor is one that comes back at the unlock, said already as it arrived
+    let live = match (unannounced, n.urgency) {
         (true, _) => None,
         (false, Urgency::Critical) => Some(Live::Assertive),
         (false, _) => Some(Live::Polite),
@@ -840,7 +851,8 @@ fn centre_window<M: Clone + 'static>(
     let mut y = HEADER_GAP.max(CLOSE_OUTSET);
     let mut cards = Vec::new();
     for (index, group) in groups.iter().enumerate() {
-        let front = group.notifications[0];
+        let shown = center.shown(group.notifications[0]);
+        let front: &Notification = &shown;
         let count = group.notifications.len();
         let fold = if ui.unfolded.contains(&front.id) {
             Fold::Unfolded
@@ -1016,7 +1028,7 @@ fn plain(text: &str, weight: FontWeight) -> AttributedText {
 }
 
 /// The body with its markup as text runs, its line breaks kept, and its links; `None` when it is empty. At most
-/// [`MAX_BODY_BYTES`] of it.
+/// [`MAX_BODY_BYTES`] of it, a longer one cut and ending in an ellipsis.
 fn body_text(n: &Notification) -> Option<BodyText> {
     let mut text = String::new();
     let mut runs = Vec::new();
@@ -1024,14 +1036,22 @@ fn body_text(n: &Notification) -> Option<BodyText> {
     for span in &n.spans {
         let mut piece = span.text.replace("\r\n", "\n").replace('\r', "\n");
         let room = MAX_BODY_BYTES.saturating_sub(text.len());
-        if piece.len() > room {
-            let mut end = room;
+        let cut = piece.len() > room;
+        if cut {
+            let mut end = room.saturating_sub(ELLIPSIS.len_utf8());
             while !piece.is_char_boundary(end) {
                 end -= 1;
             }
             piece.truncate(end);
+            if !piece.is_empty() {
+                piece.push(ELLIPSIS);
+            }
         }
         if piece.is_empty() {
+            // nothing of the body follows a cut
+            if cut {
+                break;
+            }
             continue;
         }
         let start = text.len();
@@ -1046,6 +1066,9 @@ fn body_text(n: &Notification) -> Option<BodyText> {
         runs.push((TextRange(start..text.len()), style));
         if let Some(href) = &span.link {
             links.push((start..text.len(), href.clone()));
+        }
+        if cut {
+            break;
         }
     }
     (!text.trim().is_empty()).then_some(BodyText {

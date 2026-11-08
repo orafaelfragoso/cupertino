@@ -5,6 +5,7 @@
 //! at 1× and 2× there.
 
 use super::*;
+use crate::lock_notices::{from_rows, Notice};
 use crate::model::{AuthOutcome, LockScreen};
 use crate::panel::{Action, Decision, Kind, Panel, CANCEL_LABEL, REOPEN_LABEL};
 use crate::picker::Picker;
@@ -49,6 +50,8 @@ thread_local! {
     static SURFACE: Cell<Surface> = const { Cell::new(Surface::Lock) };
     /// The next application on this thread holds each attempt until the next activity answers it.
     static HELD: Cell<bool> = const { Cell::new(false) };
+    /// The notifications the lock screen shows from the next input on, as the daemon would list them.
+    static NOTICES: RefCell<Option<Vec<Notice>>> = const { RefCell::new(None) };
 }
 
 #[derive(Debug)]
@@ -73,6 +76,7 @@ struct Model {
     held: bool,
     decided: Vec<Decision>,
     now: f64,
+    notices: Vec<Notice>,
 }
 
 struct Shown;
@@ -125,11 +129,15 @@ impl Application for Shown {
             held: HELD.get(),
             decided: Vec::new(),
             now: 1.0,
+            notices: NOTICES.with_borrow_mut(Option::take).unwrap_or_default(),
         };
         (model, Vec::new())
     }
 
     fn update(model: &mut Model, input: Input) -> Vec<Command<Input>> {
+        if let Some(notices) = NOTICES.with_borrow_mut(Option::take) {
+            model.notices = notices;
+        }
         model.handled.push(format!("{input:?}"));
         model.now += 0.01;
         let now = model.now;
@@ -187,6 +195,7 @@ impl Application for Shown {
                         shake: 0.0,
                         hidden: false,
                         power: None,
+                        notices: &model.notices,
                     },
                     LOCKED_TITLE,
                     |input| input,
@@ -912,6 +921,8 @@ fn pictures_for_review() {
     };
     let mut lock = Run::new(Surface::Lock);
     look(&mut lock, "lock");
+    NOTICES.set(Some(mixed_notices()));
+    look(&mut Run::new(Surface::Lock), "lock-notifications");
     lock.type_text(SECRET);
     look(&mut lock, "lock-typed");
     lock.key(RETURN, None);
@@ -933,4 +944,137 @@ fn pictures_for_review() {
     );
     look(&mut Run::new(Surface::Interrupt), "interrupt");
     look(&mut Run::new(Surface::Picker), "greeter-picker");
+}
+
+/// What the daemon lists for the lock screen: Mail without its preview, Chat with it, and more than the screen shows.
+fn mixed_notices() -> Vec<Notice> {
+    from_rows(vec![
+        (4, "Mail".into(), "Notification".into(), String::new()),
+        (
+            3,
+            "Chat".into(),
+            "Ada".into(),
+            "See you at six, the table is booked under my name.".into(),
+        ),
+        (2, "Calendar".into(), "Notification".into(), String::new()),
+        (1, "Reminders".into(), "Notification".into(), String::new()),
+    ])
+}
+
+fn redacted(id: u32, app: &str) -> Notice {
+    from_rows(vec![(id, app.into(), "Notification".into(), String::new())]).remove(0)
+}
+
+/// How many glyphs the window draws.
+fn glyphs(run: &Run) -> usize {
+    run.dump()
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("Glyphs "))
+        .filter_map(|line| {
+            line.split(" count=")
+                .nth(1)?
+                .split(' ')
+                .next()?
+                .parse::<usize>()
+                .ok()
+        })
+        .sum()
+}
+
+#[test]
+fn the_lock_screen_shows_and_says_only_what_the_daemon_listed_and_the_field_keeps_the_focus() {
+    let bare = glyphs(&Run::new(Surface::Lock));
+    NOTICES.set(Some(vec![redacted(7, "Mail")]));
+    let run = Run::new(Surface::Lock);
+    // drawn: the application and "Notification", nothing else
+    assert_eq!(glyphs(&run) - bare, "Mail".len() + "Notification".len());
+    let tree = run.tree();
+    let cards: Vec<&AccessibilityNode> = tree
+        .iter()
+        .map(|(_, n)| n)
+        .filter(|n| n.live == Some(Live::Polite))
+        .collect();
+    assert_eq!(cards.len(), 1, "{tree:?}");
+    assert_eq!(cards[0].name.as_deref(), Some("Mail: Notification"));
+    assert_eq!(cards[0].role, Role::StaticText);
+    assert!(!cards[0].states.focusable, "a card is no Tab stop");
+    let controls: Vec<Role> = tree
+        .iter()
+        .map(|(_, n)| n.role)
+        .filter(|role| matches!(role, Role::Button | Role::PasswordInput | Role::TextInput))
+        .collect();
+    assert_eq!(
+        controls,
+        [Role::PasswordInput],
+        "the field is still the only control"
+    );
+    assert!(is_password(&run.focused().expect("a focus")));
+}
+
+#[test]
+fn a_notice_arriving_on_the_lock_screen_is_said_once_and_the_rest_are_counted() {
+    let mut run = Run::new(Surface::Lock);
+    let said = |run: &Run| -> Vec<String> {
+        run.tree()
+            .into_iter()
+            .filter(|(_, n)| n.live == Some(Live::Polite))
+            .filter_map(|(_, n)| n.name)
+            .collect()
+    };
+    assert!(said(&run).is_empty());
+    NOTICES.set(Some(vec![redacted(1, "Mail")]));
+    run.deliver(WindowEvent::Pointer(
+        PointerEvent::Motion {
+            position: Point::new(5.0, 5.0),
+        },
+        Timestamp(0),
+    ));
+    assert_eq!(said(&run), ["Mail: Notification"]);
+    assert!(
+        is_password(&run.focused().expect("a focus")),
+        "announcing takes no focus"
+    );
+    NOTICES.set(Some(mixed_notices()));
+    run.deliver(WindowEvent::Pointer(
+        PointerEvent::Motion {
+            position: Point::new(6.0, 6.0),
+        },
+        Timestamp(0),
+    ));
+    assert_eq!(
+        said(&run),
+        [
+            "Mail: Notification",
+            "Chat: Ada, See you at six, the table is booked under my name.",
+            "Calendar: Notification"
+        ]
+    );
+    assert!(
+        run.tree()
+            .iter()
+            .any(|(_, n)| n.name.as_deref() == Some("1 more notification")),
+        "the fourth is counted"
+    );
+    // a column at the top right, each card as tall as its text with the gap below it
+    let rect = |key: &str| {
+        let runtime = run.driver.runtime();
+        let id = runtime
+            .find(run.window, &Key::from(key.to_owned()))
+            .unwrap();
+        let snapshot = runtime.snapshot(run.window).unwrap();
+        snapshot.nodes.iter().find(|n| n.id == id).unwrap().rect
+    };
+    let (mail, chat, calendar) = (rect("notice-4"), rect("notice-3"), rect("notice-2"));
+    let (ascent, descent) = (run.model().metrics.ascent, run.model().metrics.descent);
+    use crate::lock_notices::{card_height, CARD_GAP, CARD_MARGIN, CARD_TOP};
+    assert_eq!(mail.max_x(), SCREEN.width - CARD_MARGIN);
+    assert_eq!(mail.y(), CARD_TOP);
+    assert_eq!(mail.height(), card_height(0, ascent, descent) + CARD_GAP);
+    assert_eq!(chat.y(), mail.max_y());
+    assert_eq!(
+        chat.height(),
+        card_height(1, ascent, descent) + CARD_GAP,
+        "one line of body"
+    );
+    assert_eq!(calendar.y(), chat.max_y());
 }

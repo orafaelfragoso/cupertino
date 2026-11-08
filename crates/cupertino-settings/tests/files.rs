@@ -18,6 +18,7 @@ fn paths(dir: &std::path::Path) -> Paths {
         system_accessibility: None,
         data_control: Some(dir.join("data-control.conf")),
         screen_sharing: None,
+        notifications: Some(dir.join("notifications.conf")),
         screen_reader: None,
     }
 }
@@ -230,4 +231,63 @@ fn a_relative_folder_or_picture_is_refused_and_nothing_is_written() {
     assert!(!dir.path().join("compositor.json").exists());
     assert_eq!(s.compositor.wallpaper, None);
     assert_eq!(s.compositor.wallpaper_folders, None);
+}
+
+#[test]
+fn the_notifications_pane_writes_the_default_and_each_apps_choice_and_keeps_the_rest() {
+    use cupertino_defaults::notifications::{NotificationSettings, Policy, Previews};
+    let dir = tempfile::tempdir().unwrap();
+    let p = paths(dir.path());
+    let file = dir.path().join("notifications.conf");
+    std::fs::write(
+        &file,
+        "# mine\nshow_previews = never\napp.org.example.Mail.show_on_lock_screen = off\nfuture_key = 1\n",
+    )
+    .unwrap();
+    let live = Live {
+        notifying_apps: vec![("org.example.Chat".into(), "Chat".into())],
+        ..Live::default()
+    };
+    let mut s = Settings::load(&p, 1080.0).unwrap();
+    let mut commit = |id, value| {
+        for effect in change(id, value, &mut s, &live) {
+            match effect {
+                Effect::Store(file) => s.store(&p, file).unwrap(),
+                other => panic!("only a write: {other:?}"),
+            }
+        }
+    };
+    commit(ControlId::NotificationsLockScreen, Value::Bool(false));
+    // listed by name: Chat (from the centre), then Mail (from the file)
+    commit(ControlId::NotificationAppPreviews(0), Value::Index(1));
+    commit(ControlId::NotificationAppLockScreen(0), Value::Index(1));
+    commit(ControlId::NotificationAppLockScreen(1), Value::Index(0));
+    let text = std::fs::read_to_string(&file).unwrap();
+    for kept in ["# mine", "future_key = 1", "show_previews = never"] {
+        assert!(text.contains(kept), "{kept:?} kept in:\n{text}");
+    }
+    assert!(
+        !text.contains("app.org.example.Mail"),
+        "Default drops the app's key:\n{text}"
+    );
+    let (read, problems) = NotificationSettings::load(&file, None).unwrap();
+    assert!(
+        problems.iter().all(|p| p.message.contains("future_key")),
+        "{problems:?}"
+    );
+    assert_eq!(
+        read.policy("org.example.Chat"),
+        Policy {
+            show_on_lock_screen: true,
+            show_previews: Previews::Always
+        }
+    );
+    assert_eq!(
+        read.policy("org.example.Mail"),
+        Policy {
+            show_on_lock_screen: false,
+            show_previews: Previews::Never
+        },
+        "the default"
+    );
 }

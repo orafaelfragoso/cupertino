@@ -13,7 +13,7 @@
 //!
 //! Spec version 1.2 is implemented, plus the `ActivationToken` signal of 1.3.
 
-use crate::center::{CenterConfig, DndMode, Event, NotificationCenter};
+use crate::center::{CenterConfig, DndMode, Event, LockItem, NotificationCenter};
 use crate::focus::{self, Lifetime, LocalCalendar, SystemCalendar};
 use crate::notification::{Expire, Hints, ImageData, NotifyInput, Urgency};
 use cupertino_peer::{check_call, CallerError, Relation};
@@ -71,6 +71,8 @@ pub struct Shared {
     info: ServerInfo,
     /// Do not disturb as last announced on `org.cupertino.NotificationCenter1`, so its end is announced too.
     dnd_announced: AtomicBool,
+    /// The lock screen's list as last announced (`LockScreenChanged`).
+    lock_announced: Mutex<Vec<LockItem>>,
 }
 
 impl Shared {
@@ -206,7 +208,8 @@ impl Interface {
             actions,
             expire: Expire::from_dbus(expire_timeout),
             hints: parse_hints(&hints),
-        };
+        }
+        .capped();
         let now = (self.0.clock)();
         let (id, events) = {
             let mut c = self.0.lock();
@@ -357,6 +360,43 @@ impl CentreControl {
         let now = (self.shared.clock)();
         self.shared.lock().dnd_active(now)
     }
+
+    /// What the lock screen shows while the session is locked, newest first: id, application, title and body of each
+    /// notification that arrived since the lock from an application allowed on the lock screen. The title is
+    /// "Notification" and the body empty unless the application's previews are always shown, so nothing else of a
+    /// notification leaves this process. Empty while the session is unlocked. Same caller check as
+    /// `SetDoNotDisturb`.
+    async fn lock_screen_notifications(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<Vec<(u32, String, String, String)>, CallerError> {
+        guard(connection, &header, "LockScreenNotifications").await?;
+        Ok(lock_rows(&self.shared.lock().lock_screen()))
+    }
+
+    /// The applications of the notifications on screen and in the centre: the id their settings are kept under
+    /// (desktop entry, else name) and their name. Same caller check as `SetDoNotDisturb`.
+    async fn applications(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<Vec<(String, String)>, CallerError> {
+        guard(connection, &header, "Applications").await?;
+        Ok(self.shared.lock().applications())
+    }
+
+    /// The list of [`Self::lock_screen_notifications`] changed. It carries nothing: a listener asks for the list.
+    #[zbus(signal)]
+    async fn lock_screen_changed(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
+}
+
+/// The lock screen's list as `LockScreenNotifications` returns it.
+fn lock_rows(items: &[LockItem]) -> Vec<(u32, String, String, String)> {
+    items
+        .iter()
+        .map(|i| (i.id, i.app.clone(), i.title.clone(), i.body.clone()))
+        .collect()
 }
 
 impl CentreControl {
@@ -396,6 +436,7 @@ impl Server {
             wake: opts.wake.unwrap_or_else(|| Box::new(|| {})),
             info: opts.info,
             dnd_announced: AtomicBool::new(false),
+            lock_announced: Mutex::new(Vec::new()),
         });
         let builder = match &opts.address {
             Some(a) => zbus::blocking::connection::Builder::address(a.as_str())?,
@@ -454,16 +495,34 @@ impl Server {
         &self.conn
     }
 
-    /// Emit the signals for events produced on the host side, and announce a do-not-disturb duration that ran out.
-    /// Returns how many notification events were sent.
+    /// Emit the signals for events produced on the host side, announce a do-not-disturb duration that ran out and
+    /// a change of the lock screen's list (`LockScreenChanged`). Returns how many notification events were sent.
     pub fn flush_events(&self) -> zbus::Result<usize> {
-        let (events, dnd) = {
+        let (events, dnd, listed) = {
             let mut center = self.shared.lock();
             (
                 center.take_events(),
                 center.dnd_active((self.shared.clock)()),
+                center.lock_screen(),
             )
         };
+        let relisted = {
+            let mut announced = self
+                .shared
+                .lock_announced
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let changed = *announced != listed;
+            *announced = listed;
+            changed
+        };
+        if self.centre_served.load(Ordering::SeqCst) && relisted {
+            let iface = self
+                .conn
+                .object_server()
+                .interface::<_, CentreControl>(CENTRE_OBJECT_PATH)?;
+            zbus::block_on(CentreControl::lock_screen_changed(iface.signal_emitter()))?;
+        }
         if self.centre_served.load(Ordering::SeqCst)
             && self.shared.dnd_announced.swap(dnd, Ordering::SeqCst) != dnd
         {
@@ -528,6 +587,7 @@ mod tests {
             wake: Box::new(|| {}),
             info: ServerInfo::default(),
             dnd_announced: AtomicBool::new(false),
+            lock_announced: Mutex::new(Vec::new()),
         });
         let toggled = Arc::new(AtomicBool::new(false));
         let control = CentreControl {

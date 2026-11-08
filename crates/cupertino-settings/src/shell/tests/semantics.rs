@@ -63,16 +63,15 @@ fn announces(driver: &TestDriver<SettingsApp>, window: WindowId, what: &str, exp
     );
 }
 
-/// What every pane reads besides its content: its sidebar row selected, its title in the toolbar, the history buttons
-/// with no history, the search field and the sidebar's splitter.
-fn chrome(title: &str) -> [String; 6] {
+/// What every pane reads besides its content: its sidebar row selected, the history buttons with no history, the
+/// search field and the sidebar's splitter.
+fn chrome(title: &str) -> [String; 5] {
     [
         format!("ListItem {title:?} focusable selected"),
-        format!("StaticText {title:?}"),
         "Button \"Back\" disabled".to_owned(),
         "Button \"Forward\" disabled".to_owned(),
         "TextInput \"Search\" = \"\" focusable".to_owned(),
-        "Splitter \"Sidebar\" = 215 of 0..714 focusable".to_owned(),
+        "Splitter \"Sidebar\" = 232 of 0..714 focusable".to_owned(),
     ]
 }
 

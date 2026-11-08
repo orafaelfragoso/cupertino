@@ -27,31 +27,32 @@ pub mod window {
     pub const STATUS_BAR_LEADING_INSET: f64 = 4.0;
     /// Zoom slider of the status bar.
     pub const STATUS_BAR_SLIDER: (f64, f64) = (137.0, 20.0);
-    /// Toolbar controls of the browser window, `(width, height).
-    pub const TOOLBAR_BACK_FORWARD: (f64, f64) = (53.0, 28.0);
-    pub const TOOLBAR_SEARCH_FIELD: (f64, f64) = (112.0, 22.0);
-    /// The search field's width while it has the keyboard or holds text, over its resting width (approximate), and the
-    /// time it takes to change (seconds).
-    pub const SEARCH_GROWTH: f64 = 2.5;
+    /// Toolbar controls of the browser window, `(width, height)`: the back and forward group, and the search field at
+    /// rest, a round button.
+    pub const TOOLBAR_BACK_FORWARD: (f64, f64) = (73.0, 36.0);
+    pub const TOOLBAR_SEARCH_FIELD: (f64, f64) = (36.0, 36.0);
+    /// The search field's width while it has the keyboard or holds text, and the time it takes to change (seconds).
+    pub const SEARCH_OPEN: f64 = 280.0;
     pub const SEARCH_GROW_SECONDS: f64 = 0.2;
     /// The most of the toolbar the open search field takes.
     pub const SEARCH_MAX_SHARE: f64 = 0.5;
-    /// Horizontal inset of the toolbar's items from its edges, the leading and trailing fields of the unified metrics
-    /// record, and the space between two items (approximate).
+    /// Horizontal inset of the toolbar's items from its edges, and the space between two items.
     pub const TOOLBAR_INSET: f64 = 8.0;
-    pub const TOOLBAR_ITEM_GAP: f64 = 12.0;
+    pub const TOOLBAR_ITEM_GAP: f64 = 8.0;
     /// Room the folder's title keeps when the search field grows (approximate).
     pub const TITLE_MIN: f64 = 60.0;
-    /// The toolbar's pop-up buttons, `(width, height)`: View (how the folder is shown), Tags and Action.
-    pub const TOOLBAR_VIEW_POPUP: (f64, f64) = (44.0, 24.0);
-    pub const TOOLBAR_TAGS_POPUP: (f64, f64) = (29.0, 25.0);
-    pub const TOOLBAR_ACTION_POPUP: (f64, f64) = (41.0, 24.0);
+    /// The toolbar's controls between the title and the search field, `(width, height)`: the view-mode choice, the
+    /// View menu button and the share, Tags and Action group.
+    pub const TOOLBAR_VIEW_MODES: (f64, f64) = (160.0, 36.0);
+    pub const TOOLBAR_VIEW_MENU: (f64, f64) = (47.0, 36.0);
+    pub const TOOLBAR_ACTIONS: (f64, f64) = (109.5, 36.0);
 }
 
 /// Sidebar.
 pub mod sidebar {
-    /// Default width..
-    pub const DEFAULT_WIDTH: f64 = 200.0;
+    /// Default width of the sidebar pane, from the window's leading edge to the divider; the content starts 1 pt
+    /// further on, past the divider.
+    pub const DEFAULT_WIDTH: f64 = 223.0;
     /// Minimum width is this constant plus the width of a legacy (non-overlay) scroller..
     pub const MIN_WIDTH_BASE: f64 = 128.0;
     /// Width of a legacy scroller (the overlay style adds nothing)..

@@ -1,6 +1,7 @@
-//! The real Settings window, a CupertinoKit app under the server's standard title bar, against the headless server: a
-//! drag on its toolbar where no control lies moves the window through `xdg_toplevel.move`, a drag on the toolbar's
-//! search field does not, and a double click on the toolbar zooms the window and another restores it.
+//! The real Settings window, a CupertinoKit app in the full-height-sidebar style, whose window control buttons the
+//! server draws at the top of the sidebar, against the headless server: a drag on its toolbar where no control lies
+//! moves the window through `xdg_toplevel.move`, a drag on the sidebar's search field does not, and a double click on
+//! the toolbar zooms the window and another restores it.
 //! Needs an EGL device and `dbus-daemon` for the app's private bus.
 
 mod common;
@@ -18,12 +19,12 @@ use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
-/// The window's content height at its default size; the server's title bar sits above it in the frame.
+/// The window's content height at its default size; a title bar the server drew would sit above it in the frame.
 const CONTENT_HEIGHT: f64 = 625.0;
-/// Content points in the toolbar row: between the pane's title and the search field, where no item lies, and on the
-/// search field at the row's end.
+/// Content points: in the toolbar row past the back and forward buttons, where no item lies, and on the search field
+/// at the top of the sidebar, below the window control buttons.
 const TOOLBAR_GAP: (f64, f64) = (520.0, 26.0);
-const SEARCH_FIELD: (f64, f64) = (650.0, 26.0);
+const SEARCH_FIELD: (f64, f64) = (116.0, 71.0);
 /// How far a drag takes the pointer, in steps the client sees one by one.
 const DRAG: (f64, f64) = (120.0, 80.0);
 const DRAG_STEPS: u32 = 8;
@@ -232,7 +233,7 @@ fn a_drag_on_the_toolbar_moves_the_kit_window_and_one_on_its_search_field_does_n
             .find(|w| w.mapped)
             .unwrap()
             .server_side,
-        "the server draws the title bar above the toolbar"
+        "the server draws the window control buttons"
     );
     let before = frame(&h.state);
     h.drag(SEARCH_FIELD);

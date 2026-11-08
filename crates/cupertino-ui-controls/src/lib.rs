@@ -10,6 +10,7 @@ mod dialog;
 mod disclosure;
 mod editor;
 mod field;
+mod glass;
 mod grid;
 mod icon;
 mod image;
@@ -24,6 +25,7 @@ mod press;
 mod progress;
 mod rich_text;
 mod scroll;
+mod shell;
 mod sidebar;
 mod slider;
 mod split;
@@ -33,19 +35,28 @@ mod tabs;
 mod text;
 mod text_box;
 mod toggle;
+mod toolbar;
 mod tooltip;
 mod window_drag;
 mod window_group;
 
 pub use editor::EditorState;
 pub use field::{FieldState, SecureState};
+pub use glass::{nested_radius, paint_glass, GlassMaterial, GlassRole};
 pub use list::ListState;
 pub use press::Press;
 pub use scroll::{BarState, ViewportState};
+pub use shell::{SidebarWindow, SIDEBAR_PANEL_INSET, SIDEBAR_TOP, WINDOW_CORNER_RADIUS};
 pub use slider::SliderState;
 pub use split::DividerState;
 pub use stepper::StepperState;
 pub use text_box::TextBoxState;
+pub use toolbar::{
+    ToolbarButton, ToolbarGlyph, ToolbarGroup, ToolbarItem, ToolbarMenuButton, ToolbarSearch,
+    ToolbarTitle, TOOLBAR_CHOICE_INSET, TOOLBAR_CHOICE_SEGMENT, TOOLBAR_CONTROL, TOOLBAR_DIVIDER,
+    TOOLBAR_EDGE, TOOLBAR_GAP, TOOLBAR_MENU_BUTTON, TOOLBAR_ROW, TOOLBAR_SEGMENT, TOOLBAR_SYMBOL,
+    TOOLBAR_TITLE_GAP, TOOLBAR_TITLE_SIZE, TOOLBAR_TITLE_WEIGHT,
+};
 pub use tooltip::{TooltipChange, TooltipState};
 
 pub use cupertino_ui_core::SortOrder;
@@ -540,8 +551,10 @@ pub enum Navigation {
     Forward,
 }
 
-/// A page under a 52 pt toolbar row that starts with a back and forward button group, which the model's history enables.
-/// The page takes the height the row leaves. Primary+[ and Primary+] go back and forward from anywhere in the page;
+/// A page under a 52 pt toolbar row that starts with a back and forward button group, which the model's history enables:
+/// a floating glass capsule ([`ToolbarGroup`]) 8 pt from the row's leading edge, the row's other items following 8 pt
+/// apart ([`ToolbarTitle`] keeps 12 pt) and the row painting no fill of its own, so the page's background runs under
+/// it. The page takes the height the row leaves. Primary+[ and Primary+] go back and forward from anywhere in the page;
 /// Escape does not go back. The page changes at once, without a transition. The toolbar row is the window's drag
 /// region, as a [`WindowDragArea`] is: a drag on it where no control takes the press moves the window, and a double
 /// click there zooms it. Build its element with `Element::from`.

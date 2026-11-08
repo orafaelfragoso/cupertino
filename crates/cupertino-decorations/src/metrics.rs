@@ -1,22 +1,67 @@
-//! Titlebar and control metrics, window classes and interaction settings.
+//! Titlebar and control metrics, window styles and interaction settings.
 //!
-//! the window control button diameter (12 pt) and art box (16 × 16 pt) are as designed
-//! (`cupertino_theme::metrics`); corner radii are as designed;
-//! the rim width of one device pixel is as designed; the live-resize zones are as designed; the button cell, spacing and leading insets are as designed. Every other number below is approximate, labelled, and configurable.
+//! Four window styles share the window control buttons: 14 pt discs whose centres are 23 pt apart, the first one as
+//! far from the window's leading edge as from its top edge, so the group sits in the middle of the row it occupies
+//! (the 32 pt title bar of a titled window, the 52 pt or 38 pt toolbar row of a unified window, the 52 pt top of the
+//! sidebar panel of a full-height-sidebar window). Every style has the 16 pt window corner radius. The rim width of
+//! one device pixel and the live-resize zones are as designed. The small button size class (9 pt) comes from the
+//! control table; the title metrics and the glyph proportions are approximate, labelled, and configurable.
 
 use cupertino_theme::metrics::{alignment_height, Control, ControlSize};
 
-/// Titlebar flavour.
+/// The window style: where the title bar is and who draws it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TitlebarStyle {
-    /// Toolbar-less window: a plain titlebar with a centred title.
+    /// A titled window (plain windows, dialogs): a 32 pt title bar above the client's surface with
+    /// the buttons and a centred title, drawn by the decorations.
     Standard,
-    /// Titlebar merged with the client's toolbar: the bar is the 52 pt toolbar strip, the client's
+    /// Titlebar merged with the client's toolbar: the bar is the 52 pt toolbar row, the client's
     /// content runs under it (full-size content), and the decorations draw only the window control
-    /// buttons, vertically centred in the strip with the unified leading inset.
+    /// buttons, vertically centred in the row with the unified leading inset.
     /// The client draws the toolbar, its fill ([`crate::palette::Palette::titlebar`]) and the title.
     Unified,
+    /// [`TitlebarStyle::Unified`] with the compact 38 pt toolbar row.
+    UnifiedCompact,
+    /// A full-height sidebar: the client's surface fills the window, its sidebar panel runs from the
+    /// window's top edge to its bottom edge, and the decorations draw only the window control
+    /// buttons, in the 52 pt top of that panel. The client's toolbar floats over its content beside
+    /// the panel. As with the unified styles the client moves the window from its toolbar and the
+    /// top of its sidebar.
+    Sidebar,
 }
+
+impl TitlebarStyle {
+    pub const ALL: [TitlebarStyle; 4] = [
+        TitlebarStyle::Standard,
+        TitlebarStyle::Unified,
+        TitlebarStyle::UnifiedCompact,
+        TitlebarStyle::Sidebar,
+    ];
+
+    /// The client draws the row the buttons sit in and moves the window from it: the decorations
+    /// draw the buttons alone, over the client's surface, and take no room from the frame.
+    pub fn client_drawn(self) -> bool {
+        !matches!(self, TitlebarStyle::Standard)
+    }
+
+    /// The index of the style in [`TitlebarStyle::ALL`].
+    pub fn index(self) -> usize {
+        self as usize
+    }
+}
+
+/// Diameter of a window control button, regular size.
+pub const WINDOW_BUTTON_DIAMETER: f64 = 14.0;
+/// Distance between the centres of neighbouring window control buttons.
+pub const WINDOW_BUTTON_PITCH: f64 = 23.0;
+/// Height of a titled window's title bar.
+pub const TITLED_BAR_HEIGHT: f64 = 32.0;
+/// Height of a toolbar row: the unified bar, and the top of a full-height sidebar.
+pub const TOOLBAR_ROW_HEIGHT: f64 = 52.0;
+/// Height of the compact unified toolbar row.
+pub const COMPACT_TOOLBAR_ROW_HEIGHT: f64 = 38.0;
+/// The window's corner radius.
+pub const WINDOW_CORNER_RADIUS: f64 = 16.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ButtonKind {
@@ -50,10 +95,17 @@ pub enum DoubleClickAction {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DecorationMetrics {
-    /// approximate: height of a toolbar-less titlebar.
+    /// height of the title bar of a titled window.
     pub titlebar_height_standard: f64,
-    /// approximate: height of a titlebar with a unified toolbar.
+    /// height of the toolbar row of a unified window, regular size.
     pub titlebar_height_unified: f64,
+    /// height of the toolbar row of a unified window, compact size.
+    pub titlebar_height_compact: f64,
+    /// height of the top of the sidebar panel that holds the buttons, and of the toolbar row
+    /// floating over the content, in a full-height-sidebar window.
+    pub titlebar_height_sidebar: f64,
+    /// the window's corner radius, in every style.
+    pub corner_radius: f64,
     /// diameter of a window control button, regular size class.
     pub button_diameter: f64,
     /// edge of the square art box of a button, used as its hit area.
@@ -67,6 +119,10 @@ pub struct DecorationMetrics {
     pub button_leading_standard: f64,
     /// the same for a unified toolbar window whose buttons are centred in the bar.
     pub button_leading_unified: f64,
+    /// the same for the compact unified toolbar.
+    pub button_leading_compact: f64,
+    /// the same for the top of the sidebar panel of a full-height-sidebar window.
+    pub button_leading_sidebar: f64,
     /// Glyph half-extent as a fraction of the button diameter (authored, approximate).
     pub glyph_half_extent: f64,
     /// Glyph stroke width in points (authored, approximate).
@@ -101,18 +157,28 @@ impl Default for DecorationMetrics {
 }
 
 impl DecorationMetrics {
-    /// Metrics with the button diameter of a size class (12 regular, 9 small).
+    /// Metrics with the button diameter of a size class (14 regular, 9 small).
     pub fn for_button_size(size: ControlSize) -> Self {
-        let d = alignment_height(Control::WindowControlButton, size).unwrap_or(12.0);
+        let d = match size {
+            ControlSize::Regular => WINDOW_BUTTON_DIAMETER,
+            _ => alignment_height(Control::WindowControlButton, size).unwrap_or(9.0),
+        };
+        // the first button's centre is as far from the leading edge as from the top: half the row
+        let leading = |row: f64| row / 2.0 - WINDOW_BUTTON_DIAMETER / 2.0;
         Self {
-            titlebar_height_standard: 28.0,
-            titlebar_height_unified: 52.0,
+            titlebar_height_standard: TITLED_BAR_HEIGHT,
+            titlebar_height_unified: TOOLBAR_ROW_HEIGHT,
+            titlebar_height_compact: COMPACT_TOOLBAR_ROW_HEIGHT,
+            titlebar_height_sidebar: TOOLBAR_ROW_HEIGHT,
+            corner_radius: WINDOW_CORNER_RADIUS,
             button_diameter: d,
             button_art: 16.0,
-            button_cell: (14.0, 16.0),
-            button_spacing: 6.0,
-            button_leading_standard: 7.0,
-            button_leading_unified: 19.0,
+            button_cell: (WINDOW_BUTTON_DIAMETER, 16.0),
+            button_spacing: WINDOW_BUTTON_PITCH - WINDOW_BUTTON_DIAMETER,
+            button_leading_standard: leading(TITLED_BAR_HEIGHT),
+            button_leading_unified: leading(TOOLBAR_ROW_HEIGHT),
+            button_leading_compact: leading(COMPACT_TOOLBAR_ROW_HEIGHT),
+            button_leading_sidebar: leading(TOOLBAR_ROW_HEIGHT),
             glyph_half_extent: 0.2,
             glyph_stroke: 1.1,
             button_ring: 0.04,
@@ -138,23 +204,28 @@ impl DecorationMetrics {
         match style {
             TitlebarStyle::Standard => self.button_leading_standard,
             TitlebarStyle::Unified => self.button_leading_unified,
+            TitlebarStyle::UnifiedCompact => self.button_leading_compact,
+            TitlebarStyle::Sidebar => self.button_leading_sidebar,
         }
     }
 
-    /// Height of the titlebar strip of a style.
+    /// Height of the titlebar strip of a style: the row the buttons are centred in.
     pub fn titlebar_height(&self, style: TitlebarStyle) -> f64 {
         match style {
             TitlebarStyle::Standard => self.titlebar_height_standard,
             TitlebarStyle::Unified => self.titlebar_height_unified,
+            TitlebarStyle::UnifiedCompact => self.titlebar_height_compact,
+            TitlebarStyle::Sidebar => self.titlebar_height_sidebar,
         }
     }
 
-    /// Height the strip takes from the frame: the client's surface starts below it. Zero for a
-    /// unified bar, which lies over the client's content.
+    /// Height the strip takes from the frame: the client's surface starts below it. Zero for the
+    /// styles whose row the client draws, which lies over the client's content.
     pub fn titlebar_reserved(&self, style: TitlebarStyle) -> f64 {
-        match style {
-            TitlebarStyle::Standard => self.titlebar_height_standard,
-            TitlebarStyle::Unified => 0.0,
+        if style.client_drawn() {
+            0.0
+        } else {
+            self.titlebar_height(style)
         }
     }
 }
@@ -165,7 +236,7 @@ mod tests {
 
     #[test]
     fn button_size_classes_follow_the_control_table() {
-        assert_eq!(DecorationMetrics::default().button_diameter, 12.0);
+        assert_eq!(DecorationMetrics::default().button_diameter, 14.0);
         assert_eq!(
             DecorationMetrics::for_button_size(ControlSize::Small).button_diameter,
             9.0
@@ -179,7 +250,37 @@ mod tests {
         assert!(
             m.titlebar_height(TitlebarStyle::Unified) > m.titlebar_height(TitlebarStyle::Standard)
         );
-        assert_eq!(m.titlebar_reserved(TitlebarStyle::Standard), 28.0);
-        assert_eq!(m.titlebar_reserved(TitlebarStyle::Unified), 0.0);
+        assert_eq!(m.titlebar_reserved(TitlebarStyle::Standard), 32.0);
+        for style in [
+            TitlebarStyle::Unified,
+            TitlebarStyle::UnifiedCompact,
+            TitlebarStyle::Sidebar,
+        ] {
+            assert_eq!(m.titlebar_reserved(style), 0.0, "{style:?}");
+            assert!(style.client_drawn());
+        }
+        assert!(!TitlebarStyle::Standard.client_drawn());
+    }
+
+    #[test]
+    fn each_style_has_its_row_and_the_first_button_in_the_middle_of_it() {
+        let m = DecorationMetrics::default();
+        let rows = [
+            (TitlebarStyle::Standard, 32.0),
+            (TitlebarStyle::Unified, 52.0),
+            (TitlebarStyle::UnifiedCompact, 38.0),
+            (TitlebarStyle::Sidebar, 52.0),
+        ];
+        for (style, row) in rows {
+            assert_eq!(m.titlebar_height(style), row, "{style:?}");
+            // the first cell is half a button from the centre, which is half the row from the edge
+            assert_eq!(
+                m.button_leading(style) + m.button_cell.0 / 2.0,
+                row / 2.0,
+                "{style:?}"
+            );
+        }
+        assert_eq!(m.button_pitch(), 23.0);
+        assert_eq!(m.corner_radius, 16.0);
     }
 }

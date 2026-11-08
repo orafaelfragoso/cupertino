@@ -69,7 +69,7 @@ pub struct AppEffects(CupertinoAppEffectsV1);
 impl AppEffects {
     /// Bind the global; `None` when the server does not offer it.
     pub fn bind(conn: &mut Connection) -> Option<AppEffects> {
-        conn.bind_extension(1..=5, Quiet).map(AppEffects)
+        conn.bind_extension(1..=6, Quiet).map(AppEffects)
     }
 
     /// Observe the session's appearance and display options: [`AppEvent::Appearance`] and
@@ -92,9 +92,40 @@ impl AppEffects {
     /// Give the window of `surface` the unified title bar. Call it before the surface's first buffer, which the server
     /// reads the style with.
     pub fn unify_titlebar(&self, conn: &Connection, surface: SurfaceId) -> Result<(), Error> {
-        self.0
-            .set_titlebar_style(&conn.wl_surface(surface)?, TitlebarStyle::Unified);
+        self.set_window_style(conn, surface, WindowStyle::Unified)
+    }
+
+    /// Give the window of `surface` a window style. Call it before the surface's first buffer, which the server reads
+    /// the style with. A server before version 6 knows the titled and the unified styles only: the compact unified
+    /// style becomes the unified one there, and the sidebar style stays titled.
+    pub fn set_window_style(
+        &self,
+        conn: &Connection,
+        surface: SurfaceId,
+        style: WindowStyle,
+    ) -> Result<(), Error> {
+        let styles = self.0.version() >= STYLES_VERSION;
+        let wire = match style {
+            WindowStyle::Titled => TitlebarStyle::Standard,
+            WindowStyle::Unified => TitlebarStyle::Unified,
+            WindowStyle::UnifiedCompact if styles => TitlebarStyle::UnifiedCompact,
+            WindowStyle::UnifiedCompact => TitlebarStyle::Unified,
+            WindowStyle::Sidebar if styles => TitlebarStyle::Sidebar,
+            WindowStyle::Sidebar => TitlebarStyle::Standard,
+        };
+        self.0.set_titlebar_style(&conn.wl_surface(surface)?, wire);
         Ok(())
+    }
+
+    /// The window style a server gives a window that asks for `style`: the styles of version 6 fall back on older
+    /// servers ([`Self::set_window_style`]).
+    pub fn granted_style(&self, style: WindowStyle) -> WindowStyle {
+        match style {
+            _ if self.0.version() >= STYLES_VERSION => style,
+            WindowStyle::UnifiedCompact => WindowStyle::Unified,
+            WindowStyle::Sidebar => WindowStyle::Titled,
+            other => other,
+        }
     }
 
     /// The menu announcement of the window of `surface`, one per surface; `None` when the server predates it (version
@@ -142,10 +173,26 @@ impl AppEffects {
     }
 }
 
+/// The version that adds the compact unified and the sidebar title bar styles.
+const STYLES_VERSION: u32 = 6;
 /// The version that adds `set_disabled_controls`.
 const DISABLED_CONTROLS_VERSION: u32 = 4;
 /// The version whose appearance observer tells `session_lock`.
 const SESSION_LOCK_VERSION: u32 = 5;
+
+/// How the server decorates an application window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum WindowStyle {
+    /// A title bar above the surface with the window's title.
+    #[default]
+    Titled,
+    /// The surface fills the window; the server draws the window control buttons in its toolbar row.
+    Unified,
+    /// [`WindowStyle::Unified`] with the compact toolbar row.
+    UnifiedCompact,
+    /// The surface fills the window; the server draws the window control buttons at the top of its full-height sidebar.
+    Sidebar,
+}
 
 /// Window controls, each `true` when it is in the set.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -73,6 +73,29 @@ from the application's model and reports changes as messages.
   Touch, right and middle presses start nothing, and a fullscreen window neither moves nor zooms. The region has no
   role and no Tab stop: keyboard users zoom with the compositor's Zoom shortcut (Super+Ctrl+Z by default) or the menu
   bar's Window menu, tile and fill with its shortcuts, and can drag the server's title bar with the pointer as always.
+- **Window shell and toolbar.** `SidebarWindow` lays out a window opened with `DecorationMode::Sidebar`: the sidebar
+  panel from the window's top edge to its bottom edge, its 52 pt top (`SIDEBAR_TOP`) left free for the compositor's
+  window control buttons and a drag region of the window as a toolbar is, then an optional header slot
+  (`sidebar_header`, for a search field) and the sidebar's content; beside it, past a `SplitView` divider drawn as a rim one device pixel wide on the sidebar's
+  side over the content's colour (no separator line), the content
+  pane paints the window background up to the window's top edge, so the window paints none. The panel meets the
+  window's edges (`SIDEBAR_PANEL_INSET` 0); an inset panel would take the window's 16 pt corner less the inset. The
+  floating toolbar controls are 36 pt tall in the middle of the 52 pt row, 8 pt from its edges and 8 pt apart:
+  `ToolbarGroup` is a capsule of segments 36.5 pt wide (40 pt for a choice, whose chosen segment shows a pill 4 pt
+  inside it, its radius the capsule's less that inset by `nested_radius`), with 20 pt dividers between segments that
+  ask for them except beside the chosen one; a choice reads as a radio group of radio buttons, other segments as
+  buttons, a segment with a menu as a pop-up button that opens on the press; a group with an empty label adds no
+  group to the tree. `ToolbarMenuButton` is a 47 pt capsule of a symbol and a chevron, `ToolbarButton` a 36 pt circle,
+  `ToolbarSearch` a search field that rests as such a circle and passes the press to the field under it, and
+  `ToolbarTitle` the 15 pt bold title that takes the room the controls leave. `NavigationStack` puts its back and
+  forward buttons in such a group. Glyphs recede to the secondary label colour in an inactive window and to the
+  disabled colour when disabled.
+- **Glass.** Each glass surface names a `GlassRole` (`ToolbarGroup`, `SidebarPanel`) and `GlassRole::material` says
+  what draws it: the sidebar panel asks for the compositor's sidebar material under the node, with the surface's
+  opaque fill where the window cannot show it; a toolbar group lies over the window's own content, which a material
+  under the window cannot show through, so it paints a translucent body with a one-pixel rim (and a soft shade in the
+  light appearance; opaque with Reduce Transparency or Increase Contrast). Moving a role to another material is its
+  one arm in `GlassRole::material`.
 - **Menus.** `Menu` levels follow the pointer as the menu bar's do (`cupertino-menu-model`'s `tracking`): the row
   under the pointer takes the focus and the highlight, a submenu opens once the pointer rests 0.2 s on its row and
   closes once it rests 0.3 s on another, and while the pointer heads from a row into its open submenu (each move inside

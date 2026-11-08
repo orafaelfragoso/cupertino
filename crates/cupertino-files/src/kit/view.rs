@@ -10,8 +10,9 @@ use cupertino_kit::controls::{
     Column, ColumnWidth, ContextMenu, Dialog, DialogAction, DialogButton, DialogKind, Icon,
     IconDirection, Image, ImageFit, ImageSource, MenuAnchor, Modal, NavigationStack, OutlineTable,
     Progress, ScrollView, Scroller, SecureField, Selection, Sidebar, SidebarAccessory, SidebarItem,
-    SidebarLook, SidebarSection, SortOrder, Spacer, SplitView, Stack, TableView, Text, TextField,
-    TextRole, TreeItem,
+    SidebarLook, SidebarSection, SidebarWindow, SortOrder, Spacer, Stack, TableView, Text, TextField,
+    TextRole, ToolbarGlyph, ToolbarGroup, ToolbarItem, ToolbarMenuButton, ToolbarSearch,
+    ToolbarTitle, TreeItem,
 };
 use cupertino_kit::core::{CommandRegistry, Key, Menus, Shortcut, WindowBackground};
 use cupertino_kit::geometry::{Insets, Size};
@@ -30,8 +31,8 @@ use super::jobs::Job;
 use super::list::{self, Gestures, RowCell};
 use super::progress::{self, ShowsProgress};
 use super::search::{no_results, SearchSlot};
-use super::sidebar::{Backdrop, FocusWatch, Opaque};
-use super::toolbar::{PathBar, PathSegment, ToolButton};
+use super::sidebar::FocusWatch;
+use super::toolbar::{PathBar, PathSegment};
 use super::{window_key, BrowserWindow, Event, Message, Popup, Session, Unlock, COLUMNS};
 use crate::format::{human_size, relative_date};
 use crate::layout::icon::{self, Flow, FontMetrics, IconLayout, IconParams, SectionSpec};
@@ -94,13 +95,13 @@ pub(super) fn window(session: &Session, id: u64, win: &BrowserWindow) -> Window<
             size: Size::new(width, height),
             min_size: Some(Size::new(metrics::WINDOW_MIN.0, metrics::WINDOW_MIN.1)),
             max_size: None,
-            decorations: DecorationMode::Preferred,
+            decorations: DecorationMode::Sidebar,
             foreign_parent: None,
             input_region: None,
         },
         shortcuts: shortcuts(id, win, &bar, &disabled),
         on_close: Some(Message::Window(id, Event::Close)),
-        // the split view paints the sidebar material and the folder's background itself
+        // the sidebar window paints the sidebar's glass and the folder's background itself
         background: WindowBackground::None,
         popup: None,
         menus: Some(Menus {
@@ -109,24 +110,20 @@ pub(super) fn window(session: &Session, id: u64, win: &BrowserWindow) -> Window<
             on_activate: send(id, Event::Menu),
         }),
         content: Element::from(Modal {
-            content: Element::new(Backdrop {
-                children: vec![Element::from(SplitView {
-                    label: "Sidebar".into(),
-                    axis: Axis::Horizontal,
-                    leading: Element::new(FocusWatch {
-                        on_focus: send(id, Event::SidebarFocus),
-                        children: vec![places(session, id, win)],
-                    }),
-                    trailing: Element::new(Opaque {
-                        children: vec![content(session, id, win)],
-                    }),
-                    layout: win.split,
-                    min_leading: metrics::SIDEBAR_MIN,
-                    min_trailing: metrics::BROWSER_MIN.0,
-                    on_change: Some(send(id, Event::Split)),
-                })
-                .key("browser")],
+            content: Element::from(SidebarWindow {
+                label: "Sidebar".into(),
+                layout: win.split,
+                min_sidebar: metrics::SIDEBAR_MIN,
+                min_content: metrics::BROWSER_MIN.0,
+                on_change: Some(send(id, Event::Split)),
+                sidebar_header: None,
+                sidebar: Element::new(FocusWatch {
+                    on_focus: send(id, Event::SidebarFocus),
+                    children: vec![places(session, id, win)],
+                }),
+                content: content(session, id, win),
             })
+            .key("browser")
             .fill(),
             dialog: win.unlock.as_ref().map(|unlock| unlock_sheet(id, unlock)),
         }),
@@ -387,8 +384,9 @@ fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> 
     .fill()
 }
 
-/// The folder's title, which takes the room the other items leave, then the search field, which grows into it while it
-/// has the keyboard or text ([`crate::search_field`]).
+/// The folder's title, which takes the room the other items leave; the view-mode choice; the View menu; the share,
+/// Tags and Action group; then the search field, which rests as a round button and grows into the title's room while
+/// it has the keyboard or text ([`crate::search_field`]).
 fn toolbar(session: &Session, id: u64, win: &BrowserWindow) -> Vec<Element<Message>> {
     let field = Element::new(TextField {
         label: "Search".into(),
@@ -402,71 +400,93 @@ fn toolbar(session: &Session, id: u64, win: &BrowserWindow) -> Vec<Element<Messa
         selection: None,
         initial: false,
     })
-    .key("search")
-    .width(win.search_width.width());
-    // a stack that fills the room gives the title its width, so a long one ends in an ellipsis, and centres it
-    let title = Element::new(Stack {
-        axis: Axis::Vertical,
-        padding: Insets::ZERO,
-        spacing: 0.0,
-        align: Align::Stretch,
-        children: vec![
-            Element::new(Spacer { min: 0.0 }),
-            text(
-                window_title(win.browser.dir(), &session.places),
-                TextRole::Section,
-                false,
-            )
-            .key("title"),
-            Element::new(Spacer { min: 0.0 }),
-        ],
-    })
-    .fill();
-    let popup = |popup: Popup, label: &str, symbol: &str, chevron, (w, h): (f64, f64)| {
-        Element::new(ToolButton {
-            label: label.into(),
-            symbol: symbol.into(),
-            chevron,
-            size: Size::new(w, h),
-            expanded: win
-                .context
-                .as_ref()
-                .is_some_and(|menu| menu.anchor == MenuAnchor::Below(popup_key(popup))),
-            on_press: Message::Window(id, Event::Popup(popup)),
-        })
-        .key(popup_key(popup))
+    .key("search");
+    let expanded = |popup: Popup| {
+        win.context
+            .as_ref()
+            .is_some_and(|menu| menu.anchor == MenuAnchor::Below(popup_key(popup)))
     };
-    let view_symbol = match win.view {
-        ViewMode::List => "symbol.list",
-        _ => "symbol.grid",
+    let popup = |popup: Popup| Some(Message::Window(id, Event::Popup(popup)));
+    let menu = |action: MenuAction| Some(Message::Window(id, Event::Menu(action.name())));
+    let item = |key: Option<Key>, symbol: &str, label: &str, on_press, menu| ToolbarItem {
+        key,
+        glyph: ToolbarGlyph::Symbol(symbol.into()),
+        label: label.into(),
+        on_press,
+        menu,
+    };
+    let view_modes = ToolbarGroup {
+        label: "View As".into(),
+        items: vec![
+            item(
+                None,
+                "symbol.grid",
+                "Icons",
+                menu(MenuAction::View(ViewMode::Icons)),
+                None,
+            ),
+            item(
+                None,
+                "symbol.list",
+                "List",
+                menu(MenuAction::View(ViewMode::List)),
+                None,
+            ),
+            item(None, "symbol.columns", "Columns", None, None),
+            item(None, "symbol.gallery", "Gallery", None, None),
+        ],
+        selected: Some(match win.view {
+            ViewMode::Icons => 0,
+            ViewMode::List => 1,
+        }),
+        dividers: true,
+    };
+    let actions = ToolbarGroup {
+        label: String::new(),
+        items: vec![
+            item(None, "symbol.share", "Share", None, None),
+            item(
+                Some(popup_key(Popup::Tags)),
+                "symbol.tag",
+                "Tags",
+                popup(Popup::Tags),
+                Some(expanded(Popup::Tags)),
+            ),
+            ToolbarItem {
+                glyph: ToolbarGlyph::More,
+                ..item(
+                    Some(popup_key(Popup::Action)),
+                    "",
+                    "Action",
+                    popup(Popup::Action),
+                    Some(expanded(Popup::Action)),
+                )
+            },
+        ],
+        selected: None,
+        dividers: false,
     };
     vec![
-        title,
-        popup(
-            Popup::View,
-            "View",
-            view_symbol,
-            "symbol.chevron.up.down",
-            window_metrics::TOOLBAR_VIEW_POPUP,
-        ),
-        popup(
-            Popup::Tags,
-            "Tags",
-            "symbol.tag",
-            "symbol.chevron.down",
-            window_metrics::TOOLBAR_TAGS_POPUP,
-        ),
-        popup(
-            Popup::Action,
-            "Action",
-            "symbol.ellipsis.circle",
-            "symbol.chevron.down",
-            window_metrics::TOOLBAR_ACTION_POPUP,
-        ),
+        Element::new(ToolbarTitle {
+            text: window_title(win.browser.dir(), &session.places),
+        })
+        .key("title"),
+        Element::from(view_modes),
+        Element::from(ToolbarMenuButton {
+            key: Some(popup_key(Popup::View)),
+            symbol: "symbol.grid".into(),
+            label: "View".into(),
+            on_press: popup(Popup::View),
+            expanded: expanded(Popup::View),
+        }),
+        Element::from(actions),
         Element::new(SearchSlot {
             window: id,
             animating: win.search_width.animating(),
-            children: vec![field],
+            children: vec![Element::from(ToolbarSearch {
+                field,
+                collapsed: !win.search_width.is_open() && !win.search_width.animating(),
+            })],
         })
         .key("search-slot")
         .width(win.search_width.width()),

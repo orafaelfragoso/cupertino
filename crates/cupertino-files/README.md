@@ -81,19 +81,21 @@ environment at startup, so no program it starts inherits it, and raises its own 
   ID, and migrate the dock's pinned items, `mimeapps.list` defaults and the session's default file manager from the old
   ID. The dock then calls `Activate` itself, with its token, instead of starting the program.
 
-The window is a split view: the sidebar of places, then a navigation stack whose toolbar holds back / forward, the
-folder's name (Section text, cut with an ellipsis), the View, Tags and Action pop-up buttons (`kit::toolbar`; each opens
-its menu below it: the view modes, the tags of the selection, the selection's context menu or the folder's) and the
-search field, over the folder in the icon view (`kit::grid`, laid out by `layout::icon` from a 10 pt leading and 8 pt
+The window is in the full-height-sidebar style (Kit's `SidebarWindow`, `DecorationMode::Sidebar`): the sidebar of places
+from the window's top edge to its bottom edge, the window control buttons in its top, then a navigation stack whose
+floating toolbar holds the back / forward group, the folder's name (Kit's `ToolbarTitle`, cut with an ellipsis), the
+view-mode choice (icons, list, and columns and gallery disabled), the View menu button, the group of share (disabled),
+Tags and Action (each menu opens below its button: the view modes, the tags of the selection, the selection's context
+menu or the folder's) and the search field, which rests as a round button, over the folder in the icon view (`kit::grid`, laid out by `layout::icon` from a 10 pt leading and 8 pt
 top inset; a name is centred and wraps to two lines, a longer one keeping its first line and cut in the middle of the
 rest with an ellipsis, so its end and extension stay) or the list view (`kit::list`: the toolkit's outline table, Name, Date Modified,
 Size, Kind, each cut with an ellipsis in its cell; a type the kind table does not list is described from its MIME
 subtype (`mime::kind_description`), in capitals only when it is an abbreviation of up to four letters and digits, else
 in words with the first capitalised and, in a subtype of several words, each of up to three kept as an abbreviation
 ("MS WMV movie"); a header click sorts, again reverses; a folder's disclosure triangle, Left and Right open and close
-it in place). The toolbar is the window's drag region (Kit's
-`NavigationStack`, under the server's title bar): a drag where no control lies moves the window and a double click there
-zooms it, as the old window's unified bar did; back / forward, the pop-up buttons and the search field keep their
+it in place). The toolbar and the top of the sidebar are the window's drag region (Kit's `NavigationStack` and
+`SidebarWindow`): a drag where no control lies moves the window and a double click there zooms it; back / forward, the
+toolbar's buttons and the search field keep their
 presses, and from the keyboard the compositor's Zoom shortcut (Super+Ctrl+Z by default) and the menu bar's Window menu
 zoom, minimize and tile it. Under the folder the path bar and the status bar can be shown from the View menu; both
 are hidden by default. Each window keeps its view mode and bars while it is open, and the last choice made in any
@@ -103,7 +105,7 @@ folder with its icon, and a click on one, or Space or Return on it, goes there (
 reads as the group "Path"); the status bar reads "N items, X available" (`statvfs` of the
 folder, read again whenever the listing changes and after a transfer). Changes on disk appear live. The sidebar shows
 the theme's sidebar material where the compositor can draw it, and its opaque fill without desktop effects or under
-Reduce Transparency (`kit::sidebar`).
+Reduce Transparency (Kit's sidebar panel glass).
 
 **Pointer and keyboard in the views.** A press on empty space and a drag draw a rubber band (`kit::band`): the items it
 touches replace the selection, or toggle against it with Shift or Primary held at the press; near the top or bottom
@@ -154,9 +156,9 @@ Applications is the first `applications` folder of `$XDG_DATA_DIRS`, a real fold
 **Search.** Typing in the field shows the folder's items whose names contain the text, flat; Escape clears it and
 another folder ends it. A search that matches nothing shows "No Results" centred over the view, below the list's header
 (Title text: the toolkit has no 17 pt regular role, so the size and weight are approximate); an empty folder without a
-search shows nothing. The field (`search_field`) rests at 112 pt; while it has the keyboard or holds text it opens to
-2.5 times that, never more than half the toolbar and never over the back and forward buttons or the 60 pt the title
-keeps, over 0.2 s with an ease-out, or at once with Reduce Motion. A narrower toolbar narrows an open field at once.
+search shows nothing. The field (`search_field`) rests as a 36 pt round button that a click opens; while it has the keyboard or holds
+text it is open, 280 pt wide, never more than half the toolbar and never over the back and forward buttons, the 60 pt
+the title keeps or the controls after the title, over 0.2 s with an ease-out, or at once with Reduce Motion. A narrower toolbar narrows an open field at once.
 
 **Context menus.** A secondary press on an item selects it (inside a selection it keeps the selection), on empty space
 it clears the selection; the Menu key and Shift+F10 open the menu of the selection, or of the folder without one. The
@@ -276,8 +278,8 @@ is written to stderr instead, with the reason. Failures that only explain the wi
 free space, the default applications) stay on stderr. The wording is approximate.
 
 **Accessibility** (`tests/kit-accessibility.rs`). Every control reads its role, name and state and does its default
-action when assistive technology asks: the places and their eject buttons, back and forward, the View, Tags and Action
-pop-up buttons (each says whether its menu is open), the search field, the path bar's folders, the icon view's cells, the list's rows (selected, open or
+action when assistive technology asks: the places and their eject buttons, back and forward, the view modes (radio buttons, the
+shown one on), the View, Tags and Action pop-up buttons (each says whether its menu is open), share (disabled), the search field, the path bar's folders, the icon view's cells, the list's rows (selected, open or
 closed, with their level and position; Click selects a row alone, Expand and Collapse open and close a folder), the
 column headers (sorted up or down), the transfer row and its Stop button, the progress window's rows and Stop buttons, the name editor and the context menu. Icons
 are decorative, an item reads by its name and never by its path, and the rubber band is not read. Tab goes from the
@@ -402,7 +404,7 @@ Values live in `metrics.rs`.
 | Icon view | 64 pt icons (16–512), grid spacing 54 (1–100), 12 pt text (10–16), label below; cell = icon + 12.5 % padding, label width interpolated by the spacing, 1–2 lines |
 | List view | 16 pt icons (16–32), 13 pt text, row = max(icon, font line) + 4 with no intercell spacing, a 20 pt pitch, 15 pt indentation; kinds are the design's type descriptions, capitalised |
 | Column view | 245 pt columns (min 100), 312 pt preview column |
-| Chrome | sidebar 200 pt default, 128 pt minimum, rows 24/28/32 pt; unified toolbar 52 pt; status bar 20 pt, path bar 28 pt; search field 112 pt at rest |
+| Chrome | sidebar 223 pt default, 128 pt minimum, rows 24/28/32 pt; unified toolbar 52 pt; status bar 20 pt, path bar 28 pt; search field 112 pt at rest |
 | Timing | sidebar toggle 0.3 s, slow motion ×10; type-select reset after max(2 s, 2 × key-repeat delay); search field 0.2 s; progress window after 1 s (approximate) |
 | Selection look | icon bubble: the icon enlarged by its longest side / 16, that radius, quaternary label fill, white 50 % border of min(2, trunc(padding)), the same in an inactive window; the label pill is the accent (grey when inactive) |
 | Names | compare case-insensitively, numerically, width-insensitively, diacritics significant |

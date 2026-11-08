@@ -7,7 +7,7 @@ premultiplied RGBA buffers that a compositor uploads as textures.
 
 | Module | Content |
 |---|---|
-| `metrics` | `TitlebarStyle::{Standard, Unified}`, `ButtonKind`, `DecorationMetrics`, `DoubleClickAction`, `TitleAlignment` |
+| `metrics` | `TitlebarStyle::{Standard, Unified, UnifiedCompact, Sidebar}`, `ButtonKind`, `DecorationMetrics`, `DoubleClickAction`, `TitleAlignment`; the window style constants `WINDOW_BUTTON_DIAMETER`, `WINDOW_BUTTON_PITCH`, `TITLED_BAR_HEIGHT`, `TOOLBAR_ROW_HEIGHT`, `COMPACT_TOOLBAR_ROW_HEIGHT` and `WINDOW_CORNER_RADIUS` |
 | `layout` | `FrameLayout`: titlebar, content, three button circles + art boxes, button group, `title_slot` (centred title stays centred and clear of the buttons, leading title for unified bars) |
 | `hit` | `hit_test` → `Hit::{Button, Titlebar, Content, Resize(edge), None}`; `resize_hit(frame, metrics, p, exterior)` the resize zone alone, for any frame (the compositor uses it for client-decorated and untitled windows; `exterior` false leaves out the 4 pt outside part, which titled windows only have) (no `Titlebar` hit in a unified frame: the client moves the window), resize zones from `resize_outset` outside to `resize_inset` inside the geometry with corner zones measured along the edges (`resize_corner`, `resize_corner_bottom_right`), `input_region`, button-group hover, double-click action |
 | `buttons` | states normal / hover-group (glyphs on all three) / pressed / inactive (grey, colour returns on hover) / disabled; glyphs authored as vector strokes (cross, dash, plus) |
@@ -43,6 +43,19 @@ let shadow = ShadowRasterizer::new().render(&params, frame, 12.0, dec.config.cor
 Coordinates are frame-local logical points (y down, titlebar at the top). `scale` is device pixels per point and may be
 fractional: buffers are `round(size · scale)`, and the rim is always one device pixel. The window shape (all four corners
 rounded) is `Decorations::shape`, and the compositor must clip the client content to it.
+
+### Window styles
+
+| Style | Row the buttons lie in | Button centres | Drawn by the server |
+|---|---|---|---|
+| `Standard` (titled) | a 32 pt title bar above the content | (16, 16), then every 23 pt | the title bar, the centred title and the buttons |
+| `Unified` | the client's 52 pt toolbar row | (26, 26), then every 23 pt | the buttons only |
+| `UnifiedCompact` | the client's 38 pt toolbar row | (19, 19), then every 23 pt | the buttons only |
+| `Sidebar` (full-height sidebar) | the 52 pt top of the client's sidebar | (26, 26), then every 23 pt | the buttons only |
+
+The buttons are 14 pt across; each centre lies half the row's height from the top and leading edges. Every style has a
+16 pt window corner and the same rim and shadow. In the three client-drawn styles the content fills the frame, the
+client draws the row and moves the window from it, and `hit_test` gives `Hit::Button` over the buttons alone.
 
 ### Samples
 

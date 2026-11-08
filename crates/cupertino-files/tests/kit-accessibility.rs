@@ -375,6 +375,9 @@ fn tab_goes_from_the_sidebar_to_the_toolbar_the_items_and_the_path_bar_and_aroun
     let segments = path_segments(&run);
     let mut expected: Vec<String> = [
         "ListItem \"Documents\"",
+        // the view modes the window can show, then the menus
+        "RadioButton \"Icons\" off",
+        "RadioButton \"List\" on",
         "PopUpButton \"View\"",
         "PopUpButton \"Tags\"",
         "PopUpButton \"Action\"",
@@ -392,7 +395,7 @@ fn tab_goes_from_the_sidebar_to_the_toolbar_the_items_and_the_path_bar_and_aroun
     .map(str::to_owned)
     .to_vec();
     expected.extend(segments.iter().map(|s| format!("Button {s:?}")));
-    expected.push("Splitter \"Sidebar\" = 200 of 0..919".to_owned());
+    expected.push("Splitter \"Sidebar\" = 223 of 0..919".to_owned());
     expected.push("ListItem \"Documents\"".to_owned());
     let mut stops = Vec::new();
     for _ in 0..expected.len() {
@@ -863,8 +866,10 @@ fn the_focus_ring_shows_on_the_toolbar_the_path_bar_and_a_selected_row_with_incr
         let (mut run, _) = start(appearance);
         run.menu("toggle-path-bar");
         let segments = path_segments(&run);
-        run.key(TAB, None);
-        run.key(TAB, None);
+        // the sidebar, the two view modes, then the View menu
+        for _ in 0..4 {
+            run.key(TAB, None);
+        }
         assert_eq!(focused(&run), "PopUpButton \"View\"");
         let view = find(&run, Role::PopUpButton, "View");
         assert!(strokes(&run, view, ring), "{appearance:?}: View's ring");

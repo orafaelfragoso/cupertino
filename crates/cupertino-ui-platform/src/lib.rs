@@ -37,11 +37,34 @@ pub struct Capabilities {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum DecorationMode {
-    /// The compositor draws the title bar when it offers to, else the toolkit does.
+    /// The compositor draws the title bar when it offers to, else the toolkit does: a titled window, with a title bar
+    /// above the content and the title centred in it.
     #[default]
     Preferred,
     Client,
     None,
+    /// A unified window: the content fills the window and its toolbar row is the title bar; the compositor draws the
+    /// window control buttons at the row's leading end. The window keeps that end free of controls and moves itself
+    /// from the row (a [`WindowRequest::Move`] from its drag region). Without the desktop's effects it is
+    /// [`DecorationMode::Preferred`].
+    Unified,
+    /// [`DecorationMode::Unified`] with the compact toolbar row.
+    UnifiedCompact,
+    /// A full-height sidebar: the content fills the window, the sidebar panel runs from its top edge to its bottom
+    /// edge and the compositor draws the window control buttons in the top of that panel, the toolbar floating over
+    /// the content beside it. The window keeps the top of the sidebar free of controls and moves itself from there
+    /// and from its toolbar. Without the desktop's effects it is [`DecorationMode::Preferred`].
+    Sidebar,
+}
+
+impl DecorationMode {
+    /// The content fills the window and draws the row the compositor's window control buttons lie in.
+    pub fn content_fills_window(self) -> bool {
+        matches!(
+            self,
+            DecorationMode::Unified | DecorationMode::UnifiedCompact | DecorationMode::Sidebar
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

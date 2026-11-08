@@ -1,6 +1,6 @@
-//! The Settings window on CupertinoKit: the sidebar beside the pane under a back and forward toolbar with the search
-//! field, the pane's sections as Kit controls, its sheets as dialogs and its menus on the desktop's menu bar. What the
-//! window shows and does lives in [`state`]; this module only shows it.
+//! The Settings window on CupertinoKit: the full-height sidebar with the search field at its top, beside the pane under
+//! a floating back and forward toolbar; the pane's sections as Kit controls, its sheets as dialogs and its menus on
+//! the desktop's menu bar. What the window shows and does lives in [`state`]; this module only shows it.
 
 mod form;
 mod sheets;
@@ -12,10 +12,10 @@ use std::time::Duration;
 
 use cupertino_kit::controls::{
     Modal, Navigation, NavigationStack, ScrollView, Scroller, Sidebar, SidebarItem, SidebarSection,
-    SplitLayout, SplitView, TextRole, WINDOW_CONTENT_INSET,
+    SidebarWindow, SplitLayout, WINDOW_CONTENT_INSET,
 };
 use cupertino_kit::core::{CommandRegistry, Menus, Shortcut};
-use cupertino_kit::geometry::{Point, Size};
+use cupertino_kit::geometry::{Insets, Point, Size};
 use cupertino_kit::layout::ScrollState;
 use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowRequest};
 use cupertino_kit::prelude::*;
@@ -42,11 +42,16 @@ const LEVEL_TICK: Duration = Duration::from_millis(17);
 /// How often a dragged slider without stops checks whether it has settled.
 const SLIDE_TICK: Duration = Duration::from_millis(100);
 /// The sidebar's width at the start and its least; the content's least.
-const SIDEBAR: f64 = 215.0;
+const SIDEBAR: f64 = 232.0;
 const MIN_SIDEBAR: f64 = 150.0;
 const MIN_CONTENT: f64 = 320.0;
-/// The toolbar's search field, as wide as other toolbars' (approximate).
-const SEARCH_WIDTH: f64 = 112.0;
+/// The search field's room in the sidebar: in from the sidebar's sides, above the first section.
+const SEARCH_INSETS: Insets = Insets {
+    top: 8.0,
+    left: 10.0,
+    bottom: 8.0,
+    right: 10.0,
+};
 /// The interface width factor: 1 for English (approximate).
 const WIDTH_FACTOR: f64 = 1.0;
 /// How far a pane may pass its window's height, in points, before it counts as longer than the window.
@@ -443,33 +448,28 @@ impl Shell {
         .key("sidebar")
     }
 
-    /// The pane's title and the search field, after the back and forward buttons.
-    fn toolbar(&self) -> Vec<Element<Message>> {
-        let title = self
-            .state
-            .history
-            .current()
-            .title(self.state.live.has_battery());
-        let mut items: Vec<Element<Message>> =
-            form::text(title, TextRole::Title).into_iter().collect();
-        items.extend([
-            Element::new(Spacer::default()),
-            Element::new(TextField {
-                label: "Search".into(),
-                placeholder: "Search".into(),
-                value: self.query.clone(),
-                revision: self.query_revision,
-                purpose: ContentPurpose::Normal,
-                enabled: true,
-                on_change: Some(Box::new(Message::Query)),
-                on_submit: Some(Message::Search),
-                selection: None,
-                initial: false,
-            })
-            .width(SEARCH_WIDTH)
-            .key("search"),
-        ]);
-        items
+    /// The search field, in the sidebar below the window control buttons.
+    fn search(&self) -> Element<Message> {
+        let field = Element::new(TextField {
+            label: "Search".into(),
+            placeholder: "Search".into(),
+            value: self.query.clone(),
+            revision: self.query_revision,
+            purpose: ContentPurpose::Normal,
+            enabled: true,
+            on_change: Some(Box::new(Message::Query)),
+            on_submit: Some(Message::Search),
+            selection: None,
+            initial: false,
+        })
+        .key("search");
+        Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: SEARCH_INSETS,
+            spacing: 0.0,
+            align: Align::Stretch,
+            children: vec![field],
+        })
     }
 
     fn content(&self) -> Element<Message> {
@@ -502,7 +502,8 @@ impl Shell {
                 on_scroll: Box::new(Message::ContentScroll),
             })
             .key("content"),
-            toolbar: self.toolbar(),
+            // the toolbar is the back and forward buttons alone
+            toolbar: Vec::new(),
             can_go_back: self.state.history.can_go_back(),
             can_go_forward: self.state.history.can_go_forward(),
             on_navigate: Some(Box::new(Message::Navigate)),
@@ -567,15 +568,15 @@ impl Application for SettingsApp {
             .filter(|(_, on)| !on)
             .map(|(action, _)| action.name())
             .collect();
-        let split = Element::from(SplitView {
+        let split = Element::from(SidebarWindow {
             label: "Sidebar".into(),
-            axis: Axis::Horizontal,
-            leading: shell.sidebar(),
-            trailing: shell.content(),
             layout: shell.split,
-            min_leading: MIN_SIDEBAR,
-            min_trailing: MIN_CONTENT,
+            min_sidebar: MIN_SIDEBAR,
+            min_content: MIN_CONTENT,
             on_change: Some(Box::new(Message::Split)),
+            sidebar_header: Some(shell.search()),
+            sidebar: shell.sidebar(),
+            content: shell.content(),
         });
         let size = default_size(WIDTH_FACTOR);
         let mut windows = vec![Window {
@@ -591,13 +592,14 @@ impl Application for SettingsApp {
                 size,
                 min_size: Some(Size::new(MIN_SIDEBAR + MIN_CONTENT, metrics::MIN_HEIGHT)),
                 max_size: None,
-                decorations: DecorationMode::Preferred,
+                decorations: DecorationMode::Sidebar,
                 foreign_parent: None,
                 input_region: None,
             },
             shortcuts: shortcuts(),
             on_close: None,
-            background: WindowBackground::Theme,
+            // the sidebar window paints the sidebar's glass and the pane's background itself
+            background: WindowBackground::None,
             content: Element::from(Modal {
                 content: split,
                 dialog: shell.state.sheet.as_ref().map(sheets::dialog),
@@ -1181,7 +1183,8 @@ mod tests {
     }
 
     #[test]
-    fn the_toolbar_moves_the_window_on_a_drag_and_zooms_it_on_a_double_click() {
+    fn the_toolbar_and_the_top_of_the_sidebar_move_the_window_on_a_drag_and_zoom_it_on_a_double_click(
+    ) {
         let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let (mut driver, window) = start(dir.path(), PaneId::DesktopDock);
@@ -1196,8 +1199,8 @@ mod tests {
             .unwrap()
             .rect;
         let y = field.origin.y + field.size.height / 2.0;
-        // between the pane's title and the search field, where no toolbar item lies
-        let gap = Point::new(field.origin.x - 40.0, y);
+        // in the toolbar row past the back and forward buttons, where no toolbar item lies
+        let gap = Point::new(field.max_x() + 200.0, 26.0);
         let at = |time: u64, event| WindowEvent::Pointer(event, Timestamp(time));
         let button = |position, pressed| PointerEvent::Button {
             position,
@@ -1228,7 +1231,7 @@ mod tests {
             send(&mut driver, window, at(time, event));
         }
         assert!(!requests(&mut driver).contains(&WindowRequest::Move));
-        let to = Point::new(gap.x - 30.0, y + 30.0);
+        let to = Point::new(gap.x - 30.0, gap.y + 30.0);
         for (time, event) in [
             (10_000_000_000, PointerEvent::Motion { position: gap }),
             (10_000_000_000, button(gap, true)),
@@ -1244,5 +1247,32 @@ mod tests {
             send(&mut driver, window, at(time + 1, button(gap, false)));
         }
         assert!(requests(&mut driver).contains(&WindowRequest::Maximize(true)));
+        // the top of the sidebar, beside the window control buttons, moves the window too
+        let top = Point::new(field.max_x() - 20.0, 26.0);
+        let moves = |driver: &mut TestDriver<SettingsApp>| {
+            requests(driver)
+                .iter()
+                .filter(|r| **r == WindowRequest::Move)
+                .count()
+        };
+        let before = moves(&mut driver);
+        for (time, event) in [
+            (30_000_000_000, PointerEvent::Motion { position: top }),
+            (30_000_000_000, button(top, true)),
+            (
+                30_000_000_001,
+                PointerEvent::Motion {
+                    position: Point::new(top.x, top.y + 30.0),
+                },
+            ),
+            (
+                30_000_000_002,
+                button(Point::new(top.x, top.y + 30.0), false),
+            ),
+            (30_000_000_003, PointerEvent::Leave),
+        ] {
+            send(&mut driver, window, at(time, event));
+        }
+        assert_eq!(moves(&mut driver), before + 1);
     }
 }

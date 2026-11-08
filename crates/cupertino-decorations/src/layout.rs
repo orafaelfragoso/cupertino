@@ -142,9 +142,9 @@ mod tests {
     #[test]
     fn frame_stacks_titlebar_over_content() {
         let l = layout(TitlebarStyle::Standard);
-        assert_eq!(l.titlebar, Rect::new(0.0, 0.0, 800.0, 28.0));
-        assert_eq!(l.content, Rect::new(0.0, 28.0, 800.0, 600.0));
-        assert_eq!(l.frame, Rect::new(0.0, 0.0, 800.0, 628.0));
+        assert_eq!(l.titlebar, Rect::new(0.0, 0.0, 800.0, 32.0));
+        assert_eq!(l.content, Rect::new(0.0, 32.0, 800.0, 600.0));
+        assert_eq!(l.frame, Rect::new(0.0, 0.0, 800.0, 632.0));
         let u = layout(TitlebarStyle::Unified);
         assert_eq!(u.titlebar.height(), 52.0);
         assert_eq!(
@@ -153,11 +153,24 @@ mod tests {
             "the content runs under a unified bar"
         );
         assert_eq!(u.frame, Rect::new(0.0, 0.0, 800.0, 600.0));
+        for style in [TitlebarStyle::UnifiedCompact, TitlebarStyle::Sidebar] {
+            let l = layout(style);
+            assert_eq!(
+                l.content, u.content,
+                "{style:?}: the content fills the frame"
+            );
+            assert_eq!(l.frame, u.frame, "{style:?}");
+        }
+        assert_eq!(
+            layout(TitlebarStyle::UnifiedCompact).titlebar.height(),
+            38.0
+        );
+        assert_eq!(layout(TitlebarStyle::Sidebar).titlebar.height(), 52.0);
     }
 
     #[test]
     fn buttons_are_ordered_evenly_and_vertically_centred() {
-        for style in [TitlebarStyle::Standard, TitlebarStyle::Unified] {
+        for style in TitlebarStyle::ALL {
             let l = layout(style);
             let m = DecorationMetrics::default();
             for w in l.buttons.windows(2) {
@@ -166,7 +179,7 @@ mod tests {
                 assert!(!w[0].art.intersects(&w[1].art), "art boxes do not overlap");
             }
             assert_eq!(l.buttons[0].center.y, l.titlebar.height() / 2.0);
-            assert_eq!(l.buttons[0].radius, 6.0);
+            assert_eq!(l.buttons[0].radius, 7.0);
             assert_eq!(l.buttons[0].art.width(), 16.0);
             assert_eq!(l.buttons[0].kind, ButtonKind::Close);
             assert_eq!(l.buttons[2].kind, ButtonKind::Zoom);
@@ -176,14 +189,18 @@ mod tests {
 
     #[test]
     fn first_button_sits_at_the_leading_inset_of_its_style() {
-        // cell x 7 / 19 plus half the 14 pt cell; the unified bar centres the 16 pt cell in 52 pt
-        assert_eq!(
-            layout(TitlebarStyle::Standard).buttons[0].center,
-            Point::new(14.0, 14.0)
-        );
-        let u = layout(TitlebarStyle::Unified);
-        assert_eq!(u.buttons[0].center, Point::new(26.0, 26.0));
-        assert_eq!(u.buttons[2].center.x, 66.0);
+        // the first centre is as far from the leading edge as from the top: the middle of the row; 23 pt apart
+        let centres = [
+            (TitlebarStyle::Standard, 16.0),
+            (TitlebarStyle::Unified, 26.0),
+            (TitlebarStyle::UnifiedCompact, 19.0),
+            (TitlebarStyle::Sidebar, 26.0),
+        ];
+        for (style, c) in centres {
+            let l = layout(style);
+            assert_eq!(l.buttons[0].center, Point::new(c, c), "{style:?}");
+            assert_eq!(l.buttons[2].center.x, c + 46.0, "{style:?}");
+        }
     }
 
     #[test]

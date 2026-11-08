@@ -21,7 +21,7 @@ use tiny_skia::{FillRule, LineCap, Paint, Pixmap, Stroke, Transform};
 pub struct DecorationConfig {
     pub appearance: Appearance,
     pub style: TitlebarStyle,
-    /// Regular (12 pt) or small (10 pt) corner radius.
+    /// Regular ([`DecorationMetrics::corner_radius`], 16 pt) or small (10 pt) corner radius.
     pub corner: WindowCornerSize,
     /// Continuous (default) or circular corners; the exact continuous curve is approximate.
     pub corner_style: CornerStyle,
@@ -70,9 +70,10 @@ impl DecorationConfig {
             metrics: DecorationMetrics::default(),
             palette,
             typography,
-            title_alignment: match style {
-                TitlebarStyle::Standard => TitleAlignment::Center,
-                TitlebarStyle::Unified => TitleAlignment::Leading,
+            title_alignment: if style.client_drawn() {
+                TitleAlignment::Leading
+            } else {
+                TitleAlignment::Center
             },
             double_click: DoubleClickAction::Zoom,
             shadow_option: ShadowOption::Standard,
@@ -80,8 +81,12 @@ impl DecorationConfig {
         }
     }
 
+    /// The window's corner radius: the metrics' radius for the regular size, the theme's small radius otherwise.
     pub fn corner_radius(&self) -> f64 {
-        self.corner.radius_pt()
+        match self.corner {
+            WindowCornerSize::Regular => self.metrics.corner_radius,
+            small => small.radius_pt(),
+        }
     }
 }
 
@@ -145,11 +150,13 @@ fn paint(c: [f32; 4]) -> Paint<'static> {
 }
 
 impl Decorations {
-    /// Decorations of a configuration, with the `ui` font of `assets`. A unified bar draws no title, so it loads no fonts.
+    /// Decorations of a configuration, with the `ui` font of `assets`. A style whose row the client draws has no
+    /// title here, so it loads no fonts.
     pub fn new(config: DecorationConfig, assets: &Assets) -> Result<Self, AssetError> {
-        let text = match config.style {
-            TitlebarStyle::Standard => TextRenderer::new(assets, FontRole::Ui)?,
-            TitlebarStyle::Unified => TextRenderer::without_fonts(),
+        let text = if config.style.client_drawn() {
+            TextRenderer::without_fonts()
+        } else {
+            TextRenderer::new(assets, FontRole::Ui)?
         };
         Ok(Self { config, text })
     }
@@ -224,15 +231,15 @@ impl Decorations {
     }
 
     /// Placement of the title in logical points: `(left edge, text width, text)` after truncation,
-    /// or `None` when the title is empty, there is no room, or the bar is unified (the client draws
-    /// that title).
+    /// or `None` when the title is empty, there is no room, or the client draws the row (and that
+    /// title).
     pub fn title_placement(
         &mut self,
         frame_width: f64,
         title: &str,
         scale: f64,
     ) -> Option<(f64, f64, String)> {
-        if title.is_empty() || self.config.style == TitlebarStyle::Unified {
+        if title.is_empty() || self.config.style.client_drawn() {
             return None;
         }
         self.text.set_scale(scale as f32);
@@ -268,8 +275,9 @@ impl Decorations {
 
     /// Render the titlebar strip: fill, rim along the top corners and sides, separator, buttons and
     /// title. The pixmap is `round(width·scale) × round(titlebar_height·scale)` premultiplied RGBA.
-    /// A unified bar draws the buttons only: the rest of the strip stays transparent over the
-    /// client's content, and [`Decorations::render_rim`] draws the rim of the whole frame.
+    /// A style whose row the client draws gets the buttons only: the rest of the strip stays
+    /// transparent over the client's content, and [`Decorations::render_rim`] draws the rim of the
+    /// whole frame.
     pub fn render_titlebar(
         &mut self,
         frame_width: f64,
@@ -306,7 +314,7 @@ impl Decorations {
             (tb.height() * scale).round().max(1.0) as u32,
         );
         let mut pm = Pixmap::new(w, h).expect("non-zero size");
-        if cfg.style == TitlebarStyle::Unified {
+        if cfg.style.client_drawn() {
             for b in &layout.buttons {
                 draw_button(
                     &mut pm,
@@ -469,7 +477,7 @@ mod tests {
         for scale in [1.0, 1.25, 1.5, 2.0] {
             let pm = d.render_titlebar(800.0, scale, &DecorationState::default());
             assert_eq!(pm.width(), (800.0f64 * scale).round() as u32);
-            assert_eq!(pm.height(), (28.0f64 * scale).round() as u32);
+            assert_eq!(pm.height(), (32.0f64 * scale).round() as u32);
         }
         let u = decorations(TitlebarStyle::Unified, Appearance::Light).render_titlebar(
             800.0,
@@ -772,7 +780,17 @@ mod tests {
 
     #[test]
     fn a_unified_bar_draws_only_its_buttons_and_leaves_the_strip_to_the_client() {
-        let mut d = decorations(TitlebarStyle::Unified, Appearance::Light);
+        for style in [
+            TitlebarStyle::Unified,
+            TitlebarStyle::UnifiedCompact,
+            TitlebarStyle::Sidebar,
+        ] {
+            only_buttons(style);
+        }
+    }
+
+    fn only_buttons(style: TitlebarStyle) {
+        let mut d = decorations(style, Appearance::Light);
         let state = DecorationState {
             title: "Files".into(),
             ..Default::default()
@@ -801,7 +819,17 @@ mod tests {
 
     #[test]
     fn a_unified_frame_has_no_titlebar_hit_and_keeps_the_resize_zones() {
-        let d = decorations(TitlebarStyle::Unified, Appearance::Light);
+        for style in [
+            TitlebarStyle::Unified,
+            TitlebarStyle::UnifiedCompact,
+            TitlebarStyle::Sidebar,
+        ] {
+            client_moves(style);
+        }
+    }
+
+    fn client_moves(style: TitlebarStyle) {
+        let d = decorations(style, Appearance::Light);
         let content = Size::new(800.0, 600.0);
         let l = d.layout(content);
         assert_eq!(
@@ -833,14 +861,14 @@ mod tests {
         assert_eq!(h, Hit::Titlebar);
         assert_eq!(d.double_click_action(h), DoubleClickAction::Zoom);
         assert!(d.button_group_hovered(content, l.buttons[1].center));
-        assert_eq!(d.frame_size(content), Size::new(800.0, 628.0));
-        assert_eq!(d.input_region(content), Rect::new(-4.0, -4.0, 808.0, 636.0));
+        assert_eq!(d.frame_size(content), Size::new(800.0, 632.0));
+        assert_eq!(d.input_region(content), Rect::new(-4.0, -4.0, 808.0, 640.0));
     }
 
     #[test]
     fn corner_radius_follows_the_window_class() {
         let mut cfg = DecorationConfig::builtin(Appearance::Light, TitlebarStyle::Standard);
-        assert_eq!(cfg.corner_radius(), 12.0);
+        assert_eq!(cfg.corner_radius(), 16.0);
         cfg.corner = WindowCornerSize::Small;
         assert_eq!(
             decorations_with(cfg)

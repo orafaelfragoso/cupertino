@@ -52,7 +52,7 @@ the delay), dock hot-zone avoidance off, tiling animations on, tiled border off,
 | open / close transform per `MapParams::kind` | plain none; document grow-in 0.2 s; utility fade-out 0.15 s; alert pop-in 0.4 s / scale-down-and-out 0.15 s; app-modal grow-in / fade-out; `sin²` ease |
 | kind from protocol facts | modal → app-modal before utility → utility, else plain; documents and alerts have no protocol signal |
 | sheet (modal child) | 0.26 s linear time; slides 32 pt down into place eased `sin²`, alpha `min(2p, 1)`; close slides back up, alpha `1 − p` |
-| sheet placement | centred on the parent, snapped to whole points; top at the parent's title bar (`snap.titlebar_height`) |
+| sheet placement | centred on the parent, snapped to whole points; top at the bottom of the parent's title bar (`snap.titlebar_height`, 32 pt, the titled window's bar), or of the toolbar row the parent's client draws when it says so at map (`MapParams.sheet_top`: 52 pt, 38 pt compact) |
 | modal panel without a parent | centred horizontally, top a quarter of the free height below the usable top; the next panel of the app 66 pt right and down, kept on screen |
 | other child windows | centred on the parent, kept inside the usable area |
 | zoom / unzoom | `min(0.35, 181·ln(maxΔ/100 + 1)/750)` s, `sin²` ease |

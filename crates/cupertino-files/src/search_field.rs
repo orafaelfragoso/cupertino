@@ -1,7 +1,7 @@
-//! The toolbar search field's width. At rest it is [`window::TOOLBAR_SEARCH_FIELD`] wide. While it has the keyboard or
-//! holds text it is open: [`window::SEARCH_GROWTH`] times that, but never more than [`window::SEARCH_MAX_SHARE`] of
-//! the toolbar, and never over the back and forward buttons, the [`window::TITLE_MIN`] the title keeps or the pop-up
-//! buttons. The width changes over [`window::SEARCH_GROW_SECONDS`] with an ease-out, or at once with reduce motion.
+//! The toolbar search field's width. At rest it is a round button [`window::TOOLBAR_SEARCH_FIELD`] wide. While it has
+//! the keyboard or holds text it is open: [`window::SEARCH_OPEN`] wide, but never more than
+//! [`window::SEARCH_MAX_SHARE`] of the toolbar, and never over the back and forward buttons, the [`window::TITLE_MIN`]
+//! the title keeps or the controls after the title. The width changes over [`window::SEARCH_GROW_SECONDS`] with an ease-out, or at once with reduce motion.
 //! Times are seconds on the window's clock.
 
 use crate::metrics::window;
@@ -14,12 +14,12 @@ pub fn is_open(focused: bool, text: &str) -> bool {
     focused || !text.is_empty()
 }
 
-/// The width of the toolbar's pop-up buttons, View, Tags and Action, with the gap after each.
-pub fn popups() -> f64 {
+/// The width of the toolbar's controls between the title and the field, with the gap after each.
+pub fn controls() -> f64 {
     [
-        window::TOOLBAR_VIEW_POPUP,
-        window::TOOLBAR_TAGS_POPUP,
-        window::TOOLBAR_ACTION_POPUP,
+        window::TOOLBAR_VIEW_MODES,
+        window::TOOLBAR_VIEW_MENU,
+        window::TOOLBAR_ACTIONS,
     ]
     .iter()
     .map(|(w, _)| w + window::TOOLBAR_ITEM_GAP)
@@ -27,7 +27,7 @@ pub fn popups() -> f64 {
 }
 
 /// The open width in a toolbar `toolbar` points wide, whose items before the field are the back and forward buttons,
-/// the title and the pop-up buttons. It is never less than the resting width; a toolbar too narrow for that drops
+/// the title and the controls after it. It is never less than the resting width; a toolbar too narrow for that drops
 /// nothing and leaves the field at rest.
 pub fn open_width(toolbar: f64) -> f64 {
     let (back_forward, _) = window::TOOLBAR_BACK_FORWARD;
@@ -35,9 +35,9 @@ pub fn open_width(toolbar: f64) -> f64 {
         + window::TOOLBAR_ITEM_GAP
         + window::TITLE_MIN
         + window::TOOLBAR_ITEM_GAP
-        + popups();
+        + controls();
     let room = toolbar - 2.0 * window::TOOLBAR_INSET - before;
-    (REST * window::SEARCH_GROWTH)
+    window::SEARCH_OPEN
         .min(toolbar * window::SEARCH_MAX_SHARE)
         .min(room)
         .max(REST)
@@ -136,6 +136,7 @@ mod tests {
     use super::*;
 
     const WIDE: f64 = 800.0;
+    const OPEN: f64 = window::SEARCH_OPEN;
 
     #[test]
     fn the_field_is_open_with_the_keyboard_or_text() {
@@ -146,18 +147,20 @@ mod tests {
     }
 
     #[test]
-    fn the_open_width_is_two_and_a_half_times_the_rest_within_half_the_toolbar_and_the_title() {
-        assert_eq!(open_width(WIDE), REST * 2.5);
-        // half of a 600 pt toolbar is 300, over 280
-        assert_eq!(open_width(600.0), 280.0);
-        // 500 pt: half is 250; the buttons, the title's room, the pop-ups and the gaps leave 500 - 16 - 137 - 150
-        assert_eq!(open_width(500.0), 197.0);
-        // 400 pt: they leave 97, less than the rest: the field stays at rest
-        assert_eq!(open_width(400.0), REST);
-        for toolbar in [200.0, 300.0, 400.0, 600.0, 1000.0] {
+    fn the_open_width_is_its_own_within_half_the_toolbar_and_the_title() {
+        assert_eq!(open_width(WIDE), OPEN);
+        // 700 pt: the group, the title's room, the controls and the gaps leave 700 - 16 - 489.5
+        assert_eq!(open_width(700.0), 194.5);
+        // 540 pt: they leave 34.5, less than the rest: the field stays at rest
+        assert_eq!(open_width(540.0), REST);
+        for toolbar in [200.0, 300.0, 400.0, 600.0, 1000.0, 2000.0] {
             let w = open_width(toolbar);
-            assert!((REST..=REST * 2.5).contains(&w), "{toolbar}: {w}");
-            let room = toolbar - 2.0 * window::TOOLBAR_INSET - 53.0 - 12.0 - 60.0 - 12.0 - 150.0;
+            assert!((REST..=OPEN).contains(&w), "{toolbar}: {w}");
+            assert!(
+                w <= toolbar * window::SEARCH_MAX_SHARE || w == REST,
+                "{toolbar}: {w}"
+            );
+            let room = toolbar - 2.0 * window::TOOLBAR_INSET - 73.0 - 8.0 - 60.0 - 8.0 - 340.5;
             assert!(w <= room.max(REST), "{toolbar}: {w} passes the title");
         }
     }
@@ -175,13 +178,10 @@ mod tests {
         width.tick(2.1, WIDE, true);
         let half = width.width();
         // an ease-out has covered more than half the way at half the time
-        assert!(
-            half > REST + (REST * 1.5) / 2.0 && half < REST * 2.5,
-            "{half}"
-        );
+        assert!(half > REST + (OPEN - REST) / 2.0 && half < OPEN, "{half}");
         assert!(width.animating());
         width.tick(2.2, WIDE, true);
-        assert_eq!(width.width(), REST * 2.5);
+        assert_eq!(width.width(), OPEN);
         assert!(!width.animating());
     }
 
@@ -204,7 +204,7 @@ mod tests {
         let mut width = SearchWidth::default();
         width.want(true);
         width.tick(3.0, WIDE, false);
-        assert_eq!(width.width(), REST * 2.5);
+        assert_eq!(width.width(), OPEN);
         assert!(!width.animating());
         width.want(false);
         width.tick(3.0, WIDE, false);
@@ -217,9 +217,9 @@ mod tests {
         width.want(true);
         width.tick(0.0, WIDE, true);
         width.tick(1.0, WIDE, true);
-        width.tick(1.5, 500.0, true);
-        assert_eq!(width.width(), open_width(500.0));
-        assert!(width.width() < REST * 2.5);
+        width.tick(1.5, 700.0, true);
+        assert_eq!(width.width(), open_width(700.0));
+        assert!(width.width() < OPEN);
         assert!(!width.animating());
     }
 }

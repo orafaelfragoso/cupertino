@@ -544,7 +544,8 @@ impl Wm {
             let pf = pw.geometry();
             if p.modal && self.cfg.focus.place_modal_children_as_sheets {
                 kind = WindowKind::Sheet;
-                geometry = kind::sheet_frame(pf, geometry.size(), self.cfg.snap.titlebar_height);
+                let top = pw.sheet_top.unwrap_or(self.cfg.snap.titlebar_height);
+                geometry = kind::sheet_frame(pf, geometry.size(), top);
             } else {
                 let usable = self
                     .output(output)
@@ -606,6 +607,7 @@ impl Wm {
                 level,
                 lifecycle,
                 disabled: p.disabled,
+                sheet_top: p.sheet_top,
             },
         );
         self.insert_in_stack(p.window);

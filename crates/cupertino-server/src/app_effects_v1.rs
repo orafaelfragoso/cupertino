@@ -35,7 +35,7 @@ pub struct AppEffectsV1Global {
 impl AppEffectsV1Global {
     pub fn new(dh: &DisplayHandle) -> Self {
         Self {
-            _global: dh.create_global::<Cupertino, CupertinoAppEffectsV1, ()>(5, ()),
+            _global: dh.create_global::<Cupertino, CupertinoAppEffectsV1, ()>(6, ()),
         }
     }
 }
@@ -342,6 +342,16 @@ impl Cupertino {
             WEnum::Value(cupertino_app_effects_v1::TitlebarStyle::Unified) => {
                 TitlebarStyle::Unified
             }
+            WEnum::Value(cupertino_app_effects_v1::TitlebarStyle::UnifiedCompact)
+                if effects.version() >= STYLES_VERSION =>
+            {
+                TitlebarStyle::UnifiedCompact
+            }
+            WEnum::Value(cupertino_app_effects_v1::TitlebarStyle::Sidebar)
+                if effects.version() >= STYLES_VERSION =>
+            {
+                TitlebarStyle::Sidebar
+            }
             other => {
                 effects.post_error(
                     EffectsError::Window,
@@ -405,6 +415,9 @@ impl Cupertino {
         });
     }
 }
+
+/// The version that adds the compact unified and the sidebar title bar styles.
+const STYLES_VERSION: u32 = 6;
 
 /// Each window control with the version of the global that defines it.
 const WINDOW_CONTROLS: [(WindowControl, u32); 2] =

@@ -1,26 +1,108 @@
-//! A pane's sections as Kit controls: each row its label, its second line and its control; a control's change is
-//! the [`Value`] its row commits, as the panes' model reads it.
+//! A page as Kit controls: the pane's header card, then each section as a group of rows under its title, each row its
+//! label, its second line and its control, with the section's footer below; a group of rows that open the pane's
+//! sub-pages; a control's change is the [`Value`] its row commits, as the panes' model reads it.
 
-use cupertino_kit::controls::{PopUpButton, SegmentedControl, Slider, SliderStyle, TextRole};
+use std::collections::HashMap;
+
+use cupertino_kit::controls::{
+    FormGroup, FormHeader, FormRow, IconTile, NavigationRow, PopUpButton, SegmentedControl, Slider,
+    SliderStyle, TextRole, TileColor,
+};
 use cupertino_kit::core::{
     Change, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget, Window,
 };
 use cupertino_kit::geometry::{Insets, Size};
 use cupertino_kit::layout::{Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured};
 use cupertino_kit::prelude::*;
-use cupertino_kit::text::{AttributedText, TextStyle};
+use cupertino_kit::text::{AttributedText, FontWeight, TextStyle};
 
 use super::Message;
 use crate::controls::{metrics, Control, Value};
+use crate::pages::{Block, SubPage};
+use crate::pane::{Enclosure, PaneId};
 use crate::panes::{ControlId, Row, Section};
 use crate::search::Hit;
 
-/// Between a form's rows and between controls in a row, an approximate design value.
+/// Between the controls in a row, and between a row's label and its control.
 pub const ROW_GAP: f64 = 8.0;
-/// Between a form's sections, an approximate design value.
-pub const SECTION_GAP: f64 = 20.0;
+/// Between a page's groups, with or without a title above them.
+pub const SECTION_GAP: f64 = 10.0;
 /// Between a row's label and its second line.
 const LABEL_LINE_GAP: f64 = 2.0;
+/// A section title: the space above it, its weight, and its leading inset, the group's rows' own.
+pub(crate) const SECTION_TITLE_TOP: f64 = 20.0;
+const SECTION_TITLE_WEIGHT: u16 = 700;
+const SECTION_TITLE_INSET: f64 = 10.0;
+/// A footer below a group: the space between them and its inset at both sides.
+pub(crate) const FOOTER_GAP: f64 = 6.0;
+const FOOTER_INSET: f64 = 10.0;
+/// The tile of a pane's header card.
+const HEADER_TILE: f64 = 48.0;
+/// The side of a row's tile.
+const ROW_TILE: f64 = 24.0;
+
+/// The tile colour of an enclosure.
+pub fn tile_color(enclosure: Enclosure) -> TileColor {
+    match enclosure {
+        Enclosure::Blue => TileColor::Blue,
+        Enclosure::Black => TileColor::Graphite,
+        Enclosure::Gray => TileColor::Gray,
+        Enclosure::Pink => TileColor::Pink,
+        Enclosure::Indigo => TileColor::Indigo,
+        Enclosure::Green => TileColor::Green,
+        Enclosure::Red => TileColor::Red,
+    }
+}
+
+/// The header card of `pane`: its tile, `title` and description.
+pub fn header(pane: PaneId, title: &str, description: &str) -> Element<Message> {
+    let p = pane.pane();
+    Element::new(FormHeader {
+        tile: IconTile {
+            symbol: p.symbol.into(),
+            color: tile_color(p.enclosure),
+            size: HEADER_TILE,
+        },
+        title: title.into(),
+        description: description.into(),
+    })
+    .key("header")
+}
+
+/// What assistive technology calls each control of `sections`: its row's label, with the section's title after it
+/// where the same label stands in more than one section, so that, as each application's "Show previews", every one
+/// has a name of its own.
+pub fn control_names(sections: &[Section]) -> Names {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for row in sections.iter().flat_map(|s| &s.rows) {
+        *counts.entry(row.label.as_str()).or_default() += 1;
+    }
+    let mut names = Vec::new();
+    for section in sections {
+        for row in &section.rows {
+            let name = match &section.header {
+                Some(header) if counts[row.label.as_str()] > 1 => {
+                    format!("{}, {header}", row.label)
+                }
+                _ => row.label.clone(),
+            };
+            names.push((row.id, name));
+        }
+    }
+    Names(names)
+}
+
+/// The accessible name of each control of a page, by its id.
+pub struct Names(Vec<(ControlId, String)>);
+
+impl Names {
+    pub fn get(&self, id: ControlId) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|(i, _)| *i == id)
+            .map(|(_, name)| name.as_str())
+    }
+}
 
 /// A line of `content`, none when it is empty: an empty text is a node a screen reader cannot announce.
 pub fn text(content: &str, role: TextRole) -> Option<Element<Message>> {
@@ -66,27 +148,27 @@ fn control_key(id: ControlId) -> Key {
     Key::from(format!("{id:?}-control"))
 }
 
-/// The control of `row`; a disabled row's control takes no input.
-fn control(row: &Row, open: Option<ControlId>) -> Option<Element<Message>> {
+/// The control of `row`, named `name`; a disabled row's control takes no input.
+fn control(row: &Row, name: &str, open: Option<ControlId>) -> Option<Element<Message>> {
     let id = row.id;
     let enabled = row.disabled.is_none();
     let commit = move |value: Value| Message::Commit(id, value);
     let control = match &row.control {
         Control::Switch { on } => Element::new(Toggle {
-            label: row.label.clone(),
+            label: name.to_owned(),
             on: *on,
             enabled,
             on_toggle: Some(Box::new(move |on| commit(Value::Bool(on)))),
         }),
         Control::Segmented { segments, selected } => Element::new(SegmentedControl {
-            label: row.label.clone(),
+            label: name.to_owned(),
             segments: segments.iter().map(|s| s.to_string()).collect(),
             selected: Some(*selected),
             enabled,
             on_select: Some(Box::new(move |i| commit(Value::Index(i)))),
         }),
         Control::Popup { choices, selected } => Element::new(PopUpButton {
-            label: row.label.clone(),
+            label: name.to_owned(),
             options: choices.clone(),
             selected: *selected,
             open: open == Some(id),
@@ -96,7 +178,7 @@ fn control(row: &Row, open: Option<ControlId>) -> Option<Element<Message>> {
         Control::Slider { value, stops, .. } => {
             let stops = stops.filter(|n| *n > 1);
             Element::new(Slider {
-                label: row.label.clone(),
+                label: name.to_owned(),
                 value: *value,
                 min: 0.0,
                 max: 1.0,
@@ -113,7 +195,7 @@ fn control(row: &Row, open: Option<ControlId>) -> Option<Element<Message>> {
             .width(metrics::SLIDER_WIDTH)
         }
         Control::Level { value } => Element::new(Slider {
-            label: row.label.clone(),
+            label: name.to_owned(),
             value: *value,
             min: 0.0,
             max: 1.0,
@@ -219,7 +301,7 @@ impl<M: 'static> Widget<M> for Label<M> {
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
-fn row(row: &Row, open: Option<ControlId>) -> Element<Message> {
+fn row(row: &Row, names: &Names, open: Option<ControlId>) -> Element<Message> {
     let second = row
         .error
         .as_ref()
@@ -227,69 +309,156 @@ fn row(row: &Row, open: Option<ControlId>) -> Element<Message> {
         .or(row.detail.as_ref());
     let label = text(&row.label, TextRole::Body)
         .into_iter()
-        .chain(second.and_then(|s| styled(s, TextRole::Body, true)))
+        .chain(second.and_then(|s| styled(s, TextRole::Caption, true)))
         .collect();
     let mut children = vec![
         Element::new(Label { lines: label }),
         Element::new(Spacer::default()),
     ];
-    children.extend(control(row, open));
-    Element::new(Stack {
-        axis: Axis::Horizontal,
-        padding: Insets::ZERO,
-        spacing: ROW_GAP,
-        align: Align::Center,
-        children,
+    let name = names.get(row.id).unwrap_or(&row.label);
+    children.extend(control(row, name, open));
+    Element::from(FormRow {
+        tile: None,
+        content: Element::new(Stack {
+            axis: Axis::Horizontal,
+            padding: Insets::ZERO,
+            spacing: ROW_GAP,
+            align: Align::Center,
+            children,
+        }),
     })
     .key(format!("{:?}", row.id))
 }
 
-/// The pane's sections, top to bottom.
-pub fn pane(sections: &[Section], open: Option<ControlId>) -> Element<Message> {
-    column(
-        SECTION_GAP,
-        sections
-            .iter()
-            .enumerate()
-            .map(|(i, section)| {
-                let mut children = Vec::new();
-                children.extend(
-                    section
-                        .header
-                        .as_deref()
-                        .and_then(|h| text(h, TextRole::Section)),
-                );
-                children.extend(section.rows.iter().map(|r| row(r, open)));
-                children.extend(
-                    section
-                        .footer
-                        .as_deref()
-                        .and_then(|f| styled(f, TextRole::Body, true)),
-                );
-                column(ROW_GAP, children).key(i as u64)
-            })
-            .collect(),
-    )
+/// A section title, bold, over its group.
+fn section_title(title: &str) -> Element<Message> {
+    let style = TextStyle {
+        weight: FontWeight(SECTION_TITLE_WEIGHT),
+        ..TextStyle::new(13.0)
+    };
+    let title = Element::new(Text {
+        content: AttributedText::plain(title, style),
+        role: TextRole::Body,
+        wrap: true,
+        secondary: false,
+        selected: false,
+    });
+    Element::new(Stack {
+        axis: Axis::Vertical,
+        padding: Insets {
+            top: SECTION_TITLE_TOP,
+            left: SECTION_TITLE_INSET,
+            bottom: SECTION_GAP,
+            right: SECTION_TITLE_INSET,
+        },
+        spacing: 0.0,
+        align: Align::Stretch,
+        children: vec![title],
+    })
 }
 
-/// The search's results, each a button to its pane.
+/// A section: its title, its rows in a group, and its footer.
+fn section(section: &Section, names: &Names, open: Option<ControlId>) -> Vec<Element<Message>> {
+    let mut out = Vec::new();
+    if let Some(header) = section.header.as_deref().filter(|h| !h.is_empty()) {
+        out.push(section_title(header));
+    }
+    if !section.rows.is_empty() {
+        out.push(Element::from(FormGroup {
+            rows: section.rows.iter().map(|r| row(r, names, open)).collect(),
+        }));
+    }
+    if let Some(footer) = section
+        .footer
+        .as_deref()
+        .and_then(|f| styled(f, TextRole::Caption, true))
+    {
+        out.push(Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets {
+                top: FOOTER_GAP,
+                left: FOOTER_INSET,
+                bottom: 0.0,
+                right: FOOTER_INSET,
+            },
+            spacing: 0.0,
+            align: Align::Stretch,
+            children: vec![footer],
+        }));
+    }
+    out
+}
+
+/// The rows that open `subs`, in one group.
+fn links(subs: &[SubPage]) -> Element<Message> {
+    Element::from(FormGroup {
+        rows: subs
+            .iter()
+            .map(|&sub| {
+                Element::new(NavigationRow {
+                    label: sub.title().into(),
+                    tile: Some(IconTile {
+                        symbol: sub.symbol().into(),
+                        color: tile_color(sub.enclosure()),
+                        size: ROW_TILE,
+                    }),
+                    on_open: Some(Message::OpenPage(sub)),
+                })
+                .key(format!("open-{sub:?}"))
+            })
+            .collect(),
+    })
+}
+
+/// A page: its header card, when it has one, then its blocks, top to bottom. `sections` are all the pane's, which
+/// name the controls.
+pub fn page(
+    header: Option<Element<Message>>,
+    blocks: &[Block],
+    sections: &[Section],
+    open: Option<ControlId>,
+) -> Element<Message> {
+    let names = control_names(sections);
+    let mut children: Vec<Element<Message>> = header.into_iter().collect();
+    for (i, block) in blocks.iter().enumerate() {
+        let parts = match block {
+            Block::Section(s) => section(s, &names, open),
+            Block::Links(subs) => vec![links(subs)],
+        };
+        // each block is keyed by its place, so its rows keep their state while other blocks come and go
+        children.push(column(0.0, parts).key(i as u64));
+    }
+    column(SECTION_GAP, children)
+}
+
+/// The search's results, each a row that opens its page.
 pub fn results(hits: &[Hit]) -> Element<Message> {
     if hits.is_empty() {
         return line("No Results", TextRole::Body, true);
     }
-    column(
-        ROW_GAP,
-        hits.iter()
+    Element::from(FormGroup {
+        rows: hits
+            .iter()
             .enumerate()
             .map(|(i, hit)| {
+                let pane = hit.pane.pane();
                 let label = match hit.subtitle() {
-                    Some(sub) => format!("{} — {sub}", hit.pane.pane().title),
-                    None => hit.pane.pane().title.to_string(),
+                    Some(sub) => format!("{} — {sub}", pane.title),
+                    None => pane.title.to_string(),
                 };
-                button(&label, true, Message::Found(i)).key(i as u64)
+                Element::new(NavigationRow {
+                    label,
+                    tile: Some(IconTile {
+                        symbol: pane.symbol.into(),
+                        color: tile_color(pane.enclosure),
+                        size: ROW_TILE,
+                    }),
+                    on_open: Some(Message::Found(i)),
+                })
+                .key(i as u64)
             })
             .collect(),
-    )
+    })
 }
 
 /// The open menu of the pop-up button `id`, over it in `parent`.
@@ -302,8 +471,11 @@ pub fn menu(
     let Control::Popup { choices, selected } = &row.control else {
         return None;
     };
+    let name = control_names(sections)
+        .get(id)
+        .map_or_else(|| row.label.clone(), str::to_owned);
     let button = PopUpButton {
-        label: row.label.clone(),
+        label: name,
         options: choices.clone(),
         selected: *selected,
         open: true,

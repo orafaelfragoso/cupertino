@@ -23,6 +23,7 @@ pub mod mapping;
 pub mod menu_bar;
 #[cfg(feature = "app")]
 pub mod nm;
+pub mod pages;
 pub mod pane;
 pub mod panes;
 pub mod screen_sharing;

@@ -1,7 +1,7 @@
 //! The real Settings window, a CupertinoKit app in the full-height-sidebar style, whose window control buttons the
 //! server draws at the top of the sidebar, against the headless server: a drag on its toolbar where no control lies
-//! moves the window through `xdg_toplevel.move`, a drag on the sidebar's search field does not, and a double click on
-//! the toolbar zooms the window and another restores it.
+//! moves the window through `xdg_toplevel.move`, a drag on the sidebar's search field or on the toolbar's Back button
+//! does not, and a double click on the toolbar zooms the window and another restores it.
 //! Needs an EGL device and `dbus-daemon` for the app's private bus.
 
 mod common;
@@ -21,10 +21,13 @@ use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// The window's content height at its default size; a title bar the server drew would sit above it in the frame.
 const CONTENT_HEIGHT: f64 = 625.0;
-/// Content points: in the toolbar row past the back and forward buttons, where no item lies, and on the search field
-/// at the top of the sidebar, below the window control buttons.
+/// Content points: in the toolbar row past the back and forward buttons, where no item lies; on the search field at
+/// the top of the sidebar, below the window control buttons; and on the Back button.
 const TOOLBAR_GAP: (f64, f64) = (520.0, 26.0);
-const SEARCH_FIELD: (f64, f64) = (116.0, 71.0);
+const SEARCH_FIELD: (f64, f64) = (116.0, 75.0);
+const BACK_BUTTON: (f64, f64) = (259.0, 26.0);
+/// The Accessibility pane's Display row, which opens a page and so gives Back a page to go back to.
+const DISPLAY_ROW: (f64, f64) = (474.0, 262.0);
 /// How far a drag takes the pointer, in steps the client sees one by one.
 const DRAG: (f64, f64) = (120.0, 80.0);
 const DRAG_STEPS: u32 = 8;
@@ -179,6 +182,13 @@ impl Harness {
         self.run_for(Duration::from_millis(100));
     }
 
+    fn click(&mut self, content: (f64, f64)) {
+        let point = self.screen(content);
+        self.move_to(point);
+        self.button(true);
+        self.button(false);
+    }
+
     /// Two presses at `content` well within a double click.
     fn double_click(&mut self, content: (f64, f64)) {
         let point = self.screen(content);
@@ -222,7 +232,8 @@ fn title(state: &Cupertino) -> String {
 }
 
 #[test]
-fn a_drag_on_the_toolbar_moves_the_kit_window_and_one_on_its_search_field_does_not() {
+fn a_drag_on_the_toolbar_moves_the_kit_window_and_one_on_the_search_field_or_the_back_button_does_not(
+) {
     let Some(mut h) = Harness::new() else {
         return;
     };
@@ -238,6 +249,18 @@ fn a_drag_on_the_toolbar_moves_the_kit_window_and_one_on_its_search_field_does_n
     let before = frame(&h.state);
     h.drag(SEARCH_FIELD);
     assert_eq!(frame(&h.state), before, "the search field took the drag");
+    // Back is enabled once a page has been left
+    h.click(DISPLAY_ROW);
+    h.wait_until("the Display page", |s| title(s) == "Display");
+    h.run_for(Duration::from_millis(250));
+    let before = frame(&h.state);
+    h.drag(BACK_BUTTON);
+    assert_eq!(frame(&h.state), before, "the Back button took the drag");
+    assert_eq!(
+        title(&h.state),
+        "Display",
+        "released away from it, Back does not act"
+    );
 
     h.drag(TOOLBAR_GAP);
     h.wait_until("the window to follow the drag", |s| {

@@ -25,13 +25,16 @@ use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 use smithay::wayland::shm::with_buffer_contents;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
-/// The window's content height; the server's title bar sits above it in the frame.
+/// The window's content height; a title bar the server drew would sit above it in the frame.
 const CONTENT_HEIGHT: f64 = 625.0;
-// Centres of the Colour filter button and Appearance sidebar row in the 715 × 625 content.
-const COLOUR_FILTER: (f64, f64) = (596.0, 284.0);
-// Centre of the Top Left hot corner's button on the Desktop & Dock pane.
-const TOP_LEFT_CORNER: (f64, f64) = (619.0, 317.0);
-const APPEARANCE_ROW: (f64, f64) = (107.5, 93.0);
+// Centres in the 715 × 625 content: the Accessibility pane's Display row and the Colour filter button on the page it
+// opens, and the Appearance sidebar row.
+const DISPLAY_ROW: (f64, f64) = (474.0, 262.0);
+const COLOUR_FILTER: (f64, f64) = (586.0, 308.0);
+const APPEARANCE_ROW: (f64, f64) = (116.0, 194.0);
+// The Desktop & Dock pane's Hot Corners row and the Top Left corner's button on the page it opens.
+const HOT_CORNERS_ROW: (f64, f64) = (474.0, 542.0);
+const TOP_LEFT_CORNER: (f64, f64) = (609.0, 83.0);
 
 struct Process(Child);
 
@@ -62,10 +65,21 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
-        Self::with_menu("accessibility", "Accessibility", COLOUR_FILTER)
+        Self::with_menu(
+            "accessibility",
+            "Accessibility",
+            (DISPLAY_ROW, "Display"),
+            COLOUR_FILTER,
+        )
     }
 
-    fn with_menu(pane: &str, pane_title: &str, button: (f64, f64)) -> Self {
+    /// Settings on `pane`, the page its `row` opens, and the menu of `button` on that page open.
+    fn with_menu(
+        pane: &str,
+        pane_title: &str,
+        (row, page_title): ((f64, f64), &str),
+        button: (f64, f64),
+    ) -> Self {
         let binary = settings_binary();
         let home = tempfile::tempdir().unwrap();
         let bus = PrivateBus::start().expect("this regression needs dbus-daemon");
@@ -108,11 +122,14 @@ impl Harness {
         };
         h.wait_until("the pane's window", |s| title(s) == pane_title);
         h.run_for(Duration::from_millis(250));
+        h.click(row);
+        h.wait_until("the row's page", |s| title(s) == page_title);
+        h.run_for(Duration::from_millis(250));
         h.click(button);
         h.wait_until("one drawn choice popup", |s| {
             popup_count(s) == 1 && popup_drawn(s)
         });
-        assert_eq!(title(&h.state), pane_title);
+        assert_eq!(title(&h.state), page_title);
         h
     }
 
@@ -280,7 +297,7 @@ fn outside_click_dismisses_without_activating_the_underlying_pane() {
     h.run_for(Duration::from_millis(500));
     assert_eq!(
         (popup_count(&h.state), title(&h.state)),
-        (0, "Accessibility".into()),
+        (0, "Display".into()),
         "outside click must dismiss the popup and consume the pane activation"
     );
     assert!(
@@ -319,7 +336,12 @@ fn appearance_change_does_not_leave_an_orphaned_choice_popup() {
 
 #[test]
 fn pressing_a_row_of_the_open_menu_selects_it() {
-    let mut h = Harness::with_menu("desktop-dock", "Desktop & Dock", TOP_LEFT_CORNER);
+    let mut h = Harness::with_menu(
+        "desktop-dock",
+        "Desktop & Dock",
+        (HOT_CORNERS_ROW, "Hot Corners"),
+        TOP_LEFT_CORNER,
+    );
     let window = h.state.windows.iter().find(|w| w.mapped).unwrap();
     let (popup, _) = PopupManager::popups_for_surface(window.surface())
         .next()
@@ -339,7 +361,12 @@ fn pressing_a_row_of_the_open_menu_selects_it() {
 
 #[test]
 fn a_popup_under_a_stationary_pointer_takes_the_pointer_focus() {
-    let mut h = Harness::with_menu("desktop-dock", "Desktop & Dock", TOP_LEFT_CORNER);
+    let mut h = Harness::with_menu(
+        "desktop-dock",
+        "Desktop & Dock",
+        (HOT_CORNERS_ROW, "Hot Corners"),
+        TOP_LEFT_CORNER,
+    );
     let window = h.state.windows.iter().find(|w| w.mapped).unwrap();
     let parent = window.surface().clone();
     let frame = h.state.wm.window(window.id).unwrap().geometry();
@@ -377,6 +404,15 @@ const KEY_ESC: u32 = 1;
 const KEY_ENTER: u32 = 28;
 const KEY_DOWN: u32 = 108;
 const KEY_TAB: u32 = 15;
+/// How far a channel may differ between two runs and still count as the same look. An anti-aliased edge, as a group's
+/// rounded corner beside the pop-up button, can come out one level apart depending on which frames the client's
+/// repaints were split into; a focus ring that moved changes its pixels far more.
+const SAME_LOOK: u8 = 2;
+
+/// Whether two windows' pixels show the same look, every channel within [`SAME_LOOK`].
+fn same_look(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.abs_diff(*y) <= SAME_LOOK)
+}
 
 /// A pane with its menu open, the `keys` tapped (the last closes the menu), and its pixels once the client has had its
 /// time: a key that reached the pane moves its focus ring. The pixels are compared between two runs, so a pane that draws
@@ -391,7 +427,7 @@ fn pane_after(keys: &[u32]) -> Vec<u8> {
     h.run_for(Duration::from_millis(500));
     assert_eq!(
         (popup_count(&h.state), title(&h.state)),
-        (0, "Accessibility".into()),
+        (0, "Display".into()),
         "Escape closes the menu and leaves the pane as it was"
     );
     window_pixels(&h.state)
@@ -405,14 +441,19 @@ fn escape_closes_the_open_menu_and_tab_does_not_reach_the_pane() {
     drop(h);
     // Tab only moves the pane's focus, so the title cannot show it: the pane must look as if only Escape was pressed
     assert!(
-        pane_after(&[KEY_TAB, KEY_ESC]) == pane_after(&[KEY_ESC]),
+        same_look(&pane_after(&[KEY_TAB, KEY_ESC]), &pane_after(&[KEY_ESC])),
         "Tab reached the pane behind the menu and moved its focus"
     );
 }
 
 #[test]
 fn down_and_return_choose_the_next_item_of_the_open_menu() {
-    let mut h = Harness::with_menu("desktop-dock", "Desktop & Dock", TOP_LEFT_CORNER);
+    let mut h = Harness::with_menu(
+        "desktop-dock",
+        "Desktop & Dock",
+        (HOT_CORNERS_ROW, "Hot Corners"),
+        TOP_LEFT_CORNER,
+    );
     h.tap(KEY_DOWN);
     assert_eq!(popup_count(&h.state), 1, "Down only moves the highlight");
     h.tap(KEY_ENTER);

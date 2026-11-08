@@ -665,10 +665,10 @@ fn the_real_shell_processes_work_with_the_server() {
     );
 }
 
-/// The open centre's header row sits on the material even with no notification, so its title and Clear button read
-/// on any wallpaper in either appearance.
+/// The open centre puts each card on glass of its own and nothing behind its header row, whose title and clear button
+/// stand on the wallpaper.
 #[test]
-fn the_open_notification_centre_puts_its_header_on_the_material() {
+fn the_open_notification_centre_puts_its_card_on_glass_and_no_panel_behind_its_header() {
     let Some(bus) = PrivateBus::start() else {
         eprintln!("skipping: dbus-daemon is not available");
         return;
@@ -687,6 +687,25 @@ fn the_open_notification_centre_puts_its_header_on_the_material() {
             .build(),
     )
     .unwrap();
+    let hints: std::collections::HashMap<&str, zbus::zvariant::Value> =
+        std::collections::HashMap::new();
+    zbus::block_on(conn.call_method(
+        Some("org.freedesktop.Notifications"),
+        "/org/freedesktop/Notifications",
+        Some("org.freedesktop.Notifications"),
+        "Notify",
+        &(
+            "glass-test",
+            0u32,
+            "",
+            "Lunch",
+            "Are you free at noon?",
+            Vec::<&str>::new(),
+            hints,
+            0i32,
+        ),
+    ))
+    .unwrap();
     zbus::block_on(conn.call_method(
         Some("org.cupertino.NotificationCenter1"),
         "/org/cupertino/NotificationCenter1",
@@ -696,22 +715,28 @@ fn the_open_notification_centre_puts_its_header_on_the_material() {
     ))
     .unwrap();
 
-    server.wait_until("the centre to put its header on a 36 pt material", |s| {
-        header_panel_height(s) == Some(36)
+    server.wait_until("the centre to put its one card on glass", |s| {
+        centre_backdrop_heights(s).is_some_and(|h| h.len() == 1 && h[0] >= 58)
     });
 }
 
-/// Height in points of the topmost material the compositor draws under the notification surface: the centre's header
-/// panel once the centre is open. `None` until the process has committed a backdrop.
-fn header_panel_height(state: &Cupertino) -> Option<usize> {
-    let map = layer_map_for_output(&state.outputs.first()?.output);
-    let layer = map
-        .layers()
-        .find(|l| l.namespace() == "cupertino-notifications")?;
-    let top = layer_surface_backdrops(&map, layer)
-        .into_iter()
-        .min_by(|a, b| a.area.loc.y.total_cmp(&b.area.loc.y))?;
-    Some(top.area.size.h.round() as usize)
+/// Heights in points of the glass the compositor draws under the open centre's surface (the notification layer that
+/// spans the output's height), top to bottom. `None` while the centre is not open.
+fn centre_backdrop_heights(state: &Cupertino) -> Option<Vec<usize>> {
+    let output = &state.outputs.first()?.output;
+    let map = layer_map_for_output(output);
+    let layer = map.layers().find(|l| {
+        l.namespace() == "cupertino-notifications"
+            && map.layer_geometry(l).is_some_and(|g| g.size.h > 300)
+    })?;
+    let mut areas = layer_surface_backdrops(&map, layer);
+    areas.sort_by(|a, b| a.area.loc.y.total_cmp(&b.area.loc.y));
+    Some(
+        areas
+            .into_iter()
+            .map(|b| b.area.size.h.round() as usize)
+            .collect(),
+    )
 }
 
 /// The centre draws every visible card and the Clear menu on one surface: a long history must not end the process's
@@ -772,8 +797,8 @@ fn the_notification_centre_with_a_long_history_keeps_its_connection() {
     ))
     .unwrap();
 
-    server.wait_until("the centre to draw its header", |s| {
-        header_panel_height(s) == Some(36)
+    server.wait_until("the centre to draw its cards", |s| {
+        centre_backdrop_heights(s).is_some_and(|h| !h.is_empty())
     });
     let settle = Instant::now() + Duration::from_secs(2);
     while Instant::now() < settle {

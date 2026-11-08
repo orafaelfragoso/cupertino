@@ -81,6 +81,8 @@ pub(super) struct ColumnsView {
     pinned: Option<Pin>,
     /// How far the preview's text is scrolled.
     pub preview_scroll: ScrollState,
+    /// The divider being dragged: the column's place, and whether it sizes every column; kept when it is let go.
+    pub resized: Option<(usize, bool)>,
 }
 
 /// What decides where the chain scrolls to: when it changes, the chain scrolls to its end again.
@@ -141,6 +143,7 @@ impl ColumnsView {
             scrolls: HashMap::new(),
             pinned: None,
             preview_scroll: NO_SCROLL,
+            resized: None,
         }
     }
 
@@ -830,10 +833,13 @@ impl Widget<Message> for ColumnFrame {
             ) if state.from.is_some() => {
                 state.from = None;
                 cx.release_pointer();
+                cx.emit(Message::Window(self.window, WindowEvent::ColumnResized));
                 Propagation::Stop
             }
             Event::Cancel => {
-                state.from = None;
+                if state.from.take().is_some() {
+                    cx.emit(Message::Window(self.window, WindowEvent::ColumnResized));
+                }
                 Propagation::Continue
             }
             _ => Propagation::Continue,

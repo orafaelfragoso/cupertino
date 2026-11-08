@@ -117,8 +117,10 @@ the context menus and rename work as in the other views. A selected item that is
 column at the end (`cupertino-ui-controls`' `FilePreview`): a picture whole, the start of a text file, else its large
 icon, then its name, kind and size, its dates, and a More… button (a ringed ellipsis over its label) that opens the
 item's menu. The divider after a
-column drags it wider or narrower (100–1000 pt; with Option held, every column), and the widths are kept with the
-window's view state (`window_prefs`, `column_width`). Each column is a list named for its folder, and the preview a
+column drags it wider or narrower (100–1000 pt; with Option held, every column), and the width it leaves is kept with
+the window's view state once it is let go (`window_prefs`, `column_width`). A row's selection sits 10 pt in from its
+column's sides, as the grey highlight of a folder of the chain does, and a click on another column moves the keyboard
+there without a focus ring. Each column is a list named for its folder, and the preview a
 group named "Preview of <name>".
 
 **Preview window** (`preview`, `kit::peek`). Space on the items, or File › Quick Preview (Primary+Y), opens the

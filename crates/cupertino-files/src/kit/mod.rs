@@ -582,6 +582,8 @@ pub enum Event {
         width: f64,
         all: bool,
     },
+    /// A column's divider was let go: new windows' columns start at the width it left.
+    ColumnResized,
     /// The preview column's text scrolled.
     PreviewScroll(ScrollState),
     /// The preview window.
@@ -1322,12 +1324,18 @@ impl Model {
             }
             Event::ColumnResize { index, width, all } => {
                 window.columns.chain.resize(index, width, all);
-                let width = if all {
-                    window.columns.chain.default_width()
-                } else {
-                    window.columns.chain.width(index)
-                };
-                session.remember_column_width(width);
+                window.columns.resized = Some((index, all));
+            }
+            Event::ColumnResized => {
+                // kept once the divider is let go, not at every move
+                if let Some((index, all)) = window.columns.resized.take() {
+                    let width = if all {
+                        window.columns.chain.default_width()
+                    } else {
+                        window.columns.chain.width(index)
+                    };
+                    session.remember_column_width(width);
+                }
             }
             Event::PreviewScroll(scroll) => window.columns.preview_scroll = scroll,
             Event::Peek(event) => return self.peek(id, event),

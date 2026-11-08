@@ -10,6 +10,7 @@ use common::{place, Run};
 use cupertino_files::notice::Notices;
 use cupertino_files::places::PlaceKind;
 use cupertino_files::window::ViewMode;
+use cupertino_files::window_prefs::WindowPrefs;
 use cupertino_kit::core::Role;
 use cupertino_kit::geometry::{Point, Size};
 use cupertino_kit::platform::{Mods, WindowStates};
@@ -27,6 +28,7 @@ fn run() -> Run {
     std::fs::write(documents.join("a.txt"), "alpha\n").unwrap();
     std::fs::write(documents.join("b.txt"), "bravo\n").unwrap();
     let places = vec![place("Documents", &documents, PlaceKind::Documents)];
+    let prefs = prefs_file(home.path());
     let preferences = ThemePreferences {
         appearance: Appearance::Light,
         reduce_transparency: false,
@@ -39,7 +41,7 @@ fn run() -> Run {
         Notices::start(None),
         None,
         preferences,
-        |start| start.with_view(ViewMode::Columns),
+        move |start| start.with_prefs_file(prefs).with_view(ViewMode::Columns),
     );
     // wide enough for two columns and the preview
     let active = WindowStates {
@@ -52,6 +54,11 @@ fn run() -> Run {
         .unwrap();
     run.wait_until(|run| texts(run).iter().any(|t| t == "b.txt"));
     run
+}
+
+/// Where the window keeps what new windows start with, under `home`.
+fn prefs_file(home: &std::path::Path) -> std::path::PathBuf {
+    home.join("config/cupertino/files/window.json")
 }
 
 /// The texts the window shows, in tree order.
@@ -156,7 +163,16 @@ fn a_columns_divider_resizes_it() {
     assert!((list.size.width - 244.0).abs() < 1.0, "{list:?}");
     let edge = list.max_x() + 0.5;
     let y = list.min_y() + 60.0;
-    run.drag(Point::new(edge, y), Point::new(edge + 40.0, y), Mods::NONE);
+    let prefs = prefs_file(&run.home());
+    let kept = || WindowPrefs::load(&prefs).column_width;
+    let before = kept();
+    run.hold(Point::new(edge, y), Point::new(edge + 40.0, y), Mods::NONE);
     let wider = run.bounds(Role::List, "Documents");
     assert!((wider.size.width - 284.0).abs() < 1.0, "{wider:?}");
+    assert_eq!(kept(), before, "nothing is written while the divider moves");
+    run.release(Point::new(edge + 40.0, y), Mods::NONE);
+    assert!(
+        (kept() - (before + 40.0)).abs() < 1.0,
+        "the width the divider left is kept once let go"
+    );
 }

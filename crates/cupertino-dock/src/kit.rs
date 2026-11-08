@@ -208,8 +208,9 @@ pub enum AppAction {
 /// An `org.freedesktop.Application.Activate` call under way ([`Host::dbus_activate`]): whether it succeeded.
 pub type BusCall = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
 
-/// A program the dock started ([`Host::spawn`]): ends when its process exits.
-pub type Exited = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+/// A program the dock started ([`Host::spawn`]): ends when its process exits, in whether it failed (an unsuccessful
+/// exit status or a signal).
+pub type Exited = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
 
 /// Icons loading away from the model ([`Host::preload`]): ends in each one's key, side in whole points and renditions.
 pub type IconLoad =
@@ -347,10 +348,12 @@ pub enum Message {
     KeyboardLeft(u32),
     /// The activation token of the launch waiting as `launch` arrived (`None` when there is none).
     Token(u64, Option<String>),
-    /// The program started for tile `key` at `asked` (when the open was asked for) exited.
+    /// The program started for tile `key` at `asked` (when the open was asked for) exited; `failed` is whether it
+    /// failed.
     Exited {
         key: String,
         asked: f64,
+        failed: bool,
     },
     /// The folder of the stack waiting for listing `listing` was listed.
     FolderListed {
@@ -1149,14 +1152,14 @@ impl Model {
                         let now = self.now();
                         self.session.dock.app_launching(&key, now);
                     }
-                    // the guard against a second launch ends with the process: a program that exits or crashes at
-                    // once can be opened again straight away
+                    // the guard against a second launch ends with a process that fails: a program that crashes at once
+                    // can be opened again straight away
                     let Some(&asked) = self.opening.get(&key) else {
                         return Vec::new();
                     };
                     vec![Command::Perform(Box::pin(async move {
-                        exited.await;
-                        Message::Exited { key, asked }
+                        let failed = exited.await;
+                        Message::Exited { key, asked, failed }
                     }))]
                 }
                 None => {
@@ -1195,8 +1198,12 @@ impl Model {
 
     /// The program started for tile `key` when it was asked to open at `asked` exited: with no window of it shown,
     /// the guard against a second launch goes, so asking again starts it again. A later ask has a guard of its own.
-    fn exited(&mut self, key: &str, asked: f64) {
-        if self.opening.get(key) == Some(&asked) && !self.session.has_windows(key) {
+    ///
+    /// Only a failed process ends it: a launcher that hands the application on and exits successfully (a wrapper that
+    /// starts it in the background, or one that passes the open to an instance already running) is followed by a
+    /// window that has not come yet, and a second ask meanwhile would open the application twice.
+    fn exited(&mut self, key: &str, asked: f64, failed: bool) {
+        if failed && self.opening.get(key) == Some(&asked) && !self.session.has_windows(key) {
             self.opening.remove(key);
         }
     }
@@ -2451,8 +2458,8 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             Vec::new()
         }
         Message::Token(launch, token) => model.complete(launch, token),
-        Message::Exited { key, asked } => {
-            model.exited(&key, asked);
+        Message::Exited { key, asked, failed } => {
+            model.exited(&key, asked, failed);
             Vec::new()
         }
         Message::FolderListed { listing, entries } => {

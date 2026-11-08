@@ -890,8 +890,9 @@ enum Preload {
     Trash(bool),
 }
 
-/// Run `command` detached from the dock's loop, as [`spawn`] does: what ends when the process exits, its exit reaped
-/// on a thread; `None` when it did not start. An unsuccessful exit is reported on standard error.
+/// Run `command` detached from the dock's loop, as [`spawn`] does: what ends when the process exits, in whether it
+/// failed, its exit reaped on a thread; `None` when it did not start. An unsuccessful exit is reported on standard
+/// error. An exit that cannot be read counts as no failure.
 fn spawn_watched(mut command: Process) -> Option<Exited> {
     let program = command.get_program().to_string_lossy().into_owned();
     let mut child = match command.spawn() {
@@ -901,20 +902,24 @@ fn spawn_watched(mut command: Process) -> Option<Exited> {
             return None;
         }
     };
-    let (sender, receiver) = async_channel::bounded::<()>(1);
+    let (sender, receiver) = async_channel::bounded::<bool>(1);
     std::thread::spawn(move || {
-        match child.wait() {
+        let failed = match child.wait() {
             Ok(status) if !status.success() => {
-                eprintln!("{PROCESS}: {program} exited with {status}")
+                eprintln!("{PROCESS}: {program} exited with {status}");
+                true
             }
-            Ok(_) => {}
-            Err(e) => eprintln!("{PROCESS}: {program}: {e}"),
-        }
-        let _ = sender.send_blocking(());
+            Ok(_) => false,
+            Err(e) => {
+                eprintln!("{PROCESS}: {program}: {e}");
+                false
+            }
+        };
+        let _ = sender.send_blocking(failed);
     });
-    Some(Box::pin(async move {
-        let _ = receiver.recv().await;
-    }))
+    Some(Box::pin(
+        async move { receiver.recv().await.unwrap_or(false) },
+    ))
 }
 
 /// The model and the channel the session's messages arrive on.

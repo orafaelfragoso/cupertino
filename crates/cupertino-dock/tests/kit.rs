@@ -102,8 +102,8 @@ struct Record {
     preloads: Vec<Vec<(IconKey, f64)>>,
     /// The icons a background load leaves out, for the model to load itself.
     leave_out: Vec<IconKey>,
-    /// The ends of the programs started, in order: a send makes it exit.
-    exits: Vec<async_channel::Sender<()>>,
+    /// The ends of the programs started, in order: a send makes it exit, failed or not.
+    exits: Vec<async_channel::Sender<bool>>,
     /// The folders shown as stacks, with their icons, and the entries every folder lists.
     folders: Vec<(String, String)>,
     folder_entries: Vec<cupertino_dock::stack::StackEntry>,
@@ -174,11 +174,11 @@ impl Host for FakeHost {
     fn spawn(&mut self, argv: Vec<String>, token: Option<String>) -> Option<kit::Exited> {
         let mut record = self.0.borrow_mut();
         record.spawned.push((argv, token));
-        let (exit, exited) = async_channel::bounded::<()>(1);
+        let (exit, exited) = async_channel::bounded::<bool>(1);
         record.exits.push(exit);
-        Some(Box::pin(async move {
-            let _ = exited.recv().await;
-        }))
+        Some(Box::pin(
+            async move { exited.recv().await.unwrap_or(false) },
+        ))
     }
     fn open(&mut self, target: &str) {
         self.0.borrow_mut().opened.push(target.to_owned());
@@ -1685,7 +1685,7 @@ fn a_launch_whose_activation_token_never_comes_goes_ahead_without_one_after_2_s(
     );
 }
 
-/// A program that exits before it shows a window, as one that crashes at once does, can be opened again straight away:
+/// A program that fails before it shows a window, as one that crashes at once does, can be opened again straight away:
 /// the guard against a second launch ends with its process.
 #[test]
 fn a_program_that_exits_at_once_can_be_opened_again_straight_away() {
@@ -1701,7 +1701,7 @@ fn a_program_that_exits_at_once_can_be_opened_again_straight_away() {
         "guarded while it starts"
     );
     let exit = run.record.borrow().exits[0].clone();
-    exit.send_blocking(()).unwrap();
+    exit.send_blocking(true).unwrap();
     run.settle();
     run.advance(0.1);
     run.click(bar, editor);
@@ -1709,6 +1709,34 @@ fn a_program_that_exits_at_once_can_be_opened_again_straight_away() {
         run.record.borrow().spawned.len(),
         2,
         "started again after it exited"
+    );
+}
+
+/// A launcher that exits successfully before the window comes (one that starts the application in the background, or
+/// hands the open to an instance already running) leaves the guard in place: a second click opens nothing more.
+#[test]
+fn a_launcher_that_exits_successfully_before_the_window_leaves_the_guard() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    let editor = centre(run.bounds(bar, Role::Button, "Editor"));
+    run.click(bar, editor);
+    run.advance(0.5);
+    let exit = run.record.borrow().exits[0].clone();
+    exit.send_blocking(false).unwrap();
+    run.settle();
+    run.advance(0.1);
+    run.click(bar, editor);
+    assert_eq!(
+        run.record.borrow().spawned.len(),
+        1,
+        "still guarded: its window is on the way"
+    );
+    run.advance(kit::OPEN_GUARD);
+    run.click(bar, editor);
+    assert_eq!(
+        run.record.borrow().spawned.len(),
+        2,
+        "the guard ends in its own time"
     );
 }
 
@@ -1728,7 +1756,7 @@ fn an_earlier_launch_exiting_leaves_a_later_launch_guarded() {
         "the guard of the first ended in time"
     );
     let first = run.record.borrow().exits[0].clone();
-    first.send_blocking(()).unwrap();
+    first.send_blocking(true).unwrap();
     run.settle();
     run.advance(0.1);
     run.click(bar, editor);
@@ -1755,7 +1783,7 @@ fn an_exit_after_a_window_showed_keeps_the_running_application_activated() {
         }],
     });
     let exit = run.record.borrow().exits[0].clone();
-    exit.send_blocking(()).unwrap();
+    exit.send_blocking(true).unwrap();
     run.settle();
     run.click(bar, centre(run.bounds(bar, Role::Button, "Editor")));
     assert_eq!(run.record.borrow().spawned.len(), 1);

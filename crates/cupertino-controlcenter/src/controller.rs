@@ -8,11 +8,16 @@
 use std::collections::HashMap;
 
 use crate::backend::{
-    BackendError, BatteryReader, Bluetooth, Brightness, FocusMode, OverlayKind, OverlayNotifier,
-    Volume, Wifi,
+    BackendError, Bluetooth, Brightness, Launcher, MediaPlayer, OverlayKind, OverlayNotifier,
+    SessionLock, Switch, Volume, Wifi,
 };
 use crate::lifecycle::{Lifecycle, Phase};
-use crate::model::{Controls, Module, Reading, Slider, TileState, MUTE_BELOW};
+use crate::model::{
+    Controls, Detail, MediaCommand, Module, Reading, Slider, TileState, MUTE_BELOW,
+};
+
+/// The settings page the "Edit Controls" button opens.
+pub const SETTINGS_PANE: &str = "control-panel";
 
 /// Shortest time between two backend writes while a slider is dragged; the latest value wins
 /// (write throttle 0.0167 s for the volume; applied to the brightness as well, approximate).
@@ -26,10 +31,15 @@ pub const REFRESH_INTERVAL: f64 = 1.0;
 pub struct Backends {
     pub wifi: Box<dyn Wifi>,
     pub bluetooth: Box<dyn Bluetooth>,
-    pub focus_mode: Box<dyn FocusMode>,
+    pub microphone: Box<dyn Switch>,
+    pub dock_hiding: Box<dyn Switch>,
+    pub keyboard: Box<dyn Switch>,
+    pub focus_mode: Box<dyn Switch>,
     pub brightness: Box<dyn Brightness>,
     pub volume: Box<dyn Volume>,
-    pub battery: Box<dyn BatteryReader>,
+    pub media: Box<dyn MediaPlayer>,
+    pub lock: Box<dyn SessionLock>,
+    pub launcher: Box<dyn Launcher>,
     pub overlay: Box<dyn OverlayNotifier>,
 }
 
@@ -38,6 +48,25 @@ pub struct Backends {
 struct PendingWrite {
     slider: Slider,
     fraction: f64,
+}
+
+/// The level an unmuted output takes when it was muted by dragging its level to the end.
+const UNMUTED_LEVEL: f64 = 0.25;
+
+/// Switch `reading` the other way in `backend`; a refused write disables the tile with the reason.
+fn flip(
+    reading: &mut Reading<bool>,
+    backend: &mut dyn Switch,
+    what: &'static str,
+    failures: &mut FailureLog,
+) {
+    let Reading::Ready(on) = *reading else {
+        return;
+    };
+    *reading = match backend.set(!on) {
+        Ok(()) => Reading::Ready(!on),
+        Err(error) => failures.reading(what, Err(error)),
+    };
 }
 
 /// The panel's model, lifetime and backends.
@@ -51,6 +80,8 @@ pub struct Controller {
     pending: Option<PendingWrite>,
     last_write: Option<f64>,
     last_refresh: Option<f64>,
+    /// The detail view open, whose list each reading takes too.
+    detail: Option<Detail>,
 }
 
 /// The last failure of each backend, to log a failure only when it changes.
@@ -114,6 +145,7 @@ impl Controller {
             pending: None,
             last_write: None,
             last_refresh: None,
+            detail: None,
         }
     }
 
@@ -134,6 +166,8 @@ impl Controller {
         let was_shown = self.lifecycle.phase(now) == Phase::Shown;
         self.lifecycle.toggle(now);
         if !was_shown {
+            // the panel opens on its modules, never on the detail it closed with
+            self.detail = None;
             self.refresh(now);
         } else {
             self.stop_dragging();
@@ -158,28 +192,54 @@ impl Controller {
         self.pending = None;
     }
 
-    /// Read every backend. A slider being dragged keeps its value.
+    /// Read every backend, and the list of the detail view that is open. A slider being dragged keeps its value.
     pub fn refresh(&mut self, now: f64) {
         self.last_refresh = Some(now);
         let (backends, failures) = (&mut self.backends, &mut self.failures);
-        self.controls.wifi = failures.reading("wi-fi", backends.wifi.read());
-        self.controls.bluetooth = failures.reading("bluetooth", backends.bluetooth.read());
-        self.controls.focus_mode = failures.reading("focus mode", backends.focus_mode.read());
+        let controls = &mut self.controls;
+        controls.wifi = failures.reading("wi-fi", backends.wifi.read());
+        controls.bluetooth = failures.reading("bluetooth", backends.bluetooth.read());
+        controls.microphone = failures.reading("microphone", backends.microphone.read());
+        controls.dock_hiding = failures.reading("dock hiding", backends.dock_hiding.read());
+        controls.keyboard = failures.reading("keyboard backlight", backends.keyboard.read());
+        controls.focus_mode = failures.reading("focus mode", backends.focus_mode.read());
+        controls.media = failures.reading("media", backends.media.read());
         if self.dragging.is_none() {
-            self.controls.brightness =
+            controls.brightness =
                 failures.reading("display brightness", backends.brightness.read());
-            self.controls.volume = failures.reading("volume", backends.volume.read());
+            controls.volume = failures.reading("volume", backends.volume.read());
         }
-        self.controls.battery = match backends.battery.read() {
-            Ok(battery) => {
-                failures.log("battery", Ok(()));
-                battery
+        self.read_detail();
+    }
+
+    /// Read the list of the open detail view.
+    fn read_detail(&mut self) {
+        let (backends, failures) = (&mut self.backends, &mut self.failures);
+        let controls = &mut self.controls;
+        match self.detail {
+            Some(Detail::WiFi) => {
+                controls.networks = failures.reading("wi-fi networks", backends.wifi.networks())
             }
-            Err(error) => {
-                failures.log("battery", Err(&error));
-                None
+            Some(Detail::Bluetooth) => {
+                controls.devices =
+                    failures.reading("bluetooth devices", backends.bluetooth.devices())
             }
-        };
+            Some(Detail::Sound) => {
+                controls.outputs = failures.reading("sound outputs", backends.volume.outputs())
+            }
+            Some(Detail::Display) | None => {}
+        }
+    }
+
+    /// The detail view that is open.
+    pub fn detail(&self) -> Option<Detail> {
+        self.detail
+    }
+
+    /// Open `detail` and read its list at once; `None` closes the detail view.
+    pub fn show_detail(&mut self, detail: Option<Detail>) {
+        self.detail = detail;
+        self.read_detail();
     }
 
     /// Press a toggle: switch the radio, adapter or focus mode the other way. A disabled tile ignores the press.
@@ -219,23 +279,129 @@ impl Controller {
                     Err(error) => self.failures.reading("bluetooth", Err(error)),
                 };
             }
-            Module::FocusMode => {
-                let Reading::Ready(on) = self.controls.focus_mode else {
+            Module::Microphone => flip(
+                &mut self.controls.microphone,
+                &mut *backends.microphone,
+                "microphone",
+                &mut self.failures,
+            ),
+            Module::DockHiding => flip(
+                &mut self.controls.dock_hiding,
+                &mut *backends.dock_hiding,
+                "dock hiding",
+                &mut self.failures,
+            ),
+            Module::KeyboardBrightness => flip(
+                &mut self.controls.keyboard,
+                &mut *backends.keyboard,
+                "keyboard backlight",
+                &mut self.failures,
+            ),
+            Module::FocusMode => flip(
+                &mut self.controls.focus_mode,
+                &mut *backends.focus_mode,
+                "focus mode",
+                &mut self.failures,
+            ),
+            Module::Mute => {
+                let Reading::Ready(volume) = self.controls.volume else {
                     return false;
                 };
-                self.controls.focus_mode = match backends.focus_mode.set(!on) {
-                    Ok(()) => Reading::Ready(!on),
-                    Err(error) => self.failures.reading("focus mode", Err(error)),
+                // unmuting a level dragged to the end brings back an audible level
+                let level = if volume.muted && volume.level < MUTE_BELOW {
+                    UNMUTED_LEVEL
+                } else {
+                    volume.level
                 };
+                self.controls.volume = self
+                    .failures
+                    .reading("volume", backends.volume.set(level, !volume.muted));
             }
-            Module::Display
-            | Module::Sound
-            | Module::FileSharing
-            | Module::Stage
-            | Module::ScreenMirroring
-            | Module::NowPlaying => return false,
+            Module::LockScreen => {
+                let locked = backends.lock.lock();
+                self.failures
+                    .log("lock screen", locked.as_ref().map(|_| ()));
+                if locked.is_err() {
+                    return false;
+                }
+            }
+            Module::Display | Module::Sound | Module::NowPlaying => return false,
         }
         true
+    }
+
+    /// A button of the media tile.
+    pub fn media(&mut self, command: MediaCommand) -> bool {
+        let sent = self.backends.media.command(command);
+        self.failures.log("media", sent.as_ref().map(|_| ()));
+        if sent.is_err() {
+            return false;
+        }
+        self.controls.media = self.failures.reading("media", self.backends.media.read());
+        true
+    }
+
+    /// Join a network of the Wi-Fi detail; the list shows the outcome at a later reading.
+    pub fn join(&mut self, ssid: &str) -> bool {
+        let joined = self.backends.wifi.join(ssid);
+        self.failures.log("wi-fi join", joined.as_ref().map(|_| ()));
+        if let Err(error) = joined {
+            self.controls.networks = Reading::Unavailable(error.to_string());
+            return true;
+        }
+        self.controls.wifi = self.failures.reading("wi-fi", self.backends.wifi.read());
+        self.read_detail();
+        true
+    }
+
+    /// Connect a device of the Bluetooth detail, or disconnect it when it is connected.
+    pub fn connect(&mut self, id: &str) -> bool {
+        let Some(connected) = self
+            .controls
+            .devices
+            .ready()
+            .and_then(|devices| devices.iter().find(|d| d.id == id))
+            .map(|d| d.connected)
+        else {
+            return false;
+        };
+        let done = self.backends.bluetooth.set_connected(id, !connected);
+        self.failures
+            .log("bluetooth device", done.as_ref().map(|_| ()));
+        if let Err(error) = done {
+            self.controls.devices = Reading::Unavailable(error.to_string());
+            return true;
+        }
+        self.read_detail();
+        true
+    }
+
+    /// Play to an output of the Sound detail.
+    pub fn select_output(&mut self, id: u32) -> bool {
+        let done = self.backends.volume.select_output(id);
+        self.failures.log("sound output", done.as_ref().map(|_| ()));
+        if let Err(error) = done {
+            self.controls.outputs = Reading::Unavailable(error.to_string());
+            return true;
+        }
+        self.controls.volume = self.failures.reading("volume", self.backends.volume.read());
+        self.read_detail();
+        true
+    }
+
+    /// Open the settings page of the panel ("Edit Controls"); the panel closes so the window it opens is in front.
+    pub fn edit_controls(&mut self, now: f64) -> bool {
+        self.open_settings(now, SETTINGS_PANE)
+    }
+
+    /// Opens the settings application at `pane` and, when it starts, dismisses the panel.
+    pub fn open_settings(&mut self, now: f64, pane: &str) -> bool {
+        let opened = self.backends.launcher.open_settings(pane);
+        self.failures.log("settings", opened.as_ref().map(|_| ()));
+        if opened.is_ok() {
+            self.dismiss(now);
+        }
+        opened.is_ok()
     }
 
     /// The pointer put `slider` at `fraction`: the model follows at once and the backend is written at most every
@@ -335,25 +501,68 @@ impl Controller {
 mod tests {
     use super::*;
     use crate::backend::*;
-    use crate::model::{Battery, VolumeState, WifiStatus};
+    use crate::model::{Device, Media, Network, Output, VolumeState, WifiStatus};
+
+    fn network(ssid: &str, secured: bool, known: bool) -> Network {
+        Network {
+            ssid: ssid.into(),
+            bars: Some(3),
+            secured,
+            known,
+            connected: false,
+        }
+    }
 
     fn backends(overlay: RecordingOverlay) -> Backends {
         Backends {
-            wifi: Box::new(MemoryWifi(WifiStatus {
-                enabled: true,
-                network: Some("Home".into()),
-            })),
-            bluetooth: Box::new(MemoryBluetooth(false)),
-            focus_mode: Box::new(MemoryFocusMode(false)),
+            wifi: Box::new(MemoryWifi(
+                WifiStatus {
+                    enabled: true,
+                    network: Some("Home".into()),
+                },
+                vec![network("Home", true, true), network("Cafe", false, false)],
+            )),
+            bluetooth: Box::new(MemoryBluetooth(
+                false,
+                vec![Device {
+                    id: "AA:BB:CC:DD:EE:FF".into(),
+                    name: "Headphones".into(),
+                    connected: false,
+                }],
+            )),
+            microphone: Box::new(MemorySwitch(true)),
+            dock_hiding: Box::new(MemorySwitch(false)),
+            keyboard: Box::new(Unavailable::new("there is no keyboard backlight")),
+            focus_mode: Box::new(MemorySwitch(false)),
             brightness: Box::new(MemoryBrightness(0.5)),
-            volume: Box::new(MemoryVolume(VolumeState {
-                level: 0.5,
-                muted: false,
-            })),
-            battery: Box::new(MemoryBattery(Some(Battery {
-                percent: 80,
-                charging: false,
+            volume: Box::new(MemoryVolume(
+                VolumeState {
+                    level: 0.5,
+                    muted: false,
+                },
+                vec![
+                    Output {
+                        id: 31,
+                        name: "Speakers".into(),
+                        current: true,
+                    },
+                    Output {
+                        id: 47,
+                        name: "Headphones".into(),
+                        current: false,
+                    },
+                ],
+            )),
+            media: Box::new(MemoryMedia(Some(Media {
+                title: "Song".into(),
+                artist: Some("Band".into()),
+                playing: false,
+                can_previous: true,
+                can_next: true,
+                can_play_pause: true,
             }))),
+            lock: Box::new(RecordingLock::default()),
+            launcher: Box::new(RecordingLauncher::default()),
             overlay: Box::new(overlay),
         }
     }
@@ -378,12 +587,15 @@ mod tests {
             ),
             (Some(0.5), Some(0.5))
         );
+        assert_eq!(controls.tile(Module::Microphone), TileState::On);
+        assert_eq!(controls.tile(Module::DockHiding), TileState::Off);
         assert_eq!(
-            controls.battery,
-            Some(Battery {
-                percent: 80,
-                charging: false
-            })
+            controls.tile(Module::KeyboardBrightness),
+            TileState::Disabled("there is no keyboard backlight".into())
+        );
+        assert_eq!(
+            controls.media.ready().unwrap().as_ref().unwrap().title,
+            "Song"
         );
         assert_eq!(controller.phase(0.0), Phase::Shown);
     }
@@ -430,6 +642,12 @@ mod tests {
             fn set_powered(&mut self, _: bool) -> Result<(), BackendError> {
                 Err("not authorized".into())
             }
+            fn devices(&mut self) -> Result<Vec<Device>, BackendError> {
+                Ok(Vec::new())
+            }
+            fn set_connected(&mut self, _: &str, _: bool) -> Result<(), BackendError> {
+                Err("not authorized".into())
+            }
         }
         let mut backends = backends(RecordingOverlay::default());
         backends.bluetooth = Box::new(RefusesWrites);
@@ -473,19 +691,143 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_battery_is_not_a_failure() {
-        let mut backends = backends(RecordingOverlay::default());
-        backends.battery = Box::new(MemoryBattery(None));
-        let mut controller = Controller::new(backends);
-        controller.toggle(0.0);
-        assert_eq!(controller.controls().battery, None);
+    fn the_switches_flip_in_their_backends_and_a_missing_one_ignores_presses() {
+        let (mut controller, _) = opened();
+        assert!(controller.press(Module::Microphone));
+        assert!(controller.press(Module::DockHiding));
+        assert!(controller.press(Module::FocusMode));
+        assert!(!controller.press(Module::KeyboardBrightness));
+        assert!(
+            !controller.press(Module::NowPlaying),
+            "the media tile has its own buttons"
+        );
+        controller.refresh(1.0);
+        let controls = controller.controls();
+        assert_eq!(
+            [Module::Microphone, Module::DockHiding, Module::FocusMode].map(|m| controls.tile(m)),
+            [TileState::Off, TileState::On, TileState::On]
+        );
     }
 
     #[test]
-    fn modules_without_a_backend_ignore_presses() {
+    fn mute_silences_the_output_and_unmuting_a_level_at_the_end_brings_back_a_level() {
         let (mut controller, _) = opened();
-        assert!(!controller.press(Module::Stage));
-        assert!(!controller.press(Module::NowPlaying));
+        assert!(controller.press(Module::Mute));
+        assert_eq!(
+            controller.controls().volume,
+            Reading::Ready(VolumeState {
+                level: 0.5,
+                muted: true
+            })
+        );
+        controller.press(Module::Mute);
+        controller.slide(1.0, Slider::Sound, 0.0);
+        controller.release(1.1);
+        controller.press(Module::Mute);
+        assert_eq!(
+            controller.controls().volume,
+            Reading::Ready(VolumeState {
+                level: UNMUTED_LEVEL,
+                muted: false
+            })
+        );
+    }
+
+    #[test]
+    fn lock_screen_asks_the_session_and_edit_controls_opens_the_settings_page() {
+        let overlay = RecordingOverlay::default();
+        let (lock, launcher) = (RecordingLock::default(), RecordingLauncher::default());
+        let mut backends = backends(overlay);
+        backends.lock = Box::new(lock.clone());
+        backends.launcher = Box::new(launcher.clone());
+        let mut controller = Controller::new(backends);
+        controller.toggle(0.0);
+        assert!(controller.press(Module::LockScreen));
+        assert_eq!(lock.calls().len(), 1);
+        assert!(controller.edit_controls(1.0));
+        assert_eq!(launcher.calls(), [SETTINGS_PANE]);
+        assert_eq!(
+            controller.phase(1.0),
+            Phase::Hiding,
+            "the panel steps aside"
+        );
+    }
+
+    #[test]
+    fn a_media_button_reaches_the_player_and_the_tile_reads_it_again() {
+        let (mut controller, _) = opened();
+        assert_eq!(
+            controller.controls().tile(Module::NowPlaying),
+            TileState::Off
+        );
+        assert!(controller.media(MediaCommand::PlayPause));
+        assert_eq!(
+            controller.controls().tile(Module::NowPlaying),
+            TileState::On
+        );
+    }
+
+    #[test]
+    fn a_detail_reads_its_list_when_it_opens_and_with_every_reading() {
+        let (mut controller, _) = opened();
+        assert!(
+            controller.controls().networks.ready().is_none(),
+            "no list until asked"
+        );
+        controller.show_detail(Some(Detail::WiFi));
+        let names = |c: &Controller| {
+            c.controls()
+                .networks
+                .ready()
+                .unwrap()
+                .iter()
+                .map(|n| (n.ssid.clone(), n.connected))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(&controller),
+            [("Home".into(), false), ("Cafe".into(), false)]
+        );
+        assert!(controller.join("Cafe"));
+        assert_eq!(names(&controller)[1], ("Cafe".into(), true));
+        assert_eq!(
+            controller.controls().subtitle(Module::WiFi),
+            Some("Cafe"),
+            "the tile names the network joined"
+        );
+        controller.show_detail(Some(Detail::Bluetooth));
+        assert!(controller.connect("AA:BB:CC:DD:EE:FF"));
+        assert!(controller.controls().devices.ready().unwrap()[0].connected);
+        assert!(!controller.connect("unknown"));
+        controller.show_detail(Some(Detail::Sound));
+        assert!(controller.select_output(47));
+        let current: Vec<_> = controller
+            .controls()
+            .outputs
+            .ready()
+            .unwrap()
+            .iter()
+            .map(|o| o.current)
+            .collect();
+        assert_eq!(current, [false, true]);
+        controller.dismiss(2.0);
+        controller.toggle(3.0);
+        assert_eq!(
+            controller.detail(),
+            None,
+            "the panel opens again on its modules"
+        );
+    }
+
+    #[test]
+    fn a_refused_join_shows_the_reason_in_the_list() {
+        let (mut controller, _) = opened();
+        controller.show_detail(Some(Detail::WiFi));
+        assert!(controller.join("Nowhere"));
+        assert_eq!(
+            controller.controls().networks,
+            Reading::Unavailable("no network \"Nowhere\" in the last scan".into())
+        );
     }
 
     #[test]

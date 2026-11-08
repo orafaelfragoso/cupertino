@@ -3,8 +3,8 @@
 #![cfg(feature = "dbus")]
 
 use cupertino_controlcenter::backend::{
-    MemoryBattery, MemoryBluetooth, MemoryBrightness, MemoryFocusMode, MemoryVolume, MemoryWifi,
-    RecordingOverlay,
+    MemoryBluetooth, MemoryBrightness, MemoryMedia, MemorySwitch, MemoryVolume, MemoryWifi,
+    RecordingLauncher, RecordingLock, RecordingOverlay,
 };
 use cupertino_controlcenter::control::{serve, BUS_NAME, OBJECT_PATH};
 use cupertino_controlcenter::{
@@ -17,18 +17,29 @@ use zbus::{block_on, Connection};
 
 fn fake_backends() -> Backends {
     Backends {
-        wifi: Box::new(MemoryWifi(WifiStatus {
-            enabled: true,
-            network: None,
-        })),
-        bluetooth: Box::new(MemoryBluetooth(false)),
-        focus_mode: Box::new(MemoryFocusMode(false)),
+        wifi: Box::new(MemoryWifi(
+            WifiStatus {
+                enabled: true,
+                network: None,
+            },
+            Vec::new(),
+        )),
+        bluetooth: Box::new(MemoryBluetooth(false, Vec::new())),
+        microphone: Box::new(MemorySwitch(true)),
+        dock_hiding: Box::new(MemorySwitch(false)),
+        keyboard: Box::new(MemorySwitch(false)),
+        focus_mode: Box::new(MemorySwitch(false)),
         brightness: Box::new(MemoryBrightness(0.5)),
-        volume: Box::new(MemoryVolume(VolumeState {
-            level: 0.5,
-            muted: false,
-        })),
-        battery: Box::new(MemoryBattery(None)),
+        volume: Box::new(MemoryVolume(
+            VolumeState {
+                level: 0.5,
+                muted: false,
+            },
+            Vec::new(),
+        )),
+        media: Box::new(MemoryMedia(None)),
+        lock: Box::new(RecordingLock::default()),
+        launcher: Box::new(RecordingLauncher::default()),
         overlay: Box::new(RecordingOverlay::default()),
     }
 }

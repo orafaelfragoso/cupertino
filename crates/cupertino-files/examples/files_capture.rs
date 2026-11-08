@@ -22,7 +22,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use cupertino_capture::{App, Look, Request, State};
 use cupertino_files::kit::{prepare, Files, Start};
 use cupertino_files::notice::Notices;
-use cupertino_files::places::{folder_icons, standard_places, Place};
+use cupertino_files::places::{folder_icons, standard_places, Medium, Place};
 use cupertino_files::thumbnail::Thumbnailer;
 use cupertino_files::trash::Trash;
 use cupertino_files::window::ViewMode;
@@ -428,9 +428,15 @@ impl App for Capture {
                         "Backup Disk",
                         Some(Path::new("/run/media/avery/Backup")),
                         false,
+                        Medium::Disk,
                     ),
-                    Place::removable("Camera Card", Some(Path::new("/run/media/avery/CAM")), true),
-                    Place::removable("KINGSTON", None, false),
+                    Place::removable(
+                        "Camera Card",
+                        Some(Path::new("/run/media/avery/CAM")),
+                        true,
+                        Medium::Card,
+                    ),
+                    Place::removable("KINGSTON", None, false, Medium::Stick),
                 ]),
                 ("devices", _) => return Err(format!("--devices {value}: removable")),
                 (_, name) => selected = Some(name.to_string()),

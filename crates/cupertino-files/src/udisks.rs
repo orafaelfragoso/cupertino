@@ -25,7 +25,7 @@ use zbus::MatchRule;
 use crate::format::human_size;
 use crate::natural::compare_names;
 use crate::notice::{escape, shown, Notice, Notices};
-use crate::places::Place;
+use crate::places::{Medium, Place};
 
 pub const UDISKS_NAME: &str = "org.freedesktop.UDisks2";
 pub const MANAGER_PATH: &str = "/org/freedesktop/UDisks2";
@@ -35,7 +35,7 @@ pub const DRIVE: &str = "org.freedesktop.UDisks2.Drive";
 pub const ENCRYPTED: &str = "org.freedesktop.UDisks2.Encrypted";
 const ERROR: &str = "org.freedesktop.UDisks2.Error.";
 /// The notification's icon: the freedesktop name the device symbol maps to first.
-const DEVICE_ICON: &str = "drive-removable-media-symbolic";
+const DEVICE_ICON: &str = "drive-harddisk-symbolic";
 
 /// A file system the sidebar lists, of a drive udisks reports.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,6 +54,8 @@ pub struct Device {
     pub read_only: bool,
     /// The encrypted container this file system was unlocked from, which an eject locks again.
     pub backing: Option<OwnedObjectPath>,
+    /// The kind of medium the drive takes, for its symbol.
+    pub medium: Medium,
 }
 
 /// A container's passphrase: wiped from memory when dropped, and never shown by `Debug`.
@@ -143,11 +145,27 @@ pub fn devices(objects: &ManagedObjects) -> Vec<Device> {
                 locked: filesystem.is_none(),
                 read_only: flag(block, "ReadOnly"),
                 backing,
+                medium: medium_of(drive),
             })
         })
         .collect();
     out.sort_by(|a, b| compare_names(&a.name, &b.name).then_with(|| a.object.cmp(&b.object)));
     out
+}
+
+/// The kind of medium of a drive, from its `Media` and `ConnectionBus` properties: a memory card for a flash card
+/// format other than plain flash (`flash_sd`, `flash_cf`, …) or a drive on the card-reader bus, a flash drive for a
+/// stick (`thumb`) or plain flash on USB, else a disk.
+pub fn medium_of(drive: &HashMap<String, OwnedValue>) -> Medium {
+    let media = text(drive, "Media").unwrap_or_default();
+    let bus = text(drive, "ConnectionBus").unwrap_or_default();
+    if (media.starts_with("flash_") && media != "flash") || bus == "sdio" {
+        Medium::Card
+    } else if media == "thumb" || (media == "flash" && bus == "usb") {
+        Medium::Stick
+    } else {
+        Medium::Disk
+    }
 }
 
 fn text(properties: &HashMap<String, OwnedValue>, key: &str) -> Option<String> {
@@ -504,9 +522,14 @@ impl Media {
 
     /// The sidebar's rows of the devices, in order.
     pub fn places(&self) -> impl Iterator<Item = Place> + '_ {
-        self.devices
-            .iter()
-            .map(|d| Place::removable(&d.name, d.mount.as_deref(), self.busy.contains(&d.object)))
+        self.devices.iter().map(|d| {
+            Place::removable(
+                &d.name,
+                d.mount.as_deref(),
+                self.busy.contains(&d.object),
+                d.medium,
+            )
+        })
     }
 
     /// The device of row `index` and whether a call on it is under way.
@@ -743,6 +766,42 @@ mod tests {
                 .build(&())
                 .unwrap(),
         )
+    }
+
+    #[test]
+    fn a_drive_is_a_card_a_stick_or_else_a_disk_by_its_medium_and_bus() {
+        let drive = |pairs: &[(&str, &str)]| -> HashMap<String, OwnedValue> {
+            pairs
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.to_string(),
+                        OwnedValue::try_from(Value::from(*v)).unwrap(),
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(
+            medium_of(&drive(&[("Media", "flash_sd"), ("ConnectionBus", "usb")])),
+            Medium::Card
+        );
+        assert_eq!(
+            medium_of(&drive(&[("Media", ""), ("ConnectionBus", "sdio")])),
+            Medium::Card
+        );
+        assert_eq!(
+            medium_of(&drive(&[("Media", "thumb"), ("ConnectionBus", "usb")])),
+            Medium::Stick
+        );
+        assert_eq!(
+            medium_of(&drive(&[("Media", "flash"), ("ConnectionBus", "usb")])),
+            Medium::Stick
+        );
+        assert_eq!(
+            medium_of(&drive(&[("Media", ""), ("ConnectionBus", "usb")])),
+            Medium::Disk
+        );
+        assert_eq!(medium_of(&drive(&[])), Medium::Disk);
     }
 
     #[test]

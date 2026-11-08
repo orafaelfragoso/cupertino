@@ -249,7 +249,7 @@ fn place_item(session: &Session, index: usize) -> SidebarItem {
             symbol: EJECT_SYMBOL.into(),
             label: format!("Eject {}", place.name),
         }),
-        busy: place.kind == PlaceKind::Removable(Volume::Busy),
+        busy: matches!(place.kind, PlaceKind::Removable(Volume::Busy, _)),
     }
 }
 

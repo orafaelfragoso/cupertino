@@ -1016,8 +1016,16 @@ impl Widget<Message> for Name {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.text != old.text || self.max_lines != old.max_lines {
+        // as for a text, the colours are paint; what is set, in which role, how it wraps and on how many lines is size
+        let (new, was) = (&self.text, &old.text);
+        if new.content != was.content
+            || new.role != was.role
+            || new.wrap != was.wrap
+            || self.max_lines != old.max_lines
+        {
             Change::Layout
+        } else if new != was {
+            Change::Paint
         } else {
             Change::None
         }
@@ -1150,6 +1158,37 @@ mod tests {
         assert_eq!(cell_index(&cell_key(1, 4)), Some(4));
         assert_eq!(cell_index(&Key::Int(4)), None);
         assert_eq!(cell_index(&Key::from("row/1/x")), None);
+    }
+
+    #[test]
+    fn selecting_a_name_repaints_it_and_a_new_name_or_line_count_lays_it_out() {
+        let name = |text: &str, selected: bool, max_lines: Option<u32>| Name {
+            text: Text {
+                content: AttributedText::plain(text.to_owned(), TextStyle::new(12.0)),
+                role: TextRole::Body,
+                wrap: true,
+                secondary: false,
+                selected,
+            },
+            max_lines,
+        };
+        let mut state = ();
+        let shown = name("a.txt", false, Some(2));
+        let update =
+            |new: &Name, old: &Name, state: &mut ()| Widget::<Message>::update(new, old, state);
+        assert_eq!(update(&shown, &shown, &mut state), Change::None);
+        assert_eq!(
+            update(&name("a.txt", true, Some(2)), &shown, &mut state),
+            Change::Paint
+        );
+        assert_eq!(
+            update(&name("b.txt", false, Some(2)), &shown, &mut state),
+            Change::Layout
+        );
+        assert_eq!(
+            update(&name("a.txt", false, Some(3)), &shown, &mut state),
+            Change::Layout
+        );
     }
     use crate::layout::icon::{self, Flow, FontMetrics, IconParams, SectionSpec};
 

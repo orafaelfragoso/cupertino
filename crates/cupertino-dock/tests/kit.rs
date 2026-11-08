@@ -797,8 +797,7 @@ fn the_focus_dock_shortcut_is_dropped_while_the_grid_or_the_dialog_has_the_keybo
         events: vec![DockEvent::Engage],
     });
     run.send_to(grid, WindowEvent::Focus(true));
-    // the first Escape collapses the grid to its search field, the second dismisses it
-    run.key(grid, ESCAPE);
+    // with nothing typed, one Escape dismisses the grid
     run.key(grid, ESCAPE);
     run.advance(1.0);
     assert!(run.window(&format!("{GRID_APP_ID}@1")).is_none());
@@ -1173,7 +1172,7 @@ fn named(run: &Run, window: WindowId, role: Role) -> Vec<String> {
 /// its applications are in, the recently used applications in a row of their own above a separator, then every
 /// application by name. The first Escape leaves the search field alone, the second dismisses the grid.
 #[test]
-fn the_grid_is_a_panel_of_pills_recents_and_every_application_and_escape_collapses_it_first() {
+fn the_grid_is_a_panel_of_pills_recents_and_every_application_and_one_escape_closes_it() {
     let mut run = Run::start();
     run.record.borrow_mut().recent = vec![format!("{TERMINAL}.desktop")];
     let grid = open_grid(&mut run);
@@ -1230,19 +1229,6 @@ fn the_grid_is_a_panel_of_pills_recents_and_every_application_and_escape_collaps
     assert_eq!(in_recents, ["Terminal"]);
     assert_eq!(run.focused(grid).as_deref(), Some("Applications"));
 
-    run.key(grid, ESCAPE);
-    assert!(
-        run.window(&format!("{GRID_APP_ID}@1")).is_some(),
-        "the first Escape keeps the grid open"
-    );
-    assert!(named(&run, grid, Role::CheckBox).is_empty());
-    assert!(named(&run, grid, Role::Button).is_empty());
-    let collapsed = run.bounds(grid, Role::TextInput, "Applications");
-    assert_eq!(
-        collapsed,
-        kit_rect(layout.collapsed),
-        "only the search field is left"
-    );
     assert_eq!(
         run.record.borrow().keyboard.last().copied(),
         Some((Part::Grid, true))
@@ -1256,19 +1242,32 @@ fn the_grid_is_a_panel_of_pills_recents_and_every_application_and_escape_collaps
     );
 }
 
-/// Typing searches at once, from the collapsed field too, which opens again on the results; an application that runs
-/// is brought forward rather than started again.
+/// Typing searches at once; with a query typed, the first Escape clears it and leaves the grid open on every
+/// application, and the next closes it. An application that runs is brought forward rather than started again.
 #[test]
 fn typing_searches_at_once_and_an_application_that_runs_comes_forward() {
     let mut run = Run::start();
     let grid = open_grid(&mut run);
-    run.key(grid, ESCAPE);
     run.type_text(grid, "term");
     assert_eq!(named(&run, grid, Role::Button), ["Terminal"]);
+    run.key(grid, ESCAPE);
     assert!(
-        !named(&run, grid, Role::CheckBox).is_empty(),
-        "the panel opened again"
+        run.window(&format!("{GRID_APP_ID}@1")).is_some(),
+        "the first Escape clears the query"
     );
+    let mut every = named(&run, grid, Role::Button);
+    every.sort();
+    every.dedup();
+    assert_eq!(every, ["Editor", "Terminal"], "every application again");
+    assert!(!named(&run, grid, Role::CheckBox).is_empty());
+    run.key(grid, ESCAPE);
+    run.advance(1.0);
+    assert!(
+        run.window(&format!("{GRID_APP_ID}@1")).is_none(),
+        "the next closes"
+    );
+    let grid = open_grid(&mut run);
+    run.type_text(grid, "term");
     run.key(grid, RETURN);
     assert!(
         run.requests()
@@ -2615,10 +2614,11 @@ fn look_captures() {
         run.driver
             .look_into(&dir, grid, "dock-grid", scale, &looks)
             .unwrap();
-        run.key(grid, ESCAPE);
+        run.type_text(grid, "term");
         run.driver
-            .look_into(&dir, grid, "dock-grid-collapsed", scale, &looks)
+            .look_into(&dir, grid, "dock-grid-search", scale, &looks)
             .unwrap();
+        run.key(grid, ESCAPE);
         run.key(grid, ESCAPE);
         run.advance(1.0);
     }

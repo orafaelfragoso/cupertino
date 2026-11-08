@@ -178,8 +178,6 @@ pub struct GridLayout {
     pub height: f64,
     /// The panel open.
     pub panel: Rect,
-    /// The panel collapsed to its search field (the first Escape).
-    pub collapsed: Rect,
     /// The search field's row along the panel's top.
     pub search: Rect,
     /// The row the pills share.
@@ -195,10 +193,8 @@ impl GridLayout {
     /// bar's zone are not counted in).
     pub const PANEL_SIZE: (f64, f64) = (842.0, 576.0);
     pub const PANEL_MARGIN: f64 = 24.0;
-    /// Corner radius of the open panel; the collapsed one is a capsule.
+    /// Corner radius of the panel.
     pub const PANEL_RADIUS: f64 = 24.0;
-    /// Size of the collapsed panel.
-    pub const COLLAPSED_SIZE: (f64, f64) = (640.0, 52.0);
     /// The side inset of the search field, the pills, the separator and the columns.
     pub const INSET: f64 = 20.0;
     /// The search row: its height, the magnifying glass's size and centre from the row's left, where the text begins,
@@ -256,20 +252,12 @@ impl GridLayout {
         let x = ((width - w) / 2.0).floor();
         let y = (MENU_BAR_BAND + (height - MENU_BAR_BAND - h) / 2.0).floor();
         let panel = Rect::new(x, y, w, h);
-        let cw = Self::COLLAPSED_SIZE.0.min(w);
-        let collapsed = Rect::new(
-            (panel.cx() - cw / 2.0).floor(),
-            y,
-            cw,
-            Self::COLLAPSED_SIZE.1,
-        );
         let inner = (w - 2.0 * Self::INSET).max(0.0);
         let content_top = y + Self::CONTENT_TOP;
         Self {
             width,
             height,
             panel,
-            collapsed,
             search: Rect::new(x, y, w, Self::SEARCH_HEIGHT),
             pills: Rect::new(
                 x + Self::INSET,
@@ -435,7 +423,6 @@ pub struct AppGrid {
     pill: Option<Pill>,
     /// Indices into `apps` the query and the pill leave, in order; every one while there is neither.
     results: Vec<usize>,
-    collapsed: bool,
     zone: Zone,
     /// Index into `pills` of the pill the keys are on.
     pill_focus: usize,
@@ -478,7 +465,6 @@ impl AppGrid {
             query: String::new(),
             pill: None,
             results,
-            collapsed: false,
             zone: Zone::Grid,
             pill_focus: 0,
             selected: None,
@@ -544,10 +530,6 @@ impl AppGrid {
     /// The pill the keys are on while they are on the pills.
     pub fn pill_focus(&self) -> Option<usize> {
         (self.zone == Zone::Pills && !self.pills.is_empty()).then_some(self.pill_focus)
-    }
-
-    pub fn is_collapsed(&self) -> bool {
-        self.collapsed
     }
 
     pub fn selected(&self) -> Option<usize> {
@@ -673,9 +655,6 @@ impl AppGrid {
         let Some(layout) = self.layout else {
             return Vec::new();
         };
-        if self.collapsed {
-            return Vec::new();
-        }
         let (top, bottom) = (self.scroll, self.scroll + layout.content.h);
         (0..self.item_count())
             .filter_map(|index| {
@@ -709,7 +688,7 @@ impl AppGrid {
     pub fn scroller_thumb(&self) -> Option<Rect> {
         let layout = self.layout?;
         let max = self.max_scroll();
-        if max <= 0.0 || self.collapsed {
+        if max <= 0.0 {
             return None;
         }
         let track = layout.scroller_track();
@@ -720,27 +699,20 @@ impl AppGrid {
         Some(Rect::new(track.x, y, track.w, len))
     }
 
-    /// The panel's rectangle as it stands: open, or collapsed to the search field.
+    /// The panel's rectangle, once sized.
     pub fn panel(&self) -> Option<Rect> {
-        self.layout
-            .map(|l| if self.collapsed { l.collapsed } else { l.panel })
+        self.layout.map(|l| l.panel)
     }
 
-    /// The search field's row as it stands.
+    /// The search field's row, once sized.
     pub fn search_rect(&self) -> Option<Rect> {
-        self.layout.map(|l| {
-            if self.collapsed {
-                l.collapsed
-            } else {
-                l.search
-            }
-        })
+        self.layout.map(|l| l.search)
     }
 
-    /// The pills with their rectangles; none while collapsed.
+    /// The pills with their rectangles.
     pub fn pill_rects(&self) -> Vec<(Pill, Rect)> {
         match self.layout {
-            Some(l) if !self.collapsed => self
+            Some(l) => self
                 .pills
                 .iter()
                 .copied()
@@ -771,7 +743,7 @@ impl AppGrid {
 
     /// Scroll by `dy` points, within the content.
     pub fn scroll_by(&mut self, dy: f64) {
-        if self.collapsed || !dy.is_finite() {
+        if !dy.is_finite() {
             return;
         }
         self.scroll = (self.scroll + dy).clamp(0.0, self.max_scroll());
@@ -806,29 +778,25 @@ impl AppGrid {
         self.scroll = 0.0;
     }
 
-    fn expand(&mut self) {
-        self.collapsed = false;
-    }
-
     /// A key; `Char` types into the search field. Returns what the process has to do, if anything.
     pub fn key(&mut self, key: Key) -> Option<Outcome> {
         if matches!(self.phase, Phase::Leaving(_)) {
             return None;
         }
         match key {
+            // with a query typed, Escape clears it and the grid shows every application again; else it closes
             Key::Escape => {
-                if self.collapsed {
+                if self.query.is_empty() {
                     return Some(Outcome::Close);
                 }
-                self.collapsed = true;
+                self.query.clear();
                 self.zone = Zone::Grid;
-                self.selected = None;
+                self.refilter();
                 return None;
             }
             Key::Char(c) if !(c == ' ' && self.zone == Zone::Pills) => {
                 self.query.push(c);
                 self.zone = Zone::Grid;
-                self.expand();
                 self.refilter();
                 return None;
             }
@@ -840,7 +808,7 @@ impl AppGrid {
                 return None;
             }
             Key::Tab | Key::BackTab => {
-                if !self.collapsed && !self.pills.is_empty() {
+                if !self.pills.is_empty() {
                     self.zone = match self.zone {
                         Zone::Grid => {
                             self.pill_focus = self
@@ -856,16 +824,6 @@ impl AppGrid {
                 return None;
             }
             _ => {}
-        }
-        if self.collapsed {
-            return match key {
-                Key::Return => self.first_result(),
-                Key::Down => {
-                    self.expand();
-                    None
-                }
-                _ => None,
-            };
         }
         match self.zone {
             Zone::Pills => self.pill_key(key),
@@ -976,7 +934,7 @@ impl AppGrid {
         }
     }
 
-    /// A left press at `p`. Outside the panel it closes the grid. On the collapsed panel it opens it again. On a pill
+    /// A left press at `p`. Outside the panel it closes the grid. On a pill
     /// it turns that pill on or off, on an application it opens it; anywhere else on the panel it does nothing.
     /// Presses during the exit are ignored.
     pub fn click(&mut self, p: Point) -> Option<Outcome> {
@@ -986,10 +944,6 @@ impl AppGrid {
         let panel = self.panel()?;
         if !panel.contains(p) {
             return Some(Outcome::Close);
-        }
-        if self.collapsed {
-            self.expand();
-            return None;
         }
         if let Some((pill, _)) = self.pill_rects().into_iter().find(|(_, r)| r.contains(p)) {
             self.zone = Zone::Pills;
@@ -1155,12 +1109,6 @@ mod tests {
             l.panel.w < 1440.0 && l.panel.h < 830.0,
             "not the whole output"
         );
-        assert_eq!(l.collapsed, Rect::new(400.0, 139.0, 640.0, 52.0));
-        assert_eq!(
-            l.collapsed.cx(),
-            l.panel.cx(),
-            "the collapsed field keeps the centre"
-        );
         assert_eq!(l.search, Rect::new(299.0, 139.0, 842.0, 56.0));
         assert_eq!(l.pills, Rect::new(319.0, 207.0, 802.0, 26.0));
         assert_eq!(l.content.y, 139.0 + 104.0);
@@ -1306,30 +1254,34 @@ mod tests {
     }
 
     #[test]
-    fn the_first_escape_collapses_to_the_search_field_and_the_second_closes() {
+    fn one_escape_closes_and_with_a_query_typed_the_first_clears_it() {
         let mut g = sized(AppGrid::new(apps(3), &[], 0.0));
-        g.key(Key::Char('a'));
-        assert_eq!(g.key(Key::Escape), None);
-        assert!(g.is_collapsed());
-        assert_eq!(g.query(), "a", "the search stays");
-        assert!(g.visible().is_empty() && g.pill_rects().is_empty());
-        let l = *g.layout().unwrap();
-        assert_eq!(g.panel(), Some(l.collapsed));
-        assert_eq!(g.key(Key::Escape), Some(Outcome::Close));
+        assert_eq!(
+            g.key(Key::Escape),
+            Some(Outcome::Close),
+            "one Escape closes"
+        );
 
         let mut g = sized(AppGrid::new(apps(3), &[], 0.0));
-        g.key(Key::Escape);
         g.key(Key::Char('0'));
-        assert!(!g.is_collapsed(), "typing opens the panel again");
         g.key(Key::Char('1'));
-        g.key(Key::Escape);
+        assert_eq!(g.results().count(), 1);
+        g.key(Key::Down);
         assert_eq!(
-            g.key(Key::Return),
-            Some(Outcome::Launch("app-01".into())),
-            "Return in the collapsed field opens the first result"
+            g.key(Key::Escape),
+            None,
+            "the first Escape clears the query"
         );
-        assert_eq!(g.click(l.collapsed.center()), None);
-        assert!(!g.is_collapsed(), "a press on the field opens the panel");
+        assert_eq!(g.query(), "");
+        assert_eq!(g.results().count(), 3, "every application again");
+        assert_eq!(g.selected(), None);
+        assert_eq!(
+            g.panel(),
+            Some(g.layout().unwrap().panel),
+            "the panel stays open"
+        );
+        assert!(!g.visible().is_empty());
+        assert_eq!(g.key(Key::Escape), Some(Outcome::Close), "the next closes");
     }
 
     #[test]

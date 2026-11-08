@@ -50,8 +50,9 @@ pub mod window {
 
 /// Sidebar.
 pub mod sidebar {
-    /// Default width..
-    pub const DEFAULT_WIDTH: f64 = 200.0;
+    /// Default width of the sidebar pane, from the window's leading edge to the divider; the content starts 1 pt
+    /// further on, past the divider.
+    pub const DEFAULT_WIDTH: f64 = 223.0;
     /// Minimum width is this constant plus the width of a legacy (non-overlay) scroller..
     pub const MIN_WIDTH_BASE: f64 = 128.0;
     /// Width of a legacy scroller (the overlay style adds nothing)..

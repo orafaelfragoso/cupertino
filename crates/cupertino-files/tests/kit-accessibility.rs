@@ -395,7 +395,7 @@ fn tab_goes_from_the_sidebar_to_the_toolbar_the_items_and_the_path_bar_and_aroun
     .map(str::to_owned)
     .to_vec();
     expected.extend(segments.iter().map(|s| format!("Button {s:?}")));
-    expected.push("Splitter \"Sidebar\" = 200 of 0..919".to_owned());
+    expected.push("Splitter \"Sidebar\" = 223 of 0..919".to_owned());
     expected.push("ListItem \"Documents\"".to_owned());
     let mut stops = Vec::new();
     for _ in 0..expected.len() {

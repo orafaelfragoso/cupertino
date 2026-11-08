@@ -516,7 +516,7 @@ mod tests {
             .unwrap()
             .capture(&request("sidebar", &state))
             .unwrap();
-        assert_eq!((sidebar.width(), sidebar.height()), (200, 436));
+        assert_eq!((sidebar.width(), sidebar.height()), (223, 436));
     }
 
     #[test]

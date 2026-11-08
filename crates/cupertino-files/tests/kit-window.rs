@@ -374,7 +374,7 @@ fn the_window_reads_its_sidebar_toolbar_and_table_by_role_name_value_and_state()
             " collapsed",
             ["\"Notes\"", "<date>", "\"--\"", "\"Folder\""],
         ));
-        lines.push("  Splitter \"Sidebar\" = 200 of 0..919 focusable".to_owned());
+        lines.push("  Splitter \"Sidebar\" = 223 of 0..919 focusable".to_owned());
         lines
     };
     assert_eq!(outline(&run), window(" focusable"), "nothing selected");

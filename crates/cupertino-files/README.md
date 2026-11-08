@@ -145,8 +145,9 @@ closed closes the window. The bar reads as a list of tabs, each with its place a
 **Tags** (`tags`, `kit::tag_editor`). With items selected, the toolbar's Tags button opens a popover titled "Tags for
 <name>": a field, then the seven colours and every other tag in use, each with its dot, checked where every selected
 item has it. A row puts its tag on every selected item or takes it off, and a name typed in the field and Return puts a
-tag of that name on them; typing narrows the rows. Tags are kept in the `user.xdg.tags` extended attribute, and every
-listing reads them. The sidebar lists under Tags the colours and names in use, and one chosen shows the folder's items
+tag of that name on them (commas part several, as the attribute keeps them); typing narrows the rows. Tags are kept
+in the `user.xdg.tags` extended attribute, a symbolic link's on the item it points to (the system keeps no user
+attributes on a link), and every listing reads them on its own thread. The sidebar lists under Tags the colours and names in use, and one chosen shows the folder's items
 that carry it.
 
 **Pointer and keyboard in the views.** A press on empty space and a drag draw a rubber band (`kit::band`): the items it

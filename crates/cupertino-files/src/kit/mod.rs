@@ -1347,13 +1347,16 @@ impl Model {
             }
             Event::Tags(TagEvent::Toggle(name)) => window.toggle_named_tag(&name, session),
             Event::Tags(TagEvent::Submit) => {
+                // a comma parts tags, as the attribute keeps them, so "a, b" adds two
                 let typed = window
                     .tag_editor
                     .as_ref()
-                    .map(|e| e.filter.trim().to_owned())
+                    .map(|e| tags::parse_tag_list(e.filter.as_bytes()))
                     .unwrap_or_default();
                 if !typed.is_empty() {
-                    window.add_tag(&typed, session);
+                    for name in &typed {
+                        window.add_tag(name, session);
+                    }
                     if let Some(editor) = window.tag_editor.as_mut() {
                         editor.filter.clear();
                         editor.revision += 1;

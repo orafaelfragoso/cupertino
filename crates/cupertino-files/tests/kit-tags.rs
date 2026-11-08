@@ -109,10 +109,16 @@ fn the_popover_puts_a_colour_and_a_typed_tag_on_the_selection() {
         run.key(RETURN, None);
     });
     assert_eq!(read_tags(&a).unwrap(), ["Red", "Errands"]);
+    // a comma parts two tags, as the attribute keeps them
+    in_popover(&mut run, |run| {
+        run.type_text("Trip, Taxes");
+        run.key(RETURN, None);
+    });
+    assert_eq!(read_tags(&a).unwrap(), ["Red", "Errands", "Trip", "Taxes"]);
 
     // the row again takes it off; Escape closes the popover
     in_popover(&mut run, |run| run.click_named(Role::CheckBox, "Red"));
-    assert_eq!(read_tags(&a).unwrap(), ["Errands"]);
+    assert_eq!(read_tags(&a).unwrap(), ["Errands", "Trip", "Taxes"]);
     // the press closes it, so its release goes to no window
     let escape = KeyEvent {
         code: 0,

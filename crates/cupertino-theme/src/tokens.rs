@@ -146,7 +146,7 @@ mod tests {
         );
         assert_eq!(
             hex(Appearance::Dark, SemanticColor::WindowBackground),
-            "#323232"
+            "#1F2025"
         );
         assert_eq!(
             hex(Appearance::Light, SemanticColor::ControlBackground),

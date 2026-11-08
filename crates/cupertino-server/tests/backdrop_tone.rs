@@ -15,6 +15,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use cupertino_glass::glass::face_color;
 use cupertino_protocols::client::app_effects::cupertino_app_effects_v1::CupertinoAppEffectsV1;
 use cupertino_protocols::client::app_effects::cupertino_backdrop_v1::{
     self, CupertinoBackdropV1, Tone,
@@ -24,8 +25,8 @@ use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
 use cupertino_server::Cupertino;
 use cupertino_theme::glass::{
-    contrast_ratio, foreground_rgb, relative_luminance, FaceTone, FACE_TONE_HYSTERESIS,
-    FACE_TONE_THRESHOLD, VIBRANT_PLACEHOLDER, VIBRANT_PRIMARY,
+    contrast_ratio, foreground_rgb, relative_luminance, FaceTone, GlassMode, GlassParams,
+    GlassStyle, FACE_TONE_HYSTERESIS, FACE_TONE_THRESHOLD, VIBRANT_PLACEHOLDER, VIBRANT_PRIMARY,
 };
 use cupertino_theme::Appearance;
 use smithay::input::pointer::CursorImageStatus;
@@ -638,6 +639,24 @@ fn labels_on_glass_over_a_busy_wallpaper_reach_the_contrast_the_rule_allows() {
             );
 
             let face = mean(&shot, on_output(LARGE_FACE, 0));
+            if dark {
+                // dark glass holds its face under the brightness cap, which is what keeps white labels readable over
+                // a bright wall: the face is never brighter than the recipe's face over white
+                let mode = GlassMode {
+                    dark,
+                    style: GlassStyle::Regular,
+                    increase_contrast,
+                    ..GlassMode::default()
+                };
+                let params = GlassParams::new(mode, LARGE.2.min(LARGE.3) as f32);
+                let brightest =
+                    relative_luminance(face_color([1.0; 3], &params, params.face.max_luma));
+                assert!(
+                    relative_luminance(face) <= brightest + 0.02,
+                    "{what}: the panel's face {:.3} is brighter than the cap allows ({brightest:.3})",
+                    relative_luminance(face)
+                );
+            }
             for (name, rect, level) in [
                 ("primary label", PRIMARY_LABEL, VIBRANT_PRIMARY),
                 ("placeholder", PLACEHOLDER_LABEL, VIBRANT_PLACEHOLDER),

@@ -62,8 +62,8 @@ pub struct WindowPlan {
     pub shadow: f64,
     /// Drawn at its natural size and position (no animation in progress).
     pub exact: bool,
-    /// Visual corner radius of a stage placement, in points; `None` scales the window style's
-    /// radius with the content.
+    /// Visual corner radius of a stage placement, in points, or 0 for a full-screen window
+    /// ([`cupertino_wm::FrameShape::Square`]); `None` scales the window style's radius with the content.
     pub corner: Option<f64>,
 }
 
@@ -213,6 +213,10 @@ pub fn plan_for(
     }
     let animating = w.lifecycle.is_animating(now) || entry.shrink != Shrink::None;
     let mut plan = plan_window(&pres, entry.committed_size(), animating, (slide, 0.0));
+    // a full-screen window meets the edges of its output: no corner mask (its shadow is faded out by the model)
+    if w.lifecycle.toplevel_states().frame_shape() == cupertino_wm::FrameShape::Square {
+        plan.corner = Some(0.0);
+    }
     let desk = fx.show_desktop_progress(now);
     if desk > 0.0 && !w.sticky {
         if let Some(out) = wm.output(w.output) {
@@ -700,7 +704,7 @@ fn window_elements(
     }
 
     out.extend(decorations);
-    let styled = style.style_client_decorated || entry.server_side;
+    let styled = entry.styled(style.style_client_decorated);
     let radius = plan
         .corner
         .unwrap_or(style.corner_radius * plan.scale_x.min(plan.scale_y));

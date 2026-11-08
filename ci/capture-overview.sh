@@ -38,6 +38,8 @@ done
 [[ $size =~ ^([0-9]+)x([0-9]+)$ ]] || fail "--size $size: WIDTHxHEIGHT in points"
 pixels=$(python3 -I -c 'import sys; w, h, s = map(float, sys.argv[1:]); print(f"{round(w * s)}x{round(h * s)}")' \
   "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "$scale")
+# the pointer rests on the bottom-right corner, on no window or bar (no hot corner acts by default), as in capture.sh
+park="$((BASH_REMATCH[1] - 1)),$((BASH_REMATCH[2] - 1))"
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 if [ -z "${BIN_DIR:-}" ]; then
@@ -66,7 +68,7 @@ for appearance in $appearances; do
   png="$out/overview-all-windows-$windows-$appearance$contrast$transparency@${scale}x.png"
   BIN_DIR=$BIN_DIR SIZE=$pixels CUPERTINO_ACCESSIBILITY_CONF="$conf" CONFIG_JSON="{\"appearance\": \"$appearance\"}" \
     "$root/crates/cupertino-server/scripts/session.sh" --scale "$scale" "${spawn[@]}" \
-    --action 3:overview --shot "5:$png" --run-for 5.5 >"$scratch/server.log" 2>&1 \
+    --pointer "0:$park" --action 3:overview --shot "5:$png" --run-for 5.5 >"$scratch/server.log" 2>&1 \
     || { tail -20 "$scratch/server.log" >&2; exit 1; }
   [ -s "$png" ] || { tail -20 "$scratch/server.log" >&2; fail "the server wrote no $png"; }
   echo "$png"

@@ -741,7 +741,18 @@ fn window_elements(
     } else {
         cropped_backdrops(backdrops, visual_local)
     };
-    out.extend(backdrop_elements(p, &backdrops, alpha));
+    // a square backdrop follows the window's rounded corners where it reaches them, as the content does
+    let mut backdrops = backdrop_elements(p, &backdrops, alpha);
+    if matches!(clip, Clip::Rounded { .. }) {
+        for piece in &mut backdrops {
+            if let Piece::Material(m) = piece {
+                if m.radius <= 0.0 {
+                    m.clip = clip;
+                }
+            }
+        }
+    }
+    out.extend(backdrops);
     if shadow && styled {
         out.extend(shadow_piece(p, entry.id, plan, active, plan.opacity));
     }
@@ -1441,6 +1452,7 @@ fn material_piece(
             .tint
             .unwrap_or_else(|| wallpaper_tint(dark)),
         opacity: alpha,
+        clip: Clip::None,
     })))
 }
 
@@ -1787,6 +1799,7 @@ fn display_filter(p: &mut SceneParams<'_>, stack: &mut Composition) {
             stage: MaterialStage::Full,
             tint: [0.0; 3],
             opacity: 1.0,
+            clip: Clip::None,
         })),
     );
 }

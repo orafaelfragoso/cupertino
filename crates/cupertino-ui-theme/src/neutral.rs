@@ -86,7 +86,8 @@ pub(crate) const DARK: Palette<[u8; 4]> = Palette {
         (DefaultButtonText, WHITE),
         (DestructiveFill, [200, 40, 32, 255]),
         (DestructiveText, WHITE),
-        (SwitchTrack, gray(70)),
+        // the Cupertino dark track, white at 20 % over the window
+        (SwitchTrack, gray(91)),
         (SwitchThumb, WHITE),
         (TextBackground, gray(30)),
         (TextFieldBorder, gray(128)),
@@ -319,10 +320,13 @@ mod tests {
             (ScrollerThumb, TextBackground),
             (PageDot, WindowBackground),
         ];
+        // a level slider's knob is the colour of the fill under it; its ring tells them apart
         let high_contrast_boundary_pairs = [
             (SwitchTrack, WindowBackground),
             (SwitchThumb, SwitchTrack),
             (Separator, WindowBackground),
+            (ControlBorder, SwitchThumb),
+            (PanelTrack, SwitchThumb),
         ];
         for appearance in Appearance::ALL {
             let colors = ColorTokens::neutral(appearance);

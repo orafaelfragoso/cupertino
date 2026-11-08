@@ -266,12 +266,21 @@ impl<A: Application> Harness<A> {
 
     /// A harness with a screen reader attached, which [`ask`](Self::ask) speaks for.
     pub fn assistive() -> Self {
+        Self::assistive_with(false)
+    }
+
+    /// [`assistive`](Self::assistive) for content that animates without end, as [`animated`](Self::animated) is.
+    pub fn assistive_animated() -> Self {
+        Self::assistive_with(true)
+    }
+
+    fn assistive_with(animated: bool) -> Self {
         let asked = Rc::new(RefCell::new(Vec::new()));
         let mut harness = Self::build_with(
             LayoutDirection::Ltr,
             theme(),
             placeholder_icons(),
-            false,
+            animated,
             Some(Rc::clone(&asked)),
         );
         harness.asked = Some(asked);

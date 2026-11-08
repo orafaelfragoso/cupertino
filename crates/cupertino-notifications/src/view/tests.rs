@@ -250,13 +250,36 @@ fn action_labels_that_do_not_fit_share_the_row() {
 }
 
 #[test]
-fn the_close_button_lies_inside_the_card_s_rounded_corner() {
-    let centre = CLOSE_INSET + CLOSE_DIAMETER / 2.0;
-    let corner = CORNER_RADIUS;
-    let reach = ((centre - corner).powi(2) * 2.0).sqrt() + CLOSE_DIAMETER / 2.0;
+fn the_close_button_sits_on_the_card_s_corner_clear_of_the_icon_and_the_banner_takes_input_there() {
+    let card = Rect::new(28.0, SHADOW_MARGIN, 344.0, 80.0);
+    let close = close_rect(card);
+    assert_eq!(
+        close.center(),
+        card.origin,
+        "centred on the top-leading corner"
+    );
+    let icon = Rect::new(
+        card.min_x() + PADDING,
+        card.min_y() + PADDING,
+        ICON_SIZE,
+        ICON_SIZE,
+    );
     assert!(
-        reach <= corner,
-        "{reach} reaches past the curve of radius {corner}"
+        close.max_x() < icon.min_x() && close.max_y() < icon.min_y(),
+        "{close:?} reaches the icon at {icon:?}"
+    );
+
+    // the banner's window takes input over the whole button, the part past the card too
+    let m = metrics();
+    let mut c = NotificationCenter::default();
+    c.notify(NotifyInput::new("app", "Hello", "World"), 0.0);
+    let banners = windows::<Input>(&mut c, &Ui::default(), &m, 1.0, |i| i);
+    let region = banners[0].spec.input_region.clone().unwrap();
+    assert_eq!(region.len(), 2, "{region:?}");
+    assert_eq!(region[1], close_rect(region[0]));
+    assert!(
+        region[1].min_x() >= 0.0 && region[1].min_y() >= 0.0,
+        "{region:?}"
     );
 }
 

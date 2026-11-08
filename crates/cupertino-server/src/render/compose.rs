@@ -69,6 +69,8 @@ pub struct Material {
     pub stage: MaterialStage,
     pub tint: [f32; 3],
     pub opacity: f32,
+    /// A rounded clip cuts the region to a window's outline as well; the material pass draws it as the region's mask.
+    pub clip: Clip,
 }
 
 /// What keeps a stored snapshot alive for a frame: a lease on one that effect state owns, or the ownership of one the
@@ -212,7 +214,7 @@ impl Composition {
                         }),
                         placement: Placement::IDENTITY,
                         opacity: f64::from(material.opacity),
-                        clip: Clip::None,
+                        clip: material.clip,
                         damage: ContentDamage::Full,
                     },
                 );

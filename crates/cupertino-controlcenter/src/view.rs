@@ -87,15 +87,14 @@ fn switch<M: 'static>(
     })
 }
 
-/// A 40 point switch row in a 62 point tile, its button inset as far from the leading edge as from the top; the text
-/// runs to the trailing edge.
+/// A 40 point switch row in a 62 point tile, inset as far from the leading and trailing edges as from the top.
 fn row_tile<M: 'static>(controls: &Controls, module: Module, to: fn(Input) -> M) -> Element<M> {
     let inset = (COMPACT_HEIGHT - ROW_HEIGHT) / 2.0;
     Element::from(Tile {
         label: module.title().to_owned(),
         content: Element::new(Stack {
             axis: Axis::Vertical,
-            padding: Insets::new(inset, inset, inset, 0.0),
+            padding: Insets::uniform(inset),
             spacing: 0.0,
             align: Align::Stretch,
             children: vec![switch(controls, module, ModuleLayout::Row, to)],

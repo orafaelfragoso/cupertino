@@ -22,7 +22,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use cupertino_capture::{App, Look, Request, State};
 use cupertino_files::kit::{prepare, Files, Start};
 use cupertino_files::notice::Notices;
-use cupertino_files::places::{folder_icons, standard_places, Place};
+use cupertino_files::places::{folder_icons, standard_places, Medium, Place};
 use cupertino_files::thumbnail::Thumbnailer;
 use cupertino_files::trash::Trash;
 use cupertino_files::window::ViewMode;
@@ -311,7 +311,8 @@ impl Capture {
     }
 }
 
-/// Run the window and present the frames it asks for until it rests; `false` when it never does.
+/// Run the window and present the frames it asks for until it rests, or draws the same pixels frame after frame;
+/// `false` when it does neither.
 fn settle(
     driver: &mut TestDriver<Files>,
     window: WindowId,
@@ -330,7 +331,13 @@ fn settle(
             .frame_ready(window, Timestamp(0))
             .map_err(|e| Box::new(e) as _)?;
     }
-    Ok(false)
+    // a window that goes on asking for frames but presents the same pixels each time (a busy row's activity indicator
+    // at the capture's fixed clock) shows its last state
+    let frames = driver
+        .window_system_mut()
+        .frames(window)
+        .map_err(|e| Box::new(e) as _)?;
+    Ok(matches!(frames, [.., a, b] if a.pixels == b.pixels))
 }
 
 /// How many thumbnails the window draws: the images that are not square.
@@ -428,9 +435,15 @@ impl App for Capture {
                         "Backup Disk",
                         Some(Path::new("/run/media/avery/Backup")),
                         false,
+                        Medium::Disk,
                     ),
-                    Place::removable("Camera Card", Some(Path::new("/run/media/avery/CAM")), true),
-                    Place::removable("KINGSTON", None, false),
+                    Place::removable(
+                        "Camera Card",
+                        Some(Path::new("/run/media/avery/CAM")),
+                        true,
+                        Medium::Card,
+                    ),
+                    Place::removable("KINGSTON", None, false, Medium::Stick),
                 ]),
                 ("devices", _) => return Err(format!("--devices {value}: removable")),
                 (_, name) => selected = Some(name.to_string()),

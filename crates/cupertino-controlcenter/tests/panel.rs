@@ -356,7 +356,12 @@ fn the_modules_sit_on_the_two_column_grid_below_the_battery_row() {
     assert_eq!(switch("Wi-Fi"), (10.0, 48.0, 134.0, 40.0));
     assert_eq!(switch("Bluetooth"), (10.0, 95.0, 134.0, 40.0));
     assert_eq!(switch("File Sharing"), (10.0, 142.0, 134.0, 40.0));
-    assert_eq!(group("Focus Mode"), (154.0, 48.0, 134.0, 62.0));
+    assert_eq!(group("Focus"), (154.0, 48.0, 134.0, 62.0));
+    assert_eq!(
+        switch("Focus"),
+        (165.0, 59.0, 112.0, 40.0),
+        "the switch keeps the tile's inset on every side"
+    );
     assert_eq!(group("Stage"), (154.0, 120.0, 62.0, 62.0));
     assert_eq!(group("Mirroring"), (226.0, 120.0, 62.0, 62.0));
     assert_eq!(group("Display"), (10.0, 192.0, 278.0, 62.0));

@@ -54,6 +54,11 @@ impl Harness {
     }
 
     fn with_config(config: Config) -> Option<Harness> {
+        Self::with_scale(config, 1.0)
+    }
+
+    /// A display of `OUTPUT` points at `scale` device pixels a point.
+    fn with_scale(config: Config, scale: f64) -> Option<Harness> {
         let event_loop: EventLoop<'static, Cupertino> =
             EventLoop::try_new().expect("creating the event loop");
         let display: Display<Cupertino> = Display::new().expect("creating the Wayland display");
@@ -66,7 +71,11 @@ impl Harness {
             &cupertino_assets::Assets::builtin(),
         )
         .expect("creating the compositor");
-        match headless::init(&mut state, OUTPUT, 1.0) {
+        let pixels = (
+            (f64::from(OUTPUT.0) * scale).round() as i32,
+            (f64::from(OUTPUT.1) * scale).round() as i32,
+        );
+        match headless::init(&mut state, pixels, scale) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
                 common::egl_unavailable(format!("{e:#}"));
@@ -285,14 +294,14 @@ impl Dispatch<wl_pointer::WlPointer, ()> for Window {
 }
 
 /// A client with one unified window. A white one opens a popup with a `Menu` material backdrop once it has had a
-/// button press (the popup needs an input serial); a `Sidebar` one is transparent over a backdrop of that material
-/// covering it, as the Files sidebar is.
+/// button press (the popup needs an input serial); a `Sidebar` one (`sidebar` is its backdrop's corner radius) is
+/// transparent over a backdrop of that material covering it, as the Files sidebar is.
 struct App {
     stop: Arc<AtomicBool>,
 }
 
 impl App {
-    fn spawn(socket: PathBuf, sidebar: bool) -> App {
+    fn spawn(socket: PathBuf, sidebar: Option<f64>) -> App {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         std::thread::spawn(move || {
@@ -317,12 +326,13 @@ impl App {
             let decoration = decorations.get_toplevel_decoration(&toplevel, &qh, ());
             decoration.set_mode(zxdg_toplevel_decoration_v1::Mode::ServerSide);
             effects.set_titlebar_style(&window, TitlebarStyle::Unified);
-            let mut backdrop = sidebar.then(|| {
+            let mut backdrop = sidebar.map(|radius| {
                 let b: CupertinoBackdropV1 = effects.get_backdrop(&window, &qh, ());
                 b.set_material("Sidebar".into());
-                b.set_shape(0, 0, SIZE.0 as i32, SIZE.1 as i32, 10.0);
+                b.set_shape(0, 0, SIZE.0 as i32, SIZE.1 as i32, radius);
                 b
             });
+            let sidebar = sidebar.is_some();
             window.commit();
             let mut client = Window {
                 shm: globals.bind(&qh, 1..=1, ()).unwrap(),
@@ -377,7 +387,7 @@ impl Drop for App {
 fn a_window_popup_draws_its_material_over_the_window_and_only_there() {
     let Some(mut h) = Harness::new() else { return };
     h.state.cursor_status = CursorImageStatus::Hidden;
-    let _app = App::spawn(h.socket_path(), false);
+    let _app = App::spawn(h.socket_path(), None);
     h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
     let t = h.state.now() + 5.0;
     let time = t;
@@ -429,7 +439,7 @@ fn a_minimizing_window_keeps_its_material_where_it_is_otherwise_transparent() {
         return;
     };
     h.state.cursor_status = CursorImageStatus::Hidden;
-    let _app = App::spawn(h.socket_path(), true);
+    let _app = App::spawn(h.socket_path(), Some(10.0));
     h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
     let t0 = h.state.now() + 5.0;
     common::set_time(&mut h.state, &mut h.event_loop, t0);
@@ -478,4 +488,63 @@ fn a_minimizing_window_keeps_its_material_where_it_is_otherwise_transparent() {
             .all(|(x, y)| x.abs_diff(*y) <= 8),
         "while minimizing the window draws its material's fill over the desktop: {minimizing:?}, expected {stand_in:?} over {behind:?}"
     );
+}
+
+#[test]
+fn a_square_backdrop_over_the_whole_window_follows_the_window_s_rounded_corners() {
+    for scale in [1.0, 1.5] {
+        let Some(mut h) = Harness::with_scale(Config::default(), scale) else {
+            return;
+        };
+        h.state.cursor_status = CursorImageStatus::Hidden;
+        let _app = App::spawn(h.socket_path(), Some(0.0));
+        h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
+        let t = h.state.now() + 5.0;
+        common::set_time(&mut h.state, &mut h.event_loop, t);
+        h.state.tick();
+        h.step(20);
+        let id = h.state.wm.key_window().expect("a key window");
+        let frame = h.state.wm.window(id).unwrap().geometry();
+        let shot = h.screenshot();
+        // in device pixels: the window's edges and its corner radius
+        let at = |x: f64, y: f64| shot.get_pixel(x.round() as u32, y.round() as u32).0;
+        let (left, right, bottom) = (
+            frame.x * scale,
+            (frame.x + frame.w) * scale - 1.0,
+            (frame.y + frame.h) * scale - 1.0,
+        );
+        let radius = Config::default().window.corner_radius * scale;
+        let differs = |a: [u8; 4], b: [u8; 4]| {
+            a[..3]
+                .iter()
+                .zip(&b[..3])
+                .map(|(x, y)| x.abs_diff(*y))
+                .max()
+                .unwrap()
+        };
+        // (direction into the window along x, the corner's x)
+        for (inward, x) in [(1.0, left), (-1.0, right)] {
+            let beside = at(x - inward, bottom + 1.0);
+            let inside = at(x + inward * 30.0 * scale, bottom - 2.0);
+            assert!(
+                differs(inside, beside) > 24,
+                "at {scale}x the material covers the window: {inside:?} over {beside:?}"
+            );
+            // the corner pixel and one a fifth of the radius in on the diagonal lie past the rounded outline
+            for d in [0.0, (radius * 0.2).floor()] {
+                let corner = at(x + inward * d, bottom - d);
+                assert!(
+                    differs(corner, beside) <= 12,
+                    "at {scale}x past the rounded corner the desktop shows, as just outside the window: \
+                     {corner:?} {d} px in, beside {beside:?}"
+                );
+            }
+            // a radius in along the bottom edge the material is drawn again
+            let edge = at(x + inward * (radius + 2.0), bottom - 1.0);
+            assert!(
+                differs(edge, beside) > 24,
+                "at {scale}x the material reaches the bottom edge past the corner: {edge:?} over {beside:?}"
+            );
+        }
+    }
 }

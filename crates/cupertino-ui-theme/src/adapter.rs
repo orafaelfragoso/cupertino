@@ -92,7 +92,9 @@ pub(crate) const DARK: Palette<Source> = Palette {
         (DefaultButtonText, WHITE),
         (DestructiveFill, Token("system-red")),
         (DestructiveText, WHITE),
-        (SwitchTrack, Token("system-fill")),
+        // The empty part of a slider's track and an off switch's track: white at 20 %, so the track stands apart from
+        // the window and from a text background behind it.
+        (SwitchTrack, Rgba([255, 255, 255, 51])),
         (SwitchThumb, WHITE),
         (TextBackground, Token("text-background")),
         (TextFieldBorder, Token("container-border")),
@@ -192,6 +194,61 @@ mod tests {
             let get = |role| colors.get(role, StateVariant::NORMAL).unwrap().to_rgba8();
             assert_eq!(get(ScrollerThumb), thumb);
             assert_eq!(get(DialogScrim), scrim);
+        }
+    }
+
+    /// The WCAG contrast ratio of two opaque colours.
+    fn contrast(a: Color, b: Color) -> f32 {
+        let luminance = |c: Color| {
+            let lin = |v: f32| {
+                if v <= 0.04045 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+        };
+        let (x, y) = (luminance(a), luminance(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    /// `top` drawn over the opaque `bottom`.
+    fn over(top: Color, bottom: Color) -> Color {
+        let mix = |t: f32, b: f32| t * top.a + b * (1.0 - top.a);
+        Color {
+            r: mix(top.r, bottom.r),
+            g: mix(top.g, bottom.g),
+            b: mix(top.b, bottom.b),
+            a: 1.0,
+        }
+    }
+
+    #[test]
+    fn the_dark_slider_track_stands_apart_from_the_backgrounds_behind_it() {
+        /// The least contrast of the empty part of a track with the window and with a text background, in dark.
+        const DARK_TRACK: f32 = 1.75;
+        let tokens = tokens();
+        let colors = ColorTokens::cupertino(&tokens, Appearance::Dark).unwrap();
+        let get = |role| colors.get(role, StateVariant::NORMAL).unwrap();
+        let control_background = tokens
+            .table(Appearance::Dark)
+            .get("control-background")
+            .unwrap();
+        for background in [
+            get(WindowBackground),
+            get(TextBackground),
+            control_background,
+        ] {
+            let background = over(background, Color::from_rgba8([0, 0, 0, 255]));
+            let track = over(get(SwitchTrack), background);
+            let ratio = contrast(track, background);
+            assert!(
+                ratio >= DARK_TRACK,
+                "track {track:?} on {background:?}: {ratio:.2} < {DARK_TRACK}"
+            );
+            // the knob and the filled part stay far apart from the empty track
+            assert!(contrast(get(SwitchThumb), track) >= 3.0);
         }
     }
 

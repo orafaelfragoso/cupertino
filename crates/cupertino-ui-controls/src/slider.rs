@@ -31,6 +31,10 @@ const PANEL_TRACK_BORDER: f64 = 0.5;
 const TICK_DOT: f64 = 4.0;
 /// Between the track's bottom and the dots under it.
 const TICK_GAP: f64 = 2.0;
+/// The ring around the knob, and its width with Increase Contrast, where the knob takes the colour of the fill it sits
+/// on and only the ring tells them apart.
+const KNOB_RING: f64 = 1.0;
+const KNOB_RING_HIGH_CONTRAST: f64 = 2.0;
 
 /// The node state of a [`Slider`]. Opaque.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -380,11 +384,16 @@ impl<M: 'static> Widget<M> for Slider<M> {
             knob / 2.0,
             look::color(&theme, ColorRole::SwitchThumb, &look_state),
         );
+        let ring = if theme.preferences.appearance.is_high_contrast() {
+            KNOB_RING_HIGH_CONTRAST
+        } else {
+            KNOB_RING
+        };
         look::stroke(
             cx,
-            thumb.inset(Insets::uniform(0.5)),
-            knob / 2.0 - 0.5,
-            1.0,
+            thumb.inset(Insets::uniform(ring / 2.0)),
+            knob / 2.0 - ring / 2.0,
+            ring,
             look::color(&theme, ColorRole::ControlBorder, &look_state),
         );
         paint_focus_ring(cx, thumb, knob / 2.0);

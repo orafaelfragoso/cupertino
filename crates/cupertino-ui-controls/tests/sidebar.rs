@@ -301,7 +301,8 @@ enum Device {
     Eject(Key),
 }
 
-/// Three devices: Backup is mounted and can be ejected, Card is mid-eject, and Stick is not mounted.
+/// Three devices: Backup is mounted and can be ejected, Card is mid-eject, and Stick is not mounted. Card's activity
+/// indicator turns without end, so the harnesses show one more frame per settle.
 struct Devices;
 
 impl Application for Devices {
@@ -372,7 +373,7 @@ fn device_rect(h: &Harness<Devices>, name: &str) -> Rect {
 
 #[test]
 fn a_press_at_the_trailing_edge_ejects_without_selecting_and_a_press_on_the_name_selects() {
-    let mut h = Harness::<Devices>::new();
+    let mut h = Harness::<Devices>::animated();
     let r = device_rect(&h, "Backup");
     let y = r.min_y() + r.height() / 2.0;
     h.click(Point::new(r.max_x() - 11.0, y));
@@ -391,7 +392,7 @@ fn a_press_at_the_trailing_edge_ejects_without_selecting_and_a_press_on_the_name
 
 #[test]
 fn a_busy_row_has_no_eject_button_and_says_it_is_busy() {
-    let mut h = Harness::<Devices>::new();
+    let mut h = Harness::<Devices>::animated();
     let r = device_rect(&h, "Card");
     h.click(Point::new(r.max_x() - 11.0, r.min_y() + r.height() / 2.0));
     assert_eq!(h.model().1, [Device::Select(1)]);
@@ -401,7 +402,7 @@ fn a_busy_row_has_no_eject_button_and_says_it_is_busy() {
 
 #[test]
 fn assistive_technology_reads_the_description_and_clicks_the_eject_button() {
-    let mut h = Harness::<Devices>::assistive();
+    let mut h = Harness::<Devices>::assistive_animated();
     let backup = named(&h, "Backup").unwrap();
     assert_eq!(backup.description.as_deref(), Some("Removable"));
     let eject = named(&h, "Eject Backup").unwrap();
@@ -422,4 +423,144 @@ fn assistive_technology_reads_the_description_and_clicks_the_eject_button() {
         .unwrap();
     h.ask_node(id, Action::Click);
     assert_eq!(h.model().1, [Device::Eject(Key::from("Backup"))]);
+}
+
+/// Placeholders, with the colour of every symbol asked for kept by name.
+#[derive(Debug, Default)]
+struct Tints {
+    asked: std::sync::Mutex<Vec<(String, cupertino_ui_theme::Color)>>,
+    draw: cupertino_ui_core::PlaceholderIcons,
+}
+
+impl cupertino_ui_core::Icons for Tints {
+    fn symbol(
+        &self,
+        name: &str,
+        px: u32,
+        color: cupertino_ui_theme::Color,
+        mirrored: bool,
+    ) -> cupertino_ui_core::IconImage {
+        self.asked.lock().unwrap().push((name.to_owned(), color));
+        self.draw.symbol(name, px, color, mirrored)
+    }
+}
+
+#[test]
+fn an_inactive_windows_row_icons_take_the_secondary_label_colour() {
+    let tints = std::sync::Arc::new(Tints::default());
+    let mut h =
+        Harness::<Places>::with_icons(cupertino_ui_layout::LayoutDirection::Ltr, tints.clone());
+    let accent = color(ColorRole::ControlFill, InteractionVariant::Normal, true);
+    let last = |tints: &Tints| tints.asked.lock().unwrap().last().map(|(_, c)| *c);
+    assert_eq!(last(&tints), Some(accent), "the accent while active");
+    tints.asked.lock().unwrap().clear();
+    h.rt.window_system_mut()
+        .configure(
+            h.window,
+            Some(Size::new(200.0, 100.0)),
+            cupertino_ui_platform::WindowStates::default(),
+        )
+        .unwrap();
+    h.settle();
+    let asked = tints.asked.lock().unwrap().clone();
+    assert!(!asked.is_empty(), "the rows drew their icons again");
+    let secondary = support::theme()
+        .colors
+        .get(
+            ColorRole::SecondaryText,
+            cupertino_ui_theme::StateVariant::NORMAL,
+        )
+        .unwrap();
+    assert!(
+        asked.iter().all(|(_, c)| *c == secondary),
+        "every row's icon in the secondary label colour: {asked:?}"
+    );
+}
+
+#[test]
+fn a_busy_row_turns_an_activity_indicator_where_its_eject_button_was() {
+    let h = Harness::<Devices>::animated();
+    let spokes = |h: &Harness<Devices>, name: &str| -> Vec<Rect> {
+        let id = PaintNodeId::from(row(h, name));
+        h.snapshot()
+            .display_list
+            .nodes
+            .into_iter()
+            .find(|n| n.id == id)
+            .unwrap()
+            .ops
+            .into_iter()
+            .filter_map(|op| match op {
+                PaintOp::Stroke {
+                    shape: Shape::Path { verbs, .. },
+                    ..
+                } => {
+                    let points: Vec<Point> = verbs
+                        .iter()
+                        .filter_map(|v| match v {
+                            cupertino_ui_render::PathVerb::MoveTo(p)
+                            | cupertino_ui_render::PathVerb::LineTo(p) => Some(*p),
+                            _ => None,
+                        })
+                        .collect();
+                    let (a, b) = (points[0], points[1]);
+                    Some(Rect::new(
+                        a.x.min(b.x),
+                        a.y.min(b.y),
+                        (a.x - b.x).abs(),
+                        (a.y - b.y).abs(),
+                    ))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    assert!(spokes(&h, "Backup").is_empty(), "a row at rest shows none");
+    let card = spokes(&h, "Card");
+    assert_eq!(card.len(), 8);
+    let row_width = device_rect(&h, "Card").width();
+    // every spoke lies in the trailing slot the eject button takes on a row at rest
+    for spoke in &card {
+        assert!(
+            spoke.min_x() >= row_width - 10.0 - 4.0 - 24.0
+                && spoke.max_x() <= row_width - 10.0 - 4.0,
+            "{spoke:?} in the slot of a {row_width} pt row"
+        );
+    }
+}
+
+#[test]
+fn with_motion_reduced_a_busy_row_s_indicator_stands_still_and_asks_for_no_frames() {
+    let mut reduced = support::theme();
+    reduced.motion.reduce = true;
+    // a harness that is not animated settles only once the window stops asking for frames
+    let mut h = Harness::<Devices>::with_theme(reduced);
+    let strokes = |h: &Harness<Devices>| -> Vec<f32> {
+        let id = PaintNodeId::from(row(h, "Card"));
+        h.snapshot()
+            .display_list
+            .nodes
+            .into_iter()
+            .find(|n| n.id == id)
+            .unwrap()
+            .ops
+            .into_iter()
+            .filter_map(|op| match op {
+                PaintOp::Stroke {
+                    shape: Shape::Path { .. },
+                    paint: Paint::Solid(c),
+                    ..
+                } => Some(c.a),
+                _ => None,
+            })
+            .collect()
+    };
+    let still = strokes(&h);
+    assert_eq!(still.len(), 8, "the indicator is drawn: {still:?}");
+    assert!(
+        still[0] > still[1..].iter().copied().fold(0.0, f32::max),
+        "its first spoke is the brightest: {still:?}"
+    );
+    h.settle();
+    assert_eq!(strokes(&h), still, "and it does not turn");
 }

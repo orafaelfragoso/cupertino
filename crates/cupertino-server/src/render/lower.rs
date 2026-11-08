@@ -18,7 +18,7 @@ use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size};
 
 use super::clip::{ClipElement, ClipShape};
 use super::compose::{logical_rect, FrameResources};
-use super::material::{MaterialElement, SharedMaterial};
+use super::material::{MaterialElement, MaterialMask, SharedMaterial};
 use super::mesh::{MeshElement, SharedMesh};
 use super::programs::{corner_uniforms, u4, Programs};
 use super::shader_rect::{to_physical_rect, ElementCache, ElementKey, ShaderRect, Sig};
@@ -111,23 +111,39 @@ pub fn lower(
                     .filter(|_| pass.recipe.0.generation == frame.id.0);
                 match (recipe, ctx.material.clone()) {
                     (Some(recipe), Some(shared)) => {
-                        elements.push(
-                            MaterialElement::new(
-                                key,
-                                pass.stage,
-                                ctx.cache,
-                                logical_rect(pass.rect),
-                                recipe.clone(),
-                                shared,
-                                pass.radius,
-                                !pass.style.is_circular(),
-                                item.opacity as f32,
-                                pass.tint,
-                                viewport,
-                                ctx.scale,
-                            )
-                            .into(),
+                        let element = MaterialElement::new(
+                            key,
+                            pass.stage,
+                            ctx.cache,
+                            logical_rect(pass.rect),
+                            recipe.clone(),
+                            shared,
+                            pass.radius,
+                            !pass.style.is_circular(),
+                            item.opacity as f32,
+                            pass.tint,
+                            viewport,
+                            ctx.scale,
                         );
+                        // a region cannot be drawn apart and clipped (it reads what is drawn below it): a rounded
+                        // clip becomes its mask
+                        let element = match item.clip {
+                            Clip::Rounded {
+                                rect,
+                                radius,
+                                style,
+                                ..
+                            } => element.masked(
+                                MaterialMask {
+                                    rect: logical_rect(rect),
+                                    radius_pt: radius,
+                                    continuous: !style.is_circular(),
+                                },
+                                ctx.cache,
+                            ),
+                            _ => element,
+                        };
+                        elements.push(element.into());
                     }
                     _ => {
                         debug_assert!(

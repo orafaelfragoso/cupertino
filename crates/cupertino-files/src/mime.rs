@@ -179,16 +179,16 @@ pub fn kind_description(mime: &str) -> String {
                 "word processing document".into()
             }
             m if m.contains("presentation") => "presentation".into(),
-            "text/x-rust" => "Rust source code".into(),
+            "text/x-rust" | "text/rust" => "Rust source code".into(),
+            "text/x-c++src" | "text/x-c++" => "C++ source code".into(),
+            "text/markdown" | "text/x-markdown" => "Markdown text".into(),
+            m if m.ends_with("-compressed-tar") => "compressed tar archive".into(),
             // a file of no known type: a generic document (approximate, the earlier behaviour; the design's description of
             // an undeclared type is not known)
             UNKNOWN => "document".into(),
             m => {
                 let (major, minor) = m.split_once('/').unwrap_or((m, ""));
-                let minor = minor
-                    .trim_start_matches("x-")
-                    .trim_start_matches("vnd.")
-                    .to_uppercase();
+                let minor = subtype_words(minor);
                 match major {
                     "image" => format!("{minor} image"),
                     "video" => format!("{minor} movie"),
@@ -203,6 +203,48 @@ pub fn kind_description(mime: &str) -> String {
     match chars.next() {
         Some(first) => first.to_uppercase().chain(chars).collect(),
         None => described,
+    }
+}
+
+/// The longest subtype written as an abbreviation in capitals ("PNG", "WEBP"); a longer one is a word.
+const ABBREVIATION_MAX: usize = 4;
+
+/// The longest word of a subtype of several words written in capitals as an abbreviation ("WMV" in "MS WMV"); a
+/// longer one is a word.
+const WORD_ABBREVIATION_MAX: usize = 3;
+
+/// A MIME subtype as words of a kind string: without its `x-` or `vnd.` prefix, with its separators as spaces, in
+/// capitals when it is a short abbreviation and else with only its first letter capitalised, so that no subtype
+/// reads as shouted ("Markdown", "Compressed tar", "WEBP"); in a subtype of several words each short one stays an
+/// abbreviation ("MS WMV", "Adobe DNG").
+fn subtype_words(minor: &str) -> String {
+    let bare = minor.trim_start_matches("x-").trim_start_matches("vnd.");
+    if bare.len() <= ABBREVIATION_MAX && bare.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return bare.to_uppercase();
+    }
+    let parts: Vec<&str> = bare
+        .split(['-', '.', '_', '+'])
+        .filter(|w| !w.is_empty())
+        .collect();
+    let several = parts.len() > 1;
+    let words = parts
+        .iter()
+        .map(|w| {
+            if several
+                && w.len() <= WORD_ABBREVIATION_MAX
+                && w.chars().all(|c| c.is_ascii_alphanumeric())
+            {
+                w.to_uppercase()
+            } else {
+                w.to_lowercase()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut chars = words.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => words,
     }
 }
 
@@ -248,5 +290,47 @@ mod tests {
             "WEBP image",
             "an unlisted type in the same style"
         );
+    }
+
+    #[test]
+    fn no_kind_shouts_its_subtype() {
+        assert_eq!(kind_description("text/rust"), "Rust source code");
+        assert_eq!(kind_description("text/markdown"), "Markdown text");
+        assert_eq!(
+            kind_description("application/x-compressed-tar"),
+            "Compressed tar archive"
+        );
+        assert_eq!(kind_description("text/x-haskell"), "Haskell text");
+        assert_eq!(kind_description("audio/flac"), "FLAC audio");
+        // the abbreviations among the words of a longer subtype keep their capitals, and no separator leaves two
+        // spaces
+        assert_eq!(kind_description("video/x-ms-wmv"), "MS WMV movie");
+        assert_eq!(kind_description("image/x-adobe-dng"), "Adobe DNG image");
+        assert_eq!(kind_description("image/x-canon-cr2"), "Canon CR2 image");
+        assert_eq!(kind_description("audio/x-vorbis+ogg"), "Vorbis OGG audio");
+        assert_eq!(
+            kind_description("application/epub+zip"),
+            "Epub ZIP document"
+        );
+        assert_eq!(kind_description("text/x-c++src"), "C++ source code");
+        assert_eq!(
+            kind_description("application/x-plain++mark"),
+            "Plain mark document"
+        );
+        // a long subtype never comes out in capitals, so the Kind column reads as one style
+        for mime in [
+            "text/x-markdown",
+            "application/x-compressed-tar",
+            "image/x-portable-pixmap",
+            "video/x-matroska",
+            "text/javascript",
+        ] {
+            let kind = kind_description(mime);
+            let first = kind.split(' ').next().unwrap();
+            assert!(
+                first.len() <= ABBREVIATION_MAX || first.chars().skip(1).all(|c| !c.is_uppercase()),
+                "{mime}: {kind}"
+            );
+        }
     }
 }

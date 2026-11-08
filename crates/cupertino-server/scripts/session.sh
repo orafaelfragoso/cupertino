@@ -21,6 +21,7 @@
 # there show in the launcher).
 # CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE: application ids (comma separated) the dock shows as not responding; the script builds
 # a dock for it into target/capture-fixtures.
+# The volume is a stand-in `wpctl` at a fixed level (no sound device or PipeWire of the caller's is read).
 # CUPERTINO_ACCESSIBILITY_CONF: an accessibility.conf the server reads its display options from (increase_contrast = on,
 # say); without it the run has the defaults.
 # Needs: dbus-run-session, python3.
@@ -67,6 +68,40 @@ printf 'Sample download.\n' >"$FHOME/Downloads/Release Notes.txt"
 : >"$FHOME/Pictures/Holiday.png"
 : >"$FHOME/Music/Song.ogg"
 [ -z "${FIXTURE_DIR:-}" ] || cp -rL "$FIXTURE_DIR"/. "$FHOME"/
+
+# A stand-in `wpctl` first on PATH: the default sink and source at a fixed level, kept in the scratch folder, so the
+# volume the Control Center, the volume overlay and Settings show is the same on every run and no sound device is read.
+AUDIO=$SCRATCH/audio
+mkdir -p "$AUDIO/bin"
+echo "0.50 0" >"$AUDIO/sink"
+echo "0.50 0" >"$AUDIO/source"
+cat >"$AUDIO/bin/wpctl" <<'EOF'
+#!/bin/sh
+state=$(dirname "$0")/..
+case "$1" in
+status) printf 'Audio\n ├─ Sinks:\n │\n ├─ Sources:\n'; exit 0 ;;
+set-default) exit 0 ;;
+esac
+case "$2" in
+@DEFAULT_AUDIO_SINK@) node=$state/sink ;;
+@DEFAULT_AUDIO_SOURCE@) node=$state/source ;;
+*) echo "Translate ID error: '$2' is not a valid ID" >&2; exit 1 ;;
+esac
+read -r level muted <"$node"
+case "$1" in
+get-volume) if [ "$muted" = 1 ]; then printf 'Volume: %.2f [MUTED]\n' "$level"; else printf 'Volume: %.2f\n' "$level"; fi ;;
+set-volume) echo "$3 $muted" >"$node" ;;
+set-mute) echo "$level $3" >"$node" ;;
+*) exit 1 ;;
+esac
+EOF
+chmod +x "$AUDIO/bin/wpctl"
+# the shell's prompt and the terminal title it sets name neither the user nor the machine, so a terminal looks the same
+# on every machine
+cat >"$FHOME/.bashrc" <<'EOF'
+PS1='\W \$ '
+unset PROMPT_COMMAND
+EOF
 touch -d 2026-01-01T12:00:00 "$FHOME" "$FHOME"/* "$FHOME"/*/* "$FHOME"/*/*/* 2>/dev/null || true
 
 python3 -I - "$ROOT/packaging/files/etc/cupertino/compositor.json" "$SCRATCH/server.json" "$FHOME" "${CONFIG_JSON:-{\}}" <<'EOF'
@@ -80,7 +115,7 @@ EOF
 cd "$FHOME"
 env -i \
     HOME="$FHOME" \
-    PATH="$BIN_DIR:/usr/local/bin:/usr/bin:/bin" \
+    PATH="$AUDIO/bin:$BIN_DIR:/usr/local/bin:/usr/bin:/bin" \
     LANG=C.UTF-8 \
     TZ=UTC \
     XDG_CONFIG_HOME="$FHOME/.config" \

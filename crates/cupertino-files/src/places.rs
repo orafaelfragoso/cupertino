@@ -52,8 +52,20 @@ pub enum PlaceKind {
     Applications,
     Computer,
     Trash,
-    /// A file system of a removable drive (`crate::udisks`), in this state.
-    Removable(Volume),
+    /// A file system of a removable drive (`crate::udisks`), in this state, on this kind of medium.
+    Removable(Volume, Medium),
+}
+
+/// The kind of medium a removable file system is on, which picks its symbol.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Medium {
+    /// An external disk, or a drive of no known kind.
+    #[default]
+    Disk,
+    /// A flash drive: a stick that plugs straight in.
+    Stick,
+    /// A memory card in a card reader.
+    Card,
 }
 
 /// The state of a removable file system's row.
@@ -82,7 +94,9 @@ impl PlaceKind {
             PlaceKind::Applications => "symbol.applications",
             PlaceKind::Computer => "symbol.computer",
             PlaceKind::Trash => "symbol.trash",
-            PlaceKind::Removable(_) => "symbol.externaldrive",
+            PlaceKind::Removable(_, Medium::Disk) => "symbol.externaldrive",
+            PlaceKind::Removable(_, Medium::Stick) => "symbol.flash-drive",
+            PlaceKind::Removable(_, Medium::Card) => "symbol.memory-card",
         }
     }
 
@@ -99,7 +113,7 @@ impl PlaceKind {
             PlaceKind::Videos => Some("folder.movies"),
             PlaceKind::Applications => Some("folder.applications"),
             PlaceKind::Computer => Some("computer"),
-            PlaceKind::Recents | PlaceKind::Trash | PlaceKind::Removable(_) => None,
+            PlaceKind::Recents | PlaceKind::Trash | PlaceKind::Removable(..) => None,
         }
     }
 }
@@ -115,8 +129,8 @@ pub struct Place {
 }
 
 impl Place {
-    /// The row of a removable file system named `name`, mounted at `mount`.
-    pub fn removable(name: &str, mount: Option<&Path>, busy: bool) -> Place {
+    /// The row of a removable file system named `name` on `medium`, mounted at `mount`.
+    pub fn removable(name: &str, mount: Option<&Path>, busy: bool, medium: Medium) -> Place {
         let volume = match (busy, mount) {
             (true, _) => Volume::Busy,
             (false, Some(_)) => Volume::Mounted,
@@ -126,7 +140,7 @@ impl Place {
             name: name.into(),
             path: mount.map(Path::to_path_buf).unwrap_or_default(),
             group: PlaceGroup::Locations,
-            kind: PlaceKind::Removable(volume),
+            kind: PlaceKind::Removable(volume, medium),
         }
     }
 
@@ -137,7 +151,7 @@ impl Place {
 
     /// Whether the row shows the eject button: a mounted removable file system.
     pub fn ejectable(&self) -> bool {
-        self.kind == PlaceKind::Removable(Volume::Mounted)
+        matches!(self.kind, PlaceKind::Removable(Volume::Mounted, _))
     }
 }
 
@@ -160,7 +174,7 @@ pub fn removable_holding(dir: &Path, places: &[Place]) -> Option<usize> {
     places
         .iter()
         .enumerate()
-        .filter(|(_, p)| matches!(p.kind, PlaceKind::Removable(_)))
+        .filter(|(_, p)| matches!(p.kind, PlaceKind::Removable(..)))
         .filter(|(_, p)| p.folder().is_some_and(|m| dir.starts_with(m)))
         .max_by_key(|(_, p)| p.path.components().count())
         .map(|(i, _)| i)
@@ -512,7 +526,7 @@ mod tests {
         let trash = home.path().join(".local/share/Trash/files");
         let mut places = standard_places(home.path(), &[], &trash, None, "box");
         let standard = places.len();
-        places.push(Place::removable("Card", None, false));
+        places.push(Place::removable("Card", None, false, Medium::Card));
         assert_eq!(follow_trash(&mut places, standard, &trash), standard);
 
         std::fs::create_dir_all(&trash).unwrap();
@@ -546,15 +560,20 @@ mod tests {
             "Card",
             Some(Path::new("/run/media/ada/CARD")),
             false,
+            Medium::Card,
         ));
-        places.push(Place::removable("Stick", None, false));
+        places.push(Place::removable("Stick", None, false, Medium::Stick));
         places.push(Place::removable(
             "Inner",
             Some(Path::new("/run/media/ada/CARD/inner")),
             false,
+            Medium::Disk,
         ));
         let first = places.len() - 3;
-        assert_eq!(places[first].kind, PlaceKind::Removable(Volume::Mounted));
+        assert_eq!(
+            places[first].kind,
+            PlaceKind::Removable(Volume::Mounted, Medium::Card)
+        );
         assert_eq!(
             places[first + 1].folder(),
             None,
@@ -578,9 +597,26 @@ mod tests {
             "the computer is not removable"
         );
         assert_eq!(
-            Place::removable("Card", Some(Path::new("/run/media/ada/CARD")), true).kind,
-            PlaceKind::Removable(Volume::Busy)
+            Place::removable(
+                "Card",
+                Some(Path::new("/run/media/ada/CARD")),
+                true,
+                Medium::Card
+            )
+            .kind,
+            PlaceKind::Removable(Volume::Busy, Medium::Card)
         );
+    }
+
+    #[test]
+    fn a_removable_file_system_wears_the_symbol_of_its_medium_and_none_wears_the_computers() {
+        let symbol = |medium| Place::removable("X", None, false, medium).kind.symbol();
+        assert_eq!(symbol(Medium::Disk), "symbol.externaldrive");
+        assert_eq!(symbol(Medium::Stick), "symbol.flash-drive");
+        assert_eq!(symbol(Medium::Card), "symbol.memory-card");
+        for medium in [Medium::Disk, Medium::Stick, Medium::Card] {
+            assert_ne!(symbol(medium), PlaceKind::Computer.symbol());
+        }
     }
 
     #[test]

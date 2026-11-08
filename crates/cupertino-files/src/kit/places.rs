@@ -97,7 +97,7 @@ pub(super) fn reread(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::places::{PlaceGroup, PlaceKind};
+    use crate::places::{Medium, PlaceGroup, PlaceKind};
 
     fn place(name: &str, kind: PlaceKind) -> Place {
         Place {
@@ -112,7 +112,7 @@ mod tests {
     fn the_standard_places_are_read_again_and_the_devices_kept() {
         let d = tempfile::tempdir().unwrap();
         let trash = d.path().join("Trash/files");
-        let device = Place::removable("Backup", None, false);
+        let device = Place::removable("Backup", None, false, Medium::Disk);
         let mut places = vec![place("Documents", PlaceKind::Documents), device.clone()];
         assert_eq!(reread(&mut places, 1, None, &trash), 1, "no trash yet");
         std::fs::create_dir_all(&trash).unwrap();

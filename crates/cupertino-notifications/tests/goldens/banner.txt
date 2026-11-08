@@ -8,14 +8,14 @@ text_input None
 layout
   NodeId(0v1) cupertino_notifications::view::Strip<kit_goldens::Message> key=None parent=None children=[NodeId(1v1)] rect=[0,0 388x114] clip=[none]
   NodeId(1v1) cupertino_notifications::view::Card<kit_goldens::Message> key=Some(Str("card-1")) parent=Some(NodeId(0v1)) children=[NodeId(2v1)] rect=[404,12 344x90] clip=[none]
-  NodeId(2v1) cupertino_notifications::view::Place<kit_goldens::Message> key=None parent=Some(NodeId(1v1)) children=[NodeId(3v1), NodeId(4v1)] rect=[404,12 344x90] clip=[404,12 344x90]
-  NodeId(3v1) cupertino_ui_controls::Icon key=None parent=Some(NodeId(2v1)) children=[] rect=[416,24 32x32] clip=[404,12 344x90]
-  NodeId(4v1) cupertino_ui_controls::Stack<kit_goldens::Message> key=None parent=Some(NodeId(2v1)) children=[NodeId(5v1), NodeId(6v1), NodeId(8v1)] rect=[458,24 278x66] clip=[404,12 344x90]
-  NodeId(5v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(4v1)) children=[] rect=[458,24 38.796875x15.7294921875] clip=[404,12 344x90]
-  NodeId(6v1) cupertino_ui_controls::RichText<kit_goldens::Message> key=None parent=Some(NodeId(4v1)) children=[NodeId(7v1)] rect=[458,41.7294921875 133.3642578125x15.7294921875] clip=[404,12 344x90]
-  NodeId(7v1) cupertino_ui_controls::rich_text::Body key=None parent=Some(NodeId(6v1)) children=[] rect=[458,41.7294921875 133.3642578125x15.7294921875] clip=[404,12 344x90]
-  NodeId(8v1) cupertino_notifications::view::Row<kit_goldens::Message> key=None parent=Some(NodeId(4v1)) children=[NodeId(9v1)] rect=[458,59.458984375 54.23291015625x30] clip=[404,12 344x90]
-  NodeId(9v1) cupertino_ui_controls::Button<kit_goldens::Message> key=Some(Str("action-reply")) parent=Some(NodeId(8v1)) children=[] rect=[458,67.458984375 54.23291015625x20] clip=[404,12 344x90]
+  NodeId(2v1) cupertino_notifications::view::Place<kit_goldens::Message> key=None parent=Some(NodeId(1v1)) children=[NodeId(3v1), NodeId(4v1)] rect=[404,12 344x90] clip=[none]
+  NodeId(3v1) cupertino_ui_controls::Icon key=None parent=Some(NodeId(2v1)) children=[] rect=[416,24 32x32] clip=[none]
+  NodeId(4v1) cupertino_ui_controls::Stack<kit_goldens::Message> key=None parent=Some(NodeId(2v1)) children=[NodeId(5v1), NodeId(6v1), NodeId(8v1)] rect=[458,24 278x66] clip=[none]
+  NodeId(5v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(4v1)) children=[] rect=[458,24 38.796875x15.7294921875] clip=[none]
+  NodeId(6v1) cupertino_ui_controls::RichText<kit_goldens::Message> key=None parent=Some(NodeId(4v1)) children=[NodeId(7v1)] rect=[458,41.7294921875 133.3642578125x15.7294921875] clip=[none]
+  NodeId(7v1) cupertino_ui_controls::rich_text::Body key=None parent=Some(NodeId(6v1)) children=[] rect=[458,41.7294921875 133.3642578125x15.7294921875] clip=[none]
+  NodeId(8v1) cupertino_notifications::view::Row<kit_goldens::Message> key=None parent=Some(NodeId(4v1)) children=[NodeId(9v1)] rect=[458,59.458984375 54.23291015625x30] clip=[none]
+  NodeId(9v1) cupertino_ui_controls::Button<kit_goldens::Message> key=Some(Str("action-reply")) parent=Some(NodeId(8v1)) children=[] rect=[458,67.458984375 54.23291015625x20] clip=[none]
 semantics
   NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 388x114] actions=[] relations=[] children=[NodeId(1v1)]
   NodeId(1v1) role=Group name=Some("Mail: Lunch, Are you free at noon?") description=None value=none live=Polite states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[404,12 344x90] actions=[Click] relations=[] children=[NodeId(5v1), NodeId(7v1), NodeId(9v1)]
@@ -24,7 +24,7 @@ semantics
   NodeId(9v1) role=Button name=Some("Reply") description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[458,67.458984375 54.23291015625x20] actions=[Click] relations=[] children=[]
 display
   paint 4294967296 parent=None revision=1 bounds=[0,-11.25 772.25x138.5] hit=[0,0 388x114] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-  paint 4294967297 parent=Some(4294967296) revision=2 bounds=[379.75,-11.25 392.5x138.5] hit=[404,12 344x90] clip=Some(Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 90.0 } })) transform=[1.0, 0.0, 0.0, 1.0, 404.0, 12.0]
+  paint 4294967297 parent=Some(4294967296) revision=2 bounds=[379.75,-11.25 392.5x138.5] hit=[404,12 344x90] clip=None transform=[1.0, 0.0, 0.0, 1.0, 404.0, 12.0]
     Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 90.0 } }, radius: 16.0 }, paint: Solid(Color { r: 0.9254902, g: 0.9254902, b: 0.9254902, a: 1.0 }) }
     Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 90.0 } }, radius: 16.0 }, width: 0.5, paint: Solid(Color { r: 0.9019608, g: 0.9019608, b: 0.9019608, a: 1.0 }) }
   paint 4294967298 parent=Some(4294967297) revision=3 bounds=[404,12 344x90] hit=[404,12 344x90] clip=None transform=[1.0, 0.0, 0.0, 1.0, 404.0, 12.0]
@@ -53,14 +53,14 @@ text_input None
 layout
   NodeId(0v1) cupertino_notifications::view::Strip<kit_goldens::Message> key=None parent=None children=[NodeId(1v1)] rect=[0,0 388x114] clip=[none]
   NodeId(1v1) cupertino_notifications::view::Card<kit_goldens::Message> key=Some(Str("card-1")) parent=Some(NodeId(0v1)) children=[NodeId(2v1)] rect=[28,12 344x90] clip=[none]
-  NodeId(2v1) cupertino_notifications::view::Place<kit_goldens::Message> key=None parent=Some(NodeId(1v1)) children=[NodeId(3v1), NodeId(4v1)] rect=[28,12 344x90] clip=[28,12 344x90]
-  NodeId(3v1) cupertino_ui_controls::Icon key=None parent=Some(NodeId(2v1)) children=[] rect=[40,24 32x32] clip=[28,12 344x90]
-  NodeId(4v1) cupertino_ui_controls::Stack<kit_goldens::Message> key=None parent=Some(NodeId(2v1)) children=[NodeId(5v1), NodeId(6v1), NodeId(8v1)] rect=[82,24 278x66] clip=[28,12 344x90]
-  NodeId(5v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(4v1)) children=[] rect=[82,24 38.796875x15.7294921875] clip=[28,12 344x90]
-  NodeId(6v1) cupertino_ui_controls::RichText<kit_goldens::Message> key=None parent=Some(NodeId(4v1)) children=[NodeId(7v1)] rect=[82,41.7294921875 133.3642578125x15.7294921875] clip=[28,12 344x90]
-  NodeId(7v1) cupertino_ui_controls::rich_text::Body key=None parent=Some(NodeId(6v1)) children=[] rect=[82,41.7294921875 133.3642578125x15.7294921875] clip=[28,12 344x90]
-  NodeId(8v1) cupertino_notifications::view::Row<kit_goldens::Message> key=None parent=Some(NodeId(4v1)) children=[NodeId(9v1)] rect=[82,59.458984375 54.23291015625x30] clip=[28,12 344x90]
-  NodeId(9v1) cupertino_ui_controls::Button<kit_goldens::Message> key=Some(Str("action-reply")) parent=Some(NodeId(8v1)) children=[] rect=[82,67.458984375 54.23291015625x20] clip=[28,12 344x90]
+  NodeId(2v1) cupertino_notifications::view::Place<kit_goldens::Message> key=None parent=Some(NodeId(1v1)) children=[NodeId(3v1), NodeId(4v1)] rect=[28,12 344x90] clip=[none]
+  NodeId(3v1) cupertino_ui_controls::Icon key=None parent=Some(NodeId(2v1)) children=[] rect=[40,24 32x32] clip=[none]
+  NodeId(4v1) cupertino_ui_controls::Stack<kit_goldens::Message> key=None parent=Some(NodeId(2v1)) children=[NodeId(5v1), NodeId(6v1), NodeId(8v1)] rect=[82,24 278x66] clip=[none]
+  NodeId(5v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(4v1)) children=[] rect=[82,24 38.796875x15.7294921875] clip=[none]
+  NodeId(6v1) cupertino_ui_controls::RichText<kit_goldens::Message> key=None parent=Some(NodeId(4v1)) children=[NodeId(7v1)] rect=[82,41.7294921875 133.3642578125x15.7294921875] clip=[none]
+  NodeId(7v1) cupertino_ui_controls::rich_text::Body key=None parent=Some(NodeId(6v1)) children=[] rect=[82,41.7294921875 133.3642578125x15.7294921875] clip=[none]
+  NodeId(8v1) cupertino_notifications::view::Row<kit_goldens::Message> key=None parent=Some(NodeId(4v1)) children=[NodeId(9v1)] rect=[82,59.458984375 54.23291015625x30] clip=[none]
+  NodeId(9v1) cupertino_ui_controls::Button<kit_goldens::Message> key=Some(Str("action-reply")) parent=Some(NodeId(8v1)) children=[] rect=[82,67.458984375 54.23291015625x20] clip=[none]
 semantics
   NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 388x114] actions=[] relations=[] children=[NodeId(1v1)]
   NodeId(1v1) role=Group name=Some("Mail: Lunch, Are you free at noon?") description=None value=none live=Polite states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[28,12 344x90] actions=[Click] relations=[] children=[NodeId(5v1), NodeId(7v1), NodeId(9v1)]
@@ -69,7 +69,7 @@ semantics
   NodeId(9v1) role=Button name=Some("Reply") description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[82,67.458984375 54.23291015625x20] actions=[Click] relations=[] children=[]
 display
   paint 4294967296 parent=None revision=11 bounds=[0,-11.25 396.25x138.5] hit=[0,0 388x114] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-  paint 4294967297 parent=Some(4294967296) revision=12 bounds=[3.75,-11.25 392.5x138.5] hit=[28,12 344x90] clip=Some(Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 90.0 } })) transform=[1.0, 0.0, 0.0, 1.0, 28.0, 12.0]
+  paint 4294967297 parent=Some(4294967296) revision=12 bounds=[3.75,-11.25 392.5x138.5] hit=[28,12 344x90] clip=None transform=[1.0, 0.0, 0.0, 1.0, 28.0, 12.0]
     Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 90.0 } }, radius: 16.0 }, paint: Solid(Color { r: 0.9254902, g: 0.9254902, b: 0.9254902, a: 1.0 }) }
     Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 90.0 } }, radius: 16.0 }, width: 0.5, paint: Solid(Color { r: 0.9019608, g: 0.9019608, b: 0.9019608, a: 1.0 }) }
   paint 4294967298 parent=Some(4294967297) revision=3 bounds=[28,12 344x90] hit=[28,12 344x90] clip=None transform=[1.0, 0.0, 0.0, 1.0, 28.0, 12.0]
@@ -98,12 +98,12 @@ text_input None
 layout
   NodeId(10v1) cupertino_notifications::view::Strip<kit_goldens::Message> key=None parent=None children=[NodeId(11v1)] rect=[0,0 388x82] clip=[none]
   NodeId(11v1) cupertino_notifications::view::Card<kit_goldens::Message> key=Some(Str("card-2")) parent=Some(NodeId(10v1)) children=[NodeId(12v1)] rect=[279.2116649851325,12 344x58] clip=[none]
-  NodeId(12v1) cupertino_notifications::view::Place<kit_goldens::Message> key=None parent=Some(NodeId(11v1)) children=[NodeId(13v1), NodeId(14v1)] rect=[279.2116649851325,12 344x58] clip=[279.2116649851325,12 344x58]
-  NodeId(13v1) cupertino_ui_controls::Icon key=None parent=Some(NodeId(12v1)) children=[] rect=[291.2116649851325,24 32x32] clip=[279.2116649851325,12 344x58]
-  NodeId(14v1) cupertino_ui_controls::Stack<kit_goldens::Message> key=None parent=Some(NodeId(12v1)) children=[NodeId(15v1), NodeId(16v1)] rect=[333.2116649851325,24 278x34] clip=[279.2116649851325,12 344x58]
-  NodeId(15v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(14v1)) children=[] rect=[333.2116649851325,24 71.0048828125x15.7294921875] clip=[279.2116649851325,12 344x58]
-  NodeId(16v1) cupertino_ui_controls::RichText<kit_goldens::Message> key=None parent=Some(NodeId(14v1)) children=[NodeId(17v1)] rect=[333.2116649851325,41.7294921875 84.70947265625x15.7294921875] clip=[279.2116649851325,12 344x58]
-  NodeId(17v1) cupertino_ui_controls::rich_text::Body key=None parent=Some(NodeId(16v1)) children=[] rect=[333.2116649851325,41.7294921875 84.70947265625x15.7294921875] clip=[279.2116649851325,12 344x58]
+  NodeId(12v1) cupertino_notifications::view::Place<kit_goldens::Message> key=None parent=Some(NodeId(11v1)) children=[NodeId(13v1), NodeId(14v1)] rect=[279.2116649851325,12 344x58] clip=[none]
+  NodeId(13v1) cupertino_ui_controls::Icon key=None parent=Some(NodeId(12v1)) children=[] rect=[291.2116649851325,24 32x32] clip=[none]
+  NodeId(14v1) cupertino_ui_controls::Stack<kit_goldens::Message> key=None parent=Some(NodeId(12v1)) children=[NodeId(15v1), NodeId(16v1)] rect=[333.2116649851325,24 278x34] clip=[none]
+  NodeId(15v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(14v1)) children=[] rect=[333.2116649851325,24 71.0048828125x15.7294921875] clip=[none]
+  NodeId(16v1) cupertino_ui_controls::RichText<kit_goldens::Message> key=None parent=Some(NodeId(14v1)) children=[NodeId(17v1)] rect=[333.2116649851325,41.7294921875 84.70947265625x15.7294921875] clip=[none]
+  NodeId(17v1) cupertino_ui_controls::rich_text::Body key=None parent=Some(NodeId(16v1)) children=[] rect=[333.2116649851325,41.7294921875 84.70947265625x15.7294921875] clip=[none]
 semantics
   NodeId(10v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 388x82] actions=[] relations=[] children=[NodeId(11v1)]
   NodeId(11v1) role=Group name=Some("Battery: Battery low, 5% remaining") description=None value=none live=Assertive states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[279.2116649851325,12 344x58] actions=[Click] relations=[] children=[NodeId(15v1), NodeId(17v1)]
@@ -111,13 +111,13 @@ semantics
   NodeId(17v1) role=StaticText name=Some("5% remaining") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[333.2116649851325,41.7294921875 84.70947265625x15.7294921875] actions=[] relations=[] children=[]
 display
   paint 4294967306 parent=None revision=9 bounds=[0,-11.25 647.4616649851325x106.5] hit=[0,0 388x82] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-  paint 4294967307 parent=Some(4294967306) revision=10 bounds=[254.96166498513247,-11.25 392.50000000000006x106.5] hit=[279.2116649851325,12 344x58] clip=Some(Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 58.0 } })) transform=[1.0, 0.0, 0.0, 1.0, 279.2116649851325, 12.0]
+  paint 4294967307 parent=Some(4294967306) revision=10 bounds=[254.96166498513247,-11.25 392.50000000000006x106.5] hit=[279.2116649851325,12 344x58] clip=None transform=[1.0, 0.0, 0.0, 1.0, 279.2116649851325, 12.0]
     Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 58.0 } }, radius: 16.0 }, paint: Solid(Color { r: 0.9254902, g: 0.9254902, b: 0.9254902, a: 1.0 }) }
     Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 58.0 } }, radius: 16.0 }, width: 0.5, paint: Solid(Color { r: 0.9019608, g: 0.9019608, b: 0.9019608, a: 1.0 }) }
-  paint 4294967308 parent=Some(4294967307) revision=3 bounds=[279.2116649851325,12 344.00000000000006x58] hit=[279.2116649851325,12 344.00000000000006x58] clip=None transform=[1.0, 0.0, 0.0, 1.0, 279.2116649851325, 12.0]
+  paint 4294967308 parent=Some(4294967307) revision=3 bounds=[279.2116649851325,12 344.00000000000006x58] hit=[279.2116649851325,12 344x58] clip=None transform=[1.0, 0.0, 0.0, 1.0, 279.2116649851325, 12.0]
   paint 4294967309 parent=Some(4294967308) revision=4 bounds=[291.2116649851325,24 32x32] hit=[291.2116649851325,24 32x32] clip=None transform=[1.0, 0.0, 0.0, 1.0, 291.2116649851325, 24.0]
     Image { image: ResourceRef { id: ResourceId(_), revision: 1 }, src: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 32.0, height: 32.0 } }, dst: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 32.0, height: 32.0 } }, sampling: Linear }
-  paint 4294967310 parent=Some(4294967308) revision=5 bounds=[320.2116649851325,17.09375 291.00000000000006x50.2294921875] hit=[333.2116649851325,24 278.00000000000006x34] clip=None transform=[1.0, 0.0, 0.0, 1.0, 333.2116649851325, 24.0]
+  paint 4294967310 parent=Some(4294967308) revision=5 bounds=[320.2116649851325,17.09375 291.00000000000006x50.2294921875] hit=[333.2116649851325,24 278x34] clip=None transform=[1.0, 0.0, 0.0, 1.0, 333.2116649851325, 24.0]
   paint 4294967311 parent=Some(4294967310) revision=6 bounds=[320.2116649851325,17.09375 99.09326171875x32.5] hit=[333.2116649851325,24 71.0048828125x15.7294921875] clip=None transform=[1.0, 0.0, 0.0, 1.0, 333.2116649851325, 24.0]
     Glyphs origin=0,12.59375 font=FontId(2) size=13 count=11 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
   paint 4294967312 parent=Some(4294967310) revision=7 bounds=[320.2116649851325,34.8232421875 115.73681640625x32.5] hit=[333.2116649851325,41.7294921875 84.70947265625x15.7294921875] clip=None transform=[1.0, 0.0, 0.0, 1.0, 333.2116649851325, 41.7294921875]
@@ -132,14 +132,14 @@ text_input None
 layout
   NodeId(0v1) cupertino_notifications::view::Strip<kit_goldens::Message> key=None parent=None children=[NodeId(1v1)] rect=[0,0 388x114] clip=[none]
   NodeId(1v1) cupertino_notifications::view::Card<kit_goldens::Message> key=Some(Str("card-1")) parent=Some(NodeId(0v1)) children=[NodeId(2v1)] rect=[152.78833501486753,12 344x90] clip=[none]
-  NodeId(2v1) cupertino_notifications::view::Place<kit_goldens::Message> key=None parent=Some(NodeId(1v1)) children=[NodeId(3v1), NodeId(4v1)] rect=[152.78833501486753,12 344x90] clip=[152.78833501486753,12 344x90]
-  NodeId(3v1) cupertino_ui_controls::Icon key=None parent=Some(NodeId(2v1)) children=[] rect=[164.78833501486753,24 32x32] clip=[152.78833501486753,12 344x90]
-  NodeId(4v1) cupertino_ui_controls::Stack<kit_goldens::Message> key=None parent=Some(NodeId(2v1)) children=[NodeId(5v1), NodeId(6v1), NodeId(8v1)] rect=[206.78833501486753,24 278x66] clip=[152.78833501486753,12 344x90]
-  NodeId(5v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(4v1)) children=[] rect=[206.78833501486753,24 38.796875x15.7294921875] clip=[152.78833501486753,12 344x90]
-  NodeId(6v1) cupertino_ui_controls::RichText<kit_goldens::Message> key=None parent=Some(NodeId(4v1)) children=[NodeId(7v1)] rect=[206.78833501486753,41.7294921875 133.3642578125x15.7294921875] clip=[152.78833501486753,12 344x90]
-  NodeId(7v1) cupertino_ui_controls::rich_text::Body key=None parent=Some(NodeId(6v1)) children=[] rect=[206.78833501486753,41.7294921875 133.3642578125x15.7294921875] clip=[152.78833501486753,12 344x90]
-  NodeId(8v1) cupertino_notifications::view::Row<kit_goldens::Message> key=None parent=Some(NodeId(4v1)) children=[NodeId(9v1)] rect=[206.78833501486753,59.458984375 54.23291015625x30] clip=[152.78833501486753,12 344x90]
-  NodeId(9v1) cupertino_ui_controls::Button<kit_goldens::Message> key=Some(Str("action-reply")) parent=Some(NodeId(8v1)) children=[] rect=[206.78833501486753,67.458984375 54.23291015625x20] clip=[152.78833501486753,12 344x90]
+  NodeId(2v1) cupertino_notifications::view::Place<kit_goldens::Message> key=None parent=Some(NodeId(1v1)) children=[NodeId(3v1), NodeId(4v1)] rect=[152.78833501486753,12 344x90] clip=[none]
+  NodeId(3v1) cupertino_ui_controls::Icon key=None parent=Some(NodeId(2v1)) children=[] rect=[164.78833501486753,24 32x32] clip=[none]
+  NodeId(4v1) cupertino_ui_controls::Stack<kit_goldens::Message> key=None parent=Some(NodeId(2v1)) children=[NodeId(5v1), NodeId(6v1), NodeId(8v1)] rect=[206.78833501486753,24 278x66] clip=[none]
+  NodeId(5v1) cupertino_ui_controls::Text key=None parent=Some(NodeId(4v1)) children=[] rect=[206.78833501486753,24 38.796875x15.7294921875] clip=[none]
+  NodeId(6v1) cupertino_ui_controls::RichText<kit_goldens::Message> key=None parent=Some(NodeId(4v1)) children=[NodeId(7v1)] rect=[206.78833501486753,41.7294921875 133.3642578125x15.7294921875] clip=[none]
+  NodeId(7v1) cupertino_ui_controls::rich_text::Body key=None parent=Some(NodeId(6v1)) children=[] rect=[206.78833501486753,41.7294921875 133.3642578125x15.7294921875] clip=[none]
+  NodeId(8v1) cupertino_notifications::view::Row<kit_goldens::Message> key=None parent=Some(NodeId(4v1)) children=[NodeId(9v1)] rect=[206.78833501486753,59.458984375 54.23291015625x30] clip=[none]
+  NodeId(9v1) cupertino_ui_controls::Button<kit_goldens::Message> key=Some(Str("action-reply")) parent=Some(NodeId(8v1)) children=[] rect=[206.78833501486753,67.458984375 54.23291015625x20] clip=[none]
 semantics
   NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 388x114] actions=[] relations=[] children=[NodeId(1v1)]
   NodeId(1v1) role=Group name=Some("Mail: Lunch, Are you free at noon?") description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[152.78833501486753,12 344x90] actions=[Click] relations=[] children=[NodeId(5v1), NodeId(7v1), NodeId(9v1)]
@@ -148,7 +148,7 @@ semantics
   NodeId(9v1) role=Button name=Some("Reply") description=None value=none states=AccessibleStates { disabled: false, focusable: true, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[206.78833501486753,67.458984375 54.23291015625x20] actions=[Click] relations=[] children=[]
 display
   paint 4294967296 parent=None revision=14 bounds=[0,-11.25 521.0383350148675x138.5] hit=[0,0 388x114] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-  paint 4294967297 parent=Some(4294967296) revision=15 bounds=[128.53833501486753,-11.25 392.49999999999994x138.5] hit=[152.78833501486753,12 344x90] clip=Some(Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 90.0 } })) transform=[1.0, 0.0, 0.0, 1.0, 152.78833501486753, 12.0]
+  paint 4294967297 parent=Some(4294967296) revision=15 bounds=[128.53833501486753,-11.25 392.49999999999994x138.5] hit=[152.78833501486753,12 344x90] clip=None transform=[1.0, 0.0, 0.0, 1.0, 152.78833501486753, 12.0]
     Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 90.0 } }, radius: 16.0 }, paint: Solid(Color { r: 0.9254902, g: 0.9254902, b: 0.9254902, a: 1.0 }) }
     Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 344.0, height: 90.0 } }, radius: 16.0 }, width: 0.5, paint: Solid(Color { r: 0.9019608, g: 0.9019608, b: 0.9019608, a: 1.0 }) }
   paint 4294967298 parent=Some(4294967297) revision=3 bounds=[152.78833501486753,12 344x90] hit=[152.78833501486753,12 344x90] clip=None transform=[1.0, 0.0, 0.0, 1.0, 152.78833501486753, 12.0]

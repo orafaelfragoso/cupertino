@@ -316,8 +316,14 @@ impl Shell {
             Message::Select(i) => {
                 let rows: Vec<PaneId> = self.shown_groups().into_iter().flatten().collect();
                 if let Some(&pane) = rows.get(i) {
-                    self.end_search();
-                    self.show(Page::pane(pane))?;
+                    // the row of the pane already shown leaves its sub-page or a search; on the pane itself it does
+                    // nothing, and the pane keeps its scroll position
+                    let shown =
+                        self.query.is_empty() && self.state.history.current() == Page::pane(pane);
+                    if !shown {
+                        self.end_search();
+                        self.show(Page::pane(pane))?;
+                    }
                 }
             }
             Message::OpenPage(sub) => self.show(Page {
@@ -1025,6 +1031,66 @@ mod tests {
         );
         let stored = Settings::load(&paths(dir.path()), 1080.0).unwrap();
         assert_eq!(stored.dock.autohide, Some(true));
+    }
+
+    #[test]
+    fn the_rows_switches_are_small_and_their_rows_keep_their_height() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let (driver, window) = start(dir.path(), PaneId::DesktopDock);
+        let snapshot = driver.runtime().snapshot(window).unwrap();
+        let mut switches: Vec<_> = snapshot
+            .accessibility
+            .iter()
+            .filter(|(_, n)| n.role == Role::Switch)
+            .filter_map(|(id, _)| Some(snapshot.nodes.iter().find(|m| m.id == *id)?.rect))
+            .collect();
+        assert!(switches.len() >= 2, "{switches:?}");
+        for rect in &switches {
+            assert_eq!(rect.size, Size::new(36.0, 16.0), "{rect:?}");
+        }
+        switches.sort_by(|a, b| a.origin.y.total_cmp(&b.origin.y));
+        let step = switches
+            .windows(2)
+            .map(|pair| pair[1].origin.y - pair[0].origin.y)
+            .fold(f64::INFINITY, f64::min);
+        assert!(
+            (step - (cupertino_kit::controls::FORM_ROW_HEIGHT + 1.0)).abs() < 0.01,
+            "switches in neighbouring rows sit a row and its hairline apart: {step}"
+        );
+    }
+
+    #[test]
+    fn the_selected_panes_row_goes_back_from_a_sub_page_to_the_pane() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let (mut driver, window) = start(dir.path(), PaneId::Accessibility);
+        click(&mut driver, window, &format!("open-{:?}", SubPage::Display));
+        assert_eq!(title(&mut driver, window), SubPage::Display.title());
+        click(&mut driver, window, "accessibility");
+        assert_eq!(title(&mut driver, window), "Accessibility");
+        let shell = driver.runtime().model();
+        assert_eq!(
+            shell.state.history.current(),
+            Page::pane(PaneId::Accessibility)
+        );
+        assert!(
+            shell.state.history.can_go_back(),
+            "the sub-page stays in the history"
+        );
+
+        // on the pane itself the row changes nothing
+        let entries = |driver: &TestDriver<SettingsApp>| {
+            let history = &driver.runtime().model().state.history;
+            (
+                history.current(),
+                history.can_go_back(),
+                history.can_go_forward(),
+            )
+        };
+        let before = entries(&driver);
+        click(&mut driver, window, "accessibility");
+        assert_eq!(entries(&driver), before);
     }
 
     #[test]

@@ -1633,7 +1633,7 @@ const NOTIFICATION_APPS_FOOTER: &str =
     "Apps appear here once they send a notification. Default follows the settings above.";
 
 /// The applications the Notifications pane lists, as (settings id, name): those `notifications.conf` holds a choice of
-/// and those whose notifications the centre holds now, each once, by name, at most [`MAX_NOTIFICATION_APPS`]. The
+/// and those whose notifications the centre holds now, each once, by name then id, at most [`MAX_NOTIFICATION_APPS`]. The
 /// name is the desktop entry's, else the one the centre gave, else the id.
 pub fn notification_apps(settings: &Settings, live: &Live) -> Vec<(String, String)> {
     let named = |id: &str, given: Option<&str>| {
@@ -1663,7 +1663,9 @@ pub fn notification_apps(settings: &Settings, live: &Live) -> Vec<(String, Strin
             apps.push((id.clone(), named(id, Some(name))));
         }
     }
-    apps.sort_by(|a, b| crate::sidebar::standard_compare(&a.1, &b.1));
+    // applications of one name by id, so that their order (and the numbers that tell their pop-ups apart) does not
+    // change with which of them holds a choice or with the order the centre lists them in
+    apps.sort_by(|a, b| crate::sidebar::standard_compare(&a.1, &b.1).then_with(|| a.0.cmp(&b.0)));
     apps.truncate(MAX_NOTIFICATION_APPS);
     apps
 }

@@ -377,6 +377,12 @@ pub struct Toggle<M> {
     pub on_toggle: Option<Handler<bool, M>>,
 }
 
+/// A [`Toggle`] at the small size of a settings form's rows, made with [`Toggle::small`]: a 36 × 16 pt track and a
+/// capsule thumb. It behaves and reads to assistive technology as the toggle does.
+pub struct SmallToggle<M> {
+    pub toggle: Toggle<M>,
+}
+
 /// How a [`ModuleToggle`] sets out its symbol and text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ModuleLayout {
@@ -1094,7 +1100,9 @@ pub struct TileSidebarItem {
 /// set apart by space, one row selected and filled with the accent colour. `header` (a search field) stands above the
 /// rows and does not scroll. One Tab stop at the selected row, else the first; Up, Down, Home and End move the
 /// selection across the groups, and a click or assistive technology's Click selects a row. A row that becomes selected
-/// is reported once; selecting the selected row reports nothing. Build its element with `Element::from`.
+/// is reported once; a key that leaves the selection where it is reports nothing, while a press or Click on the
+/// selected row reports it again, so that a window showing a page below that row's page can go back to it. Build its
+/// element with `Element::from`.
 pub struct TileSidebar<M> {
     /// The list's accessible name.
     pub label: String,

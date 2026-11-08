@@ -832,9 +832,21 @@ fn a_node_nothing_clips_or_cuts_is_painted_straight_into_the_frame() {
     assert_eq!(stats.node_composite.count, 0);
 }
 
-#[test]
-fn a_clipped_cut_or_grouped_node_keeps_its_scratch_image() {
-    let clipped = DisplayList {
+/// The blue square's outline: an operation the span path leaves to the scratch image.
+fn blue_outline() -> PaintNode {
+    node(
+        1,
+        rect(9.0, 9.0, 32.0, 32.0),
+        vec![PaintOp::Stroke {
+            shape: Shape::Rect(rect(10.0, 10.0, 30.0, 30.0)),
+            width: 1.0,
+            paint: solid(0.0, 0.0, 1.0, 0.5),
+        }],
+    )
+}
+
+fn under_a_clip(square: PaintNode) -> DisplayList {
+    DisplayList {
         nodes: vec![
             PaintNode {
                 clip: Some(Shape::Rect(rect(0.0, 0.0, 20.0, 20.0))),
@@ -842,12 +854,36 @@ fn a_clipped_cut_or_grouped_node_keeps_its_scratch_image() {
             },
             PaintNode {
                 parent: Some(PaintNodeId(9)),
-                ..blue_square()
+                ..square
             },
         ],
-    };
-    let stats = frame_stats(&clipped, &DamageRegion::Full);
+    }
+}
+
+#[test]
+fn a_clipped_cut_or_grouped_node_keeps_its_scratch_image() {
+    let stats = frame_stats(&under_a_clip(blue_outline()), &DamageRegion::Full);
     assert_eq!(stats.node_composite.count, 1, "under a clipping ancestor");
+    let cut = DamageRegion::Rects(vec![rect(0.0, 0.0, 20.0, 20.0)]);
+    let stats = frame_stats(
+        &DisplayList {
+            nodes: vec![blue_outline()],
+        },
+        &cut,
+    );
+    assert_eq!(stats.node_composite.count, 1, "cut by the damage");
+    let stats = frame_stats(&faded_sheet(0.0), &DamageRegion::Full);
+    assert_eq!(stats.group_composite.count, 1, "inside a group's layer");
+}
+
+#[test]
+fn a_clipped_or_cut_rectangle_on_whole_pixels_is_written_as_rows() {
+    let stats = frame_stats(&under_a_clip(blue_square()), &DamageRegion::Full);
+    assert_eq!(
+        (stats.spans.count, stats.node_composite.count),
+        (1, 0),
+        "under a clipping ancestor"
+    );
     let cut = DamageRegion::Rects(vec![rect(0.0, 0.0, 20.0, 20.0)]);
     let stats = frame_stats(
         &DisplayList {
@@ -855,9 +891,17 @@ fn a_clipped_cut_or_grouped_node_keeps_its_scratch_image() {
         },
         &cut,
     );
-    assert_eq!(stats.node_composite.count, 1, "cut by the damage");
-    let stats = frame_stats(&faded_sheet(0.0), &DamageRegion::Full);
-    assert_eq!(stats.group_composite.count, 1, "inside a group's layer");
+    assert_eq!(
+        (stats.spans.count, stats.node_composite.count),
+        (1, 0),
+        "cut by the damage"
+    );
+    // the damaged pixels reach a pixel past the damaged rectangle
+    assert_eq!(
+        stats.spans.bytes,
+        11 * 11 * 4,
+        "the square's part of the damage"
+    );
 }
 
 #[test]

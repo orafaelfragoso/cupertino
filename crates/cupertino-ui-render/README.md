@@ -9,8 +9,22 @@ fresh one within a few levels: a group's layer covers the pixels its descendants
 anti-aliased curved or fractional edge cut by a damaged rectangle's border is sampled on a slightly different sub-pixel
 grid.
 
+Two fast paths give the same bytes as that general path, which a test checks on random scenes at several scales and
+damages. A node the general path would paint through a scratch image (one that a clip above it or the damage cuts),
+under clips that are all axis-aligned rectangles, whose large fills are solid rectangles or rounded rectangles, has
+pixels its fills and clips cover fully and its other operations (smaller fills, strokes, images, glyph rasters) do not
+reach. Those pixels hold one colour in the scratch image: the renderer writes them as rows, copied when the colour is
+opaque and blended with the scratch image's own integer source-over otherwise, and paints the rest through the scratch
+image with those pixels cut out of the fills, as holes on whole pixels that change no other pixel's coverage. Span
+writes to the frame wait until something else paints there, so layers of one colour each over the same pixels (the
+cleared rectangle, the window's background, a page's background, a translucent group over it) collapse into one write.
+And when the last node whose opaque fill covers a whole damaged rectangle has no group above it, nothing painted before
+it there is painted at all. On a 3840×2160 frame each pass over the pixels costs a few milliseconds of memory traffic,
+so these paths matter most for large damage.
+
 `CpuRenderer::stats` counts what the last frame did (dirty pixels, nodes and groups painted, primitives, scratch and layer
 allocations, clip masks, and each copy site with its bytes: clear, node, group and layer composites, crops, mask
-application, cache fills, retained caches), so a timing run can tell a slower frame from a heavier one. The opt-in
+application, cache fills, retained caches), the rectangles the span path wrote (`spans`) and the nodes skipped under an
+opaque fill (`hidden`), so a timing run can tell a slower frame from a heavier one. The opt-in
 `tests/render_matrix.rs` prints cold, steady and full-repaint timings with those counters for 1, 10 and 100 rows at
 scale 1 and 2; run it with `--release --ignored --nocapture` in an exclusive slot.

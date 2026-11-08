@@ -45,7 +45,7 @@ Each tile asks the compositor for regular glass under its own outline (`PaintCx:
 ends, the media tile and an open detail view with 32 pt corners, the display and sound tiles with 24 pt corners. The tiles
 join one glass container with an 8 pt blend, less than the 12 pt between them, so tiles at rest stay apart and a growing
 detail view blends where it passes them. The glass alpha follows the fade; the content fades as one layer. In a light
-session each tile lays black at 0.5 over its glass, so the white text reads on the light glass the compositor draws there.
+session each tile lays black at 0.27 over its glass, so over a white page it reads as a mid-light grey under its white text.
 With Reduce Transparency each tile fills grey 0.114 on one grey 0.302 panel of 40 pt corners, 8 pt around the grid and
 around an open detail view while it is taller. With Increase Contrast each tile fills grey 0.463 inside a 0.5 pt rim of
 grey 0.341, with no glass. A
@@ -174,7 +174,7 @@ the menu bar.
 | Capsule content | 36 pt badge 14 pt in; text from 56 pt; 13 pt semibold title, 11 pt state |
 | Level | 4 pt track centred 42 pt below the tile's top; display track 36 to 254 pt, sound 33 to 213 pt; 26 pt output button centred at 265 pt |
 | Media tile | 40 pt artwork 14 pt in; buttons centred at 30, 70 and 110 pt across and 111 pt down |
-| Glass | regular, one container, 8 pt blend; light session tint black 0.5 |
+| Glass | regular, one container, 8 pt blend; light session tint black 0.27 |
 | Reduce Transparency | tiles grey 0.114, panel grey 0.302 with 40 pt corners and 8 pt padding |
 | Increase Contrast | tiles grey 0.463, 0.5 pt rim grey 0.341 |
 | Detail view | 64 pt header, 28 pt heading, 32 pt rows (at most 9), 9 pt separator, 32 pt settings row, 8 pt bottom (`layout::detail`) |

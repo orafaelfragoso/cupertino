@@ -402,6 +402,31 @@ fn the_panel_in_a_light_session_matches_its_golden() {
     check("light-session", Appearance::Dark, false, light);
 }
 
+/// A point on the media tile's glass, clear of its artwork, text and buttons: near its top-right corner.
+const MEDIA_GLASS: (u32, u32) = (280, 30);
+
+#[test]
+fn a_light_session_darkens_the_glass_by_about_a_quarter() {
+    let light = Presentation {
+        light: true,
+        ..Presentation::SHOWN
+    };
+    let (frame, _) = Run::start(tokens(Appearance::Dark, false), light).capture();
+    let tint = frame.pixel(MEDIA_GLASS.0, MEDIA_GLASS.1).unwrap();
+    assert_eq!((tint.red(), tint.green(), tint.blue()), (0, 0, 0));
+    assert!(
+        (60..=78).contains(&tint.alpha()),
+        "a quarter black keeps a tile over a white page mid-light grey, not dark: alpha {}",
+        tint.alpha()
+    );
+    let (dark, _) = Run::start(tokens(Appearance::Dark, false), Presentation::SHOWN).capture();
+    assert_eq!(
+        dark.pixel(MEDIA_GLASS.0, MEDIA_GLASS.1).unwrap().alpha(),
+        0,
+        "the dark session draws the glass alone"
+    );
+}
+
 #[test]
 fn the_open_wifi_view_matches_its_golden() {
     check("wifi-detail", Appearance::Dark, false, WIFI_OPEN);

@@ -55,11 +55,12 @@ const CONTAINER: u32 = 1;
 const BLEND: f64 = 8.0;
 
 /// The fills a tile paints itself. `RT_*`: the opaque panel and tiles with Reduce Transparency. `LIGHT_TINT`: laid
-/// over the glass in a light session, where the compositor draws light glass; half black brings it to about the
-/// darkness of the dark glass. `FALLBACK`: a tile the window cannot show glass under.
+/// over the glass in a light session, where the compositor draws light glass: about a quarter black, so a tile over a
+/// white page reads as a mid-light grey (about three quarters of the page's brightness) under its white text, not as
+/// dark glass. `FALLBACK`: a tile the window cannot show glass under.
 const RT_GROUP: Color = Color::new(0.302, 0.302, 0.302, 1.0);
 const RT_TILE: Color = Color::new(0.114, 0.114, 0.114, 1.0);
-const LIGHT_TINT: Color = Color::new(0.0, 0.0, 0.0, 0.5);
+const LIGHT_TINT: Color = Color::new(0.0, 0.0, 0.0, 0.27);
 /// The tiles with Increase Contrast: opaque mid grey inside a darker rim half a point wide, so no backdrop shows through
 /// behind the white text.
 const IC_TILE: Color = Color::new(0.463, 0.463, 0.463, 1.0);

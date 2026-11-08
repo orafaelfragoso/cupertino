@@ -77,9 +77,12 @@ from the application's model and reports changes as messages.
   let go over an item chooses it, once, if the pointer reached an item or the press was held 0.5 s; a quicker click
   leaves the menu open. The row a context menu opens under the pointer (one the compositor slid to fit) is not reached
   until the pointer goes on to another. Typed letters find a row as `cupertino-typeahead` does, per level, and Return chooses it;
-  Escape closes one level and the focus goes back to its row, or to where the menu opened. The panel places the
-  submenu's edge where it asked the compositor to put it, beside its row on the trailing side: a submenu the compositor
-  flips to the other side keeps no triangle.
+  Escape closes one level and the focus goes back to its row, or to where the menu opened. The panel takes the
+  submenu's near edge from where the compositor placed its window (`EventCx::popup_placement`), so a submenu flipped to
+  the leading side, or slid, keeps its triangle; until the compositor has placed it, the edge is where the panel
+  asked for it, beside its row on the trailing side. The 0.5 s of a held press count from the press
+  (`EventCx::opening_press`), however late after it the application opens the menu, and from when the panel first
+  hears of anything only for a menu no held press opened.
 - **Sliders.** `on_change` reports every value a drag passes; `on_end` reports the value once the change ends, when
   the pointer lets go or the drag is cancelled, and at once for a key or assistive technology step, so an
   application can write a level live and commit it once. With Increase Contrast the knob's ring (the control border

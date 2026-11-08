@@ -240,9 +240,13 @@ pub fn start_power_bus(state: &mut Cupertino) {
 
 mod bus {
     //! The watcher threads. The blocking `zbus` API is used as in `cupertino-login`: one reader thread per signal stream.
+    //! Each stream passes on a signal only from its service, the owner of the service's name or the bus daemon, checked when
+    //! the signal arrives ([`only_from`]): the bus delivers a signal addressed to this process whatever its rules say, so
+    //! another user could otherwise hold off the idle lock with a forged `BlockInhibited` or `PrepareForSleep`.
 
     use std::sync::mpsc::Receiver;
 
+    use cupertino_peer::signal::{sent_by_bus, sent_by_owner};
     use smithay::reexports::calloop::channel::Sender;
     use zbus::blocking::{Connection, MessageIterator};
     use zbus::message::Type;
@@ -271,15 +275,22 @@ mod bus {
                     .build();
                 MessageIterator::for_match_rule(rule, &conn, None)
             };
-        let upower_changes = changes(UPOWER, UPOWER_PATH)?;
-        let logind_changes = changes(LOGIND_MANAGER, LOGIND_PATH)?;
+        let from_owner = |name: &'static str| {
+            let conn = conn.clone();
+            move |message: &zbus::Message| sent_by_owner(&conn, message, name)
+        };
+        let upower_changes = only_from(changes(UPOWER, UPOWER_PATH)?, from_owner(UPOWER));
+        let logind_changes = only_from(changes(LOGIND_MANAGER, LOGIND_PATH)?, from_owner(LOGIND));
         let owner_rule = MatchRule::builder()
             .msg_type(Type::Signal)
             .sender("org.freedesktop.DBus")?
             .member("NameOwnerChanged")?
             .arg(0, UPOWER)?
             .build();
-        let owners = MessageIterator::for_match_rule(owner_rule, &conn, None)?;
+        let owners = only_from(
+            MessageIterator::for_match_rule(owner_rule, &conn, None)?,
+            sent_by_bus,
+        );
         let sleep_rule = MatchRule::builder()
             .msg_type(Type::Signal)
             .sender(LOGIND)?
@@ -287,7 +298,10 @@ mod bus {
             .interface(LOGIND_MANAGER)?
             .member("PrepareForSleep")?
             .build();
-        let sleeps = MessageIterator::for_match_rule(sleep_rule, &conn, None)?;
+        let sleeps = only_from(
+            MessageIterator::for_match_rule(sleep_rule, &conn, None)?,
+            from_owner(LOGIND),
+        );
 
         // the subscriptions are up: read the current values
         report_on_battery(&conn, &events);
@@ -411,9 +425,23 @@ mod bus {
         let _ = events.send(event);
     }
 
+    /// The messages of `messages` that `from_service` accepts; any other is logged and dropped.
+    fn only_from(
+        messages: MessageIterator,
+        from_service: impl Fn(&zbus::Message) -> bool + Send + 'static,
+    ) -> impl Iterator<Item = zbus::Result<zbus::Message>> + Send + 'static {
+        messages.filter(move |message| match message {
+            Ok(message) if !from_service(message) => {
+                tracing::warn!("ignored a power signal that its service did not send");
+                false
+            }
+            _ => true,
+        })
+    }
+
     fn reader(
         name: &str,
-        messages: MessageIterator,
+        messages: impl Iterator<Item = zbus::Result<zbus::Message>> + Send + 'static,
         events: Sender<BusEvent>,
         handle: impl Fn(&zbus::Message, &Sender<BusEvent>) -> zbus::Result<()> + Send + 'static,
     ) -> zbus::Result<()> {

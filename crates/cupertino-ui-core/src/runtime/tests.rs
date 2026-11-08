@@ -1701,6 +1701,9 @@ impl Application for Choices {
     }
 
     fn update(selected: &mut usize, message: String) -> Vec<Command<String>> {
+        if let Some(key) = message.strip_prefix("move:") {
+            return vec![Command::MoveFocus(Key::from(key.to_owned()))];
+        }
         if message == "every" {
             *selected = EVERY_STOP;
             return vec![Command::Focus(Key::from("choice0"))];
@@ -3008,4 +3011,36 @@ fn a_focus_that_falls_to_a_node_without_a_role_is_told_on_its_nearest_ancestor_a
         .unwrap()
         .1;
     assert!(!window_node.states.focused, "the window lets the focus go");
+}
+
+#[test]
+fn a_moved_focus_keeps_the_ring_as_it_showed() {
+    let damage = Rc::default();
+    let mut rt = Runtime::<Choices, _>::new(FakeSystem::default(), options(&damage));
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+    let focused = |rt: &Runtime<Choices, FakeSystem>| {
+        let focus = rt.snapshot(window).unwrap().focus;
+        (0..CHOICES).find(|i| focus == rt.find(window, &Key::from(format!("choice{i}"))))
+    };
+    // every choice a stop, the first focused with its ring as Focus gives it
+    rt.messages.push_back("every".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(focused(&rt), Some(0));
+    assert!(rt.windows[0].focus.visible());
+
+    rt.messages.push_back("move:choice2".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(focused(&rt), Some(2));
+    assert!(rt.windows[0].focus.visible(), "a ring that showed shows on");
+
+    // a click's focus shows no ring, and the focus moved after it shows none either
+    let node = rt.find(window, &Key::from("choice2"));
+    let w = &mut rt.windows[0];
+    w.focus.set(&rt.tree, node, false);
+    rt.messages.push_back("move:choice3".into());
+    rt.step(steps()).unwrap();
+    assert_eq!(focused(&rt), Some(3));
+    assert!(!rt.windows[0].focus.visible(), "no ring after a click");
 }

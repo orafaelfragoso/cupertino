@@ -4,12 +4,18 @@
 use cupertino_geometry::Size;
 use std::collections::HashMap;
 
+pub use cupertino_theme::glass::FaceTone;
 pub use cupertino_theme::{Appearance, Color, ControlSize, DesignTokens};
 
 mod adapter;
 mod metrics;
 mod neutral;
 mod palette;
+mod vibrant;
+
+pub use vibrant::{
+    glass_foreground, vibrant_level, VIBRANT_PLACEHOLDER, VIBRANT_PRIMARY, VIBRANT_SECONDARY,
+};
 
 /// The semantic colours controls draw with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -199,6 +205,17 @@ impl ColorTokens {
             .get(&(role, state))
             .or_else(|| self.map.get(&(role, StateVariant::NORMAL)))
             .copied()
+    }
+
+    /// The same table with each colour replaced by `f(role, state, colour)`.
+    pub fn map(&self, f: impl Fn(ColorRole, StateVariant, Color) -> Color) -> Self {
+        Self {
+            map: self
+                .map
+                .iter()
+                .map(|(&(role, state), &color)| ((role, state), f(role, state, color)))
+                .collect(),
+        }
     }
 }
 
